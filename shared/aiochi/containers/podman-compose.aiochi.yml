@@ -27,6 +27,7 @@ volumes:
   zeek_logs:
   zeek_spool:
   identity_data:
+  ollama_models:
 
 services:
   # ============================================================================
@@ -199,14 +200,19 @@ services:
       CLICKHOUSE_DB: "aiochi"
       CLICKHOUSE_USER: "aiochi"
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      # Optional LLM (Ollama)
-      OLLAMA_HOST: "${OLLAMA_HOST:-}"
-      # Template-first mode (LLM fallback)
-      NARRATIVE_MODE: "${NARRATIVE_MODE:-template}"
+      # Ollama LLM connection (Agentic AI)
+      OLLAMA_HOST: "http://172.20.210.50:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
+      # Agentic mode (template fallback for speed)
+      NARRATIVE_MODE: "${NARRATIVE_MODE:-agentic}"
+      # n8n AI features
+      N8N_AI_ENABLED: "true"
     depends_on:
       clickhouse:
         condition: service_healthy
       identity-engine:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
@@ -293,3 +299,45 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # ============================================================================
+  # AI TIER - Local LLM for Agentic Reasoning
+  # ============================================================================
+
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: aiochi-ollama
+    hostname: aiochi-ollama
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.50
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+      OLLAMA_KEEP_ALIVE: "24h"
+      # GPU acceleration (optional - auto-detected)
+      # NVIDIA_VISIBLE_DEVICES: all
+    # Pull default model on first start
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        sleep 5
+        /bin/ollama pull llama3.2:3b
+        wait
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G

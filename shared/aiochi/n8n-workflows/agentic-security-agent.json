@@ -1,0 +1,375 @@
+{
+  "name": "AIOCHI: Agentic Security Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - Security Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 400],
+      "webhookId": "aiochi-agent"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.mac_address }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-known-blocklist",
+      "name": "Known Blocklist Check",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "SELECT trust_score, ecosystem, last_action, action_count FROM aiochi.device_trust WHERE mac_address = '{{ $json.mac_address }}' LIMIT 1"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 3000
+        }
+      },
+      "id": "lookup-trust-score",
+      "name": "Lookup Trust Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [600, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.trust_score || 50 }}",
+              "operation": "smaller",
+              "value2": 30
+            }
+          ]
+        }
+      },
+      "id": "low-trust-check",
+      "name": "Trust < 30?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [800, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.severity }}",
+              "operation": "equals",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "id": "critical-check",
+      "name": "Is Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "modelId": "ollama:llama3.2:3b",
+        "options": {
+          "systemMessage": "You are AIOCHI, an AI network security agent for a home/small business network. You protect the network by analyzing events and deciding actions.\n\nYou have access to these TOOLS:\n1. BLOCK - Immediately block a device (OpenFlow DROP rule, highest priority)\n2. MIGRATE - Apply network policy to a device. Policies:\n   - quarantine: Complete isolation, no network access\n   - internet_only: Internet only, no LAN access (for guests)\n   - lan_only: LAN only, no internet (for IoT sensors)\n   - smart_home: LAN + mDNS/Bonjour (for HomeKit, AirPlay devices)\n   - full_access: Remove restrictions (for trusted devices)\n3. THROTTLE - Rate-limit a device to 1Mbps\n4. MONITOR - Just log and watch, no action\n5. TRUST - Mark device as trusted, remove restrictions\n\nYour MEMORY includes:\n- Recent actions you've taken (don't repeat within 5 minutes)\n- Device trust scores (0-100)\n- Ecosystem bubbles (Apple, Samsung, Google, IoT)\n\nRules:\n1. Never block devices with trust_score > 80\n2. Critical threats (malware, C2) = immediate BLOCK\n3. New unknown devices = MIGRATE to internet_only first\n4. Known IoT devices = MIGRATE to smart_home\n5. Devices talking to known bad IPs = BLOCK\n6. Always explain your reasoning in plain English for the user\n\nRespond with JSON: {\"action\": \"...\", \"target\": \"<policy_name or mac>\", \"reason\": \"...\", \"narrative\": \"...\"}",
+          "temperature": 0.3,
+          "maxTokens": 500
+        }
+      },
+      "id": "ai-agent",
+      "name": "AI Security Agent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "aiochi-memory",
+        "contextWindowLength": 10
+      },
+      "id": "window-memory",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1,
+      "position": [800, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse AI agent response and route to appropriate action\nconst response = items[0].json;\n\n// Parse the AI response\nlet decision;\ntry {\n  // Extract JSON from response\n  const jsonMatch = response.text.match(/\\{[\\s\\S]*\\}/);\n  decision = jsonMatch ? JSON.parse(jsonMatch[0]) : { action: 'MONITOR', reason: 'Failed to parse response' };\n} catch (e) {\n  decision = { action: 'MONITOR', reason: 'Parse error: ' + e.message };\n}\n\n// Add metadata\ndecision.timestamp = new Date().toISOString();\ndecision.event_id = response.event_id || 'unknown';\ndecision.mac_address = response.mac_address;\ndecision.trust_score = response.trust_score || 50;\n\nreturn [{ json: decision }];"
+      },
+      "id": "parse-decision",
+      "name": "Parse AI Decision",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1200, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action }}",
+              "operation": "equals",
+              "value2": "BLOCK"
+            }
+          ]
+        }
+      },
+      "id": "route-action",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1400, 500]
+    },
+    {
+      "parameters": {
+        "command": "/opt/hookprobe/shared/aiochi/tools/block-device.sh \"{{ $json.mac_address }}\" \"{{ $json.reason }}\"",
+        "cwd": "/opt/hookprobe"
+      },
+      "id": "tool-block",
+      "name": "Tool: Block Device",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "command": "/opt/hookprobe/shared/aiochi/tools/migrate-device.sh \"{{ $json.mac_address }}\" \"{{ $json.target }}\" \"{{ $json.reason }}\"",
+        "cwd": "/opt/hookprobe"
+      },
+      "id": "tool-migrate",
+      "name": "Tool: Migrate Device",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1600, 450]
+    },
+    {
+      "parameters": {
+        "command": "/opt/hookprobe/shared/aiochi/tools/throttle-device.sh \"{{ $json.mac_address }}\" \"1mbit\" \"{{ $json.reason }}\"",
+        "cwd": "/opt/hookprobe"
+      },
+      "id": "tool-throttle",
+      "name": "Tool: Throttle Device",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1600, 600]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO aiochi.agent_actions FORMAT JSONEachRow {{ JSON.stringify($json) }}"
+            }
+          ]
+        }
+      },
+      "id": "log-action",
+      "name": "Log Action to ClickHouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1800, 450]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate human narrative for the feed\nconst decision = items[0].json;\n\nconst actionEmojis = {\n  'BLOCK': '🛡️',\n  'MIGRATE': '🔄',\n  'THROTTLE': '⏱️',\n  'MONITOR': '👁️',\n  'TRUST': '✅'\n};\n\nconst actionColors = {\n  'BLOCK': 'danger',\n  'MIGRATE': 'warning',\n  'THROTTLE': 'info',\n  'MONITOR': 'secondary',\n  'TRUST': 'success'\n};\n\nconst narrative = {\n  id: `agent-${Date.now()}`,\n  timestamp: decision.timestamp,\n  category: 'ai-agent',\n  icon: 'fa-robot',\n  color: actionColors[decision.action] || 'info',\n  emoji: actionEmojis[decision.action] || '🤖',\n  title: `AI Agent: ${decision.action}`,\n  narrative: decision.narrative || decision.reason,\n  action_taken: decision.action,\n  target_device: decision.mac_address,\n  requires_feedback: decision.action === 'BLOCK' || decision.action === 'MIGRATE'\n};\n\nreturn [{ json: narrative }];"
+      },
+      "id": "generate-narrative",
+      "name": "Generate Narrative",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 450]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/feed",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "narrative",
+              "value": "={{ $json }}"
+            }
+          ]
+        }
+      },
+      "id": "update-feed",
+      "name": "Update Privacy Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2200, 450]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.requires_feedback }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "needs-feedback",
+      "name": "Needs Human Feedback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2400, 450]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/feedback-request",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.narrative }}"
+            },
+            {
+              "name": "options",
+              "value": "[{\"label\": \"✅ Trust Device\", \"action\": \"trust\"}, {\"label\": \"❌ Block Forever\", \"action\": \"block_permanent\"}]"
+            }
+          ]
+        }
+      },
+      "id": "request-feedback",
+      "name": "Request Human Feedback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2600, 350]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Deterministic BLOCK for critical threats\nconst event = items[0].json;\n\nconst result = {\n  action: 'BLOCK',\n  target: event.mac_address,\n  reason: 'Critical threat detected - automatic block',\n  narrative: `🚨 CRITICAL: I detected a ${event.threat_type || 'critical threat'} from ${event.device_name || 'unknown device'}. I've immediately blocked it to protect your network.`,\n  timestamp: new Date().toISOString(),\n  event_id: event.id,\n  mac_address: event.mac_address,\n  deterministic: true\n};\n\nreturn [{ json: result }];"
+      },
+      "id": "deterministic-block",
+      "name": "Deterministic Block",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Security Event": {
+      "main": [
+        [
+          { "node": "Known Blocklist Check", "type": "main", "index": 0 },
+          { "node": "Lookup Trust Score", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Lookup Trust Score": {
+      "main": [[{ "node": "Trust < 30?", "type": "main", "index": 0 }]]
+    },
+    "Trust < 30?": {
+      "main": [
+        [{ "node": "Is Critical?", "type": "main", "index": 0 }],
+        [{ "node": "AI Security Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Critical?": {
+      "main": [
+        [{ "node": "Deterministic Block", "type": "main", "index": 0 }],
+        [{ "node": "AI Security Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Deterministic Block": {
+      "main": [[{ "node": "Route Action", "type": "main", "index": 0 }]]
+    },
+    "Window Buffer Memory": {
+      "main": [[{ "node": "AI Security Agent", "type": "ai_memory", "index": 0 }]]
+    },
+    "AI Security Agent": {
+      "main": [[{ "node": "Parse AI Decision", "type": "main", "index": 0 }]]
+    },
+    "Parse AI Decision": {
+      "main": [[{ "node": "Route Action", "type": "main", "index": 0 }]]
+    },
+    "Route Action": {
+      "main": [
+        [{ "node": "Tool: Block Device", "type": "main", "index": 0 }],
+        [{ "node": "Tool: Migrate Device", "type": "main", "index": 0 }],
+        [{ "node": "Tool: Throttle Device", "type": "main", "index": 0 }],
+        [{ "node": "Log Action to ClickHouse", "type": "main", "index": 0 }]
+      ]
+    },
+    "Tool: Block Device": {
+      "main": [[{ "node": "Log Action to ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Tool: Migrate Device": {
+      "main": [[{ "node": "Log Action to ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Tool: Throttle Device": {
+      "main": [[{ "node": "Log Action to ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Log Action to ClickHouse": {
+      "main": [[{ "node": "Generate Narrative", "type": "main", "index": 0 }]]
+    },
+    "Generate Narrative": {
+      "main": [[{ "node": "Update Privacy Feed", "type": "main", "index": 0 }]]
+    },
+    "Update Privacy Feed": {
+      "main": [[{ "node": "Needs Human Feedback?", "type": "main", "index": 0 }]]
+    },
+    "Needs Human Feedback?": {
+      "main": [
+        [{ "node": "Request Human Feedback", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "AIOCHI", "id": "aiochi" },
+    { "name": "Agentic", "id": "agentic" },
+    { "name": "Security", "id": "security" },
+    { "name": "AI-Agent", "id": "ai-agent" }
+  ],
+  "pinData": {},
+  "versionId": "2.0.0"
+}
