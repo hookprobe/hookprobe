@@ -1013,13 +1013,12 @@ class FingerprintDaemon:
 
 def main():
     import argparse
+    import signal
+    import time
 
     parser = argparse.ArgumentParser(description='Unified Fingerprint Engine')
     parser.add_argument('--daemon', action='store_true',
-                        help='Run as daemon, monitoring for new devices')
-    parser.add_argument('--debug', action='store_true',
-                        help='Enable debug logging')
-
+                        help='Run as daemon (monitoring mode)')
     subparsers = parser.add_subparsers(dest='command')
 
     # Identify
@@ -1034,10 +1033,52 @@ def main():
 
     args = parser.parse_args()
 
-    # Configure logging
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    log_format = '%(asctime)s %(levelname)s: %(message)s' if args.daemon else '%(levelname)s: %(message)s'
-    logging.basicConfig(level=log_level, format=log_format)
+    # Handle daemon mode - run as a service that keeps the engine ready
+    if args.daemon:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+        engine = get_fingerprint_engine()
+        logging.info("Unified Fingerprint Engine started in daemon mode")
+        logging.info(f"Engine ready - ML model: {'loaded' if engine.ml_model else 'not available'}")
+        logging.info(f"Fingerbank API: {'configured' if engine.fingerbank_api_key else 'not configured'}")
+
+        # Signal handler for graceful shutdown
+        running = True
+        def handle_signal(signum, frame):
+            nonlocal running
+            logging.info(f"Received signal {signum}, shutting down...")
+            running = False
+
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        # Main daemon loop - keep engine warm and log periodic stats
+        stats_interval = 300  # Log stats every 5 minutes
+        last_stats = time.time()
+
+        while running:
+            try:
+                time.sleep(10)
+
+                # Periodic stats logging
+                if time.time() - last_stats >= stats_interval:
+                    stats = engine.get_stats()
+                    logging.info(f"Stats: {stats.get('total_identifications', 0)} identifications, "
+                                f"cache hit rate: {stats.get('cache_hit_rate', 0):.1%}")
+                    last_stats = time.time()
+
+            except Exception as e:
+                logging.error(f"Error in daemon loop: {e}")
+                time.sleep(30)
+
+        logging.info("Unified Fingerprint Engine stopped")
+        return
+
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     engine = get_fingerprint_engine()
 
