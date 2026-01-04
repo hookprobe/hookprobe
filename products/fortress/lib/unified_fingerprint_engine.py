@@ -872,6 +872,142 @@ def get_fingerprint_engine() -> UnifiedFingerprintEngine:
 
 
 # =============================================================================
+# DAEMON MODE - Continuous Device Monitoring
+# =============================================================================
+
+class FingerprintDaemon:
+    """
+    Daemon that monitors for new devices and applies fingerprinting.
+
+    Watches:
+    - DHCP lease file for new/changed leases
+    - OVS bridge for new MAC addresses
+    - Runs periodic scans for device updates
+    """
+
+    def __init__(self, engine: UnifiedFingerprintEngine):
+        self.engine = engine
+        self.running = False
+        self.lease_file = Path('/var/lib/misc/dnsmasq.leases')
+        self.lease_mtime = 0
+        self.known_macs: set = set()
+        self._stop_event = threading.Event()
+
+    def start(self):
+        """Start the daemon main loop."""
+        import signal
+        import time
+
+        self.running = True
+        logger.info("Fingerprint daemon starting...")
+
+        # Handle signals for graceful shutdown
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
+
+        # Initial scan
+        self._scan_dhcp_leases()
+        self._scan_ovs_macs()
+
+        logger.info("Fingerprint daemon started - monitoring for new devices")
+
+        while self.running and not self._stop_event.is_set():
+            try:
+                # Check for DHCP lease changes
+                if self.lease_file.exists():
+                    current_mtime = self.lease_file.stat().st_mtime
+                    if current_mtime > self.lease_mtime:
+                        self.lease_mtime = current_mtime
+                        self._scan_dhcp_leases()
+
+                # Periodic OVS MAC scan (every 30 seconds)
+                self._scan_ovs_macs()
+
+                # Wait before next iteration
+                self._stop_event.wait(timeout=30)
+
+            except Exception as e:
+                logger.error(f"Daemon loop error: {e}")
+                time.sleep(5)
+
+        logger.info("Fingerprint daemon stopped")
+
+    def stop(self):
+        """Stop the daemon."""
+        self.running = False
+        self._stop_event.set()
+
+    def _handle_signal(self, signum, frame):
+        """Handle shutdown signals."""
+        logger.info(f"Received signal {signum}, shutting down...")
+        self.stop()
+
+    def _scan_dhcp_leases(self):
+        """Parse dnsmasq lease file for device info."""
+        if not self.lease_file.exists():
+            return
+
+        try:
+            with open(self.lease_file, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 4:
+                        # Format: timestamp mac ip hostname [client-id]
+                        mac = parts[1].upper()
+                        hostname = parts[3] if parts[3] != '*' else None
+
+                        if mac not in self.known_macs:
+                            self.known_macs.add(mac)
+                            self._fingerprint_device(mac, hostname=hostname)
+
+        except Exception as e:
+            logger.error(f"Failed to parse DHCP leases: {e}")
+
+    def _scan_ovs_macs(self):
+        """Scan OVS bridge for MAC addresses."""
+        import subprocess
+
+        try:
+            # Get MAC addresses from OVS FDB
+            result = subprocess.run(
+                ['ovs-appctl', 'fdb/show', 'FTS'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n')[1:]:  # Skip header
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        mac = parts[1].upper()
+                        # Skip broadcast, multicast, and local MACs
+                        if mac.startswith('FF:') or mac.startswith('01:'):
+                            continue
+                        if mac not in self.known_macs:
+                            self.known_macs.add(mac)
+                            self._fingerprint_device(mac)
+        except subprocess.TimeoutExpired:
+            logger.warning("OVS FDB query timed out")
+        except FileNotFoundError:
+            pass  # ovs-appctl not available
+        except Exception as e:
+            logger.debug(f"OVS scan error: {e}")
+
+    def _fingerprint_device(self, mac: str, hostname: str = None):
+        """Fingerprint a newly discovered device."""
+        try:
+            signals = SignalData(mac=mac, hostname=hostname)
+            identity = self.engine.identify(signals)
+
+            logger.info(
+                f"Device identified: {mac} → {identity.device_type} "
+                f"({identity.vendor}) [{identity.confidence:.0%}] "
+                f"→ policy: {identity.policy}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to fingerprint {mac}: {e}")
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -879,6 +1015,11 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Unified Fingerprint Engine')
+    parser.add_argument('--daemon', action='store_true',
+                        help='Run as daemon, monitoring for new devices')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug logging')
+
     subparsers = parser.add_subparsers(dest='command')
 
     # Identify
@@ -893,11 +1034,19 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    # Configure logging
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    log_format = '%(asctime)s %(levelname)s: %(message)s' if args.daemon else '%(levelname)s: %(message)s'
+    logging.basicConfig(level=log_level, format=log_format)
 
     engine = get_fingerprint_engine()
 
-    if args.command == 'identify':
+    if args.daemon:
+        # Run as daemon
+        daemon = FingerprintDaemon(engine)
+        daemon.start()
+
+    elif args.command == 'identify':
         signals = SignalData(
             mac=args.mac,
             dhcp_fingerprint=args.dhcp,
