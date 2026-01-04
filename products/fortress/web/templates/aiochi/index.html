@@ -1,0 +1,969 @@
+{% extends "base.html" %}
+
+{% block title %}AIOCHI - AI Eyes{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* AIOCHI Dashboard - Cognitive Network Layer */
+    :root {
+        --aiochi-calm: #81c784;
+        --aiochi-curious: #ffb74d;
+        --aiochi-alert: #e57373;
+        --aiochi-primary: #4fc3f7;
+        --aiochi-bg-dark: #1a1a2e;
+        --aiochi-bg-card: #16213e;
+        --aiochi-text: #e8e8e8;
+        --aiochi-text-muted: #8b8b9a;
+    }
+
+    .aiochi-container {
+        padding: 0;
+    }
+
+    /* Ambient State Banner */
+    .ambient-banner {
+        background: linear-gradient(135deg, var(--aiochi-bg-card) 0%, #0f3460 100%);
+        border-radius: 12px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border: 1px solid rgba(255,255,255,0.05);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+
+    .ambient-state {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+    }
+
+    .ambient-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        transition: all 0.5s ease;
+    }
+
+    .ambient-icon.calm {
+        background: linear-gradient(135deg, rgba(129, 199, 132, 0.2) 0%, rgba(129, 199, 132, 0.1) 100%);
+        color: var(--aiochi-calm);
+        box-shadow: 0 0 30px rgba(129, 199, 132, 0.3);
+    }
+
+    .ambient-icon.curious {
+        background: linear-gradient(135deg, rgba(255, 183, 77, 0.2) 0%, rgba(255, 183, 77, 0.1) 100%);
+        color: var(--aiochi-curious);
+        box-shadow: 0 0 30px rgba(255, 183, 77, 0.3);
+        animation: pulse-curious 2s ease-in-out infinite;
+    }
+
+    .ambient-icon.alert {
+        background: linear-gradient(135deg, rgba(229, 115, 115, 0.2) 0%, rgba(229, 115, 115, 0.1) 100%);
+        color: var(--aiochi-alert);
+        box-shadow: 0 0 30px rgba(229, 115, 115, 0.4);
+        animation: pulse-alert 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse-curious {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.05); opacity: 0.9; }
+    }
+
+    @keyframes pulse-alert {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 30px rgba(229, 115, 115, 0.4); }
+        50% { transform: scale(1.08); box-shadow: 0 0 50px rgba(229, 115, 115, 0.6); }
+    }
+
+    .ambient-text h2 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin: 0 0 4px 0;
+        color: var(--aiochi-text);
+    }
+
+    .ambient-text p {
+        margin: 0;
+        color: var(--aiochi-text-muted);
+        font-size: 0.95rem;
+    }
+
+    .whisper-badge {
+        background: rgba(79, 195, 247, 0.1);
+        border: 1px solid rgba(79, 195, 247, 0.3);
+        border-radius: 20px;
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.85rem;
+        color: var(--aiochi-primary);
+    }
+
+    .whisper-phase {
+        font-size: 1.2rem;
+    }
+
+    /* Three Pillars Grid */
+    .pillars-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 24px;
+        margin-bottom: 24px;
+    }
+
+    @media (max-width: 1200px) {
+        .pillars-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .pillar-card {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        overflow: hidden;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .pillar-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .pillar-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .pillar-title i {
+        font-size: 1.2rem;
+    }
+
+    .pillar-title h3 {
+        font-size: 1rem;
+        font-weight: 600;
+        margin: 0;
+        color: var(--aiochi-text);
+    }
+
+    .pillar-title span {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        font-weight: 400;
+    }
+
+    .pillar-body {
+        padding: 20px;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    /* PRESENCE - Device Bubbles */
+    .presence-icon { color: var(--aiochi-primary); }
+
+    .bubble-list {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .bubble-item {
+        background: rgba(255,255,255,0.03);
+        border-radius: 10px;
+        padding: 16px;
+        border: 1px solid rgba(255,255,255,0.05);
+        transition: all 0.3s ease;
+    }
+
+    .bubble-item:hover {
+        background: rgba(255,255,255,0.05);
+        border-color: rgba(255,255,255,0.1);
+    }
+
+    .bubble-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+
+    .bubble-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .bubble-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+    }
+
+    .bubble-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: var(--aiochi-text);
+    }
+
+    .bubble-meta {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .trust-badge {
+        font-size: 0.65rem;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .trust-CORE { background: rgba(129, 199, 132, 0.2); color: #81c784; }
+    .trust-TRUSTED { background: rgba(79, 195, 247, 0.2); color: #4fc3f7; }
+    .trust-KNOWN { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .trust-VISITOR { background: rgba(186, 104, 200, 0.2); color: #ba68c8; }
+
+    .bubble-devices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .device-chip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 16px;
+        padding: 4px 10px;
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .device-chip.online {
+        color: var(--aiochi-calm);
+    }
+
+    .device-chip i {
+        font-size: 0.7rem;
+    }
+
+    /* PRIVACY - Narrative Feed */
+    .privacy-icon { color: var(--aiochi-calm); }
+
+    .feed-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .feed-item {
+        display: flex;
+        gap: 12px;
+        padding: 12px;
+        background: rgba(255,255,255,0.02);
+        border-radius: 8px;
+        border-left: 3px solid transparent;
+        transition: all 0.3s ease;
+    }
+
+    .feed-item:hover {
+        background: rgba(255,255,255,0.04);
+    }
+
+    .feed-item.success { border-left-color: var(--aiochi-calm); }
+    .feed-item.warning { border-left-color: var(--aiochi-curious); }
+    .feed-item.info { border-left-color: var(--aiochi-primary); }
+    .feed-item.danger { border-left-color: var(--aiochi-alert); }
+
+    .feed-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 0.85rem;
+    }
+
+    .feed-icon.success { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .feed-icon.warning { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
+    .feed-icon.info { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
+    .feed-icon.danger { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+
+    .feed-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .feed-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4px;
+    }
+
+    .feed-title {
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: var(--aiochi-text);
+    }
+
+    .feed-time {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .feed-narrative {
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+        line-height: 1.4;
+    }
+
+    /* PERFORMANCE - Health Score */
+    .performance-icon { color: var(--aiochi-curious); }
+
+    .health-score-container {
+        text-align: center;
+        margin-bottom: 24px;
+    }
+
+    .health-gauge {
+        position: relative;
+        width: 160px;
+        height: 160px;
+        margin: 0 auto 16px;
+    }
+
+    .health-gauge svg {
+        transform: rotate(-90deg);
+    }
+
+    .health-gauge-bg {
+        fill: none;
+        stroke: rgba(255,255,255,0.1);
+        stroke-width: 12;
+    }
+
+    .health-gauge-fill {
+        fill: none;
+        stroke-width: 12;
+        stroke-linecap: round;
+        transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+    }
+
+    .health-gauge-fill.good { stroke: var(--aiochi-calm); }
+    .health-gauge-fill.warning { stroke: var(--aiochi-curious); }
+    .health-gauge-fill.critical { stroke: var(--aiochi-alert); }
+
+    .health-score-value {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+    }
+
+    .health-score-number {
+        font-size: 2.5rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .health-score-number.good { color: var(--aiochi-calm); }
+    .health-score-number.warning { color: var(--aiochi-curious); }
+    .health-score-number.critical { color: var(--aiochi-alert); }
+
+    .health-score-label {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .health-insight {
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 0.85rem;
+        color: var(--aiochi-text-muted);
+        line-height: 1.5;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .health-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .metric-item {
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        padding: 12px;
+        text-align: center;
+    }
+
+    .metric-value {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .metric-label {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Quick Actions */
+    .quick-actions-card {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        padding: 20px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .quick-actions-title {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--aiochi-text);
+    }
+
+    .quick-actions-title i {
+        color: var(--aiochi-primary);
+    }
+
+    .quick-actions-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+    }
+
+    @media (max-width: 992px) {
+        .quick-actions-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    .action-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 16px 12px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-align: center;
+    }
+
+    .action-btn:hover {
+        background: rgba(255,255,255,0.06);
+        transform: translateY(-2px);
+    }
+
+    .action-btn.active {
+        border-color: var(--aiochi-primary);
+        background: rgba(79, 195, 247, 0.1);
+    }
+
+    .action-btn i {
+        font-size: 1.5rem;
+    }
+
+    .action-btn.warning i { color: var(--aiochi-curious); }
+    .action-btn.info i { color: var(--aiochi-primary); }
+    .action-btn.primary i { color: #ba68c8; }
+    .action-btn.danger i { color: var(--aiochi-alert); }
+
+    .action-btn span {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        line-height: 1.3;
+    }
+
+    .action-btn.active span {
+        color: var(--aiochi-text);
+    }
+
+    /* Demo Mode Badge */
+    .demo-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255, 183, 77, 0.15);
+        color: var(--aiochi-curious);
+        font-size: 0.7rem;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    /* Loading State */
+    .loading-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(26, 26, 46, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+        border-radius: 12px;
+    }
+
+    .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid rgba(255,255,255,0.1);
+        border-top-color: var(--aiochi-primary);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Scrollbar styling */
+    .pillar-body::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .pillar-body::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.02);
+        border-radius: 3px;
+    }
+
+    .pillar-body::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.1);
+        border-radius: 3px;
+    }
+
+    .pillar-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(255,255,255,0.15);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="aiochi-container">
+    <!-- Ambient State Banner -->
+    <div class="ambient-banner" id="ambient-banner">
+        <div class="ambient-state">
+            <div class="ambient-icon calm" id="ambient-icon">
+                <i class="fas fa-shield-check"></i>
+            </div>
+            <div class="ambient-text">
+                <h2 id="ambient-title">Everything is Peaceful</h2>
+                <p id="ambient-message">Your network is protected and running smoothly.</p>
+            </div>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <div class="whisper-badge" id="whisper-badge">
+                <span class="whisper-phase">🌙</span>
+                <span id="whisper-message">Dreaming...</span>
+            </div>
+            <span class="demo-badge" id="demo-badge" style="display: none;">
+                <i class="fas fa-flask"></i> Demo Mode
+            </span>
+        </div>
+    </div>
+
+    <!-- Three Pillars -->
+    <div class="pillars-grid">
+        <!-- PRESENCE - Who's Home -->
+        <div class="pillar-card">
+            <div class="pillar-header">
+                <div class="pillar-title">
+                    <i class="fas fa-users presence-icon"></i>
+                    <div>
+                        <h3>PRESENCE</h3>
+                        <span>Who's Home</span>
+                    </div>
+                </div>
+                <span class="badge bg-info" id="presence-count">0 devices</span>
+            </div>
+            <div class="pillar-body" id="presence-body">
+                <div class="bubble-list" id="bubble-list">
+                    <!-- Bubbles populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- PRIVACY - What's Happening -->
+        <div class="pillar-card">
+            <div class="pillar-header">
+                <div class="pillar-title">
+                    <i class="fas fa-shield-alt privacy-icon"></i>
+                    <div>
+                        <h3>PRIVACY</h3>
+                        <span>What's Happening</span>
+                    </div>
+                </div>
+                <span class="badge bg-success" id="privacy-count">All clear</span>
+            </div>
+            <div class="pillar-body" id="privacy-body">
+                <div class="feed-list" id="feed-list">
+                    <!-- Feed items populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- PERFORMANCE - How Fast -->
+        <div class="pillar-card">
+            <div class="pillar-header">
+                <div class="pillar-title">
+                    <i class="fas fa-tachometer-alt performance-icon"></i>
+                    <div>
+                        <h3>PERFORMANCE</h3>
+                        <span>How Fast</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pillar-body" id="performance-body">
+                <div class="health-score-container">
+                    <div class="health-gauge">
+                        <svg viewBox="0 0 160 160">
+                            <circle class="health-gauge-bg" cx="80" cy="80" r="70"></circle>
+                            <circle class="health-gauge-fill good" cx="80" cy="80" r="70"
+                                    stroke-dasharray="439.8" stroke-dashoffset="439.8" id="health-gauge-fill"></circle>
+                        </svg>
+                        <div class="health-score-value">
+                            <div class="health-score-number good" id="health-score">--</div>
+                            <div class="health-score-label">Health</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="health-insight" id="health-insight">
+                    Loading network insights...
+                </div>
+                <div class="health-metrics" id="health-metrics">
+                    <div class="metric-item">
+                        <div class="metric-value" id="metric-latency">--</div>
+                        <div class="metric-label">Latency (ms)</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metric-bandwidth">--</div>
+                        <div class="metric-label">Bandwidth %</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metric-uptime">--</div>
+                        <div class="metric-label">Uptime %</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metric-blocked">--</div>
+                        <div class="metric-label">Blocked (24h)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="quick-actions-card">
+        <h4 class="quick-actions-title">
+            <i class="fas fa-bolt"></i>
+            Quick Actions
+        </h4>
+        <div class="quick-actions-grid" id="quick-actions">
+            <!-- Actions populated by JS -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    'use strict';
+
+    // Configuration
+    const API_BASE = '/aiochi/api';
+    const REFRESH_INTERVAL = 5000;
+
+    // State
+    let isLoading = false;
+    let demoMode = true;
+
+    // Device type icons
+    const deviceIcons = {
+        'phone': 'fa-mobile-alt',
+        'laptop': 'fa-laptop',
+        'tablet': 'fa-tablet-alt',
+        'watch': 'fa-clock',
+        'speaker': 'fa-volume-up',
+        'thermostat': 'fa-thermometer-half',
+        'camera': 'fa-video',
+        'hub': 'fa-sitemap',
+        'gaming': 'fa-gamepad',
+        'tv': 'fa-tv',
+        'default': 'fa-microchip'
+    };
+
+    // Ecosystem colors
+    const ecosystemColors = {
+        'apple': '#a3a3a3',
+        'samsung': '#1428a0',
+        'google': '#4285f4',
+        'iot': '#ffb74d',
+        'mixed': '#ba68c8'
+    };
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        fetchStatus();
+        setInterval(fetchStatus, REFRESH_INTERVAL);
+    });
+
+    // Fetch all status data
+    async function fetchStatus() {
+        if (isLoading) return;
+        isLoading = true;
+
+        try {
+            const response = await fetch(`${API_BASE}/status`);
+            const data = await response.json();
+
+            if (data.success) {
+                demoMode = data.demo_mode;
+                updateDemoMode(demoMode);
+                updateAmbient(data.ambient);
+                updatePresence(data.presence);
+                updatePrivacy(data.privacy);
+                updatePerformance(data.performance);
+                updateQuickActions(data.quick_actions);
+            }
+        } catch (error) {
+            console.error('Failed to fetch AIOCHI status:', error);
+        } finally {
+            isLoading = false;
+        }
+    }
+
+    // Update demo mode indicator
+    function updateDemoMode(isDemo) {
+        const badge = document.getElementById('demo-badge');
+        badge.style.display = isDemo ? 'inline-flex' : 'none';
+    }
+
+    // Update ambient state banner
+    function updateAmbient(ambient) {
+        const icon = document.getElementById('ambient-icon');
+        const title = document.getElementById('ambient-title');
+        const message = document.getElementById('ambient-message');
+        const whisperPhase = document.querySelector('.whisper-phase');
+        const whisperMessage = document.getElementById('whisper-message');
+
+        // Update state class
+        icon.className = 'ambient-icon ' + ambient.state.toLowerCase();
+        icon.innerHTML = `<i class="fas ${ambient.icon}"></i>`;
+
+        // Update text
+        title.textContent = getAmbientTitle(ambient.state);
+        message.textContent = ambient.message;
+
+        // Update whisper
+        if (ambient.whisper) {
+            whisperPhase.textContent = ambient.whisper.phase;
+            whisperMessage.textContent = ambient.whisper.message;
+        }
+    }
+
+    function getAmbientTitle(state) {
+        const titles = {
+            'CALM': 'Everything is Peaceful',
+            'CURIOUS': 'Something Caught My Attention',
+            'ALERT': 'Action Required'
+        };
+        return titles[state] || state;
+    }
+
+    // Update presence bubbles
+    function updatePresence(presence) {
+        const countBadge = document.getElementById('presence-count');
+        const bubbleList = document.getElementById('bubble-list');
+
+        countBadge.textContent = `${presence.online_devices}/${presence.total_devices} online`;
+
+        let html = '';
+        for (const bubble of presence.bubbles) {
+            const bgColor = bubble.color || ecosystemColors[bubble.ecosystem] || '#4fc3f7';
+            const devices = bubble.devices.map(d => {
+                const iconClass = deviceIcons[d.type] || deviceIcons.default;
+                const onlineClass = d.online ? 'online' : '';
+                return `<div class="device-chip ${onlineClass}">
+                    <i class="fas ${iconClass}"></i>
+                    ${d.name}
+                </div>`;
+            }).join('');
+
+            html += `
+            <div class="bubble-item">
+                <div class="bubble-header">
+                    <div class="bubble-info">
+                        <div class="bubble-avatar" style="background: ${bgColor}20; color: ${bgColor}">
+                            <i class="fas ${bubble.icon}"></i>
+                        </div>
+                        <div>
+                            <div class="bubble-name">${bubble.label}</div>
+                            <div class="bubble-meta">${bubble.devices.length} devices · ${bubble.ecosystem}</div>
+                        </div>
+                    </div>
+                    <span class="trust-badge trust-${bubble.trust_level}">${bubble.trust_level}</span>
+                </div>
+                <div class="bubble-devices">
+                    ${devices}
+                </div>
+            </div>`;
+        }
+
+        bubbleList.innerHTML = html;
+    }
+
+    // Update privacy feed
+    function updatePrivacy(privacy) {
+        const countBadge = document.getElementById('privacy-count');
+        const feedList = document.getElementById('feed-list');
+
+        if (privacy.unread_count > 0) {
+            countBadge.textContent = `${privacy.unread_count} new`;
+            countBadge.className = 'badge bg-warning';
+        } else {
+            countBadge.textContent = 'All clear';
+            countBadge.className = 'badge bg-success';
+        }
+
+        let html = '';
+        for (const event of privacy.events) {
+            html += `
+            <div class="feed-item ${event.color}">
+                <div class="feed-icon ${event.color}">
+                    <i class="fas ${event.icon}"></i>
+                </div>
+                <div class="feed-content">
+                    <div class="feed-header">
+                        <span class="feed-title">${event.title}</span>
+                        <span class="feed-time">${event.time}</span>
+                    </div>
+                    <p class="feed-narrative">${event.narrative}</p>
+                </div>
+            </div>`;
+        }
+
+        feedList.innerHTML = html;
+    }
+
+    // Update performance metrics
+    function updatePerformance(performance) {
+        const score = performance.health_score;
+        const gaugeFill = document.getElementById('health-gauge-fill');
+        const scoreEl = document.getElementById('health-score');
+        const insightEl = document.getElementById('health-insight');
+
+        // Calculate gauge offset (circumference = 2 * PI * r = 2 * 3.14159 * 70 ≈ 439.8)
+        const circumference = 439.8;
+        const offset = circumference - (circumference * score / 100);
+        gaugeFill.style.strokeDashoffset = offset;
+
+        // Determine color class
+        let colorClass = 'good';
+        if (score < 50) colorClass = 'critical';
+        else if (score < 75) colorClass = 'warning';
+
+        gaugeFill.className.baseVal = `health-gauge-fill ${colorClass}`;
+        scoreEl.textContent = score;
+        scoreEl.className = `health-score-number ${colorClass}`;
+
+        // Update insight
+        insightEl.textContent = performance.insight;
+
+        // Update metrics
+        const metrics = performance.metrics;
+        document.getElementById('metric-latency').textContent = metrics.latency_ms;
+        document.getElementById('metric-bandwidth').textContent = metrics.bandwidth_used_pct + '%';
+        document.getElementById('metric-uptime').textContent = metrics.uptime_pct + '%';
+        document.getElementById('metric-blocked').textContent = metrics.threats_blocked_24h;
+    }
+
+    // Update quick actions
+    function updateQuickActions(quickActions) {
+        const container = document.getElementById('quick-actions');
+
+        let html = '';
+        for (const action of quickActions.actions) {
+            const activeClass = action.active ? 'active' : '';
+            html += `
+            <div class="action-btn ${action.color} ${activeClass}"
+                 data-action="${action.id}"
+                 data-active="${action.active}"
+                 onclick="toggleAction('${action.id}', ${!action.active})"
+                 title="${action.description}">
+                <i class="fas ${action.icon}"></i>
+                <span>${action.label}</span>
+            </div>`;
+        }
+
+        container.innerHTML = html;
+    }
+
+    // Toggle action
+    window.toggleAction = async function(actionId, activate) {
+        try {
+            const response = await fetch(`${API_BASE}/action/${actionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ activate })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                // Update button state
+                const btn = document.querySelector(`[data-action="${actionId}"]`);
+                if (btn) {
+                    if (activate) {
+                        btn.classList.add('active');
+                        btn.dataset.active = 'true';
+                    } else {
+                        btn.classList.remove('active');
+                        btn.dataset.active = 'false';
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Failed to toggle action:', error);
+        }
+    };
+
+})();
+</script>
+{% endblock %}

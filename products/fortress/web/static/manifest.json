@@ -1,0 +1,54 @@
+{
+  "name": "HookProbe Fortress - AI Eyes",
+  "short_name": "AI Eyes",
+  "description": "Your network speaks human now. AI-powered security monitoring with push notifications.",
+  "start_url": "/aiochi/",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#002742",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["security", "network", "monitoring"],
+  "icons": [
+    {
+      "src": "/static/images/aiochi-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/images/aiochi-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/static/images/aiochi-screenshot-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "AI Eyes mobile dashboard"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Security Status",
+      "short_name": "Status",
+      "description": "View current network security status",
+      "url": "/aiochi/",
+      "icons": [{ "src": "/static/images/shield-icon.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Quick Actions",
+      "short_name": "Actions",
+      "description": "Access quick network actions",
+      "url": "/aiochi/#actions",
+      "icons": [{ "src": "/static/images/bolt-icon.png", "sizes": "96x96" }]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}
