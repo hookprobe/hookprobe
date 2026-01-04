@@ -292,7 +292,7 @@ services:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
       # Metrics export to Victoria (mgmt tier)
-      VICTORIA_PUSH_URL: http://172.20.203.11:8428/api/v1/write
+      VICTORIA_PUSH_URL: http://172.20.200.31:8428/api/v1/write
     volumes:
       # Bind mount for shared data (visible on host and other containers)
       # U suffix auto-adjusts ownership to container user (fixes GID mismatch)

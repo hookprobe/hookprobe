@@ -499,6 +499,18 @@ setup_wifi_bridge() {
     local veth_br="veth-wifi-a"   # Linux bridge side
     local veth_ovs="veth-wifi-b"  # OVS side
 
+    # Clean up orphan veth interfaces that may have accumulated
+    # These can appear from failed setup attempts or network changes
+    cleanup_orphan_veths() {
+        for orphan in $(ip link show master "$br_wifi" 2>/dev/null | grep -oE "veth[0-9]+@" | tr -d '@'); do
+            if [ -n "$orphan" ] && [ "$orphan" != "$veth_br" ]; then
+                log_info "Removing orphan veth: $orphan"
+                ip link set "$orphan" nomaster 2>/dev/null || true
+                ip link delete "$orphan" 2>/dev/null || true
+            fi
+        done
+    }
+
     # Create Linux bridge if not exists
     if ! ip link show "$br_wifi" &>/dev/null; then
         log_info "Creating WiFi bridge $br_wifi..."
@@ -507,6 +519,9 @@ setup_wifi_bridge() {
         ip link set "$br_wifi" type bridge stp_state 0
         # Set forward delay to 0
         echo 0 > "/sys/class/net/$br_wifi/bridge/forward_delay" 2>/dev/null || true
+    else
+        # Bridge exists, cleanup orphan interfaces
+        cleanup_orphan_veths
     fi
 
     # Bring up the bridge
@@ -597,16 +612,35 @@ show_status() {
 
     echo -e "\n${CYAN}WiFi Bridge (SDN Autopilot):${NC}"
     if ip link show br-wifi &>/dev/null; then
-        echo "  br-wifi: UP"
+        local br_state
+        br_state=$(ip link show br-wifi 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
+        echo "  br-wifi: $br_state"
         echo "  Members:"
-        bridge link show master br-wifi 2>/dev/null | while read -r line; do
-            local dev hairpin
-            dev=$(echo "$line" | awk '{print $2}' | tr -d ':')
-            hairpin=$(bridge link show dev "$dev" 2>/dev/null | grep -o "hairpin on" || echo "hairpin off")
-            echo "    $dev ($hairpin)"
+        # Check each interface in the bridge
+        for dev in $(bridge link show master br-wifi 2>/dev/null | awk '{print $2}' | tr -d ':'); do
+            local hairpin_status
+            # bridge -d link show gives detailed info including hairpin
+            if bridge -d link show dev "$dev" 2>/dev/null | grep -q "hairpin on"; then
+                hairpin_status="hairpin on"
+            else
+                hairpin_status="hairpin off"
+            fi
+            echo "    $dev ($hairpin_status)"
         done
         echo "  veth-wifi-b → OVS:"
-        ovs-vsctl get port veth-wifi-b tag 2>/dev/null && echo "" || echo "  (not connected)"
+        # Check OVS connection - may require root
+        local veth_tag
+        veth_tag=$(ovs-vsctl get port veth-wifi-b tag 2>/dev/null)
+        if [ -n "$veth_tag" ]; then
+            echo "  VLAN tag: $veth_tag"
+        else
+            # Could be permission issue or not connected
+            if ovs-vsctl port-to-br veth-wifi-b 2>/dev/null | grep -q "$OVS_BRIDGE"; then
+                echo "  Connected (run as root for VLAN details)"
+            else
+                echo "  (not connected)"
+            fi
+        fi
     else
         echo "  (not configured)"
     fi
