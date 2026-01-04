@@ -192,9 +192,25 @@ class EcosystemBubbleManager:
 
     # Clustering thresholds
     MIN_CLUSTER_CONFIDENCE = 0.65     # Minimum to create bubble
-    CONFIRMATION_THRESHOLD = 0.85      # Confidence to confirm bubble
+    CONFIRMATION_THRESHOLD = 0.85      # Confidence to confirm bubble (default)
     DORMANT_TIMEOUT = 300              # Seconds before bubble goes dormant
     DISSOLVE_TIMEOUT = 3600            # Seconds before bubble dissolves
+
+    # Ecosystem-specific confirmation thresholds
+    # Apple/Google have tighter signatures allowing lower thresholds
+    # Unknown ecosystems require higher confidence
+    ECOSYSTEM_THRESHOLDS = {
+        'apple': 0.75,      # Tight ecosystem with consistent signatures (Continuity, AirPlay)
+        'google': 0.78,     # Good signature reliability (Cast, Nearby Share)
+        'amazon': 0.80,     # Moderate variance (Alexa, Fire TV)
+        'samsung': 0.82,    # SmartThings ecosystem
+        'microsoft': 0.85,  # Standard threshold
+        'unknown': 0.90,    # Conservative for unknown ecosystems
+    }
+
+    # Ecosystem lock-in confidence boost
+    # When ALL devices in bubble are same ecosystem, boost confidence
+    ECOSYSTEM_LOCK_IN_BOOST = 0.10  # +10% when all same ecosystem
 
     # Update intervals
     CLUSTERING_INTERVAL = 60           # Run clustering every 60 seconds
@@ -278,6 +294,45 @@ class EcosystemBubbleManager:
                 conn.commit()
         except Exception as e:
             logger.warning(f"Could not initialize bubble database: {e}")
+
+    def _get_confirmation_threshold(self, ecosystem: str) -> float:
+        """Get ecosystem-specific confirmation threshold.
+
+        Apple/Google have tight signatures allowing lower thresholds.
+        Unknown ecosystems require higher confidence.
+        """
+        eco_lower = ecosystem.lower() if ecosystem else 'unknown'
+        return self.ECOSYSTEM_THRESHOLDS.get(eco_lower, self.CONFIRMATION_THRESHOLD)
+
+    def _apply_ecosystem_lock_in_boost(self, bubble: 'Bubble', base_confidence: float) -> float:
+        """Boost confidence when all devices are same ecosystem.
+
+        When ALL devices in bubble belong to same tight ecosystem (Apple),
+        we can be more confident they belong to same user.
+        """
+        if not bubble.devices or len(bubble.devices) < 2:
+            return base_confidence
+
+        # Check if all devices are same ecosystem (using presence data)
+        if not self.presence_sensor:
+            return base_confidence
+
+        ecosystems = set()
+        for mac in bubble.devices:
+            presence = self.presence_sensor.get_device_presence(mac)
+            if presence and hasattr(presence, 'ecosystem'):
+                ecosystems.add(str(presence.ecosystem).lower())
+
+        # If all devices same ecosystem, apply boost
+        if len(ecosystems) == 1:
+            eco = list(ecosystems)[0]
+            # Only boost for tight ecosystems (apple, google)
+            if eco in ['apple', 'google', 'ecosystemtype.apple', 'ecosystemtype.google']:
+                boosted = min(0.98, base_confidence + self.ECOSYSTEM_LOCK_IN_BOOST)
+                logger.debug(f"Ecosystem lock-in boost for {eco}: {base_confidence:.2f} -> {boosted:.2f}")
+                return boosted
+
+        return base_confidence
 
     # =========================================================================
     # LIFECYCLE MANAGEMENT
@@ -434,31 +489,34 @@ class EcosystemBubbleManager:
             for mac in left_devices:
                 self._remove_device_from_bubble(bubble, mac)
 
-            # Update confidence
-            if cluster.confidence > bubble.confidence:
-                bubble.confidence = cluster.confidence
+            # Update confidence with ecosystem lock-in boost
+            boosted_confidence = self._apply_ecosystem_lock_in_boost(bubble, cluster.confidence)
+            if boosted_confidence > bubble.confidence:
+                bubble.confidence = boosted_confidence
 
             bubble.last_activity = datetime.now().isoformat()
 
-            # Confirm if threshold met
+            # Confirm if ecosystem-specific threshold met
             if bubble.state == BubbleState.FORMING:
-                if bubble.confidence >= self.CONFIRMATION_THRESHOLD:
+                threshold = self._get_confirmation_threshold(bubble.ecosystem)
+                if bubble.confidence >= threshold:
                     bubble.state = BubbleState.ACTIVE
                     self._record_event(BubbleEvent(
                         event_type='confirmed',
                         bubble_id=bubble_id,
-                        details={'confidence': bubble.confidence}
+                        details={'confidence': bubble.confidence, 'threshold': threshold}
                     ))
-                    logger.info(f"Bubble confirmed: {bubble_id} ({len(bubble.devices)} devices)")
+                    logger.info(f"Bubble confirmed: {bubble_id} ({len(bubble.devices)} devices, threshold={threshold:.2f})")
 
         else:
             # Create new bubble
+            threshold = self._get_confirmation_threshold(cluster.ecosystem)
             bubble = Bubble(
                 bubble_id=bubble_id,
                 ecosystem=cluster.ecosystem,
                 devices=set(cluster.devices),
                 confidence=cluster.confidence,
-                state=BubbleState.FORMING if cluster.confidence < self.CONFIRMATION_THRESHOLD else BubbleState.ACTIVE
+                state=BubbleState.FORMING if cluster.confidence < threshold else BubbleState.ACTIVE
             )
 
             # Extract owner hint
