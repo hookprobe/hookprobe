@@ -360,7 +360,7 @@ class EcosystemBubbleManager:
 
         ecosystems = set()
         for mac in bubble.devices:
-            presence = self.presence_sensor.get_device_presence(mac)
+            presence = self.presence_sensor.get_device(mac)
             if presence and hasattr(presence, 'ecosystem'):
                 ecosystems.add(str(presence.ecosystem).lower())
 
