@@ -294,8 +294,8 @@ stop_all_services() {
     iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE 2>/dev/null || true
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # 9. Release locked ports
-    fuser -k 8443/tcp 5353/udp 8050/tcp 2>/dev/null || true
+    # 9. Release locked ports (53/udp is dnsXai, 5353 is mDNS - don't kill mDNS)
+    fuser -k 8443/tcp 53/udp 8050/tcp 2>/dev/null || true
 
     log_info "All services stopped"
 }

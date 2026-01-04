@@ -216,6 +216,10 @@ configure_openflow() {
     # which operates at a higher layer and doesn't have these issues.
     ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
 
+    # Disable multicast snooping - CRITICAL for HomeKit, HomePod, AirPlay, Chromecast
+    # When enabled, OVS may block multicast if IGMP isn't properly handled
+    ovs-vsctl set bridge "$OVS_BRIDGE" mcast_snooping_enable=false 2>/dev/null || true
+
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
 
@@ -239,6 +243,19 @@ configure_openflow() {
     # Required for device discovery, AirPlay, HomeKit, smart home protocols
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL"
 
+    # Priority 700: Allow IPv6 multicast (essential for HomeKit, HomePod, AirPlay)
+    # IPv6 multicast uses Ethernet addresses starting with 33:33:xx:xx:xx:xx
+    # This covers ff02::fb (mDNS), ff02::1 (all-nodes), ff02::2 (all-routers)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00,actions=NORMAL"
+
+    # Priority 700: Allow all IPv6 traffic (HomeKit, AirPlay heavily use IPv6)
+    # dl_type=0x86dd is IPv6
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ipv6,actions=NORMAL"
+
+    # Priority 600: Allow ICMPv6 (Neighbor Discovery Protocol - essential for IPv6)
+    # Without NDP, IPv6 devices cannot discover each other
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,icmp6,actions=NORMAL"
+
     # Priority 500: Permissive rules for LAN traffic (10.200.0.0/16)
     # Broader /16 handles any user-configured subnet mask (/29 to /22)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
@@ -252,7 +269,8 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL"
 
     log_success "OpenFlow rules configured"
-    log_info "  ARP, DHCP, DNS: priority 800-1000"
+    log_info "  ARP, DHCP, DNS, mDNS: priority 800-1000"
+    log_info "  IPv4/IPv6 multicast (HomeKit, AirPlay): priority 700"
     log_info "  LAN (10.200.0.0/16): priority 500"
     log_info "  Containers (172.20.0.0/16): priority 500"
 }
@@ -384,6 +402,176 @@ setup_container_veth() {
 }
 
 # ============================================================
+# AVAHI CONFIGURATION (FOR ECOSYSTEM BUBBLE MDNS)
+# ============================================================
+#
+# The PresenceSensor uses Python's zeroconf library to detect Apple/Google
+# ecosystem devices via mDNS announcements. However, avahi-daemon by default
+# has exclusive bind on port 5353, blocking zeroconf.
+#
+# Solution: Configure avahi-daemon to allow other mDNS stacks to coexist.
+# This enables Ecosystem Bubble detection for HomeKit/AirPlay device grouping.
+#
+# ============================================================
+
+setup_avahi_coexistence() {
+    log_section "Avahi mDNS Coexistence"
+
+    local avahi_conf="/etc/avahi/avahi-daemon.conf"
+
+    if [ ! -f "$avahi_conf" ]; then
+        log_warn "Avahi not installed - mDNS ecosystem detection may not work"
+        return 0
+    fi
+
+    # Check if already configured
+    if grep -q "^disallow-other-stacks=no" "$avahi_conf" 2>/dev/null; then
+        log_info "Avahi already configured for coexistence"
+        return 0
+    fi
+
+    log_info "Configuring Avahi for mDNS coexistence..."
+
+    # Backup original
+    cp "$avahi_conf" "${avahi_conf}.backup-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+
+    # Update configuration
+    if grep -q "^disallow-other-stacks=" "$avahi_conf" 2>/dev/null; then
+        # Replace existing setting
+        sed -i 's/^disallow-other-stacks=.*/disallow-other-stacks=no/' "$avahi_conf"
+    elif grep -q "^\[server\]" "$avahi_conf" 2>/dev/null; then
+        # Add after [server] section
+        sed -i '/^\[server\]/a disallow-other-stacks=no' "$avahi_conf"
+    else
+        # Append to end
+        echo "" >> "$avahi_conf"
+        echo "[server]" >> "$avahi_conf"
+        echo "disallow-other-stacks=no" >> "$avahi_conf"
+    fi
+
+    # Also enable reflector for cross-interface mDNS (br-wifi ↔ vlan100)
+    if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
+        sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
+    elif grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
+        sed -i '/^\[reflector\]/a enable-reflector=yes' "$avahi_conf"
+    else
+        echo "" >> "$avahi_conf"
+        echo "[reflector]" >> "$avahi_conf"
+        echo "enable-reflector=yes" >> "$avahi_conf"
+    fi
+
+    # Restart avahi-daemon to apply changes
+    if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+        systemctl restart avahi-daemon 2>/dev/null || true
+        log_info "Restarted avahi-daemon with new configuration"
+    fi
+
+    log_success "Avahi configured for mDNS coexistence"
+}
+
+# ============================================================
+# WIFI BRIDGE (FOR SDN AUTOPILOT WITH AP_ISOLATE=1)
+# ============================================================
+#
+# Architecture:
+#   WiFi clients → hostapd (ap_isolate=1) → br-wifi → veth → OVS
+#
+# With ap_isolate=1, hostapd forces ALL client traffic through the bridge.
+# This gives OVS full visibility and control for NAC policy enforcement.
+# mDNS reflection is handled by hairpin mode on br-wifi, allowing HomeKit
+# devices with policy=normal to discover each other.
+#
+# Traffic flow:
+#   1. WiFi client sends mDNS (or any packet)
+#   2. hostapd forwards to br-wifi (because ap_isolate=1)
+#   3. br-wifi forwards to veth-wifi-a → veth-wifi-b → OVS
+#   4. OVS applies NAC policies (allow/block based on device policy)
+#   5. If allowed, OVS forwards back to veth-wifi-b → veth-wifi-a → br-wifi
+#   6. br-wifi hairpin reflects back to wlan interfaces
+#   7. hostapd broadcasts to WiFi clients
+#
+# ============================================================
+
+setup_wifi_bridge() {
+    log_section "WiFi Bridge for SDN Autopilot"
+
+    local br_wifi="br-wifi"
+    local veth_br="veth-wifi-a"   # Linux bridge side
+    local veth_ovs="veth-wifi-b"  # OVS side
+
+    # Create Linux bridge if not exists
+    if ! ip link show "$br_wifi" &>/dev/null; then
+        log_info "Creating WiFi bridge $br_wifi..."
+        ip link add "$br_wifi" type bridge
+        # Set STP off for faster convergence
+        ip link set "$br_wifi" type bridge stp_state 0
+        # Set forward delay to 0
+        echo 0 > "/sys/class/net/$br_wifi/bridge/forward_delay" 2>/dev/null || true
+    fi
+
+    # Bring up the bridge
+    ip link set "$br_wifi" up
+
+    # Create veth pair if not exists
+    if ! ip link show "$veth_br" &>/dev/null; then
+        log_info "Creating veth pair $veth_br <-> $veth_ovs..."
+        ip link add "$veth_br" type veth peer name "$veth_ovs"
+    fi
+
+    # Add veth_br to Linux bridge
+    if ! ip link show master "$br_wifi" | grep -q "$veth_br"; then
+        ip link set "$veth_br" master "$br_wifi" 2>/dev/null || true
+    fi
+
+    # Bring up veth interfaces
+    ip link set "$veth_br" up
+    ip link set "$veth_ovs" up
+
+    # Add veth_ovs to OVS with VLAN 100 (LAN)
+    if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
+        local current_br
+        current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
+        if [ "$current_br" = "$OVS_BRIDGE" ]; then
+            ovs-vsctl set port "$veth_ovs" tag="$VLAN_LAN" 2>/dev/null || true
+            log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_LAN"
+        else
+            ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" || true
+            log_info "Moved $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_LAN"
+        fi
+    else
+        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" 2>/dev/null || {
+            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" || true
+        }
+        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_LAN"
+    fi
+
+    # Enable hairpin mode on veth for mDNS reflection
+    # This allows packets to go back out the same port they came in on
+    if command -v bridge &>/dev/null; then
+        bridge link set dev "$veth_br" hairpin on 2>/dev/null || true
+        log_info "Enabled hairpin mode on $veth_br for mDNS reflection"
+    else
+        log_warn "bridge command not found - hairpin may not work"
+    fi
+
+    # Also enable hairpin on any WiFi interfaces that get added to br-wifi
+    # hostapd will add wlan interfaces when it starts with bridge=br-wifi
+    for wlan_if in $(ls /sys/class/net/ 2>/dev/null | grep -E "^wlan|^wlp|^wlx"); do
+        if ip link show master "$br_wifi" 2>/dev/null | grep -q "$wlan_if"; then
+            bridge link set dev "$wlan_if" hairpin on 2>/dev/null || true
+            log_info "Enabled hairpin mode on $wlan_if"
+        fi
+    done
+
+    log_success "WiFi bridge configured for SDN Autopilot"
+    log_info "  Bridge: $br_wifi → $veth_br ↔ $veth_ovs → OVS ($OVS_BRIDGE)"
+    log_info "  NAC policies enforced at OVS layer"
+    log_info "  mDNS reflection via hairpin mode"
+}
+
+# ============================================================
 # STATUS
 # ============================================================
 
@@ -406,6 +594,22 @@ show_status() {
 
     echo -e "\n${CYAN}Container veth:${NC}"
     ip -br addr show | grep -E "veth-mgmt" || echo "  (none)"
+
+    echo -e "\n${CYAN}WiFi Bridge (SDN Autopilot):${NC}"
+    if ip link show br-wifi &>/dev/null; then
+        echo "  br-wifi: UP"
+        echo "  Members:"
+        bridge link show master br-wifi 2>/dev/null | while read -r line; do
+            local dev hairpin
+            dev=$(echo "$line" | awk '{print $2}' | tr -d ':')
+            hairpin=$(bridge link show dev "$dev" 2>/dev/null | grep -o "hairpin on" || echo "hairpin off")
+            echo "    $dev ($hairpin)"
+        done
+        echo "  veth-wifi-b → OVS:"
+        ovs-vsctl get port veth-wifi-b tag 2>/dev/null && echo "" || echo "  (not connected)"
+    else
+        echo "  (not configured)"
+    fi
 }
 
 # ============================================================
@@ -426,8 +630,16 @@ main() {
             # Containers use podman's internal network as primary
             setup_container_veth || log_warn "Container veth setup had issues (non-fatal)"
 
+            # Avahi mDNS coexistence for Ecosystem Bubble detection
+            # Enables HomeKit/AirPlay device grouping via PresenceSensor
+            setup_avahi_coexistence || log_warn "Avahi setup had issues (non-fatal)"
+
+            # WiFi bridge for SDN Autopilot (ap_isolate=1 + hairpin mDNS)
+            # Allows full OVS control over WiFi traffic including device-to-device
+            setup_wifi_bridge || log_warn "WiFi bridge setup had issues (non-fatal)"
+
             log_section "OVS Post-Setup Complete"
-            log_success "VLAN interfaces, OpenFlow rules, and port tags configured"
+            log_success "VLAN interfaces, OpenFlow rules, port tags, and WiFi bridge configured"
             ;;
 
         status)
