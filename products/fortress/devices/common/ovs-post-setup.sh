@@ -501,12 +501,18 @@ setup_wifi_bridge() {
 
     # Clean up orphan veth interfaces that may have accumulated
     # These can appear from failed setup attempts or network changes
+    # Pattern: veth0@enp1s0, veth1@enp1s0, etc. (NOT veth-wifi-a)
     cleanup_orphan_veths() {
-        for orphan in $(ip link show master "$br_wifi" 2>/dev/null | grep -oE "veth[0-9]+@" | tr -d '@'); do
-            if [ -n "$orphan" ] && [ "$orphan" != "$veth_br" ]; then
-                log_info "Removing orphan veth: $orphan"
-                ip link set "$orphan" nomaster 2>/dev/null || true
-                ip link delete "$orphan" 2>/dev/null || true
+        local members
+        members=$(bridge link show master "$br_wifi" 2>/dev/null | awk '{print $2}' | tr -d ':')
+        for member in $members; do
+            # Extract base name (veth0 from veth0@enp1s0)
+            local base_name="${member%%@*}"
+            # Only remove numbered veths (veth0, veth1, etc.) not our veth-wifi-a
+            if [[ "$base_name" =~ ^veth[0-9]+$ ]]; then
+                log_info "Removing orphan veth: $base_name"
+                ip link set "$base_name" nomaster 2>/dev/null || true
+                ip link delete "$base_name" 2>/dev/null || true
             fi
         done
     }
@@ -619,11 +625,18 @@ show_status() {
         # Check each interface in the bridge
         for dev in $(bridge link show master br-wifi 2>/dev/null | awk '{print $2}' | tr -d ':'); do
             local hairpin_status
-            # bridge -d link show gives detailed info including hairpin
-            if bridge -d link show dev "$dev" 2>/dev/null | grep -q "hairpin on"; then
-                hairpin_status="hairpin on"
+            local base_dev="${dev%%@*}"
+            # Check hairpin using /sys/class/net (more reliable than bridge -d)
+            if [ -f "/sys/class/net/$base_dev/brport/hairpin_mode" ]; then
+                local hp_val
+                hp_val=$(cat "/sys/class/net/$base_dev/brport/hairpin_mode" 2>/dev/null)
+                if [ "$hp_val" = "1" ]; then
+                    hairpin_status="hairpin on"
+                else
+                    hairpin_status="hairpin off"
+                fi
             else
-                hairpin_status="hairpin off"
+                hairpin_status="hairpin n/a"
             fi
             echo "    $dev ($hairpin_status)"
         done
