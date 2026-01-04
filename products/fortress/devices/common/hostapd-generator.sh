@@ -3009,14 +3009,29 @@ generate_wifi_bridge_helper() {
 
     cat > "$helper_script" << 'HELPER_EOF'
 #!/bin/bash
-# Fortress WiFi Bridge Helper
-# Adds WiFi interface to OVS bridge after hostapd starts
+# Fortress WiFi Bridge Helper - SDN Autopilot Edition
+#
+# Architecture: WiFi → br-wifi (Linux bridge) → veth → OVS
+#
+# This script:
+# 1. Ensures br-wifi exists and is connected to OVS via veth
+# 2. Adds WiFi interface to br-wifi (NOT directly to OVS)
+# 3. Sets up ebtables to force WiFi-to-WiFi through veth for OVS policy enforcement
+#
+# With hostapd ap_isolate=1 + bridge=br-wifi, all traffic goes through OVS
+# where NAC policies can block/allow based on device policy.
 
 IFACE="$1"
-BRIDGE="${2:-FTS}"
+OVS_BRIDGE="${2:-FTS}"
 ACTION="${3:-add}"
+WIFI_BRIDGE="br-wifi"
+VETH_BR="veth-wifi-a"
+VETH_OVS="veth-wifi-b"
+VLAN_TAG="${WIFI_VLAN_TAG:-100}"
 
 [ -z "$IFACE" ] && exit 1
+
+log() { echo "[wifi-bridge] $*"; logger -t fts-wifi-bridge "$*" 2>/dev/null || true; }
 
 # Wait for interface to be ready
 for i in {1..10}; do
@@ -3027,45 +3042,106 @@ for i in {1..10}; do
 done
 
 if ! ip link show "$IFACE" &>/dev/null; then
-    echo "Interface $IFACE not found after waiting"
+    log "Interface $IFACE not found after waiting"
     exit 1
 fi
 
-# Check if OVS is available and bridge exists
-if ! command -v ovs-vsctl &>/dev/null; then
-    echo "OVS not available, skipping bridge configuration"
-    exit 0
-fi
+# Ensure br-wifi exists
+ensure_wifi_bridge() {
+    if ! ip link show "$WIFI_BRIDGE" &>/dev/null; then
+        log "Creating WiFi bridge $WIFI_BRIDGE"
+        ip link add "$WIFI_BRIDGE" type bridge
+        ip link set "$WIFI_BRIDGE" type bridge stp_state 0
+        echo 0 > "/sys/class/net/$WIFI_BRIDGE/bridge/forward_delay" 2>/dev/null || true
+    fi
+    ip link set "$WIFI_BRIDGE" up
+}
 
-if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
-    echo "OVS bridge $BRIDGE does not exist, skipping"
-    exit 0
-fi
+# Ensure veth pair connecting br-wifi to OVS
+ensure_veth_pair() {
+    if ! ip link show "$VETH_BR" &>/dev/null; then
+        log "Creating veth pair $VETH_BR <-> $VETH_OVS"
+        ip link add "$VETH_BR" type veth peer name "$VETH_OVS"
+    fi
+
+    # Add veth_br to br-wifi
+    if ! ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$VETH_BR"; then
+        ip link set "$VETH_BR" master "$WIFI_BRIDGE" 2>/dev/null || true
+    fi
+
+    # Add veth_ovs to OVS with VLAN tag
+    if command -v ovs-vsctl &>/dev/null && ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+        if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${VETH_OVS}$"; then
+            log "Adding $VETH_OVS to OVS bridge $OVS_BRIDGE (VLAN $VLAN_TAG)"
+            ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$VETH_OVS" tag="$VLAN_TAG" 2>/dev/null || true
+        fi
+    fi
+
+    ip link set "$VETH_BR" up
+    ip link set "$VETH_OVS" up
+}
+
+# Set up ebtables to force WiFi-to-WiFi traffic through veth (to OVS)
+setup_ebtables() {
+    if ! command -v ebtables &>/dev/null; then
+        log "ebtables not available - WiFi isolation via OVS won't work"
+        return 1
+    fi
+
+    # Remove old rules for this interface first
+    ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+
+    # Block direct WiFi-to-WiFi on same interface
+    ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+
+    # Block WiFi-to-WiFi across different interfaces (2.4GHz ↔ 5GHz)
+    for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+        if [ "$other" != "$IFACE" ]; then
+            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+        fi
+    done
+
+    log "ebtables rules set for $IFACE - WiFi traffic forced through OVS"
+}
+
+# Remove ebtables rules
+remove_ebtables() {
+    if command -v ebtables &>/dev/null; then
+        ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+        done
+    fi
+}
 
 if [ "$ACTION" = "add" ]; then
-    # Add interface to OVS bridge with VLAN 100 (LAN) tag
-    # WiFi clients should be on VLAN 100 for internet access
-    VLAN_TAG="${WIFI_VLAN_TAG:-100}"
+    # Ensure infrastructure is ready
+    ensure_wifi_bridge
+    ensure_veth_pair
 
-    if ! ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
-        echo "Adding $IFACE to OVS bridge $BRIDGE (VLAN $VLAN_TAG)"
-        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" \
-            tag="$VLAN_TAG" vlan_mode=access 2>/dev/null || {
-            echo "Failed to add $IFACE to $BRIDGE"
-            exit 1
-        }
-    else
-        # Interface already in bridge, ensure VLAN tag is set
-        echo "Setting VLAN $VLAN_TAG on existing port $IFACE"
-        ovs-vsctl set port "$IFACE" tag="$VLAN_TAG" vlan_mode=access 2>/dev/null || true
+    # Add WiFi interface to br-wifi (NOT directly to OVS)
+    # hostapd with bridge=br-wifi should have already done this, but ensure it
+    if ! ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
+        log "Adding $IFACE to bridge $WIFI_BRIDGE"
+        ip link set "$IFACE" master "$WIFI_BRIDGE" 2>/dev/null || true
     fi
+
     ip link set "$IFACE" up 2>/dev/null || true
-    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE (VLAN $VLAN_TAG)"
+
+    # Set up ebtables for WiFi isolation via OVS
+    setup_ebtables
+
+    log "WiFi interface $IFACE configured: br-wifi → veth → OVS ($OVS_BRIDGE)"
+
 elif [ "$ACTION" = "remove" ]; then
-    # Remove interface from OVS bridge
-    if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
-        echo "Removing $IFACE from OVS bridge $BRIDGE"
-        ovs-vsctl del-port "$BRIDGE" "$IFACE" 2>/dev/null || true
+    # Remove ebtables rules
+    remove_ebtables
+
+    # Remove interface from br-wifi
+    if ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
+        log "Removing $IFACE from bridge $WIFI_BRIDGE"
+        ip link set "$IFACE" nomaster 2>/dev/null || true
     fi
 fi
 
