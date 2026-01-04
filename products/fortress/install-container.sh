@@ -3633,6 +3633,28 @@ attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
 attach_if_ready fts-grafana 172.20.200.30 mgmt true
 attach_if_ready fts-victoria 172.20.200.31 mgmt true
 
+# Clean up orphan veth interfaces from br-wifi
+# These can accumulate from container restarts or failed network setups
+cleanup_orphan_veths() {
+    local br_wifi="br-wifi"
+    if ip link show "$br_wifi" &>/dev/null; then
+        local members
+        members=$(bridge link show master "$br_wifi" 2>/dev/null | awk '{print $2}' | tr -d ':')
+        for member in $members; do
+            local base_name="${member%%@*}"
+            # Only remove numbered veths (veth0, veth1, etc.) not our veth-wifi-a
+            if [[ "$base_name" =~ ^veth[0-9]+$ ]]; then
+                log_info "Removing orphan veth: $base_name"
+                ip link set "$base_name" nomaster 2>/dev/null || true
+                ip link delete "$base_name" 2>/dev/null || true
+            fi
+        done
+    fi
+}
+
+# Clean up any orphan veths that might have accumulated
+cleanup_orphan_veths
+
 log_info "OVS container integration complete"
 OVSEOF
 
