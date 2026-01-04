@@ -50,9 +50,9 @@ sudo ./install.sh --tier nexus
 
 ### Fortress Options
 ```bash
---enable-n8n         # Workflow automation
---enable-monitoring  # Grafana + Victoria Metrics
---enable-clickhouse  # Analytics database
+--enable-aiochi      # AIOCHI (AI Eyes) - Full cognitive layer
+                     # Includes: n8n, Grafana, VictoriaMetrics,
+                     # ClickHouse, Suricata, Zeek, Ollama LLM
 --enable-lte         # LTE/5G failover
 ```
 
@@ -82,7 +82,8 @@ Automate security responses with visual workflows.
 - Sync threat intel with external feeds
 
 ```bash
-sudo ./install.sh --tier fortress --enable-n8n
+# n8n is included with AIOCHI (AI Eyes)
+sudo ./install.sh --tier fortress --enable-aiochi
 ```
 
 ### LTE — Mobile Failover

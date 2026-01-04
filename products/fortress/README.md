@@ -240,12 +240,15 @@ sudo ./install.sh --tier fortress
 ### With Options
 
 ```bash
-# Enable all optional features
-sudo ./install.sh --tier fortress \
-  --enable-n8n \
-  --enable-monitoring \
-  --enable-clickhouse \
-  --enable-lte
+# Enable AIOCHI (AI Eyes - Cognitive Network Layer)
+# Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n, Ollama LLM
+sudo ./install.sh --tier fortress --enable-aiochi
+
+# Enable LTE failover
+sudo ./install.sh --tier fortress --enable-lte
+
+# Full installation with all features
+sudo ./install.sh --tier fortress --enable-aiochi --enable-lte
 ```
 
 ---
