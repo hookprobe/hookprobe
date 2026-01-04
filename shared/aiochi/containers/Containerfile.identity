@@ -1,0 +1,118 @@
+# AIOCHI Identity Engine Container
+# Transforms MAC addresses into human-readable device labels
+#
+# Features:
+#   - Device fingerprinting (DHCP Option 55, MAC OUI, hostname, mDNS)
+#   - Ecosystem bubble detection (Apple, Google, Samsung clusters)
+#   - Human labeling ("Dad's iPhone", "Kitchen Thermostat")
+#   - REST API for device identity lookups
+#
+# Usage: podman build -t localhost/aiochi-identity:latest -f Containerfile.identity .
+
+FROM docker.io/library/python:3.11-slim-bookworm
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL version="1.0.0"
+LABEL description="AIOCHI Identity Engine - Device fingerprinting and labeling"
+
+# Create app user
+RUN groupadd -r aiochi && useradd -r -g aiochi aiochi
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy backend modules
+COPY backend/__init__.py backend/
+COPY backend/identity_engine.py backend/
+COPY backend/presence_tracker.py backend/
+COPY backend/time_patterns.py backend/
+COPY backend/trust_heatmap.py backend/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    flask>=3.0.0 \
+    gunicorn>=21.0.0 \
+    clickhouse-connect>=0.7.0 \
+    requests>=2.31.0
+
+# Create data directory
+RUN mkdir -p /app/data && chown -R aiochi:aiochi /app/data
+
+# Create entrypoint script
+RUN cat > /app/entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "=== AIOCHI Identity Engine ==="
+echo "Starting identity engine on port 8060..."
+
+# Start Flask API server
+exec gunicorn \
+    --bind 0.0.0.0:8060 \
+    --workers 2 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile - \
+    "backend.identity_engine:create_app()"
+EOF
+
+RUN chmod +x /app/entrypoint.sh
+
+# Create minimal Flask app factory
+RUN cat > /app/backend/identity_engine_app.py << 'PYEOF'
+"""AIOCHI Identity Engine REST API"""
+from flask import Flask, jsonify, request
+import os
+
+def create_app():
+    """Create Flask application."""
+    app = Flask(__name__)
+
+    @app.route('/health')
+    def health():
+        return jsonify({'status': 'healthy', 'service': 'identity-engine'})
+
+    @app.route('/api/device/<mac>')
+    def get_device(mac):
+        """Get device identity by MAC address."""
+        # Import identity engine
+        from . import identity_engine
+        engine = identity_engine.IdentityEngine()
+        identity = engine.identify(mac)
+        if identity:
+            return jsonify(identity.to_dict())
+        return jsonify({'error': 'Device not found'}), 404
+
+    @app.route('/api/devices')
+    def list_devices():
+        """List all known devices."""
+        from . import identity_engine
+        engine = identity_engine.IdentityEngine()
+        devices = engine.all_identities()
+        return jsonify([d.to_dict() for d in devices])
+
+    @app.route('/api/ecosystems')
+    def list_ecosystems():
+        """List detected ecosystem bubbles."""
+        from . import identity_engine
+        engine = identity_engine.IdentityEngine()
+        ecosystems = engine.get_ecosystem_bubbles()
+        return jsonify(ecosystems)
+
+    return app
+PYEOF
+
+# Switch to non-root user
+USER aiochi
+
+EXPOSE 8060
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+    CMD curl -f http://localhost:8060/health || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

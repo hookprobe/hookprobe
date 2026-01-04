@@ -574,6 +574,70 @@ remove_containers() {
         podman rm -f "$container" 2>/dev/null || true
     done
 
+    # ============================================================
+    # AIOCHI CLEANUP - AI Eyes (Cognitive Network Layer)
+    # ============================================================
+    # Check if AIOCHI was installed
+    local aiochi_installed=false
+    if [ -f "${CONFIG_DIR}/optional-services.conf" ]; then
+        source "${CONFIG_DIR}/optional-services.conf" 2>/dev/null || true
+        aiochi_installed="${INSTALL_AIOCHI:-false}"
+    fi
+
+    # Also detect AIOCHI by container presence
+    if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -qE "^aiochi-"; then
+        aiochi_installed=true
+    fi
+
+    if [ "$aiochi_installed" = true ] || podman ps -a --format "{{.Names}}" 2>/dev/null | grep -qE "^aiochi-"; then
+        log_info "AIOCHI (AI Eyes) detected - cleaning up..."
+
+        # Stop AIOCHI containers
+        log_info "Stopping AIOCHI containers..."
+        for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^aiochi-" || true); do
+            log_info "  Stopping: $container"
+            podman stop "$container" 2>/dev/null || true
+        done
+
+        # Remove AIOCHI containers
+        log_info "Removing AIOCHI containers..."
+        for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^aiochi-" || true); do
+            log_info "  Removing: $container"
+            podman rm -f "$container" 2>/dev/null || true
+        done
+
+        # Remove AIOCHI images (localhost/aiochi-*)
+        log_info "Removing AIOCHI images..."
+        for image in $(podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^localhost/aiochi-" || true); do
+            log_info "  Removing image: $image"
+            podman rmi -f "$image" 2>/dev/null || true
+        done
+
+        # Handle AIOCHI volumes
+        if [ "$KEEP_DATA" = true ]; then
+            log_info "Preserving AIOCHI volumes (--keep-data specified)"
+            log_info "  AIOCHI data preserved for reinstallation:"
+            for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^aiochi-" || true); do
+                log_info "    • $volume"
+            done
+        else
+            log_info "Removing AIOCHI volumes..."
+            for volume in $(podman volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^aiochi-" || true); do
+                log_info "  Removing volume: $volume"
+                podman volume rm -f "$volume" 2>/dev/null || true
+            done
+        fi
+
+        # Remove AIOCHI network
+        log_info "Removing AIOCHI network..."
+        podman network rm -f aiochi-internal 2>/dev/null || true
+
+        # Remove AIOCHI environment file
+        rm -f /opt/hookprobe/shared/aiochi/containers/.env 2>/dev/null || true
+
+        log_info "AIOCHI cleanup complete"
+    fi
+
     # Remove ALL fortress images (localhost/fts-*)
     log_info "Removing all fortress images..."
     for image in $(podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^localhost/fts-" || true); do
@@ -592,7 +656,11 @@ remove_containers() {
         "docker.io/library/python:3.11-slim-bookworm"
         "docker.io/library/debian:bookworm-slim"
         "docker.io/jasonish/suricata:latest"
+        "docker.io/jasonish/suricata:7.0.8"
         "docker.io/zeek/zeek:latest"
+        "docker.io/zeek/zeek:7.0.3"
+        "docker.io/clickhouse/clickhouse-server:24.8"
+        "docker.io/n8nio/n8n:1.70.3"
     )
     for image in "${base_images[@]}"; do
         if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qF "$image"; then
@@ -1283,8 +1351,21 @@ remove_installation() {
         rm -f /var/log/hookprobe/lstm-training.log 2>/dev/null || true
         # Remove SDN Auto Pilot database
         rm -f /var/lib/hookprobe/autopilot.db 2>/dev/null || true
+
+        # Remove AIOCHI shared module
+        if [ -d "/opt/hookprobe/shared/aiochi" ]; then
+            log_info "Removing AIOCHI shared module..."
+            rm -rf /opt/hookprobe/shared/aiochi 2>/dev/null || true
+        fi
+        # Clean up empty shared directory if nothing else is there
+        if [ -d "/opt/hookprobe/shared" ] && [ -z "$(ls -A /opt/hookprobe/shared 2>/dev/null)" ]; then
+            rmdir /opt/hookprobe/shared 2>/dev/null || true
+        fi
     else
         log_info "SDN Auto Pilot database preserved: /var/lib/hookprobe/autopilot.db"
+        if [ -d "/opt/hookprobe/shared/aiochi" ]; then
+            log_info "AIOCHI shared module preserved: /opt/hookprobe/shared/aiochi"
+        fi
     fi
 
     # User data directory handling
@@ -1531,6 +1612,14 @@ verify_uninstall() {
                 issues=$((issues + 1))
             fi
         done
+
+        # Check AIOCHI containers
+        for container in aiochi-clickhouse aiochi-victoria aiochi-grafana aiochi-narrative aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper; do
+            if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+                log_warn "AIOCHI container still exists: $container"
+                issues=$((issues + 1))
+            fi
+        done
     fi
 
     # Check installation directory
@@ -1746,6 +1835,21 @@ main() {
     echo -e "  • Installation: $INSTALL_DIR"
     [ "$KEEP_DATA" = false ] && echo -e "  • Data: $DATA_DIR"
     [ "$KEEP_LOGS" = true ] && echo -e "  ${DIM}(Logs preserved at $LOG_DIR)${NC}"
+
+    # Check if AIOCHI was installed and removed
+    if [ -f "${CONFIG_DIR}/optional-services.conf" ] && grep -q "INSTALL_AIOCHI=true" "${CONFIG_DIR}/optional-services.conf" 2>/dev/null; then
+        echo ""
+        echo -e "  ${BOLD}AIOCHI (AI Eyes) Components Removed:${NC}"
+        echo -e "  • ClickHouse analytics database"
+        echo -e "  • VictoriaMetrics time-series"
+        echo -e "  • Grafana dashboards"
+        echo -e "  • n8n narrative engine"
+        echo -e "  • Suricata + Zeek network capture"
+        echo -e "  • Identity engine"
+        echo -e "  • Log shipper pipeline"
+        [ "$KEEP_DATA" = true ] && echo -e "  ${DIM}(AIOCHI data volumes preserved)${NC}"
+    fi
+
     echo ""
     echo -e "  ${DIM}To reinstall Fortress:${NC}"
     echo -e "  ${DIM}sudo ./install.sh --tier fortress${NC}"
