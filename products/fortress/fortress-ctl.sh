@@ -128,10 +128,16 @@ create_backup() {
 
     case "$backup_type" in
         full|db)
-            # Database backup
+            # Database backup (check both fts-postgres and aiochi-postgres)
             log_substep "Backing up PostgreSQL database..."
-            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
-                podman exec fts-postgres pg_dump -U fortress fortress > "${backup_path}/database.sql" 2>/dev/null || {
+            local pg_container=""
+            if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "aiochi-postgres"; then
+                pg_container="aiochi-postgres"
+            elif podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+                pg_container="fts-postgres"
+            fi
+            if [ -n "$pg_container" ]; then
+                podman exec "$pg_container" pg_dump -U fortress fortress > "${backup_path}/database.sql" 2>/dev/null || {
                     log_warn "Database backup failed (container may not be running)"
                 }
             elif [ -f /var/lib/postgresql/data/PG_VERSION ]; then
@@ -164,9 +170,9 @@ create_backup() {
                 tar -czf "${backup_path}/web-app.tar.gz" -C "$INSTALL_DIR" web lib 2>/dev/null || true
             fi
 
-            # Container image tag
-            if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -q "fts-web"; then
-                podman images --format "{{.Repository}}:{{.Tag}}:{{.ID}}" | grep fortress > "${backup_path}/images.txt" 2>/dev/null || true
+            # Container image tag (check for fts-web or aiochi-web)
+            if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qE "(fts|aiochi)-web"; then
+                podman images --format "{{.Repository}}:{{.Tag}}:{{.ID}}" | grep -E "(fortress|aiochi)" > "${backup_path}/images.txt" 2>/dev/null || true
             fi
             ;;
     esac
@@ -209,11 +215,17 @@ restore_backup() {
     local backup_type=$(python3 -c "import json; print(json.load(open('${restore_path}/manifest.json'))['type'])")
     log_info "Backup type: $backup_type"
 
-    # Restore database
+    # Restore database (check for both fts-postgres and aiochi-postgres)
     if [ -f "${restore_path}/database.sql" ]; then
         log_substep "Restoring database..."
-        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
-            podman exec -i fts-postgres psql -U fortress fortress < "${restore_path}/database.sql"
+        local pg_container=""
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "aiochi-postgres"; then
+            pg_container="aiochi-postgres"
+        elif podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+            pg_container="fts-postgres"
+        fi
+        if [ -n "$pg_container" ]; then
+            podman exec -i "$pg_container" psql -U fortress fortress < "${restore_path}/database.sql"
         fi
     fi
 
@@ -264,14 +276,14 @@ stop_all_services() {
         }
     fi
 
-    # 3. Force-stop any remaining fts-* containers
+    # 3. Force-stop any remaining fts-* or aiochi-* containers
     log_substep "Force-stopping remaining containers..."
-    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^(fts|aiochi)-" || true); do
         podman stop -t 5 "$container" 2>/dev/null || true
     done
 
     # 4. Kill unresponsive containers
-    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+    for container in $(podman ps --format "{{.Names}}" 2>/dev/null | grep -E "^(fts|aiochi)-" || true); do
         podman kill "$container" 2>/dev/null || true
     done
 
@@ -323,13 +335,13 @@ start_all_services() {
             log_substep "Cleaning up stale containers..."
             podman-compose down --timeout 10 2>/dev/null || true
 
-            # Force-remove any remaining fts-* containers
-            for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^fts-" || true); do
+            # Force-remove any remaining fts-* or aiochi-* containers
+            for container in $(podman ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^(fts|aiochi)-" || true); do
                 podman rm -f "$container" 2>/dev/null || true
             done
 
             # Remove stale networks
-            for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+            for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^(fts|aiochi)-" || true); do
                 podman network rm -f "$network" 2>/dev/null || true
             done
 
@@ -338,11 +350,11 @@ start_all_services() {
         }
     fi
 
-    # Wait for essential containers
+    # Wait for essential containers (fts-postgres or aiochi-postgres)
     log_substep "Waiting for containers to be ready..."
     local retries=30
     while [ $retries -gt 0 ]; do
-        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-postgres"; then
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -qE "(fts|aiochi)-postgres"; then
             break
         fi
         sleep 2
@@ -406,9 +418,10 @@ uninstall_staged() {
     log_substep "Stage 2: Removing application..."
 
     if [ "$mode" = "container" ]; then
-        # Remove containers but not volumes
-        podman rm -f fts-web fts-agent 2>/dev/null || true
+        # Remove containers but not volumes (both fts-* and aiochi-* prefixes)
+        podman rm -f fts-web fts-agent aiochi-web aiochi-agent 2>/dev/null || true
         podman rmi localhost/fts-web:latest localhost/fts-agent:latest 2>/dev/null || true
+        podman rmi localhost/aiochi-web:latest localhost/aiochi-agent:latest 2>/dev/null || true
     fi
 
     rm -rf "$INSTALL_DIR/web" "$INSTALL_DIR/lib" 2>/dev/null || true
@@ -424,10 +437,10 @@ uninstall_staged() {
     # Remove nftables rules
     nft delete table inet fortress_filter 2>/dev/null || true
 
-    # Remove redis container/data if not keeping data
+    # Remove redis container/data if not keeping data (both fts-* and aiochi-* prefixes)
     if [ "$keep_data" = "false" ]; then
-        podman rm -f fts-redis 2>/dev/null || true
-        podman volume rm fts-redis-data 2>/dev/null || true
+        podman rm -f fts-redis aiochi-redis 2>/dev/null || true
+        podman volume rm fts-redis-data aiochi-redis-data 2>/dev/null || true
     fi
 
     # Stage 4: Handle data (Tier 1)
@@ -440,8 +453,11 @@ uninstall_staged() {
             create_backup "db" >/dev/null 2>&1 || true
         fi
 
-        podman rm -f fts-postgres 2>/dev/null || true
+        # Remove postgres containers (fts or aiochi)
+        podman rm -f fts-postgres aiochi-postgres 2>/dev/null || true
+        # Remove volumes (both fts-* and aiochi-* prefixes)
         podman volume rm fts-postgres-data fts-web-data fts-web-logs fortress-config 2>/dev/null || true
+        podman volume rm aiochi-postgres-data aiochi-web-data aiochi-web-logs 2>/dev/null || true
 
         rm -rf "$DATA_DIR" "$LOG_DIR/fortress"* 2>/dev/null || true
     else
@@ -836,15 +852,15 @@ show_status() {
     echo ""
 
     echo "Services:"
-    if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fortress"; then
-        podman ps --filter "name=fortress" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    if podman ps --format "{{.Names}}" 2>/dev/null | grep -qE "(fortress|fts-|aiochi-)"; then
+        podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | grep -E "(NAME|fts-|aiochi-)"
     else
         systemctl is-active fortress fts-web fts-agent 2>/dev/null || echo "  No services running"
     fi
     echo ""
 
     echo "Volumes:"
-    podman volume ls --filter "name=fortress" 2>/dev/null || echo "  No volumes found"
+    podman volume ls 2>/dev/null | grep -E "(NAME|fts-|aiochi-|fortress)" || echo "  No volumes found"
     echo ""
 
     echo "Backups:"
