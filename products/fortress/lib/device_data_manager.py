@@ -608,7 +608,7 @@ class DeviceDataManager:
         Returns:
             True if successful
         """
-        valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'default', 'normal', 'smart_home']
+        valid_policies = ['full_access', 'lan_only', 'internet_only', 'isolated', 'quarantine', 'default', 'smart_home']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
@@ -637,15 +637,15 @@ class DeviceDataManager:
         - quarantine/isolated: Block all traffic except DHCP/DNS
         - lan_only: Allow LAN, block internet
         - internet_only: Block LAN, allow internet
-        - full_access/normal/smart_home: No restrictions
+        - full_access/smart_home: No restrictions
         """
         mac_upper = mac.upper()
 
         # Normalize policy names
         policy_map = {
             'isolated': 'quarantine',
-            'default': 'normal',
-            'full_access': 'normal',
+            'default': 'smart_home',
+            'normal': 'smart_home',
         }
         effective_policy = policy_map.get(policy, policy)
 
@@ -660,11 +660,11 @@ class DeviceDataManager:
         logger.info(f"Block requested for device: {mac}")
 
     def _unblock_device(self, mac: str):
-        """Unblock a device by applying normal policy."""
+        """Unblock a device by applying smart_home policy."""
         mac_upper = mac.upper()
         entry = self._registry.get(mac_upper)
-        # Restore original policy or use normal
-        policy = entry.policy if entry and entry.policy not in ('isolated', 'quarantine') else 'normal'
+        # Restore original policy or use smart_home
+        policy = entry.policy if entry and entry.policy not in ('isolated', 'quarantine') else 'smart_home'
         self._write_policy_trigger(mac_upper, policy)
         logger.info(f"Unblock requested for device: {mac}")
 
@@ -680,7 +680,7 @@ class DeviceDataManager:
         for mac, entry in self._registry.items():
             if entry.is_blocked:
                 self._write_policy_trigger(mac, 'quarantine')
-            elif entry.policy not in ('normal', 'full_access', 'default', 'smart_home', ''):
+            elif entry.policy not in ('full_access', 'default', 'smart_home', ''):
                 self._write_policy_trigger(mac, entry.policy)
             synced += 1
         logger.info(f"Requested sync for {synced} device policies")

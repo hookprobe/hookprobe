@@ -479,7 +479,7 @@ setup_avahi_coexistence() {
 # With ap_isolate=1, hostapd forces ALL client traffic through the bridge.
 # This gives OVS full visibility and control for NAC policy enforcement.
 # mDNS reflection is handled by hairpin mode on br-wifi, allowing HomeKit
-# devices with policy=normal to discover each other.
+# devices with policy=smart_home to discover each other.
 #
 # Traffic flow:
 #   1. WiFi client sends mDNS (or any packet)

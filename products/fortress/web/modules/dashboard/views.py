@@ -311,7 +311,7 @@ def get_sdn_autopilot_summary():
                     result['quarantined'] += count
                 elif policy == 'internet_only':
                     result['internet_only'] += count
-                elif policy in ('full_access', 'normal', 'smart_home'):
+                elif policy in ('full_access', 'smart_home'):
                     result['full_access'] += count
                 result['policies_applied'] += count
 
@@ -808,7 +808,7 @@ def get_topology_data():
         {'id': 'policy_quarantine', 'name': 'quarantine', 'label': 'Quarantine', 'color': '#dc3545', 'icon': 'ban'},
         {'id': 'policy_internet_only', 'name': 'internet_only', 'label': 'Internet Only', 'color': '#17a2b8', 'icon': 'globe'},
         {'id': 'policy_lan_only', 'name': 'lan_only', 'label': 'LAN Only', 'color': '#ffc107', 'icon': 'home'},
-        {'id': 'policy_normal', 'name': 'normal', 'label': 'Normal', 'color': '#28a745', 'icon': 'check-circle'},
+        {'id': 'policy_smart_home', 'name': 'smart_home', 'label': 'Smart Home', 'color': '#28a745', 'icon': 'check-circle'},
         {'id': 'policy_full_access', 'name': 'full_access', 'label': 'Full Access', 'color': '#007bff', 'icon': 'shield-alt'},
     ]
 
@@ -837,7 +837,7 @@ def get_topology_data():
     for i, device in enumerate(devices):
         mac = device.get('mac_address', f'unknown_{i}')
         device_id = f"device_{mac.replace(':', '_')}"
-        policy = device.get('policy', 'normal')
+        policy = device.get('policy', 'smart_home')
         vlan_id = device.get('vlan_id', 100)
 
         # Determine device icon
@@ -926,7 +926,7 @@ def api_update_device_policy(mac):
     if not new_policy:
         return jsonify({'success': False, 'error': 'Policy required'}), 400
 
-    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'smart_home', 'full_access']
     if new_policy not in valid_policies:
         return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
 

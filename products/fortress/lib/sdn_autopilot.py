@@ -16,7 +16,7 @@ Policies (matching device_policies.py):
 - QUARANTINE: Unknown devices, no network access (default)
 - INTERNET_ONLY: Can access internet but not LAN devices
 - LAN_ONLY: Can access LAN but not internet (IoT, printers)
-- NORMAL: Curated IoT (HomePod, Echo, Matter/Thread bridges)
+- SMART_HOME: Curated IoT (HomePod, Echo, Matter/Thread bridges)
 - FULL_ACCESS: Management devices with full access
 
 Storage: SQLite database at /var/lib/hookprobe/autopilot.db
@@ -527,9 +527,9 @@ class SDNAutoPilot:
 
         Policy Hierarchy:
         1. Management Devices (MacBook, iPad, iMac) - full network control
-        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN
-        3. Trusted Infrastructure (Raspberry Pi) - normal access
-        4. Smart Home devices - normal
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - smart_home LAN
+        3. Trusted Infrastructure (Raspberry Pi) - smart_home access
+        4. Smart Home devices - smart_home
         5. Personal Devices (non-Apple) - internet_only
         6. IoT Devices - lan_only
         7. Unknown - quarantine
@@ -544,21 +544,21 @@ class SDNAutoPilot:
                 return 'full_access', f"Management: {device_name} (Apple)"
 
         # =======================================================================
-        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # APPLE ECOSYSTEM - Smart Home LAN access for inter-device communication
         # =======================================================================
 
-        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # iPhone, Apple Watch, HomePod, Apple TV get smart_home policy
         # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
         if vendor == "Apple" and score >= 0.75:
-            return 'normal', f"Apple Ecosystem: {device_name}"
+            return 'smart_home', f"Apple Ecosystem: {device_name}"
 
         # =======================================================================
-        # TRUSTED INFRASTRUCTURE - Normal access (not management)
+        # TRUSTED INFRASTRUCTURE - Smart Home access (not management)
         # =======================================================================
 
         # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and score >= 0.80:
-            return 'normal', f"Trusted SBC: {device_name}"
+            return 'smart_home', f"Trusted SBC: {device_name}"
 
         # =======================================================================
         # HIGH CONFIDENCE DEVICES (score >= 0.80)
@@ -566,16 +566,16 @@ class SDNAutoPilot:
         if score >= 0.80:
             # Smart home devices need LAN access for control
             if category in ('voice_assistant', 'smart_hub', 'bridge'):
-                return 'normal', f"Verified {device_name} (score: {score:.2f})"
+                return 'smart_home', f"Verified {device_name} (score: {score:.2f})"
             # Personal devices - internet access only (non-Apple)
             elif category in ('phone', 'tablet', 'laptop', 'workstation', 'desktop', 'gaming', 'streaming', 'smart_tv', 'wearable'):
                 return 'internet_only', f"Verified {device_name} (score: {score:.2f})"
             # IoT devices - LAN only (no internet)
             elif category in ('printer', 'camera', 'doorbell', 'thermostat', 'iot', 'appliance', 'sensor', 'smart_plug', 'smart_light'):
                 return 'lan_only', f"Verified IoT: {device_name} (score: {score:.2f})"
-            # SBCs get normal access
+            # SBCs get smart_home access
             elif category == 'sbc':
-                return 'normal', f"SBC: {device_name}"
+                return 'smart_home', f"SBC: {device_name}"
             # Servers get full access
             elif category == 'server':
                 return 'full_access', f"Server: {device_name} (score: {score:.2f})"
@@ -588,7 +588,7 @@ class SDNAutoPilot:
             if category in ('printer', 'camera', 'iot', 'thermostat', 'appliance'):
                 return 'lan_only', f"Likely IoT: {device_name} (score: {score:.2f})"
             if category in ('voice_assistant', 'smart_hub', 'bridge'):
-                return 'normal', f"Likely smart home: {device_name} (score: {score:.2f})"
+                return 'smart_home', f"Likely smart home: {device_name} (score: {score:.2f})"
             return 'internet_only', f"Generic device: {device_name} (score: {score:.2f})"
 
         # Known workstation vendors get internet access
@@ -730,23 +730,23 @@ class SDNAutoPilot:
             if category in ('laptop', 'tablet', 'desktop'):
                 return 'full_access', f"Management (Apple {category})"
 
-        # Apple Ecosystem: Other Apple devices get 'normal'
+        # Apple Ecosystem: Other Apple devices get smart_home
         if vendor == "Apple" and score >= 0.75:
-            return 'normal', f"Apple Ecosystem (score: {score:.2f})"
+            return 'smart_home', f"Apple Ecosystem (score: {score:.2f})"
 
         # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and score >= 0.80:
-            return 'normal', f"Trusted SBC (score: {score:.2f})"
+            return 'smart_home', f"Trusted SBC (score: {score:.2f})"
 
         if score >= 0.80:
             if category in ('smart_hub', 'bridge', 'voice_assistant'):
-                return 'normal', f"Verified {category} (score: {score:.2f})"
+                return 'smart_home', f"Verified {category} (score: {score:.2f})"
             elif category in ('phone', 'tablet', 'laptop', 'workstation', 'gaming'):
                 return 'internet_only', f"Verified device (score: {score:.2f})"
             elif category in ('printer', 'camera', 'iot', 'sensor'):
                 return 'lan_only', f"Verified IoT (score: {score:.2f})"
             elif category == 'sbc':
-                return 'normal', f"SBC (score: {score:.2f})"
+                return 'smart_home', f"SBC (score: {score:.2f})"
             return 'internet_only', f"Verified (score: {score:.2f})"
         elif score >= 0.50:
             if category in ('printer', 'camera', 'iot'):
@@ -904,7 +904,7 @@ class SDNAutoPilot:
                 'comment': "Allow gateway"
             })
 
-        elif policy in ('normal', 'smart_home'):
+        elif policy == 'smart_home':
             rules.append({
                 'priority': 600,
                 'match': {'eth_src': mac},
@@ -952,7 +952,7 @@ class SDNAutoPilot:
 
         Args:
             mac: Device MAC address
-            policy: Policy name (quarantine, internet_only, lan_only, normal/smart_home, full_access)
+            policy: Policy name (quarantine, internet_only, lan_only, smart_home, full_access)
 
         Returns:
             True if successful, False otherwise
@@ -960,16 +960,16 @@ class SDNAutoPilot:
         mac = mac.upper()
 
         # Normalize policy names
-        # 'isolated' and 'smart_home' are legacy aliases
+        # 'isolated' and 'normal' are legacy aliases
         # NOTE: full_access is a DISTINCT policy (includes management network access)
-        #       and should NOT be aliased to 'normal'
+        #       and should NOT be aliased to 'smart_home'
         policy_aliases = {
             'isolated': 'quarantine',
-            'smart_home': 'normal',
+            'normal': 'smart_home',
         }
         policy = policy_aliases.get(policy, policy)
 
-        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'normal', 'full_access']
+        valid_policies = ['quarantine', 'internet_only', 'lan_only', 'smart_home', 'full_access']
         if policy not in valid_policies:
             logger.warning(f"Invalid policy: {policy}")
             return False
@@ -1230,7 +1230,7 @@ class SDNAutoPilot:
     def sync_all(self, devices: List[Dict], apply_rules: bool = True) -> Dict:
         """Sync all devices."""
         results = {'total': 0, 'quarantine': 0, 'internet_only': 0,
-                   'lan_only': 0, 'normal': 0, 'full_access': 0}
+                   'lan_only': 0, 'smart_home': 0, 'full_access': 0}
 
         for d in devices:
             if not d.get('mac'):
