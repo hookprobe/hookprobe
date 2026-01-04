@@ -226,4 +226,4 @@ Contact: qsecbit@hookprobe.com
 
 ---
 
-*AIOCHI - Less is more for noobs, but powerful monitoring underneath.*
+*AIOCHI - Less is more for everyone, but powerful monitoring underneath.*
