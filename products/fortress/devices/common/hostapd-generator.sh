@@ -2179,7 +2179,7 @@ wpa_passphrase=$password
 # HomeKit/AirPlay/mDNS Discovery:
 # OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
 # This gives SDN visibility into device discovery while maintaining isolation control.
-# Devices with policy=normal/smart_home get mDNS reflected; internet_only does not.
+# Devices with policy=smart_home get mDNS reflected; internet_only does not.
 macaddr_acl=0
 ap_isolate=1
 max_num_sta=64
@@ -2783,7 +2783,7 @@ wpa_passphrase=$password
 # HomeKit/AirPlay/mDNS Discovery:
 # OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
 # This gives SDN visibility into device discovery while maintaining isolation control.
-# Devices with policy=normal/smart_home get mDNS reflected; internet_only does not.
+# Devices with policy=smart_home get mDNS reflected; internet_only does not.
 macaddr_acl=0
 ap_isolate=1
 max_num_sta=128
