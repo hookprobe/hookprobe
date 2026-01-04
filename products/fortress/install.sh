@@ -967,7 +967,7 @@ main() {
                 install_args="$install_args --quick"
                 ;;
             # Pass-through flags to install-container.sh
-            --non-interactive|--preserve-data|--enable-monitoring|--enable-n8n|--enable-clickhouse|--enable-remote-access|--enable-lte|--keep-data|--keep-config|--purge)
+            --non-interactive|--preserve-data|--enable-aiochi|--enable-remote-access|--enable-lte|--keep-data|--keep-config|--purge)
                 install_args="$install_args $1"
                 ;;
             # Flags with values (for LTE config)

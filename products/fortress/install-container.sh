@@ -4640,23 +4640,19 @@ main() {
             --keep-data|--keep-config|--purge)
                 uninstall_args="$uninstall_args $1"
                 ;;
-            --enable-monitoring)
+            --enable-aiochi)
+                # AIOCHI bundles all monitoring/analytics components
+                export INSTALL_AIOCHI=true
                 export INSTALL_MONITORING=true
-                ;;
-            --enable-n8n)
-                export INSTALL_N8N=true
-                ;;
-            --enable-clickhouse)
                 export INSTALL_CLICKHOUSE=true
+                export INSTALL_N8N=true
+                export INSTALL_IDS=true
                 ;;
             --enable-remote-access)
                 export INSTALL_CLOUDFLARE_TUNNEL=true
                 ;;
             --enable-lte)
                 export INSTALL_LTE=true
-                ;;
-            --enable-ids)
-                export INSTALL_IDS=true
                 ;;
             --lte-apn)
                 shift
@@ -4692,11 +4688,10 @@ main() {
                 echo "  --preserve-data     Reinstall using existing data volumes"
                 echo "  --force-rebuild     Force rebuild of all containers"
                 echo ""
-                echo "Optional Services:"
-                echo "  --enable-monitoring       Install Grafana + VictoriaMetrics"
-                echo "  --enable-n8n              Install n8n workflow automation"
-                echo "  --enable-clickhouse       Install ClickHouse analytics database"
-                echo "  --enable-ids              Install Suricata + Zeek + XDP IDS/IPS"
+                echo "Optional Components:"
+                echo "  --enable-aiochi           Install AIOCHI (AI Eyes) - Cognitive Network Layer"
+                echo "                            Bundles: ClickHouse, Grafana, VictoriaMetrics,"
+                echo "                            n8n, Suricata, Zeek, Ollama LLM"
                 echo "  --enable-remote-access    Configure Cloudflare Tunnel"
                 echo "  --enable-lte              Enable LTE modem failover"
                 echo ""
@@ -4717,6 +4712,7 @@ main() {
                 echo "  ADMIN_USER          Admin username"
                 echo "  ADMIN_PASS          Admin password"
                 echo "  WEB_PORT            Web UI port"
+                echo "  INSTALL_AIOCHI      true/false - Enable AIOCHI (AI Eyes)"
                 echo "  LTE_APN             LTE APN name"
                 echo "  LTE_AUTH            LTE auth type (none/pap/chap/mschapv2)"
                 echo "  LTE_USER            LTE username"
