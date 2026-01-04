@@ -293,7 +293,7 @@ sync_from_autopilot() {
                 failed=$((failed + 1))
             fi
         fi
-    done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, policy, ip FROM device_identity WHERE policy IS NOT NULL AND policy != '' AND policy NOT IN ('normal', 'smart_home', 'full_access')" 2>/dev/null || true)
+    done < <(sqlite3 "$AUTOPILOT_DB" "SELECT mac, policy, ip FROM device_identity WHERE policy IS NOT NULL AND policy != '' AND policy NOT IN ('smart_home', 'full_access')" 2>/dev/null || true)
 
     log_info "NAC autopilot sync complete: $synced synced, $failed failed"
     return 0
