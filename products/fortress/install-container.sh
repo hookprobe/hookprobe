@@ -3206,8 +3206,14 @@ start_optional_services() {
     # Load environment for container configs
     [ -f ".env" ] && source .env 2>/dev/null || true
 
-    # Monitoring (Grafana + VictoriaMetrics)
-    if [ "${INSTALL_MONITORING:-}" = true ]; then
+    # If AIOCHI is enabled, skip individual fts-* services (they're bundled in AIOCHI)
+    # AIOCHI provides its own aiochi-* containers for all monitoring/analytics
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        log_info "AIOCHI enabled - skipping individual fts-* services (bundled in AIOCHI)"
+    fi
+
+    # Monitoring (Grafana + VictoriaMetrics) - ONLY if NOT using AIOCHI
+    if [ "${INSTALL_MONITORING:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
         log_info "Starting monitoring services (Grafana + VictoriaMetrics)..."
 
         # VictoriaMetrics
@@ -3235,8 +3241,8 @@ start_optional_services() {
         log_info "Monitoring services started (Grafana: http://localhost:3000)"
     fi
 
-    # n8n Workflow Automation
-    if [ "${INSTALL_N8N:-}" = true ]; then
+    # n8n Workflow Automation - ONLY if NOT using AIOCHI
+    if [ "${INSTALL_N8N:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
         log_info "Starting n8n workflow automation..."
 
         podman run -d --name fts-n8n \
@@ -3265,8 +3271,8 @@ start_optional_services() {
         log_info "n8n started (http://localhost:5678)"
     fi
 
-    # ClickHouse Analytics
-    if [ "${INSTALL_CLICKHOUSE:-}" = true ]; then
+    # ClickHouse Analytics - ONLY if NOT using AIOCHI
+    if [ "${INSTALL_CLICKHOUSE:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
         log_info "Starting ClickHouse analytics database..."
 
         podman run -d --name fts-clickhouse \
@@ -3286,8 +3292,8 @@ start_optional_services() {
         log_info "ClickHouse started (HTTP: localhost:8123, Native: localhost:9000)"
     fi
 
-    # IDS/IPS (Suricata + Zeek + XDP)
-    if [ "${INSTALL_IDS:-}" = true ]; then
+    # IDS/IPS (Suricata + Zeek + XDP) - ONLY if NOT using AIOCHI
+    if [ "${INSTALL_IDS:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
         log_info "Starting IDS/IPS services..."
 
         # Suricata
