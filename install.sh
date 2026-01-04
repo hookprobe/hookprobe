@@ -1631,24 +1631,29 @@ install_fortress() {
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
-    # Optional Features
+    # AIOCHI - AI Eyes (Cognitive Network Layer)
     # ─────────────────────────────────────────────────────────────────
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}OPTIONAL FEATURES${NC}"
+    echo -e "${CYAN}AIOCHI - AI EYES (COGNITIVE NETWORK LAYER)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
+    echo -e "${BOLD}🔭 Do you want EYES on your network?${NC}"
+    echo ""
+    echo "AIOCHI (AI Eyes) transforms your network into a"
+    echo "living story that anyone can understand:"
+    echo ""
+    echo "  • Visual presence map (who's home)"
+    echo "  • Human-readable network feed (not tech jargon)"
+    echo "  • One-touch actions (pause kids' internet, game mode)"
+    echo "  • Performance health score with insights"
+    echo "  • AI-powered security analysis via local Ollama LLM"
+    echo ""
+    echo -e "${DIM}Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n${NC}"
+    echo -e "${DIM}Adds ~2GB RAM usage${NC}"
+    echo ""
 
-    read -p "Enable n8n automation? (yes/no) [yes]: " enable_n8n
-    enable_n8n=${enable_n8n:-yes}
-
-    read -p "Enable Grafana dashboards? (yes/no) [yes]: " enable_grafana
-    enable_grafana=${enable_grafana:-yes}
-
-    read -p "Enable ClickHouse analytics? (yes/no) [yes]: " enable_clickhouse
-    enable_clickhouse=${enable_clickhouse:-yes}
-
-    read -p "Enable IDS/IPS (Suricata + Zeek)? (yes/no) [yes]: " enable_ids
-    enable_ids=${enable_ids:-yes}
+    read -p "Enable AIOCHI (AI Eyes)? (yes/no) [yes]: " enable_aiochi
+    enable_aiochi=${enable_aiochi:-yes}
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1670,13 +1675,20 @@ install_fortress() {
     echo "  ✓ Web Dashboard (https://localhost:8443)"
     echo "  ✓ Local Auth (max 5 users)"
     echo ""
-    echo -e "${BOLD}Optional Features:${NC}"
+    if [ "$enable_aiochi" = "yes" ]; then
+        echo -e "${BOLD}AIOCHI - AI Eyes (Cognitive Layer):${NC}"
+        echo "  ✓ ClickHouse analytics database"
+        echo "  ✓ VictoriaMetrics time-series"
+        echo "  ✓ Grafana monitoring dashboards"
+        echo "  ✓ n8n AI Agent workflows + Ollama LLM"
+        echo "  ✓ Suricata + Zeek network capture"
+        echo "  ✓ Identity Engine + Log Shipper"
+        echo ""
+    fi
+    echo -e "${BOLD}Connectivity:${NC}"
     [ "$enable_lte" = "yes" ] && echo "  ✓ LTE Failover (APN: $lte_apn, Auth: $lte_auth)"
     [ "$enable_remote" = "yes" ] && echo "  ✓ Remote Access (Cloudflare Tunnel)"
-    [ "$enable_grafana" = "yes" ] && echo "  ✓ Monitoring (Grafana + Victoria Metrics)"
-    [ "$enable_n8n" = "yes" ] && echo "  ✓ n8n Workflow Automation"
-    [ "$enable_clickhouse" = "yes" ] && echo "  ✓ ClickHouse Analytics"
-    [ "$enable_ids" = "yes" ] && echo "  ✓ IDS/IPS (Suricata + Zeek)"
+    [ "$enable_lte" != "yes" ] && [ "$enable_remote" != "yes" ] && echo "  (no optional connectivity)"
     echo ""
 
     # Default YES for confirmation
@@ -1707,10 +1719,7 @@ CFEOF
         export FORTRESS_NETWORK_PREFIX="$network_prefix"
 
         local extra_args="--non-interactive"
-        [ "$enable_n8n" = "yes" ] && extra_args="$extra_args --enable-n8n"
-        [ "$enable_grafana" = "yes" ] && extra_args="$extra_args --enable-monitoring"
-        [ "$enable_clickhouse" = "yes" ] && extra_args="$extra_args --enable-clickhouse"
-        [ "$enable_ids" = "yes" ] && extra_args="$extra_args --enable-ids"
+        [ "$enable_aiochi" = "yes" ] && extra_args="$extra_args --enable-aiochi"
         [ "$enable_remote" = "yes" ] && extra_args="$extra_args --enable-remote-access"
 
         if [ "$enable_lte" = "yes" ]; then
@@ -1728,11 +1737,14 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
-            # Export all optional service flags
-            [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
-            [ "$enable_n8n" = "yes" ] && export INSTALL_N8N=true
-            [ "$enable_clickhouse" = "yes" ] && export INSTALL_CLICKHOUSE=true
-            [ "$enable_ids" = "yes" ] && export INSTALL_IDS=true
+            # Export AIOCHI flag (bundles all monitoring/analytics)
+            if [ "$enable_aiochi" = "yes" ]; then
+                export INSTALL_AIOCHI=true
+                export INSTALL_MONITORING=true
+                export INSTALL_N8N=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+            fi
             [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
             [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
             # Export LTE configuration
@@ -1757,11 +1769,14 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
-            # Export all optional service flags
-            [ "$enable_grafana" = "yes" ] && export INSTALL_MONITORING=true
-            [ "$enable_n8n" = "yes" ] && export INSTALL_N8N=true
-            [ "$enable_clickhouse" = "yes" ] && export INSTALL_CLICKHOUSE=true
-            [ "$enable_ids" = "yes" ] && export INSTALL_IDS=true
+            # Export AIOCHI flag (bundles all monitoring/analytics)
+            if [ "$enable_aiochi" = "yes" ]; then
+                export INSTALL_AIOCHI=true
+                export INSTALL_MONITORING=true
+                export INSTALL_N8N=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+            fi
             [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
             [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
             # Export LTE configuration

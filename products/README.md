@@ -167,7 +167,7 @@ Do you need to train ML models locally?
 **Best for:** Home offices, small businesses, NIS2 compliance needs
 
 ```bash
-./install.sh --tier fortress --enable-n8n --enable-monitoring
+./install.sh --tier fortress --enable-aiochi
 ```
 
 **What you achieve:**
