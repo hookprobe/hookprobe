@@ -30,6 +30,7 @@ datasources:
     url: fts-postgres:5432
     database: fortress
     user: fortress
+    isDefault: false
     secureJsonData:
       password: ${POSTGRES_PASSWORD}
     jsonData:
