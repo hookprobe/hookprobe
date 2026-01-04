@@ -3082,19 +3082,29 @@ ensure_veth_pair() {
 }
 
 # Set up ebtables to force WiFi-to-WiFi traffic through veth (to OVS)
+# Critical: Traffic from veth (returning from OVS) must be ALLOWED
+# Only block DIRECT WiFi-to-WiFi that bypasses OVS
 setup_ebtables() {
     if ! command -v ebtables &>/dev/null; then
         log "ebtables not available - WiFi isolation via OVS won't work"
         return 1
     fi
 
-    # Remove old rules for this interface first
+    # First, ensure traffic FROM veth (coming from OVS) is allowed
+    # This MUST be added before DROP rules (order matters in ebtables)
+    if ! ebtables -L FORWARD | grep -q "veth-wifi-a.*ACCEPT"; then
+        ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
+        log "Added ACCEPT rule for traffic from $VETH_BR (OVS return path)"
+    fi
+
+    # Remove old DROP rules for this interface first
     ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
 
-    # Block direct WiFi-to-WiFi on same interface
+    # Block direct WiFi-to-WiFi on same interface (forces through OVS)
     ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
 
     # Block WiFi-to-WiFi across different interfaces (2.4GHz ↔ 5GHz)
+    # This forces cross-band traffic through veth → OVS for policy enforcement
     for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
         if [ "$other" != "$IFACE" ]; then
             ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
@@ -3103,6 +3113,14 @@ setup_ebtables() {
     done
 
     log "ebtables rules set for $IFACE - WiFi traffic forced through OVS"
+}
+
+# Enable hairpin mode on interface for mDNS reflection
+setup_hairpin() {
+    if command -v bridge &>/dev/null; then
+        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
+        log "Enabled hairpin on $IFACE for mDNS/multicast reflection"
+    fi
 }
 
 # Remove ebtables rules
@@ -3131,6 +3149,9 @@ if [ "$ACTION" = "add" ]; then
 
     # Set up ebtables for WiFi isolation via OVS
     setup_ebtables
+
+    # Enable hairpin for mDNS/Bonjour reflection (HomeKit/AirPlay)
+    setup_hairpin
 
     log "WiFi interface $IFACE configured: br-wifi → veth → OVS ($OVS_BRIDGE)"
 
