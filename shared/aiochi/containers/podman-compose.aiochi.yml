@@ -1,0 +1,295 @@
+# AIOCHI - AI Eyes Container Stack
+# Cognitive Network Layer for HookProbe Fortress
+#
+# Usage:
+#   podman-compose -f podman-compose.aiochi.yml up -d
+#
+# Note: This stack is OPTIONAL. Core security (QSecBit, dnsXai) runs without it.
+#       AIOCHI adds the "Eyes" - visual dashboards and human narratives.
+
+name: aiochi
+
+networks:
+  aiochi-internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.210.0/24
+          gateway: 172.20.210.1
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
+  grafana_data:
+  victoria_data:
+  n8n_data:
+  suricata_logs:
+  zeek_logs:
+  zeek_spool:
+  identity_data:
+
+services:
+  # ============================================================================
+  # DATA TIER - Event Storage
+  # ============================================================================
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.8
+    container_name: aiochi-clickhouse
+    hostname: aiochi-clickhouse
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.10
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP API (internal only)
+      - "127.0.0.1:9000:9000"   # Native protocol (internal only)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
+    environment:
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  victoria:
+    image: docker.io/victoriametrics/victoria-metrics:v1.106.1
+    container_name: aiochi-victoria
+    hostname: aiochi-victoria
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.11
+    ports:
+      - "127.0.0.1:8428:8428"
+    volumes:
+      - victoria_data:/victoria-metrics-data
+    command:
+      - "--retentionPeriod=30d"
+      - "--httpListenAddr=:8428"
+      - "--storageDataPath=/victoria-metrics-data"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8428/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # CAPTURE TIER - Network Traffic Analysis
+  # ============================================================================
+
+  suricata:
+    image: docker.io/jasonish/suricata:7.0.8
+    container_name: aiochi-suricata
+    hostname: aiochi-suricata
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - suricata_logs:/var/log/suricata
+      - ./configs/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./configs/suricata/rules:/etc/suricata/rules:ro
+    environment:
+      SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS} --af-packet"
+    command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS}", "--af-packet"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "suricata"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  zeek:
+    image: docker.io/zeek/zeek:7.0.3
+    container_name: aiochi-zeek
+    hostname: aiochi-zeek
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - zeek_logs:/opt/zeek/logs
+      - zeek_spool:/opt/zeek/spool
+      - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
+      - ./configs/zeek/node.cfg:/opt/zeek/etc/node.cfg:ro
+    environment:
+      ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS}"
+    command: ["zeekctl", "deploy"]
+    healthcheck:
+      test: ["CMD", "zeekctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # INTELLIGENCE TIER - Device Identity & Narratives
+  # ============================================================================
+
+  identity-engine:
+    build:
+      context: .
+      dockerfile: Containerfile.identity
+    container_name: aiochi-identity
+    hostname: aiochi-identity
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.20
+    ports:
+      - "127.0.0.1:8060:8060"
+    volumes:
+      - identity_data:/app/data
+      - /var/lib/misc:/var/lib/misc:ro          # dnsmasq leases
+      - /run/avahi-daemon:/run/avahi-daemon:ro  # mDNS socket
+    environment:
+      CLICKHOUSE_HOST: 172.20.210.10
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8060/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  narrative-engine:
+    image: docker.io/n8nio/n8n:1.70.3
+    container_name: aiochi-narrative
+    hostname: aiochi-narrative
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.21
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-workflows:/home/node/workflows:ro
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: "${N8N_USER:-admin}"
+      N8N_BASIC_AUTH_PASSWORD: "${N8N_PASSWORD:-aiochi_admin}"
+      N8N_HOST: "0.0.0.0"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      WEBHOOK_URL: "http://172.20.210.21:5678"
+      GENERIC_TIMEZONE: "${TZ:-UTC}"
+      # ClickHouse connection
+      CLICKHOUSE_HOST: "172.20.210.10"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: "aiochi"
+      CLICKHOUSE_USER: "aiochi"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      # Optional LLM (Ollama)
+      OLLAMA_HOST: "${OLLAMA_HOST:-}"
+      # Template-first mode (LLM fallback)
+      NARRATIVE_MODE: "${NARRATIVE_MODE:-template}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      identity-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # VISUALIZATION TIER - Dashboard
+  # ============================================================================
+
+  grafana:
+    image: docker.io/grafana/grafana:11.4.0
+    container_name: aiochi-grafana
+    hostname: aiochi-grafana
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.30
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-aiochi_admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000}"
+      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
+      # Dark theme by default
+      GF_USERS_DEFAULT_THEME: "dark"
+      # Disable alerting (we use our own)
+      GF_ALERTING_ENABLED: "false"
+      GF_UNIFIED_ALERTING_ENABLED: "false"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      victoria:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # LOG SHIPPER - ClickHouse Integration
+  # ============================================================================
+
+  log-shipper:
+    build:
+      context: .
+      dockerfile: Containerfile.logshipper
+    container_name: aiochi-logshipper
+    hostname: aiochi-logshipper
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.40
+    volumes:
+      - suricata_logs:/var/log/suricata:ro
+      - zeek_logs:/opt/zeek/logs:ro
+    environment:
+      CLICKHOUSE_HOST: 172.20.210.10
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      SURICATA_LOG_PATH: /var/log/suricata/eve.json
+      ZEEK_LOG_PATH: /opt/zeek/logs/current
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      suricata:
+        condition: service_started
+      zeek:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
