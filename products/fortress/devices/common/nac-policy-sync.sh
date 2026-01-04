@@ -37,6 +37,10 @@ CONTAINER_NETWORK="172.20.0.0/16"
 # Trigger file from container for real-time policy application
 POLICY_TRIGGER_FILE="/opt/hookprobe/fortress/data/.nac_policy_sync"
 
+# Ecosystem Bubble trigger file for bubble-based OpenFlow rules
+# Written by ecosystem_bubble.py, consumed here to apply bubble rules
+BUBBLE_TRIGGER_FILE="/opt/hookprobe/fortress/data/.bubble_sdn_sync"
+
 # Database paths
 # Primary: SDN Autopilot database (device_identity table)
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
@@ -72,6 +76,73 @@ except Exception as e:
         # Remove the trigger file
         rm -f "$POLICY_TRIGGER_FILE"
     fi
+}
+
+# Check for ecosystem bubble trigger file from container
+# Bubble rules allow intra-bubble traffic for same-user device groups
+# Priority 450 (below base allow 500, above drop rules)
+check_bubble_trigger() {
+    if [ ! -f "$BUBBLE_TRIGGER_FILE" ]; then
+        return 0
+    fi
+
+    log_info "Processing ecosystem bubble trigger..."
+
+    # Parse bubble rules JSON using Python
+    local rules_json
+    rules_json=$(python3 -c "
+import json
+import sys
+try:
+    with open('$BUBBLE_TRIGGER_FILE') as f:
+        data = json.load(f)
+    # Output each rule as a single line for bash processing
+    for rule in data.get('rules', []):
+        match = rule.get('match', {})
+        eth_src = match.get('eth_src', '')
+        eth_dst = match.get('eth_dst', '')
+        priority = rule.get('priority', 450)
+        bubble_id = rule.get('bubble_id', 'unknown')
+        if eth_src and eth_dst:
+            print(f'{eth_src}|{eth_dst}|{priority}|{bubble_id}')
+except Exception as e:
+    print(f'ERROR:{e}', file=sys.stderr)
+" 2>&1)
+
+    if echo "$rules_json" | grep -q "^ERROR:"; then
+        log_error "Failed to parse bubble trigger: $(echo "$rules_json" | grep '^ERROR:')"
+        rm -f "$BUBBLE_TRIGGER_FILE"
+        return 1
+    fi
+
+    local applied=0
+    local bubble_ids=()
+
+    # First, clear old bubble rules (priority 450)
+    ovs-ofctl del-flows "$OVS_BRIDGE" "priority=450" 2>/dev/null || true
+
+    # Apply each bubble rule
+    while IFS='|' read -r eth_src eth_dst priority bubble_id; do
+        [ -z "$eth_src" ] && continue
+        [ -z "$eth_dst" ] && continue
+
+        # Allow traffic between bubble devices (bidirectional)
+        if add_flow "priority=${priority:-450},dl_src=$eth_src,dl_dst=$eth_dst,actions=NORMAL"; then
+            ((applied++)) || true
+        fi
+
+        # Track unique bubble IDs
+        if [[ ! " ${bubble_ids[*]} " =~ " ${bubble_id} " ]]; then
+            bubble_ids+=("$bubble_id")
+        fi
+    done <<< "$rules_json"
+
+    if [ "$applied" -gt 0 ]; then
+        log_info "Applied $applied bubble OpenFlow rules for ${#bubble_ids[@]} bubble(s)"
+    fi
+
+    # Keep the trigger file for debugging (with .processed suffix)
+    mv "$BUBBLE_TRIGGER_FILE" "${BUBBLE_TRIGGER_FILE}.processed" 2>/dev/null || true
 }
 
 # Apply OpenFlow rule
@@ -349,8 +420,41 @@ show_status() {
         echo ""
         echo "  Per-device flows (priority >= 600):"
         ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -E "priority=(6[0-9]{2}|7[0-9]{2}|1000|1001)" | head -20 || echo "    None"
+        echo ""
+        echo "  Ecosystem bubble flows (priority 450):"
+        ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -E "priority=450" | head -20 || echo "    None"
     else
         echo "  Status: Bridge not found"
+    fi
+
+    echo ""
+    echo "=== Ecosystem Bubble Status ==="
+
+    # Check bubble database
+    local bubble_db="/var/lib/hookprobe/bubbles.db"
+    if [ -f "$bubble_db" ]; then
+        echo "Bubble Database: $bubble_db"
+        if command -v sqlite3 &>/dev/null; then
+            local bubble_count
+            bubble_count=$(sqlite3 "$bubble_db" "SELECT COUNT(*) FROM bubbles WHERE state = 'active'" 2>/dev/null || echo "0")
+            echo "  Active bubbles: $bubble_count"
+            echo ""
+            if [ "$bubble_count" -gt 0 ]; then
+                echo "  Bubbles:"
+                sqlite3 "$bubble_db" "SELECT bubble_id, ecosystem, confidence FROM bubbles WHERE state = 'active'" 2>/dev/null | \
+                    while IFS='|' read -r bid eco conf; do
+                        printf "    %s (%s) confidence=%.2f\n" "$bid" "$eco" "$conf"
+                    done
+            fi
+        fi
+    else
+        echo "Bubble Database: Not found"
+    fi
+
+    # Check last trigger file
+    if [ -f "${BUBBLE_TRIGGER_FILE}.processed" ]; then
+        echo ""
+        echo "Last bubble sync: $(stat -c '%y' "${BUBBLE_TRIGGER_FILE}.processed" 2>/dev/null | cut -d. -f1)"
     fi
 }
 
@@ -369,6 +473,8 @@ main() {
             fi
             # First check for any pending trigger from container
             check_policy_trigger
+            # Check for ecosystem bubble rules from container
+            check_bubble_trigger
             # Then sync all restrictive policies from database
             # This is fast since we only sync quarantine/internet_only/lan_only
             if [ -f "$AUTOPILOT_DB" ]; then
@@ -394,6 +500,8 @@ main() {
 
             # First check for any pending policy trigger from container
             check_policy_trigger
+            # Check for ecosystem bubble rules from container
+            check_bubble_trigger
 
             log_info "Starting NAC policy sync..."
 
