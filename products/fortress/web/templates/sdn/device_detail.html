@@ -308,8 +308,8 @@
                             <option value="lan_only" {% if device.policy == 'lan_only' %}selected{% endif %}>
                                 LAN Only - No Internet
                             </option>
-                            <option value="normal" {% if device.policy == 'normal' or device.policy == 'smart_home' %}selected{% endif %}>
-                                Normal (Smart Home) - Curated Access
+                            <option value="smart_home" {% if device.policy == 'smart_home' or device.policy == 'normal' %}selected{% endif %}>
+                                Smart Home - Curated Access
                             </option>
                             <option value="full_access" {% if device.policy == 'full_access' %}selected{% endif %}>
                                 Full Access - Management Device

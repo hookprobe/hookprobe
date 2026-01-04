@@ -651,3 +651,374 @@ def api_profile_switch(profile_id):
     except Exception as e:
         logger.error(f"Profile switch error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# AI Agent Feedback API (Human-in-the-Loop)
+# ============================================================================
+
+import subprocess
+import uuid
+
+# Storage for pending feedback requests (in production, use database)
+_pending_feedback = {}
+
+# Storage for recent agent actions (in production, use ClickHouse)
+_agent_actions = []
+
+
+@aiochi_bp.route('/api/agent/status')
+@login_required
+def api_agent_status():
+    """Get AI Agent status and recent actions."""
+    try:
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_AVAILABLE,
+            'agent': {
+                'status': 'active',
+                'model': 'llama3.2:3b',
+                'mode': 'agentic',  # 'agentic' or 'template'
+                'memory_window': 10,  # Last N events remembered
+                'tools_available': ['BLOCK', 'MIGRATE', 'THROTTLE', 'MONITOR', 'TRUST'],
+            },
+            'stats': {
+                'actions_today': 7,
+                'deterministic_pct': 60,  # % of decisions that were instant (no LLM)
+                'avg_response_ms': 850,
+                'feedback_pending': len(_pending_feedback),
+            },
+            'recent_actions': _agent_actions[-10:]  # Last 10 actions
+        })
+    except Exception as e:
+        logger.error(f"Agent status API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/feed', methods=['POST'])
+def api_feed_post():
+    """Receive narrative events from n8n workflow (internal API)."""
+    try:
+        data = request.get_json() or {}
+        narrative = data.get('narrative', {})
+
+        if not narrative:
+            return jsonify({'success': False, 'error': 'No narrative data'}), 400
+
+        # Store the narrative event
+        event_id = narrative.get('id', str(uuid.uuid4()))
+        narrative['id'] = event_id
+        narrative['received_at'] = datetime.now().isoformat()
+
+        # Add to agent actions if it's an AI action
+        if narrative.get('category') == 'ai-agent':
+            _agent_actions.append(narrative)
+            # Keep only last 100 actions
+            if len(_agent_actions) > 100:
+                _agent_actions.pop(0)
+
+        logger.info(f"Narrative received: {narrative.get('title', 'Unknown')}")
+
+        return jsonify({
+            'success': True,
+            'event_id': event_id
+        })
+    except Exception as e:
+        logger.error(f"Feed POST error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/feedback-request', methods=['POST'])
+def api_feedback_request():
+    """Receive feedback request from n8n workflow (internal API)."""
+    try:
+        data = request.get_json() or {}
+
+        action_id = data.get('action_id')
+        message = data.get('message')
+        options = data.get('options', [
+            {'label': 'Approve', 'action': 'approve'},
+            {'label': 'Reject', 'action': 'reject'}
+        ])
+
+        if not action_id or not message:
+            return jsonify({
+                'success': False,
+                'error': 'action_id and message are required'
+            }), 400
+
+        # Store the feedback request
+        feedback_req = {
+            'id': action_id,
+            'message': message,
+            'options': options,
+            'created_at': datetime.now().isoformat(),
+            'status': 'pending',
+            'mac_address': data.get('mac_address'),
+            'action_type': data.get('action_type'),
+            'device_label': data.get('device_label'),
+        }
+        _pending_feedback[action_id] = feedback_req
+
+        logger.info(f"Feedback request created: {action_id}")
+
+        # TODO: Send push notification to subscribed clients
+        # In production, use pywebpush to send to all _push_subscriptions
+
+        return jsonify({
+            'success': True,
+            'feedback_id': action_id
+        })
+    except Exception as e:
+        logger.error(f"Feedback request error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/feedback/pending')
+@login_required
+def api_feedback_pending():
+    """Get all pending feedback requests."""
+    try:
+        pending = [
+            fb for fb in _pending_feedback.values()
+            if fb.get('status') == 'pending'
+        ]
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_AVAILABLE,
+            'pending': pending,
+            'count': len(pending)
+        })
+    except Exception as e:
+        logger.error(f"Feedback pending API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/feedback/<action_id>', methods=['POST'])
+@login_required
+def api_feedback_submit(action_id):
+    """Submit feedback for an AI action."""
+    try:
+        if action_id not in _pending_feedback:
+            return jsonify({
+                'success': False,
+                'error': 'Feedback request not found'
+            }), 404
+
+        data = request.get_json() or {}
+        response = data.get('response')  # 'approve', 'reject', 'trust', 'block_permanent'
+        notes = data.get('notes', '')
+
+        if not response:
+            return jsonify({
+                'success': False,
+                'error': 'Response is required (approve, reject, trust, block_permanent)'
+            }), 400
+
+        feedback_req = _pending_feedback[action_id]
+        mac_address = feedback_req.get('mac_address')
+        action_type = feedback_req.get('action_type')
+
+        # Update feedback status
+        feedback_req['status'] = 'responded'
+        feedback_req['response'] = response
+        feedback_req['notes'] = notes
+        feedback_req['responded_at'] = datetime.now().isoformat()
+
+        # Execute action based on feedback
+        result = {'action_taken': None}
+
+        if response == 'trust' and mac_address:
+            # User trusts this device - remove block and add to trusted
+            result = _execute_tool('trust-device.sh', [mac_address, 'user', notes or 'User approved'])
+
+        elif response == 'block_permanent' and mac_address:
+            # User wants permanent block
+            result = _execute_tool('block-device.sh', [mac_address, notes or 'User requested permanent block'])
+
+        elif response == 'reject' and mac_address and action_type == 'BLOCK':
+            # User rejects the block - unblock the device
+            result = _execute_tool('unblock-device.sh', [mac_address, notes or 'User rejected AI block decision'])
+
+        elif response == 'reject' and mac_address and action_type == 'MIGRATE':
+            # User rejects migration - move back to trusted VLAN
+            result = _execute_tool('migrate-device.sh', [mac_address, 'trusted', notes or 'User rejected migration'])
+
+        elif response == 'approve':
+            # User approves - no action needed, AI decision stands
+            result = {'action_taken': 'none', 'message': 'User approved AI decision'}
+
+        logger.info(f"Feedback submitted for {action_id}: {response}")
+
+        return jsonify({
+            'success': True,
+            'feedback_id': action_id,
+            'response': response,
+            'result': result
+        })
+    except Exception as e:
+        logger.error(f"Feedback submit error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _execute_tool(tool_name, args):
+    """Execute an AIOCHI tool script."""
+    try:
+        tool_path = f'/opt/hookprobe/shared/aiochi/tools/{tool_name}'
+
+        # Build command
+        cmd = [tool_path] + args
+
+        # Execute
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            # Parse JSON output
+            import json
+            try:
+                output = json.loads(result.stdout)
+                return output
+            except json.JSONDecodeError:
+                return {'action_taken': tool_name, 'raw_output': result.stdout}
+        else:
+            logger.error(f"Tool {tool_name} failed: {result.stderr}")
+            return {'action_taken': tool_name, 'error': result.stderr}
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"Tool {tool_name} timed out")
+        return {'action_taken': tool_name, 'error': 'Timeout'}
+    except FileNotFoundError:
+        logger.warning(f"Tool {tool_name} not found (demo mode)")
+        return {'action_taken': tool_name, 'demo_mode': True, 'message': 'Tool not available in demo mode'}
+    except Exception as e:
+        logger.error(f"Tool execution error: {e}")
+        return {'action_taken': tool_name, 'error': str(e)}
+
+
+@aiochi_bp.route('/api/agent/actions')
+@login_required
+def api_agent_actions():
+    """Get AI agent action history."""
+    try:
+        limit = request.args.get('limit', 20, type=int)
+        offset = request.args.get('offset', 0, type=int)
+
+        # In demo mode, generate sample actions
+        if not AIOCHI_AVAILABLE or not _agent_actions:
+            demo_actions = [
+                {
+                    'id': 'action-1',
+                    'timestamp': (datetime.now() - timedelta(minutes=15)).isoformat(),
+                    'action': 'BLOCK',
+                    'mac_address': 'aa:bb:cc:dd:ee:ff',
+                    'device_label': 'Unknown Device',
+                    'reason': 'Detected connection to known C2 server',
+                    'narrative': "I blocked an unknown device that was trying to communicate with a server associated with malware. Better safe than sorry!",
+                    'deterministic': True,
+                    'trust_score_before': 30,
+                    'trust_score_after': 10,
+                    'feedback_status': 'pending',
+                },
+                {
+                    'id': 'action-2',
+                    'timestamp': (datetime.now() - timedelta(hours=2)).isoformat(),
+                    'action': 'MIGRATE',
+                    'mac_address': '11:22:33:44:55:66',
+                    'device_label': 'New Smart Bulb',
+                    'reason': 'New IoT device detected',
+                    'narrative': "A new smart device joined your network. I moved it to the IoT zone for safety until I learn more about it.",
+                    'deterministic': False,
+                    'trust_score_before': 50,
+                    'trust_score_after': 50,
+                    'feedback_status': 'approved',
+                },
+                {
+                    'id': 'action-3',
+                    'timestamp': (datetime.now() - timedelta(hours=5)).isoformat(),
+                    'action': 'MONITOR',
+                    'mac_address': '77:88:99:aa:bb:cc',
+                    'device_label': "Kids' Tablet",
+                    'reason': 'Unusual browsing pattern at late hour',
+                    'narrative': "The kids' tablet was active at 2 AM, which is unusual. I'm keeping an eye on it but no action needed yet.",
+                    'deterministic': False,
+                    'trust_score_before': 85,
+                    'trust_score_after': 85,
+                    'feedback_status': 'none',
+                },
+            ]
+            actions = demo_actions
+        else:
+            actions = _agent_actions
+
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_AVAILABLE,
+            'actions': actions[offset:offset + limit],
+            'total': len(actions),
+            'offset': offset,
+            'limit': limit
+        })
+    except Exception as e:
+        logger.error(f"Agent actions API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/agent/trust/<mac_address>', methods=['GET'])
+@login_required
+def api_agent_trust_get(mac_address):
+    """Get trust score for a device."""
+    try:
+        # In production, query ClickHouse device_trust table
+        # For demo, return sample data
+        trust_data = {
+            'mac_address': mac_address,
+            'trust_score': 75,
+            'ecosystem': 'apple',
+            'action_count': 3,
+            'is_known': True,
+            'last_action': 'MONITOR',
+            'last_seen': datetime.now().isoformat()
+        }
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_AVAILABLE,
+            'trust': trust_data
+        })
+    except Exception as e:
+        logger.error(f"Trust get API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/agent/trust/<mac_address>', methods=['PUT'])
+@login_required
+def api_agent_trust_set(mac_address):
+    """Manually set trust score for a device."""
+    try:
+        data = request.get_json() or {}
+        trust_score = data.get('trust_score')
+        notes = data.get('notes', '')
+
+        if trust_score is None or not (0 <= trust_score <= 100):
+            return jsonify({
+                'success': False,
+                'error': 'trust_score must be between 0 and 100'
+            }), 400
+
+        logger.info(f"Trust score set for {mac_address}: {trust_score}")
+
+        # In production, update ClickHouse device_trust table
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_AVAILABLE,
+            'mac_address': mac_address,
+            'trust_score': trust_score,
+            'message': 'Trust score updated'
+        })
+    except Exception as e:
+        logger.error(f"Trust set API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500

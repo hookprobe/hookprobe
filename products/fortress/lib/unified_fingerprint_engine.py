@@ -293,29 +293,29 @@ class UnifiedFingerprintEngine:
 
     # Policy assignment based on category and vendor
     CATEGORY_POLICIES = {
-        'phone': 'normal',
-        'tablet': 'normal',
+        'phone': 'smart_home',
+        'tablet': 'smart_home',
         'laptop': 'full_access',
         'desktop': 'full_access',
         'smart_tv': 'internet_only',
         'streaming': 'internet_only',
         'gaming': 'internet_only',
-        'voice_assistant': 'normal',
-        'smart_hub': 'normal',
+        'voice_assistant': 'smart_home',
+        'smart_hub': 'smart_home',
         'camera': 'lan_only',
         'printer': 'lan_only',
         'thermostat': 'lan_only',
         'iot': 'lan_only',
         'network': 'full_access',
         'server': 'full_access',
-        'wearable': 'normal',
+        'wearable': 'smart_home',
         'unknown': 'quarantine',
     }
 
     # Vendor trust levels (Apple and Raspberry Pi get elevated trust)
     TRUSTED_VENDORS = {
         'Apple': {'policy_boost': 'full_access', 'confidence_boost': 0.10},
-        'Raspberry Pi': {'policy_boost': 'normal', 'confidence_boost': 0.05},
+        'Raspberry Pi': {'policy_boost': 'smart_home', 'confidence_boost': 0.05},
     }
 
     def __init__(self):
@@ -758,9 +758,9 @@ class UnifiedFingerprintEngine:
                 # Apple management devices (MacBook, iPad) get full access
                 if identity.vendor == 'Apple' and identity.category in ('laptop', 'tablet', 'desktop'):
                     return 'full_access'
-                # Other Apple devices get normal
+                # Other Apple devices get smart_home
                 if identity.vendor == 'Apple':
-                    return 'normal'
+                    return 'smart_home'
                 return trust_info['policy_boost']
 
         # Category-based policy
@@ -770,7 +770,7 @@ class UnifiedFingerprintEngine:
         if identity.confidence < 0.5:
             return 'quarantine'
         elif identity.confidence < 0.7 and policy == 'full_access':
-            return 'normal'
+            return 'smart_home'
 
         return policy
 

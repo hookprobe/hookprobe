@@ -6,7 +6,7 @@ Network Policies:
 - QUARANTINE: Unknown devices, no network access (default for unknowns)
 - INTERNET_ONLY: Can access internet but not LAN devices
 - LAN_ONLY: Can access LAN but not internet (IoT, printers)
-- NORMAL: Curated IoT (HomePod, Echo, Matter/Thread bridges)
+- SMART_HOME: Curated IoT (HomePod, Echo, Matter/Thread bridges)
 - FULL_ACCESS: Management devices on VLAN 200, can manage other devices
 
 Storage: SQLite database at /var/lib/hookprobe/devices.db
@@ -33,7 +33,7 @@ class NetworkPolicy(str, Enum):
     QUARANTINE = 'quarantine'       # No network access - unknown devices
     INTERNET_ONLY = 'internet_only' # Internet access, no LAN
     LAN_ONLY = 'lan_only'           # LAN access, no internet
-    NORMAL = 'normal'               # Curated IoT (bridges, smart home)
+    SMART_HOME = 'smart_home'       # Curated IoT (bridges, smart home)
     FULL_ACCESS = 'full_access'     # Full access, can manage others
 
 
@@ -63,8 +63,8 @@ POLICY_INFO = {
         'internet': False,
         'lan': True,
     },
-    NetworkPolicy.NORMAL: {
-        'name': 'Normal',
+    NetworkPolicy.SMART_HOME: {
+        'name': 'Smart Home',
         'icon': 'fa-home',
         'color': 'success',
         'description': 'Smart home devices with curated access',
@@ -185,12 +185,10 @@ class DevicePolicyDB:
 
         Policy name mapping for compatibility:
         - quarantine -> isolated (both mean block all)
-        - normal -> full_access (both mean allow all)
         """
         # Map device_policies names to device_data_manager names
         policy_map = {
             'quarantine': 'isolated',
-            'normal': 'full_access',
         }
         internal_policy = policy_map.get(policy, policy)
 
@@ -309,9 +307,9 @@ def get_recommended_policy(device: Dict) -> str:
     device_type = device.get('device_type', 'unknown').lower()
     manufacturer = device.get('manufacturer', '').lower()
 
-    # Smart home hubs/bridges get NORMAL (they need both internet and LAN)
+    # Smart home hubs/bridges get SMART_HOME (they need both internet and LAN)
     if device_type in ('homepod', 'echo', 'google_home', 'smart_hub', 'bridge'):
-        return NetworkPolicy.NORMAL.value
+        return NetworkPolicy.SMART_HOME.value
 
     # IoT devices get LAN_ONLY
     if device_type in ('iot', 'camera', 'printer', 'smart_plug', 'sensor'):

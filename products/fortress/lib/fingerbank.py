@@ -79,12 +79,12 @@ CATEGORY_POLICIES = {
     'server': 'full_access',
     'management': 'full_access',
     'network': 'full_access',      # Ubiquiti, TP-Link network devices
-    'sbc': 'normal',               # Raspberry Pi, etc. (trusted but limited)
+    'sbc': 'smart_home',           # Raspberry Pi, etc. (trusted but limited)
 
-    # Normal access - trusted smart home
-    'smart_hub': 'normal',
-    'bridge': 'normal',
-    'voice_assistant': 'normal',
+    # Smart Home access - trusted smart home
+    'smart_hub': 'smart_home',
+    'bridge': 'smart_home',
+    'voice_assistant': 'smart_home',
 
     # Internet only - personal devices
     'laptop': 'internet_only',
@@ -2257,15 +2257,15 @@ class Fingerbank:
 
         Policy Hierarchy:
         1. Management Devices (MacBook, iPad) - full network control
-        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - normal LAN access
-        3. Trusted Infrastructure (Raspberry Pi) - normal access
+        2. Apple Ecosystem (iPhone, Apple Watch, HomePod, Apple TV) - smart_home LAN access
+        3. Trusted Infrastructure (Raspberry Pi) - smart_home access
         4. Category-based policies from CATEGORY_POLICIES
         5. Default to quarantine for unknown
 
         Management Philosophy:
         MacBook and iPad are designated management devices with full_access.
         They can manage the network, access all VLANs, and control other devices.
-        Other Apple devices get 'normal' for inter-device communication only.
+        Other Apple devices get 'smart_home' for inter-device communication only.
         """
         # =====================================================================
         # MANAGEMENT DEVICES - Full network control
@@ -2278,21 +2278,21 @@ class Fingerbank:
                 return 'full_access'
 
         # =====================================================================
-        # APPLE ECOSYSTEM - Normal LAN access for inter-device communication
+        # APPLE ECOSYSTEM - Smart Home LAN access for inter-device communication
         # =====================================================================
 
-        # iPhone, Apple Watch, HomePod, Apple TV get normal policy
+        # iPhone, Apple Watch, HomePod, Apple TV get smart_home policy
         # Enables Bonjour/mDNS, AirPlay, AirDrop, Handoff, HomeKit
         if vendor == "Apple" and confidence >= 0.75:
-            return 'normal'
+            return 'smart_home'
 
         # =====================================================================
-        # TRUSTED INFRASTRUCTURE - Normal access
+        # TRUSTED INFRASTRUCTURE - Smart Home access
         # =====================================================================
 
         # Raspberry Pi: Trusted but not management
         if vendor == "Raspberry Pi" and confidence >= 0.80:
-            return 'normal'
+            return 'smart_home'
 
         # =====================================================================
         # CATEGORY-BASED POLICIES
