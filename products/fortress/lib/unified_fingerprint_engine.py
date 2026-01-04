@@ -1088,22 +1088,7 @@ def main():
         traceback.print_exc()
         return 1
 
-    if args.daemon:
-        # Run as daemon
-        try:
-            logging.info("Unified Fingerprint Engine started in daemon mode")
-            logging.info(f"  ML classifier: {'loaded' if engine.ml_classifier else 'not available'}")
-            logging.info(f"  Fingerbank API: {'configured' if engine.fingerbank_api else 'not configured'}")
-            logging.info(f"  OUI database: {len(engine.oui_db)} entries")
-            daemon = FingerprintDaemon(engine)
-            daemon.start()
-        except Exception as e:
-            logging.error(f"Daemon failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return 1
-
-    elif args.command == 'identify':
+    if args.command == 'identify':
         signals = SignalData(
             mac=args.mac,
             dhcp_fingerprint=args.dhcp,
