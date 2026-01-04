@@ -51,3 +51,7 @@ def register_blueprints(app: Flask):
     # SLA AI module - Business Continuity Dashboard
     from .slaai import slaai_bp
     app.register_blueprint(slaai_bp)
+
+    # AIOCHI module - AI Eyes Cognitive Network Layer
+    from .aiochi import aiochi_bp
+    app.register_blueprint(aiochi_bp)

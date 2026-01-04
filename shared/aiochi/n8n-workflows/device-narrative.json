@@ -1,0 +1,108 @@
+{
+  "name": "AIOCHI: Device Narrative Generator",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - Device Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiochi-device-event"
+    },
+    {
+      "parameters": {
+        "functionCode": "// AIOCHI Device Narrative Generator\n// Transforms device events into friendly human stories\n\nconst event = items[0].json;\n\n// Device type to friendly icon mapping\nconst deviceIcons = {\n  'phone': 'fa-mobile-alt',\n  'smartphone': 'fa-mobile-alt',\n  'laptop': 'fa-laptop',\n  'desktop': 'fa-desktop',\n  'tablet': 'fa-tablet-alt',\n  'tv': 'fa-tv',\n  'speaker': 'fa-volume-up',\n  'thermostat': 'fa-thermometer-half',\n  'camera': 'fa-video',\n  'doorbell': 'fa-bell',\n  'watch': 'fa-clock',\n  'gaming': 'fa-gamepad',\n  'printer': 'fa-print',\n  'router': 'fa-wifi',\n  'hub': 'fa-sitemap',\n  'light': 'fa-lightbulb',\n  'unknown': 'fa-microchip'\n};\n\n// Ecosystem detection\nconst ecosystemMap = {\n  'apple': ['iPhone', 'iPad', 'MacBook', 'iMac', 'Apple Watch', 'HomePod', 'Apple TV'],\n  'samsung': ['Galaxy', 'Samsung'],\n  'google': ['Pixel', 'Chromecast', 'Nest', 'Google Home'],\n  'amazon': ['Echo', 'Alexa', 'Fire', 'Kindle', 'Ring']\n};\n\n// Event type narratives\nconst eventTypes = {\n  'new_device': {\n    icon: 'fa-plus-circle',\n    color: 'info',\n    emoji: '📱',\n    generateNarrative: (device, network) => {\n      return `A new device \"${device}\" just joined ${network}. I'm getting to know it!`;\n    }\n  },\n  'device_connected': {\n    icon: 'fa-plug',\n    color: 'success',\n    emoji: '✅',\n    generateNarrative: (device) => {\n      return `${device} is now online and connected to your network.`;\n    }\n  },\n  'device_disconnected': {\n    icon: 'fa-unlink',\n    color: 'warning',\n    emoji: '📴',\n    generateNarrative: (device, lastSeen) => {\n      return `${device} disconnected. Last seen ${lastSeen || 'just now'}.`;\n    }\n  },\n  'device_renamed': {\n    icon: 'fa-edit',\n    color: 'info',\n    emoji: '✏️',\n    generateNarrative: (oldName, newName) => {\n      return `Device renamed from \"${oldName}\" to \"${newName}\".`;\n    }\n  },\n  'device_moved': {\n    icon: 'fa-arrows-alt',\n    color: 'info',\n    emoji: '🔄',\n    generateNarrative: (device, fromBubble, toBubble) => {\n      return `${device} moved from ${fromBubble} to ${toBubble}.`;\n    }\n  },\n  'ecosystem_detected': {\n    icon: 'fa-users',\n    color: 'success',\n    emoji: '👨‍👩‍👧‍👦',\n    generateNarrative: (ecosystem, count) => {\n      return `I detected ${count} ${ecosystem} devices that likely belong to the same person.`;\n    }\n  },\n  'device_trusted': {\n    icon: 'fa-shield-check',\n    color: 'success',\n    emoji: '🛡️',\n    generateNarrative: (device) => {\n      return `${device} has been marked as trusted. It now has full network access.`;\n    }\n  },\n  'device_blocked': {\n    icon: 'fa-ban',\n    color: 'danger',\n    emoji: '🚫',\n    generateNarrative: (device) => {\n      return `${device} has been blocked from the network.`;\n    }\n  }\n};\n\n// Get event config\nconst eventType = event.event_type || 'new_device';\nconst config = eventTypes[eventType] || eventTypes.new_device;\n\n// Get device info\nconst deviceName = event.device_name || event.hostname || event.mac_address || 'Unknown Device';\nconst deviceType = event.device_type || 'unknown';\nconst network = event.network_name || event.vlan_name || 'your network';\n\n// Detect ecosystem\nlet ecosystem = 'unknown';\nfor (const [eco, keywords] of Object.entries(ecosystemMap)) {\n  if (keywords.some(k => deviceName.toLowerCase().includes(k.toLowerCase()))) {\n    ecosystem = eco;\n    break;\n  }\n}\n\n// Generate narrative\nlet narrative = '';\nswitch (eventType) {\n  case 'new_device':\n    narrative = config.generateNarrative(deviceName, network);\n    break;\n  case 'device_connected':\n    narrative = config.generateNarrative(deviceName);\n    break;\n  case 'device_disconnected':\n    narrative = config.generateNarrative(deviceName, event.last_seen);\n    break;\n  case 'device_renamed':\n    narrative = config.generateNarrative(event.old_name, deviceName);\n    break;\n  case 'device_moved':\n    narrative = config.generateNarrative(deviceName, event.from_bubble, event.to_bubble);\n    break;\n  case 'ecosystem_detected':\n    narrative = config.generateNarrative(event.ecosystem_name, event.device_count);\n    break;\n  case 'device_trusted':\n  case 'device_blocked':\n    narrative = config.generateNarrative(deviceName);\n    break;\n  default:\n    narrative = `Something happened with ${deviceName}.`;\n}\n\n// Build narrative event\nconst narrativeEvent = {\n  id: `device-${Date.now()}`,\n  timestamp: event.timestamp || new Date().toISOString(),\n  category: 'device',\n  event_type: eventType,\n  icon: deviceIcons[deviceType] || config.icon,\n  color: config.color,\n  emoji: config.emoji,\n  title: eventType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),\n  narrative: narrative,\n  device_name: deviceName,\n  device_type: deviceType,\n  mac_address: event.mac_address,\n  ip_address: event.ip_address,\n  ecosystem: ecosystem,\n  bubble_id: event.bubble_id,\n  raw_event_id: event.id || event.event_id\n};\n\nreturn [{ json: narrativeEvent }];"
+      },
+      "id": "generate-narrative",
+      "name": "Generate Device Narrative",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.10:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO aiochi.narrative_events FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        }
+      },
+      "id": "store-narrative",
+      "name": "Store in ClickHouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/feed",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "narrative",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "update-feed",
+      "name": "Update Privacy Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://172.20.210.20:8060/api/presence",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "device_event",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "update-presence",
+      "name": "Update Presence Bubbles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 450]
+    }
+  ],
+  "connections": {
+    "Webhook - Device Event": {
+      "main": [[{ "node": "Generate Device Narrative", "type": "main", "index": 0 }]]
+    },
+    "Generate Device Narrative": {
+      "main": [[{ "node": "Store in ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Store in ClickHouse": {
+      "main": [
+        [{ "node": "Update Privacy Feed", "type": "main", "index": 0 }],
+        [{ "node": "Update Presence Bubbles", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    { "name": "AIOCHI", "id": "aiochi" },
+    { "name": "Narrative", "id": "narrative" },
+    { "name": "Device", "id": "device" }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}
