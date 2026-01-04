@@ -395,16 +395,23 @@ services:
     container_name: fts-suricata
     restart: unless-stopped
     hostname: fts-suricata
-    # Command: -i <interface> runs Suricata on the specified interface
-    # The jasonish/suricata image expects the interface as the first argument
-    command: ["-i", "${SURICATA_INTERFACE:-FTS}", "--set", "outputs.eve-log.enabled=yes"]
+    # The jasonish/suricata image entrypoint handles config loading
+    # -i <interface> specifies the capture interface
+    # --af-packet uses AF_PACKET for efficient capture
+    command:
+      - -c
+      - /etc/suricata/suricata.yaml
+      - -i
+      - "${SURICATA_INTERFACE:-FTS}"
+      - --af-packet
     environment:
       # Interface to monitor (set during install based on detection)
       SURICATA_INTERFACE: "${SURICATA_INTERFACE:-FTS}"
     volumes:
       - suricata_logs:/var/log/suricata
       - suricata_rules:/var/lib/suricata
-      - suricata_config:/etc/suricata
+      # Don't mount config volume - use the default config from the image
+      # - suricata_config:/etc/suricata
       - /etc/hookprobe:/etc/hookprobe:ro
     # Host network REQUIRED for packet capture on bridge/physical interfaces
     network_mode: host
@@ -414,11 +421,11 @@ services:
       - SYS_NICE
     # Core IDS service - always started
     healthcheck:
-      test: ["CMD", "test", "-f", "/var/run/suricata.pid"]
+      test: ["CMD", "pgrep", "-x", "suricata"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     profiles:
       - ids
 
@@ -742,9 +749,7 @@ volumes:
   suricata_rules:
     driver: local
     name: fts-suricata-rules
-  suricata_config:
-    driver: local
-    name: fts-suricata-config
+  # suricata_config not used - image provides default config
   zeek_logs:
     driver: local
     name: fts-zeek-logs

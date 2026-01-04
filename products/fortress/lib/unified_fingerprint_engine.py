@@ -1080,12 +1080,24 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-    engine = get_fingerprint_engine()
+    try:
+        engine = get_fingerprint_engine()
+    except Exception as e:
+        logging.error(f"Failed to initialize fingerprint engine: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
     if args.daemon:
         # Run as daemon
-        daemon = FingerprintDaemon(engine)
-        daemon.start()
+        try:
+            daemon = FingerprintDaemon(engine)
+            daemon.start()
+        except Exception as e:
+            logging.error(f"Daemon failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
 
     elif args.command == 'identify':
         signals = SignalData(
@@ -1115,7 +1127,11 @@ def main():
 
     else:
         parser.print_help()
+        return 0
+
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    sys.exit(main() or 0)
