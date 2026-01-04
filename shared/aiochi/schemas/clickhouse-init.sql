@@ -348,6 +348,104 @@ CREATE FUNCTION IF NOT EXISTS getDeviceLabel AS (mac) ->
     );
 
 -- ============================================================================
+-- AGENTIC AI - DEVICE TRUST SCORES
+-- Memory for AI Agent decision making
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS device_trust (
+    mac_address String,
+    trust_score UInt8 DEFAULT 50,  -- 0-100 (higher = more trusted)
+    ecosystem String,              -- "apple", "google", "amazon", "iot", "unknown"
+    bubble_id String,              -- Family bubble association
+    last_action String,            -- Last AI action taken
+    action_count UInt32 DEFAULT 0, -- Total actions on this device
+    block_count UInt32 DEFAULT 0,
+    migrate_count UInt32 DEFAULT 0,
+    throttle_count UInt32 DEFAULT 0,
+    trust_count UInt32 DEFAULT 0,  -- Times marked trusted
+    last_seen DateTime DEFAULT now(),
+    first_seen DateTime DEFAULT now(),
+    is_known Bool DEFAULT false,   -- User explicitly identified
+    is_blocked Bool DEFAULT false, -- Currently blocked
+    blocked_reason String,
+    notes String,                  -- Human-added notes
+
+    INDEX idx_mac mac_address TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_ecosystem ecosystem TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_trust trust_score TYPE minmax GRANULARITY 1
+) ENGINE = ReplacingMergeTree(last_seen)
+ORDER BY (mac_address)
+TTL last_seen + INTERVAL 365 DAY;
+
+-- ============================================================================
+-- AGENTIC AI - AGENT ACTIONS LOG
+-- Audit trail of all AI decisions
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS agent_actions (
+    id UUID DEFAULT generateUUIDv4(),
+    timestamp DateTime DEFAULT now(),
+    event_id String,               -- Triggering security event
+    mac_address String,
+    device_label String,
+    action Enum8('BLOCK' = 1, 'MIGRATE' = 2, 'THROTTLE' = 3, 'MONITOR' = 4, 'TRUST' = 5),
+    target String,                 -- VLAN name for migrate, rate for throttle
+    reason String,                 -- AI's reasoning
+    narrative String,              -- Human-friendly explanation
+    trust_score_before UInt8,
+    trust_score_after UInt8,
+    deterministic Bool DEFAULT false,  -- Was this a short-circuit decision?
+    model_used String,             -- "llama3.2:3b" or "deterministic"
+    inference_time_ms UInt32,
+    human_feedback Enum8('pending' = 0, 'approved' = 1, 'rejected' = 2, 'undo' = 3) DEFAULT 'pending',
+    feedback_timestamp Nullable(DateTime),
+    feedback_notes String,
+
+    INDEX idx_mac mac_address TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_action action TYPE minmax GRANULARITY 1,
+    INDEX idx_feedback human_feedback TYPE minmax GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, action, mac_address)
+TTL timestamp + INTERVAL 180 DAY;
+
+-- ============================================================================
+-- AGENTIC AI - THREAT BLOCKLIST
+-- Known bad actors for deterministic blocking
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS threat_blocklist (
+    indicator_type Enum8('mac' = 1, 'ip' = 2, 'domain' = 3, 'ja3' = 4, 'user_agent' = 5),
+    indicator_value String,
+    threat_category String,        -- "malware", "c2", "phishing", "scanner"
+    severity Enum8('low' = 1, 'medium' = 2, 'high' = 3, 'critical' = 4),
+    source String,                 -- "suricata", "zeek", "user", "mesh", "external"
+    added_at DateTime DEFAULT now(),
+    expires_at Nullable(DateTime),
+    auto_block Bool DEFAULT true,  -- Deterministic block on match
+    confidence Float32 DEFAULT 1.0,
+    notes String,
+
+    INDEX idx_indicator indicator_value TYPE bloom_filter GRANULARITY 1
+) ENGINE = ReplacingMergeTree(added_at)
+ORDER BY (indicator_type, indicator_value);
+
+-- ============================================================================
+-- AGENTIC AI - ACTION RATE LIMITER
+-- Prevent flapping (memory for recent actions)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS action_rate_limit (
+    mac_address String,
+    action Enum8('BLOCK' = 1, 'MIGRATE' = 2, 'THROTTLE' = 3, 'MONITOR' = 4, 'TRUST' = 5),
+    last_action_at DateTime DEFAULT now(),
+    action_count_5min UInt8 DEFAULT 1,
+    cooldown_until Nullable(DateTime),
+
+    INDEX idx_mac mac_address TYPE bloom_filter GRANULARITY 1
+) ENGINE = ReplacingMergeTree(last_action_at)
+ORDER BY (mac_address, action);
+
+-- ============================================================================
 -- SAMPLE QUERIES FOR DASHBOARD
 -- ============================================================================
 
