@@ -54,7 +54,7 @@
 │  (internal)   │            │   (internet OK)   │          │   (internal)      │
 ├───────────────┤            ├───────────────────┤          ├───────────────────┤
 │ postgres :5432│◄───────────│ web      :8443    │          │ grafana   :3000   │
-│ redis    :6379│            │ dnsxai   :5353    │          │ victoria  :8428   │
+│ redis    :6379│            │ dnsxai   :53      │          │ victoria  :8428   │
 │               │            │ dfs      :8050    │          │                   │
 └───────────────┘            └───────────────────┘          └───────────────────┘
                                        │
@@ -215,12 +215,14 @@ nft add rule inet nat postrouting \
 **Current flow**:
 1. Client DNS → OVS bridge gateway (10.200.0.1)
 2. dnsmasq on host receives DNS
-3. dnsmasq configured to forward to dnsXai (172.20.201.11:5353)
+3. dnsmasq configured to forward to dnsXai (127.0.0.1:53)
 
 **Fix**: Ensure dnsmasq config includes:
 ```conf
-server=172.20.201.11#5353
+server=127.0.0.1
 ```
+Note: dnsXai binds to 127.0.0.1:53 (host port 53 → container port 5353).
+This frees port 5353 for mDNS (Avahi + bubble manager ecosystem detection).
 
 ### GAP 5: Host-Network Container PBR
 

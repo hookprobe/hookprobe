@@ -159,6 +159,10 @@ create_ovs_bridge() {
 
         # Enable STP for loop prevention (optional, disable for faster convergence)
         ovs-vsctl set bridge "$OVS_BRIDGE" stp_enable=false
+
+        # Disable multicast snooping - CRITICAL for HomeKit, HomePod, AirPlay
+        # mcast_snooping can block multicast if IGMP isn't properly handled
+        ovs-vsctl set bridge "$OVS_BRIDGE" mcast_snooping_enable=false
     fi
 
     # Bring bridge up
