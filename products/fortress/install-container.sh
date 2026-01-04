@@ -399,17 +399,6 @@ collect_configuration() {
             set_subnet_ranges "23"
         fi
 
-        # Build optional services list
-        local optional_services=""
-        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
-        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
-        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
-        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
-        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
-        [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
-        optional_services="${optional_services%%, }"  # Remove trailing comma
-        [ -z "$optional_services" ] && optional_services="Core only"
-
         # Show complete configuration summary
         echo ""
         echo "════════════════════════════════════════════════════════════════"
@@ -425,19 +414,26 @@ collect_configuration() {
         echo "    WiFi SSID:      $WIFI_SSID"
         echo "    Web Port:       $WEB_PORT"
         echo ""
-        echo -e "  ${BOLD}Security Core:${NC}"
-        echo "    ✓ QSecBit threat detection"
-        echo "    ✓ dnsXai DNS protection"
+        echo -e "  ${BOLD}Security Core (always installed):${NC}"
+        echo "    ✓ QSecBit AI threat detection"
+        echo "    ✓ dnsXai DNS ML protection"
         echo "    ✓ DFS WiFi intelligence"
+        echo "    ✓ SDN Autopilot device classification"
         echo ""
-        echo -e "  ${BOLD}Optional Services:${NC}"
-        [ "${INSTALL_MONITORING:-}" = true ] && echo "    ✓ Monitoring (Grafana + VictoriaMetrics)"
-        [ "${INSTALL_N8N:-}" = true ] && echo "    ✓ n8n Workflow Automation"
-        [ "${INSTALL_CLICKHOUSE:-}" = true ] && echo "    ✓ ClickHouse Analytics"
-        [ "${INSTALL_IDS:-}" = true ] && echo "    ✓ IDS/IPS (Suricata + Zeek)"
-        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && echo "    ✓ Cloudflare Tunnel"
+        if [ "${INSTALL_AIOCHI:-}" = true ]; then
+            echo -e "  ${BOLD}AIOCHI - AI Eyes (Cognitive Layer):${NC}"
+            echo "    ✓ ClickHouse analytics database"
+            echo "    ✓ VictoriaMetrics time-series"
+            echo "    ✓ Grafana dashboards"
+            echo "    ✓ n8n AI agent workflows"
+            echo "    ✓ Suricata + Zeek network capture"
+            echo "    ✓ Ollama local LLM"
+            echo ""
+        fi
+        echo -e "  ${BOLD}Connectivity:${NC}"
         [ "${INSTALL_LTE:-}" = true ] && echo "    ✓ LTE Failover (APN: ${LTE_APN:-auto})"
-        [ -z "$optional_services" ] || [ "$optional_services" = "Core only" ] && echo "    (none selected)"
+        [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && echo "    ✓ Cloudflare Tunnel: ${CLOUDFLARE_HOSTNAME:-configured}"
+        [ "${INSTALL_LTE:-}" != true ] && [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" != true ] && echo "    (no optional connectivity)"
         echo ""
         echo "════════════════════════════════════════════════════════════════"
         echo ""
@@ -626,70 +622,27 @@ collect_configuration() {
     fi
 
     # ============================================================
-    # OPTIONAL SERVICES
-    # ============================================================
-    echo ""
-    echo -e "${BOLD}OPTIONAL SERVICES${NC}"
-    echo ""
-    echo "Select additional services to install:"
-    echo ""
-
-    # Monitoring (Grafana + VictoriaMetrics)
-    if [ -z "${INSTALL_MONITORING:-}" ]; then
-        read -p "Install monitoring dashboard (Grafana + VictoriaMetrics)? [Y/n]: " mon_choice
-        if [[ ! "${mon_choice:-Y}" =~ ^[Nn]$ ]]; then
-            export INSTALL_MONITORING=true
-            log_info "Monitoring: enabled"
-        fi
-    fi
-
-    # n8n Workflow Automation
-    if [ -z "${INSTALL_N8N:-}" ]; then
-        read -p "Install n8n workflow automation? [Y/n]: " n8n_choice
-        if [[ ! "${n8n_choice:-Y}" =~ ^[Nn]$ ]]; then
-            export INSTALL_N8N=true
-            log_info "n8n: enabled"
-        fi
-    fi
-
-    # ClickHouse Analytics
-    if [ -z "${INSTALL_CLICKHOUSE:-}" ]; then
-        read -p "Install ClickHouse analytics database? [Y/n]: " ch_choice
-        if [[ ! "${ch_choice:-Y}" =~ ^[Nn]$ ]]; then
-            export INSTALL_CLICKHOUSE=true
-            log_info "ClickHouse: enabled"
-        fi
-    fi
-
-    # IDS/IPS (Suricata + Zeek + XDP)
-    if [ -z "${INSTALL_IDS:-}" ]; then
-        read -p "Install IDS/IPS (Suricata + Zeek + XDP)? [Y/n]: " ids_choice
-        if [[ ! "${ids_choice:-Y}" =~ ^[Nn]$ ]]; then
-            export INSTALL_IDS=true
-            log_info "IDS/IPS: enabled"
-        fi
-    fi
-
-    # ============================================================
     # AIOCHI - AI Eyes (Cognitive Network Layer)
     # ============================================================
+    # Ask about AIOCHI FIRST - it bundles all monitoring/analytics components
     echo ""
-    echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
-    echo -e "${CYAN}${BOLD}║   🔭 Do you want EYES on your network?                      ║${NC}"
-    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
-    echo -e "${CYAN}${BOLD}║   AIOCHI (AI Eyes) transforms your network into a           ║${NC}"
-    echo -e "${CYAN}${BOLD}║   living story that anyone can understand:                  ║${NC}"
-    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
-    echo -e "${CYAN}${BOLD}║   • Visual presence map (who's home)                        ║${NC}"
-    echo -e "${CYAN}${BOLD}║   • Human-readable network feed (not tech jargon)           ║${NC}"
-    echo -e "${CYAN}${BOLD}║   • One-touch actions (pause kids' internet, game mode)     ║${NC}"
-    echo -e "${CYAN}${BOLD}║   • Performance health score with insights                  ║${NC}"
-    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
-    echo -e "${CYAN}${BOLD}║   Adds ~2GB RAM usage. Includes: ClickHouse, Grafana,       ║${NC}"
-    echo -e "${CYAN}${BOLD}║   Suricata, Zeek, n8n, VictoriaMetrics                      ║${NC}"
-    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
-    echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}${BOLD}AIOCHI - AI EYES (COGNITIVE NETWORK LAYER)${NC}"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${BOLD}🔭 Do you want EYES on your network?${NC}"
+    echo ""
+    echo "AIOCHI (AI Eyes) transforms your network into a"
+    echo "living story that anyone can understand:"
+    echo ""
+    echo "  • Visual presence map (who's home)"
+    echo "  • Human-readable network feed (not tech jargon)"
+    echo "  • One-touch actions (pause kids' internet, game mode)"
+    echo "  • Performance health score with insights"
+    echo "  • AI-powered security analysis via local Ollama LLM"
+    echo ""
+    echo -e "${DIM}Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n${NC}"
+    echo -e "${DIM}Adds ~2GB RAM usage${NC}"
     echo ""
 
     if [ -z "${INSTALL_AIOCHI:-}" ]; then
@@ -705,39 +658,48 @@ collect_configuration() {
         fi
     fi
 
+    # No individual optional services - AIOCHI is all-or-nothing
+    # Monitoring, ClickHouse, n8n, IDS are ONLY available as part of AIOCHI bundle
+
     # ============================================================
     # INSTALLATION SUMMARY
     # ============================================================
 
-    # Build optional services list
-    local optional_services=""
-    if [ "${INSTALL_AIOCHI:-}" = true ]; then
-        optional_services="AIOCHI (AI Eyes)"
-    else
-        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
-        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
-        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
-        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
-    fi
-    [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
-    [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
-    optional_services="${optional_services%%, }"  # Remove trailing comma
-    [ -z "$optional_services" ] && optional_services="None"
-
     # Confirm installation
     echo ""
-    echo "Installation Summary:"
-    echo "====================="
-    echo "  Network Mode:     $NETWORK_MODE"
-    echo "  LAN Subnet:       10.200.0.0/$LAN_SUBNET_MASK (DHCP: $LAN_DHCP_START - $LAN_DHCP_END)"
-    echo "  Security Core:    QSecBit + dnsXai + DFS Intelligence"
-    echo "  Admin User:       $ADMIN_USER"
-    echo "  WiFi SSID:        $WIFI_SSID"
-    echo "  Web Port:         $WEB_PORT"
-    echo "  Optional:         $optional_services"
-    [ -n "${LTE_APN:-}" ] && echo "  LTE APN:          $LTE_APN"
-    [ -n "${CLOUDFLARE_HOSTNAME:-}" ] && echo "  Remote Access:    $CLOUDFLARE_HOSTNAME"
-    echo "  Install Dir:      $INSTALL_DIR"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}${BOLD}CONFIGURATION SUMMARY${NC}"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${BOLD}Network Settings:${NC}"
+    echo "  • Network size: /$LAN_SUBNET_MASK"
+    echo "  • WiFi SSID: $WIFI_SSID"
+    echo ""
+    echo -e "${BOLD}Core Features (always installed):${NC}"
+    echo "  ✓ Linux Bridge (FTS) for LAN"
+    echo "  ✓ QSecBit AI Security Agent"
+    echo "  ✓ dnsXai DNS ML Protection"
+    echo "  ✓ DFS WiFi Intelligence"
+    echo "  ✓ SDN Autopilot + Device Classification"
+    echo "  ✓ Web Dashboard (https://localhost:$WEB_PORT)"
+    echo "  ✓ Local Auth (max 5 users)"
+    echo ""
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        echo -e "${BOLD}AIOCHI - AI Eyes (Cognitive Layer):${NC}"
+        echo "  ✓ ClickHouse analytics database"
+        echo "  ✓ VictoriaMetrics time-series"
+        echo "  ✓ Grafana monitoring dashboards"
+        echo "  ✓ n8n AI Agent workflows + Ollama LLM"
+        echo "  ✓ Suricata + Zeek network capture"
+        echo "  ✓ Identity Engine + Log Shipper"
+        echo ""
+    fi
+    echo -e "${BOLD}Connectivity:${NC}"
+    [ "${INSTALL_LTE:-}" = true ] && echo "  ✓ LTE Failover (APN: $LTE_APN, Auth: ${LTE_AUTH:-none})"
+    [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && echo "  ✓ Cloudflare Tunnel: $CLOUDFLARE_HOSTNAME"
+    [ "${INSTALL_LTE:-}" != true ] && [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" != true ] && echo "  (no optional connectivity configured)"
+    echo ""
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     read -p "Proceed with installation? [Y/n]: " confirm
     if [[ "${confirm:-Y}" =~ ^[Nn]$ ]]; then
@@ -3553,22 +3515,40 @@ save_optional_services_config() {
     cat > "$config_file" << EOF
 # Fortress Optional Services Configuration
 # Generated: $(date -Iseconds)
-# These services are started separately from core services
+#
+# Core services (always installed):
+#   - QSecBit AI threat detection
+#   - dnsXai DNS ML protection
+#   - DFS WiFi intelligence
+#   - SDN Autopilot device classification
+#   - PostgreSQL + Redis + Flask Web UI
+#
+# AIOCHI is an all-or-nothing bundle that adds cognitive network layer
 
+# AIOCHI - AI Eyes (Cognitive Network Layer)
+# When true, includes ALL monitoring/analytics components:
+#   - ClickHouse analytics database
+#   - VictoriaMetrics time-series
+#   - Grafana monitoring dashboards
+#   - n8n AI Agent workflows + Ollama LLM
+#   - Suricata + Zeek network capture
+#   - Identity Engine + Log Shipper
+INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
+
+# Component flags (set automatically when AIOCHI=true)
 INSTALL_MONITORING=${INSTALL_MONITORING:-false}
 INSTALL_N8N=${INSTALL_N8N:-false}
 INSTALL_CLICKHOUSE=${INSTALL_CLICKHOUSE:-false}
 INSTALL_IDS=${INSTALL_IDS:-false}
-INSTALL_CLOUDFLARE_TUNNEL=${INSTALL_CLOUDFLARE_TUNNEL:-false}
-CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
-CLOUDFLARE_HOSTNAME="${CLOUDFLARE_HOSTNAME:-}"
+
+# Connectivity options
+INSTALL_LTE=${INSTALL_LTE:-false}
 LTE_APN="${LTE_APN:-}"
 LTE_AUTH="${LTE_AUTH:-none}"
 
-# AIOCHI - AI Eyes (Cognitive Network Layer)
-# When true, includes: ClickHouse, VictoriaMetrics, Suricata, Zeek,
-# Identity Engine, Narrative Engine (n8n), Grafana, Log Shipper
-INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
+INSTALL_CLOUDFLARE_TUNNEL=${INSTALL_CLOUDFLARE_TUNNEL:-false}
+CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
+CLOUDFLARE_HOSTNAME="${CLOUDFLARE_HOSTNAME:-}"
 EOF
 
     chmod 600 "$config_file"
