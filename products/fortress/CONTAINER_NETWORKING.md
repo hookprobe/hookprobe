@@ -78,7 +78,7 @@ ISSUES:
 | **postgres** | ✅ PRIMARY | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **redis** | ✅ PRIMARY | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **web** | ✅ client | ✅ PRIMARY | ✅ client | ✅ client | ✅ 8443 | ❌ |
-| **dnsxai** | ❌ | ✅ PRIMARY | ❌ | ❌ | ✅ 5353 | ✅ (upstream DNS) |
+| **dnsxai** | ❌ | ✅ PRIMARY | ❌ | ❌ | ✅ 127.0.0.1:53 | ✅ (upstream DNS) |
 | **dfs-intelligence** | ❌ | ✅ PRIMARY | ❌ | ❌ | ✅ 8050 | ❌ |
 | **qsecbit-agent** | ✅ client | ✅ client | ✅ PRIMARY | ✅ client | ✅ HOST NET | ❌ |
 | **grafana** | ❌ | ❌ | ❌ | ✅ PRIMARY | ✅ 3000 | ❌ |
@@ -157,7 +157,7 @@ ISSUES:
 │                                       │  WiFi Clients: 10.250.0.x      │   │
 │                                       │  LAN Clients:  10.250.1.x      │   │
 │                                       │                                 │   │
-│                                       │  dnsmasq → dnsxai:5353         │   │
+│                                       │  dnsmasq → localhost:53        │   │
 │                                       │  (DNS queries forwarded)       │   │
 │                                       └─────────────────────────────────┘   │
 │                                                                              │
