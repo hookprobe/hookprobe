@@ -671,15 +671,54 @@ collect_configuration() {
     fi
 
     # ============================================================
+    # AIOCHI - AI Eyes (Cognitive Network Layer)
+    # ============================================================
+    echo ""
+    echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   🔭 Do you want EYES on your network?                      ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   AIOCHI (AI Eyes) transforms your network into a           ║${NC}"
+    echo -e "${CYAN}${BOLD}║   living story that anyone can understand:                  ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Visual presence map (who's home)                        ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Human-readable network feed (not tech jargon)           ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • One-touch actions (pause kids' internet, game mode)     ║${NC}"
+    echo -e "${CYAN}${BOLD}║   • Performance health score with insights                  ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}║   Adds ~2GB RAM usage. Includes: ClickHouse, Grafana,       ║${NC}"
+    echo -e "${CYAN}${BOLD}║   Suricata, Zeek, n8n, VictoriaMetrics                      ║${NC}"
+    echo -e "${CYAN}${BOLD}║                                                              ║${NC}"
+    echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    if [ -z "${INSTALL_AIOCHI:-}" ]; then
+        read -p "Install AIOCHI (AI Eyes)? [Y/n]: " aiochi_choice
+        if [[ ! "${aiochi_choice:-Y}" =~ ^[Nn]$ ]]; then
+            export INSTALL_AIOCHI=true
+            # AIOCHI bundles all monitoring components with cognitive layer
+            export INSTALL_MONITORING=true
+            export INSTALL_CLICKHOUSE=true
+            export INSTALL_N8N=true
+            export INSTALL_IDS=true
+            log_info "AIOCHI: enabled (includes Monitoring, ClickHouse, n8n, IDS/IPS)"
+        fi
+    fi
+
+    # ============================================================
     # INSTALLATION SUMMARY
     # ============================================================
 
     # Build optional services list
     local optional_services=""
-    [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
-    [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
-    [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
-    [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        optional_services="AIOCHI (AI Eyes)"
+    else
+        [ "${INSTALL_MONITORING:-}" = true ] && optional_services="${optional_services}Monitoring, "
+        [ "${INSTALL_N8N:-}" = true ] && optional_services="${optional_services}n8n, "
+        [ "${INSTALL_CLICKHOUSE:-}" = true ] && optional_services="${optional_services}ClickHouse, "
+        [ "${INSTALL_IDS:-}" = true ] && optional_services="${optional_services}IDS/IPS, "
+    fi
     [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && optional_services="${optional_services}Cloudflare Tunnel, "
     [ "${INSTALL_LTE:-}" = true ] && optional_services="${optional_services}LTE Failover, "
     optional_services="${optional_services%%, }"  # Remove trailing comma

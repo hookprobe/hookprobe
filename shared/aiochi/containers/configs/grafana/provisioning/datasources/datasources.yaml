@@ -1,0 +1,31 @@
+# AIOCHI Grafana Datasources
+# Configured automatically during container startup
+
+apiVersion: 1
+
+datasources:
+  # ClickHouse - Primary data store
+  - name: ClickHouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    url: http://aiochi-clickhouse:8123
+    jsonData:
+      defaultDatabase: aiochi
+      port: 9000
+      server: aiochi-clickhouse
+      username: aiochi
+      tlsSkipVerify: true
+    secureJsonData:
+      password: ${CLICKHOUSE_PASSWORD}
+    editable: false
+    isDefault: true
+
+  # VictoriaMetrics - Time series metrics
+  - name: VictoriaMetrics
+    type: prometheus
+    access: proxy
+    url: http://aiochi-victoria:8428
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false
+    editable: false
