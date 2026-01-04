@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <users>
+        <aiochi>
+            <password_sha256_hex></password_sha256_hex>
+            <networks>
+                <ip>172.20.210.0/24</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </aiochi>
+    </users>
+</clickhouse>
