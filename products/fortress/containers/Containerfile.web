@@ -9,9 +9,10 @@
 
 FROM python:3.11-slim-bookworm AS builder
 
-# Install build dependencies
+# Install build dependencies (includes g++ for scikit-learn compilation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
     libpq-dev \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
