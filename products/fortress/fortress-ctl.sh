@@ -781,12 +781,12 @@ device_set_policy() {
     # Validate policy
     case "$policy" in
         quarantine|internet_only|lan_only|normal|smart_home|full_access)
-            # Normalize smart_home to normal
-            [ "$policy" = "smart_home" ] && policy="normal"
+            # Normalize normal (legacy) to smart_home
+            [ "$policy" = "normal" ] && policy="smart_home"
             ;;
         *)
             log_error "Invalid policy: $policy"
-            echo "Valid policies: quarantine, internet_only, lan_only, normal, full_access"
+            echo "Valid policies: quarantine, internet_only, lan_only, smart_home, full_access"
             exit 1
             ;;
     esac
