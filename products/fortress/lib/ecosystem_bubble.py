@@ -75,14 +75,25 @@ from typing import Dict, List, Optional, Set, Tuple, Callable, Any
 logger = logging.getLogger(__name__)
 
 # Import our proprietary modules
+# Try both 'lib.' prefix (container) and direct import (standalone)
+HAS_PRESENCE = False
 try:
-    from presence_sensor import (
+    from lib.presence_sensor import (
         PresenceSensor, get_presence_sensor,
         DevicePresence, EcosystemType, PresenceState
     )
     HAS_PRESENCE = True
 except ImportError:
-    HAS_PRESENCE = False
+    try:
+        from presence_sensor import (
+            PresenceSensor, get_presence_sensor,
+            DevicePresence, EcosystemType, PresenceState
+        )
+        HAS_PRESENCE = True
+    except ImportError:
+        pass
+
+if not HAS_PRESENCE:
     # Stub classes for type hints when import fails
     class DevicePresence:
         pass
@@ -92,15 +103,27 @@ except ImportError:
         UNKNOWN = 'unknown'
     class PresenceState:
         ACTIVE = 'active'
+    def get_presence_sensor():
+        return None
 
+HAS_CLUSTERING = False
 try:
-    from behavior_clustering import (
+    from lib.behavior_clustering import (
         BehavioralClusteringEngine, get_clustering_engine,
         DeviceBehavior, ClusterResult
     )
     HAS_CLUSTERING = True
 except ImportError:
-    HAS_CLUSTERING = False
+    try:
+        from behavior_clustering import (
+            BehavioralClusteringEngine, get_clustering_engine,
+            DeviceBehavior, ClusterResult
+        )
+        HAS_CLUSTERING = True
+    except ImportError:
+        pass
+
+if not HAS_CLUSTERING:
     # Stub classes for type hints when import fails
     class BehavioralClusteringEngine:
         pass
