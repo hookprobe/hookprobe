@@ -70,20 +70,26 @@
 
 ## Container Network Assignments
 
-| Container | Network(s) | IP Address(es) | Internet | Notes |
-|-----------|------------|----------------|----------|-------|
-| **postgres** | fts-data | 172.20.200.10 | NO | Primary database |
-| **redis** | fts-data | 172.20.200.11 | NO | Session cache |
-| **web** | fts-services, fts-data | 172.20.201.10, 172.20.200.20 | YES | Admin portal |
-| **dnsxai** | fts-services | 172.20.201.11 | YES | DNS ML protection |
-| **dfs** | fts-services | 172.20.201.12 | YES | WiFi intelligence |
-| **grafana** | fts-mgmt, fts-data | 172.20.203.10, 172.20.200.30 | NO | Monitoring UI |
-| **victoria** | fts-mgmt | 172.20.203.11 | NO | Metrics DB |
-| **qsecbit** | host | host IPs | YES | Threat detection |
-| **suricata** | host | host IPs | YES | IDS/IPS |
-| **zeek** | host | host IPs | YES | Network analysis |
-| **xdp** | host | host IPs | YES | DDoS protection |
-| **lstm-trainer** | fts-ml | 172.20.202.10 | NO | ML training |
+All containers use a **single consolidated network** (`fts-internal` / 172.20.200.0/24) managed by podman-compose. The "tier" concept is used for OpenFlow policy decisions (which containers get internet access) rather than actual network segmentation.
+
+| Container | Network | IP Address | Internet | Tier Policy | Notes |
+|-----------|---------|------------|----------|-------------|-------|
+| **postgres** | fts-internal | 172.20.200.10 | NO | data | Primary database |
+| **redis** | fts-internal | 172.20.200.11 | NO | data | Session cache |
+| **web** | fts-internal | 172.20.200.20 | YES | services | Admin portal |
+| **dnsxai** | fts-internal | 172.20.200.21 | YES | services | DNS ML protection |
+| **dfs** | fts-internal | 172.20.200.22 | YES | services | WiFi intelligence |
+| **grafana** | fts-internal | 172.20.200.30 | NO | mgmt | Monitoring UI |
+| **victoria** | fts-internal | 172.20.200.31 | NO | mgmt | Metrics DB |
+| **lstm-trainer** | fts-internal | 172.20.200.40 | NO | ml | ML training (one-shot) |
+| **n8n** | fts-internal | 172.20.200.50 | YES | services | Workflow automation |
+| **clickhouse** | fts-internal | 172.20.200.51 | NO | data | Analytics DB |
+| **cloudflared** | fts-internal | 172.20.200.60 | YES | services | Tunnel client |
+| **qsecbit** | host | host IPs | YES | - | Threat detection |
+| **suricata** | host | host IPs | YES | - | IDS/IPS |
+| **zeek** | host | host IPs | YES | - | Network analysis |
+| **xdp** | host | host IPs | YES | - | DDoS protection |
+| **bubble-manager** | host | host IPs | YES | - | Device ecosystem detection |
 
 ## Traffic Flow Rules
 
@@ -129,13 +135,13 @@ INTERNET
 ### 2. Container → Internet (services tier)
 
 ```
-dnsxai (172.20.201.11)
+dnsxai (172.20.200.21)
     │
     ▼
-Podman bridge (fts-services)
+Podman bridge (fts-internal)
     │
     ▼
-Host routing (172.20.201.0/24 → gateway)
+Host routing (172.20.200.0/24 → gateway)
     │
     ├─► NOT through OVS (podman bridge is separate!)
     │
@@ -149,17 +155,16 @@ PBR: fwmark → routing table
 INTERNET
 ```
 
-### 3. Container → Container (cross-tier)
+### 3. Container → Container (same network)
 
 ```
-web (172.20.201.10) → postgres (172.20.200.10)
+web (172.20.200.20) → postgres (172.20.200.10)
     │
-    ├─► Web has interface on BOTH networks
-    │   - fts-services: 172.20.201.10
-    │   - fts-data: 172.20.200.20
+    ├─► All containers on same fts-internal network
+    │   Direct communication via podman bridge
     │
     ▼
-Direct podman bridge routing (172.20.200.0/24)
+Podman bridge routing (172.20.200.0/24)
     │
     ▼
 postgres (172.20.200.10)
@@ -184,18 +189,20 @@ nft add rule inet fts_wan_failover forward \
 
 ### GAP 2: No NAT for Container Networks
 
-**Problem**: Services tier (172.20.201.0/24) is allowed internet by OVS rules, but no NAT masquerade rule exists.
+**Problem**: Container network (172.20.200.0/24) needs NAT masquerade for internet access.
 
-**Impact**: Container internet access fails silently.
+**Impact**: Container internet access fails silently without NAT.
 
 **Fix**: Add masquerade rule in nftables:
 
 ```bash
 nft add rule inet nat postrouting \
-    ip saddr 172.20.201.0/24 \
+    ip saddr 172.20.200.0/24 \
     oifname { "eth0", "enp*", "wwan0" } \
     masquerade
 ```
+
+**Status**: ✅ Fixed - NAT rules added in traffic-flow-setup.sh
 
 ### GAP 3: OVS vs Podman Bridge Mismatch
 
@@ -265,22 +272,27 @@ nft list chain inet fts_wan_failover forward
 
 ## Traffic Matrix
 
+All containers are on the same `fts-internal` network (172.20.200.0/24). The "Tier Policy" column indicates OpenFlow rules for internet access control.
+
 | Source | Destination | Allowed | Via |
 |--------|-------------|---------|-----|
 | LAN Client | Internet | ✅ | OVS → NAT → PBR |
 | LAN Client | Containers | ❌ | Blocked by OVS |
-| web | postgres | ✅ | Direct (dual-homed) |
+| web | postgres | ✅ | fts-internal (same network) |
 | web | Internet | ✅ | Podman → NAT → PBR |
 | dnsxai | Internet | ✅ | Podman → NAT → PBR |
-| grafana | postgres | ✅ | Direct (dual-homed) |
-| grafana | victoria | ✅ | fts-mgmt network |
-| grafana | Internet | ❌ | internal network |
-| qsecbit | Internet | ✅ | Host → PBR |
-| qsecbit | Containers | ✅ | Host → Direct IP |
-| postgres | Internet | ❌ | internal network |
-| redis | Internet | ❌ | internal network |
+| grafana | postgres | ✅ | fts-internal (same network) |
+| grafana | victoria | ✅ | fts-internal (same network) |
+| grafana | Internet | ❌ | Tier policy: mgmt (no internet) |
+| victoria | Internet | ❌ | Tier policy: mgmt (no internet) |
+| qsecbit | Internet | ✅ | Host network → PBR |
+| qsecbit | Containers | ✅ | Host → Direct IP (172.20.200.x) |
+| bubble-manager | Containers | ✅ | Host → Direct IP (172.20.200.x) |
+| postgres | Internet | ❌ | Tier policy: data (no internet) |
+| redis | Internet | ❌ | Tier policy: data (no internet) |
+| clickhouse | Internet | ❌ | Tier policy: data (no internet) |
 
 ## Version
-- Document: 1.0.0
+- Document: 1.1.0
 - Fortress: 5.5.0
-- Date: 2024-12-26
+- Date: 2025-01-04
