@@ -13,7 +13,7 @@
 FROM python:3.11-slim-bookworm AS builder
 
 # Build dependencies for numpy/scipy compilation
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libopenblas-dev \
@@ -39,7 +39,7 @@ FROM python:3.11-slim-bookworm
 # avahi-utils for mDNS hostname discovery (Apple devices, printers)
 # nbtscan for NetBIOS hostname discovery (Windows devices)
 # hwdata provides /usr/share/hwdata/oui.txt for manufacturer lookup (~40K entries)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libopenblas0 \
     libgomp1 \
     iproute2 \
@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nbtscan \
     hwdata \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe fortress
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin fortress
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

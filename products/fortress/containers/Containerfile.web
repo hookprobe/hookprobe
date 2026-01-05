@@ -10,7 +10,7 @@
 FROM python:3.11-slim-bookworm AS builder
 
 # Install build dependencies (includes g++ for scikit-learn compilation)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
@@ -37,12 +37,12 @@ LABEL version="5.5.0"
 LABEL description="HookProbe Fortress Admin Portal - Self-contained Flask application"
 
 # Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r fortress -g 1000 \
-    && useradd -r -g fortress -u 1000 -d /app fortress
+    && groupadd -g 1000 fortress \
+    && useradd -g fortress -u 1000 -d /app -s /sbin/nologin fortress
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
