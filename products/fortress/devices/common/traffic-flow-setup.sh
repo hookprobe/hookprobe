@@ -33,6 +33,11 @@ CONTAINER_ML="172.20.202.0/24"
 CONTAINER_MGMT="172.20.203.0/24"
 LAN_NETWORK="${LAN_NETWORK:-10.200.0.0/23}"
 
+# Web UI configuration
+WEB_PORT="${WEB_PORT:-8443}"
+WEB_CONTAINER_IP="172.20.200.20"
+LAN_GATEWAY_IP="${LAN_GATEWAY_IP:-10.200.0.1}"
+
 # PBR marks (must match wan-failover-pbr.sh)
 FWMARK_PRIMARY=0x100
 FWMARK_BACKUP=0x200
@@ -106,6 +111,10 @@ table inet fts_nat {
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
 
+        # Web UI DNAT: LAN clients accessing dashboard on gateway IP
+        # Traffic to 10.200.0.1:8443 → web container at 172.20.200.20:8443
+        iifname "vlan100" tcp dport 8443 dnat to 172.20.200.20:8443
+
         # DNS redirect: LAN clients → dnsmasq (which forwards to dnsXai)
         # This ensures DNS goes through our ML protection
         # ip saddr 10.200.0.0/23 udp dport 53 redirect to :53
@@ -115,10 +124,11 @@ table inet fts_nat {
         type nat hook postrouting priority srcnat; policy accept;
 
         # SNAT for container replies to LAN clients
-        # Containers on 172.20.200.0/24 replying to LAN clients (10.200.x.x)
-        # must use the MGMT gateway IP so clients see responses from
-        # the same IP they connected to (10.200.100.1 for dashboard)
-        ip saddr 172.20.200.0/24 ip daddr 10.200.0.0/8 snat to 10.200.100.1
+        # Containers on 172.20.200.0/24 replying to LAN clients (10.200.0.x)
+        # must use the LAN gateway IP (10.200.0.1) so clients see responses from
+        # the same IP they connected to
+        # Using masquerade to auto-select correct source IP based on output interface
+        ip saddr 172.20.200.0/24 oifname "vlan100" masquerade
 
 NFTEOF
 
@@ -135,6 +145,20 @@ EOF
     done
 
     cat >> "$NFTABLES_FILE" << 'NFTEOF'
+    }
+
+    # Forward chain for DNAT'd traffic
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # Allow traffic to container network (DNAT'd web UI traffic)
+        ip daddr 172.20.200.0/24 accept
+
+        # Allow related/established traffic back
+        ct state established,related accept
+
+        # Allow container network to reach LAN (for responses)
+        ip saddr 172.20.200.0/24 ip daddr 10.200.0.0/8 accept
     }
 }
 
