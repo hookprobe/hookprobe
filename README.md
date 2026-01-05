@@ -367,6 +367,7 @@ sudo ./install.sh --tier guardian   # 🏠 Home/Prosumer ($75 RPi, 1.5GB RAM)
 
 # Other tiers available:
 # sudo ./install.sh --tier fortress   # 🏢 Business ($200 Mini PC, 4GB RAM)
+# sudo ./install.sh --tier fortress --enable-aiochi  # With AI Eyes cognitive layer
 # sudo ./install.sh --tier nexus      # 🏗️ Enterprise ($2000 Server, 16GB+ RAM)
 ```
 
@@ -399,7 +400,7 @@ The majority of HookProbe is open source under AGPL v3.0:
 
 ### Documented Innovations
 
-Our proprietary components (Qsecbit algorithm, Neural Resonance protocol, dnsXai classifier) are clearly documented. You can understand *what* they do and *why* - the implementation is protected, but the purpose is transparent.
+Our proprietary components (Qsecbit algorithm, Neural Resonance protocol, dnsXai classifier, AIOCHI cognitive layer, SLA AI business continuity) are clearly documented. You can understand *what* they do and *why* - the implementation is protected, but the purpose is transparent.
 
 ### Privacy by Architecture
 
@@ -433,6 +434,8 @@ hookprobe/
 │   ├── dnsXai/              # AI DNS Protection (documented, proprietary)
 │   ├── mesh/                # Collective Defense (open source)
 │   ├── dsm/                 # Decentralized Security (documented, proprietary)
+│   ├── aiochi/              # AIOCHI - AI Eyes Cognitive Layer (proprietary)
+│   ├── slaai/               # SLA AI Business Continuity (proprietary)
 │   ├── response/            # Automated Response (open source)
 │   └── cortex/              # 3D Visualization (open source)
 │

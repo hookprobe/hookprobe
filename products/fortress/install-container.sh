@@ -1136,6 +1136,11 @@ WEB_SSL=true
 # Logging
 LOG_LEVEL=info
 LOG_DIR=${LOG_DIR}
+
+# Optional features
+INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
+INSTALL_LTE=${INSTALL_LTE:-false}
+INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
 EOF
 
     # Set ownership so container (fortress user) can read
@@ -3133,6 +3138,35 @@ MDNSCONF
     log_info "Web UI will be available on port ${WEB_PORT}"
     podman-compose up -d --no-build
 
+    # ========================================
+    # WORKAROUND: podman-compose 1.x ignores profiles
+    # ========================================
+    # podman-compose 1.x doesn't support --profile flag, so ALL containers
+    # start regardless of profiles. When AIOCHI is enabled, we need to stop
+    # the individual fts-* optional containers since AIOCHI provides bundled
+    # aiochi-* containers for all monitoring/analytics/IDS.
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        log_info "AIOCHI enabled - stopping fts-* optional containers (AIOCHI provides these)..."
+        # Stop and remove optional containers that AIOCHI replaces
+        local aiochi_replaces=(
+            "fts-grafana"
+            "fts-victoria"
+            "fts-n8n"
+            "fts-clickhouse"
+            "fts-suricata"
+            "fts-zeek"
+            "fts-xdp"
+            "fts-lstm-trainer"
+        )
+        for container in "${aiochi_replaces[@]}"; do
+            if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+                log_info "  Stopping ${container} (replaced by AIOCHI)..."
+                podman stop -t 5 "$container" 2>/dev/null || true
+                podman rm -f "$container" 2>/dev/null || true
+            fi
+        done
+    fi
+
     # Wait for services in dependency order
     log_info "Waiting for services to be ready..."
 
@@ -3392,115 +3426,231 @@ AIOCHIENV
             log_info "  Building AIOCHI containers..."
             cd "$aiochi_dir"
 
-            # Build custom containers
+            # Build custom containers (with visible output)
             if [ -f "Containerfile.identity" ]; then
-                podman build -t localhost/aiochi-identity:latest -f Containerfile.identity . 2>/dev/null || \
+                log_info "    Building identity-engine..."
+                if ! podman build -t localhost/aiochi-identity:latest -f Containerfile.identity . 2>&1 | tail -5; then
                     log_warn "Failed to build identity-engine (will use fallback)"
+                fi
             fi
             if [ -f "Containerfile.logshipper" ]; then
-                podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper . 2>/dev/null || \
+                log_info "    Building log-shipper..."
+                if ! podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper . 2>&1 | tail -5; then
                     log_warn "Failed to build log-shipper (will use fallback)"
+                fi
             fi
 
-            # Pull required images
+            # ============================================================
+            # PULL AIOCHI CONTAINER IMAGES (with progress visibility)
+            # ============================================================
+            # Total download: ~3-4GB for all images
+            # Ollama + LLM model is the largest (~2GB)
             log_info "  Pulling AIOCHI container images..."
-            podman pull docker.io/clickhouse/clickhouse-server:24.8 2>/dev/null || true
-            podman pull docker.io/victoriametrics/victoria-metrics:v1.106.1 2>/dev/null || true
-            podman pull docker.io/jasonish/suricata:7.0.8 2>/dev/null || true
-            podman pull docker.io/zeek/zeek:7.0.3 2>/dev/null || true
-            podman pull docker.io/n8nio/n8n:1.70.3 2>/dev/null || true
-            podman pull docker.io/grafana/grafana:11.4.0 2>/dev/null || true
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info "  Total download: ~3-4GB (depending on cached images)"
+            log_info "  This may take 5-15 minutes on first install..."
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
 
-            # Start AIOCHI stack
-            log_info "  Starting AIOCHI containers..."
-            podman-compose -f podman-compose.aiochi.yml up -d --no-build 2>/dev/null || {
-                log_warn "podman-compose failed, starting containers individually..."
-
-                # Create AIOCHI network
-                podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal 2>/dev/null || true
-
-                # Start ClickHouse
-                podman run -d --name aiochi-clickhouse \
-                    --restart unless-stopped \
-                    --network aiochi-internal \
-                    --ip 172.20.210.10 \
-                    -p 127.0.0.1:8123:8123 \
-                    -p 127.0.0.1:9000:9000 \
-                    -v aiochi-clickhouse-data:/var/lib/clickhouse \
-                    -v aiochi-clickhouse-logs:/var/log/clickhouse-server \
-                    -e CLICKHOUSE_DB=aiochi \
-                    -e CLICKHOUSE_USER=aiochi \
-                    -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
-                    docker.io/clickhouse/clickhouse-server:24.8 \
-                    2>/dev/null || log_warn "ClickHouse may already be running"
-
-                # Start VictoriaMetrics
-                podman run -d --name aiochi-victoria \
-                    --restart unless-stopped \
-                    --network aiochi-internal \
-                    --ip 172.20.210.11 \
-                    -p 127.0.0.1:8428:8428 \
-                    -v aiochi-victoria-data:/victoria-metrics-data \
-                    docker.io/victoriametrics/victoria-metrics:v1.106.1 \
-                    --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data \
-                    2>/dev/null || log_warn "VictoriaMetrics may already be running"
-
-                # Start Grafana
-                podman run -d --name aiochi-grafana \
-                    --restart unless-stopped \
-                    --network aiochi-internal \
-                    --ip 172.20.210.30 \
-                    -p 0.0.0.0:3000:3000 \
-                    -v aiochi-grafana-data:/var/lib/grafana \
-                    -e GF_SECURITY_ADMIN_USER=admin \
-                    -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
-                    -e GF_USERS_DEFAULT_THEME=dark \
-                    -e GF_INSTALL_PLUGINS=grafana-clickhouse-datasource \
-                    docker.io/grafana/grafana:11.4.0 \
-                    2>/dev/null || log_warn "Grafana may already be running"
-
-                # Start n8n (narrative engine)
-                podman run -d --name aiochi-narrative \
-                    --restart unless-stopped \
-                    --network aiochi-internal \
-                    --ip 172.20.210.21 \
-                    -p 127.0.0.1:5678:5678 \
-                    -v aiochi-n8n-data:/home/node/.n8n \
-                    -e N8N_BASIC_AUTH_ACTIVE=true \
-                    -e N8N_BASIC_AUTH_USER=admin \
-                    -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
-                    -e N8N_HOST=0.0.0.0 \
-                    -e N8N_PORT=5678 \
-                    docker.io/n8nio/n8n:1.70.3 \
-                    2>/dev/null || log_warn "n8n may already be running"
-
-                # Start Suricata (network mode: host for traffic capture)
-                podman run -d --name aiochi-suricata \
-                    --restart unless-stopped \
-                    --network host \
-                    --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
-                    -v aiochi-suricata-logs:/var/log/suricata \
-                    docker.io/jasonish/suricata:7.0.8 \
-                    -i FTS --af-packet \
-                    2>/dev/null || log_warn "Suricata may already be running"
-
-                # Start Zeek (network mode: host for traffic capture)
-                podman run -d --name aiochi-zeek \
-                    --restart unless-stopped \
-                    --network host \
-                    --cap-add NET_ADMIN --cap-add NET_RAW \
-                    -v aiochi-zeek-logs:/opt/zeek/logs \
-                    docker.io/zeek/zeek:7.0.3 \
-                    zeek -i FTS local LogAscii::use_json=T \
-                    2>/dev/null || log_warn "Zeek may already be running"
+            # Helper function to pull with progress
+            pull_with_progress() {
+                local image="$1"
+                local name="$2"
+                local size="$3"
+                echo -n "    [PULL] ${name} (${size})... "
+                if podman pull "$image" >/dev/null 2>&1; then
+                    echo "✓"
+                    return 0
+                else
+                    echo "✗ (will retry later)"
+                    return 1
+                fi
             }
 
-            log_info "AIOCHI started:"
-            log_info "  - ClickHouse: http://localhost:8123 (HTTP API)"
-            log_info "  - VictoriaMetrics: http://localhost:8428"
-            log_info "  - Grafana: http://localhost:3000 (admin/${GRAFANA_PASSWORD:-fortress_grafana_admin})"
-            log_info "  - n8n: http://localhost:5678 (admin/${N8N_PASSWORD:-fortress_n8n_admin})"
-            log_info "  - Suricata + Zeek: Capturing on FTS bridge"
+            # Pull images with size estimates
+            pull_with_progress "docker.io/clickhouse/clickhouse-server:24.8" "ClickHouse" "~500MB"
+            pull_with_progress "docker.io/victoriametrics/victoria-metrics:v1.106.1" "VictoriaMetrics" "~30MB"
+            pull_with_progress "docker.io/jasonish/suricata:7.0.8" "Suricata IDS" "~300MB"
+            pull_with_progress "docker.io/zeek/zeek:7.0.3" "Zeek NSM" "~400MB"
+            pull_with_progress "docker.io/n8nio/n8n:1.70.3" "n8n Workflows" "~400MB"
+            pull_with_progress "docker.io/grafana/grafana:11.4.0" "Grafana" "~400MB"
+
+            # Ollama is special - it's the LLM runtime
+            log_info ""
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info "  OLLAMA LOCAL LLM (~2GB download)"
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info "  Ollama provides local AI reasoning for security narratives."
+            log_info "  The llama3.2:3b model will be downloaded on first start."
+            log_info "  This is a ~2GB download and may take 5-10 minutes."
+            log_info ""
+            echo -n "    [PULL] Ollama runtime (~500MB)... "
+            if podman pull docker.io/ollama/ollama:latest >/dev/null 2>&1; then
+                echo "✓"
+            else
+                echo "✗ (AIOCHI will start without LLM)"
+                log_warn "Ollama pull failed - AI narratives will use template fallback"
+            fi
+
+            echo ""
+            log_info "  Image pulls complete. Starting containers..."
+            echo ""
+
+            # ============================================================
+            # START AIOCHI CONTAINERS
+            # ============================================================
+            # We start containers individually for better progress visibility
+            # and to handle Ollama's async model download gracefully
+            log_info "  Starting AIOCHI containers..."
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+
+            # Helper function for container start with status
+            start_aiochi_container() {
+                local name="$1"
+                local desc="$2"
+                shift 2
+                echo -n "    [START] ${desc}... "
+                if podman run -d "$@" >/dev/null 2>&1; then
+                    echo "✓"
+                    return 0
+                elif podman ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
+                    echo "○ (already exists)"
+                    return 0
+                else
+                    echo "✗"
+                    return 1
+                fi
+            }
+
+            # Create AIOCHI network
+            podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal 2>/dev/null || true
+
+            # 1. Data Tier
+            start_aiochi_container "aiochi-clickhouse" "ClickHouse (analytics)" \
+                --name aiochi-clickhouse \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.10 \
+                -p 127.0.0.1:8123:8123 \
+                -p 127.0.0.1:9000:9000 \
+                -v aiochi-clickhouse-data:/var/lib/clickhouse \
+                -v aiochi-clickhouse-logs:/var/log/clickhouse-server \
+                -e CLICKHOUSE_DB=aiochi \
+                -e CLICKHOUSE_USER=aiochi \
+                -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                docker.io/clickhouse/clickhouse-server:24.8
+
+            start_aiochi_container "aiochi-victoria" "VictoriaMetrics (time-series)" \
+                --name aiochi-victoria \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.11 \
+                -p 127.0.0.1:8428:8428 \
+                -v aiochi-victoria-data:/victoria-metrics-data \
+                docker.io/victoriametrics/victoria-metrics:v1.106.1 \
+                --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data
+
+            # 2. Capture Tier
+            start_aiochi_container "aiochi-suricata" "Suricata IDS (host network)" \
+                --name aiochi-suricata \
+                --restart unless-stopped \
+                --network host \
+                --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
+                -v aiochi-suricata-logs:/var/log/suricata \
+                docker.io/jasonish/suricata:7.0.8 \
+                -i FTS --af-packet
+
+            start_aiochi_container "aiochi-zeek" "Zeek NSM (host network)" \
+                --name aiochi-zeek \
+                --restart unless-stopped \
+                --network host \
+                --cap-add NET_ADMIN --cap-add NET_RAW \
+                -v aiochi-zeek-logs:/opt/zeek/logs \
+                docker.io/zeek/zeek:7.0.3 \
+                zeek -i FTS local LogAscii::use_json=T
+
+            # 3. Visualization Tier
+            start_aiochi_container "aiochi-grafana" "Grafana (dashboards)" \
+                --name aiochi-grafana \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.30 \
+                -p 0.0.0.0:3000:3000 \
+                -v aiochi-grafana-data:/var/lib/grafana \
+                -e GF_SECURITY_ADMIN_USER=admin \
+                -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
+                -e GF_USERS_DEFAULT_THEME=dark \
+                docker.io/grafana/grafana:11.4.0
+
+            # 4. Intelligence Tier
+            start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
+                --name aiochi-narrative \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.21 \
+                -p 127.0.0.1:5678:5678 \
+                -v aiochi-n8n-data:/home/node/.n8n \
+                -e N8N_BASIC_AUTH_ACTIVE=true \
+                -e N8N_BASIC_AUTH_USER=admin \
+                -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
+                -e N8N_HOST=0.0.0.0 \
+                -e N8N_PORT=5678 \
+                docker.io/n8nio/n8n:1.70.3
+
+            # 5. AI Tier - Ollama (starts in background, model downloads async)
+            log_info ""
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info "  Starting Ollama LLM (model download is ASYNC)"
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo -n "    [START] Ollama LLM runtime... "
+            # Start Ollama WITHOUT the model pull in entrypoint - we'll do that async
+            if podman run -d --name aiochi-ollama \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.50 \
+                -p 127.0.0.1:11434:11434 \
+                -v aiochi-ollama-models:/root/.ollama \
+                -e OLLAMA_HOST=0.0.0.0 \
+                -e OLLAMA_KEEP_ALIVE=24h \
+                docker.io/ollama/ollama:latest \
+                serve >/dev/null 2>&1; then
+                echo "✓"
+                # Queue model download in background (don't block install)
+                log_info "    → Model download will start in background (~2GB)..."
+                log_info "    → Monitor: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+                (
+                    sleep 15  # Wait for Ollama to fully start
+                    mkdir -p "$LOG_DIR"
+                    echo "[$(date -Iseconds)] Starting llama3.2:3b model download..." >> "${LOG_DIR}/aiochi-llm-download.log"
+                    podman exec aiochi-ollama ollama pull llama3.2:3b 2>&1 | while read line; do
+                        echo "[$(date -Iseconds)] $line" >> "${LOG_DIR}/aiochi-llm-download.log"
+                    done
+                    echo "[$(date -Iseconds)] Model download complete." >> "${LOG_DIR}/aiochi-llm-download.log"
+                ) &
+            elif podman ps -a --format "{{.Names}}" | grep -q "^aiochi-ollama$"; then
+                echo "○ (already exists)"
+            else
+                echo "✗ (AI narratives will use templates)"
+                log_warn "Ollama failed to start - AI narratives will fall back to templates"
+            fi
+
+            echo ""
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info "  AIOCHI containers started successfully!"
+            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            log_info ""
+            log_info "  Services available at:"
+            log_info "    • ClickHouse:      http://localhost:8123"
+            log_info "    • VictoriaMetrics: http://localhost:8428"
+            log_info "    • Grafana:         http://localhost:3000"
+            log_info "    • n8n Workflows:   http://localhost:5678"
+            log_info "    • Ollama LLM:      http://localhost:11434"
+            log_info ""
+            log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
+            log_info "        in the background. AI features will activate once complete."
+            log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+            echo ""
 
             cd "${INSTALL_DIR}/containers"
         else
@@ -3950,6 +4100,10 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1
 
 # Start containers (--no-build prevents rebuild attempts - images built during install)
 ExecStart=${podman_compose_bin} -f podman-compose.yml up -d --no-build
+
+# WORKAROUND: podman-compose 1.x ignores profiles, so we stop AIOCHI-replaced containers
+# Only runs if INSTALL_AIOCHI=true in fortress.conf
+ExecStartPost=/bin/bash -c '[ "\${INSTALL_AIOCHI:-}" = "true" ] && for c in fts-grafana fts-victoria fts-n8n fts-clickhouse fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do podman stop -t 2 \$c 2>/dev/null; podman rm -f \$c 2>/dev/null; done || true'
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
