@@ -680,31 +680,22 @@ setup_nat() {
     iptables -C FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-    # DNAT rules for LAN access to container services
-    # Web UI: LAN clients (10.200.0.0/xx) -> web container (172.20.200.20:8443)
-    # In VLAN mode, traffic arrives on vlan100, not FTS bridge
+    # NOTE: Web UI DNAT is NOT needed - podman's port forward handles it
+    # Podman listens on 0.0.0.0:8443 and proxies to the container.
+    # DNAT would intercept packets before reaching the local socket, breaking access.
+    # Only use DNAT if you have direct routing to the container network (rare).
     local web_port="${WEB_PORT:-8443}"
-    local web_ip="${CONTAINER_IPS[web]}"
-    local lan_iface="vlan100"  # VLAN mode uses vlan100 for LAN traffic
+    log_info "Web UI accessible via podman port forward on port $web_port"
 
-    # DNAT for vlan100 (VLAN mode - primary)
-    iptables -t nat -C PREROUTING -i "$lan_iface" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i "$lan_iface" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}"
-
-    # DNAT for OVS bridge (legacy mode fallback)
-    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}"
-
-    # Allow forwarding to container network for DNAT'd traffic
-    # All containers are on 172.20.200.0/24 as defined in podman-compose.yml
-    iptables -C FORWARD -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
-        iptables -A FORWARD -d 172.20.200.0/24 -j ACCEPT
+    # Allow forwarding to container network (for containers that need LAN access)
+    # This is still useful for container-to-LAN communication paths
+    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT
 
     iptables -C FORWARD -s 172.20.200.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -s 172.20.200.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     log_info "NAT configured for LAN (${lan_cidr}) and Containers (172.20.200.0/24)"
-    log_info "DNAT configured for web UI access on port $web_port → ${web_ip}"
 }
 
 # ============================================================
@@ -1114,24 +1105,57 @@ attach_container_to_ovs() {
         return 1
     }
 
-    # Clean up any existing veth
+    # Verify PID is valid and not 0 (container may be restarting)
+    if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+        log_warn "Container $container_name has invalid PID ($pid) - skipping attachment"
+        return 1
+    fi
+
+    # Verify container's network namespace exists
+    if [ ! -d "/proc/$pid/ns" ]; then
+        log_warn "Container $container_name namespace not accessible - skipping attachment"
+        return 1
+    fi
+
+    # Check if container already has eth-ovs interface (already attached)
+    if nsenter -t "$pid" -n ip link show "$veth_cont" &>/dev/null; then
+        log_info "Container $container_name already has $veth_cont interface - skipping"
+        return 0
+    fi
+
+    # Clean up any existing veth on host side
     ip link del "$veth_host" 2>/dev/null || true
     ovs-vsctl del-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null || true
 
-    # Create veth pair
-    ip link add "$veth_host" type veth peer name "$veth_cont"
+    # Create veth pair with error handling
+    if ! ip link add "$veth_host" type veth peer name "$veth_cont" 2>/dev/null; then
+        log_warn "Failed to create veth pair for $container_name - skipping"
+        return 1
+    fi
 
     # Add host end to OVS bridge (for traffic monitoring/mirroring)
-    ovs-vsctl add-port "$OVS_BRIDGE" "$veth_host"
+    if ! ovs-vsctl add-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null; then
+        log_warn "Failed to add $veth_host to OVS - cleaning up"
+        ip link del "$veth_host" 2>/dev/null || true
+        return 1
+    fi
     ip link set "$veth_host" up
 
     # Move container end to container namespace
-    ip link set "$veth_cont" netns "$pid"
+    # This is the critical operation - if it fails, clean up
+    if ! ip link set "$veth_cont" netns "$pid" 2>/dev/null; then
+        log_warn "Failed to move $veth_cont to container namespace - cleaning up"
+        ovs-vsctl del-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null || true
+        ip link del "$veth_host" 2>/dev/null || true
+        return 1
+    fi
 
     # Bring up container end - NO IP ASSIGNMENT
     # Container already has eth0 with IP from podman network
     # This veth is for OVS traffic mirroring only, not routing
-    nsenter -t "$pid" -n ip link set "$veth_cont" up
+    nsenter -t "$pid" -n ip link set "$veth_cont" up 2>/dev/null || {
+        log_warn "Failed to bring up $veth_cont inside container - OVS may have partial attachment"
+    }
 
     # DO NOT assign IP or route - container uses eth0 for all traffic
     # The eth-ovs interface is just for OVS visibility/mirroring
