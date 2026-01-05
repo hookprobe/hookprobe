@@ -89,6 +89,19 @@ services:
   # ============================================================================
   # CAPTURE TIER - Network Traffic Analysis
   # ============================================================================
+  #
+  # IMPORTANT: These containers capture from the OVS mirror port (FTS-mirror),
+  # NOT the main FTS bridge. Direct AF_PACKET capture on an OVS bridge causes:
+  #   1. Packet loss (competes with OVS datapath)
+  #   2. Promiscuous mode conflicts
+  #   3. CPU starvation
+  #
+  # The FTS-mirror port receives a copy of all traffic via OVS port mirroring,
+  # which is the proper way to capture traffic for IDS/NSM analysis.
+  # See: products/fortress/devices/common/ovs-post-setup.sh (setup_traffic_mirror)
+  #
+  # Default: CAPTURE_INTERFACE=FTS-mirror (OVS mirror port)
+  # ============================================================================
 
   suricata:
     image: docker.io/jasonish/suricata:7.0.8
@@ -105,8 +118,8 @@ services:
       - ./configs/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
       - ./configs/suricata/rules:/etc/suricata/rules:ro
     environment:
-      SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS} --af-packet"
-    command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS}", "--af-packet"]
+      SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS-mirror} --af-packet"
+    command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
     healthcheck:
       test: ["CMD", "pgrep", "-x", "suricata"]
       interval: 30s
@@ -128,7 +141,7 @@ services:
       - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
       - ./configs/zeek/node.cfg:/opt/zeek/etc/node.cfg:ro
     environment:
-      ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS}"
+      ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
     command: ["zeekctl", "deploy"]
     healthcheck:
       test: ["CMD", "zeekctl", "status"]
