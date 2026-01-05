@@ -787,6 +787,10 @@ create_directories() {
     # Stores: dnsXai whitelist, user configs, blocked traffic logs
     mkdir -p /var/lib/hookprobe/userdata/dnsxai
 
+    # CRITICAL: Truly persistent storage that is NEVER removed by any uninstall
+    # This is the canonical location for user data that must survive even --purge
+    mkdir -p /etc/hookprobe/persistent/dnsxai
+
     chmod 755 "$INSTALL_DIR" "$CONFIG_DIR"
     chmod 700 "$INSTALL_DIR/containers/secrets"
     chmod 750 "$CONFIG_DIR/secrets"  # Group-readable for fortress user
@@ -828,15 +832,38 @@ create_directories() {
     chmod 777 "$INSTALL_DIR/data"
     chown 1000:1000 "$INSTALL_DIR/data" 2>/dev/null || true
 
-    # Bootstrap dnsXai defaults to userdata if not present
-    # This ensures defaults are available even before container first starts
-    # Container entrypoint will sync these properly on startup
+    # Bootstrap dnsXai whitelist to PERSISTENT location
+    # /etc/hookprobe/persistent/ is NEVER removed by any uninstall, even --purge
+    # The userdata location is a symlink for backwards compatibility
     local default_whitelist="${FORTRESS_ROOT}/../../shared/dnsXai/data/whitelist.txt"
+    local persistent_whitelist="/etc/hookprobe/persistent/dnsxai/whitelist.txt"
     local userdata_whitelist="/var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
-    if [ ! -f "$userdata_whitelist" ] && [ -f "$default_whitelist" ]; then
-        log_info "Bootstrapping default dnsXai whitelist to userdata..."
-        cp "$default_whitelist" "$userdata_whitelist"
-        chmod 644 "$userdata_whitelist"
+
+    # Migrate existing whitelist to persistent location if present
+    if [ -f "$userdata_whitelist" ] && [ ! -L "$userdata_whitelist" ]; then
+        if [ ! -f "$persistent_whitelist" ]; then
+            log_info "Migrating existing whitelist to persistent location..."
+            mv "$userdata_whitelist" "$persistent_whitelist"
+        else
+            log_info "Merging existing whitelist with persistent copy..."
+            cat "$userdata_whitelist" >> "$persistent_whitelist"
+            sort -u "$persistent_whitelist" -o "$persistent_whitelist"
+            rm -f "$userdata_whitelist"
+        fi
+    fi
+
+    # Bootstrap defaults if no whitelist exists
+    if [ ! -f "$persistent_whitelist" ] && [ -f "$default_whitelist" ]; then
+        log_info "Bootstrapping default dnsXai whitelist to persistent location..."
+        cp "$default_whitelist" "$persistent_whitelist"
+    fi
+    chmod 644 "$persistent_whitelist" 2>/dev/null || true
+
+    # Create symlink from userdata to persistent (backwards compatibility)
+    if [ ! -L "$userdata_whitelist" ]; then
+        rm -f "$userdata_whitelist" 2>/dev/null || true
+        ln -sf "$persistent_whitelist" "$userdata_whitelist"
+        log_info "Created symlink: $userdata_whitelist -> $persistent_whitelist"
     fi
 
     # Set group ownership so container (fortress user) can read config files
