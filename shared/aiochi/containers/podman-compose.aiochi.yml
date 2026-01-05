@@ -142,8 +142,8 @@ services:
 
   identity-engine:
     build:
-      context: .
-      dockerfile: Containerfile.identity
+      context: ..
+      dockerfile: containers/Containerfile.identity
     container_name: aiochi-identity
     hostname: aiochi-identity
     restart: unless-stopped
@@ -267,8 +267,8 @@ services:
 
   log-shipper:
     build:
-      context: .
-      dockerfile: Containerfile.logshipper
+      context: ..
+      dockerfile: containers/Containerfile.logshipper
     container_name: aiochi-logshipper
     hostname: aiochi-logshipper
     restart: unless-stopped
