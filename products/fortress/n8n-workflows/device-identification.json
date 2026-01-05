@@ -1,0 +1,437 @@
+{
+  "name": "Fortress Device Identification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "device-event",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Device Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event }}",
+              "operation": "equals",
+              "value2": "new_device"
+            }
+          ]
+        }
+      },
+      "id": "if-new-device",
+      "name": "Is New Device?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'python3 -c \"from autopilot.probe_service import get_probe_service; import json; p=get_probe_service(); r=p.probe(\\\"' + $json.data.mac + '\\\", 60); print(json.dumps(r.to_dict()))\"' }}"
+      },
+      "id": "run-probe",
+      "name": "Run 60s Probe Capture",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const probeOutput = $input.item.json.stdout;\nlet probeResult;\n\ntry {\n  probeResult = JSON.parse(probeOutput);\n} catch (e) {\n  probeResult = { error: 'Failed to parse probe output' };\n}\n\nconst originalData = $('Device Event Webhook').first().json.data;\n\nreturn [{\n  json: {\n    mac: originalData.mac,\n    ip: originalData.ip,\n    hostname: probeResult.hostname || originalData.hostname,\n    ecosystem: probeResult.ecosystem,\n    device_type: probeResult.device_type,\n    services: probeResult.services || [],\n    d2d_targets: probeResult.d2d_targets || [],\n    confidence: probeResult.confidence || 0,\n    probe_timestamp: new Date().toISOString(),\n  }\n}];"
+      },
+      "id": "parse-probe-result",
+      "name": "Parse Probe Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.confidence }}",
+              "operation": "largerEqual",
+              "value2": 0.7
+            }
+          ]
+        }
+      },
+      "id": "if-high-confidence",
+      "name": "High Confidence?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\n\n// Determine bubble type based on ecosystem and context\nlet bubbleType = 'GUEST';\nlet bubbleName = 'Guests';\n\nif (data.ecosystem === 'apple' || data.ecosystem === 'samsung') {\n  bubbleType = 'FAMILY';\n  bubbleName = 'Family';\n} else if (data.services.some(s => s.includes('iot') || s.includes('homekit'))) {\n  bubbleType = 'IOT';\n  bubbleName = 'Smart Home';\n}\n\nreturn [{\n  json: {\n    ...data,\n    suggested_bubble_type: bubbleType,\n    suggested_bubble_name: bubbleName,\n    auto_assign: data.confidence >= 0.8,\n  }\n}];"
+      },
+      "id": "determine-bubble",
+      "name": "Determine Bubble",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.auto_assign }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-auto-assign",
+      "name": "Auto Assign?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1450, 100]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'python3 -c \"from ecosystem_bubble import get_bubble_manager, BubbleType; m=get_bubble_manager(); m.auto_assign_device(\\\"' + $json.mac + '\\\", BubbleType.' + $json.suggested_bubble_type + ')\"' }}"
+      },
+      "id": "auto-assign-bubble",
+      "name": "Auto Assign to Bubble",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1650, 0]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8443/api/devices/pending",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "mac",
+              "value": "={{ $json.mac }}"
+            },
+            {
+              "name": "hostname",
+              "value": "={{ $json.hostname }}"
+            },
+            {
+              "name": "ecosystem",
+              "value": "={{ $json.ecosystem }}"
+            },
+            {
+              "name": "suggested_bubble",
+              "value": "={{ $json.suggested_bubble_name }}"
+            },
+            {
+              "name": "confidence",
+              "value": "={{ $json.confidence }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notify-admin",
+      "name": "Notify Admin (Pending)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "tableName": "devices",
+        "columns": "mac,ip,hostname,ecosystem,device_type,services,d2d_targets,bubble_id,confidence,created_at",
+        "additionalFields": {}
+      },
+      "id": "save-to-clickhouse",
+      "name": "Save to ClickHouse",
+      "type": "n8n-nodes-base.clickHouse",
+      "typeVersion": 1,
+      "position": [1850, 100],
+      "credentials": {
+        "clickHouseApi": {
+          "id": "clickhouse-fortress",
+          "name": "Fortress ClickHouse"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "log-entry",
+              "name": "log",
+              "type": "string",
+              "value": "={{ 'Device ' + $json.mac + ' identified as ' + $json.ecosystem + ' with confidence ' + $json.confidence }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-completion",
+      "name": "Log Completion",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2050, 100]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'python3 -c \"from autopilot.dhcp_sentinel import get_dhcp_sentinel; s=get_dhcp_sentinel(); s.update_bubble_assignment(\\\"' + $json.mac + '\\\", \\\"' + ($json.bubble_id || 'guest') + '\\\")\"' }}"
+      },
+      "id": "update-sentinel",
+      "name": "Update DHCP Sentinel",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1850, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Low confidence - put in guest bubble for now\nconst data = $input.item.json;\n\nreturn [{\n  json: {\n    ...data,\n    bubble_id: 'guest',\n    bubble_name: 'Guests',\n    reason: 'Low confidence fingerprint - manual review recommended',\n  }\n}];"
+      },
+      "id": "guest-fallback",
+      "name": "Guest Bubble Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'python3 -c \"from ecosystem_bubble import get_bubble_manager, BubbleType; m=get_bubble_manager(); m.add_device_to_bubble(\\\"' + $json.mac + '\\\", \\\"guest\\\")\"' }}"
+      },
+      "id": "assign-guest",
+      "name": "Assign to Guest Bubble",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8443/api/notifications",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "new_device"
+            },
+            {
+              "name": "title",
+              "value": "New Device Needs Review"
+            },
+            {
+              "name": "message",
+              "value": "={{ 'Device ' + $json.mac + ' (' + ($json.hostname || 'unknown') + ') placed in Guest network. Ecosystem: ' + ($json.ecosystem || 'unknown') + '. Click to assign to family bubble.' }}"
+            },
+            {
+              "name": "mac",
+              "value": "={{ $json.mac }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notify-review",
+      "name": "Notify for Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {},
+      "id": "no-op-existing",
+      "name": "Existing Device (No Action)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [650, 400]
+    }
+  ],
+  "connections": {
+    "Device Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Is New Device?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Device?": {
+      "main": [
+        [
+          {
+            "node": "Run 60s Probe Capture",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Existing Device (No Action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 60s Probe Capture": {
+      "main": [
+        [
+          {
+            "node": "Parse Probe Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Probe Result": {
+      "main": [
+        [
+          {
+            "node": "High Confidence?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Confidence?": {
+      "main": [
+        [
+          {
+            "node": "Determine Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guest Bubble Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Bubble": {
+      "main": [
+        [
+          {
+            "node": "Auto Assign?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto Assign?": {
+      "main": [
+        [
+          {
+            "node": "Auto Assign to Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Admin (Pending)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto Assign to Bubble": {
+      "main": [
+        [
+          {
+            "node": "Update DHCP Sentinel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DHCP Sentinel": {
+      "main": [
+        [
+          {
+            "node": "Save to ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to ClickHouse": {
+      "main": [
+        [
+          {
+            "node": "Log Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guest Bubble Fallback": {
+      "main": [
+        [
+          {
+            "node": "Assign to Guest Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign to Guest Bubble": {
+      "main": [
+        [
+          {
+            "node": "Notify for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Admin (Pending)": {
+      "main": [
+        [
+          {
+            "node": "Save to ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "fortress",
+      "createdAt": "2026-01-05T00:00:00.000Z"
+    },
+    {
+      "name": "autopilot",
+      "createdAt": "2026-01-05T00:00:00.000Z"
+    }
+  ],
+  "triggerCount": 0,
+  "versionId": "1.0.0"
+}
