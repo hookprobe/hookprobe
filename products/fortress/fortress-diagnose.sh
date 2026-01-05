@@ -32,7 +32,26 @@ for svc in fortress fortress-vlan fts-hostapd-24ghz fts-hostapd-5ghz dnsmasq; do
     fi
 done
 
-# 2. Containers
+# 2. Podman Networks
+header "PODMAN NETWORKS"
+if command -v podman &>/dev/null; then
+    # Check for required network
+    if podman network exists containers_fts-internal 2>/dev/null; then
+        ok "containers_fts-internal network exists"
+        # Show subnet info
+        podman network inspect containers_fts-internal 2>/dev/null | grep -E '"subnet"|"gateway"' | head -4 | sed 's/^/    /'
+    else
+        fail "containers_fts-internal network MISSING!"
+        warn "Run: sudo ./fortress-recover.sh to fix"
+    fi
+    echo ""
+    echo "All podman networks:"
+    podman network ls 2>/dev/null | grep -E "fts-|aiochi-|NETWORK" | head -10
+else
+    fail "Podman not installed"
+fi
+
+# 3. Containers
 header "CONTAINERS"
 if command -v podman &>/dev/null; then
     echo "Running containers:"
@@ -40,11 +59,23 @@ if command -v podman &>/dev/null; then
     echo ""
     echo "All containers (including stopped):"
     podman ps -a --format "  {{.Names}}: {{.Status}}" 2>/dev/null
+
+    # Check if fts-web has eth0
+    echo ""
+    if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^fts-web$"; then
+        web_eth0=$(podman exec fts-web ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}' || echo "")
+        if [ -n "$web_eth0" ]; then
+            ok "fts-web eth0: $web_eth0"
+        else
+            fail "fts-web missing eth0 interface!"
+            warn "Network connectivity issue - run: sudo ./fortress-recover.sh"
+        fi
+    fi
 else
     fail "Podman not installed"
 fi
 
-# 3. OVS Bridge
+# 4. OVS Bridge
 header "OVS NETWORK"
 if command -v ovs-vsctl &>/dev/null; then
     if ovs-vsctl br-exists FTS 2>/dev/null; then
@@ -57,7 +88,7 @@ else
     fail "Open vSwitch not installed"
 fi
 
-# 4. VLAN Interfaces
+# 5. VLAN Interfaces
 header "VLAN INTERFACES"
 if ip link show vlan100 &>/dev/null; then
     ok "vlan100 (LAN): $(ip -br addr show vlan100 2>/dev/null | awk '{print $3}')"
@@ -70,7 +101,7 @@ else
     info "vlan200 not configured (optional)"
 fi
 
-# 5. DHCP
+# 6. DHCP
 header "DHCP (dnsmasq)"
 if [ -f /etc/dnsmasq.d/fts-vlan.conf ]; then
     ok "DHCP config exists"
@@ -79,7 +110,7 @@ else
     warn "DHCP config not found"
 fi
 
-# 6. WiFi
+# 7. WiFi
 header "WIFI (hostapd)"
 for band in 24ghz 5ghz; do
     conf="/etc/hostapd/fts-${band}.conf"
@@ -92,7 +123,7 @@ for band in 24ghz 5ghz; do
     fi
 done
 
-# 7. Databases
+# 8. Databases
 header "DATABASES"
 for db in fingerprint ecosystem_bubbles presence; do
     dbfile="/var/lib/hookprobe/${db}.db"
@@ -104,7 +135,7 @@ for db in fingerprint ecosystem_bubbles presence; do
     fi
 done
 
-# 8. Configuration
+# 9. Configuration
 header "CONFIGURATION"
 if [ -f /etc/hookprobe/fortress.conf ]; then
     ok "fortress.conf exists"
@@ -115,7 +146,7 @@ else
     fail "fortress.conf not found"
 fi
 
-# 9. AIOCHI (if enabled)
+# 10. AIOCHI (if enabled)
 header "AIOCHI (AI Eyes)"
 if grep -q "INSTALL_AIOCHI=true" /etc/hookprobe/fortress.conf 2>/dev/null; then
     ok "AIOCHI enabled"
@@ -132,7 +163,7 @@ else
     info "AIOCHI not enabled"
 fi
 
-# 10. Web UI
+# 11. Web UI
 header "WEB UI"
 WEB_PORT=$(grep "^WEB_PORT=" /etc/hookprobe/fortress.conf 2>/dev/null | cut -d= -f2 || echo "8443")
 if curl -sk "https://localhost:${WEB_PORT}/health" &>/dev/null; then
@@ -146,7 +177,7 @@ else
 fi
 info "Access: https://<your-ip>:${WEB_PORT}"
 
-# 11. NAT/Firewall
+# 12. NAT/Firewall
 header "NAT/FIREWALL"
 if iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -q MASQUERADE; then
     ok "NAT masquerade configured"
@@ -154,7 +185,7 @@ else
     warn "NAT masquerade not found"
 fi
 
-# 12. Container Logs (recent errors)
+# 13. Container Logs (recent errors)
 header "RECENT ERRORS (last 5 lines per container)"
 for container in fts-web fts-qsecbit fts-dnsxai fts-postgres; do
     if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
