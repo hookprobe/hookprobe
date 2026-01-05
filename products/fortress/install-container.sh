@@ -272,6 +272,16 @@ check_prerequisites() {
     log_info "hostapd: $(hostapd -v 2>&1 | head -1 || echo 'available')"
     log_info "iw: $(iw --version 2>&1 | head -1 || echo 'available')"
 
+    # Python3 (required for host-based fingerprinting services)
+    if ! command -v python3 &>/dev/null; then
+        log_warn "Python3 not found. Installing..."
+        _apt_install_resilient python3 python3-pip python3-venv || {
+            log_error "Failed to install Python3"
+            exit 1
+        }
+    fi
+    log_info "Python3: $(python3 --version 2>&1)"
+
     # ebtables (required for WiFi-to-WiFi isolation via OVS)
     if ! command -v ebtables &>/dev/null; then
         log_warn "ebtables not found. Installing..."
