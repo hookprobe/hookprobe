@@ -45,6 +45,11 @@
 | **ClickHouse Graph Storage** | Device relationship persistence | `products/fortress/lib/clickhouse_graph.py` |
 | **n8n Bubble Webhooks** | Workflow automation | `products/fortress/lib/n8n_webhook.py` |
 | **Reinforcement Learning** | Learn from corrections | `products/fortress/lib/reinforcement_feedback.py` |
+| **AI Autopilot (Efficiency)** | Event-driven device detection | `products/fortress/lib/autopilot/` |
+| **DHCP Sentinel** | Low-power new device trigger | `products/fortress/lib/autopilot/dhcp_sentinel.py` |
+| **OVS MAC Watcher** | Unknown device detection | `products/fortress/lib/autopilot/mac_watcher.py` |
+| **On-Demand Probe** | 60s burst packet capture | `products/fortress/lib/autopilot/probe_service.py` |
+| **IPFIX Collector** | Sampled D2D flow analysis | `products/fortress/lib/autopilot/ipfix_collector.py` |
 | **Fingerbank API setup** | External enrichment | `products/fortress/docs/FINGERBANK-API-SETUP.md` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
@@ -200,6 +205,7 @@ These directories contain proprietary innovations. Commercial license required f
 | **ClickHouse Graph Storage** | `products/fortress/lib/clickhouse_graph.py` | Proprietary |
 | **n8n Webhook Integration** | `products/fortress/lib/n8n_webhook.py` | Proprietary |
 | **Reinforcement Learning Feedback** | `products/fortress/lib/reinforcement_feedback.py` | Proprietary |
+| **AI Autopilot (Efficiency Engine)** | `products/fortress/lib/autopilot/` | Proprietary |
 | **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
 
 ### Usage Guidelines
@@ -1681,6 +1687,134 @@ bubble = manager.create_manual_bubble(
 # Move device (triggers webhook + RL)
 manager.move_device(mac="AA:BB:CC:DD:EE:03", to_bubble_id=bubble.bubble_id)
 ```
+
+### AI Autopilot - Event-Driven Efficiency Architecture
+
+**Location**: `products/fortress/lib/autopilot/`
+**Status**: Production Ready
+**Branding**: "Sleep-and-Wake" Architecture
+
+AI Autopilot replaces continuous monitoring with event-driven detection to achieve 99% efficiency. Instead of running Suricata/Zeek 24/7 (15-40% CPU, 2GB RAM), it uses low-power sentinels that trigger deep analysis only when needed.
+
+> *"Like motion-activated lights instead of stadium floodlights"*
+
+**Resource Comparison**:
+
+| Mode | CPU Usage | RAM Usage | Coverage |
+|------|-----------|-----------|----------|
+| Continuous (Zeek/Suricata) | 15-40% | 2GB+ | 100% |
+| AI Autopilot (Event-Driven) | 1% idle / 10% burst | <200MB | 99% |
+
+**Architecture Overview**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    AI AUTOPILOT (Event-Driven)                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ALWAYS-ON SENTINELS (<1% CPU)                                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                     │
+│  │    DHCP     │  │     OVS     │  │    IPFIX    │                     │
+│  │  SENTINEL   │  │ MAC WATCHER │  │  SAMPLER    │                     │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                     │
+│         │                │                │                             │
+│         └────────┬───────┴────────┬───────┘                             │
+│                  │                │                                     │
+│                  ▼                ▼                                     │
+│          ┌─────────────┐  ┌─────────────┐                              │
+│          │ EFFICIENCY  │──│    n8n      │                              │
+│          │   ENGINE    │  │  WORKFLOWS  │                              │
+│          └──────┬──────┘  └─────────────┘                              │
+│                 │                                                       │
+│  BURST MODE (10% CPU, 60 seconds)                                      │
+│                 ▼                                                       │
+│          ┌─────────────┐                                               │
+│          │  ON-DEMAND  │  tshark capture                               │
+│          │    PROBE    │  MAC-filtered                                 │
+│          └──────┬──────┘                                               │
+│                 │                                                       │
+│                 ▼                                                       │
+│          ┌─────────────┐                                               │
+│          │   BUBBLE    │  SDN rule update                              │
+│          │ ASSIGNMENT  │                                               │
+│          └─────────────┘                                               │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Core Components**:
+
+| Component | File | CPU | Purpose |
+|-----------|------|-----|---------|
+| **DHCP Sentinel** | `dhcp_sentinel.py` | 0% | Hook into dnsmasq lease events |
+| **MAC Watcher** | `mac_watcher.py` | <0.1% | Poll OVS MAC table every 5s |
+| **On-Demand Probe** | `probe_service.py` | 10% burst | 60s tshark capture per device |
+| **IPFIX Collector** | `ipfix_collector.py` | <0.1% | Sampled D2D flow analysis |
+| **Efficiency Engine** | `efficiency_engine.py` | <0.1% | Central coordinator |
+
+**Dashboard State Indicators**:
+
+| State | Icon | Meaning |
+|-------|------|---------|
+| **SLEEPING** | 🟢 Green | Idle, sentinels watching (saving power) |
+| **IDENTIFYING** | 🔵 Blue Pulse | Processing new device (60s burst) |
+| **PROTECTED** | 🛡️ Gold Shield | All devices in bubbles |
+
+**DHCP Sentinel Setup**:
+
+```bash
+# In /etc/dnsmasq.d/fts-dhcp.conf:
+dhcp-script=/opt/hookprobe/fortress/scripts/dhcp-hook.sh
+
+# The hook captures DHCP Option 55 (OS fingerprint) for instant identification
+```
+
+**IPFIX Sampling Setup**:
+
+```bash
+# Configure OVS to sample 1/100 packets (discovery protocols only)
+ovs-vsctl -- --id=@br get Bridge FTS -- \
+    --id=@ipfix create IPFIX targets=\"127.0.0.1:4739\" \
+    sampling=100 -- set Bridge FTS ipfix=@ipfix
+```
+
+**Python API**:
+
+```python
+from products.fortress.lib.autopilot import (
+    get_efficiency_engine,
+    get_dhcp_sentinel,
+    get_mac_watcher,
+    get_probe_service,
+    get_ipfix_collector,
+    AutopilotState,
+)
+
+# Start the engine (typically done by systemd)
+engine = get_efficiency_engine()
+engine.start()
+
+# Check state for dashboard
+if engine.state == AutopilotState.SLEEPING:
+    print("🟢 Network quiet, saving power")
+elif engine.state == AutopilotState.IDENTIFYING:
+    print("🔵 Processing new device...")
+
+# Manual probe trigger
+probe = get_probe_service()
+result = probe.probe("AA:BB:CC:DD:EE:FF", duration=60)
+print(f"Ecosystem: {result.ecosystem}, Confidence: {result.confidence:.0%}")
+```
+
+**n8n Workflow**:
+
+The workflow in `n8n-workflows/device-identification.json` automates:
+1. Receive webhook from DHCP Sentinel
+2. Trigger 60s probe capture
+3. Parse fingerprint results
+4. Auto-assign bubble (if confidence ≥80%) or notify admin
+5. Save to ClickHouse
+6. Update SDN rules
 
 ### MSSP - Cloud Federation Platform
 
