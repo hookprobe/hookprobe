@@ -736,7 +736,7 @@ device_list() {
             quarantine) policy_color="${RED}${policy}${NC}" ;;
             internet_only) policy_color="${GREEN}${policy}${NC}" ;;
             lan_only) policy_color="${YELLOW}${policy}${NC}" ;;
-            normal|smart_home) policy_color="${CYAN}${policy}${NC}" ;;
+            smart_home) policy_color="${CYAN}${policy}${NC}" ;;
             full_access) policy_color="${BLUE}${policy}${NC}" ;;
             *) policy_color="$policy" ;;
         esac
@@ -785,7 +785,7 @@ device_set_policy() {
         echo "  quarantine     - Block all network access"
         echo "  internet_only  - Internet access only (no LAN)"
         echo "  lan_only       - LAN access only (no internet)"
-        echo "  normal         - LAN + Internet (aka smart_home)"
+        echo "  smart_home     - LAN + Internet (trusted devices)"
         echo "  full_access    - Full access including management"
         echo ""
         exit 1
@@ -796,9 +796,12 @@ device_set_policy() {
 
     # Validate policy
     case "$policy" in
-        quarantine|internet_only|lan_only|normal|smart_home|full_access)
-            # Normalize normal (legacy) to smart_home
-            [ "$policy" = "normal" ] && policy="smart_home"
+        quarantine|internet_only|lan_only|smart_home|full_access)
+            ;;
+        normal)
+            # Legacy alias - convert to smart_home with deprecation notice
+            log_warn "'normal' is deprecated, use 'smart_home' instead"
+            policy="smart_home"
             ;;
         *)
             log_error "Invalid policy: $policy"
@@ -989,7 +992,7 @@ Device Policies:
   quarantine     - Block all network access (default for unknown)
   internet_only  - Internet only, no LAN access
   lan_only       - LAN only, no internet access
-  normal         - LAN + Internet (smart home devices)
+  smart_home     - LAN + Internet (trusted devices)
   full_access    - Full access including management network
 
 Examples:
