@@ -741,11 +741,11 @@ Qsecbit = 0.30·threats + 0.20·mobile + 0.25·ids + 0.15·xdp + 0.02·network +
 
 **RAG Status**:
 
-| Status | Range | Meaning | Action |
-|--------|-------|---------|--------|
-| **GREEN** | < 0.45 | Normal | Learning baseline |
-| **AMBER** | 0.45-0.70 | Warning | Kali spins up |
-| **RED** | > 0.70 | Critical | Full mitigation |
+| Status | Protection | Meaning | What's Happening |
+|--------|------------|---------|------------------|
+| **GREEN** | > 55% | Protected | All clear |
+| **AMBER** | 30-55% | Monitoring | Investigating activity |
+| **RED** | < 30% | Defending | Active mitigation |
 
 ### HTP - HookProbe Transport Protocol
 
@@ -1670,11 +1670,11 @@ Qsecbit = 0.25·L2 + 0.10·L3 + 0.10·L4 + 0.25·L5 + 0.10·L7 + 0.10·energy + 
 
 **RAG Status Thresholds:**
 
-| Status | Score Range | Action Triggered |
-|--------|-------------|------------------|
-| **GREEN** | < 0.45 | Normal, learning baseline |
-| **AMBER** | 0.45 - 0.70 | Warning, prepare Kali container |
-| **RED** | ≥ 0.70 | Critical, full mitigation |
+| Status | Protection | Action Triggered |
+|--------|------------|------------------|
+| **GREEN** | > 55% | All clear, learning baseline |
+| **AMBER** | 30-55% | Monitoring, investigating |
+| **RED** | < 30% | Defending, active mitigation |
 
 ### Phase 2: Automated Response
 
