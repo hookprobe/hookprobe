@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe dfs
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin dfs
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
