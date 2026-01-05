@@ -55,3 +55,7 @@ def register_blueprints(app: Flask):
     # AIOCHI module - AI Eyes Cognitive Network Layer
     from .aiochi import aiochi_bp
     app.register_blueprint(aiochi_bp)
+
+    # Bubbles module - Device bubble management (same-user grouping)
+    from .bubbles import bubbles_bp
+    app.register_blueprint(bubbles_bp)
