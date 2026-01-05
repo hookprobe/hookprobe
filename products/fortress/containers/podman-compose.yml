@@ -352,6 +352,8 @@ services:
       - /etc/hookprobe:/etc/hookprobe:ro
       # OVS socket for OpenFlow commands (ovs-ofctl, ovs-vsctl)
       - /run/openvswitch:/run/openvswitch
+      # Zeek logs for D2D connection analysis (connection_graph.py)
+      - zeek_logs:/var/log/zeek:ro
     # Host network REQUIRED for:
     # - mDNS multicast discovery (224.0.0.251:5353)
     # - OVS OpenFlow rule application
