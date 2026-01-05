@@ -57,6 +57,14 @@ import ipaddress
 
 logger = logging.getLogger(__name__)
 
+# Optional ClickHouse integration
+try:
+    from .clickhouse_graph import get_clickhouse_store, ClickHouseGraphStore
+    HAS_CLICKHOUSE = True
+except ImportError:
+    HAS_CLICKHOUSE = False
+    ClickHouseGraphStore = None
+
 # Zeek log locations
 ZEEK_LOG_DIR = Path('/var/log/zeek/current')
 ZEEK_CONN_LOG = ZEEK_LOG_DIR / 'conn.log'
@@ -258,6 +266,67 @@ class D2DCluster:
         }
 
 
+@dataclass
+class TemporalPattern:
+    """
+    Temporal pattern for a device - tracks wake/sleep cycles.
+
+    Used to correlate devices that follow the same schedule:
+    - Mom's phone and laptop wake at 7am together
+    - Kids' devices go dormant at 9pm bedtime
+    - Work devices active 9-5, home devices 6pm-10pm
+    """
+    mac: str
+    # Active hours (0-23)
+    active_hours: Set[int] = field(default_factory=set)
+    # Wake/sleep events (hour, weekday)
+    wake_events: List[Tuple[int, int]] = field(default_factory=list)  # (hour, weekday)
+    sleep_events: List[Tuple[int, int]] = field(default_factory=list)  # (hour, weekday)
+    # Typical activity pattern
+    avg_session_duration: float = 0.0  # minutes
+    avg_idle_duration: float = 0.0     # minutes between sessions
+
+    def similarity(self, other: 'TemporalPattern') -> float:
+        """
+        Calculate similarity with another device's temporal pattern.
+
+        Returns 0.0 - 1.0:
+        - 1.0 = identical schedule (same user, different devices)
+        - 0.5 = similar schedule (work colleagues, family members)
+        - 0.0 = completely different schedules
+        """
+        if not self.active_hours or not other.active_hours:
+            return 0.0
+
+        # Jaccard similarity for active hours
+        intersection = len(self.active_hours & other.active_hours)
+        union = len(self.active_hours | other.active_hours)
+        hour_similarity = intersection / union if union > 0 else 0.0
+
+        # Wake/sleep event correlation
+        wake_corr = self._event_correlation(self.wake_events, other.wake_events)
+        sleep_corr = self._event_correlation(self.sleep_events, other.sleep_events)
+
+        # Weighted average
+        return (hour_similarity * 0.4) + (wake_corr * 0.3) + (sleep_corr * 0.3)
+
+    @staticmethod
+    def _event_correlation(events_a: List[Tuple[int, int]],
+                          events_b: List[Tuple[int, int]]) -> float:
+        """Calculate correlation between two event lists."""
+        if not events_a or not events_b:
+            return 0.0
+
+        # Count events within same hour (any weekday)
+        hours_a = set(e[0] for e in events_a)
+        hours_b = set(e[0] for e in events_b)
+
+        intersection = len(hours_a & hours_b)
+        union = len(hours_a | hours_b)
+
+        return intersection / union if union > 0 else 0.0
+
+
 # =============================================================================
 # CONNECTION GRAPH ANALYZER
 # =============================================================================
@@ -278,11 +347,29 @@ class ConnectionGraphAnalyzer:
     MIN_CONNECTIONS = 3           # Minimum connections to consider relationship
     AFFINITY_THRESHOLD = 0.3      # Minimum affinity for clustering
 
-    def __init__(self, db_path: Path = D2D_DB):
+    def __init__(self, db_path: Path = D2D_DB, enable_clickhouse: bool = True):
         self.db_path = db_path
         self.relationships: Dict[Tuple[str, str], DeviceRelationship] = {}
         self.ip_to_mac: Dict[str, str] = {}
         self._lock = __import__('threading').Lock()
+
+        # Temporal pattern tracking for enhanced affinity scoring
+        self._temporal_patterns: Dict[str, TemporalPattern] = {}
+        self._device_last_seen: Dict[str, datetime] = {}
+        self._device_state: Dict[str, str] = {}  # 'active' or 'dormant'
+
+        # Event batching for temporal analysis
+        self._temporal_event_buffer: List[Dict] = []
+        self._temporal_buffer_size = 100
+
+        # ClickHouse integration for AI learning
+        self._clickhouse_store: Optional[ClickHouseGraphStore] = None
+        if enable_clickhouse and HAS_CLICKHOUSE:
+            try:
+                self._clickhouse_store = get_clickhouse_store()
+                logger.info("ClickHouse graph storage enabled")
+            except Exception as e:
+                logger.debug(f"ClickHouse not available: {e}")
 
         self._ensure_db()
         self._load_ip_mac_mapping()
@@ -326,6 +413,30 @@ class ConnectionGraphAnalyzer:
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_rel_affinity
                 ON device_relationships(affinity_score DESC)
+            ''')
+            # Temporal patterns table for wake/sleep analysis
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS temporal_patterns (
+                    mac TEXT PRIMARY KEY,
+                    active_hours_json TEXT,
+                    wake_events_json TEXT,
+                    sleep_events_json TEXT,
+                    avg_session_duration REAL DEFAULT 0.0,
+                    avg_idle_duration REAL DEFAULT 0.0,
+                    last_updated TEXT
+                )
+            ''')
+            # Temporal correlation between device pairs
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS temporal_correlations (
+                    mac_a TEXT NOT NULL,
+                    mac_b TEXT NOT NULL,
+                    pattern_similarity REAL DEFAULT 0.0,
+                    coincident_wake_count INTEGER DEFAULT 0,
+                    coincident_sleep_count INTEGER DEFAULT 0,
+                    last_calculated TEXT,
+                    PRIMARY KEY (mac_a, mac_b)
+                )
             ''')
             conn.commit()
 
@@ -682,7 +793,11 @@ class ConnectionGraphAnalyzer:
         """
         Update temporal sync scores from presence sensor events.
 
-        Called by the presence sensor when devices join/leave together.
+        Enhanced algorithm:
+        1. Track wake/sleep patterns per device
+        2. Detect coincident events (same time window)
+        3. Calculate pattern similarity between devices
+        4. Update temporal_sync_score with weighted combination
 
         Args:
             presence_events: List of {mac, event_type, timestamp, access_point}
@@ -690,32 +805,71 @@ class ConnectionGraphAnalyzer:
         if len(presence_events) < 2:
             return
 
+        # Buffer events for batch processing
+        self._temporal_event_buffer.extend(presence_events)
+
+        # Process when buffer is full
+        if len(self._temporal_event_buffer) >= self._temporal_buffer_size:
+            self._process_temporal_buffer()
+            self._temporal_event_buffer = []
+        else:
+            # Still process immediate coincidence detection
+            self._detect_coincident_events(presence_events)
+
+        logger.debug(f"Updated temporal sync from {len(presence_events)} events")
+
+    def _detect_coincident_events(self, events: List[Dict]):
+        """Detect and score coincident wake/sleep events."""
         # Group events by time window (60 seconds)
         windows: Dict[int, List[Dict]] = defaultdict(list)
-        for event in presence_events:
+
+        for event in events:
             try:
                 ts = datetime.fromisoformat(event['timestamp'])
                 window_key = int(ts.timestamp() // 60)  # 1-minute windows
                 windows[window_key].append(event)
+
+                # Track device state and pattern
+                mac = event.get('mac', '').upper()
+                event_type = event.get('event_type', '')
+
+                if mac and event_type in ('join', 'leave'):
+                    self._update_device_pattern(mac, event_type, ts)
+
             except (KeyError, ValueError):
                 continue
 
         # Find correlated events (same time window, same event type)
-        for window_key, events in windows.items():
-            # Group by event type
-            by_type: Dict[str, List[str]] = defaultdict(list)
-            for e in events:
+        for window_key, window_events in windows.items():
+            by_type: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)
+
+            for e in window_events:
                 event_type = e.get('event_type', '')
                 mac = e.get('mac', '').upper()
-                if event_type in ('join', 'leave') and mac:
-                    by_type[event_type].append(mac)
+                try:
+                    ts = datetime.fromisoformat(e['timestamp'])
+                except (KeyError, ValueError):
+                    ts = datetime.now()
 
-            # Devices that join/leave together are likely same user
-            for event_type, macs in by_type.items():
+                if event_type in ('join', 'leave') and mac:
+                    by_type[event_type].append((mac, ts))
+
+            # Score coincident events
+            for event_type, mac_times in by_type.items():
+                macs = [m for m, t in mac_times]
+
                 if len(macs) >= 2:
-                    for i in range(len(macs)):
-                        for j in range(i + 1, len(macs)):
-                            key = self._normalize_mac_pair(macs[i], macs[j])
+                    # Calculate time closeness for bonus scoring
+                    for i in range(len(mac_times)):
+                        for j in range(i + 1, len(mac_times)):
+                            mac_a, time_a = mac_times[i]
+                            mac_b, time_b = mac_times[j]
+
+                            # Time difference bonus (closer = higher score)
+                            time_diff = abs((time_a - time_b).total_seconds())
+                            closeness_bonus = max(0, 1.0 - (time_diff / 60))  # 0-1 based on 60s window
+
+                            key = self._normalize_mac_pair(mac_a, mac_b)
                             if key not in self.relationships:
                                 self.relationships[key] = DeviceRelationship(
                                     mac_a=key[0],
@@ -723,15 +877,188 @@ class ConnectionGraphAnalyzer:
                                     first_seen=datetime.now(),
                                     last_seen=datetime.now(),
                                 )
-                            # Increase temporal sync score
-                            current = self.relationships[key].temporal_sync_score
-                            # Each correlated event adds 0.1 up to max 1.0
-                            self.relationships[key].temporal_sync_score = min(1.0, current + 0.1)
 
-        logger.debug(f"Updated temporal sync from {len(presence_events)} events")
+                            rel = self.relationships[key]
+
+                            # Enhanced scoring:
+                            # - Base: 0.05 per coincident event
+                            # - Bonus: up to 0.05 more for very close events
+                            # - Wake events worth more (user starting day)
+                            base_score = 0.05
+                            if event_type == 'join':
+                                base_score = 0.08  # Wake events more significant
+
+                            score_increment = base_score + (closeness_bonus * 0.05)
+                            rel.temporal_sync_score = min(1.0, rel.temporal_sync_score + score_increment)
+
+    def _update_device_pattern(self, mac: str, event_type: str, timestamp: datetime):
+        """Update temporal pattern for a device."""
+        mac = mac.upper()
+
+        if mac not in self._temporal_patterns:
+            self._temporal_patterns[mac] = TemporalPattern(mac=mac)
+
+        pattern = self._temporal_patterns[mac]
+        hour = timestamp.hour
+        weekday = timestamp.weekday()
+
+        # Track active hours
+        pattern.active_hours.add(hour)
+
+        # Track wake/sleep events
+        if event_type == 'join':
+            # Check if this is a "wake" event (device was dormant)
+            if self._device_state.get(mac) == 'dormant':
+                pattern.wake_events.append((hour, weekday))
+                # Keep only recent events (last 7 days worth)
+                if len(pattern.wake_events) > 50:
+                    pattern.wake_events = pattern.wake_events[-50:]
+
+            self._device_state[mac] = 'active'
+
+        elif event_type == 'leave':
+            pattern.sleep_events.append((hour, weekday))
+            if len(pattern.sleep_events) > 50:
+                pattern.sleep_events = pattern.sleep_events[-50:]
+
+            self._device_state[mac] = 'dormant'
+
+        # Track last seen for session duration calculation
+        if mac in self._device_last_seen and self._device_state.get(mac) == 'active':
+            session_duration = (timestamp - self._device_last_seen[mac]).total_seconds() / 60
+            if pattern.avg_session_duration == 0:
+                pattern.avg_session_duration = session_duration
+            else:
+                # Exponential moving average
+                pattern.avg_session_duration = (pattern.avg_session_duration * 0.9) + (session_duration * 0.1)
+
+        self._device_last_seen[mac] = timestamp
+
+    def _process_temporal_buffer(self):
+        """Process buffered events for pattern similarity calculation."""
+        with self._lock:
+            # Get unique MACs from buffer
+            macs = set()
+            for event in self._temporal_event_buffer:
+                mac = event.get('mac', '').upper()
+                if mac:
+                    macs.add(mac)
+
+            # Calculate pattern similarity between all pairs
+            macs_list = list(macs)
+            for i in range(len(macs_list)):
+                for j in range(i + 1, len(macs_list)):
+                    mac_a = macs_list[i]
+                    mac_b = macs_list[j]
+
+                    pattern_a = self._temporal_patterns.get(mac_a)
+                    pattern_b = self._temporal_patterns.get(mac_b)
+
+                    if pattern_a and pattern_b:
+                        similarity = pattern_a.similarity(pattern_b)
+
+                        if similarity > 0.3:  # Only update if significant
+                            key = self._normalize_mac_pair(mac_a, mac_b)
+
+                            if key not in self.relationships:
+                                self.relationships[key] = DeviceRelationship(
+                                    mac_a=key[0],
+                                    mac_b=key[1],
+                                    first_seen=datetime.now(),
+                                    last_seen=datetime.now(),
+                                )
+
+                            # Blend pattern similarity into temporal sync score
+                            rel = self.relationships[key]
+                            # Pattern similarity has weight of 0.3 in overall temporal score
+                            current_event_score = rel.temporal_sync_score
+                            blended = (current_event_score * 0.7) + (similarity * 0.3)
+                            rel.temporal_sync_score = min(1.0, blended)
+
+            # Persist patterns
+            self._persist_temporal_patterns()
+
+    def _persist_temporal_patterns(self):
+        """Persist temporal patterns to SQLite and ClickHouse."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                for mac, pattern in self._temporal_patterns.items():
+                    # SQLite persistence
+                    conn.execute('''
+                        INSERT OR REPLACE INTO temporal_patterns
+                        (mac, active_hours_json, wake_events_json, sleep_events_json,
+                         avg_session_duration, avg_idle_duration, last_updated)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        mac,
+                        json.dumps(list(pattern.active_hours)),
+                        json.dumps(pattern.wake_events),
+                        json.dumps(pattern.sleep_events),
+                        pattern.avg_session_duration,
+                        pattern.avg_idle_duration,
+                        datetime.now().isoformat(),
+                    ))
+
+                    # ClickHouse persistence for AI learning
+                    if self._clickhouse_store and len(pattern.active_hours) > 0:
+                        wake_hours = list(set(h for h, w in pattern.wake_events))
+                        sleep_hours = list(set(h for h, w in pattern.sleep_events))
+
+                        self._clickhouse_store.record_temporal_pattern(
+                            mac=mac,
+                            active_hours=list(pattern.active_hours),
+                            wake_hours=wake_hours,
+                            sleep_hours=sleep_hours,
+                            avg_session_duration=pattern.avg_session_duration,
+                            avg_idle_duration=pattern.avg_idle_duration,
+                        )
+
+                conn.commit()
+
+            # Flush ClickHouse buffer
+            if self._clickhouse_store:
+                self._clickhouse_store.flush()
+
+        except Exception as e:
+            logger.debug(f"Could not persist temporal patterns: {e}")
+
+    def load_temporal_patterns(self):
+        """Load temporal patterns from database."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                rows = conn.execute('SELECT * FROM temporal_patterns').fetchall()
+
+                for row in rows:
+                    mac = row[0]
+                    self._temporal_patterns[mac] = TemporalPattern(
+                        mac=mac,
+                        active_hours=set(json.loads(row[1] or '[]')),
+                        wake_events=json.loads(row[2] or '[]'),
+                        sleep_events=json.loads(row[3] or '[]'),
+                        avg_session_duration=row[4] or 0.0,
+                        avg_idle_duration=row[5] or 0.0,
+                    )
+
+                logger.debug(f"Loaded {len(rows)} temporal patterns from DB")
+        except Exception as e:
+            logger.debug(f"Could not load temporal patterns: {e}")
+
+    def get_temporal_similarity(self, mac_a: str, mac_b: str) -> float:
+        """
+        Get temporal pattern similarity between two devices.
+
+        Returns:
+            Similarity score 0.0 - 1.0
+        """
+        pattern_a = self._temporal_patterns.get(mac_a.upper())
+        pattern_b = self._temporal_patterns.get(mac_b.upper())
+
+        if pattern_a and pattern_b:
+            return pattern_a.similarity(pattern_b)
+        return 0.0
 
     def _persist_relationships(self):
-        """Persist relationships to database."""
+        """Persist relationships to SQLite and ClickHouse."""
         try:
             with sqlite3.connect(str(self.db_path)) as conn:
                 # Ensure schema has new columns
@@ -746,6 +1073,8 @@ class ConnectionGraphAnalyzer:
 
                 for key, rel in self.relationships.items():
                     affinity = rel.calculate_affinity_score()
+
+                    # Persist to SQLite
                     conn.execute('''
                         INSERT OR REPLACE INTO device_relationships
                         (mac_a, mac_b, connection_count, total_bytes,
@@ -764,7 +1093,39 @@ class ConnectionGraphAnalyzer:
                         rel.discovery_hits,
                         rel.temporal_sync_score,
                     ))
+
+                    # Also persist to ClickHouse for AI learning
+                    if self._clickhouse_store:
+                        self._clickhouse_store.record_relationship(
+                            mac_a=rel.mac_a,
+                            mac_b=rel.mac_b,
+                            connection_count=rel.connection_count,
+                            total_bytes=rel.total_bytes,
+                            bidirectional_count=rel.bidirectional_count,
+                            high_affinity_count=rel.high_affinity_count,
+                            services=rel.services_used,
+                            discovery_hits=rel.discovery_hits,
+                            temporal_sync_score=rel.temporal_sync_score,
+                            affinity_score=affinity,
+                        )
+
+                        # Also record affinity history for trend analysis
+                        if affinity > 0.1:  # Only meaningful affinities
+                            self._clickhouse_store.record_affinity_history(
+                                mac_a=rel.mac_a,
+                                mac_b=rel.mac_b,
+                                affinity_score=affinity,
+                                discovery_hits=rel.discovery_hits,
+                                temporal_sync_score=rel.temporal_sync_score,
+                                connection_count=rel.connection_count,
+                            )
+
                 conn.commit()
+
+            # Flush ClickHouse buffer
+            if self._clickhouse_store:
+                self._clickhouse_store.flush()
+
         except Exception as e:
             logger.error(f"Failed to persist relationships: {e}")
 
@@ -936,6 +1297,12 @@ class ConnectionGraphAnalyzer:
             if r.calculate_affinity_score() >= 0.5
         )
 
+        # Temporal affinity stats
+        temporal_pairs = sum(
+            1 for r in self.relationships.values()
+            if r.temporal_sync_score > 0.3
+        )
+
         return {
             'total_relationships': len(self.relationships),
             'total_connections': total_connections,
@@ -943,6 +1310,10 @@ class ConnectionGraphAnalyzer:
             'unique_devices': len(set(
                 mac for key in self.relationships.keys() for mac in key
             )),
+            # Temporal stats
+            'temporal_patterns_tracked': len(self._temporal_patterns),
+            'temporal_high_affinity_pairs': temporal_pairs,
+            'buffered_events': len(self._temporal_event_buffer),
         }
 
 
@@ -962,6 +1333,7 @@ def get_connection_analyzer() -> ConnectionGraphAnalyzer:
         if _analyzer is None:
             _analyzer = ConnectionGraphAnalyzer()
             _analyzer.load_relationships()
+            _analyzer.load_temporal_patterns()
         return _analyzer
 
 
