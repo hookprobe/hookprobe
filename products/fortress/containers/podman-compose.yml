@@ -698,8 +698,11 @@ services:
 # ============================================================
 # VOLUMES (persistent storage)
 # ============================================================
+# NOTE: Only CORE service volumes are defined here.
+# Optional service volumes (monitoring, IDS, automation) are auto-created
+# when those services are started via profiles.
 volumes:
-  # Data Tier
+  # Data Tier (CORE)
   postgres_data:
     driver: local
     name: fts-postgres-data
@@ -710,7 +713,7 @@ volumes:
     driver: local
     name: fts-redis-data
 
-  # Services Tier
+  # Services Tier (CORE)
   web_data:
     driver: local
     name: fts-web-data
@@ -723,9 +726,6 @@ volumes:
   dnsxai_blocklists:
     driver: local
     name: fts-dnsxai-blocklists
-  dnsxai_logs:
-    driver: local
-    name: fts-dnsxai-logs
   dnsxai_certs:
     driver: local
     name: fts-dnsxai-certs
@@ -733,57 +733,34 @@ volumes:
     driver: local
     name: fts-dfs-data
 
-  # ML Tier
-  # Note: agent_data is now a bind mount to /opt/hookprobe/fortress/data
-  # This allows host visibility and sharing between containers
-  ml_models:
-    driver: local
-    name: fts-ml-models
-
-  # Management Tier
-  grafana_data:
-    driver: local
-    name: fts-grafana-data
-  victoria_data:
-    driver: local
-    name: fts-victoria-data
-
-  # IDS/IPS Tier
-  suricata_logs:
-    driver: local
-    name: fts-suricata-logs
-  suricata_rules:
-    driver: local
-    name: fts-suricata-rules
-  # suricata_config not used - image provides default config
+  # Zeek logs - used by bubble-manager even without zeek service
+  # bubble-manager reads zeek conn.log for D2D connection analysis
   zeek_logs:
     driver: local
     name: fts-zeek-logs
-  zeek_spool:
-    driver: local
-    name: fts-zeek-spool
-  zeek_config:
-    driver: local
-    name: fts-zeek-config
-  xdp_data:
-    driver: local
-    name: fts-xdp-data
 
-  # Automation Tier
-  n8n_data:
-    driver: local
-    name: fts-n8n-data
-  clickhouse_data:
-    driver: local
-    name: fts-clickhouse-data
-  clickhouse_logs:
-    driver: local
-    name: fts-clickhouse-logs
-
-  # Mesh Tier volumes are in podman-compose.mesh.yml
-
+  # ============================================================
+  # OPTIONAL SERVICE VOLUMES (auto-created when services start)
+  # ============================================================
+  # These are NOT created by default. When you start optional services
+  # via --profile, podman will auto-create any missing volumes.
+  #
+  # Monitoring (--profile monitoring):
+  #   grafana_data, victoria_data
+  #
+  # IDS/IPS (--profile ids):
+  #   suricata_logs, suricata_rules, zeek_spool, zeek_config, xdp_data
+  #
+  # Automation (--profile automation):
+  #   n8n_data
+  #
+  # Analytics (--profile analytics):
+  #   clickhouse_data, clickhouse_logs
+  #
+  # ML Training (--profile training):
+  #   ml_models
+  #
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
-  # This allows the install script to create users.json in the host directory
 
 # ============================================================
 # NETWORKS - OVS-Integrated 4-Tier Security Architecture

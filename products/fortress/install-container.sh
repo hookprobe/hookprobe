@@ -3204,16 +3204,20 @@ MDNSCONF
     # which services to start.
     #
     # Core services (always started):
-    #   - fts-postgres, fts-redis (data tier)
-    #   - fts-web, fts-qsecbit, fts-bubble-manager (application tier)
-    #   - fts-dnsxai, fts-dfs (services tier)
-    #   - fts-cloudflared (if tunnel configured)
+    #   - postgres, redis (data tier)
+    #   - web, qsecbit-agent, bubble-manager (application tier)
+    #   - dnsxai, dfs-intelligence (services tier)
+    #   - cloudflared (if tunnel configured)
     #
-    # Optional services (AIOCHI replaces these):
-    #   - fts-grafana, fts-victoria (monitoring)
-    #   - fts-n8n, fts-clickhouse (automation/analytics)
-    #   - fts-suricata, fts-zeek, fts-xdp (IDS)
-    #   - fts-lstm-trainer (ML training)
+    # OPTIONAL services (NOT started by default - use profiles manually):
+    #   - grafana, victoria (monitoring) - use: --profile monitoring
+    #   - n8n (automation) - use: --profile automation
+    #   - clickhouse (analytics) - use: --profile analytics
+    #   - suricata, zeek, xdp-protection (IDS) - use: --profile ids
+    #   - lstm-trainer (ML training) - use: --profile training
+    #
+    # IMPORTANT: We ALWAYS specify explicit service names because podman-compose
+    # 1.x ignores profiles and would start ALL services otherwise.
 
     # Service names must match podman-compose.yml (no fts- prefix in compose file)
     local core_services="postgres redis web qsecbit-agent bubble-manager dnsxai dfs-intelligence"
@@ -3225,13 +3229,16 @@ MDNSCONF
 
     if [ "${INSTALL_AIOCHI:-}" = true ]; then
         # AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
-        log_info "AIOCHI mode - starting core services only..."
-        # shellcheck disable=SC2086
-        podman-compose up -d --no-build $core_services
+        log_info "AIOCHI mode - starting core services only (AIOCHI provides IDS/monitoring)..."
     else
-        # Standard mode: start all services defined in compose file
-        podman-compose up -d --no-build
+        # Standard mode: start core services only
+        # Optional services (monitoring, IDS, analytics) must be enabled explicitly
+        log_info "Standard mode - starting core services..."
     fi
+
+    # Always use explicit service list (podman-compose 1.x doesn't support profiles)
+    # shellcheck disable=SC2086
+    podman-compose up -d --no-build $core_services
 
     # Wait for services in dependency order
     log_info "Waiting for services to be ready..."
@@ -3966,6 +3973,15 @@ connect_containers_to_ovs() {
 
     local ovs_script="${DEVICES_DIR}/common/ovs-container-network.sh"
 
+    # Check if OVS container attachment is disabled
+    # This can be set in /etc/hookprobe/fortress.conf or via environment
+    # Set SKIP_OVS_CONTAINER_ATTACH=true to disable OVS veth attachment
+    if [ "${SKIP_OVS_CONTAINER_ATTACH:-false}" = "true" ]; then
+        log_warn "OVS container attachment DISABLED (SKIP_OVS_CONTAINER_ATTACH=true)"
+        log_warn "Containers will use podman network only - OpenFlow per-device rules won't apply to container traffic"
+        return 0
+    fi
+
     if [ ! -f "$ovs_script" ]; then
         log_warn "OVS script not found - skipping container OVS integration"
         return 0
@@ -3980,6 +3996,9 @@ connect_containers_to_ovs() {
     #
     # IMPORTANT: All containers are on fts-internal (172.20.200.0/24) as defined in
     # podman-compose.yml. The "tier" label is only for OpenFlow policy decisions.
+    #
+    # TROUBLESHOOTING: If containers have networking issues (empty routing table,
+    # can't reach each other), set SKIP_OVS_CONTAINER_ATTACH=true in fortress.conf
 
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
@@ -4173,6 +4192,21 @@ else
     log_info "NAC sync script not found - will sync when web app starts"
 fi
 
+# Check if OVS container attachment is disabled
+# Source fortress.conf to get the setting
+FORTRESS_CONF="/etc/hookprobe/fortress.conf"
+if [ -f "$FORTRESS_CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$FORTRESS_CONF"
+fi
+
+if [ "${SKIP_OVS_CONTAINER_ATTACH:-false}" = "true" ]; then
+    log_warn "OVS container attachment DISABLED (SKIP_OVS_CONTAINER_ATTACH=true)"
+    log_warn "Containers using podman network only - this is safe but limits OpenFlow visibility"
+    log_info "OVS bridge setup complete (container attachment skipped)"
+    exit 0
+fi
+
 log_info "Waiting for containers..."
 
 # Wait for core containers first
@@ -4298,22 +4332,22 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
   fi'
 
 # Start containers - SMART STARTUP
-# AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
-# Standard mode: start all services
+# podman-compose 1.x doesn't support profiles, so we ALWAYS specify explicit services.
 #
 # Core services (names must match podman-compose.yml - no fts- prefix):
 #   postgres, redis, web, qsecbit-agent, bubble-manager, dnsxai, dfs-intelligence
 # Optional connectivity: cloudflared (only if INSTALL_CLOUDFLARE_TUNNEL=true)
-# Optional (AIOCHI replaces): grafana, victoria, n8n, clickhouse, suricata, zeek, xdp-protection, lstm-trainer
+#
+# OPTIONAL (NOT started by default):
+#   - grafana, victoria (monitoring)
+#   - n8n, clickhouse (automation/analytics)
+#   - suricata, zeek, xdp-protection (IDS)
+#   - lstm-trainer (ML training)
 ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
   CORE="postgres redis web qsecbit-agent bubble-manager dnsxai dfs-intelligence" && \\
   if [ "\${INSTALL_CLOUDFLARE_TUNNEL:-}" = "true" ]; then CORE="\$CORE cloudflared"; fi && \\
-  if [ "\${INSTALL_AIOCHI:-}" = "true" ]; then \\
-    echo "[FTS] AIOCHI mode - starting core services only" && \\
-    ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE; \\
-  else \\
-    ${podman_compose_bin} -f podman-compose.yml up -d --no-build; \\
-  fi'
+  echo "[FTS] Starting core services: \$CORE" && \\
+  ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE'
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
