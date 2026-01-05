@@ -1098,10 +1098,6 @@ attach_container_to_ovs() {
 
     local veth_host="veth-${container_name}"
     local veth_cont="eth-ovs"
-    local port_name="${OVS_BRIDGE}-${tier}"
-    local config="${TIER_CONFIG[$tier]}"
-    local gateway="${config%%:*}"
-    gateway="${gateway%/*}"
 
     # Get container PID
     local pid
@@ -1117,19 +1113,22 @@ attach_container_to_ovs() {
     # Create veth pair
     ip link add "$veth_host" type veth peer name "$veth_cont"
 
-    # Add host end to OVS bridge
+    # Add host end to OVS bridge (for traffic monitoring/mirroring)
     ovs-vsctl add-port "$OVS_BRIDGE" "$veth_host"
     ip link set "$veth_host" up
 
     # Move container end to container namespace
     ip link set "$veth_cont" netns "$pid"
 
-    # Configure container end
+    # Bring up container end - NO IP ASSIGNMENT
+    # Container already has eth0 with IP from podman network
+    # This veth is for OVS traffic mirroring only, not routing
     nsenter -t "$pid" -n ip link set "$veth_cont" up
-    nsenter -t "$pid" -n ip addr add "${ip}/24" dev "$veth_cont"
-    nsenter -t "$pid" -n ip route add default via "$gateway" 2>/dev/null || true
 
-    log_info "Attached $container_name to OVS ($tier tier, IP: $ip)"
+    # DO NOT assign IP or route - container uses eth0 for all traffic
+    # The eth-ovs interface is just for OVS visibility/mirroring
+
+    log_info "Attached $container_name to OVS ($tier tier, monitoring only)"
 }
 
 # ============================================================
