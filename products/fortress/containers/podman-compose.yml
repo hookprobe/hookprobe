@@ -444,6 +444,7 @@ services:
       ZEEK_INTERFACE: "${ZEEK_INTERFACE:-FTS}"
     command:
       - zeek
+      - -C                                    # Ignore checksums (fixes NIC offloading warnings)
       - -i
       - ${ZEEK_INTERFACE:-FTS}
       - local

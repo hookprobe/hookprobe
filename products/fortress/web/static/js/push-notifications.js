@@ -24,6 +24,19 @@
                 return false;
             }
 
+            // Service workers require valid HTTPS (not self-signed) or localhost
+            // Skip initialization if we're on an IP address with self-signed cert
+            const hostname = window.location.hostname;
+            const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+            const isIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+
+            if (isIP && !isLocalhost) {
+                // Accessing via IP with likely self-signed cert - skip service worker
+                console.log('[AIOCHI Push] Service workers not available on IP addresses with self-signed certificates');
+                console.log('[AIOCHI Push] Use a domain with valid HTTPS or Cloudflare Tunnel for push notifications');
+                return false;
+            }
+
             this.isSupported = true;
             console.log('[AIOCHI Push] Push notifications supported');
 
@@ -42,6 +55,13 @@
 
                 return true;
             } catch (error) {
+                // SSL certificate errors are expected when using self-signed certs
+                if (error.name === 'SecurityError') {
+                    console.log('[AIOCHI Push] Service worker blocked due to SSL certificate');
+                    console.log('[AIOCHI Push] Configure Cloudflare Tunnel or use a valid HTTPS certificate for push notifications');
+                    this.isSupported = false;
+                    return false;
+                }
                 console.error('[AIOCHI Push] Service worker registration failed:', error);
                 return false;
             }
