@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 # AIOCHI API configuration
 # When AIOCHI is enabled, fts-web calls the AIOCHI containers via REST APIs
-AIOCHI_IDENTITY_URL = 'http://aiochi-identity:8060'
+# NOTE: fts-web and aiochi-identity are on different podman networks (fts-internal vs aiochi-internal)
+# so we use localhost:8060 which is port-mapped from aiochi-identity container
+AIOCHI_IDENTITY_URL = 'http://127.0.0.1:8060'
 AIOCHI_ENABLED = False
 
 def check_aiochi_available():
