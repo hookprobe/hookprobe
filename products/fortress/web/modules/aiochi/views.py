@@ -12,17 +12,56 @@ from . import aiochi_bp
 
 logger = logging.getLogger(__name__)
 
-# Check if AIOCHI backend modules are available
-AIOCHI_AVAILABLE = False
+# AIOCHI API configuration
+# When AIOCHI is enabled, fts-web calls the AIOCHI containers via REST APIs
+AIOCHI_IDENTITY_URL = 'http://aiochi-identity:8060'
+AIOCHI_ENABLED = False
+
+def check_aiochi_available():
+    """Check if AIOCHI Identity Engine is reachable."""
+    import requests
+    try:
+        resp = requests.get(f'{AIOCHI_IDENTITY_URL}/health', timeout=2)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+# Check on module load (but don't fail startup)
 try:
-    import sys
-    sys.path.insert(0, '/opt/hookprobe/shared/aiochi')
-    from backend.identity_engine import IdentityEngine
-    from backend.presence_tracker import PresenceTracker
-    from backend.ambient_state import AmbientStateMachine
-    AIOCHI_AVAILABLE = True
+    import requests
+    AIOCHI_ENABLED = check_aiochi_available()
+    if AIOCHI_ENABLED:
+        logger.info("AIOCHI Identity Engine available at %s", AIOCHI_IDENTITY_URL)
+    else:
+        logger.info("AIOCHI Identity Engine not reachable, using demo mode")
 except ImportError:
-    logger.warning("AIOCHI backend modules not available, using demo mode")
+    logger.warning("requests module not available, AIOCHI integration disabled")
+
+
+def fetch_aiochi_devices():
+    """Fetch devices from AIOCHI Identity Engine."""
+    import requests
+    try:
+        resp = requests.get(f'{AIOCHI_IDENTITY_URL}/api/devices', timeout=3)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch AIOCHI devices: {e}")
+        return None
+
+
+def fetch_aiochi_ecosystems():
+    """Fetch ecosystem bubbles from AIOCHI Identity Engine."""
+    import requests
+    try:
+        resp = requests.get(f'{AIOCHI_IDENTITY_URL}/api/ecosystems', timeout=3)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch AIOCHI ecosystems: {e}")
+        return None
 
 
 def get_demo_presence():
@@ -259,14 +298,14 @@ def index():
 def api_status():
     """Get full AIOCHI status for dashboard."""
     try:
-        if AIOCHI_AVAILABLE:
+        if AIOCHI_ENABLED:
             # TODO: Integrate with real AIOCHI backend
             pass
 
         # Demo mode response
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'timestamp': datetime.now().isoformat(),
             'ambient': get_demo_ambient_state(),
             'presence': get_demo_presence(),
@@ -287,9 +326,20 @@ def api_status():
 def api_presence():
     """Get presence data (device bubbles)."""
     try:
+        # Try to fetch real data from AIOCHI containers
+        if AIOCHI_ENABLED:
+            ecosystems = fetch_aiochi_ecosystems()
+            if ecosystems:
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'data': ecosystems
+                })
+
+        # Fallback to demo data
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': True,
             'data': get_demo_presence()
         })
     except Exception as e:
@@ -304,7 +354,7 @@ def api_feed():
     try:
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'data': get_demo_privacy_feed()
         })
     except Exception as e:
@@ -319,7 +369,7 @@ def api_performance():
     try:
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'data': get_demo_performance()
         })
     except Exception as e:
@@ -350,7 +400,7 @@ def api_action(action_id):
         # For now, just acknowledge
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'action': action_id,
             'activated': activate,
             'message': f"Action '{action_id}' {'activated' if activate else 'deactivate'} successfully"
@@ -488,7 +538,7 @@ def api_profiles():
     try:
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'profiles': list(_demo_profiles.values())
         })
     except Exception as e:
@@ -507,7 +557,7 @@ def api_profile_get(profile_id):
 
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'profile': profile
         })
     except Exception as e:
@@ -535,7 +585,7 @@ def api_profile_update(profile_id):
         logger.info(f"Profile updated: {profile_id}")
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'profile': profile
         })
     except Exception as e:
@@ -578,7 +628,7 @@ def api_profile_create():
 
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'profile': profile
         })
     except Exception as e:
@@ -644,7 +694,7 @@ def api_profile_switch(profile_id):
 
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'profile': profile,
             'narrative_config': narrative_configs.get(profile.get('persona', 'parent'))
         })
@@ -674,7 +724,7 @@ def api_agent_status():
     try:
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'agent': {
                 'status': 'active',
                 'model': 'llama3.2:3b',
@@ -785,7 +835,7 @@ def api_feedback_pending():
         ]
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'pending': pending,
             'count': len(pending)
         })
@@ -909,7 +959,7 @@ def api_agent_actions():
         offset = request.args.get('offset', 0, type=int)
 
         # In demo mode, generate sample actions
-        if not AIOCHI_AVAILABLE or not _agent_actions:
+        if not AIOCHI_ENABLED or not _agent_actions:
             demo_actions = [
                 {
                     'id': 'action-1',
@@ -957,7 +1007,7 @@ def api_agent_actions():
 
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'actions': actions[offset:offset + limit],
             'total': len(actions),
             'offset': offset,
@@ -986,7 +1036,7 @@ def api_agent_trust_get(mac_address):
         }
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'trust': trust_data
         })
     except Exception as e:
@@ -1014,7 +1064,7 @@ def api_agent_trust_set(mac_address):
         # In production, update ClickHouse device_trust table
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_AVAILABLE,
+            'demo_mode': not AIOCHI_ENABLED,
             'mac_address': mac_address,
             'trust_score': trust_score,
             'message': 'Trust score updated'
