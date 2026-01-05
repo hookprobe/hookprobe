@@ -164,6 +164,56 @@ def get_reinforcement_feedback_engine():
     return get_feedback_engine()
 
 
+# ============================================================
+# AI AUTOPILOT - EVENT-DRIVEN EFFICIENCY (Proprietary)
+# ============================================================
+
+def get_efficiency_engine():
+    """Get the AI Autopilot efficiency engine singleton.
+
+    Central coordinator for event-driven device identification.
+    Orchestrates DHCP sentinel, MAC watcher, and on-demand probes.
+    """
+    from .autopilot.efficiency_engine import get_efficiency_engine as _get_ee
+    return _get_ee()
+
+
+def get_dhcp_sentinel():
+    """Get the DHCP sentinel singleton.
+
+    Low-power hook into dnsmasq DHCP events for new device detection.
+    """
+    from .autopilot.dhcp_sentinel import get_dhcp_sentinel as _get_ds
+    return _get_ds()
+
+
+def get_mac_watcher():
+    """Get the OVS MAC watcher singleton.
+
+    Monitors OVS MAC table for unknown devices.
+    """
+    from .autopilot.mac_watcher import get_mac_watcher as _get_mw
+    return _get_mw()
+
+
+def get_probe_service():
+    """Get the on-demand probe service singleton.
+
+    Performs burst packet capture for device fingerprinting.
+    """
+    from .autopilot.probe_service import get_probe_service as _get_ps
+    return _get_ps()
+
+
+def get_ipfix_collector():
+    """Get the IPFIX collector singleton.
+
+    Collects sampled flow data for D2D relationship detection.
+    """
+    from .autopilot.ipfix_collector import get_ipfix_collector as _get_ic
+    return _get_ic()
+
+
 __all__ = [
     # Config
     'FortressConfig',
@@ -188,6 +238,16 @@ __all__ = [
     'get_behavior_clustering_engine',
     'get_ecosystem_bubble_manager',
     'get_d2d_connection_graph',
+    # Integration modules
+    'get_clickhouse_graph_store',
+    'get_n8n_webhook_client',
+    'get_reinforcement_feedback_engine',
+    # AI Autopilot - Event-Driven Efficiency (Proprietary)
+    'get_efficiency_engine',
+    'get_dhcp_sentinel',
+    'get_mac_watcher',
+    'get_probe_service',
+    'get_ipfix_collector',
 ]
 
-__version__ = '5.5.0'
+__version__ = '5.6.0'

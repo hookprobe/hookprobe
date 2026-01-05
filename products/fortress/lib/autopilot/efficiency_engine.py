@@ -485,7 +485,7 @@ class EfficiencyEngine:
     def _on_dhcp_event(self, event: DHCPEvent):
         """Handle DHCP event from sentinel."""
         if event.is_new_device:
-            asyncio.create_task(self._handle_new_device(
+            self._schedule_async_task(self._handle_new_device(
                 mac=event.mac,
                 ip=event.ip,
                 hostname=event.hostname,
@@ -495,7 +495,23 @@ class EfficiencyEngine:
     def _on_unknown_mac(self, event: MACEvent):
         """Handle unknown MAC from watcher."""
         if event.is_unknown:
-            asyncio.create_task(self._handle_new_device(mac=event.mac))
+            self._schedule_async_task(self._handle_new_device(mac=event.mac))
+
+    def _schedule_async_task(self, coro):
+        """Schedule an async task from sync context.
+
+        Handles the case where we're called from a sync callback
+        but need to run an async coroutine.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            # No running loop - run in a new thread with its own loop
+            def run_coro():
+                asyncio.run(coro)
+            thread = Thread(target=run_coro, daemon=True)
+            thread.start()
 
     async def run_async(self):
         """Main async run loop."""

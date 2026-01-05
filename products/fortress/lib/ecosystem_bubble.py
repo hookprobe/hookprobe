@@ -1135,6 +1135,123 @@ class EcosystemBubbleManager:
                 if b.state == BubbleState.ACTIVE
             ]
 
+    def get_bubbles_by_type(self, bubble_type: BubbleType) -> List[Bubble]:
+        """Get all bubbles of a specific type.
+
+        Args:
+            bubble_type: The type of bubble (FAMILY, GUEST, IOT, WORK)
+
+        Returns:
+            List of matching bubbles
+        """
+        with self._lock:
+            return [
+                b for b in self._bubbles.values()
+                if b.bubble_type == bubble_type and b.state == BubbleState.ACTIVE
+            ]
+
+    def get_bubbles_by_ecosystem(self, ecosystem: str) -> List[Bubble]:
+        """Get all bubbles for a specific ecosystem.
+
+        Args:
+            ecosystem: Ecosystem identifier (apple, samsung, google, etc.)
+
+        Returns:
+            List of matching bubbles
+        """
+        with self._lock:
+            ecosystem = ecosystem.lower()
+            return [
+                b for b in self._bubbles.values()
+                if b.ecosystem == ecosystem and b.state == BubbleState.ACTIVE
+            ]
+
+    def add_device_to_bubble(self, mac: str, bubble_id: str) -> bool:
+        """Add a device to an existing bubble.
+
+        This is the public API for adding devices. It handles:
+        - Removing device from old bubble
+        - Adding to new bubble
+        - Updating SDN rules
+        - Recording the event
+
+        Args:
+            mac: Device MAC address
+            bubble_id: Target bubble ID
+
+        Returns:
+            True if successful, False if bubble not found
+        """
+        mac = mac.upper()
+
+        with self._lock:
+            bubble = self._bubbles.get(bubble_id)
+            if not bubble:
+                logger.warning(f"Bubble not found: {bubble_id}")
+                return False
+
+            # Remove from old bubble if any
+            old_bubble_id = self._device_bubble_map.get(mac)
+            if old_bubble_id and old_bubble_id in self._bubbles:
+                old_bubble = self._bubbles[old_bubble_id]
+                old_bubble.devices.discard(mac)
+
+                # Record move event with reinforcement learning
+                if HAS_REINFORCEMENT:
+                    try:
+                        feedback_engine = get_feedback_engine()
+                        if feedback_engine:
+                            feedback_engine.record_correction(
+                                mac=mac,
+                                old_bubble_id=old_bubble_id,
+                                new_bubble_id=bubble_id,
+                                old_bubble_devices=list(old_bubble.devices),
+                                new_bubble_devices=list(bubble.devices),
+                                reason='autopilot_assignment'
+                            )
+                    except Exception as e:
+                        logger.debug(f"Reinforcement feedback error: {e}")
+
+            # Add to new bubble
+            bubble.devices.add(mac)
+            self._device_bubble_map[mac] = bubble_id
+            bubble.last_activity = datetime.now().isoformat()
+
+            # Record event
+            self._record_event(BubbleEvent(
+                event_type='device_added',
+                bubble_id=bubble_id,
+                mac=mac,
+                details={'old_bubble': old_bubble_id}
+            ))
+
+            # Trigger webhook if available
+            if HAS_WEBHOOK:
+                try:
+                    webhook = get_webhook_client()
+                    if webhook:
+                        webhook.on_bubble_change(
+                            mac=mac,
+                            old_bubble=old_bubble_id or 'none',
+                            new_bubble=bubble_id,
+                            confidence=bubble.confidence,
+                            reason='add_device_to_bubble'
+                        )
+                except Exception as e:
+                    logger.debug(f"Webhook error: {e}")
+
+            # Mark SDN dirty
+            self._sdn_dirty = True
+
+            # Trigger callbacks
+            for callback in self._on_device_joined:
+                try:
+                    callback(mac, bubble)
+                except Exception as e:
+                    logger.error(f"Device joined callback error: {e}")
+
+            return True
+
     def force_clustering(self):
         """Force an immediate clustering run."""
         self._run_clustering()
