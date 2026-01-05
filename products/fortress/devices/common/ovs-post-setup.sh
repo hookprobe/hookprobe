@@ -104,9 +104,100 @@ wait_for_bridge() {
 # ============================================================
 # BRING UP VLAN INTERFACES
 # ============================================================
-# After reboot, OVS restores ports from OVSDB but IP addresses
-# and link UP state are NOT persisted. This function ensures
-# VLAN interfaces are UP with correct IP addresses.
+# Creates VLAN interfaces as OVS internal ports with proper tagging.
+# This is the ONLY correct approach for OVS bridges.
+#
+# IMPORTANT: Netplan's vlans: section creates Linux VLAN sub-interfaces
+# (8021q), which DON'T work correctly with OVS bridges. We must use
+# OVS internal ports with VLAN tags instead.
+
+# Helper to check if interface is an OVS internal port
+is_ovs_internal_port() {
+    local iface="$1"
+    local iface_type
+    iface_type=$(ovs-vsctl get interface "$iface" type 2>/dev/null | tr -d '"') || return 1
+    [ "$iface_type" = "internal" ]
+}
+
+# Helper to create/ensure OVS internal port for VLAN
+ensure_ovs_vlan_port() {
+    local port_name="$1"
+    local vlan_tag="$2"
+    local gateway_ip="$3"
+    local netmask="$4"
+
+    # Check if interface exists
+    if ip link show "$port_name" &>/dev/null; then
+        # Interface exists - check if it's an OVS internal port
+        if is_ovs_internal_port "$port_name"; then
+            log_info "$port_name: OVS internal port exists"
+        else
+            # It's NOT an OVS internal port (likely a Linux VLAN from netplan)
+            # We need to delete it and recreate as OVS internal port
+            log_warn "$port_name: Not an OVS internal port - recreating..."
+
+            # Bring down and delete the Linux VLAN interface
+            ip link set "$port_name" down 2>/dev/null || true
+            ip link delete "$port_name" 2>/dev/null || true
+
+            # Small delay to let kernel cleanup
+            sleep 0.5
+
+            # Create as OVS internal port
+            log_info "Creating $port_name as OVS internal port (VLAN $vlan_tag)..."
+            ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
+                tag="$vlan_tag" \
+                -- set interface "$port_name" type=internal
+        fi
+    else
+        # Interface doesn't exist - create it as OVS internal port
+        # First check if it's already an OVS port (might just be down)
+        if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${port_name}$"; then
+            log_info "$port_name: OVS port exists, ensuring internal type..."
+            ovs-vsctl set interface "$port_name" type=internal 2>/dev/null || true
+        else
+            log_info "Creating $port_name as OVS internal port (VLAN $vlan_tag)..."
+            ovs-vsctl add-port "$OVS_BRIDGE" "$port_name" \
+                tag="$vlan_tag" \
+                -- set interface "$port_name" type=internal
+        fi
+    fi
+
+    # Wait for interface to appear (OVS needs a moment)
+    local wait_count=0
+    while [ $wait_count -lt 20 ]; do
+        if ip link show "$port_name" &>/dev/null; then
+            break
+        fi
+        sleep 0.2
+        wait_count=$((wait_count + 1))
+    done
+
+    if ! ip link show "$port_name" &>/dev/null; then
+        log_error "Failed to create $port_name interface"
+        return 1
+    fi
+
+    # Bring interface UP
+    ip link set "$port_name" up
+
+    # Assign IP if not present
+    if ! ip addr show "$port_name" 2>/dev/null | grep -q "${gateway_ip}/"; then
+        log_info "Assigning ${gateway_ip}/${netmask} to $port_name..."
+        ip addr add "${gateway_ip}/${netmask}" dev "$port_name" 2>/dev/null || {
+            log_warn "IP may already be assigned to $port_name"
+        }
+    fi
+
+    # Verify
+    if ip addr show "$port_name" 2>/dev/null | grep -q "${gateway_ip}/"; then
+        log_success "$port_name: UP with IP ${gateway_ip}/${netmask}"
+        return 0
+    else
+        log_error "$port_name: Failed to assign IP ${gateway_ip}/${netmask}"
+        return 1
+    fi
+}
 
 bring_up_vlan_interfaces() {
     log_section "Bringing Up VLAN Interfaces"
@@ -121,86 +212,27 @@ bring_up_vlan_interfaces() {
             log_info "Bringing bridge $OVS_BRIDGE UP..."
             ip link set "$OVS_BRIDGE" up
         fi
-    fi
-
-    # VLAN 100 (LAN) - Check if interface exists (either as OVS internal or netplan VLAN)
-    local vlan_lan="vlan${VLAN_LAN}"
-    if ip link show "$vlan_lan" &>/dev/null; then
-        # Bring interface UP if DOWN
-        if ! ip link show "$vlan_lan" | grep -q "state UP"; then
-            log_info "Bringing $vlan_lan UP..."
-            ip link set "$vlan_lan" up
-        fi
-
-        # Assign IP if not present
-        if ! ip addr show "$vlan_lan" 2>/dev/null | grep -q "${gateway_lan}/"; then
-            log_info "Assigning ${gateway_lan}/${lan_mask} to $vlan_lan..."
-            ip addr add "${gateway_lan}/${lan_mask}" dev "$vlan_lan" 2>/dev/null || {
-                log_warn "IP may already be assigned to $vlan_lan"
-            }
-        fi
-        log_success "$vlan_lan: UP with IP ${gateway_lan}/${lan_mask}"
     else
-        # Interface doesn't exist - create it as OVS internal port
-        log_info "Creating $vlan_lan as OVS internal port..."
-        if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${vlan_lan}$"; then
-            ovs-vsctl add-port "$OVS_BRIDGE" "$vlan_lan" \
-                tag="$VLAN_LAN" \
-                -- set interface "$vlan_lan" type=internal
-        fi
-        ip link set "$vlan_lan" up
-        ip addr add "${gateway_lan}/${lan_mask}" dev "$vlan_lan" 2>/dev/null || true
-        log_success "Created $vlan_lan with IP ${gateway_lan}/${lan_mask}"
-    fi
-
-    # VLAN 200 (MGMT) - Same process
-    local vlan_mgmt="vlan${VLAN_MGMT}"
-    if ip link show "$vlan_mgmt" &>/dev/null; then
-        # Bring interface UP if DOWN
-        if ! ip link show "$vlan_mgmt" | grep -q "state UP"; then
-            log_info "Bringing $vlan_mgmt UP..."
-            ip link set "$vlan_mgmt" up
-        fi
-
-        # Assign IP if not present (MGMT is always /30)
-        if ! ip addr show "$vlan_mgmt" 2>/dev/null | grep -q "${gateway_mgmt}/"; then
-            log_info "Assigning ${gateway_mgmt}/30 to $vlan_mgmt..."
-            ip addr add "${gateway_mgmt}/30" dev "$vlan_mgmt" 2>/dev/null || {
-                log_warn "IP may already be assigned to $vlan_mgmt"
-            }
-        fi
-        log_success "$vlan_mgmt: UP with IP ${gateway_mgmt}/30"
-    else
-        # Interface doesn't exist - create it as OVS internal port
-        log_info "Creating $vlan_mgmt as OVS internal port..."
-        if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${vlan_mgmt}$"; then
-            ovs-vsctl add-port "$OVS_BRIDGE" "$vlan_mgmt" \
-                tag="$VLAN_MGMT" \
-                -- set interface "$vlan_mgmt" type=internal
-        fi
-        ip link set "$vlan_mgmt" up
-        ip addr add "${gateway_mgmt}/30" dev "$vlan_mgmt" 2>/dev/null || true
-        log_success "Created $vlan_mgmt with IP ${gateway_mgmt}/30"
-    fi
-
-    # Verify interfaces are ready
-    local ready=true
-    if ! ip addr show "$vlan_lan" 2>/dev/null | grep -q "${gateway_lan}/"; then
-        log_error "$vlan_lan: IP not configured!"
-        ready=false
-    fi
-    if ! ip addr show "$vlan_mgmt" 2>/dev/null | grep -q "${gateway_mgmt}/"; then
-        log_error "$vlan_mgmt: IP not configured!"
-        ready=false
-    fi
-
-    if [ "$ready" = true ]; then
-        log_success "All VLAN interfaces ready"
-        return 0
-    else
-        log_error "Some VLAN interfaces failed to configure"
+        log_error "Bridge $OVS_BRIDGE does not exist!"
         return 1
     fi
+
+    # VLAN 100 (LAN) - Create/ensure as OVS internal port
+    local vlan_lan="vlan${VLAN_LAN}"
+    if ! ensure_ovs_vlan_port "$vlan_lan" "$VLAN_LAN" "$gateway_lan" "$lan_mask"; then
+        log_error "Failed to configure $vlan_lan"
+        return 1
+    fi
+
+    # VLAN 200 (MGMT) - Create/ensure as OVS internal port
+    local vlan_mgmt="vlan${VLAN_MGMT}"
+    if ! ensure_ovs_vlan_port "$vlan_mgmt" "$VLAN_MGMT" "$gateway_mgmt" "30"; then
+        log_error "Failed to configure $vlan_mgmt"
+        return 1
+    fi
+
+    log_success "All VLAN interfaces ready (OVS internal ports)"
+    return 0
 }
 
 # ============================================================
