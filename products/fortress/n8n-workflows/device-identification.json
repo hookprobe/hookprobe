@@ -4,12 +4,12 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "device-event",
+        "path": "dhcp-event",
         "responseMode": "onReceived",
         "options": {}
       },
       "id": "webhook-trigger",
-      "name": "Device Event Webhook",
+      "name": "DHCP Event Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
       "position": [250, 300]
@@ -44,7 +44,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const probeOutput = $input.item.json.stdout;\nlet probeResult;\n\ntry {\n  probeResult = JSON.parse(probeOutput);\n} catch (e) {\n  probeResult = { error: 'Failed to parse probe output' };\n}\n\nconst originalData = $('Device Event Webhook').first().json.data;\n\nreturn [{\n  json: {\n    mac: originalData.mac,\n    ip: originalData.ip,\n    hostname: probeResult.hostname || originalData.hostname,\n    ecosystem: probeResult.ecosystem,\n    device_type: probeResult.device_type,\n    services: probeResult.services || [],\n    d2d_targets: probeResult.d2d_targets || [],\n    confidence: probeResult.confidence || 0,\n    probe_timestamp: new Date().toISOString(),\n  }\n}];"
+        "jsCode": "const probeOutput = $input.item.json.stdout;\nlet probeResult;\n\ntry {\n  probeResult = JSON.parse(probeOutput);\n} catch (e) {\n  probeResult = { error: 'Failed to parse probe output' };\n}\n\nconst originalData = $('DHCP Event Webhook').first().json.data;\n\nreturn [{\n  json: {\n    mac: originalData.mac,\n    ip: originalData.ip,\n    hostname: probeResult.hostname || originalData.hostname,\n    ecosystem: probeResult.ecosystem,\n    device_type: probeResult.device_type,\n    services: probeResult.services || [],\n    d2d_targets: probeResult.d2d_targets || [],\n    confidence: probeResult.confidence || 0,\n    probe_timestamp: new Date().toISOString(),\n  }\n}];"
       },
       "id": "parse-probe-result",
       "name": "Parse Probe Result",
@@ -253,7 +253,7 @@
     }
   ],
   "connections": {
-    "Device Event Webhook": {
+    "DHCP Event Webhook": {
       "main": [
         [
           {
