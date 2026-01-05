@@ -1165,6 +1165,17 @@ class SDNAutoPilot:
         if not friendly_name and hostname:
             friendly_name = self._clean_hostname_to_display(hostname)
 
+        # Policy hierarchy: lower number = more permissive
+        # Auto-classification should NEVER downgrade a device to less permissive policy
+        # This prevents WAN failover from resetting trusted devices to internet_only
+        POLICY_RANK = {
+            'full_access': 1,
+            'smart_home': 2,
+            'lan_only': 3,
+            'internet_only': 4,
+            'quarantine': 5,
+        }
+
         with self._get_conn() as conn:
             # Check existing device state for connection event logging
             existing = conn.execute(
@@ -1186,6 +1197,24 @@ class SDNAutoPilot:
                     reason="Manual override",
                     device_name=identity.device_name
                 )
+            elif existing:
+                # CRITICAL: Preserve policy if existing is MORE permissive than new classification
+                # This prevents WAN failover from resetting full_access devices to internet_only
+                existing_rank = POLICY_RANK.get(existing['policy'], 4)
+                new_rank = POLICY_RANK.get(identity.policy, 4)
+                if existing_rank < new_rank:
+                    # Existing policy is more permissive - keep it
+                    logger.info(f"{mac}: Preserving {existing['policy']} (more permissive than {identity.policy})")
+                    identity = IdentityScore(
+                        policy=existing['policy'],
+                        confidence=identity.confidence,
+                        vendor=identity.vendor,
+                        os_fingerprint=identity.os_fingerprint,
+                        category=identity.category,
+                        signals=identity.signals,
+                        reason=f"Preserved (was {existing['policy']})",
+                        device_name=identity.device_name
+                    )
 
             now = datetime.now().isoformat()
             conn.execute('''
