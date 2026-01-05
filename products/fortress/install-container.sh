@@ -4110,6 +4110,17 @@ ExecStartPre=/bin/bash -c '/opt/hookprobe/fortress/devices/common/ovs-post-setup
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 
+# CRITICAL: Ensure podman network exists before starting containers
+# podman-compose creates networks with project prefix (directory name)
+# If network is missing/corrupted, containers won't have eth0 interface
+ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
+  NETWORK_NAME="containers_fts-internal" && \\
+  if ! podman network exists "\$NETWORK_NAME" 2>/dev/null; then \\
+    echo "[FTS] Creating podman network: \$NETWORK_NAME" && \\
+    podman network create --driver bridge --subnet 172.20.200.0/24 --gateway 172.20.200.1 "\$NETWORK_NAME" || \\
+    echo "[FTS] Network creation failed - compose will retry"; \\
+  fi'
+
 # Start containers (--no-build prevents rebuild attempts - images built during install)
 ExecStart=${podman_compose_bin} -f podman-compose.yml up -d --no-build
 
