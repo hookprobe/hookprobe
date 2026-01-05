@@ -3896,11 +3896,22 @@ setup_traffic_flow() {
 
     # Add iptables SNAT fallback for container replies to LAN clients
     # This ensures dashboard is accessible even if nftables setup failed
-    # Containers replying to LAN clients must use MGMT gateway IP (10.200.100.1)
-    # so clients see responses from the IP they connected to
+    # Container replies going out vlan100 must appear from 10.200.0.1 (LAN gateway)
     log_info "Adding iptables SNAT fallback for container traffic..."
-    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1
+    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -o vlan100 -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -o vlan100 -j MASQUERADE
+
+    # Also need DNAT rule for web UI access (fallback if nftables fails)
+    # LAN clients accessing 10.200.0.1:8443 → container at 172.20.200.20:8443
+    log_info "Adding iptables DNAT fallback for web UI access..."
+    iptables -t nat -C PREROUTING -i vlan100 -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}" 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i vlan100 -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}"
+
+    # Allow forwarding to container network
+    iptables -C FORWARD -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -d 172.20.200.0/24 -j ACCEPT
+    iptables -C FORWARD -s 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -s 172.20.200.0/24 -j ACCEPT
 }
 
 # Wait for container to be running
