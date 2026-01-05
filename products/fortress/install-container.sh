@@ -4193,15 +4193,11 @@ install_fingerprinting_services() {
     mkdir -p /var/lib/fortress/bubbles
     chown fortress:fortress /var/lib/fortress/bubbles 2>/dev/null || true
 
-    # Initialize SQLite databases with schema
-    local init_fingerprint_db=$(cat << 'DBEOF'
-import sqlite3
-import os
-
-# Fingerprint database
-fp_db = '/var/lib/hookprobe/fingerprint.db'
-conn = sqlite3.connect(fp_db)
-conn.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
+    # Initialize SQLite databases with schema (using sqlite3 CLI)
+    if command -v sqlite3 &>/dev/null; then
+        # Fingerprint database
+        sqlite3 /var/lib/hookprobe/fingerprint.db << 'SQLEOF'
+CREATE TABLE IF NOT EXISTS fingerprints (
     mac_address TEXT PRIMARY KEY,
     device_type TEXT,
     device_category TEXT,
@@ -4215,23 +4211,21 @@ conn.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
     signals TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-)''')
-conn.execute('''CREATE TABLE IF NOT EXISTS fingerprint_feedback (
+);
+CREATE TABLE IF NOT EXISTS fingerprint_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mac_address TEXT,
     correct_type TEXT,
     correct_vendor TEXT,
     submitted_by TEXT,
     submitted_at TEXT DEFAULT CURRENT_TIMESTAMP
-)''')
-conn.commit()
-conn.close()
-os.chmod(fp_db, 0o644)
+);
+SQLEOF
+        chmod 644 /var/lib/hookprobe/fingerprint.db
 
-# Ecosystem bubbles database
-bubble_db = '/var/lib/hookprobe/ecosystem_bubbles.db'
-conn = sqlite3.connect(bubble_db)
-conn.execute('''CREATE TABLE IF NOT EXISTS bubbles (
+        # Ecosystem bubbles database
+        sqlite3 /var/lib/hookprobe/ecosystem_bubbles.db << 'SQLEOF'
+CREATE TABLE IF NOT EXISTS bubbles (
     bubble_id TEXT PRIMARY KEY,
     name TEXT,
     ecosystem TEXT,
@@ -4240,16 +4234,16 @@ conn.execute('''CREATE TABLE IF NOT EXISTS bubbles (
     device_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-)''')
-conn.execute('''CREATE TABLE IF NOT EXISTS bubble_devices (
+);
+CREATE TABLE IF NOT EXISTS bubble_devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bubble_id TEXT,
     mac_address TEXT,
     device_type TEXT,
     joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (bubble_id) REFERENCES bubbles(bubble_id)
-)''')
-conn.execute('''CREATE TABLE IF NOT EXISTS bubble_sdn_rules (
+);
+CREATE TABLE IF NOT EXISTS bubble_sdn_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bubble_id TEXT,
     rule_type TEXT,
@@ -4259,15 +4253,13 @@ conn.execute('''CREATE TABLE IF NOT EXISTS bubble_sdn_rules (
     active INTEGER DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (bubble_id) REFERENCES bubbles(bubble_id)
-)''')
-conn.commit()
-conn.close()
-os.chmod(bubble_db, 0o644)
+);
+SQLEOF
+        chmod 644 /var/lib/hookprobe/ecosystem_bubbles.db
 
-# Presence sensor database
-presence_db = '/var/lib/hookprobe/presence.db'
-conn = sqlite3.connect(presence_db)
-conn.execute('''CREATE TABLE IF NOT EXISTS presence_events (
+        # Presence sensor database
+        sqlite3 /var/lib/hookprobe/presence.db << 'SQLEOF'
+CREATE TABLE IF NOT EXISTS presence_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mac_address TEXT,
     event_type TEXT,
@@ -4276,28 +4268,24 @@ conn.execute('''CREATE TABLE IF NOT EXISTS presence_events (
     signal_data TEXT,
     confidence REAL,
     detected_at TEXT DEFAULT CURRENT_TIMESTAMP
-)''')
-conn.execute('''CREATE TABLE IF NOT EXISTS mdns_services (
+);
+CREATE TABLE IF NOT EXISTS mdns_services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mac_address TEXT,
     service_type TEXT,
     service_name TEXT,
     hostname TEXT,
     discovered_at TEXT DEFAULT CURRENT_TIMESTAMP
-)''')
-conn.execute('''CREATE INDEX IF NOT EXISTS idx_presence_mac ON presence_events(mac_address)''')
-conn.execute('''CREATE INDEX IF NOT EXISTS idx_presence_ecosystem ON presence_events(ecosystem)''')
-conn.commit()
-conn.close()
-os.chmod(presence_db, 0o644)
+);
+CREATE INDEX IF NOT EXISTS idx_presence_mac ON presence_events(mac_address);
+CREATE INDEX IF NOT EXISTS idx_presence_ecosystem ON presence_events(ecosystem);
+SQLEOF
+        chmod 644 /var/lib/hookprobe/presence.db
 
-print("Databases initialized successfully")
-DBEOF
-)
-
-    python3 -c "$init_fingerprint_db" 2>/dev/null || {
-        log_warn "Database initialization skipped (Python not available)"
-    }
+        log_info "Databases initialized successfully"
+    else
+        log_warn "Database initialization skipped (sqlite3 not available)"
+    fi
 
     # Enable and start services
     # Note: fts-bubble-manager runs in a container (managed by fortress.service)
