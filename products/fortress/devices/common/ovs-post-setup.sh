@@ -625,6 +625,90 @@ setup_wifi_bridge() {
 }
 
 # ============================================================
+# TRAFFIC MIRROR (FOR IDS/NSM CAPTURE)
+# ============================================================
+#
+# Creates an OVS mirror port that receives a copy of ALL traffic.
+# This is the PROPER way to capture traffic on an OVS bridge.
+#
+# IMPORTANT: IDS/NSM tools (Suricata, Zeek) should capture from
+# FTS-mirror, NOT directly from FTS. Direct AF_PACKET capture on
+# an OVS bridge causes:
+#   1. Packet loss (competes with OVS datapath)
+#   2. Promiscuous mode conflicts
+#   3. CPU starvation
+#
+# The mirror port receives a copy of traffic, which doesn't
+# interfere with OVS switching operations.
+#
+# ============================================================
+
+setup_traffic_mirror() {
+    log_section "Traffic Mirror Port (for IDS/NSM)"
+
+    local mirror_port="FTS-mirror"
+
+    # Check if mirror port already exists
+    if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${mirror_port}$"; then
+        # Ensure it's an internal port
+        local iface_type
+        iface_type=$(ovs-vsctl get interface "$mirror_port" type 2>/dev/null | tr -d '"') || true
+        if [ "$iface_type" = "internal" ]; then
+            log_info "$mirror_port: OVS internal port exists"
+        else
+            log_warn "$mirror_port: Recreating as internal port..."
+            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$mirror_port"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$mirror_port" \
+                -- set interface "$mirror_port" type=internal
+        fi
+    else
+        # Create mirror port
+        log_info "Creating $mirror_port as OVS internal port..."
+        ovs-vsctl add-port "$OVS_BRIDGE" "$mirror_port" \
+            -- set interface "$mirror_port" type=internal
+    fi
+
+    # Wait for interface to appear
+    local wait_count=0
+    while [ $wait_count -lt 20 ]; do
+        if ip link show "$mirror_port" &>/dev/null; then
+            break
+        fi
+        sleep 0.2
+        wait_count=$((wait_count + 1))
+    done
+
+    if ! ip link show "$mirror_port" &>/dev/null; then
+        log_error "Failed to create $mirror_port interface"
+        return 1
+    fi
+
+    # Bring interface UP (no IP needed - just for capture)
+    ip link set "$mirror_port" up
+
+    # Clear any existing mirrors
+    ovs-vsctl --if-exists clear bridge "$OVS_BRIDGE" mirrors
+
+    # Create mirror that copies ALL traffic to the mirror port
+    log_info "Configuring OVS mirror to copy all traffic..."
+    ovs-vsctl -- set bridge "$OVS_BRIDGE" mirrors=@m \
+        -- --id=@p get port "$mirror_port" \
+        -- --id=@m create mirror name=ids-capture select-all=true output-port=@p
+
+    # Verify mirror is active
+    if ovs-vsctl list mirror 2>/dev/null | grep -q "ids-capture"; then
+        log_success "Traffic mirror configured: $mirror_port"
+        log_info "  IDS/NSM tools should capture from: $mirror_port"
+        log_info "  This avoids packet loss from direct bridge capture"
+    else
+        log_error "Failed to configure traffic mirror"
+        return 1
+    fi
+
+    return 0
+}
+
+# ============================================================
 # STATUS
 # ============================================================
 
@@ -647,6 +731,25 @@ show_status() {
 
     echo -e "\n${CYAN}Container veth:${NC}"
     ip -br addr show | grep -E "veth-mgmt" || echo "  (none)"
+
+    echo -e "\n${CYAN}Traffic Mirror (IDS/NSM Capture):${NC}"
+    if ip link show FTS-mirror &>/dev/null; then
+        local mirror_state
+        mirror_state=$(ip link show FTS-mirror 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
+        echo "  FTS-mirror: $mirror_state"
+        # Check if mirroring is active
+        if ovs-vsctl list mirror 2>/dev/null | grep -q "ids-capture"; then
+            echo "  OVS Mirror: ACTIVE (ids-capture)"
+            echo "  Suricata/Zeek should use: CAPTURE_INTERFACE=FTS-mirror"
+        else
+            echo -e "  ${YELLOW}OVS Mirror: NOT CONFIGURED${NC}"
+            echo "  Run: ./ovs-post-setup.sh setup"
+        fi
+    else
+        echo -e "  ${RED}FTS-mirror: NOT FOUND${NC}"
+        echo "  AIOCHI containers may cause packet loss!"
+        echo "  Run: ./ovs-post-setup.sh setup"
+    fi
 
     echo -e "\n${CYAN}WiFi Bridge (SDN Autopilot):${NC}"
     if ip link show br-wifi &>/dev/null; then
@@ -799,8 +902,12 @@ main() {
             # Allows full OVS control over WiFi traffic including device-to-device
             setup_wifi_bridge || log_warn "WiFi bridge setup had issues (non-fatal)"
 
+            # Traffic mirror for IDS/NSM capture (AIOCHI Suricata/Zeek)
+            # Creates FTS-mirror port - proper way to capture without packet loss
+            setup_traffic_mirror || log_warn "Traffic mirror setup had issues (non-fatal)"
+
             log_section "OVS Post-Setup Complete"
-            log_success "VLAN interfaces, OpenFlow rules, port tags, and WiFi bridge configured"
+            log_success "VLAN interfaces, OpenFlow rules, port tags, WiFi bridge, and traffic mirror configured"
             ;;
 
         status)
