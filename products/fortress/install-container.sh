@@ -3804,34 +3804,37 @@ connect_containers_to_ovs() {
     # Connect each container to its OVS tier via veth pair
     # This provides OpenFlow-controlled traffic monitoring alongside Podman networking
     #
-    # NOTE: Containers using network_mode: host (web, qsecbit) cannot be attached to OVS
-    # They share the host network namespace and are already visible to OVS via host interfaces
+    # NOTE: Containers using network_mode: host (qsecbit, bubble-manager) cannot be
+    # attached to OVS - they share the host network namespace and are already visible
+    # to OVS via host interfaces.
+    #
+    # IMPORTANT: All containers are on fts-internal (172.20.200.0/24) as defined in
+    # podman-compose.yml. The "tier" label is only for OpenFlow policy decisions.
 
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
-    # Data tier containers (always required)
+    # Data tier containers (database layer - no internet access via OpenFlow)
     attach_container_if_running "$ovs_script" fts-postgres 172.20.200.10 data
     attach_container_if_running "$ovs_script" fts-redis 172.20.200.11 data
 
-    # Services tier containers (dnsxai and dfs use bridge network)
-    # Note: web uses host network - already visible via host interfaces
-    attach_container_if_running "$ovs_script" fts-dnsxai 172.20.201.11 services
-    attach_container_if_running "$ovs_script" fts-dfs 172.20.201.12 services
+    # Services tier containers (internet-allowed via OpenFlow)
+    # IPs must match podman-compose.yml assignments
+    attach_container_if_running "$ovs_script" fts-web 172.20.200.20 services
+    attach_container_if_running "$ovs_script" fts-dnsxai 172.20.200.21 services
+    attach_container_if_running "$ovs_script" fts-dfs 172.20.200.22 services
 
-    # Note: qsecbit uses host network - already visible via host interfaces
-    # It captures traffic on host interfaces directly
+    # Note: qsecbit and bubble-manager use host network - already visible via host interfaces
+    # They capture traffic on host interfaces directly
 
     # ML tier (optional - only with --profile training)
     attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.200.40 ml true
 
     # Mgmt tier (optional - only with --profile monitoring)
-    # Note: All containers are on fts-internal (172.20.200.0/24) but we still use
-    # tier labels for OpenFlow policy decisions (mgmt tier = no internet)
     attach_container_if_running "$ovs_script" fts-grafana 172.20.200.30 mgmt true
     attach_container_if_running "$ovs_script" fts-victoria 172.20.200.31 mgmt true
 
     log_info "OVS container integration complete"
-    log_info "  Note: web and qsecbit use host network (no OVS attachment needed)"
+    log_info "  Note: qsecbit and bubble-manager use host network (no OVS attachment needed)"
     log_info "  Traffic mirroring: all bridge container traffic → fts-mirror"
     log_info "  sFlow export: 127.0.0.1:6343"
     log_info "  IPFIX export: 127.0.0.1:4739"
@@ -4009,15 +4012,18 @@ wait_for_container fts-redis || log_warn "redis not ready"
 # Now attach all containers
 log_info "Attaching containers to OVS..."
 
-# Data tier (required)
+# Data tier (required - no internet via OpenFlow)
 attach_if_ready fts-postgres 172.20.200.10 data
 attach_if_ready fts-redis 172.20.200.11 data
 
-# Services tier (dnsxai and dfs use fts-internal network)
-# Note: All containers are on fts-internal (172.20.200.0/24) but we still use
-# tier labels for OpenFlow policy decisions (services tier = internet allowed)
+# Services tier (internet-allowed via OpenFlow)
+# All containers are on fts-internal (172.20.200.0/24) per podman-compose.yml
+# IPs MUST match compose file assignments
+attach_if_ready fts-web 172.20.200.20 services
 attach_if_ready fts-dnsxai 172.20.200.21 services
 attach_if_ready fts-dfs 172.20.200.22 services
+
+# Note: fts-qsecbit and fts-bubble-manager use host network (no attachment needed)
 
 # Optional tiers (mgmt tier = no internet, ml tier = no internet)
 attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
