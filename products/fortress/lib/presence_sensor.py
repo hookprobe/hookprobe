@@ -237,6 +237,34 @@ class PresenceEvent:
     details: Dict = field(default_factory=dict)
 
 
+@dataclass
+class MDNSQueryRecord:
+    """Track mDNS query for pairing with responses."""
+    query_mac: str          # Device that made the query
+    service_type: str       # e.g., "_airplay._tcp"
+    query_name: str         # Full query name
+    timestamp: datetime
+    response_macs: List[str] = field(default_factory=list)  # Devices that responded
+    paired: bool = False    # Whether response was received
+
+
+@dataclass
+class MDNSDiscoveryPair:
+    """A paired mDNS query/response indicating device relationship."""
+    querier_mac: str        # Device that queried
+    responder_mac: str      # Device that responded
+    service_type: str       # Service being discovered
+    timestamp: datetime
+
+    def to_dict(self) -> Dict:
+        return {
+            'querier': self.querier_mac,
+            'responder': self.responder_mac,
+            'service': self.service_type,
+            'timestamp': self.timestamp.isoformat(),
+        }
+
+
 # =============================================================================
 # MDNS LISTENER
 # =============================================================================
@@ -292,9 +320,18 @@ class PresenceSensor:
         self._browsers: List['ServiceBrowser'] = []
         self._mdns_available = False  # Set to True when mDNS sensing starts successfully
 
+        # mDNS Query/Response Pairing
+        self._pending_queries: Dict[str, MDNSQueryRecord] = {}  # query_key → record
+        self._discovery_pairs: List[MDNSDiscoveryPair] = []
+        self._query_timeout = 30  # Seconds to wait for response
+        self._discovery_hits: Dict[Tuple[str, str], int] = {}  # (mac_a, mac_b) → hit_count
+
         # Event correlation
         self._event_window: List[PresenceEvent] = []
         self._correlation_window = 300  # 5 minutes
+
+        # Callbacks for external integration
+        self._discovery_callbacks: List[callable] = []
 
         # Initialize database
         self._init_database()
@@ -344,10 +381,33 @@ class PresenceSensor:
                         details_json TEXT
                     )
                 ''')
+                # mDNS Discovery Pairs table for Query/Response tracking
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS mdns_discovery_pairs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        querier_mac TEXT NOT NULL,
+                        responder_mac TEXT NOT NULL,
+                        service_type TEXT,
+                        timestamp TEXT,
+                        UNIQUE(querier_mac, responder_mac, service_type, timestamp)
+                    )
+                ''')
+                # Discovery hits aggregation (for affinity scoring)
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS discovery_hits (
+                        mac_a TEXT NOT NULL,
+                        mac_b TEXT NOT NULL,
+                        hit_count INTEGER DEFAULT 0,
+                        last_hit TEXT,
+                        PRIMARY KEY (mac_a, mac_b)
+                    )
+                ''')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_presence_mac ON device_presence(mac)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_bubble_id ON device_presence(bubble_id)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_events_mac ON presence_events(mac)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_events_ts ON presence_events(timestamp)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_mdns_querier ON mdns_discovery_pairs(querier_mac)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_mdns_responder ON mdns_discovery_pairs(responder_mac)')
                 conn.commit()
         except Exception as e:
             logger.warning(f"Could not initialize presence database: {e}")
@@ -455,6 +515,11 @@ class PresenceSensor:
                     }
                 ))
 
+                # Record as mDNS response for query/response pairing
+                # When a device advertises a service, it's responding to
+                # any pending queries for that service type
+                self.record_mdns_response(mac, service_type.replace('.local.', ''))
+
                 logger.debug(f"mDNS: {mac} -> {device.ecosystem.value} ({service_type})")
 
             except Exception as e:
@@ -485,6 +550,208 @@ class PresenceSensor:
         # Find device by service name pattern
         # This is imperfect but helps track departures
         pass
+
+    # =========================================================================
+    # MDNS QUERY/RESPONSE PAIRING
+    # =========================================================================
+
+    def record_mdns_query(self, querier_mac: str, service_type: str,
+                          query_name: str, timestamp: datetime = None):
+        """
+        Record an mDNS query for later pairing with response.
+
+        When device A queries for _airplay._tcp.local., we record it.
+        If device B responds (or is advertising), we pair them.
+
+        Args:
+            querier_mac: MAC of device making the query
+            service_type: Service being queried (e.g., "_airplay._tcp")
+            query_name: Full query name
+            timestamp: When the query was made
+        """
+        with self._lock:
+            querier_mac = querier_mac.upper()
+            timestamp = timestamp or datetime.now()
+
+            # Create a query key based on querier + service
+            query_key = f"{querier_mac}:{service_type}:{int(timestamp.timestamp())}"
+
+            self._pending_queries[query_key] = MDNSQueryRecord(
+                query_mac=querier_mac,
+                service_type=service_type,
+                query_name=query_name,
+                timestamp=timestamp,
+            )
+
+            # Clean up old queries (beyond timeout window)
+            self._cleanup_old_queries()
+
+            logger.debug(f"mDNS Query: {querier_mac} → {service_type}")
+
+    def record_mdns_response(self, responder_mac: str, service_type: str,
+                             timestamp: datetime = None):
+        """
+        Record an mDNS response and pair it with pending queries.
+
+        When device B advertises/responds to a service, we look for
+        recent queries for that service and create discovery pairs.
+
+        Args:
+            responder_mac: MAC of device responding/advertising
+            service_type: Service being advertised
+            timestamp: When the response was seen
+        """
+        with self._lock:
+            responder_mac = responder_mac.upper()
+            timestamp = timestamp or datetime.now()
+
+            # Find pending queries for this service type
+            now = datetime.now()
+            pairs_created = 0
+
+            for query_key, query in list(self._pending_queries.items()):
+                # Skip if wrong service type
+                if query.service_type != service_type:
+                    continue
+
+                # Skip if same device (can't pair with self)
+                if query.query_mac == responder_mac:
+                    continue
+
+                # Skip if too old
+                age = (now - query.timestamp).total_seconds()
+                if age > self._query_timeout:
+                    continue
+
+                # Create discovery pair!
+                pair = MDNSDiscoveryPair(
+                    querier_mac=query.query_mac,
+                    responder_mac=responder_mac,
+                    service_type=service_type,
+                    timestamp=timestamp,
+                )
+                self._discovery_pairs.append(pair)
+
+                # Update discovery hits (normalized key)
+                hit_key = self._normalize_mac_pair(query.query_mac, responder_mac)
+                self._discovery_hits[hit_key] = self._discovery_hits.get(hit_key, 0) + 1
+
+                # Mark query as paired
+                query.paired = True
+                query.response_macs.append(responder_mac)
+                pairs_created += 1
+
+                # Persist to database
+                self._persist_discovery_pair(pair)
+
+                # Notify callbacks
+                self._notify_discovery(pair)
+
+                logger.debug(f"mDNS Pair: {query.query_mac} ↔ {responder_mac} via {service_type}")
+
+            if pairs_created > 0:
+                logger.info(f"Created {pairs_created} mDNS discovery pairs for {service_type}")
+
+    def _normalize_mac_pair(self, mac_a: str, mac_b: str) -> Tuple[str, str]:
+        """Normalize MAC pair for consistent ordering."""
+        return tuple(sorted([mac_a.upper(), mac_b.upper()]))
+
+    def _cleanup_old_queries(self):
+        """Remove queries older than timeout."""
+        now = datetime.now()
+        cutoff = self._query_timeout * 2  # Keep a bit longer for analysis
+
+        old_keys = [
+            key for key, query in self._pending_queries.items()
+            if (now - query.timestamp).total_seconds() > cutoff
+        ]
+
+        for key in old_keys:
+            del self._pending_queries[key]
+
+    def _persist_discovery_pair(self, pair: MDNSDiscoveryPair):
+        """Persist discovery pair to database."""
+        try:
+            with sqlite3.connect(str(PRESENCE_DB)) as conn:
+                # Insert pair record
+                conn.execute('''
+                    INSERT OR IGNORE INTO mdns_discovery_pairs
+                    (querier_mac, responder_mac, service_type, timestamp)
+                    VALUES (?, ?, ?, ?)
+                ''', (
+                    pair.querier_mac,
+                    pair.responder_mac,
+                    pair.service_type,
+                    pair.timestamp.isoformat(),
+                ))
+
+                # Update discovery hits
+                hit_key = self._normalize_mac_pair(pair.querier_mac, pair.responder_mac)
+                conn.execute('''
+                    INSERT INTO discovery_hits (mac_a, mac_b, hit_count, last_hit)
+                    VALUES (?, ?, 1, ?)
+                    ON CONFLICT(mac_a, mac_b) DO UPDATE SET
+                        hit_count = hit_count + 1,
+                        last_hit = excluded.last_hit
+                ''', (hit_key[0], hit_key[1], pair.timestamp.isoformat()))
+
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"Could not persist discovery pair: {e}")
+
+    def get_discovery_hits(self, mac_a: str, mac_b: str) -> int:
+        """
+        Get the number of mDNS discovery hits between two devices.
+
+        This is a key metric for affinity scoring:
+        - High hit count = devices frequently discover each other
+        - Indicates same-user ownership or strong relationship
+
+        Args:
+            mac_a: First device MAC
+            mac_b: Second device MAC
+
+        Returns:
+            Number of discovery hits (query/response pairs)
+        """
+        hit_key = self._normalize_mac_pair(mac_a, mac_b)
+        return self._discovery_hits.get(hit_key, 0)
+
+    def get_all_discovery_hits(self) -> Dict[Tuple[str, str], int]:
+        """Get all discovery hit counts for all device pairs."""
+        return dict(self._discovery_hits)
+
+    def register_discovery_callback(self, callback: callable):
+        """
+        Register callback for discovery pair notifications.
+
+        Callback receives MDNSDiscoveryPair object when new pair is detected.
+        Used by connection_graph.py to update affinity scores in real-time.
+        """
+        self._discovery_callbacks.append(callback)
+
+    def _notify_discovery(self, pair: MDNSDiscoveryPair):
+        """Notify all registered callbacks of new discovery pair."""
+        for callback in self._discovery_callbacks:
+            try:
+                callback(pair)
+            except Exception as e:
+                logger.debug(f"Discovery callback failed: {e}")
+
+    def load_discovery_hits_from_db(self):
+        """Load discovery hits from database on startup."""
+        try:
+            with sqlite3.connect(str(PRESENCE_DB)) as conn:
+                rows = conn.execute('''
+                    SELECT mac_a, mac_b, hit_count FROM discovery_hits
+                ''').fetchall()
+
+                for row in rows:
+                    self._discovery_hits[(row[0], row[1])] = row[2]
+
+                logger.debug(f"Loaded {len(rows)} discovery hit records")
+        except Exception as e:
+            logger.debug(f"Could not load discovery hits: {e}")
 
     def _ip_to_mac(self, ip: str) -> Optional[str]:
         """Convert IP to MAC via ARP table."""
@@ -858,6 +1125,9 @@ class PresenceSensor:
         """Start all presence sensing."""
         self.running = True
 
+        # Load persisted discovery hits
+        self.load_discovery_hits_from_db()
+
         # Start mDNS
         self.start_mdns_sensing()
 
@@ -976,14 +1246,24 @@ class PresenceSensor:
             for d in self._devices.values():
                 ecosystems[d.ecosystem.value] += 1
 
+            # Discovery pair stats
+            total_discovery_hits = sum(self._discovery_hits.values())
+            device_pairs_with_hits = len(self._discovery_hits)
+
             return {
                 'total_devices': len(self._devices),
                 'ecosystems': dict(ecosystems),
                 'total_events': len(self._events),
                 'window_events': len(self._event_window),
                 'mdns_enabled': HAS_ZEROCONF,
+                'mdns_available': self._mdns_available,
                 'ble_enabled': HAS_BLEAK,
                 'running': self.running,
+                # mDNS Query/Response Pairing stats
+                'pending_queries': len(self._pending_queries),
+                'discovery_pairs': len(self._discovery_pairs),
+                'total_discovery_hits': total_discovery_hits,
+                'device_pairs_with_hits': device_pairs_with_hits,
             }
 
 
