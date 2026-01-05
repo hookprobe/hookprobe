@@ -3492,39 +3492,55 @@ AIOCHIENV
             # Build from parent directory (shared/aiochi/) to access backend/ folder
             log_info "  Building AIOCHI containers..."
             local aiochi_parent="/opt/hookprobe/shared/aiochi"
-            cd "$aiochi_parent"
+            local aiochi_containers="${aiochi_parent}/containers"
+
+            # Track which images were built successfully (default: false)
+            AIOCHI_IDENTITY_BUILT=false
+            AIOCHI_LOGSHIPPER_BUILT=false
 
             # Verify required files exist before building
             log_info "    Verifying AIOCHI build context..."
-            if [ ! -d "backend" ]; then
+            if [ ! -d "${aiochi_parent}/backend" ]; then
                 log_warn "    backend/ directory missing - AIOCHI custom containers will not be built"
-            elif [ ! -f "backend/__init__.py" ]; then
+            elif [ ! -f "${aiochi_parent}/backend/__init__.py" ]; then
                 log_warn "    backend/__init__.py missing - AIOCHI custom containers will not be built"
             else
                 # Build custom containers with proper error handling
-                if [ -f "containers/Containerfile.identity" ]; then
+                # Use absolute paths and match proven syntax: podman build -f FILE -t TAG CONTEXT
+                local containerfile_identity="${aiochi_containers}/Containerfile.identity"
+                local containerfile_logshipper="${aiochi_containers}/Containerfile.logshipper"
+
+                if [ -f "$containerfile_identity" ]; then
                     log_info "    Building identity-engine..."
                     # Verify Containerfile has valid FROM statement
-                    if head -20 "containers/Containerfile.identity" | grep -q "^FROM "; then
-                        if podman build -t localhost/aiochi-identity:latest \
-                            -f containers/Containerfile.identity . 2>&1; then
+                    if head -20 "$containerfile_identity" | grep -q "^FROM "; then
+                        # Build with explicit format and absolute paths
+                        if podman build --format docker \
+                            -f "$containerfile_identity" \
+                            -t localhost/aiochi-identity:latest \
+                            "$aiochi_parent" 2>&1; then
                             log_info "    ✓ identity-engine built successfully"
+                            AIOCHI_IDENTITY_BUILT=true
                         else
-                            log_warn "    ✗ Failed to build identity-engine (will use fallback)"
+                            log_warn "    ✗ Failed to build identity-engine (container will be skipped)"
                         fi
                     else
                         log_warn "    ✗ Containerfile.identity appears invalid (no FROM statement)"
                     fi
                 fi
 
-                if [ -f "containers/Containerfile.logshipper" ]; then
+                if [ -f "$containerfile_logshipper" ]; then
                     log_info "    Building log-shipper..."
-                    if head -20 "containers/Containerfile.logshipper" | grep -q "^FROM "; then
-                        if podman build -t localhost/aiochi-logshipper:latest \
-                            -f containers/Containerfile.logshipper . 2>&1; then
+                    if head -20 "$containerfile_logshipper" | grep -q "^FROM "; then
+                        # Build with explicit format and absolute paths
+                        if podman build --format docker \
+                            -f "$containerfile_logshipper" \
+                            -t localhost/aiochi-logshipper:latest \
+                            "$aiochi_parent" 2>&1; then
                             log_info "    ✓ log-shipper built successfully"
+                            AIOCHI_LOGSHIPPER_BUILT=true
                         else
-                            log_warn "    ✗ Failed to build log-shipper (will use fallback)"
+                            log_warn "    ✗ Failed to build log-shipper (container will be skipped)"
                         fi
                     else
                         log_warn "    ✗ Containerfile.logshipper appears invalid (no FROM statement)"
@@ -3598,6 +3614,8 @@ AIOCHIENV
             echo ""
 
             # Helper function for container start with status
+            # NOTE: Returns 0 even on failure - AIOCHI is optional, failures shouldn't abort install
+            AIOCHI_FAILED_CONTAINERS=""
             start_aiochi_container() {
                 local name="$1"
                 local desc="$2"
@@ -3611,7 +3629,9 @@ AIOCHIENV
                     return 0
                 else
                     echo "✗"
-                    return 1
+                    AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} ${name}"
+                    # Don't return 1 - AIOCHI is optional, continue installation
+                    return 0
                 fi
             }
 
@@ -3691,40 +3711,52 @@ AIOCHIENV
                 docker.io/n8nio/n8n:1.70.3
 
             # 5. Identity Engine (CRITICAL for fts-web integration)
-            start_aiochi_container "aiochi-identity" "Identity Engine" \
-                --name aiochi-identity \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.20 \
-                -p 127.0.0.1:8060:8060 \
-                -v aiochi-identity-data:/app/data \
-                -v /var/lib/misc:/var/lib/misc:ro \
-                -v /run/avahi-daemon:/run/avahi-daemon:ro \
-                -e CLICKHOUSE_HOST=172.20.210.10 \
-                -e CLICKHOUSE_PORT=8123 \
-                -e CLICKHOUSE_DB=aiochi \
-                -e CLICKHOUSE_USER=aiochi \
-                -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
-                -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
-                localhost/aiochi-identity:latest
+            # Only start if the image was built successfully
+            if [ "${AIOCHI_IDENTITY_BUILT:-false}" = "true" ]; then
+                start_aiochi_container "aiochi-identity" "Identity Engine" \
+                    --name aiochi-identity \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.20 \
+                    -p 127.0.0.1:8060:8060 \
+                    -v aiochi-identity-data:/app/data \
+                    -v /var/lib/misc:/var/lib/misc:ro \
+                    -v /run/avahi-daemon:/run/avahi-daemon:ro \
+                    -e CLICKHOUSE_HOST=172.20.210.10 \
+                    -e CLICKHOUSE_PORT=8123 \
+                    -e CLICKHOUSE_DB=aiochi \
+                    -e CLICKHOUSE_USER=aiochi \
+                    -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                    -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+                    localhost/aiochi-identity:latest
+            else
+                echo "    [SKIP] Identity Engine (image build failed)"
+                AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-identity(build-failed)"
+            fi
 
             # 6. Log Shipper (ships Suricata/Zeek logs to ClickHouse)
-            start_aiochi_container "aiochi-logshipper" "Log Shipper" \
-                --name aiochi-logshipper \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.40 \
-                -v aiochi-suricata-logs:/var/log/suricata:ro \
-                -v aiochi-zeek-logs:/opt/zeek/logs:ro \
-                -e CLICKHOUSE_HOST=172.20.210.10 \
-                -e CLICKHOUSE_PORT=8123 \
-                -e CLICKHOUSE_DB=aiochi \
-                -e CLICKHOUSE_USER=aiochi \
-                -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
-                -e SURICATA_LOG_PATH=/var/log/suricata/eve.json \
-                -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
-                -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
-                localhost/aiochi-logshipper:latest
+            # Only start if the image was built successfully
+            if [ "${AIOCHI_LOGSHIPPER_BUILT:-false}" = "true" ]; then
+                start_aiochi_container "aiochi-logshipper" "Log Shipper" \
+                    --name aiochi-logshipper \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.40 \
+                    -v aiochi-suricata-logs:/var/log/suricata:ro \
+                    -v aiochi-zeek-logs:/opt/zeek/logs:ro \
+                    -e CLICKHOUSE_HOST=172.20.210.10 \
+                    -e CLICKHOUSE_PORT=8123 \
+                    -e CLICKHOUSE_DB=aiochi \
+                    -e CLICKHOUSE_USER=aiochi \
+                    -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                    -e SURICATA_LOG_PATH=/var/log/suricata/eve.json \
+                    -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
+                    -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+                    localhost/aiochi-logshipper:latest
+            else
+                echo "    [SKIP] Log Shipper (image build failed)"
+                AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-logshipper(build-failed)"
+            fi
 
             # 7. AI Tier - Ollama (starts in background, model downloads async)
             log_info ""
@@ -3765,7 +3797,14 @@ AIOCHIENV
 
             echo ""
             log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            log_info "  AIOCHI containers started successfully!"
+            if [ -z "$AIOCHI_FAILED_CONTAINERS" ]; then
+                log_info "  AIOCHI containers started successfully!"
+            else
+                log_warn "  AIOCHI started with some failures"
+                log_warn "  Failed containers:${AIOCHI_FAILED_CONTAINERS}"
+                log_warn "  These containers may need manual attention."
+                log_warn "  Check with: podman logs <container-name>"
+            fi
             log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             log_info ""
             log_info "  Services available at:"
