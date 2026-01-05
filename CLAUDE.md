@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.7
-**Last Updated**: 2025-12-26
+**Version**: 5.8
+**Last Updated**: 2026-01-05
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -39,6 +39,12 @@
 | **Device Fingerprinting (ML)** | 99% accuracy classifier | `products/fortress/lib/ml_fingerprint_classifier.py` |
 | **Behavioral Clustering** | DBSCAN user bubbles | `products/fortress/lib/behavior_clustering.py` |
 | **Multi-Modal Presence** | mDNS, BLE, spatial | `products/fortress/lib/presence_sensor.py` |
+| **mDNS Query/Response Pairing** | Device discovery tracking | `products/fortress/lib/presence_sensor.py` |
+| **D2D Connection Graph** | Zeek-based device affinity | `products/fortress/lib/connection_graph.py` |
+| **Temporal Affinity Scoring** | Wake/sleep correlation | `products/fortress/lib/connection_graph.py` |
+| **ClickHouse Graph Storage** | Device relationship persistence | `products/fortress/lib/clickhouse_graph.py` |
+| **n8n Bubble Webhooks** | Workflow automation | `products/fortress/lib/n8n_webhook.py` |
+| **Reinforcement Learning** | Learn from corrections | `products/fortress/lib/reinforcement_feedback.py` |
 | **Fingerbank API setup** | External enrichment | `products/fortress/docs/FINGERBANK-API-SETUP.md` |
 | **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
@@ -190,6 +196,10 @@ These directories contain proprietary innovations. Commercial license required f
 | **ML Fingerprint Classifier** | `products/fortress/lib/ml_fingerprint_classifier.py` | Proprietary |
 | **Behavioral Clustering Engine** | `products/fortress/lib/behavior_clustering.py` | Proprietary |
 | **Presence Sensor (Multi-Modal)** | `products/fortress/lib/presence_sensor.py` | Proprietary |
+| **D2D Connection Graph** | `products/fortress/lib/connection_graph.py` | Proprietary |
+| **ClickHouse Graph Storage** | `products/fortress/lib/clickhouse_graph.py` | Proprietary |
+| **n8n Webhook Integration** | `products/fortress/lib/n8n_webhook.py` | Proprietary |
+| **Reinforcement Learning Feedback** | `products/fortress/lib/reinforcement_feedback.py` | Proprietary |
 | **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
 
 ### Usage Guidelines
@@ -476,7 +486,14 @@ hookprobe/
 │   │   │   ├── config.py            # Configuration loading
 │   │   │   ├── device_manager.py    # Device discovery, OUI lookup
 │   │   │   ├── vlan_manager.py      # VLAN creation, DHCP config
-│   │   │   └── cloudflare_tunnel.py # Remote access integration
+│   │   │   ├── cloudflare_tunnel.py # Remote access integration
+│   │   │   ├── ecosystem_bubble.py  # Same-user device grouping
+│   │   │   ├── presence_sensor.py   # mDNS/BLE presence detection
+│   │   │   ├── behavior_clustering.py # DBSCAN device clustering
+│   │   │   ├── connection_graph.py  # D2D affinity via Zeek
+│   │   │   ├── clickhouse_graph.py  # ClickHouse graph persistence
+│   │   │   ├── n8n_webhook.py       # n8n workflow webhooks
+│   │   │   └── reinforcement_feedback.py # RL from corrections
 │   │   ├── web/                     # Flask + AdminLTE UI
 │   │   │   ├── app.py               # Flask app with Flask-Login
 │   │   │   └── modules/             # Blueprints (auth, dashboard, clients...)
@@ -1381,6 +1398,289 @@ cat /etc/dnsmasq.d/fts-vlan.conf      # DHCP config
 - Interface mapping saved to `/etc/hookprobe/wifi-interfaces.conf`
 
 **Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
+
+### Ecosystem Bubble - Same-User Device Detection
+
+**Location**: `products/fortress/lib/`
+**Status**: Production Ready
+**Branding**: "Atmospheric Presence" - Detecting device relationships through behavioral patterns
+
+Ecosystem Bubble is Fortress's proprietary system for automatically grouping devices by owner (Dad, Mom, Kids, Guests) using multi-modal signals without requiring manual configuration.
+
+> *"Dad's iPhone and MacBook wake up together at 7am, share files via AirDrop, and query the same Apple TV - they belong in the same bubble"*
+
+**Architecture Overview**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ECOSYSTEM BUBBLE SYSTEM                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │  PRESENCE   │───▶│ CONNECTION  │───▶│  BEHAVIOR   │───▶│   BUBBLE    │  │
+│  │   SENSOR    │    │    GRAPH    │    │  CLUSTERING │    │   MANAGER   │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│   mDNS/BLE/WiFi     Zeek conn.log       DBSCAN ML         SDN Rules        │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                      INTEGRATION MODULES                                 ││
+│  │  ClickHouse ─── n8n Webhooks ─── Reinforcement Learning                ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Core Components**:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Ecosystem Bubble Manager** | `ecosystem_bubble.py` | Orchestrator, bubble lifecycle, SDN rules |
+| **Presence Sensor** | `presence_sensor.py` | mDNS, BLE, network events |
+| **Behavior Clustering** | `behavior_clustering.py` | DBSCAN unsupervised clustering |
+| **Connection Graph** | `connection_graph.py` | Zeek-based D2D affinity analysis |
+| **ClickHouse Storage** | `clickhouse_graph.py` | Time-series persistence for AI |
+| **n8n Webhooks** | `n8n_webhook.py` | Workflow automation integration |
+| **Reinforcement Learning** | `reinforcement_feedback.py` | Learn from user corrections |
+
+**Affinity Score Algorithm**:
+
+```python
+# The Formula (0.0 - 1.0)
+S_aff = (Discovery Hits × W_discovery) + (D2D Flows × W_d2d) + (Temporal Sync × W_temporal)
+
+# Default Weights:
+W_discovery = 0.10   # mDNS query/response pairing
+W_d2d = 0.05         # Device-to-device connections (Zeek)
+W_temporal = 0.02    # Wake/sleep correlation
+
+# Enhanced with Reinforcement Learning:
+S_adjusted = S_aff + RL_adjustment  # Range: -0.5 to +0.5
+```
+
+**Bubble Types**:
+
+| Type | VLAN | Internet | LAN | D2D | Use Case |
+|------|------|----------|-----|-----|----------|
+| **FAMILY** | 110 | ✅ | ✅ | ✅ | Dad, Mom, Kids |
+| **GUEST** | 150 | ✅ | ❌ | ❌ | Visitors, temporary |
+| **IOT** | 130 | ✅ | ❌ | ✅ | Smart home devices |
+| **WORK** | 120 | ✅ | ⚠️ | ✅ | Business devices |
+
+**Key Files**:
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `ecosystem_bubble.py` | ~1200 | Main orchestrator, bubble CRUD, SDN |
+| `presence_sensor.py` | ~1050 | mDNS listener, BLE scanner, events |
+| `connection_graph.py` | ~1000 | Zeek parsing, temporal patterns |
+| `behavior_clustering.py` | ~600 | DBSCAN, feature engineering |
+| `clickhouse_graph.py` | ~540 | ClickHouse persistence |
+| `n8n_webhook.py` | ~455 | Async webhook client |
+| `reinforcement_feedback.py` | ~500 | Correction learning |
+
+#### mDNS Query/Response Pairing
+
+Tracks which device queries which service to detect ownership relationships.
+
+**How it works**:
+1. iPhone queries `_airplay._tcp.local.` (looking for Apple TV)
+2. Apple TV responds (advertising service)
+3. System creates "discovery pair" linking iPhone ↔ Apple TV
+4. Multiple discoveries = high affinity = same bubble
+
+```python
+from presence_sensor import PresenceSensor
+
+sensor = PresenceSensor()
+sensor.record_mdns_query("AA:BB:CC:DD:EE:01", "_airplay._tcp", "Apple TV")
+sensor.record_mdns_response("FF:EE:DD:CC:BB:AA", "_airplay._tcp")
+
+# Get discovery hit count between devices
+hits = sensor.get_discovery_hits("AA:BB:CC:DD:EE:01", "FF:EE:DD:CC:BB:AA")
+```
+
+**Database Tables** (SQLite):
+- `mdns_discovery_pairs` - Individual query/response pairs
+- `discovery_hits` - Aggregated hit counts per device pair
+
+#### Temporal Affinity Scoring
+
+Detects devices that follow the same schedule (same user).
+
+**Pattern Detection**:
+- Active hours (0-23) - Jaccard similarity
+- Wake events (hour, weekday) - Join network pattern
+- Sleep events (hour, weekday) - Leave network pattern
+- Session duration - How long device stays active
+
+```python
+from connection_graph import TemporalPattern
+
+# Two devices with similar patterns
+pattern_dad_phone = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+pattern_dad_phone.active_hours = {7, 8, 9, 18, 19, 20, 21, 22}
+pattern_dad_phone.wake_events = [(7, 0), (7, 1), (7, 2)]  # 7am weekdays
+
+pattern_dad_laptop = TemporalPattern(mac="AA:BB:CC:DD:EE:02")
+pattern_dad_laptop.active_hours = {7, 8, 9, 18, 19, 20, 21, 23}
+
+similarity = pattern_dad_phone.similarity(pattern_dad_laptop)  # ~0.85
+```
+
+**Coincident Event Detection**:
+- Events within 60-second windows get bonus scoring
+- Wake events (join) worth more than sleep events (leave)
+- Closeness bonus: closer events = higher score
+
+#### ClickHouse Graph Storage
+
+Persists device relationships for AI learning and trend analysis.
+
+**Tables**:
+
+| Table | Purpose | TTL |
+|-------|---------|-----|
+| `bubble_device_relationships` | D2D connections | 90 days |
+| `bubble_mdns_discoveries` | Discovery pairs | 30 days |
+| `bubble_temporal_patterns` | Wake/sleep cycles | 30 days |
+| `bubble_assignments` | Bubble membership | 365 days |
+| `bubble_affinity_history` | Score trends | 90 days |
+
+```python
+from clickhouse_graph import get_clickhouse_store
+
+store = get_clickhouse_store()
+store.record_relationship(
+    mac_a="AA:BB:CC:DD:EE:01",
+    mac_b="AA:BB:CC:DD:EE:02",
+    connection_count=15,
+    high_affinity_count=8,
+    services=["smb", "mdns", "airplay"],
+    temporal_sync=0.82,
+    affinity_score=0.75,
+)
+```
+
+#### n8n Webhook Integration
+
+Sends events to n8n for workflow automation.
+
+**Event Types**:
+
+| Event | Trigger | Use Case |
+|-------|---------|----------|
+| `bubble_change` | Device moved | Notify admin |
+| `device_join` | New device | Welcome automation |
+| `device_leave` | Device left | Session logging |
+| `relationship_detected` | High affinity found | Suggest grouping |
+| `manual_correction` | User edit | RL training |
+| `bubble_created` | New bubble | Policy setup |
+
+**Configuration** (`/etc/hookprobe/fortress.conf`):
+```bash
+N8N_WEBHOOK_URL="http://localhost:5678/webhook/bubble-events"
+N8N_AUTH_TOKEN="your-bearer-token"
+```
+
+```python
+from n8n_webhook import get_webhook_client
+
+client = get_webhook_client()
+client.on_bubble_change(
+    mac="AA:BB:CC:DD:EE:01",
+    old_bubble="guests",
+    new_bubble="family-dad",
+    confidence=0.92,
+    reason="High temporal correlation with existing devices"
+)
+```
+
+#### Reinforcement Learning Feedback
+
+Learns from user manual corrections to improve automatic assignment.
+
+**How it works**:
+1. AI assigns device to "Guests" bubble
+2. User manually moves device to "Dad" bubble
+3. System records negative feedback (wrong assignment)
+4. System records positive feedback (correct assignment)
+5. Affinity scores adjusted for future predictions
+
+**Constants**:
+```python
+POSITIVE_FEEDBACK_WEIGHT = 0.15   # +15% affinity boost
+NEGATIVE_FEEDBACK_WEIGHT = -0.20  # -20% affinity penalty
+DECAY_FACTOR = 0.95               # Daily decay (old corrections matter less)
+MAX_FEEDBACK_AGE_DAYS = 30        # Discard very old feedback
+```
+
+```python
+from reinforcement_feedback import get_feedback_engine
+
+engine = get_feedback_engine()
+
+# Record user correction
+engine.record_correction(
+    mac="AA:BB:CC:DD:EE:01",
+    old_bubble_id="bubble-guests",
+    new_bubble_id="bubble-dad",
+    old_bubble_devices=["GG:UU:EE:SS:TT:01"],  # Negative feedback
+    new_bubble_devices=["AA:BB:CC:DD:EE:02"],  # Positive feedback
+    reason="Device belongs to Dad"
+)
+
+# Apply to affinity scores
+engine.apply_pending_corrections()
+
+# Get adjusted affinity
+base = 0.5
+adjusted = engine.get_adjusted_affinity("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", base)
+# Returns: 0.65 (base + positive adjustment)
+```
+
+**CLI Tools**:
+```bash
+# Reinforcement learning stats
+python -m reinforcement_feedback stats
+
+# Top adjusted device pairs
+python -m reinforcement_feedback pairs --limit 20
+
+# Apply daily decay
+python -m reinforcement_feedback decay
+
+# n8n webhook status
+python -m n8n_webhook status
+
+# Test webhook
+python -m n8n_webhook test
+```
+
+**Python API**:
+```python
+from products.fortress.lib import (
+    get_ecosystem_bubble_manager,
+    get_presence_sensor,
+    get_d2d_connection_graph,
+    get_clickhouse_graph_store,
+    get_n8n_webhook_client,
+    get_reinforcement_feedback_engine,
+)
+
+# Get manager and check if devices are same bubble
+manager = get_ecosystem_bubble_manager()
+same, confidence = manager.are_same_bubble("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02")
+
+# Create manual bubble
+bubble = manager.create_manual_bubble(
+    name="Dad's Devices",
+    bubble_type=BubbleType.FAMILY,
+    devices=["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
+)
+
+# Move device (triggers webhook + RL)
+manager.move_device(mac="AA:BB:CC:DD:EE:03", to_bubble_id=bubble.bubble_id)
+```
 
 ### MSSP - Cloud Federation Platform
 
