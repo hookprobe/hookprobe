@@ -160,6 +160,80 @@ class BubblePrivilege(Enum):
     QUARANTINE = "quarantine"     # No intra-bubble traffic
 
 
+class BubbleType(Enum):
+    """Type of bubble determining default network policies."""
+    FAMILY = "family"             # Full smart home access, D2D, shared devices
+    GUEST = "guest"               # Internet only, isolated
+    CORPORATE = "corporate"       # Separate, controlled access
+    SMART_HOME = "smart_home"     # IoT devices - limited LAN
+    CUSTOM = "custom"             # User-defined policies
+
+
+# Default policies for each bubble type
+BUBBLE_TYPE_POLICIES = {
+    BubbleType.FAMILY: {
+        'internet_access': True,
+        'lan_access': True,
+        'smart_home_access': True,
+        'd2d_allowed': True,
+        'shared_devices': True,
+        'vlan': 100,
+        'qos_priority': 'high',
+        'bandwidth_limit': None,  # Unlimited
+        'mdns_allowed': True,
+        'description': 'Full network access with smart home integration',
+    },
+    BubbleType.GUEST: {
+        'internet_access': True,
+        'lan_access': False,
+        'smart_home_access': False,
+        'd2d_allowed': False,
+        'shared_devices': False,
+        'vlan': 40,
+        'qos_priority': 'low',
+        'bandwidth_limit': 50,  # 50 Mbps
+        'mdns_allowed': False,
+        'description': 'Internet only - isolated from local network',
+    },
+    BubbleType.CORPORATE: {
+        'internet_access': True,
+        'lan_access': False,
+        'smart_home_access': False,
+        'd2d_allowed': False,
+        'shared_devices': False,
+        'vlan': 50,
+        'qos_priority': 'medium',
+        'bandwidth_limit': None,
+        'mdns_allowed': False,
+        'description': 'Work devices - isolated with internet access',
+    },
+    BubbleType.SMART_HOME: {
+        'internet_access': True,
+        'lan_access': True,
+        'smart_home_access': True,
+        'd2d_allowed': True,
+        'shared_devices': True,
+        'vlan': 30,
+        'qos_priority': 'medium',
+        'bandwidth_limit': 10,  # 10 Mbps for IoT
+        'mdns_allowed': True,
+        'description': 'IoT and smart home devices',
+    },
+    BubbleType.CUSTOM: {
+        'internet_access': True,
+        'lan_access': False,
+        'smart_home_access': False,
+        'd2d_allowed': False,
+        'shared_devices': False,
+        'vlan': 100,
+        'qos_priority': 'medium',
+        'bandwidth_limit': None,
+        'mdns_allowed': True,
+        'description': 'Custom configuration',
+    },
+}
+
+
 # OpenFlow priorities
 OFP_BUBBLE_PRIORITY = 500         # Bubble allow rules
 OFP_ISOLATION_PRIORITY = 100      # Default isolation
@@ -180,6 +254,11 @@ class Bubble:
     privilege: BubblePrivilege = BubblePrivilege.FULL
     confidence: float = 0.0
 
+    # Bubble type and policies
+    bubble_type: BubbleType = BubbleType.FAMILY
+    policies: Dict = field(default_factory=dict)  # Override default policies
+    pinned: bool = False  # If True, AI won't modify assignments
+
     # Lifecycle
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_activity: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -187,12 +266,26 @@ class Bubble:
 
     # Identity hints
     owner_hint: Optional[str] = None  # Extracted from hostnames
+    name: Optional[str] = None  # User-defined name (e.g., "Dad", "Mom", "Kids")
     primary_device: Optional[str] = None  # Most active device
+
+    # Manual assignment tracking
+    manually_assigned_devices: Set[str] = field(default_factory=set)  # Devices pinned by user
+    is_manual: bool = False  # True if bubble was manually created
+
+    # D2D relationship tracking
+    affinity_scores: Dict[str, float] = field(default_factory=dict)  # device_pair -> score
 
     # Stats
     handoff_count: int = 0
     sync_count: int = 0
     total_traffic_bytes: int = 0
+
+    def get_effective_policies(self) -> Dict:
+        """Get effective policies (type defaults + overrides)."""
+        base_policies = BUBBLE_TYPE_POLICIES.get(self.bubble_type, {}).copy()
+        base_policies.update(self.policies)
+        return base_policies
 
     def to_dict(self) -> Dict:
         return {
@@ -202,10 +295,16 @@ class Bubble:
             'state': self.state.value,
             'privilege': self.privilege.value,
             'confidence': self.confidence,
+            'bubble_type': self.bubble_type.value,
+            'policies': self.get_effective_policies(),
+            'pinned': self.pinned,
+            'is_manual': self.is_manual,
+            'name': self.name or self.owner_hint,
             'created_at': self.created_at,
             'last_activity': self.last_activity,
             'device_count': len(self.devices),
             'owner_hint': self.owner_hint,
+            'manually_assigned_devices': list(self.manually_assigned_devices),
         }
 
 
@@ -309,9 +408,45 @@ class EcosystemBubbleManager:
                         created_at TEXT,
                         last_activity TEXT,
                         handoff_count INTEGER,
-                        sync_count INTEGER
+                        sync_count INTEGER,
+                        bubble_type TEXT DEFAULT 'family',
+                        policies_json TEXT,
+                        pinned INTEGER DEFAULT 0,
+                        name TEXT,
+                        is_manual INTEGER DEFAULT 0,
+                        manually_assigned_json TEXT,
+                        affinity_scores_json TEXT
                     )
                 ''')
+                # Add new columns to existing tables (migration)
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN bubble_type TEXT DEFAULT "family"')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN policies_json TEXT')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN pinned INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN name TEXT')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN is_manual INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN manually_assigned_json TEXT')
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute('ALTER TABLE bubbles ADD COLUMN affinity_scores_json TEXT')
+                except sqlite3.OperationalError:
+                    pass
                 conn.execute('''
                     CREATE TABLE IF NOT EXISTS bubble_events (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -520,9 +655,32 @@ class EcosystemBubbleManager:
             # Update existing bubble
             bubble = self._bubbles[bubble_id]
 
-            # Check for new devices
+            # Skip updates for pinned bubbles
+            if bubble.pinned:
+                logger.debug(f"Skipping pinned bubble: {bubble_id}")
+                return
+
+            # Check for new devices (exclude manually assigned devices elsewhere)
             new_devices = set(cluster.devices) - bubble.devices
             left_devices = bubble.devices - set(cluster.devices)
+
+            # Filter out manually assigned devices from movements
+            for mac in list(new_devices):
+                mac_upper = mac.upper()
+                # Check if device is manually assigned to another bubble
+                current_bubble_id = self._device_bubble_map.get(mac_upper)
+                if current_bubble_id and current_bubble_id in self._bubbles:
+                    current_bubble = self._bubbles[current_bubble_id]
+                    if mac_upper in current_bubble.manually_assigned_devices:
+                        new_devices.discard(mac)
+                        logger.debug(f"Skipping manually assigned device: {mac}")
+
+            # Don't remove manually assigned devices
+            for mac in list(left_devices):
+                mac_upper = mac.upper()
+                if mac_upper in bubble.manually_assigned_devices:
+                    left_devices.discard(mac)
+                    logger.debug(f"Keeping manually assigned device: {mac}")
 
             for mac in new_devices:
                 self._add_device_to_bubble(bubble, mac)
@@ -551,22 +709,38 @@ class EcosystemBubbleManager:
 
         else:
             # Create new bubble
+            # Filter out manually assigned devices from new bubble
+            available_devices = set()
+            for mac in cluster.devices:
+                mac_upper = mac.upper()
+                current_bubble_id = self._device_bubble_map.get(mac_upper)
+                if current_bubble_id and current_bubble_id in self._bubbles:
+                    current_bubble = self._bubbles[current_bubble_id]
+                    if mac_upper in current_bubble.manually_assigned_devices:
+                        logger.debug(f"Excluding manually assigned device from new bubble: {mac}")
+                        continue
+                available_devices.add(mac)
+
+            if not available_devices:
+                logger.debug(f"No available devices for new bubble: {bubble_id}")
+                return
+
             threshold = self._get_confirmation_threshold(cluster.ecosystem)
             bubble = Bubble(
                 bubble_id=bubble_id,
                 ecosystem=cluster.ecosystem,
-                devices=set(cluster.devices),
+                devices=available_devices,
                 confidence=cluster.confidence,
                 state=BubbleState.FORMING if cluster.confidence < threshold else BubbleState.ACTIVE
             )
 
             # Extract owner hint
-            bubble.owner_hint = self._extract_owner_hint(cluster.devices)
+            bubble.owner_hint = self._extract_owner_hint(list(available_devices))
 
             self._bubbles[bubble_id] = bubble
 
             # Map devices to bubble
-            for mac in cluster.devices:
+            for mac in available_devices:
                 self._device_bubble_map[mac] = bubble_id
 
             self._record_event(BubbleEvent(
@@ -958,6 +1132,350 @@ class EcosystemBubbleManager:
     def on_device_joined(self, callback: Callable):
         """Register callback for device joining bubble."""
         self._on_device_joined.append(callback)
+
+    # =========================================================================
+    # MANUAL BUBBLE MANAGEMENT
+    # =========================================================================
+
+    def create_manual_bubble(
+        self,
+        name: str,
+        bubble_type: BubbleType = BubbleType.FAMILY,
+        devices: Optional[List[str]] = None,
+        policies: Optional[Dict] = None
+    ) -> Bubble:
+        """Create a manually-defined bubble.
+
+        Args:
+            name: Human-readable name (e.g., "Dad", "Mom", "Kids")
+            bubble_type: Type determining default policies
+            devices: Initial devices to add (MAC addresses)
+            policies: Policy overrides
+
+        Returns:
+            The created bubble
+        """
+        import uuid
+
+        bubble_id = f"manual-{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
+
+        with self._lock:
+            bubble = Bubble(
+                bubble_id=bubble_id,
+                ecosystem='mixed',  # Manual bubbles can contain mixed ecosystems
+                devices=set(devices or []),
+                state=BubbleState.ACTIVE,
+                confidence=1.0,  # Manual bubbles have full confidence
+                bubble_type=bubble_type,
+                policies=policies or {},
+                pinned=True,  # Manual bubbles are pinned by default
+                name=name,
+                is_manual=True,
+                manually_assigned_devices=set(devices or []),
+            )
+
+            self._bubbles[bubble_id] = bubble
+
+            # Map devices to this bubble
+            for mac in bubble.devices:
+                mac = mac.upper()
+                # Remove from old bubble if any
+                old_bubble_id = self._device_bubble_map.get(mac)
+                if old_bubble_id and old_bubble_id in self._bubbles:
+                    old_bubble = self._bubbles[old_bubble_id]
+                    old_bubble.devices.discard(mac)
+                    old_bubble.manually_assigned_devices.discard(mac)
+
+                self._device_bubble_map[mac] = bubble_id
+
+            self._record_event(BubbleEvent(
+                event_type='created_manual',
+                bubble_id=bubble_id,
+                details={'name': name, 'type': bubble_type.value, 'devices': list(bubble.devices)}
+            ))
+
+            self._sdn_dirty = True
+            self._persist_bubble(bubble)
+
+            logger.info(f"Manual bubble created: {name} ({bubble_id})")
+
+            return bubble
+
+    def update_bubble(
+        self,
+        bubble_id: str,
+        name: Optional[str] = None,
+        bubble_type: Optional[BubbleType] = None,
+        policies: Optional[Dict] = None,
+        pinned: Optional[bool] = None
+    ) -> Optional[Bubble]:
+        """Update bubble settings.
+
+        Args:
+            bubble_id: Bubble to update
+            name: New name
+            bubble_type: New type
+            policies: Policy overrides
+            pinned: Pin status
+
+        Returns:
+            Updated bubble or None if not found
+        """
+        with self._lock:
+            bubble = self._bubbles.get(bubble_id)
+            if not bubble:
+                return None
+
+            if name is not None:
+                bubble.name = name
+            if bubble_type is not None:
+                bubble.bubble_type = bubble_type
+            if policies is not None:
+                bubble.policies = policies
+            if pinned is not None:
+                bubble.pinned = pinned
+
+            bubble.last_activity = datetime.now().isoformat()
+
+            self._record_event(BubbleEvent(
+                event_type='updated',
+                bubble_id=bubble_id,
+                details={
+                    'name': bubble.name,
+                    'type': bubble.bubble_type.value,
+                    'pinned': bubble.pinned
+                }
+            ))
+
+            self._sdn_dirty = True
+            self._persist_bubble(bubble)
+
+            logger.info(f"Bubble updated: {bubble_id}")
+
+            return bubble
+
+    def move_device(self, mac: str, target_bubble_id: str, pin: bool = True) -> bool:
+        """Move a device to a different bubble.
+
+        Args:
+            mac: Device MAC address
+            target_bubble_id: Target bubble ID
+            pin: If True, pin the device (AI won't move it back)
+
+        Returns:
+            True if successful
+        """
+        mac = mac.upper()
+
+        with self._lock:
+            target_bubble = self._bubbles.get(target_bubble_id)
+            if not target_bubble:
+                logger.warning(f"Target bubble not found: {target_bubble_id}")
+                return False
+
+            # Remove from current bubble
+            current_bubble_id = self._device_bubble_map.get(mac)
+            if current_bubble_id and current_bubble_id in self._bubbles:
+                current_bubble = self._bubbles[current_bubble_id]
+                current_bubble.devices.discard(mac)
+                current_bubble.manually_assigned_devices.discard(mac)
+
+                self._record_event(BubbleEvent(
+                    event_type='device_left',
+                    bubble_id=current_bubble_id,
+                    mac=mac,
+                    details={'reason': 'manual_move', 'target': target_bubble_id}
+                ))
+
+            # Add to target bubble
+            target_bubble.devices.add(mac)
+            if pin:
+                target_bubble.manually_assigned_devices.add(mac)
+            self._device_bubble_map[mac] = target_bubble_id
+            target_bubble.last_activity = datetime.now().isoformat()
+
+            self._record_event(BubbleEvent(
+                event_type='device_joined',
+                bubble_id=target_bubble_id,
+                mac=mac,
+                details={'reason': 'manual_move', 'pinned': pin}
+            ))
+
+            self._sdn_dirty = True
+            self._persist_bubble(target_bubble)
+            if current_bubble_id and current_bubble_id in self._bubbles:
+                self._persist_bubble(self._bubbles[current_bubble_id])
+
+            logger.info(f"Device {mac} moved to bubble {target_bubble_id}")
+
+            return True
+
+    def pin_bubble(self, bubble_id: str, pinned: bool = True) -> bool:
+        """Pin or unpin a bubble.
+
+        Pinned bubbles won't be modified by AI clustering.
+
+        Args:
+            bubble_id: Bubble to pin/unpin
+            pinned: True to pin, False to unpin
+
+        Returns:
+            True if successful
+        """
+        with self._lock:
+            bubble = self._bubbles.get(bubble_id)
+            if not bubble:
+                return False
+
+            bubble.pinned = pinned
+
+            self._record_event(BubbleEvent(
+                event_type='pinned' if pinned else 'unpinned',
+                bubble_id=bubble_id
+            ))
+
+            self._persist_bubble(bubble)
+            logger.info(f"Bubble {bubble_id} {'pinned' if pinned else 'unpinned'}")
+
+            return True
+
+    def delete_bubble(self, bubble_id: str) -> bool:
+        """Delete a bubble.
+
+        Args:
+            bubble_id: Bubble to delete
+
+        Returns:
+            True if successful
+        """
+        with self._lock:
+            bubble = self._bubbles.get(bubble_id)
+            if not bubble:
+                return False
+
+            # Clear device mappings
+            for mac in bubble.devices:
+                if self._device_bubble_map.get(mac) == bubble_id:
+                    del self._device_bubble_map[mac]
+
+            # Clear SDN rules
+            if bubble_id in self._sdn_rules:
+                del self._sdn_rules[bubble_id]
+
+            # Remove bubble
+            del self._bubbles[bubble_id]
+
+            self._record_event(BubbleEvent(
+                event_type='deleted',
+                bubble_id=bubble_id
+            ))
+
+            self._sdn_dirty = True
+
+            # Delete from database
+            try:
+                with sqlite3.connect(str(BUBBLE_DB)) as conn:
+                    conn.execute('DELETE FROM bubbles WHERE bubble_id = ?', (bubble_id,))
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"Could not delete bubble from database: {e}")
+
+            logger.info(f"Bubble deleted: {bubble_id}")
+
+            return True
+
+    def get_ai_suggestions(self) -> List[Dict]:
+        """Get AI suggestions for device groupings.
+
+        Returns a list of suggested device pairs with affinity scores.
+
+        Returns:
+            List of suggestion dictionaries
+        """
+        suggestions = []
+
+        # Try to use connection graph analyzer for D2D detection
+        try:
+            from lib.connection_graph import ConnectionGraphAnalyzer
+            analyzer = ConnectionGraphAnalyzer()
+            clusters = analyzer.find_d2d_clusters()
+
+            for cluster in clusters:
+                if len(cluster.devices) >= 2:
+                    suggestions.append({
+                        'type': 'cluster',
+                        'devices': list(cluster.devices),
+                        'affinity_score': cluster.average_affinity,
+                        'reason': f"Detected D2D communication between {len(cluster.devices)} devices",
+                        'suggested_bubble_type': 'family'
+                    })
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"Connection graph analysis failed: {e}")
+
+        # Add suggestions from clustering engine
+        if self.clustering_engine and HAS_CLUSTERING:
+            try:
+                clusters = self.clustering_engine.cluster_devices()
+                for cluster in clusters:
+                    if cluster.confidence >= 0.5 and len(cluster.devices) >= 2:
+                        # Skip if devices already in same bubble
+                        bubble_ids = set()
+                        for mac in cluster.devices:
+                            bid = self._device_bubble_map.get(mac.upper())
+                            if bid:
+                                bubble_ids.add(bid)
+
+                        if len(bubble_ids) > 1 or not bubble_ids:
+                            suggestions.append({
+                                'type': 'behavioral',
+                                'devices': list(cluster.devices),
+                                'affinity_score': cluster.confidence,
+                                'reason': f"Similar behavior patterns detected ({cluster.ecosystem} ecosystem)",
+                                'suggested_bubble_type': 'family' if cluster.ecosystem in ['apple', 'google'] else 'custom'
+                            })
+            except Exception as e:
+                logger.debug(f"Clustering suggestions failed: {e}")
+
+        return suggestions
+
+    def _persist_bubble(self, bubble: Bubble):
+        """Persist a single bubble to database."""
+        try:
+            with sqlite3.connect(str(BUBBLE_DB)) as conn:
+                conn.execute('''
+                    INSERT OR REPLACE INTO bubbles
+                    (bubble_id, ecosystem, devices_json, state, privilege,
+                     confidence, owner_hint, primary_device, created_at,
+                     last_activity, handoff_count, sync_count, bubble_type,
+                     policies_json, pinned, name, is_manual, manually_assigned_json,
+                     affinity_scores_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    bubble.bubble_id,
+                    bubble.ecosystem,
+                    json.dumps(list(bubble.devices)),
+                    bubble.state.value,
+                    bubble.privilege.value,
+                    bubble.confidence,
+                    bubble.owner_hint,
+                    bubble.primary_device,
+                    bubble.created_at,
+                    bubble.last_activity,
+                    bubble.handoff_count,
+                    bubble.sync_count,
+                    bubble.bubble_type.value,
+                    json.dumps(bubble.policies),
+                    1 if bubble.pinned else 0,
+                    bubble.name,
+                    1 if bubble.is_manual else 0,
+                    json.dumps(list(bubble.manually_assigned_devices)),
+                    json.dumps(bubble.affinity_scores),
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Could not persist bubble: {e}")
 
     def _persist_all(self):
         """Persist all state to database."""
