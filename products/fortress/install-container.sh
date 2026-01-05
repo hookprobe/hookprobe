@@ -3966,6 +3966,15 @@ connect_containers_to_ovs() {
 
     local ovs_script="${DEVICES_DIR}/common/ovs-container-network.sh"
 
+    # Check if OVS container attachment is disabled
+    # This can be set in /etc/hookprobe/fortress.conf or via environment
+    # Set SKIP_OVS_CONTAINER_ATTACH=true to disable OVS veth attachment
+    if [ "${SKIP_OVS_CONTAINER_ATTACH:-false}" = "true" ]; then
+        log_warn "OVS container attachment DISABLED (SKIP_OVS_CONTAINER_ATTACH=true)"
+        log_warn "Containers will use podman network only - OpenFlow per-device rules won't apply to container traffic"
+        return 0
+    fi
+
     if [ ! -f "$ovs_script" ]; then
         log_warn "OVS script not found - skipping container OVS integration"
         return 0
@@ -3980,6 +3989,9 @@ connect_containers_to_ovs() {
     #
     # IMPORTANT: All containers are on fts-internal (172.20.200.0/24) as defined in
     # podman-compose.yml. The "tier" label is only for OpenFlow policy decisions.
+    #
+    # TROUBLESHOOTING: If containers have networking issues (empty routing table,
+    # can't reach each other), set SKIP_OVS_CONTAINER_ATTACH=true in fortress.conf
 
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
@@ -4171,6 +4183,21 @@ if [ -f "$NAC_SYNC_SCRIPT" ]; then
     "$NAC_SYNC_SCRIPT" 2>/dev/null || log_warn "NAC policy sync failed (non-fatal)"
 else
     log_info "NAC sync script not found - will sync when web app starts"
+fi
+
+# Check if OVS container attachment is disabled
+# Source fortress.conf to get the setting
+FORTRESS_CONF="/etc/hookprobe/fortress.conf"
+if [ -f "$FORTRESS_CONF" ]; then
+    # shellcheck source=/dev/null
+    source "$FORTRESS_CONF"
+fi
+
+if [ "${SKIP_OVS_CONTAINER_ATTACH:-false}" = "true" ]; then
+    log_warn "OVS container attachment DISABLED (SKIP_OVS_CONTAINER_ATTACH=true)"
+    log_warn "Containers using podman network only - this is safe but limits OpenFlow visibility"
+    log_info "OVS bridge setup complete (container attachment skipped)"
+    exit 0
 fi
 
 log_info "Waiting for containers..."
