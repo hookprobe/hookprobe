@@ -646,10 +646,10 @@
                         <div class="qsecbit-gauge">
                             <canvas id="qsecbitGauge" width="160" height="160"></canvas>
                             <div class="qsecbit-score rag-{{ qsecbit.rag_status }}" id="qsecbit-score">
-                                {{ ((1 - qsecbit.score) * 100)|int }}%
+                                {{ (qsecbit.score * 100)|int }}%
                             </div>
                         </div>
-                        <small class="text-muted">Protection</small>
+                        <small class="text-muted">Security Score</small>
                     </div>
                     <div class="col-7">
                         <!-- Threat Summary -->
@@ -1818,14 +1818,13 @@ async function trainML() {
 }
 
 // === QSECBIT GAUGE ===
-// Protection gauge: full = secure, empty = under attack
+// Security gauge: full = secure (high score), empty = under attack (low score)
 function drawQsecbitGauge() {
     const canvas = document.getElementById('qsecbitGauge');
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
     const score = {{ qsecbit.score }};
-    const protection = 1 - score;  // Invert: 100% protection when score is 0
     const status = '{{ qsecbit.rag_status }}';
 
     const color = status === 'GREEN' ? '#28a745' : status === 'AMBER' ? '#ffc107' : '#dc3545';
@@ -1837,8 +1836,8 @@ function drawQsecbitGauge() {
     ctx.lineWidth = 15;
     ctx.stroke();
 
-    // Protection arc - full when protected, empty when under attack
-    const endAngle = 0.75 * Math.PI + (protection * 1.5 * Math.PI);
+    // Security arc - full when score is high, empty when under attack
+    const endAngle = 0.75 * Math.PI + (score * 1.5 * Math.PI);
     ctx.beginPath();
     ctx.arc(80, 80, 60, 0.75 * Math.PI, endAngle);
     ctx.strokeStyle = color;
@@ -1852,9 +1851,9 @@ async function refreshQsecbit() {
         const resp = await fetch('/security/api/qsecbit');
         const data = await resp.json();
         if (data.score !== undefined) {
-            // Show protection percentage (inverted)
-            const protection = Math.round((1 - data.score) * 100);
-            document.getElementById('qsecbit-score').textContent = protection + '%';
+            // Show security score percentage
+            const securityScore = Math.round(data.score * 100);
+            document.getElementById('qsecbit-score').textContent = securityScore + '%';
         }
     } catch(e) {}
 }
