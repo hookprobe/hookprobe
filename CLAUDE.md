@@ -64,6 +64,13 @@
 | **Adaptive DNS failover** | Multi-provider DNS | `shared/slaai/dns_intelligence.py` |
 | **PBR integration** | Route switching | `shared/slaai/integrations/pbr.py` |
 | **Fortress dual-WAN** | PBR failover | `products/fortress/devices/common/wan-failover-pbr.sh` |
+| **AIOCHI (AI Eyes)** | Cognitive network layer | `shared/aiochi/` |
+| **AIOCHI architecture** | Design docs | `shared/aiochi/ARCHITECTURE.md` |
+| **AIOCHI containers** | Podman compose | `shared/aiochi/containers/podman-compose.aiochi.yml` |
+| **AIOCHI + Fortress install** | Enable AI Eyes | `./install.sh --tier fortress --enable-aiochi` |
+| **Ollama LLM integration** | Local AI reasoning | `shared/aiochi/containers/` (aiochi-ollama service) |
+| **AIOCHI n8n workflows** | Agentic security | `shared/aiochi/n8n-workflows/` |
+| **AIOCHI ClickHouse schema** | Event analytics | `shared/aiochi/schemas/clickhouse-init.sql` |
 | **Community guidelines** | Code of Conduct | `CODE_OF_CONDUCT.md` |
 | **Contributing** | Contribution guide | `docs/CONTRIBUTING.md` |
 | **Security reporting** | Vulnerability disclosure | `docs/SECURITY.md` |
@@ -77,6 +84,7 @@
 - [Codebase Structure](#codebase-structure)
 - [Core Modules](#core-modules)
 - [Shared Infrastructure](#shared-infrastructure)
+- [AIOCHI - AI Eyes](#aiochi---ai-eyes)
 - [Product Tiers](#product-tiers)
 - [Cortex Visualization](#cortex-visualization)
 - [End-to-End (E2E) Security Flow](#end-to-end-e2e-security-flow)
@@ -177,6 +185,7 @@ These directories contain proprietary innovations. Commercial license required f
 | **dnsXai ML Classifier** | `shared/dnsXai/` | Proprietary |
 | **DSM Consensus** | `shared/dsm/` | Proprietary |
 | **SLA AI Business Continuity** | `shared/slaai/` | Proprietary |
+| **AIOCHI (AI Eyes) Cognitive Layer** | `shared/aiochi/` | Proprietary |
 | **Ecosystem Bubble (Atmospheric Presence)** | `products/fortress/lib/ecosystem_bubble.py` | Proprietary |
 | **ML Fingerprint Classifier** | `products/fortress/lib/ml_fingerprint_classifier.py` | Proprietary |
 | **Behavioral Clustering Engine** | `products/fortress/lib/behavior_clustering.py` | Proprietary |
@@ -369,6 +378,25 @@ hookprobe/
 │       │   └── pbr.py               # Fortress PBR integration
 │       └── tests/
 │           └── test_slaai.py        # Comprehensive test suite
+│
+│   └── aiochi/                       # AIOCHI - AI EYES (COGNITIVE LAYER)
+│       ├── ARCHITECTURE.md          # Comprehensive architecture doc
+│       ├── __init__.py              # Module exports
+│       ├── containers/
+│       │   ├── podman-compose.aiochi.yml  # AIOCHI container orchestration
+│       │   ├── Containerfile.identity     # Identity engine build
+│       │   ├── Containerfile.logshipper   # Log shipper build
+│       │   └── configs/                   # Service configurations
+│       │       ├── clickhouse/            # ClickHouse init scripts
+│       │       ├── grafana/               # Grafana provisioning
+│       │       ├── suricata/              # Suricata rules
+│       │       └── zeek/                  # Zeek scripts
+│       ├── schemas/
+│       │   └── clickhouse-init.sql        # ClickHouse schema
+│       ├── n8n-workflows/
+│       │   └── agentic-security-agent.json # AI security workflow
+│       ├── personas/                      # Device persona templates
+│       └── templates/                     # Narrative templates
 │
 ├── products/                         # PRODUCT TIERS
 │   ├── README.md                    # Product tier overview
@@ -1019,6 +1047,121 @@ from shared.slaai import (
     DNSIntelligence,       # Adaptive DNS
 )
 ```
+
+---
+
+## AIOCHI - AI Eyes
+
+### Cognitive Network Layer for HookProbe
+
+**Location**: `shared/aiochi/`
+**Status**: Production Ready
+**Branding**: "AIOCHI" (AI Eyes) - See your network, understand your security
+
+AIOCHI transforms raw network data into **human-readable narratives** using local AI. It's the "eyes" that make complex security events understandable to non-technical users.
+
+> *"Mom's iPhone joined the network"* instead of *"MAC aa:bb:cc:dd:ee:ff DHCP lease 10.200.0.45"*
+
+**Philosophy**: *Feel → Sense → Adapt → Learn → Optimize*
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           AIOCHI - AI EYES                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │  CAPTURE    │───▶│   STORE     │───▶│  ANALYZE    │───▶│  NARRATE    │  │
+│  │ (IDS/NSM)   │    │ (ClickHouse)│    │ (Identity)  │    │ (LLM/n8n)   │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│   Suricata          Time-series        Device            Ollama            │
+│   Zeek              VictoriaMetrics    Fingerprinting    llama3.2:3b       │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                         VISUALIZATION (Grafana)                         ││
+│  │  Network presence map • Security health score • Human-readable feed    ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | Container | Purpose | Port |
+|-----------|-----------|---------|------|
+| **ClickHouse** | aiochi-clickhouse | Event analytics database | 8123, 9000 |
+| **VictoriaMetrics** | aiochi-victoria | Time-series metrics | 8428 |
+| **Suricata** | aiochi-suricata | Deep packet inspection | host network |
+| **Zeek** | aiochi-zeek | Network security monitor | host network |
+| **Grafana** | aiochi-grafana | Visual dashboards | 3000 |
+| **n8n** | aiochi-narrative | Workflow automation | 5678 |
+| **Ollama** | aiochi-ollama | Local LLM (llama3.2:3b) | 11434 |
+| **Identity Engine** | aiochi-identity | Device fingerprinting | 8060 |
+| **Log Shipper** | aiochi-logshipper | Event pipeline | - |
+
+### Installation
+
+```bash
+# Enable AIOCHI with Fortress
+sudo ./install.sh --tier fortress --enable-aiochi
+
+# AIOCHI adds ~2GB RAM usage and ~4GB disk for:
+# - Container images (~2GB)
+# - LLM model llama3.2:3b (~2GB, downloaded async)
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `shared/aiochi/ARCHITECTURE.md` | Comprehensive architecture documentation |
+| `shared/aiochi/containers/podman-compose.aiochi.yml` | Container orchestration |
+| `shared/aiochi/containers/Containerfile.identity` | Identity engine build |
+| `shared/aiochi/containers/Containerfile.logshipper` | Log shipper build |
+| `shared/aiochi/schemas/clickhouse-init.sql` | ClickHouse schema |
+| `shared/aiochi/n8n-workflows/agentic-security-agent.json` | AI security workflow |
+
+### Narrative Examples
+
+AIOCHI transforms technical events into human-readable stories:
+
+| Raw Event | AIOCHI Narrative |
+|-----------|------------------|
+| `DHCP ACK 10.200.0.45 aa:bb:cc:dd:ee:ff` | "Sarah's iPhone joined the network" |
+| `DNS query blocked: ads.tracker.com` | "Blocked advertising tracker (protects privacy)" |
+| `Suricata alert: ET SCAN` | "Someone is probing the network - already blocked" |
+| `New device: Apple vendor` | "New Apple device detected - awaiting identification" |
+
+### CLI Commands
+
+```bash
+# Check AIOCHI container status
+podman ps --filter "name=aiochi-"
+
+# Monitor LLM model download
+tail -f /var/log/fortress/aiochi-llm-download.log
+
+# Access Grafana dashboards
+open http://localhost:3000  # admin/fortress_grafana_admin
+
+# Access n8n workflows
+open http://localhost:5678  # admin/fortress_n8n_admin
+
+# Query ClickHouse directly
+podman exec -it aiochi-clickhouse clickhouse-client -d aiochi
+```
+
+### Integration with Fortress
+
+When `--enable-aiochi` is used:
+1. Core Fortress containers (fts-*) start normally
+2. AIOCHI containers (aiochi-*) start separately
+3. Optional fts-* services (grafana, victoria, n8n, etc.) are **skipped** (AIOCHI provides them)
+4. Ollama starts and downloads LLM model in background
+5. `INSTALL_AIOCHI=true` saved to `/etc/hookprobe/fortress.conf`
+
+**Note**: The LLM model download (~2GB) runs **asynchronously** so installation completes without blocking.
 
 ---
 
