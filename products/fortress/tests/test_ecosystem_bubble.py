@@ -324,6 +324,294 @@ class TestEcosystemBubbleManager:
             print(f"✓ Stats: {stats}")
 
 
+class TestManualBubbleManagement:
+    """Test manual bubble management features."""
+
+    @pytest.fixture
+    def temp_dbs(self, tmp_path):
+        """Create temporary database paths."""
+        return {
+            'bubble': tmp_path / "bubbles.db",
+            'clustering': tmp_path / "clustering.db",
+            'presence': tmp_path / "presence.db"
+        }
+
+    def test_bubble_types(self, temp_dbs):
+        """Test BubbleType enum and policies."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import BubbleType, BUBBLE_TYPE_POLICIES
+
+            # Verify all bubble types have policies
+            for bubble_type in BubbleType:
+                assert bubble_type in BUBBLE_TYPE_POLICIES, \
+                    f"Missing policy for {bubble_type}"
+                policy = BUBBLE_TYPE_POLICIES[bubble_type]
+                assert 'internet_access' in policy
+                assert 'lan_access' in policy
+                assert 'vlan' in policy
+                print(f"✓ {bubble_type.value}: VLAN {policy['vlan']}")
+
+    def test_create_manual_bubble(self, temp_dbs):
+        """Test creating a manual bubble."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('ecosystem_bubble.SDN_TRIGGER_FILE', temp_dbs['bubble'].parent / '.sdn_trigger'), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import EcosystemBubbleManager, BubbleType
+
+            manager = EcosystemBubbleManager()
+
+            # Create a family bubble
+            bubble = manager.create_manual_bubble(
+                name="Dad's Devices",
+                bubble_type=BubbleType.FAMILY,
+                devices=["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
+            )
+
+            assert bubble is not None
+            assert bubble.name == "Dad's Devices"
+            assert bubble.bubble_type == BubbleType.FAMILY
+            assert len(bubble.devices) == 2
+            assert bubble.is_manual is True
+            assert bubble.created_by == 'user'
+            print(f"✓ Created manual bubble: {bubble.bubble_id}")
+
+    def test_move_device_between_bubbles(self, temp_dbs):
+        """Test moving a device from one bubble to another."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('ecosystem_bubble.SDN_TRIGGER_FILE', temp_dbs['bubble'].parent / '.sdn_trigger'), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import EcosystemBubbleManager, BubbleType
+
+            manager = EcosystemBubbleManager()
+
+            # Create two bubbles
+            dad_bubble = manager.create_manual_bubble(
+                name="Dad",
+                bubble_type=BubbleType.FAMILY,
+                devices=["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
+            )
+
+            mom_bubble = manager.create_manual_bubble(
+                name="Mom",
+                bubble_type=BubbleType.FAMILY,
+                devices=["FF:EE:DD:CC:BB:01"]
+            )
+
+            # Move device from Dad to Mom
+            result = manager.move_device(
+                mac="AA:BB:CC:DD:EE:02",
+                to_bubble_id=mom_bubble.bubble_id
+            )
+
+            assert result is True
+            # Refresh bubbles
+            updated_dad = manager.get_bubble(dad_bubble.bubble_id)
+            updated_mom = manager.get_bubble(mom_bubble.bubble_id)
+
+            assert "AA:BB:CC:DD:EE:02" not in updated_dad.devices
+            assert "AA:BB:CC:DD:EE:02" in updated_mom.devices
+            print("✓ Device moved successfully")
+
+    def test_pin_bubble(self, temp_dbs):
+        """Test pinning a bubble to prevent AI changes."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('ecosystem_bubble.SDN_TRIGGER_FILE', temp_dbs['bubble'].parent / '.sdn_trigger'), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import EcosystemBubbleManager, BubbleType
+
+            manager = EcosystemBubbleManager()
+
+            bubble = manager.create_manual_bubble(
+                name="Kids",
+                bubble_type=BubbleType.FAMILY,
+                devices=["AA:BB:CC:DD:EE:03"]
+            )
+
+            # Pin the bubble
+            result = manager.pin_bubble(bubble.bubble_id, pinned=True)
+            assert result is True
+
+            # Verify it's pinned
+            updated = manager.get_bubble(bubble.bubble_id)
+            assert updated.pinned is True
+            print("✓ Bubble pinned successfully")
+
+    def test_guest_bubble_isolation(self, temp_dbs):
+        """Test that guest bubbles have internet-only access."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('ecosystem_bubble.SDN_TRIGGER_FILE', temp_dbs['bubble'].parent / '.sdn_trigger'), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import EcosystemBubbleManager, BubbleType, BUBBLE_TYPE_POLICIES
+
+            manager = EcosystemBubbleManager()
+
+            bubble = manager.create_manual_bubble(
+                name="Guest",
+                bubble_type=BubbleType.GUEST,
+                devices=["GG:UU:EE:SS:TT:01"]
+            )
+
+            # Verify guest policy
+            guest_policy = BUBBLE_TYPE_POLICIES[BubbleType.GUEST]
+            assert guest_policy['internet_access'] is True
+            assert guest_policy['lan_access'] is False
+            assert guest_policy['smart_home_access'] is False
+            assert guest_policy['d2d_allowed'] is False
+            print(f"✓ Guest bubble isolated: VLAN {guest_policy['vlan']}")
+
+    def test_ai_suggestions(self, temp_dbs):
+        """Test getting AI suggestions for bubble assignments."""
+        with patch('ecosystem_bubble.BUBBLE_DB', temp_dbs['bubble']), \
+             patch('ecosystem_bubble.SDN_TRIGGER_FILE', temp_dbs['bubble'].parent / '.sdn_trigger'), \
+             patch('behavior_clustering.CLUSTERING_DB', temp_dbs['clustering']), \
+             patch('presence_sensor.PRESENCE_DB', temp_dbs['presence']):
+            from ecosystem_bubble import EcosystemBubbleManager, BubbleType
+            from behavior_clustering import get_clustering_engine
+
+            manager = EcosystemBubbleManager()
+            clustering = get_clustering_engine()
+
+            # Create a bubble
+            manager.create_manual_bubble(
+                name="Family",
+                bubble_type=BubbleType.FAMILY,
+                devices=["AA:BB:CC:DD:EE:01"]
+            )
+
+            # Add correlated device behavior
+            clustering.update_behavior(
+                mac="AA:BB:CC:DD:EE:01",
+                ecosystem="apple",
+                time_correlation=0.95,
+                hostname_pattern="Dad's iPhone"
+            )
+            clustering.update_behavior(
+                mac="AA:BB:CC:DD:EE:02",
+                ecosystem="apple",
+                time_correlation=0.93,
+                hostname_pattern="Dad's iPad"
+            )
+
+            # Get AI suggestions
+            suggestions = manager.get_ai_suggestions()
+            print(f"✓ Got {len(suggestions)} AI suggestions")
+            for s in suggestions:
+                print(f"  {s.get('device_mac')}: {s.get('reason')}")
+
+
+class TestConnectionGraph:
+    """Test D2D connection graph analysis."""
+
+    @pytest.fixture
+    def temp_zeek_log(self, tmp_path):
+        """Create temporary Zeek conn.log with test data."""
+        log_dir = tmp_path / "zeek" / "current"
+        log_dir.mkdir(parents=True)
+        conn_log = log_dir / "conn.log"
+
+        # Sample Zeek conn.log entries (JSON format)
+        import json
+        entries = [
+            {
+                "ts": 1704067200.0,
+                "id.orig_h": "10.200.0.10",  # Dad's iPhone
+                "id.orig_p": 12345,
+                "id.resp_h": "10.200.0.11",  # Dad's MacBook
+                "id.resp_p": 445,
+                "proto": "tcp",
+                "service": "smb",
+                "duration": 5.5,
+                "orig_bytes": 1024,
+                "resp_bytes": 2048,
+                "conn_state": "SF",
+                "orig_l2_addr": "aa:bb:cc:dd:ee:01",
+                "resp_l2_addr": "aa:bb:cc:dd:ee:02",
+            },
+            {
+                "ts": 1704067300.0,
+                "id.orig_h": "10.200.0.10",
+                "id.orig_p": 54321,
+                "id.resp_h": "10.200.0.12",  # Dad's iPad
+                "id.resp_p": 5353,
+                "proto": "udp",
+                "service": "mdns",
+                "duration": 0.5,
+                "orig_bytes": 128,
+                "resp_bytes": 256,
+                "conn_state": "SF",
+                "orig_l2_addr": "aa:bb:cc:dd:ee:01",
+                "resp_l2_addr": "aa:bb:cc:dd:ee:03",
+            },
+        ]
+
+        with open(conn_log, 'w') as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + '\n')
+
+        return tmp_path / "zeek"
+
+    def test_connection_graph_init(self, temp_zeek_log):
+        """Test connection graph initialization."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'):
+            from connection_graph import D2DConnectionGraph
+            graph = D2DConnectionGraph()
+            assert graph is not None
+            print("✓ Connection graph initialized")
+
+    def test_parse_zeek_conn_log(self, temp_zeek_log):
+        """Test parsing Zeek conn.log for D2D connections."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
+             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
+            from connection_graph import D2DConnectionGraph
+            graph = D2DConnectionGraph()
+
+            connections = graph.parse_zeek_conn_log()
+            assert len(connections) == 2
+            print(f"✓ Parsed {len(connections)} connections")
+
+            for conn in connections:
+                print(f"  {conn.src_mac} -> {conn.dst_mac} ({conn.service})")
+
+    def test_affinity_score_calculation(self, temp_zeek_log):
+        """Test affinity score calculation."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
+             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
+            from connection_graph import D2DConnectionGraph
+            graph = D2DConnectionGraph()
+
+            # Parse connections and analyze
+            graph.parse_zeek_conn_log()
+            graph.analyze_relationships()
+
+            # Get affinity between two devices
+            affinity = graph.get_affinity(
+                "aa:bb:cc:dd:ee:01",
+                "aa:bb:cc:dd:ee:02"
+            )
+
+            assert 0 <= affinity <= 1.0
+            print(f"✓ Affinity score: {affinity:.2%}")
+
+    def test_high_affinity_services(self, temp_zeek_log):
+        """Test detection of high-affinity service types."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'):
+            from connection_graph import HIGH_AFFINITY_SERVICES
+
+            # SMB/file sharing indicates same-user devices
+            assert 'smb' in HIGH_AFFINITY_SERVICES
+            # mDNS for discovery
+            assert 'mdns' in HIGH_AFFINITY_SERVICES
+            # AirPlay/AirDrop
+            assert 'airplay' in HIGH_AFFINITY_SERVICES or 'airdrop' in HIGH_AFFINITY_SERVICES
+            print(f"✓ High-affinity services defined: {len(HIGH_AFFINITY_SERVICES)}")
+
+
 class TestIntegration:
     """End-to-end integration tests."""
 

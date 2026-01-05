@@ -1,0 +1,752 @@
+{% extends "base.html" %}
+
+{% block page_title %}Device Bubbles{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">Device Bubbles</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Header with actions -->
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-layer-group mr-2"></i>Device Bubbles
+                </h3>
+                <div class="card-tools">
+                    <button type="button" class="btn btn-success btn-sm" onclick="showCreateBubbleModal()">
+                        <i class="fas fa-plus mr-1"></i> Create Bubble
+                    </button>
+                    <button type="button" class="btn btn-info btn-sm ml-2" onclick="loadSuggestions()">
+                        <i class="fas fa-lightbulb mr-1"></i> AI Suggestions
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm ml-2" onclick="loadBubbles()">
+                        <i class="fas fa-sync mr-1"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-0">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Drag and drop devices between bubbles to manually organize them.
+                    <strong>Pin</strong> bubbles to prevent AI from changing them.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Suggestions (collapsible) -->
+    <div class="col-12 mb-3" id="suggestions-container" style="display: none;">
+        <div class="card card-outline card-info collapsed-card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-lightbulb mr-2"></i>AI Suggestions
+                </h3>
+                <div class="card-tools">
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body" id="suggestions-body">
+                <!-- Suggestions loaded dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Bubbles Grid -->
+    <div class="col-12">
+        <div class="row" id="bubbles-container">
+            <!-- Bubbles loaded dynamically -->
+            <div class="col-12 text-center py-5" id="loading-indicator">
+                <i class="fas fa-spinner fa-spin fa-3x text-muted"></i>
+                <p class="mt-3 text-muted">Loading bubbles...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Unassigned Devices -->
+    <div class="col-12 mt-4">
+        <div class="card card-outline card-secondary">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-question-circle mr-2"></i>Unassigned Devices
+                </h3>
+                <div class="card-tools">
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                        <i class="fas fa-minus"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row" id="unassigned-devices">
+                    <div class="col-12 text-muted text-center py-3">
+                        <i class="fas fa-check-circle mr-1"></i>
+                        All devices are assigned to bubbles
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Bubble Modal -->
+<div class="modal fade" id="createBubbleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-plus-circle mr-2"></i>Create New Bubble</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="createBubbleForm">
+                    <!-- Preset buttons -->
+                    <div class="form-group">
+                        <label>Quick Presets</label>
+                        <div class="btn-group d-flex flex-wrap" role="group">
+                            <button type="button" class="btn btn-outline-primary preset-btn" data-preset="dad">
+                                <i class="fas fa-user-tie"></i> Dad
+                            </button>
+                            <button type="button" class="btn btn-outline-danger preset-btn" data-preset="mom">
+                                <i class="fas fa-user"></i> Mom
+                            </button>
+                            <button type="button" class="btn btn-outline-warning preset-btn" data-preset="kids">
+                                <i class="fas fa-child"></i> Kids
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary preset-btn" data-preset="guest">
+                                <i class="fas fa-user-friends"></i> Guest
+                            </button>
+                            <button type="button" class="btn btn-outline-dark preset-btn" data-preset="work">
+                                <i class="fas fa-laptop"></i> Work
+                            </button>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <div class="form-group">
+                        <label for="bubbleName">Bubble Name</label>
+                        <input type="text" class="form-control" id="bubbleName" placeholder="e.g., Dad's Devices" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="bubbleType">Bubble Type</label>
+                        <select class="form-control" id="bubbleType">
+                            <option value="family">Family (Full Access + Smart Home)</option>
+                            <option value="guest">Guest (Internet Only)</option>
+                            <option value="corporate">Corporate (Isolated)</option>
+                            <option value="smart_home">Smart Home (IoT Devices)</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="bubbleIcon">Icon</label>
+                            <select class="form-control" id="bubbleIcon">
+                                <option value="fa-users">Users</option>
+                                <option value="fa-user-tie">Dad</option>
+                                <option value="fa-user">Mom</option>
+                                <option value="fa-child">Kids</option>
+                                <option value="fa-user-friends">Guests</option>
+                                <option value="fa-laptop">Work</option>
+                                <option value="fa-home">Home</option>
+                                <option value="fa-wifi">IoT</option>
+                            </select>
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="bubbleColor">Color</label>
+                            <input type="color" class="form-control" id="bubbleColor" value="#4CAF50" style="height: 38px;">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" onclick="createBubble()">
+                    <i class="fas fa-plus mr-1"></i>Create Bubble
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Bubble Modal -->
+<div class="modal fade" id="editBubbleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-edit mr-2"></i>Edit Bubble</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="editBubbleForm">
+                    <input type="hidden" id="editBubbleId">
+
+                    <div class="form-group">
+                        <label for="editBubbleName">Bubble Name</label>
+                        <input type="text" class="form-control" id="editBubbleName" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="editBubbleType">Bubble Type</label>
+                        <select class="form-control" id="editBubbleType">
+                            <option value="family">Family</option>
+                            <option value="guest">Guest</option>
+                            <option value="corporate">Corporate</option>
+                            <option value="smart_home">Smart Home</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="editBubbleIcon">Icon</label>
+                            <select class="form-control" id="editBubbleIcon">
+                                <option value="fa-users">Users</option>
+                                <option value="fa-user-tie">Dad</option>
+                                <option value="fa-user">Mom</option>
+                                <option value="fa-child">Kids</option>
+                                <option value="fa-user-friends">Guests</option>
+                                <option value="fa-laptop">Work</option>
+                                <option value="fa-home">Home</option>
+                            </select>
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="editBubbleColor">Color</label>
+                            <input type="color" class="form-control" id="editBubbleColor" style="height: 38px;">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="custom-control custom-switch">
+                            <input type="checkbox" class="custom-control-input" id="editBubblePinned">
+                            <label class="custom-control-label" for="editBubblePinned">
+                                <i class="fas fa-thumbtack mr-1"></i>Pin (prevent AI changes)
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-danger" onclick="deleteBubble()">
+                    <i class="fas fa-trash mr-1"></i>Delete
+                </button>
+                <div>
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveBubble()">
+                        <i class="fas fa-save mr-1"></i>Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+// Bubble data
+let bubbles = [];
+let allDevices = [];
+const presets = {
+    dad: { name: "Dad's Bubble", icon: 'fa-user-tie', color: '#1976D2', type: 'family' },
+    mom: { name: "Mom's Bubble", icon: 'fa-user', color: '#E91E63', type: 'family' },
+    kids: { name: "Kids' Bubble", icon: 'fa-child', color: '#FF5722', type: 'family' },
+    guest: { name: 'Guests', icon: 'fa-user-friends', color: '#607D8B', type: 'guest' },
+    work: { name: 'Work Devices', icon: 'fa-laptop', color: '#455A64', type: 'corporate' }
+};
+
+// Load bubbles on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadBubbles();
+    loadAllDevices();
+
+    // Setup preset buttons
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const preset = presets[this.dataset.preset];
+            if (preset) {
+                document.getElementById('bubbleName').value = preset.name;
+                document.getElementById('bubbleType').value = preset.type;
+                document.getElementById('bubbleIcon').value = preset.icon;
+                document.getElementById('bubbleColor').value = preset.color;
+            }
+        });
+    });
+});
+
+function loadBubbles() {
+    fetch('/bubbles/api/list')
+        .then(r => r.json())
+        .then(data => {
+            bubbles = data.bubbles || [];
+            renderBubbles();
+        })
+        .catch(err => {
+            console.error('Failed to load bubbles:', err);
+            document.getElementById('loading-indicator').innerHTML =
+                '<p class="text-danger"><i class="fas fa-exclamation-circle mr-2"></i>Failed to load bubbles</p>';
+        });
+}
+
+function loadAllDevices() {
+    fetch('/api/dashboard/devices')
+        .then(r => r.json())
+        .then(data => {
+            allDevices = data.devices || [];
+            updateUnassignedDevices();
+        })
+        .catch(err => console.error('Failed to load devices:', err));
+}
+
+function renderBubbles() {
+    const container = document.getElementById('bubbles-container');
+    container.innerHTML = '';
+
+    if (bubbles.length === 0) {
+        container.innerHTML = `
+            <div class="col-12 text-center py-5">
+                <i class="fas fa-layer-group fa-3x text-muted mb-3"></i>
+                <h5 class="text-muted">No bubbles yet</h5>
+                <p class="text-muted">Create your first bubble to organize devices by user</p>
+                <button class="btn btn-success" onclick="showCreateBubbleModal()">
+                    <i class="fas fa-plus mr-1"></i>Create Bubble
+                </button>
+            </div>
+        `;
+        return;
+    }
+
+    bubbles.forEach(bubble => {
+        const card = createBubbleCard(bubble);
+        container.appendChild(card);
+    });
+
+    // Initialize drag and drop
+    initDragDrop();
+    updateUnassignedDevices();
+}
+
+function createBubbleCard(bubble) {
+    const col = document.createElement('div');
+    col.className = 'col-lg-4 col-md-6 mb-4';
+
+    const pinnedBadge = bubble.is_pinned ?
+        '<span class="badge badge-warning ml-2"><i class="fas fa-thumbtack"></i> Pinned</span>' : '';
+
+    const manualBadge = bubble.is_manual ?
+        '<span class="badge badge-info ml-2">Manual</span>' :
+        '<span class="badge badge-secondary ml-2">AI</span>';
+
+    const policyInfo = bubble.policy || {};
+    const accessBadges = [];
+    if (policyInfo.internet_access) accessBadges.push('<span class="badge badge-success badge-sm">Internet</span>');
+    if (policyInfo.lan_access) accessBadges.push('<span class="badge badge-primary badge-sm">LAN</span>');
+    if (policyInfo.smart_home_access) accessBadges.push('<span class="badge badge-warning badge-sm">Smart Home</span>');
+    if (policyInfo.d2d_allowed) accessBadges.push('<span class="badge badge-info badge-sm">D2D</span>');
+
+    let devicesHtml = '';
+    if (bubble.devices && bubble.devices.length > 0) {
+        bubble.devices.forEach(mac => {
+            const device = allDevices.find(d => d.mac_address === mac) || { mac_address: mac };
+            devicesHtml += `
+                <div class="device-item d-flex justify-content-between align-items-center mb-2 p-2 bg-light rounded"
+                     draggable="true" data-mac="${mac}" data-bubble="${bubble.bubble_id}">
+                    <div>
+                        <i class="fas fa-microchip mr-2 text-muted"></i>
+                        <span class="device-name">${device.hostname || device.friendly_name || mac.substr(0,11)}</span>
+                        <small class="text-muted d-block ml-4">${mac}</small>
+                    </div>
+                    <button class="btn btn-xs btn-outline-danger" onclick="removeDevice('${bubble.bubble_id}', '${mac}')">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            `;
+        });
+    } else {
+        devicesHtml = '<p class="text-muted text-center py-3"><i class="fas fa-inbox mr-1"></i>No devices</p>';
+    }
+
+    col.innerHTML = `
+        <div class="card bubble-card" data-bubble-id="${bubble.bubble_id}"
+             style="border-left: 4px solid ${bubble.color || '#9C27B0'};">
+            <div class="card-header" style="background-color: ${bubble.color || '#9C27B0'}20;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h3 class="card-title">
+                        <i class="fas ${bubble.icon || 'fa-layer-group'} mr-2" style="color: ${bubble.color || '#9C27B0'};"></i>
+                        ${bubble.display_name || 'Unnamed Bubble'}
+                    </h3>
+                    <div>
+                        ${pinnedBadge}
+                        ${manualBadge}
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    ${accessBadges.join(' ')}
+                </div>
+                <div class="bubble-devices dropzone" data-bubble-id="${bubble.bubble_id}">
+                    ${devicesHtml}
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="d-flex justify-content-between">
+                    <span class="text-muted">
+                        <i class="fas fa-laptop mr-1"></i>${bubble.device_count || 0} devices
+                    </span>
+                    <div>
+                        <button class="btn btn-xs btn-outline-primary" onclick="editBubble('${bubble.bubble_id}')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-xs btn-outline-warning ml-1" onclick="togglePin('${bubble.bubble_id}', ${!bubble.is_pinned})">
+                            <i class="fas fa-thumbtack"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    return col;
+}
+
+function updateUnassignedDevices() {
+    const container = document.getElementById('unassigned-devices');
+    const assignedMacs = new Set();
+
+    bubbles.forEach(b => {
+        (b.devices || []).forEach(mac => assignedMacs.add(mac.toUpperCase()));
+    });
+
+    const unassigned = allDevices.filter(d => !assignedMacs.has(d.mac_address.toUpperCase()));
+
+    if (unassigned.length === 0) {
+        container.innerHTML = `
+            <div class="col-12 text-muted text-center py-3">
+                <i class="fas fa-check-circle mr-1"></i>
+                All devices are assigned to bubbles
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = '';
+    unassigned.forEach(device => {
+        const div = document.createElement('div');
+        div.className = 'col-md-3 col-sm-4 mb-2';
+        div.innerHTML = `
+            <div class="device-item d-flex justify-content-between align-items-center p-2 bg-light rounded"
+                 draggable="true" data-mac="${device.mac_address}" data-bubble="">
+                <div>
+                    <i class="fas fa-question-circle mr-2 text-warning"></i>
+                    <span class="device-name">${device.hostname || device.friendly_name || device.mac_address.substr(0,11)}</span>
+                    <small class="text-muted d-block ml-4">${device.manufacturer || 'Unknown'}</small>
+                </div>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+
+    initDragDrop();
+}
+
+function initDragDrop() {
+    // Make devices draggable
+    document.querySelectorAll('.device-item[draggable="true"]').forEach(item => {
+        item.addEventListener('dragstart', handleDragStart);
+        item.addEventListener('dragend', handleDragEnd);
+    });
+
+    // Make dropzones accept drops
+    document.querySelectorAll('.dropzone, .bubble-devices').forEach(zone => {
+        zone.addEventListener('dragover', handleDragOver);
+        zone.addEventListener('drop', handleDrop);
+        zone.addEventListener('dragleave', handleDragLeave);
+    });
+}
+
+let draggedElement = null;
+
+function handleDragStart(e) {
+    draggedElement = this;
+    this.classList.add('dragging');
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+        mac: this.dataset.mac,
+        fromBubble: this.dataset.bubble
+    }));
+}
+
+function handleDragEnd(e) {
+    this.classList.remove('dragging');
+    document.querySelectorAll('.dropzone').forEach(z => z.classList.remove('drag-over'));
+}
+
+function handleDragOver(e) {
+    e.preventDefault();
+    this.classList.add('drag-over');
+}
+
+function handleDragLeave(e) {
+    this.classList.remove('drag-over');
+}
+
+function handleDrop(e) {
+    e.preventDefault();
+    this.classList.remove('drag-over');
+
+    try {
+        const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        const toBubble = this.dataset.bubbleId;
+
+        if (toBubble && data.mac) {
+            moveDevice(data.mac, data.fromBubble, toBubble);
+        }
+    } catch (err) {
+        console.error('Drop error:', err);
+    }
+}
+
+function moveDevice(mac, fromBubble, toBubble) {
+    fetch('/bubbles/api/move-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            mac: mac,
+            from_bubble: fromBubble || null,
+            to_bubble: toBubble
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            loadBubbles();
+            toastr.success(`Device moved to bubble`);
+        } else {
+            toastr.error(data.error || 'Failed to move device');
+        }
+    })
+    .catch(err => {
+        console.error('Move error:', err);
+        toastr.error('Failed to move device');
+    });
+}
+
+function removeDevice(bubbleId, mac) {
+    if (!confirm('Remove device from bubble?')) return;
+
+    fetch(`/bubbles/api/${bubbleId}/devices/${mac}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadBubbles();
+                toastr.success('Device removed');
+            } else {
+                toastr.error(data.error || 'Failed to remove device');
+            }
+        });
+}
+
+function showCreateBubbleModal() {
+    document.getElementById('createBubbleForm').reset();
+    $('#createBubbleModal').modal('show');
+}
+
+function createBubble() {
+    const name = document.getElementById('bubbleName').value;
+    const type = document.getElementById('bubbleType').value;
+    const icon = document.getElementById('bubbleIcon').value;
+    const color = document.getElementById('bubbleColor').value;
+
+    if (!name) {
+        toastr.error('Please enter a bubble name');
+        return;
+    }
+
+    fetch('/bubbles/api/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name: name,
+            bubble_type: type,
+            icon: icon,
+            color: color,
+            devices: []
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            $('#createBubbleModal').modal('hide');
+            loadBubbles();
+            toastr.success(`Bubble "${name}" created`);
+        } else {
+            toastr.error(data.error || 'Failed to create bubble');
+        }
+    });
+}
+
+function editBubble(bubbleId) {
+    const bubble = bubbles.find(b => b.bubble_id === bubbleId);
+    if (!bubble) return;
+
+    document.getElementById('editBubbleId').value = bubbleId;
+    document.getElementById('editBubbleName').value = bubble.display_name || '';
+    document.getElementById('editBubbleType').value = bubble.bubble_type || 'custom';
+    document.getElementById('editBubbleIcon').value = bubble.icon || 'fa-layer-group';
+    document.getElementById('editBubbleColor').value = bubble.color || '#9C27B0';
+    document.getElementById('editBubblePinned').checked = bubble.is_pinned;
+
+    $('#editBubbleModal').modal('show');
+}
+
+function saveBubble() {
+    const bubbleId = document.getElementById('editBubbleId').value;
+
+    fetch(`/bubbles/api/${bubbleId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            display_name: document.getElementById('editBubbleName').value,
+            bubble_type: document.getElementById('editBubbleType').value,
+            icon: document.getElementById('editBubbleIcon').value,
+            color: document.getElementById('editBubbleColor').value,
+            is_pinned: document.getElementById('editBubblePinned').checked
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            $('#editBubbleModal').modal('hide');
+            loadBubbles();
+            toastr.success('Bubble updated');
+        } else {
+            toastr.error(data.error || 'Failed to update bubble');
+        }
+    });
+}
+
+function deleteBubble() {
+    const bubbleId = document.getElementById('editBubbleId').value;
+    if (!confirm('Delete this bubble? Devices will become unassigned.')) return;
+
+    fetch(`/bubbles/api/${bubbleId}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                $('#editBubbleModal').modal('hide');
+                loadBubbles();
+                toastr.success('Bubble deleted');
+            } else {
+                toastr.error(data.error || 'Failed to delete bubble');
+            }
+        });
+}
+
+function togglePin(bubbleId, pin) {
+    const endpoint = pin ? 'pin' : 'unpin';
+    fetch(`/bubbles/api/${bubbleId}/${endpoint}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadBubbles();
+                toastr.success(pin ? 'Bubble pinned' : 'Bubble unpinned');
+            }
+        });
+}
+
+function loadSuggestions() {
+    const container = document.getElementById('suggestions-container');
+    const body = document.getElementById('suggestions-body');
+
+    fetch('/bubbles/api/suggestions')
+        .then(r => r.json())
+        .then(data => {
+            const suggestions = data.suggestions || [];
+
+            if (suggestions.length === 0) {
+                body.innerHTML = '<p class="text-muted"><i class="fas fa-check-circle mr-1"></i>No suggestions at this time</p>';
+            } else {
+                body.innerHTML = suggestions.map(s => `
+                    <div class="alert alert-info d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="fas fa-lightbulb mr-2"></i>
+                            ${s.message}
+                            <span class="badge badge-primary ml-2">Affinity: ${(s.affinity * 100).toFixed(0)}%</span>
+                        </div>
+                        <button class="btn btn-sm btn-success" onclick="applySuggestion(${JSON.stringify(s.action).replace(/"/g, '&quot;')})">
+                            <i class="fas fa-check mr-1"></i>Apply
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            container.style.display = 'block';
+            $(container).find('.card').removeClass('collapsed-card');
+        });
+}
+
+function applySuggestion(action) {
+    if (action.type === 'move_device') {
+        moveDevice(action.mac, action.from_bubble, action.to_bubble);
+    } else if (action.type === 'add_device') {
+        fetch(`/bubbles/api/${action.bubble_id}/devices`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac: action.mac })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadBubbles();
+                toastr.success('Device added to bubble');
+            }
+        });
+    }
+}
+</script>
+
+<style>
+.bubble-card {
+    transition: transform 0.2s;
+}
+.bubble-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+.device-item {
+    cursor: grab;
+    transition: background-color 0.2s;
+}
+.device-item:hover {
+    background-color: #e9ecef !important;
+}
+.device-item.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+}
+.dropzone.drag-over {
+    background-color: #d4edda;
+    border: 2px dashed #28a745;
+}
+.badge-sm {
+    font-size: 0.7rem;
+    padding: 0.2em 0.5em;
+}
+.bubble-devices {
+    min-height: 100px;
+    border: 1px dashed #dee2e6;
+    border-radius: 4px;
+    padding: 8px;
+}
+</style>
+{% endblock %}
