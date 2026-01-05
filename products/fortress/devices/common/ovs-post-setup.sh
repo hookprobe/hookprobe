@@ -702,22 +702,26 @@ show_status() {
         # Check fts-web network interface (critical for web UI access)
         echo -e "\n${CYAN}Web Container Network:${NC}"
         if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^fts-web$"; then
-            local web_eth0
-            web_eth0=$(podman exec fts-web ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}')
-            if [ -n "$web_eth0" ]; then
-                echo -e "  ${GREEN}✓${NC} fts-web eth0: $web_eth0"
+            # Use podman inspect (always works) instead of ip addr (may not be in container)
+            local web_ip
+            web_ip=$(podman inspect fts-web --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
+            if [ -n "$web_ip" ]; then
+                echo -e "  ${GREEN}✓${NC} fts-web network: $web_ip"
 
-                # Test internal connectivity
-                if podman exec fts-web curl -sk "https://127.0.0.1:${WEB_PORT:-8443}/health" --max-time 3 2>/dev/null | grep -q "healthy"; then
+                # Test web UI health
+                if curl -sk "https://localhost:${WEB_PORT:-8443}/health" --max-time 3 2>/dev/null | grep -q "healthy"; then
                     echo -e "  ${GREEN}✓${NC} Web UI health check: OK"
                 else
                     echo -e "  ${YELLOW}⚠${NC} Web UI health check: not responding (may still be starting)"
                 fi
             else
-                echo -e "  ${RED}✗${NC} fts-web missing eth0 interface!"
-                echo "    Container has no network connectivity"
-                echo "    Fix: sudo ./fortress-recover.sh"
-                all_healthy=false
+                # Fallback: check if container is running at all
+                if podman inspect fts-web --format '{{.State.Running}}' 2>/dev/null | grep -q "true"; then
+                    echo -e "  ${YELLOW}⚠${NC} fts-web running but network info unavailable"
+                else
+                    echo -e "  ${RED}✗${NC} fts-web not running properly!"
+                    all_healthy=false
+                fi
             fi
         else
             echo -e "  ${RED}✗${NC} fts-web container not running"

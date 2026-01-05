@@ -911,7 +911,29 @@ EOF
         if [ -d "$aiochi_src" ]; then
             log_info "Copying AIOCHI module..."
             mkdir -p "$aiochi_dst"
-            cp -r "$aiochi_src/"* "$aiochi_dst/" 2>/dev/null || true
+
+            # Copy with error visibility (don't suppress errors)
+            if ! cp -r "$aiochi_src/"* "$aiochi_dst/" 2>&1; then
+                log_warn "  Some files failed to copy"
+            fi
+
+            # Verify critical files were copied
+            local missing_files=0
+            for critical_file in \
+                "backend/__init__.py" \
+                "backend/identity_engine.py" \
+                "containers/Containerfile.identity" \
+                "containers/Containerfile.logshipper" \
+                "containers/podman-compose.aiochi.yml"; do
+                if [ ! -f "$aiochi_dst/$critical_file" ]; then
+                    log_warn "  Missing critical file: $critical_file"
+                    missing_files=$((missing_files + 1))
+                fi
+            done
+
+            if [ $missing_files -gt 0 ]; then
+                log_warn "  $missing_files critical AIOCHI files missing - custom containers may fail to build"
+            fi
 
             # Ensure scripts are executable
             find "$aiochi_dst" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
@@ -3146,35 +3168,41 @@ MDNSCONF
     # context path resolution. Images are already built in build_containers().
     log_info "Starting Fortress services..."
     log_info "Web UI will be available on port ${WEB_PORT}"
-    podman-compose up -d --no-build
 
     # ========================================
-    # WORKAROUND: podman-compose 1.x ignores profiles
+    # SMART SERVICE STARTUP (avoid start-then-stop waste)
     # ========================================
-    # podman-compose 1.x doesn't support --profile flag, so ALL containers
-    # start regardless of profiles. When AIOCHI is enabled, we need to stop
-    # the individual fts-* optional containers since AIOCHI provides bundled
-    # aiochi-* containers for all monitoring/analytics/IDS.
+    # podman-compose 1.x doesn't support --profile flag. Instead of starting
+    # ALL containers then stopping the ones AIOCHI replaces, we specify exactly
+    # which services to start.
+    #
+    # Core services (always started):
+    #   - fts-postgres, fts-redis (data tier)
+    #   - fts-web, fts-qsecbit, fts-bubble-manager (application tier)
+    #   - fts-dnsxai, fts-dfs (services tier)
+    #   - fts-cloudflared (if tunnel configured)
+    #
+    # Optional services (AIOCHI replaces these):
+    #   - fts-grafana, fts-victoria (monitoring)
+    #   - fts-n8n, fts-clickhouse (automation/analytics)
+    #   - fts-suricata, fts-zeek, fts-xdp (IDS)
+    #   - fts-lstm-trainer (ML training)
+
+    local core_services="fts-postgres fts-redis fts-web fts-qsecbit fts-bubble-manager fts-dnsxai fts-dfs"
+
+    # Add cloudflared if tunnel token is configured
+    if [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
+        core_services="$core_services fts-cloudflared"
+    fi
+
     if [ "${INSTALL_AIOCHI:-}" = true ]; then
-        log_info "AIOCHI enabled - stopping fts-* optional containers (AIOCHI provides these)..."
-        # Stop and remove optional containers that AIOCHI replaces
-        local aiochi_replaces=(
-            "fts-grafana"
-            "fts-victoria"
-            "fts-n8n"
-            "fts-clickhouse"
-            "fts-suricata"
-            "fts-zeek"
-            "fts-xdp"
-            "fts-lstm-trainer"
-        )
-        for container in "${aiochi_replaces[@]}"; do
-            if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
-                log_info "  Stopping ${container} (replaced by AIOCHI)..."
-                podman stop -t 5 "$container" 2>/dev/null || true
-                podman rm -f "$container" 2>/dev/null || true
-            fi
-        done
+        # AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
+        log_info "AIOCHI mode - starting core services only..."
+        # shellcheck disable=SC2086
+        podman-compose up -d --no-build $core_services
+    else
+        # Standard mode: start all services defined in compose file
+        podman-compose up -d --no-build
     fi
 
     # Wait for services in dependency order
@@ -3438,17 +3466,41 @@ AIOCHIENV
             local aiochi_parent="/opt/hookprobe/shared/aiochi"
             cd "$aiochi_parent"
 
-            # Build custom containers (with visible output)
-            if [ -f "containers/Containerfile.identity" ]; then
-                log_info "    Building identity-engine..."
-                if ! podman build -t localhost/aiochi-identity:latest -f containers/Containerfile.identity . 2>&1 | tail -5; then
-                    log_warn "Failed to build identity-engine (will use fallback)"
+            # Verify required files exist before building
+            log_info "    Verifying AIOCHI build context..."
+            if [ ! -d "backend" ]; then
+                log_warn "    backend/ directory missing - AIOCHI custom containers will not be built"
+            elif [ ! -f "backend/__init__.py" ]; then
+                log_warn "    backend/__init__.py missing - AIOCHI custom containers will not be built"
+            else
+                # Build custom containers with proper error handling
+                if [ -f "containers/Containerfile.identity" ]; then
+                    log_info "    Building identity-engine..."
+                    # Verify Containerfile has valid FROM statement
+                    if head -20 "containers/Containerfile.identity" | grep -q "^FROM "; then
+                        if podman build -t localhost/aiochi-identity:latest \
+                            -f containers/Containerfile.identity . 2>&1; then
+                            log_info "    ✓ identity-engine built successfully"
+                        else
+                            log_warn "    ✗ Failed to build identity-engine (will use fallback)"
+                        fi
+                    else
+                        log_warn "    ✗ Containerfile.identity appears invalid (no FROM statement)"
+                    fi
                 fi
-            fi
-            if [ -f "containers/Containerfile.logshipper" ]; then
-                log_info "    Building log-shipper..."
-                if ! podman build -t localhost/aiochi-logshipper:latest -f containers/Containerfile.logshipper . 2>&1 | tail -5; then
-                    log_warn "Failed to build log-shipper (will use fallback)"
+
+                if [ -f "containers/Containerfile.logshipper" ]; then
+                    log_info "    Building log-shipper..."
+                    if head -20 "containers/Containerfile.logshipper" | grep -q "^FROM "; then
+                        if podman build -t localhost/aiochi-logshipper:latest \
+                            -f containers/Containerfile.logshipper . 2>&1; then
+                            log_info "    ✓ log-shipper built successfully"
+                        else
+                            log_warn "    ✗ Failed to build log-shipper (will use fallback)"
+                        fi
+                    else
+                        log_warn "    ✗ Containerfile.logshipper appears invalid (no FROM statement)"
+                    fi
                 fi
             fi
 
@@ -3804,34 +3856,37 @@ connect_containers_to_ovs() {
     # Connect each container to its OVS tier via veth pair
     # This provides OpenFlow-controlled traffic monitoring alongside Podman networking
     #
-    # NOTE: Containers using network_mode: host (web, qsecbit) cannot be attached to OVS
-    # They share the host network namespace and are already visible to OVS via host interfaces
+    # NOTE: Containers using network_mode: host (qsecbit, bubble-manager) cannot be
+    # attached to OVS - they share the host network namespace and are already visible
+    # to OVS via host interfaces.
+    #
+    # IMPORTANT: All containers are on fts-internal (172.20.200.0/24) as defined in
+    # podman-compose.yml. The "tier" label is only for OpenFlow policy decisions.
 
     log_info "Attaching containers to OVS bridge for flow monitoring..."
 
-    # Data tier containers (always required)
+    # Data tier containers (database layer - no internet access via OpenFlow)
     attach_container_if_running "$ovs_script" fts-postgres 172.20.200.10 data
     attach_container_if_running "$ovs_script" fts-redis 172.20.200.11 data
 
-    # Services tier containers (dnsxai and dfs use bridge network)
-    # Note: web uses host network - already visible via host interfaces
-    attach_container_if_running "$ovs_script" fts-dnsxai 172.20.201.11 services
-    attach_container_if_running "$ovs_script" fts-dfs 172.20.201.12 services
+    # Services tier containers (internet-allowed via OpenFlow)
+    # IPs must match podman-compose.yml assignments
+    attach_container_if_running "$ovs_script" fts-web 172.20.200.20 services
+    attach_container_if_running "$ovs_script" fts-dnsxai 172.20.200.21 services
+    attach_container_if_running "$ovs_script" fts-dfs 172.20.200.22 services
 
-    # Note: qsecbit uses host network - already visible via host interfaces
-    # It captures traffic on host interfaces directly
+    # Note: qsecbit and bubble-manager use host network - already visible via host interfaces
+    # They capture traffic on host interfaces directly
 
     # ML tier (optional - only with --profile training)
     attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.200.40 ml true
 
     # Mgmt tier (optional - only with --profile monitoring)
-    # Note: All containers are on fts-internal (172.20.200.0/24) but we still use
-    # tier labels for OpenFlow policy decisions (mgmt tier = no internet)
     attach_container_if_running "$ovs_script" fts-grafana 172.20.200.30 mgmt true
     attach_container_if_running "$ovs_script" fts-victoria 172.20.200.31 mgmt true
 
     log_info "OVS container integration complete"
-    log_info "  Note: web and qsecbit use host network (no OVS attachment needed)"
+    log_info "  Note: qsecbit and bubble-manager use host network (no OVS attachment needed)"
     log_info "  Traffic mirroring: all bridge container traffic → fts-mirror"
     log_info "  sFlow export: 127.0.0.1:6343"
     log_info "  IPFIX export: 127.0.0.1:4739"
@@ -4009,15 +4064,18 @@ wait_for_container fts-redis || log_warn "redis not ready"
 # Now attach all containers
 log_info "Attaching containers to OVS..."
 
-# Data tier (required)
+# Data tier (required - no internet via OpenFlow)
 attach_if_ready fts-postgres 172.20.200.10 data
 attach_if_ready fts-redis 172.20.200.11 data
 
-# Services tier (dnsxai and dfs use fts-internal network)
-# Note: All containers are on fts-internal (172.20.200.0/24) but we still use
-# tier labels for OpenFlow policy decisions (services tier = internet allowed)
+# Services tier (internet-allowed via OpenFlow)
+# All containers are on fts-internal (172.20.200.0/24) per podman-compose.yml
+# IPs MUST match compose file assignments
+attach_if_ready fts-web 172.20.200.20 services
 attach_if_ready fts-dnsxai 172.20.200.21 services
 attach_if_ready fts-dfs 172.20.200.22 services
+
+# Note: fts-qsecbit and fts-bubble-manager use host network (no attachment needed)
 
 # Optional tiers (mgmt tier = no internet, ml tier = no internet)
 attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
@@ -4121,12 +4179,20 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
     echo "[FTS] Network creation failed - compose will retry"; \\
   fi'
 
-# Start containers (--no-build prevents rebuild attempts - images built during install)
-ExecStart=${podman_compose_bin} -f podman-compose.yml up -d --no-build
-
-# WORKAROUND: podman-compose 1.x ignores profiles, so we stop AIOCHI-replaced containers
-# Only runs if INSTALL_AIOCHI=true in fortress.conf
-ExecStartPost=/bin/bash -c '[ "\${INSTALL_AIOCHI:-}" = "true" ] && for c in fts-grafana fts-victoria fts-n8n fts-clickhouse fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do podman stop -t 2 \$c 2>/dev/null; podman rm -f \$c 2>/dev/null; done || true'
+# Start containers - SMART STARTUP
+# AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
+# Standard mode: start all services
+#
+# Core services: postgres, redis, web, qsecbit, bubble-manager, dnsxai, dfs, cloudflared
+# Optional (AIOCHI replaces): grafana, victoria, n8n, clickhouse, suricata, zeek, xdp, lstm-trainer
+ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
+  CORE="fts-postgres fts-redis fts-web fts-qsecbit fts-bubble-manager fts-dnsxai fts-dfs fts-cloudflared" && \\
+  if [ "\${INSTALL_AIOCHI:-}" = "true" ]; then \\
+    echo "[FTS] AIOCHI mode - starting core services only" && \\
+    ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE; \\
+  else \\
+    ${podman_compose_bin} -f podman-compose.yml up -d --no-build; \\
+  fi'
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
 ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
@@ -4279,7 +4345,9 @@ SQLEOF
         chmod 644 /var/lib/hookprobe/ecosystem_bubbles.db
 
         # Presence sensor database
+        # Note: Must handle schema migrations for existing installations
         sqlite3 /var/lib/hookprobe/presence.db << 'SQLEOF'
+-- Create table if not exists (new installs)
 CREATE TABLE IF NOT EXISTS presence_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mac_address TEXT,
@@ -4290,6 +4358,20 @@ CREATE TABLE IF NOT EXISTS presence_events (
     confidence REAL,
     detected_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Schema migration: add ecosystem column if missing (upgrades from older versions)
+-- SQLite doesn't have "ADD COLUMN IF NOT EXISTS", so we check first
+PRAGMA table_info(presence_events);
+SQLEOF
+
+        # Check if ecosystem column exists and add if missing
+        if ! sqlite3 /var/lib/hookprobe/presence.db "PRAGMA table_info(presence_events);" | grep -q "ecosystem"; then
+            log_info "  Adding ecosystem column to presence_events (schema migration)..."
+            sqlite3 /var/lib/hookprobe/presence.db "ALTER TABLE presence_events ADD COLUMN ecosystem TEXT;" 2>/dev/null || true
+        fi
+
+        # Continue with remaining schema
+        sqlite3 /var/lib/hookprobe/presence.db << 'SQLEOF'
 CREATE TABLE IF NOT EXISTS mdns_services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mac_address TEXT,
