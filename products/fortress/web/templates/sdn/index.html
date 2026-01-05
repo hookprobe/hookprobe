@@ -695,7 +695,148 @@
         .device-row:active {
             background: rgba(255,255,255,0.1) !important;
         }
+        /* Bubble Manager Styles */
+        .bubble-card {
+            background: linear-gradient(135deg, rgba(0,217,255,0.08) 0%, rgba(0,0,0,0.2) 100%);
+            border: 1px solid rgba(0,217,255,0.2);
+            border-radius: 12px;
+            padding: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 100px;
+        }
+        .bubble-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,217,255,0.2);
+            border-color: rgba(0,217,255,0.4);
+        }
+        .bubble-card.family { border-left: 4px solid #4fc3f7; }
+        .bubble-card.guest { border-left: 4px solid #ffb74d; }
+        .bubble-card.corporate { border-left: 4px solid #ce93d8; }
+        .bubble-card.smart_home { border-left: 4px solid #81c784; }
+        .bubble-card.custom { border-left: 4px solid #90a4ae; }
+        .bubble-device {
+            display: inline-flex;
+            align-items: center;
+            background: rgba(255,255,255,0.1);
+            padding: 0.25rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            margin: 0.125rem;
+            cursor: grab;
+        }
+        .bubble-device:active { cursor: grabbing; }
+        .bubble-device.dragging { opacity: 0.5; }
+        .bubble-card.drag-over {
+            background: rgba(0,217,255,0.2);
+            border-style: dashed;
+        }
+        .bubble-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .bubble-name {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #fff;
+        }
+        .bubble-badge {
+            font-size: 0.65rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 10px;
+        }
+        .bubble-devices-list {
+            min-height: 40px;
+            padding: 0.25rem;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.2);
+        }
+        .bubble-empty {
+            text-align: center;
+            color: #666;
+            font-size: 0.75rem;
+            padding: 0.5rem;
+        }
+        .bubble-policies {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            margin-top: 0.5rem;
+        }
+        .policy-tag {
+            font-size: 0.6rem;
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+        }
+        .policy-tag.enabled { color: #81c784; }
+        .policy-tag.disabled { color: #e57373; }
+        .add-bubble-card {
+            background: rgba(255,255,255,0.03);
+            border: 2px dashed rgba(255,255,255,0.2);
+            border-radius: 12px;
+            min-height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .add-bubble-card:hover {
+            border-color: rgba(0,217,255,0.5);
+            background: rgba(0,217,255,0.05);
+        }
+        .unassigned-devices {
+            background: rgba(255,87,34,0.1);
+            border: 1px dashed rgba(255,87,34,0.3);
+            border-radius: 12px;
+            padding: 1rem;
+        }
         </style>
+
+        <!-- Bubble Manager (User Device Groups) -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card" style="background: #1a1a2e; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h3 class="card-title">
+                                <i class="fas fa-users mr-2" style="color: #4fc3f7;"></i>Device Bubbles
+                                <small class="text-muted ml-2" style="font-size: 0.7rem;">Drag devices to assign</small>
+                            </h3>
+                            <div>
+                                <button class="btn btn-sm btn-outline-info" onclick="BubbleManager.showSuggestions()">
+                                    <i class="fas fa-magic mr-1"></i>AI Suggestions
+                                </button>
+                                <button class="btn btn-sm btn-outline-success ml-1" onclick="BubbleManager.showCreateModal()">
+                                    <i class="fas fa-plus mr-1"></i>New Bubble
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body pt-0">
+                        <div class="row" id="bubbles-container">
+                            <!-- Bubbles will be loaded here -->
+                            <div class="col-12 text-center py-4 text-muted" id="bubbles-loading">
+                                <i class="fas fa-spinner fa-spin mr-2"></i>Loading bubbles...
+                            </div>
+                        </div>
+                        <!-- Unassigned Devices -->
+                        <div class="unassigned-devices mt-3" id="unassigned-container" style="display: none;">
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-question-circle mr-2 text-warning"></i>
+                                <strong style="font-size: 0.85rem;">Unassigned Devices</strong>
+                            </div>
+                            <div class="bubble-devices-list" id="unassigned-devices">
+                                <!-- Unassigned devices go here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Interface Traffic (Real-time) -->
         <div class="row">
@@ -750,6 +891,105 @@
 
 <!-- Device Detail Modal -->
 {% include 'sdn/partials/device_detail_modal.html' %}
+
+<!-- Create Bubble Modal -->
+<div class="modal fade" id="modal-create-bubble" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content" style="background: #1a1a2e; border: 1px solid rgba(255,255,255,0.1);">
+            <div class="modal-header" style="background: linear-gradient(135deg, rgba(0,217,255,0.2) 0%, rgba(0,0,0,0.2) 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-users mr-2" style="color: #4fc3f7;"></i>Create Device Bubble</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <form id="form-create-bubble">
+                <div class="modal-body">
+                    <!-- Quick Presets -->
+                    <div class="mb-3">
+                        <label class="d-block mb-2" style="font-size: 0.85rem; color: #888;">Quick Presets</label>
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-outline-info" onclick="BubbleManager.applyPreset('dad')">
+                                <i class="fas fa-user mr-1"></i>Dad
+                            </button>
+                            <button type="button" class="btn btn-outline-info" onclick="BubbleManager.applyPreset('mom')">
+                                <i class="fas fa-user mr-1"></i>Mom
+                            </button>
+                            <button type="button" class="btn btn-outline-info" onclick="BubbleManager.applyPreset('kids')">
+                                <i class="fas fa-child mr-1"></i>Kids
+                            </button>
+                            <button type="button" class="btn btn-outline-warning" onclick="BubbleManager.applyPreset('guest')">
+                                <i class="fas fa-user-friends mr-1"></i>Guest
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="BubbleManager.applyPreset('work')">
+                                <i class="fas fa-briefcase mr-1"></i>Work
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Bubble Name</label>
+                        <input type="text" name="name" id="bubble-name" class="form-control" placeholder="e.g., Dad, Mom, Kids" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Bubble Type</label>
+                        <select name="bubble_type" id="bubble-type" class="form-control">
+                            <option value="family">Family (Full Access)</option>
+                            <option value="guest">Guest (Internet Only)</option>
+                            <option value="corporate">Corporate (Isolated)</option>
+                            <option value="smart_home">Smart Home (IoT)</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Network Access</label>
+                        <div class="custom-control custom-switch mb-2">
+                            <input type="checkbox" class="custom-control-input" id="policy-internet" checked>
+                            <label class="custom-control-label" for="policy-internet">Internet Access</label>
+                        </div>
+                        <div class="custom-control custom-switch mb-2">
+                            <input type="checkbox" class="custom-control-input" id="policy-lan" checked>
+                            <label class="custom-control-label" for="policy-lan">LAN Access</label>
+                        </div>
+                        <div class="custom-control custom-switch mb-2">
+                            <input type="checkbox" class="custom-control-input" id="policy-smarthome" checked>
+                            <label class="custom-control-label" for="policy-smarthome">Smart Home Access</label>
+                        </div>
+                        <div class="custom-control custom-switch">
+                            <input type="checkbox" class="custom-control-input" id="policy-d2d" checked>
+                            <label class="custom-control-label" for="policy-d2d">Device-to-Device (D2D)</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.1);">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="fas fa-plus mr-1"></i>Create Bubble
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- AI Suggestions Modal -->
+<div class="modal fade" id="modal-suggestions" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" style="background: #1a1a2e; border: 1px solid rgba(255,255,255,0.1);">
+            <div class="modal-header" style="background: linear-gradient(135deg, rgba(156,39,176,0.2) 0%, rgba(0,0,0,0.2) 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-magic mr-2" style="color: #ce93d8;"></i>AI Device Grouping Suggestions</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body" id="suggestions-body">
+                <div class="text-center py-4 text-muted">
+                    <i class="fas fa-spinner fa-spin mr-2"></i>Analyzing device patterns...
+                </div>
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.1);">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 {% endblock %}
 
@@ -2296,5 +2536,423 @@ function saveLteSettings() {
         toastr.error('Failed to save LTE settings: ' + (xhr.responseJSON ? xhr.responseJSON.error : error));
     });
 }
+
+// =============================================================================
+// Bubble Manager Controller
+// =============================================================================
+var BubbleManager = {
+    bubbles: [],
+    devices: [],
+    draggedDevice: null,
+
+    init: function() {
+        this.loadBubbles();
+        this.setupDragDrop();
+        this.setupFormHandler();
+        this.setupTypeChangeHandler();
+    },
+
+    loadBubbles: function() {
+        var self = this;
+        $.get('/bubbles/api/list')
+            .done(function(data) {
+                self.bubbles = data.bubbles || [];
+                self.devices = data.devices || [];
+                self.renderBubbles();
+            })
+            .fail(function() {
+                $('#bubbles-loading').html('<span class="text-muted">Could not load bubbles</span>');
+            });
+    },
+
+    renderBubbles: function() {
+        var container = $('#bubbles-container');
+        container.empty();
+
+        if (this.bubbles.length === 0) {
+            container.html(`
+                <div class="col-12">
+                    <div class="text-center py-4">
+                        <i class="fas fa-users fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">No device bubbles yet</p>
+                        <button class="btn btn-sm btn-outline-success" onclick="BubbleManager.showCreateModal()">
+                            <i class="fas fa-plus mr-1"></i>Create First Bubble
+                        </button>
+                    </div>
+                </div>
+            `);
+        } else {
+            var assignedDevices = new Set();
+
+            this.bubbles.forEach(function(bubble) {
+                (bubble.devices || []).forEach(function(mac) {
+                    assignedDevices.add(mac.toUpperCase());
+                });
+
+                var devicesHtml = '';
+                if (bubble.devices && bubble.devices.length > 0) {
+                    bubble.devices.forEach(function(mac) {
+                        var device = BubbleManager.findDevice(mac);
+                        var name = device ? (device.name || device.hostname || mac) : mac;
+                        var icon = device ? BubbleManager.getDeviceIcon(device.device_type) : 'fa-laptop';
+                        devicesHtml += '<span class="bubble-device" draggable="true" data-mac="' + mac + '">' +
+                            '<i class="fas ' + icon + ' mr-1" style="font-size: 0.65rem;"></i>' + name + '</span>';
+                    });
+                } else {
+                    devicesHtml = '<div class="bubble-empty">Drop devices here</div>';
+                }
+
+                var policies = bubble.policies || {};
+                var policyTags = '';
+                if (policies.internet_access) policyTags += '<span class="policy-tag enabled"><i class="fas fa-globe"></i></span>';
+                if (policies.lan_access) policyTags += '<span class="policy-tag enabled"><i class="fas fa-network-wired"></i></span>';
+                if (policies.smart_home_access) policyTags += '<span class="policy-tag enabled"><i class="fas fa-home"></i></span>';
+                if (policies.d2d_allowed) policyTags += '<span class="policy-tag enabled"><i class="fas fa-exchange-alt"></i></span>';
+
+                var pinnedBadge = bubble.pinned ? '<i class="fas fa-thumbtack text-warning ml-1" title="Pinned"></i>' : '';
+
+                container.append(`
+                    <div class="col-md-4 col-lg-3 mb-3">
+                        <div class="bubble-card ${bubble.bubble_type}" data-bubble-id="${bubble.bubble_id}">
+                            <div class="bubble-header">
+                                <span class="bubble-name">${bubble.name || bubble.owner_hint || 'Unnamed'}${pinnedBadge}</span>
+                                <span class="badge bubble-badge badge-${BubbleManager.getTypeBadgeClass(bubble.bubble_type)}">${bubble.bubble_type}</span>
+                            </div>
+                            <div class="bubble-devices-list" data-bubble-id="${bubble.bubble_id}">
+                                ${devicesHtml}
+                            </div>
+                            <div class="bubble-policies">${policyTags}</div>
+                            <div class="mt-2 d-flex justify-content-end">
+                                <button class="btn btn-xs btn-outline-secondary mr-1" onclick="BubbleManager.togglePin('${bubble.bubble_id}', ${!bubble.pinned})" title="${bubble.pinned ? 'Unpin' : 'Pin'}">
+                                    <i class="fas fa-thumbtack"></i>
+                                </button>
+                                <button class="btn btn-xs btn-outline-danger" onclick="BubbleManager.deleteBubble('${bubble.bubble_id}')" title="Delete">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `);
+            });
+
+            // Add "New Bubble" card
+            container.append(`
+                <div class="col-md-4 col-lg-3 mb-3">
+                    <div class="add-bubble-card" onclick="BubbleManager.showCreateModal()">
+                        <div class="text-center text-muted">
+                            <i class="fas fa-plus-circle fa-2x mb-2"></i>
+                            <div style="font-size: 0.85rem;">Add Bubble</div>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            // Show unassigned devices
+            var unassignedHtml = '';
+            this.devices.forEach(function(device) {
+                if (!assignedDevices.has(device.mac.toUpperCase())) {
+                    var icon = BubbleManager.getDeviceIcon(device.device_type);
+                    var name = device.name || device.hostname || device.mac;
+                    unassignedHtml += '<span class="bubble-device" draggable="true" data-mac="' + device.mac + '">' +
+                        '<i class="fas ' + icon + ' mr-1" style="font-size: 0.65rem;"></i>' + name + '</span>';
+                }
+            });
+
+            if (unassignedHtml) {
+                $('#unassigned-container').show();
+                $('#unassigned-devices').html(unassignedHtml);
+            } else {
+                $('#unassigned-container').hide();
+            }
+        }
+
+        this.setupDragDrop();
+    },
+
+    findDevice: function(mac) {
+        mac = mac.toUpperCase();
+        return this.devices.find(function(d) { return d.mac.toUpperCase() === mac; });
+    },
+
+    getDeviceIcon: function(deviceType) {
+        var icons = {
+            'phone': 'fa-mobile-alt',
+            'tablet': 'fa-tablet-alt',
+            'laptop': 'fa-laptop',
+            'desktop': 'fa-desktop',
+            'tv': 'fa-tv',
+            'speaker': 'fa-volume-up',
+            'camera': 'fa-video',
+            'iot': 'fa-microchip',
+            'printer': 'fa-print',
+            'router': 'fa-wifi'
+        };
+        return icons[deviceType] || 'fa-laptop';
+    },
+
+    getTypeBadgeClass: function(bubbleType) {
+        var classes = {
+            'family': 'info',
+            'guest': 'warning',
+            'corporate': 'secondary',
+            'smart_home': 'success',
+            'custom': 'light'
+        };
+        return classes[bubbleType] || 'secondary';
+    },
+
+    setupDragDrop: function() {
+        var self = this;
+
+        // Make devices draggable
+        $('.bubble-device').off('dragstart dragend').on('dragstart', function(e) {
+            self.draggedDevice = $(this).data('mac');
+            $(this).addClass('dragging');
+            e.originalEvent.dataTransfer.setData('text/plain', self.draggedDevice);
+        }).on('dragend', function() {
+            $(this).removeClass('dragging');
+            self.draggedDevice = null;
+        });
+
+        // Make bubble cards drop targets
+        $('.bubble-devices-list').off('dragover dragenter dragleave drop')
+            .on('dragover', function(e) {
+                e.preventDefault();
+            })
+            .on('dragenter', function(e) {
+                e.preventDefault();
+                $(this).closest('.bubble-card').addClass('drag-over');
+            })
+            .on('dragleave', function(e) {
+                $(this).closest('.bubble-card').removeClass('drag-over');
+            })
+            .on('drop', function(e) {
+                e.preventDefault();
+                $(this).closest('.bubble-card').removeClass('drag-over');
+                var bubbleId = $(this).data('bubble-id');
+                var mac = e.originalEvent.dataTransfer.getData('text/plain');
+                if (bubbleId && mac) {
+                    self.moveDevice(mac, bubbleId);
+                }
+            });
+    },
+
+    moveDevice: function(mac, bubbleId) {
+        var self = this;
+        $.ajax({
+            url: '/bubbles/api/move-device',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac: mac, target_bubble_id: bubbleId }),
+            success: function(data) {
+                if (data.success) {
+                    toastr.success('Device moved successfully');
+                    self.loadBubbles();
+                } else {
+                    toastr.error(data.error || 'Failed to move device');
+                }
+            },
+            error: function() {
+                toastr.error('Failed to move device');
+            }
+        });
+    },
+
+    showCreateModal: function() {
+        $('#bubble-name').val('');
+        $('#bubble-type').val('family');
+        this.updatePolicyCheckboxes('family');
+        $('#modal-create-bubble').modal('show');
+    },
+
+    applyPreset: function(preset) {
+        var presets = {
+            'dad': { name: 'Dad', type: 'family' },
+            'mom': { name: 'Mom', type: 'family' },
+            'kids': { name: 'Kids', type: 'family' },
+            'guest': { name: 'Guest', type: 'guest' },
+            'work': { name: 'Work', type: 'corporate' }
+        };
+        var p = presets[preset];
+        if (p) {
+            $('#bubble-name').val(p.name);
+            $('#bubble-type').val(p.type);
+            this.updatePolicyCheckboxes(p.type);
+        }
+    },
+
+    updatePolicyCheckboxes: function(bubbleType) {
+        var policies = {
+            'family': { internet: true, lan: true, smarthome: true, d2d: true },
+            'guest': { internet: true, lan: false, smarthome: false, d2d: false },
+            'corporate': { internet: true, lan: false, smarthome: false, d2d: false },
+            'smart_home': { internet: true, lan: true, smarthome: true, d2d: true },
+            'custom': { internet: true, lan: false, smarthome: false, d2d: false }
+        };
+        var p = policies[bubbleType] || policies.custom;
+        $('#policy-internet').prop('checked', p.internet);
+        $('#policy-lan').prop('checked', p.lan);
+        $('#policy-smarthome').prop('checked', p.smarthome);
+        $('#policy-d2d').prop('checked', p.d2d);
+    },
+
+    setupTypeChangeHandler: function() {
+        var self = this;
+        $('#bubble-type').on('change', function() {
+            self.updatePolicyCheckboxes($(this).val());
+        });
+    },
+
+    setupFormHandler: function() {
+        var self = this;
+        $('#form-create-bubble').on('submit', function(e) {
+            e.preventDefault();
+            var data = {
+                name: $('#bubble-name').val(),
+                bubble_type: $('#bubble-type').val(),
+                policies: {
+                    internet_access: $('#policy-internet').is(':checked'),
+                    lan_access: $('#policy-lan').is(':checked'),
+                    smart_home_access: $('#policy-smarthome').is(':checked'),
+                    d2d_allowed: $('#policy-d2d').is(':checked')
+                }
+            };
+
+            $.ajax({
+                url: '/bubbles/api/create',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(data),
+                success: function(resp) {
+                    if (resp.success) {
+                        toastr.success('Bubble created: ' + data.name);
+                        $('#modal-create-bubble').modal('hide');
+                        self.loadBubbles();
+                    } else {
+                        toastr.error(resp.error || 'Failed to create bubble');
+                    }
+                },
+                error: function() {
+                    toastr.error('Failed to create bubble');
+                }
+            });
+        });
+    },
+
+    togglePin: function(bubbleId, pinned) {
+        var self = this;
+        $.ajax({
+            url: '/bubbles/api/' + bubbleId + '/pin',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ pinned: pinned }),
+            success: function(data) {
+                if (data.success) {
+                    toastr.success(pinned ? 'Bubble pinned' : 'Bubble unpinned');
+                    self.loadBubbles();
+                } else {
+                    toastr.error(data.error || 'Failed to update pin status');
+                }
+            },
+            error: function() {
+                toastr.error('Failed to update pin status');
+            }
+        });
+    },
+
+    deleteBubble: function(bubbleId) {
+        if (!confirm('Delete this bubble? Devices will become unassigned.')) return;
+        var self = this;
+        $.ajax({
+            url: '/bubbles/api/' + bubbleId,
+            method: 'DELETE',
+            success: function(data) {
+                if (data.success) {
+                    toastr.success('Bubble deleted');
+                    self.loadBubbles();
+                } else {
+                    toastr.error(data.error || 'Failed to delete bubble');
+                }
+            },
+            error: function() {
+                toastr.error('Failed to delete bubble');
+            }
+        });
+    },
+
+    showSuggestions: function() {
+        $('#modal-suggestions').modal('show');
+        $('#suggestions-body').html('<div class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin mr-2"></i>Analyzing device patterns...</div>');
+
+        $.get('/bubbles/api/suggestions')
+            .done(function(data) {
+                if (data.suggestions && data.suggestions.length > 0) {
+                    var html = '';
+                    data.suggestions.forEach(function(s, idx) {
+                        html += '<div class="card mb-2" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);">' +
+                            '<div class="card-body p-3">' +
+                            '<div class="d-flex justify-content-between align-items-center mb-2">' +
+                            '<span class="badge badge-' + (s.type === 'cluster' ? 'info' : 'secondary') + '">' + s.type + '</span>' +
+                            '<span class="text-muted" style="font-size: 0.75rem;">Affinity: ' + (s.affinity_score * 100).toFixed(0) + '%</span>' +
+                            '</div>' +
+                            '<p style="font-size: 0.85rem;">' + s.reason + '</p>' +
+                            '<div class="mb-2">';
+                        s.devices.forEach(function(mac) {
+                            html += '<span class="badge badge-light mr-1">' + mac + '</span>';
+                        });
+                        html += '</div>' +
+                            '<button class="btn btn-sm btn-success" onclick="BubbleManager.createFromSuggestion(' + idx + ')">Create Bubble</button>' +
+                            '</div></div>';
+                    });
+                    $('#suggestions-body').html(html);
+                    BubbleManager.currentSuggestions = data.suggestions;
+                } else {
+                    $('#suggestions-body').html('<div class="text-center py-4 text-muted"><i class="fas fa-check-circle mr-2"></i>No suggestions - devices are well organized!</div>');
+                }
+            })
+            .fail(function() {
+                $('#suggestions-body').html('<div class="text-center py-4 text-danger">Failed to load suggestions</div>');
+            });
+    },
+
+    currentSuggestions: [],
+
+    createFromSuggestion: function(idx) {
+        var s = this.currentSuggestions[idx];
+        if (!s) return;
+
+        var name = prompt('Enter a name for this bubble:', 'Family ' + (this.bubbles.length + 1));
+        if (!name) return;
+
+        var self = this;
+        $.ajax({
+            url: '/bubbles/api/create',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                name: name,
+                bubble_type: s.suggested_bubble_type || 'family',
+                devices: s.devices
+            }),
+            success: function(resp) {
+                if (resp.success) {
+                    toastr.success('Bubble created from suggestion');
+                    $('#modal-suggestions').modal('hide');
+                    self.loadBubbles();
+                } else {
+                    toastr.error(resp.error || 'Failed to create bubble');
+                }
+            },
+            error: function() {
+                toastr.error('Failed to create bubble');
+            }
+        });
+    }
+};
+
+// Initialize Bubble Manager on page load
+$(document).ready(function() {
+    BubbleManager.init();
+});
 </script>
 {% endblock %}
