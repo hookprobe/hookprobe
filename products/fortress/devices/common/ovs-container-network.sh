@@ -680,31 +680,22 @@ setup_nat() {
     iptables -C FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD ! -i "$OVS_BRIDGE" -o "$OVS_BRIDGE" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-    # DNAT rules for LAN access to container services
-    # Web UI: LAN clients (10.200.0.0/xx) -> web container (172.20.200.20:8443)
-    # In VLAN mode, traffic arrives on vlan100, not FTS bridge
+    # NOTE: Web UI DNAT is NOT needed - podman's port forward handles it
+    # Podman listens on 0.0.0.0:8443 and proxies to the container.
+    # DNAT would intercept packets before reaching the local socket, breaking access.
+    # Only use DNAT if you have direct routing to the container network (rare).
     local web_port="${WEB_PORT:-8443}"
-    local web_ip="${CONTAINER_IPS[web]}"
-    local lan_iface="vlan100"  # VLAN mode uses vlan100 for LAN traffic
+    log_info "Web UI accessible via podman port forward on port $web_port"
 
-    # DNAT for vlan100 (VLAN mode - primary)
-    iptables -t nat -C PREROUTING -i "$lan_iface" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i "$lan_iface" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}"
-
-    # DNAT for OVS bridge (legacy mode fallback)
-    iptables -t nat -C PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$web_port" -j DNAT --to-destination "${web_ip}:${web_port}"
-
-    # Allow forwarding to container network for DNAT'd traffic
-    # All containers are on 172.20.200.0/24 as defined in podman-compose.yml
-    iptables -C FORWARD -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
-        iptables -A FORWARD -d 172.20.200.0/24 -j ACCEPT
+    # Allow forwarding to container network (for containers that need LAN access)
+    # This is still useful for container-to-LAN communication paths
+    iptables -C FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$OVS_BRIDGE" -d 172.20.200.0/24 -j ACCEPT
 
     iptables -C FORWARD -s 172.20.200.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -s 172.20.200.0/24 -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     log_info "NAT configured for LAN (${lan_cidr}) and Containers (172.20.200.0/24)"
-    log_info "DNAT configured for web UI access on port $web_port → ${web_ip}"
 }
 
 # ============================================================
