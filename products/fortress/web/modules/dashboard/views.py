@@ -28,6 +28,7 @@ try:
     from device_policies import (
         get_all_devices as get_all_devices_from_db,
         get_device_stats,
+        set_device_policy,
         NetworkPolicy,
         POLICY_INFO,
     )
@@ -36,9 +37,12 @@ try:
 except ImportError as e:
     logger.warning(f"Dashboard: device_policies module not available: {e}")
 
-    # Stub function for when module not available
+    # Stub functions for when module not available
     def get_all_devices_from_db():
         return []
+
+    def set_device_policy(mac, policy):
+        return None
 
 # Import ecosystem bubble manager for same-user device grouping
 ECOSYSTEM_BUBBLE_AVAILABLE = False
@@ -917,7 +921,12 @@ def api_topology():
 @dashboard_bp.route('/api/dashboard/device/<mac>/policy', methods=['PATCH'])
 @login_required
 def api_update_device_policy(mac):
-    """Update device policy via drag-and-drop."""
+    """Update device policy via drag-and-drop.
+
+    Uses the device_policies module which:
+    1. Updates the SQLite database (/var/lib/hookprobe/devices.db)
+    2. Applies OpenFlow rules for actual network enforcement
+    """
     from flask import request
 
     data = request.get_json()
@@ -930,37 +939,30 @@ def api_update_device_policy(mac):
     if new_policy not in valid_policies:
         return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
 
-    # Update in autopilot database
-    autopilot_db = Path('/var/lib/hookprobe/autopilot.db')
-    try:
-        if autopilot_db.exists():
-            import sqlite3
-            conn = sqlite3.connect(str(autopilot_db), timeout=5)
-            cursor = conn.cursor()
-
+    # Use device_policies module (same as SDN module) for consistent policy updates
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
             # Normalize MAC address
-            mac_normalized = mac.lower().replace('-', ':')
+            mac_normalized = mac.upper().replace('-', ':')
 
-            cursor.execute("""
-                UPDATE device_identity SET policy = ?, manual_override = 1, updated_at = datetime('now')
-                WHERE LOWER(mac) = ?
-            """, (new_policy, mac_normalized))
+            # Update policy and apply OpenFlow rules
+            result = set_device_policy(mac_normalized, new_policy)
 
-            if cursor.rowcount == 0:
-                conn.close()
+            if result:
+                # Clear cache to reflect change
+                _local_cache.clear()
+
+                return jsonify({
+                    'success': True,
+                    'message': f'Policy updated to {new_policy}',
+                    'device': result
+                })
+            else:
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Failed to update device policy: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
 
-            conn.commit()
-            conn.close()
-
-            # Clear cache to reflect change
-            _local_cache.clear()
-
-            # TODO: Trigger OpenFlow rule update via network-filter-manager.sh
-
-            return jsonify({'success': True, 'message': f'Policy updated to {new_policy}'})
-    except Exception as e:
-        logger.error(f"Failed to update device policy: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-    return jsonify({'success': False, 'error': 'Database not available'}), 500
+    return jsonify({'success': False, 'error': 'Device policies module not available'}), 500
