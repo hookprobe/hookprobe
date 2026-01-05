@@ -17,7 +17,7 @@
 FROM python:3.11-slim-bookworm AS builder
 
 # Build dependencies for scikit-learn
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     && rm -rf /var/lib/apt/lists/*
@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir \
 FROM python:3.11-slim-bookworm
 
 # Install OVS tools for OpenFlow rule management
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     openvswitch-switch \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin bubble

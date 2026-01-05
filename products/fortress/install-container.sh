@@ -3423,19 +3423,21 @@ AIOCHIENV
             chmod 600 "${aiochi_dir}/.env"
 
             # Build AIOCHI containers (identity-engine, log-shipper)
+            # Build from parent directory (shared/aiochi/) to access backend/ folder
             log_info "  Building AIOCHI containers..."
-            cd "$aiochi_dir"
+            local aiochi_parent="/opt/hookprobe/shared/aiochi"
+            cd "$aiochi_parent"
 
             # Build custom containers (with visible output)
-            if [ -f "Containerfile.identity" ]; then
+            if [ -f "containers/Containerfile.identity" ]; then
                 log_info "    Building identity-engine..."
-                if ! podman build -t localhost/aiochi-identity:latest -f Containerfile.identity . 2>&1 | tail -5; then
+                if ! podman build -t localhost/aiochi-identity:latest -f containers/Containerfile.identity . 2>&1 | tail -5; then
                     log_warn "Failed to build identity-engine (will use fallback)"
                 fi
             fi
-            if [ -f "Containerfile.logshipper" ]; then
+            if [ -f "containers/Containerfile.logshipper" ]; then
                 log_info "    Building log-shipper..."
-                if ! podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper . 2>&1 | tail -5; then
+                if ! podman build -t localhost/aiochi-logshipper:latest -f containers/Containerfile.logshipper . 2>&1 | tail -5; then
                     log_warn "Failed to build log-shipper (will use fallback)"
                 fi
             fi
