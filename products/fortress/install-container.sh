@@ -3492,22 +3492,29 @@ AIOCHIENV
             # Build from parent directory (shared/aiochi/) to access backend/ folder
             log_info "  Building AIOCHI containers..."
             local aiochi_parent="/opt/hookprobe/shared/aiochi"
-            cd "$aiochi_parent"
+            local aiochi_containers="${aiochi_parent}/containers"
 
             # Verify required files exist before building
             log_info "    Verifying AIOCHI build context..."
-            if [ ! -d "backend" ]; then
+            if [ ! -d "${aiochi_parent}/backend" ]; then
                 log_warn "    backend/ directory missing - AIOCHI custom containers will not be built"
-            elif [ ! -f "backend/__init__.py" ]; then
+            elif [ ! -f "${aiochi_parent}/backend/__init__.py" ]; then
                 log_warn "    backend/__init__.py missing - AIOCHI custom containers will not be built"
             else
                 # Build custom containers with proper error handling
-                if [ -f "containers/Containerfile.identity" ]; then
+                # Use absolute paths and match proven syntax: podman build -f FILE -t TAG CONTEXT
+                local containerfile_identity="${aiochi_containers}/Containerfile.identity"
+                local containerfile_logshipper="${aiochi_containers}/Containerfile.logshipper"
+
+                if [ -f "$containerfile_identity" ]; then
                     log_info "    Building identity-engine..."
                     # Verify Containerfile has valid FROM statement
-                    if head -20 "containers/Containerfile.identity" | grep -q "^FROM "; then
-                        if podman build -t localhost/aiochi-identity:latest \
-                            -f containers/Containerfile.identity . 2>&1; then
+                    if head -20 "$containerfile_identity" | grep -q "^FROM "; then
+                        # Build with explicit format and absolute paths
+                        if podman build --format docker \
+                            -f "$containerfile_identity" \
+                            -t localhost/aiochi-identity:latest \
+                            "$aiochi_parent" 2>&1; then
                             log_info "    ✓ identity-engine built successfully"
                         else
                             log_warn "    ✗ Failed to build identity-engine (will use fallback)"
@@ -3517,11 +3524,14 @@ AIOCHIENV
                     fi
                 fi
 
-                if [ -f "containers/Containerfile.logshipper" ]; then
+                if [ -f "$containerfile_logshipper" ]; then
                     log_info "    Building log-shipper..."
-                    if head -20 "containers/Containerfile.logshipper" | grep -q "^FROM "; then
-                        if podman build -t localhost/aiochi-logshipper:latest \
-                            -f containers/Containerfile.logshipper . 2>&1; then
+                    if head -20 "$containerfile_logshipper" | grep -q "^FROM "; then
+                        # Build with explicit format and absolute paths
+                        if podman build --format docker \
+                            -f "$containerfile_logshipper" \
+                            -t localhost/aiochi-logshipper:latest \
+                            "$aiochi_parent" 2>&1; then
                             log_info "    ✓ log-shipper built successfully"
                         else
                             log_warn "    ✗ Failed to build log-shipper (will use fallback)"
