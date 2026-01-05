@@ -1114,24 +1114,57 @@ attach_container_to_ovs() {
         return 1
     }
 
-    # Clean up any existing veth
+    # Verify PID is valid and not 0 (container may be restarting)
+    if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+        log_warn "Container $container_name has invalid PID ($pid) - skipping attachment"
+        return 1
+    fi
+
+    # Verify container's network namespace exists
+    if [ ! -d "/proc/$pid/ns" ]; then
+        log_warn "Container $container_name namespace not accessible - skipping attachment"
+        return 1
+    fi
+
+    # Check if container already has eth-ovs interface (already attached)
+    if nsenter -t "$pid" -n ip link show "$veth_cont" &>/dev/null; then
+        log_info "Container $container_name already has $veth_cont interface - skipping"
+        return 0
+    fi
+
+    # Clean up any existing veth on host side
     ip link del "$veth_host" 2>/dev/null || true
     ovs-vsctl del-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null || true
 
-    # Create veth pair
-    ip link add "$veth_host" type veth peer name "$veth_cont"
+    # Create veth pair with error handling
+    if ! ip link add "$veth_host" type veth peer name "$veth_cont" 2>/dev/null; then
+        log_warn "Failed to create veth pair for $container_name - skipping"
+        return 1
+    fi
 
     # Add host end to OVS bridge (for traffic monitoring/mirroring)
-    ovs-vsctl add-port "$OVS_BRIDGE" "$veth_host"
+    if ! ovs-vsctl add-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null; then
+        log_warn "Failed to add $veth_host to OVS - cleaning up"
+        ip link del "$veth_host" 2>/dev/null || true
+        return 1
+    fi
     ip link set "$veth_host" up
 
     # Move container end to container namespace
-    ip link set "$veth_cont" netns "$pid"
+    # This is the critical operation - if it fails, clean up
+    if ! ip link set "$veth_cont" netns "$pid" 2>/dev/null; then
+        log_warn "Failed to move $veth_cont to container namespace - cleaning up"
+        ovs-vsctl del-port "$OVS_BRIDGE" "$veth_host" 2>/dev/null || true
+        ip link del "$veth_host" 2>/dev/null || true
+        return 1
+    fi
 
     # Bring up container end - NO IP ASSIGNMENT
     # Container already has eth0 with IP from podman network
     # This veth is for OVS traffic mirroring only, not routing
-    nsenter -t "$pid" -n ip link set "$veth_cont" up
+    nsenter -t "$pid" -n ip link set "$veth_cont" up 2>/dev/null || {
+        log_warn "Failed to bring up $veth_cont inside container - OVS may have partial attachment"
+    }
 
     # DO NOT assign IP or route - container uses eth0 for all traffic
     # The eth-ovs interface is just for OVS visibility/mirroring
