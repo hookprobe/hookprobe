@@ -63,6 +63,8 @@ class EcosystemType(Enum):
     GOOGLE = "google"
     AMAZON = "amazon"
     SAMSUNG = "samsung"
+    XIAOMI = "xiaomi"
+    HUAWEI = "huawei"
     MICROSOFT = "microsoft"
     UNKNOWN = "unknown"
 
@@ -101,6 +103,54 @@ AMAZON_MDNS_SERVICES = [
     "_amzn-alexa._tcp",        # Alexa
     "_amzn-wplay._tcp",        # Amazon Whole Home Audio
 ]
+
+# Samsung ecosystem services
+SAMSUNG_MDNS_SERVICES = [
+    "_samsung-smartcam._tcp",   # Samsung SmartCam
+    "_samsungtvrc._tcp",        # Samsung TV Remote Control
+    "_samsung-tv._tcp",         # Samsung Smart TV
+    "_smartthings._tcp",        # SmartThings Hub
+]
+
+# Xiaomi ecosystem services
+XIAOMI_MDNS_SERVICES = [
+    "_miio._udp",               # Xiaomi Mi Home protocol
+    "_mi-connect._tcp",         # Mi Connect (device pairing)
+    "_xiaomi-gateway._tcp",     # Xiaomi Gateway
+]
+
+# Huawei ecosystem services
+HUAWEI_MDNS_SERVICES = [
+    "_huawei-hilink._tcp",      # Huawei HiLink
+    "_hw-share._tcp",           # Huawei Share
+    "_hisuite._tcp",            # HiSuite connection
+]
+
+# BLE Manufacturer IDs (Bluetooth SIG assigned)
+BLE_MANUFACTURER_IDS = {
+    0x004C: 'apple',           # Apple Inc.
+    0x00E0: 'google',          # Google LLC
+    0x0075: 'samsung',         # Samsung Electronics
+    0x0157: 'xiaomi',          # Xiaomi Communications
+    0x007D: 'huawei',          # Huawei Technologies
+    0x0006: 'microsoft',       # Microsoft
+    0x0131: 'amazon',          # Amazon.com Services
+}
+
+# BLE Service UUIDs for ecosystem detection
+BLE_SERVICE_UUIDS = {
+    # Samsung
+    'FE07': 'samsung_smartthings',
+    'FE11': 'samsung_galaxy_buds',
+    'FE12': 'samsung_gear',
+    # Xiaomi
+    'FE95': 'xiaomi_mi_home',
+    'FE9F': 'xiaomi_band',
+    # Huawei
+    'FE86': 'huawei_hilink',
+    'FE87': 'huawei_watch',
+    'FDA4': 'huawei_share',
+}
 
 
 # =============================================================================
@@ -478,23 +528,38 @@ class PresenceSensor:
                 await asyncio.sleep(30)
 
     def _process_ble_device(self, device):
-        """Process a discovered BLE device."""
+        """Process a discovered BLE device for cross-ecosystem detection."""
         with self._lock:
             try:
                 # BLE uses different addressing - we need to correlate
-                # For Apple devices, look for Continuity packets
+                if not device.metadata:
+                    return
 
-                if device.metadata:
-                    manufacturer_data = device.metadata.get('manufacturer_data', {})
+                manufacturer_data = device.metadata.get('manufacturer_data', {})
+                service_uuids = device.metadata.get('uuids', [])
 
-                    # Apple's Company ID is 0x004C
-                    if 0x004C in manufacturer_data:
-                        apple_data = manufacturer_data[0x004C]
-                        self._process_apple_ble(device, apple_data)
+                # Process by manufacturer ID
+                for mfr_id, ecosystem in BLE_MANUFACTURER_IDS.items():
+                    if mfr_id in manufacturer_data:
+                        data = manufacturer_data[mfr_id]
 
-                    # Google's Company ID is 0x00E0
-                    if 0x00E0 in manufacturer_data:
-                        self._process_google_ble(device, manufacturer_data[0x00E0])
+                        if ecosystem == 'apple':
+                            self._process_apple_ble(device, data)
+                        elif ecosystem == 'google':
+                            self._process_google_ble(device, data)
+                        elif ecosystem == 'samsung':
+                            self._process_samsung_ble(device, data)
+                        elif ecosystem == 'xiaomi':
+                            self._process_xiaomi_ble(device, data)
+                        elif ecosystem == 'huawei':
+                            self._process_huawei_ble(device, data)
+
+                # Also check service UUIDs
+                for uuid in service_uuids:
+                    uuid_short = uuid.upper()[-4:]  # Get short UUID
+                    if uuid_short in BLE_SERVICE_UUIDS:
+                        service_type = BLE_SERVICE_UUIDS[uuid_short]
+                        self._record_ble_service_event(device, service_type)
 
             except Exception as e:
                 logger.debug(f"Error processing BLE device: {e}")
@@ -527,10 +592,86 @@ class PresenceSensor:
 
     def _process_google_ble(self, device, data: bytes):
         """Process Google-specific BLE advertisement."""
-        # Google Fast Pair, Chromecast discovery, etc.
-        pass
+        # Google Fast Pair uses specific data patterns
+        if len(data) >= 3:
+            # Fast Pair model ID is in first 3 bytes
+            logger.debug(f"Google BLE device: {device.name}")
+            self._record_ecosystem_event(device, EcosystemType.GOOGLE, 'ble_presence')
 
-    def _record_handoff_event(self, ble_device):
+    def _process_samsung_ble(self, device, data: bytes):
+        """Process Samsung-specific BLE advertisement."""
+        # Samsung SmartThings and Galaxy devices
+        if len(data) >= 2:
+            logger.debug(f"Samsung BLE device: {device.name}")
+            self._record_ecosystem_event(device, EcosystemType.SAMSUNG, 'ble_presence')
+
+            # Galaxy Buds connection events indicate same-user
+            if len(data) >= 4 and data[0] == 0x42:  # Buds connection marker
+                self._record_handoff_event(device, ecosystem='samsung')
+
+    def _process_xiaomi_ble(self, device, data: bytes):
+        """Process Xiaomi-specific BLE advertisement."""
+        # Xiaomi Mi Home devices have specific packet structure
+        if len(data) >= 5:
+            logger.debug(f"Xiaomi BLE device: {device.name}")
+            self._record_ecosystem_event(device, EcosystemType.XIAOMI, 'ble_presence')
+
+            # Mi Band sync events (frame type 0x05)
+            if data[0] == 0x05:
+                self._record_sync_event(device, ecosystem='xiaomi')
+
+    def _process_huawei_ble(self, device, data: bytes):
+        """Process Huawei-specific BLE advertisement."""
+        # Huawei HiLink and Watch devices
+        if len(data) >= 4:
+            logger.debug(f"Huawei BLE device: {device.name}")
+            self._record_ecosystem_event(device, EcosystemType.HUAWEI, 'ble_presence')
+
+            # Huawei Share proximity event
+            if len(data) >= 6 and data[0] == 0x01:
+                self._record_handoff_event(device, ecosystem='huawei')
+
+    def _record_ecosystem_event(self, ble_device, ecosystem: EcosystemType, event_type: str):
+        """Record an ecosystem detection event for correlation."""
+        self._record_event(PresenceEvent(
+            mac='BLE:' + ble_device.address,
+            event_type=event_type,
+            timestamp=datetime.now().isoformat(),
+            details={
+                'name': ble_device.name,
+                'rssi': ble_device.rssi,
+                'ecosystem': ecosystem.value
+            }
+        ))
+
+    def _record_sync_event(self, ble_device, ecosystem: str):
+        """Record a sync event (band/watch syncing with phone)."""
+        self._record_event(PresenceEvent(
+            mac='BLE:' + ble_device.address,
+            event_type='sync',
+            timestamp=datetime.now().isoformat(),
+            details={
+                'name': ble_device.name,
+                'rssi': ble_device.rssi,
+                'ecosystem': ecosystem,
+                'sync_type': 'wearable'
+            }
+        ))
+
+    def _record_ble_service_event(self, ble_device, service_type: str):
+        """Record a BLE service UUID detection event."""
+        self._record_event(PresenceEvent(
+            mac='BLE:' + ble_device.address,
+            event_type='ble_service',
+            timestamp=datetime.now().isoformat(),
+            details={
+                'name': ble_device.name,
+                'rssi': ble_device.rssi,
+                'service': service_type
+            }
+        ))
+
+    def _record_handoff_event(self, ble_device, ecosystem: str = 'apple'):
         """Record a handoff event for correlation."""
         self._record_event(PresenceEvent(
             mac='BLE:' + ble_device.address,
