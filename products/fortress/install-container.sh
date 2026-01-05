@@ -3664,6 +3664,9 @@ AIOCHIENV
                 --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data
 
             # 2. Capture Tier
+            # IMPORTANT: Capture from FTS-mirror (OVS mirror port), NOT FTS directly!
+            # Direct AF_PACKET capture on OVS bridge causes packet loss and CPU starvation.
+            # See: devices/common/ovs-post-setup.sh (setup_traffic_mirror function)
             start_aiochi_container "aiochi-suricata" "Suricata IDS (host network)" \
                 --name aiochi-suricata \
                 --restart unless-stopped \
@@ -3671,7 +3674,7 @@ AIOCHIENV
                 --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
                 -v aiochi-suricata-logs:/var/log/suricata \
                 docker.io/jasonish/suricata:7.0.8 \
-                -i FTS --af-packet
+                -i FTS-mirror --af-packet
 
             start_aiochi_container "aiochi-zeek" "Zeek NSM (host network)" \
                 --name aiochi-zeek \
@@ -3680,7 +3683,7 @@ AIOCHIENV
                 --cap-add NET_ADMIN --cap-add NET_RAW \
                 -v aiochi-zeek-logs:/opt/zeek/logs \
                 docker.io/zeek/zeek:7.0.3 \
-                zeek -i FTS local LogAscii::use_json=T
+                zeek -i FTS-mirror local LogAscii::use_json=T
 
             # 3. Visualization Tier
             start_aiochi_container "aiochi-grafana" "Grafana (dashboards)" \
