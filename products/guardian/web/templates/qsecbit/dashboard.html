@@ -271,8 +271,8 @@
             <circle class="ring-progress green" id="progress" cx="130" cy="130" r="120"/>
         </svg>
         <div class="score-inner">
-            <div class="score-value green" id="score">0.00</div>
-            <div class="score-unit">Qsecbit 5.0</div>
+            <div class="score-value green" id="score">100</div>
+            <div class="score-unit">Protection Level</div>
         </div>
     </div>
 
@@ -339,6 +339,11 @@
 
         const $ = id => document.getElementById(id);
 
+        // Protection = inverted risk (higher = safer)
+        function getProtection(score) {
+            return Math.round((1 - score) * 100);
+        }
+
         function getClass(score) {
             if (score >= 0.70) return 'red';
             if (score >= 0.45) return 'amber';
@@ -346,21 +351,22 @@
         }
 
         function getText(score) {
-            if (score >= 0.70) return 'THREAT DETECTED';
-            if (score >= 0.45) return 'ELEVATED RISK';
+            if (score >= 0.70) return 'UNDER ATTACK';
+            if (score >= 0.45) return 'MONITORING';
             return 'PROTECTED';
         }
 
         function updateUI(data) {
             const s = data.score || 0;
             const c = getClass(s);
+            const protection = getProtection(s);
 
-            // Score
-            $('score').textContent = s.toFixed(2);
+            // Score - show protection percentage (100 = fully secure)
+            $('score').textContent = protection + '%';
             $('score').className = 'score-value ' + c;
 
-            // Ring
-            const offset = CIRC - ((1 - s) * CIRC);
+            // Ring - full = protected, empty = under attack
+            const offset = CIRC * s;  // Inverted: low score = full ring
             $('progress').style.strokeDashoffset = offset;
             $('progress').className = 'ring-progress ' + c;
 
@@ -373,16 +379,17 @@
             $('blocked').textContent = data.blocked || 0;
             $('chains').textContent = data.attack_chains || 0;
 
-            // Layers
+            // Layers - show protection per layer (inverted)
             if (data.layers) {
                 Object.entries(data.layers).forEach(([layer, info]) => {
                     const el = document.querySelector(`[data-layer="${layer}"]`);
                     if (el) {
                         const val = typeof info === 'object' ? info.score : info;
                         const cls = getClass(val);
-                        el.querySelector('.layer-fill').style.width = (val * 100) + '%';
+                        const prot = (1 - val) * 100;  // Inverted: full bar = protected
+                        el.querySelector('.layer-fill').style.width = prot + '%';
                         el.querySelector('.layer-fill').className = 'layer-fill ' + cls;
-                        el.querySelector('.layer-score').textContent = val.toFixed(2);
+                        el.querySelector('.layer-score').textContent = Math.round(prot) + '%';
                     }
                 });
             }
