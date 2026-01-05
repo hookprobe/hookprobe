@@ -64,6 +64,56 @@ def create_app(config_class=Config):
     def health():
         return {'status': 'healthy', 'tier': 'fortress'}, 200
 
+    # Global API status endpoint for sidebar polling
+    @app.route('/api/status')
+    def api_status():
+        """Global status API for sidebar badges.
+
+        Returns QSecBit status and device count for sidebar updates.
+        Called by base.html every 10 seconds.
+        """
+        from flask_login import current_user
+        from flask import jsonify
+
+        # Return minimal data if not authenticated
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'Not authenticated'}), 401
+
+        # Get QSecBit status
+        qsecbit = {'status': 'UNKNOWN', 'score': 0}
+        device_count = 0
+        notification_count = 0
+
+        try:
+            from .modules.dashboard.views import (
+                get_qsecbit_stats,
+                get_all_devices,
+                get_recent_threats
+            )
+
+            # Get QSecBit stats
+            stats = get_qsecbit_stats()
+            qsecbit = {
+                'status': stats.get('rag_status', 'GREEN'),
+                'score': stats.get('score', 0)
+            }
+
+            # Get online device count from the same source as SDN page
+            devices = get_all_devices()
+            device_count = len([d for d in devices if d.get('is_online', False)])
+
+            # Get notification count (recent threats)
+            notification_count = len(get_recent_threats())
+
+        except Exception as e:
+            app.logger.error(f"API status error: {e}")
+
+        return jsonify({
+            'qsecbit': qsecbit,
+            'device_count': device_count,
+            'notification_count': notification_count
+        })
+
     # Error handlers
     @app.errorhandler(401)
     def unauthorized(e):
