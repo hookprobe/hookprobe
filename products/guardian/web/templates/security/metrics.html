@@ -535,8 +535,8 @@
 <!-- Premium QSecBit Hero Display -->
 <div class="qsecbit-hero">
     <div class="qsecbit-hero-content">
-        <h2>Security Score</h2>
-        <p class="subtitle">Real-time Quantified Security Metric</p>
+        <h2>Protection Level</h2>
+        <p class="subtitle">Full = Secure · Empty = Under Attack</p>
 
         <!-- Large Ring Display -->
         <div class="qsecbit-ring-large">
@@ -545,8 +545,8 @@
                 <circle class="ring-fill green" id="qsecbit-ring" cx="100" cy="100" r="90"/>
             </svg>
             <div class="ring-center">
-                <div class="ring-score green" id="qsecbit-score">0.000</div>
-                <div class="ring-label">QSecBit</div>
+                <div class="ring-score green" id="qsecbit-score">100%</div>
+                <div class="ring-label">Protected</div>
             </div>
         </div>
 
@@ -700,10 +700,14 @@
         return 'green';
     }
 
+    function getProtection(score) {
+        return Math.round((1 - score) * 100);
+    }
+
     function getRiskMessage(score) {
-        if (score >= 0.70) return 'Threat Detected - Active Mitigation';
-        if (score >= 0.45) return 'Elevated Risk - Monitoring Closely';
-        return 'All Systems Nominal';
+        if (score >= 0.70) return 'Under Attack · Defending';
+        if (score >= 0.45) return 'Monitoring · Stay Alert';
+        return 'All Clear · Protected';
     }
 
     function formatTime(isoString) {
@@ -748,20 +752,21 @@
     function updateQSecBitDisplay(data) {
         const score = data.score || 0;
         const statusClass = getStatusClass(score);
+        const protection = getProtection(score);
 
-        // Update ring
+        // Update ring - full when protected, empty when under attack
         const ring = document.getElementById('qsecbit-ring');
-        const progress = 1 - score; // Inverted: 0 = full protection
+        const progress = 1 - score;
         const offset = RING_CIRCUMFERENCE - (progress * RING_CIRCUMFERENCE);
         ring.style.strokeDashoffset = offset;
         ring.className = 'ring-fill ' + statusClass;
 
-        // Update score display
+        // Update score display - show protection percentage
         const scoreEl = document.getElementById('qsecbit-score');
-        scoreEl.textContent = score.toFixed(3);
+        scoreEl.textContent = protection + '%';
         scoreEl.className = 'ring-score ' + statusClass;
 
-        // Update risk banner
+        // Update status banner
         const banner = document.getElementById('risk-banner');
         const riskText = document.getElementById('risk-text');
         banner.className = 'risk-banner ' + statusClass;
