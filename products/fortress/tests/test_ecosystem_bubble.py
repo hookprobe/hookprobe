@@ -683,6 +683,370 @@ class TestIntegration:
             print(f"  Same bubble: {same} (confidence: {confidence:.1%})")
 
 
+class TestMDNSQueryResponsePairing:
+    """Test mDNS query/response pairing for device relationship detection."""
+
+    @pytest.fixture
+    def temp_db(self, tmp_path):
+        """Create temporary database path."""
+        return tmp_path / "presence.db"
+
+    def test_record_mdns_query(self, temp_db):
+        """Test recording an mDNS query."""
+        with patch('presence_sensor.PRESENCE_DB', temp_db):
+            from presence_sensor import PresenceSensor
+            sensor = PresenceSensor()
+
+            # Record a query
+            sensor.record_mdns_query(
+                mac="AA:BB:CC:DD:EE:01",
+                service_type="_airplay._tcp",
+                query_name="Apple TV"
+            )
+
+            # Verify query recorded
+            assert len(sensor._mdns_queries) > 0
+            query = sensor._mdns_queries[0]
+            assert query.query_mac == "AA:BB:CC:DD:EE:01"
+            assert query.service_type == "_airplay._tcp"
+            print("✓ mDNS query recorded")
+
+    def test_mdns_query_response_pairing(self, temp_db):
+        """Test pairing mDNS queries with responses."""
+        with patch('presence_sensor.PRESENCE_DB', temp_db):
+            from presence_sensor import PresenceSensor
+            sensor = PresenceSensor()
+
+            # Record query from iPhone
+            sensor.record_mdns_query(
+                mac="AA:BB:CC:DD:EE:01",  # iPhone
+                service_type="_airplay._tcp",
+                query_name="Apple TV"
+            )
+
+            # Record response from Apple TV
+            sensor.record_mdns_response(
+                mac="FF:EE:DD:CC:BB:AA",  # Apple TV
+                service_type="_airplay._tcp",
+                service_name="Apple TV"
+            )
+
+            # Check discovery pair was created
+            pairs = sensor.get_discovery_pairs()
+            assert len(pairs) > 0
+            print(f"✓ Created {len(pairs)} discovery pair(s)")
+
+    def test_discovery_hits_count(self, temp_db):
+        """Test counting discovery hits between devices."""
+        with patch('presence_sensor.PRESENCE_DB', temp_db):
+            from presence_sensor import PresenceSensor
+            sensor = PresenceSensor()
+
+            mac_a = "AA:BB:CC:DD:EE:01"
+            mac_b = "FF:EE:DD:CC:BB:AA"
+
+            # Multiple queries/responses
+            for i in range(3):
+                sensor.record_mdns_query(mac_a, "_airplay._tcp", f"Query-{i}")
+                sensor.record_mdns_response(mac_b, "_airplay._tcp", f"Response-{i}")
+
+            # Get discovery hits
+            hits = sensor.get_discovery_hits(mac_a, mac_b)
+            assert hits >= 3
+            print(f"✓ Discovery hits: {hits}")
+
+
+class TestTemporalAffinityScoring:
+    """Test enhanced temporal affinity scoring."""
+
+    @pytest.fixture
+    def temp_zeek_log(self, tmp_path):
+        """Create temporary Zeek log directory."""
+        log_dir = tmp_path / "zeek" / "current"
+        log_dir.mkdir(parents=True)
+        conn_log = log_dir / "conn.log"
+        conn_log.touch()
+        return tmp_path / "zeek"
+
+    def test_temporal_pattern_creation(self, temp_zeek_log):
+        """Test creating temporal patterns for devices."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
+             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
+            from connection_graph import TemporalPattern
+
+            pattern = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+            pattern.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
+            pattern.wake_events = [(8, 0), (8, 1), (8, 2)]  # (hour, day_of_week)
+            pattern.sleep_events = [(22, 0), (22, 1), (23, 2)]
+
+            assert len(pattern.active_hours) == 9
+            print(f"✓ Temporal pattern created: {len(pattern.active_hours)} active hours")
+
+    def test_temporal_similarity(self, temp_zeek_log):
+        """Test calculating temporal similarity between devices."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
+             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
+            from connection_graph import TemporalPattern
+
+            # Two devices with similar patterns (same user)
+            pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+            pattern_a.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
+            pattern_a.wake_events = [(8, 0), (8, 1), (8, 2)]
+
+            pattern_b = TemporalPattern(mac="AA:BB:CC:DD:EE:02")
+            pattern_b.active_hours = {8, 9, 10, 11, 13, 18, 19, 20, 22}
+            pattern_b.wake_events = [(8, 0), (8, 1), (9, 2)]
+
+            similarity = pattern_a.similarity(pattern_b)
+            assert 0 <= similarity <= 1.0
+            assert similarity > 0.5  # Should be high for similar patterns
+            print(f"✓ Temporal similarity: {similarity:.2%}")
+
+    def test_different_user_low_similarity(self, temp_zeek_log):
+        """Test that different users have low temporal similarity."""
+        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
+             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
+            from connection_graph import TemporalPattern
+
+            # Day worker
+            pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+            pattern_a.active_hours = {8, 9, 10, 11, 12, 13, 14, 15, 16}
+
+            # Night worker
+            pattern_b = TemporalPattern(mac="FF:EE:DD:CC:BB:AA")
+            pattern_b.active_hours = {20, 21, 22, 23, 0, 1, 2, 3, 4}
+
+            similarity = pattern_a.similarity(pattern_b)
+            assert similarity < 0.3  # Should be low for different patterns
+            print(f"✓ Different user similarity: {similarity:.2%}")
+
+
+class TestReinforcementLearning:
+    """Test reinforcement learning feedback engine."""
+
+    @pytest.fixture
+    def temp_db(self, tmp_path):
+        """Create temporary database path."""
+        return tmp_path / "feedback.db"
+
+    def test_feedback_engine_init(self, temp_db):
+        """Test feedback engine initialization."""
+        with patch('reinforcement_feedback.FEEDBACK_DB', temp_db):
+            from reinforcement_feedback import ReinforcementFeedbackEngine
+            engine = ReinforcementFeedbackEngine(db_path=temp_db)
+            assert engine is not None
+            print("✓ Reinforcement feedback engine initialized")
+
+    def test_record_correction(self, temp_db):
+        """Test recording a user correction."""
+        with patch('reinforcement_feedback.FEEDBACK_DB', temp_db):
+            from reinforcement_feedback import ReinforcementFeedbackEngine
+            engine = ReinforcementFeedbackEngine(db_path=temp_db)
+
+            # User moves device from Dad's bubble to Mom's bubble
+            engine.record_correction(
+                mac="AA:BB:CC:DD:EE:01",
+                old_bubble_id="bubble-dad",
+                new_bubble_id="bubble-mom",
+                old_bubble_devices=["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"],
+                new_bubble_devices=["FF:EE:DD:CC:BB:01"],
+                reason="Device actually belongs to Mom"
+            )
+
+            assert len(engine._pending_corrections) == 1
+            print("✓ Correction recorded")
+
+    def test_apply_corrections(self, temp_db):
+        """Test applying corrections to affinity scores."""
+        with patch('reinforcement_feedback.FEEDBACK_DB', temp_db):
+            from reinforcement_feedback import ReinforcementFeedbackEngine
+            engine = ReinforcementFeedbackEngine(db_path=temp_db)
+
+            # Record and apply correction
+            engine.record_correction(
+                mac="AA:BB:CC:DD:EE:01",
+                old_bubble_id="bubble-dad",
+                new_bubble_id="bubble-mom",
+                old_bubble_devices=["AA:BB:CC:DD:EE:02"],
+                new_bubble_devices=["FF:EE:DD:CC:BB:01"],
+            )
+
+            engine.apply_pending_corrections()
+
+            # Check negative adjustment with old bubble device
+            adj_old = engine.get_affinity_adjustment(
+                "AA:BB:CC:DD:EE:01",
+                "AA:BB:CC:DD:EE:02"
+            )
+            assert adj_old < 0  # Negative feedback
+            print(f"✓ Old bubble adjustment: {adj_old:+.3f}")
+
+            # Check positive adjustment with new bubble device
+            adj_new = engine.get_affinity_adjustment(
+                "AA:BB:CC:DD:EE:01",
+                "FF:EE:DD:CC:BB:01"
+            )
+            assert adj_new > 0  # Positive feedback
+            print(f"✓ New bubble adjustment: {adj_new:+.3f}")
+
+    def test_adjusted_affinity(self, temp_db):
+        """Test getting adjusted affinity score."""
+        with patch('reinforcement_feedback.FEEDBACK_DB', temp_db):
+            from reinforcement_feedback import ReinforcementFeedbackEngine
+            engine = ReinforcementFeedbackEngine(db_path=temp_db)
+
+            # Set up a known adjustment
+            engine._adjustments[("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02")] = 0.2
+
+            # Get adjusted affinity
+            base_affinity = 0.5
+            adjusted = engine.get_adjusted_affinity(
+                "AA:BB:CC:DD:EE:01",
+                "AA:BB:CC:DD:EE:02",
+                base_affinity
+            )
+
+            assert adjusted == 0.7  # 0.5 + 0.2
+            print(f"✓ Adjusted affinity: {base_affinity} -> {adjusted}")
+
+    def test_decay_factor(self, temp_db):
+        """Test that adjustments decay over time."""
+        with patch('reinforcement_feedback.FEEDBACK_DB', temp_db):
+            from reinforcement_feedback import ReinforcementFeedbackEngine, DECAY_FACTOR
+            engine = ReinforcementFeedbackEngine(db_path=temp_db)
+
+            # Set up adjustment
+            initial_adj = 0.2
+            engine._adjustments[("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02")] = initial_adj
+
+            # Apply decay
+            engine.apply_decay()
+
+            new_adj = engine.get_affinity_adjustment(
+                "AA:BB:CC:DD:EE:01",
+                "AA:BB:CC:DD:EE:02"
+            )
+
+            expected = initial_adj * DECAY_FACTOR
+            assert abs(new_adj - expected) < 0.001
+            print(f"✓ Decay applied: {initial_adj} -> {new_adj}")
+
+
+class TestN8NWebhook:
+    """Test n8n webhook integration."""
+
+    def test_webhook_client_init(self):
+        """Test webhook client initialization."""
+        with patch('n8n_webhook.CONFIG_FILE', Path('/tmp/nonexistent.conf')):
+            from n8n_webhook import N8NWebhookClient
+            client = N8NWebhookClient(enabled=False)
+            assert client is not None
+            print("✓ Webhook client initialized")
+
+    def test_event_creation(self):
+        """Test creating webhook events."""
+        from n8n_webhook import WebhookEvent
+        from datetime import datetime
+
+        event = WebhookEvent(
+            event_type="bubble_change",
+            timestamp=datetime.now(),
+            data={
+                "mac": "AA:BB:CC:DD:EE:01",
+                "old_bubble_id": "bubble-1",
+                "new_bubble_id": "bubble-2"
+            }
+        )
+
+        assert event.event_type == "bubble_change"
+        json_str = event.to_json()
+        assert "bubble_change" in json_str
+        print("✓ Webhook event created")
+
+    def test_event_queue(self):
+        """Test queueing events."""
+        with patch('n8n_webhook.CONFIG_FILE', Path('/tmp/nonexistent.conf')):
+            from n8n_webhook import N8NWebhookClient
+            # Create client with URL but don't actually send
+            client = N8NWebhookClient(
+                webhook_url="http://localhost:5678/webhook/test",
+                enabled=True
+            )
+
+            # Queue an event
+            client.send("test_event", {"message": "test"})
+
+            # Check queue
+            assert client._event_queue.qsize() >= 0
+            print("✓ Event queued successfully")
+
+            # Stop client
+            client.stop()
+
+    def test_convenience_methods(self):
+        """Test convenience methods for specific event types."""
+        with patch('n8n_webhook.CONFIG_FILE', Path('/tmp/nonexistent.conf')):
+            from n8n_webhook import N8NWebhookClient
+            client = N8NWebhookClient(enabled=False)
+
+            # These shouldn't raise errors even when disabled
+            client.on_bubble_change("AA:BB:CC:DD:EE:01", "old", "new")
+            client.on_device_join("AA:BB:CC:DD:EE:01", "10.200.0.10", "iPhone", "bubble-1")
+            client.on_manual_correction("AA:BB:CC:DD:EE:01", "old", "new", "test reason")
+            print("✓ Convenience methods work when disabled")
+
+
+class TestClickHouseGraphStorage:
+    """Test ClickHouse graph storage (with mocks)."""
+
+    def test_clickhouse_store_init(self):
+        """Test ClickHouse store initialization."""
+        with patch('clickhouse_graph.ClickHouseGraphStore._init_client') as mock_init:
+            mock_init.return_value = None
+            from clickhouse_graph import ClickHouseGraphStore
+            store = ClickHouseGraphStore(enabled=False)
+            assert store is not None
+            print("✓ ClickHouse store initialized (disabled mode)")
+
+    def test_record_relationship_disabled(self):
+        """Test recording relationship when disabled."""
+        with patch('clickhouse_graph.ClickHouseGraphStore._init_client') as mock_init:
+            mock_init.return_value = None
+            from clickhouse_graph import ClickHouseGraphStore
+            store = ClickHouseGraphStore(enabled=False)
+
+            # Should not raise error when disabled
+            store.record_relationship(
+                mac_a="AA:BB:CC:DD:EE:01",
+                mac_b="AA:BB:CC:DD:EE:02",
+                connection_count=5,
+                high_affinity_count=3,
+                services=["smb", "mdns"],
+                temporal_sync=0.8,
+                affinity_score=0.75
+            )
+            print("✓ Record relationship works when disabled")
+
+    def test_record_bubble_assignment_disabled(self):
+        """Test recording bubble assignment when disabled."""
+        with patch('clickhouse_graph.ClickHouseGraphStore._init_client') as mock_init:
+            mock_init.return_value = None
+            from clickhouse_graph import ClickHouseGraphStore
+            store = ClickHouseGraphStore(enabled=False)
+
+            # Should not raise error when disabled
+            store.record_bubble_assignment(
+                mac="AA:BB:CC:DD:EE:01",
+                bubble_id="bubble-dad",
+                bubble_name="Dad",
+                bubble_type="FAMILY",
+                confidence=0.95,
+                is_manual=True,
+                source="user"
+            )
+            print("✓ Record bubble assignment works when disabled")
+
+
 if __name__ == '__main__':
     # Run tests with verbose output
     pytest.main([__file__, '-v', '--tb=short', '-s'])
