@@ -736,7 +736,7 @@ device_list() {
             quarantine) policy_color="${RED}${policy}${NC}" ;;
             internet_only) policy_color="${GREEN}${policy}${NC}" ;;
             lan_only) policy_color="${YELLOW}${policy}${NC}" ;;
-            normal|smart_home) policy_color="${CYAN}${policy}${NC}" ;;
+            smart_home) policy_color="${CYAN}${policy}${NC}" ;;
             full_access) policy_color="${BLUE}${policy}${NC}" ;;
             *) policy_color="$policy" ;;
         esac
@@ -785,7 +785,7 @@ device_set_policy() {
         echo "  quarantine     - Block all network access"
         echo "  internet_only  - Internet access only (no LAN)"
         echo "  lan_only       - LAN access only (no internet)"
-        echo "  normal         - LAN + Internet (aka smart_home)"
+        echo "  smart_home     - LAN + Internet (trusted devices)"
         echo "  full_access    - Full access including management"
         echo ""
         exit 1
@@ -796,9 +796,12 @@ device_set_policy() {
 
     # Validate policy
     case "$policy" in
-        quarantine|internet_only|lan_only|normal|smart_home|full_access)
-            # Normalize normal (legacy) to smart_home
-            [ "$policy" = "normal" ] && policy="smart_home"
+        quarantine|internet_only|lan_only|smart_home|full_access)
+            ;;
+        normal)
+            # Legacy alias - convert to smart_home with deprecation notice
+            log_warn "'normal' is deprecated, use 'smart_home' instead"
+            policy="smart_home"
             ;;
         *)
             log_error "Invalid policy: $policy"
@@ -827,12 +830,70 @@ device_set_policy() {
 
     log_info "Policy updated: $mac → $policy"
 
-    # Trigger OpenFlow rule update if NAC sync script exists
-    local nac_script="/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh"
-    if [ -x "$nac_script" ]; then
-        log_substep "Syncing OpenFlow rules..."
-        "$nac_script" 2>/dev/null || log_warn "OpenFlow sync failed (non-fatal)"
-    fi
+    # Apply OpenFlow rules for THIS device only (not a full sync)
+    # CRITICAL: Don't trigger full NAC sync - that would re-apply policies for ALL devices
+    log_substep "Syncing OpenFlow rules..."
+
+    local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+    local GATEWAY_IP="${GATEWAY_IP:-10.200.0.1}"
+    local LAN_NETWORK="10.200.0.0/16"
+    local CONTAINER_NETWORK="172.20.0.0/16"
+
+    # Remove existing per-device rules first
+    ovs-ofctl del-flows "$OVS_BRIDGE" "dl_src=$mac" 2>/dev/null || true
+    ovs-ofctl del-flows "$OVS_BRIDGE" "dl_dst=$mac" 2>/dev/null || true
+
+    # Apply policy-specific rules
+    case "$policy" in
+        quarantine)
+            # Block all except DHCP/DNS/ARP
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,arp,dl_src=$mac,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1001,arp,dl_dst=$mac,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,ip,dl_src=$mac,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,ip,dl_dst=$mac,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=999,dl_src=$mac,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=999,dl_dst=$mac,actions=drop"
+            log_info "Applied QUARANTINE policy for $mac"
+            ;;
+        internet_only)
+            # Block LAN, allow internet
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=850,udp,dl_src=$mac,tp_dst=5353,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=850,udp,dl_dst=$mac,tp_src=5353,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,arp,dl_src=$mac,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,arp,dl_dst=$mac,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=750,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=750,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=650,ip,dl_src=$mac,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=650,ip,dl_dst=$mac,actions=NORMAL"
+            log_info "Applied INTERNET_ONLY policy for $mac"
+            ;;
+        lan_only)
+            # Allow LAN, block internet
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=750,ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=740,ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=730,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=730,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=720,ip,dl_src=$mac,nw_dst=10.200.0.0/23,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=710,ip,dl_dst=$mac,nw_src=10.200.0.0/23,actions=NORMAL"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,ip,dl_src=$mac,actions=drop"
+            ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,ip,dl_dst=$mac,actions=drop"
+            log_info "Applied LAN_ONLY policy for $mac"
+            ;;
+        smart_home|full_access)
+            # No per-device rules needed - uses base priority 500 rules (allow all)
+            log_info "Applied ${policy^^} policy for $mac (no restrictions)"
+            ;;
+    esac
 
     echo ""
     log_info "Device policy changed successfully"
@@ -931,7 +992,7 @@ Device Policies:
   quarantine     - Block all network access (default for unknown)
   internet_only  - Internet only, no LAN access
   lan_only       - LAN only, no internet access
-  normal         - LAN + Internet (smart home devices)
+  smart_home     - LAN + Internet (trusted devices)
   full_access    - Full access including management network
 
 Examples:
