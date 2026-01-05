@@ -180,14 +180,6 @@
                         </a>
                     </li>
 
-                    <!-- 6. SLA AI (Business Continuity) -->
-                    <li class="nav-item">
-                        <a href="{{ url_for('slaai.index') }}" class="nav-link {% if 'slaai' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-chart-line"></i>
-                            <p>SLA AI</p>
-                        </a>
-                    </li>
-
                     <!-- 7. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
