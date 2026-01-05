@@ -167,14 +167,17 @@ done
 # Check web container network
 header "CHECKING CONTAINER NETWORK"
 
-web_eth0=$(podman exec fts-web ip addr show eth0 2>/dev/null | grep "inet " || echo "")
-if [ -n "$web_eth0" ]; then
-    ok "fts-web has eth0 interface"
-    echo "    $web_eth0"
+# Use podman inspect (always works) instead of ip addr (may not be in container)
+web_ip=$(podman inspect fts-web --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "")
+if [ -n "$web_ip" ]; then
+    ok "fts-web network: $web_ip"
 else
-    fail "fts-web missing eth0 interface!"
-    info "Debugging network..."
-    podman exec fts-web ip addr 2>/dev/null || true
+    # Fallback: check if container is running
+    if podman inspect fts-web --format '{{.State.Running}}' 2>/dev/null | grep -q "true"; then
+        warn "fts-web running but network info unavailable"
+    else
+        fail "fts-web not running properly!"
+    fi
 fi
 
 # Step 10: Test web UI
