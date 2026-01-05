@@ -657,6 +657,84 @@ show_status() {
     else
         echo "  (not configured)"
     fi
+
+    # Container Network Validation
+    echo -e "\n${CYAN}Container Network:${NC}"
+    if command -v podman &>/dev/null; then
+        # Check podman network
+        local network_name="containers_fts-internal"
+        if podman network exists "$network_name" 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Network: $network_name exists"
+            local subnet gateway
+            subnet=$(podman network inspect "$network_name" 2>/dev/null | grep -o '"subnet": "[^"]*"' | head -1 | cut -d'"' -f4)
+            gateway=$(podman network inspect "$network_name" 2>/dev/null | grep -o '"gateway": "[^"]*"' | head -1 | cut -d'"' -f4)
+            [ -n "$subnet" ] && echo "    Subnet: $subnet"
+            [ -n "$gateway" ] && echo "    Gateway: $gateway"
+        else
+            echo -e "  ${RED}✗${NC} Network: $network_name MISSING"
+            echo "    Run: podman network create --driver bridge --subnet 172.20.200.0/24 --gateway 172.20.200.1 $network_name"
+        fi
+
+        # Check core containers
+        echo -e "\n${CYAN}Core Containers:${NC}"
+        local core_containers="fts-postgres fts-redis fts-web fts-qsecbit fts-dnsxai fts-dfs"
+        local all_healthy=true
+        for container in $core_containers; do
+            local status
+            status=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+            local health=""
+            if [ "$status" = "running" ]; then
+                health=$(podman inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || echo "")
+                if [ "$health" = "healthy" ]; then
+                    echo -e "  ${GREEN}✓${NC} $container: running (healthy)"
+                elif [ -n "$health" ]; then
+                    echo -e "  ${YELLOW}⚠${NC} $container: running ($health)"
+                    all_healthy=false
+                else
+                    echo -e "  ${GREEN}✓${NC} $container: running"
+                fi
+            else
+                echo -e "  ${RED}✗${NC} $container: $status"
+                all_healthy=false
+            fi
+        done
+
+        # Check fts-web network interface (critical for web UI access)
+        echo -e "\n${CYAN}Web Container Network:${NC}"
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^fts-web$"; then
+            local web_eth0
+            web_eth0=$(podman exec fts-web ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}')
+            if [ -n "$web_eth0" ]; then
+                echo -e "  ${GREEN}✓${NC} fts-web eth0: $web_eth0"
+
+                # Test internal connectivity
+                if podman exec fts-web curl -sk "https://127.0.0.1:${WEB_PORT:-8443}/health" --max-time 3 2>/dev/null | grep -q "healthy"; then
+                    echo -e "  ${GREEN}✓${NC} Web UI health check: OK"
+                else
+                    echo -e "  ${YELLOW}⚠${NC} Web UI health check: not responding (may still be starting)"
+                fi
+            else
+                echo -e "  ${RED}✗${NC} fts-web missing eth0 interface!"
+                echo "    Container has no network connectivity"
+                echo "    Fix: sudo ./fortress-recover.sh"
+                all_healthy=false
+            fi
+        else
+            echo -e "  ${RED}✗${NC} fts-web container not running"
+            all_healthy=false
+        fi
+
+        # Summary
+        echo ""
+        if [ "$all_healthy" = true ]; then
+            echo -e "${GREEN}Container network: HEALTHY${NC}"
+        else
+            echo -e "${RED}Container network: ISSUES DETECTED${NC}"
+            echo "  Run: sudo /opt/hookprobe/fortress/fortress-recover.sh"
+        fi
+    else
+        echo "  Podman not installed"
+    fi
 }
 
 # ============================================================
