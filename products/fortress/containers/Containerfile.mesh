@@ -24,7 +24,7 @@
 FROM python:3.11-slim-bookworm AS builder
 
 # Build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libffi-dev \
@@ -45,7 +45,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-mesh.txt
 FROM python:3.11-slim-bookworm
 
 # Runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libffi8 \
     libssl3 \
     iproute2 \
