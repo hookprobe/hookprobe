@@ -41,7 +41,7 @@ FROM python:3.11-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openvswitch-switch \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -u 1000 -g nogroup -d /opt/hookprobe bubble
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin bubble
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
