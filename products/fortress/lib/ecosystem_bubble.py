@@ -106,6 +106,40 @@ if not HAS_PRESENCE:
     def get_presence_sensor():
         return None
 
+# n8n webhook integration for bubble events
+HAS_WEBHOOK = False
+try:
+    from lib.n8n_webhook import get_webhook_client, N8NWebhookClient
+    HAS_WEBHOOK = True
+except ImportError:
+    try:
+        from n8n_webhook import get_webhook_client, N8NWebhookClient
+        HAS_WEBHOOK = True
+    except ImportError:
+        pass
+
+if not HAS_WEBHOOK:
+    def get_webhook_client():
+        return None
+    N8NWebhookClient = None
+
+# Reinforcement learning from manual corrections
+HAS_REINFORCEMENT = False
+try:
+    from lib.reinforcement_feedback import get_feedback_engine, ReinforcementFeedbackEngine
+    HAS_REINFORCEMENT = True
+except ImportError:
+    try:
+        from reinforcement_feedback import get_feedback_engine, ReinforcementFeedbackEngine
+        HAS_REINFORCEMENT = True
+    except ImportError:
+        pass
+
+if not HAS_REINFORCEMENT:
+    def get_feedback_engine():
+        return None
+    ReinforcementFeedbackEngine = None
+
 HAS_CLUSTERING = False
 try:
     from lib.behavior_clustering import (
@@ -381,6 +415,18 @@ class EcosystemBubbleManager:
         self._on_bubble_created: List[Callable] = []
         self._on_bubble_dissolved: List[Callable] = []
         self._on_device_joined: List[Callable] = []
+
+        # n8n webhook integration for automation
+        self._webhook_client: Optional[N8NWebhookClient] = None
+        if HAS_WEBHOOK:
+            self._webhook_client = get_webhook_client()
+            logger.info("n8n webhook integration enabled")
+
+        # Reinforcement learning from manual corrections
+        self._feedback_engine: Optional[ReinforcementFeedbackEngine] = None
+        if HAS_REINFORCEMENT:
+            self._feedback_engine = get_feedback_engine()
+            logger.info("Reinforcement learning enabled")
 
         # Background tasks
         self._running = False
@@ -1199,6 +1245,15 @@ class EcosystemBubbleManager:
 
             logger.info(f"Manual bubble created: {name} ({bubble_id})")
 
+            # Send webhook notification
+            if self._webhook_client:
+                self._webhook_client.on_bubble_created(
+                    bubble_id=bubble_id,
+                    bubble_name=name,
+                    bubble_type=bubble_type.value,
+                    devices=list(bubble.devices),
+                )
+
             return bubble
 
     def update_bubble(
@@ -1307,6 +1362,46 @@ class EcosystemBubbleManager:
                 self._persist_bubble(self._bubbles[current_bubble_id])
 
             logger.info(f"Device {mac} moved to bubble {target_bubble_id}")
+
+            # Send webhook notification
+            if self._webhook_client:
+                self._webhook_client.on_bubble_change(
+                    mac=mac,
+                    old_bubble=current_bubble_id or '',
+                    new_bubble=target_bubble_id,
+                    confidence=target_bubble.confidence,
+                    reason='manual_move' if pin else 'auto_move',
+                )
+
+                # If this is a manual correction, also notify for learning
+                if pin and current_bubble_id:
+                    self._webhook_client.on_manual_correction(
+                        mac=mac,
+                        old_bubble=current_bubble_id,
+                        new_bubble=target_bubble_id,
+                        correction_reason='user_correction',
+                    )
+
+            # Record correction for reinforcement learning
+            if self._feedback_engine and pin and current_bubble_id:
+                # Get devices in old and new bubbles for learning
+                old_bubble_devices = []
+                if current_bubble_id in self._bubbles:
+                    old_bubble_devices = list(self._bubbles[current_bubble_id].devices)
+
+                new_bubble_devices = list(target_bubble.devices)
+
+                self._feedback_engine.record_correction(
+                    mac=mac,
+                    old_bubble_id=current_bubble_id,
+                    new_bubble_id=target_bubble_id,
+                    old_bubble_devices=old_bubble_devices,
+                    new_bubble_devices=new_bubble_devices,
+                    reason='manual_move',
+                )
+
+                # Apply immediately for real-time learning
+                self._feedback_engine.apply_pending_corrections()
 
             return True
 

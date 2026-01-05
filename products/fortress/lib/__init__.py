@@ -122,8 +122,46 @@ def get_d2d_connection_graph():
     Affinity Score Formula:
     S_aff = (Discovery Hits × 10) + (D2D Flows × 5) + (Temporal Sync × 2)
     """
-    from .connection_graph import D2DConnectionGraph
-    return D2DConnectionGraph()
+    from .connection_graph import get_connection_analyzer
+    return get_connection_analyzer()
+
+
+# ============================================================
+# INTEGRATION MODULES (Gap Implementations)
+# ============================================================
+
+def get_clickhouse_graph_store():
+    """Get ClickHouse graph storage for AI learning.
+
+    Persists device relationships to ClickHouse for:
+    - Trend analysis over time
+    - AI model training
+    - Grafana dashboards
+    """
+    from .clickhouse_graph import get_clickhouse_store
+    return get_clickhouse_store()
+
+
+def get_n8n_webhook_client():
+    """Get n8n webhook client for automation.
+
+    Sends events to n8n for workflow automation:
+    - Bubble changes
+    - Device joins/leaves
+    - Manual corrections
+    """
+    from .n8n_webhook import get_webhook_client
+    return get_webhook_client()
+
+
+def get_reinforcement_feedback_engine():
+    """Get reinforcement learning feedback engine.
+
+    Learns from user manual corrections to improve
+    automatic bubble assignment over time.
+    """
+    from .reinforcement_feedback import get_feedback_engine
+    return get_feedback_engine()
 
 
 __all__ = [
