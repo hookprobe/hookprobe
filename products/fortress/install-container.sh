@@ -3647,7 +3647,7 @@ AIOCHIENV
                 -e GF_USERS_DEFAULT_THEME=dark \
                 docker.io/grafana/grafana:11.4.0
 
-            # 4. Intelligence Tier
+            # 4. Intelligence Tier - n8n Narratives
             start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
                 --name aiochi-narrative \
                 --restart unless-stopped \
@@ -3662,7 +3662,43 @@ AIOCHIENV
                 -e N8N_PORT=5678 \
                 docker.io/n8nio/n8n:1.70.3
 
-            # 5. AI Tier - Ollama (starts in background, model downloads async)
+            # 5. Identity Engine (CRITICAL for fts-web integration)
+            start_aiochi_container "aiochi-identity" "Identity Engine" \
+                --name aiochi-identity \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.20 \
+                -p 127.0.0.1:8060:8060 \
+                -v aiochi-identity-data:/app/data \
+                -v /var/lib/misc:/var/lib/misc:ro \
+                -v /run/avahi-daemon:/run/avahi-daemon:ro \
+                -e CLICKHOUSE_HOST=172.20.210.10 \
+                -e CLICKHOUSE_PORT=8123 \
+                -e CLICKHOUSE_DB=aiochi \
+                -e CLICKHOUSE_USER=aiochi \
+                -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+                localhost/aiochi-identity:latest
+
+            # 6. Log Shipper (ships Suricata/Zeek logs to ClickHouse)
+            start_aiochi_container "aiochi-logshipper" "Log Shipper" \
+                --name aiochi-logshipper \
+                --restart unless-stopped \
+                --network aiochi-internal \
+                --ip 172.20.210.40 \
+                -v aiochi-suricata-logs:/var/log/suricata:ro \
+                -v aiochi-zeek-logs:/opt/zeek/logs:ro \
+                -e CLICKHOUSE_HOST=172.20.210.10 \
+                -e CLICKHOUSE_PORT=8123 \
+                -e CLICKHOUSE_DB=aiochi \
+                -e CLICKHOUSE_USER=aiochi \
+                -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                -e SURICATA_LOG_PATH=/var/log/suricata/eve.json \
+                -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
+                -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+                localhost/aiochi-logshipper:latest
+
+            # 7. AI Tier - Ollama (starts in background, model downloads async)
             log_info ""
             log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             log_info "  Starting Ollama LLM (model download is ASYNC)"
@@ -3709,6 +3745,7 @@ AIOCHIENV
             log_info "    • VictoriaMetrics: http://localhost:8428"
             log_info "    • Grafana:         http://localhost:3000"
             log_info "    • n8n Workflows:   http://localhost:5678"
+            log_info "    • Identity Engine: http://localhost:8060"
             log_info "    • Ollama LLM:      http://localhost:11434"
             log_info ""
             log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
