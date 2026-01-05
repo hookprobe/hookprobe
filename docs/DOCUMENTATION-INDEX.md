@@ -7,7 +7,7 @@
 
 ---
 
-**Documentation for HookProbe v5.0**
+**Documentation for HookProbe v5.7**
 
 HookProbe is advanced network security software that operates without the complexity. This index provides navigation to all documentation organized by topic and audience.
 
@@ -34,6 +34,8 @@ HookProbe is advanced network security software that operates without the comple
 - **[Mesh Architecture](../shared/mesh/ARCHITECTURE.md)** ⭐ **Collective defense network**
 - **[Qsecbit Algorithm](../core/qsecbit/README.md)** - AI threat detection
 - **[dnsXai DNS Protection](../shared/dnsXai/README.md)** - AI-powered DNS filtering
+- **[AIOCHI (AI Eyes)](../shared/aiochi/README.md)** ⭐ **Cognitive network layer - human-readable narratives**
+- **[SLA AI Business Continuity](../shared/slaai/ARCHITECTURE.md)** - Intelligent WAN failover
 
 ### Protocol Documentation
 - **[HTP Protocol](HTP_SECURITY_ENHANCEMENTS.md)** - Transport protocol
@@ -163,6 +165,8 @@ HookProbe uses a **dual licensing model**:
 | Neural Resonance Protocol | `core/neuro/` |
 | dnsXai ML Classifier | `shared/dnsXai/` |
 | DSM Consensus | `shared/dsm/` |
+| AIOCHI Cognitive Layer | `shared/aiochi/` |
+| SLA AI Business Continuity | `shared/slaai/` |
 | MSSP Cloud Platform | `products/mssp/` |
 
 **Free for:** Personal use, internal business protection
@@ -212,9 +216,9 @@ HookProbe uses a **dual licensing model**:
 ---
 
 <p align="center">
-  <strong>HookProbe v5.0</strong><br>
+  <strong>HookProbe v5.7</strong><br>
   <em>Collective intelligence for network security.</em><br>
   <em>One node's detection is everyone's protection.</em>
 </p>
 
-**Version**: 5.0.0 | **Last Updated**: 2025-12-09
+**Version**: 5.7.0 | **Last Updated**: 2026-01-05
