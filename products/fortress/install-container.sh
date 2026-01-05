@@ -4220,10 +4220,12 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
 # AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
 # Standard mode: start all services
 #
-# Core services: postgres, redis, web, qsecbit, bubble-manager, dnsxai, dfs, cloudflared
+# Core services: postgres, redis, web, qsecbit, bubble-manager, dnsxai, dfs
+# Optional connectivity: cloudflared (only if INSTALL_CLOUDFLARE_TUNNEL=true)
 # Optional (AIOCHI replaces): grafana, victoria, n8n, clickhouse, suricata, zeek, xdp, lstm-trainer
 ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
-  CORE="fts-postgres fts-redis fts-web fts-qsecbit fts-bubble-manager fts-dnsxai fts-dfs fts-cloudflared" && \\
+  CORE="fts-postgres fts-redis fts-web fts-qsecbit fts-bubble-manager fts-dnsxai fts-dfs" && \\
+  if [ "\${INSTALL_CLOUDFLARE_TUNNEL:-}" = "true" ]; then CORE="\$CORE fts-cloudflared"; fi && \\
   if [ "\${INSTALL_AIOCHI:-}" = "true" ]; then \\
     echo "[FTS] AIOCHI mode - starting core services only" && \\
     ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE; \\
