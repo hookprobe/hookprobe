@@ -8,12 +8,12 @@
 #   - Traffic mirroring to QSecBit for analysis
 #   - Per-tier internet isolation
 #
-# Network Tiers (FTS = abbreviation for "fortress"):
-#   - FTS-data      (172.20.200.0/24)      - NO internet - postgres, redis
-#   - FTS-services  (172.20.201.0/24)      - internet OK - web, dnsxai, dfs
-#   - FTS-ml        (172.20.202.0/24)      - NO internet - lstm-trainer
-#   - FTS-mgmt      (172.20.203.0/24)      - NO internet - grafana, victoria
-#   - FTS-lan       (10.200.0.0/MASK)      - LAN clients + WiFi AP
+# Network Architecture:
+#   - Container Network (172.20.200.0/24)  - All fortress containers (fts-internal podman network)
+#   - LAN Network       (10.200.0.0/MASK)  - LAN clients + WiFi AP
+#
+# NOTE: The original multi-tier OVS design (FTS-data, FTS-services, FTS-ml, FTS-mgmt)
+#       was planned but not implemented. All containers now run on single podman network.
 #
 # LAN subnet is configurable via LAN_SUBNET_MASK environment variable
 # Supports /23 (510 devices) to /29 (6 devices), default is /23
@@ -57,11 +57,12 @@ get_lan_cidr() {
 # Container network tiers (OVS internal ports)
 # NOTE: Interface names must be <= 15 chars (Linux IFNAMSIZ limit)
 # With "FTS-" prefix (6 chars), tier names can be up to 9 chars
+#
+# IMPORTANT: All Fortress containers run on single podman network (172.20.200.0/24)
+# managed by podman-compose. The multi-tier OVS design was planned but not implemented.
+# Only "containers" and "lan" tiers are actively used.
 declare -A TIER_CONFIG=(
-    ["data"]="172.20.200.1/24:false"      # gateway:internet_allowed
-    ["services"]="172.20.201.1/24:true"   # web, dnsxai, dfs
-    ["ml"]="172.20.202.1/24:false"
-    ["mgmt"]="172.20.203.1/24:false"
+    ["containers"]="172.20.200.1/24:true"  # All podman containers (fts-*) need NAT for internet
     ["lan"]="${LAN_BASE_IP}/${LAN_SUBNET_MASK}:true"  # LAN clients need NAT
 )
 
@@ -379,17 +380,10 @@ install_openflow_rules() {
     ovs-ofctl add-flow "$OVS_BRIDGE" \
         "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=${CONTAINER_IPS[web]},nw_dst=172.20.200.0/24,actions=resubmit(,$OF_TABLE_OUTPUT)"
 
-    # Services tier - full access (internet handled in next table)
+    # Container tier (172.20.200.0/24) - allow internet access (for DNS upstream, etc.)
+    # All containers are on this single network per podman-compose.yml
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.201.0/24,actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
-
-    # ML tier - internal only
-    ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.202.0/24,nw_dst=172.20.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
-
-    # Mgmt tier - can query services (Victoria for Grafana dashboards)
-    ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.203.0/24,nw_dst=172.20.0.0/16,actions=resubmit(,$OF_TABLE_OUTPUT)"
+        "table=$OF_TABLE_TIER_ISOLATION,priority=100,ip,nw_src=172.20.200.0/24,actions=resubmit(,$OF_TABLE_INTERNET_CONTROL)"
 
     # LAN tier - can reach services and internet (dynamic CIDR)
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -406,9 +400,9 @@ install_openflow_rules() {
     # === TABLE 20: INTERNET CONTROL ===
     log_info "Table 20: Internet access control"
 
-    # Services tier - allow internet
+    # Container tier (172.20.200.0/24) - allow internet
     ovs-ofctl add-flow "$OVS_BRIDGE" \
-        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=172.20.201.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
+        "table=$OF_TABLE_INTERNET_CONTROL,priority=100,ip,nw_src=172.20.200.0/24,actions=resubmit(,$OF_TABLE_MIRROR)"
 
     # LAN - allow internet (will be NATed) - dynamic CIDR
     ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -663,13 +657,14 @@ setup_nat() {
     iptables -t nat -C POSTROUTING -s "${lan_cidr}" ! -d "${lan_cidr}" ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -s "${lan_cidr}" ! -d "${lan_cidr}" ! -o "$OVS_BRIDGE" -j MASQUERADE
 
-    # NAT for services tier (dnsxai needs upstream DNS)
-    iptables -t nat -C POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 172.20.201.0/24 -o "$wan_iface" -j MASQUERADE
+    # NAT for container network (dnsxai needs upstream DNS, web needs HTTPS, etc.)
+    # All fortress containers are on 172.20.200.0/24 (fts-internal podman network)
+    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -o "$wan_iface" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -o "$wan_iface" -j MASQUERADE
 
-    # Fallback NAT for services tier
-    iptables -t nat -C POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 172.20.201.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE
+    # Fallback NAT for container network
+    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 ! -d 172.20.0.0/16 ! -o "$OVS_BRIDGE" -j MASQUERADE
 
     # Allow forwarding from LAN to WAN (specific interface)
     iptables -C FORWARD -i "$OVS_BRIDGE" -o "$wan_iface" -j ACCEPT 2>/dev/null || \
@@ -969,11 +964,17 @@ cleanup_ovs_network() {
 }
 
 # ============================================================
-# PODMAN CNI INTEGRATION
+# PODMAN CNI INTEGRATION (LEGACY - NOT CURRENTLY USED)
 # ============================================================
+#
+# NOTE: This section was designed for multi-tier container networks but is not
+# currently used. All Fortress containers use podman-compose built-in networking
+# (containers_fts-internal at 172.20.200.0/24). This code is retained for
+# potential future use with advanced OVS-attached container networks.
 
 create_podman_networks() {
-    log_section "Creating Podman Networks for OVS Integration"
+    log_section "Creating Podman Networks for OVS Integration (LEGACY)"
+    log_warn "NOTE: Fortress currently uses podman-compose networking, not OVS-attached CNI"
 
     local cni_dir="/etc/cni/net.d"
     mkdir -p "$cni_dir"
@@ -1028,21 +1029,20 @@ EOF
 }
 
 create_container_veths() {
-    log_section "Creating Container veth Interfaces"
+    log_section "Creating Container veth Interfaces (LEGACY)"
+    log_warn "NOTE: Fortress currently uses podman-compose networking, not OVS veth pairs"
 
     # This function creates veth pairs for containers to connect to OVS
     # Called after containers start, before they need networking
+    # LEGACY: Not currently used since containers use podman-compose networking
 
     for container in "${!CONTAINER_IPS[@]}"; do
         local ip="${CONTAINER_IPS[$container]}"
         local tier=""
 
-        # Determine tier from IP
+        # Determine tier from IP - all containers are on 172.20.200.0/24
         case "$ip" in
-            172.20.200.*) tier="data" ;;
-            172.20.201.*) tier="services" ;;
-            172.20.202.*) tier="ml" ;;
-            172.20.203.*) tier="mgmt" ;;
+            172.20.200.*) tier="containers" ;;
             *) continue ;;
         esac
 
@@ -1165,18 +1165,15 @@ Examples:
   $0 add-lan eth1                   # Add LAN interface
   $0 nat eth0                       # Setup NAT
   $0 dhcp                           # Configure DHCP
-  $0 podman-networks                # Create Podman CNI networks
-  $0 attach fts-web 172.20.201.10 services
-  $0 connect-containers             # Connect all containers
   $0 block 10.200.0.50              # Block IP
   $0 vxlan-peer mssp 203.0.113.1 2000
 
-Container Network Tiers (FTS = abbreviation for "fortress"):
-  data      172.20.200.0/24      postgres, redis (NO internet)
-  services  172.20.201.0/24      web, dnsxai, dfs (internet OK)
-  ml        172.20.202.0/24      lstm-trainer (NO internet)
-  mgmt      172.20.203.0/24      grafana, victoria (NO internet)
-  lan       10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
+Network Architecture:
+  containers  172.20.200.0/24      All fortress containers (fts-internal podman network)
+  lan         10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
+
+NOTE: Containers use podman-compose built-in networking (containers_fts-internal).
+      OVS provides VLAN interfaces (vlan100, vlan200) for LAN/MGMT traffic only.
 
 LAN Subnet Configuration:
   Export LAN_SUBNET_MASK before calling init/nat/dhcp commands.
