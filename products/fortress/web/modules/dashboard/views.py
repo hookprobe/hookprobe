@@ -44,6 +44,23 @@ except ImportError as e:
     def set_device_policy(mac, policy):
         return None
 
+# Import SDN Auto Pilot module (premium heuristic scoring engine)
+# This is the PRIMARY data source for devices - same as SDN page
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    from sdn_autopilot import (
+        get_autopilot as get_sdn_autopilot,
+        SDNAutoPilot,
+    )
+    SDN_AUTOPILOT_AVAILABLE = True
+    logger.info("Dashboard: SDN Auto Pilot module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Dashboard: SDN Auto Pilot module not available: {e}")
+
+    # Stub function to prevent NameError
+    def get_sdn_autopilot():
+        return None
+
 # Import ecosystem bubble manager for same-user device grouping
 ECOSYSTEM_BUBBLE_AVAILABLE = False
 try:
@@ -154,23 +171,174 @@ def get_device_count():
     return 0
 
 
+def _load_device_status_cache():
+    """Load device status from host-generated cache file.
+
+    Same implementation as SDN module to ensure consistent device data.
+    """
+    cache = {}
+    # DHCP devices file (updated by dhcp-event.sh)
+    dhcp_file = DATA_DIR / 'devices.json'
+    try:
+        if dhcp_file.exists():
+            data = json.loads(dhcp_file.read_text())
+            if isinstance(data, dict):
+                for mac, device in data.items():
+                    if isinstance(device, dict):
+                        mac_upper = mac.upper()
+                        cache[mac_upper] = {
+                            'status': 'online' if device.get('is_active', False) else 'offline',
+                            'ip': device.get('ip_address', ''),
+                            'hostname': device.get('hostname', ''),
+                            'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
+                            'vendor_class': device.get('vendor_class', ''),
+                        }
+    except Exception as e:
+        logger.debug(f"Failed to load DHCP devices: {e}")
+
+    # Device status cache (updated by device-status-updater.sh)
+    status_file = Path('/opt/hookprobe/fortress/data/device_status.json')
+    try:
+        if status_file.exists():
+            data = json.loads(status_file.read_text())
+            for device in data.get('devices', []):
+                mac = device.get('mac', '').upper()
+                if mac:
+                    if mac in cache:
+                        cache[mac].update({
+                            'status': device.get('status', cache[mac].get('status', 'offline')),
+                            'ip': device.get('ip', '') or cache[mac].get('ip', ''),
+                            'hostname': device.get('hostname', '') or cache[mac].get('hostname', ''),
+                        })
+                    else:
+                        cache[mac] = {
+                            'status': device.get('status', 'offline'),
+                            'ip': device.get('ip', ''),
+                            'hostname': device.get('hostname', ''),
+                        }
+    except Exception as e:
+        logger.debug(f"Failed to load status cache: {e}")
+
+    return cache
+
+
+def _load_wifi_signals():
+    """Load WiFi signal data from host-generated file."""
+    signals = {}
+    wifi_file = Path('/opt/hookprobe/fortress/data/wifi_signals.json')
+    try:
+        if wifi_file.exists():
+            data = json.loads(wifi_file.read_text())
+            for station in data.get('stations', []):
+                mac = station.get('mac', '').upper()
+                if mac:
+                    signals[mac] = {
+                        'wifi_rssi': station.get('rssi'),
+                        'wifi_quality': station.get('quality'),
+                        'wifi_proximity': station.get('proximity'),
+                        'wifi_interface': station.get('interface'),
+                        'wifi_band': station.get('band'),
+                    }
+    except Exception as e:
+        logger.debug(f"Failed to load WiFi signals: {e}")
+    return signals
+
+
 def get_all_devices():
     """Get list of all connected devices.
 
-    Priority:
-    1. device_policies module (SQLite database) - same source as SDN dashboard
-    2. JSON file from agent
-    3. ARP table fallback
+    Priority (same as SDN page for consistency):
+    1. SDN Auto Pilot (autopilot.db) - PRIMARY source with device classification
+    2. device_policies module (devices.db) - fallback
+    3. JSON file from agent - fallback
+    4. ARP table - final fallback
     """
-    # Use device_policies module (same as SDN dashboard)
+    devices = []
+
+    # Load device status and WiFi signals from host-generated files
+    status_cache = _load_device_status_cache()
+    wifi_signals = _load_wifi_signals()
+
+    # Primary: Use SDN Auto Pilot (autopilot.db) - same as SDN page
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Sync devices from status cache to database
+                if status_cache:
+                    devices_to_sync = [
+                        {
+                            'mac': mac,
+                            'ip': info.get('ip', ''),
+                            'hostname': info.get('hostname', ''),
+                            'dhcp_fingerprint': info.get('dhcp_fingerprint', ''),
+                            'vendor_class': info.get('vendor_class', ''),
+                        }
+                        for mac, info in status_cache.items()
+                    ]
+                    autopilot.sync_from_device_list(devices_to_sync)
+
+                # Get all devices from autopilot.db
+                db_devices = autopilot.get_all_devices()
+
+                for d in db_devices:
+                    policy = d.get('policy', 'quarantine')
+                    mac = d.get('mac', '').upper()
+
+                    # Get policy info for display
+                    policy_info = {}
+                    if DEVICE_POLICIES_AVAILABLE:
+                        try:
+                            policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
+                        except ValueError:
+                            pass
+
+                    # Get status from cache
+                    cached = status_cache.get(mac, {})
+                    status = cached.get('status') or d.get('status', 'offline')
+                    is_online = status == 'online'
+
+                    # Get WiFi signal data
+                    wifi_data = wifi_signals.get(mac, {})
+
+                    devices.append({
+                        'mac_address': mac,
+                        'ip_address': d.get('ip', ''),
+                        'hostname': d.get('friendly_name') or d.get('hostname') or d.get('device_type', 'Unknown'),
+                        'manufacturer': d.get('vendor', 'Unknown'),
+                        'device_type': d.get('device_type') or d.get('category', 'unknown'),
+                        'policy': policy,
+                        'policy_name': policy_info.get('name', policy.replace('_', ' ').title()),
+                        'policy_color': policy_info.get('color', 'secondary'),
+                        'vlan_id': 200 if policy == 'full_access' else 100,
+                        'state': 'REACHABLE' if is_online else 'STALE',
+                        'is_online': is_online,
+                        'is_wifi': bool(wifi_data.get('wifi_interface')),
+                        'interface': wifi_data.get('wifi_interface', ''),
+                        'first_seen': d.get('first_seen'),
+                        'last_seen': d.get('last_seen'),
+                        'wifi_rssi': wifi_data.get('wifi_rssi'),
+                        'wifi_quality': wifi_data.get('wifi_quality'),
+                    })
+
+                if devices:
+                    logger.debug(f"Loaded {len(devices)} devices from autopilot.db")
+                    return devices
+        except Exception as e:
+            logger.warning(f"Failed to load from autopilot.db: {e}")
+
+    # Fallback: Use device_policies module (devices.db)
     if DEVICE_POLICIES_AVAILABLE:
         try:
-            devices = get_all_devices_from_db()
-            if devices:
-                # Transform to expected format for dashboard/topology
-                return [
-                    {
-                        'mac_address': d.get('mac_address', ''),
+            db_devices = get_all_devices_from_db()
+            if db_devices:
+                for d in db_devices:
+                    mac = d.get('mac_address', '').upper()
+                    wifi_data = wifi_signals.get(mac, {})
+                    cached = status_cache.get(mac, {})
+
+                    devices.append({
+                        'mac_address': mac,
                         'ip_address': d.get('ip_address', ''),
                         'hostname': d.get('hostname'),
                         'manufacturer': d.get('manufacturer', 'Unknown'),
@@ -181,49 +349,43 @@ def get_all_devices():
                         'vlan_id': 200 if d.get('policy') == 'full_access' else 100,
                         'state': 'REACHABLE' if d.get('is_online') else 'STALE',
                         'is_online': d.get('is_online', False),
-                        'is_wifi': d.get('interface', '').startswith('wlan'),
-                        'interface': d.get('interface', ''),
+                        'is_wifi': bool(wifi_data.get('wifi_interface')) or d.get('interface', '').startswith('wlan'),
+                        'interface': wifi_data.get('wifi_interface') or d.get('interface', ''),
                         'first_seen': d.get('first_seen'),
                         'last_seen': d.get('last_seen'),
-                    }
-                    for d in devices
-                ]
+                        'wifi_rssi': wifi_data.get('wifi_rssi'),
+                        'wifi_quality': wifi_data.get('wifi_quality'),
+                    })
+
+                if devices:
+                    logger.debug(f"Loaded {len(devices)} devices from device_policies")
+                    return devices
         except Exception as e:
             logger.warning(f"Failed to get devices from database: {e}")
 
-    # Fallback: JSON file from agent
-    devices_file = DATA_DIR / 'devices.json'
-    try:
-        if devices_file.exists():
-            with open(devices_file, 'r') as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-    except Exception:
-        pass
+    # Final fallback: build from status cache (from ARP/DHCP data)
+    if status_cache:
+        for mac, info in status_cache.items():
+            wifi_data = wifi_signals.get(mac, {})
+            devices.append({
+                'mac_address': mac,
+                'ip_address': info.get('ip', ''),
+                'hostname': info.get('hostname'),
+                'manufacturer': 'Unknown',
+                'device_type': 'unknown',
+                'policy': 'quarantine',
+                'policy_name': 'Quarantine',
+                'policy_color': 'danger',
+                'vlan_id': 100,
+                'state': 'REACHABLE' if info.get('status') == 'online' else 'STALE',
+                'is_online': info.get('status') == 'online',
+                'is_wifi': bool(wifi_data.get('wifi_interface')),
+                'interface': wifi_data.get('wifi_interface', ''),
+                'first_seen': None,
+                'last_seen': None,
+            })
 
-    # Final fallback: build from ARP table
-    try:
-        import subprocess
-        result = subprocess.run(['ip', '-j', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            neighbors = json.loads(result.stdout)
-            devices = []
-            for n in neighbors:
-                if n.get('state') and n['state'] != 'FAILED':
-                    devices.append({
-                        'ip_address': n.get('dst', ''),
-                        'mac_address': n.get('lladdr', ''),
-                        'state': n.get('state', 'UNKNOWN'),
-                        'device_type': 'unknown',
-                        'hostname': None,
-                        'manufacturer': None,
-                        'policy': 'quarantine',
-                    })
-            return devices
-    except Exception:
-        pass
-
-    return []
+    return devices
 
 
 def get_dns_blocked_count():
