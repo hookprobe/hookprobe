@@ -113,6 +113,19 @@ def get_ecosystem_bubble_manager():
     return get_bubble_manager()
 
 
+def get_d2d_connection_graph():
+    """Get the D2D connection graph analyzer.
+
+    Parses Zeek conn.log to detect device-to-device communication
+    patterns and calculate affinity scores for bubble detection.
+
+    Affinity Score Formula:
+    S_aff = (Discovery Hits × 10) + (D2D Flows × 5) + (Temporal Sync × 2)
+    """
+    from .connection_graph import D2DConnectionGraph
+    return D2DConnectionGraph()
+
+
 __all__ = [
     # Config
     'FortressConfig',
@@ -136,6 +149,7 @@ __all__ = [
     'get_presence_sensor',
     'get_behavior_clustering_engine',
     'get_ecosystem_bubble_manager',
+    'get_d2d_connection_graph',
 ]
 
 __version__ = '5.5.0'

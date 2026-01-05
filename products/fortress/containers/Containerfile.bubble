@@ -60,6 +60,7 @@ RUN mkdir -p /opt/hookprobe/fortress/lib \
 COPY --chown=bubble:nogroup products/fortress/lib/ecosystem_bubble.py /opt/hookprobe/fortress/lib/
 COPY --chown=bubble:nogroup products/fortress/lib/behavior_clustering.py /opt/hookprobe/fortress/lib/
 COPY --chown=bubble:nogroup products/fortress/lib/presence_sensor.py /opt/hookprobe/fortress/lib/
+COPY --chown=bubble:nogroup products/fortress/lib/connection_graph.py /opt/hookprobe/fortress/lib/
 COPY --chown=bubble:nogroup products/fortress/lib/__init__.py /opt/hookprobe/fortress/lib/
 
 # Environment
