@@ -131,8 +131,9 @@ parse_args() {
                 echo "  • fts-*-data           - All other data volumes"
                 echo ""
                 echo "ALWAYS preserved (even with --purge):"
-                echo "  • /var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
+                echo "  • /etc/hookprobe/persistent/dnsxai/whitelist.txt"
                 echo "    - User's DNS whitelist is NEVER removed"
+                echo "    - Symlinked from /var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
                 echo ""
                 echo "Removed with --purge:"
                 echo "  • Other userdata files (blocked traffic logs, etc.)"
@@ -1158,6 +1159,12 @@ remove_networkmanager_config() {
 remove_configuration() {
     log_step "Removing configuration files..."
 
+    # CRITICAL: NEVER remove /etc/hookprobe/persistent/ - this contains user data
+    # that must survive even --purge (dnsXai whitelist, etc.)
+    if [ -d "$CONFIG_DIR/persistent" ]; then
+        log_info "PROTECTED: $CONFIG_DIR/persistent/ (user whitelist - never removed)"
+    fi
+
     # Remove Fortress-specific config
     if [ -d "$FORTRESS_CONFIG_DIR" ]; then
         log_info "Removing $FORTRESS_CONFIG_DIR..."
@@ -1369,37 +1376,32 @@ remove_installation() {
     fi
 
     # User data directory handling
-    # CRITICAL: dnsXai whitelist is ALWAYS preserved - user's custom rules must never be lost
+    # CRITICAL: dnsXai whitelist is stored in /etc/hookprobe/persistent/ which is NEVER removed
+    # The /var/lib/hookprobe/userdata/ location may contain a symlink to the persistent location
     # Other userdata (blocked traffic logs, etc.) can be removed with --purge
+
+    # Verify persistent whitelist location is protected
+    local persistent_whitelist="/etc/hookprobe/persistent/dnsxai/whitelist.txt"
+    if [ -f "$persistent_whitelist" ]; then
+        log_info "PROTECTED: $persistent_whitelist (NEVER removed)"
+    fi
+
     if [ -d "/var/lib/hookprobe/userdata" ]; then
-        # Always preserve dnsXai whitelist
-        local whitelist_file="/var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
-        local whitelist_backup=""
-
-        if [ -f "$whitelist_file" ]; then
-            log_info "Preserving dnsXai whitelist (ALWAYS protected)..."
-            whitelist_backup=$(mktemp)
-            cp "$whitelist_file" "$whitelist_backup"
-        fi
-
         if [ "$PURGE_MODE" = true ]; then
-            log_info "Removing user data (--purge mode, except whitelist)..."
-            # Remove everything except the whitelist
-            find /var/lib/hookprobe/userdata -type f ! -name "whitelist.txt" -delete 2>/dev/null || true
-            # Remove empty directories but keep dnsxai
+            log_info "Removing user data (--purge mode)..."
+            # Remove userdata except symlinks to persistent (which point to protected location)
+            find /var/lib/hookprobe/userdata -type f ! -type l -delete 2>/dev/null || true
+            # Remove empty directories
             find /var/lib/hookprobe/userdata -mindepth 1 -type d -empty -delete 2>/dev/null || true
+        else
+            log_info "Userdata preserved: /var/lib/hookprobe/userdata/"
         fi
+    fi
 
-        # Restore whitelist if it was backed up
-        if [ -n "$whitelist_backup" ] && [ -f "$whitelist_backup" ]; then
-            mkdir -p /var/lib/hookprobe/userdata/dnsxai 2>/dev/null || true
-            cp "$whitelist_backup" "$whitelist_file"
-            rm -f "$whitelist_backup"
-            log_info "  dnsXai whitelist restored: $whitelist_file"
-        fi
-
-        log_info "Userdata preserved: /var/lib/hookprobe/userdata/"
-        log_info "  dnsXai whitelist is ALWAYS protected and will never be removed"
+    # Ensure persistent directory is mentioned
+    if [ -d "/etc/hookprobe/persistent" ]; then
+        log_info "Persistent data location preserved: /etc/hookprobe/persistent/"
+        log_info "  dnsXai whitelist is ALWAYS protected and will NEVER be removed"
     fi
 
     # Clean up parent directories if empty
@@ -1708,7 +1710,7 @@ main() {
         echo -e "  • Fortress user and group"
         echo ""
         echo -e "${GREEN}PROTECTED (never removed):${NC}"
-        echo -e "  • dnsXai whitelist (/var/lib/hookprobe/userdata/dnsxai/whitelist.txt)"
+        echo -e "  • dnsXai whitelist (/etc/hookprobe/persistent/dnsxai/whitelist.txt)"
         echo ""
     fi
 

@@ -202,15 +202,18 @@ services:
       DNSXAI_PROTECTION_LEVEL: 3
       # Path must match Containerfile: /opt/hookprobe/shared/dnsXai/data
       DNSXAI_DATA_DIR: /opt/hookprobe/shared/dnsXai/data
-      # User data directory for persistent whitelist (survives reinstall)
-      DNSXAI_USERDATA_DIR: /opt/hookprobe/shared/dnsXai/userdata
+      # User data directory for persistent whitelist (survives reinstall AND purge)
+      # CRITICAL: /etc/hookprobe/persistent/ is NEVER removed by any uninstall
+      DNSXAI_USERDATA_DIR: /etc/hookprobe/persistent/dnsxai
       LOG_DIR: /var/log/hookprobe
     volumes:
       # Mount over shared path to persist data while keeping bundled whitelist
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
       - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
-      # PERSISTENT USER DATA - survives uninstall/reinstall (whitelist, config)
-      # U suffix auto-adjusts ownership to container user (fixes GID mismatch)
+      # PERSISTENT USER DATA - NEVER removed, even with --purge
+      # This location survives ALL uninstall operations
+      - /etc/hookprobe/persistent/dnsxai:/etc/hookprobe/persistent/dnsxai:U
+      # Legacy mount for backwards compatibility (may contain symlinks)
       - /var/lib/hookprobe/userdata/dnsxai:/opt/hookprobe/shared/dnsXai/userdata:U
       # Bind mount logs to host for ML training data visibility
       - /var/log/hookprobe:/var/log/hookprobe:U
