@@ -111,9 +111,11 @@ table inet fts_nat {
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
 
-        # Web UI DNAT: LAN clients accessing dashboard on gateway IP
-        # Traffic to 10.200.0.1:8443 → web container at 172.20.200.20:8443
-        iifname "vlan100" tcp dport 8443 dnat to 172.20.200.20:8443
+        # NOTE: Web UI access works via podman's port forward (0.0.0.0:8443)
+        # Packets to gateway:8443 reach the local socket where podman proxy handles them.
+        # DO NOT use DNAT here - it intercepts packets before they reach the local socket
+        # and routes them to the container network, which may not be directly routable.
+        # Podman's userspace proxy handles the forwarding correctly.
 
         # DNS redirect: LAN clients → dnsmasq (which forwards to dnsXai)
         # This ensures DNS goes through our ML protection
@@ -125,8 +127,7 @@ table inet fts_nat {
 
         # SNAT for container replies to LAN clients
         # Containers on 172.20.200.0/24 replying to LAN clients (10.200.0.x)
-        # must use the LAN gateway IP (10.200.0.1) so clients see responses from
-        # the same IP they connected to
+        # must use the LAN gateway IP so clients see responses from the same IP
         # Using masquerade to auto-select correct source IP based on output interface
         ip saddr 172.20.200.0/24 oifname "vlan100" masquerade
 
