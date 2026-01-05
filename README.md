@@ -256,11 +256,11 @@ Qsecbit = α·drift + β·p_attack + γ·decay + δ·q_drift + ε·energy_anomal
 # See: core/qsecbit/qsecbit.py
 ```
 
-| Score | Status | What Happens | Why |
-|-------|--------|--------------|-----|
-| < 0.45 | GREEN | Learning mode | System behavior normal |
-| 0.45-0.70 | AMBER | Mitigation starts | Anomalies detected, investigating |
-| > 0.70 | RED | Full defense | Confirmed threat, blocking |
+| Protection | Status | What It Means |
+|------------|--------|---------------|
+| > 55% | 🟢 GREEN | All clear · Protected |
+| 30-55% | 🟡 AMBER | Monitoring · Stay alert |
+| < 30% | 🔴 RED | Under attack · Defending |
 
 ### dnsXai - Explainable DNS Protection
 
