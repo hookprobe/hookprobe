@@ -26,7 +26,18 @@ for svc in fortress fortress-vlan fts-hostapd-24ghz fts-hostapd-5ghz dnsmasq; do
     if systemctl is-active "$svc" &>/dev/null; then
         ok "$svc: running"
     elif systemctl is-enabled "$svc" &>/dev/null; then
-        warn "$svc: enabled but not running"
+        # For fortress.service, check if containers are running anyway
+        if [ "$svc" = "fortress" ]; then
+            running_fts=$(podman ps --format "{{.Names}}" 2>/dev/null | grep -c "^fts-" || echo 0)
+            if [ "$running_fts" -gt 0 ]; then
+                warn "$svc: service inactive but $running_fts fts-* containers running"
+                info "  Run 'systemctl start fortress' to sync state"
+            else
+                warn "$svc: enabled but not running"
+            fi
+        else
+            warn "$svc: enabled but not running"
+        fi
     else
         info "$svc: not configured"
     fi
@@ -60,15 +71,21 @@ if command -v podman &>/dev/null; then
     echo "All containers (including stopped):"
     podman ps -a --format "  {{.Names}}: {{.Status}}" 2>/dev/null
 
-    # Check if fts-web has eth0
+    # Check container network connectivity
     echo ""
     if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "^fts-web$"; then
-        web_eth0=$(podman exec fts-web ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}' || echo "")
-        if [ -n "$web_eth0" ]; then
-            ok "fts-web eth0: $web_eth0"
+        # Use podman inspect (always works) instead of ip addr (may not be in container)
+        web_ip=$(podman inspect fts-web --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "")
+        if [ -n "$web_ip" ]; then
+            ok "fts-web network: $web_ip"
         else
-            fail "fts-web missing eth0 interface!"
-            warn "Network connectivity issue - run: sudo ./fortress-recover.sh"
+            # Fallback: check if container is running and healthy
+            if podman inspect fts-web --format '{{.State.Running}}' 2>/dev/null | grep -q "true"; then
+                ok "fts-web running (network info unavailable)"
+            else
+                fail "fts-web not running properly!"
+                warn "Run: sudo ./fortress-recover.sh to fix"
+            fi
         fi
     fi
 else
