@@ -81,7 +81,7 @@ class DHCPEvent:
     client_id: Optional[str] = None         # DHCP option 61
     lease_time: int = 3600
     timestamp: datetime = field(default_factory=datetime.now)
-    interface: str = 'vlan100'
+    interface: str = 'FTS'
 
     # Derived fields
     os_fingerprint: Optional[str] = None
@@ -119,7 +119,7 @@ class DHCPEvent:
         option55 = env.get('DNSMASQ_REQUESTED_OPTIONS')
         client_id = env.get('DNSMASQ_CLIENT_ID')
         lease_time = int(env.get('DNSMASQ_LEASE_LENGTH', '3600'))
-        interface = env.get('DNSMASQ_INTERFACE', 'vlan100')
+        interface = env.get('DNSMASQ_INTERFACE', 'FTS')
 
         event = cls(
             event_type=event_type,

@@ -208,7 +208,7 @@ class TestPresenceSensor:
         """Test presence sensor initialization."""
         with patch('presence_sensor.PRESENCE_DB', temp_db):
             from presence_sensor import PresenceSensor
-            sensor = PresenceSensor(interface="vlan100")
+            sensor = PresenceSensor(interface="FTS")
             assert sensor is not None
             print("✓ Presence sensor initialized")
 

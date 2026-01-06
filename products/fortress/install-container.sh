@@ -385,7 +385,7 @@ collect_configuration() {
     fi
 
     # Other defaults from environment
-    NETWORK_MODE="vlan"  # Always use VLAN mode (filter mode removed)
+    NETWORK_MODE="flat"  # Flat bridge mode - OpenFlow NAC (no VLANs)
     ADMIN_USER="${ADMIN_USER:-admin}"
     WEB_PORT="${WEB_PORT:-8443}"
 
@@ -458,13 +458,13 @@ collect_configuration() {
 
     # Network mode selection
     echo ""
-    # VLAN mode is always used (filter mode removed)
+    # FLAT BRIDGE ARCHITECTURE
     # Network architecture:
-    #   - FTS Bridge: Layer 2 OVS switch (no IP)
-    #   - VLAN 100: LAN (10.200.0.0/24) - WiFi clients, general devices
-    #   - VLAN 200: MGMT (10.200.100.0/30) - Admin access
-    NETWORK_MODE="vlan"
-    log_info "Network mode: VLAN (OVS-based segmentation)"
+    #   - FTS Bridge: Layer 2 OVS switch with gateway IP (10.200.0.1)
+    #   - All devices on same L2 segment (no VLANs)
+    #   - Segmentation via OpenFlow NAC rules (device policies)
+    NETWORK_MODE="flat"
+    log_info "Network mode: Flat Bridge (OpenFlow-based NAC)"
 
     # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
     if [ -z "${LAN_SUBNET_MASK:-}" ]; then
@@ -1168,15 +1168,14 @@ create_configuration() {
 FORTRESS_MODE=container
 FORTRESS_VERSION=5.5.0
 
-# Network mode (vlan or filter)
+# Network mode (flat bridge architecture)
 NETWORK_MODE=${NETWORK_MODE}
 
-# LAN Network Configuration
+# LAN Network Configuration (Flat Bridge)
 LAN_SUBNET_MASK=${LAN_SUBNET_MASK:-24}
 LAN_DHCP_START=${LAN_DHCP_START:-10.200.0.100}
 LAN_DHCP_END=${LAN_DHCP_END:-10.200.0.200}
-GATEWAY_LAN=10.200.0.1
-GATEWAY_MGMT=10.200.100.1
+GATEWAY_IP=10.200.0.1
 
 # Database (handled by container)
 DATABASE_HOST=fts-postgres
@@ -1251,7 +1250,7 @@ setup_network() {
     log_info "Detected interfaces:"
     log_info "  WAN:  ${NET_WAN_IFACE:-auto-detect}"
     log_info "  LAN:  ${NET_LAN_IFACES:-none}"
-    log_info "  MGMT: ${MGMT_INTERFACE:-none}${MGMT_INTERFACE:+ (VLAN 200 trunk)}"
+    log_info "  Admin: ${MGMT_INTERFACE:-none}${MGMT_INTERFACE:+ (admin console port)}"
     log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
     log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
 
@@ -1282,13 +1281,13 @@ setup_network() {
             log_info "  WiFi AP will provide client connectivity"
         fi
 
-        # Add MGMT interface to OVS bridge if detected
-        # MGMT interface is designated as the last LAN ethernet port (by PCI order)
-        # It provides trunk access: native LAN + tagged VLAN 200 (management)
+        # Add admin console interface to OVS bridge if detected
+        # This is designated as the last LAN ethernet port (by PCI order)
+        # Recommended for connecting admin workstation for initial setup
         if [ -n "$MGMT_INTERFACE" ]; then
-            log_info "  Adding MGMT interface $MGMT_INTERFACE to OVS bridge..."
+            log_info "  Adding admin interface $MGMT_INTERFACE to OVS bridge..."
             "$ovs_script" add-lan "$MGMT_INTERFACE" || {
-                log_warn "Failed to add MGMT interface $MGMT_INTERFACE to OVS bridge"
+                log_warn "Failed to add admin interface $MGMT_INTERFACE to OVS bridge"
             }
         fi
 
@@ -1316,11 +1315,11 @@ setup_network() {
         local netplan_gen="${DEVICES_DIR}/common/netplan-ovs-generator.sh"
         local ovs_post="${DEVICES_DIR}/common/ovs-post-setup.sh"
 
-        if [ "$NETWORK_MODE" = "vlan" ] && [ -f "$netplan_gen" ]; then
-            # VLAN mode: Use Netplan + OVS for fast, reliable network setup
-            # VLAN 100 = LAN (10.200.0.0/xx) - WiFi clients, regular devices
-            # VLAN 200 = MGMT (10.200.100.0/30) - Management access, container network
-            log_info "Configuring VLAN-based network segmentation (netplan + OVS)..."
+        if [ -f "$netplan_gen" ]; then
+            # FLAT BRIDGE ARCHITECTURE - Use Netplan + OVS for fast, reliable network setup
+            # FTS Bridge: 10.200.0.0/xx - All devices on same L2 segment
+            # Segmentation via OpenFlow NAC rules (device policies)
+            log_info "Configuring flat bridge network (netplan + OVS)..."
 
             chmod +x "$netplan_gen"
             [ -f "$ovs_post" ] && chmod +x "$ovs_post"
@@ -1350,12 +1349,12 @@ setup_network() {
                         fi
                     fi
 
-                    log_success "VLAN network configured via netplan"
-                    log_info "  VLAN 100 (LAN):  10.200.0.0/$LAN_MASK - WiFi clients, LAN devices"
-                    log_info "  VLAN 200 (MGMT): 10.200.100.0/30 - Management access"
+                    log_success "Flat bridge network configured via netplan"
+                    log_info "  FTS Bridge: 10.200.0.0/$LAN_MASK - WiFi clients, LAN devices"
+                    log_info "  OpenFlow:   NAC via device fingerprinting policies"
 
-                    # Configure DHCP on VLAN interfaces (NOT the FTS bridge)
-                    setup_vlan_dhcp
+                    # Configure DHCP on FTS bridge (flat bridge mode)
+                    setup_flat_bridge_dhcp
 
                     # Install services for boot persistence
                     install_vlan_service
@@ -1546,29 +1545,12 @@ validate_network_setup() {
         log_info "OVS bridge: ${OVS_BRIDGE:-FTS} (UP)"
     fi
 
-    # Check gateway IP is configured
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        # VLAN mode: check both vlan100 and vlan200 interfaces
-        if ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1"; then
-            log_info "VLAN 100 (LAN): 10.200.0.1 configured"
-        else
-            log_warn "VLAN 100 gateway not configured"
-            warnings=$((warnings + 1))
-        fi
-        if ip addr show vlan200 2>/dev/null | grep -q "10.200.100.1"; then
-            log_info "VLAN 200 (MGMT): 10.200.100.1 configured"
-        else
-            log_warn "VLAN 200 gateway not configured"
-            warnings=$((warnings + 1))
-        fi
+    # Check gateway IP is configured on FTS bridge (flat bridge mode)
+    if ip addr show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -q "10.200.0.1"; then
+        log_info "LAN gateway: 10.200.0.1 on ${OVS_BRIDGE:-FTS} bridge"
     else
-        # Filter mode: check bridge has gateway IP
-        if ip addr show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -q "10.200.0.1"; then
-            log_info "LAN gateway: 10.200.0.1"
-        else
-            log_warn "LAN gateway IP not configured on bridge"
-            warnings=$((warnings + 1))
-        fi
+        log_warn "LAN gateway IP not configured on bridge"
+        warnings=$((warnings + 1))
     fi
 
     # Check IP forwarding
@@ -2275,13 +2257,13 @@ EOF
     log_info "DHCP configured on $lan_port"
 }
 
-# Setup DHCP for VLAN mode - listens on vlan100, NOT FTS bridge
-# This is critical: in VLAN mode, FTS bridge should NOT have an IP
-setup_vlan_dhcp() {
-    log_info "Configuring DHCP for VLAN mode..."
+# Setup DHCP for flat bridge mode - listens on FTS bridge directly
+# Flat bridge: FTS bridge has gateway IP, OpenFlow handles NAC
+setup_flat_bridge_dhcp() {
+    log_info "Configuring DHCP for flat bridge mode..."
 
-    # In VLAN mode, dnsmasq listens on vlan100 (LAN VLAN), NOT the FTS bridge
-    local lan_interface="vlan100"
+    # In flat bridge mode, dnsmasq listens on FTS bridge directly
+    local lan_interface="${OVS_BRIDGE:-FTS}"
     local config_file="/etc/dnsmasq.d/fts-vlan.conf"
 
     # Use saved configuration values
@@ -2319,20 +2301,20 @@ setup_vlan_dhcp() {
     rm -f /etc/dnsmasq.d/fortress-vlans.conf 2>/dev/null || true
 
     cat > "$config_file" << EOF
-# HookProbe Fortress DHCP Configuration (VLAN Mode)
+# HookProbe Fortress DHCP Configuration (Flat Bridge Mode)
 # Generated: $(date -Iseconds)
 # LAN Subnet: 10.200.0.0/${subnet_mask}
 #
-# IMPORTANT: In VLAN mode, dnsmasq listens on vlan100, NOT the FTS bridge
-# FTS bridge is a Layer 2 switch only - no IP address
+# Flat Bridge Architecture:
+#   FTS bridge has gateway IP directly on its internal port
+#   OpenFlow rules handle NAC (Network Access Control)
+#   No VLANs - all ports untagged for low-latency operation
 
 # ============================================
 # Interface binding
 # ============================================
-# DHCP/DNS listens ONLY on vlan100 (LAN gateway)
-# Using bind-dynamic to allow late binding to interfaces that may not
-# exist at startup time (VLAN interfaces created by OVS post-setup)
-# This avoids race conditions where dnsmasq starts before vlan100 is ready
+# DHCP/DNS listens on FTS bridge (LAN gateway)
+# Using bind-dynamic to allow late binding to interfaces
 interface=${lan_interface}
 bind-dynamic
 listen-address=${gateway_lan}
@@ -2343,10 +2325,10 @@ except-interface=lo
 no-resolv
 no-poll
 
-# LAN DHCP range on VLAN 100 (configured subnet: /${subnet_mask})
+# LAN DHCP range (configured subnet: /${subnet_mask})
 dhcp-range=${dhcp_start},${dhcp_end},12h
 
-# Gateway (VLAN 100 interface IP)
+# Gateway (FTS bridge IP)
 dhcp-option=3,${gateway_lan}
 
 # DNS (clients query dnsmasq on gateway, which forwards to dnsXai or upstream)
@@ -2382,26 +2364,26 @@ EOF
 
     chmod 644 "$config_file"
 
-    # Create systemd drop-in to make dnsmasq wait for OVS and VLANs
-    setup_dnsmasq_vlan_dependency
+    # Create systemd drop-in to make dnsmasq wait for OVS bridge
+    setup_dnsmasq_bridge_dependency
 
     # Restart dnsmasq
     systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null || {
         log_warn "dnsmasq service not available"
     }
 
-    log_info "DHCP configured on ${lan_interface} (VLAN mode)"
+    log_info "DHCP configured on ${lan_interface} (flat bridge mode)"
 }
 
-# Create systemd drop-in for VLAN mode dnsmasq
-setup_dnsmasq_vlan_dependency() {
+# Create systemd drop-in for flat bridge mode dnsmasq
+setup_dnsmasq_bridge_dependency() {
     local dropin_dir="/etc/systemd/system/dnsmasq.service.d"
     mkdir -p "$dropin_dir"
 
-    cat > "${dropin_dir}/fortress-vlan.conf" << 'EOF'
-# HookProbe Fortress - Make dnsmasq wait for VLAN interfaces
+    cat > "${dropin_dir}/fortress-bridge.conf" << 'EOF'
+# HookProbe Fortress - Make dnsmasq wait for FTS bridge
 [Unit]
-# Wait for OVS and VLAN setup to be ready before starting dnsmasq
+# Wait for OVS and bridge setup to be ready before starting dnsmasq
 After=openvswitch-switch.service fortress-vlan.service
 Wants=openvswitch-switch.service fortress-vlan.service
 
@@ -2410,25 +2392,25 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Wait for vlan100 to have IP address AND be stable (required for DHCP socket binding)
-# 1. Wait up to 60s for vlan100 to get an IP
+# Wait for FTS bridge to have IP address AND be stable (required for DHCP socket binding)
+# 1. Wait up to 60s for FTS to get an IP
 # 2. Sleep 3s after finding it to let OVS OpenFlow rules propagate
 # 3. Verify interface is still ready (handles transient states)
 # This fixes the race condition where dnsmasq starts before DHCP socket can bind properly
 ExecStartPre=/bin/bash -c '\
-    echo "dnsmasq: Waiting for vlan100..."; \
+    echo "dnsmasq: Waiting for FTS bridge..."; \
     for i in $(seq 1 60); do \
-        if ip addr show vlan100 2>/dev/null | grep -q "inet 10.200"; then \
-            echo "dnsmasq: vlan100 found, waiting for OpenFlow rules..."; \
+        if ip addr show FTS 2>/dev/null | grep -q "inet 10.200"; then \
+            echo "dnsmasq: FTS bridge found, waiting for OpenFlow rules..."; \
             sleep 3; \
-            if ip addr show vlan100 2>/dev/null | grep -q "inet 10.200"; then \
-                echo "dnsmasq: vlan100 stable, starting DHCP"; \
+            if ip addr show FTS 2>/dev/null | grep -q "inet 10.200"; then \
+                echo "dnsmasq: FTS bridge stable, starting DHCP"; \
                 exit 0; \
             fi; \
         fi; \
         sleep 1; \
     done; \
-    echo "ERROR: vlan100 not ready after 60s"; \
+    echo "ERROR: FTS bridge not ready after 60s"; \
     exit 1'
 
 # ALWAYS restart dnsmasq if it stops (not just on failure)
@@ -3906,16 +3888,16 @@ setup_traffic_flow() {
 
     # Add iptables SNAT fallback for container replies to LAN clients
     # This ensures dashboard is accessible even if nftables setup failed
-    # Container replies going out vlan100 must appear from 10.200.0.1 (LAN gateway)
+    # Container replies going out FTS bridge must appear from 10.200.0.1 (LAN gateway)
     log_info "Adding iptables SNAT fallback for container traffic..."
-    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -o vlan100 -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -o vlan100 -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s 172.20.200.0/24 -o "${OVS_BRIDGE:-FTS}" -j MASQUERADE 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -s 172.20.200.0/24 -o "${OVS_BRIDGE:-FTS}" -j MASQUERADE
 
     # Also need DNAT rule for web UI access (fallback if nftables fails)
     # LAN clients accessing 10.200.0.1:8443 → container at 172.20.200.20:8443
     log_info "Adding iptables DNAT fallback for web UI access..."
-    iptables -t nat -C PREROUTING -i vlan100 -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}" 2>/dev/null || \
-        iptables -t nat -A PREROUTING -i vlan100 -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}"
+    iptables -t nat -C PREROUTING -i "${OVS_BRIDGE:-FTS}" -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}" 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i "${OVS_BRIDGE:-FTS}" -p tcp --dport "${WEB_PORT:-8443}" -j DNAT --to-destination 172.20.200.20:"${WEB_PORT:-8443}"
 
     # Allow forwarding to container network
     iptables -C FORWARD -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || \
@@ -4150,7 +4132,7 @@ OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 # Always use VLAN mode (filter mode removed)
-NETWORK_MODE="vlan"
+NETWORK_MODE="flat"
 
 log_info "Ensuring OVS bridge $OVS_BRIDGE is ready..."
 
@@ -4167,13 +4149,13 @@ if ! ip link show "$OVS_BRIDGE" 2>/dev/null | grep -q "state UP"; then
     ip link set "$OVS_BRIDGE" up || log_warn "Failed to bring bridge UP"
 fi
 
-# VLAN mode: IPs are on vlan100/vlan200, not FTS bridge (Layer 2 only)
-log_info "VLAN mode: IPs are on vlan100/vlan200, not FTS bridge"
-# Ensure VLAN interfaces are ready (fortress-vlan.service should have done this)
-if ! ip addr show vlan100 2>/dev/null | grep -q "10.200.0.1/"; then
-    log_warn "vlan100 not ready - running ovs-post-setup bring-up-vlans"
-    /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || {
-        log_warn "Failed to bring up VLAN interfaces"
+# Flat bridge mode: IP is on FTS bridge directly (no VLANs)
+log_info "Flat bridge mode: IP on FTS bridge, OpenFlow NAC"
+# Ensure FTS bridge has gateway IP (fortress-vlan.service should have done this)
+if ! ip addr show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -q "10.200.0.1/"; then
+    log_warn "FTS bridge not ready - running ovs-post-setup setup-gateway"
+    /opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup-gateway 2>/dev/null || {
+        log_warn "Failed to configure bridge gateway"
     }
 fi
 
@@ -4265,19 +4247,16 @@ OVSEOF
     local podman_compose_bin
     podman_compose_bin=$(command -v podman-compose || echo "/usr/bin/podman-compose")
 
-    # Determine if VLAN mode is enabled
-    local is_vlan_mode="false"
-    if [ "${NETWORK_MODE:-}" = "vlan" ] || [ -f "/etc/systemd/system/fortress-vlan.service" ]; then
-        is_vlan_mode="true"
-    fi
+    # Flat bridge mode always uses fortress-vlan.service for bridge setup
+    local is_flat_mode="true"
 
     # Build After/Requires lines based on network mode
     local after_deps="network-online.target openvswitch-switch.service podman.socket podman.service"
     local requires_deps="podman.socket openvswitch-switch.service"
     local wants_deps="network-online.target"
 
-    if [ "$is_vlan_mode" = "true" ]; then
-        # VLAN mode: Wait for fortress-vlan.service which sets up VLAN interfaces
+    if [ "$is_flat_mode" = "true" ]; then
+        # Flat bridge mode: Wait for fortress-vlan.service which sets up bridge gateway
         after_deps="$after_deps fortress-vlan.service"
         wants_deps="$wants_deps fortress-vlan.service"
     fi
@@ -4311,11 +4290,10 @@ ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2
 # Ensure bridge is UP
 ExecStartPre=/bin/bash -c 'ip link set FTS up 2>/dev/null || true'
 
-# CRITICAL: Ensure VLAN interfaces are UP with IPs
-# VLAN mode: IPs are on vlan100 (LAN) and vlan200 (MGMT), not FTS bridge
-ExecStartPre=/bin/bash -c '/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh bring-up-vlans 2>/dev/null || \\
-  (ip link set vlan100 up 2>/dev/null; ip addr add 10.200.0.1/\${LAN_SUBNET_MASK:-24} dev vlan100 2>/dev/null || true; \\
-   ip link set vlan200 up 2>/dev/null; ip addr add 10.200.100.1/30 dev vlan200 2>/dev/null || true)'
+# CRITICAL: Ensure FTS bridge has gateway IP
+# Flat bridge mode: IP is on FTS bridge directly (no VLANs)
+ExecStartPre=/bin/bash -c '/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup-gateway 2>/dev/null || \\
+  (ip link set FTS up 2>/dev/null; ip addr add 10.200.0.1/\${LAN_SUBNET_MASK:-24} dev FTS 2>/dev/null || true)'
 
 # Wait for podman to be fully ready (max 60 seconds)
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
@@ -4998,7 +4976,7 @@ uninstall() {
 # QUICK INSTALL
 # ============================================================
 quick_install() {
-    NETWORK_MODE="vlan"  # Always VLAN mode
+    NETWORK_MODE="flat"  # Always VLAN mode
     ADMIN_USER="admin"
     ADMIN_PASS="hookprobe"
     WEB_PORT="8443"
@@ -5215,20 +5193,13 @@ main() {
     echo "════════════════════════════════════════════════════════════════"
     echo ""
 
-    # Access information based on network mode
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "Access the admin portal:"
-        echo -e "  ${CYAN}From MGMT VLAN:${NC} https://10.200.100.1:${WEB_PORT}"
-        if [ -n "$MGMT_INTERFACE" ]; then
-            echo -e "  ${CYAN}MGMT Port:${NC}      $MGMT_INTERFACE (connect admin workstation here)"
-        fi
-        echo -e "  ${CYAN}Via Cloudflare:${NC} Configure tunnel for remote access"
-        echo ""
-        echo -e "${YELLOW}NOTE: WiFi clients CANNOT access admin portal (LAN isolated from MGMT)${NC}"
-    else
-        echo "Access the admin portal at:"
-        echo -e "  ${CYAN}https://10.200.0.1:${WEB_PORT}${NC}"
+    # Access information for flat bridge mode
+    echo "Access the admin portal:"
+    echo -e "  ${CYAN}https://10.200.0.1:${WEB_PORT}${NC}"
+    if [ -n "$MGMT_INTERFACE" ]; then
+        echo -e "  ${CYAN}Admin Port:${NC}     $MGMT_INTERFACE (recommended for admin workstation)"
     fi
+    echo -e "  ${CYAN}Via Cloudflare:${NC} Configure tunnel for remote access"
     echo ""
 
     echo "Login credentials:"
@@ -5247,24 +5218,21 @@ main() {
     fi
 
     echo "Network Configuration:"
-    echo -e "  Mode:       ${BOLD}VLAN${NC} (OVS-based segmentation)"
+    echo -e "  Mode:       ${BOLD}Flat Bridge${NC} (OpenFlow NAC)"
     echo -e "  Bridge:     $OVS_BRIDGE (OVS with OpenFlow 1.3+)"
     echo ""
-    echo "VLAN Segmentation:"
-    echo -e "  VLAN 100 (LAN):  10.200.0.0/${LAN_SUBNET_MASK:-24} - WiFi clients, regular devices"
-    echo -e "  VLAN 200 (MGMT): 10.200.100.0/30 - Admin access"
-    if [ -n "$MGMT_INTERFACE" ]; then
-        echo -e "  MGMT Port:       $MGMT_INTERFACE (trunk: native LAN + tagged MGMT)"
-    fi
+    echo "Network Architecture:"
+    echo -e "  FTS Bridge:  10.200.0.0/${LAN_SUBNET_MASK:-24} - WiFi clients, LAN devices"
+    echo -e "  OpenFlow:    NAC via device fingerprinting policies"
     echo ""
 
     echo "Container Network: 172.20.200.0/24 (isolated)"
     echo ""
 
     echo "Security Features:"
-    echo "  - OpenFlow tier isolation (containers can't reach unauthorized networks)"
+    echo "  - OpenFlow NAC (Network Access Control via fingerprints)"
     echo "  - Traffic mirroring to QSecBit (all traffic analyzed)"
-    echo "  - VLAN-based segmentation (LAN isolated from management)"
+    echo "  - Flat bridge for low-latency packet processing"
     echo "  - sFlow/IPFIX export for ML analysis"
     echo "  - VXLAN tunnels ready for mesh connectivity"
     echo "  - AI Device Fingerprinting (99%+ accuracy)"

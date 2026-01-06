@@ -58,11 +58,13 @@ fi
 
 # Defaults
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
-VLAN_LAN="${VLAN_LAN:-100}"
-VLAN_MGMT="${VLAN_MGMT:-200}"
 GATEWAY_LAN="${GATEWAY_LAN:-10.200.0.1}"
-GATEWAY_MGMT="${GATEWAY_MGMT:-10.200.100.1}"
 LAN_MASK="${LAN_MASK:-24}"
+
+# FLAT BRIDGE ARCHITECTURE (no VLANs)
+# IP is assigned directly to FTS bridge's internal port
+# OpenFlow rules handle NAC (Network Access Control)
+# This simplifies the network and reduces packet processing overhead
 
 # Container network
 CONTAINER_SUBNET="${CONTAINER_SUBNET:-172.20.200.0/24}"
@@ -199,14 +201,18 @@ ensure_ovs_vlan_port() {
     fi
 }
 
-bring_up_vlan_interfaces() {
-    log_section "Bringing Up VLAN Interfaces"
+setup_bridge_gateway() {
+    log_section "Setting Up Bridge Gateway"
 
     local gateway_lan="${GATEWAY_LAN:-10.200.0.1}"
-    local gateway_mgmt="${GATEWAY_MGMT:-10.200.100.1}"
     local lan_mask="${LAN_MASK:-24}"
 
-    # First, ensure the OVS bridge itself is UP
+    # FLAT BRIDGE ARCHITECTURE
+    # OVS bridge has a default internal port with the same name (FTS)
+    # We assign the gateway IP directly to this port
+    # No VLAN tagging overhead - pure Layer 2 switching with OpenFlow NAC
+
+    # Ensure the OVS bridge is UP
     if ip link show "$OVS_BRIDGE" &>/dev/null; then
         if ! ip link show "$OVS_BRIDGE" | grep -q "state UP"; then
             log_info "Bringing bridge $OVS_BRIDGE UP..."
@@ -217,22 +223,23 @@ bring_up_vlan_interfaces() {
         return 1
     fi
 
-    # VLAN 100 (LAN) - Create/ensure as OVS internal port
-    local vlan_lan="vlan${VLAN_LAN}"
-    if ! ensure_ovs_vlan_port "$vlan_lan" "$VLAN_LAN" "$gateway_lan" "$lan_mask"; then
-        log_error "Failed to configure $vlan_lan"
-        return 1
+    # Assign gateway IP directly to the FTS bridge's internal port
+    # This is the correct way to give OVS bridge an IP (via its internal port)
+    if ! ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${gateway_lan}/"; then
+        log_info "Assigning ${gateway_lan}/${lan_mask} to $OVS_BRIDGE..."
+        ip addr add "${gateway_lan}/${lan_mask}" dev "$OVS_BRIDGE" 2>/dev/null || {
+            log_warn "IP may already be assigned to $OVS_BRIDGE"
+        }
     fi
 
-    # VLAN 200 (MGMT) - Create/ensure as OVS internal port
-    local vlan_mgmt="vlan${VLAN_MGMT}"
-    if ! ensure_ovs_vlan_port "$vlan_mgmt" "$VLAN_MGMT" "$gateway_mgmt" "30"; then
-        log_error "Failed to configure $vlan_mgmt"
+    # Verify IP assignment
+    if ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${gateway_lan}/"; then
+        log_success "$OVS_BRIDGE: UP with IP ${gateway_lan}/${lan_mask} (flat bridge)"
+        return 0
+    else
+        log_error "$OVS_BRIDGE: Failed to assign IP ${gateway_lan}/${lan_mask}"
         return 1
     fi
-
-    log_success "All VLAN interfaces ready (OVS internal ports)"
-    return 0
 }
 
 # ============================================================
@@ -308,129 +315,33 @@ configure_openflow() {
 }
 
 # ============================================================
-# PORT VLAN TAGGING
+# PORT CONFIGURATION (FLAT BRIDGE - NO VLAN TAGGING)
 # ============================================================
 
-detect_trunk_port() {
-    # Auto-detect management/trunk port (last ethernet port on bridge)
-    local ports ethernet_ports=()
+configure_bridge_ports() {
+    log_section "Configuring Bridge Ports (Flat Mode)"
 
-    ports=$(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null) || return
-
-    for port in $ports; do
-        # Skip internal VLAN interfaces
-        [[ "$port" =~ ^vlan[0-9]+$ ]] && continue
-        # Skip veth pairs
-        [[ "$port" =~ ^veth ]] && continue
-        # Skip WiFi
-        [[ "$port" =~ ^wlan|^wlp|^wlx ]] && continue
-
-        ethernet_ports+=("$port")
-    done
-
-    # Sort and get last one (typically enp4s0 on 4-port box)
-    if [ ${#ethernet_ports[@]} -gt 0 ]; then
-        printf '%s\n' "${ethernet_ports[@]}" | sort -V | tail -1
-    fi
-}
-
-configure_port_vlans() {
-    log_section "Configuring Port VLAN Tags"
-
-    # Detect trunk port
-    local trunk_port
-    trunk_port=$(detect_trunk_port)
-    [ -n "$trunk_port" ] && log_info "Detected trunk port: $trunk_port"
+    # FLAT BRIDGE ARCHITECTURE
+    # All ports are untagged (no VLAN overhead)
+    # OpenFlow rules handle NAC (Network Access Control)
 
     # Get all ports
     local ports
     ports=$(ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null) || return 0
 
     for port in $ports; do
-        # Skip internal VLAN interfaces (created by netplan)
-        [[ "$port" =~ ^vlan[0-9]+$ ]] && continue
+        # Skip the bridge's internal port (FTS itself)
+        [[ "$port" == "$OVS_BRIDGE" ]] && continue
 
-        # Skip veth pairs (handled separately)
-        [[ "$port" =~ ^veth ]] && continue
+        # Clear any existing VLAN tags - flat bridge mode
+        ovs-vsctl remove port "$port" tag 2>/dev/null || true
+        ovs-vsctl remove port "$port" vlan_mode 2>/dev/null || true
 
-        case "$port" in
-            # WiFi interfaces - VLAN 100 (LAN) access mode
-            wlan*|wlp*|wlx*)
-                log_info "WiFi $port → VLAN $VLAN_LAN (access)"
-                ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access 2>/dev/null || true
-                ;;
-
-            *)
-                if [ "$port" = "$trunk_port" ]; then
-                    # Trunk port - carries both VLANs
-                    log_info "TRUNK $port → Native $VLAN_LAN + Tagged $VLAN_MGMT"
-                    ovs-vsctl set port "$port" \
-                        trunks="$VLAN_LAN,$VLAN_MGMT" \
-                        vlan_mode=native-untagged \
-                        tag="$VLAN_LAN" 2>/dev/null || true
-                else
-                    # Regular LAN port - VLAN 100 access
-                    log_info "LAN $port → VLAN $VLAN_LAN (access)"
-                    ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access 2>/dev/null || true
-                fi
-                ;;
-        esac
+        log_info "Port $port: untagged (flat bridge)"
     done
 
-    log_success "Port VLAN configuration complete"
-}
-
-# ============================================================
-# CONTAINER BRIDGE (VETH TO VLAN 200)
-# ============================================================
-
-setup_container_veth() {
-    log_section "Container Network Bridge"
-
-    local veth_host="veth-mgmt-host"
-    local veth_ovs="veth-mgmt-ovs"
-
-    # Create veth pair if not exists
-    if ! ip link show "$veth_host" &>/dev/null; then
-        log_info "Creating veth pair..."
-        ip link add "$veth_host" type veth peer name "$veth_ovs"
-    fi
-
-    # Add OVS side to bridge with VLAN 200 (idempotent)
-    # Check if port exists using port-to-br (more reliable than --if-exists get)
-    if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
-        # Port exists in some bridge - ensure it's on our bridge with correct VLAN
-        local current_br
-        current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
-        if [ "$current_br" = "$OVS_BRIDGE" ]; then
-            ovs-vsctl set port "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || true
-            log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_MGMT"
-        else
-            # Port on wrong bridge - move it
-            ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
-            log_info "Moved $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
-        fi
-    else
-        # Port doesn't exist in OVS - add it
-        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || {
-            # Might fail if interface not ready, try to recover
-            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
-        }
-        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
-    fi
-
-    # Bring up interfaces
-    ip link set "$veth_host" up
-    ip link set "$veth_ovs" up
-
-    # Host side IP for routing
-    if ! ip addr show "$veth_host" | grep -q "10.200.100.254"; then
-        ip addr add "10.200.100.254/24" dev "$veth_host" 2>/dev/null || true
-    fi
-
-    log_success "Container veth bridge configured"
+    log_success "Bridge ports configured (flat mode - no VLAN tagging)"
+    log_info "  All traffic flows at L2 with OpenFlow NAC"
 }
 
 # ============================================================
@@ -481,7 +392,7 @@ setup_avahi_coexistence() {
         echo "disallow-other-stacks=no" >> "$avahi_conf"
     fi
 
-    # Also enable reflector for cross-interface mDNS (br-wifi ↔ vlan100)
+    # Also enable reflector for cross-interface mDNS (br-wifi ↔ FTS bridge)
     if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
         sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
     elif grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
@@ -580,24 +491,25 @@ setup_wifi_bridge() {
     ip link set "$veth_br" up
     ip link set "$veth_ovs" up
 
-    # Add veth_ovs to OVS with VLAN 100 (LAN)
+    # Add veth_ovs to OVS (flat bridge - no VLAN tagging)
     if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
         local current_br
         current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
         if [ "$current_br" = "$OVS_BRIDGE" ]; then
-            ovs-vsctl set port "$veth_ovs" tag="$VLAN_LAN" 2>/dev/null || true
-            log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_LAN"
+            # Clear any VLAN tags (flat bridge mode)
+            ovs-vsctl remove port "$veth_ovs" tag 2>/dev/null || true
+            log_info "$veth_ovs already on $OVS_BRIDGE (flat mode)"
         else
             ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" || true
-            log_info "Moved $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_LAN"
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" || true
+            log_info "Moved $veth_ovs to $OVS_BRIDGE (flat mode)"
         fi
     else
-        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" 2>/dev/null || {
+        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" 2>/dev/null || {
             ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_LAN" || true
+            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" || true
         }
-        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_LAN"
+        log_info "Added $veth_ovs to $OVS_BRIDGE (flat mode)"
     fi
 
     # Enable hairpin mode on veth for mDNS reflection
@@ -726,11 +638,14 @@ show_status() {
         echo "  $port: tag=$tag mode=$mode"
     done
 
-    echo -e "\n${CYAN}VLAN Interfaces:${NC}"
-    ip -br addr show | grep -E "vlan[0-9]+" || echo "  (none)"
-
-    echo -e "\n${CYAN}Container veth:${NC}"
-    ip -br addr show | grep -E "veth-mgmt" || echo "  (none)"
+    echo -e "\n${CYAN}Bridge Gateway (Flat Mode):${NC}"
+    local fts_ip
+    fts_ip=$(ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -oP "inet \K[0-9./]+" | head -1)
+    if [ -n "$fts_ip" ]; then
+        echo "  $OVS_BRIDGE: $fts_ip (gateway)"
+    else
+        echo "  $OVS_BRIDGE: NO IP (gateway not configured)"
+    fi
 
     echo -e "\n${CYAN}Traffic Mirror (IDS/NSM Capture):${NC}"
     if ip link show FTS-mirror &>/dev/null; then
@@ -886,13 +801,9 @@ main() {
     case "$action" in
         setup|configure)
             wait_for_bridge || exit 1
-            bring_up_vlan_interfaces  # CRITICAL: Bring up VLANs with IPs first
+            setup_bridge_gateway  # CRITICAL: Assign IP to FTS bridge first
             configure_openflow
-            configure_port_vlans
-
-            # Container veth is optional - don't fail if it doesn't work
-            # Containers use podman's internal network as primary
-            setup_container_veth || log_warn "Container veth setup had issues (non-fatal)"
+            configure_bridge_ports
 
             # Avahi mDNS coexistence for Ecosystem Bubble detection
             # Enables HomeKit/AirPlay device grouping via PresenceSensor
@@ -919,20 +830,28 @@ main() {
             configure_openflow
             ;;
 
-        vlans)
+        gateway)
+            # Configure gateway IP on FTS bridge
             wait_for_bridge || exit 1
-            bring_up_vlan_interfaces
-            configure_port_vlans
+            setup_bridge_gateway
+            configure_bridge_ports
             ;;
 
-        bring-up-vlans)
-            # Standalone command to just bring up VLAN interfaces
+        ports)
+            # Configure bridge ports (flat mode - no VLAN tags)
             wait_for_bridge || exit 1
-            bring_up_vlan_interfaces
+            configure_bridge_ports
             ;;
 
         *)
-            echo "Usage: $0 {setup|status|openflow|vlans|bring-up-vlans}"
+            echo "Usage: $0 {setup|status|openflow|gateway|ports}"
+            echo ""
+            echo "Flat Bridge Architecture - OpenFlow NAC"
+            echo "  setup     - Full setup (gateway + openflow + ports)"
+            echo "  status    - Show bridge status"
+            echo "  openflow  - Configure OpenFlow rules"
+            echo "  gateway   - Setup gateway IP on FTS bridge"
+            echo "  ports     - Configure ports (flat mode)"
             exit 1
             ;;
     esac

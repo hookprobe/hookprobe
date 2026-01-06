@@ -207,10 +207,9 @@ if [ "$all_ok" = "true" ]; then
     ok "All core containers are running!"
     echo ""
     info "Access web UI at:"
-    info "  https://<fortress-ip>:${WEB_PORT}"
+    info "  https://10.200.0.1:${WEB_PORT}"
     echo ""
-    info "From MGMT VLAN: https://10.200.100.1:${WEB_PORT}"
-    info "From LAN:       https://10.200.0.1:${WEB_PORT}"
+    info "Or via any assigned IP on the FTS bridge"
 else
     echo ""
     warn "Some containers failed to start. Check logs:"

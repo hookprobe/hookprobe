@@ -96,11 +96,11 @@ fi
 DETECTED_GATEWAY=""
 DETECTED_SUBNET=""
 
-# VLAN mode: Get IP from vlan100 interface
-if ip addr show vlan100 2>/dev/null | grep -q "inet "; then
-    DETECTED_GATEWAY=$(ip addr show vlan100 | grep -oP 'inet \K[\d.]+' | head -1)
-    DETECTED_SUBNET=$(ip addr show vlan100 | grep -oP 'inet \K[\d./]+' | head -1)
-    log_success "VLAN mode: vlan100 = $DETECTED_SUBNET"
+# VLAN mode: Get IP from FTS interface
+if ip addr show FTS 2>/dev/null | grep -q "inet "; then
+    DETECTED_GATEWAY=$(ip addr show FTS | grep -oP 'inet \K[\d.]+' | head -1)
+    DETECTED_SUBNET=$(ip addr show FTS | grep -oP 'inet \K[\d./]+' | head -1)
+    log_success "VLAN mode: FTS = $DETECTED_SUBNET"
 fi
 
 if [ -z "$DETECTED_GATEWAY" ]; then
