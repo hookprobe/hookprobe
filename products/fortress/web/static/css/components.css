@@ -1922,3 +1922,216 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+
+/* =============================================================================
+   MOBILE & TOUCH SUPPORT
+   Critical fixes for touch devices (iOS Safari, Android Chrome, etc.)
+   ============================================================================= */
+
+/* Remove 300ms tap delay on touch devices */
+a, button, input, select, textarea, label,
+.btn, .toggle, .nav-link, .dropdown-toggle,
+[role="button"], [tabindex], .clickable {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(230, 149, 0, 0.2);
+}
+
+/* Ensure all interactive elements have proper touch targets */
+@media (pointer: coarse), (max-width: 768px) {
+    /* Minimum 44px touch targets (iOS standard) */
+    .btn, button:not(.close) {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 0.75rem 1rem;
+    }
+
+    .btn--sm {
+        min-height: 36px;
+        padding: 0.5rem 0.75rem;
+    }
+
+    /* Larger toggles on touch */
+    .toggle {
+        width: 52px;
+        height: 28px;
+    }
+
+    .toggle .toggle-slider {
+        width: 22px;
+        height: 22px;
+    }
+
+    .toggle input:checked + .toggle-slider {
+        transform: translateX(24px);
+    }
+
+    /* Larger level pips */
+    .level-pip {
+        width: 32px;
+        height: 32px;
+    }
+
+    /* Larger dropdown toggles */
+    .nav-link, .dropdown-item {
+        min-height: 44px;
+        padding: 0.75rem 1rem;
+        display: flex;
+        align-items: center;
+    }
+
+    /* Better spacing for mobile menu */
+    .navbar-badge {
+        font-size: 0.65rem;
+        padding: 3px 6px;
+    }
+
+    /* Table touch targets */
+    .data-table td, .data-table th {
+        padding: 0.75rem;
+    }
+
+    /* Card padding on mobile */
+    .fts-card-body {
+        padding: 1rem;
+    }
+
+    /* Modal buttons */
+    .modal-footer .btn {
+        min-width: 100px;
+    }
+
+    /* Toast close button */
+    .fts-toast .close {
+        min-width: 32px;
+        min-height: 32px;
+        padding: 0.5rem;
+    }
+}
+
+/* Visual feedback for touch interactions */
+@media (pointer: coarse) {
+    .btn:active,
+    button:active,
+    .nav-link:active,
+    .dropdown-item:active,
+    [role="button"]:active,
+    .toggle:active {
+        transform: scale(0.97);
+        opacity: 0.9;
+        transition: transform 0.1s, opacity 0.1s;
+    }
+
+    /* Active state for cards */
+    .fts-card:active {
+        transform: scale(0.99);
+    }
+
+    /* Table row active state */
+    .data-table tbody tr:active {
+        background: rgba(230, 149, 0, 0.15);
+    }
+}
+
+/* Focus visible for keyboard navigation (doesn't affect touch) */
+.btn:focus-visible,
+button:focus-visible,
+.nav-link:focus-visible,
+a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* AdminLTE sidebar fixes for mobile */
+@media (max-width: 991.98px) {
+    /* Ensure hamburger menu is clickable */
+    [data-widget="pushmenu"] {
+        min-width: 48px;
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        cursor: pointer;
+    }
+
+    /* Sidebar links on mobile */
+    .sidebar .nav-link {
+        min-height: 48px;
+        padding: 0.75rem 1rem;
+    }
+
+    /* Dropdown menus on mobile */
+    .dropdown-menu {
+        position: absolute;
+        z-index: 1050;
+        max-height: 80vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Full-width modals on small screens */
+    .modal-dialog {
+        margin: 0.5rem;
+        max-width: calc(100% - 1rem);
+    }
+
+    /* Better spacing for form inputs */
+    .form-control {
+        min-height: 44px;
+        font-size: 16px; /* Prevents iOS zoom */
+    }
+
+    select.form-control {
+        min-height: 44px;
+    }
+
+    /* Checkbox/radio touch targets */
+    .form-check {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+    }
+
+    .form-check-input {
+        width: 20px;
+        height: 20px;
+    }
+}
+
+/* iOS specific fixes */
+@supports (-webkit-touch-callout: none) {
+    /* Prevent text selection on long press */
+    .btn, button, .nav-link {
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    /* Fix for iOS safe area */
+    .main-footer {
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .btn {
+        border: 2px solid currentColor;
+    }
+}
+
+/* Reduced motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+    .btn:active,
+    .fts-card:active,
+    .toggle:active {
+        transform: none;
+    }
+
+    .pulse-glow,
+    .pulse-dot,
+    .live-dot {
+        animation: none;
+    }
+}
