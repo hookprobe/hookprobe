@@ -14,9 +14,9 @@ from .presence_tracker import PresenceTracker, Bubble
 from .performance_scorer import PerformanceScorer, HealthScore
 from .ambient_state import AmbientState, AmbientStateManager
 from .quick_actions import QuickActionExecutor, QuickAction
-from .time_patterns import TimePatternLearner, PatternAnomaly
+from .time_patterns import TimePatternLearner, Anomaly
 from .trust_heatmap import TrustHeatmap, TrustLevel
-from .whisper_mode import WhisperMode, WhisperPhase
+from .whisper_mode import WhisperEngine, WhisperPhase
 from .family_profiles import FamilyProfile, FamilyProfileManager, Persona
 
 __all__ = [
@@ -35,10 +35,10 @@ __all__ = [
     "QuickAction",
     # Intelligence Modules
     "TimePatternLearner",
-    "PatternAnomaly",
+    "Anomaly",
     "TrustHeatmap",
     "TrustLevel",
-    "WhisperMode",
+    "WhisperEngine",
     "WhisperPhase",
     # Family Profiles
     "FamilyProfile",
