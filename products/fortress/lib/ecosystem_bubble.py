@@ -204,6 +204,7 @@ class BubbleType(Enum):
 
 
 # Default policies for each bubble type
+# Note: Flat bridge architecture - segmentation via OpenFlow NAC rules, not VLANs
 BUBBLE_TYPE_POLICIES = {
     BubbleType.FAMILY: {
         'internet_access': True,
@@ -211,7 +212,6 @@ BUBBLE_TYPE_POLICIES = {
         'smart_home_access': True,
         'd2d_allowed': True,
         'shared_devices': True,
-        'vlan': 100,
         'qos_priority': 'high',
         'bandwidth_limit': None,  # Unlimited
         'mdns_allowed': True,
@@ -223,7 +223,6 @@ BUBBLE_TYPE_POLICIES = {
         'smart_home_access': False,
         'd2d_allowed': False,
         'shared_devices': False,
-        'vlan': 40,
         'qos_priority': 'low',
         'bandwidth_limit': 50,  # 50 Mbps
         'mdns_allowed': False,
@@ -235,7 +234,6 @@ BUBBLE_TYPE_POLICIES = {
         'smart_home_access': False,
         'd2d_allowed': False,
         'shared_devices': False,
-        'vlan': 50,
         'qos_priority': 'medium',
         'bandwidth_limit': None,
         'mdns_allowed': False,
@@ -247,7 +245,6 @@ BUBBLE_TYPE_POLICIES = {
         'smart_home_access': True,
         'd2d_allowed': True,
         'shared_devices': True,
-        'vlan': 30,
         'qos_priority': 'medium',
         'bandwidth_limit': 10,  # 10 Mbps for IoT
         'mdns_allowed': True,
@@ -259,7 +256,6 @@ BUBBLE_TYPE_POLICIES = {
         'smart_home_access': False,
         'd2d_allowed': False,
         'shared_devices': False,
-        'vlan': 100,
         'qos_priority': 'medium',
         'bandwidth_limit': None,
         'mdns_allowed': True,
