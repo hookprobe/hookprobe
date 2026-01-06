@@ -416,12 +416,16 @@ class ClickHouseGraphStore:
         mac_a, mac_b = sorted([mac_a.upper(), mac_b.upper()])
 
         try:
-            result = self._client.query(f'''
+            # Use parameterized query to prevent SQL injection (B608 fix)
+            result = self._client.query(
+                '''
                 SELECT * FROM bubble_device_relationships
-                WHERE mac_a = '{mac_a}' AND mac_b = '{mac_b}'
+                WHERE mac_a = {mac_a:String} AND mac_b = {mac_b:String}
                 ORDER BY last_seen DESC
                 LIMIT 1
-            ''')
+                ''',
+                parameters={'mac_a': mac_a, 'mac_b': mac_b}
+            )
 
             if result.row_count > 0:
                 return dict(zip(result.column_names, result.first_row))
@@ -437,14 +441,18 @@ class ClickHouseGraphStore:
             return []
 
         try:
-            result = self._client.query(f'''
+            # Use parameterized query to prevent SQL injection (B608 fix)
+            result = self._client.query(
+                '''
                 SELECT mac_a, mac_b, affinity_score, discovery_hits,
                        temporal_sync_score, connection_count, last_seen
                 FROM bubble_device_relationships
-                WHERE affinity_score >= {min_score}
+                WHERE affinity_score >= {min_score:Float64}
                 ORDER BY affinity_score DESC
-                LIMIT {limit}
-            ''')
+                LIMIT {limit:UInt32}
+                ''',
+                parameters={'min_score': float(min_score), 'limit': int(limit)}
+            )
 
             return [dict(zip(result.column_names, row)) for row in result.result_rows]
         except Exception as e:
@@ -461,12 +469,16 @@ class ClickHouseGraphStore:
             return []
 
         try:
-            result = self._client.query(f'''
+            # Use parameterized query to prevent SQL injection (B608 fix)
+            result = self._client.query(
+                '''
                 SELECT * FROM bubble_assignments
                 WHERE corrected = true
-                  AND timestamp > now() - INTERVAL {since_hours} HOUR
+                  AND timestamp > now() - INTERVAL {since_hours:UInt32} HOUR
                 ORDER BY timestamp DESC
-            ''')
+                ''',
+                parameters={'since_hours': int(since_hours)}
+            )
 
             return [dict(zip(result.column_names, row)) for row in result.result_rows]
         except Exception as e:
