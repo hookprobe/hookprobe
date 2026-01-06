@@ -413,33 +413,38 @@ setup_avahi_coexistence() {
 }
 
 # ============================================================
-# WIFI BRIDGE (SDN AUTOPILOT WITH BRIDGE PORT ISOLATION)
+# WIFI BRIDGE (SDN AUTOPILOT WITH HAIRPIN MODE)
 # ============================================================
 #
 # Architecture:
-#   WiFi clients → hostapd (ap_isolate=0) → br-wifi → veth → OVS
+#   WiFi clients → hostapd (ap_isolate=1) → br-wifi → veth → OVS
 #
-# Key: We use BRIDGE PORT ISOLATION instead of ap_isolate=1:
-#   - wlan interfaces: isolated=on (can ONLY talk to non-isolated ports)
-#   - veth-wifi-a: isolated=off (the "uplink" to OVS)
+# Key: We use ap_isolate=1 + HAIRPIN MODE (NOT bridge port isolation):
+#   - ap_isolate=1 in hostapd forces ALL traffic through the bridge
+#   - hairpin mode allows D2D traffic to return to the same/different WiFi
+#   - OVS NAC rules handle policy enforcement
 #
-# This forces ALL WiFi traffic through OVS for NAC policy enforcement,
-# while allowing device-to-device (D2D) for policies that permit it:
-#   - internet_only: OVS blocks LAN traffic (no D2D)
-#   - smart_home/full_access: OVS allows LAN traffic (D2D works)
+# Why NOT bridge port isolation (isolated=on)?
+#   - With isolated=on, traffic to veth works but return traffic is blocked
+#   - D2D fails even when OVS allows it because bridge blocks the return path
+#   - ap_isolate=1 already forces traffic through the bridge - isolation is redundant
 #
-# Traffic flow (D2D allowed):
+# Policy enforcement via OVS NAC rules:
+#   - internet_only: OVS blocks LAN traffic (priority 700)
+#   - smart_home/full_access: OVS allows LAN traffic (no blocking rule)
+#
+# Traffic flow (D2D allowed - smart_home):
 #   1. iPhone sends AirPlay to HomePod (both on wlan_24ghz)
-#   2. wlan_24ghz is isolated → traffic MUST go to veth-wifi-a
-#   3. veth-wifi-a → veth-wifi-b → OVS
-#   4. OVS checks NAC policy: iPhone is smart_home → ALLOW
-#   5. OVS forwards back to veth-wifi-b → veth-wifi-a
-#   6. veth-wifi-a is non-isolated → can reach wlan_24ghz → HomePod
+#   2. ap_isolate=1 forces traffic through br-wifi
+#   3. Traffic goes to veth-wifi-a → veth-wifi-b → OVS
+#   4. OVS checks NAC: iPhone is smart_home → no blocking rule → ALLOW
+#   5. OVS returns via veth-wifi-b → veth-wifi-a (hairpin on)
+#   6. br-wifi forwards to wlan_24ghz (hairpin on) → HomePod
 #
-# Traffic flow (D2D blocked):
-#   1. Guest phone sends to HomePod
-#   2. wlan → veth → OVS
-#   3. OVS checks NAC policy: Guest is internet_only → DROP
+# Traffic flow (D2D blocked - internet_only):
+#   1. Guest iPad tries to ping HomePod
+#   2. ap_isolate=1 forces through br-wifi → veth → OVS
+#   3. OVS checks NAC: iPad is internet_only → priority 700 DROP rule
 #   4. Traffic blocked at OVS layer
 #
 # ============================================================
@@ -522,48 +527,47 @@ setup_wifi_bridge() {
     fi
 
     # ============================================================
-    # BRIDGE PORT ISOLATION - Forces ALL traffic through OVS
+    # HAIRPIN MODE FOR D2D TRAFFIC
     # ============================================================
-    # Instead of ap_isolate=1 (which blocks at WiFi driver level),
-    # we use bridge port isolation:
-    #   - wlan interfaces: isolated=on (can ONLY reach non-isolated ports)
-    #   - veth-wifi-a: isolated=off (the "uplink" to OVS)
+    # With ap_isolate=1 in hostapd, all WiFi traffic goes through br-wifi.
+    # Hairpin mode allows traffic to return to the same or different WiFi interface.
+    # OVS NAC rules handle policy enforcement (internet_only blocks LAN traffic).
     #
-    # This forces ALL WiFi traffic through: wlan → veth → OVS
-    # OVS then applies NAC policies to allow/block based on device policy.
+    # NO bridge port isolation! With ap_isolate=1, traffic already goes through
+    # the bridge. Setting isolated=on would BLOCK D2D even after OVS allows it.
     # ============================================================
 
     if command -v bridge &>/dev/null; then
-        # veth-wifi-a is NON-ISOLATED (the uplink - traffic must go here)
-        bridge link set dev "$veth_br" isolated off 2>/dev/null || true
-        # Enable hairpin on veth for return traffic from OVS
+        # Enable hairpin on veth for OVS return traffic
         bridge link set dev "$veth_br" hairpin on 2>/dev/null || true
-        log_info "Set $veth_br: isolated=off, hairpin=on (OVS uplink)"
+        log_info "Set $veth_br: hairpin=on (OVS return traffic)"
 
-        # WiFi interfaces are ISOLATED (can only reach veth)
+        # Enable hairpin on WiFi interfaces for D2D reflection
+        # Do NOT set isolated=on - it breaks D2D even after OVS policy allows it
         for wlan_if in $(ls /sys/class/net/ 2>/dev/null | grep -E "^wlan|^wlp|^wlx"); do
             if ip link show master "$br_wifi" 2>/dev/null | grep -q "$wlan_if"; then
-                bridge link set dev "$wlan_if" isolated on 2>/dev/null || true
-                log_info "Set $wlan_if: isolated=on (traffic forced through OVS)"
+                bridge link set dev "$wlan_if" hairpin on 2>/dev/null || true
+                bridge link set dev "$wlan_if" isolated off 2>/dev/null || true
+                log_info "Set $wlan_if: hairpin=on, isolated=off (D2D allowed)"
             fi
         done
         # Also handle stable-named interfaces
         for wlan_if in wlan_24ghz wlan_5ghz; do
             if ip link show master "$br_wifi" 2>/dev/null | grep -q "$wlan_if"; then
-                bridge link set dev "$wlan_if" isolated on 2>/dev/null || true
-                log_info "Set $wlan_if: isolated=on (traffic forced through OVS)"
+                bridge link set dev "$wlan_if" hairpin on 2>/dev/null || true
+                bridge link set dev "$wlan_if" isolated off 2>/dev/null || true
+                log_info "Set $wlan_if: hairpin=on, isolated=off (D2D allowed)"
             fi
         done
     else
-        log_warn "bridge command not found - port isolation won't work"
-        log_warn "D2D may bypass OVS policy enforcement"
+        log_warn "bridge command not found - hairpin mode won't work"
+        log_warn "D2D traffic may not reflect properly"
     fi
 
     log_success "WiFi bridge configured for SDN Autopilot"
     log_info "  Bridge: $br_wifi → $veth_br ↔ $veth_ovs → OVS ($OVS_BRIDGE)"
-    log_info "  WiFi ports: isolated (forces traffic through OVS)"
-    log_info "  veth uplink: non-isolated + hairpin (returns traffic)"
-    log_info "  NAC policies enforced at OVS layer"
+    log_info "  All ports: hairpin=on (D2D reflection enabled)"
+    log_info "  OVS NAC rules handle policy (internet_only=blocked, smart_home=allowed)"
 }
 
 # ============================================================
