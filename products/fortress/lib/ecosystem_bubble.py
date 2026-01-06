@@ -2,6 +2,27 @@
 """
 Ecosystem Bubble Manager - Proprietary HookProbe Technology
 
+DEPRECATED: This module is being replaced by shared/aiochi/bubble/
+=================================================================
+The canonical bubble management module is now at:
+    shared/aiochi/bubble/
+        - types.py: BubbleType, NetworkPolicy, Bubble
+        - policy_resolver.py: OpenFlow policy mapping
+        - manager.py: EcosystemBubbleManager
+
+To use the new module:
+    from shared.aiochi.bubble import (
+        BubbleType, NetworkPolicy, Bubble,
+        get_bubble_manager, get_policy_resolver
+    )
+
+Or via fortress lib shim:
+    from products.fortress.lib import get_ecosystem_bubble_manager
+
+This file is kept for backwards compatibility but will be removed
+in a future release. Please migrate to the unified module.
+=================================================================
+
 PROPRIETARY AND CONFIDENTIAL
 Copyright (c) 2024-2025 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
