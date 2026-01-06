@@ -3992,7 +3992,10 @@ connect_containers_to_ovs() {
 
     # Services tier containers (internet-allowed via OpenFlow)
     # IPs must match podman-compose.yml assignments
-    attach_container_if_running "$ovs_script" fts-web 172.20.200.20 services
+    #
+    # IMPORTANT: fts-web is NOT attached to OVS because it needs podman's native
+    # port forwarding for port 8443. OVS attachment breaks DNAT rules.
+    # attach_container_if_running "$ovs_script" fts-web 172.20.200.20 services  # DISABLED - breaks port 8443
     attach_container_if_running "$ovs_script" fts-dnsxai 172.20.200.21 services
     attach_container_if_running "$ovs_script" fts-dfs 172.20.200.22 services
 
@@ -4207,7 +4210,9 @@ attach_if_ready fts-redis 172.20.200.11 data
 # Services tier (internet-allowed via OpenFlow)
 # All containers are on fts-internal (172.20.200.0/24) per podman-compose.yml
 # IPs MUST match compose file assignments
-attach_if_ready fts-web 172.20.200.20 services
+#
+# IMPORTANT: fts-web is NOT attached to OVS - it needs podman port forwarding for :8443
+# attach_if_ready fts-web 172.20.200.20 services  # DISABLED - breaks port 8443 forwarding
 attach_if_ready fts-dnsxai 172.20.200.21 services
 attach_if_ready fts-dfs 172.20.200.22 services
 
