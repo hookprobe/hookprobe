@@ -12,13 +12,21 @@
 # Boot sequence:
 #   1. fortress-vlan.service creates base OpenFlow rules (priority 500)
 #   2. fortress.service starts containers
-#   3. fts-ovs-connect.sh calls this script to apply per-device rules (priority 600-750)
+#   3. fts-ovs-connect.sh calls this script to apply per-device rules
 #
-# Per-device policies override base rules with higher priority:
+# Policy Priority Hierarchy (AIOCHI Bubble Integration):
+#   - Priority 900-1001: Device-specific policy overrides
+#   - Priority 600-850:  Bubble default policies
+#   - Priority 500:      Base ALLOW rules (fallback)
+#   - Priority 450:      D2D bubble rules (intra-bubble traffic)
+#   - Priority 100:      Default isolation
+#
+# Policy Types:
 #   - QUARANTINE: Priority 999-1001 (drop all except DHCP/DNS/ARP)
-#   - LAN_ONLY: Priority 600-750 (allow LAN devices, block internet)
-#   - INTERNET_ONLY: Priority 650-800 (allow DHCP/DNS/ARP, block ALL LAN including gateway ping)
-#   - FULL_ACCESS/NORMAL/SMART_HOME: No rules needed (use base priority 500)
+#   - LAN_ONLY: Priority 600-750 (allow LAN, block internet)
+#   - INTERNET_ONLY: Priority 650-850 (internet only, no LAN/mDNS)
+#   - SMART_HOME: Priority 500 (full local access, base allow)
+#   - FULL_ACCESS: Priority 500 (no restrictions)
 #
 
 set -e
@@ -37,8 +45,12 @@ CONTAINER_NETWORK="172.20.0.0/16"
 POLICY_TRIGGER_FILE="/opt/hookprobe/fortress/data/.nac_policy_sync"
 
 # Ecosystem Bubble trigger file for bubble-based OpenFlow rules
-# Written by ecosystem_bubble.py, consumed here to apply bubble rules
+# Written by shared/aiochi/bubble/manager.py, consumed here to apply bubble rules
 BUBBLE_TRIGGER_FILE="/opt/hookprobe/fortress/data/.bubble_sdn_sync"
+
+# Policy resolution trigger file for device-specific overrides
+# Written by shared/aiochi/bubble/policy_resolver.py
+POLICY_RESOLUTION_FILE="/opt/hookprobe/fortress/data/.policy_resolutions"
 
 # Database paths
 # Primary: SDN Autopilot database (device_identity table)
@@ -163,9 +175,24 @@ remove_device_rules() {
 }
 
 # Apply policy rules for a device
+# Args:
+#   $1: MAC address
+#   $2: Policy name (quarantine, lan_only, internet_only, smart_home, full_access)
+#   $3: Priority mode ('override' for device-specific, 'default' for bubble default)
+#
+# Priority offsets:
+#   - override: +300 (e.g., INTERNET_ONLY becomes 950-1100 instead of 650-800)
+#   - default: +0 (standard priorities)
 apply_policy() {
     local mac="$1"
     local policy="$2"
+    local priority_mode="${3:-default}"
+    local priority_offset=0
+
+    # Device-specific overrides get higher priority
+    if [ "$priority_mode" = "override" ]; then
+        priority_offset=300
+    fi
 
     # Normalize MAC: uppercase and colons (OVS expects XX:XX:XX:XX:XX:XX format)
     mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
@@ -176,6 +203,7 @@ apply_policy() {
     case "$policy" in
         isolated|quarantine)
             # QUARANTINE: Block all traffic except DHCP and DNS to gateway
+            # NOTE: Quarantine is ALWAYS highest priority regardless of override mode
             # Priority 1001: Allow DHCP (so device can get/renew IP)
             add_flow "priority=1001,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
             add_flow "priority=1001,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
@@ -198,19 +226,22 @@ apply_policy() {
             # LAN_ONLY: Device-to-device communication ONLY (IoT/IIoT, HomeKit lights)
             # NO dashboard, NO containers, NO internet - just talk to other devices
             #
+            # Priority offset: +300 for device overrides (e.g., 750 -> 1050)
             # Allow gateway for DHCP/DNS only
-            add_flow "priority=750,ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
-            add_flow "priority=740,ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
+            add_flow "priority=$((750 + priority_offset)),ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
+            add_flow "priority=$((740 + priority_offset)),ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
             # Block containers - IoT shouldn't talk to infrastructure
-            add_flow "priority=730,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
-            add_flow "priority=730,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
+            add_flow "priority=$((730 + priority_offset)),ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            add_flow "priority=$((730 + priority_offset)),ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
             # Allow device-to-device on LAN network only
-            add_flow "priority=720,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=NORMAL"
-            add_flow "priority=710,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=NORMAL"
+            add_flow "priority=$((720 + priority_offset)),ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=NORMAL"
+            add_flow "priority=$((710 + priority_offset)),ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=NORMAL"
             # Block everything else (internet)
-            add_flow "priority=600,ip,dl_src=$mac,actions=drop"
-            add_flow "priority=600,ip,dl_dst=$mac,actions=drop"
-            log_info "Applied LAN_ONLY policy for $mac (device-to-device only, no dashboard/internet)"
+            add_flow "priority=$((600 + priority_offset)),ip,dl_src=$mac,actions=drop"
+            add_flow "priority=$((600 + priority_offset)),ip,dl_dst=$mac,actions=drop"
+            local mode_str="bubble default"
+            [ "$priority_mode" = "override" ] && mode_str="device override"
+            log_info "Applied LAN_ONLY policy for $mac ($mode_str, device-to-device only)"
             ;;
 
         internet_only)
@@ -221,36 +252,39 @@ apply_policy() {
             # For internet routing: packets go THROUGH gateway (L2) but IP dst is internet host
             # So we don't need to allow IP traffic TO gateway IP - only DHCP and DNS
             #
-            # Priority 850: Block mDNS/Bonjour (no HomeKit/AirPlay discovery)
+            # Priority offset: +300 for device overrides (e.g., 850 -> 1150)
+            # Block mDNS/Bonjour (no HomeKit/AirPlay discovery)
             # This prevents internet_only devices from seeing or being seen by smart home devices
-            add_flow "priority=850,udp,dl_src=$mac,tp_dst=5353,actions=drop"
-            add_flow "priority=850,udp,dl_dst=$mac,tp_src=5353,actions=drop"
+            add_flow "priority=$((850 + priority_offset)),udp,dl_src=$mac,tp_dst=5353,actions=drop"
+            add_flow "priority=$((850 + priority_offset)),udp,dl_dst=$mac,tp_src=5353,actions=drop"
             # Also block IPv6 mDNS (HomeKit uses IPv6 heavily)
-            add_flow "priority=850,udp6,dl_src=$mac,tp_dst=5353,actions=drop"
-            add_flow "priority=850,udp6,dl_dst=$mac,tp_src=5353,actions=drop"
-            # Priority 800: Allow DHCP (essential for IP assignment)
-            add_flow "priority=800,udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
-            add_flow "priority=800,udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
-            # Priority 800: Allow DNS to gateway only (for name resolution)
-            add_flow "priority=800,udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
-            add_flow "priority=800,udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
-            add_flow "priority=800,tcp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
-            add_flow "priority=800,tcp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
-            # Priority 800: Allow ARP (needed for gateway MAC resolution)
-            add_flow "priority=800,arp,dl_src=$mac,actions=NORMAL"
-            add_flow "priority=800,arp,dl_dst=$mac,actions=NORMAL"
-            # Priority 750: Block containers - no access to infrastructure
-            add_flow "priority=750,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
-            add_flow "priority=750,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
-            # Priority 700: Block ALL LAN traffic (including gateway - no ping allowed)
+            add_flow "priority=$((850 + priority_offset)),udp6,dl_src=$mac,tp_dst=5353,actions=drop"
+            add_flow "priority=$((850 + priority_offset)),udp6,dl_dst=$mac,tp_src=5353,actions=drop"
+            # Allow DHCP (essential for IP assignment)
+            add_flow "priority=$((800 + priority_offset)),udp,dl_src=$mac,tp_dst=67,actions=NORMAL"
+            add_flow "priority=$((800 + priority_offset)),udp,dl_dst=$mac,tp_src=67,actions=NORMAL"
+            # Allow DNS to gateway only (for name resolution)
+            add_flow "priority=$((800 + priority_offset)),udp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            add_flow "priority=$((800 + priority_offset)),udp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            add_flow "priority=$((800 + priority_offset)),tcp,dl_src=$mac,nw_dst=$GATEWAY_IP,tp_dst=53,actions=NORMAL"
+            add_flow "priority=$((800 + priority_offset)),tcp,dl_dst=$mac,nw_src=$GATEWAY_IP,tp_src=53,actions=NORMAL"
+            # Allow ARP (needed for gateway MAC resolution)
+            add_flow "priority=$((800 + priority_offset)),arp,dl_src=$mac,actions=NORMAL"
+            add_flow "priority=$((800 + priority_offset)),arp,dl_dst=$mac,actions=NORMAL"
+            # Block containers - no access to infrastructure
+            add_flow "priority=$((750 + priority_offset)),ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            add_flow "priority=$((750 + priority_offset)),ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
+            # Block ALL LAN traffic (including gateway - no ping allowed)
             # This blocks: other devices, dashboard, gateway ICMP/ping
-            add_flow "priority=700,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=drop"
-            add_flow "priority=700,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=drop"
-            # Priority 650: Allow internet (non-LAN destinations)
+            add_flow "priority=$((700 + priority_offset)),ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=drop"
+            add_flow "priority=$((700 + priority_offset)),ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=drop"
+            # Allow internet (non-LAN destinations)
             # Internet traffic has nw_dst=internet_host (e.g., 8.8.8.8), not gateway IP
-            add_flow "priority=650,ip,dl_src=$mac,actions=NORMAL"
-            add_flow "priority=650,ip,dl_dst=$mac,actions=NORMAL"
-            log_info "Applied INTERNET_ONLY policy for $mac (no LAN/mDNS/HomeKit access)"
+            add_flow "priority=$((650 + priority_offset)),ip,dl_src=$mac,actions=NORMAL"
+            add_flow "priority=$((650 + priority_offset)),ip,dl_dst=$mac,actions=NORMAL"
+            local mode_str="bubble default"
+            [ "$priority_mode" = "override" ] && mode_str="device override"
+            log_info "Applied INTERNET_ONLY policy for $mac ($mode_str, no LAN/mDNS access)"
             ;;
 
         full_access|normal|smart_home|default|"")
