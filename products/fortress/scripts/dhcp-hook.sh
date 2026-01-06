@@ -89,7 +89,7 @@ JSON_PAYLOAD=$(cat <<EOF
         "vendor_class": "${DNSMASQ_VENDOR_CLASS:-null}",
         "option55": "${DNSMASQ_REQUESTED_OPTIONS:-null}",
         "client_id": "${DNSMASQ_CLIENT_ID:-null}",
-        "interface": "${DNSMASQ_INTERFACE:-vlan100}",
+        "interface": "${DNSMASQ_INTERFACE:-FTS}",
         "lease_length": "${DNSMASQ_LEASE_LENGTH:-3600}",
         "timestamp": "$(date -Iseconds)"
     },

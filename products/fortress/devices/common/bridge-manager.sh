@@ -4,20 +4,19 @@
 # ============================================================
 #
 # Creates and manages the FTS bridge for Fortress deployments.
-# FTS is a Layer 2 OVS switch - NO IP on bridge itself.
 #
-# Network Architecture:
+# FLAT BRIDGE ARCHITECTURE:
 #   WAN (Primary):   enp1s0, eth0, etc. → DHCP from ISP
 #   WAN (Failover):  wwp0s20f0u4, wwan0 → LTE modem
-#   FTS Bridge:      Layer 2 OVS switch (NO IP)
-#   vlan100:         LAN clients + WiFi (10.200.0.1/XX - user configurable)
-#   vlan200:         Management network (10.200.100.1/30 - fixed)
+#   FTS Bridge:      OVS switch with gateway IP (10.200.0.1/XX)
 #
-# The FTS bridge handles layer 2 switching and VLAN tagging.
-# IP addresses are assigned to vlan100 and vlan200 interfaces.
-# DHCP/DNS services bind to vlan100 (not the bridge).
+# The FTS bridge handles layer 2 switching with OpenFlow NAC.
+# Gateway IP is assigned directly to the FTS bridge internal port.
+# DHCP/DNS services bind to FTS bridge.
+# No VLANs - all ports untagged for low-latency operation.
+# OpenFlow rules handle Network Access Control (NAC).
 #
-# Version: 5.1.0
+# Version: 5.2.0
 # License: AGPL-3.0
 #
 # ============================================================
@@ -47,13 +46,11 @@ log_success() {
 }
 
 # Configuration
-# NOTE: FTS bridge is Layer 2 only - NO IP on bridge itself
-# IPs are assigned to vlan100 (LAN) and vlan200 (MGMT)
+# FLAT BRIDGE: Gateway IP is assigned directly to FTS bridge
+# OpenFlow rules handle NAC (Network Access Control) via fingerprints
 BRIDGE_NAME="${FORTRESS_BRIDGE_NAME:-FTS}"
-VLAN_LAN_IP="${FORTRESS_VLAN_LAN_IP:-10.200.0.1}"
-VLAN_LAN_MASK="${FORTRESS_VLAN_LAN_MASK:-24}"
-VLAN_MGMT_IP="${FORTRESS_VLAN_MGMT_IP:-10.200.100.1}"
-VLAN_MGMT_MASK="30"
+GATEWAY_IP="${FORTRESS_GATEWAY_IP:-10.200.0.1}"
+GATEWAY_MASK="${FORTRESS_GATEWAY_MASK:-24}"
 
 # State directory
 STATE_DIR="/var/lib/fortress/bridge"
@@ -64,15 +61,14 @@ STATE_DIR="/var/lib/fortress/bridge"
 
 create_bridge() {
     # Create the FTS bridge if it doesn't exist
-    # NOTE: FTS bridge is Layer 2 only - NO IP on bridge
-    # IPs are assigned to vlan100/vlan200 interfaces
+    # FLAT BRIDGE: Gateway IP assigned directly to bridge
     #
     # Args:
     #   $1 - Bridge name (optional, defaults to FTS)
 
     local bridge="${1:-$BRIDGE_NAME}"
 
-    log_info "Creating bridge: $bridge (Layer 2 - no IP)"
+    log_info "Creating bridge: $bridge (flat bridge with gateway IP)"
 
     # Check if bridge already exists
     if ip link show "$bridge" &>/dev/null; then
@@ -86,12 +82,16 @@ create_bridge() {
         log_success "Bridge $bridge created"
     fi
 
-    # Configure bridge - bring up without IP
+    # Configure bridge - bring up
     ip link set "$bridge" up 2>/dev/null || true
 
-    # NOTE: NO IP assigned to bridge - IPs go on vlan100/vlan200
-    log_info "Bridge $bridge is Layer 2 only (no IP)"
-    log_info "IPs will be assigned to vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK) and vlan200 ($VLAN_MGMT_IP/$VLAN_MGMT_MASK)"
+    # Assign gateway IP to bridge (flat bridge mode)
+    if ! ip addr show "$bridge" 2>/dev/null | grep -q "$GATEWAY_IP/"; then
+        ip addr add "$GATEWAY_IP/$GATEWAY_MASK" dev "$bridge" 2>/dev/null || true
+        log_info "Assigned gateway IP $GATEWAY_IP/$GATEWAY_MASK to $bridge"
+    else
+        log_info "Gateway IP already assigned to $bridge"
+    fi
 
     # Disable STP (not needed for small networks)
     if [ -f "/sys/class/net/$bridge/bridge/stp_state" ]; then
@@ -296,7 +296,7 @@ setup_lan_bridge() {
 
 configure_nm_bridge() {
     # Create bridge using NetworkManager
-    # NOTE: FTS bridge is Layer 2 only - no IP on bridge
+    # NOTE: FTS bridge has gateway IP - no IP on bridge
     #
     # This is an alternative to the manual bridge creation
     # when NetworkManager is managing the network
@@ -343,7 +343,7 @@ configure_nm_bridge() {
     nmcli con up "$bridge" 2>/dev/null || true
 
     log_success "NetworkManager bridge created: $bridge (Layer 2)"
-    log_info "IPs should be assigned to vlan100/vlan200, not the bridge"
+    log_info "IP should be assigned to FTS, not the bridge"
 }
 
 # ============================================================
@@ -352,8 +352,8 @@ configure_nm_bridge() {
 
 generate_netplan_bridge() {
     # Generate netplan configuration for the bridge
-    # NOTE: FTS bridge is Layer 2 only - no IP on bridge
-    # IPs are assigned to vlan100/vlan200
+    # NOTE: FTS bridge has gateway IP - no IP on bridge
+    # IP is assigned to FTS
     #
     # Args:
     #   $1 - Output file path
@@ -372,7 +372,7 @@ generate_netplan_bridge() {
 #
 # WAN: $wan_iface (DHCP)
 # LAN Bridge: $BRIDGE_NAME ($lan_ifaces) - Layer 2 only, no IP
-# IPs: vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK), vlan200 ($VLAN_MGMT_IP/$VLAN_MGMT_MASK)
+# IP: FTS ($GATEWAY_IP/$GATEWAY_MASK)
 #
 network:
   version: 2
@@ -412,7 +412,7 @@ BRIDGEEOF
 
     cat >> "$output_file" << BRIDGECFGEOF
       # NO IP on bridge - Layer 2 only
-      # IPs are assigned to vlan100/vlan200
+      # IP is assigned to FTS
       dhcp4: false
       dhcp6: false
       parameters:
@@ -422,7 +422,7 @@ BRIDGECFGEOF
 
     chmod 644 "$output_file"
     log_success "Generated netplan config: $output_file"
-    log_info "Note: IPs should be assigned to vlan100/vlan200, not the bridge"
+    log_info "Note: IP should be assigned to FTS, not the bridge"
 
     # Suggest applying
     echo ""
@@ -435,8 +435,8 @@ BRIDGECFGEOF
 # ============================================================
 
 configure_dnsmasq_bridge() {
-    # Configure dnsmasq for DHCP on vlan100 (LAN VLAN)
-    # NOTE: FTS bridge is Layer 2 only - DHCP binds to vlan100
+    # Configure dnsmasq for DHCP on FTS (LAN VLAN)
+    # NOTE: FTS bridge has gateway IP - DHCP binds to FTS bridge
     #
     # Uses setup-dhcp.sh for the main configuration.
     # This function is for fallback/manual setup only.
@@ -445,9 +445,9 @@ configure_dnsmasq_bridge() {
     local dhcp_start="${FORTRESS_DHCP_START:-}"
     local dhcp_end="${FORTRESS_DHCP_END:-}"
     local dhcp_lease="${FORTRESS_DHCP_LEASE:-12h}"
-    local subnet_mask="${VLAN_LAN_MASK:-24}"
-    local gateway="${VLAN_LAN_IP:-10.200.0.1}"
-    local dhcp_iface="vlan100"
+    local subnet_mask="${GATEWAY_MASK:-24}"
+    local gateway="${GATEWAY_IP:-10.200.0.1}"
+    local dhcp_iface="FTS"
 
     # Calculate DHCP range based on subnet mask if not explicitly set
     # CRITICAL: Wrong defaults cause DHCP failures on small subnets!
@@ -473,19 +473,19 @@ configure_dnsmasq_bridge() {
 # HookProbe Fortress DHCP Configuration
 # Generated: $(date -Iseconds)
 #
-# NOTE: DHCP binds to vlan100 (FTS bridge is Layer 2 only)
+# NOTE: DHCP binds to FTS bridge (FTS bridge has gateway IP)
 
-# Interface binding - vlan100 (NOT the FTS bridge)
+# Interface binding - FTS (NOT the FTS bridge)
 interface=$dhcp_iface
 bind-dynamic
 
 # DHCP range
 dhcp-range=$dhcp_start,$dhcp_end,$dhcp_lease
 
-# Gateway (vlan100 IP)
+# Gateway (FTS IP)
 dhcp-option=3,$gateway
 
-# DNS (vlan100 IP)
+# DNS (FTS IP)
 dhcp-option=6,$gateway
 
 # Domain
@@ -510,20 +510,20 @@ DNSMASQEOF
 }
 
 configure_dnsmasq_bridge_custom() {
-    # Configure dnsmasq for DHCP on vlan100 with custom parameters
-    # NOTE: FTS bridge is Layer 2 only - DHCP binds to vlan100
+    # Configure dnsmasq for DHCP on FTS with custom parameters
+    # NOTE: FTS bridge has gateway IP - DHCP binds to FTS bridge
     #
     # Args:
-    #   $1 - Gateway IP (vlan100 IP)
+    #   $1 - Gateway IP (FTS IP)
     #   $2 - DHCP range start
     #   $3 - DHCP range end
     #   $4 - Lease time (optional, default 12h)
 
-    local gateway="${1:-$VLAN_LAN_IP}"
+    local gateway="${1:-$GATEWAY_IP}"
     local dhcp_start="${2:-10.200.0.100}"
     local dhcp_end="${3:-10.200.0.200}"
     local dhcp_lease="${4:-12h}"
-    local dhcp_iface="vlan100"
+    local dhcp_iface="FTS"
     local config_file="/etc/dnsmasq.d/fts-bridge.conf"
 
     log_info "Configuring dnsmasq for DHCP on $dhcp_iface..."
@@ -536,19 +536,19 @@ configure_dnsmasq_bridge_custom() {
 # HookProbe Fortress DHCP Configuration
 # Generated: $(date -Iseconds)
 #
-# NOTE: DHCP binds to vlan100 (FTS bridge is Layer 2 only)
+# NOTE: DHCP binds to FTS bridge (FTS bridge has gateway IP)
 
-# Interface binding - vlan100 (NOT the FTS bridge)
+# Interface binding - FTS (NOT the FTS bridge)
 interface=$dhcp_iface
 bind-dynamic
 
 # DHCP range
 dhcp-range=$dhcp_start,$dhcp_end,$dhcp_lease
 
-# Gateway (vlan100 IP)
+# Gateway (FTS IP)
 dhcp-option=3,$gateway
 
-# DNS (vlan100 IP)
+# DNS (FTS IP)
 dhcp-option=6,$gateway
 
 # Domain
@@ -612,7 +612,7 @@ setup_nat() {
 
 show_bridge_status() {
     # Display bridge status
-    # NOTE: FTS bridge is Layer 2 only - IPs on vlan100/vlan200
+    # NOTE: FTS bridge has gateway IP - IP on FTS
 
     local bridge="${1:-$BRIDGE_NAME}"
 
@@ -632,16 +632,11 @@ show_bridge_status() {
     echo "  Mode:       Layer 2 switch (no IP)"
     echo "  State:      $bridge_state"
 
-    # Show VLAN IPs if available
-    if ip link show vlan100 &>/dev/null; then
-        local vlan100_ip
-        vlan100_ip=$(ip addr show vlan100 2>/dev/null | grep "inet " | awk '{print $2}')
-        echo "  vlan100 IP: ${vlan100_ip:-not set} (LAN clients)"
-    fi
-    if ip link show vlan200 &>/dev/null; then
-        local vlan200_ip
-        vlan200_ip=$(ip addr show vlan200 2>/dev/null | grep "inet " | awk '{print $2}')
-        echo "  vlan200 IP: ${vlan200_ip:-not set} (Management)"
+    # Show VLAN IP if available
+    if ip link show FTS &>/dev/null; then
+        local FTS_ip
+        FTS_ip=$(ip addr show FTS 2>/dev/null | grep "inet " | awk '{print $2}')
+        echo "  FTS IP: ${FTS_ip:-not set} (LAN clients)"
     fi
 
     # List bridge members
@@ -678,8 +673,8 @@ usage() {
     echo ""
     echo "Network Architecture:"
     echo "  FTS Bridge:  Layer 2 switch (no IP)"
-    echo "  vlan100:     LAN clients + WiFi (10.200.0.1/XX)"
-    echo "  vlan200:     Management (10.200.100.1/30)"
+    echo "  FTS:     LAN clients + WiFi (10.200.0.1/XX)"
+    echo "  Note: Access control via OpenFlow fingerprint policies"
     echo ""
     echo "Commands:"
     echo "  create [name]             - Create Layer 2 bridge"
@@ -689,7 +684,7 @@ usage() {
     echo "  setup                     - Auto-setup LAN bridge"
     echo "  status [bridge]           - Show bridge status"
     echo "  netplan [output_file]     - Generate netplan config"
-    echo "  dnsmasq                   - Configure dnsmasq DHCP on vlan100"
+    echo "  dnsmasq                   - Configure dnsmasq DHCP on FTS"
     echo "  nat <wan_iface>           - Setup NAT masquerade"
     echo ""
 }

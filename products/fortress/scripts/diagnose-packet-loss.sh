@@ -112,8 +112,8 @@ ip -s link show | grep -A6 -E "^[0-9]+:" | grep -E "^[0-9]+:|errors|dropped|over
 
 echo ""
 echo -e "${CYAN}VLAN Interface Status:${NC}"
-ip addr show vlan100 2>/dev/null || echo "vlan100 not found"
-ip addr show vlan200 2>/dev/null || echo "vlan200 not found"
+ip addr show FTS 2>/dev/null || echo "FTS not found"
+ip addr show FTS 2>/dev/null || echo "FTS not found"
 
 echo ""
 echo -e "${CYAN}Bridge/OVS Interface:${NC}"
@@ -254,7 +254,7 @@ if [[ -f /proc/sys/net/netfilter/nf_conntrack_count ]]; then
 fi
 
 # Check interface drops
-for iface in FTS vlan100 eth0 enp1s0; do
+for iface in FTS FTS eth0 enp1s0; do
     DROPS=$(ip -s link show $iface 2>/dev/null | grep -A1 "RX:" | tail -1 | awk '{print $4}')
     if [[ -n "$DROPS" && "$DROPS" -gt 1000 ]]; then
         ISSUES+=("INTERFACE DROPS on $iface: $DROPS")
