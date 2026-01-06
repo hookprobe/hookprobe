@@ -533,6 +533,424 @@
         text-transform: uppercase;
     }
 
+    /* Bubble Manager Section */
+    .bubble-manager-card {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        margin-top: 24px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .bubble-manager-header {
+        padding: 20px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .bubble-manager-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .bubble-manager-title i {
+        color: var(--aiochi-primary);
+    }
+
+    .bubble-manager-body {
+        padding: 20px;
+    }
+
+    .bubble-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 16px;
+    }
+
+    .bubble-card {
+        background: rgba(255,255,255,0.03);
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        padding: 16px;
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+
+    .bubble-card:hover {
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.15);
+        transform: translateY(-2px);
+    }
+
+    .bubble-card.drop-target {
+        border-color: var(--aiochi-primary);
+        background: rgba(79, 195, 247, 0.1);
+        box-shadow: 0 0 20px rgba(79, 195, 247, 0.2);
+    }
+
+    .bubble-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+
+    .bubble-card-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .bubble-card-avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+    }
+
+    .bubble-card-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: var(--aiochi-text);
+    }
+
+    .bubble-card-type {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+    }
+
+    .bubble-card-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    .bubble-card-actions button {
+        background: none;
+        border: none;
+        color: var(--aiochi-text-muted);
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+    .bubble-card-actions button:hover {
+        background: rgba(255,255,255,0.1);
+        color: var(--aiochi-text);
+    }
+
+    .bubble-card-devices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-height: 36px;
+    }
+
+    .device-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 16px;
+        padding: 5px 10px;
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        cursor: grab;
+        transition: all 0.2s;
+        border: 1px solid transparent;
+    }
+
+    .device-tag:hover {
+        background: rgba(255,255,255,0.1);
+        color: var(--aiochi-text);
+    }
+
+    .device-tag.dragging {
+        opacity: 0.5;
+        cursor: grabbing;
+    }
+
+    .device-tag.online::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        background: var(--aiochi-calm);
+        border-radius: 50%;
+    }
+
+    .device-tag.offline::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        background: var(--aiochi-text-muted);
+        border-radius: 50%;
+    }
+
+    .bubble-card-footer {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .bubble-policy-badges {
+        display: flex;
+        gap: 6px;
+    }
+
+    .policy-badge {
+        font-size: 0.65rem;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.05);
+        color: var(--aiochi-text-muted);
+    }
+
+    .policy-badge.active {
+        background: rgba(129, 199, 132, 0.2);
+        color: var(--aiochi-calm);
+    }
+
+    .policy-badge.inactive {
+        background: rgba(229, 115, 115, 0.2);
+        color: var(--aiochi-alert);
+        text-decoration: line-through;
+    }
+
+    .bubble-device-count {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    /* Unassigned Devices Section */
+    .unassigned-section {
+        margin-top: 20px;
+        padding: 16px;
+        background: rgba(255, 183, 77, 0.05);
+        border-radius: 10px;
+        border: 1px dashed rgba(255, 183, 77, 0.3);
+    }
+
+    .unassigned-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--aiochi-curious);
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .unassigned-devices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        min-height: 32px;
+    }
+
+    /* Create Bubble Button */
+    .create-bubble-card {
+        background: rgba(79, 195, 247, 0.05);
+        border: 2px dashed rgba(79, 195, 247, 0.3);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 150px;
+        color: var(--aiochi-primary);
+        transition: all 0.3s ease;
+    }
+
+    .create-bubble-card:hover {
+        background: rgba(79, 195, 247, 0.1);
+        border-color: var(--aiochi-primary);
+    }
+
+    .create-bubble-card i {
+        font-size: 2rem;
+        margin-bottom: 8px;
+    }
+
+    .create-bubble-card span {
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+
+    /* Bubble Modal */
+    .bubble-modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s ease;
+    }
+
+    .bubble-modal-overlay.active {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    .bubble-modal {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        width: 90%;
+        max-width: 500px;
+        max-height: 90vh;
+        overflow-y: auto;
+        transform: scale(0.9);
+        transition: transform 0.3s ease;
+    }
+
+    .bubble-modal-overlay.active .bubble-modal {
+        transform: scale(1);
+    }
+
+    .bubble-modal-header {
+        padding: 20px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .bubble-modal-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        color: var(--aiochi-text);
+    }
+
+    .bubble-modal-close {
+        background: none;
+        border: none;
+        color: var(--aiochi-text-muted);
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+    }
+
+    .bubble-modal-body {
+        padding: 20px;
+    }
+
+    .bubble-form-group {
+        margin-bottom: 16px;
+    }
+
+    .bubble-form-group label {
+        display: block;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--aiochi-text);
+        margin-bottom: 6px;
+    }
+
+    .bubble-form-group input,
+    .bubble-form-group select {
+        width: 100%;
+        padding: 10px 12px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px;
+        color: var(--aiochi-text);
+        font-size: 0.9rem;
+    }
+
+    .bubble-form-group input:focus,
+    .bubble-form-group select:focus {
+        outline: none;
+        border-color: var(--aiochi-primary);
+    }
+
+    .bubble-color-picker {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .color-option {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s;
+    }
+
+    .color-option:hover {
+        transform: scale(1.1);
+    }
+
+    .color-option.selected {
+        border-color: white;
+        box-shadow: 0 0 10px rgba(255,255,255,0.3);
+    }
+
+    .bubble-modal-footer {
+        padding: 16px 20px;
+        border-top: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+    }
+
+    .btn-bubble {
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+    }
+
+    .btn-bubble-cancel {
+        background: rgba(255,255,255,0.1);
+        color: var(--aiochi-text-muted);
+    }
+
+    .btn-bubble-cancel:hover {
+        background: rgba(255,255,255,0.15);
+    }
+
+    .btn-bubble-save {
+        background: var(--aiochi-primary);
+        color: #000;
+    }
+
+    .btn-bubble-save:hover {
+        background: #6fd0fc;
+    }
+
+    .btn-bubble-delete {
+        background: rgba(229, 115, 115, 0.2);
+        color: var(--aiochi-alert);
+    }
+
+    .btn-bubble-delete:hover {
+        background: rgba(229, 115, 115, 0.3);
+    }
+
     /* Loading State */
     .loading-overlay {
         position: absolute;
@@ -704,6 +1122,92 @@
         </h4>
         <div class="quick-actions-grid" id="quick-actions">
             <!-- Actions populated by JS -->
+        </div>
+    </div>
+
+    <!-- Bubble Manager Section -->
+    <div class="bubble-manager-card">
+        <div class="bubble-manager-header">
+            <div class="bubble-manager-title">
+                <i class="fas fa-layer-group"></i>
+                <div>
+                    <span>Device Bubbles</span>
+                    <small style="font-weight: 400; color: var(--aiochi-text-muted); font-size: 0.75rem; display: block;">
+                        Drag devices between bubbles to organize your network
+                    </small>
+                </div>
+            </div>
+            <button class="btn-bubble btn-bubble-save" onclick="openCreateBubbleModal()">
+                <i class="fas fa-plus"></i> New Bubble
+            </button>
+        </div>
+        <div class="bubble-manager-body">
+            <div class="bubble-grid" id="bubble-grid">
+                <!-- Bubbles populated by JS -->
+            </div>
+
+            <!-- Unassigned Devices -->
+            <div class="unassigned-section" id="unassigned-section">
+                <div class="unassigned-title">
+                    <i class="fas fa-question-circle"></i>
+                    Unassigned Devices
+                </div>
+                <div class="unassigned-devices" id="unassigned-devices"
+                     ondragover="handleDragOver(event)"
+                     ondrop="handleDrop(event, null)">
+                    <!-- Unassigned devices populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bubble Create/Edit Modal -->
+    <div class="bubble-modal-overlay" id="bubble-modal-overlay" onclick="closeBubbleModal(event)">
+        <div class="bubble-modal" onclick="event.stopPropagation()">
+            <div class="bubble-modal-header">
+                <h3 id="bubble-modal-title">Create New Bubble</h3>
+                <button class="bubble-modal-close" onclick="closeBubbleModal()">&times;</button>
+            </div>
+            <div class="bubble-modal-body">
+                <input type="hidden" id="bubble-edit-id">
+
+                <div class="bubble-form-group">
+                    <label for="bubble-name">Bubble Name</label>
+                    <input type="text" id="bubble-name" placeholder="e.g., Dad's Devices">
+                </div>
+
+                <div class="bubble-form-group">
+                    <label for="bubble-type">Bubble Type</label>
+                    <select id="bubble-type">
+                        <option value="FAMILY">Family - Full network access</option>
+                        <option value="GUEST">Guest - Internet only</option>
+                        <option value="IOT">IoT - Smart home devices</option>
+                        <option value="WORK">Work - Isolated corporate</option>
+                        <option value="CUSTOM">Custom</option>
+                    </select>
+                </div>
+
+                <div class="bubble-form-group">
+                    <label>Color</label>
+                    <div class="bubble-color-picker" id="bubble-color-picker">
+                        <div class="color-option" style="background: #1976D2" data-color="#1976D2" onclick="selectColor('#1976D2')"></div>
+                        <div class="color-option" style="background: #E91E63" data-color="#E91E63" onclick="selectColor('#E91E63')"></div>
+                        <div class="color-option" style="background: #FF5722" data-color="#FF5722" onclick="selectColor('#FF5722')"></div>
+                        <div class="color-option" style="background: #4CAF50" data-color="#4CAF50" onclick="selectColor('#4CAF50')"></div>
+                        <div class="color-option" style="background: #FF9800" data-color="#FF9800" onclick="selectColor('#FF9800')"></div>
+                        <div class="color-option" style="background: #607D8B" data-color="#607D8B" onclick="selectColor('#607D8B')"></div>
+                        <div class="color-option" style="background: #9C27B0" data-color="#9C27B0" onclick="selectColor('#9C27B0')"></div>
+                        <div class="color-option selected" style="background: #2196F3" data-color="#2196F3" onclick="selectColor('#2196F3')"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="bubble-modal-footer">
+                <button class="btn-bubble btn-bubble-delete" id="bubble-delete-btn" style="display: none; margin-right: auto;" onclick="deleteBubble()">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+                <button class="btn-bubble btn-bubble-cancel" onclick="closeBubbleModal()">Cancel</button>
+                <button class="btn-bubble btn-bubble-save" onclick="saveBubble()">Save</button>
+            </div>
         </div>
     </div>
 </div>
@@ -970,6 +1474,305 @@
             console.error('Failed to toggle action:', error);
         }
     };
+
+    // =========================================================================
+    // BUBBLE MANAGER
+    // =========================================================================
+
+    // State
+    let bubblesData = { bubbles: [], unassigned_devices: [] };
+    let selectedColor = '#2196F3';
+    let draggedDevice = null;
+    let draggedFromBubble = null;
+
+    // Icon mapping for bubble types
+    const typeIcons = {
+        'FAMILY': 'fa-users',
+        'GUEST': 'fa-user-friends',
+        'IOT': 'fa-home',
+        'WORK': 'fa-briefcase',
+        'CUSTOM': 'fa-layer-group'
+    };
+
+    // Fetch bubbles from API
+    async function fetchBubbles() {
+        try {
+            const response = await fetch(`${API_BASE}/bubbles`);
+            const data = await response.json();
+            if (data.success) {
+                bubblesData = data;
+                renderBubbles();
+            }
+        } catch (error) {
+            console.error('Failed to fetch bubbles:', error);
+        }
+    }
+
+    // Render bubbles grid
+    function renderBubbles() {
+        const grid = document.getElementById('bubble-grid');
+        const unassignedEl = document.getElementById('unassigned-devices');
+
+        let html = '';
+
+        // Render each bubble
+        for (const bubble of bubblesData.bubbles) {
+            const devices = bubble.devices || [];
+            const policy = bubble.policy || {};
+
+            html += `
+            <div class="bubble-card"
+                 data-bubble-id="${bubble.bubble_id}"
+                 ondragover="handleDragOver(event)"
+                 ondrop="handleDrop(event, '${bubble.bubble_id}')">
+                <div class="bubble-card-header">
+                    <div class="bubble-card-info">
+                        <div class="bubble-card-avatar" style="background: ${bubble.color}20; color: ${bubble.color}">
+                            <i class="fas ${bubble.icon || typeIcons[bubble.bubble_type] || 'fa-layer-group'}"></i>
+                        </div>
+                        <div>
+                            <div class="bubble-card-name">${bubble.name}</div>
+                            <div class="bubble-card-type">${bubble.bubble_type}</div>
+                        </div>
+                    </div>
+                    <div class="bubble-card-actions">
+                        <button onclick="openEditBubbleModal('${bubble.bubble_id}')" title="Edit">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="bubble-card-devices">
+                    ${devices.map(d => `
+                        <div class="device-tag ${d.online !== false ? 'online' : 'offline'}"
+                             draggable="true"
+                             data-mac="${d.mac}"
+                             data-bubble="${bubble.bubble_id}"
+                             ondragstart="handleDragStart(event, '${d.mac}', '${bubble.bubble_id}')"
+                             ondragend="handleDragEnd(event)">
+                            ${d.label || d.mac}
+                        </div>
+                    `).join('')}
+                    ${devices.length === 0 ? '<span style="color: var(--aiochi-text-muted); font-size: 0.75rem;">Drop devices here</span>' : ''}
+                </div>
+                <div class="bubble-card-footer">
+                    <div class="bubble-policy-badges">
+                        <span class="policy-badge ${policy.internet !== false ? 'active' : 'inactive'}">Internet</span>
+                        <span class="policy-badge ${policy.lan ? 'active' : 'inactive'}">LAN</span>
+                        <span class="policy-badge ${policy.d2d ? 'active' : 'inactive'}">D2D</span>
+                    </div>
+                    <span class="bubble-device-count">${devices.length} devices</span>
+                </div>
+            </div>`;
+        }
+
+        // Add "Create New Bubble" card
+        html += `
+        <div class="bubble-card create-bubble-card" onclick="openCreateBubbleModal()">
+            <i class="fas fa-plus-circle"></i>
+            <span>Create New Bubble</span>
+        </div>`;
+
+        grid.innerHTML = html;
+
+        // Render unassigned devices
+        const unassigned = bubblesData.unassigned_devices || [];
+        if (unassigned.length > 0) {
+            unassignedEl.innerHTML = unassigned.map(d => `
+                <div class="device-tag"
+                     draggable="true"
+                     data-mac="${d.mac}"
+                     data-bubble=""
+                     ondragstart="handleDragStart(event, '${d.mac}', '')"
+                     ondragend="handleDragEnd(event)">
+                    ${d.label || d.mac}
+                </div>
+            `).join('');
+            document.getElementById('unassigned-section').style.display = 'block';
+        } else {
+            unassignedEl.innerHTML = '<span style="color: var(--aiochi-text-muted); font-size: 0.75rem;">No unassigned devices</span>';
+        }
+    }
+
+    // Drag and drop handlers
+    window.handleDragStart = function(event, mac, bubbleId) {
+        draggedDevice = mac;
+        draggedFromBubble = bubbleId;
+        event.target.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', mac);
+    };
+
+    window.handleDragEnd = function(event) {
+        event.target.classList.remove('dragging');
+        // Remove drop-target class from all cards
+        document.querySelectorAll('.bubble-card').forEach(card => {
+            card.classList.remove('drop-target');
+        });
+    };
+
+    window.handleDragOver = function(event) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+
+        // Add visual feedback
+        const card = event.target.closest('.bubble-card');
+        if (card && !card.classList.contains('create-bubble-card')) {
+            card.classList.add('drop-target');
+        }
+    };
+
+    window.handleDrop = async function(event, targetBubbleId) {
+        event.preventDefault();
+
+        // Remove drop-target class
+        document.querySelectorAll('.bubble-card').forEach(card => {
+            card.classList.remove('drop-target');
+        });
+
+        if (!draggedDevice) return;
+
+        // Don't do anything if dropped on same bubble
+        if (draggedFromBubble === targetBubbleId) {
+            draggedDevice = null;
+            draggedFromBubble = null;
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_BASE}/bubbles/move-device`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mac: draggedDevice,
+                    from_bubble: draggedFromBubble || null,
+                    to_bubble: targetBubbleId
+                })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                // Refresh bubbles
+                fetchBubbles();
+            } else {
+                console.error('Move device failed:', data.error);
+            }
+        } catch (error) {
+            console.error('Failed to move device:', error);
+        }
+
+        draggedDevice = null;
+        draggedFromBubble = null;
+    };
+
+    // Modal functions
+    window.openCreateBubbleModal = function() {
+        document.getElementById('bubble-modal-title').textContent = 'Create New Bubble';
+        document.getElementById('bubble-edit-id').value = '';
+        document.getElementById('bubble-name').value = '';
+        document.getElementById('bubble-type').value = 'FAMILY';
+        document.getElementById('bubble-delete-btn').style.display = 'none';
+        selectColor('#2196F3');
+        document.getElementById('bubble-modal-overlay').classList.add('active');
+    };
+
+    window.openEditBubbleModal = function(bubbleId) {
+        const bubble = bubblesData.bubbles.find(b => b.bubble_id === bubbleId);
+        if (!bubble) return;
+
+        document.getElementById('bubble-modal-title').textContent = 'Edit Bubble';
+        document.getElementById('bubble-edit-id').value = bubbleId;
+        document.getElementById('bubble-name').value = bubble.name;
+        document.getElementById('bubble-type').value = bubble.bubble_type;
+        document.getElementById('bubble-delete-btn').style.display = 'block';
+        selectColor(bubble.color || '#2196F3');
+        document.getElementById('bubble-modal-overlay').classList.add('active');
+    };
+
+    window.closeBubbleModal = function(event) {
+        if (event && event.target !== event.currentTarget) return;
+        document.getElementById('bubble-modal-overlay').classList.remove('active');
+    };
+
+    window.selectColor = function(color) {
+        selectedColor = color;
+        document.querySelectorAll('.color-option').forEach(opt => {
+            opt.classList.toggle('selected', opt.dataset.color === color);
+        });
+    };
+
+    window.saveBubble = async function() {
+        const bubbleId = document.getElementById('bubble-edit-id').value;
+        const name = document.getElementById('bubble-name').value.trim();
+        const bubbleType = document.getElementById('bubble-type').value;
+
+        if (!name) {
+            alert('Please enter a bubble name');
+            return;
+        }
+
+        try {
+            let url = `${API_BASE}/bubbles`;
+            let method = 'POST';
+
+            if (bubbleId) {
+                url = `${API_BASE}/bubbles/${bubbleId}`;
+                method = 'PUT';
+            }
+
+            const response = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    bubble_type: bubbleType,
+                    color: selectedColor,
+                    icon: typeIcons[bubbleType] || 'fa-layer-group'
+                })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                closeBubbleModal();
+                fetchBubbles();
+            } else {
+                alert(data.error || 'Failed to save bubble');
+            }
+        } catch (error) {
+            console.error('Failed to save bubble:', error);
+            alert('Failed to save bubble');
+        }
+    };
+
+    window.deleteBubble = async function() {
+        const bubbleId = document.getElementById('bubble-edit-id').value;
+        if (!bubbleId) return;
+
+        if (!confirm('Are you sure you want to delete this bubble? Devices will be moved to unassigned.')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_BASE}/bubbles/${bubbleId}`, {
+                method: 'DELETE'
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                closeBubbleModal();
+                fetchBubbles();
+            } else {
+                alert(data.error || 'Failed to delete bubble');
+            }
+        } catch (error) {
+            console.error('Failed to delete bubble:', error);
+            alert('Failed to delete bubble');
+        }
+    };
+
+    // Initialize bubbles on load
+    document.addEventListener('DOMContentLoaded', function() {
+        fetchBubbles();
+    });
 
 })();
 </script>
