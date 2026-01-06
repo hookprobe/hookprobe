@@ -1130,9 +1130,12 @@ def api_topology():
 def api_update_device_policy(mac):
     """Update device policy via drag-and-drop.
 
-    Uses the device_policies module which:
-    1. Updates the SQLite database (/var/lib/hookprobe/devices.db)
-    2. Applies OpenFlow rules for actual network enforcement
+    IMPORTANT: Uses SDN Autopilot as the SINGLE SOURCE OF TRUTH for policies.
+    This ensures consistency with the SDN dashboard and all other pages.
+
+    The autopilot.db database is authoritative for:
+    1. Policy storage (persisted in device_identity table)
+    2. OpenFlow rule application for network enforcement
     """
     from flask import request
 
@@ -1146,30 +1149,58 @@ def api_update_device_policy(mac):
     if new_policy not in valid_policies:
         return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
 
-    # Use device_policies module (same as SDN module) for consistent policy updates
+    # CRITICAL: Use SDN Autopilot as the single source of truth for policies
+    # This ensures Dashboard, SDN page, and AIOCHI all read/write the same data
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Normalize MAC address
+                mac_normalized = mac.upper().replace('-', ':')
+
+                # Update policy via SDN Autopilot (writes to autopilot.db)
+                result = autopilot.set_policy(mac_normalized, new_policy)
+
+                if result:
+                    # Clear cache to reflect change
+                    _local_cache.clear()
+
+                    # Get updated device info for response
+                    device = autopilot.get_device(mac_normalized)
+
+                    return jsonify({
+                        'success': True,
+                        'message': f'Policy updated to {new_policy}',
+                        'device': {
+                            'mac': mac_normalized,
+                            'policy': new_policy,
+                            'friendly_name': device.get('friendly_name') if device else None,
+                        }
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Device not found or update failed'}), 404
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Failed to update device policy via SDN Autopilot: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # Fallback to legacy device_policies module if SDN Autopilot unavailable
     if DEVICE_POLICIES_AVAILABLE:
         try:
-            # Normalize MAC address
             mac_normalized = mac.upper().replace('-', ':')
-
-            # Update policy and apply OpenFlow rules
             result = set_device_policy(mac_normalized, new_policy)
-
             if result:
-                # Clear cache to reflect change
                 _local_cache.clear()
-
                 return jsonify({
                     'success': True,
-                    'message': f'Policy updated to {new_policy}',
+                    'message': f'Policy updated to {new_policy} (legacy mode)',
                     'device': result
                 })
             else:
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
-        except ValueError as e:
-            return jsonify({'success': False, 'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Failed to update device policy: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    return jsonify({'success': False, 'error': 'Device policies module not available'}), 500
+    return jsonify({'success': False, 'error': 'No policy management module available'}), 500
