@@ -3,13 +3,12 @@
 # setup-dhcp.sh - Configure DHCP for Fortress OVS VLAN network
 # Part of HookProbe Fortress - Small Business Security Gateway
 #
-# Network Architecture:
-#   FTS Bridge: Layer 2 OVS switch (NO IP)
-#   vlan100: LAN clients + WiFi (IP: 10.200.0.1/XX)
-#   vlan200: Management (IP: 10.200.100.1/30)
+# Network Architecture (FLAT BRIDGE):
+#   FTS Bridge: OVS switch with IP 10.200.0.1/XX (gateway)
 #
-# DHCP listens on vlan100 (VLAN mode)
+# DHCP listens on FTS bridge (flat mode - no VLANs)
 # DHCP range is calculated based on user's subnet size
+# OpenFlow rules handle NAC (Network Access Control)
 #
 
 set -e
@@ -27,13 +26,10 @@ OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_GATEWAY="${LAN_GATEWAY:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
 
-# VLAN interfaces
-VLAN_LAN="${VLAN_LAN:-vlan100}"
-VLAN_MGMT="${VLAN_MGMT:-vlan200}"
-
-# MGMT configuration (fixed /30)
-MGMT_GATEWAY="${MGMT_GATEWAY:-10.200.100.1}"
-MGMT_SUBNET_MASK="30"
+# FLAT BRIDGE ARCHITECTURE
+# DHCP binds directly to OVS bridge (FTS) instead of VLAN interface
+# OVS bridge has IP assigned to its internal port
+DHCP_INTERFACE="${DHCP_INTERFACE:-FTS}"
 
 # Colors
 RED='\033[0;31m'
@@ -94,9 +90,9 @@ calculate_dhcp_range() {
     esac
 }
 
-# Get DHCP interface (always vlan100 - FTS bridge has no IP)
+# Get DHCP interface (FTS bridge in flat mode)
 get_dhcp_interface() {
-    echo "$VLAN_LAN"
+    echo "$DHCP_INTERFACE"
 }
 
 # ============================================
@@ -110,13 +106,10 @@ diagnose() {
     echo ""
 
     # Show configuration
-    echo "1. CONFIGURATION:"
-    echo "   OVS Bridge:      $OVS_BRIDGE (Layer 2 - no IP)"
+    echo "1. CONFIGURATION (FLAT BRIDGE MODE):"
+    echo "   OVS Bridge:      $OVS_BRIDGE (with gateway IP)"
     echo "   DHCP Interface:  $(get_dhcp_interface)"
     echo "   LAN Gateway:     $LAN_GATEWAY/$LAN_SUBNET_MASK"
-    echo "   VLAN LAN:        $VLAN_LAN"
-    echo "   VLAN MGMT:       $VLAN_MGMT"
-    echo "   MGMT Gateway:    $MGMT_GATEWAY/$MGMT_SUBNET_MASK"
     echo ""
 
     # Check dnsmasq status
@@ -163,37 +156,17 @@ diagnose() {
         local bridge_state
         bridge_state=$(ip link show "$OVS_BRIDGE" | grep -oP 'state \K\S+')
         if [ -n "$bridge_ip" ]; then
-            echo "   [WARN] $OVS_BRIDGE: $bridge_ip ($bridge_state)"
-            echo "   [WARN] FTS bridge should have NO IP - IPs belong on vlan100/vlan200"
+            echo "   [OK] $OVS_BRIDGE: $bridge_ip ($bridge_state) - flat bridge gateway"
         else
-            echo "   [OK] $OVS_BRIDGE: NO IP ($bridge_state) - correct for Layer 2 bridge"
+            echo "   [WARN] $OVS_BRIDGE: NO IP ($bridge_state) - gateway IP not assigned"
         fi
     else
         echo "   [MISSING] $OVS_BRIDGE bridge does not exist"
     fi
     echo ""
 
-    # Check VLAN interfaces
-    echo "6. VLAN INTERFACE STATUS:"
-    for iface in "$VLAN_LAN" "$VLAN_MGMT"; do
-        if ip link show "$iface" &>/dev/null; then
-            local ip
-            ip=$(ip -4 addr show "$iface" 2>/dev/null | grep "inet " | awk '{print $2}')
-            local state
-            state=$(ip link show "$iface" | grep -oP 'state \K\S+')
-            if [ -n "$ip" ]; then
-                echo "   [OK] $iface: $ip ($state)"
-            else
-                echo "   [WARN] $iface: NO IP ($state)"
-            fi
-        else
-            echo "   [MISSING] $iface does not exist"
-        fi
-    done
-    echo ""
-
     # Check dnsmasq config
-    echo "7. DNSMASQ CONFIGURATION:"
+    echo "6. DNSMASQ CONFIGURATION:"
     if [ -f /etc/dnsmasq.d/fortress.conf ]; then
         echo "   [OK] /etc/dnsmasq.d/fortress.conf exists"
         echo "   Interface:"
@@ -206,7 +179,7 @@ diagnose() {
     echo ""
 
     # Recent DHCP logs
-    echo "8. RECENT DHCP LOG ENTRIES:"
+    echo "7. RECENT DHCP LOG ENTRIES:"
     if [ -f /var/log/dnsmasq.log ]; then
         tail -10 /var/log/dnsmasq.log | sed 's/^/   /'
     else
@@ -243,7 +216,7 @@ install_dnsmasq() {
 configure() {
     log_info "Configuring DHCP for Fortress..."
     log_info "  Subnet:         /$LAN_SUBNET_MASK"
-    log_info "  DHCP Interface: $VLAN_LAN"
+    log_info "  DHCP Interface: $(get_dhcp_interface)"
 
     # Ensure dnsmasq is installed
     if ! command -v dnsmasq &>/dev/null; then
@@ -383,10 +356,10 @@ generate_dhcp_config() {
 #
 # LAN Subnet: 10.200.0.0/$LAN_SUBNET_MASK
 #
-# Network Architecture:
-#   FTS Bridge: Layer 2 OVS switch (NO IP)
-#   vlan100: LAN clients + WiFi (10.200.0.1/$LAN_SUBNET_MASK)
-#   vlan200: Management network (10.200.100.1/30)
+# Network Architecture (FLAT BRIDGE):
+#   FTS Bridge: OVS switch with gateway IP 10.200.0.1/$LAN_SUBNET_MASK
+#   OpenFlow rules handle NAC (Network Access Control)
+#   No VLANs - all ports untagged for low-latency operation
 #
 
 # ============================================
@@ -427,7 +400,7 @@ min-cache-ttl=300
 # ============================================
 # Interface binding
 # ============================================
-# DHCP/DNS listens ONLY on vlan100 (LAN gateway)
+# DHCP/DNS listens ONLY on FTS bridge (LAN gateway)
 # Using bind-interfaces + listen-address to avoid conflict with
 # Podman's aardvark-dns which listens on 172.20.200.1:53
 interface=$dhcp_iface
@@ -548,13 +521,12 @@ usage() {
     echo "  LAN_SUBNET_MASK  - Subnet size: 29, 28, 27, 26, 25, 24, 23 (default: 24)"
     echo "  LAN_GATEWAY      - Gateway IP (default: 10.200.0.1)"
     echo "  OVS_BRIDGE       - OVS bridge name (default: FTS)"
-    echo "  VLAN_LAN         - LAN VLAN interface (default: vlan100)"
-    echo "  VLAN_MGMT        - Management VLAN interface (default: vlan200)"
+    echo "  DHCP_INTERFACE   - DHCP interface (default: FTS bridge)"
     echo ""
-    echo "Network Architecture:"
-    echo "  FTS Bridge: Layer 2 OVS switch (NO IP)"
-    echo "  vlan100:    LAN clients + WiFi (10.200.0.1/XX)"
-    echo "  vlan200:    Management network (10.200.100.1/30)"
+    echo "Network Architecture (FLAT BRIDGE):"
+    echo "  FTS Bridge: OVS switch with gateway IP 10.200.0.1/XX"
+    echo "  OpenFlow:   NAC via device fingerprinting policies"
+    echo "  No VLANs:   All ports untagged for low-latency operation"
     echo ""
     echo "DHCP Range by Subnet:"
     echo "  /29  →  10.200.0.2 - 10.200.0.6      (6 devices)"

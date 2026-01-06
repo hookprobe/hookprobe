@@ -13,9 +13,9 @@ Type=oneshot
 RemainAfterExit=yes
 
 # Clean up stray OVS bridges and detach misattached ports
-# This fixes the "enp3s0 attached to bridge vlan100" error on reboot
+# This fixes the "enp3s0 attached to bridge FTS" error on reboot
 ExecStart=/bin/bash -c '\
-    for br in vlan100 vlan200 vlan1; do \
+    for br in FTS FTS vlan1; do \
         if /usr/bin/ovs-vsctl br-exists "$br" 2>/dev/null; then \
             echo "Removing stray OVS bridge: $br"; \
             for port in $(/usr/bin/ovs-vsctl list-ports "$br" 2>/dev/null); do \

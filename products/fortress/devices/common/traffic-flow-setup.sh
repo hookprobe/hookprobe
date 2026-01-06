@@ -129,7 +129,7 @@ table inet fts_nat {
         # Containers on 172.20.200.0/24 replying to LAN clients (10.200.0.x)
         # must use the LAN gateway IP so clients see responses from the same IP
         # Using masquerade to auto-select correct source IP based on output interface
-        ip saddr 172.20.200.0/24 oifname "vlan100" masquerade
+        ip saddr 172.20.200.0/24 oifname "FTS" masquerade
 
 NFTEOF
 

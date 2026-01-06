@@ -93,7 +93,7 @@ class JA3Fingerprinter:
     Uses tshark (Wireshark CLI) to capture and parse TLS Client Hello packets.
     """
 
-    def __init__(self, interface: str = "vlan100"):
+    def __init__(self, interface: str = "FTS"):
         self.interface = interface
         self.capture_process: Optional[subprocess.Popen] = None
         self.running = False
@@ -453,7 +453,7 @@ class JA3Fingerprinter:
 _ja3_instance: Optional[JA3Fingerprinter] = None
 
 
-def get_ja3_fingerprinter(interface: str = "vlan100") -> JA3Fingerprinter:
+def get_ja3_fingerprinter(interface: str = "FTS") -> JA3Fingerprinter:
     """Get singleton JA3 fingerprinter instance."""
     global _ja3_instance
 
