@@ -11,5 +11,5 @@
 # Install: pip install -r requirements-dfs.txt
 
 # Optional ML dependencies (graceful fallback without these)
-numpy>=1.20.0
-scikit-learn>=1.0.0
+numpy>=1.24.0,<2.0.0
+scikit-learn>=1.5.0,<2.0.0  # CVE-2024-5206 fix (sensitive data leakage)

@@ -29,6 +29,7 @@ from flask_login import login_required, current_user
 
 from . import bubbles_bp
 from ..auth.decorators import admin_required
+from ...security_utils import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,7 @@ def list_bubbles():
 
     except Exception as e:
         logger.error(f"Failed to list bubbles: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
     return jsonify({'bubbles': bubbles, 'count': len(bubbles)})
 
@@ -344,7 +345,7 @@ def create_bubble():
 
     except Exception as e:
         logger.error(f"Failed to create bubble: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>', methods=['GET'])
@@ -392,7 +393,7 @@ def get_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to get bubble {bubble_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>', methods=['PUT'])
@@ -470,7 +471,7 @@ def update_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to update bubble {bubble_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>', methods=['DELETE'])
@@ -505,7 +506,7 @@ def delete_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to delete bubble {bubble_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>/devices', methods=['POST'])
@@ -575,7 +576,7 @@ def add_device_to_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to add device to bubble: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>/devices/<mac>', methods=['DELETE'])
@@ -618,7 +619,7 @@ def remove_device_from_bubble(bubble_id, mac):
 
     except Exception as e:
         logger.error(f"Failed to remove device from bubble: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/move-device', methods=['POST'])
@@ -714,7 +715,7 @@ def move_device():
 
     except Exception as e:
         logger.error(f"Failed to move device: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>/pin', methods=['POST'])
@@ -739,7 +740,7 @@ def pin_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to pin bubble: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/<bubble_id>/unpin', methods=['POST'])
@@ -759,7 +760,7 @@ def unpin_bubble(bubble_id):
 
     except Exception as e:
         logger.error(f"Failed to unpin bubble: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/presets')

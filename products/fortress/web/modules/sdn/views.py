@@ -21,6 +21,7 @@ import subprocess
 
 from . import sdn_bp
 from ..auth.decorators import operator_required
+from ...security_utils import mask_mac, safe_error_message
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -982,14 +983,14 @@ def set_policy():
 
     except ValueError as e:
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 400
         flash(f'Invalid policy: {e}', 'danger')
         return redirect(url_for('sdn.index'))
 
     except Exception as e:
         logger.error(f"Error setting policy: {e}")
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
         flash(f'Error setting policy: {e}', 'danger')
         return redirect(url_for('sdn.index'))
 
@@ -1035,7 +1036,7 @@ def auto_classify():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @sdn_bp.route('/disconnect-device', methods=['POST'])
@@ -1074,7 +1075,7 @@ def disconnect_device():
         return jsonify({'success': True, 'message': 'Device disconnected'})
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @sdn_bp.route('/block-device', methods=['POST'])
@@ -1119,7 +1120,7 @@ def block_device():
         return jsonify({'success': True, 'message': 'Device blocked'})
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @sdn_bp.route('/unblock-device', methods=['POST'])
@@ -1165,7 +1166,7 @@ def unblock_device():
         return jsonify({'success': True, 'message': f'Device unblocked, policy: {recommended}'})
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 
@@ -1204,7 +1205,7 @@ def bulk_set_policy():
 
             results['success'].append(mac)
         except Exception as e:
-            results['failed'].append({'mac': mac, 'error': str(e)})
+            results['failed'].append({'mac': mac, 'error': safe_error_message(e)})
 
     return jsonify({
         'success': len(results['failed']) == 0,
@@ -1249,7 +1250,7 @@ def bulk_auto_classify():
                 'policy': recommended
             })
         except Exception as e:
-            results['failed'].append({'mac': mac, 'error': str(e)})
+            results['failed'].append({'mac': mac, 'error': safe_error_message(e)})
 
     return jsonify({
         'success': len(results['failed']) == 0,
@@ -1312,7 +1313,7 @@ def discover_devices():
 
     except Exception as e:
         logger.error(f"Device discovery failed: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 def _scan_network_devices() -> List[Dict]:
@@ -2315,7 +2316,7 @@ def api_trust_summary():
                 'trust_framework_available': TRUST_FRAMEWORK_AVAILABLE
             })
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2362,7 +2363,7 @@ def api_enroll_device():
                 return jsonify({'success': False, 'error': 'Certificate issuance failed'}), 500
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2395,7 +2396,7 @@ def api_revoke_device():
                 return jsonify({'success': False, 'error': 'Revocation failed'}), 500
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2433,7 +2434,7 @@ def api_quarantine_device():
                 return jsonify({'success': False, 'error': 'Quarantine failed'}), 500
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2567,7 +2568,7 @@ def api_sdn_devices():
             return jsonify({'success': True, 'devices': sdn_devices})
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e), 'devices': []}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e), 'devices': []}), 500
     else:
         # Demo mode
         return jsonify({'success': True, 'devices': get_demo_sdn_devices()})
@@ -2591,7 +2592,7 @@ def api_sdn_segments():
             return jsonify({'success': True, 'segments': segments})
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         # Demo data
         demo_devices = get_demo_sdn_devices()
@@ -2736,7 +2737,7 @@ def api_move_device():
                 return jsonify({'success': False, 'error': 'Move failed'}), 500
 
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2798,7 +2799,7 @@ def api_device_register():
             })
         except Exception as e:
             logger.error(f"Failed to register device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2834,7 +2835,7 @@ def api_device_get(mac_address):
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
         except Exception as e:
             logger.error(f"Failed to get device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         # Return demo data
         return jsonify({
@@ -2895,7 +2896,7 @@ def api_device_update(mac_address):
                 return jsonify({'success': False, 'error': 'Update failed'}), 500
         except Exception as e:
             logger.error(f"Failed to update device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2922,7 +2923,7 @@ def api_device_delete(mac_address):
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
         except Exception as e:
             logger.error(f"Failed to delete device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -2986,7 +2987,7 @@ def api_device_set_policy(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mac} via Fingerbank pipeline")
+                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
 
             success = autopilot.set_policy(mac, policy)
 
@@ -2999,7 +3000,7 @@ def api_device_set_policy(mac_address):
                 return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
         except Exception as e:
             logger.error(f"Failed to set device policy via autopilot: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     # Fallback to DeviceDataManager if available
     elif DEVICE_DATA_MANAGER_AVAILABLE:
@@ -3019,7 +3020,7 @@ def api_device_set_policy(mac_address):
                 return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
         except Exception as e:
             logger.error(f"Failed to set device policy: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': False,
@@ -3050,7 +3051,7 @@ def api_device_block(mac_address):
                 return jsonify({'success': False, 'error': 'Failed to block device'}), 500
         except Exception as e:
             logger.error(f"Failed to block device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -3079,7 +3080,7 @@ def api_device_unblock(mac_address):
                 return jsonify({'success': False, 'error': 'Failed to unblock device'}), 500
         except Exception as e:
             logger.error(f"Failed to unblock device: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -3128,7 +3129,7 @@ def api_device_list():
             })
         except Exception as e:
             logger.error(f"Failed to list devices: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         # Return demo data
         return jsonify({
@@ -3150,7 +3151,7 @@ def api_device_stats():
             return jsonify({'success': True, 'stats': stats})
         except Exception as e:
             logger.error(f"Failed to get device stats: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -3181,7 +3182,7 @@ def api_device_sync_policies():
             })
         except Exception as e:
             logger.error(f"Failed to sync policies: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -3479,7 +3480,7 @@ def api_device_detail(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mac} via Fingerbank pipeline")
+                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
 
                 # Get the newly created device
                 device = autopilot.get_device_detail(mac)
@@ -3504,7 +3505,7 @@ def api_device_detail(mac_address):
             })
         except Exception as e:
             logger.error(f"Failed to get device detail: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': False,
@@ -3546,7 +3547,7 @@ def api_device_add_tag(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mac} via Fingerbank pipeline")
+                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
 
             success = autopilot.add_tag(mac, tag)
 
@@ -3561,7 +3562,7 @@ def api_device_add_tag(mac_address):
                 return jsonify({'success': False, 'error': 'Failed to add tag to database'}), 500
         except Exception as e:
             logger.error(f"Failed to add tag: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
@@ -3598,7 +3599,7 @@ def api_device_remove_tag(mac_address, tag):
                 return jsonify({'success': False, 'error': 'Failed to remove tag from database'}), 500
         except Exception as e:
             logger.error(f"Failed to remove tag: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
@@ -3670,7 +3671,7 @@ def api_device_disconnect(mac_address):
             autopilot = get_sdn_autopilot()
             if autopilot.delete_device(mac):
                 results['deleted'] = True
-                logger.info(f"Deleted device {mac} from database")
+                logger.info(f"Deleted device {mask_mac(mac)} from database")
         except Exception as e:
             logger.warning(f"Failed to delete device: {e}")
 
@@ -3733,7 +3734,7 @@ def api_device_timeline(mac_address):
             })
         except Exception as e:
             logger.error(f"Failed to get timeline: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
@@ -3754,7 +3755,7 @@ def api_all_tags():
             })
         except Exception as e:
             logger.error(f"Failed to get tags: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({'success': True, 'tags': [], 'count': 0})
 
@@ -3774,7 +3775,7 @@ def api_proximity_report():
             })
         except Exception as e:
             logger.error(f"Failed to get proximity report: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
@@ -3801,7 +3802,7 @@ def api_proximity_enforce():
             })
         except Exception as e:
             logger.error(f"Failed to enforce proximity policies: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({'success': False, 'error': 'SDN Auto Pilot not available'}), 503
 
@@ -3824,7 +3825,7 @@ def api_wifi_signals():
             })
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Failed to read WiFi signals: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
     else:
         return jsonify({
             'success': True,
