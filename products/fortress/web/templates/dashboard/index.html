@@ -2,6 +2,8 @@
 
 {% block title %}Dashboard - HookProbe Fortress{% endblock %}
 
+{% block page_title %}HOOKPROBE Fortress Dashboard{% endblock %}
+
 {% block page_header %}{% endblock %}
 
 {% block breadcrumb %}
@@ -727,11 +729,11 @@
                     <i class="fas fa-shield-alt"></i>
                     <span>AI Security</span>
                 </a>
-                <a href="#" class="quick-action-btn" title="AI Eyes - Cognitive Network Layer">
+                <a href="{{ url_for('aiochi.index') }}" class="quick-action-btn" title="AI Eyes - Cognitive Network Layer">
                     <i class="fas fa-eye"></i>
                     <span>AIOCHI</span>
                 </a>
-                <a href="#" class="quick-action-btn" title="Neural Command Center">
+                <a href="{{ url_for('aiochi.cortex') }}" class="quick-action-btn" title="Neural Command Center">
                     <i class="fas fa-globe"></i>
                     <span>Cortex</span>
                 </a>
