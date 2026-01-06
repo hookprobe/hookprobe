@@ -14,6 +14,7 @@ from flask import render_template, jsonify
 from flask_login import login_required
 
 from . import dashboard_bp
+from ...security_utils import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -1180,10 +1181,10 @@ def api_update_device_policy(mac):
                 else:
                     return jsonify({'success': False, 'error': 'Device not found or update failed'}), 404
         except ValueError as e:
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 400
         except Exception as e:
             logger.error(f"Failed to update device policy via SDN Autopilot: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     # Fallback to legacy device_policies module if SDN Autopilot unavailable
     if DEVICE_POLICIES_AVAILABLE:
@@ -1201,6 +1202,6 @@ def api_update_device_policy(mac):
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
         except Exception as e:
             logger.error(f"Failed to update device policy: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     return jsonify({'success': False, 'error': 'No policy management module available'}), 500
