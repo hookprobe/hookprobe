@@ -78,6 +78,43 @@ except ImportError:
     except ImportError as e:
         logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
 
+# Import hostname decoder for dnsmasq octal escapes
+try:
+    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name
+except ImportError:
+    # Fallback implementations if module not found
+    import re as _re
+    def decode_dnsmasq_hostname(hostname):
+        if not hostname or '\\' not in hostname:
+            return hostname
+        try:
+            result = b''
+            i = 0
+            while i < len(hostname):
+                if hostname[i] == '\\' and i + 3 < len(hostname):
+                    octal_str = hostname[i+1:i+4]
+                    if all(c in '01234567' for c in octal_str):
+                        result += bytes([int(octal_str, 8)])
+                        i += 4
+                        continue
+                result += hostname[i].encode('utf-8', errors='replace')
+                i += 1
+            return result.decode('utf-8', errors='replace').strip()
+        except Exception:
+            return hostname
+
+    def clean_device_name(hostname, max_length=32):
+        if not hostname:
+            return "Unknown Device"
+        name = decode_dnsmasq_hostname(hostname)
+        if not name:
+            return "Unknown Device"
+        name = _re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+        if name.endswith('.local'):
+            name = name[:-6]
+        name = _re.sub(r'\s+', ' ', name).strip()
+        return name[:max_length-3] + '...' if len(name) > max_length else name or "Unknown Device"
+
 # Data directory - shared volume from fts-qsecbit agent
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
 
@@ -197,7 +234,7 @@ def _load_device_status_cache():
                         cache[mac_upper] = {
                             'status': 'online' if device.get('is_active', False) else 'offline',
                             'ip': device.get('ip_address', ''),
-                            'hostname': device.get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
                             'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
                             'vendor_class': device.get('vendor_class', ''),
                         }
@@ -216,13 +253,13 @@ def _load_device_status_cache():
                         cache[mac].update({
                             'status': device.get('status', cache[mac].get('status', 'offline')),
                             'ip': device.get('ip', '') or cache[mac].get('ip', ''),
-                            'hostname': device.get('hostname', '') or cache[mac].get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '') or cache[mac].get('hostname', '')),
                         })
                     else:
                         cache[mac] = {
                             'status': device.get('status', 'offline'),
                             'ip': device.get('ip', ''),
-                            'hostname': device.get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
                         }
     except Exception as e:
         logger.debug(f"Failed to load status cache: {e}")
@@ -278,7 +315,7 @@ def get_all_devices():
                         {
                             'mac': mac,
                             'ip': info.get('ip', ''),
-                            'hostname': info.get('hostname', ''),
+                            'hostname': clean_device_name(info.get('hostname', '')),
                             'dhcp_fingerprint': info.get('dhcp_fingerprint', ''),
                             'vendor_class': info.get('vendor_class', ''),
                         }
@@ -312,7 +349,7 @@ def get_all_devices():
                     devices.append({
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
-                        'hostname': d.get('friendly_name') or d.get('hostname') or d.get('device_type', 'Unknown'),
+                        'hostname': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
                         'manufacturer': d.get('vendor', 'Unknown'),
                         'device_type': d.get('device_type') or d.get('category', 'unknown'),
                         'policy': policy,
@@ -348,7 +385,7 @@ def get_all_devices():
                     devices.append({
                         'mac_address': mac,
                         'ip_address': d.get('ip_address', ''),
-                        'hostname': d.get('hostname'),
+                        'hostname': clean_device_name(d.get('hostname', '')),
                         'manufacturer': d.get('manufacturer', 'Unknown'),
                         'device_type': d.get('device_type', 'unknown'),
                         'policy': d.get('policy', 'quarantine'),
@@ -378,7 +415,7 @@ def get_all_devices():
             devices.append({
                 'mac_address': mac,
                 'ip_address': info.get('ip', ''),
-                'hostname': info.get('hostname'),
+                'hostname': clean_device_name(info.get('hostname', '')),
                 'manufacturer': 'Unknown',
                 'device_type': 'unknown',
                 'policy': 'quarantine',
@@ -705,7 +742,7 @@ def get_recent_devices():
             icon = 'desktop'
 
         recent.append({
-            'name': d.get('hostname') or d.get('manufacturer') or 'Unknown Device',
+            'name': clean_device_name(d.get('hostname', '')) or d.get('manufacturer') or 'Unknown Device',
             'ip': d.get('ip_address', ''),
             'mac': d.get('mac_address', ''),
             'vlan': vlan_names.get(vlan_id, f'VLAN {vlan_id}'),
@@ -1040,7 +1077,7 @@ def get_topology_data():
         nodes.append({
             'id': device_id,
             'type': 'device',
-            'label': device.get('hostname') or device.get('manufacturer') or 'Unknown',
+            'label': clean_device_name(device.get('hostname', '')) or device.get('manufacturer') or 'Unknown',
             'mac': mac,
             'ip': device.get('ip_address', ''),
             'policy': policy,
