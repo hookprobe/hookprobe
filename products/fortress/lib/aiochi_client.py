@@ -511,6 +511,223 @@ class AIOCHIClient:
             self._sync_thread.join(timeout=5.0)
 
     # =========================================================================
+    # SDN AUTOPILOT → AIOCHI FEEDBACK (Gap #2 Fix)
+    # =========================================================================
+
+    def report_sdn_decision(
+        self,
+        mac: str,
+        decision: str,
+        reason: str,
+        details: Dict = None,
+    ) -> bool:
+        """
+        Report SDN Autopilot enforcement decision back to AIOCHI.
+
+        Gap #2 Fix: Enables bidirectional sync so AIOCHI can learn from
+        actual SDN enforcement outcomes.
+
+        Args:
+            mac: Device MAC address
+            decision: 'accept', 'reject', 'override', 'quarantine'
+            reason: Human-readable reason
+            details: Additional context (optional)
+
+        Returns:
+            True if reported successfully
+        """
+        mac = mac.upper().replace('-', ':')
+        data = {
+            'mac': mac,
+            'decision': decision,
+            'reason': reason,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'sdn_autopilot',
+        }
+        if details:
+            data['details'] = details
+
+        response = self._request('POST', f'/api/device/{mac}/feedback', data)
+        if response and response.get('status') in ('received', 'ok'):
+            logger.debug(f"Reported SDN decision for {mac}: {decision}")
+            return True
+
+        logger.debug(f"Failed to report SDN decision for {mac}")
+        return False
+
+    def update_trust_adjustment(
+        self,
+        mac: str,
+        adjustment: float,
+        reason: str,
+        attack_type: str = None,
+    ) -> bool:
+        """
+        Send trust score adjustment from SDN Autopilot to AIOCHI.
+
+        Gap #2 Fix: When SDN detects an attack or validates good behavior,
+        this informs AIOCHI to update the device's trust score.
+
+        Args:
+            mac: Device MAC address
+            adjustment: Trust adjustment (-10.0 to +10.0)
+            reason: Reason for adjustment
+            attack_type: Type of attack if negative (optional)
+
+        Returns:
+            True if adjustment accepted
+        """
+        mac = mac.upper().replace('-', ':')
+
+        # Clamp adjustment to valid range
+        adjustment = max(-10.0, min(10.0, adjustment))
+
+        data = {
+            'mac': mac,
+            'adjustment': adjustment,
+            'reason': reason,
+            'timestamp': datetime.now().isoformat(),
+            'source': 'sdn_autopilot',
+        }
+        if attack_type:
+            data['attack_type'] = attack_type
+
+        response = self._request('POST', f'/api/device/{mac}/trust-adjust', data)
+        if response and response.get('status') in ('applied', 'ok'):
+            logger.info(f"Trust adjustment for {mac}: {adjustment:+.1f} ({reason})")
+
+            # Invalidate cache as trust may affect policy
+            with self._cache_lock:
+                self._policy_cache.pop(mac, None)
+
+            return True
+
+        logger.debug(f"Failed to apply trust adjustment for {mac}")
+        return False
+
+    def report_defense_outcome(
+        self,
+        mac: str,
+        attack_type: str,
+        detected: bool,
+        blocked: bool,
+        detection_method: str,
+        response_action: str = None,
+    ) -> bool:
+        """
+        Report actual defense outcome to AIOCHI for learning.
+
+        Gap #6 Integration: Feeds real-world outcomes back to AIOCHI
+        and Nexus for improving detection accuracy.
+
+        Args:
+            mac: Target device MAC
+            attack_type: Type of attack (ter_replay, mac_impersonation, etc.)
+            detected: Whether attack was detected
+            blocked: Whether attack was blocked
+            detection_method: How it was detected (e.g., 'NEURO resonance drift')
+            response_action: Action taken (quarantine, rate_limit, etc.)
+
+        Returns:
+            True if reported
+        """
+        mac = mac.upper().replace('-', ':')
+
+        data = {
+            'event_type': 'defense_outcome',
+            'mac': mac,
+            'attack_type': attack_type,
+            'detected': detected,
+            'blocked': blocked,
+            'detection_method': detection_method,
+            'response_action': response_action,
+            'timestamp': datetime.now().isoformat(),
+        }
+
+        # Report to AIOCHI
+        response = self._request('POST', '/api/defense-outcome', data)
+
+        # Also report to Fortress API for Nexus to fetch
+        try:
+            import urllib.request
+            fortress_url = 'http://localhost:8443/api/v1/defense/outcome'
+            req = urllib.request.Request(
+                fortress_url,
+                data=json.dumps(data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            pass  # Best effort
+
+        return response is not None
+
+    def report_optimization_applied(self, optimization: Dict) -> bool:
+        """
+        Report that Nexus optimization was applied.
+
+        Gap #2 Integration: Informs AIOCHI when purple team optimizations
+        are applied so it can track effectiveness.
+
+        Args:
+            optimization: Optimization record from Nexus
+
+        Returns:
+            True if reported
+        """
+        data = {
+            'event_type': 'optimization_applied',
+            'optimization_id': optimization.get('id'),
+            'simulation_id': optimization.get('simulation_id'),
+            'applied_count': len(optimization.get('applied', [])),
+            'failed_count': len(optimization.get('failed', [])),
+            'timestamp': datetime.now().isoformat(),
+            'source': 'sdn_autopilot',
+        }
+
+        response = self._request('POST', '/api/optimization-applied', data)
+        return response is not None
+
+    def report_bubble_violation(
+        self,
+        mac: str,
+        violation_type: str,
+        bubble_id: str,
+        details: Dict = None,
+    ) -> bool:
+        """
+        Report a bubble policy violation to AIOCHI.
+
+        Used when a device in a bubble violates its policy (e.g., attempting
+        forbidden LAN access from Guest bubble).
+
+        Args:
+            mac: Device MAC address
+            violation_type: 'internet_block', 'lan_block', 'd2d_block', 'vlan_hop'
+            bubble_id: Current bubble ID
+            details: Additional details
+
+        Returns:
+            True if reported
+        """
+        mac = mac.upper().replace('-', ':')
+
+        data = {
+            'mac': mac,
+            'violation_type': violation_type,
+            'bubble_id': bubble_id,
+            'details': details or {},
+            'timestamp': datetime.now().isoformat(),
+        }
+
+        response = self._request('POST', '/api/bubble-violation', data)
+        if response:
+            logger.warning(f"Bubble violation: {mac} in {bubble_id} - {violation_type}")
+            return True
+        return False
+
+    # =========================================================================
     # HEALTH CHECK
     # =========================================================================
 
