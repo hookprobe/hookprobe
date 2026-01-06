@@ -458,13 +458,13 @@ collect_configuration() {
 
     # Network mode selection
     echo ""
-    # VLAN mode is always used (filter mode removed)
+    # FLAT BRIDGE ARCHITECTURE
     # Network architecture:
-    #   - FTS Bridge: Layer 2 OVS switch (no IP)
-    #   - VLAN 100: LAN (10.200.0.0/24) - WiFi clients, general devices
-    #   - VLAN 200: MGMT (10.200.100.0/30) - Admin access
+    #   - FTS Bridge: Layer 2 OVS switch with gateway IP (10.200.0.1)
+    #   - All devices on same L2 segment (no VLANs)
+    #   - Segmentation via OpenFlow NAC rules (device policies)
     NETWORK_MODE="flat"
-    log_info "Network mode: VLAN (OVS-based segmentation)"
+    log_info "Network mode: Flat Bridge (OpenFlow-based NAC)"
 
     # LAN subnet (only if not set via FORTRESS_NETWORK_PREFIX)
     if [ -z "${LAN_SUBNET_MASK:-}" ]; then
@@ -1168,15 +1168,14 @@ create_configuration() {
 FORTRESS_MODE=container
 FORTRESS_VERSION=5.5.0
 
-# Network mode (vlan or filter)
+# Network mode (flat bridge architecture)
 NETWORK_MODE=${NETWORK_MODE}
 
-# LAN Network Configuration
+# LAN Network Configuration (Flat Bridge)
 LAN_SUBNET_MASK=${LAN_SUBNET_MASK:-24}
 LAN_DHCP_START=${LAN_DHCP_START:-10.200.0.100}
 LAN_DHCP_END=${LAN_DHCP_END:-10.200.0.200}
-GATEWAY_LAN=10.200.0.1
-GATEWAY_MGMT=10.200.100.1
+GATEWAY_IP=10.200.0.1
 
 # Database (handled by container)
 DATABASE_HOST=fts-postgres
@@ -1251,7 +1250,7 @@ setup_network() {
     log_info "Detected interfaces:"
     log_info "  WAN:  ${NET_WAN_IFACE:-auto-detect}"
     log_info "  LAN:  ${NET_LAN_IFACES:-none}"
-    log_info "  MGMT: ${MGMT_INTERFACE:-none}${MGMT_INTERFACE:+ (VLAN 200 trunk)}"
+    log_info "  Admin: ${MGMT_INTERFACE:-none}${MGMT_INTERFACE:+ (admin console port)}"
     log_info "  WiFi: ${NET_WIFI_24GHZ_IFACE:-none} (2.4G) / ${NET_WIFI_5GHZ_IFACE:-none} (5G)"
     log_info "  LTE:  ${NET_WWAN_IFACE:-none}"
 
@@ -1282,13 +1281,13 @@ setup_network() {
             log_info "  WiFi AP will provide client connectivity"
         fi
 
-        # Add MGMT interface to OVS bridge if detected
-        # MGMT interface is designated as the last LAN ethernet port (by PCI order)
-        # It provides trunk access: native LAN + tagged VLAN 200 (management)
+        # Add admin console interface to OVS bridge if detected
+        # This is designated as the last LAN ethernet port (by PCI order)
+        # Recommended for connecting admin workstation for initial setup
         if [ -n "$MGMT_INTERFACE" ]; then
-            log_info "  Adding MGMT interface $MGMT_INTERFACE to OVS bridge..."
+            log_info "  Adding admin interface $MGMT_INTERFACE to OVS bridge..."
             "$ovs_script" add-lan "$MGMT_INTERFACE" || {
-                log_warn "Failed to add MGMT interface $MGMT_INTERFACE to OVS bridge"
+                log_warn "Failed to add admin interface $MGMT_INTERFACE to OVS bridge"
             }
         fi
 
@@ -1316,11 +1315,11 @@ setup_network() {
         local netplan_gen="${DEVICES_DIR}/common/netplan-ovs-generator.sh"
         local ovs_post="${DEVICES_DIR}/common/ovs-post-setup.sh"
 
-        if [ "$NETWORK_MODE" = "vlan" ] && [ -f "$netplan_gen" ]; then
-            # VLAN mode: Use Netplan + OVS for fast, reliable network setup
-            # VLAN 100 = LAN (10.200.0.0/xx) - WiFi clients, regular devices
-            # VLAN 200 = MGMT (10.200.100.0/30) - Management access, container network
-            log_info "Configuring VLAN-based network segmentation (netplan + OVS)..."
+        if [ -f "$netplan_gen" ]; then
+            # FLAT BRIDGE ARCHITECTURE - Use Netplan + OVS for fast, reliable network setup
+            # FTS Bridge: 10.200.0.0/xx - All devices on same L2 segment
+            # Segmentation via OpenFlow NAC rules (device policies)
+            log_info "Configuring flat bridge network (netplan + OVS)..."
 
             chmod +x "$netplan_gen"
             [ -f "$ovs_post" ] && chmod +x "$ovs_post"
@@ -5194,20 +5193,13 @@ main() {
     echo "════════════════════════════════════════════════════════════════"
     echo ""
 
-    # Access information based on network mode
-    if [ "$NETWORK_MODE" = "vlan" ]; then
-        echo "Access the admin portal:"
-        echo -e "  ${CYAN}From MGMT VLAN:${NC} https://10.200.100.1:${WEB_PORT}"
-        if [ -n "$MGMT_INTERFACE" ]; then
-            echo -e "  ${CYAN}MGMT Port:${NC}      $MGMT_INTERFACE (connect admin workstation here)"
-        fi
-        echo -e "  ${CYAN}Via Cloudflare:${NC} Configure tunnel for remote access"
-        echo ""
-        echo -e "${YELLOW}NOTE: WiFi clients CANNOT access admin portal (LAN isolated from MGMT)${NC}"
-    else
-        echo "Access the admin portal at:"
-        echo -e "  ${CYAN}https://10.200.0.1:${WEB_PORT}${NC}"
+    # Access information for flat bridge mode
+    echo "Access the admin portal:"
+    echo -e "  ${CYAN}https://10.200.0.1:${WEB_PORT}${NC}"
+    if [ -n "$MGMT_INTERFACE" ]; then
+        echo -e "  ${CYAN}Admin Port:${NC}     $MGMT_INTERFACE (recommended for admin workstation)"
     fi
+    echo -e "  ${CYAN}Via Cloudflare:${NC} Configure tunnel for remote access"
     echo ""
 
     echo "Login credentials:"

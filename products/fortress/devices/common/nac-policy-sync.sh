@@ -25,12 +25,11 @@ set -e
 
 LOG_TAG="fts-nac"
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
-# LAN_NETWORK covers both LAN VLAN (10.200.0.x) and MGMT VLAN (10.200.100.x)
+
+# FLAT BRIDGE ARCHITECTURE
+# All devices share the same Layer 2 segment (no VLANs)
+# Segmentation is via OpenFlow rules, not VLAN tagging
 LAN_NETWORK="${LAN_NETWORK:-10.200.0.0/16}"
-# LAN_VLAN is where client devices live (device-to-device communication)
-LAN_VLAN="${LAN_VLAN:-10.200.0.0/23}"
-# MGMT_VLAN is where dashboard/management lives (10.200.100.1)
-MGMT_VLAN="${MGMT_VLAN:-10.200.100.0/30}"
 GATEWAY_IP="${GATEWAY_IP:-10.200.0.1}"
 CONTAINER_NETWORK="172.20.0.0/16"
 
@@ -202,15 +201,12 @@ apply_policy() {
             # Allow gateway for DHCP/DNS only
             add_flow "priority=750,ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
             add_flow "priority=740,ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
-            # Block MGMT VLAN (dashboard at 10.200.100.1) - explicit block before LAN allow
-            add_flow "priority=735,ip,dl_src=$mac,nw_dst=$MGMT_VLAN,actions=drop"
-            add_flow "priority=735,ip,dl_dst=$mac,nw_src=$MGMT_VLAN,actions=drop"
             # Block containers - IoT shouldn't talk to infrastructure
             add_flow "priority=730,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
             add_flow "priority=730,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
-            # Allow device-to-device on LAN VLAN only
-            add_flow "priority=720,ip,dl_src=$mac,nw_dst=$LAN_VLAN,actions=NORMAL"
-            add_flow "priority=710,ip,dl_dst=$mac,nw_src=$LAN_VLAN,actions=NORMAL"
+            # Allow device-to-device on LAN network only
+            add_flow "priority=720,ip,dl_src=$mac,nw_dst=$LAN_NETWORK,actions=NORMAL"
+            add_flow "priority=710,ip,dl_dst=$mac,nw_src=$LAN_NETWORK,actions=NORMAL"
             # Block everything else (internet)
             add_flow "priority=600,ip,dl_src=$mac,actions=drop"
             add_flow "priority=600,ip,dl_dst=$mac,actions=drop"
