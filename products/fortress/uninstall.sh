@@ -686,11 +686,29 @@ remove_containers() {
         done
     fi
 
-    # Remove ALL fortress networks (fts-* naming convention)
+    # Remove ALL fortress networks (multiple naming patterns)
+    # - fts-* : Direct podman network names
+    # - containers_fts-* : podman-compose prefixed names (directory name prefix)
+    # - *_fts-internal : Any compose-generated internal network
     log_info "Removing all fortress networks..."
-    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-" || true); do
+    for network in $(podman network ls --format "{{.Name}}" 2>/dev/null | grep -E "^fts-|^containers_fts-|_fts-internal$" || true); do
         log_info "  Removing network: $network"
         podman network rm -f "$network" 2>/dev/null || true
+    done
+
+    # Clean up stale podman network interfaces
+    # These can retain IPs (e.g., 172.20.200.1/24) after network deletion, blocking recreation
+    log_info "Cleaning up stale podman interfaces..."
+    for iface in $(ip -o link show 2>/dev/null | grep -oP 'podman\d+' | sort -u || true); do
+        log_info "  Removing stale interface: $iface"
+        ip addr flush dev "$iface" 2>/dev/null || true
+        ip link del "$iface" 2>/dev/null || true
+    done
+
+    # Also clean veth interfaces that might be orphaned from OVS attachment
+    for iface in $(ip -o link show 2>/dev/null | grep -oP 'veth-fts-[^@:]+' | sort -u || true); do
+        log_info "  Removing orphan veth: $iface"
+        ip link del "$iface" 2>/dev/null || true
     done
 
     # Prune dangling images and build cache
