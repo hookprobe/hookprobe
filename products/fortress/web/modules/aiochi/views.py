@@ -1074,3 +1074,508 @@ def api_agent_trust_set(mac_address):
     except Exception as e:
         logger.error(f"Trust set API error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# Bubble Management API (AIOCHI Identity Engine Integration)
+# ============================================================================
+# These endpoints proxy to the AIOCHI Identity Engine for unified bubble
+# management. AIOCHI is the single source of truth for device-to-bubble
+# relationships.
+
+def fetch_aiochi_bubbles():
+    """Fetch all bubbles from AIOCHI Identity Engine."""
+    import requests
+    try:
+        resp = requests.get(f'{AIOCHI_IDENTITY_URL}/api/bubbles', timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch AIOCHI bubbles: {e}")
+        return None
+
+
+def get_demo_bubbles():
+    """Generate demo bubbles data."""
+    return {
+        'bubbles': [
+            {
+                'bubble_id': 'bubble-dad',
+                'name': "Dad's Bubble",
+                'bubble_type': 'FAMILY',
+                'icon': 'fa-user-tie',
+                'color': '#1976D2',
+                'devices': [
+                    {'mac': 'AA:BB:CC:DD:EE:01', 'label': 'iPhone 15 Pro', 'online': True},
+                    {'mac': 'AA:BB:CC:DD:EE:02', 'label': 'MacBook Pro', 'online': True},
+                    {'mac': 'AA:BB:CC:DD:EE:03', 'label': 'Apple Watch', 'online': True},
+                ],
+                'policy': {'internet': True, 'lan': True, 'd2d': True, 'vlan': 110},
+                'is_manual': False,
+                'is_pinned': False,
+            },
+            {
+                'bubble_id': 'bubble-mom',
+                'name': "Mom's Bubble",
+                'bubble_type': 'FAMILY',
+                'icon': 'fa-user',
+                'color': '#E91E63',
+                'devices': [
+                    {'mac': 'BB:CC:DD:EE:FF:01', 'label': 'Galaxy S24', 'online': True},
+                    {'mac': 'BB:CC:DD:EE:FF:02', 'label': 'Galaxy Tab', 'online': False},
+                ],
+                'policy': {'internet': True, 'lan': True, 'd2d': True, 'vlan': 110},
+                'is_manual': False,
+                'is_pinned': False,
+            },
+            {
+                'bubble_id': 'bubble-kids',
+                'name': "Kids' Bubble",
+                'bubble_type': 'FAMILY',
+                'icon': 'fa-child',
+                'color': '#FF5722',
+                'devices': [
+                    {'mac': 'CC:DD:EE:FF:00:01', 'label': 'iPad', 'online': True},
+                    {'mac': 'CC:DD:EE:FF:00:02', 'label': 'Nintendo Switch', 'online': True},
+                ],
+                'policy': {'internet': True, 'lan': True, 'd2d': True, 'vlan': 110},
+                'is_manual': True,
+                'is_pinned': False,
+            },
+            {
+                'bubble_id': 'bubble-iot',
+                'name': 'Smart Home',
+                'bubble_type': 'IOT',
+                'icon': 'fa-home',
+                'color': '#FF9800',
+                'devices': [
+                    {'mac': 'DD:EE:FF:00:11:01', 'label': 'HomePod Mini', 'online': True},
+                    {'mac': 'DD:EE:FF:00:11:02', 'label': 'Nest Thermostat', 'online': True},
+                    {'mac': 'DD:EE:FF:00:11:03', 'label': 'Ring Doorbell', 'online': True},
+                ],
+                'policy': {'internet': True, 'lan': False, 'd2d': True, 'vlan': 130},
+                'is_manual': False,
+                'is_pinned': False,
+            },
+            {
+                'bubble_id': 'bubble-guest',
+                'name': 'Guests',
+                'bubble_type': 'GUEST',
+                'icon': 'fa-user-friends',
+                'color': '#607D8B',
+                'devices': [],
+                'policy': {'internet': True, 'lan': False, 'd2d': False, 'vlan': 150},
+                'is_manual': True,
+                'is_pinned': True,
+            },
+        ],
+        'unassigned_devices': [
+            {'mac': 'EE:FF:00:11:22:01', 'label': 'Unknown Device', 'vendor': 'Unknown'},
+            {'mac': 'EE:FF:00:11:22:02', 'label': 'Guest Laptop', 'vendor': 'Dell'},
+        ]
+    }
+
+
+@aiochi_bp.route('/api/bubbles')
+@login_required
+def api_bubbles_list():
+    """Get all bubbles from AIOCHI Identity Engine."""
+    try:
+        if AIOCHI_ENABLED:
+            data = fetch_aiochi_bubbles()
+            if data:
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    **data
+                })
+
+        # Fallback to demo data
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            **get_demo_bubbles()
+        })
+    except Exception as e:
+        logger.error(f"Bubbles list API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/<bubble_id>')
+@login_required
+def api_bubble_get(bubble_id):
+    """Get a specific bubble from AIOCHI Identity Engine."""
+    import requests
+    try:
+        if AIOCHI_ENABLED:
+            resp = requests.get(f'{AIOCHI_IDENTITY_URL}/api/bubble/{bubble_id}', timeout=5)
+            if resp.status_code == 200:
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'bubble': resp.json()
+                })
+            elif resp.status_code == 404:
+                return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+
+        # Demo mode: find in demo bubbles
+        demo = get_demo_bubbles()
+        for b in demo['bubbles']:
+            if b['bubble_id'] == bubble_id:
+                return jsonify({
+                    'success': True,
+                    'demo_mode': True,
+                    'bubble': b
+                })
+
+        return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+    except Exception as e:
+        logger.error(f"Bubble get API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles', methods=['POST'])
+@login_required
+def api_bubble_create():
+    """Create a new bubble via AIOCHI Identity Engine."""
+    import requests
+    try:
+        data = request.get_json() or {}
+
+        name = data.get('name', 'New Bubble')
+        bubble_type = data.get('bubble_type', 'CUSTOM')
+        devices = data.get('devices', [])
+        icon = data.get('icon', 'fa-layer-group')
+        color = data.get('color', '#9C27B0')
+
+        if AIOCHI_ENABLED:
+            # Forward to AIOCHI Identity Engine
+            resp = requests.post(
+                f'{AIOCHI_IDENTITY_URL}/api/bubble',
+                json={
+                    'name': name,
+                    'bubble_type': bubble_type,
+                    'devices': devices,
+                    'icon': icon,
+                    'color': color,
+                },
+                timeout=5
+            )
+            if resp.status_code in (200, 201):
+                result = resp.json()
+                logger.info(f"Created bubble via AIOCHI: {result.get('bubble_id')}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    **result
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to create bubble')
+                }), resp.status_code
+
+        # Demo mode: simulate creation
+        import hashlib
+        bubble_id = f"DEMO-{hashlib.sha256(f'{name}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
+        logger.info(f"Created demo bubble: {bubble_id}")
+
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'bubble_id': bubble_id,
+            'message': f"Bubble '{name}' created (demo mode)"
+        })
+    except Exception as e:
+        logger.error(f"Bubble create API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['PUT'])
+@login_required
+def api_bubble_update(bubble_id):
+    """Update a bubble via AIOCHI Identity Engine."""
+    import requests
+    try:
+        data = request.get_json() or {}
+
+        if AIOCHI_ENABLED:
+            resp = requests.put(
+                f'{AIOCHI_IDENTITY_URL}/api/bubble/{bubble_id}',
+                json=data,
+                timeout=5
+            )
+            if resp.status_code == 200:
+                logger.info(f"Updated bubble via AIOCHI: {bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'message': 'Bubble updated'
+                })
+            elif resp.status_code == 404:
+                return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to update bubble')
+                }), resp.status_code
+
+        # Demo mode
+        logger.info(f"Updated demo bubble: {bubble_id}")
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': 'Bubble updated (demo mode)'
+        })
+    except Exception as e:
+        logger.error(f"Bubble update API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['DELETE'])
+@login_required
+def api_bubble_delete(bubble_id):
+    """Delete a bubble via AIOCHI Identity Engine."""
+    import requests
+    try:
+        if AIOCHI_ENABLED:
+            resp = requests.delete(
+                f'{AIOCHI_IDENTITY_URL}/api/bubble/{bubble_id}',
+                timeout=5
+            )
+            if resp.status_code == 200:
+                logger.info(f"Deleted bubble via AIOCHI: {bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'message': 'Bubble deleted'
+                })
+            elif resp.status_code == 404:
+                return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to delete bubble')
+                }), resp.status_code
+
+        # Demo mode
+        logger.info(f"Deleted demo bubble: {bubble_id}")
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': 'Bubble deleted (demo mode)'
+        })
+    except Exception as e:
+        logger.error(f"Bubble delete API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/<bubble_id>/devices', methods=['POST'])
+@login_required
+def api_bubble_add_device(bubble_id):
+    """Add a device to a bubble via AIOCHI Identity Engine."""
+    import requests
+    try:
+        data = request.get_json() or {}
+        mac = data.get('mac', '').upper()
+        confidence = data.get('confidence', 1.0)
+        reason = data.get('reason', 'Manual assignment via UI')
+
+        if not mac:
+            return jsonify({'success': False, 'error': 'MAC address required'}), 400
+
+        if AIOCHI_ENABLED:
+            resp = requests.post(
+                f'{AIOCHI_IDENTITY_URL}/api/device/{mac}/assign',
+                json={
+                    'bubble_id': bubble_id,
+                    'confidence': confidence,
+                    'reason': reason,
+                },
+                timeout=5
+            )
+            if resp.status_code == 200:
+                logger.info(f"Assigned device {mac} to bubble {bubble_id} via AIOCHI")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'message': f'Device {mac} added to bubble'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to assign device')
+                }), resp.status_code
+
+        # Demo mode
+        logger.info(f"Assigned device {mac} to demo bubble {bubble_id}")
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': f'Device {mac} added to bubble (demo mode)'
+        })
+    except Exception as e:
+        logger.error(f"Bubble add device API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/<bubble_id>/devices/<mac>', methods=['DELETE'])
+@login_required
+def api_bubble_remove_device(bubble_id, mac):
+    """Remove a device from a bubble via AIOCHI Identity Engine."""
+    import requests
+    mac = mac.upper()
+    try:
+        if AIOCHI_ENABLED:
+            # Assign to "unassigned" by setting bubble_id to None
+            resp = requests.post(
+                f'{AIOCHI_IDENTITY_URL}/api/device/{mac}/assign',
+                json={
+                    'bubble_id': None,
+                    'confidence': 0.0,
+                    'reason': 'Removed from bubble via UI',
+                },
+                timeout=5
+            )
+            if resp.status_code == 200:
+                logger.info(f"Removed device {mac} from bubble {bubble_id} via AIOCHI")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'message': f'Device {mac} removed from bubble'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to remove device')
+                }), resp.status_code
+
+        # Demo mode
+        logger.info(f"Removed device {mac} from demo bubble {bubble_id}")
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': f'Device {mac} removed from bubble (demo mode)'
+        })
+    except Exception as e:
+        logger.error(f"Bubble remove device API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/move-device', methods=['POST'])
+@login_required
+def api_bubble_move_device():
+    """Move a device between bubbles via AIOCHI Identity Engine."""
+    import requests
+    try:
+        data = request.get_json() or {}
+        mac = data.get('mac', '').upper()
+        from_bubble = data.get('from_bubble')
+        to_bubble = data.get('to_bubble')
+        reason = data.get('reason', 'Moved via drag-and-drop')
+
+        if not mac or not to_bubble:
+            return jsonify({'success': False, 'error': 'MAC and to_bubble required'}), 400
+
+        if AIOCHI_ENABLED:
+            resp = requests.post(
+                f'{AIOCHI_IDENTITY_URL}/api/device/{mac}/assign',
+                json={
+                    'bubble_id': to_bubble,
+                    'confidence': 1.0,
+                    'reason': reason,
+                },
+                timeout=5
+            )
+            if resp.status_code == 200:
+                logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} via AIOCHI")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'message': f'Device moved to bubble',
+                    'device': mac,
+                    'from_bubble': from_bubble,
+                    'to_bubble': to_bubble,
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': resp.json().get('error', 'Failed to move device')
+                }), resp.status_code
+
+        # Demo mode
+        logger.info(f"Moved device {mac} in demo mode")
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': 'Device moved (demo mode)',
+            'device': mac,
+            'from_bubble': from_bubble,
+            'to_bubble': to_bubble,
+        })
+    except Exception as e:
+        logger.error(f"Bubble move device API error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/types')
+@login_required
+def api_bubble_types():
+    """Get available bubble types and their policies."""
+    types = [
+        {
+            'type': 'FAMILY',
+            'name': 'Family',
+            'icon': 'fa-users',
+            'color': '#4CAF50',
+            'policy': {'internet': True, 'lan': True, 'd2d': True, 'vlan': 110},
+            'description': 'Full network access with smart home integration',
+        },
+        {
+            'type': 'GUEST',
+            'name': 'Guest',
+            'icon': 'fa-user-friends',
+            'color': '#607D8B',
+            'policy': {'internet': True, 'lan': False, 'd2d': False, 'vlan': 150},
+            'description': 'Internet only, isolated from home network',
+        },
+        {
+            'type': 'IOT',
+            'name': 'IoT / Smart Home',
+            'icon': 'fa-home',
+            'color': '#FF9800',
+            'policy': {'internet': True, 'lan': False, 'd2d': True, 'vlan': 130},
+            'description': 'Smart home devices with D2D but no LAN access',
+        },
+        {
+            'type': 'WORK',
+            'name': 'Work',
+            'icon': 'fa-briefcase',
+            'color': '#2196F3',
+            'policy': {'internet': True, 'lan': False, 'd2d': False, 'vlan': 120},
+            'description': 'Work devices, isolated from family',
+        },
+        {
+            'type': 'CUSTOM',
+            'name': 'Custom',
+            'icon': 'fa-layer-group',
+            'color': '#9C27B0',
+            'policy': {'internet': True, 'lan': True, 'd2d': True, 'vlan': 110},
+            'description': 'Custom user-defined bubble',
+        },
+    ]
+
+    presets = {
+        'dad': {'name': "Dad's Bubble", 'icon': 'fa-user-tie', 'color': '#1976D2'},
+        'mom': {'name': "Mom's Bubble", 'icon': 'fa-user', 'color': '#E91E63'},
+        'kids': {'name': "Kids' Bubble", 'icon': 'fa-child', 'color': '#FF5722'},
+        'guest': {'name': 'Guests', 'icon': 'fa-user-friends', 'color': '#607D8B'},
+        'work': {'name': 'Work Devices', 'icon': 'fa-laptop', 'color': '#455A64'},
+    }
+
+    return jsonify({
+        'success': True,
+        'types': types,
+        'presets': presets
+    })
