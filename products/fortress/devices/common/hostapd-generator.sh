@@ -1944,6 +1944,14 @@ generate_hostapd_24ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
+    # ap_isolate setting based on D2D config
+    # ENABLE_WIFI_D2D=true (default) → ap_isolate=0 (allow AirPlay, HomeKit, etc.)
+    # ENABLE_WIFI_D2D=false → ap_isolate=1 (strict isolation for guest networks)
+    local ap_isolate_value=0
+    if [ "${ENABLE_WIFI_D2D:-true}" != "true" ]; then
+        ap_isolate_value=1
+    fi
+
     # Verify hardware actually supports 2.4GHz band
     if ! verify_band_support "$iface" "24ghz"; then
         log_error "Interface $iface does not support 2.4GHz band"
@@ -2171,17 +2179,11 @@ wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 wpa_passphrase=$password
 
-# Access Control - SDN Autopilot Mode
-# ap_isolate=1 forces ALL WiFi traffic through OVS bridge for policy enforcement.
-# Without this, same-radio (intra-BSS) traffic is forwarded by hostapd internally
-# and never reaches OVS for NAC policy enforcement.
-#
-# HomeKit/AirPlay/mDNS Discovery:
-# OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
-# This gives SDN visibility into device discovery while maintaining isolation control.
-# Devices with policy=smart_home get mDNS reflected; internet_only does not.
+# Access Control
+# ap_isolate=0: Allow device-to-device (D2D) for AirPlay, HomeKit, printers
+# ap_isolate=1: Strict isolation mode for guest networks (ENABLE_WIFI_D2D=false)
 macaddr_acl=0
-ap_isolate=1
+ap_isolate=$ap_isolate_value
 max_num_sta=64
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -2276,6 +2278,14 @@ generate_hostapd_5ghz() {
     [ -z "$iface" ] && { log_error "Interface required"; return 1; }
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
+
+    # ap_isolate setting based on D2D config
+    # ENABLE_WIFI_D2D=true (default) → ap_isolate=0 (allow AirPlay, HomeKit, etc.)
+    # ENABLE_WIFI_D2D=false → ap_isolate=1 (strict isolation for guest networks)
+    local ap_isolate_value=0
+    if [ "${ENABLE_WIFI_D2D:-true}" != "true" ]; then
+        ap_isolate_value=1
+    fi
 
     # Verify hardware actually supports 5GHz band
     if ! verify_band_support "$iface" "5ghz"; then
@@ -2775,17 +2785,11 @@ ieee80211w=1
 # WPA2 Fallback Password
 wpa_passphrase=$password
 
-# Access Control - SDN Autopilot Mode
-# ap_isolate=1 forces ALL WiFi traffic through OVS bridge for policy enforcement.
-# Without this, same-radio (intra-BSS) traffic is forwarded by hostapd internally
-# and never reaches OVS for NAC policy enforcement.
-#
-# HomeKit/AirPlay/mDNS Discovery:
-# OVS handles mDNS reflection (hairpin) via OpenFlow rules in ovs-post-setup.sh.
-# This gives SDN visibility into device discovery while maintaining isolation control.
-# Devices with policy=smart_home get mDNS reflected; internet_only does not.
+# Access Control
+# ap_isolate=0: Allow device-to-device (D2D) for AirPlay, HomeKit, printers
+# ap_isolate=1: Strict isolation mode for guest networks (ENABLE_WIFI_D2D=false)
 macaddr_acl=0
-ap_isolate=1
+ap_isolate=$ap_isolate_value
 max_num_sta=128
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -3029,6 +3033,15 @@ VETH_BR="veth-wifi-a"
 VETH_OVS="veth-wifi-b"
 VLAN_TAG="${WIFI_VLAN_TAG:-100}"
 
+# Load Fortress config for D2D setting
+# ENABLE_WIFI_D2D=true allows device-to-device (AirPlay, HomeKit, printers)
+# ENABLE_WIFI_D2D=false forces all traffic through OVS (strict isolation)
+if [ -f /etc/hookprobe/fortress.conf ]; then
+    # shellcheck source=/dev/null
+    source /etc/hookprobe/fortress.conf 2>/dev/null || true
+fi
+ENABLE_WIFI_D2D="${ENABLE_WIFI_D2D:-true}"  # Default: allow D2D for home/small-biz
+
 [ -z "$IFACE" ] && exit 1
 
 log() { echo "[wifi-bridge] $*"; logger -t fts-wifi-bridge "$*" 2>/dev/null || true; }
@@ -3081,38 +3094,45 @@ ensure_veth_pair() {
     ip link set "$VETH_OVS" up
 }
 
-# Set up ebtables to force WiFi-to-WiFi traffic through veth (to OVS)
-# Critical: Traffic from veth (returning from OVS) must be ALLOWED
-# Only block DIRECT WiFi-to-WiFi that bypasses OVS
+# Set up ebtables rules for WiFi traffic
+# When ENABLE_WIFI_D2D=true (default): Allow device-to-device (AirPlay, HomeKit, printers)
+# When ENABLE_WIFI_D2D=false: Force all traffic through OVS for strict isolation
 setup_ebtables() {
     if ! command -v ebtables &>/dev/null; then
-        log "ebtables not available - WiFi isolation via OVS won't work"
-        return 1
+        log "ebtables not available - skipping bridge filtering"
+        return 0
     fi
 
     # First, ensure traffic FROM veth (coming from OVS) is allowed
-    # This MUST be added before DROP rules (order matters in ebtables)
+    # This is needed for OVS-based policies to return traffic to WiFi
     if ! ebtables -L FORWARD | grep -q "veth-wifi-a.*ACCEPT"; then
         ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
         log "Added ACCEPT rule for traffic from $VETH_BR (OVS return path)"
     fi
 
-    # Remove old DROP rules for this interface first
+    # Always remove old DROP rules first (cleanup from previous config)
     ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block direct WiFi-to-WiFi on same interface (forces through OVS)
-    ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block WiFi-to-WiFi across different interfaces (2.4GHz ↔ 5GHz)
-    # This forces cross-band traffic through veth → OVS for policy enforcement
     for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
         if [ "$other" != "$IFACE" ]; then
             ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
         fi
     done
 
-    log "ebtables rules set for $IFACE - WiFi traffic forced through OVS"
+    if [ "$ENABLE_WIFI_D2D" = "true" ]; then
+        # D2D enabled: Allow device-to-device communication (AirPlay, HomeKit, printers)
+        # Traffic flows: WiFi ↔ WiFi directly via br-wifi + hairpin mode
+        log "D2D enabled for $IFACE - allowing device-to-device (AirPlay, HomeKit)"
+    else
+        # D2D disabled: Block direct WiFi-to-WiFi (strict isolation mode)
+        # Note: This blocks D2D but doesn't redirect through OVS - use for guest networks
+        ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
+        done
+        log "D2D disabled for $IFACE - strict isolation mode (guest network)"
+    fi
 }
 
 # Enable hairpin mode on interface for mDNS reflection
