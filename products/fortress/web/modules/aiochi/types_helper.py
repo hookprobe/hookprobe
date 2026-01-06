@@ -29,9 +29,9 @@ BUBBLE_TYPE_POLICIES = {
     'WORK': {
         'internet': True,
         'lan': False,
-        'd2d': True,
+        'd2d': False,
         'vlan': 120,
-        'description': 'Work devices with limited access'
+        'description': 'Work devices - Internet only (laptops, phones)'
     },
     'CUSTOM': {
         'internet': True,
@@ -71,9 +71,9 @@ BUBBLE_TYPE_POLICIES = {
     'corporate': {
         'internet': True,
         'lan': False,
-        'd2d': True,
+        'd2d': False,
         'vlan': 120,
-        'description': 'Corporate devices'
+        'description': 'Corporate devices - Internet only'
     },
     'custom': {
         'internet': True,
