@@ -77,16 +77,16 @@ CREATE TABLE IF NOT EXISTS vlans (
 );
 
 -- Default VLANs for VLAN mode network segmentation
--- Physical VLANs: 100 (LAN) and 200 (MGMT) have their own subnets
--- Segment VLANs: 10-99 are logical tags within VLAN 100 (share LAN subnet, isolated via OpenFlow)
--- Note: Subnet values for segment VLANs match LAN since they share the same IP space
+-- FLAT BRIDGE ARCHITECTURE
+-- All devices share the same L2 segment on FTS bridge (10.200.0.0/xx)
+-- Segmentation is via OpenFlow NAC rules, not physical VLANs
+-- "VLAN IDs" are logical segment identifiers for device classification
 -- Trust levels: 0=UNTRUSTED, 1=MINIMAL, 2=STANDARD, 3=HIGH, 4=ENTERPRISE
 INSERT INTO vlans (vlan_id, name, description, subnet, gateway, is_isolated, is_logical, trust_floor)
 VALUES
-    -- Physical VLANs (actual tagged traffic)
-    (100, 'LAN', 'LAN clients and WiFi (physical)', '10.200.0.0/23', '10.200.0.1', false, false, 0),
-    (200, 'MGMT', 'Management network (container access)', '10.200.100.0/30', '10.200.100.1', false, false, 4),
-    -- Segment VLANs (logical tags within VLAN 100 for device classification via OpenFlow)
+    -- Default LAN segment (all devices start here)
+    (0, 'LAN', 'Default LAN segment (flat bridge)', '10.200.0.0/23', '10.200.0.1', false, true, 0),
+    -- Logical segments (device classification via OpenFlow NAC rules)
     (10, 'SecMON', 'Security monitoring devices (NVR, SIEM)', '10.200.0.0/23', '10.200.0.1', false, true, 3),
     (20, 'POS', 'Point of Sale terminals (isolated)', '10.200.0.0/23', '10.200.0.1', true, true, 3),
     (30, 'Staff', 'Staff devices (laptops, phones)', '10.200.0.0/23', '10.200.0.1', false, true, 2),

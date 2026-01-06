@@ -1324,11 +1324,16 @@ def get_qsecbit_stats() -> Dict:
 
 
 # =============================================================================
-# VLAN Configuration (Real Data)
+# Network Segments (Flat Bridge Architecture)
 # =============================================================================
 
 def get_vlans() -> List[Dict]:
-    """Get actual VLAN configuration from system."""
+    """Get network segment configuration from system.
+
+    Note: Flat bridge architecture uses OpenFlow NAC for segmentation.
+    This function returns any legacy VLAN interfaces if present,
+    but in normal operation returns empty list.
+    """
     cached = _get_cached('vlans', ttl=60)
     if cached is not None:
         return cached
@@ -1348,16 +1353,9 @@ def get_vlans() -> List[Dict]:
             except ValueError:
                 continue
 
-        # Determine VLAN name
-        if vlan_id == 100:
-            name = 'LAN'
-            description = 'Local Area Network - All clients'
-        elif vlan_id == 200:
-            name = 'MGMT'
-            description = 'Management - Admin access'
-        else:
-            name = f'VLAN {vlan_id}'
-            description = ''
+        # Generic VLAN naming (flat bridge has no dedicated VLANs)
+        name = f'VLAN {vlan_id}' if vlan_id else 'Unknown'
+        description = ''
 
         vlans.append({
             'vlan_id': vlan_id,

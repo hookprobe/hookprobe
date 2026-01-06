@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.10:8123",
+        "url": "http://aiochi-clickhouse:8123",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.20:8060/api/feed",
+        "url": "http://aiochi-identity:8060/api/feed",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
@@ -64,7 +64,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.20:8060/api/presence",
+        "url": "http://aiochi-identity:8060/api/presence",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
