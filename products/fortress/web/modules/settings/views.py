@@ -364,7 +364,15 @@ def apply_wifi_settings(ssid: str, password: str, channel: str = 'auto', band: s
 
 
 def update_hostapd_ssid(config_path: Path, ssid: str, password: str):
-    """Update SSID and password in a hostapd config file."""
+    """Update SSID and password in a hostapd config file.
+
+    Note: WPA passphrases must be stored in clear text in hostapd config files
+    for the WiFi AP to function. This is unavoidable per WPA2-PSK specification.
+    File permissions are set to 600 (root read/write only) to protect credentials.
+    See: CWE-312 mitigation via file permission restriction.
+    """
+    import os
+
     if not config_path.exists():
         return
 
@@ -381,6 +389,13 @@ def update_hostapd_ssid(config_path: Path, ssid: str, password: str):
             new_lines.append(line)
 
     config_path.write_text('\n'.join(new_lines))
+
+    # Security: Set restrictive file permissions (600 = owner read/write only)
+    # This mitigates CWE-312 by ensuring only root can read the passphrase
+    try:
+        os.chmod(config_path, 0o600)
+    except OSError as e:
+        logger.warning(f"Could not set permissions on {config_path}: {e}")
 
 
 def apply_regulatory_domain(domain: str) -> dict:
