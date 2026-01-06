@@ -62,13 +62,21 @@ except ImportError as e:
         return None
 
 # Import ecosystem bubble manager for same-user device grouping
+# Uses unified module from shared/aiochi/bubble
 ECOSYSTEM_BUBBLE_AVAILABLE = False
 try:
-    from ecosystem_bubble import get_bubble_manager
+    # Prefer unified module from shared/aiochi
+    from shared.aiochi.bubble import get_bubble_manager
     ECOSYSTEM_BUBBLE_AVAILABLE = True
-    logger.info("Dashboard: ecosystem_bubble module loaded successfully")
-except ImportError as e:
-    logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
+    logger.info("Dashboard: AIOCHI bubble module loaded successfully")
+except ImportError:
+    try:
+        # Fallback to deprecated local module
+        from ecosystem_bubble import get_bubble_manager
+        ECOSYSTEM_BUBBLE_AVAILABLE = True
+        logger.info("Dashboard: legacy ecosystem_bubble module loaded (deprecated)")
+    except ImportError as e:
+        logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
 
 # Data directory - shared volume from fts-qsecbit agent
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
