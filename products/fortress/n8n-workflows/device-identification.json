@@ -99,13 +99,19 @@
     },
     {
       "parameters": {
-        "command": "={{ 'python3 -c \"from ecosystem_bubble import get_bubble_manager, BubbleType; m=get_bubble_manager(); m.auto_assign_device(\\\"' + $json.mac + '\\\", BubbleType.' + $json.suggested_bubble_type + ')\"' }}"
+        "url": "={{ 'http://aiochi-identity:8060/api/device/' + $json.mac + '/assign' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ bubble_id: $json.suggested_bubble_type.toLowerCase() + '-auto', confidence: $json.confidence, reason: 'Auto-assigned by AI Autopilot based on ecosystem detection' }) }}",
+        "options": {}
       },
       "id": "auto-assign-bubble",
-      "name": "Auto Assign to Bubble",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [1650, 0]
+      "name": "Auto Assign via AIOCHI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1650, 0],
+      "notes": "Forward to AIOCHI Identity Engine (single source of truth)"
     },
     {
       "parameters": {
@@ -183,13 +189,19 @@
     },
     {
       "parameters": {
-        "command": "={{ 'python3 -c \"from autopilot.dhcp_sentinel import get_dhcp_sentinel; s=get_dhcp_sentinel(); s.update_bubble_assignment(\\\"' + $json.mac + '\\\", \\\"' + ($json.bubble_id || 'guest') + '\\\")\"' }}"
+        "url": "http://aiochi-identity:8060/api/presence",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ mac: $json.mac, ip: $json.ip, hostname: $json.hostname, event: 'bubble_assigned', bubble_id: $json.bubble_id || 'guest', timestamp: new Date().toISOString() }) }}",
+        "options": {}
       },
       "id": "update-sentinel",
-      "name": "Update DHCP Sentinel",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [1850, 0]
+      "name": "Update AIOCHI Presence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1850, 0],
+      "notes": "Notify AIOCHI of bubble assignment for presence tracking"
     },
     {
       "parameters": {
@@ -203,13 +215,19 @@
     },
     {
       "parameters": {
-        "command": "={{ 'python3 -c \"from ecosystem_bubble import get_bubble_manager, BubbleType; m=get_bubble_manager(); m.add_device_to_bubble(\\\"' + $json.mac + '\\\", \\\"guest\\\")\"' }}"
+        "url": "={{ 'http://aiochi-identity:8060/api/device/' + $json.mac + '/assign' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ bubble_id: 'guest', confidence: $json.confidence || 0.3, reason: 'Low confidence - assigned to guest for manual review' }) }}",
+        "options": {}
       },
       "id": "assign-guest",
-      "name": "Assign to Guest Bubble",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [1450, 300]
+      "name": "Assign Guest via AIOCHI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1450, 300],
+      "notes": "Forward to AIOCHI Identity Engine (single source of truth)"
     },
     {
       "parameters": {
