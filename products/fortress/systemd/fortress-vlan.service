@@ -4,7 +4,7 @@
 #
 # This service runs AFTER netplan/systemd-networkd has created:
 #   - OVS bridge (FTS)
-#   - VLAN interfaces (vlan100, vlan200)
+#   - VLAN interfaces (FTS, FTS)
 #   - IP addressing
 #
 # This service only configures what netplan cannot:
@@ -48,7 +48,7 @@ ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
 # The fix for DHCP race conditions is now handled by:
 # 1. dnsmasq uses bind-dynamic (not bind-interfaces) for late interface binding
 # 2. dnsmasq drop-in has After=fortress-vlan.service (starts AFTER this completes)
-# 3. dnsmasq ExecStartPre waits for vlan100 IP + 3s stabilization delay
+# 3. dnsmasq ExecStartPre waits for FTS IP + 3s stabilization delay
 # This ensures OpenFlow rules are in place before dnsmasq binds the DHCP socket.
 
 # On stop, don't cleanup (keep config for debugging)
