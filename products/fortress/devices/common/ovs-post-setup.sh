@@ -59,10 +59,9 @@ fi
 # Defaults
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 VLAN_LAN="${VLAN_LAN:-100}"
-VLAN_MGMT="${VLAN_MGMT:-200}"
 GATEWAY_LAN="${GATEWAY_LAN:-10.200.0.1}"
-GATEWAY_MGMT="${GATEWAY_MGMT:-10.200.100.1}"
 LAN_MASK="${LAN_MASK:-24}"
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 
 # Container network
 CONTAINER_SUBNET="${CONTAINER_SUBNET:-172.20.200.0/24}"
@@ -203,7 +202,6 @@ bring_up_vlan_interfaces() {
     log_section "Bringing Up VLAN Interfaces"
 
     local gateway_lan="${GATEWAY_LAN:-10.200.0.1}"
-    local gateway_mgmt="${GATEWAY_MGMT:-10.200.100.1}"
     local lan_mask="${LAN_MASK:-24}"
 
     # First, ensure the OVS bridge itself is UP
@@ -218,20 +216,14 @@ bring_up_vlan_interfaces() {
     fi
 
     # VLAN 100 (LAN) - Create/ensure as OVS internal port
+    # NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
     local vlan_lan="vlan${VLAN_LAN}"
     if ! ensure_ovs_vlan_port "$vlan_lan" "$VLAN_LAN" "$gateway_lan" "$lan_mask"; then
         log_error "Failed to configure $vlan_lan"
         return 1
     fi
 
-    # VLAN 200 (MGMT) - Create/ensure as OVS internal port
-    local vlan_mgmt="vlan${VLAN_MGMT}"
-    if ! ensure_ovs_vlan_port "$vlan_mgmt" "$VLAN_MGMT" "$gateway_mgmt" "30"; then
-        log_error "Failed to configure $vlan_mgmt"
-        return 1
-    fi
-
-    log_success "All VLAN interfaces ready (OVS internal ports)"
+    log_success "LAN VLAN interface ready (OVS internal port)"
     return 0
 }
 
@@ -361,76 +353,15 @@ configure_port_vlans() {
                 ;;
 
             *)
-                if [ "$port" = "$trunk_port" ]; then
-                    # Trunk port - carries both VLANs
-                    log_info "TRUNK $port → Native $VLAN_LAN + Tagged $VLAN_MGMT"
-                    ovs-vsctl set port "$port" \
-                        trunks="$VLAN_LAN,$VLAN_MGMT" \
-                        vlan_mode=native-untagged \
-                        tag="$VLAN_LAN" 2>/dev/null || true
-                else
-                    # Regular LAN port - VLAN 100 access
-                    log_info "LAN $port → VLAN $VLAN_LAN (access)"
-                    ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access 2>/dev/null || true
-                fi
+                # All LAN ports - VLAN 100 access
+                # NOTE: Trunk mode removed - access control via OpenFlow fingerprint policies
+                log_info "LAN $port → VLAN $VLAN_LAN (access)"
+                ovs-vsctl set port "$port" tag="$VLAN_LAN" vlan_mode=access 2>/dev/null || true
                 ;;
         esac
     done
 
     log_success "Port VLAN configuration complete"
-}
-
-# ============================================================
-# CONTAINER BRIDGE (VETH TO VLAN 200)
-# ============================================================
-
-setup_container_veth() {
-    log_section "Container Network Bridge"
-
-    local veth_host="veth-mgmt-host"
-    local veth_ovs="veth-mgmt-ovs"
-
-    # Create veth pair if not exists
-    if ! ip link show "$veth_host" &>/dev/null; then
-        log_info "Creating veth pair..."
-        ip link add "$veth_host" type veth peer name "$veth_ovs"
-    fi
-
-    # Add OVS side to bridge with VLAN 200 (idempotent)
-    # Check if port exists using port-to-br (more reliable than --if-exists get)
-    if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
-        # Port exists in some bridge - ensure it's on our bridge with correct VLAN
-        local current_br
-        current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
-        if [ "$current_br" = "$OVS_BRIDGE" ]; then
-            ovs-vsctl set port "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || true
-            log_info "$veth_ovs already on $OVS_BRIDGE, ensured VLAN $VLAN_MGMT"
-        else
-            # Port on wrong bridge - move it
-            ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
-            log_info "Moved $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
-        fi
-    else
-        # Port doesn't exist in OVS - add it
-        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" 2>/dev/null || {
-            # Might fail if interface not ready, try to recover
-            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" tag="$VLAN_MGMT" || true
-        }
-        log_info "Added $veth_ovs to $OVS_BRIDGE with VLAN $VLAN_MGMT"
-    fi
-
-    # Bring up interfaces
-    ip link set "$veth_host" up
-    ip link set "$veth_ovs" up
-
-    # Host side IP for routing
-    if ! ip addr show "$veth_host" | grep -q "10.200.100.254"; then
-        ip addr add "10.200.100.254/24" dev "$veth_host" 2>/dev/null || true
-    fi
-
-    log_success "Container veth bridge configured"
 }
 
 # ============================================================
@@ -729,9 +660,6 @@ show_status() {
     echo -e "\n${CYAN}VLAN Interfaces:${NC}"
     ip -br addr show | grep -E "vlan[0-9]+" || echo "  (none)"
 
-    echo -e "\n${CYAN}Container veth:${NC}"
-    ip -br addr show | grep -E "veth-mgmt" || echo "  (none)"
-
     echo -e "\n${CYAN}Traffic Mirror (IDS/NSM Capture):${NC}"
     if ip link show FTS-mirror &>/dev/null; then
         local mirror_state
@@ -889,10 +817,6 @@ main() {
             bring_up_vlan_interfaces  # CRITICAL: Bring up VLANs with IPs first
             configure_openflow
             configure_port_vlans
-
-            # Container veth is optional - don't fail if it doesn't work
-            # Containers use podman's internal network as primary
-            setup_container_veth || log_warn "Container veth setup had issues (non-fatal)"
 
             # Avahi mDNS coexistence for Ecosystem Bubble detection
             # Enables HomeKit/AirPlay device grouping via PresenceSensor
