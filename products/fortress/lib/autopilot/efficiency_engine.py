@@ -375,7 +375,12 @@ class EfficiencyEngine:
         if probe_result.d2d_targets:
             # Check if any D2D targets are already in a bubble
             try:
-                from ..ecosystem_bubble import get_bubble_manager
+                # Use unified module from shared/aiochi/bubble
+                try:
+                    from shared.aiochi.bubble import get_bubble_manager
+                except ImportError:
+                    # Fallback to deprecated local module
+                    from ..ecosystem_bubble import get_bubble_manager
 
                 manager = get_bubble_manager()
 
@@ -398,7 +403,11 @@ class EfficiencyEngine:
         # Check ecosystem-based assignment
         if probe_result.ecosystem and confidence >= self.config.auto_bubble_confidence:
             try:
-                from ..ecosystem_bubble import get_bubble_manager, BubbleType
+                # Use unified module from shared/aiochi/bubble
+                try:
+                    from shared.aiochi.bubble import get_bubble_manager, BubbleType
+                except ImportError:
+                    from ..ecosystem_bubble import get_bubble_manager, BubbleType
 
                 manager = get_bubble_manager()
 
@@ -420,7 +429,11 @@ class EfficiencyEngine:
         # Default to guest bubble if configured
         if self.config.guest_bubble_default and not ident.bubble_id:
             try:
-                from ..ecosystem_bubble import get_bubble_manager, BubbleType
+                # Use unified module from shared/aiochi/bubble
+                try:
+                    from shared.aiochi.bubble import get_bubble_manager, BubbleType
+                except ImportError:
+                    from ..ecosystem_bubble import get_bubble_manager, BubbleType
 
                 manager = get_bubble_manager()
                 guest_bubbles = manager.get_bubbles_by_type(BubbleType.GUEST)
