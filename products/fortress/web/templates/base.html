@@ -167,28 +167,19 @@
                     </li>
 
                     <!-- 5. AIOCHI (Cognitive Network Layer) -->
-                    <li class="nav-item {% if 'aiochi' in request.endpoint or 'cortex' in request.endpoint %}menu-open{% endif %}">
-                        <a href="#" class="nav-link {% if 'aiochi' in request.endpoint or 'cortex' in request.endpoint %}active{% endif %}">
+                    <li class="nav-item">
+                        <a href="{{ url_for('aiochi.index') }}" class="nav-link {% if request.endpoint == 'aiochi.index' %}active{% endif %}">
                             <i class="nav-icon fas fa-eye"></i>
-                            <p>
-                                AIOCHI
-                                <i class="right fas fa-angle-left"></i>
-                            </p>
+                            <p>AIOCHI</p>
                         </a>
-                        <ul class="nav nav-treeview">
-                            <li class="nav-item">
-                                <a href="{{ url_for('aiochi.index') }}" class="nav-link {% if request.endpoint == 'aiochi.index' %}active{% endif %}">
-                                    <i class="fas fa-brain nav-icon"></i>
-                                    <p>AI Eyes</p>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a href="{{ url_for('aiochi.cortex') }}" class="nav-link {% if request.endpoint == 'aiochi.cortex' %}active{% endif %}">
-                                    <i class="fas fa-globe nav-icon"></i>
-                                    <p>Cortex</p>
-                                </a>
-                            </li>
-                        </ul>
+                    </li>
+
+                    <!-- 6. CORTEX (Neural Command Center - 3D Globe) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('aiochi.cortex') }}" class="nav-link {% if request.endpoint == 'aiochi.cortex' %}active{% endif %}">
+                            <i class="nav-icon fas fa-globe"></i>
+                            <p>Cortex</p>
+                        </a>
                     </li>
 
                     <!-- 7. SETTINGS (Admin only) -->
