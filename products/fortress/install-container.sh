@@ -3467,8 +3467,9 @@ GRAFANA_PORT=3000
 N8N_USER=admin
 N8N_PASSWORD=${N8N_PASSWORD:-fortress_n8n_admin}
 
-# Capture interface (OVS bridge)
-CAPTURE_INTERFACE=FTS
+# Capture interface (OVS mirror port - NOT the main bridge!)
+# FTS-mirror receives a copy of all traffic without impacting OVS datapath
+CAPTURE_INTERFACE=FTS-mirror
 
 # Log level
 LOG_LEVEL=INFO
