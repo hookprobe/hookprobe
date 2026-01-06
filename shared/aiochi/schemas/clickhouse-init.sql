@@ -487,3 +487,254 @@ ORDER BY (mac_address, action);
 -- GROUP BY alert_signature, alert_category
 -- ORDER BY count DESC
 -- LIMIT 10;
+
+
+-- ============================================================================
+-- PURPLE TEAM SCHEMA (Gap #4 Fix)
+-- Database for Nexus Red/Purple Team simulation results
+-- ============================================================================
+
+CREATE DATABASE IF NOT EXISTS purple_team;
+
+USE purple_team;
+
+-- Simulation Results
+-- Core table for storing purple team simulation outcomes
+CREATE TABLE IF NOT EXISTS simulations (
+    simulation_id String,
+    timestamp DateTime DEFAULT now(),
+    nexus_node_id String DEFAULT '',
+
+    -- Defense metrics
+    defense_score UInt8,              -- 0-100
+    overall_risk Enum8('LOW' = 1, 'MEDIUM' = 2, 'HIGH' = 3, 'CRITICAL' = 4),
+
+    -- Attack metrics
+    attacks_total UInt8,
+    attacks_successful UInt8,
+    attacks_detected UInt8,
+    attacks_blocked UInt8,
+
+    -- Bubble metrics
+    bubbles_tested UInt8,
+    bubbles_penetrated UInt8,
+    devices_compromised UInt16,
+
+    -- Detection metrics
+    true_positives UInt8,
+    false_positives UInt8,
+    true_negatives UInt8,
+    false_negatives UInt8,
+
+    -- CVSS scores
+    cvss_max Float32,
+    cvss_avg Float32,
+
+    -- Action taken
+    action Enum8('log_only' = 1, 'alert_and_optimize' = 2, 'review_required' = 3, 'immediate_alert' = 4),
+    priority Enum8('low' = 1, 'medium' = 2, 'high' = 3, 'critical' = 4),
+
+    -- Recommendations (stored as JSON)
+    recommendations String,           -- JSON array of recommendation strings
+
+    -- Duration
+    duration_seconds Float32,
+
+    INDEX idx_sim simulation_id TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_risk overall_risk TYPE minmax GRANULARITY 1,
+    INDEX idx_score defense_score TYPE minmax GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, simulation_id)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- Attack Results
+-- Detailed results for each attack vector in a simulation
+CREATE TABLE IF NOT EXISTS attack_results (
+    id UUID DEFAULT generateUUIDv4(),
+    simulation_id String,
+    timestamp DateTime DEFAULT now(),
+
+    -- Attack details
+    attack_type String,               -- 'ter_replay', 'mac_impersonation', etc.
+    attack_name String,               -- Human-readable name
+    mitre_technique String,           -- MITRE ATT&CK ID (e.g., T1134)
+
+    -- Results
+    success Bool,
+    partial_success Bool,
+    detected Bool,
+    blocked Bool,
+
+    -- Scoring
+    confidence Float32,               -- 0.0-1.0
+    exploitability Float32,           -- CVSS exploitability
+    impact Float32,                   -- CVSS impact
+    cvss_score Float32,               -- Combined CVSS
+
+    -- Timing
+    execution_time_ms Float32,
+
+    -- Target
+    target_bubble_id String,
+    target_mac String,
+
+    -- Evidence (JSON)
+    evidence String,                  -- JSON array
+    details String,                   -- JSON object
+
+    INDEX idx_sim simulation_id TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_attack attack_type TYPE bloom_filter GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, simulation_id, attack_type)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- Optimization History
+-- Track optimizations applied from purple team recommendations
+CREATE TABLE IF NOT EXISTS optimizations (
+    id UUID DEFAULT generateUUIDv4(),
+    optimization_id String,
+    simulation_id String,
+    timestamp DateTime DEFAULT now(),
+
+    -- What was optimized
+    parameter String,
+    action String,                    -- 'increase', 'decrease', 'enable', 'disable'
+    old_value String,
+    new_value String,
+    reason String,
+
+    -- Result
+    applied Bool,
+    error String DEFAULT '',
+
+    -- Impact tracking
+    defense_score_before UInt8,
+    defense_score_after UInt8,
+
+    INDEX idx_sim simulation_id TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_param parameter TYPE bloom_filter GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, simulation_id)
+TTL timestamp + INTERVAL 180 DAY;
+
+
+-- Defense Outcomes
+-- Real-world defense outcomes for comparison with simulations
+CREATE TABLE IF NOT EXISTS defense_outcomes (
+    id UUID DEFAULT generateUUIDv4(),
+    timestamp DateTime DEFAULT now(),
+
+    -- Event details
+    attack_type String,
+    detected Bool,
+    blocked Bool,
+    detection_method String,
+    response_action String,
+
+    -- Target
+    target_mac String,
+    target_bubble_id String,
+
+    -- Source (for correlation)
+    source_ip String DEFAULT '',
+
+    -- Metrics
+    detection_time_ms Float32,
+    response_time_ms Float32,
+
+    INDEX idx_attack attack_type TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_mac target_mac TYPE bloom_filter GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, attack_type)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- Meta-Regression Observations
+-- Store observations for meta-regressive learning
+CREATE TABLE IF NOT EXISTS meta_regression_observations (
+    id UUID DEFAULT generateUUIDv4(),
+    timestamp DateTime DEFAULT now(),
+    simulation_id String,
+
+    -- Bubble being analyzed
+    bubble_id String,
+    bubble_type String,
+
+    -- Feature values
+    temporal_sync Float32,            -- 0.0-1.0
+    d2d_affinity Float32,             -- 0.0-1.0
+    nse_resonance Float32,            -- 0.0-1.0
+
+    -- Target variable
+    accuracy Float32,                 -- 0.0-1.0 (bubble assignment accuracy)
+
+    -- Model output (after regression)
+    predicted_accuracy Float32,
+    residual Float32,
+
+    INDEX idx_sim simulation_id TYPE bloom_filter GRANULARITY 1,
+    INDEX idx_bubble bubble_id TYPE bloom_filter GRANULARITY 1
+) ENGINE = MergeTree()
+ORDER BY (timestamp, simulation_id)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- Regression Coefficients
+-- Store learned regression coefficients over time
+CREATE TABLE IF NOT EXISTS regression_coefficients (
+    timestamp DateTime DEFAULT now(),
+    model_version UInt32,
+
+    -- Coefficients from E = β₀ + β₁(Ts) + β₂(D2D) + β₃(NSE) + ε
+    beta_0 Float32,                   -- Intercept
+    beta_temporal_sync Float32,       -- β₁
+    beta_d2d_affinity Float32,        -- β₂
+    beta_nse_resonance Float32,       -- β₃
+
+    -- Model quality
+    r_squared Float32,
+    observations_count UInt32,
+
+    -- Source
+    nexus_node_id String DEFAULT ''
+) ENGINE = MergeTree()
+ORDER BY (timestamp, model_version)
+TTL timestamp + INTERVAL 365 DAY;
+
+
+-- ============================================================================
+-- PURPLE TEAM VIEWS
+-- ============================================================================
+
+-- Defense score trend over last 30 days
+-- CREATE VIEW defense_score_trend AS
+-- SELECT
+--     toDate(timestamp) AS date,
+--     avg(defense_score) AS avg_score,
+--     min(defense_score) AS min_score,
+--     max(defense_score) AS max_score,
+--     count() AS simulations
+-- FROM purple_team.simulations
+-- WHERE timestamp > now() - INTERVAL 30 DAY
+-- GROUP BY date
+-- ORDER BY date;
+
+-- Attack success rate by type
+-- CREATE VIEW attack_success_rates AS
+-- SELECT
+--     attack_type,
+--     count() AS total,
+--     sum(success) AS successful,
+--     round(sum(success) / count() * 100, 1) AS success_rate_pct,
+--     avg(cvss_score) AS avg_cvss
+-- FROM purple_team.attack_results
+-- WHERE timestamp > now() - INTERVAL 30 DAY
+-- GROUP BY attack_type
+-- ORDER BY success_rate_pct DESC;
+
+-- Latest coefficients
+-- SELECT * FROM purple_team.regression_coefficients
+-- ORDER BY timestamp DESC
+-- LIMIT 1;

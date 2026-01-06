@@ -962,3 +962,463 @@ def presence_status():
         pass
 
     return jsonify(status)
+
+
+# ========================================
+# Nexus Purple Team Integration API (v1)
+# ========================================
+
+# Lazy import for SDN Autopilot
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    from products.fortress.lib.sdn_autopilot import get_sdn_autopilot
+    SDN_AUTOPILOT_AVAILABLE = True
+except ImportError:
+    pass
+
+
+@api_bp.route('/v1/alerts', methods=['POST'])
+def receive_nexus_alert():
+    """
+    Receive security alerts from Nexus Purple Team.
+
+    Gap #1 Fix: This endpoint receives validation results from Nexus
+    after running red/purple team simulations against the digital twin.
+
+    Payload:
+    {
+        "alert_type": "purple_team_validation",
+        "priority": "high|medium|low|critical",
+        "simulation_id": "SIM-20260106-103000",
+        "defense_score": 72,
+        "overall_risk": "HIGH",
+        "bubbles_penetrated": 1,
+        "recommendations": ["..."],
+        "timestamp": "2026-01-06T12:00:00Z"
+    }
+    """
+    data = request.get_json() or {}
+
+    # Validate required fields
+    required = ['alert_type', 'priority', 'simulation_id']
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({'error': f'Missing fields: {missing}'}), 400
+
+    # Store alert
+    from pathlib import Path
+    alert = {
+        'id': f"ALERT-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        'received_at': datetime.now().isoformat(),
+        'acknowledged': False,
+        **data
+    }
+
+    # Persist to file for dashboard
+    try:
+        alert_file = Path('/opt/hookprobe/fortress/data/purple_team_alerts.json')
+        alert_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = []
+        if alert_file.exists():
+            existing = json.loads(alert_file.read_text())
+
+        existing.insert(0, alert)
+        existing = existing[:100]  # Keep last 100 alerts
+        alert_file.write_text(json.dumps(existing, indent=2))
+    except Exception as e:
+        pass
+
+    # Log high-priority alerts
+    import logging
+    logger = logging.getLogger(__name__)
+    if data.get('priority') in ('high', 'critical'):
+        logger.warning(
+            f"Purple Team Alert [{data.get('priority')}]: "
+            f"Defense Score={data.get('defense_score')}, "
+            f"Risk={data.get('overall_risk')}"
+        )
+
+    # Trigger immediate action for critical alerts
+    if data.get('priority') == 'critical' and data.get('overall_risk') == 'CRITICAL':
+        _trigger_emergency_lockdown(data)
+
+    return jsonify({
+        'status': 'received',
+        'alert_id': alert['id'],
+        'message': 'Alert queued for processing'
+    }), 201
+
+
+@api_bp.route('/v1/alerts')
+@login_required
+def list_nexus_alerts():
+    """List recent Purple Team alerts."""
+    from pathlib import Path
+    try:
+        alert_file = Path('/opt/hookprobe/fortress/data/purple_team_alerts.json')
+        if alert_file.exists():
+            alerts = json.loads(alert_file.read_text())
+            return jsonify({'alerts': alerts, 'count': len(alerts)})
+    except Exception:
+        pass
+
+    return jsonify({'alerts': [], 'count': 0})
+
+
+@api_bp.route('/v1/alerts/<alert_id>/acknowledge', methods=['POST'])
+@login_required
+@operator_required
+def acknowledge_alert(alert_id):
+    """Acknowledge a Purple Team alert."""
+    from pathlib import Path
+    try:
+        alert_file = Path('/opt/hookprobe/fortress/data/purple_team_alerts.json')
+        if alert_file.exists():
+            alerts = json.loads(alert_file.read_text())
+            for alert in alerts:
+                if alert.get('id') == alert_id:
+                    alert['acknowledged'] = True
+                    alert['acknowledged_at'] = datetime.now().isoformat()
+                    alert['acknowledged_by'] = current_user.id
+                    alert_file.write_text(json.dumps(alerts, indent=2))
+                    return jsonify({'success': True})
+
+        return jsonify({'error': 'Alert not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/v1/autopilot/optimize', methods=['POST'])
+def apply_nexus_optimization():
+    """
+    Apply optimization recommendations from Nexus Purple Team.
+
+    Gap #1 Fix: This endpoint receives optimization parameters from Nexus
+    to improve SDN Autopilot bubble assignment accuracy.
+
+    Payload:
+    {
+        "source": "purple_team",
+        "simulation_id": "SIM-20260106-103000",
+        "optimizations": [
+            {
+                "parameter": "temporal_sync_weight",
+                "action": "increase",
+                "old_value": 0.30,
+                "new_value": 0.35,
+                "reason": "Meta-regression shows temporal sync underweighted"
+            }
+        ]
+    }
+    """
+    data = request.get_json() or {}
+
+    if data.get('source') != 'purple_team':
+        return jsonify({'error': 'Invalid source - only purple_team allowed'}), 403
+
+    optimizations = data.get('optimizations', [])
+    if not optimizations:
+        return jsonify({'error': 'No optimizations provided'}), 400
+
+    # Track what we apply
+    applied = []
+    failed = []
+
+    for opt in optimizations:
+        param = opt.get('parameter')
+        action = opt.get('action')
+        new_value = opt.get('new_value')
+        reason = opt.get('reason', 'Purple team recommendation')
+
+        result = _apply_autopilot_optimization(param, action, new_value, reason)
+        if result['success']:
+            applied.append({
+                'parameter': param,
+                'action': action,
+                'new_value': new_value,
+                'applied_at': datetime.now().isoformat()
+            })
+        else:
+            failed.append({
+                'parameter': param,
+                'error': result.get('error', 'Unknown error')
+            })
+
+    # Persist optimization history
+    from pathlib import Path
+    opt_record = {
+        'id': f"OPT-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        'simulation_id': data.get('simulation_id'),
+        'timestamp': datetime.now().isoformat(),
+        'applied': applied,
+        'failed': failed
+    }
+
+    # Write to file for auditing
+    try:
+        opt_file = Path('/opt/hookprobe/fortress/data/autopilot_optimizations.json')
+        opt_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = []
+        if opt_file.exists():
+            existing = json.loads(opt_file.read_text())
+
+        existing.insert(0, opt_record)
+        existing = existing[:50]  # Keep last 50 optimizations
+        opt_file.write_text(json.dumps(existing, indent=2))
+    except Exception as e:
+        pass
+
+    # Report back to AIOCHI (Gap #2 integration)
+    try:
+        from products.fortress.lib.aiochi_client import get_aiochi_client
+        client = get_aiochi_client()
+        client.report_optimization_applied(opt_record)
+    except Exception:
+        pass
+
+    return jsonify({
+        'status': 'processed',
+        'optimization_id': opt_record['id'],
+        'applied_count': len(applied),
+        'failed_count': len(failed),
+        'applied': applied,
+        'failed': failed
+    }), 200 if not failed else 207  # 207 = Multi-Status
+
+
+@api_bp.route('/v1/autopilot/status')
+@login_required
+def autopilot_status():
+    """Get SDN Autopilot optimization status and history."""
+    from pathlib import Path
+
+    status = {
+        'autopilot_active': SDN_AUTOPILOT_AVAILABLE,
+        'last_optimization': None,
+        'recent_optimizations': [],
+        'current_weights': {},
+        'defense_score_trend': []
+    }
+
+    # Load optimization history
+    try:
+        opt_file = Path('/opt/hookprobe/fortress/data/autopilot_optimizations.json')
+        if opt_file.exists():
+            opts = json.loads(opt_file.read_text())
+            status['recent_optimizations'] = opts[:10]
+            if opts:
+                status['last_optimization'] = opts[0].get('timestamp')
+    except Exception:
+        pass
+
+    # Load current weights from autopilot config
+    try:
+        config_file = Path('/etc/hookprobe/autopilot.conf')
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                for line in f:
+                    if '=' in line and not line.strip().startswith('#'):
+                        key, value = line.strip().split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"\'')
+                        if key.endswith('_weight') or key.endswith('_interval'):
+                            try:
+                                status['current_weights'][key] = float(value)
+                            except ValueError:
+                                status['current_weights'][key] = value
+    except Exception:
+        pass
+
+    # Load defense score trend from alerts
+    try:
+        alert_file = Path('/opt/hookprobe/fortress/data/purple_team_alerts.json')
+        if alert_file.exists():
+            alerts = json.loads(alert_file.read_text())
+            for alert in alerts[:20]:
+                if 'defense_score' in alert:
+                    status['defense_score_trend'].append({
+                        'timestamp': alert.get('received_at'),
+                        'score': alert.get('defense_score'),
+                        'risk': alert.get('overall_risk')
+                    })
+    except Exception:
+        pass
+
+    return jsonify(status)
+
+
+@api_bp.route('/v1/defense/outcome', methods=['POST'])
+def report_defense_outcome():
+    """
+    Report actual defense outcome from SDN Autopilot.
+
+    Gap #6 Fix: SDN Autopilot reports real defense outcomes to enable
+    Nexus to compare simulated vs actual detection rates.
+
+    Payload:
+    {
+        "event_type": "defense_outcome",
+        "attack_type": "ter_replay",
+        "detected": true,
+        "blocked": true,
+        "detection_method": "NEURO protocol resonance drift",
+        "response_action": "quarantine",
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "timestamp": "2026-01-06T12:00:00Z"
+    }
+    """
+    from pathlib import Path
+    data = request.get_json() or {}
+
+    # Store outcome
+    outcome = {
+        'id': f"DEF-{datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]}",
+        'received_at': datetime.now().isoformat(),
+        **data
+    }
+
+    # Persist for Nexus to fetch
+    try:
+        outcome_file = Path('/opt/hookprobe/fortress/data/defense_outcomes.json')
+        outcome_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = []
+        if outcome_file.exists():
+            existing = json.loads(outcome_file.read_text())
+
+        existing.insert(0, outcome)
+        existing = existing[:500]  # Keep more outcomes for analysis
+        outcome_file.write_text(json.dumps(existing, indent=2))
+    except Exception:
+        pass
+
+    return jsonify({
+        'status': 'received',
+        'outcome_id': outcome['id']
+    }), 201
+
+
+@api_bp.route('/v1/defense/outcomes')
+@login_required
+def list_defense_outcomes():
+    """List recent defense outcomes for Nexus feedback loop."""
+    from pathlib import Path
+    limit = request.args.get('limit', 100, type=int)
+    since = request.args.get('since')  # ISO timestamp
+
+    try:
+        outcome_file = Path('/opt/hookprobe/fortress/data/defense_outcomes.json')
+        if outcome_file.exists():
+            outcomes = json.loads(outcome_file.read_text())
+
+            # Filter by timestamp if provided
+            if since:
+                outcomes = [o for o in outcomes if o.get('received_at', '') > since]
+
+            outcomes = outcomes[:limit]
+            return jsonify({'outcomes': outcomes, 'count': len(outcomes)})
+    except Exception:
+        pass
+
+    return jsonify({'outcomes': [], 'count': 0})
+
+
+def _apply_autopilot_optimization(
+    parameter: str,
+    action: str,
+    new_value,
+    reason: str
+):
+    """Apply a single autopilot optimization parameter."""
+    from pathlib import Path
+    config_file = Path('/etc/hookprobe/autopilot.conf')
+
+    # Whitelist of allowed parameters
+    ALLOWED_PARAMS = {
+        'temporal_sync_weight',
+        'd2d_affinity_weight',
+        'nse_resonance_weight',
+        'nse_heartbeat_interval_ms',
+        'ter_replay_window_ms',
+        'entropy_threshold',
+        'mac_binding_strict',
+        'mdns_validation_enabled',
+        'temporal_mimicry_detection',
+        'dhcp_fingerprint_validation',
+    }
+
+    if parameter not in ALLOWED_PARAMS:
+        return {'success': False, 'error': f'Parameter not allowed: {parameter}'}
+
+    try:
+        # Read current config
+        lines = []
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                lines = f.readlines()
+
+        # Update or add parameter
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f'{parameter}='):
+                lines[i] = f'{parameter}={new_value}  # Updated by purple_team: {reason}\n'
+                found = True
+                break
+
+        if not found:
+            lines.append(f'{parameter}={new_value}  # Added by purple_team: {reason}\n')
+
+        # Write updated config
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_file, 'w') as f:
+            f.writelines(lines)
+
+        # Reload autopilot if available
+        if SDN_AUTOPILOT_AVAILABLE:
+            try:
+                autopilot = get_sdn_autopilot()
+                autopilot.reload_config()
+            except Exception:
+                pass
+
+        import logging
+        logging.getLogger(__name__).info(
+            f"Applied autopilot optimization: {parameter}={new_value} ({reason})"
+        )
+        return {'success': True}
+
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def _trigger_emergency_lockdown(alert_data):
+    """Trigger emergency lockdown for critical alerts."""
+    from pathlib import Path
+    import logging
+    import subprocess
+
+    logging.getLogger(__name__).critical(
+        f"EMERGENCY LOCKDOWN triggered by Purple Team alert"
+    )
+
+    try:
+        # Write lockdown flag for SDN Autopilot
+        lockdown_file = Path('/run/fortress/emergency_lockdown')
+        lockdown_file.parent.mkdir(parents=True, exist_ok=True)
+        lockdown_file.write_text(json.dumps({
+            'triggered_at': datetime.now().isoformat(),
+            'reason': 'Purple team critical alert',
+            'simulation_id': alert_data.get('simulation_id'),
+            'defense_score': alert_data.get('defense_score'),
+        }))
+
+        # Signal systemd to trigger lockdown (if service exists)
+        subprocess.run(
+            ['systemctl', 'start', 'fortress-lockdown.service'],
+            capture_output=True,
+            timeout=5
+        )
+    except Exception:
+        pass
