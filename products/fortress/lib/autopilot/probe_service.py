@@ -38,7 +38,7 @@ import shutil
 # Configuration
 CAPTURE_DIR = Path(os.getenv('CAPTURE_DIR', '/var/lib/hookprobe/captures'))
 PROBE_TIMEOUT = int(os.getenv('PROBE_TIMEOUT', '60'))  # seconds
-CAPTURE_INTERFACE = os.getenv('CAPTURE_INTERFACE', 'vlan100')
+CAPTURE_INTERFACE = os.getenv('CAPTURE_INTERFACE', 'FTS')
 LOG_FILE = Path('/var/log/fortress/probe-service.log')
 
 # Capture filter for discovery protocols

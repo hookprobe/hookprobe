@@ -118,9 +118,9 @@ log_success "OVS bridge '$OVS_BRIDGE' found"
 
 # Detect current network mode
 CURRENT_MODE="unknown"
-if ip link show vlan100 &>/dev/null; then
+if ip link show FTS &>/dev/null; then
     CURRENT_MODE="vlan"
-    log_info "Current mode: VLAN (vlan100/vlan200 interfaces detected)"
+    log_info "Current mode: VLAN (FTS/FTS interfaces detected)"
 elif ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "10.200.0.1"; then
     CURRENT_MODE="filter"
     log_info "Current mode: Filter (IP on bridge)"
@@ -177,11 +177,11 @@ fi
 
 # Check if VLAN interfaces need creation (filter mode → VLAN mode upgrade)
 if [ "$CURRENT_MODE" = "filter" ] || [ "$CURRENT_MODE" = "legacy" ]; then
-    if ! ip link show vlan100 &>/dev/null; then
-        CHANGES_NEEDED+=("Create vlan100 interface (LAN)")
+    if ! ip link show FTS &>/dev/null; then
+        CHANGES_NEEDED+=("Create FTS interface (LAN)")
     fi
-    if ! ip link show vlan200 &>/dev/null; then
-        CHANGES_NEEDED+=("Create vlan200 interface (MGMT)")
+    if ! ip link show FTS &>/dev/null; then
+        CHANGES_NEEDED+=("Create FTS interface (MGMT)")
     fi
 fi
 
@@ -195,7 +195,7 @@ else
 fi
 
 # Check IP configuration
-CURRENT_LAN_IP=$(ip addr show vlan100 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+CURRENT_LAN_IP=$(ip addr show FTS 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
 if [ -z "$CURRENT_LAN_IP" ]; then
     CURRENT_LAN_IP=$(ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
 fi
@@ -273,8 +273,8 @@ if [ "$CURRENT_DHCP_SUBNET" = "10.250.0.x" ]; then
 
     # Determine interface to listen on
     DHCP_INTERFACE="$OVS_BRIDGE"
-    if [ "$CURRENT_MODE" = "vlan" ] || ip link show vlan100 &>/dev/null; then
-        DHCP_INTERFACE="vlan100"
+    if [ "$CURRENT_MODE" = "vlan" ] || ip link show FTS &>/dev/null; then
+        DHCP_INTERFACE="FTS"
     fi
 
     cat > "$DNSMASQ_CONF" << EOF
@@ -322,35 +322,35 @@ fi
 
 log_step "Step 5: Configuring VLAN interfaces..."
 
-# Create vlan100 if needed
-if ! ip link show vlan100 &>/dev/null; then
-    log_info "Creating vlan100 (LAN) interface..."
-    ovs-vsctl add-port "$OVS_BRIDGE" vlan100 -- set interface vlan100 type=internal
-    ovs-vsctl set port vlan100 tag=$LAN_VLAN
-    ip link set vlan100 up
-    ip addr add "$LAN_GATEWAY/24" dev vlan100 2>/dev/null || true
-    log_success "vlan100 created with IP $LAN_GATEWAY"
+# Create FTS if needed
+if ! ip link show FTS &>/dev/null; then
+    log_info "Creating FTS (LAN) interface..."
+    ovs-vsctl add-port "$OVS_BRIDGE" FTS -- set interface FTS type=internal
+    ovs-vsctl set port FTS tag=$LAN_VLAN
+    ip link set FTS up
+    ip addr add "$LAN_GATEWAY/24" dev FTS 2>/dev/null || true
+    log_success "FTS created with IP $LAN_GATEWAY"
 else
     # Ensure correct IP
-    if ! ip addr show vlan100 | grep -q "$LAN_GATEWAY"; then
-        ip addr add "$LAN_GATEWAY/24" dev vlan100 2>/dev/null || true
-        log_info "Added $LAN_GATEWAY to vlan100"
+    if ! ip addr show FTS | grep -q "$LAN_GATEWAY"; then
+        ip addr add "$LAN_GATEWAY/24" dev FTS 2>/dev/null || true
+        log_info "Added $LAN_GATEWAY to FTS"
     fi
 fi
 
-# Create vlan200 if needed
-if ! ip link show vlan200 &>/dev/null; then
-    log_info "Creating vlan200 (MGMT) interface..."
-    ovs-vsctl add-port "$OVS_BRIDGE" vlan200 -- set interface vlan200 type=internal
-    ovs-vsctl set port vlan200 tag=$MGMT_VLAN
-    ip link set vlan200 up
-    ip addr add "$MGMT_GATEWAY/30" dev vlan200 2>/dev/null || true
-    log_success "vlan200 created with IP $MGMT_GATEWAY"
+# Create FTS if needed
+if ! ip link show FTS &>/dev/null; then
+    log_info "Creating FTS (MGMT) interface..."
+    ovs-vsctl add-port "$OVS_BRIDGE" FTS -- set interface FTS type=internal
+    ovs-vsctl set port FTS tag=$MGMT_VLAN
+    ip link set FTS up
+    ip addr add "$MGMT_GATEWAY/30" dev FTS 2>/dev/null || true
+    log_success "FTS created with IP $MGMT_GATEWAY"
 else
     # Ensure correct IP
-    if ! ip addr show vlan200 | grep -q "$MGMT_GATEWAY"; then
-        ip addr add "$MGMT_GATEWAY/30" dev vlan200 2>/dev/null || true
-        log_info "Added $MGMT_GATEWAY to vlan200"
+    if ! ip addr show FTS | grep -q "$MGMT_GATEWAY"; then
+        ip addr add "$MGMT_GATEWAY/30" dev FTS 2>/dev/null || true
+        log_info "Added $MGMT_GATEWAY to FTS"
     fi
 fi
 
@@ -425,19 +425,19 @@ log_step "Step 8: Verifying configuration..."
 
 ERRORS=0
 
-# Check vlan100
-if ip addr show vlan100 2>/dev/null | grep -q "$LAN_GATEWAY"; then
-    log_success "vlan100: $LAN_GATEWAY ✓"
+# Check FTS
+if ip addr show FTS 2>/dev/null | grep -q "$LAN_GATEWAY"; then
+    log_success "FTS: $LAN_GATEWAY ✓"
 else
-    log_error "vlan100: IP not configured"
+    log_error "FTS: IP not configured"
     ((ERRORS++))
 fi
 
-# Check vlan200
-if ip addr show vlan200 2>/dev/null | grep -q "$MGMT_GATEWAY"; then
-    log_success "vlan200: $MGMT_GATEWAY ✓"
+# Check FTS
+if ip addr show FTS 2>/dev/null | grep -q "$MGMT_GATEWAY"; then
+    log_success "FTS: $MGMT_GATEWAY ✓"
 else
-    log_error "vlan200: IP not configured"
+    log_error "FTS: IP not configured"
     ((ERRORS++))
 fi
 

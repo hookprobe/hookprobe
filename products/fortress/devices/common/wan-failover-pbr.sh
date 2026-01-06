@@ -683,7 +683,7 @@ setup_routing_tables() {
 
     # CRITICAL: Add LAN/local routes to both WAN tables
     # Without these, reply packets marked with fwmark get routed via WAN default
-    # instead of being delivered locally to LAN clients (vlan100, vlan200, etc.)
+    # instead of being delivered locally to LAN clients (FTS, FTS, etc.)
     add_local_routes_to_pbr_tables
 
     # IMPORTANT: Keep a default route in main table as fallback

@@ -107,15 +107,15 @@ fi
 
 # 5. VLAN Interfaces
 header "VLAN INTERFACES"
-if ip link show vlan100 &>/dev/null; then
-    ok "vlan100 (LAN): $(ip -br addr show vlan100 2>/dev/null | awk '{print $3}')"
+if ip link show FTS &>/dev/null; then
+    ok "FTS (LAN): $(ip -br addr show FTS 2>/dev/null | awk '{print $3}')"
 else
-    warn "vlan100 not configured"
+    warn "FTS not configured"
 fi
-if ip link show vlan200 &>/dev/null; then
-    ok "vlan200 (MGMT): $(ip -br addr show vlan200 2>/dev/null | awk '{print $3}')"
+if ip link show FTS &>/dev/null; then
+    ok "FTS (MGMT): $(ip -br addr show FTS 2>/dev/null | awk '{print $3}')"
 else
-    info "vlan200 not configured (optional)"
+    info "FTS not configured (optional)"
 fi
 
 # 6. DHCP

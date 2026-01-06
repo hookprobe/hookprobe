@@ -182,8 +182,8 @@ ensure_ovs_bridge() {
     ip link set "$OVS_BRIDGE" up
 
     # VLAN mode: FTS bridge is Layer 2 only, no IP
-    # IPs are on vlan100 (LAN) and vlan200 (MGMT)
-    log_info "  VLAN mode: FTS bridge is Layer 2 only (IPs on vlan100/vlan200)"
+    # IPs are on FTS (LAN) and FTS (MGMT)
+    log_info "  VLAN mode: FTS bridge is Layer 2 only (IPs on FTS/FTS)"
     log_success "OVS bridge ready: $OVS_BRIDGE"
 }
 
