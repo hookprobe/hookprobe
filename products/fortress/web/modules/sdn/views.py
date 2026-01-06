@@ -67,6 +67,46 @@ except ImportError as e:
     def get_sdn_autopilot():
         return None
 
+# Import hostname decoder for dnsmasq octal escapes
+try:
+    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name
+except ImportError:
+    # Fallback implementations if module not found
+    def decode_dnsmasq_hostname(hostname):
+        """Decode dnsmasq octal escapes (fallback implementation)."""
+        if not hostname or '\\' not in hostname:
+            return hostname
+        try:
+            result = b''
+            i = 0
+            while i < len(hostname):
+                if hostname[i] == '\\' and i + 3 < len(hostname):
+                    octal_str = hostname[i+1:i+4]
+                    if all(c in '01234567' for c in octal_str):
+                        result += bytes([int(octal_str, 8)])
+                        i += 4
+                        continue
+                result += hostname[i].encode('utf-8', errors='replace')
+                i += 1
+            return result.decode('utf-8', errors='replace').strip()
+        except Exception:
+            return hostname
+
+    def clean_device_name(hostname, max_length=32):
+        """Clean device name (fallback implementation)."""
+        if not hostname:
+            return "Unknown Device"
+        name = decode_dnsmasq_hostname(hostname)
+        if not name:
+            return "Unknown Device"
+        # Remove hex suffixes
+        import re
+        name = re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+        if name.endswith('.local'):
+            name = name[:-6]
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name[:max_length-3] + '...' if len(name) > max_length else name or "Unknown Device"
+
 
 def classify_device(mac_address: str) -> dict:
     """Simple device classification based on MAC address.
@@ -154,7 +194,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                         'neighbor_state': 'REACHABLE' if device.get('is_active', False) else 'STALE',
                         'last_packet_count': 0,
                         'ip': device.get('ip_address', ''),
-                        'hostname': device.get('hostname', ''),
+                        'hostname': clean_device_name(device.get('hostname', '')),
                         'vendor': '',  # Will be detected by Fingerbank from OUI
                         # CRITICAL: DHCP fingerprint data for Fingerbank identification
                         'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
@@ -188,7 +228,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                             'neighbor_state': device.get('neighbor_state', cache[mac].get('neighbor_state', 'UNKNOWN')),
                             'last_packet_count': device.get('last_packet_count', 0),
                             'ip': device.get('ip', '') or cache[mac].get('ip', ''),
-                            'hostname': device.get('hostname', '') or device.get('name', '') or cache[mac].get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '') or device.get('name', '') or cache[mac].get('hostname', '')),
                             'vendor': device.get('vendor', '') or cache[mac].get('vendor', ''),
                         })
                     else:
@@ -198,7 +238,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                             'neighbor_state': device.get('neighbor_state', 'UNKNOWN'),
                             'last_packet_count': device.get('last_packet_count', 0),
                             'ip': device.get('ip', ''),
-                            'hostname': device.get('hostname', '') or device.get('name', ''),
+                            'hostname': clean_device_name(device.get('hostname', '') or device.get('name', '')),
                             'vendor': device.get('vendor', ''),
                             'dhcp_fingerprint': '',  # Not yet available
                             'vendor_class': '',
@@ -625,7 +665,7 @@ def format_device_for_template(device):
     return {
         'mac': device.get('mac_address', ''),
         'ip': device.get('ip_address', ''),
-        'hostname': device.get('hostname', 'Unknown'),
+        'hostname': clean_device_name(device.get('hostname', '')) or 'Unknown',
         'vendor': device.get('manufacturer', 'Unknown'),
         'category': category,
         'policy': policy,
@@ -691,7 +731,7 @@ def index():
                         {
                             'mac': mac,
                             'ip': info.get('ip', ''),
-                            'hostname': info.get('hostname', ''),
+                            'hostname': clean_device_name(info.get('hostname', '')),
                             # CRITICAL: Pass DHCP fingerprint for Fingerbank identification
                             # Identity Stack: DHCP Option 55 (50%) + OUI (20%) + Hostname (20%)
                             'dhcp_fingerprint': info.get('dhcp_fingerprint', ''),
@@ -731,8 +771,8 @@ def index():
                     device = {
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
-                        'hostname': d.get('friendly_name') or d.get('hostname') or d.get('device_type', 'Unknown'),
-                        'friendly_name': d.get('friendly_name', ''),
+                        'hostname': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                        'friendly_name': clean_device_name(d.get('friendly_name', '')),
                         'manufacturer': d.get('vendor', 'Unknown'),
                         'device_type': d.get('category', 'unknown'),
                         'policy': policy,
@@ -1248,8 +1288,8 @@ def discover_devices():
             device = {
                 'mac_address': d.get('mac', ''),
                 'ip_address': d.get('ip', ''),
-                'hostname': d.get('hostname', ''),
-                'friendly_name': d.get('friendly_name', '') or d.get('device_type', ''),
+                'hostname': clean_device_name(d.get('hostname', '')),
+                'friendly_name': clean_device_name(d.get('friendly_name', '')) or d.get('device_type', ''),
                 'manufacturer': d.get('vendor', 'Unknown'),
                 'device_type': d.get('device_type') or d.get('category', 'unknown'),
                 'policy': d.get('policy', 'quarantine'),
@@ -2509,7 +2549,7 @@ def api_sdn_devices():
 
                 sdn_devices.append({
                     'mac': device.get('mac', ''),
-                    'hostname': device.get('hostname') or device.get('friendly_name') or 'Unknown',
+                    'hostname': clean_device_name(device.get('hostname') or device.get('friendly_name', '')) or 'Unknown',
                     'ip_address': device.get('ip', '--'),
                     'vendor': device.get('vendor', 'Unknown'),
                     'segment': segment,

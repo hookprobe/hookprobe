@@ -62,13 +62,58 @@ except ImportError as e:
         return None
 
 # Import ecosystem bubble manager for same-user device grouping
+# Uses unified module from shared/aiochi/bubble
 ECOSYSTEM_BUBBLE_AVAILABLE = False
 try:
-    from ecosystem_bubble import get_bubble_manager
+    # Prefer unified module from shared/aiochi
+    from shared.aiochi.bubble import get_bubble_manager
     ECOSYSTEM_BUBBLE_AVAILABLE = True
-    logger.info("Dashboard: ecosystem_bubble module loaded successfully")
-except ImportError as e:
-    logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
+    logger.info("Dashboard: AIOCHI bubble module loaded successfully")
+except ImportError:
+    try:
+        # Fallback to deprecated local module
+        from ecosystem_bubble import get_bubble_manager
+        ECOSYSTEM_BUBBLE_AVAILABLE = True
+        logger.info("Dashboard: legacy ecosystem_bubble module loaded (deprecated)")
+    except ImportError as e:
+        logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
+
+# Import hostname decoder for dnsmasq octal escapes
+try:
+    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name
+except ImportError:
+    # Fallback implementations if module not found
+    import re as _re
+    def decode_dnsmasq_hostname(hostname):
+        if not hostname or '\\' not in hostname:
+            return hostname
+        try:
+            result = b''
+            i = 0
+            while i < len(hostname):
+                if hostname[i] == '\\' and i + 3 < len(hostname):
+                    octal_str = hostname[i+1:i+4]
+                    if all(c in '01234567' for c in octal_str):
+                        result += bytes([int(octal_str, 8)])
+                        i += 4
+                        continue
+                result += hostname[i].encode('utf-8', errors='replace')
+                i += 1
+            return result.decode('utf-8', errors='replace').strip()
+        except Exception:
+            return hostname
+
+    def clean_device_name(hostname, max_length=32):
+        if not hostname:
+            return "Unknown Device"
+        name = decode_dnsmasq_hostname(hostname)
+        if not name:
+            return "Unknown Device"
+        name = _re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+        if name.endswith('.local'):
+            name = name[:-6]
+        name = _re.sub(r'\s+', ' ', name).strip()
+        return name[:max_length-3] + '...' if len(name) > max_length else name or "Unknown Device"
 
 # Data directory - shared volume from fts-qsecbit agent
 DATA_DIR = Path('/opt/hookprobe/fortress/data')
@@ -189,7 +234,7 @@ def _load_device_status_cache():
                         cache[mac_upper] = {
                             'status': 'online' if device.get('is_active', False) else 'offline',
                             'ip': device.get('ip_address', ''),
-                            'hostname': device.get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
                             'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
                             'vendor_class': device.get('vendor_class', ''),
                         }
@@ -208,13 +253,13 @@ def _load_device_status_cache():
                         cache[mac].update({
                             'status': device.get('status', cache[mac].get('status', 'offline')),
                             'ip': device.get('ip', '') or cache[mac].get('ip', ''),
-                            'hostname': device.get('hostname', '') or cache[mac].get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '') or cache[mac].get('hostname', '')),
                         })
                     else:
                         cache[mac] = {
                             'status': device.get('status', 'offline'),
                             'ip': device.get('ip', ''),
-                            'hostname': device.get('hostname', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
                         }
     except Exception as e:
         logger.debug(f"Failed to load status cache: {e}")
@@ -270,7 +315,7 @@ def get_all_devices():
                         {
                             'mac': mac,
                             'ip': info.get('ip', ''),
-                            'hostname': info.get('hostname', ''),
+                            'hostname': clean_device_name(info.get('hostname', '')),
                             'dhcp_fingerprint': info.get('dhcp_fingerprint', ''),
                             'vendor_class': info.get('vendor_class', ''),
                         }
@@ -304,7 +349,7 @@ def get_all_devices():
                     devices.append({
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
-                        'hostname': d.get('friendly_name') or d.get('hostname') or d.get('device_type', 'Unknown'),
+                        'hostname': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
                         'manufacturer': d.get('vendor', 'Unknown'),
                         'device_type': d.get('device_type') or d.get('category', 'unknown'),
                         'policy': policy,
@@ -340,7 +385,7 @@ def get_all_devices():
                     devices.append({
                         'mac_address': mac,
                         'ip_address': d.get('ip_address', ''),
-                        'hostname': d.get('hostname'),
+                        'hostname': clean_device_name(d.get('hostname', '')),
                         'manufacturer': d.get('manufacturer', 'Unknown'),
                         'device_type': d.get('device_type', 'unknown'),
                         'policy': d.get('policy', 'quarantine'),
@@ -370,7 +415,7 @@ def get_all_devices():
             devices.append({
                 'mac_address': mac,
                 'ip_address': info.get('ip', ''),
-                'hostname': info.get('hostname'),
+                'hostname': clean_device_name(info.get('hostname', '')),
                 'manufacturer': 'Unknown',
                 'device_type': 'unknown',
                 'policy': 'quarantine',
@@ -697,7 +742,7 @@ def get_recent_devices():
             icon = 'desktop'
 
         recent.append({
-            'name': d.get('hostname') or d.get('manufacturer') or 'Unknown Device',
+            'name': clean_device_name(d.get('hostname', '')) or d.get('manufacturer') or 'Unknown Device',
             'ip': d.get('ip_address', ''),
             'mac': d.get('mac_address', ''),
             'vlan': vlan_names.get(vlan_id, f'VLAN {vlan_id}'),
@@ -1032,7 +1077,7 @@ def get_topology_data():
         nodes.append({
             'id': device_id,
             'type': 'device',
-            'label': device.get('hostname') or device.get('manufacturer') or 'Unknown',
+            'label': clean_device_name(device.get('hostname', '')) or device.get('manufacturer') or 'Unknown',
             'mac': mac,
             'ip': device.get('ip_address', ''),
             'policy': policy,
@@ -1085,9 +1130,12 @@ def api_topology():
 def api_update_device_policy(mac):
     """Update device policy via drag-and-drop.
 
-    Uses the device_policies module which:
-    1. Updates the SQLite database (/var/lib/hookprobe/devices.db)
-    2. Applies OpenFlow rules for actual network enforcement
+    IMPORTANT: Uses SDN Autopilot as the SINGLE SOURCE OF TRUTH for policies.
+    This ensures consistency with the SDN dashboard and all other pages.
+
+    The autopilot.db database is authoritative for:
+    1. Policy storage (persisted in device_identity table)
+    2. OpenFlow rule application for network enforcement
     """
     from flask import request
 
@@ -1101,30 +1149,58 @@ def api_update_device_policy(mac):
     if new_policy not in valid_policies:
         return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
 
-    # Use device_policies module (same as SDN module) for consistent policy updates
+    # CRITICAL: Use SDN Autopilot as the single source of truth for policies
+    # This ensures Dashboard, SDN page, and AIOCHI all read/write the same data
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Normalize MAC address
+                mac_normalized = mac.upper().replace('-', ':')
+
+                # Update policy via SDN Autopilot (writes to autopilot.db)
+                result = autopilot.set_policy(mac_normalized, new_policy)
+
+                if result:
+                    # Clear cache to reflect change
+                    _local_cache.clear()
+
+                    # Get updated device info for response
+                    device = autopilot.get_device(mac_normalized)
+
+                    return jsonify({
+                        'success': True,
+                        'message': f'Policy updated to {new_policy}',
+                        'device': {
+                            'mac': mac_normalized,
+                            'policy': new_policy,
+                            'friendly_name': device.get('friendly_name') if device else None,
+                        }
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Device not found or update failed'}), 404
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Failed to update device policy via SDN Autopilot: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # Fallback to legacy device_policies module if SDN Autopilot unavailable
     if DEVICE_POLICIES_AVAILABLE:
         try:
-            # Normalize MAC address
             mac_normalized = mac.upper().replace('-', ':')
-
-            # Update policy and apply OpenFlow rules
             result = set_device_policy(mac_normalized, new_policy)
-
             if result:
-                # Clear cache to reflect change
                 _local_cache.clear()
-
                 return jsonify({
                     'success': True,
-                    'message': f'Policy updated to {new_policy}',
+                    'message': f'Policy updated to {new_policy} (legacy mode)',
                     'device': result
                 })
             else:
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
-        except ValueError as e:
-            return jsonify({'success': False, 'error': str(e)}), 400
         except Exception as e:
             logger.error(f"Failed to update device policy: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    return jsonify({'success': False, 'error': 'Device policies module not available'}), 500
+    return jsonify({'success': False, 'error': 'No policy management module available'}), 500
