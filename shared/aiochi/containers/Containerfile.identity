@@ -29,12 +29,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create app directory
 WORKDIR /app
 
-# Copy backend modules
+# Copy ALL backend modules (required for __init__.py imports)
 COPY backend/__init__.py backend/
 COPY backend/identity_engine.py backend/
 COPY backend/presence_tracker.py backend/
 COPY backend/time_patterns.py backend/
 COPY backend/trust_heatmap.py backend/
+COPY backend/ambient_state.py backend/
+COPY backend/family_profiles.py backend/
+COPY backend/narrative_engine.py backend/
+COPY backend/performance_scorer.py backend/
+COPY backend/quick_actions.py backend/
+COPY backend/whisper_mode.py backend/
 
 # Copy scripts (external files to avoid heredoc parsing issues)
 COPY containers/scripts/identity_entrypoint.sh /app/entrypoint.sh
