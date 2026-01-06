@@ -189,6 +189,66 @@ services:
       timeout: 5s
       retries: 5
 
+  # ============================================================================
+  # BUBBLE MANAGER - Ecosystem Device Detection
+  # ============================================================================
+  # Same-user device detection via Zeek log analysis (NO host network!)
+  # Reads mDNS/D2D data from Zeek logs instead of live capture
+  # This eliminates port 5353 conflicts and network blocking
+  bubble-manager:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.bubble
+    container_name: aiochi-bubble
+    hostname: aiochi-bubble
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.25
+    volumes:
+      # Zeek logs for mDNS and D2D connection analysis
+      - zeek_logs:/opt/zeek/logs:ro
+      # Persistent bubble state
+      - /var/lib/hookprobe:/var/lib/hookprobe:U
+      - /var/lib/fortress:/var/lib/fortress:U
+      # OVS socket for OpenFlow rules (bubble policies)
+      - /run/openvswitch:/run/openvswitch
+      # Fortress configuration
+      - /etc/hookprobe:/etc/hookprobe:ro
+    environment:
+      # Database connection (Fortress PostgreSQL)
+      DATABASE_HOST: "${FORTRESS_DB_HOST:-172.20.200.10}"
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      # ClickHouse for analytics
+      CLICKHOUSE_HOST: aiochi-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      # Zeek log paths
+      ZEEK_LOG_PATH: /opt/zeek/logs/current
+      ZEEK_DNS_LOG: /opt/zeek/logs/current/dns.log
+      ZEEK_CONN_LOG: /opt/zeek/logs/current/conn.log
+      # Logging
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      PYTHONPATH: /opt/hookprobe
+    cap_add:
+      - NET_ADMIN  # Required for OVS OpenFlow commands
+    depends_on:
+      zeek:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'bubble' > /dev/null || curl -sf http://localhost:8070/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   narrative-engine:
     image: docker.io/n8nio/n8n:1.70.3
     container_name: aiochi-narrative
