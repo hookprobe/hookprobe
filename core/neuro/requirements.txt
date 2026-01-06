@@ -2,7 +2,7 @@
 
 # Core dependencies
 numpy>=1.24.0
-cryptography>=41.0.0  # For ChaCha20-Poly1305, Curve25519, HKDF
+cryptography>=44.0.1  # For ChaCha20-Poly1305, Curve25519, HKDF (CVE-2024-12797 fix)
 
 # Optional: Integration with Qsecbit
 # (Already included in main HookProbe installation)
