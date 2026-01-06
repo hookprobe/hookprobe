@@ -1,51 +1,521 @@
 {% extends "base.html" %}
-{% block title %}Users - HookProbe Fortress{% endblock %}
+{% block title %}User Management - HookProbe Fortress{% endblock %}
 {% block page_header %}{% endblock %}
 {% block breadcrumb %}
 <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
 <li class="breadcrumb-item"><a href="{{ url_for('settings.index') }}">Settings</a></li>
 <li class="breadcrumb-item active">Users</li>
 {% endblock %}
+
 {% block content %}
-<div class="card">
+<!-- User Limit Info -->
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="info-box bg-gradient-dark">
+            <span class="info-box-icon"><i class="fas fa-users"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">User Accounts</span>
+                <span class="info-box-number" id="user-count-display">{{ users|length }} / 5</span>
+                <div class="progress">
+                    <div class="progress-bar" id="user-progress" style="width: {{ (users|length / 5 * 100)|int }}%"></div>
+                </div>
+                <span class="progress-description" id="user-limit-text">
+                    {% if users|length >= 5 %}
+                    Maximum users reached
+                    {% else %}
+                    {{ 5 - users|length }} slot(s) available
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Users Card -->
+<div class="card card-outline card-primary">
     <div class="card-header">
-        <h3 class="card-title">Users</h3>
+        <h3 class="card-title"><i class="fas fa-user-cog mr-2"></i>User Management</h3>
         <div class="card-tools">
-            <button class="btn btn-primary btn-sm" data-toggle="modal" data-target="#addUserModal">
-                <i class="fas fa-plus"></i> Add User
+            <button class="btn btn-success btn-sm" id="btn-add-user" onclick="showAddUserModal()">
+                <i class="fas fa-plus mr-1"></i> Add User
             </button>
         </div>
     </div>
-    <div class="card-body table-responsive p-0">
-        <table class="table table-hover text-nowrap">
-            <thead>
-                <tr>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Email</th>
-                    <th>Last Login</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for user in users %}
-                <tr>
-                    <td>{{ user.id }}</td>
-                    <td><span class="badge badge-{{ 'danger' if user.role == 'admin' else 'warning' if user.role == 'operator' else 'info' }}">{{ user.role }}</span></td>
-                    <td>{{ user.email or '-' }}</td>
-                    <td>{{ user.last_login or 'Never' }}</td>
-                    <td>
-                        <button class="btn btn-xs btn-info"><i class="fas fa-edit"></i></button>
-                        <button class="btn btn-xs btn-danger"><i class="fas fa-trash"></i></button>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="5" class="text-center">No users found</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-striped mb-0" id="users-table">
+                <thead class="thead-dark">
+                    <tr>
+                        <th style="width: 50px;"></th>
+                        <th>Username</th>
+                        <th>Display Name</th>
+                        <th>Role</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Last Login</th>
+                        <th style="width: 120px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="users-tbody">
+                    {% for user in users %}
+                    <tr data-user-id="{{ user.id }}">
+                        <td class="text-center">
+                            <div class="user-avatar" style="width: 35px; height: 35px; border-radius: 50%;
+                                background: linear-gradient(135deg,
+                                    {{ '#dc3545' if user.role == 'admin' else '#ffc107' if user.role == 'operator' else '#6c757d' }},
+                                    {{ '#a71d2a' if user.role == 'admin' else '#d39e00' if user.role == 'operator' else '#545b62' }});
+                                display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
+                                {{ user.id[0]|upper }}
+                            </div>
+                        </td>
+                        <td>
+                            <strong>{{ user.id }}</strong>
+                            {% if user.id == current_user.id %}
+                            <span class="badge badge-secondary ml-1">You</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ user.display_name or '-' }}</td>
+                        <td>
+                            <span class="badge badge-{{ 'danger' if user.role == 'admin' else 'warning' if user.role == 'operator' else 'info' }}">
+                                <i class="fas fa-{{ 'crown' if user.role == 'admin' else 'user-shield' if user.role == 'operator' else 'eye' }} mr-1"></i>
+                                {{ user.role|title }}
+                            </span>
+                        </td>
+                        <td>{{ user.email or '-' }}</td>
+                        <td>
+                            {% if user.is_active %}
+                            <span class="badge badge-success"><i class="fas fa-check-circle mr-1"></i>Active</span>
+                            {% else %}
+                            <span class="badge badge-secondary"><i class="fas fa-ban mr-1"></i>Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if user.last_login %}
+                            <small>{{ user.last_login[:16].replace('T', ' ') }}</small>
+                            {% else %}
+                            <small class="text-muted">Never</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-xs btn-info" onclick="showEditUserModal('{{ user.id }}')" title="Edit">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            {% if user.id != current_user.id %}
+                            <button class="btn btn-xs btn-danger" onclick="confirmDeleteUser('{{ user.id }}')" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            {% else %}
+                            <button class="btn btn-xs btn-secondary" disabled title="Cannot delete yourself">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-4">
+                            <i class="fas fa-users fa-3x text-muted mb-3"></i>
+                            <p class="text-muted">No users found</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="card-footer">
+        <small class="text-muted">
+            <i class="fas fa-info-circle mr-1"></i>
+            Fortress supports up to 5 user accounts. Each user can have Admin, Operator, or Viewer permissions.
+        </small>
     </div>
 </div>
+
+<!-- Role Information -->
+<div class="card card-outline card-secondary">
+    <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-shield-alt mr-2"></i>Role Permissions</h3>
+        <div class="card-tools">
+            <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                <i class="fas fa-minus"></i>
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="callout callout-danger">
+                    <h5><i class="fas fa-crown mr-2"></i>Admin</h5>
+                    <ul class="mb-0 pl-3">
+                        <li>Full system access</li>
+                        <li>User management</li>
+                        <li>Network configuration</li>
+                        <li>Security settings</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="callout callout-warning">
+                    <h5><i class="fas fa-user-shield mr-2"></i>Operator</h5>
+                    <ul class="mb-0 pl-3">
+                        <li>Device management</li>
+                        <li>Network monitoring</li>
+                        <li>View security alerts</li>
+                        <li>Cannot change settings</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="callout callout-info">
+                    <h5><i class="fas fa-eye mr-2"></i>Viewer</h5>
+                    <ul class="mb-0 pl-3">
+                        <li>Dashboard access</li>
+                        <li>View reports</li>
+                        <li>Read-only access</li>
+                        <li>No configuration</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add User Modal -->
+<div class="modal fade" id="addUserModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header bg-success">
+                <h5 class="modal-title"><i class="fas fa-user-plus mr-2"></i>Add New User</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <form id="add-user-form" onsubmit="createUser(event)">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="add-username">Username <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="add-username" required
+                               pattern="[a-zA-Z0-9]{3,20}" placeholder="3-20 alphanumeric characters">
+                        <small class="text-muted">Lowercase letters and numbers only</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="add-display-name">Display Name</label>
+                        <input type="text" class="form-control" id="add-display-name"
+                               placeholder="Optional display name" maxlength="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-email">Email</label>
+                        <input type="email" class="form-control" id="add-email"
+                               placeholder="Optional email address">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-role">Role <span class="text-danger">*</span></label>
+                        <select class="form-control" id="add-role" required>
+                            <option value="viewer">Viewer - Read only</option>
+                            <option value="operator">Operator - Manage devices</option>
+                            <option value="admin">Admin - Full access</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="add-password">Password <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="add-password" required
+                                   minlength="8" placeholder="Minimum 8 characters">
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-outline-secondary" onclick="togglePasswordVisibility('add-password')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="add-password-confirm">Confirm Password <span class="text-danger">*</span></label>
+                        <input type="password" class="form-control" id="add-password-confirm" required
+                               minlength="8" placeholder="Confirm password">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="fas fa-plus mr-1"></i> Create User
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit User Modal -->
+<div class="modal fade" id="editUserModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header bg-info">
+                <h5 class="modal-title"><i class="fas fa-user-edit mr-2"></i>Edit User</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <form id="edit-user-form" onsubmit="updateUser(event)">
+                <input type="hidden" id="edit-user-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" class="form-control" id="edit-username" readonly
+                               style="background-color: #e9ecef;">
+                        <small class="text-muted">Username cannot be changed</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-display-name">Display Name</label>
+                        <input type="text" class="form-control" id="edit-display-name"
+                               placeholder="Display name" maxlength="50">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-email">Email</label>
+                        <input type="email" class="form-control" id="edit-email"
+                               placeholder="Email address">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-role">Role</label>
+                        <select class="form-control" id="edit-role">
+                            <option value="viewer">Viewer - Read only</option>
+                            <option value="operator">Operator - Manage devices</option>
+                            <option value="admin">Admin - Full access</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="custom-control custom-switch">
+                            <input type="checkbox" class="custom-control-input" id="edit-is-active" checked>
+                            <label class="custom-control-label" for="edit-is-active">Account Active</label>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="form-group">
+                        <label for="edit-password">New Password <small class="text-muted">(leave blank to keep current)</small></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="edit-password"
+                                   minlength="8" placeholder="New password (optional)">
+                            <div class="input-group-append">
+                                <button type="button" class="btn btn-outline-secondary" onclick="togglePasswordVisibility('edit-password')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-info">
+                        <i class="fas fa-save mr-1"></i> Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteUserModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-sm" role="document">
+        <div class="modal-content">
+            <div class="modal-header bg-danger">
+                <h5 class="modal-title"><i class="fas fa-exclamation-triangle mr-2"></i>Delete User</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body text-center">
+                <i class="fas fa-user-times fa-4x text-danger mb-3"></i>
+                <p>Are you sure you want to delete user <strong id="delete-username"></strong>?</p>
+                <p class="text-muted small">This action cannot be undone.</p>
+                <input type="hidden" id="delete-user-id">
+            </div>
+            <div class="modal-footer justify-content-center">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="deleteUser()">
+                    <i class="fas fa-trash mr-1"></i> Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Toggle password visibility
+function togglePasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    const icon = input.nextElementSibling.querySelector('i');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.replace('fa-eye', 'fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.replace('fa-eye-slash', 'fa-eye');
+    }
+}
+
+// Show notification
+function showNotification(message, type = 'success') {
+    if (typeof Swal !== 'undefined') {
+        const Toast = Swal.mixin({
+            toast: true,
+            position: 'top-end',
+            showConfirmButton: false,
+            timer: 3000,
+            timerProgressBar: true
+        });
+        Toast.fire({
+            icon: type,
+            title: message
+        });
+    } else {
+        alert((type === 'error' ? 'Error: ' : '') + message);
+    }
+}
+
+// Show Add User Modal
+function showAddUserModal() {
+    document.getElementById('add-user-form').reset();
+    $('#addUserModal').modal('show');
+}
+
+// Create User
+async function createUser(event) {
+    event.preventDefault();
+
+    const password = document.getElementById('add-password').value;
+    const passwordConfirm = document.getElementById('add-password-confirm').value;
+
+    if (password !== passwordConfirm) {
+        showNotification('Passwords do not match', 'error');
+        return;
+    }
+
+    const data = {
+        username: document.getElementById('add-username').value.toLowerCase(),
+        display_name: document.getElementById('add-display-name').value,
+        email: document.getElementById('add-email').value,
+        role: document.getElementById('add-role').value,
+        password: password
+    };
+
+    try {
+        const response = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(result.message, 'success');
+            $('#addUserModal').modal('hide');
+            location.reload();
+        } else {
+            showNotification(result.error || 'Failed to create user', 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('An error occurred', 'error');
+    }
+}
+
+// Show Edit User Modal
+async function showEditUserModal(userId) {
+    try {
+        const response = await fetch(`/api/users/${userId}`);
+        const result = await response.json();
+
+        if (result.success) {
+            const user = result.user;
+            document.getElementById('edit-user-id').value = user.id;
+            document.getElementById('edit-username').value = user.id;
+            document.getElementById('edit-display-name').value = user.display_name || '';
+            document.getElementById('edit-email').value = user.email || '';
+            document.getElementById('edit-role').value = user.role;
+            document.getElementById('edit-is-active').checked = user.is_active;
+            document.getElementById('edit-password').value = '';
+
+            $('#editUserModal').modal('show');
+        } else {
+            showNotification(result.error || 'Failed to load user', 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('An error occurred', 'error');
+    }
+}
+
+// Update User
+async function updateUser(event) {
+    event.preventDefault();
+
+    const userId = document.getElementById('edit-user-id').value;
+    const data = {
+        display_name: document.getElementById('edit-display-name').value,
+        email: document.getElementById('edit-email').value,
+        role: document.getElementById('edit-role').value,
+        is_active: document.getElementById('edit-is-active').checked
+    };
+
+    const newPassword = document.getElementById('edit-password').value;
+    if (newPassword) {
+        data.password = newPassword;
+    }
+
+    try {
+        const response = await fetch(`/api/users/${userId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(result.message, 'success');
+            $('#editUserModal').modal('hide');
+            location.reload();
+        } else {
+            showNotification(result.error || 'Failed to update user', 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('An error occurred', 'error');
+    }
+}
+
+// Confirm Delete User
+function confirmDeleteUser(userId) {
+    document.getElementById('delete-user-id').value = userId;
+    document.getElementById('delete-username').textContent = userId;
+    $('#deleteUserModal').modal('show');
+}
+
+// Delete User
+async function deleteUser() {
+    const userId = document.getElementById('delete-user-id').value;
+
+    try {
+        const response = await fetch(`/api/users/${userId}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(result.message, 'success');
+            $('#deleteUserModal').modal('hide');
+            location.reload();
+        } else {
+            showNotification(result.error || 'Failed to delete user', 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('An error occurred', 'error');
+    }
+}
+</script>
 {% endblock %}
