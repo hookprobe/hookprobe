@@ -40,6 +40,80 @@ except ImportError:
     logger.warning("requests module not available, AIOCHI integration disabled")
 
 
+# ============================================================================
+# Local Bubble Manager Integration (Fallback when AIOCHI container unavailable)
+# ============================================================================
+LOCAL_BUBBLE_MANAGER = None
+LOCAL_BUBBLE_AVAILABLE = False
+
+try:
+    import sys
+    from pathlib import Path
+    # Add shared/aiochi to path
+    aiochi_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared' / 'aiochi'
+    if aiochi_path.exists() and str(aiochi_path.parent) not in sys.path:
+        sys.path.insert(0, str(aiochi_path.parent))
+
+    from aiochi.bubble import get_bubble_manager, BubbleType, NetworkPolicy
+    LOCAL_BUBBLE_AVAILABLE = True
+    logger.info("Local bubble manager available as fallback")
+except ImportError as e:
+    logger.warning(f"Local bubble manager not available: {e}")
+
+# Import SDN autopilot for device data
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+    if lib_path.exists() and str(lib_path) not in sys.path:
+        sys.path.insert(0, str(lib_path))
+
+    from sdn_autopilot import get_autopilot as get_sdn_autopilot
+    SDN_AUTOPILOT_AVAILABLE = True
+    logger.info("SDN Autopilot available for device data")
+except ImportError as e:
+    logger.warning(f"SDN Autopilot not available: {e}")
+
+# Import hostname decoder
+try:
+    from hostname_decoder import clean_device_name
+except ImportError:
+    def clean_device_name(name, max_length=32):
+        return name if name else "Unknown Device"
+
+
+def get_local_bubble_manager():
+    """Get or create the local bubble manager instance."""
+    global LOCAL_BUBBLE_MANAGER
+    if LOCAL_BUBBLE_MANAGER is None and LOCAL_BUBBLE_AVAILABLE:
+        LOCAL_BUBBLE_MANAGER = get_bubble_manager()
+    return LOCAL_BUBBLE_MANAGER
+
+
+def get_sdn_devices():
+    """Get all devices from SDN Autopilot."""
+    if not SDN_AUTOPILOT_AVAILABLE:
+        return []
+
+    try:
+        autopilot = get_sdn_autopilot()
+        if autopilot:
+            devices = autopilot.get_all_devices()
+            return [
+                {
+                    'mac': d.get('mac', ''),
+                    'label': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                    'vendor': d.get('vendor', 'Unknown'),
+                    'ip': d.get('ip', ''),
+                    'online': d.get('is_online', False),
+                    'device_type': d.get('device_type', 'unknown'),
+                }
+                for d in devices if d.get('mac')
+            ]
+    except Exception as e:
+        logger.warning(f"Failed to get SDN devices: {e}")
+    return []
+
+
 def fetch_aiochi_devices():
     """Fetch devices from AIOCHI Identity Engine."""
     import requests
@@ -1180,8 +1254,15 @@ def get_demo_bubbles():
 @aiochi_bp.route('/api/bubbles')
 @login_required
 def api_bubbles_list():
-    """Get all bubbles from AIOCHI Identity Engine."""
+    """Get all bubbles with real device data.
+
+    Priority:
+    1. AIOCHI Identity Engine (container) - if available
+    2. Local bubble manager (SQLite) - real data fallback
+    3. Demo data - only if nothing else works
+    """
     try:
+        # Try AIOCHI container first
         if AIOCHI_ENABLED:
             data = fetch_aiochi_bubbles()
             if data:
@@ -1189,6 +1270,75 @@ def api_bubbles_list():
                     'success': True,
                     'demo_mode': False,
                     **data
+                })
+
+        # Try local bubble manager (real data)
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                # Get all bubbles from local database
+                bubbles_list = manager.get_all_bubbles()
+
+                # Get all devices from SDN
+                all_devices = get_sdn_devices()
+                all_devices_map = {d['mac'].upper(): d for d in all_devices}
+
+                # Track which devices are already assigned
+                assigned_macs = set()
+
+                # Format bubbles for API response
+                bubbles_data = []
+                for bubble in bubbles_list:
+                    # Get device details for devices in this bubble
+                    devices_in_bubble = []
+                    for mac in bubble.devices:
+                        mac_upper = mac.upper()
+                        assigned_macs.add(mac_upper)
+                        device_info = all_devices_map.get(mac_upper, {})
+                        devices_in_bubble.append({
+                            'mac': mac_upper,
+                            'label': device_info.get('label', mac_upper[:8]),
+                            'vendor': device_info.get('vendor', 'Unknown'),
+                            'online': device_info.get('online', False),
+                            'ip': device_info.get('ip', ''),
+                        })
+
+                    # Get policy info based on bubble type
+                    from .types_helper import get_bubble_type_policy
+                    policy = get_bubble_type_policy(bubble.bubble_type.value if hasattr(bubble.bubble_type, 'value') else str(bubble.bubble_type))
+
+                    bubbles_data.append({
+                        'bubble_id': bubble.bubble_id,
+                        'name': bubble.name,
+                        'bubble_type': bubble.bubble_type.value if hasattr(bubble.bubble_type, 'value') else str(bubble.bubble_type),
+                        'icon': bubble.icon or 'fa-layer-group',
+                        'color': bubble.color or '#2196F3',
+                        'devices': devices_in_bubble,
+                        'policy': policy,
+                        'is_manual': bubble.is_manual,
+                        'is_pinned': bubble.pinned,
+                        'confidence': bubble.confidence,
+                    })
+
+                # Calculate unassigned devices (in SDN but not in any bubble)
+                unassigned = []
+                for mac, device in all_devices_map.items():
+                    if mac not in assigned_macs:
+                        unassigned.append({
+                            'mac': mac,
+                            'label': device.get('label', 'Unknown'),
+                            'vendor': device.get('vendor', 'Unknown'),
+                            'online': device.get('online', False),
+                            'ip': device.get('ip', ''),
+                            'device_type': device.get('device_type', 'unknown'),
+                        })
+
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'local_mode': True,
+                    'bubbles': bubbles_data,
+                    'unassigned_devices': unassigned,
                 })
 
         # Fallback to demo data
@@ -1199,6 +1349,8 @@ def api_bubbles_list():
         })
     except Exception as e:
         logger.error(f"Bubbles list API error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1238,7 +1390,12 @@ def api_bubble_get(bubble_id):
 @aiochi_bp.route('/api/bubbles', methods=['POST'])
 @login_required
 def api_bubble_create():
-    """Create a new bubble via AIOCHI Identity Engine."""
+    """Create a new bubble.
+
+    Priority:
+    1. AIOCHI Identity Engine (container) - if available
+    2. Local bubble manager (SQLite) - real data fallback
+    """
     import requests
     try:
         data = request.get_json() or {}
@@ -1276,7 +1433,47 @@ def api_bubble_create():
                     'error': resp.json().get('error', 'Failed to create bubble')
                 }), resp.status_code
 
-        # Demo mode: simulate creation
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                # Map string bubble_type to enum
+                type_map = {
+                    'FAMILY': BubbleType.FAMILY,
+                    'GUEST': BubbleType.GUEST,
+                    'IOT': BubbleType.IOT,
+                    'WORK': BubbleType.CORPORATE,
+                    'CUSTOM': BubbleType.CUSTOM,
+                    'family': BubbleType.FAMILY,
+                    'guest': BubbleType.GUEST,
+                    'iot': BubbleType.IOT,
+                    'smart_home': BubbleType.IOT,
+                    'corporate': BubbleType.CORPORATE,
+                    'custom': BubbleType.CUSTOM,
+                }
+                bt = type_map.get(bubble_type, BubbleType.CUSTOM)
+
+                bubble = manager.create_bubble(
+                    name=name,
+                    bubble_type=bt,
+                    color=color,
+                    icon=icon,
+                )
+
+                # Add devices to the bubble
+                for mac in devices:
+                    manager.add_device(bubble.bubble_id, mac)
+
+                logger.info(f"Created bubble via local manager: {bubble.bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'local_mode': True,
+                    'bubble_id': bubble.bubble_id,
+                    'message': f"Bubble '{name}' created"
+                })
+
+        # Demo mode fallback
         import hashlib
         bubble_id = f"DEMO-{hashlib.sha256(f'{name}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
         logger.info(f"Created demo bubble: {bubble_id}")
@@ -1289,13 +1486,15 @@ def api_bubble_create():
         })
     except Exception as e:
         logger.error(f"Bubble create API error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['PUT'])
 @login_required
 def api_bubble_update(bubble_id):
-    """Update a bubble via AIOCHI Identity Engine."""
+    """Update a bubble (name, type, color, icon)."""
     import requests
     try:
         data = request.get_json() or {}
@@ -1321,6 +1520,41 @@ def api_bubble_update(bubble_id):
                     'error': resp.json().get('error', 'Failed to update bubble')
                 }), resp.status_code
 
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                # Map bubble_type if provided
+                bubble_type = None
+                if 'bubble_type' in data:
+                    type_map = {
+                        'FAMILY': BubbleType.FAMILY,
+                        'GUEST': BubbleType.GUEST,
+                        'IOT': BubbleType.IOT,
+                        'WORK': BubbleType.CORPORATE,
+                        'CUSTOM': BubbleType.CUSTOM,
+                    }
+                    bubble_type = type_map.get(data['bubble_type'].upper(), BubbleType.CUSTOM)
+
+                result = manager.update_bubble(
+                    bubble_id=bubble_id,
+                    name=data.get('name'),
+                    bubble_type=bubble_type,
+                    color=data.get('color'),
+                    icon=data.get('icon'),
+                )
+
+                if result:
+                    logger.info(f"Updated bubble via local manager: {bubble_id}")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'local_mode': True,
+                        'message': 'Bubble updated'
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+
         # Demo mode
         logger.info(f"Updated demo bubble: {bubble_id}")
         return jsonify({
@@ -1336,7 +1570,7 @@ def api_bubble_update(bubble_id):
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['DELETE'])
 @login_required
 def api_bubble_delete(bubble_id):
-    """Delete a bubble via AIOCHI Identity Engine."""
+    """Delete a bubble. Devices become unassigned."""
     import requests
     try:
         if AIOCHI_ENABLED:
@@ -1359,6 +1593,22 @@ def api_bubble_delete(bubble_id):
                     'error': resp.json().get('error', 'Failed to delete bubble')
                 }), resp.status_code
 
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                result = manager.delete_bubble(bubble_id)
+                if result:
+                    logger.info(f"Deleted bubble via local manager: {bubble_id}")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'local_mode': True,
+                        'message': 'Bubble deleted'
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+
         # Demo mode
         logger.info(f"Deleted demo bubble: {bubble_id}")
         return jsonify({
@@ -1374,7 +1624,7 @@ def api_bubble_delete(bubble_id):
 @aiochi_bp.route('/api/bubbles/<bubble_id>/devices', methods=['POST'])
 @login_required
 def api_bubble_add_device(bubble_id):
-    """Add a device to a bubble via AIOCHI Identity Engine."""
+    """Add a device to a bubble. Device can only belong to one bubble."""
     import requests
     try:
         data = request.get_json() or {}
@@ -1408,6 +1658,25 @@ def api_bubble_add_device(bubble_id):
                     'error': resp.json().get('error', 'Failed to assign device')
                 }), resp.status_code
 
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                result = manager.add_device(bubble_id, mac)
+                if result:
+                    logger.info(f"Assigned device {mac} to bubble {bubble_id} via local manager")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'local_mode': True,
+                        'message': f'Device {mac} added to bubble'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to add device (bubble not found or device already assigned)'
+                    }), 400
+
         # Demo mode
         logger.info(f"Assigned device {mac} to demo bubble {bubble_id}")
         return jsonify({
@@ -1423,7 +1692,7 @@ def api_bubble_add_device(bubble_id):
 @aiochi_bp.route('/api/bubbles/<bubble_id>/devices/<mac>', methods=['DELETE'])
 @login_required
 def api_bubble_remove_device(bubble_id, mac):
-    """Remove a device from a bubble via AIOCHI Identity Engine."""
+    """Remove a device from a bubble. Device becomes unassigned."""
     import requests
     mac = mac.upper()
     try:
@@ -1451,6 +1720,25 @@ def api_bubble_remove_device(bubble_id, mac):
                     'error': resp.json().get('error', 'Failed to remove device')
                 }), resp.status_code
 
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                result = manager.remove_device(bubble_id, mac)
+                if result:
+                    logger.info(f"Removed device {mac} from bubble {bubble_id} via local manager")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'local_mode': True,
+                        'message': f'Device {mac} removed from bubble'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to remove device (bubble or device not found)'
+                    }), 400
+
         # Demo mode
         logger.info(f"Removed device {mac} from demo bubble {bubble_id}")
         return jsonify({
@@ -1466,12 +1754,15 @@ def api_bubble_remove_device(bubble_id, mac):
 @aiochi_bp.route('/api/bubbles/move-device', methods=['POST'])
 @login_required
 def api_bubble_move_device():
-    """Move a device between bubbles via AIOCHI Identity Engine."""
+    """Move a device between bubbles (or from unassigned to bubble).
+
+    Used by drag-and-drop in the UI. A device can only belong to one bubble.
+    """
     import requests
     try:
         data = request.get_json() or {}
         mac = data.get('mac', '').upper()
-        from_bubble = data.get('from_bubble')
+        from_bubble = data.get('from_bubble')  # Can be None/null for unassigned
         to_bubble = data.get('to_bubble')
         reason = data.get('reason', 'Moved via drag-and-drop')
 
@@ -1503,6 +1794,28 @@ def api_bubble_move_device():
                     'success': False,
                     'error': resp.json().get('error', 'Failed to move device')
                 }), resp.status_code
+
+        # Use local bubble manager
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                result = manager.move_device(mac, to_bubble)
+                if result:
+                    logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} via local manager")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'local_mode': True,
+                        'message': 'Device moved to bubble',
+                        'device': mac,
+                        'from_bubble': from_bubble,
+                        'to_bubble': to_bubble,
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to move device (target bubble not found)'
+                    }), 400
 
         # Demo mode
         logger.info(f"Moved device {mac} in demo mode")
