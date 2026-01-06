@@ -6,7 +6,7 @@
 # Generates netplan YAML for:
 #   - OVS bridge (FTS)
 #   - VLAN 100 (LAN) with user-configured subnet mask
-#   - VLAN 200 (MGMT) with /30 for admin access
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 #
 # Usage:
 #   ./netplan-ovs-generator.sh generate [--mask 24] [--lan-ifaces "enp2s0 enp3s0"]
@@ -35,11 +35,10 @@ STATE_FILE="$STATE_DIR/netplan-config.conf"
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_MASK="${LAN_MASK:-24}"
 VLAN_LAN="${VLAN_LAN:-100}"
-VLAN_MGMT="${VLAN_MGMT:-200}"
 
 # Gateway IPs
 GATEWAY_LAN="10.200.0.1"
-GATEWAY_MGMT="10.200.100.1"
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 
 # Colors
 RED='\033[0;31m'
@@ -80,11 +79,9 @@ LAN_MASK=$LAN_MASK
 
 # VLAN IDs
 VLAN_LAN=$VLAN_LAN
-VLAN_MGMT=$VLAN_MGMT
 
 # Gateway IPs
 GATEWAY_LAN=$GATEWAY_LAN
-GATEWAY_MGMT=$GATEWAY_MGMT
 
 # OVS Bridge
 OVS_BRIDGE=$OVS_BRIDGE
@@ -105,7 +102,6 @@ generate_netplan() {
     log_info "Generating netplan config for OVS bridge..."
     log_info "  Bridge: $OVS_BRIDGE"
     log_info "  LAN VLAN: $VLAN_LAN (10.200.0.1/$LAN_MASK)"
-    log_info "  MGMT VLAN: $VLAN_MGMT (10.200.100.1/30)"
     [ -n "$lan_ifaces" ] && log_info "  LAN interfaces: $lan_ifaces"
 
     # Create netplan directory if needed
@@ -166,10 +162,11 @@ generate_netplan() {
 #   /opt/hookprobe/fortress/devices/common/netplan-ovs-generator.sh generate
 #   netplan apply
 #
-# IMPORTANT: VLAN interfaces (vlan100, vlan200) are NOT created by netplan.
-# They are created by ovs-post-setup.sh as OVS internal ports, which is the
+# IMPORTANT: VLAN interface (vlan100) is NOT created by netplan.
+# It is created by ovs-post-setup.sh as OVS internal port, which is the
 # correct approach for OVS bridges. Netplan's vlans: section creates Linux
 # 8021q VLAN interfaces that don't integrate properly with OVS switching.
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 
 network:
   version: 2
@@ -249,12 +246,11 @@ apply_netplan() {
             ip link set "$OVS_BRIDGE" up 2>/dev/null || true
         fi
 
-        # NOTE: VLAN interfaces are NOT created by netplan anymore.
-        # They are created by ovs-post-setup.sh as OVS internal ports.
+        # NOTE: VLAN interface is NOT created by netplan anymore.
+        # It is created by ovs-post-setup.sh as OVS internal port.
         # This is the correct approach for OVS bridges.
-        log_info "VLAN interfaces will be created by ovs-post-setup.sh"
+        log_info "VLAN interface will be created by ovs-post-setup.sh"
         log_info "  vlan${VLAN_LAN}: ${GATEWAY_LAN}/${LAN_MASK} (LAN)"
-        log_info "  vlan${VLAN_MGMT}: ${GATEWAY_MGMT}/30 (MGMT)"
 
         return 0
     else

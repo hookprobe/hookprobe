@@ -6,10 +6,10 @@
 # Network Architecture:
 #   FTS Bridge: Layer 2 OVS switch (NO IP)
 #   vlan100: LAN clients + WiFi (IP: 10.200.0.1/XX)
-#   vlan200: Management (IP: 10.200.100.1/30)
 #
 # DHCP listens on vlan100 (VLAN mode)
 # DHCP range is calculated based on user's subnet size
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 #
 
 set -e
