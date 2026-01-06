@@ -1199,6 +1199,16 @@ LOG_DIR=${LOG_DIR}
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 INSTALL_LTE=${INSTALL_LTE:-false}
 INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
+
+# Container networking - SKIP OVS attachment to preserve podman port forwarding
+# OVS veth attachment breaks podman's DNAT rules for port 8443
+# Set to false only if you need OpenFlow visibility into container traffic
+SKIP_OVS_CONTAINER_ATTACH=true
+
+# WiFi Device-to-Device (D2D) communication
+# ENABLE_WIFI_D2D=true (default): Allow AirPlay, HomeKit, printers, file sharing
+# ENABLE_WIFI_D2D=false: Strict isolation for guest networks (blocks all D2D)
+ENABLE_WIFI_D2D=true
 EOF
 
     # Set ownership so container (fortress user) can read
@@ -1906,6 +1916,15 @@ VETH_BR="veth-wifi-a"
 VETH_OVS="veth-wifi-b"
 # FLAT BRIDGE: No VLAN tagging - all ports untagged
 
+# Load Fortress config for D2D setting
+# ENABLE_WIFI_D2D=true allows device-to-device (AirPlay, HomeKit, printers)
+# ENABLE_WIFI_D2D=false forces strict isolation (guest network mode)
+if [ -f /etc/hookprobe/fortress.conf ]; then
+    # shellcheck source=/dev/null
+    source /etc/hookprobe/fortress.conf 2>/dev/null || true
+fi
+ENABLE_WIFI_D2D="${ENABLE_WIFI_D2D:-true}"  # Default: allow D2D
+
 [ -z "$IFACE" ] && exit 1
 
 log() { echo "[wifi-bridge] $*"; logger -t fts-wifi-bridge "$*" 2>/dev/null || true; }
@@ -1958,53 +1977,49 @@ ensure_veth_pair() {
     ip link set "$VETH_OVS" up
 }
 
-# Set up ebtables to force WiFi-to-WiFi traffic through veth (to OVS)
-setup_ebtables() {
-    if ! command -v ebtables &>/dev/null; then
-        log "ebtables not available - WiFi isolation via OVS won't work"
-        return 1
-    fi
-
-    # First, ensure traffic FROM veth (coming from OVS) is allowed
-    if ! ebtables -L FORWARD 2>/dev/null | grep -q "veth-wifi-a.*ACCEPT"; then
-        ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
-        log "Added ACCEPT rule for traffic from $VETH_BR (OVS return path)"
-    fi
-
-    # Remove old DROP rules for this interface first
-    ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block direct WiFi-to-WiFi on same interface (forces through OVS)
-    ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block WiFi-to-WiFi across different interfaces (2.4GHz ↔ 5GHz)
-    for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-        if [ "$other" != "$IFACE" ]; then
-            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-        fi
-    done
-
-    log "ebtables rules set for $IFACE - WiFi traffic forced through OVS"
-}
-
-# Enable hairpin mode on interface for mDNS reflection
+# Set up hairpin mode for D2D traffic
+# With ap_isolate=1 in hostapd, all WiFi traffic goes through br-wifi bridge.
+# Hairpin mode allows traffic to return to the same or different WiFi interface.
+# OVS NAC rules handle policy enforcement (internet_only blocks LAN traffic).
+#
+# NO ebtables DROP rules - they block D2D before OVS can apply policy!
+# NO bridge port isolation - ap_isolate=1 already forces traffic through bridge.
 setup_hairpin() {
-    if command -v bridge &>/dev/null; then
-        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
-        bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
-        log "Enabled hairpin on $IFACE and $VETH_BR for mDNS/multicast reflection"
-    fi
-}
-
-# Remove ebtables rules
-remove_ebtables() {
+    # Clean up any old ebtables DROP rules (migration from old approach)
     if command -v ebtables &>/dev/null; then
         ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
         for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
+        done
+
+        # Ensure ACCEPT rule for veth (OVS return traffic)
+        if ! ebtables -L FORWARD 2>/dev/null | grep -q "veth-wifi-a.*ACCEPT"; then
+            ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
+        fi
+    fi
+
+    # Enable hairpin mode for D2D reflection
+    if command -v bridge &>/dev/null; then
+        bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
+        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
+        log "Hairpin enabled on $IFACE and $VETH_BR for D2D"
+    fi
+}
+
+# Clean up hairpin settings (for interface removal)
+remove_hairpin() {
+    # Clean up any ebtables rules
+    if command -v ebtables &>/dev/null; then
+        ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
         done
     fi
+    log "Cleaned up ebtables rules for $IFACE"
 }
 
 if [ "$ACTION" = "add" ]; then
@@ -2020,17 +2035,16 @@ if [ "$ACTION" = "add" ]; then
 
     ip link set "$IFACE" up 2>/dev/null || true
 
-    # Set up ebtables for WiFi isolation via OVS
-    setup_ebtables
-
-    # Enable hairpin for mDNS/Bonjour reflection (HomeKit/AirPlay)
+    # Enable hairpin for D2D traffic (ap_isolate=1 forces through bridge)
+    # OVS NAC rules handle policy - internet_only blocks LAN, smart_home allows D2D
     setup_hairpin
 
-    log "WiFi interface $IFACE configured: br-wifi → veth → OVS ($OVS_BRIDGE)"
+    log "WiFi interface $IFACE configured: br-wifi (hairpin) → veth → OVS ($OVS_BRIDGE)"
+    log "D2D: smart_home=allowed, internet_only=blocked by OVS NAC rules"
 
 elif [ "$ACTION" = "remove" ]; then
-    # Remove ebtables rules
-    remove_ebtables
+    # Clean up hairpin settings
+    remove_hairpin
 
     # Remove interface from br-wifi
     if ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
