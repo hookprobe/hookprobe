@@ -395,12 +395,16 @@
 }
 
 .quick-action-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    display: flex;
+    flex-wrap: wrap;
     gap: 0.75rem;
+    justify-content: flex-start;
 }
 
 .quick-action-btn {
+    flex: 1 1 calc(14.28% - 0.75rem);
+    min-width: 90px;
+    max-width: 130px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -428,46 +432,11 @@
     margin-bottom: 0.5rem;
 }
 
-.remote-access-status {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: rgba(0,0,0,0.3);
-    border-radius: 10px;
-    margin-bottom: 1rem;
-}
-
-.remote-access-icon {
-    width: 50px;
-    height: 50px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
-}
-
-.remote-access-icon.connected {
-    background: rgba(40, 167, 69, 0.2);
-    color: #28a745;
-}
-
-.remote-access-icon.disconnected {
-    background: rgba(108, 117, 125, 0.2);
-    color: #6c757d;
-}
-
-.remote-access-info h6 {
-    margin: 0 0 0.25rem 0;
-    color: #fff;
-    font-size: 0.9rem;
-}
-
-.remote-access-info p {
-    margin: 0;
+.remote-access-card h5 {
+    font-size: 0.85rem;
     color: #888;
-    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 /* Device Edit Modal */
@@ -525,9 +494,18 @@
 }
 
 /* Responsive */
+@media (max-width: 1200px) {
+    .quick-action-btn {
+        flex: 1 1 calc(14.28% - 0.65rem);
+        min-width: 85px;
+        padding: 0.85rem 0.4rem;
+    }
+}
+
 @media (max-width: 992px) {
-    .quick-action-grid {
-        grid-template-columns: repeat(2, 1fr);
+    .quick-action-btn {
+        flex: 1 1 calc(25% - 0.75rem);
+        min-width: 80px;
     }
 }
 
@@ -546,6 +524,15 @@
     }
     .topology-legend {
         display: none;
+    }
+    .quick-action-btn {
+        flex: 1 1 calc(33.33% - 0.65rem);
+        min-width: 70px;
+        padding: 0.75rem 0.3rem;
+        font-size: 0.7rem;
+    }
+    .quick-action-btn i {
+        font-size: 1.1rem;
     }
 }
 </style>
@@ -726,9 +713,9 @@
     </div>
 </div>
 
-<!-- Quick Actions & Remote Access -->
+<!-- Quick Actions -->
 <div class="row bottom-section">
-    <div class="col-lg-8 mb-3">
+    <div class="col-12 mb-3">
         <div class="quick-actions-card">
             <h5><i class="fas fa-bolt mr-2"></i>Quick Actions</h5>
             <div class="quick-action-grid">
@@ -740,9 +727,21 @@
                     <i class="fas fa-shield-alt"></i>
                     <span>AI Security</span>
                 </a>
-                <a href="{{ url_for('slaai.index') }}" class="quick-action-btn">
-                    <i class="fas fa-random"></i>
-                    <span>WAN Failover</span>
+                <a href="#" class="quick-action-btn" title="AI Eyes - Cognitive Network Layer">
+                    <i class="fas fa-eye"></i>
+                    <span>AIOCHI</span>
+                </a>
+                <a href="#" class="quick-action-btn" title="Neural Command Center">
+                    <i class="fas fa-globe"></i>
+                    <span>Cortex</span>
+                </a>
+                <a href="{{ url_for('tunnel.index') }}" class="quick-action-btn">
+                    <i class="fas fa-cloud"></i>
+                    <span>Cloudflare</span>
+                </a>
+                <a href="{{ url_for('auth.profile') }}" class="quick-action-btn">
+                    <i class="fas fa-user"></i>
+                    <span>Profile</span>
                 </a>
                 <a href="{{ url_for('settings.index') }}" class="quick-action-btn">
                     <i class="fas fa-cog"></i>
@@ -751,32 +750,25 @@
             </div>
         </div>
     </div>
+</div>
 
-    <div class="col-lg-4 mb-3">
+<!-- Remote Access Status -->
+<div class="row">
+    <div class="col-12 mb-3">
         <div class="remote-access-card">
-            <h5><i class="fas fa-cloud mr-2"></i>Remote Access</h5>
-            <div class="remote-access-status">
-                {% if tunnel_status.state == 'connected' %}
-                <div class="remote-access-icon connected">
-                    <i class="fas fa-cloud-upload-alt"></i>
+            <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                    <h5 class="mb-0 mr-3"><i class="fas fa-cloud mr-2"></i>Remote Access</h5>
+                    {% if tunnel_status.state == 'connected' %}
+                    <span class="badge badge-success"><i class="fas fa-check-circle mr-1"></i>Connected</span>
+                    {% else %}
+                    <span class="badge badge-secondary"><i class="fas fa-times-circle mr-1"></i>Not Configured</span>
+                    {% endif %}
                 </div>
-                <div class="remote-access-info">
-                    <h6>Connected</h6>
-                    <p>{{ tunnel_status.hostname or 'Cloudflare Tunnel' }}</p>
-                </div>
-                {% else %}
-                <div class="remote-access-icon disconnected">
-                    <i class="fas fa-cloud"></i>
-                </div>
-                <div class="remote-access-info">
-                    <h6>Not Configured</h6>
-                    <p>Set up remote access</p>
-                </div>
-                {% endif %}
+                <a href="{{ url_for('tunnel.index') }}" class="btn btn-outline-light btn-sm">
+                    <i class="fas fa-external-link-alt mr-1"></i> Manage Tunnel
+                </a>
             </div>
-            <a href="{{ url_for('tunnel.index') }}" class="btn btn-outline-light btn-sm btn-block">
-                <i class="fas fa-external-link-alt mr-1"></i> Manage Tunnel
-            </a>
         </div>
     </div>
 </div>
