@@ -1977,21 +1977,15 @@ ensure_veth_pair() {
     ip link set "$VETH_OVS" up
 }
 
-# Set up bridge port isolation for SDN policy enforcement
-# This forces ALL WiFi traffic through veth → OVS for NAC policy decisions:
-#   - WiFi interfaces: isolated=on (can ONLY reach non-isolated ports)
-#   - veth-wifi-a: isolated=off (the uplink to OVS)
+# Set up hairpin mode for D2D traffic
+# With ap_isolate=1 in hostapd, all WiFi traffic goes through br-wifi bridge.
+# Hairpin mode allows traffic to return to the same or different WiFi interface.
+# OVS NAC rules handle policy enforcement (internet_only blocks LAN traffic).
 #
-# With ap_isolate=0 in hostapd + bridge isolation:
-#   - Traffic flows: wlan (isolated) → veth (non-isolated) → OVS → policy → veth → wlan
-#   - OVS NAC rules control D2D: internet_only blocks LAN, smart_home allows LAN
-setup_bridge_isolation() {
-    if ! command -v bridge &>/dev/null; then
-        log "bridge command not available - port isolation won't work"
-        return 1
-    fi
-
-    # Remove any old ebtables rules (migration from old approach)
+# NO ebtables DROP rules - they block D2D before OVS can apply policy!
+# NO bridge port isolation - ap_isolate=1 already forces traffic through bridge.
+setup_hairpin() {
+    # Clean up any old ebtables DROP rules (migration from old approach)
     if command -v ebtables &>/dev/null; then
         ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
         for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
@@ -1999,29 +1993,24 @@ setup_bridge_isolation() {
                 ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
             fi
         done
-        log "Cleaned up old ebtables rules for $IFACE"
+
+        # Ensure ACCEPT rule for veth (OVS return traffic)
+        if ! ebtables -L FORWARD 2>/dev/null | grep -q "veth-wifi-a.*ACCEPT"; then
+            ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
+        fi
     fi
 
-    # Set veth-wifi-a as NON-ISOLATED (the uplink to OVS)
-    # This port MUST be non-isolated so WiFi traffic can reach it
-    bridge link set dev "$VETH_BR" isolated off 2>/dev/null || true
-    bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
-    log "Set $VETH_BR: isolated=off, hairpin=on (OVS uplink)"
-
-    # Set WiFi interface as ISOLATED
-    # Isolated ports can ONLY communicate with non-isolated ports (veth)
-    # This forces ALL traffic through: wlan → veth → OVS → policy decision
-    bridge link set dev "$IFACE" isolated on 2>/dev/null || true
-    log "Set $IFACE: isolated=on (traffic forced through OVS for NAC policy)"
+    # Enable hairpin mode for D2D reflection
+    if command -v bridge &>/dev/null; then
+        bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
+        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
+        log "Hairpin enabled on $IFACE and $VETH_BR for D2D"
+    fi
 }
 
-# Remove bridge isolation (for interface removal)
-remove_bridge_isolation() {
-    if command -v bridge &>/dev/null; then
-        bridge link set dev "$IFACE" isolated off 2>/dev/null || true
-        log "Removed isolation from $IFACE"
-    fi
-    # Also clean up any old ebtables rules
+# Clean up hairpin settings (for interface removal)
+remove_hairpin() {
+    # Clean up any ebtables rules
     if command -v ebtables &>/dev/null; then
         ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
         for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
@@ -2030,6 +2019,7 @@ remove_bridge_isolation() {
             fi
         done
     fi
+    log "Cleaned up ebtables rules for $IFACE"
 }
 
 if [ "$ACTION" = "add" ]; then
@@ -2045,17 +2035,16 @@ if [ "$ACTION" = "add" ]; then
 
     ip link set "$IFACE" up 2>/dev/null || true
 
-    # Set up bridge port isolation for SDN policy enforcement
-    # This forces all WiFi traffic through OVS for NAC decisions
-    # D2D allowed/blocked based on device policy (internet_only vs smart_home)
-    setup_bridge_isolation
+    # Enable hairpin for D2D traffic (ap_isolate=1 forces through bridge)
+    # OVS NAC rules handle policy - internet_only blocks LAN, smart_home allows D2D
+    setup_hairpin
 
-    log "WiFi interface $IFACE configured: isolated → veth → OVS ($OVS_BRIDGE)"
-    log "NAC policy enforced at OVS layer (internet_only=no D2D, smart_home=D2D allowed)"
+    log "WiFi interface $IFACE configured: br-wifi (hairpin) → veth → OVS ($OVS_BRIDGE)"
+    log "D2D: smart_home=allowed, internet_only=blocked by OVS NAC rules"
 
 elif [ "$ACTION" = "remove" ]; then
-    # Remove bridge isolation and cleanup
-    remove_bridge_isolation
+    # Clean up hairpin settings
+    remove_hairpin
 
     # Remove interface from br-wifi
     if ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
