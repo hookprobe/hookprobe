@@ -4,6 +4,7 @@ Provides system-wide settings including WiFi, network, and security options.
 """
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from flask_login import login_required, current_user
 
 from . import settings_bp
 from ..auth.decorators import admin_required
+from ...security_utils import safe_error_message
+
+logger = logging.getLogger(__name__)
 
 
 def get_system_config():
@@ -182,7 +186,7 @@ def api_save_config():
 
         return jsonify({'success': True, 'message': 'Configuration saved'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @settings_bp.route('/api/system', methods=['GET'])
@@ -218,7 +222,7 @@ def api_restart_service():
     except subprocess.CalledProcessError as e:
         return jsonify({'success': False, 'error': f'Failed to restart {service}'}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @settings_bp.route('/api/logs/<service>')
@@ -241,7 +245,7 @@ def api_get_logs(service):
             'logs': result.stdout.split('\n')[-100:]
         })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # =============================================================================
@@ -520,7 +524,7 @@ def api_apply_config():
 
     except Exception as e:
         logger.error(f"Failed to apply configuration: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @settings_bp.route('/api/timezones')
