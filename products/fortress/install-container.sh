@@ -3965,6 +3965,12 @@ connect_containers_to_ovs() {
 
     local ovs_script="${DEVICES_DIR}/common/ovs-container-network.sh"
 
+    # Source fortress.conf to get current settings (may have been written during this install)
+    if [ -f "$CONFIG_DIR/fortress.conf" ]; then
+        # shellcheck source=/dev/null
+        source "$CONFIG_DIR/fortress.conf" 2>/dev/null || true
+    fi
+
     # Check if OVS container attachment is disabled
     # This can be set in /etc/hookprobe/fortress.conf or via environment
     # Set SKIP_OVS_CONTAINER_ATTACH=true to disable OVS veth attachment
