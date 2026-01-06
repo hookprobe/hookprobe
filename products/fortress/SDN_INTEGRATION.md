@@ -2,23 +2,24 @@
 
 ## Executive Summary
 
-This document provides the integration path between the physical network infrastructure (VLAN 100/200) and the logical SDN segmentation layer (segments 10-99) with Device Trust Framework integration.
+This document provides the integration path between the physical network infrastructure (flat bridge) and the logical SDN segmentation layer (OpenFlow-based NAC) with Device Trust Framework integration.
 
 ## Current Architecture Analysis
 
-### Physical Layer (Install Scripts)
+### Physical Layer (Flat Bridge)
 
-The install scripts (`install-container.sh`, `ovs-post-setup.sh`) define:
+The install scripts (`install-container.sh`, `ovs-post-setup.sh`) define a **flat bridge** architecture:
 
-| VLAN | Name | Subnet | Purpose |
-|------|------|--------|---------|
-| **100** | LAN | 10.200.0.0/24 | All WiFi clients, LAN devices |
-| **200** | MGMT | 10.200.100.0/30 | Admin access, container network |
+| Component | Subnet | Purpose |
+|-----------|--------|---------|
+| **FTS Bridge** | 10.200.0.0/XX | All WiFi clients, LAN devices |
+| **OpenFlow** | N/A | NAC via device fingerprinting policies |
 
-- **FTS Bridge**: OVS bridge connecting all interfaces
-- **DHCP**: dnsmasq on `vlan100` interface (10.200.0.100-200)
-- **Gateway**: 10.200.0.1 (LAN), 10.200.100.1 (MGMT)
-- **WiFi**: Single SSID bridged to VLAN 100
+- **FTS Bridge**: OVS bridge with gateway IP (10.200.0.1/XX)
+- **DHCP**: dnsmasq binds to FTS bridge (10.200.0.100-200)
+- **Gateway**: 10.200.0.1 on FTS bridge
+- **WiFi**: Single SSID bridged to FTS
+- **NAC**: OpenFlow rules based on device fingerprints
 
 ### Logical Layer (SDN Auto-Pilot)
 
@@ -38,7 +39,7 @@ The SDN Auto-Pilot defines segments for device classification:
 
 **Mismatch**: Python config.py uses 10.250.x.x subnet while install scripts use 10.200.x.x subnet.
 
-**Resolution**: The segment VLANs (10-99) operate as **logical sub-segments within VLAN 100** using OVS OpenFlow rules, not as separate physical VLANs.
+**Resolution**: The segment VLANs (10-99) operate as **logical sub-segments within FTS bridge** using OVS OpenFlow rules, not as separate physical VLANs.
 
 ---
 
@@ -57,7 +58,7 @@ The SDN Auto-Pilot defines segments for device classification:
 │  │  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘  ││
 │  │         │                  │                  │                  │          ││
 │  │         │         ┌────────┴────────┬─────────┘                  │          ││
-│  │         │         │   VLAN 100      │                    VLAN 200│          ││
+│  │         │         │   FTS bridge      │                    removed│          ││
 │  │         │         │   (LAN)         │                    (MGMT)  │          ││
 │  │  ┌──────┴─────────┴────────────────────────────────────┬─────────┴──────┐  ││
 │  │  │                      FTS OVS BRIDGE                  │               │  ││
@@ -107,7 +108,7 @@ The SDN Auto-Pilot defines segments for device classification:
 ```
 Device connects to WiFi (HookProbe-Fortress)
     ↓
-DHCP Request → dnsmasq on vlan100
+DHCP Request → dnsmasq on FTS bridge
     ↓
 Device assigned IP from 10.200.0.100-200
     ↓
@@ -129,7 +130,7 @@ Device traffic tagged with segment VLAN
 
 ### 2. Segment VLAN Assignment
 
-Within VLAN 100, devices are logically segmented via OVS flow rules:
+Within FTS bridge, devices are logically segmented via OVS flow rules:
 
 | Trust Level | Default Segment | Can Upgrade To |
 |-------------|-----------------|----------------|
@@ -137,7 +138,7 @@ Within VLAN 100, devices are logically segmented via OVS flow rules:
 | L1 MINIMAL | 40 (Guest) | 40 only |
 | L2 STANDARD | OUI-based | 30, 40, 50, 60 |
 | L3 HIGH | OUI-based | 10, 20, 30, 50 |
-| L4 ENTERPRISE | Any + MGMT | All + VLAN 200 |
+| L4 ENTERPRISE | Any + MGMT | All + removed |
 
 ### 3. Inter-Segment Isolation
 
@@ -226,7 +227,7 @@ Change from 10.250.x.x to 10.200.x.x subnet:
 # NEW (10.200.x.x - ALIGNED WITH INSTALL SCRIPTS)
 "lan": VLANConfig(100, "LAN", "10.200.0.0/24", "10.200.0.1"),
 "mgmt": VLANConfig(200, "MGMT", "10.200.100.0/30", "10.200.100.1"),
-# Segment VLANs (logical within VLAN 100)
+# Segment VLANs (logical within FTS bridge)
 "secmon": VLANConfig(10, "Security Monitor", "10.200.0.0/24", "10.200.0.1", is_logical=True),
 "pos": VLANConfig(20, "POS", "10.200.0.0/24", "10.200.0.1", is_logical=True),
 "staff": VLANConfig(30, "Staff", "10.200.0.0/24", "10.200.0.1", is_logical=True),
@@ -238,8 +239,8 @@ Change from 10.250.x.x to 10.200.x.x subnet:
 
 ### 2. DHCP Configuration
 
-The install scripts correctly configure DHCP on `vlan100`:
-- Interface: `vlan100` (not FTS bridge in VLAN mode)
+The install scripts correctly configure DHCP on `FTS bridge`:
+- Interface: `FTS bridge` (not FTS bridge in VLAN mode)
 - Range: 10.200.0.100 - 10.200.0.200 (configurable)
 - Gateway: 10.200.0.1
 - DNS: 10.200.0.1 (dnsXai container)
@@ -290,7 +291,7 @@ From SDN Auto-Pilot OUI database:
 
 - [ ] Update `config.py` VLANs to use 10.200.x.x subnet
 - [ ] Add `is_logical` flag to VLANConfig for segment VLANs
-- [ ] Add VLAN 100 (LAN) and 200 (MGMT) to config
+- [ ] Add FTS bridge (LAN) and 200 (MGMT) to config
 - [ ] Update `dnsmasq-fortress.conf` template
 
 ### Phase 2: SDN Auto-Pilot Update ✓
