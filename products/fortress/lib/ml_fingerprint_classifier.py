@@ -268,7 +268,8 @@ class FeatureExtractor:
 
         # OUI hash for clustering (2 features)
         oui = mac[:8].upper().replace('-', ':')
-        oui_hash = int(hashlib.md5(oui.encode()).hexdigest()[:8], 16)
+        # MD5 used for feature hashing (not for security) - B324 fix
+        oui_hash = int(hashlib.md5(oui.encode(), usedforsecurity=False).hexdigest()[:8], 16)
         features[-2] = (oui_hash & 0xFFFF) / 65535  # Lower 16 bits
         features[-1] = ((oui_hash >> 16) & 0xFFFF) / 65535  # Upper 16 bits
 
@@ -316,9 +317,9 @@ class FeatureExtractor:
                 if stype in service_lower:
                     features[idx] = 1.0
 
-        # Model identifier hash
+        # Model identifier hash (MD5 for feature hashing, not security - B324 fix)
         if model:
-            model_hash = int(hashlib.md5(model.encode()).hexdigest()[:8], 16)
+            model_hash = int(hashlib.md5(model.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             features[-2] = (model_hash & 0xFFFF) / 65535
             features[-1] = ((model_hash >> 16) & 0xFFFF) / 65535
 
@@ -332,10 +333,10 @@ class FeatureExtractor:
         if ja3_hashes:
             features[0] = min(len(ja3_hashes) / 10, 1.0)  # Count, normalized
 
-            # Cluster by hash similarity
+            # Cluster by hash similarity (MD5 for feature hashing, not security - B324 fix)
             for idx, ja3 in enumerate(ja3_hashes[:4]):
                 if ja3:
-                    hash_val = int(hashlib.md5(ja3.encode()).hexdigest()[:4], 16)
+                    hash_val = int(hashlib.md5(ja3.encode(), usedforsecurity=False).hexdigest()[:4], 16)
                     features[idx + 1] = hash_val / 65535
 
         return features
@@ -361,7 +362,8 @@ class FeatureExtractor:
             features[4] = ttl / 255  # Normalized TTL
 
         if options:
-            opt_hash = int(hashlib.md5(options.encode()).hexdigest()[:8], 16)
+            # MD5 for feature hashing, not security - B324 fix
+            opt_hash = int(hashlib.md5(options.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             features[5] = (opt_hash & 0xFFFF) / 65535
             features[6] = ((opt_hash >> 16) & 0xFFFF) / 65535
 
@@ -380,8 +382,8 @@ class FeatureExtractor:
                 if kw in vc:
                     features[idx] = 1.0
 
-            # Hash for unknown vendor classes
-            vc_hash = int(hashlib.md5(vendor_class.encode()).hexdigest()[:8], 16)
+            # Hash for unknown vendor classes (MD5 for feature hashing, not security - B324 fix)
+            vc_hash = int(hashlib.md5(vendor_class.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             features[-2] = (vc_hash & 0xFFFF) / 65535
             features[-1] = ((vc_hash >> 16) & 0xFFFF) / 65535
 

@@ -540,17 +540,38 @@ def setup_ovs_ipfix(bridge: str = 'FTS', target: str = '127.0.0.1:4739', samplin
     This sets up OVS to export sampled flow data to the collector.
     """
     import subprocess
+    import re
 
-    # Create IPFIX configuration
-    cmd = f'''
-    ovs-vsctl -- --id=@br get Bridge {bridge} -- \
-        --id=@ipfix create IPFIX targets=\\"{target}\\" \
-        sampling={sampling} obs_domain_id=1 obs_point_id=1 -- \
-        set Bridge {bridge} ipfix=@ipfix
-    '''
+    # Validate inputs to prevent command injection (B602 security fix)
+    # Bridge name: alphanumeric, dash, underscore only
+    if not re.match(r'^[A-Za-z0-9_-]+$', bridge):
+        logger.error(f"Invalid bridge name: {bridge}")
+        return False
 
+    # Target: IP:port format only
+    if not re.match(r'^[\d.:]+$', target):
+        logger.error(f"Invalid target format: {target}")
+        return False
+
+    # Sampling must be positive integer
+    sampling = int(sampling)
+    if sampling < 1:
+        logger.error(f"Invalid sampling rate: {sampling}")
+        return False
+
+    # Use subprocess with list arguments instead of shell=True
+    # ovs-vsctl command with proper argument list
     try:
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        subprocess.run([
+            'ovs-vsctl',
+            '--', '--id=@br', 'get', 'Bridge', bridge,
+            '--', '--id=@ipfix', 'create', 'IPFIX',
+            f'targets="{target}"',
+            f'sampling={sampling}',
+            'obs_domain_id=1',
+            'obs_point_id=1',
+            '--', 'set', 'Bridge', bridge, 'ipfix=@ipfix'
+        ], check=True, capture_output=True)
         logger.info(f"IPFIX configured on {bridge}: target={target}, sampling=1/{sampling}")
         return True
     except subprocess.CalledProcessError as e:
