@@ -1204,6 +1204,11 @@ INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
 # OVS veth attachment breaks podman's DNAT rules for port 8443
 # Set to false only if you need OpenFlow visibility into container traffic
 SKIP_OVS_CONTAINER_ATTACH=true
+
+# WiFi Device-to-Device (D2D) communication
+# ENABLE_WIFI_D2D=true (default): Allow AirPlay, HomeKit, printers, file sharing
+# ENABLE_WIFI_D2D=false: Strict isolation for guest networks (blocks all D2D)
+ENABLE_WIFI_D2D=true
 EOF
 
     # Set ownership so container (fortress user) can read
@@ -1911,6 +1916,15 @@ VETH_BR="veth-wifi-a"
 VETH_OVS="veth-wifi-b"
 # FLAT BRIDGE: No VLAN tagging - all ports untagged
 
+# Load Fortress config for D2D setting
+# ENABLE_WIFI_D2D=true allows device-to-device (AirPlay, HomeKit, printers)
+# ENABLE_WIFI_D2D=false forces strict isolation (guest network mode)
+if [ -f /etc/hookprobe/fortress.conf ]; then
+    # shellcheck source=/dev/null
+    source /etc/hookprobe/fortress.conf 2>/dev/null || true
+fi
+ENABLE_WIFI_D2D="${ENABLE_WIFI_D2D:-true}"  # Default: allow D2D
+
 [ -z "$IFACE" ] && exit 1
 
 log() { echo "[wifi-bridge] $*"; logger -t fts-wifi-bridge "$*" 2>/dev/null || true; }
@@ -1963,11 +1977,13 @@ ensure_veth_pair() {
     ip link set "$VETH_OVS" up
 }
 
-# Set up ebtables to force WiFi-to-WiFi traffic through veth (to OVS)
+# Set up ebtables rules for WiFi traffic
+# When ENABLE_WIFI_D2D=true (default): Allow device-to-device (AirPlay, HomeKit, printers)
+# When ENABLE_WIFI_D2D=false: Force all traffic through OVS for strict isolation
 setup_ebtables() {
     if ! command -v ebtables &>/dev/null; then
-        log "ebtables not available - WiFi isolation via OVS won't work"
-        return 1
+        log "ebtables not available - skipping bridge filtering"
+        return 0
     fi
 
     # First, ensure traffic FROM veth (coming from OVS) is allowed
@@ -1976,21 +1992,27 @@ setup_ebtables() {
         log "Added ACCEPT rule for traffic from $VETH_BR (OVS return path)"
     fi
 
-    # Remove old DROP rules for this interface first
+    # Always remove old DROP rules first (cleanup from previous config)
     ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block direct WiFi-to-WiFi on same interface (forces through OVS)
-    ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-
-    # Block WiFi-to-WiFi across different interfaces (2.4GHz ↔ 5GHz)
     for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
         if [ "$other" != "$IFACE" ]; then
             ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
         fi
     done
 
-    log "ebtables rules set for $IFACE - WiFi traffic forced through OVS"
+    if [ "$ENABLE_WIFI_D2D" = "true" ]; then
+        # D2D enabled: Allow device-to-device communication (AirPlay, HomeKit, printers)
+        log "D2D enabled for $IFACE - allowing device-to-device (AirPlay, HomeKit)"
+    else
+        # D2D disabled: Block direct WiFi-to-WiFi (strict isolation mode)
+        ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
+        done
+        log "D2D disabled for $IFACE - strict isolation mode"
+    fi
 }
 
 # Enable hairpin mode on interface for mDNS reflection
