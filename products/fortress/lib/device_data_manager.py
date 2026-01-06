@@ -19,6 +19,7 @@ License: AGPL-3.0
 
 import json
 import logging
+import re
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from enum import Enum
@@ -27,6 +28,17 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_mac(mac: str) -> str:
+    """Mask MAC address for secure logging (CWE-532 mitigation)."""
+    if not mac:
+        return "**:**:**:**:**:**"
+    mac_clean = mac.upper().replace('-', ':')
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_clean):
+        return "**:**:**:**:**:**"
+    parts = mac_clean.split(':')
+    return f"{parts[0]}:{parts[1]}:{parts[2]}:**:**:{parts[5]}"
 
 # Network configuration for policy enforcement
 # Uses broader /16 to match ovs-post-setup.sh base rules
@@ -593,9 +605,9 @@ class DeviceDataManager:
                 'timestamp': datetime.now().isoformat(),
             }
             POLICY_TRIGGER_FILE.write_text(json.dumps(trigger_data, indent=2))
-            logger.info(f"Policy trigger written: {mac} -> {policy}")
+            logger.info(f"Policy trigger written: {_mask_mac(mac)} -> {policy}")
         except Exception as e:
-            logger.warning(f"Failed to write policy trigger for {mac}: {e}")
+            logger.warning(f"Failed to write policy trigger for {_mask_mac(mac)}: {e}")
 
     def set_policy(self, mac_address: str, policy: str) -> bool:
         """
@@ -651,13 +663,13 @@ class DeviceDataManager:
 
         # Write trigger file for host-side application
         self._write_policy_trigger(mac_upper, effective_policy)
-        logger.info(f"Requested {effective_policy.upper()} policy for {mac}")
+        logger.info(f"Requested {effective_policy.upper()} policy for {_mask_mac(mac)}")
 
     def _block_device(self, mac: str):
         """Block a device by applying quarantine policy."""
         # Use quarantine policy for blocking
         self._write_policy_trigger(mac.upper(), 'quarantine')
-        logger.info(f"Block requested for device: {mac}")
+        logger.info(f"Block requested for device: {_mask_mac(mac)}")
 
     def _unblock_device(self, mac: str):
         """Unblock a device by applying smart_home policy."""
@@ -666,7 +678,7 @@ class DeviceDataManager:
         # Restore original policy or use smart_home
         policy = entry.policy if entry and entry.policy not in ('isolated', 'quarantine') else 'smart_home'
         self._write_policy_trigger(mac_upper, policy)
-        logger.info(f"Unblock requested for device: {mac}")
+        logger.info(f"Unblock requested for device: {_mask_mac(mac)}")
 
     def sync_policies(self):
         """

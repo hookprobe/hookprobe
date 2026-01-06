@@ -16,6 +16,7 @@ import logging
 
 from . import slaai_bp
 from ..auth.decorators import operator_required
+from ...security_utils import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def api_status():
         logger.error(f"SLA AI status error: {e}")
         return jsonify({
             'success': False,
-            'error': str(e),
+            'error': safe_error_message(e),
             'status': get_demo_sla_status(),
             'demo_mode': True
         })
@@ -203,7 +204,7 @@ def api_metrics():
 
     except Exception as e:
         logger.error(f"Metrics error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/history')
@@ -219,7 +220,7 @@ def api_history():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/force-failover', methods=['POST'])
@@ -236,7 +237,7 @@ def api_force_failover():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/force-failback', methods=['POST'])
@@ -252,7 +253,7 @@ def api_force_failback():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/traffic')
@@ -281,7 +282,7 @@ def api_traffic():
 
     except Exception as e:
         logger.error(f"Traffic API error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/interfaces')
@@ -311,7 +312,7 @@ def api_interfaces():
 
     except Exception as e:
         logger.error(f"Interfaces API error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/lte-usage')
@@ -345,7 +346,7 @@ def api_lte_usage():
 
     except Exception as e:
         logger.error(f"LTE usage API error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/lte-usage/reset', methods=['POST'])
@@ -380,7 +381,7 @@ def api_reset_lte_usage():
 
     except Exception as e:
         logger.error(f"LTE reset API error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 # LTE Limits Configuration File
@@ -418,7 +419,7 @@ def api_get_lte_limits():
 
     except Exception as e:
         logger.error(f"LTE limits GET error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': safe_error_message(e)})
 
 
 @slaai_bp.route('/api/lte-limits', methods=['POST'])
@@ -501,4 +502,4 @@ def api_set_lte_limits():
 
     except Exception as e:
         logger.error(f"LTE limits POST error: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
