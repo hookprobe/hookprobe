@@ -10,6 +10,7 @@ from flask import render_template, jsonify, request
 from flask_login import login_required
 
 from . import aiochi_bp
+from ...security_utils import safe_error_message
 
 # Security: MAC address validation pattern
 MAC_PATTERN = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
@@ -423,7 +424,7 @@ def api_status():
         logger.error(f"AIOCHI status API error: {e}")
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': safe_error_message(e)
         }), 500
 
 
@@ -450,7 +451,7 @@ def api_presence():
         })
     except Exception as e:
         logger.error(f"AIOCHI presence API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/feed')
@@ -465,7 +466,7 @@ def api_feed():
         })
     except Exception as e:
         logger.error(f"AIOCHI feed API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/performance')
@@ -480,7 +481,7 @@ def api_performance():
         })
     except Exception as e:
         logger.error(f"AIOCHI performance API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/action/<action_id>', methods=['POST'])
@@ -513,7 +514,7 @@ def api_action(action_id):
         })
     except Exception as e:
         logger.error(f"AIOCHI action API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # Push notification storage (in production, use database)
@@ -550,7 +551,7 @@ def api_push_subscribe():
         })
     except Exception as e:
         logger.error(f"Push subscribe error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/push/unsubscribe', methods=['POST'])
@@ -571,7 +572,7 @@ def api_push_unsubscribe():
         })
     except Exception as e:
         logger.error(f"Push unsubscribe error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/push/test', methods=['POST'])
@@ -588,7 +589,7 @@ def api_push_test():
         })
     except Exception as e:
         logger.error(f"Push test error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # ============================================================================
@@ -649,7 +650,7 @@ def api_profiles():
         })
     except Exception as e:
         logger.error(f"Profiles API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/profiles/<profile_id>')
@@ -668,7 +669,7 @@ def api_profile_get(profile_id):
         })
     except Exception as e:
         logger.error(f"Profile get error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/profiles/<profile_id>', methods=['PUT'])
@@ -696,7 +697,7 @@ def api_profile_update(profile_id):
         })
     except Exception as e:
         logger.error(f"Profile update error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/profiles', methods=['POST'])
@@ -739,7 +740,7 @@ def api_profile_create():
         })
     except Exception as e:
         logger.error(f"Profile create error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/profiles/<profile_id>', methods=['DELETE'])
@@ -765,7 +766,7 @@ def api_profile_delete(profile_id):
         })
     except Exception as e:
         logger.error(f"Profile delete error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/profiles/<profile_id>/switch', methods=['POST'])
@@ -806,7 +807,7 @@ def api_profile_switch(profile_id):
         })
     except Exception as e:
         logger.error(f"Profile switch error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # ============================================================================
@@ -848,7 +849,7 @@ def api_agent_status():
         })
     except Exception as e:
         logger.error(f"Agent status API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/feed', methods=['POST'])
@@ -881,7 +882,7 @@ def api_feed_post():
         })
     except Exception as e:
         logger.error(f"Feed POST error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/feedback-request', methods=['POST'])
@@ -927,7 +928,7 @@ def api_feedback_request():
         })
     except Exception as e:
         logger.error(f"Feedback request error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/feedback/pending')
@@ -947,7 +948,7 @@ def api_feedback_pending():
         })
     except Exception as e:
         logger.error(f"Feedback pending API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/feedback/<action_id>', methods=['POST'])
@@ -1025,7 +1026,7 @@ def api_feedback_submit(action_id):
         })
     except Exception as e:
         logger.error(f"Feedback submit error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 def _execute_tool(tool_name, args):
@@ -1064,7 +1065,7 @@ def _execute_tool(tool_name, args):
         return {'action_taken': tool_name, 'demo_mode': True, 'message': 'Tool not available in demo mode'}
     except Exception as e:
         logger.error(f"Tool execution error: {e}")
-        return {'action_taken': tool_name, 'error': str(e)}
+        return {'action_taken': tool_name, 'error': safe_error_message(e)}
 
 
 @aiochi_bp.route('/api/agent/actions')
@@ -1132,7 +1133,7 @@ def api_agent_actions():
         })
     except Exception as e:
         logger.error(f"Agent actions API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/agent/trust/<mac_address>', methods=['GET'])
@@ -1158,7 +1159,7 @@ def api_agent_trust_get(mac_address):
         })
     except Exception as e:
         logger.error(f"Trust get API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/agent/trust/<mac_address>', methods=['PUT'])
@@ -1188,7 +1189,7 @@ def api_agent_trust_set(mac_address):
         })
     except Exception as e:
         logger.error(f"Trust set API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # ============================================================================
@@ -1392,7 +1393,7 @@ def api_bubbles_list():
         logger.error(f"Bubbles list API error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>')
@@ -1425,7 +1426,7 @@ def api_bubble_get(bubble_id):
         return jsonify({'success': False, 'error': 'Bubble not found'}), 404
     except Exception as e:
         logger.error(f"Bubble get API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles', methods=['POST'])
@@ -1529,7 +1530,7 @@ def api_bubble_create():
         logger.error(f"Bubble create API error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['PUT'])
@@ -1605,7 +1606,7 @@ def api_bubble_update(bubble_id):
         })
     except Exception as e:
         logger.error(f"Bubble update API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['DELETE'])
@@ -1659,7 +1660,7 @@ def api_bubble_delete(bubble_id):
         })
     except Exception as e:
         logger.error(f"Bubble delete API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>/devices', methods=['POST'])
@@ -1727,7 +1728,7 @@ def api_bubble_add_device(bubble_id):
         })
     except Exception as e:
         logger.error(f"Bubble add device API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>/devices/<mac>', methods=['DELETE'])
@@ -1789,7 +1790,7 @@ def api_bubble_remove_device(bubble_id, mac):
         })
     except Exception as e:
         logger.error(f"Bubble remove device API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/move-device', methods=['POST'])
@@ -1870,7 +1871,7 @@ def api_bubble_move_device():
         })
     except Exception as e:
         logger.error(f"Bubble move device API error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @aiochi_bp.route('/api/bubbles/types')

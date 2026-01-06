@@ -10,12 +10,16 @@ Provides REST API endpoints for:
 """
 
 import json
+import logging
 from datetime import datetime
 from flask import jsonify, request
 from flask_login import login_required, current_user
 
 from . import api_bp
 from ..auth.decorators import admin_required, operator_required
+from ...security_utils import safe_error_message
+
+logger = logging.getLogger(__name__)
 
 # Import lib modules (with fallback for development)
 DB_AVAILABLE = False
@@ -1086,7 +1090,7 @@ def acknowledge_alert(alert_id):
 
         return jsonify({'error': 'Alert not found'}), 404
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @api_bp.route('/v1/autopilot/optimize', methods=['POST'])
@@ -1390,7 +1394,7 @@ def _apply_autopilot_optimization(
         return {'success': True}
 
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': safe_error_message(e)}
 
 
 def _trigger_emergency_lockdown(alert_data):
