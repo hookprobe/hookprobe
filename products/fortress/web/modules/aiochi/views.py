@@ -369,6 +369,13 @@ def index():
     return render_template('aiochi/index.html')
 
 
+@aiochi_bp.route('/cortex')
+@login_required
+def cortex():
+    """Cortex - Neural Command Center 3D Globe Visualization."""
+    return render_template('aiochi/cortex.html')
+
+
 @aiochi_bp.route('/api/status')
 @login_required
 def api_status():
