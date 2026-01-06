@@ -163,7 +163,8 @@ class JA3Fingerprinter:
         ]
 
         ja3_string = ','.join(parts)
-        ja3_hash = hashlib.md5(ja3_string.encode()).hexdigest()
+        # MD5 used for JA3 fingerprint standard (not for security) - B324 fix
+        ja3_hash = hashlib.md5(ja3_string.encode(), usedforsecurity=False).hexdigest()
 
         return ja3_hash, ja3_string
 

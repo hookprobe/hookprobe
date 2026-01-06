@@ -7,7 +7,7 @@ scikit-learn>=1.5.0,<2.0.0  # Fixed PYSEC-2024-110
 
 # API server
 flask>=3.0.0,<4.0.0
-gunicorn>=21.0.0,<23.0.0
+gunicorn>=22.0.0,<24.0.0  # CVE-2024-1135 fix
 
 # Utilities
 requests>=2.31.0
