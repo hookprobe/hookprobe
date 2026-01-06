@@ -1977,59 +1977,57 @@ ensure_veth_pair() {
     ip link set "$VETH_OVS" up
 }
 
-# Set up ebtables rules for WiFi traffic
-# When ENABLE_WIFI_D2D=true (default): Allow device-to-device (AirPlay, HomeKit, printers)
-# When ENABLE_WIFI_D2D=false: Force all traffic through OVS for strict isolation
-setup_ebtables() {
-    if ! command -v ebtables &>/dev/null; then
-        log "ebtables not available - skipping bridge filtering"
-        return 0
+# Set up bridge port isolation for SDN policy enforcement
+# This forces ALL WiFi traffic through veth → OVS for NAC policy decisions:
+#   - WiFi interfaces: isolated=on (can ONLY reach non-isolated ports)
+#   - veth-wifi-a: isolated=off (the uplink to OVS)
+#
+# With ap_isolate=0 in hostapd + bridge isolation:
+#   - Traffic flows: wlan (isolated) → veth (non-isolated) → OVS → policy → veth → wlan
+#   - OVS NAC rules control D2D: internet_only blocks LAN, smart_home allows LAN
+setup_bridge_isolation() {
+    if ! command -v bridge &>/dev/null; then
+        log "bridge command not available - port isolation won't work"
+        return 1
     fi
 
-    # First, ensure traffic FROM veth (coming from OVS) is allowed
-    if ! ebtables -L FORWARD 2>/dev/null | grep -q "veth-wifi-a.*ACCEPT"; then
-        ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
-        log "Added ACCEPT rule for traffic from $VETH_BR (OVS return path)"
-    fi
-
-    # Always remove old DROP rules first (cleanup from previous config)
-    ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-    for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-        if [ "$other" != "$IFACE" ]; then
-            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-        fi
-    done
-
-    if [ "$ENABLE_WIFI_D2D" = "true" ]; then
-        # D2D enabled: Allow device-to-device communication (AirPlay, HomeKit, printers)
-        log "D2D enabled for $IFACE - allowing device-to-device (AirPlay, HomeKit)"
-    else
-        # D2D disabled: Block direct WiFi-to-WiFi (strict isolation mode)
-        ebtables -A FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-            if [ "$other" != "$IFACE" ]; then
-                ebtables -A FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            fi
-        done
-        log "D2D disabled for $IFACE - strict isolation mode"
-    fi
-}
-
-# Enable hairpin mode on interface for mDNS reflection
-setup_hairpin() {
-    if command -v bridge &>/dev/null; then
-        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
-        bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
-        log "Enabled hairpin on $IFACE and $VETH_BR for mDNS/multicast reflection"
-    fi
-}
-
-# Remove ebtables rules
-remove_ebtables() {
+    # Remove any old ebtables rules (migration from old approach)
     if command -v ebtables &>/dev/null; then
         ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
         for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-            ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
+        done
+        log "Cleaned up old ebtables rules for $IFACE"
+    fi
+
+    # Set veth-wifi-a as NON-ISOLATED (the uplink to OVS)
+    # This port MUST be non-isolated so WiFi traffic can reach it
+    bridge link set dev "$VETH_BR" isolated off 2>/dev/null || true
+    bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
+    log "Set $VETH_BR: isolated=off, hairpin=on (OVS uplink)"
+
+    # Set WiFi interface as ISOLATED
+    # Isolated ports can ONLY communicate with non-isolated ports (veth)
+    # This forces ALL traffic through: wlan → veth → OVS → policy decision
+    bridge link set dev "$IFACE" isolated on 2>/dev/null || true
+    log "Set $IFACE: isolated=on (traffic forced through OVS for NAC policy)"
+}
+
+# Remove bridge isolation (for interface removal)
+remove_bridge_isolation() {
+    if command -v bridge &>/dev/null; then
+        bridge link set dev "$IFACE" isolated off 2>/dev/null || true
+        log "Removed isolation from $IFACE"
+    fi
+    # Also clean up any old ebtables rules
+    if command -v ebtables &>/dev/null; then
+        ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
+        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
+            if [ "$other" != "$IFACE" ]; then
+                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
+            fi
         done
     fi
 }
@@ -2047,17 +2045,17 @@ if [ "$ACTION" = "add" ]; then
 
     ip link set "$IFACE" up 2>/dev/null || true
 
-    # Set up ebtables for WiFi isolation via OVS
-    setup_ebtables
+    # Set up bridge port isolation for SDN policy enforcement
+    # This forces all WiFi traffic through OVS for NAC decisions
+    # D2D allowed/blocked based on device policy (internet_only vs smart_home)
+    setup_bridge_isolation
 
-    # Enable hairpin for mDNS/Bonjour reflection (HomeKit/AirPlay)
-    setup_hairpin
-
-    log "WiFi interface $IFACE configured: br-wifi → veth → OVS ($OVS_BRIDGE)"
+    log "WiFi interface $IFACE configured: isolated → veth → OVS ($OVS_BRIDGE)"
+    log "NAC policy enforced at OVS layer (internet_only=no D2D, smart_home=D2D allowed)"
 
 elif [ "$ACTION" = "remove" ]; then
-    # Remove ebtables rules
-    remove_ebtables
+    # Remove bridge isolation and cleanup
+    remove_bridge_isolation
 
     # Remove interface from br-wifi
     if ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
