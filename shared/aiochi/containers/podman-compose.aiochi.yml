@@ -48,7 +48,10 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
-      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Main AIOCHI schema (executed first - creates database and tables)
+      - ../schemas/clickhouse-init.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+      # Additional initialization (executed after schema)
+      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/99-init.sql:ro
       - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
     environment:
       CLICKHOUSE_DB: aiochi
@@ -170,7 +173,8 @@ services:
       - /var/lib/misc:/var/lib/misc:ro          # dnsmasq leases
       - /run/avahi-daemon:/run/avahi-daemon:ro  # mDNS socket
     environment:
-      CLICKHOUSE_HOST: 172.20.210.10
+      # Use container DNS name instead of hardcoded IP
+      CLICKHOUSE_HOST: aiochi-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_DB: aiochi
       CLICKHOUSE_USER: aiochi
@@ -205,16 +209,16 @@ services:
       N8N_HOST: "0.0.0.0"
       N8N_PORT: "5678"
       N8N_PROTOCOL: "http"
-      WEBHOOK_URL: "http://172.20.210.21:5678"
+      WEBHOOK_URL: "http://aiochi-narrative:5678"
       GENERIC_TIMEZONE: "${TZ:-UTC}"
-      # ClickHouse connection
-      CLICKHOUSE_HOST: "172.20.210.10"
+      # ClickHouse connection (use container DNS names)
+      CLICKHOUSE_HOST: "aiochi-clickhouse"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: "aiochi"
       CLICKHOUSE_USER: "aiochi"
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
       # Ollama LLM connection (Agentic AI)
-      OLLAMA_HOST: "http://172.20.210.50:11434"
+      OLLAMA_HOST: "http://aiochi-ollama:11434"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
       # Agentic mode (template fallback for speed)
       NARRATIVE_MODE: "${NARRATIVE_MODE:-agentic}"
@@ -292,7 +296,8 @@ services:
       - suricata_logs:/var/log/suricata:ro
       - zeek_logs:/opt/zeek/logs:ro
     environment:
-      CLICKHOUSE_HOST: 172.20.210.10
+      # Use container DNS name instead of hardcoded IP
+      CLICKHOUSE_HOST: aiochi-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_DB: aiochi
       CLICKHOUSE_USER: aiochi
@@ -334,20 +339,31 @@ services:
       OLLAMA_KEEP_ALIVE: "24h"
       # GPU acceleration (optional - auto-detected)
       # NVIDIA_VISIBLE_DEVICES: all
-    # Pull default model on first start
+    # Pull default model on first start (async - don't block container ready)
+    # Model download (~2GB) happens in background, healthcheck waits for API
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         /bin/ollama serve &
-        sleep 5
-        /bin/ollama pull llama3.2:3b
-        wait
+        OLLAMA_PID=$!
+        # Wait for Ollama API to be ready (up to 30s)
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+            echo "Ollama API ready, pulling model in background..."
+            # Pull model in background (don't block container startup)
+            nohup /bin/ollama pull llama3.2:3b >/var/log/ollama-pull.log 2>&1 &
+            break
+          fi
+          sleep 1
+        done
+        wait $OLLAMA_PID
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      # Extended start period for slow systems (model download is async now)
+      start_period: 60s
     deploy:
       resources:
         limits:

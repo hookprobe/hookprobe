@@ -1904,7 +1904,7 @@ ACTION="${3:-add}"
 WIFI_BRIDGE="br-wifi"
 VETH_BR="veth-wifi-a"
 VETH_OVS="veth-wifi-b"
-VLAN_TAG="${WIFI_VLAN_TAG:-100}"
+# FLAT BRIDGE: No VLAN tagging - all ports untagged
 
 [ -z "$IFACE" ] && exit 1
 
@@ -1946,11 +1946,11 @@ ensure_veth_pair() {
         ip link set "$VETH_BR" master "$WIFI_BRIDGE" 2>/dev/null || true
     fi
 
-    # Add veth_ovs to OVS with VLAN tag
+    # Add veth_ovs to OVS (flat bridge - no VLAN tagging)
     if command -v ovs-vsctl &>/dev/null && ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
         if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${VETH_OVS}$"; then
-            log "Adding $VETH_OVS to OVS bridge $OVS_BRIDGE (VLAN $VLAN_TAG)"
-            ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$VETH_OVS" tag="$VLAN_TAG" 2>/dev/null || true
+            log "Adding $VETH_OVS to OVS bridge $OVS_BRIDGE (flat mode)"
+            ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$VETH_OVS" 2>/dev/null || true
         fi
     fi
 
@@ -2457,11 +2457,12 @@ EOF
 
 # NOTE: setup_mgmt_vlan_filter_mode() removed - VLAN mode handles management network via netplan
 
-# Install VLAN service for boot persistence
-# Netplan handles bridge/VLAN creation at boot
-# The service only runs OVS post-setup (OpenFlow rules, port tagging)
+# Install network boot persistence service
+# Netplan handles OVS bridge creation at boot
+# The fortress-vlan service runs OVS post-setup (OpenFlow NAC rules, port config)
+# Note: Named "vlan" for historical reasons, but flat bridge uses OpenFlow NAC
 install_vlan_service() {
-    log_info "Installing VLAN boot persistence..."
+    log_info "Installing network boot persistence..."
 
     # Use INSTALL_DIR which is /opt/hookprobe/fortress
     # The systemd service ExecStart points to this path
@@ -3466,8 +3467,9 @@ GRAFANA_PORT=3000
 N8N_USER=admin
 N8N_PASSWORD=${N8N_PASSWORD:-fortress_n8n_admin}
 
-# Capture interface (OVS bridge)
-CAPTURE_INTERFACE=FTS
+# Capture interface (OVS mirror port - NOT the main bridge!)
+# FTS-mirror receives a copy of all traffic without impacting OVS datapath
+CAPTURE_INTERFACE=FTS-mirror
 
 # Log level
 LOG_LEVEL=INFO
@@ -4131,7 +4133,7 @@ fi
 OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
 LAN_BASE_IP="${LAN_BASE_IP:-10.200.0.1}"
 LAN_SUBNET_MASK="${LAN_SUBNET_MASK:-24}"
-# Always use VLAN mode (filter mode removed)
+# Flat bridge architecture - no VLANs, OpenFlow NAC for segmentation
 NETWORK_MODE="flat"
 
 log_info "Ensuring OVS bridge $OVS_BRIDGE is ready..."
@@ -4650,7 +4652,8 @@ save_installation_state() {
 
     # All security core containers are always installed
     local containers='["fts-web", "fts-postgres", "fts-redis", "fts-qsecbit", "fts-dnsxai", "fts-dfs"]'
-    local volumes='["fts-postgres-data", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-config", "fts-agent-data", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dfs-data", "fts-ml-models"]'
+    # Volumes defined in podman-compose.yml (core tier only, optional profiles auto-create theirs)
+    local volumes='["fts-postgres-data", "fts-postgres-certs", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dnsxai-certs", "fts-dfs-data", "fts-zeek-logs"]'
 
     # Network configuration for Python config.py to load
     local lan_subnet="10.200.0.0/${LAN_SUBNET_MASK:-24}"

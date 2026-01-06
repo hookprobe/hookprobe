@@ -15,7 +15,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.11:8428/api/v1/query_range",
+        "url": "http://aiochi-victoria:8428/api/v1/query_range",
         "method": "GET",
         "queryParameters": {
           "parameters": [
@@ -34,7 +34,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.11:8428/api/v1/query",
+        "url": "http://aiochi-victoria:8428/api/v1/query",
         "method": "GET",
         "queryParameters": {
           "parameters": [
@@ -50,7 +50,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.10:8123",
+        "url": "http://aiochi-clickhouse:8123",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
@@ -88,7 +88,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.10:8123",
+        "url": "http://aiochi-clickhouse:8123",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
@@ -111,7 +111,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.20:8060/api/performance",
+        "url": "http://aiochi-identity:8060/api/performance",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
@@ -148,7 +148,7 @@
     },
     {
       "parameters": {
-        "url": "http://172.20.210.20:8060/api/alert",
+        "url": "http://aiochi-identity:8060/api/alert",
         "method": "POST",
         "bodyParameters": {
           "parameters": [
