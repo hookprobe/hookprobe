@@ -9,6 +9,84 @@
 <li class="breadcrumb-item active">Settings</li>
 {% endblock %}
 
+{% block extra_css %}
+<style>
+    .settings-section {
+        background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    .settings-section h5 {
+        color: #4fc3f7;
+        border-bottom: 1px solid rgba(79,195,247,0.3);
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+    .apply-banner {
+        background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
+        border-radius: 8px;
+        padding: 15px 20px;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border: 1px solid rgba(79,195,247,0.3);
+    }
+    .apply-banner .info {
+        color: #90caf9;
+    }
+    .apply-banner .info i {
+        margin-right: 10px;
+        color: #4fc3f7;
+    }
+    .btn-apply {
+        background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
+        border: none;
+        color: #000;
+        font-weight: 600;
+        padding: 10px 25px;
+    }
+    .btn-apply:hover {
+        background: linear-gradient(135deg, #81d4fa 0%, #4fc3f7 100%);
+        color: #000;
+    }
+    .password-toggle {
+        cursor: pointer;
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #6c757d;
+    }
+    .password-toggle:hover {
+        color: #4fc3f7;
+    }
+    .form-group.position-relative .form-control {
+        padding-right: 40px;
+    }
+    .apply-result {
+        display: none;
+        margin-top: 15px;
+        padding: 15px;
+        border-radius: 8px;
+    }
+    .apply-result.success {
+        background: rgba(40, 167, 69, 0.2);
+        border: 1px solid #28a745;
+    }
+    .apply-result.error {
+        background: rgba(220, 53, 69, 0.2);
+        border: 1px solid #dc3545;
+    }
+    .apply-result ul {
+        margin-bottom: 0;
+        padding-left: 20px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <!-- System Status -->
@@ -79,8 +157,14 @@
             <div class="card-body p-0">
                 <ul class="list-group list-group-flush">
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-wifi mr-2"></i>WiFi (hostapd)</span>
-                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('hostapd')">
+                        <span><i class="fas fa-wifi mr-2"></i>WiFi 2.4GHz</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('fts-hostapd-24ghz')">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span><i class="fas fa-wifi mr-2"></i>WiFi 5GHz</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('fts-hostapd-5ghz')">
                             <i class="fas fa-sync-alt"></i>
                         </button>
                     </li>
@@ -91,8 +175,8 @@
                         </button>
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-shield-halved mr-2"></i>Fortress Agent</span>
-                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('fortress-agent')">
+                        <span><i class="fas fa-shield-halved mr-2"></i>Fortress</span>
+                        <button class="btn btn-sm btn-outline-warning" onclick="restartService('fortress')">
                             <i class="fas fa-sync-alt"></i>
                         </button>
                     </li>
@@ -103,6 +187,20 @@
 
     <!-- Configuration -->
     <div class="col-lg-8">
+        <!-- Apply Banner -->
+        <div class="apply-banner">
+            <div class="info">
+                <i class="fas fa-info-circle"></i>
+                <span>Changes are saved automatically. Click <strong>Apply Changes</strong> to activate new settings.</span>
+            </div>
+            <button type="button" class="btn btn-apply" onclick="applyChanges()">
+                <i class="fas fa-check-circle mr-1"></i> Apply Changes
+            </button>
+        </div>
+
+        <!-- Apply Result -->
+        <div id="apply-result" class="apply-result"></div>
+
         <div class="card card-outline card-info">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-sliders-h mr-2"></i>Configuration</h3>
@@ -110,131 +208,220 @@
             <div class="card-body">
                 <form id="config-form">
                     <!-- WiFi Settings -->
-                    <h5 class="text-muted mb-3"><i class="fas fa-wifi mr-2"></i>WiFi Settings</h5>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="form-group">
-                                <label>Network Name (SSID)</label>
-                                <input type="text" class="form-control" name="wifi_ssid"
-                                       value="{{ config.wifi_ssid }}" placeholder="HookProbe-Fortress">
+                    <div class="settings-section">
+                        <h5><i class="fas fa-wifi mr-2"></i>WiFi Settings</h5>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label>Network Name (SSID)</label>
+                                    <input type="text" class="form-control" name="wifi_ssid"
+                                           value="{{ config.wifi_ssid }}" placeholder="HookProbe-Fortress"
+                                           maxlength="32">
+                                    <small class="form-text text-muted">1-32 characters</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group position-relative">
+                                    <label>WiFi Password</label>
+                                    <input type="password" class="form-control" name="wifi_password" id="wifi_password"
+                                           value="{{ config.wifi_password }}" placeholder="Enter WiFi password"
+                                           minlength="8" maxlength="63">
+                                    <i class="fas fa-eye password-toggle" onclick="togglePassword('wifi_password')"></i>
+                                    <small class="form-text text-muted">8-63 characters (WPA2)</small>
+                                </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
-                            <div class="form-group">
-                                <label>Channel</label>
-                                <select class="form-control" name="wifi_channel">
-                                    <option value="auto" {% if config.wifi_channel == 'auto' %}selected{% endif %}>Auto</option>
-                                    {% for ch in range(1, 12) %}
-                                    <option value="{{ ch }}" {% if config.wifi_channel == ch|string %}selected{% endif %}>{{ ch }}</option>
-                                    {% endfor %}
-                                </select>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Channel</label>
+                                    <select class="form-control" name="wifi_channel">
+                                        <option value="auto" {% if config.wifi_channel == 'auto' %}selected{% endif %}>Auto (Recommended)</option>
+                                        <optgroup label="2.4 GHz Channels">
+                                            {% for ch in range(1, 12) %}
+                                            <option value="{{ ch }}" {% if config.wifi_channel == ch|string %}selected{% endif %}>Channel {{ ch }}</option>
+                                            {% endfor %}
+                                        </optgroup>
+                                        <optgroup label="5 GHz Channels">
+                                            {% for ch in [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165] %}
+                                            <option value="{{ ch }}" {% if config.wifi_channel == ch|string %}selected{% endif %}>Channel {{ ch }}</option>
+                                            {% endfor %}
+                                        </optgroup>
+                                    </select>
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="form-group">
-                                <label>Band</label>
-                                <select class="form-control" name="wifi_band">
-                                    <option value="2.4GHz" {% if config.wifi_band == '2.4GHz' %}selected{% endif %}>2.4 GHz</option>
-                                    <option value="5GHz" {% if config.wifi_band == '5GHz' %}selected{% endif %}>5 GHz</option>
-                                    <option value="dual" {% if config.wifi_band == 'dual' %}selected{% endif %}>Dual Band</option>
-                                </select>
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Band</label>
+                                    <select class="form-control" name="wifi_band">
+                                        <option value="dual" {% if config.wifi_band == 'dual' %}selected{% endif %}>Dual Band (2.4 + 5 GHz)</option>
+                                        <option value="2.4GHz" {% if config.wifi_band == '2.4GHz' %}selected{% endif %}>2.4 GHz Only</option>
+                                        <option value="5GHz" {% if config.wifi_band == '5GHz' %}selected{% endif %}>5 GHz Only</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Regulatory Domain</label>
+                                    <select class="form-control" name="regulatory_domain">
+                                        <option value="US" {% if config.regulatory_domain == 'US' %}selected{% endif %}>United States (US)</option>
+                                        <option value="GB" {% if config.regulatory_domain == 'GB' %}selected{% endif %}>United Kingdom (GB)</option>
+                                        <option value="DE" {% if config.regulatory_domain == 'DE' %}selected{% endif %}>Germany (DE)</option>
+                                        <option value="FR" {% if config.regulatory_domain == 'FR' %}selected{% endif %}>France (FR)</option>
+                                        <option value="AU" {% if config.regulatory_domain == 'AU' %}selected{% endif %}>Australia (AU)</option>
+                                        <option value="CA" {% if config.regulatory_domain == 'CA' %}selected{% endif %}>Canada (CA)</option>
+                                        <option value="JP" {% if config.regulatory_domain == 'JP' %}selected{% endif %}>Japan (JP)</option>
+                                        <option value="NZ" {% if config.regulatory_domain == 'NZ' %}selected{% endif %}>New Zealand (NZ)</option>
+                                        <option value="ES" {% if config.regulatory_domain == 'ES' %}selected{% endif %}>Spain (ES)</option>
+                                        <option value="IT" {% if config.regulatory_domain == 'IT' %}selected{% endif %}>Italy (IT)</option>
+                                        <option value="NL" {% if config.regulatory_domain == 'NL' %}selected{% endif %}>Netherlands (NL)</option>
+                                        <option value="BE" {% if config.regulatory_domain == 'BE' %}selected{% endif %}>Belgium (BE)</option>
+                                        <option value="AT" {% if config.regulatory_domain == 'AT' %}selected{% endif %}>Austria (AT)</option>
+                                        <option value="CH" {% if config.regulatory_domain == 'CH' %}selected{% endif %}>Switzerland (CH)</option>
+                                        <option value="SE" {% if config.regulatory_domain == 'SE' %}selected{% endif %}>Sweden (SE)</option>
+                                        <option value="NO" {% if config.regulatory_domain == 'NO' %}selected{% endif %}>Norway (NO)</option>
+                                        <option value="DK" {% if config.regulatory_domain == 'DK' %}selected{% endif %}>Denmark (DK)</option>
+                                        <option value="FI" {% if config.regulatory_domain == 'FI' %}selected{% endif %}>Finland (FI)</option>
+                                        <option value="IE" {% if config.regulatory_domain == 'IE' %}selected{% endif %}>Ireland (IE)</option>
+                                        <option value="PT" {% if config.regulatory_domain == 'PT' %}selected{% endif %}>Portugal (PT)</option>
+                                    </select>
+                                    <small class="form-text text-muted">Affects available channels</small>
+                                </div>
                             </div>
                         </div>
                     </div>
-
-                    <hr>
 
                     <!-- Network Settings -->
-                    <h5 class="text-muted mb-3"><i class="fas fa-network-wired mr-2"></i>Network Settings</h5>
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <label>Network Size</label>
-                                <select class="form-control" name="network_size">
-                                    <option value="/29" {% if config.network_size == '/29' %}selected{% endif %}>/29 (6 devices)</option>
-                                    <option value="/28" {% if config.network_size == '/28' %}selected{% endif %}>/28 (14 devices)</option>
-                                    <option value="/27" {% if config.network_size == '/27' %}selected{% endif %}>/27 (30 devices)</option>
-                                    <option value="/26" {% if config.network_size == '/26' %}selected{% endif %}>/26 (62 devices)</option>
-                                    <option value="/25" {% if config.network_size == '/25' %}selected{% endif %}>/25 (126 devices)</option>
-                                    <option value="/24" {% if config.network_size == '/24' %}selected{% endif %}>/24 (254 devices)</option>
-                                    <option value="/23" {% if config.network_size == '/23' %}selected{% endif %}>/23 (510 devices)</option>
-                                </select>
+                    <div class="settings-section">
+                        <h5><i class="fas fa-network-wired mr-2"></i>Network Settings</h5>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Network Size</label>
+                                    <select class="form-control" name="network_size">
+                                        <option value="/29" {% if config.network_size == '/29' %}selected{% endif %}>/29 (6 devices)</option>
+                                        <option value="/28" {% if config.network_size == '/28' %}selected{% endif %}>/28 (14 devices)</option>
+                                        <option value="/27" {% if config.network_size == '/27' %}selected{% endif %}>/27 (30 devices)</option>
+                                        <option value="/26" {% if config.network_size == '/26' %}selected{% endif %}>/26 (62 devices)</option>
+                                        <option value="/25" {% if config.network_size == '/25' %}selected{% endif %}>/25 (126 devices)</option>
+                                        <option value="/24" {% if config.network_size == '/24' %}selected{% endif %}>/24 (254 devices)</option>
+                                        <option value="/23" {% if config.network_size == '/23' %}selected{% endif %}>/23 (510 devices)</option>
+                                    </select>
+                                    <small class="form-text text-muted">Phase 2: Changes subnet size</small>
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <label>Gateway IP</label>
-                                <input type="text" class="form-control" name="gateway_ip"
-                                       value="{{ config.gateway_ip }}" placeholder="10.250.0.1">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Gateway IP</label>
+                                    <input type="text" class="form-control" name="gateway_ip"
+                                           value="{{ config.gateway_ip }}" placeholder="10.200.0.1" disabled>
+                                    <small class="form-text text-muted">Phase 2: Advanced config</small>
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <label>DNS Servers</label>
-                                <input type="text" class="form-control" name="dns_upstream"
-                                       value="{{ config.dns_upstream|join(', ') }}" placeholder="1.1.1.1, 8.8.8.8">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>DNS Servers</label>
+                                    <input type="text" class="form-control" name="dns_upstream"
+                                           value="{{ config.dns_upstream|join(', ') }}" placeholder="1.1.1.1, 8.8.8.8" disabled>
+                                    <small class="form-text text-muted">Phase 2: Custom DNS</small>
+                                </div>
                             </div>
                         </div>
                     </div>
-
-                    <hr>
 
                     <!-- LTE Settings -->
-                    <h5 class="text-muted mb-3"><i class="fas fa-signal mr-2"></i>LTE Failover</h5>
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <div class="custom-control custom-switch">
-                                    <input type="checkbox" class="custom-control-input" id="lte_enabled" name="lte_enabled"
-                                           {% if config.lte_enabled %}checked{% endif %}>
-                                    <label class="custom-control-label" for="lte_enabled">Enable LTE Failover</label>
+                    <div class="settings-section">
+                        <h5><i class="fas fa-signal mr-2"></i>LTE Failover</h5>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <div class="custom-control custom-switch">
+                                        <input type="checkbox" class="custom-control-input" id="lte_enabled" name="lte_enabled"
+                                               {% if config.lte_enabled %}checked{% endif %} disabled>
+                                        <label class="custom-control-label" for="lte_enabled">Enable LTE Failover</label>
+                                    </div>
+                                    <small class="form-text text-muted">Phase 3: LTE configuration</small>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>APN</label>
+                                    <input type="text" class="form-control" name="lte_apn"
+                                           value="{{ config.lte_apn }}" placeholder="internet" disabled>
+                                    <small class="form-text text-muted">Phase 3: APN configuration</small>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <label>APN</label>
-                                <input type="text" class="form-control" name="lte_apn"
-                                       value="{{ config.lte_apn }}" placeholder="internet">
-                            </div>
-                        </div>
                     </div>
-
-                    <hr>
 
                     <!-- System Settings -->
-                    <h5 class="text-muted mb-3"><i class="fas fa-cog mr-2"></i>System</h5>
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <label>Timezone</label>
-                                <select class="form-control" name="timezone">
-                                    <option value="UTC" {% if config.timezone == 'UTC' %}selected{% endif %}>UTC</option>
-                                    <option value="America/New_York" {% if config.timezone == 'America/New_York' %}selected{% endif %}>Eastern (US)</option>
-                                    <option value="America/Chicago" {% if config.timezone == 'America/Chicago' %}selected{% endif %}>Central (US)</option>
-                                    <option value="America/Los_Angeles" {% if config.timezone == 'America/Los_Angeles' %}selected{% endif %}>Pacific (US)</option>
-                                    <option value="Europe/London" {% if config.timezone == 'Europe/London' %}selected{% endif %}>London</option>
-                                    <option value="Europe/Paris" {% if config.timezone == 'Europe/Paris' %}selected{% endif %}>Paris</option>
-                                </select>
+                    <div class="settings-section">
+                        <h5><i class="fas fa-cog mr-2"></i>System</h5>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Timezone</label>
+                                    <select class="form-control" name="timezone" id="timezone-select">
+                                        <optgroup label="Common">
+                                            <option value="UTC" {% if config.timezone == 'UTC' %}selected{% endif %}>UTC</option>
+                                        </optgroup>
+                                        <optgroup label="Americas">
+                                            <option value="America/New_York" {% if config.timezone == 'America/New_York' %}selected{% endif %}>New York (Eastern)</option>
+                                            <option value="America/Chicago" {% if config.timezone == 'America/Chicago' %}selected{% endif %}>Chicago (Central)</option>
+                                            <option value="America/Denver" {% if config.timezone == 'America/Denver' %}selected{% endif %}>Denver (Mountain)</option>
+                                            <option value="America/Los_Angeles" {% if config.timezone == 'America/Los_Angeles' %}selected{% endif %}>Los Angeles (Pacific)</option>
+                                            <option value="America/Toronto" {% if config.timezone == 'America/Toronto' %}selected{% endif %}>Toronto</option>
+                                            <option value="America/Vancouver" {% if config.timezone == 'America/Vancouver' %}selected{% endif %}>Vancouver</option>
+                                            <option value="America/Sao_Paulo" {% if config.timezone == 'America/Sao_Paulo' %}selected{% endif %}>São Paulo</option>
+                                        </optgroup>
+                                        <optgroup label="Europe">
+                                            <option value="Europe/London" {% if config.timezone == 'Europe/London' %}selected{% endif %}>London</option>
+                                            <option value="Europe/Paris" {% if config.timezone == 'Europe/Paris' %}selected{% endif %}>Paris</option>
+                                            <option value="Europe/Berlin" {% if config.timezone == 'Europe/Berlin' %}selected{% endif %}>Berlin</option>
+                                            <option value="Europe/Rome" {% if config.timezone == 'Europe/Rome' %}selected{% endif %}>Rome</option>
+                                            <option value="Europe/Madrid" {% if config.timezone == 'Europe/Madrid' %}selected{% endif %}>Madrid</option>
+                                            <option value="Europe/Amsterdam" {% if config.timezone == 'Europe/Amsterdam' %}selected{% endif %}>Amsterdam</option>
+                                            <option value="Europe/Zurich" {% if config.timezone == 'Europe/Zurich' %}selected{% endif %}>Zurich</option>
+                                            <option value="Europe/Stockholm" {% if config.timezone == 'Europe/Stockholm' %}selected{% endif %}>Stockholm</option>
+                                            <option value="Europe/Dublin" {% if config.timezone == 'Europe/Dublin' %}selected{% endif %}>Dublin</option>
+                                        </optgroup>
+                                        <optgroup label="Asia/Pacific">
+                                            <option value="Asia/Tokyo" {% if config.timezone == 'Asia/Tokyo' %}selected{% endif %}>Tokyo</option>
+                                            <option value="Asia/Shanghai" {% if config.timezone == 'Asia/Shanghai' %}selected{% endif %}>Shanghai</option>
+                                            <option value="Asia/Hong_Kong" {% if config.timezone == 'Asia/Hong_Kong' %}selected{% endif %}>Hong Kong</option>
+                                            <option value="Asia/Singapore" {% if config.timezone == 'Asia/Singapore' %}selected{% endif %}>Singapore</option>
+                                            <option value="Asia/Dubai" {% if config.timezone == 'Asia/Dubai' %}selected{% endif %}>Dubai</option>
+                                            <option value="Asia/Kolkata" {% if config.timezone == 'Asia/Kolkata' %}selected{% endif %}>Mumbai/Kolkata</option>
+                                            <option value="Australia/Sydney" {% if config.timezone == 'Australia/Sydney' %}selected{% endif %}>Sydney</option>
+                                            <option value="Australia/Melbourne" {% if config.timezone == 'Australia/Melbourne' %}selected{% endif %}>Melbourne</option>
+                                            <option value="Pacific/Auckland" {% if config.timezone == 'Pacific/Auckland' %}selected{% endif %}>Auckland</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
                             </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-group">
-                                <div class="custom-control custom-switch">
-                                    <input type="checkbox" class="custom-control-input" id="auto_update" name="auto_update"
-                                           {% if config.auto_update %}checked{% endif %}>
-                                    <label class="custom-control-label" for="auto_update">Auto Updates</label>
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <div class="custom-control custom-switch mt-4">
+                                        <input type="checkbox" class="custom-control-input" id="auto_update" name="auto_update"
+                                               {% if config.auto_update %}checked{% endif %}>
+                                        <label class="custom-control-label" for="auto_update">Auto Updates</label>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="mt-4">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-save mr-1"></i> Save Configuration
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary" onclick="location.reload()">
-                            <i class="fas fa-undo mr-1"></i> Reset
+                    <div class="mt-4 d-flex justify-content-between">
+                        <div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save mr-1"></i> Save Configuration
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary ml-2" onclick="location.reload()">
+                                <i class="fas fa-undo mr-1"></i> Reset
+                            </button>
+                        </div>
+                        <button type="button" class="btn btn-apply" onclick="applyChanges()">
+                            <i class="fas fa-check-circle mr-1"></i> Apply Changes
                         </button>
                     </div>
                 </form>
@@ -247,44 +434,159 @@
 {% block extra_js %}
 <script>
 $(document).ready(function() {
+    // Save configuration
     $('#config-form').on('submit', function(e) {
         e.preventDefault();
-        var formData = {};
-        $(this).serializeArray().forEach(function(item) {
-            if (item.name === 'dns_upstream') {
-                formData[item.name] = item.value.split(',').map(s => s.trim());
-            } else {
-                formData[item.name] = item.value;
-            }
-        });
-        formData.lte_enabled = $('#lte_enabled').is(':checked');
-        formData.auto_update = $('#auto_update').is(':checked');
-
-        $.ajax({
-            url: '{{ url_for("settings.api_save_config") }}',
-            method: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify(formData),
-            success: function(response) {
-                alert(response.success ? 'Configuration saved!' : (response.error || 'Failed to save'));
-            },
-            error: function() { alert('Network error'); }
-        });
+        saveConfig();
     });
 });
 
+function saveConfig() {
+    var formData = {};
+    $('#config-form').serializeArray().forEach(function(item) {
+        if (item.name === 'dns_upstream') {
+            formData[item.name] = item.value.split(',').map(s => s.trim()).filter(s => s);
+        } else {
+            formData[item.name] = item.value;
+        }
+    });
+    formData.lte_enabled = $('#lte_enabled').is(':checked');
+    formData.auto_update = $('#auto_update').is(':checked');
+
+    $.ajax({
+        url: '{{ url_for("settings.api_save_config") }}',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(formData),
+        success: function(response) {
+            if (response.success) {
+                showNotification('success', 'Configuration saved. Click "Apply Changes" to activate.');
+            } else {
+                showNotification('error', response.error || 'Failed to save');
+            }
+        },
+        error: function() {
+            showNotification('error', 'Network error while saving');
+        }
+    });
+}
+
+function applyChanges() {
+    // First save, then apply
+    var formData = {};
+    $('#config-form').serializeArray().forEach(function(item) {
+        if (item.name === 'dns_upstream') {
+            formData[item.name] = item.value.split(',').map(s => s.trim()).filter(s => s);
+        } else {
+            formData[item.name] = item.value;
+        }
+    });
+    formData.lte_enabled = $('#lte_enabled').is(':checked');
+    formData.auto_update = $('#auto_update').is(':checked');
+
+    var resultDiv = $('#apply-result');
+    resultDiv.html('<i class="fas fa-spinner fa-spin mr-2"></i>Saving and applying configuration...').removeClass('success error').show();
+
+    // Save first
+    $.ajax({
+        url: '{{ url_for("settings.api_save_config") }}',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(formData),
+        success: function(saveResponse) {
+            if (!saveResponse.success) {
+                resultDiv.html('<i class="fas fa-times-circle mr-2"></i>Failed to save: ' + (saveResponse.error || 'Unknown error'))
+                    .addClass('error');
+                return;
+            }
+
+            // Then apply
+            $.ajax({
+                url: '{{ url_for("settings.api_apply_config") }}',
+                method: 'POST',
+                contentType: 'application/json',
+                success: function(response) {
+                    if (response.success) {
+                        var html = '<i class="fas fa-check-circle mr-2"></i><strong>Configuration applied successfully!</strong>';
+                        if (response.applied && response.applied.length > 0) {
+                            html += '<ul>';
+                            response.applied.forEach(function(item) {
+                                html += '<li>' + item + '</li>';
+                            });
+                            html += '</ul>';
+                        }
+                        if (response.warnings && response.warnings.length > 0) {
+                            html += '<div class="mt-2 text-warning"><strong>Warnings:</strong></div><ul class="text-warning">';
+                            response.warnings.forEach(function(item) {
+                                html += '<li>' + item + '</li>';
+                            });
+                            html += '</ul>';
+                        }
+                        resultDiv.html(html).removeClass('error').addClass('success');
+                    } else {
+                        var html = '<i class="fas fa-times-circle mr-2"></i><strong>Apply failed:</strong> ' + (response.error || 'Unknown error');
+                        if (response.details && response.details.length > 0) {
+                            html += '<ul>';
+                            response.details.forEach(function(item) {
+                                html += '<li>' + item + '</li>';
+                            });
+                            html += '</ul>';
+                        }
+                        resultDiv.html(html).removeClass('success').addClass('error');
+                    }
+                },
+                error: function(xhr) {
+                    resultDiv.html('<i class="fas fa-times-circle mr-2"></i>Network error while applying configuration')
+                        .removeClass('success').addClass('error');
+                }
+            });
+        },
+        error: function() {
+            resultDiv.html('<i class="fas fa-times-circle mr-2"></i>Network error while saving')
+                .removeClass('success').addClass('error');
+        }
+    });
+}
+
 function restartService(service) {
-    if (!confirm('Restart ' + service + '?')) return;
+    if (!confirm('Restart ' + service + '? This may briefly interrupt network connectivity.')) return;
+
     $.ajax({
         url: '{{ url_for("settings.api_restart_service") }}',
         method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({service: service}),
         success: function(response) {
-            alert(response.success ? service + ' restarted' : (response.error || 'Failed'));
+            showNotification(response.success ? 'success' : 'error',
+                response.success ? service + ' restarted successfully' : (response.error || 'Failed to restart'));
         },
-        error: function() { alert('Network error'); }
+        error: function() {
+            showNotification('error', 'Network error');
+        }
     });
+}
+
+function togglePassword(inputId) {
+    var input = document.getElementById(inputId);
+    var icon = input.nextElementSibling;
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}
+
+function showNotification(type, message) {
+    // Use toastr if available, else alert
+    if (typeof toastr !== 'undefined') {
+        toastr[type](message);
+    } else {
+        alert(message);
+    }
 }
 </script>
 {% endblock %}
