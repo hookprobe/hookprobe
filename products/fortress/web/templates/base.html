@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="description" content="HookProbe Fortress - Small Business Security Gateway">
+    <!-- Mobile touch behavior -->
+    <meta name="format-detection" content="telephone=no">
     <title>{% block title %}HookProbe Fortress{% endblock %}</title>
 
     <!-- Google Fonts - Inter (Premium UI font) -->
@@ -302,6 +304,101 @@
 <script src="{{ url_for('static', filename='js/components.js') }}"></script>
 <!-- Fortress JS -->
 <script src="{{ url_for('static', filename='js/fortress.js') }}"></script>
+
+<!-- Mobile Touch Support -->
+<script>
+(function() {
+    'use strict';
+
+    // Detect if device has touch capability
+    var isTouchDevice = ('ontouchstart' in window) ||
+        (navigator.maxTouchPoints > 0) ||
+        (navigator.msMaxTouchPoints > 0);
+
+    if (isTouchDevice) {
+        document.documentElement.classList.add('touch-device');
+
+        // Fix AdminLTE sidebar toggle for touch devices
+        document.addEventListener('DOMContentLoaded', function() {
+            var pushMenuBtn = document.querySelector('[data-widget="pushmenu"]');
+            if (pushMenuBtn) {
+                // Add explicit touch handler
+                pushMenuBtn.addEventListener('touchend', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Trigger AdminLTE's pushmenu
+                    if (typeof $ !== 'undefined' && $.fn.PushMenu) {
+                        $('[data-widget="pushmenu"]').PushMenu('toggle');
+                    } else {
+                        // Fallback: toggle sidebar-open class manually
+                        document.body.classList.toggle('sidebar-open');
+                        document.body.classList.toggle('sidebar-collapse');
+                    }
+                }, { passive: false });
+            }
+
+            // Fix dropdown toggles for touch
+            document.querySelectorAll('[data-toggle="dropdown"]').forEach(function(el) {
+                el.addEventListener('touchend', function(e) {
+                    e.preventDefault();
+                    if (typeof $ !== 'undefined') {
+                        $(this).dropdown('toggle');
+                    }
+                }, { passive: false });
+            });
+
+            // Ensure all nav-links have touch support
+            document.querySelectorAll('.nav-link:not([data-toggle])').forEach(function(el) {
+                el.addEventListener('touchend', function(e) {
+                    // Allow link navigation
+                    if (this.href && !this.href.endsWith('#')) {
+                        window.location.href = this.href;
+                    }
+                });
+            });
+
+            // Fix sidebar treeview menus for touch
+            document.querySelectorAll('.nav-treeview').forEach(function(menu) {
+                var parent = menu.previousElementSibling;
+                if (parent && parent.classList.contains('nav-link')) {
+                    parent.addEventListener('touchend', function(e) {
+                        e.preventDefault();
+                        var menuItem = this.closest('.nav-item');
+                        if (menuItem) {
+                            menuItem.classList.toggle('menu-open');
+                        }
+                    }, { passive: false });
+                }
+            });
+        });
+
+        // Close sidebar when tapping outside on mobile
+        document.addEventListener('touchstart', function(e) {
+            var sidebar = document.querySelector('.main-sidebar');
+            var pushMenuBtn = document.querySelector('[data-widget="pushmenu"]');
+            if (sidebar && document.body.classList.contains('sidebar-open')) {
+                if (!sidebar.contains(e.target) && (!pushMenuBtn || !pushMenuBtn.contains(e.target))) {
+                    document.body.classList.remove('sidebar-open');
+                    document.body.classList.add('sidebar-collapse');
+                }
+            }
+        }, { passive: true });
+    }
+
+    // Add fast-click behavior for all clickable elements
+    document.addEventListener('DOMContentLoaded', function() {
+        // Remove any existing fastclick (we use touch-action: manipulation instead)
+        // But ensure click events fire immediately on touch
+        document.querySelectorAll('a, button, .btn, [role="button"]').forEach(function(el) {
+            if (!el.dataset.touchHandled) {
+                el.dataset.touchHandled = 'true';
+                // The CSS touch-action: manipulation removes the 300ms delay
+                // This JS is just for edge cases
+            }
+        });
+    });
+})();
+</script>
 
 <!-- Live Status Polling -->
 <script>

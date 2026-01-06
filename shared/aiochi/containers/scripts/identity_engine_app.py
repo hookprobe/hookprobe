@@ -460,4 +460,474 @@ def create_app():
             'active_devices': len(_device_bubble_map),
         })
 
+    # =========================================================================
+    # PURPLE TEAM FEEDBACK ENDPOINTS
+    # Receive feedback from SDN Autopilot and Nexus Purple Team for learning
+    # =========================================================================
+
+    # In-memory storage for feedback data (in production: ClickHouse)
+    _sdn_decisions = []  # SDN enforcement decisions
+    _trust_adjustments = []  # Trust score adjustments
+    _defense_outcomes = []  # Real defense outcomes
+    _vulnerabilities = []  # Reported vulnerabilities
+    _optimizations_applied = []  # Applied optimizations
+    _bubble_violations = []  # Policy violations
+
+    @app.route('/api/device/<mac>/feedback', methods=['POST'])
+    def receive_sdn_feedback(mac):
+        """Receive SDN Autopilot enforcement decision feedback.
+
+        This enables AIOCHI to learn from actual SDN enforcement outcomes.
+        Called by Fortress SDN Autopilot after enforcement actions.
+
+        Request body:
+        {
+            "decision": "ALLOW|BLOCK|QUARANTINE|RATE_LIMIT",
+            "reason": "Why this decision was made",
+            "details": {
+                "attack_type": "optional attack type",
+                "rule_id": "OVS flow rule ID",
+                "confidence": 0.85
+            }
+        }
+        """
+        mac = mac.upper().replace('-', ':')
+        data = request.get_json() or {}
+
+        decision = data.get('decision')
+        if not decision:
+            return jsonify({'error': 'decision required'}), 400
+
+        feedback = {
+            'mac': mac,
+            'decision': decision,
+            'reason': data.get('reason', ''),
+            'details': data.get('details', {}),
+            'timestamp': datetime.now().isoformat(),
+            'bubble_id': _device_bubble_map.get(mac),
+        }
+
+        _sdn_decisions.append(feedback)
+        logger.info(f"SDN feedback: {mac} - {decision} ({data.get('reason', 'no reason')})")
+
+        # Update device trust based on decision outcome
+        engine = get_engine()
+        identity = engine.get_identity(mac)
+        if identity:
+            # Positive decisions can increase trust over time
+            if decision in ('ALLOW',) and identity.trust_level.value < 3:
+                # Gradual trust increase (in production: use RL engine)
+                logger.debug(f"Device {mac} building trust through positive decisions")
+
+        return jsonify({
+            'status': 'received',
+            'mac': mac,
+            'decision': decision,
+            'feedback_id': len(_sdn_decisions),
+        })
+
+    @app.route('/api/device/<mac>/trust-adjust', methods=['POST'])
+    def receive_trust_adjustment(mac):
+        """Receive trust score adjustment from SDN Autopilot.
+
+        Called when SDN Autopilot detects attacks or positive behavior
+        that should adjust device trust.
+
+        Request body:
+        {
+            "adjustment": 0.15,  # -1.0 to 1.0
+            "reason": "Blocked port scan attempt",
+            "attack_type": "PORT_SCAN",
+            "evidence": {...}
+        }
+        """
+        mac = mac.upper().replace('-', ':')
+        data = request.get_json() or {}
+
+        adjustment = data.get('adjustment', 0.0)
+        if not isinstance(adjustment, (int, float)):
+            return jsonify({'error': 'adjustment must be a number'}), 400
+
+        # Clamp adjustment to valid range
+        adjustment = max(-1.0, min(1.0, adjustment))
+
+        record = {
+            'mac': mac,
+            'adjustment': adjustment,
+            'reason': data.get('reason', ''),
+            'attack_type': data.get('attack_type'),
+            'evidence': data.get('evidence', {}),
+            'timestamp': datetime.now().isoformat(),
+            'bubble_id': _device_bubble_map.get(mac),
+        }
+
+        _trust_adjustments.append(record)
+        logger.info(f"Trust adjustment: {mac} += {adjustment} ({data.get('reason', 'no reason')})")
+
+        # Apply adjustment to device trust
+        engine = get_engine()
+        identity = engine.get_identity(mac)
+        new_trust_level = None
+
+        if identity:
+            current = identity.trust_level.value
+            # Map adjustment to trust level change
+            if adjustment < -0.5:
+                # Severe negative - drop trust significantly
+                new_level = max(0, current - 2)
+            elif adjustment < -0.2:
+                # Moderate negative - drop trust one level
+                new_level = max(0, current - 1)
+            elif adjustment > 0.5:
+                # Strong positive - increase trust
+                new_level = min(4, current + 1)
+            else:
+                new_level = current
+
+            if new_level != current:
+                # Note: In production, this would update the identity engine's internal state
+                new_trust_level = new_level
+                logger.info(f"Device {mac} trust level: {current} -> {new_level}")
+
+        return jsonify({
+            'status': 'received',
+            'mac': mac,
+            'adjustment': adjustment,
+            'previous_trust': identity.trust_level.value if identity else 0,
+            'new_trust': new_trust_level,
+        })
+
+    @app.route('/api/defense-outcome', methods=['POST'])
+    def receive_defense_outcome():
+        """Receive actual defense outcome from SDN Autopilot.
+
+        Enables comparison of simulated vs real attack outcomes
+        for Purple Team meta-learning.
+
+        Request body:
+        {
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "attack_type": "TER_REPLAY",
+            "detected": true,
+            "blocked": true,
+            "detection_time_ms": 45,
+            "mitigation_method": "OVS_FLOW_BLOCK",
+            "confidence": 0.92,
+            "false_positive": false,
+            "evidence": {...}
+        }
+        """
+        data = request.get_json() or {}
+
+        required = ['mac', 'attack_type', 'detected', 'blocked']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify({'error': f'Missing required fields: {missing}'}), 400
+
+        mac = data['mac'].upper().replace('-', ':')
+
+        outcome = {
+            'mac': mac,
+            'attack_type': data['attack_type'],
+            'detected': data['detected'],
+            'blocked': data['blocked'],
+            'detection_time_ms': data.get('detection_time_ms', 0),
+            'mitigation_method': data.get('mitigation_method', 'UNKNOWN'),
+            'confidence': data.get('confidence', 0.0),
+            'false_positive': data.get('false_positive', False),
+            'evidence': data.get('evidence', {}),
+            'timestamp': datetime.now().isoformat(),
+            'bubble_id': _device_bubble_map.get(mac),
+        }
+
+        _defense_outcomes.append(outcome)
+        logger.info(f"Defense outcome: {mac} - {data['attack_type']} - "
+                    f"detected={data['detected']}, blocked={data['blocked']}")
+
+        # Calculate outcome score for meta-learning
+        outcome_score = 0
+        if outcome['detected'] and outcome['blocked']:
+            outcome_score = 100  # Perfect defense
+        elif outcome['detected'] and not outcome['blocked']:
+            outcome_score = 50  # Detected but not blocked
+        elif not outcome['detected'] and not outcome['blocked']:
+            outcome_score = 0  # Missed attack
+        elif not outcome['detected'] and outcome['blocked']:
+            outcome_score = 75  # Blocked by other means (e.g., baseline rules)
+
+        # Penalize false positives
+        if outcome['false_positive']:
+            outcome_score = max(0, outcome_score - 25)
+
+        return jsonify({
+            'status': 'received',
+            'outcome_id': len(_defense_outcomes),
+            'outcome_score': outcome_score,
+            'message': 'Defense outcome recorded for meta-learning',
+        })
+
+    @app.route('/api/vulnerability', methods=['POST'])
+    def receive_vulnerability():
+        """Receive vulnerability report from Nexus Purple Team.
+
+        Called when Purple Team discovers a vulnerability during simulation.
+
+        Request body:
+        {
+            "simulation_id": "sim-uuid",
+            "attack_class": "TERReplayBubbleAttack",
+            "affected_bubble": "family-dad",
+            "affected_devices": ["AA:BB:CC:DD:EE:FF"],
+            "severity": "HIGH",
+            "mitre_attack_id": "T1557",
+            "description": "TER replay attack bypassed bubble boundary",
+            "recommended_fix": "Increase TER replay window strictness",
+            "evidence": {...}
+        }
+        """
+        data = request.get_json() or {}
+
+        required = ['attack_class', 'affected_bubble', 'severity']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify({'error': f'Missing required fields: {missing}'}), 400
+
+        valid_severities = ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
+        if data['severity'] not in valid_severities:
+            return jsonify({'error': f'severity must be one of {valid_severities}'}), 400
+
+        vuln = {
+            'simulation_id': data.get('simulation_id', 'manual'),
+            'attack_class': data['attack_class'],
+            'affected_bubble': data['affected_bubble'],
+            'affected_devices': data.get('affected_devices', []),
+            'severity': data['severity'],
+            'mitre_attack_id': data.get('mitre_attack_id', ''),
+            'description': data.get('description', ''),
+            'recommended_fix': data.get('recommended_fix', ''),
+            'evidence': data.get('evidence', {}),
+            'timestamp': datetime.now().isoformat(),
+            'status': 'NEW',
+        }
+
+        _vulnerabilities.append(vuln)
+        logger.warning(f"Vulnerability reported: {data['attack_class']} - "
+                       f"{data['severity']} - bubble: {data['affected_bubble']}")
+
+        # For CRITICAL vulnerabilities, trigger immediate alert
+        if vuln['severity'] == 'CRITICAL':
+            logger.critical(f"CRITICAL vulnerability discovered: {vuln['description']}")
+            # In production: trigger n8n webhook for immediate notification
+
+        return jsonify({
+            'status': 'received',
+            'vulnerability_id': len(_vulnerabilities),
+            'severity': vuln['severity'],
+            'message': f"Vulnerability {vuln['attack_class']} recorded",
+        })
+
+    @app.route('/api/optimization-applied', methods=['POST'])
+    def receive_optimization_applied():
+        """Receive notification that optimization was applied by SDN Autopilot.
+
+        Tracks which Nexus recommendations were actually applied.
+
+        Request body:
+        {
+            "simulation_id": "sim-uuid",
+            "optimization_id": "opt-uuid",
+            "parameter": "temporal_sync_weight",
+            "old_value": 0.5,
+            "new_value": 0.7,
+            "applied_by": "sdn_autopilot",
+            "result": "SUCCESS"
+        }
+        """
+        data = request.get_json() or {}
+
+        required = ['parameter', 'old_value', 'new_value']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify({'error': f'Missing required fields: {missing}'}), 400
+
+        optimization = {
+            'simulation_id': data.get('simulation_id', 'manual'),
+            'optimization_id': data.get('optimization_id', f'opt-{len(_optimizations_applied) + 1}'),
+            'parameter': data['parameter'],
+            'old_value': data['old_value'],
+            'new_value': data['new_value'],
+            'applied_by': data.get('applied_by', 'unknown'),
+            'result': data.get('result', 'UNKNOWN'),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+        _optimizations_applied.append(optimization)
+        logger.info(f"Optimization applied: {data['parameter']} = {data['new_value']} "
+                    f"(was {data['old_value']})")
+
+        return jsonify({
+            'status': 'received',
+            'optimization_id': optimization['optimization_id'],
+            'message': f"Optimization for {data['parameter']} recorded",
+        })
+
+    @app.route('/api/bubble-violation', methods=['POST'])
+    def receive_bubble_violation():
+        """Receive bubble policy violation report.
+
+        Called when SDN Autopilot detects a device violating its bubble policy.
+
+        Request body:
+        {
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "violation_type": "UNAUTHORIZED_D2D|CROSS_BUBBLE|VLAN_ESCAPE|INTERNET_BLOCKED",
+            "bubble_id": "family-dad",
+            "target_mac": "BB:CC:DD:EE:FF:00",
+            "target_bubble_id": "guest-visitors",
+            "details": {...}
+        }
+        """
+        data = request.get_json() or {}
+
+        required = ['mac', 'violation_type', 'bubble_id']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify({'error': f'Missing required fields: {missing}'}), 400
+
+        valid_violations = ('UNAUTHORIZED_D2D', 'CROSS_BUBBLE', 'VLAN_ESCAPE', 'INTERNET_BLOCKED')
+        if data['violation_type'] not in valid_violations:
+            return jsonify({'error': f'violation_type must be one of {valid_violations}'}), 400
+
+        mac = data['mac'].upper().replace('-', ':')
+
+        violation = {
+            'mac': mac,
+            'violation_type': data['violation_type'],
+            'bubble_id': data['bubble_id'],
+            'target_mac': data.get('target_mac', '').upper().replace('-', ':') if data.get('target_mac') else None,
+            'target_bubble_id': data.get('target_bubble_id'),
+            'details': data.get('details', {}),
+            'timestamp': datetime.now().isoformat(),
+            'action_taken': 'LOGGED',  # In production: BLOCKED, QUARANTINED, etc.
+        }
+
+        _bubble_violations.append(violation)
+        logger.warning(f"Bubble violation: {mac} - {data['violation_type']} in bubble {data['bubble_id']}")
+
+        # Cross-bubble violations are more severe
+        if violation['violation_type'] == 'CROSS_BUBBLE':
+            logger.warning(f"Cross-bubble communication attempt: {mac} -> {violation['target_mac']}")
+
+        return jsonify({
+            'status': 'received',
+            'violation_id': len(_bubble_violations),
+            'violation_type': violation['violation_type'],
+            'action_taken': violation['action_taken'],
+        })
+
+    # =========================================================================
+    # PURPLE TEAM QUERY ENDPOINTS
+    # Allow Nexus to query feedback data for meta-learning
+    # =========================================================================
+
+    @app.route('/api/defense-outcomes', methods=['GET'])
+    def list_defense_outcomes():
+        """List defense outcomes for meta-learning analysis.
+
+        Query params:
+            - attack_type: Filter by attack type
+            - since: ISO timestamp, return outcomes after this time
+            - limit: Max results (default 100)
+        """
+        attack_type = request.args.get('attack_type')
+        since = request.args.get('since')
+        limit = int(request.args.get('limit', 100))
+
+        results = _defense_outcomes.copy()
+
+        if attack_type:
+            results = [r for r in results if r['attack_type'] == attack_type]
+
+        if since:
+            results = [r for r in results if r['timestamp'] >= since]
+
+        results = results[-limit:]
+
+        return jsonify({
+            'outcomes': results,
+            'total': len(results),
+        })
+
+    @app.route('/api/vulnerabilities', methods=['GET'])
+    def list_vulnerabilities():
+        """List discovered vulnerabilities.
+
+        Query params:
+            - severity: Filter by severity
+            - status: Filter by status (NEW, ACKNOWLEDGED, FIXED)
+            - limit: Max results (default 50)
+        """
+        severity = request.args.get('severity')
+        status = request.args.get('status')
+        limit = int(request.args.get('limit', 50))
+
+        results = _vulnerabilities.copy()
+
+        if severity:
+            results = [r for r in results if r['severity'] == severity]
+
+        if status:
+            results = [r for r in results if r['status'] == status]
+
+        results = results[-limit:]
+
+        return jsonify({
+            'vulnerabilities': results,
+            'total': len(results),
+            'by_severity': {
+                'CRITICAL': sum(1 for v in _vulnerabilities if v['severity'] == 'CRITICAL'),
+                'HIGH': sum(1 for v in _vulnerabilities if v['severity'] == 'HIGH'),
+                'MEDIUM': sum(1 for v in _vulnerabilities if v['severity'] == 'MEDIUM'),
+                'LOW': sum(1 for v in _vulnerabilities if v['severity'] == 'LOW'),
+            },
+        })
+
+    @app.route('/api/feedback-stats', methods=['GET'])
+    def get_feedback_stats():
+        """Get statistics on feedback data for monitoring.
+
+        Returns counts and recent activity summary.
+        """
+        return jsonify({
+            'sdn_decisions': {
+                'total': len(_sdn_decisions),
+                'recent_24h': sum(1 for d in _sdn_decisions
+                                  if datetime.fromisoformat(d['timestamp']) > datetime.now().replace(hour=0, minute=0)),
+            },
+            'trust_adjustments': {
+                'total': len(_trust_adjustments),
+                'positive': sum(1 for t in _trust_adjustments if t['adjustment'] > 0),
+                'negative': sum(1 for t in _trust_adjustments if t['adjustment'] < 0),
+            },
+            'defense_outcomes': {
+                'total': len(_defense_outcomes),
+                'detected': sum(1 for o in _defense_outcomes if o['detected']),
+                'blocked': sum(1 for o in _defense_outcomes if o['blocked']),
+                'false_positives': sum(1 for o in _defense_outcomes if o['false_positive']),
+            },
+            'vulnerabilities': {
+                'total': len(_vulnerabilities),
+                'open': sum(1 for v in _vulnerabilities if v['status'] == 'NEW'),
+                'critical': sum(1 for v in _vulnerabilities if v['severity'] == 'CRITICAL'),
+            },
+            'optimizations_applied': {
+                'total': len(_optimizations_applied),
+                'successful': sum(1 for o in _optimizations_applied if o['result'] == 'SUCCESS'),
+            },
+            'bubble_violations': {
+                'total': len(_bubble_violations),
+                'cross_bubble': sum(1 for v in _bubble_violations if v['violation_type'] == 'CROSS_BUBBLE'),
+            },
+        })
+
     return app

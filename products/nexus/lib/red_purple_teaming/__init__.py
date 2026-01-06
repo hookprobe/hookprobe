@@ -65,6 +65,15 @@ from .bubble_attacks import (
     TemporalMimicryAttack,
     DHCPFingerprintSpoofAttack,
     D2DAffinityInjectionAttack,
+    ATTACK_CLASSES,
+)
+
+from .aiochi_integration import (
+    NexusAIOCHIClient,
+    BubbleInfo,
+    DeviceTrustInfo,
+    VulnerabilityReport,
+    get_nexus_aiochi_client,
 )
 
 __all__ = [
@@ -107,6 +116,14 @@ __all__ = [
     'TemporalMimicryAttack',
     'DHCPFingerprintSpoofAttack',
     'D2DAffinityInjectionAttack',
+    'ATTACK_CLASSES',
+
+    # AIOCHI Integration (Gap #5)
+    'NexusAIOCHIClient',
+    'BubbleInfo',
+    'DeviceTrustInfo',
+    'VulnerabilityReport',
+    'get_nexus_aiochi_client',
 ]
 
 __version__ = '1.0.0'
