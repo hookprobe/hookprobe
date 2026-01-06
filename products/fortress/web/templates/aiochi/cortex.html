@@ -1,0 +1,672 @@
+{% extends "base.html" %}
+
+{% block title %}Cortex - HookProbe Fortress{% endblock %}
+
+{% block page_title %}Cortex{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('aiochi.index') }}">AIOCHI</a></li>
+<li class="breadcrumb-item active">Cortex</li>
+{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+    /* Cortex Integration Styles */
+    .content-wrapper {
+        background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 50%, #0d1117 100%) !important;
+    }
+
+    .cortex-container {
+        position: relative;
+        width: 100%;
+        height: calc(100vh - 160px);
+        min-height: 500px;
+        background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 50%, #0d1117 100%);
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid rgba(74, 222, 128, 0.2);
+    }
+
+    /* Globe container takes full space */
+    #globe-container {
+        width: 100%;
+        height: 100%;
+    }
+
+    /* Ambient overlay for threat visualization */
+    #ambient-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        z-index: 5;
+        transition: background 0.5s ease;
+    }
+
+    /* Header controls positioned inside cortex */
+    .cortex-header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem;
+        background: linear-gradient(180deg, rgba(10, 15, 26, 0.9) 0%, transparent 100%);
+    }
+
+    .cortex-logo {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .cortex-logo-icon {
+        font-size: 1.5rem;
+        color: #4ade80;
+        text-shadow: 0 0 20px rgba(74, 222, 128, 0.6);
+        animation: cortex-pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes cortex-pulse {
+        0%, 100% { opacity: 0.8; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.1); }
+    }
+
+    .cortex-title {
+        font-family: 'Orbitron', sans-serif;
+        font-weight: 700;
+        font-size: 1.25rem;
+        color: #fff;
+        letter-spacing: 2px;
+    }
+
+    .cortex-subtitle {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.7rem;
+        color: #4ade80;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+    }
+
+    /* Controls */
+    .cortex-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .mode-toggle {
+        display: flex;
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 6px;
+        padding: 2px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .mode-btn {
+        padding: 0.4rem 0.8rem;
+        border: none;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.6);
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 600;
+        font-size: 0.75rem;
+        letter-spacing: 1px;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+    .mode-btn.active {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+    }
+
+    .mode-btn:hover:not(.active) {
+        color: #fff;
+    }
+
+    .connection-status {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.6);
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ef4444;
+    }
+
+    .status-dot.connected {
+        background: #4ade80;
+        box-shadow: 0 0 10px rgba(74, 222, 128, 0.6);
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    /* Stats panel */
+    .cortex-stats {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        display: flex;
+        justify-content: center;
+        gap: 1.5rem;
+        padding: 1rem;
+        background: linear-gradient(0deg, rgba(10, 15, 26, 0.9) 0%, transparent 100%);
+    }
+
+    .stat-item {
+        text-align: center;
+        min-width: 60px;
+    }
+
+    .stat-value {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .stat-label {
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.65rem;
+        color: rgba(255, 255, 255, 0.5);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .stat-sentinel .stat-value { color: #94a3b8; }
+    .stat-guardian .stat-value { color: #3b82f6; }
+    .stat-fortress .stat-value { color: #4ade80; }
+    .stat-nexus .stat-value { color: #f59e0b; }
+    .stat-attack .stat-value { color: #ef4444; }
+    .stat-repelled .stat-value { color: #3b82f6; }
+
+    /* Event log sidebar */
+    .cortex-events {
+        position: absolute;
+        top: 70px;
+        right: 1rem;
+        width: 280px;
+        max-height: calc(100% - 150px);
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        overflow: hidden;
+    }
+
+    .events-header {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: #4ade80;
+        letter-spacing: 1px;
+    }
+
+    .events-list {
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 0.5rem;
+    }
+
+    .event-item {
+        padding: 0.5rem;
+        margin-bottom: 0.25rem;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 4px;
+        font-family: 'Rajdhani', sans-serif;
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.7);
+        border-left: 2px solid transparent;
+    }
+
+    .event-item.attack {
+        border-left-color: #ef4444;
+    }
+
+    .event-item.repelled {
+        border-left-color: #3b82f6;
+    }
+
+    .event-item.status {
+        border-left-color: #4ade80;
+    }
+
+    .event-time {
+        font-size: 0.65rem;
+        color: rgba(255, 255, 255, 0.4);
+    }
+
+    /* Legend */
+    .cortex-legend {
+        position: absolute;
+        bottom: 80px;
+        left: 1rem;
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        padding: 0.75rem;
+        font-family: 'Rajdhani', sans-serif;
+    }
+
+    .legend-title {
+        font-size: 0.7rem;
+        color: rgba(255, 255, 255, 0.5);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 0.5rem;
+    }
+
+    .legend-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+        font-size: 0.7rem;
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+    }
+
+    .legend-dot.sentinel { background: #94a3b8; }
+    .legend-dot.guardian { background: #3b82f6; }
+    .legend-dot.fortress { background: #4ade80; }
+    .legend-dot.nexus { background: #f59e0b; }
+    .legend-dot.attack { background: #ef4444; }
+    .legend-dot.repelled { background: #60a5fa; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .cortex-container {
+            height: calc(100vh - 200px);
+            min-height: 400px;
+        }
+
+        .cortex-events {
+            display: none;
+        }
+
+        .cortex-legend {
+            display: none;
+        }
+
+        .cortex-stats {
+            gap: 0.75rem;
+            padding: 0.75rem;
+        }
+
+        .stat-value {
+            font-size: 1rem;
+        }
+    }
+
+    /* Loading state */
+    .cortex-loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        color: #4ade80;
+        font-family: 'Orbitron', sans-serif;
+        z-index: 200;
+    }
+
+    .cortex-loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(74, 222, 128, 0.2);
+        border-top-color: #4ade80;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 1rem;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cortex-container">
+    <!-- Ambient overlay -->
+    <div id="ambient-overlay"></div>
+
+    <!-- Header -->
+    <div class="cortex-header">
+        <div class="cortex-logo">
+            <span class="cortex-logo-icon">&#x2B21;</span>
+            <div>
+                <div class="cortex-title">CORTEX</div>
+                <div class="cortex-subtitle">Neural Command Center</div>
+            </div>
+        </div>
+        <div class="cortex-controls">
+            <div class="mode-toggle">
+                <button id="mode-demo" class="mode-btn active" onclick="setDataMode('demo')">DEMO</button>
+                <button id="mode-live" class="mode-btn" onclick="setDataMode('live')">LIVE</button>
+            </div>
+            <div class="connection-status">
+                <span id="status-dot" class="status-dot"></span>
+                <span id="status-text">CONNECTING</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading state -->
+    <div id="cortex-loading" class="cortex-loading">
+        <div class="cortex-loading-spinner"></div>
+        <div>INITIALIZING MESH</div>
+    </div>
+
+    <!-- Globe container -->
+    <div id="globe-container"></div>
+
+    <!-- Legend -->
+    <div class="cortex-legend">
+        <div class="legend-title">Node Types</div>
+        <div class="legend-row"><span class="legend-dot sentinel"></span> Sentinel</div>
+        <div class="legend-row"><span class="legend-dot guardian"></span> Guardian</div>
+        <div class="legend-row"><span class="legend-dot fortress"></span> Fortress</div>
+        <div class="legend-row"><span class="legend-dot nexus"></span> Nexus</div>
+        <div class="legend-title" style="margin-top: 0.5rem;">Events</div>
+        <div class="legend-row"><span class="legend-dot attack"></span> Attack</div>
+        <div class="legend-row"><span class="legend-dot repelled"></span> Repelled</div>
+    </div>
+
+    <!-- Event log -->
+    <div class="cortex-events">
+        <div class="events-header">LIVE FEED</div>
+        <div class="events-list" id="events-list">
+            <!-- Events populated by JS -->
+        </div>
+    </div>
+
+    <!-- Stats panel -->
+    <div class="cortex-stats">
+        <div class="stat-item">
+            <div class="stat-value" id="stat-nodes">0</div>
+            <div class="stat-label">Nodes</div>
+        </div>
+        <div class="stat-item stat-sentinel">
+            <div class="stat-value" id="stat-sentinels">0</div>
+            <div class="stat-label">Sentinels</div>
+        </div>
+        <div class="stat-item stat-guardian">
+            <div class="stat-value" id="stat-guardians">0</div>
+            <div class="stat-label">Guardians</div>
+        </div>
+        <div class="stat-item stat-fortress">
+            <div class="stat-value" id="stat-fortresses">0</div>
+            <div class="stat-label">Fortresses</div>
+        </div>
+        <div class="stat-item stat-nexus">
+            <div class="stat-value" id="stat-nexuses">0</div>
+            <div class="stat-label">Nexuses</div>
+        </div>
+        <div class="stat-item stat-attack">
+            <div class="stat-value" id="stat-attacks">0</div>
+            <div class="stat-label">Attacks</div>
+        </div>
+        <div class="stat-item stat-repelled">
+            <div class="stat-value" id="stat-repelled">0</div>
+            <div class="stat-label">Repelled</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Globe.gl -->
+<script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+
+<script>
+(function() {
+    'use strict';
+
+    // State
+    let globe = null;
+    let dataMode = 'demo';
+    let isConnected = false;
+    const state = {
+        nodes: [],
+        attacks: 0,
+        repelled: 0
+    };
+
+    // Demo data - nodes distributed worldwide
+    const demoNodes = [
+        { id: 'sentinel-1', lat: 51.5074, lng: -0.1278, tier: 'sentinel', status: 'green', label: 'London Sentinel' },
+        { id: 'guardian-1', lat: 40.7128, lng: -74.0060, tier: 'guardian', status: 'green', label: 'NYC Guardian' },
+        { id: 'fortress-1', lat: 35.6762, lng: 139.6503, tier: 'fortress', status: 'green', label: 'Tokyo Fortress' },
+        { id: 'nexus-1', lat: 37.7749, lng: -122.4194, tier: 'nexus', status: 'green', label: 'SF Nexus' },
+        { id: 'sentinel-2', lat: 48.8566, lng: 2.3522, tier: 'sentinel', status: 'green', label: 'Paris Sentinel' },
+        { id: 'guardian-2', lat: -33.8688, lng: 151.2093, tier: 'guardian', status: 'amber', label: 'Sydney Guardian' },
+        { id: 'fortress-2', lat: 52.5200, lng: 13.4050, tier: 'fortress', status: 'green', label: 'Berlin Fortress' },
+        { id: 'sentinel-3', lat: 1.3521, lng: 103.8198, tier: 'sentinel', status: 'green', label: 'Singapore Sentinel' },
+        { id: 'guardian-3', lat: 55.7558, lng: 37.6173, tier: 'guardian', status: 'green', label: 'Moscow Guardian' },
+        { id: 'fortress-3', lat: -23.5505, lng: -46.6333, tier: 'fortress', status: 'green', label: 'Sao Paulo Fortress' },
+        { id: 'sentinel-4', lat: 19.4326, lng: -99.1332, tier: 'sentinel', status: 'green', label: 'Mexico City Sentinel' },
+        { id: 'nexus-2', lat: 28.6139, lng: 77.2090, tier: 'nexus', status: 'green', label: 'Delhi Nexus' },
+    ];
+
+    // Tier colors
+    const tierColors = {
+        sentinel: '#94a3b8',
+        guardian: '#3b82f6',
+        fortress: '#4ade80',
+        nexus: '#f59e0b'
+    };
+
+    // Initialize globe
+    function initGlobe() {
+        const container = document.getElementById('globe-container');
+        if (!container) return;
+
+        globe = Globe()
+            .globeImageUrl('//unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+            .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png')
+            .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
+            .pointsData(state.nodes)
+            .pointLat('lat')
+            .pointLng('lng')
+            .pointColor(d => tierColors[d.tier] || '#ffffff')
+            .pointAltitude(d => d.tier === 'nexus' ? 0.04 : d.tier === 'fortress' ? 0.03 : 0.02)
+            .pointRadius(d => d.tier === 'nexus' ? 0.5 : d.tier === 'fortress' ? 0.4 : d.tier === 'guardian' ? 0.35 : 0.25)
+            .pointLabel(d => `<div style="padding: 8px; background: rgba(0,0,0,0.8); border-radius: 4px; font-family: Rajdhani, sans-serif;">
+                <strong>${d.label}</strong><br>
+                <small style="color: ${tierColors[d.tier]}">${d.tier.toUpperCase()}</small>
+            </div>`)
+            .arcsData([])
+            .arcColor(d => d.type === 'attack' ? ['#ef4444', '#fca5a5'] : ['#3b82f6', '#93c5fd'])
+            .arcDashLength(0.4)
+            .arcDashGap(0.2)
+            .arcDashAnimateTime(1500)
+            .arcStroke(0.5)
+            .width(container.clientWidth)
+            .height(container.clientHeight)
+            (container);
+
+        // Auto-rotate
+        globe.controls().autoRotate = true;
+        globe.controls().autoRotateSpeed = 0.3;
+
+        // Hide loading
+        document.getElementById('cortex-loading').style.display = 'none';
+
+        // Load demo data
+        if (dataMode === 'demo') {
+            loadDemoData();
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            globe.width(container.clientWidth);
+            globe.height(container.clientHeight);
+        });
+    }
+
+    // Load demo data
+    function loadDemoData() {
+        state.nodes = [...demoNodes];
+        updateStats();
+        if (globe) {
+            globe.pointsData(state.nodes);
+        }
+
+        // Start demo events
+        startDemoEvents();
+        setConnected(true);
+    }
+
+    // Demo event generator
+    let demoInterval = null;
+    function startDemoEvents() {
+        if (demoInterval) clearInterval(demoInterval);
+
+        demoInterval = setInterval(() => {
+            const isAttack = Math.random() > 0.6;
+            const sourceIdx = Math.floor(Math.random() * state.nodes.length);
+            const targetIdx = Math.floor(Math.random() * state.nodes.length);
+
+            if (sourceIdx !== targetIdx) {
+                const source = state.nodes[sourceIdx];
+                const target = state.nodes[targetIdx];
+
+                if (isAttack) {
+                    state.attacks++;
+                    addEvent('attack', `Attack detected: ${source.label} → ${target.label}`);
+
+                    // Show attack arc
+                    const arc = {
+                        startLat: source.lat,
+                        startLng: source.lng,
+                        endLat: target.lat,
+                        endLng: target.lng,
+                        type: 'attack'
+                    };
+                    const currentArcs = globe.arcsData() || [];
+                    globe.arcsData([...currentArcs, arc]);
+
+                    // Repel after delay
+                    setTimeout(() => {
+                        state.repelled++;
+                        addEvent('repelled', `Attack repelled at ${target.label}`);
+
+                        // Change arc to repelled
+                        arc.type = 'repelled';
+                        globe.arcsData([...globe.arcsData()]);
+
+                        // Remove arc after animation
+                        setTimeout(() => {
+                            const arcs = globe.arcsData().filter(a => a !== arc);
+                            globe.arcsData(arcs);
+                        }, 2000);
+
+                        updateStats();
+                    }, 1500);
+                } else {
+                    addEvent('status', `Mesh sync: ${source.label} ↔ ${target.label}`);
+                }
+
+                updateStats();
+            }
+        }, 3000);
+    }
+
+    // Add event to log
+    function addEvent(type, message) {
+        const list = document.getElementById('events-list');
+        const item = document.createElement('div');
+        item.className = `event-item ${type}`;
+        item.innerHTML = `
+            <div class="event-time">${new Date().toLocaleTimeString()}</div>
+            <div>${message}</div>
+        `;
+        list.insertBefore(item, list.firstChild);
+
+        // Keep only last 20 events
+        while (list.children.length > 20) {
+            list.removeChild(list.lastChild);
+        }
+    }
+
+    // Update stats
+    function updateStats() {
+        document.getElementById('stat-nodes').textContent = state.nodes.length;
+        document.getElementById('stat-sentinels').textContent = state.nodes.filter(n => n.tier === 'sentinel').length;
+        document.getElementById('stat-guardians').textContent = state.nodes.filter(n => n.tier === 'guardian').length;
+        document.getElementById('stat-fortresses').textContent = state.nodes.filter(n => n.tier === 'fortress').length;
+        document.getElementById('stat-nexuses').textContent = state.nodes.filter(n => n.tier === 'nexus').length;
+        document.getElementById('stat-attacks').textContent = state.attacks;
+        document.getElementById('stat-repelled').textContent = state.repelled;
+    }
+
+    // Set connection status
+    function setConnected(connected) {
+        isConnected = connected;
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        if (connected) {
+            dot.classList.add('connected');
+            text.textContent = 'ONLINE';
+        } else {
+            dot.classList.remove('connected');
+            text.textContent = 'OFFLINE';
+        }
+    }
+
+    // Set data mode
+    window.setDataMode = function(mode) {
+        dataMode = mode;
+        document.getElementById('mode-demo').classList.toggle('active', mode === 'demo');
+        document.getElementById('mode-live').classList.toggle('active', mode === 'live');
+
+        if (mode === 'demo') {
+            loadDemoData();
+        } else {
+            // Live mode - would connect to real WebSocket
+            if (demoInterval) {
+                clearInterval(demoInterval);
+                demoInterval = null;
+            }
+            addEvent('status', 'Switched to LIVE mode - connect backend for real data');
+        }
+    };
+
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', initGlobe);
+})();
+</script>
+{% endblock %}
