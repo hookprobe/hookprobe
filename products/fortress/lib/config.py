@@ -75,10 +75,8 @@ class FortressConfig:
     wan_interface: str = ""
     lan_interfaces: List[str] = field(default_factory=list)
     lan_subnet: str = "10.200.0.0/24"  # User-configurable during install (/29 to /23)
-    lan_gateway: str = "10.200.0.1"
-    mgmt_subnet: str = "10.200.100.0/30"  # Fixed management subnet
-    mgmt_gateway: str = "10.200.100.1"
-    network_mode: str = "vlan"  # Always VLAN mode
+    lan_gateway: str = "10.200.0.1"  # Gateway IP on FTS bridge
+    network_mode: str = "flat"  # Flat bridge architecture (no physical VLANs)
 
     # Database
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -110,20 +108,17 @@ class FortressConfig:
         self._load_network_state()
 
         if not self.vlans:
-            # Physical VLANs (infrastructure layer)
-            # VLAN 100 = LAN - All WiFi clients, LAN devices (user-selected subnet)
-            # VLAN 200 = MGMT - Admin access, container network (fixed /30)
+            # FLAT BRIDGE ARCHITECTURE
+            # All devices share the same Layer 2 segment (FTS bridge)
+            # No physical VLANs - segmentation is via OpenFlow NAC rules
             #
-            # Segment VLANs (logical layer via OpenFlow rules within VLAN 100)
+            # Logical Segments (device classification for OpenFlow policies)
             # These are NOT separate subnets - they share LAN subnet with isolation via OVS flows
+            # The "VLAN ID" is used as a logical segment identifier, not 802.1Q tag
             self.vlans = {
-                # Physical VLANs (actual tagged traffic)
-                "lan": VLANConfig(100, "LAN", self.lan_subnet, self.lan_gateway,
-                                  dhcp_enabled=True, is_logical=False, trust_floor=0),
-                "mgmt": VLANConfig(200, "MGMT", self.mgmt_subnet, self.mgmt_gateway,
-                                   dhcp_enabled=True, is_logical=False, trust_floor=4, is_isolated=False),
-                # Segment VLANs (logical tags within VLAN 100 for device classification)
-                # These share the LAN subnet - segmentation is via OpenFlow, not IP
+                # All segments share LAN subnet - segmentation is via OpenFlow, not VLAN tags
+                "lan": VLANConfig(0, "LAN", self.lan_subnet, self.lan_gateway,
+                                  dhcp_enabled=True, is_logical=True, trust_floor=0),
                 "secmon": VLANConfig(10, "Security Monitor", self.lan_subnet, self.lan_gateway,
                                      dhcp_enabled=False, is_logical=True, trust_floor=3, is_isolated=False),
                 "pos": VLANConfig(20, "POS", self.lan_subnet, self.lan_gateway,

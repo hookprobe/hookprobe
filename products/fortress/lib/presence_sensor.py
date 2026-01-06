@@ -305,7 +305,7 @@ class PresenceSensor:
     and ecosystem relationships.
     """
 
-    def __init__(self, interface: str = "vlan100"):
+    def __init__(self, interface: str = "FTS"):
         self.interface = interface
         self.running = False
 
@@ -1275,7 +1275,7 @@ _sensor_instance: Optional[PresenceSensor] = None
 _sensor_lock = threading.Lock()
 
 
-def get_presence_sensor(interface: str = "vlan100") -> PresenceSensor:
+def get_presence_sensor(interface: str = "FTS") -> PresenceSensor:
     """Get singleton presence sensor instance."""
     global _sensor_instance
 
@@ -1293,7 +1293,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Presence Sensor')
-    parser.add_argument('--interface', default='vlan100', help='Network interface')
+    parser.add_argument('--interface', default='FTS', help='Network interface')
     parser.add_argument('--scan', action='store_true', help='Run discovery scan')
     parser.add_argument('--stats', action='store_true', help='Show statistics')
 

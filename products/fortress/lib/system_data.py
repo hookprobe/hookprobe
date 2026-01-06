@@ -238,7 +238,7 @@ def get_arp_devices() -> List[Dict]:
         interface = None
         state = 'UNKNOWN'
 
-        # Parse: 10.200.0.10 dev vlan100 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+        # Parse: 10.200.0.10 dev FTS lladdr aa:bb:cc:dd:ee:ff REACHABLE
         for i, part in enumerate(parts):
             if part == 'dev' and i + 1 < len(parts):
                 interface = parts[i + 1]
@@ -250,10 +250,8 @@ def get_arp_devices() -> List[Dict]:
         if not mac_address or not interface:
             continue
 
-        # Determine VLAN from interface
-        vlan_id = 100  # Default LAN
-        if 'vlan200' in interface or 'mgmt' in interface.lower():
-            vlan_id = 200
+        # FLAT BRIDGE: All clients on single network (no VLANs)
+        vlan_id = 0  # Flat bridge - no VLAN tagging
 
         # Get hostname via reverse DNS
         hostname = None
