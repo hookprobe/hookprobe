@@ -2961,17 +2961,10 @@ build_containers() {
         skipped_count=$((skipped_count + 1))
     fi
 
-    if needs_rebuild "localhost/fts-bubble:latest" "Containerfile.bubble" "$repo_root"; then
-        log_info "  - Building bubble-manager (ecosystem detection)..."
-        _podman_build_resilient Containerfile.bubble localhost/fts-bubble:latest "$repo_root" || {
-            log_error "Failed to build bubble-manager container"
-            exit 1
-        }
-        built_count=$((built_count + 1))
-    else
-        log_info "  - Skipping bubble-manager (already built)"
-        skipped_count=$((skipped_count + 1))
-    fi
+    # NOTE: bubble-manager is now part of AIOCHI stack - skip building in Fortress
+    # AIOCHI will build aiochi-bubble using shared/aiochi/bubble code
+    log_info "  - Skipping bubble-manager (moved to AIOCHI stack)"
+    skipped_count=$((skipped_count + 1))
 
     # LSTM trainer is optional (used for retraining models)
     if needs_rebuild "localhost/fts-lstm:latest" "Containerfile.lstm" "$repo_root"; then
@@ -3203,7 +3196,9 @@ MDNSCONF
     # 1.x ignores profiles and would start ALL services otherwise.
 
     # Service names must match podman-compose.yml (no fts- prefix in compose file)
-    local core_services="postgres redis web qsecbit-agent bubble-manager dnsxai dfs-intelligence"
+    # NOTE: bubble-manager is NOW part of AIOCHI stack (requires Zeek for mDNS detection)
+    # This removes host network dependency that was blocking port forwarding
+    local core_services="postgres redis web qsecbit-agent dnsxai dfs-intelligence"
 
     # Add cloudflared if tunnel token is configured
     if [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
@@ -3211,12 +3206,11 @@ MDNSCONF
     fi
 
     if [ "${INSTALL_AIOCHI:-}" = true ]; then
-        # AIOCHI mode: start only core services (AIOCHI provides monitoring/IDS/analytics)
-        log_info "AIOCHI mode - starting core services only (AIOCHI provides IDS/monitoring)..."
+        # AIOCHI mode: bubble detection is handled by AIOCHI stack (aiochi-bubble)
+        log_info "AIOCHI mode - core services + AIOCHI provides bubble detection..."
     else
-        # Standard mode: start core services only
-        # Optional services (monitoring, IDS, analytics) must be enabled explicitly
-        log_info "Standard mode - starting core services..."
+        # Standard mode: no bubble detection (requires AIOCHI for ecosystem grouping)
+        log_info "Standard mode - starting core services (bubble detection requires --enable-aiochi)..."
     fi
 
     # Always use explicit service list (podman-compose 1.x doesn't support profiles)
@@ -4320,8 +4314,10 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
 # podman-compose 1.x doesn't support profiles, so we ALWAYS specify explicit services.
 #
 # Core services (names must match podman-compose.yml - no fts- prefix):
-#   postgres, redis, web, qsecbit-agent, bubble-manager, dnsxai, dfs-intelligence
+#   postgres, redis, web, qsecbit-agent, dnsxai, dfs-intelligence
 # Optional connectivity: cloudflared (only if INSTALL_CLOUDFLARE_TUNNEL=true)
+#
+# NOTE: bubble-manager moved to AIOCHI stack (aiochi-bubble) to avoid host network blocking
 #
 # OPTIONAL (NOT started by default):
 #   - grafana, victoria (monitoring)
@@ -4329,7 +4325,7 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
 #   - suricata, zeek, xdp-protection (IDS)
 #   - lstm-trainer (ML training)
 ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
-  CORE="postgres redis web qsecbit-agent bubble-manager dnsxai dfs-intelligence" && \\
+  CORE="postgres redis web qsecbit-agent dnsxai dfs-intelligence" && \\
   if [ "\${INSTALL_CLOUDFLARE_TUNNEL:-}" = "true" ]; then CORE="\$CORE cloudflared"; fi && \\
   echo "[FTS] Starting core services: \$CORE" && \\
   ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE'
@@ -4393,11 +4389,12 @@ install_fingerprinting_services() {
         log_info "  Installed: fts-presence-sensor.service"
     fi
 
-    # Install ecosystem bubble manager service
-    if [ -f "${SYSTEMD_SRC}/fts-bubble-manager.service" ]; then
-        cp "${SYSTEMD_SRC}/fts-bubble-manager.service" "${SYSTEMD_DST}/"
-        log_info "  Installed: fts-bubble-manager.service"
-    fi
+    # NOTE: Ecosystem bubble manager is now part of AIOCHI stack (aiochi-bubble)
+    # No separate systemd service needed - managed by AIOCHI containers
+    # if [ -f "${SYSTEMD_SRC}/fts-bubble-manager.service" ]; then
+    #     cp "${SYSTEMD_SRC}/fts-bubble-manager.service" "${SYSTEMD_DST}/"
+    #     log_info "  Installed: fts-bubble-manager.service"
+    # fi
 
     # Install WAN failover service (for dual-WAN PBR failover)
     if [ -f "${SYSTEMD_SRC}/fts-wan-failover.service" ]; then
@@ -4531,12 +4528,11 @@ SQLEOF
     fi
 
     # Enable and start services
-    # Note: fts-bubble-manager runs in a container (managed by fortress.service)
-    #       The systemd service just monitors the container status
+    # NOTE: bubble-manager is now part of AIOCHI stack - no systemd service here
     systemctl daemon-reload
     systemctl enable fts-fingerprint-engine.service 2>/dev/null || true
     systemctl enable fts-presence-sensor.service 2>/dev/null || true
-    systemctl enable fts-bubble-manager.service 2>/dev/null || true
+    # Bubble manager moved to AIOCHI (aiochi-bubble container)
 
     # Enable WAN failover service (only if config exists - ConditionPathExists checks this)
     # The service will be inactive until /etc/hookprobe/wan-failover.conf is created
@@ -4551,12 +4547,13 @@ SQLEOF
         log_warn "fts-presence-sensor failed to start (may need bluetooth)"
     }
 
-    # Bubble manager runs in container - just verify it's running
-    # Note: avahi is configured earlier in PORT CONFLICT RESOLUTION section
-    log_info "Verifying bubble-manager container..."
-    systemctl start fts-bubble-manager.service 2>/dev/null || {
-        log_warn "fts-bubble-manager container not running (check: podman logs fts-bubble-manager)"
-    }
+    # NOTE: Bubble manager is now part of AIOCHI stack (aiochi-bubble)
+    # Ecosystem detection requires --enable-aiochi during installation
+    if [ "${INSTALL_AIOCHI:-}" = true ]; then
+        log_info "Bubble detection available via AIOCHI stack (aiochi-bubble)"
+    else
+        log_info "Bubble detection disabled (enable with --enable-aiochi)"
+    fi
 
     log_info "AI Fingerprinting services installed and started"
 }
@@ -5251,7 +5248,7 @@ main() {
     echo "  systemctl status fortress             # Check container status"
     echo "  systemctl status fts-hostapd-*        # Check WiFi AP status"
     echo "  systemctl status fts-fingerprint-engine  # AI fingerprinting"
-    echo "  systemctl status fts-bubble-manager   # Ecosystem bubbles"
+    echo "  # Bubble detection: requires --enable-aiochi (runs as aiochi-bubble)"
     echo "  fortress-ctl fingerbank status        # Fingerbank API status"
     echo "  ovs-vsctl show                        # View OVS bridge"
     echo "  cat /etc/netplan/60-fortress-ovs.yaml # View netplan config"
