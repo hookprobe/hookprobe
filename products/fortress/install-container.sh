@@ -1199,6 +1199,11 @@ LOG_DIR=${LOG_DIR}
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 INSTALL_LTE=${INSTALL_LTE:-false}
 INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
+
+# Container networking - SKIP OVS attachment to preserve podman port forwarding
+# OVS veth attachment breaks podman's DNAT rules for port 8443
+# Set to false only if you need OpenFlow visibility into container traffic
+SKIP_OVS_CONTAINER_ATTACH=true
 EOF
 
     # Set ownership so container (fortress user) can read
