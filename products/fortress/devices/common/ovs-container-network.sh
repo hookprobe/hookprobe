@@ -902,14 +902,14 @@ init_ovs_network_podman() {
 }
 
 # Ensure FTS bridge is up (NO IP - Layer 2 only)
-# IPs are assigned to vlan100/vlan200, not FTS bridge
+# IPs are assigned to vlan100, not FTS bridge
 setup_lan_gateway() {
     log_section "Setting Up FTS Bridge"
 
     # FTS bridge is Layer 2 only - NO IP
-    # IPs are on vlan100 (LAN) and vlan200 (MGMT)
+    # IP is on vlan100 (LAN) - access control via OpenFlow fingerprint policies
     log_info "FTS bridge is Layer 2 only (no IP)"
-    log_info "IPs will be assigned to vlan100 and vlan200"
+    log_info "IP will be assigned to vlan100"
 
     # Ensure bridge is up
     ip link set "$OVS_BRIDGE" up 2>/dev/null || true
@@ -1205,7 +1205,7 @@ Network Architecture:
   lan         10.200.0.0/MASK      WiFi/LAN clients (NAT to internet)
 
 NOTE: Containers use podman-compose built-in networking (containers_fts-internal).
-      OVS provides VLAN interfaces (vlan100, vlan200) for LAN/MGMT traffic only.
+      OVS provides VLAN interface (vlan100) for LAN traffic only.
 
 LAN Subnet Configuration:
   Export LAN_SUBNET_MASK before calling init/nat/dhcp commands.

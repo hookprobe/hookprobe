@@ -11,11 +11,11 @@
 #   WAN (Failover):  wwp0s20f0u4, wwan0 → LTE modem
 #   FTS Bridge:      Layer 2 OVS switch (NO IP)
 #   vlan100:         LAN clients + WiFi (10.200.0.1/XX - user configurable)
-#   vlan200:         Management network (10.200.100.1/30 - fixed)
 #
 # The FTS bridge handles layer 2 switching and VLAN tagging.
-# IP addresses are assigned to vlan100 and vlan200 interfaces.
+# IP address is assigned to vlan100 interface.
 # DHCP/DNS services bind to vlan100 (not the bridge).
+# NOTE: MGMT VLAN (vlan200) removed - access control via OpenFlow fingerprint policies
 #
 # Version: 5.1.0
 # License: AGPL-3.0
@@ -48,12 +48,10 @@ log_success() {
 
 # Configuration
 # NOTE: FTS bridge is Layer 2 only - NO IP on bridge itself
-# IPs are assigned to vlan100 (LAN) and vlan200 (MGMT)
+# IP is assigned to vlan100 (LAN) - access control via OpenFlow fingerprint policies
 BRIDGE_NAME="${FORTRESS_BRIDGE_NAME:-FTS}"
 VLAN_LAN_IP="${FORTRESS_VLAN_LAN_IP:-10.200.0.1}"
 VLAN_LAN_MASK="${FORTRESS_VLAN_LAN_MASK:-24}"
-VLAN_MGMT_IP="${FORTRESS_VLAN_MGMT_IP:-10.200.100.1}"
-VLAN_MGMT_MASK="30"
 
 # State directory
 STATE_DIR="/var/lib/fortress/bridge"
@@ -65,7 +63,7 @@ STATE_DIR="/var/lib/fortress/bridge"
 create_bridge() {
     # Create the FTS bridge if it doesn't exist
     # NOTE: FTS bridge is Layer 2 only - NO IP on bridge
-    # IPs are assigned to vlan100/vlan200 interfaces
+    # IP is assigned to vlan100 interface
     #
     # Args:
     #   $1 - Bridge name (optional, defaults to FTS)
@@ -89,9 +87,9 @@ create_bridge() {
     # Configure bridge - bring up without IP
     ip link set "$bridge" up 2>/dev/null || true
 
-    # NOTE: NO IP assigned to bridge - IPs go on vlan100/vlan200
+    # NOTE: NO IP assigned to bridge - IP goes on vlan100
     log_info "Bridge $bridge is Layer 2 only (no IP)"
-    log_info "IPs will be assigned to vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK) and vlan200 ($VLAN_MGMT_IP/$VLAN_MGMT_MASK)"
+    log_info "IP will be assigned to vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK)"
 
     # Disable STP (not needed for small networks)
     if [ -f "/sys/class/net/$bridge/bridge/stp_state" ]; then
@@ -343,7 +341,7 @@ configure_nm_bridge() {
     nmcli con up "$bridge" 2>/dev/null || true
 
     log_success "NetworkManager bridge created: $bridge (Layer 2)"
-    log_info "IPs should be assigned to vlan100/vlan200, not the bridge"
+    log_info "IP should be assigned to vlan100, not the bridge"
 }
 
 # ============================================================
@@ -353,7 +351,7 @@ configure_nm_bridge() {
 generate_netplan_bridge() {
     # Generate netplan configuration for the bridge
     # NOTE: FTS bridge is Layer 2 only - no IP on bridge
-    # IPs are assigned to vlan100/vlan200
+    # IP is assigned to vlan100
     #
     # Args:
     #   $1 - Output file path
@@ -372,7 +370,7 @@ generate_netplan_bridge() {
 #
 # WAN: $wan_iface (DHCP)
 # LAN Bridge: $BRIDGE_NAME ($lan_ifaces) - Layer 2 only, no IP
-# IPs: vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK), vlan200 ($VLAN_MGMT_IP/$VLAN_MGMT_MASK)
+# IP: vlan100 ($VLAN_LAN_IP/$VLAN_LAN_MASK)
 #
 network:
   version: 2
@@ -412,7 +410,7 @@ BRIDGEEOF
 
     cat >> "$output_file" << BRIDGECFGEOF
       # NO IP on bridge - Layer 2 only
-      # IPs are assigned to vlan100/vlan200
+      # IP is assigned to vlan100
       dhcp4: false
       dhcp6: false
       parameters:
@@ -422,7 +420,7 @@ BRIDGECFGEOF
 
     chmod 644 "$output_file"
     log_success "Generated netplan config: $output_file"
-    log_info "Note: IPs should be assigned to vlan100/vlan200, not the bridge"
+    log_info "Note: IP should be assigned to vlan100, not the bridge"
 
     # Suggest applying
     echo ""
@@ -612,7 +610,7 @@ setup_nat() {
 
 show_bridge_status() {
     # Display bridge status
-    # NOTE: FTS bridge is Layer 2 only - IPs on vlan100/vlan200
+    # NOTE: FTS bridge is Layer 2 only - IP on vlan100
 
     local bridge="${1:-$BRIDGE_NAME}"
 
@@ -632,16 +630,11 @@ show_bridge_status() {
     echo "  Mode:       Layer 2 switch (no IP)"
     echo "  State:      $bridge_state"
 
-    # Show VLAN IPs if available
+    # Show VLAN IP if available
     if ip link show vlan100 &>/dev/null; then
         local vlan100_ip
         vlan100_ip=$(ip addr show vlan100 2>/dev/null | grep "inet " | awk '{print $2}')
         echo "  vlan100 IP: ${vlan100_ip:-not set} (LAN clients)"
-    fi
-    if ip link show vlan200 &>/dev/null; then
-        local vlan200_ip
-        vlan200_ip=$(ip addr show vlan200 2>/dev/null | grep "inet " | awk '{print $2}')
-        echo "  vlan200 IP: ${vlan200_ip:-not set} (Management)"
     fi
 
     # List bridge members
@@ -679,7 +672,7 @@ usage() {
     echo "Network Architecture:"
     echo "  FTS Bridge:  Layer 2 switch (no IP)"
     echo "  vlan100:     LAN clients + WiFi (10.200.0.1/XX)"
-    echo "  vlan200:     Management (10.200.100.1/30)"
+    echo "  Note: Access control via OpenFlow fingerprint policies"
     echo ""
     echo "Commands:"
     echo "  create [name]             - Create Layer 2 bridge"
