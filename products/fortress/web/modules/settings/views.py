@@ -19,15 +19,17 @@ def get_system_config():
     config_file = Path('/opt/hookprobe/fortress/config/fortress.json')
     defaults = {
         'wifi_ssid': 'HookProbe-Fortress',
+        'wifi_password': '',  # WiFi password (WPA2)
         'wifi_channel': 'auto',
-        'wifi_band': '2.4GHz',
+        'wifi_band': 'dual',  # dual, 2.4GHz, 5GHz
         'network_size': '/24',
-        'gateway_ip': '10.250.0.1',
+        'gateway_ip': '10.200.0.1',  # Fixed: was 10.250.0.1, must match OVS setup
         'dns_upstream': ['1.1.1.1', '8.8.8.8'],
         'lte_enabled': False,
         'lte_apn': 'internet',
         'auto_update': True,
-        'timezone': 'UTC'
+        'timezone': 'UTC',
+        'regulatory_domain': 'US',  # WiFi regulatory domain (US, GB, DE, etc.)
     }
 
     if config_file.exists():
@@ -196,7 +198,16 @@ def api_system_info():
 def api_restart_service():
     """Restart a system service."""
     service = request.json.get('service')
-    allowed_services = ['dnsmasq', 'hostapd', 'fts-web', 'fts-agent']
+    allowed_services = [
+        'dnsmasq',
+        'hostapd',
+        'fts-web',
+        'fts-agent',
+        'fts-hostapd-24ghz',
+        'fts-hostapd-5ghz',
+        'fortress',
+        'fortress-agent',
+    ]
 
     if service not in allowed_services:
         return jsonify({'success': False, 'error': 'Invalid service'}), 400
@@ -231,3 +242,278 @@ def api_get_logs(service):
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# =============================================================================
+# APPLY CONFIGURATION FUNCTIONS
+# These functions actually apply settings to the system
+# =============================================================================
+
+import logging
+logger = logging.getLogger(__name__)
+
+# Paths to configuration scripts
+HOSTAPD_GENERATOR = Path('/opt/hookprobe/fortress/devices/common/hostapd-generator.sh')
+HOSTAPD_24GHZ_CONF = Path('/etc/hostapd/hostapd-24ghz.conf')
+HOSTAPD_5GHZ_CONF = Path('/etc/hostapd/hostapd-5ghz.conf')
+FORTRESS_CONF = Path('/etc/hookprobe/fortress.conf')
+
+
+def apply_timezone(timezone: str) -> dict:
+    """Apply timezone setting using timedatectl."""
+    try:
+        # Validate timezone exists
+        result = subprocess.run(
+            ['timedatectl', 'list-timezones'],
+            capture_output=True, text=True, timeout=10
+        )
+        valid_timezones = result.stdout.strip().split('\n')
+
+        if timezone not in valid_timezones:
+            return {'success': False, 'error': f'Invalid timezone: {timezone}'}
+
+        # Set timezone
+        result = subprocess.run(
+            ['timedatectl', 'set-timezone', timezone],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            logger.info(f"Timezone set to {timezone}")
+            return {'success': True, 'message': f'Timezone set to {timezone}'}
+        else:
+            return {'success': False, 'error': result.stderr or 'Failed to set timezone'}
+
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'error': 'Timeout setting timezone'}
+    except Exception as e:
+        logger.error(f"Failed to set timezone: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def apply_wifi_settings(ssid: str, password: str, channel: str = 'auto', band: str = 'dual') -> dict:
+    """Apply WiFi settings by regenerating hostapd configuration.
+
+    This updates the hostapd configuration files and restarts the services.
+    """
+    results = []
+    errors = []
+
+    # Validate inputs
+    if not ssid or len(ssid) < 1 or len(ssid) > 32:
+        return {'success': False, 'error': 'SSID must be 1-32 characters'}
+
+    if password and (len(password) < 8 or len(password) > 63):
+        return {'success': False, 'error': 'Password must be 8-63 characters'}
+
+    try:
+        # Method 1: Use hostapd-generator.sh if available
+        if HOSTAPD_GENERATOR.exists():
+            env = {
+                'WIFI_SSID': ssid,
+                'WIFI_PASSWORD': password or '',
+                'WIFI_CHANNEL': channel if channel != 'auto' else '',
+                'WIFI_BAND': band,
+                'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            }
+
+            result = subprocess.run(
+                [str(HOSTAPD_GENERATOR)],
+                env=env,
+                capture_output=True, text=True, timeout=30
+            )
+
+            if result.returncode == 0:
+                results.append('hostapd configuration regenerated')
+            else:
+                errors.append(f'hostapd-generator failed: {result.stderr}')
+
+        # Method 2: Direct config file update (fallback)
+        else:
+            # Update 2.4GHz config
+            if HOSTAPD_24GHZ_CONF.exists():
+                update_hostapd_ssid(HOSTAPD_24GHZ_CONF, ssid, password)
+                results.append('2.4GHz config updated')
+
+            # Update 5GHz config
+            if HOSTAPD_5GHZ_CONF.exists():
+                update_hostapd_ssid(HOSTAPD_5GHZ_CONF, ssid, password)
+                results.append('5GHz config updated')
+
+        # Restart hostapd services
+        for service in ['fts-hostapd-24ghz', 'fts-hostapd-5ghz']:
+            try:
+                subprocess.run(['systemctl', 'restart', service], timeout=15)
+                results.append(f'{service} restarted')
+            except Exception as e:
+                errors.append(f'Failed to restart {service}: {e}')
+
+        if errors and not results:
+            return {'success': False, 'error': '; '.join(errors)}
+
+        return {
+            'success': True,
+            'message': 'WiFi settings applied',
+            'details': results,
+            'warnings': errors if errors else None
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to apply WiFi settings: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def update_hostapd_ssid(config_path: Path, ssid: str, password: str):
+    """Update SSID and password in a hostapd config file."""
+    if not config_path.exists():
+        return
+
+    content = config_path.read_text()
+    lines = content.split('\n')
+    new_lines = []
+
+    for line in lines:
+        if line.startswith('ssid='):
+            new_lines.append(f'ssid={ssid}')
+        elif line.startswith('wpa_passphrase=') and password:
+            new_lines.append(f'wpa_passphrase={password}')
+        else:
+            new_lines.append(line)
+
+    config_path.write_text('\n'.join(new_lines))
+
+
+def apply_regulatory_domain(domain: str) -> dict:
+    """Apply WiFi regulatory domain setting."""
+    valid_domains = ['US', 'GB', 'DE', 'FR', 'AU', 'JP', 'CA', 'NZ', 'ES', 'IT', 'NL', 'BE', 'AT', 'CH', 'SE', 'NO', 'DK', 'FI', 'IE', 'PT']
+
+    if domain not in valid_domains:
+        return {'success': False, 'error': f'Invalid regulatory domain: {domain}'}
+
+    try:
+        # Set regulatory domain using iw
+        result = subprocess.run(
+            ['iw', 'reg', 'set', domain],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            logger.info(f"Regulatory domain set to {domain}")
+            return {'success': True, 'message': f'Regulatory domain set to {domain}'}
+        else:
+            return {'success': False, 'error': result.stderr or 'Failed to set regulatory domain'}
+
+    except Exception as e:
+        logger.error(f"Failed to set regulatory domain: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def get_current_timezone() -> str:
+    """Get the current system timezone."""
+    try:
+        result = subprocess.run(
+            ['timedatectl', 'show', '--property=Timezone', '--value'],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip() if result.returncode == 0 else 'UTC'
+    except Exception:
+        return 'UTC'
+
+
+def get_available_timezones() -> list:
+    """Get list of available timezones."""
+    try:
+        result = subprocess.run(
+            ['timedatectl', 'list-timezones'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().split('\n')
+    except Exception:
+        pass
+
+    # Fallback to common timezones
+    return [
+        'UTC',
+        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+        'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome',
+        'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Dubai',
+        'Australia/Sydney', 'Australia/Melbourne', 'Pacific/Auckland'
+    ]
+
+
+@settings_bp.route('/api/apply', methods=['POST'])
+@login_required
+@admin_required
+def api_apply_config():
+    """Apply configuration changes to the system.
+
+    This endpoint actually applies the saved configuration to the system,
+    updating hostapd, timezone, and other system settings.
+    """
+    try:
+        config = get_system_config()
+        results = []
+        errors = []
+
+        # Apply timezone
+        if config.get('timezone'):
+            tz_result = apply_timezone(config['timezone'])
+            if tz_result['success']:
+                results.append(f"Timezone: {tz_result['message']}")
+            else:
+                errors.append(f"Timezone: {tz_result['error']}")
+
+        # Apply WiFi settings
+        wifi_ssid = config.get('wifi_ssid')
+        wifi_password = config.get('wifi_password')
+        if wifi_ssid:
+            wifi_result = apply_wifi_settings(
+                wifi_ssid,
+                wifi_password,
+                config.get('wifi_channel', 'auto'),
+                config.get('wifi_band', 'dual')
+            )
+            if wifi_result['success']:
+                results.append(f"WiFi: {wifi_result['message']}")
+            else:
+                errors.append(f"WiFi: {wifi_result['error']}")
+
+        # Apply regulatory domain
+        reg_domain = config.get('regulatory_domain')
+        if reg_domain:
+            reg_result = apply_regulatory_domain(reg_domain)
+            if reg_result['success']:
+                results.append(f"Regulatory: {reg_result['message']}")
+            else:
+                errors.append(f"Regulatory: {reg_result['error']}")
+
+        # Summary
+        if errors and not results:
+            return jsonify({
+                'success': False,
+                'error': 'All apply operations failed',
+                'details': errors
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'message': 'Configuration applied',
+            'applied': results,
+            'warnings': errors if errors else None
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to apply configuration: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@settings_bp.route('/api/timezones')
+@login_required
+def api_get_timezones():
+    """Get list of available timezones."""
+    return jsonify({
+        'success': True,
+        'timezones': get_available_timezones(),
+        'current': get_current_timezone()
+    })
