@@ -740,26 +740,54 @@ volumes:
     name: fts-zeek-logs
 
   # ============================================================
-  # OPTIONAL SERVICE VOLUMES (auto-created when services start)
+  # OPTIONAL SERVICE VOLUMES
   # ============================================================
-  # These are NOT created by default. When you start optional services
-  # via --profile, podman will auto-create any missing volumes.
-  #
-  # Monitoring (--profile monitoring):
-  #   grafana_data, victoria_data
-  #
-  # IDS/IPS (--profile ids):
-  #   suricata_logs, suricata_rules, zeek_spool, zeek_config, xdp_data
-  #
-  # Automation (--profile automation):
-  #   n8n_data
-  #
-  # Analytics (--profile analytics):
-  #   clickhouse_data, clickhouse_logs
-  #
-  # ML Training (--profile training):
-  #   ml_models
-  #
+  # podman-compose 1.0.6 requires ALL volumes to be defined at top level,
+  # even for profile-gated services. These are created when referenced.
+
+  # ML Training (--profile training)
+  ml_models:
+    driver: local
+    name: fts-ml-models
+
+  # Monitoring (--profile monitoring)
+  grafana_data:
+    driver: local
+    name: fts-grafana-data
+  victoria_data:
+    driver: local
+    name: fts-victoria-data
+
+  # IDS/IPS (--profile ids)
+  suricata_logs:
+    driver: local
+    name: fts-suricata-logs
+  suricata_rules:
+    driver: local
+    name: fts-suricata-rules
+  zeek_spool:
+    driver: local
+    name: fts-zeek-spool
+  zeek_config:
+    driver: local
+    name: fts-zeek-config
+  xdp_data:
+    driver: local
+    name: fts-xdp-data
+
+  # Automation (--profile automation)
+  n8n_data:
+    driver: local
+    name: fts-n8n-data
+
+  # Analytics (--profile analytics)
+  clickhouse_data:
+    driver: local
+    name: fts-clickhouse-data
+  clickhouse_logs:
+    driver: local
+    name: fts-clickhouse-logs
+
   # Note: /etc/hookprobe is bind-mounted from host, not a named volume
 
 # ============================================================
