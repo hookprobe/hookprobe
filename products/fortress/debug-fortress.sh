@@ -106,7 +106,7 @@ else
 fi
 
 section "NETWORK - VLANS"
-for vlan in vlan100 vlan200; do
+for vlan in FTS FTS; do
     if ip link show $vlan &>/dev/null; then
         ip_addr=$(ip -4 addr show $vlan 2>/dev/null | grep inet | awk '{print $2}' | head -1)
         state=$(ip link show $vlan 2>/dev/null | grep -oE "state [A-Z]+" | awk '{print $2}')
