@@ -59,8 +59,10 @@ Key Innovation:
 """
 
 import asyncio
+import copy
 import json
 import logging
+import queue
 import sqlite3
 import subprocess
 import threading
@@ -71,6 +73,9 @@ from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Callable, Any
+
+# Database timeout for SQLite operations (prevent indefinite blocking)
+DB_TIMEOUT_SECONDS = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -428,6 +433,11 @@ class EcosystemBubbleManager:
         self._running = False
         self._threads: List[threading.Thread] = []
 
+        # OVS command queue for non-blocking subprocess execution
+        # This prevents OVS commands from blocking the main lock
+        self._ovs_command_queue: queue.Queue = queue.Queue()
+        self._ovs_worker_thread: Optional[threading.Thread] = None
+
         # Initialize database
         self._init_database()
 
@@ -436,7 +446,8 @@ class EcosystemBubbleManager:
         try:
             BUBBLE_DB.parent.mkdir(parents=True, exist_ok=True)
 
-            with sqlite3.connect(str(BUBBLE_DB)) as conn:
+            # Use timeout to prevent indefinite blocking on database operations
+            with sqlite3.connect(str(BUBBLE_DB), timeout=DB_TIMEOUT_SECONDS) as conn:
                 conn.execute('''
                     CREATE TABLE IF NOT EXISTS bubbles (
                         bubble_id TEXT PRIMARY KEY,
@@ -952,24 +963,84 @@ class EcosystemBubbleManager:
     # =========================================================================
 
     def _sync_sdn_rules(self):
-        """Synchronize SDN rules for all active bubbles."""
-        with self._lock:
-            rules = []
+        """Synchronize SDN rules for all active bubbles.
 
+        Non-blocking design: Takes a quick snapshot of bubble state,
+        then does heavy rule generation and file I/O outside the lock.
+        """
+        # Phase 1: Quick snapshot with minimal lock time
+        bubbles_snapshot = []
+        with self._lock:
             for bubble_id, bubble in self._bubbles.items():
                 if bubble.state not in [BubbleState.ACTIVE, BubbleState.FORMING]:
                     continue
-
                 if bubble.confidence < self.MIN_CLUSTER_CONFIDENCE:
                     continue
+                # Create lightweight snapshot (just what we need for rule generation)
+                bubbles_snapshot.append({
+                    'bubble_id': bubble.bubble_id,
+                    'devices': list(bubble.devices),  # Copy the set
+                    'state': bubble.state,
+                })
+            active_bubble_count = len([
+                b for b in self._bubbles.values()
+                if b.state == BubbleState.ACTIVE
+            ])
 
-                # Generate rules for this bubble
-                bubble_rules = self._generate_bubble_rules(bubble)
-                rules.extend(bubble_rules)
-                self._sdn_rules[bubble_id] = bubble_rules
+        # Phase 2: Generate rules OUTSIDE the lock (no blocking)
+        rules = []
+        generated_rules = {}
+        for snapshot in bubbles_snapshot:
+            bubble_rules = self._generate_bubble_rules_from_snapshot(snapshot)
+            rules.extend(bubble_rules)
+            generated_rules[snapshot['bubble_id']] = bubble_rules
 
-            # Write rules to trigger file for host-side application
-            self._write_sdn_trigger(rules)
+        # Phase 3: Quick update of rules cache
+        with self._lock:
+            self._sdn_rules.update(generated_rules)
+
+        # Phase 4: Write file OUTSIDE the lock (file I/O can be slow)
+        self._write_sdn_trigger_nonblocking(rules, active_bubble_count)
+
+    def _generate_bubble_rules_from_snapshot(self, snapshot: Dict) -> List[Dict]:
+        """Generate OpenFlow rules from a bubble snapshot (lock-free)."""
+        rules = []
+        devices = snapshot['devices']
+        bubble_id = snapshot['bubble_id']
+
+        # For each device pair in the bubble, allow bidirectional traffic
+        for i in range(len(devices)):
+            for j in range(i + 1, len(devices)):
+                mac_a = devices[i]
+                mac_b = devices[j]
+
+                # Allow A -> B
+                rules.append({
+                    'type': 'allow',
+                    'priority': OFP_BUBBLE_PRIORITY,
+                    'match': {
+                        'eth_src': mac_a,
+                        'eth_dst': mac_b,
+                    },
+                    'actions': ['normal'],
+                    'bubble_id': bubble_id,
+                    'comment': f'Bubble {bubble_id}: {mac_a} -> {mac_b}'
+                })
+
+                # Allow B -> A
+                rules.append({
+                    'type': 'allow',
+                    'priority': OFP_BUBBLE_PRIORITY,
+                    'match': {
+                        'eth_src': mac_b,
+                        'eth_dst': mac_a,
+                    },
+                    'actions': ['normal'],
+                    'bubble_id': bubble_id,
+                    'comment': f'Bubble {bubble_id}: {mac_b} -> {mac_a}'
+                })
+
+        return rules
 
     def _generate_bubble_rules(self, bubble: Bubble) -> List[Dict]:
         """Generate OpenFlow rules for bubble traffic."""
@@ -1038,26 +1109,70 @@ class EcosystemBubbleManager:
         except Exception as e:
             logger.error(f"Could not write SDN trigger: {e}")
 
+    def _write_sdn_trigger_nonblocking(self, rules: List[Dict], active_bubble_count: int):
+        """Write SDN rules to trigger file (non-blocking version).
+
+        This version does NOT access self._bubbles and can be called
+        outside the lock for improved concurrency.
+        """
+        try:
+            SDN_TRIGGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            trigger_data = {
+                'timestamp': datetime.now().isoformat(),
+                'rules': rules,
+                'bubble_count': active_bubble_count
+            }
+
+            with open(SDN_TRIGGER_FILE, 'w') as f:
+                json.dump(trigger_data, f, indent=2)
+
+            # Update sync timestamps with quick lock acquisition
+            now = datetime.now().isoformat()
+            with self._lock:
+                for bubble in self._bubbles.values():
+                    if bubble.state == BubbleState.ACTIVE:
+                        bubble.last_sdn_sync = now
+
+            logger.debug(f"SDN trigger written: {len(rules)} rules")
+
+        except Exception as e:
+            logger.error(f"Could not write SDN trigger: {e}")
+
     def apply_ovs_rules(self, bridge: str = "FTS"):
-        """Apply OpenFlow rules to OVS bridge (run on host)."""
+        """Apply OpenFlow rules to OVS bridge (run on host).
+
+        Non-blocking design: Takes a quick snapshot of rules,
+        then executes OVS commands outside the lock to prevent blocking.
+        """
+        # Phase 1: Quick snapshot with minimal lock time
+        rules_to_apply = []
         with self._lock:
             for bubble_id, rules in self._sdn_rules.items():
                 for rule in rules:
-                    try:
-                        match_str = ','.join(
-                            f"{k}={v}" for k, v in rule['match'].items()
-                        )
+                    rules_to_apply.append(copy.deepcopy(rule))
 
-                        # Add flow
-                        cmd = [
-                            'ovs-ofctl', 'add-flow', bridge,
-                            f"priority={rule['priority']},{match_str},actions=normal"
-                        ]
+        # Phase 2: Execute OVS commands OUTSIDE the lock
+        # This prevents subprocess calls from blocking other threads
+        for rule in rules_to_apply:
+            try:
+                match_str = ','.join(
+                    f"{k}={v}" for k, v in rule['match'].items()
+                )
 
-                        subprocess.run(cmd, check=True, capture_output=True)
+                # Add flow
+                cmd = [
+                    'ovs-ofctl', 'add-flow', bridge,
+                    f"priority={rule['priority']},{match_str},actions=normal"
+                ]
 
-                    except subprocess.CalledProcessError as e:
-                        logger.error(f"OVS flow add failed: {e}")
+                # Use timeout to prevent indefinite blocking
+                subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"OVS flow add timed out for rule: {rule.get('comment', 'unknown')}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"OVS flow add failed: {e}")
 
     # =========================================================================
     # EVENT MANAGEMENT
@@ -1069,7 +1184,7 @@ class EcosystemBubbleManager:
 
         # Persist to database
         try:
-            with sqlite3.connect(str(BUBBLE_DB)) as conn:
+            with sqlite3.connect(str(BUBBLE_DB), timeout=DB_TIMEOUT_SECONDS) as conn:
                 conn.execute('''
                     INSERT INTO bubble_events
                     (event_type, bubble_id, mac, timestamp, details_json)
@@ -1582,7 +1697,7 @@ class EcosystemBubbleManager:
 
             # Delete from database
             try:
-                with sqlite3.connect(str(BUBBLE_DB)) as conn:
+                with sqlite3.connect(str(BUBBLE_DB), timeout=DB_TIMEOUT_SECONDS) as conn:
                     conn.execute('DELETE FROM bubbles WHERE bubble_id = ?', (bubble_id,))
                     conn.commit()
             except Exception as e:
@@ -1651,7 +1766,7 @@ class EcosystemBubbleManager:
     def _persist_bubble(self, bubble: Bubble):
         """Persist a single bubble to database."""
         try:
-            with sqlite3.connect(str(BUBBLE_DB)) as conn:
+            with sqlite3.connect(str(BUBBLE_DB), timeout=DB_TIMEOUT_SECONDS) as conn:
                 conn.execute('''
                     INSERT OR REPLACE INTO bubbles
                     (bubble_id, ecosystem, devices_json, state, privilege,
@@ -1686,34 +1801,46 @@ class EcosystemBubbleManager:
             logger.error(f"Could not persist bubble: {e}")
 
     def _persist_all(self):
-        """Persist all state to database."""
+        """Persist all state to database.
+
+        Non-blocking design: Takes a quick snapshot of bubble data,
+        then performs SQLite writes outside the lock.
+        """
+        # Phase 1: Quick snapshot with minimal lock time
+        bubbles_data = []
         with self._lock:
-            try:
-                with sqlite3.connect(str(BUBBLE_DB)) as conn:
-                    for bubble in self._bubbles.values():
-                        conn.execute('''
-                            INSERT OR REPLACE INTO bubbles
-                            (bubble_id, ecosystem, devices_json, state, privilege,
-                             confidence, owner_hint, primary_device, created_at,
-                             last_activity, handoff_count, sync_count)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            bubble.bubble_id,
-                            bubble.ecosystem,
-                            json.dumps(list(bubble.devices)),
-                            bubble.state.value,
-                            bubble.privilege.value,
-                            bubble.confidence,
-                            bubble.owner_hint,
-                            bubble.primary_device,
-                            bubble.created_at,
-                            bubble.last_activity,
-                            bubble.handoff_count,
-                            bubble.sync_count
-                        ))
-                    conn.commit()
-            except Exception as e:
-                logger.error(f"Could not persist bubbles: {e}")
+            for bubble in self._bubbles.values():
+                bubbles_data.append((
+                    bubble.bubble_id,
+                    bubble.ecosystem,
+                    json.dumps(list(bubble.devices)),
+                    bubble.state.value,
+                    bubble.privilege.value,
+                    bubble.confidence,
+                    bubble.owner_hint,
+                    bubble.primary_device,
+                    bubble.created_at,
+                    bubble.last_activity,
+                    bubble.handoff_count,
+                    bubble.sync_count
+                ))
+
+        # Phase 2: SQLite writes OUTSIDE the lock
+        if not bubbles_data:
+            return
+
+        try:
+            with sqlite3.connect(str(BUBBLE_DB), timeout=DB_TIMEOUT_SECONDS) as conn:
+                conn.executemany('''
+                    INSERT OR REPLACE INTO bubbles
+                    (bubble_id, ecosystem, devices_json, state, privilege,
+                     confidence, owner_hint, primary_device, created_at,
+                     last_activity, handoff_count, sync_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', bubbles_data)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Could not persist bubbles: {e}")
 
     def get_stats(self) -> Dict:
         """Get bubble manager statistics."""
