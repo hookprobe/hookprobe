@@ -4,11 +4,34 @@ Flask views for the Cognitive Network Layer.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from flask import render_template, jsonify, request
 from flask_login import login_required
 
 from . import aiochi_bp
+
+# Security: MAC address validation pattern
+MAC_PATTERN = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
+
+
+def _validate_mac_address(mac: str) -> bool:
+    """Validate MAC address format to prevent command injection (CWE-78)."""
+    if not mac or not isinstance(mac, str):
+        return False
+    return bool(MAC_PATTERN.match(mac))
+
+
+def _sanitize_notes(notes: str, max_length: int = 200) -> str:
+    """Sanitize notes field to prevent command injection (CWE-78).
+
+    Only allows alphanumeric characters, spaces, and basic punctuation.
+    """
+    if not notes or not isinstance(notes, str):
+        return ''
+    # Only allow safe characters: alphanumeric, spaces, and basic punctuation
+    sanitized = re.sub(r'[^a-zA-Z0-9\s.,!?\-_\']', '', notes)
+    return sanitized[:max_length]
 
 logger = logging.getLogger(__name__)
 
@@ -952,10 +975,21 @@ def api_feedback_submit(action_id):
         mac_address = feedback_req.get('mac_address')
         action_type = feedback_req.get('action_type')
 
+        # Security: Validate MAC address format to prevent command injection (CWE-78)
+        if mac_address and not _validate_mac_address(mac_address):
+            logger.warning(f"Invalid MAC address format rejected: {mac_address[:50]}")
+            return jsonify({
+                'success': False,
+                'error': 'Invalid MAC address format'
+            }), 400
+
+        # Security: Sanitize notes field to prevent command injection (CWE-78)
+        sanitized_notes = _sanitize_notes(notes)
+
         # Update feedback status
         feedback_req['status'] = 'responded'
         feedback_req['response'] = response
-        feedback_req['notes'] = notes
+        feedback_req['notes'] = sanitized_notes
         feedback_req['responded_at'] = datetime.now().isoformat()
 
         # Execute action based on feedback
@@ -963,19 +997,19 @@ def api_feedback_submit(action_id):
 
         if response == 'trust' and mac_address:
             # User trusts this device - remove block and add to trusted
-            result = _execute_tool('trust-device.sh', [mac_address, 'user', notes or 'User approved'])
+            result = _execute_tool('trust-device.sh', [mac_address, 'user', sanitized_notes or 'User approved'])
 
         elif response == 'block_permanent' and mac_address:
             # User wants permanent block
-            result = _execute_tool('block-device.sh', [mac_address, notes or 'User requested permanent block'])
+            result = _execute_tool('block-device.sh', [mac_address, sanitized_notes or 'User requested permanent block'])
 
         elif response == 'reject' and mac_address and action_type == 'BLOCK':
             # User rejects the block - unblock the device
-            result = _execute_tool('unblock-device.sh', [mac_address, notes or 'User rejected AI block decision'])
+            result = _execute_tool('unblock-device.sh', [mac_address, sanitized_notes or 'User rejected AI block decision'])
 
         elif response == 'reject' and mac_address and action_type == 'MIGRATE':
             # User rejects migration - move back to trusted VLAN
-            result = _execute_tool('migrate-device.sh', [mac_address, 'trusted', notes or 'User rejected migration'])
+            result = _execute_tool('migrate-device.sh', [mac_address, 'trusted', sanitized_notes or 'User rejected migration'])
 
         elif response == 'approve':
             # User approves - no action needed, AI decision stands
