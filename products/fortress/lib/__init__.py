@@ -81,6 +81,7 @@ def get_unified_fingerprint_engine():
 
 # ============================================================
 # ECOSYSTEM BUBBLE - ATMOSPHERIC PRESENCE (Proprietary)
+# Unified module located at shared/aiochi/bubble/
 # ============================================================
 
 def get_presence_sensor():
@@ -108,9 +109,36 @@ def get_ecosystem_bubble_manager():
 
     Orchestrates presence sensing, behavioral clustering, and
     SDN policy enforcement for same-user device groups.
+
+    NOTE: Uses unified module from shared/aiochi/bubble/
     """
-    from .ecosystem_bubble import get_bubble_manager
-    return get_bubble_manager()
+    try:
+        # Prefer unified module from shared/aiochi
+        from shared.aiochi.bubble import get_bubble_manager
+        return get_bubble_manager()
+    except ImportError:
+        # Fallback to local module for backwards compatibility
+        from .ecosystem_bubble import get_bubble_manager
+        return get_bubble_manager()
+
+
+def get_policy_resolver():
+    """Get the policy resolver for bubble->OpenFlow mapping.
+
+    Maps bubbles and devices to OpenFlow network policies.
+    Supports:
+    - Device-specific policy overrides (priority 900)
+    - Bubble default policies (priority 600)
+    - Quarantine for unknown devices
+
+    NOTE: Uses unified module from shared/aiochi/bubble/
+    """
+    try:
+        from shared.aiochi.bubble import get_policy_resolver
+        return get_policy_resolver()
+    except ImportError:
+        # Policy resolver only available in unified module
+        raise ImportError("PolicyResolver requires shared/aiochi/bubble module")
 
 
 def get_d2d_connection_graph():
@@ -237,6 +265,7 @@ __all__ = [
     'get_presence_sensor',
     'get_behavior_clustering_engine',
     'get_ecosystem_bubble_manager',
+    'get_policy_resolver',
     'get_d2d_connection_graph',
     # Integration modules
     'get_clickhouse_graph_store',
