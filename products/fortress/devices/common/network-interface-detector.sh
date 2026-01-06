@@ -307,18 +307,21 @@ classify_wan_lan_interfaces() {
     fi
 
     # ============================================================
-    # MANAGEMENT INTERFACE DETECTION (VLAN 200)
+    # ADMIN CONSOLE PORT DETECTION (Flat Bridge Architecture)
     # ============================================================
     # If device has 2+ LAN ethernet interfaces (excluding WAN),
-    # designate the LAST one as management interface.
-    # Management port is configured as trunk: native LAN (100), tagged MGMT (200)
-    # This allows dual-use: regular LAN access OR management access with VLAN tag
+    # designate the LAST one as admin console port.
+    # This port is recommended for connecting admin workstation.
+    #
+    # In flat bridge mode, all ports share the same L2 segment.
+    # The admin port is just a recommendation for where to connect
+    # the admin workstation for initial setup.
     #
     # Examples:
-    #   eth0 (WAN) + WiFi only        → No MGMT port (use WiFi for LAN)
-    #   eth0 (WAN) + eth1             → No MGMT port (eth1 needed for LAN)
-    #   eth0 (WAN) + eth1 + eth2      → eth2 = MGMT (trunk), eth1 = LAN only
-    #   eth0 (WAN) + eth1 + eth2 + eth3 → eth3 = MGMT (trunk), eth1,eth2 = LAN
+    #   eth0 (WAN) + WiFi only        → No admin port (use WiFi)
+    #   eth0 (WAN) + eth1             → No admin port (eth1 needed for LAN)
+    #   eth0 (WAN) + eth1 + eth2      → eth2 = Admin, eth1 = General LAN
+    #   eth0 (WAN) + eth1 + eth2 + eth3 → eth3 = Admin, eth1,eth2 = General LAN
 
     local mgmt_iface=""
     local lan_iface_count
@@ -328,7 +331,7 @@ classify_wan_lan_interfaces() {
         # Get the last LAN interface (by PCI order, which is already sorted)
         mgmt_iface=$(echo "$NET_LAN_IFACES" | awk '{print $NF}')
 
-        # Remove MGMT interface from LAN list
+        # Remove admin interface from general LAN list
         local new_lan_ifaces=""
         for iface in $NET_LAN_IFACES; do
             if [ "$iface" != "$mgmt_iface" ]; then
@@ -337,16 +340,14 @@ classify_wan_lan_interfaces() {
         done
         NET_LAN_IFACES=$(echo "$new_lan_ifaces" | xargs)
 
-        log_section "Management Interface (VLAN 200)"
-        log_success "MGMT: $mgmt_iface (trunk mode: native LAN + tagged MGMT)"
-        log_info "  This port provides:"
-        log_info "    - Untagged traffic → VLAN 100 (LAN, 10.200.0.0/24)"
-        log_info "    - Tagged VLAN 200 → Management (10.200.100.0/24)"
-        log_info "    - Direct access to container network (172.20.200.0/24)"
-        log_info "  Updated LAN Interfaces: ${NET_LAN_IFACES:-none}"
+        log_section "Admin Console Port"
+        log_success "Admin Port: $mgmt_iface (recommended for admin workstation)"
+        log_info "  Connect admin workstation here for initial setup"
+        log_info "  Access dashboard at: https://10.200.0.1:8443"
+        log_info "  General LAN ports: ${NET_LAN_IFACES:-none}"
     else
-        log_info "No dedicated management port (need 2+ LAN interfaces)"
-        log_info "  Management access via: Cloudflare Tunnel (remote) or WiFi admin SSID"
+        log_info "No dedicated admin port (need 2+ LAN interfaces)"
+        log_info "  Dashboard access via: any LAN port or WiFi at 10.200.0.1:8443"
     fi
 
     export NET_MGMT_IFACE="$mgmt_iface"
