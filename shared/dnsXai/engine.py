@@ -715,6 +715,73 @@ class CNAMEUncloaker:
         'bluecoat.com',  # Symantec BlueCoat
     }
 
+    # Package repositories and software distribution - CRITICAL: NEVER block
+    # Blocking these breaks system updates and package installation
+    SOFTWARE_DISTRIBUTION_DOMAINS = {
+        # Linux distributions
+        'raspberrypi.com', 'raspberrypi.org', 'archive.raspberrypi.com',
+        'archive.raspberrypi.org', 'downloads.raspberrypi.com',
+        'ubuntu.com', 'archive.ubuntu.com', 'security.ubuntu.com',
+        'packages.ubuntu.com', 'launchpad.net', 'ppa.launchpad.net',
+        'debian.org', 'deb.debian.org', 'security.debian.org',
+        'ftp.debian.org', 'packages.debian.org',
+        'fedoraproject.org', 'download.fedoraproject.org',
+        'centos.org', 'mirror.centos.org', 'vault.centos.org',
+        'archlinux.org', 'mirror.archlinux.org',
+        'opensuse.org', 'download.opensuse.org',
+        'alpinelinux.org', 'dl-cdn.alpinelinux.org',
+        'manjaro.org', 'repo.manjaro.org',
+        'linuxmint.com', 'packages.linuxmint.com',
+        'kali.org', 'http.kali.org', 'archive.kali.org',
+        # Python packages
+        'pypi.org', 'pypi.python.org', 'files.pythonhosted.org',
+        'pythonhosted.org', 'python.org', 'docs.python.org',
+        # Node.js / npm
+        'npmjs.org', 'npmjs.com', 'registry.npmjs.org',
+        'nodejs.org', 'yarnpkg.com', 'registry.yarnpkg.com',
+        # Ruby
+        'rubygems.org', 'bundler.io',
+        # Rust
+        'crates.io', 'static.crates.io', 'rust-lang.org',
+        # Go
+        'golang.org', 'proxy.golang.org', 'sum.golang.org',
+        # Java / Maven
+        'maven.apache.org', 'repo.maven.apache.org', 'repo1.maven.org',
+        'central.sonatype.com', 'oss.sonatype.org',
+        # Docker / Container registries
+        'docker.io', 'docker.com', 'registry.docker.io',
+        'hub.docker.com', 'ghcr.io', 'gcr.io', 'quay.io',
+        'registry.access.redhat.com', 'registry.redhat.io',
+        # Package managers
+        'brew.sh', 'formulae.brew.sh', 'homebrew.bintray.com',
+        'chocolatey.org', 'community.chocolatey.org',
+        'snapcraft.io', 'api.snapcraft.io',
+        'flathub.org', 'dl.flathub.org',
+        # Version control
+        'github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com',
+        'codeload.github.com', 'api.github.com', 'gist.github.com',
+        'gitlab.com', 'registry.gitlab.com',
+        'bitbucket.org', 'bitbucket.io',
+        'sourceforge.net', 'downloads.sourceforge.net',
+        'savannah.gnu.org', 'git.savannah.gnu.org',
+        # Software vendors
+        'kernel.org', 'cdn.kernel.org', 'git.kernel.org',
+        'apache.org', 'downloads.apache.org', 'archive.apache.org',
+        'gnu.org', 'ftp.gnu.org',
+        'mozilla.org', 'download.mozilla.org', 'archive.mozilla.org',
+        'videolan.org', 'download.videolan.org',
+        'libreoffice.org', 'download.libreoffice.org',
+        'gimp.org', 'download.gimp.org',
+        'blender.org', 'download.blender.org',
+        'jetbrains.com', 'download.jetbrains.com',
+        'visualstudio.microsoft.com', 'code.visualstudio.com',
+        'atom.io', 'atom-installer.github.com',
+        # Hardware vendors
+        'nvidia.com', 'developer.nvidia.com', 'download.nvidia.com',
+        'amd.com', 'drivers.amd.com',
+        'intel.com', 'downloadcenter.intel.com',
+    }
+
     def __init__(self, config: AdBlockConfig):
         self.config = config
         self.cache: Dict[str, Tuple[List[str], datetime]] = {}
@@ -800,6 +867,10 @@ class CNAMEUncloaker:
         if domain_lower in self.SECURITY_SERVICE_DOMAINS:
             return True
 
+        # Check software distribution domains (package repos, etc.)
+        if domain_lower in self.SOFTWARE_DISTRIBUTION_DOMAINS:
+            return True
+
         # Check exact match for infrastructure
         if domain_lower in self.LEGITIMATE_INFRASTRUCTURE:
             return True
@@ -813,6 +884,8 @@ class CNAMEUncloaker:
             if parent in self.SYSTEM_CONNECTIVITY_DOMAINS:
                 return True
             if parent in self.SECURITY_SERVICE_DOMAINS:
+                return True
+            if parent in self.SOFTWARE_DISTRIBUTION_DOMAINS:
                 return True
 
         return False
@@ -1167,6 +1240,10 @@ class AIAdBlocker:
         self._stop_event = threading.Event()
         self._threads: List[threading.Thread] = []
 
+        # Whitelist file tracking for auto-reload
+        self._whitelist_mtime: float = 0.0
+        self._whitelist_check_interval: int = 5  # Check every 5 seconds
+
         # Load blocklists
         self._load_lists()
 
@@ -1175,6 +1252,8 @@ class AIAdBlocker:
         blocklist_path = self.data_dir / self.config.blocklist_file
         whitelist_path = self.data_dir / self.config.whitelist_file
         enterprise_whitelist_path = self.data_dir / 'enterprise-whitelist.txt'
+        # Also check userdata directory (persistent across reinstalls)
+        userdata_whitelist_path = Path('/opt/hookprobe/shared/dnsXai/userdata/whitelist.txt')
 
         if blocklist_path.exists():
             with open(blocklist_path, 'r') as f:
@@ -1185,15 +1264,25 @@ class AIAdBlocker:
                 )
             self.logger.info(f"Loaded {len(self.blocklist)} blocked domains")
 
-        # Load user whitelist
-        if whitelist_path.exists():
-            with open(whitelist_path, 'r') as f:
+        # Load user whitelist - check userdata first (persistent), then data dir
+        whitelist_to_load = whitelist_path
+        if userdata_whitelist_path.exists():
+            whitelist_to_load = userdata_whitelist_path
+            self.logger.debug("Using userdata whitelist (persistent)")
+
+        if whitelist_to_load.exists():
+            with open(whitelist_to_load, 'r') as f:
                 self.whitelist = set(
                     line.strip().lower()
                     for line in f
                     if line.strip() and not line.startswith('#')
                 )
-            self.logger.info(f"Loaded {len(self.whitelist)} whitelisted domains")
+            # Track modification time for auto-reload
+            self._whitelist_mtime = whitelist_to_load.stat().st_mtime
+            self._whitelist_path = whitelist_to_load
+            self.logger.info(f"Loaded {len(self.whitelist)} whitelisted domains from {whitelist_to_load}")
+        else:
+            self._whitelist_path = whitelist_to_load
 
         # Load enterprise whitelist (comprehensive list of known safe domains)
         if enterprise_whitelist_path.exists():
@@ -1224,6 +1313,86 @@ class AIAdBlocker:
                 self.logger.info(f"Loaded {len(enterprise_domains)} shared enterprise whitelist domains")
             except Exception as e:
                 self.logger.warning(f"Failed to load shared enterprise whitelist: {e}")
+
+    def reload_whitelist(self) -> int:
+        """
+        Reload whitelist from file(s).
+
+        This is called:
+        1. When the API server notifies us of a whitelist change
+        2. When the file watcher detects a modification
+        3. Manually via CLI
+
+        Returns the number of whitelisted domains loaded.
+        """
+        old_count = len(self.whitelist)
+        userdata_whitelist_path = Path('/opt/hookprobe/shared/dnsXai/userdata/whitelist.txt')
+        whitelist_path = self.data_dir / self.config.whitelist_file
+
+        # Prefer userdata (persistent), fall back to data dir
+        whitelist_to_load = whitelist_path
+        if userdata_whitelist_path.exists():
+            whitelist_to_load = userdata_whitelist_path
+
+        new_whitelist = set()
+
+        if whitelist_to_load.exists():
+            try:
+                with open(whitelist_to_load, 'r') as f:
+                    new_whitelist = set(
+                        line.strip().lower()
+                        for line in f
+                        if line.strip() and not line.startswith('#')
+                    )
+                self._whitelist_mtime = whitelist_to_load.stat().st_mtime
+                self._whitelist_path = whitelist_to_load
+            except Exception as e:
+                self.logger.error(f"Failed to reload whitelist: {e}")
+                return len(self.whitelist)
+
+        # Load enterprise whitelists too
+        for enterprise_path in [
+            self.data_dir / 'enterprise-whitelist.txt',
+            Path('/opt/hookprobe/shared/dnsXai/data/enterprise-whitelist.txt')
+        ]:
+            if enterprise_path.exists():
+                try:
+                    with open(enterprise_path, 'r') as f:
+                        new_whitelist.update(
+                            line.strip().lower()
+                            for line in f
+                            if line.strip() and not line.startswith('#')
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Failed to load enterprise whitelist from {enterprise_path}: {e}")
+
+        # Atomic update
+        self.whitelist = new_whitelist
+        new_count = len(self.whitelist)
+
+        if new_count != old_count:
+            self.logger.info(f"Whitelist reloaded: {old_count} -> {new_count} domains")
+        else:
+            self.logger.debug(f"Whitelist reloaded (no changes): {new_count} domains")
+
+        return new_count
+
+    def _check_whitelist_file_changed(self) -> bool:
+        """Check if whitelist file has been modified since last load."""
+        try:
+            userdata_path = Path('/opt/hookprobe/shared/dnsXai/userdata/whitelist.txt')
+            data_path = self.data_dir / self.config.whitelist_file
+
+            # Check both paths for changes
+            for path in [userdata_path, data_path]:
+                if path.exists():
+                    current_mtime = path.stat().st_mtime
+                    if current_mtime > self._whitelist_mtime:
+                        return True
+            return False
+        except Exception as e:
+            self.logger.debug(f"Error checking whitelist mtime: {e}")
+            return False
 
     def _save_blocklist(self):
         """Save blocklist to file."""
@@ -1458,19 +1627,21 @@ class AIAdBlocker:
         return False
 
     def _is_system_connectivity_domain(self, domain: str) -> bool:
-        """Check if domain is a system/browser connectivity check.
+        """Check if domain is protected infrastructure that should NEVER be blocked.
 
-        These domains are used by operating systems and browsers to detect:
-        - Network connectivity (NCSI, CNA)
-        - Captive portal presence
-        - Internet access availability
+        Protected categories:
+        1. System connectivity (NCSI, CNA, captive portal detection)
+        2. Security services (Zscaler, Forcepoint, etc.)
+        3. Software distribution (package repos, container registries)
+        4. Legitimate infrastructure (CDNs, major platforms)
 
-        CRITICAL: These should NEVER be blocked as it breaks:
+        CRITICAL: Blocking these breaks:
         - WiFi captive portal login
         - Network status indicators
-        - VPN/proxy detection
+        - System/package updates
+        - Container pulls
         """
-        # Use the lists from CNAMEUncloaker
+        # Use the comprehensive lists from CNAMEUncloaker
         return self.cname_uncloaker._is_legitimate_infrastructure(domain)
 
     def _record_classification(self, result: ClassificationResult):
@@ -1591,7 +1762,25 @@ class AIAdBlocker:
         updater_thread.start()
         self._threads.append(updater_thread)
 
-        self.logger.info("Background tasks started")
+        # Whitelist file watcher - auto-reload when API server modifies the file
+        def whitelist_watcher():
+            while not self._stop_event.wait(self._whitelist_check_interval):
+                try:
+                    if self._check_whitelist_file_changed():
+                        self.logger.info("Whitelist file changed, reloading...")
+                        self.reload_whitelist()
+                except Exception as e:
+                    self.logger.error(f"Whitelist watcher error: {e}")
+
+        watcher_thread = threading.Thread(
+            target=whitelist_watcher,
+            daemon=True,
+            name="WhitelistWatcher"
+        )
+        watcher_thread.start()
+        self._threads.append(watcher_thread)
+
+        self.logger.info("Background tasks started (blocklist updater + whitelist watcher)")
 
     def stop(self):
         """Stop background tasks."""
