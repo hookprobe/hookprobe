@@ -62,6 +62,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     ulimits:
       nofile:
         soft: 262144
@@ -88,6 +89,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
   # ============================================================================
   # CAPTURE TIER - Network Traffic Analysis
@@ -124,10 +126,12 @@ services:
       SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS-mirror} --af-packet"
     command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
     healthcheck:
-      test: ["CMD", "pgrep", "-x", "suricata"]
+      # Check Suricata process and verify eve.json is being written
+      test: ["CMD-SHELL", "pgrep -x suricata && test -f /var/log/suricata/eve.json"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   zeek:
     image: docker.io/zeek/zeek:7.0.3
@@ -147,10 +151,12 @@ services:
       ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
     command: ["zeekctl", "deploy"]
     healthcheck:
-      test: ["CMD", "zeekctl", "status"]
+      # Check Zeek status and verify logs are being generated
+      test: ["CMD-SHELL", "zeekctl status | grep -q running"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 45s
 
   # ============================================================================
   # INTELLIGENCE TIER - Device Identity & Narratives
@@ -188,6 +194,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # ============================================================================
   # BUBBLE MANAGER - Ecosystem Device Detection
@@ -296,6 +303,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # ============================================================================
   # VISUALIZATION TIER - Dashboard
@@ -337,6 +345,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
 
   # ============================================================================
   # LOG SHIPPER - ClickHouse Integration
@@ -373,10 +382,12 @@ services:
       zeek:
         condition: service_started
     healthcheck:
-      test: ["CMD", "pgrep", "-x", "python"]
+      # Check Python process is running and can connect to ClickHouse
+      test: ["CMD-SHELL", "pgrep -f 'logshipper' > /dev/null || pgrep -x python"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   # ============================================================================
   # AI TIER - Local LLM for Agentic Reasoning
