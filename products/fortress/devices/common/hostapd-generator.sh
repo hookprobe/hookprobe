@@ -1944,8 +1944,9 @@ generate_hostapd_24ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
-    # ap_isolate=1 forces all client-to-client traffic through OVS bridge
-    # D2D is handled by OVS OpenFlow rules (internet_only=blocked, smart_home=allowed)
+    # ap_isolate=1 forces all WiFi D2D traffic through OVS bridge for policy enforcement
+    # OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+    # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
     local ap_isolate_value=1
 
     # Verify hardware actually supports 2.4GHz band
@@ -2168,8 +2169,10 @@ rsn_pairwise=CCMP
 wpa_passphrase=$password
 
 # Access Control
-# ap_isolate=1 forces all client-to-client traffic through OVS for policy enforcement
-# D2D allowed for smart_home/full_access, blocked for internet_only (via OpenFlow rules)
+# ap_isolate=1 blocks direct WiFi D2D, forcing traffic through OVS bridge
+# OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi
+# Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+# This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
 ap_isolate=1
 max_num_sta=64
@@ -2267,8 +2270,9 @@ generate_hostapd_5ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
-    # ap_isolate=1 forces all client-to-client traffic through OVS bridge
-    # D2D is handled by OVS OpenFlow rules (internet_only=blocked, smart_home=allowed)
+    # ap_isolate=1 forces all WiFi D2D traffic through OVS bridge for policy enforcement
+    # OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+    # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
     local ap_isolate_value=1
 
     # Verify hardware actually supports 5GHz band
@@ -2762,8 +2766,10 @@ ieee80211w=1
 wpa_passphrase=$password
 
 # Access Control
-# ap_isolate=1 forces all client-to-client traffic through OVS for policy enforcement
-# D2D allowed for smart_home/full_access, blocked for internet_only (via OpenFlow rules)
+# ap_isolate=1 blocks direct WiFi D2D, forcing traffic through OVS bridge
+# OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+# Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+# This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
 ap_isolate=1
 max_num_sta=128

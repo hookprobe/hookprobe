@@ -263,6 +263,11 @@ configure_openflow() {
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
 
+    # Priority 65535: EAPOL frames for 802.1X/WPA authentication (HIGHEST PRIORITY)
+    # dl_type=0x888e is the EtherType for EAPOL (Extensible Authentication Protocol over LAN)
+    # Without this, WPA handshakes fail and clients cannot authenticate
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=65535,dl_type=0x888e,actions=NORMAL"
+
     # Priority 1000: Allow ARP (essential for L2 connectivity)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL"
 
@@ -301,6 +306,54 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL"
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL"
 
+    # ================================================================
+    # D2D HAIRPIN RULES FOR ap_isolate=1 SUPPORT
+    # ================================================================
+    #
+    # With ap_isolate=1, WiFi blocks direct client-to-client at wireless layer.
+    # Traffic still reaches OVS bridge. These rules hairpin it back (in_port action)
+    # so OVS can enforce policy while still allowing D2D for permitted devices.
+    #
+    # Policy enforcement order (higher priority = matches first):
+    # - QUARANTINE: blocked at priority 1000 (never reaches hairpin)
+    # - INTERNET_ONLY: blocked at priority 700 (never reaches hairpin)
+    # - SMART_HOME/FULL_ACCESS: allowed, reaches hairpin at 501-505
+    #
+    # Actions: in_port sends back to same WiFi interface, normal forwards elsewhere
+    # ================================================================
+    local wifi_24_iface="${WIFI_24GHZ_IFACE:-wlan_24ghz}"
+    local wifi_5_iface="${WIFI_5GHZ_IFACE:-wlan_5ghz}"
+
+    for wifi_iface in "$wifi_24_iface" "$wifi_5_iface"; do
+        if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${wifi_iface}$"; then
+            # Priority 505: mDNS hairpin (224.0.0.251:5353) - AirPlay, HomeKit discovery
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=505,udp,in_port=${wifi_iface},nw_dst=224.0.0.251,tp_dst=5353,actions=in_port,normal"
+
+            # Priority 505: IPv6 mDNS hairpin (ff02::fb) - HomeKit, Matter
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=505,udp6,in_port=${wifi_iface},ipv6_dst=ff02::fb,tp_dst=5353,actions=in_port,normal"
+
+            # Priority 504: SSDP hairpin (239.255.255.250:1900) - Chromecast, UPnP
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=504,udp,in_port=${wifi_iface},nw_dst=239.255.255.250,tp_dst=1900,actions=in_port,normal"
+
+            # Priority 503: ARP hairpin - essential for D2D MAC resolution
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=503,arp,in_port=${wifi_iface},actions=in_port,normal"
+
+            # Priority 502: IPv6 NDP hairpin - essential for IPv6 D2D
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=502,icmp6,in_port=${wifi_iface},actions=in_port,normal"
+
+            # Priority 501: Unicast IP hairpin (LAN subnet) - actual D2D traffic
+            ovs-ofctl add-flow "$OVS_BRIDGE" \
+                "priority=501,ip,in_port=${wifi_iface},nw_dst=10.200.0.0/16,actions=in_port,normal"
+
+            log_info "  D2D hairpin enabled for ${wifi_iface} (mDNS, SSDP, ARP, NDP, IP)"
+        fi
+    done
+
     # Priority 500: Allow container network traffic (172.20.0.0/16)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=172.20.0.0/16,actions=NORMAL"
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=172.20.0.0/16,actions=NORMAL"
@@ -309,8 +362,15 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL"
 
     log_success "OpenFlow rules configured"
+    log_info "  EAPOL (WPA auth): priority 65535"
     log_info "  ARP, DHCP, DNS, mDNS: priority 800-1000"
     log_info "  IPv4/IPv6 multicast (HomeKit, AirPlay): priority 700"
+    log_info "  D2D hairpin (WiFi ap_isolate=1): priority 501-505"
+    log_info "    ├─ mDNS (AirPlay/HomeKit): 505"
+    log_info "    ├─ SSDP (Chromecast/UPnP): 504"
+    log_info "    ├─ ARP (MAC resolution): 503"
+    log_info "    ├─ ICMPv6/NDP: 502"
+    log_info "    └─ Unicast IP: 501"
     log_info "  LAN (10.200.0.0/16): priority 500"
     log_info "  Containers (172.20.0.0/16): priority 500"
 }
