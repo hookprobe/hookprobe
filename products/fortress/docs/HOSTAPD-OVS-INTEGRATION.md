@@ -1,12 +1,16 @@
 # hostapd-ovs Integration Architecture
 
-**Version**: 1.0.0
-**Status**: Design Complete
+**Version**: 2.0.0
+**Status**: Production (hostapd-ovs REQUIRED)
 **Last Updated**: 2026-01-07
 
 ## Executive Summary
 
-This document outlines the complete migration from traditional hostapd (with br-wifi Linux bridge) to **hostapd-ovs** (direct OVS integration) for the Fortress product. It addresses three critical issues:
+This document describes the **hostapd-ovs** WiFi architecture for Fortress. As of v2.0, hostapd-ovs is the **ONLY** supported WiFi integration method - direct OVS bridge connection with no intermediate Linux bridge (br-wifi).
+
+**Architecture**: `WiFi → OVS (FTS) → OpenFlow policy`
+
+This addresses three critical requirements:
 
 1. **MAC Randomization Device Tracking** - Stop device name incrementing ("iPhone 3, 4, 5...")
 2. **Cross-Band D2D Communication** - Ensure mDNS/multicast flows between 2.4GHz and 5GHz
@@ -35,22 +39,17 @@ This document outlines the complete migration from traditional hostapd (with br-
 | mDNS Hostname | "Johns-iPhone.local" | 9/10 | Not indexed |
 | Fingerbank Device Type | Stays same | 8/10 | Classification only |
 
-### Issue 2: Cross-Band mDNS/Multicast Gaps
+### Issue 2: Cross-Band mDNS/Multicast Handling
 
-**Current Architecture** (br-wifi mode):
-```
-wlan_24ghz ──┐
-              ├── br-wifi (Linux bridge) ── veth-wifi-a ── veth-wifi-b ── OVS(FTS)
-wlan_5ghz ──┘
-```
-
-**With hostapd-ovs** (direct mode):
+**Architecture** (hostapd-ovs direct mode):
 ```
 wlan_24ghz ── OVS(FTS) ── OpenFlow rules
 wlan_5ghz  ── OVS(FTS) ── OpenFlow rules
 ```
 
-**Gap**: When WiFi interfaces connect directly to OVS (no br-wifi), multicast/mDNS does NOT automatically bridge between bands because:
+**Note**: The legacy br-wifi architecture (Linux bridge + veth pairs) is no longer supported. All Fortress installations use hostapd-ovs direct OVS integration.
+
+**Consideration**: With direct OVS connection (no Linux bridge), multicast/mDNS does NOT automatically bridge between bands because:
 1. OVS uses L2 MAC learning per-port
 2. Multicast must be explicitly flooded to target ports
 3. No hairpin mode available (that's a Linux bridge feature)
@@ -355,11 +354,10 @@ PRIORITY   RULE TYPE                           POLICY
 - [ ] Modify mDNS resolver to extract device ID/name
 - [ ] Update Web UI to show single device with MAC history
 
-### Phase 2: Cross-Band Multicast (hostapd-ovs mode) ✅
+### Phase 2: Cross-Band Multicast ✅
 - [x] Add `setup_multicast_reflection()` to `ovs-post-setup.sh`
-- [x] Detect hostapd-ovs mode from `/etc/hookprobe/fortress.conf`
-- [x] Skip br-wifi creation when `HOSTAPD_OVS_MODE=true`
 - [x] Apply multicast rules (priority 400) for cross-band mDNS
+- [x] Cleanup legacy br-wifi infrastructure on boot
 
 ### Phase 3: Policy-Aware mDNS ✅
 - [x] Add mDNS rules for SMART_HOME policy (priority 475) in `nac-policy-sync.sh`
@@ -367,9 +365,9 @@ PRIORITY   RULE TYPE                           POLICY
 - [x] Update `apply_policy()` to call mDNS functions
 
 ### Phase 4: hostapd-generator Updates ✅
-- [x] Prefer hostapd-ovs binary when available (`/usr/local/bin/hostapd-ovs`)
-- [x] Auto-enable `HOSTAPD_OVS_MODE=true` in `fortress.conf`
-- [x] Skip wifi bridge helper generation in hostapd-ovs mode
+- [x] Require hostapd-ovs binary (`/usr/local/bin/hostapd-ovs`)
+- [x] Always use `bridge=FTS` in hostapd config (direct OVS)
+- [x] Remove wifi bridge helper script (no longer needed)
 
 ### Phase 5: Testing & Validation
 - [ ] Test MAC randomization tracking (iPhone, Android)
@@ -382,31 +380,24 @@ PRIORITY   RULE TYPE                           POLICY
 
 ## Validation Commands
 
-### 1. Verify hostapd-ovs Mode
+### 1. Verify hostapd-ovs Installation
 
 ```bash
-# Check if hostapd-ovs binary is installed
+# Check if hostapd-ovs binary is installed (REQUIRED)
 ls -la /usr/local/bin/hostapd-ovs
 
-# Check mode in fortress.conf
-grep HOSTAPD_OVS_MODE /etc/hookprobe/fortress.conf
-# Expected: HOSTAPD_OVS_MODE=true
-
-# Verify hostapd is using correct binary
+# Verify hostapd is using the correct binary
 ps aux | grep hostapd
 # Expected: /usr/local/bin/hostapd-ovs -B -P ...
 
-# Check hostapd config has bridge=FTS (not br-wifi)
+# Check hostapd config has bridge=FTS (direct OVS)
 grep "^bridge=" /etc/hostapd/hostapd-*.conf
 # Expected: bridge=FTS
 ```
 
-### 2. Verify WiFi Direct to OVS (No br-wifi)
+### 2. Verify WiFi Direct to OVS
 
 ```bash
-# Verify br-wifi does NOT exist (hostapd-ovs mode)
-ip link show br-wifi 2>/dev/null && echo "ERROR: br-wifi exists!" || echo "OK: No br-wifi (direct OVS mode)"
-
 # Verify WiFi interfaces are OVS ports
 ovs-vsctl show | grep -E "wlan_24ghz|wlan_5ghz"
 # Expected: Both interfaces listed as OVS ports
@@ -414,6 +405,9 @@ ovs-vsctl show | grep -E "wlan_24ghz|wlan_5ghz"
 # Get OVS port numbers
 ovs-ofctl show FTS | grep -E "wlan_24ghz|wlan_5ghz"
 # Note the port numbers for OpenFlow rule verification
+
+# Verify no legacy br-wifi exists
+ip link show br-wifi 2>/dev/null && echo "WARNING: Legacy br-wifi found, will be cleaned up on next boot" || echo "OK: No br-wifi"
 ```
 
 ### 3. Verify Cross-Band Multicast Rules
@@ -504,34 +498,45 @@ ovs-ofctl dump-flows FTS | grep "priority=850"
 
 ---
 
-## Rollback Plan
+## Troubleshooting
 
-If issues occur, rollback by:
+### Rebuild hostapd-ovs
 
-1. **Revert to br-wifi mode**:
-   ```bash
-   # Set mode in fortress.conf
-   sed -i 's/HOSTAPD_OVS_MODE=true/HOSTAPD_OVS_MODE=false/' /etc/hookprobe/fortress.conf
+If hostapd-ovs is corrupted or missing:
 
-   # Use standard hostapd
-   systemctl restart fts-hostapd-24ghz fts-hostapd-5ghz
-   ```
+```bash
+# Rebuild from source
+cd /path/to/hookprobe
+./shared/hostapd-ovs/build-hostapd-ovs.sh
 
-2. **Remove new OpenFlow rules**:
-   ```bash
-   # Remove multicast reflection rules
-   ovs-ofctl del-flows FTS "priority=400"
+# Restart WiFi services
+systemctl restart fts-hostapd-24ghz fts-hostapd-5ghz
+```
 
-   # Remove policy mDNS rules
-   ovs-ofctl del-flows FTS "priority=475"
-   ```
+### Clear OpenFlow Rules
 
-3. **Restore device database**:
-   ```bash
-   # Backup current, restore previous
-   cp /var/lib/hookprobe/devices.db /var/lib/hookprobe/devices.db.new
-   cp /var/lib/hookprobe/devices.db.bak /var/lib/hookprobe/devices.db
-   ```
+If OpenFlow rules cause issues:
+
+```bash
+# Remove multicast reflection rules
+ovs-ofctl del-flows FTS "priority=400"
+
+# Remove policy mDNS rules
+ovs-ofctl del-flows FTS "priority=475"
+
+# Re-run OVS setup to restore
+/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh
+```
+
+### Restore Device Database
+
+```bash
+# Backup current, restore previous
+cp /var/lib/hookprobe/devices.db /var/lib/hookprobe/devices.db.new
+cp /var/lib/hookprobe/devices.db.bak /var/lib/hookprobe/devices.db
+```
+
+**Note**: The legacy br-wifi architecture is no longer supported. If you encounter issues with hostapd-ovs, the solution is to rebuild hostapd-ovs, not revert to br-wifi.
 
 ---
 
