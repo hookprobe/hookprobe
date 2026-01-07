@@ -9,10 +9,10 @@
 #   - ClickHouse (analytics database)
 #   - Suricata IDS (deep packet inspection)
 #   - Zeek NSM (network security monitor)
-#   - Grafana (visualization dashboards)
 #   - Identity Engine (device fingerprinting)
 #   - Bubble Manager (ecosystem detection)
 #   - Log Shipper (event pipeline)
+#   - Note: Visualization via Fortress AdminLTE web UI (no Grafana)
 #
 # OPTIONAL (started if installed):
 #   - n8n (workflow automation) - profile: workflows
@@ -44,11 +44,12 @@ RemainAfterExit=yes
 ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
 
 # Start AIOCHI containers (core + optional if installed)
-# Core: clickhouse, suricata, zeek, grafana, identity, bubble, logshipper
+# Core: clickhouse, suricata, zeek, identity, bubble, logshipper
 # Optional: narrative (n8n), ollama
+# Note: No Grafana - visualization handled by Fortress AdminLTE web UI
 ExecStart=/bin/bash -c '\
     echo "[AIOCHI] Starting containers..." && \
-    for container in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-grafana aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do \
+    for container in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do \
         if podman container exists $container 2>/dev/null; then \
             podman start $container 2>/dev/null && echo "  ✓ $container" || echo "  ○ $container (already running or failed)"; \
         else \
@@ -60,7 +61,7 @@ ExecStart=/bin/bash -c '\
 # Stop all AIOCHI containers gracefully (reverse order)
 ExecStop=/bin/bash -c '\
     echo "[AIOCHI] Stopping containers..." && \
-    for container in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-clickhouse; do \
+    for container in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-zeek aiochi-suricata aiochi-clickhouse; do \
         if podman container exists $container 2>/dev/null; then \
             podman stop -t 10 $container 2>/dev/null && echo "  ✓ $container stopped" || true; \
         fi; \
