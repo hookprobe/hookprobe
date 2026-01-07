@@ -15,35 +15,22 @@
     },
     {
       "parameters": {
-        "url": "http://aiochi-victoria:8428/api/v1/query_range",
-        "method": "GET",
-        "queryParameters": {
-          "parameters": [
-            { "name": "query", "value": "rate(hookprobe_bytes_total[5m])" },
-            { "name": "start", "value": "={{Date.now() - 300000}}" },
-            { "name": "end", "value": "={{Date.now()}}" },
-            { "name": "step", "value": "60" }
-          ]
-        }
+        "url": "http://aiochi-clickhouse:8123/?query=SELECT%20sum(bytes_in%20%2B%20bytes_out)%20as%20total_bytes%20FROM%20aiochi.zeek_conn%20WHERE%20timestamp%20%3E%20now()%20-%20INTERVAL%205%20MINUTE%20FORMAT%20JSON",
+        "method": "GET"
       },
       "id": "fetch-bandwidth",
-      "name": "Fetch Bandwidth Metrics",
+      "name": "Fetch Bandwidth Metrics (ClickHouse)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
       "position": [450, 200]
     },
     {
       "parameters": {
-        "url": "http://aiochi-victoria:8428/api/v1/query",
-        "method": "GET",
-        "queryParameters": {
-          "parameters": [
-            { "name": "query", "value": "avg(hookprobe_latency_ms)" }
-          ]
-        }
+        "url": "http://aiochi-clickhouse:8123/?query=SELECT%20avg(latency_ms)%20as%20latency_ms%20FROM%20aiochi.performance_metrics%20WHERE%20timestamp%20%3E%20now()%20-%20INTERVAL%205%20MINUTE%20FORMAT%20JSON",
+        "method": "GET"
       },
       "id": "fetch-latency",
-      "name": "Fetch Latency Metrics",
+      "name": "Fetch Latency Metrics (ClickHouse)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
       "position": [450, 350]
