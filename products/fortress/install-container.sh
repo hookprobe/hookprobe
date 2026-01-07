@@ -3547,15 +3547,7 @@ AIOCHIENV
                 -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
                 docker.io/clickhouse/clickhouse-server:24.8
 
-            start_aiochi_container "aiochi-victoria" "VictoriaMetrics (time-series)" \
-                --name aiochi-victoria \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.11 \
-                -p 127.0.0.1:8428:8428 \
-                -v aiochi-victoria-data:/victoria-metrics-data \
-                docker.io/victoriametrics/victoria-metrics:v1.106.1 \
-                --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data
+            # NOTE: VictoriaMetrics removed - ClickHouse handles time-series analytics
 
             # 2. Capture Tier
             # IMPORTANT: Capture from FTS-mirror (OVS mirror port), NOT FTS directly!
@@ -3592,20 +3584,24 @@ AIOCHIENV
                 -e GF_USERS_DEFAULT_THEME=dark \
                 docker.io/grafana/grafana:11.4.0
 
-            # 4. Intelligence Tier - n8n Narratives
-            start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
-                --name aiochi-narrative \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.21 \
-                -p 127.0.0.1:5678:5678 \
-                -v aiochi-n8n-data:/home/node/.n8n \
-                -e N8N_BASIC_AUTH_ACTIVE=true \
-                -e N8N_BASIC_AUTH_USER=admin \
-                -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
-                -e N8N_HOST=0.0.0.0 \
-                -e N8N_PORT=5678 \
-                docker.io/n8nio/n8n:1.70.3
+            # 4. Intelligence Tier - n8n Narratives (OPTIONAL: --aiochi-workflows or --aiochi-full)
+            if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
+                    --name aiochi-narrative \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.21 \
+                    -p 127.0.0.1:5678:5678 \
+                    -v aiochi-n8n-data:/home/node/.n8n \
+                    -e N8N_BASIC_AUTH_ACTIVE=true \
+                    -e N8N_BASIC_AUTH_USER=admin \
+                    -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
+                    -e N8N_HOST=0.0.0.0 \
+                    -e N8N_PORT=5678 \
+                    docker.io/n8nio/n8n:1.70.3
+            else
+                log_info "    [SKIP] n8n Workflows (use --aiochi-workflows or --aiochi-full to enable)"
+            fi
 
             # 5. Identity Engine (CRITICAL for fts-web integration)
             # Only start if the image was built successfully
@@ -3655,41 +3651,48 @@ AIOCHIENV
                 AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-logshipper(build-failed)"
             fi
 
-            # 7. AI Tier - Ollama (starts in background, model downloads async)
-            log_info ""
-            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            log_info "  Starting Ollama LLM (model download is ASYNC)"
-            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo -n "    [START] Ollama LLM runtime... "
-            # Start Ollama WITHOUT the model pull in entrypoint - we'll do that async
-            if podman run -d --name aiochi-ollama \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.50 \
-                -p 127.0.0.1:11434:11434 \
-                -v aiochi-ollama-models:/root/.ollama \
-                -e OLLAMA_HOST=0.0.0.0 \
-                -e OLLAMA_KEEP_ALIVE=24h \
-                docker.io/ollama/ollama:latest \
-                serve >/dev/null 2>&1; then
-                echo "✓"
-                # Queue model download in background (don't block install)
-                log_info "    → Model download will start in background (~2GB)..."
-                log_info "    → Monitor: tail -f ${LOG_DIR}/aiochi-llm-download.log"
-                (
-                    sleep 15  # Wait for Ollama to fully start
-                    mkdir -p "$LOG_DIR"
-                    echo "[$(date -Iseconds)] Starting llama3.2:3b model download..." >> "${LOG_DIR}/aiochi-llm-download.log"
-                    podman exec aiochi-ollama ollama pull llama3.2:3b 2>&1 | while read line; do
-                        echo "[$(date -Iseconds)] $line" >> "${LOG_DIR}/aiochi-llm-download.log"
-                    done
-                    echo "[$(date -Iseconds)] Model download complete." >> "${LOG_DIR}/aiochi-llm-download.log"
-                ) &
-            elif podman ps -a --format "{{.Names}}" | grep -q "^aiochi-ollama$"; then
-                echo "○ (already exists)"
+            # 7. AI Tier - Ollama (OPTIONAL: --aiochi-ai or --aiochi-full)
+            # When not installed, AIOCHI uses template-based narratives instead
+            if [ "${AIOCHI_AI:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                log_info "  Starting Ollama LLM (model download is ASYNC)"
+                log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo -n "    [START] Ollama LLM runtime... "
+                # Start Ollama WITHOUT the model pull in entrypoint - we'll do that async
+                if podman run -d --name aiochi-ollama \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.50 \
+                    -p 127.0.0.1:11434:11434 \
+                    -v aiochi-ollama-models:/root/.ollama \
+                    -e OLLAMA_HOST=0.0.0.0 \
+                    -e OLLAMA_KEEP_ALIVE=24h \
+                    docker.io/ollama/ollama:latest \
+                    serve >/dev/null 2>&1; then
+                    echo "✓"
+                    # Queue model download in background (don't block install)
+                    log_info "    → Model download will start in background (~2GB)..."
+                    log_info "    → Monitor: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+                    (
+                        sleep 15  # Wait for Ollama to fully start
+                        mkdir -p "$LOG_DIR"
+                        echo "[$(date -Iseconds)] Starting llama3.2:3b model download..." >> "${LOG_DIR}/aiochi-llm-download.log"
+                        podman exec aiochi-ollama ollama pull llama3.2:3b 2>&1 | while read line; do
+                            echo "[$(date -Iseconds)] $line" >> "${LOG_DIR}/aiochi-llm-download.log"
+                        done
+                        echo "[$(date -Iseconds)] Model download complete." >> "${LOG_DIR}/aiochi-llm-download.log"
+                    ) &
+                elif podman ps -a --format "{{.Names}}" | grep -q "^aiochi-ollama$"; then
+                    echo "○ (already exists)"
+                else
+                    echo "✗ (AI narratives will use templates)"
+                    log_warn "Ollama failed to start - AI narratives will fall back to templates"
+                fi
             else
-                echo "✗ (AI narratives will use templates)"
-                log_warn "Ollama failed to start - AI narratives will fall back to templates"
+                log_info ""
+                log_info "    [SKIP] Ollama LLM (use --aiochi-ai or --aiochi-full to enable)"
+                log_info "           AIOCHI will use template-based narratives instead"
             fi
 
             echo ""
@@ -3704,17 +3707,30 @@ AIOCHIENV
             fi
             log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             log_info ""
-            log_info "  Services available at:"
-            log_info "    • ClickHouse:      http://localhost:8123"
-            log_info "    • VictoriaMetrics: http://localhost:8428"
-            log_info "    • Grafana:         http://localhost:3000"
-            log_info "    • n8n Workflows:   http://localhost:5678"
-            log_info "    • Identity Engine: http://localhost:8060"
-            log_info "    • Ollama LLM:      http://localhost:11434"
-            log_info ""
-            log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
-            log_info "        in the background. AI features will activate once complete."
-            log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+            log_info "  AIOCHI Core Services:"
+            log_info "    • ClickHouse:      http://localhost:8123  (analytics)"
+            log_info "    • Grafana:         http://localhost:3000  (dashboards)"
+            log_info "    • Identity Engine: http://localhost:8060  (device fingerprinting)"
+            log_info "    • Suricata:        IDS on FTS-mirror"
+            log_info "    • Zeek:            NSM on FTS-mirror"
+            if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  Optional - Workflows:"
+                log_info "    • n8n Workflows:   http://localhost:5678"
+            fi
+            if [ "${AIOCHI_AI:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  Optional - AI:"
+                log_info "    • Ollama LLM:      http://localhost:11434"
+                log_info ""
+                log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
+                log_info "        in the background. AI features will activate once complete."
+                log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+            else
+                log_info ""
+                log_info "  Narratives: Using template-based generation (no LLM)"
+                log_info "  To enable AI narratives, reinstall with --aiochi-ai or --aiochi-full"
+            fi
             echo ""
 
             # Install AIOCHI systemd service for auto-start on reboot
@@ -3727,7 +3743,7 @@ AIOCHIENV
                 systemctl enable aiochi.service 2>/dev/null || true
                 log_info "  ✓ aiochi.service installed and enabled"
             else
-                # Create inline if not found
+                # Create inline if not found (matches systemd/aiochi.service)
                 cat > "$aiochi_service_dst" << 'AIOCHISERVICE'
 [Unit]
 Description=HookProbe AIOCHI (AI Eyes) Containers
@@ -3740,8 +3756,10 @@ ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aioch
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
-ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-victoria aiochi-suricata aiochi-zeek aiochi-grafana aiochi-narrative aiochi-identity aiochi-logshipper aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
-ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-victoria aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
+# Core: clickhouse, suricata, zeek, grafana, identity, bubble, logshipper
+# Optional (started if installed): narrative (n8n), ollama
+ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-grafana aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
+ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
 Restart=no
 
 [Install]
@@ -4982,12 +5000,38 @@ main() {
                 uninstall_args="$uninstall_args $1"
                 ;;
             --enable-aiochi)
-                # AIOCHI bundles all monitoring/analytics components
+                # AIOCHI (AI Eyes) - minimal core installation (~2GB RAM)
+                # Includes: ClickHouse, Suricata, Zeek, Grafana, Identity, Bubble, LogShipper
                 export INSTALL_AIOCHI=true
                 export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
-                export INSTALL_N8N=true
                 export INSTALL_IDS=true
+                ;;
+            --aiochi-workflows)
+                # Add n8n workflow automation to AIOCHI
+                export INSTALL_AIOCHI=true
+                export INSTALL_MONITORING=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_WORKFLOWS=true
+                ;;
+            --aiochi-ai)
+                # Add Ollama LLM for AI narratives (~4GB additional RAM)
+                export INSTALL_AIOCHI=true
+                export INSTALL_MONITORING=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_AI=true
+                ;;
+            --aiochi-full)
+                # Full AIOCHI stack with all optional components (~8GB RAM)
+                export INSTALL_AIOCHI=true
+                export INSTALL_MONITORING=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_WORKFLOWS=true
+                export AIOCHI_AI=true
+                export AIOCHI_FULL=true
                 ;;
             --enable-remote-access)
                 export INSTALL_CLOUDFLARE_TUNNEL=true
@@ -5029,10 +5073,15 @@ main() {
                 echo "  --preserve-data     Reinstall using existing data volumes"
                 echo "  --force-rebuild     Force rebuild of all containers"
                 echo ""
-                echo "Optional Components:"
-                echo "  --enable-aiochi           Install AIOCHI (AI Eyes) - Cognitive Network Layer"
-                echo "                            Bundles: ClickHouse, Grafana, VictoriaMetrics,"
-                echo "                            n8n, Suricata, Zeek, Ollama LLM"
+                echo "AIOCHI (AI Eyes) - Cognitive Network Layer:"
+                echo "  --enable-aiochi           Install AIOCHI minimal (~2GB RAM)"
+                echo "                            Core: ClickHouse, Grafana, Suricata, Zeek,"
+                echo "                            Identity Engine, Bubble Manager, Log Shipper"
+                echo "  --aiochi-workflows        Add n8n workflow automation (~500MB more)"
+                echo "  --aiochi-ai               Add Ollama LLM for AI narratives (~4GB more)"
+                echo "  --aiochi-full             Full AIOCHI stack with all components (~8GB total)"
+                echo ""
+                echo "Other Optional Components:"
                 echo "  --enable-remote-access    Configure Cloudflare Tunnel"
                 echo "  --enable-lte              Enable LTE modem failover"
                 echo ""
@@ -5053,7 +5102,10 @@ main() {
                 echo "  ADMIN_USER          Admin username"
                 echo "  ADMIN_PASS          Admin password"
                 echo "  WEB_PORT            Web UI port"
-                echo "  INSTALL_AIOCHI      true/false - Enable AIOCHI (AI Eyes)"
+                echo "  INSTALL_AIOCHI      true/false - Enable AIOCHI (AI Eyes) core"
+                echo "  AIOCHI_WORKFLOWS    true/false - Add n8n workflows"
+                echo "  AIOCHI_AI           true/false - Add Ollama LLM"
+                echo "  AIOCHI_FULL         true/false - Enable all AIOCHI components"
                 echo "  LTE_APN             LTE APN name"
                 echo "  LTE_AUTH            LTE auth type (none/pap/chap/mschapv2)"
                 echo "  LTE_USER            LTE username"
