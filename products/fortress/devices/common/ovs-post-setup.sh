@@ -535,11 +535,70 @@ setup_avahi_coexistence() {
 # ============================================================
 
 setup_wifi_bridge() {
-    log_section "WiFi Bridge for SDN Autopilot"
+    log_section "WiFi Bridge Configuration"
 
     local br_wifi="br-wifi"
     local veth_br="veth-wifi-a"   # Linux bridge side
     local veth_ovs="veth-wifi-b"  # OVS side
+
+    # ============================================================
+    # CHECK FOR HOSTAPD-OVS MODE (DIRECT OVS INTEGRATION)
+    # ============================================================
+    # In hostapd-ovs mode, WiFi interfaces connect directly to OVS
+    # without the br-wifi + veth overhead. This eliminates:
+    #   - Extra Linux bridge processing
+    #   - veth pair latency
+    #   - Hairpin mode complexity
+    #   - Packet loss from extra hops
+    #
+    # Traffic flow:
+    #   hostapd-ovs mode:  WiFi → OVS (FTS) → OpenFlow rules
+    #   veth mode:         WiFi → br-wifi → veth → OVS → rules
+    # ============================================================
+
+    local hostapd_ovs_mode="false"
+    if [ -f "$FORTRESS_CONF" ]; then
+        hostapd_ovs_mode=$(grep "^HOSTAPD_OVS_MODE=" "$FORTRESS_CONF" 2>/dev/null | cut -d= -f2 || echo "false")
+    fi
+
+    if [ "$hostapd_ovs_mode" = "true" ]; then
+        log_info "hostapd-ovs mode: Direct OVS integration (no br-wifi overhead)"
+
+        # Cleanup legacy br-wifi infrastructure if present
+        if ip link show "$br_wifi" &>/dev/null; then
+            log_info "Removing legacy br-wifi infrastructure..."
+
+            # Remove veth from OVS
+            if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
+                ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs" 2>/dev/null || true
+                log_info "  Removed $veth_ovs from OVS"
+            fi
+
+            # Delete veth pair
+            if ip link show "$veth_br" &>/dev/null; then
+                ip link delete "$veth_br" 2>/dev/null || true
+                log_info "  Deleted veth pair"
+            fi
+
+            # Delete br-wifi
+            ip link set "$br_wifi" down 2>/dev/null || true
+            ip link delete "$br_wifi" 2>/dev/null || true
+            log_info "  Deleted br-wifi bridge"
+
+            log_success "Legacy br-wifi infrastructure removed"
+        fi
+
+        # WiFi interfaces will be added to OVS by hostapd-ovs using bridge=FTS
+        # The multicast reflection rules (priority 400) handle cross-band mDNS
+        log_success "hostapd-ovs mode ready: WiFi → OVS ($OVS_BRIDGE) direct"
+        return 0
+    fi
+
+    # ============================================================
+    # VETH MODE: br-wifi + veth pair (legacy/fallback)
+    # ============================================================
+    log_info "veth mode: Setting up br-wifi with veth pair to OVS"
+    log_warn "  Consider using hostapd-ovs for better performance"
 
     # Clean up orphan veth interfaces that may have accumulated
     # These can appear from failed setup attempts or network changes
