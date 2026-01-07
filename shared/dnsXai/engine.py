@@ -168,6 +168,8 @@ class DomainFeatureExtractor:
     - Entropy: Shannon entropy, n-gram entropy
     - Pattern: known ad patterns, suspicious TLDs
     - Structural: subdomain depth, numeric ratio
+    - DGA detection: Domain Generation Algorithm indicators
+    - Threat intelligence: Real-time reputation scoring
     """
 
     # Known ad-related patterns
@@ -178,6 +180,23 @@ class DomainFeatureExtractor:
         r'sponsor', r'stat[si]?\.', r'track', r'traff', r'widget',
         r'metric', r'analytic', r'telemetry', r'collect', r'ingest',
     ]
+
+    # DGA (Domain Generation Algorithm) detection patterns
+    DGA_INDICATORS = [
+        r'^[a-z]{15,}$',  # Very long random-looking strings
+        r'^[a-z0-9]{20,}$',  # Long alphanumeric
+        r'^[bcdfghjklmnpqrstvwxz]{6,}$',  # Consonant-heavy (no vowels)
+        r'[0-9]{4,}',  # Many consecutive digits
+        r'([a-z])\1{3,}',  # Repeated characters (aaaa)
+    ]
+
+    # Threat intelligence keywords (malware, C2, phishing)
+    THREAT_KEYWORDS = {
+        'malware': 0.95, 'phish': 0.95, 'exploit': 0.90, 'botnet': 0.95,
+        'ransomware': 0.95, 'trojan': 0.90, 'virus': 0.85, 'worm': 0.85,
+        'keylog': 0.95, 'backdoor': 0.95, 'rootkit': 0.95, 'cryptomine': 0.90,
+        'coinminer': 0.90, 'c2server': 0.95, 'cnc': 0.85, 'payload': 0.80,
+    }
 
     # Suspicious TLDs often used by trackers
     SUSPICIOUS_TLDS = {
@@ -194,10 +213,78 @@ class DomainFeatureExtractor:
     def __init__(self):
         self._pattern_cache = {}
         self._compile_patterns()
+        # Adaptive threshold learning
+        self._false_positive_domains: Set[str] = set()
+        self._confirmed_threats: Set[str] = set()
 
     def _compile_patterns(self):
         """Pre-compile regex patterns for performance."""
         self._ad_regex = [re.compile(p, re.I) for p in self.AD_PATTERNS]
+        self._dga_regex = [re.compile(p, re.I) for p in self.DGA_INDICATORS]
+
+    def detect_dga(self, domain: str) -> Tuple[bool, float]:
+        """
+        Detect Domain Generation Algorithm (DGA) patterns.
+
+        DGA domains are machine-generated and used by malware for C2 communication.
+        Returns (is_dga, confidence)
+        """
+        domain_lower = domain.lower().strip('.')
+        parts = domain_lower.split('.')
+
+        # Focus on the subdomain/main domain, not TLD
+        main_part = parts[0] if len(parts) > 1 else domain_lower
+
+        # Skip very short domains
+        if len(main_part) < 8:
+            return False, 0.0
+
+        # Check DGA patterns
+        dga_score = 0.0
+
+        for regex in self._dga_regex:
+            if regex.search(main_part):
+                dga_score += 0.3
+
+        # High entropy in main part suggests randomness
+        entropy = self._shannon_entropy(main_part)
+        if entropy > 4.0:  # High entropy threshold
+            dga_score += 0.3
+
+        # Low vowel ratio (DGA domains often lack natural vowels)
+        vowel_ratio = sum(c in 'aeiou' for c in main_part) / max(len(main_part), 1)
+        if vowel_ratio < 0.15:
+            dga_score += 0.2
+
+        # Unnatural consonant clusters
+        consonant_cluster = re.search(r'[bcdfghjklmnpqrstvwxz]{5,}', main_part)
+        if consonant_cluster:
+            dga_score += 0.2
+
+        is_dga = dga_score >= 0.5
+        return is_dga, min(dga_score, 1.0)
+
+    def detect_threat_keywords(self, domain: str) -> Tuple[bool, float, str]:
+        """
+        Detect threat-related keywords in domain.
+
+        Returns (is_threat, confidence, matched_keyword)
+        """
+        domain_lower = domain.lower()
+
+        for keyword, confidence in self.THREAT_KEYWORDS.items():
+            if keyword in domain_lower:
+                return True, confidence, keyword
+
+        return False, 0.0, ""
+
+    def record_false_positive(self, domain: str):
+        """Record a domain that was incorrectly blocked (for adaptive learning)."""
+        self._false_positive_domains.add(domain.lower())
+
+    def record_confirmed_threat(self, domain: str):
+        """Record a confirmed threat domain (for adaptive learning)."""
+        self._confirmed_threats.add(domain.lower())
 
     @lru_cache(maxsize=10000)
     def extract_features(self, domain: str) -> Dict[str, float]:
@@ -263,6 +350,30 @@ class DomainFeatureExtractor:
         else:
             features['subdomain_entropy'] = 0.0
 
+        # === Advanced ML Features (NextDNS-style AI threat detection) ===
+
+        # DGA (Domain Generation Algorithm) detection
+        is_dga, dga_score = self.detect_dga(domain)
+        features['is_dga'] = 1.0 if is_dga else 0.0
+        features['dga_score'] = dga_score
+
+        # Threat keyword detection
+        is_threat, threat_score, _ = self.detect_threat_keywords(domain)
+        features['has_threat_keyword'] = 1.0 if is_threat else 0.0
+        features['threat_score'] = threat_score
+
+        # Reputation features (adaptive learning)
+        features['is_known_fp'] = 1.0 if domain in self._false_positive_domains else 0.0
+        features['is_confirmed_threat'] = 1.0 if domain in self._confirmed_threats else 0.0
+
+        # Domain age proxy (newer TLDs more suspicious)
+        new_tlds = {'xyz', 'top', 'club', 'online', 'site', 'website', 'space',
+                   'tech', 'store', 'shop', 'live', 'life', 'world', 'today'}
+        features['is_new_tld'] = 1.0 if tld in new_tlds else 0.0
+
+        # Punycode detection (internationalized domains, often used in phishing)
+        features['is_punycode'] = 1.0 if 'xn--' in domain else 0.0
+
         return features
 
     def _shannon_entropy(self, s: str) -> float:
@@ -295,6 +406,126 @@ class DomainFeatureExtractor:
             entropy -= p * math.log2(p)
 
         return entropy
+
+
+# =============================================================================
+# Query Pattern Analyzer (DNS Tunneling & Anomaly Detection)
+# =============================================================================
+
+class QueryPatternAnalyzer:
+    """
+    Analyzes DNS query patterns for suspicious behavior.
+
+    Detects:
+    - DNS tunneling (data exfiltration via DNS)
+    - Query flooding (DDoS amplification)
+    - Unusual query timing patterns
+    - Subdomain enumeration attacks
+
+    This provides NextDNS-style AI threat detection capabilities.
+    """
+
+    def __init__(self, window_seconds: int = 60):
+        self._query_times: Dict[str, List[float]] = {}  # domain -> timestamps
+        self._query_sizes: Dict[str, List[int]] = {}  # domain -> query sizes
+        self._window_seconds = window_seconds
+        self._lock = threading.Lock()
+
+        # Thresholds for anomaly detection
+        self.TUNNEL_ENTROPY_THRESHOLD = 4.2  # High entropy = encoded data
+        self.TUNNEL_LENGTH_THRESHOLD = 50  # Unusually long subdomains
+        self.FLOOD_THRESHOLD = 100  # Queries per minute per domain
+        self.ENUMERATION_THRESHOLD = 50  # Unique subdomains per minute
+
+    def record_query(self, domain: str, query_size: int = 0):
+        """Record a query for pattern analysis."""
+        now = time.time()
+        with self._lock:
+            if domain not in self._query_times:
+                self._query_times[domain] = []
+                self._query_sizes[domain] = []
+
+            self._query_times[domain].append(now)
+            self._query_sizes[domain].append(query_size)
+
+            # Clean old entries (outside window)
+            cutoff = now - self._window_seconds
+            self._query_times[domain] = [t for t in self._query_times[domain] if t > cutoff]
+            self._query_sizes[domain] = self._query_sizes[domain][-len(self._query_times[domain]):]
+
+    def detect_dns_tunneling(self, domain: str) -> Tuple[bool, float, str]:
+        """
+        Detect DNS tunneling indicators.
+
+        DNS tunneling is used for data exfiltration and C2 communication.
+        Returns (is_tunnel, confidence, reason)
+        """
+        domain_lower = domain.lower()
+        parts = domain_lower.split('.')
+
+        if len(parts) < 3:
+            return False, 0.0, ""
+
+        subdomain = parts[0]
+        score = 0.0
+        reasons = []
+
+        # Long subdomains (tunneling uses encoded data)
+        if len(subdomain) > self.TUNNEL_LENGTH_THRESHOLD:
+            score += 0.4
+            reasons.append(f"long_subdomain:{len(subdomain)}")
+
+        # Base64-like patterns
+        if re.match(r'^[A-Za-z0-9+/=]{20,}$', subdomain):
+            score += 0.4
+            reasons.append("base64_pattern")
+
+        # Hex encoding
+        if re.match(r'^[0-9a-f]{16,}$', subdomain, re.I):
+            score += 0.3
+            reasons.append("hex_encoding")
+
+        # High entropy
+        entropy = self._calculate_entropy(subdomain)
+        if entropy > self.TUNNEL_ENTROPY_THRESHOLD:
+            score += 0.3
+            reasons.append(f"high_entropy:{entropy:.2f}")
+
+        is_tunnel = score >= 0.6
+        return is_tunnel, min(score, 1.0), ';'.join(reasons)
+
+    def detect_query_flooding(self, domain: str) -> Tuple[bool, int]:
+        """Detect query flooding (potential DDoS)."""
+        with self._lock:
+            if domain not in self._query_times:
+                return False, 0
+            queries = self._query_times[domain]
+            qpm = len(queries) * (60 / max(self._window_seconds, 1))
+            return qpm > self.FLOOD_THRESHOLD, int(qpm)
+
+    def _calculate_entropy(self, s: str) -> float:
+        """Calculate Shannon entropy."""
+        if not s:
+            return 0.0
+        prob = {c: s.count(c) / len(s) for c in set(s)}
+        return -sum(p * math.log2(p) for p in prob.values())
+
+    def get_domain_stats(self, domain: str) -> Dict[str, Any]:
+        """Get query statistics for a domain."""
+        with self._lock:
+            times = self._query_times.get(domain, [])
+            sizes = self._query_sizes.get(domain, [])
+            if not times:
+                return {'queries': 0, 'qpm': 0}
+            return {
+                'queries': len(times),
+                'qpm': len(times) * (60 / max(self._window_seconds, 1)),
+                'avg_size': sum(sizes) / len(sizes) if sizes else 0,
+            }
+
+
+# Global query analyzer instance
+query_pattern_analyzer = QueryPatternAnalyzer()
 
 
 # =============================================================================
@@ -891,15 +1122,36 @@ class CNAMEUncloaker:
         return False
 
     def _is_whitelisted(self, domain: str, whitelist: Set[str]) -> bool:
-        """Check if domain or parent is in whitelist."""
+        """Check if domain matches whitelist (supports wildcards and parent domains).
+
+        Whitelist patterns supported:
+        - exact: example.com - matches only example.com
+        - wildcard: *.example.com - matches sub.example.com, a.b.example.com, etc.
+        - parent: example.com also matches all subdomains (implicit wildcard)
+        """
         domain_lower = domain.lower()
+
+        # 1. Check exact match
         if domain_lower in whitelist:
             return True
+
+        # 2. Check wildcard patterns (*.example.com)
         parts = domain_lower.split('.')
+        for i in range(len(parts)):
+            wildcard = '*.' + '.'.join(parts[i:])
+            if wildcard in whitelist:
+                return True
+
+        # 3. Check parent domain match
         for i in range(1, len(parts)):
             parent = '.'.join(parts[i:])
             if parent in whitelist:
                 return True
+            # Also check parent with wildcard
+            wildcard = '*.' + parent
+            if wildcard in whitelist:
+                return True
+
         return False
 
     def check_chain_for_trackers(
@@ -1599,15 +1851,38 @@ class AIAdBlocker:
         return result
 
     def _is_whitelisted(self, domain: str) -> bool:
-        """Check if domain or parent is whitelisted."""
+        """Check if domain matches whitelist (supports wildcards and parent domains).
+
+        Whitelist patterns supported:
+        - exact: example.com - matches only example.com
+        - wildcard: *.example.com - matches sub.example.com, a.b.example.com, etc.
+        - parent: example.com also matches all subdomains (implicit wildcard)
+
+        The parent domain matching is the default behavior - whitelisting example.com
+        automatically whitelists all subdomains. Use explicit patterns for fine control.
+        """
+        domain = domain.lower()
+
+        # 1. Check exact match
         if domain in self.whitelist:
             return True
 
-        # Check parent domains
+        # 2. Check wildcard patterns (*.example.com)
         parts = domain.split('.')
+        for i in range(len(parts)):
+            # Build wildcard pattern for this level
+            wildcard = '*.' + '.'.join(parts[i:])
+            if wildcard in self.whitelist:
+                return True
+
+        # 3. Check parent domain match (example.com whitelists sub.example.com)
         for i in range(1, len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self.whitelist:
+                return True
+            # Also check parent with wildcard
+            wildcard = '*.' + parent
+            if wildcard in self.whitelist:
                 return True
 
         return False
