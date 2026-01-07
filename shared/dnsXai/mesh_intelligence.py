@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import AI ad blocker components
 try:
-    from ai_ad_blocker import (
+    from engine import (
         AIAdBlocker,
         AdBlockConfig,
         DomainCategory,
@@ -50,7 +50,45 @@ try:
     )
     AD_BLOCKER_AVAILABLE = True
 except ImportError:
-    AD_BLOCKER_AVAILABLE = False
+    try:
+        # Fallback for when imported as package
+        from .engine import (
+            AIAdBlocker,
+            AdBlockConfig,
+            DomainCategory,
+            ClassificationResult,
+            DomainClassifier
+        )
+        AD_BLOCKER_AVAILABLE = True
+    except ImportError:
+        AD_BLOCKER_AVAILABLE = False
+        # Define fallback types when ad blocker is not available
+        class DomainCategory(Enum):
+            """Fallback domain category enum."""
+            LEGITIMATE = "legitimate"
+            ADVERTISING = "advertising"
+            TRACKING = "tracking"
+            ANALYTICS = "analytics"
+            SOCIAL_TRACKER = "social_tracker"
+            MALWARE = "malware"
+            CRYPTOMINER = "cryptominer"
+            UNKNOWN = "unknown"
+
+        class ClassificationResult:
+            """Fallback classification result."""
+            pass
+
+        class DomainClassifier:
+            """Fallback domain classifier."""
+            pass
+
+        class AdBlockConfig:
+            """Fallback config."""
+            pass
+
+        class AIAdBlocker:
+            """Fallback ad blocker."""
+            pass
 
 # Import mesh components
 try:

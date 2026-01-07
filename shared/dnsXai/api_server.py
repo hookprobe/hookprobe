@@ -565,6 +565,25 @@ class SimpleDomainFeatureExtractor:
         'gstatic.com', 'googleapis.com', 'icloud.com', 'office.com',
     }
 
+    # Package repositories and software distribution - CRITICAL: NEVER block
+    SOFTWARE_DISTRIBUTION_DOMAINS = {
+        # Linux distributions
+        'raspberrypi.com', 'raspberrypi.org', 'archive.raspberrypi.com',
+        'archive.raspberrypi.org', 'downloads.raspberrypi.com',
+        'ubuntu.com', 'archive.ubuntu.com', 'security.ubuntu.com',
+        'debian.org', 'deb.debian.org', 'security.debian.org',
+        'fedoraproject.org', 'centos.org', 'archlinux.org',
+        # Package managers
+        'pypi.org', 'files.pythonhosted.org', 'npmjs.org', 'npmjs.com',
+        'rubygems.org', 'crates.io', 'golang.org', 'maven.apache.org',
+        # Container registries
+        'docker.io', 'docker.com', 'ghcr.io', 'gcr.io', 'quay.io',
+        # Version control
+        'github.com', 'raw.githubusercontent.com', 'gitlab.com', 'bitbucket.org',
+        # Common software
+        'kernel.org', 'apache.org', 'gnu.org', 'mozilla.org',
+    }
+
     def __init__(self):
         import re
         # Compile single regex for all keywords - O(1) lookup
@@ -574,13 +593,15 @@ class SimpleDomainFeatureExtractor:
         )
 
     def _is_protected_domain(self, domain: str) -> bool:
-        """Check if domain is protected (system connectivity, security, CDN)."""
+        """Check if domain is protected (system connectivity, security, CDN, software repos)."""
         domain_lower = domain.lower()
 
         # Check exact match first
         if domain_lower in self.SYSTEM_CONNECTIVITY_DOMAINS:
             return True
         if domain_lower in self.SECURITY_SERVICE_DOMAINS:
+            return True
+        if domain_lower in self.SOFTWARE_DISTRIBUTION_DOMAINS:
             return True
 
         # Check parent domains
@@ -592,6 +613,8 @@ class SimpleDomainFeatureExtractor:
             if parent in self.SECURITY_SERVICE_DOMAINS:
                 return True
             if parent in self.LEGITIMATE_INFRASTRUCTURE:
+                return True
+            if parent in self.SOFTWARE_DISTRIBUTION_DOMAINS:
                 return True
 
         return False
@@ -1053,9 +1076,11 @@ class APIHandler(BaseHTTPRequestHandler):
             '/api/stats': self._get_stats,
             '/api/status': self._get_status,
             '/api/whitelist': self._get_whitelist,
+            '/api/whitelist/status': self._get_whitelist_status,
             '/api/blocked': self._get_blocked,
             '/api/ml/status': self._get_ml_status,
             '/api/ml/training-data': self._get_training_data,
+            '/api/test/classify': self._test_classify,
         }
 
         handler = routes.get(path)
@@ -1285,6 +1310,78 @@ class APIHandler(BaseHTTPRequestHandler):
         result = ml_manager.start_training()
         status = 200 if result.get('success') else 400
         self._send_json(result, status)
+
+    def _test_classify(self):
+        """Test classify a domain without blocking (for debugging)."""
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        domain = params.get('domain', [''])[0].strip().lower()
+
+        if not domain:
+            self._send_error('Missing domain parameter')
+            return
+
+        # Use the smart classifier to test
+        extractor = SimpleDomainFeatureExtractor()
+
+        # Check if protected
+        is_protected = extractor._is_protected_domain(domain)
+
+        # Check if whitelisted
+        is_whitelisted = whitelist_manager.contains(domain)
+
+        # Quick classify
+        would_block, confidence, reason = extractor.quick_classify(domain)
+
+        # Extract features for debugging
+        features = extractor.extract_features(domain)
+
+        self._send_json({
+            'domain': domain,
+            'is_protected': is_protected,
+            'is_whitelisted': is_whitelisted,
+            'would_block': would_block and not is_protected and not is_whitelisted,
+            'confidence': confidence,
+            'reason': reason,
+            'effective_action': 'ALLOW' if (is_protected or is_whitelisted or not would_block) else 'BLOCK',
+            'features': features,
+            'notes': self._get_classification_notes(domain, is_protected, is_whitelisted)
+        })
+
+    def _get_classification_notes(self, domain: str, is_protected: bool, is_whitelisted: bool) -> list:
+        """Get helpful notes about domain classification."""
+        notes = []
+
+        if is_protected:
+            notes.append("Domain is protected infrastructure (never blocked)")
+
+        if is_whitelisted:
+            notes.append("Domain is in user whitelist")
+
+        # Check parent domains
+        parts = domain.split('.')
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[i:])
+            if whitelist_manager.contains(parent):
+                notes.append(f"Parent domain '{parent}' is whitelisted")
+                break
+
+        extractor = SimpleDomainFeatureExtractor()
+        if domain in extractor.SOFTWARE_DISTRIBUTION_DOMAINS:
+            notes.append("Domain is a software distribution service")
+        elif domain in extractor.SYSTEM_CONNECTIVITY_DOMAINS:
+            notes.append("Domain is used for system connectivity checks")
+
+        return notes
+
+    def _get_whitelist_status(self):
+        """Get detailed whitelist status."""
+        self._send_json({
+            'whitelist': whitelist_manager.get_all(),
+            'count': len(whitelist_manager.get_all()),
+            'file_location': str(USERDATA_WHITELIST_FILE) if USERDATA_WHITELIST_FILE.exists() else str(WHITELIST_FILE),
+            'note': 'DNS engine auto-reloads whitelist every 5 seconds when file changes'
+        })
 
 
 def run_api_server(host: str = '0.0.0.0', port: int = 8080):
