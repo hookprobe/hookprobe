@@ -239,10 +239,10 @@ EOF
     # We need to re-find the line since we modified the file
     BR_LINE=$(grep -n "^int linux_br_get(" "$TARGET" | cut -d: -f1)
 
-    # Find the "return -1;" line within linux_br_get function
-    # It's typically within 20 lines of the function start
+    # Find the FIRST "return -1;" line within linux_br_get function
+    # Must use head -1 to get the one in linux_br_get, not linux_master_get
     local RET_LINE
-    RET_LINE=$(sed -n "${BR_LINE},$((BR_LINE+30))p" "$TARGET" | grep -n "return -1;" | tail -1 | cut -d: -f1)
+    RET_LINE=$(sed -n "${BR_LINE},$((BR_LINE+20))p" "$TARGET" | grep -n "return -1;" | head -1 | cut -d: -f1)
     if [ -z "$RET_LINE" ]; then
         log_error "Cannot find return -1 in linux_br_get function"
     fi
