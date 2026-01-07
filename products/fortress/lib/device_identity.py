@@ -72,11 +72,25 @@ class DeviceIdentity:
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
 
+    @property
+    def display_name(self) -> str:
+        """Human-friendly display name for the device."""
+        if self.canonical_name:
+            return self.canonical_name
+        if self.mdns_device_id:
+            return self.mdns_device_id
+        if self.device_type and self.manufacturer:
+            return f"{self.manufacturer} {self.device_type}"
+        if self.current_mac:
+            return f"Device-{self.current_mac[-8:].replace(':', '')}"
+        return f"Unknown-{self.identity_id[:8]}"
+
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization."""
         return {
             "identity_id": self.identity_id,
             "canonical_name": self.canonical_name,
+            "display_name": self.display_name,
             "mdns_device_id": self.mdns_device_id,
             "dhcp_option55": self.dhcp_option55,
             "fingerbank_id": self.fingerbank_id,
@@ -717,3 +731,8 @@ if __name__ == "__main__":
     elif args.command == "cleanup":
         removed = manager.cleanup_stale_identities(args.days)
         print(f"Removed {removed} stale identities (not seen in {args.days} days)")
+
+
+# Alias for backward compatibility with DHCP hooks
+# The DHCP event scripts use DeviceIdentityTracker name
+DeviceIdentityTracker = DeviceIdentityManager
