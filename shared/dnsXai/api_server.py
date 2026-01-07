@@ -405,7 +405,13 @@ class WhitelistManager:
         return sorted(self._whitelist)
 
     def validate_domain(self, domain: str) -> Tuple[bool, str]:
-        """Validate domain format. Returns (is_valid, error_message)."""
+        """Validate domain format including wildcard patterns. Returns (is_valid, error_message).
+
+        Supported formats:
+        - example.com - exact domain
+        - sub.example.com - subdomain
+        - *.example.com - wildcard (matches all subdomains)
+        """
         import re
 
         if not domain:
@@ -420,17 +426,31 @@ class WhitelistManager:
         if len(domain) < 2:
             return False, "Domain too short"
 
+        # Handle wildcard patterns (*.example.com)
+        is_wildcard = domain.startswith('*.')
+        if is_wildcard:
+            # Strip the wildcard prefix for validation
+            domain_to_validate = domain[2:]  # Remove "*."
+            if not domain_to_validate:
+                return False, "Invalid wildcard: missing domain after *."
+        else:
+            domain_to_validate = domain
+
         # Check for invalid characters
-        # Valid: a-z, 0-9, hyphen, dot
-        if not re.match(r'^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$', domain):
-            return False, "Invalid characters (only a-z, 0-9, hyphen, dot allowed)"
+        # Valid: a-z, 0-9, hyphen, dot (and * only at start for wildcards)
+        if is_wildcard:
+            if not re.match(r'^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$', domain_to_validate):
+                return False, "Invalid characters in domain after wildcard"
+        else:
+            if not re.match(r'^[a-z0-9]([a-z0-9\-\.]*[a-z0-9])?$', domain):
+                return False, "Invalid characters (only a-z, 0-9, hyphen, dot allowed)"
 
         # Check for consecutive dots
-        if '..' in domain:
+        if '..' in domain_to_validate:
             return False, "Invalid format: consecutive dots"
 
         # Check for leading/trailing hyphens in labels
-        labels = domain.split('.')
+        labels = domain_to_validate.split('.')
         for label in labels:
             if not label:
                 return False, "Invalid format: empty label"
@@ -439,8 +459,9 @@ class WhitelistManager:
             if label.startswith('-') or label.endswith('-'):
                 return False, f"Label '{label}' cannot start or end with hyphen"
 
-        # Must have at least one dot for a proper domain (or be a TLD which is ok)
-        # Single-label domains are allowed for flexibility
+        # Wildcards must have at least one domain level after the *
+        if is_wildcard and len(labels) < 1:
+            return False, "Wildcard must have at least one domain level (e.g., *.example.com)"
 
         return True, ""
 
@@ -474,13 +495,36 @@ class WhitelistManager:
         return False
 
     def contains(self, domain: str) -> bool:
-        """Check if domain is whitelisted."""
+        """Check if domain matches whitelist (supports wildcards and parent domains).
+
+        Whitelist patterns supported:
+        - exact: example.com - matches only example.com
+        - wildcard: *.example.com - matches sub.example.com, a.b.example.com, etc.
+        - parent: example.com also matches all subdomains (implicit wildcard)
+        """
         domain = domain.strip().lower()
-        # Check exact match and parent domains
         parts = domain.split('.')
+
+        # 1. Check exact match
+        if domain in self._whitelist:
+            return True
+
+        # 2. Check wildcard patterns (*.example.com)
         for i in range(len(parts)):
-            if '.'.join(parts[i:]) in self._whitelist:
+            wildcard = '*.' + '.'.join(parts[i:])
+            if wildcard in self._whitelist:
                 return True
+
+        # 3. Check parent domain match (example.com whitelists sub.example.com)
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in self._whitelist:
+                return True
+            # Also check parent with wildcard
+            wildcard = '*.' + parent
+            if wildcard in self._whitelist:
+                return True
+
         return False
 
 
@@ -1078,9 +1122,11 @@ class APIHandler(BaseHTTPRequestHandler):
             '/api/whitelist': self._get_whitelist,
             '/api/whitelist/status': self._get_whitelist_status,
             '/api/blocked': self._get_blocked,
+            '/api/blocked/stats': self._get_blocked_stats,
             '/api/ml/status': self._get_ml_status,
             '/api/ml/training-data': self._get_training_data,
             '/api/test/classify': self._test_classify,
+            '/api/blocklist/info': self._get_blocklist_info,
         }
 
         handler = routes.get(path)
@@ -1099,6 +1145,8 @@ class APIHandler(BaseHTTPRequestHandler):
             '/api/pause': self._pause,
             '/api/resume': self._resume,
             '/api/whitelist': self._add_whitelist,
+            '/api/whitelist/bulk': self._add_whitelist_bulk,
+            '/api/blocked/whitelist': self._whitelist_from_blocked,
             '/api/ml/train': self._start_training,
         }
 
@@ -1201,6 +1249,74 @@ class APIHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({'success': False, 'error': message}, 400)
 
+    def _add_whitelist_bulk(self):
+        """Add multiple domains to whitelist at once."""
+        data = self._parse_body()
+        domains = data.get('domains', [])
+
+        if not domains or not isinstance(domains, list):
+            self._send_json({'success': False, 'error': 'Missing or invalid domains array'}, 400)
+            return
+
+        results = {
+            'added': [],
+            'failed': [],
+            'already_exists': []
+        }
+
+        for domain in domains:
+            if not isinstance(domain, str):
+                continue
+            domain = domain.strip()
+            if not domain:
+                continue
+
+            success, message = whitelist_manager.add(domain)
+            if success:
+                results['added'].append(domain.lower())
+            elif 'already whitelisted' in message.lower():
+                results['already_exists'].append(domain.lower())
+            else:
+                results['failed'].append({'domain': domain, 'error': message})
+
+        self._send_json({
+            'success': len(results['added']) > 0 or len(results['already_exists']) > 0,
+            'results': results,
+            'summary': f"Added {len(results['added'])}, already existed {len(results['already_exists'])}, failed {len(results['failed'])}"
+        })
+
+    def _whitelist_from_blocked(self):
+        """Whitelist a domain that was previously blocked (quick action from dashboard)."""
+        data = self._parse_body()
+        domain = data.get('domain', '').strip()
+        remove_from_log = data.get('remove_from_log', True)
+
+        if not domain:
+            self._send_json({'success': False, 'error': 'Missing domain parameter'}, 400)
+            return
+
+        # Add to whitelist
+        success, message = whitelist_manager.add(domain)
+
+        result = {
+            'success': success,
+            'domain': domain.lower(),
+            'whitelisted': success,
+            'message': message
+        }
+
+        # Optionally remove from blocked log to clean up the display
+        if success and remove_from_log:
+            removed = stats_tracker.remove_from_blocked_log(domain)
+            result['removed_from_blocked_log'] = removed
+            if removed:
+                result['message'] += ' and removed from blocked log'
+
+        if success:
+            self._send_json(result)
+        else:
+            self._send_json(result, 400)
+
     def _remove_whitelist(self):
         """Remove domain from whitelist."""
         data = self._parse_body()
@@ -1216,14 +1332,94 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_json({'success': False, 'message': 'Domain not in whitelist'})
 
     def _get_blocked(self):
-        """Get recently blocked domains."""
+        """Get recently blocked domains with enhanced categorization and stats."""
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         limit = int(params.get('limit', ['100'])[0])
+        category_filter = params.get('category', [None])[0]
+        hours = int(params.get('hours', ['24'])[0])
+
+        blocked = stats_tracker.get_blocked_domains(limit * 2)  # Get more for filtering
+
+        # Categorize blocked domains
+        categorized = {
+            'advertising': [],
+            'tracking': [],
+            'analytics': [],
+            'malware': [],
+            'social': [],
+            'other': []
+        }
+
+        category_counts = {cat: 0 for cat in categorized.keys()}
+        filtered_blocked = []
+
+        cutoff_time = None
+        if hours < 720:  # 30 days max
+            try:
+                cutoff_time = datetime.now() - timedelta(hours=hours)
+            except:
+                pass
+
+        for item in blocked:
+            # Time filter
+            if cutoff_time:
+                try:
+                    item_time = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00').split('+')[0])
+                    if item_time < cutoff_time:
+                        continue
+                except:
+                    pass
+
+            reason = item.get('reason', '').lower()
+            domain = item.get('domain', '')
+
+            # Categorize by detection reason
+            if 'advertising' in reason or 'advert' in reason or 'ads' in reason or 'pagead' in reason:
+                cat = 'advertising'
+            elif 'tracking' in reason or 'tracker' in reason or 'pixel' in reason or 'beacon' in reason:
+                cat = 'tracking'
+            elif 'analytics' in reason or 'metric' in reason or 'telemetry' in reason:
+                cat = 'analytics'
+            elif 'malware' in reason or 'phish' in reason or 'spam' in reason:
+                cat = 'malware'
+            elif 'social' in reason or 'facebook' in domain or 'twitter' in domain:
+                cat = 'social'
+            else:
+                cat = 'other'
+
+            item['category'] = cat
+            category_counts[cat] += 1
+
+            if category_filter and cat != category_filter:
+                continue
+
+            filtered_blocked.append(item)
+            categorized[cat].append(item)
+
+            if len(filtered_blocked) >= limit:
+                break
+
+        # Top blocked domains aggregation
+        domain_counts = {}
+        for item in filtered_blocked:
+            domain = item.get('domain', '')
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+
+        top_domains = sorted(domain_counts.items(), key=lambda x: -x[1])[:10]
 
         self._send_json({
-            'blocked': stats_tracker.get_blocked_domains(limit),
-            'count': len(stats_tracker.get_blocked_domains(limit))
+            'blocked': filtered_blocked[:limit],
+            'count': len(filtered_blocked),
+            'total_in_log': len(blocked),
+            'categories': category_counts,
+            'top_blocked': [{'domain': d, 'count': c} for d, c in top_domains],
+            'filters': {
+                'category': category_filter,
+                'hours': hours,
+                'limit': limit
+            },
+            'can_whitelist': True  # Hint for UI that domains can be whitelisted
         })
 
     def _remove_blocked(self):
@@ -1356,15 +1552,9 @@ class APIHandler(BaseHTTPRequestHandler):
             notes.append("Domain is protected infrastructure (never blocked)")
 
         if is_whitelisted:
-            notes.append("Domain is in user whitelist")
-
-        # Check parent domains
-        parts = domain.split('.')
-        for i in range(1, len(parts)):
-            parent = '.'.join(parts[i:])
-            if whitelist_manager.contains(parent):
-                notes.append(f"Parent domain '{parent}' is whitelisted")
-                break
+            # Show how domain was matched
+            match_info = self._get_whitelist_match_info(domain)
+            notes.append(f"Domain is whitelisted via: {match_info}")
 
         extractor = SimpleDomainFeatureExtractor()
         if domain in extractor.SOFTWARE_DISTRIBUTION_DOMAINS:
@@ -1374,14 +1564,191 @@ class APIHandler(BaseHTTPRequestHandler):
 
         return notes
 
+    def _get_whitelist_match_info(self, domain: str) -> str:
+        """Get detailed info about how a domain was matched in whitelist."""
+        domain = domain.strip().lower()
+        parts = domain.split('.')
+
+        # Check exact match
+        if domain in whitelist_manager._whitelist:
+            return f"exact match '{domain}'"
+
+        # Check wildcard patterns
+        for i in range(len(parts)):
+            wildcard = '*.' + '.'.join(parts[i:])
+            if wildcard in whitelist_manager._whitelist:
+                return f"wildcard pattern '{wildcard}'"
+
+        # Check parent domain match
+        for i in range(1, len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in whitelist_manager._whitelist:
+                return f"parent domain '{parent}'"
+            wildcard = '*.' + parent
+            if wildcard in whitelist_manager._whitelist:
+                return f"parent wildcard '{wildcard}'"
+
+        return "unknown match"
+
     def _get_whitelist_status(self):
         """Get detailed whitelist status."""
+        whitelist_entries = whitelist_manager.get_all()
+
+        # Categorize entries by type
+        exact_domains = []
+        wildcard_domains = []
+        for entry in whitelist_entries:
+            if entry.startswith('*.'):
+                wildcard_domains.append(entry)
+            else:
+                exact_domains.append(entry)
+
         self._send_json({
-            'whitelist': whitelist_manager.get_all(),
-            'count': len(whitelist_manager.get_all()),
+            'whitelist': whitelist_entries,
+            'count': len(whitelist_entries),
+            'exact_domains': len(exact_domains),
+            'wildcard_patterns': len(wildcard_domains),
+            'examples': {
+                'exact': exact_domains[:5] if exact_domains else [],
+                'wildcards': wildcard_domains[:5] if wildcard_domains else []
+            },
             'file_location': str(USERDATA_WHITELIST_FILE) if USERDATA_WHITELIST_FILE.exists() else str(WHITELIST_FILE),
+            'supported_formats': [
+                'example.com - exact match (also matches all subdomains)',
+                '*.example.com - wildcard (explicitly matches subdomains only)',
+                'sub.example.com - specific subdomain'
+            ],
             'note': 'DNS engine auto-reloads whitelist every 5 seconds when file changes'
         })
+
+    def _get_blocked_stats(self):
+        """Get comprehensive blocking statistics for dashboard."""
+        # Read all blocked entries
+        blocked = []
+        try:
+            if BLOCKED_LOG.exists():
+                with open(BLOCKED_LOG, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) >= 4:
+                            blocked.append({
+                                'timestamp': parts[0],
+                                'domain': parts[1],
+                                'reason': parts[2],
+                                'ml': parts[3] == 'True'
+                            })
+        except Exception as e:
+            logger.warning(f"Could not read blocked log: {e}")
+
+        # Time-based stats
+        now = datetime.now()
+        hourly_blocks = [0] * 24
+        daily_blocks = [0] * 7
+
+        category_counts = {
+            'advertising': 0,
+            'tracking': 0,
+            'analytics': 0,
+            'malware': 0,
+            'other': 0
+        }
+
+        detection_methods = {
+            'blocklist': 0,
+            'ml': 0,
+            'cname': 0,
+            'pattern': 0
+        }
+
+        for item in blocked:
+            try:
+                ts = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00').split('+')[0])
+                hours_ago = int((now - ts).total_seconds() / 3600)
+                if hours_ago < 24:
+                    hourly_blocks[23 - hours_ago] += 1
+                days_ago = int((now - ts).total_seconds() / 86400)
+                if days_ago < 7:
+                    daily_blocks[6 - days_ago] += 1
+            except:
+                pass
+
+            # Categorize
+            reason = item.get('reason', '').lower()
+            if 'advertising' in reason or 'advert' in reason:
+                category_counts['advertising'] += 1
+            elif 'tracking' in reason or 'tracker' in reason:
+                category_counts['tracking'] += 1
+            elif 'analytics' in reason or 'telemetry' in reason:
+                category_counts['analytics'] += 1
+            elif 'malware' in reason or 'phish' in reason:
+                category_counts['malware'] += 1
+            else:
+                category_counts['other'] += 1
+
+            # Detection method
+            if 'blocklist' in reason:
+                detection_methods['blocklist'] += 1
+            elif item.get('ml') or 'ml' in reason:
+                detection_methods['ml'] += 1
+            elif 'cname' in reason:
+                detection_methods['cname'] += 1
+            else:
+                detection_methods['pattern'] += 1
+
+        self._send_json({
+            'total_blocks': len(blocked),
+            'categories': category_counts,
+            'detection_methods': detection_methods,
+            'hourly_trend': hourly_blocks,
+            'daily_trend': daily_blocks,
+            'ml_effectiveness': {
+                'total_ml_blocks': detection_methods['ml'],
+                'ml_percentage': round(detection_methods['ml'] / max(len(blocked), 1) * 100, 1)
+            }
+        })
+
+    def _get_blocklist_info(self):
+        """Get information about the blocklist file."""
+        blocklist_file = DATA_DIR / 'blocklist.txt'
+        info = {
+            'file_exists': False,
+            'domain_count': 0,
+            'file_path': str(blocklist_file),
+            'last_modified': None,
+            'file_size_kb': 0,
+            'sources': [],
+            'sample_domains': []
+        }
+
+        try:
+            if blocklist_file.exists():
+                info['file_exists'] = True
+                stat = blocklist_file.stat()
+                info['last_modified'] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                info['file_size_kb'] = round(stat.st_size / 1024, 1)
+
+                with open(blocklist_file, 'r') as f:
+                    domains = []
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('# Source:'):
+                            info['sources'].append(line[9:].strip())
+                        elif line and not line.startswith('#'):
+                            domains.append(line)
+
+                    info['domain_count'] = len(domains)
+                    # Get sample from different parts of list
+                    if domains:
+                        info['sample_domains'] = (
+                            domains[:3] +
+                            domains[len(domains)//2:len(domains)//2+2] +
+                            domains[-2:]
+                        )[:10]
+        except Exception as e:
+            logger.warning(f"Could not get blocklist info: {e}")
+            info['error'] = str(e)
+
+        self._send_json(info)
 
 
 def run_api_server(host: str = '0.0.0.0', port: int = 8080):
