@@ -22,9 +22,10 @@
 #   - suricata: IDS threat detection
 #   - zeek: Connection/protocol logging
 #   - log-shipper: Data pipeline
-#   - grafana: Visualization dashboard
 #   - identity-engine: Device fingerprinting (AIOCHI core)
 #   - bubble-manager: Ecosystem detection (AIOCHI core)
+#
+# Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed)
 #
 # Optional (profile: ai):
 #   - ollama: Local LLM for AI narratives (~4GB additional RAM)
@@ -45,7 +46,6 @@ networks:
 volumes:
   clickhouse_data:
   clickhouse_logs:
-  grafana_data:
   n8n_data:
   suricata_logs:
   zeek_logs:
@@ -293,46 +293,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  # ============================================================================
-  # VISUALIZATION TIER - Dashboard (CORE)
-  # ============================================================================
-
-  grafana:
-    image: docker.io/grafana/grafana:11.4.0
-    container_name: aiochi-grafana
-    hostname: aiochi-grafana
-    restart: unless-stopped
-    networks:
-      aiochi-internal:
-        ipv4_address: 172.20.210.30
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    environment:
-      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
-      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-aiochi_admin}"
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000}"
-      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
-      # Dark theme by default
-      GF_USERS_DEFAULT_THEME: "dark"
-      # Disable alerting (we use our own)
-      GF_ALERTING_ENABLED: "false"
-      GF_UNIFIED_ALERTING_ENABLED: "false"
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
   # ============================================================================
   # OPTIONAL: WORKFLOW ENGINE (profile: workflows)

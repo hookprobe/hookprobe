@@ -1045,9 +1045,8 @@ EOF
             # Create configs directory if it doesn't exist
             mkdir -p "$aiochi_dst/containers/configs/suricata/rules"
             mkdir -p "$aiochi_dst/containers/configs/zeek"
-            mkdir -p "$aiochi_dst/containers/configs/grafana/provisioning"/{dashboards,datasources}
-            mkdir -p "$aiochi_dst/containers/configs/grafana/dashboards"
             mkdir -p "$aiochi_dst/containers/n8n-workflows"
+            # Note: No Grafana - visualization handled by Fortress AdminLTE web UI
 
             log_info "  Installed: AIOCHI module to $aiochi_dst"
         else
@@ -3470,12 +3469,13 @@ AIOCHIENV
             }
 
             # Pull images with size estimates
+            # Core AIOCHI images (always pulled)
             pull_with_progress "docker.io/clickhouse/clickhouse-server:24.8" "ClickHouse" "~500MB"
-            pull_with_progress "docker.io/victoriametrics/victoria-metrics:v1.106.1" "VictoriaMetrics" "~30MB"
             pull_with_progress "docker.io/jasonish/suricata:7.0.8" "Suricata IDS" "~300MB"
             pull_with_progress "docker.io/zeek/zeek:7.0.3" "Zeek NSM" "~400MB"
+            # Optional AIOCHI images (n8n for --aiochi-workflows or --aiochi-full)
             pull_with_progress "docker.io/n8nio/n8n:1.70.3" "n8n Workflows" "~400MB"
-            pull_with_progress "docker.io/grafana/grafana:11.4.0" "Grafana" "~400MB"
+            # Note: No Grafana/VictoriaMetrics - visualization via Fortress AdminLTE web UI
 
             # Ollama is special - it's the LLM runtime
             log_info ""
@@ -3571,20 +3571,10 @@ AIOCHIENV
                 docker.io/zeek/zeek:7.0.3 \
                 zeek -i FTS-mirror local LogAscii::use_json=T
 
-            # 3. Visualization Tier
-            start_aiochi_container "aiochi-grafana" "Grafana (dashboards)" \
-                --name aiochi-grafana \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.30 \
-                -p 0.0.0.0:3000:3000 \
-                -v aiochi-grafana-data:/var/lib/grafana \
-                -e GF_SECURITY_ADMIN_USER=admin \
-                -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
-                -e GF_USERS_DEFAULT_THEME=dark \
-                docker.io/grafana/grafana:11.4.0
+            # Note: No Grafana container - visualization handled by Fortress AdminLTE web UI
+            # This saves ~200MB RAM and avoids redundant dashboarding
 
-            # 4. Intelligence Tier - n8n Narratives (OPTIONAL: --aiochi-workflows or --aiochi-full)
+            # 3. Intelligence Tier - n8n Narratives (OPTIONAL: --aiochi-workflows or --aiochi-full)
             if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
                 start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
                     --name aiochi-narrative \
@@ -3756,10 +3746,11 @@ ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aioch
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
-# Core: clickhouse, suricata, zeek, grafana, identity, bubble, logshipper
+# Core: clickhouse, suricata, zeek, identity, bubble, logshipper
 # Optional (started if installed): narrative (n8n), ollama
-ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-grafana aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
-ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
+# Note: No Grafana - visualization via Fortress AdminLTE web UI
+ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
+ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-zeek aiochi-suricata aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
 Restart=no
 
 [Install]
