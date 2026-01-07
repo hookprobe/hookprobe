@@ -132,6 +132,31 @@ except ImportError:
         name = re.sub(r'[-_]+', ' ', name)
         name = re.sub(r'\s+', ' ', name).strip()
 
+        # Remove OS auto-incremented numbers (e.g., "Hookprobe 10", "Hookprobe's iPad 119")
+        trailing_num_match = re.match(r'^(.+?)\s+(\d+)$', name)
+        if trailing_num_match:
+            base_name = trailing_num_match.group(1)
+            num = int(trailing_num_match.group(2))
+
+            # Keep legitimate product model numbers
+            model_patterns = [
+                r'(?i)\biphone\s*\d{1,2}$',
+                r'(?i)\bipad\s*(pro|air|mini)?\s*\d{1,2}$',
+                r'(?i)\bgalaxy\s*[sazm]\d{1,2}$',
+                r'(?i)\bpixel\s*\d{1,2}$',
+                r'(?i)\bwatch\s*(se|ultra)?\s*\d{1,2}$',
+                r'(?i)\bmacbook\s*(pro|air)?\s*\d{2,4}$',
+                r'(?i)\bsurface\s*(pro|go|laptop)?\s*\d{1,2}$',
+                r'(?i)\bps\d$',
+                r'(?i)\becho\s*(dot|show)?\s*\d{1,2}$',
+            ]
+            is_model = any(re.search(p, name) for p in model_patterns)
+            is_possessive = "'s" in base_name.lower() or "'s" in base_name
+            is_high_number = num > 20
+
+            if not is_model and (is_high_number or is_possessive or num > 9):
+                name = base_name
+
         # If name is mostly hex/numbers, return None for fallback
         if name and len(re.sub(r'[0-9a-fA-F\s-]', '', name)) < 3:
             return None
@@ -140,6 +165,36 @@ except ImportError:
             return None
 
         return name[:max_length-3] + '...' if len(name) > max_length else name
+
+
+def get_friendly_name(mac: str, hostname: str, manufacturer: str, device_type: str) -> str:
+    """Generate a user-friendly device name with smart fallbacks.
+
+    Priority:
+    1. Cleaned hostname (if usable)
+    2. Device type + last 4 MAC chars (e.g., "iPhone CE05")
+    3. Manufacturer + last 4 MAC chars (e.g., "Withings 5A0A")
+    4. Generic "Device CE05"
+    """
+    # Try cleaned hostname first
+    cleaned = clean_device_name(hostname)
+    if cleaned:
+        return cleaned
+
+    # Get last 4 MAC chars for uniqueness
+    mac_suffix = mac[-5:].replace(':', '') if mac else '????'
+
+    # Try device type (skip generic types)
+    if device_type and device_type.lower() not in ('unknown', '', 'none', 'other'):
+        dt = device_type.replace('_', ' ').title()
+        return f"{dt} {mac_suffix}"
+
+    # Try manufacturer (this is key for devices like Withings)
+    if manufacturer and manufacturer.lower() not in ('unknown', 'private', '', 'none'):
+        return f"{manufacturer} {mac_suffix}"
+
+    # Fallback
+    return f"Device {mac_suffix}"
 
 
 def classify_device(mac_address: str) -> dict:
@@ -696,11 +751,15 @@ def format_device_for_template(device):
             b /= 1024
         return f'{b:.1f} PB'
 
+    mac = device.get('mac_address', '')
+    vendor = device.get('manufacturer', 'Unknown')
+    hostname = get_friendly_name(mac, device.get('hostname', ''), vendor, category)
+
     return {
-        'mac': device.get('mac_address', ''),
+        'mac': mac,
         'ip': device.get('ip_address', ''),
-        'hostname': clean_device_name(device.get('hostname', '')) or 'Unknown',
-        'vendor': device.get('manufacturer', 'Unknown'),
+        'hostname': hostname,
+        'vendor': vendor,
         'category': category,
         'policy': policy,
         'status': status,
@@ -802,13 +861,19 @@ def index():
                     # Get WiFi signal data if available
                     wifi_data = wifi_signals.get(mac, {})
 
+                    # Get friendly name with smart fallback
+                    raw_name = d.get('friendly_name') or d.get('hostname', '')
+                    vendor = d.get('vendor', 'Unknown')
+                    category = d.get('category', 'unknown')
+                    friendly = get_friendly_name(mac, raw_name, vendor, category)
+
                     device = {
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
-                        'hostname': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                        'hostname': friendly,
                         'friendly_name': clean_device_name(d.get('friendly_name', '')),
-                        'manufacturer': d.get('vendor', 'Unknown'),
-                        'device_type': d.get('category', 'unknown'),
+                        'manufacturer': vendor,
+                        'device_type': category,
                         'policy': policy,
                         'policy_name': policy_info.get('name', policy.replace('_', ' ').title()),
                         'policy_color': policy_info.get('color', 'secondary'),
@@ -2580,12 +2645,16 @@ def api_sdn_devices():
             for device in devices:
                 policy = device.get('policy', 'quarantine')
                 segment, trust = policy_to_segment.get(policy, ('GUEST', 1))
+                mac = device.get('mac', '')
+                vendor = device.get('vendor', 'Unknown')
+                category = device.get('category', device.get('device_type', 'unknown'))
+                raw_hostname = device.get('hostname') or device.get('friendly_name', '')
 
                 sdn_devices.append({
-                    'mac': device.get('mac', ''),
-                    'hostname': clean_device_name(device.get('hostname') or device.get('friendly_name', '')) or 'Unknown',
+                    'mac': mac,
+                    'hostname': get_friendly_name(mac, raw_hostname, vendor, category),
                     'ip_address': device.get('ip', '--'),
-                    'vendor': device.get('vendor', 'Unknown'),
+                    'vendor': vendor,
                     'segment': segment,
                     'vlan_id': device.get('vlan_id', 40),
                     'trust_level': trust,

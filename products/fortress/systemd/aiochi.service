@@ -1,0 +1,74 @@
+#!/usr/bin/env systemd
+#
+# aiochi.service - AIOCHI (AI Eyes) Container Orchestration
+#
+# This service starts AIOCHI containers after the main Fortress containers.
+# AIOCHI provides the cognitive network layer with:
+#   - ClickHouse (analytics database)
+#   - VictoriaMetrics (time-series metrics)
+#   - Suricata IDS (deep packet inspection)
+#   - Zeek NSM (network security monitor)
+#   - Grafana (visualization dashboards)
+#   - n8n (workflow automation)
+#   - Ollama (local LLM for narratives)
+#   - Identity Engine (device fingerprinting)
+#   - Log Shipper (event pipeline)
+#
+# Install:
+#   sudo cp aiochi.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable aiochi.service
+#
+
+[Unit]
+Description=HookProbe AIOCHI (AI Eyes) Containers
+Documentation=https://hookprobe.com/docs/aiochi
+
+# Run after fortress containers are up
+After=fortress.service fortress-vlan.service openvswitch-switch.service
+Wants=fortress.service
+Requires=podman.socket
+
+# Only start if AIOCHI was installed
+ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aiochi.yml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Ensure podman network exists
+ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
+
+# Start all AIOCHI containers that have --restart unless-stopped
+# Using podman start (containers were created during install with podman run -d)
+ExecStart=/bin/bash -c '\
+    echo "[AIOCHI] Starting containers..." && \
+    for container in aiochi-clickhouse aiochi-victoria aiochi-suricata aiochi-zeek aiochi-grafana aiochi-narrative aiochi-identity aiochi-logshipper aiochi-ollama; do \
+        if podman container exists $container 2>/dev/null; then \
+            podman start $container 2>/dev/null && echo "  ✓ $container" || echo "  ○ $container (already running or failed)"; \
+        else \
+            echo "  - $container (not installed)"; \
+        fi; \
+    done && \
+    echo "[AIOCHI] Container startup complete"'
+
+# Stop all AIOCHI containers gracefully
+ExecStop=/bin/bash -c '\
+    echo "[AIOCHI] Stopping containers..." && \
+    for container in aiochi-logshipper aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-victoria aiochi-clickhouse; do \
+        if podman container exists $container 2>/dev/null; then \
+            podman stop -t 10 $container 2>/dev/null && echo "  ✓ $container stopped" || true; \
+        fi; \
+    done && \
+    echo "[AIOCHI] Container shutdown complete"'
+
+# Restart policy - don't restart automatically (let admin investigate)
+Restart=no
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aiochi
+
+[Install]
+WantedBy=multi-user.target
