@@ -1228,10 +1228,30 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_error('Failed to resume')
 
     def _get_whitelist(self):
-        """Get whitelist entries."""
+        """Get whitelist entries with optional search."""
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        search_query = params.get('search', [''])[0].strip().lower()
+
+        all_entries = whitelist_manager.get_all()
+
+        # Apply search filter if provided
+        if search_query:
+            filtered_entries = [e for e in all_entries if search_query in e.lower()]
+        else:
+            filtered_entries = all_entries
+
+        # Separate exact domains vs wildcards for display
+        exact_domains = [e for e in filtered_entries if not e.startswith('*.')]
+        wildcard_patterns = [e for e in filtered_entries if e.startswith('*.')]
+
         self._send_json({
-            'whitelist': whitelist_manager.get_all(),
-            'count': len(whitelist_manager.get_all())
+            'whitelist': filtered_entries,
+            'count': len(filtered_entries),
+            'total': len(all_entries),
+            'exact_domains': len(exact_domains),
+            'wildcard_patterns': len(wildcard_patterns),
+            'search': search_query if search_query else None
         })
 
     def _add_whitelist(self):
@@ -1338,20 +1358,29 @@ class APIHandler(BaseHTTPRequestHandler):
         limit = int(params.get('limit', ['100'])[0])
         category_filter = params.get('category', [None])[0]
         hours = int(params.get('hours', ['24'])[0])
+        search_query = params.get('search', [''])[0].strip().lower()
 
-        blocked = stats_tracker.get_blocked_domains(limit * 2)  # Get more for filtering
+        # Get raw log entry count first (before deduplication)
+        total_log_entries = 0
+        try:
+            if BLOCKED_LOG.exists():
+                with open(BLOCKED_LOG, 'r') as f:
+                    total_log_entries = sum(1 for line in f if line.strip())
+        except:
+            pass
+
+        blocked = stats_tracker.get_blocked_domains(limit * 3)  # Get more for filtering
 
         # Categorize blocked domains
-        categorized = {
-            'advertising': [],
-            'tracking': [],
-            'analytics': [],
-            'malware': [],
-            'social': [],
-            'other': []
+        category_counts = {
+            'advertising': 0,
+            'tracking': 0,
+            'analytics': 0,
+            'malware': 0,
+            'social': 0,
+            'other': 0
         }
 
-        category_counts = {cat: 0 for cat in categorized.keys()}
         filtered_blocked = []
 
         cutoff_time = None
@@ -1362,6 +1391,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 pass
 
         for item in blocked:
+            domain = item.get('domain', '')
+            reason = item.get('reason', '').lower()
+
+            # Search filter
+            if search_query and search_query not in domain:
+                continue
+
             # Time filter
             if cutoff_time:
                 try:
@@ -1370,9 +1406,6 @@ class APIHandler(BaseHTTPRequestHandler):
                         continue
                 except:
                     pass
-
-            reason = item.get('reason', '').lower()
-            domain = item.get('domain', '')
 
             # Categorize by detection reason
             if 'advertising' in reason or 'advert' in reason or 'ads' in reason or 'pagead' in reason:
@@ -1395,15 +1428,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 continue
 
             filtered_blocked.append(item)
-            categorized[cat].append(item)
 
             if len(filtered_blocked) >= limit:
                 break
 
-        # Top blocked domains aggregation
+        # Top blocked domains aggregation (from all matching, not just limited)
         domain_counts = {}
-        for item in filtered_blocked:
+        for item in blocked:
             domain = item.get('domain', '')
+            if search_query and search_query not in domain:
+                continue
             domain_counts[domain] = domain_counts.get(domain, 0) + 1
 
         top_domains = sorted(domain_counts.items(), key=lambda x: -x[1])[:10]
@@ -1411,13 +1445,15 @@ class APIHandler(BaseHTTPRequestHandler):
         self._send_json({
             'blocked': filtered_blocked[:limit],
             'count': len(filtered_blocked),
-            'total_in_log': len(blocked),
+            'unique_domains': len(blocked),  # Total unique domains (deduplicated)
+            'total_log_entries': total_log_entries,  # Raw log entry count (with duplicates)
             'categories': category_counts,
             'top_blocked': [{'domain': d, 'count': c} for d, c in top_domains],
             'filters': {
                 'category': category_filter,
                 'hours': hours,
-                'limit': limit
+                'limit': limit,
+                'search': search_query if search_query else None
             },
             'can_whitelist': True  # Hint for UI that domains can be whitelisted
         })
