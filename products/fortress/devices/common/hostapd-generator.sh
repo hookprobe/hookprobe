@@ -1944,9 +1944,10 @@ generate_hostapd_24ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
-    # ap_isolate=0 allows client-to-client traffic through OVS bridge for policy enforcement
-    # D2D is controlled by OVS OpenFlow rules (internet_only=blocked, smart_home/full_access=allowed)
-    local ap_isolate_value=0
+    # ap_isolate=1 forces all WiFi D2D traffic through OVS bridge for policy enforcement
+    # OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+    # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+    local ap_isolate_value=1
 
     # Verify hardware actually supports 2.4GHz band
     if ! verify_band_support "$iface" "24ghz"; then
@@ -2168,12 +2169,12 @@ rsn_pairwise=CCMP
 wpa_passphrase=$password
 
 # Access Control
-# ap_isolate=0 allows client-to-client traffic to flow through OVS bridge
-# OVS OpenFlow rules enforce D2D policy: allowed for smart_home/full_access,
-# blocked for internet_only/quarantine (see nac-policy-sync.sh)
-# Setting ap_isolate=1 would block D2D at WiFi layer BEFORE OVS can apply policy
+# ap_isolate=1 blocks direct WiFi D2D, forcing traffic through OVS bridge
+# OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi
+# Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+# This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=64
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
@@ -2269,9 +2270,10 @@ generate_hostapd_5ghz() {
     [ -z "$password" ] && { log_error "Password required"; return 1; }
     [ ${#password} -lt 8 ] && { log_error "Password must be at least 8 characters"; return 1; }
 
-    # ap_isolate=0 allows client-to-client traffic through OVS bridge for policy enforcement
-    # D2D is controlled by OVS OpenFlow rules (internet_only=blocked, smart_home/full_access=allowed)
-    local ap_isolate_value=0
+    # ap_isolate=1 forces all WiFi D2D traffic through OVS bridge for policy enforcement
+    # OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+    # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+    local ap_isolate_value=1
 
     # Verify hardware actually supports 5GHz band
     if ! verify_band_support "$iface" "5ghz"; then
@@ -2764,12 +2766,12 @@ ieee80211w=1
 wpa_passphrase=$password
 
 # Access Control
-# ap_isolate=0 allows client-to-client traffic to flow through OVS bridge
-# OVS OpenFlow rules enforce D2D policy: allowed for smart_home/full_access,
-# blocked for internet_only/quarantine (see nac-policy-sync.sh)
-# Setting ap_isolate=1 would block D2D at WiFi layer BEFORE OVS can apply policy
+# ap_isolate=1 blocks direct WiFi D2D, forcing traffic through OVS bridge
+# OVS hairpin rules (priority 501) reflect allowed D2D back to WiFi interface
+# Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
+# This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
-ap_isolate=0
+ap_isolate=1
 max_num_sta=128
 
 # Dynamic VLAN Assignment (disabled by default - requires VLAN infrastructure)
