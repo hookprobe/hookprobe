@@ -96,17 +96,50 @@ except ImportError:
     def clean_device_name(hostname, max_length=32):
         """Clean device name (fallback implementation)."""
         if not hostname:
-            return "Unknown Device"
+            return None
         name = decode_dnsmasq_hostname(hostname)
         if not name:
-            return "Unknown Device"
-        # Remove hex suffixes
+            return None
         import re
-        name = re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+
+        # Remove .local suffix first
         if name.endswith('.local'):
             name = name[:-6]
+
+        # Remove hex prefixes (e.g., "F6574fcbe4474hookprobepro" -> "hookprobepro")
+        # Match hex chars at start followed by recognizable word
+        hex_prefix_match = re.match(r'^[0-9a-fA-F]{8,}[-_]?(.+)$', name)
+        if hex_prefix_match:
+            remaining = hex_prefix_match.group(1)
+            # Only use if remaining part looks like a real name (has letters)
+            if re.search(r'[a-zA-Z]{3,}', remaining):
+                name = remaining
+
+        # Remove hex/UUID suffixes (e.g., "device-abc123def456")
+        name = re.sub(r'[-_][0-9a-fA-F]{6,}(?:[-_]\d+)?$', '', name)
+
+        # Remove trailing numbers with punctuation (e.g., " 652!", " 9!")
+        name = re.sub(r'\s+\d+[!@#$%^&*]+$', '', name)
+
+        # Remove pure UUID-like strings - return None to use fallback
+        if re.match(r'^[0-9a-fA-F]{8}[-_ ][0-9a-fA-F]{4}[-_ ][0-9a-fA-F]{4}', name):
+            return None
+
+        # Remove trailing punctuation artifacts
+        name = re.sub(r'[!@#$%^&*]+$', '', name)
+
+        # Clean up whitespace and special chars
+        name = re.sub(r'[-_]+', ' ', name)
         name = re.sub(r'\s+', ' ', name).strip()
-        return name[:max_length-3] + '...' if len(name) > max_length else name or "Unknown Device"
+
+        # If name is mostly hex/numbers, return None for fallback
+        if name and len(re.sub(r'[0-9a-fA-F\s-]', '', name)) < 3:
+            return None
+
+        if not name or len(name) < 2:
+            return None
+
+        return name[:max_length-3] + '...' if len(name) > max_length else name
 
 
 def classify_device(mac_address: str) -> dict:
