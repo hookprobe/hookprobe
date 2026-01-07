@@ -20,6 +20,10 @@
 | **Add XDP/eBPF rules** | Edit XDP manager | `core/qsecbit/xdp_manager.py` |
 | **Work with HTP protocol** | Core transport | `core/htp/transport/htp.py` |
 | **Add DNS/Ad blocking** | dnsXai module | `shared/dnsXai/` |
+| **dnsXai API server** | HTTP endpoints | `shared/dnsXai/api_server.py` |
+| **dnsXai whitelist (wildcard)** | `*.domain.com` support | `shared/dnsXai/api_server.py` |
+| **dnsXai DGA detection** | Malware C2 detection | `shared/dnsXai/engine.py` |
+| **dnsXai DNS tunneling** | Exfiltration detection | `shared/dnsXai/engine.py` |
 | **Work with mesh networking** | Mesh module | `shared/mesh/` |
 | **Configure n8n automation** | Deploy addon | `deploy/addons/n8n/` |
 | **Add LTE/5G failover** | Check addon docs | `deploy/addons/lte/README.md` |
@@ -824,32 +828,94 @@ W(t+1) = W(t) - η_mod × ∇L(W(t), TER)
 ### dnsXai - AI-Powered DNS Protection
 
 **Location**: `shared/dnsXai/`
+**Version**: 5.1.0
 
-Next-generation DNS protection with machine learning.
+Next-generation DNS protection with machine learning, competitive with AdGuard, Pi-hole, and NextDNS.
 
 | File | Purpose |
 |------|---------|
-| `engine.py` | ML classifier (20 features, 8 categories) |
+| `engine.py` | ML classifier (30+ features, 8 categories, DGA detection) |
+| `api_server.py` | HTTP API for dashboard integration |
 | `integration.py` | Product integration utilities |
 | `mesh_intelligence.py` | Federated learning across mesh |
 | `update-blocklist.sh` | Blocklist updater script |
 
-**Features**:
-- ML-based classification for unknown domains
+**Core Features**:
+- ML-based classification for unknown domains (30+ features)
 - CNAME uncloaking (detects first-party tracker masquerading)
 - Federated learning across mesh network
 - 5-tier protection levels (~130K to ~250K domains)
 - <1ms inference on Raspberry Pi
+- Whitelist auto-sync between API and DNS engine (5s polling)
+- Protected infrastructure domains (never blocked)
+
+**AI/ML Threat Detection** (NextDNS-style):
+- **DGA Detection**: Domain Generation Algorithm patterns for malware C2
+- **DNS Tunneling Detection**: Data exfiltration via long encoded subdomains
+- **Query Pattern Analysis**: Flood and enumeration attack detection
+- **Threat Keywords**: Malware/phishing indicator scanning
+- **Punycode Detection**: Internationalized domain phishing
+- **New TLD Scoring**: Suspicious TLD risk assessment
+- **Adaptive Learning**: Learn from false positives/negatives
+
+**Whitelist Features**:
+- Wildcard patterns: `*.example.com` matches all subdomains
+- Parent domain matching: `example.com` auto-whitelists subdomains
+- Exact match: `sub.example.com` for specific subdomain
+- Search functionality: Filter whitelist by keyword
+- Bulk operations: Add multiple domains at once
+
+**API Endpoints**:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/stats` | GET | Protection statistics |
+| `/api/status` | GET | Protection status |
+| `/api/level` | POST | Set protection level (0-5) |
+| `/api/pause` | POST | Pause protection |
+| `/api/resume` | POST | Resume protection |
+| `/api/whitelist` | GET | Get whitelist (`?search=keyword`) |
+| `/api/whitelist` | POST | Add domain to whitelist |
+| `/api/whitelist/bulk` | POST | Bulk add domains |
+| `/api/whitelist/status` | GET | Detailed whitelist info |
+| `/api/blocked` | GET | Blocked domains (`?search=&category=&hours=`) |
+| `/api/blocked/stats` | GET | Blocking statistics with trends |
+| `/api/blocked/whitelist` | POST | Quick whitelist from blocked |
+| `/api/blocklist/info` | GET | Blocklist file info |
+| `/api/ml/status` | GET | ML model status |
+| `/api/ml/train` | POST | Trigger ML training |
+| `/api/test/classify` | GET | Test domain classification |
+
+**Protected Infrastructure** (never blocked):
+- System connectivity: `msftconnecttest.com`, `captive.apple.com`, etc.
+- Software repos: `raspberrypi.com`, `pypi.org`, `github.com`, etc.
+- CDN/Cloud: `cloudflare.com`, `amazonaws.com`, `akamaiedge.net`, etc.
 
 **Protection Levels**:
 
-| Level | Name | Protection |
-|-------|------|------------|
-| 1 | Base | Ads + Malware |
-| 2 | Enhanced | + Fakenews |
-| 3 | Strong | + Gambling |
-| 4 | Maximum | + Adult Content |
-| 5 | Full | + Social Trackers |
+| Level | Name | Protection | Domains |
+|-------|------|------------|---------|
+| 0 | Off | Passthrough | 0 |
+| 1 | Base | Ads + Malware | ~130K |
+| 2 | Enhanced | + Fakenews | ~132K |
+| 3 | Strong | + Gambling | ~135K |
+| 4 | Maximum | + Adult Content | ~200K |
+| 5 | Full | + Social Trackers | ~250K |
+
+**CLI Usage**:
+```bash
+# Test domain classification
+curl "http://localhost:8080/api/test/classify?domain=doubleclick.net"
+
+# Search blocked domains
+curl "http://localhost:8080/api/blocked?search=google&category=tracking"
+
+# Add wildcard whitelist
+curl -X POST http://localhost:8080/api/whitelist -d '{"domain": "*.example.com"}'
+
+# Get blocking stats
+curl http://localhost:8080/api/blocked/stats
+```
 
 ### Mesh - Unified Communication Layer
 
