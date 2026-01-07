@@ -225,8 +225,17 @@ apply_policy() {
         lan_only)
             # LAN_ONLY: Device-to-device communication ONLY (IoT/IIoT, HomeKit lights)
             # NO dashboard, NO containers, NO internet - just talk to other devices
+            # ALLOWS mDNS for discovery (HomeKit, AirPlay on LAN)
             #
             # Priority offset: +300 for device overrides (e.g., 750 -> 1050)
+            #
+            # Priority 475: mDNS/SSDP discovery (allows HomeKit/AirPlay on LAN)
+            add_flow "priority=475,udp,dl_src=$mac,tp_dst=5353,actions=NORMAL"
+            add_flow "priority=475,udp6,dl_src=$mac,tp_dst=5353,actions=NORMAL"
+            add_flow "priority=475,udp,dl_dst=$mac,tp_src=5353,actions=NORMAL"
+            add_flow "priority=475,udp6,dl_dst=$mac,tp_src=5353,actions=NORMAL"
+            add_flow "priority=475,udp,dl_src=$mac,nw_dst=239.255.255.250,tp_dst=1900,actions=NORMAL"
+            add_flow "priority=475,udp,dl_dst=$mac,nw_src=239.255.255.250,tp_src=1900,actions=NORMAL"
             # Allow gateway for DHCP/DNS only
             add_flow "priority=$((750 + priority_offset)),ip,dl_src=$mac,nw_dst=$GATEWAY_IP,actions=NORMAL"
             add_flow "priority=$((740 + priority_offset)),ip,dl_dst=$mac,nw_src=$GATEWAY_IP,actions=NORMAL"
@@ -241,7 +250,7 @@ apply_policy() {
             add_flow "priority=$((600 + priority_offset)),ip,dl_dst=$mac,actions=drop"
             local mode_str="bubble default"
             [ "$priority_mode" = "override" ] && mode_str="device override"
-            log_info "Applied LAN_ONLY policy for $mac ($mode_str, device-to-device only)"
+            log_info "Applied LAN_ONLY policy for $mac ($mode_str, D2D + mDNS discovery)"
             ;;
 
         internet_only)
@@ -287,7 +296,28 @@ apply_policy() {
             log_info "Applied INTERNET_ONLY policy for $mac ($mode_str, no LAN/mDNS access)"
             ;;
 
-        full_access|normal|smart_home|default|"")
+        smart_home)
+            # SMART_HOME: Full access + explicit mDNS allow rules
+            # Priority 475: Ensures SMART_HOME devices can discover each other
+            # even if they're in different ecosystem bubbles
+            #
+            # This is between INTERNET_ONLY mDNS block (850) and base allow (800)
+            # Without this, SMART_HOME devices rely on base mDNS allow which works,
+            # but explicit rules make policy intent clearer and enable future filtering
+            #
+            # Allow mDNS queries FROM this device
+            add_flow "priority=475,udp,dl_src=$mac,tp_dst=5353,actions=NORMAL"
+            add_flow "priority=475,udp6,dl_src=$mac,tp_dst=5353,actions=NORMAL"
+            # Allow mDNS responses TO this device
+            add_flow "priority=475,udp,dl_dst=$mac,tp_src=5353,actions=NORMAL"
+            add_flow "priority=475,udp6,dl_dst=$mac,tp_src=5353,actions=NORMAL"
+            # Allow SSDP/UPnP (239.255.255.250:1900)
+            add_flow "priority=475,udp,dl_src=$mac,nw_dst=239.255.255.250,tp_dst=1900,actions=NORMAL"
+            add_flow "priority=475,udp,dl_dst=$mac,nw_src=239.255.255.250,tp_src=1900,actions=NORMAL"
+            log_info "Applied SMART_HOME policy for $mac (full access + mDNS/SSDP discovery)"
+            ;;
+
+        full_access|normal|default|"")
             # No per-device rules needed - base priority 500 rules allow all
             log_info "Applied FULL_ACCESS policy for $mac (no restrictions)"
             ;;
