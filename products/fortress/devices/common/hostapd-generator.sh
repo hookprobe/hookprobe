@@ -3243,21 +3243,53 @@ generate_systemd_services() {
 
     log_info "Generating systemd service files"
 
-    # Find hostapd binary - check common locations
+    # Find hostapd binary - prefer hostapd-ovs for direct OVS integration
     local hostapd_bin=""
-    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
-        if [ -x "$path" ]; then
-            hostapd_bin="$path"
-            break
-        fi
-    done
-    if [ -z "$hostapd_bin" ]; then
-        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
-    fi
-    log_info "  Using hostapd: $hostapd_bin"
+    local using_hostapd_ovs=false
 
-    # Generate helper script for OVS bridge integration
-    generate_wifi_bridge_helper
+    # Check for hostapd-ovs first (patched for OVS bridge support)
+    if [ -x "/usr/local/bin/hostapd-ovs" ]; then
+        hostapd_bin="/usr/local/bin/hostapd-ovs"
+        using_hostapd_ovs=true
+        log_info "  Using hostapd-ovs: Direct OVS bridge integration enabled"
+
+        # Enable HOSTAPD_OVS_MODE in fortress.conf
+        if [ -f "/etc/hookprobe/fortress.conf" ]; then
+            if grep -q "^HOSTAPD_OVS_MODE=" /etc/hookprobe/fortress.conf; then
+                sed -i 's/^HOSTAPD_OVS_MODE=.*/HOSTAPD_OVS_MODE=true/' /etc/hookprobe/fortress.conf
+            else
+                echo "HOSTAPD_OVS_MODE=true" >> /etc/hookprobe/fortress.conf
+            fi
+        fi
+    else
+        # Fall back to standard hostapd
+        for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+            if [ -x "$path" ]; then
+                hostapd_bin="$path"
+                break
+            fi
+        done
+        if [ -z "$hostapd_bin" ]; then
+            hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+        fi
+        log_info "  Using hostapd: $hostapd_bin (veth bridge mode)"
+
+        # Ensure HOSTAPD_OVS_MODE=false in fortress.conf
+        if [ -f "/etc/hookprobe/fortress.conf" ]; then
+            if grep -q "^HOSTAPD_OVS_MODE=" /etc/hookprobe/fortress.conf; then
+                sed -i 's/^HOSTAPD_OVS_MODE=.*/HOSTAPD_OVS_MODE=false/' /etc/hookprobe/fortress.conf
+            else
+                echo "HOSTAPD_OVS_MODE=false" >> /etc/hookprobe/fortress.conf
+            fi
+        fi
+    fi
+
+    # Generate helper script for OVS bridge integration (only needed for veth mode)
+    if [ "$using_hostapd_ovs" = "false" ]; then
+        generate_wifi_bridge_helper
+    else
+        log_info "  Skipping wifi bridge helper (hostapd-ovs mode - direct OVS integration)"
+    fi
 
     if [ "$has_24ghz" = "true" ]; then
         # Extract interface from config if not provided
