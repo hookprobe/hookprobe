@@ -188,7 +188,7 @@ apply_patch() {
 /* === OVS Bridge Support (HookProbe Patch) ===
  *
  * This function provides OVS bridge lookup as a fallback when the standard
- * sysfs/ioctl method fails. OVS bridges don't appear in /sys/class/net/*/brif/
+ * sysfs/ioctl method fails. OVS bridges don't appear in sysfs brif directory
  * so we query ovs-vsctl directly.
  *
  * Security: Interface name is validated to prevent command injection.
