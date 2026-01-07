@@ -3717,6 +3717,41 @@ AIOCHIENV
             log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
             echo ""
 
+            # Install AIOCHI systemd service for auto-start on reboot
+            log_info "  Installing AIOCHI systemd service for boot persistence..."
+            local aiochi_service_src="${FORTRESS_ROOT}/systemd/aiochi.service"
+            local aiochi_service_dst="/etc/systemd/system/aiochi.service"
+            if [ -f "$aiochi_service_src" ]; then
+                cp "$aiochi_service_src" "$aiochi_service_dst"
+                systemctl daemon-reload
+                systemctl enable aiochi.service 2>/dev/null || true
+                log_info "  ✓ aiochi.service installed and enabled"
+            else
+                # Create inline if not found
+                cat > "$aiochi_service_dst" << 'AIOCHISERVICE'
+[Unit]
+Description=HookProbe AIOCHI (AI Eyes) Containers
+After=fortress.service fortress-vlan.service openvswitch-switch.service
+Wants=fortress.service
+Requires=podman.socket
+ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aiochi.yml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
+ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-victoria aiochi-suricata aiochi-zeek aiochi-grafana aiochi-narrative aiochi-identity aiochi-logshipper aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
+ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-identity aiochi-ollama aiochi-narrative aiochi-grafana aiochi-zeek aiochi-suricata aiochi-victoria aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+AIOCHISERVICE
+                systemctl daemon-reload
+                systemctl enable aiochi.service 2>/dev/null || true
+                log_info "  ✓ aiochi.service created and enabled"
+            fi
+
             cd "${INSTALL_DIR}/containers"
         else
             log_warn "AIOCHI compose file not found: $aiochi_compose"
