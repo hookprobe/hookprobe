@@ -263,6 +263,11 @@ configure_openflow() {
     # Clear existing flows
     ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
 
+    # Priority 65535: EAPOL frames for 802.1X/WPA authentication (HIGHEST PRIORITY)
+    # dl_type=0x888e is the EtherType for EAPOL (Extensible Authentication Protocol over LAN)
+    # Without this, WPA handshakes fail and clients cannot authenticate
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=65535,dl_type=0x888e,actions=NORMAL"
+
     # Priority 1000: Allow ARP (essential for L2 connectivity)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL"
 
@@ -309,6 +314,7 @@ configure_openflow() {
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL"
 
     log_success "OpenFlow rules configured"
+    log_info "  EAPOL (WPA auth): priority 65535"
     log_info "  ARP, DHCP, DNS, mDNS: priority 800-1000"
     log_info "  IPv4/IPv6 multicast (HomeKit, AirPlay): priority 700"
     log_info "  LAN (10.200.0.0/16): priority 500"
