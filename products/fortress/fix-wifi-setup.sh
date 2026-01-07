@@ -188,69 +188,16 @@ fi
 log_info "Step 7: Unmasking hostapd..."
 systemctl unmask hostapd 2>/dev/null || true
 
-# Step 8: Create bridge helper script
-log_info "Step 8: Creating WiFi bridge helper script..."
-BRIDGE_HELPER="/usr/local/bin/fts-wifi-bridge-helper.sh"
-
-cat > "$BRIDGE_HELPER" << 'HELPER_EOF'
-#!/bin/bash
-# Fortress WiFi Bridge Helper
-# Adds WiFi interface to OVS bridge after hostapd starts
-
-IFACE="$1"
-BRIDGE="${2:-FTS}"
-ACTION="${3:-add}"
-
-[ -z "$IFACE" ] && exit 1
-
-# Wait for interface to be ready
-for i in {1..10}; do
-    if ip link show "$IFACE" &>/dev/null; then
-        break
-    fi
-    sleep 0.5
-done
-
-if ! ip link show "$IFACE" &>/dev/null; then
-    echo "Interface $IFACE not found after waiting"
+# Step 8: Verify hostapd-ovs (REQUIRED for direct OVS bridge integration)
+log_info "Step 8: Verifying hostapd-ovs..."
+HOSTAPD_OVS_BIN="/usr/local/bin/hostapd-ovs"
+if [ ! -x "$HOSTAPD_OVS_BIN" ]; then
+    log_error "hostapd-ovs not found at $HOSTAPD_OVS_BIN"
+    log_error "Run: ./shared/hostapd-ovs/build-hostapd-ovs.sh to build it"
+    log_error "WiFi will not work without hostapd-ovs for OVS integration"
     exit 1
 fi
-
-# Check if OVS is available and bridge exists
-if ! command -v ovs-vsctl &>/dev/null; then
-    echo "OVS not available, skipping bridge configuration"
-    exit 0
-fi
-
-if ! ovs-vsctl br-exists "$BRIDGE" 2>/dev/null; then
-    echo "OVS bridge $BRIDGE does not exist, skipping"
-    exit 0
-fi
-
-if [ "$ACTION" = "add" ]; then
-    # Add interface to OVS bridge
-    if ! ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
-        echo "Adding $IFACE to OVS bridge $BRIDGE"
-        ovs-vsctl --may-exist add-port "$BRIDGE" "$IFACE" 2>/dev/null || {
-            echo "Failed to add $IFACE to $BRIDGE"
-            exit 1
-        }
-    fi
-    ip link set "$IFACE" up 2>/dev/null || true
-    echo "WiFi interface $IFACE added to OVS bridge $BRIDGE"
-elif [ "$ACTION" = "remove" ]; then
-    # Remove interface from OVS bridge
-    if ovs-vsctl list-ports "$BRIDGE" 2>/dev/null | grep -q "^${IFACE}$"; then
-        echo "Removing $IFACE from OVS bridge $BRIDGE"
-        ovs-vsctl del-port "$BRIDGE" "$IFACE" 2>/dev/null || true
-    fi
-fi
-
-exit 0
-HELPER_EOF
-
-chmod +x "$BRIDGE_HELPER"
-log_info "  Created $BRIDGE_HELPER"
+log_info "  Found hostapd-ovs: $HOSTAPD_OVS_BIN"
 
 # Step 9: Create systemd services
 log_info "Step 9: Creating systemd services..."
@@ -259,18 +206,9 @@ log_info "Step 9: Creating systemd services..."
 IFACE_24GHZ="wlan_24ghz"
 IFACE_5GHZ="wlan_5ghz"
 
-# Find hostapd binary - check common locations
-HOSTAPD_BIN=""
-for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
-    if [ -x "$path" ]; then
-        HOSTAPD_BIN="$path"
-        break
-    fi
-done
-if [ -z "$HOSTAPD_BIN" ]; then
-    HOSTAPD_BIN=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
-fi
-log_info "  Using hostapd: $HOSTAPD_BIN"
+# Use hostapd-ovs for direct OVS bridge integration
+HOSTAPD_BIN="$HOSTAPD_OVS_BIN"
+log_info "  Using hostapd-ovs: Direct OVS bridge integration (WiFi → FTS → OpenFlow)"
 
 if [ -n "$mac_24ghz" ]; then
     cat > /etc/systemd/system/fts-hostapd-24ghz.service << EOF
@@ -290,10 +228,8 @@ ExecStartPre=-/sbin/ip link set ${IFACE_24GHZ} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${IFACE_24GHZ} up
 ExecStart=${HOSTAPD_BIN} -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
-ExecStartPost=${BRIDGE_HELPER} ${IFACE_24GHZ} ${OVS_BRIDGE} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${IFACE_24GHZ} down
-ExecStopPost=-${BRIDGE_HELPER} ${IFACE_24GHZ} ${OVS_BRIDGE} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
@@ -322,10 +258,8 @@ ExecStartPre=-/sbin/ip link set ${IFACE_5GHZ} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${IFACE_5GHZ} up
 ExecStart=${HOSTAPD_BIN} -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
-ExecStartPost=${BRIDGE_HELPER} ${IFACE_5GHZ} ${OVS_BRIDGE} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${IFACE_5GHZ} down
-ExecStopPost=-${BRIDGE_HELPER} ${IFACE_5GHZ} ${OVS_BRIDGE} remove
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=10
@@ -386,11 +320,12 @@ echo ""
 echo "Files created:"
 echo "  /etc/udev/rules.d/70-fts-wifi.rules"
 echo "  /etc/hookprobe/wifi-interfaces.conf"
-echo "  /usr/local/bin/fts-wifi-bridge-helper.sh"
 echo "  /etc/systemd/system/fts-hostapd-24ghz.service (if 2.4GHz)"
 echo "  /etc/systemd/system/fts-hostapd-5ghz.service (if 5GHz)"
 echo "  /etc/hostapd/hostapd-24ghz.conf (if 2.4GHz available)"
 echo "  /etc/hostapd/hostapd-5ghz.conf (if 5GHz available)"
+echo ""
+echo "Architecture: WiFi → OVS (FTS) → OpenFlow policy (direct hostapd-ovs)"
 echo ""
 echo "Next steps:"
 echo "  1. Verify interface names: ip link show"

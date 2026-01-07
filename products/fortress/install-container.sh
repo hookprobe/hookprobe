@@ -49,6 +49,73 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "\n${CYAN}${BOLD}==> $1${NC}"; }
 
 # ============================================================
+# HOSTAPD-OVS BUILD (REQUIRED)
+# ============================================================
+# Build hostapd with OVS bridge support for direct WiFi→OVS integration.
+# This is REQUIRED for Fortress - there is no fallback mode.
+#
+# Architecture: WiFi → OVS (FTS) directly → OpenFlow policy
+# No intermediate Linux bridge - best performance
+#
+# The patch is in shared/hostapd-ovs/build-hostapd-ovs.sh
+# ============================================================
+build_hostapd_ovs() {
+    log_info "Building hostapd with OVS bridge support (REQUIRED)..."
+
+    # Path to shared hostapd-ovs build script
+    local HOSTAPD_OVS_SCRIPT=""
+
+    # Try multiple locations (installed vs development)
+    if [ -f "${SCRIPT_DIR}/../../shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="${SCRIPT_DIR}/../../shared/hostapd-ovs/build-hostapd-ovs.sh"
+    elif [ -f "/opt/hookprobe/shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="/opt/hookprobe/shared/hostapd-ovs/build-hostapd-ovs.sh"
+    elif [ -f "${FORTRESS_ROOT}/../../shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="${FORTRESS_ROOT}/../../shared/hostapd-ovs/build-hostapd-ovs.sh"
+    fi
+
+    if [ -z "$HOSTAPD_OVS_SCRIPT" ] || [ ! -f "$HOSTAPD_OVS_SCRIPT" ]; then
+        log_error "hostapd-ovs build script not found!"
+        log_error "Expected at: shared/hostapd-ovs/build-hostapd-ovs.sh"
+        log_error "This is required for WiFi to work with OVS."
+        return 1
+    fi
+
+    # Check if hostapd-ovs is already installed
+    if [ -x "/usr/local/bin/hostapd-ovs" ]; then
+        local installed_version
+        installed_version=$(/usr/local/bin/hostapd-ovs -v 2>&1 | head -1 || echo "unknown")
+        log_info "hostapd-ovs already installed: $installed_version"
+
+        # Check if rebuild is needed (version mismatch)
+        if [ -f "/var/lib/hookprobe/hostapd-ovs.state" ]; then
+            log_info "  State: $(cat /var/lib/hookprobe/hostapd-ovs.state | head -1)"
+        fi
+        return 0
+    fi
+
+    # Build hostapd-ovs
+    log_info "Compiling hostapd with OVS patch (this may take 2-5 minutes)..."
+    chmod +x "$HOSTAPD_OVS_SCRIPT"
+
+    # Run build script (it handles its own error messages)
+    if "$HOSTAPD_OVS_SCRIPT"; then
+        log_success "hostapd-ovs built and installed"
+
+        # Verify installation
+        if [ -x "/usr/local/bin/hostapd-ovs" ]; then
+            log_info "  Binary: /usr/local/bin/hostapd-ovs"
+            log_info "  Version: $(/usr/local/bin/hostapd-ovs -v 2>&1 | head -1)"
+        fi
+    else
+        log_error "hostapd-ovs build failed!"
+        log_error "WiFi will not work without hostapd-ovs."
+        log_error "Check build log for errors."
+        return 1
+    fi
+}
+
+# ============================================================
 # BANNER
 # ============================================================
 show_banner() {
@@ -271,6 +338,15 @@ check_prerequisites() {
     fi
     log_info "hostapd: $(hostapd -v 2>&1 | head -1 || echo 'available')"
     log_info "iw: $(iw --version 2>&1 | head -1 || echo 'available')"
+
+    # ============================================================
+    # hostapd-ovs: Build hostapd with OVS bridge support
+    # ============================================================
+    # This patched hostapd can bridge directly to OVS, eliminating
+    # the need for veth pairs and intermediate Linux bridges.
+    # Benefits: Simpler config, better performance, full OpenFlow control
+    # ============================================================
+    build_hostapd_ovs
 
     # Python3 (required for host-based fingerprinting services)
     if ! command -v python3 &>/dev/null; then
@@ -1884,181 +1960,6 @@ update_hostapd_configs_stable_names() {
     fi
 }
 
-# ============================================================
-# WIFI BRIDGE HELPER - SDN AUTOPILOT SUPPORT
-# ============================================================
-generate_wifi_bridge_helper() {
-    # Generate helper script for WiFi → br-wifi → veth → OVS architecture
-    # This enables SDN policy enforcement and ebtables-based WiFi isolation
-
-    local helper_script="/usr/local/bin/fts-wifi-bridge-helper.sh"
-    local ovs_bridge="${OVS_BRIDGE:-FTS}"
-
-    log_info "Generating WiFi bridge helper script..."
-
-    cat > "$helper_script" << 'HELPER_EOF'
-#!/bin/bash
-# Fortress WiFi Bridge Helper - SDN Autopilot Edition
-#
-# Architecture: WiFi → br-wifi (Linux bridge) → veth → OVS
-#
-# This script:
-# 1. Ensures br-wifi exists and is connected to OVS via veth
-# 2. Adds WiFi interface to br-wifi (NOT directly to OVS)
-# 3. Sets up ebtables to force WiFi-to-WiFi through veth for OVS policy enforcement
-# 4. Enables hairpin mode for mDNS/Bonjour reflection (HomeKit/AirPlay)
-
-IFACE="$1"
-OVS_BRIDGE="${2:-FTS}"
-ACTION="${3:-add}"
-WIFI_BRIDGE="br-wifi"
-VETH_BR="veth-wifi-a"
-VETH_OVS="veth-wifi-b"
-# FLAT BRIDGE: No VLAN tagging - all ports untagged
-
-# Load Fortress config for D2D setting
-# ENABLE_WIFI_D2D=true allows device-to-device (AirPlay, HomeKit, printers)
-# ENABLE_WIFI_D2D=false forces strict isolation (guest network mode)
-if [ -f /etc/hookprobe/fortress.conf ]; then
-    # shellcheck source=/dev/null
-    source /etc/hookprobe/fortress.conf 2>/dev/null || true
-fi
-ENABLE_WIFI_D2D="${ENABLE_WIFI_D2D:-true}"  # Default: allow D2D
-
-[ -z "$IFACE" ] && exit 1
-
-log() { echo "[wifi-bridge] $*"; logger -t fts-wifi-bridge "$*" 2>/dev/null || true; }
-
-# Wait for interface to be ready
-for i in {1..10}; do
-    if ip link show "$IFACE" &>/dev/null; then
-        break
-    fi
-    sleep 0.5
-done
-
-if ! ip link show "$IFACE" &>/dev/null; then
-    log "Interface $IFACE not found after waiting"
-    exit 1
-fi
-
-# Ensure br-wifi exists
-ensure_wifi_bridge() {
-    if ! ip link show "$WIFI_BRIDGE" &>/dev/null; then
-        log "Creating WiFi bridge $WIFI_BRIDGE"
-        ip link add "$WIFI_BRIDGE" type bridge
-        ip link set "$WIFI_BRIDGE" type bridge stp_state 0
-        echo 0 > "/sys/class/net/$WIFI_BRIDGE/bridge/forward_delay" 2>/dev/null || true
-    fi
-    ip link set "$WIFI_BRIDGE" up
-}
-
-# Ensure veth pair connecting br-wifi to OVS
-ensure_veth_pair() {
-    if ! ip link show "$VETH_BR" &>/dev/null; then
-        log "Creating veth pair $VETH_BR <-> $VETH_OVS"
-        ip link add "$VETH_BR" type veth peer name "$VETH_OVS"
-    fi
-
-    # Add veth_br to br-wifi
-    if ! ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$VETH_BR"; then
-        ip link set "$VETH_BR" master "$WIFI_BRIDGE" 2>/dev/null || true
-    fi
-
-    # Add veth_ovs to OVS (flat bridge - no VLAN tagging)
-    if command -v ovs-vsctl &>/dev/null && ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
-        if ! ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${VETH_OVS}$"; then
-            log "Adding $VETH_OVS to OVS bridge $OVS_BRIDGE (flat mode)"
-            ovs-vsctl --may-exist add-port "$OVS_BRIDGE" "$VETH_OVS" 2>/dev/null || true
-        fi
-    fi
-
-    ip link set "$VETH_BR" up
-    ip link set "$VETH_OVS" up
-}
-
-# Set up hairpin mode for D2D traffic
-# With ap_isolate=1 in hostapd, all WiFi traffic goes through br-wifi bridge.
-# Hairpin mode allows traffic to return to the same or different WiFi interface.
-# OVS NAC rules handle policy enforcement (internet_only blocks LAN traffic).
-#
-# NO ebtables DROP rules - they block D2D before OVS can apply policy!
-# NO bridge port isolation - ap_isolate=1 already forces traffic through bridge.
-setup_hairpin() {
-    # Clean up any old ebtables DROP rules (migration from old approach)
-    if command -v ebtables &>/dev/null; then
-        ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-            if [ "$other" != "$IFACE" ]; then
-                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            fi
-        done
-
-        # Ensure ACCEPT rule for veth (OVS return traffic)
-        if ! ebtables -L FORWARD 2>/dev/null | grep -q "veth-wifi-a.*ACCEPT"; then
-            ebtables -I FORWARD 1 -i "$VETH_BR" -j ACCEPT 2>/dev/null || true
-        fi
-    fi
-
-    # Enable hairpin mode for D2D reflection
-    if command -v bridge &>/dev/null; then
-        bridge link set dev "$VETH_BR" hairpin on 2>/dev/null || true
-        bridge link set dev "$IFACE" hairpin on 2>/dev/null || true
-        log "Hairpin enabled on $IFACE and $VETH_BR for D2D"
-    fi
-}
-
-# Clean up hairpin settings (for interface removal)
-remove_hairpin() {
-    # Clean up any ebtables rules
-    if command -v ebtables &>/dev/null; then
-        ebtables -D FORWARD -i "$IFACE" -o "$IFACE" -j DROP 2>/dev/null || true
-        for other in wlan_24ghz wlan_5ghz wlan0 wlan1; do
-            if [ "$other" != "$IFACE" ]; then
-                ebtables -D FORWARD -i "$IFACE" -o "$other" -j DROP 2>/dev/null || true
-            fi
-        done
-    fi
-    log "Cleaned up ebtables rules for $IFACE"
-}
-
-if [ "$ACTION" = "add" ]; then
-    # Ensure infrastructure is ready
-    ensure_wifi_bridge
-    ensure_veth_pair
-
-    # Add WiFi interface to br-wifi (NOT directly to OVS)
-    if ! ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
-        log "Adding $IFACE to bridge $WIFI_BRIDGE"
-        ip link set "$IFACE" master "$WIFI_BRIDGE" 2>/dev/null || true
-    fi
-
-    ip link set "$IFACE" up 2>/dev/null || true
-
-    # Enable hairpin for D2D traffic (ap_isolate=1 forces through bridge)
-    # OVS NAC rules handle policy - internet_only blocks LAN, smart_home allows D2D
-    setup_hairpin
-
-    log "WiFi interface $IFACE configured: br-wifi (hairpin) → veth → OVS ($OVS_BRIDGE)"
-    log "D2D: smart_home=allowed, internet_only=blocked by OVS NAC rules"
-
-elif [ "$ACTION" = "remove" ]; then
-    # Clean up hairpin settings
-    remove_hairpin
-
-    # Remove interface from br-wifi
-    if ip link show master "$WIFI_BRIDGE" 2>/dev/null | grep -q "$IFACE"; then
-        log "Removing $IFACE from bridge $WIFI_BRIDGE"
-        ip link set "$IFACE" nomaster 2>/dev/null || true
-    fi
-fi
-
-exit 0
-HELPER_EOF
-
-    chmod +x "$helper_script"
-    log_info "  Created: $helper_script"
-}
 
 # ============================================================
 # WIFI SERVICES WITH STABLE NAMES - PHASE 3
@@ -2071,21 +1972,15 @@ create_wifi_services_stable() {
 
     local ovs_bridge="${OVS_BRIDGE:-FTS}"
 
-    # Generate the WiFi bridge helper script first
-    generate_wifi_bridge_helper
-
-    # Find hostapd binary - check common locations
-    local hostapd_bin=""
-    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
-        if [ -x "$path" ]; then
-            hostapd_bin="$path"
-            break
-        fi
-    done
-    if [ -z "$hostapd_bin" ]; then
-        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+    # hostapd-ovs is REQUIRED for direct OVS bridge integration
+    local hostapd_bin="/usr/local/bin/hostapd-ovs"
+    if [ ! -x "$hostapd_bin" ]; then
+        log_error "hostapd-ovs not found at $hostapd_bin"
+        log_error "Run: ./shared/hostapd-ovs/build-hostapd-ovs.sh to build it"
+        log_error "WiFi will not work without hostapd-ovs for OVS integration"
+        return 1
     fi
-    log_info "  Using hostapd: $hostapd_bin"
+    log_info "  Using hostapd-ovs: Direct OVS bridge integration (WiFi → FTS → OpenFlow)"
 
     # 2.4GHz service
     if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
@@ -2108,10 +2003,8 @@ ExecStartPre=-/sbin/ip link set ${WIFI_24GHZ_STABLE} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${WIFI_24GHZ_STABLE} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid /etc/hostapd/hostapd-24ghz.conf
-ExecStartPost=/usr/local/bin/fts-wifi-bridge-helper.sh ${WIFI_24GHZ_STABLE} ${ovs_bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${WIFI_24GHZ_STABLE} down
-ExecStopPost=-/usr/local/bin/fts-wifi-bridge-helper.sh ${WIFI_24GHZ_STABLE} ${ovs_bridge} remove
 Restart=on-failure
 RestartSec=10
 
@@ -2144,10 +2037,8 @@ ExecStartPre=-/sbin/ip link set ${WIFI_5GHZ_STABLE} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${WIFI_5GHZ_STABLE} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid /etc/hostapd/hostapd-5ghz.conf
-ExecStartPost=/usr/local/bin/fts-wifi-bridge-helper.sh ${WIFI_5GHZ_STABLE} ${ovs_bridge} add
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${WIFI_5GHZ_STABLE} down
-ExecStopPost=-/usr/local/bin/fts-wifi-bridge-helper.sh ${WIFI_5GHZ_STABLE} ${ovs_bridge} remove
 Restart=on-failure
 RestartSec=10
 

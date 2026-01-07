@@ -59,12 +59,42 @@ fi
 if command -v python3 &>/dev/null; then
     export PYTHONPATH="${FORTRESS_LIB}:${PYTHONPATH:-}"
 
+    # Register device with Device Identity Layer (handles MAC randomization tracking)
+    # This runs synchronously before the async sentinel to ensure identity is created
+    if python3 -c "import device_identity" 2>/dev/null; then
+        log "Registering device identity for MAC $MAC"
+
+        # Pass DHCP Option 55 fingerprint for identity matching
+        OPTION55="${DNSMASQ_REQUESTED_OPTIONS:-}"
+        VENDOR_CLASS="${DNSMASQ_VENDOR_CLASS:-}"
+        CLIENT_ID="${DNSMASQ_CLIENT_ID:-}"
+
+        python3 -c "
+import device_identity
+tracker = device_identity.DeviceIdentityTracker()
+identity = tracker.find_or_create_identity(
+    mac='$MAC',
+    dhcp_option55='$OPTION55' if '$OPTION55' else None,
+    hostname='$HOSTNAME' if '$HOSTNAME' else None,
+    dhcp_vendor_class='$VENDOR_CLASS' if '$VENDOR_CLASS' else None,
+    dhcp_client_id='$CLIENT_ID' if '$CLIENT_ID' else None,
+)
+if identity:
+    print(f'Device identity: {identity.identity_id} (name: {identity.display_name})')
+" 2>/dev/null || log "Device identity registration skipped (error or first-time setup)"
+    fi
+
     if python3 -c "import $PYTHON_MODULE" 2>/dev/null; then
         log "Using Python DHCP Sentinel"
 
-        # Build arguments
+        # Build arguments with DHCP fingerprint
         ARGS=("$ACTION" "$MAC" "$IP")
         [[ -n "$HOSTNAME" ]] && ARGS+=("$HOSTNAME")
+
+        # Pass DHCP Option 55 via environment for fingerprinting
+        export DHCP_OPTION55="${DNSMASQ_REQUESTED_OPTIONS:-}"
+        export DHCP_VENDOR_CLASS="${DNSMASQ_VENDOR_CLASS:-}"
+        export DHCP_CLIENT_ID="${DNSMASQ_CLIENT_ID:-}"
 
         # Run sentinel (async, don't block dnsmasq)
         python3 -m "$PYTHON_MODULE" "${ARGS[@]}" &

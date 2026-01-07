@@ -89,10 +89,32 @@ if not mac:
     sys.exit(0)
 
 # =========================================================================
+# DEVICE IDENTITY LAYER - MAC Randomization Tracking
+# =========================================================================
+# This links MAC addresses to persistent device identities using DHCP Option 55
+# fingerprint (device DNA) and mDNS names. Prevents "iPhone 3, 4, 5..." syndrome.
+try:
+    sys.path.insert(0, '/opt/hookprobe/fortress/lib')
+    from device_identity import DeviceIdentityTracker
+
+    tracker = DeviceIdentityTracker()
+    identity = tracker.find_or_create_identity(
+        mac=mac,
+        dhcp_option55=dhcp_fingerprint or None,
+        hostname=hostname or None,
+        dhcp_vendor_class=vendor_class or None,
+    )
+    if identity:
+        logger.info(f"Device identity: {identity.identity_id} -> {identity.display_name}")
+except ImportError:
+    logger.debug("Device Identity Layer not available")
+except Exception as e:
+    logger.debug(f"Device identity error: {e}")
+
+# =========================================================================
 # SDN AUTO PILOT INTEGRATION
 # =========================================================================
 try:
-    sys.path.insert(0, '/opt/hookprobe/fortress/lib')
     from sdn_autopilot import SDNAutoPilot
 
     # Use HOST database path (not container path /app/db/autopilot.db)
