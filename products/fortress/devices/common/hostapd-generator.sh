@@ -2641,7 +2641,7 @@ EOF
         cat >> "$HOSTAPD_5GHZ_CONF" << EOF
 # 802.11ac (WiFi 5)
 ieee80211ac=1
-require_vht=1
+require_vht=0
 # VHT channel width: 0=40MHz, 1=80MHz, 2=160MHz, 3=80+80MHz
 vht_oper_chwidth=$vht_oper_chwidth_val
 vht_oper_centr_freq_seg0_idx=$vht_oper_centr_freq_seg0_idx
