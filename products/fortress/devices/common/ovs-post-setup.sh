@@ -315,6 +315,91 @@ configure_openflow() {
 }
 
 # ============================================================
+# CROSS-BAND MULTICAST REFLECTION (hostapd-ovs mode only)
+# ============================================================
+#
+# When using hostapd-ovs (direct OVS integration without br-wifi),
+# multicast/mDNS traffic doesn't automatically bridge between
+# 2.4GHz and 5GHz WiFi bands because OVS uses per-port MAC learning.
+#
+# These rules explicitly reflect multicast traffic between WiFi bands
+# to enable device discovery (HomeKit, AirPlay, Chromecast, etc.).
+#
+# Priority 400: Below base allow (500), above default (0)
+# Only applied when HOSTAPD_OVS_MODE=true in fortress.conf
+#
+# ============================================================
+
+setup_multicast_reflection() {
+    log_section "Cross-Band Multicast Reflection"
+
+    # Check if hostapd-ovs mode is enabled
+    local hostapd_ovs_mode="false"
+    if [ -f "$FORTRESS_CONF" ]; then
+        hostapd_ovs_mode=$(grep "^HOSTAPD_OVS_MODE=" "$FORTRESS_CONF" 2>/dev/null | cut -d= -f2 || echo "false")
+    fi
+
+    if [ "$hostapd_ovs_mode" != "true" ]; then
+        log_info "hostapd-ovs mode not enabled - using br-wifi hairpin instead"
+        log_info "  Multicast reflection handled by Linux bridge (br-wifi)"
+        return 0
+    fi
+
+    # Get OVS port numbers for WiFi interfaces
+    local wifi_24_port wifi_5_port
+    wifi_24_port=$(ovs-vsctl get interface wlan_24ghz ofport 2>/dev/null | tr -d '"') || wifi_24_port=""
+    wifi_5_port=$(ovs-vsctl get interface wlan_5ghz ofport 2>/dev/null | tr -d '"') || wifi_5_port=""
+
+    # Validate port numbers
+    if [ -z "$wifi_24_port" ] || [ "$wifi_24_port" = "-1" ]; then
+        log_warn "wlan_24ghz port not found in OVS - multicast reflection skipped"
+        return 0
+    fi
+
+    if [ -z "$wifi_5_port" ] || [ "$wifi_5_port" = "-1" ]; then
+        log_warn "wlan_5ghz port not found in OVS - multicast reflection skipped"
+        return 0
+    fi
+
+    log_info "Setting up cross-band multicast reflection"
+    log_info "  wlan_24ghz port: $wifi_24_port"
+    log_info "  wlan_5ghz port: $wifi_5_port"
+
+    # Clear any existing multicast reflection rules
+    ovs-ofctl del-flows "$OVS_BRIDGE" "priority=400" 2>/dev/null || true
+
+    # IPv4 mDNS (224.0.0.251:5353) - Bonjour/Zeroconf discovery
+    # Reflect from 2.4GHz to 5GHz and vice versa
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_24_port,nw_dst=224.0.0.251,tp_dst=5353,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_5_port,nw_dst=224.0.0.251,tp_dst=5353,actions=output:$wifi_24_port,NORMAL"
+
+    # IPv6 mDNS (ff02::fb) - HomeKit, AirPlay, Matter
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp6,in_port=$wifi_24_port,ipv6_dst=ff02::fb,tp_dst=5353,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp6,in_port=$wifi_5_port,ipv6_dst=ff02::fb,tp_dst=5353,actions=output:$wifi_24_port,NORMAL"
+
+    # SSDP/UPnP (239.255.255.250:1900) - Chromecast, Roku, smart TVs
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_24_port,nw_dst=239.255.255.250,tp_dst=1900,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_5_port,nw_dst=239.255.255.250,tp_dst=1900,actions=output:$wifi_24_port,NORMAL"
+
+    # IPv6 All-Nodes multicast (ff02::1) - Neighbor Discovery, router advertisements
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,ipv6,in_port=$wifi_24_port,ipv6_dst=ff02::1,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,ipv6,in_port=$wifi_5_port,ipv6_dst=ff02::1,actions=output:$wifi_24_port,NORMAL"
+
+    log_success "Cross-band multicast reflection configured"
+    log_info "  mDNS (224.0.0.251, ff02::fb): 2.4GHz <-> 5GHz"
+    log_info "  SSDP (239.255.255.250): 2.4GHz <-> 5GHz"
+    log_info "  IPv6 NDP (ff02::1): 2.4GHz <-> 5GHz"
+}
+
+# ============================================================
 # PORT CONFIGURATION (FLAT BRIDGE - NO VLAN TAGGING)
 # ============================================================
 
@@ -838,6 +923,10 @@ main() {
             setup_bridge_gateway  # CRITICAL: Assign IP to FTS bridge first
             configure_openflow
             configure_bridge_ports
+
+            # Cross-band multicast reflection for hostapd-ovs mode
+            # Enables mDNS/SSDP discovery between 2.4GHz and 5GHz WiFi bands
+            setup_multicast_reflection || log_warn "Multicast reflection setup had issues (non-fatal)"
 
             # Avahi mDNS coexistence for Ecosystem Bubble detection
             # Enables HomeKit/AirPlay device grouping via PresenceSensor
