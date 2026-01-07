@@ -319,7 +319,7 @@ NARRATIVE_TEMPLATES = {
 │         ▼                                                                    │
 │  STAGE 5: VISUALIZE                                                          │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Grafana Dashboard                                                   │    │
+│  │  Fortress AdminLTE Web UI                                            │    │
 │  │                                                                       │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │    │
 │  │  │  PRESENCE   │  │   PRIVACY   │  │ PERFORMANCE │                  │    │
@@ -360,7 +360,8 @@ AIOCHI supports three deployment tiers to match your resources:
 | `aiochi-logshipper` | custom (Python) | Data pipeline | ~100MB | - |
 | `aiochi-identity` | custom (Python) | Device fingerprinting | ~200MB | 8060 |
 | `aiochi-bubble` | custom (Python) | Ecosystem detection | ~200MB | 8070 |
-| `aiochi-grafana` | grafana/grafana | Dashboard | ~200MB | 3000 |
+
+Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana container).
 
 ### Optional Containers (Profiles)
 
@@ -373,6 +374,7 @@ AIOCHI supports three deployment tiers to match your resources:
 
 | Component | Reason for Removal |
 |-----------|-------------------|
+| **Grafana** | Visualization via Fortress AdminLTE web UI; redundant |
 | **VictoriaMetrics** | ClickHouse handles time-series; redundant |
 | **Fortress lib/ecosystem_bubble.py** | Moved to AIOCHI bubble-manager |
 | **Fortress lib/presence_sensor.py** | Moved to AIOCHI bubble-manager |
@@ -387,7 +389,8 @@ AIOCHI supports three deployment tiers to match your resources:
 | Suricata | No | Yes | Alerting for narratives |
 | Zeek | No | Yes | Connection logging for identity |
 | ClickHouse | No | Yes | Analytics, not required for security |
-| Grafana | No | Yes | Visualization, not required for security |
+| Identity Engine | No | Yes | Device fingerprinting for narratives |
+| Bubble Manager | No | Yes | Ecosystem detection |
 | n8n | No | Optional | Complex workflows only |
 | Ollama | No | Optional | AI narratives only |
 
@@ -578,7 +581,7 @@ POST /webhook/device-offline         # Triggered when device disconnects
 POST /webhook/performance-alert      # Triggered by QoS degradation
 ```
 
-### Dashboard API (Grafana data sources)
+### Dashboard API (Fortress Web UI data sources)
 
 ```
 GET  /api/v1/narratives?limit=20     # Recent narratives for feed
@@ -639,15 +642,14 @@ shared/aiochi/
 ├── containers/
 │   ├── podman-compose.aiochi.yml
 │   ├── Containerfile.identity
-│   ├── Containerfile.narrative
+│   ├── Containerfile.bubble
+│   ├── Containerfile.logshipper
 │   └── configs/
 │       ├── clickhouse/
-│       ├── grafana/
 │       ├── suricata/
 │       └── zeek/
 ├── schemas/
-│   ├── clickhouse-init.sql      # ClickHouse table definitions
-│   └── grafana-dashboards/      # Pre-built dashboard JSON
+│   └── clickhouse-init.sql      # ClickHouse table definitions
 ├── personas/
 │   ├── parent.yaml              # Parent persona config
 │   ├── gamer.yaml               # Gamer persona config
