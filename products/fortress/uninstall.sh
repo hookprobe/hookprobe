@@ -525,10 +525,14 @@ remove_management_scripts() {
         "/usr/local/bin/fts-channel-optimize.sh"
         "/usr/local/bin/fts-wifi-prepare.sh"
         "/usr/local/bin/fts-wifi-bridge.sh"
+        "/usr/local/bin/fts-wifi-bridge-helper.sh"
         "/usr/local/bin/fts-dnsxai-privacy"
         "/usr/local/bin/dfs-channel-selector"
         "/usr/local/bin/fts-lan-bridge.sh"
         "/usr/local/bin/fortress-ctl"
+        # hostapd-ovs binaries (OVS-patched hostapd)
+        "/usr/local/bin/hostapd-ovs"
+        "/usr/local/bin/hostapd_cli-ovs"
     )
 
     for script in "${scripts[@]}"; do
@@ -546,6 +550,12 @@ remove_management_scripts() {
 
     # Remove entire bin directory if empty
     rmdir "${INSTALL_DIR}/bin" 2>/dev/null || true
+
+    # Remove hostapd-ovs state file
+    if [ -f "/var/lib/hookprobe/hostapd-ovs.state" ]; then
+        log_info "Removing hostapd-ovs state file..."
+        rm -f /var/lib/hookprobe/hostapd-ovs.state
+    fi
 
     log_info "Management scripts removed"
 }

@@ -49,6 +49,76 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "\n${CYAN}${BOLD}==> $1${NC}"; }
 
 # ============================================================
+# HOSTAPD-OVS BUILD
+# ============================================================
+# Build hostapd with OVS bridge support for direct WiFi→OVS integration
+# This eliminates the need for veth pairs and intermediate Linux bridges.
+#
+# Architecture comparison:
+#   Before: WiFi → br-wifi (Linux bridge) → veth pair → OVS
+#   After:  WiFi → OVS (direct, via patched hostapd)
+#
+# The patch is in shared/hostapd-ovs/build-hostapd-ovs.sh
+# ============================================================
+build_hostapd_ovs() {
+    log_info "Building hostapd with OVS bridge support..."
+
+    # Path to shared hostapd-ovs build script
+    local HOSTAPD_OVS_SCRIPT=""
+
+    # Try multiple locations (installed vs development)
+    if [ -f "${SCRIPT_DIR}/../../shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="${SCRIPT_DIR}/../../shared/hostapd-ovs/build-hostapd-ovs.sh"
+    elif [ -f "/opt/hookprobe/shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="/opt/hookprobe/shared/hostapd-ovs/build-hostapd-ovs.sh"
+    elif [ -f "${FORTRESS_ROOT}/../../shared/hostapd-ovs/build-hostapd-ovs.sh" ]; then
+        HOSTAPD_OVS_SCRIPT="${FORTRESS_ROOT}/../../shared/hostapd-ovs/build-hostapd-ovs.sh"
+    fi
+
+    if [ -z "$HOSTAPD_OVS_SCRIPT" ] || [ ! -f "$HOSTAPD_OVS_SCRIPT" ]; then
+        log_warn "hostapd-ovs build script not found - using standard hostapd with veth workaround"
+        HOSTAPD_OVS_AVAILABLE=false
+        return 0
+    fi
+
+    # Check if hostapd-ovs is already installed
+    if [ -x "/usr/local/bin/hostapd-ovs" ]; then
+        local installed_version
+        installed_version=$(/usr/local/bin/hostapd-ovs -v 2>&1 | head -1 || echo "unknown")
+        log_info "hostapd-ovs already installed: $installed_version"
+        HOSTAPD_OVS_AVAILABLE=true
+
+        # Check if rebuild is needed (version mismatch)
+        if [ -f "/var/lib/hookprobe/hostapd-ovs.state" ]; then
+            log_info "  State: $(cat /var/lib/hookprobe/hostapd-ovs.state | head -1)"
+        fi
+        return 0
+    fi
+
+    # Build hostapd-ovs
+    log_info "Compiling hostapd with OVS patch (this may take 2-5 minutes)..."
+    chmod +x "$HOSTAPD_OVS_SCRIPT"
+
+    # Run build script (it handles its own error messages)
+    if "$HOSTAPD_OVS_SCRIPT"; then
+        HOSTAPD_OVS_AVAILABLE=true
+        log_success "hostapd-ovs built and installed"
+
+        # Verify installation
+        if [ -x "/usr/local/bin/hostapd-ovs" ]; then
+            log_info "  Binary: /usr/local/bin/hostapd-ovs"
+            log_info "  Version: $(/usr/local/bin/hostapd-ovs -v 2>&1 | head -1)"
+        fi
+    else
+        log_warn "hostapd-ovs build failed - will use standard hostapd with veth workaround"
+        HOSTAPD_OVS_AVAILABLE=false
+    fi
+}
+
+# Global flag for hostapd-ovs availability (set by build_hostapd_ovs)
+HOSTAPD_OVS_AVAILABLE=false
+
+# ============================================================
 # BANNER
 # ============================================================
 show_banner() {
@@ -271,6 +341,15 @@ check_prerequisites() {
     fi
     log_info "hostapd: $(hostapd -v 2>&1 | head -1 || echo 'available')"
     log_info "iw: $(iw --version 2>&1 | head -1 || echo 'available')"
+
+    # ============================================================
+    # hostapd-ovs: Build hostapd with OVS bridge support
+    # ============================================================
+    # This patched hostapd can bridge directly to OVS, eliminating
+    # the need for veth pairs and intermediate Linux bridges.
+    # Benefits: Simpler config, better performance, full OpenFlow control
+    # ============================================================
+    build_hostapd_ovs
 
     # Python3 (required for host-based fingerprinting services)
     if ! command -v python3 &>/dev/null; then
@@ -2074,18 +2153,31 @@ create_wifi_services_stable() {
     # Generate the WiFi bridge helper script first
     generate_wifi_bridge_helper
 
-    # Find hostapd binary - check common locations
+    # Find hostapd binary - prefer hostapd-ovs for direct OVS integration
     local hostapd_bin=""
-    for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
-        if [ -x "$path" ]; then
-            hostapd_bin="$path"
-            break
+    local using_hostapd_ovs=false
+
+    # Check for hostapd-ovs first (patched for OVS bridge support)
+    if [ "$HOSTAPD_OVS_AVAILABLE" = true ] && [ -x "/usr/local/bin/hostapd-ovs" ]; then
+        hostapd_bin="/usr/local/bin/hostapd-ovs"
+        using_hostapd_ovs=true
+        log_info "  Using hostapd-ovs: Direct OVS bridge integration enabled"
+    else
+        # Fall back to standard hostapd
+        for path in /usr/local/bin/hostapd /usr/sbin/hostapd /usr/bin/hostapd; do
+            if [ -x "$path" ]; then
+                hostapd_bin="$path"
+                break
+            fi
+        done
+        if [ -z "$hostapd_bin" ]; then
+            hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
         fi
-    done
-    if [ -z "$hostapd_bin" ]; then
-        hostapd_bin=$(which hostapd 2>/dev/null || echo "/usr/sbin/hostapd")
+        log_info "  Using hostapd: $hostapd_bin (veth bridge workaround)"
     fi
-    log_info "  Using hostapd: $hostapd_bin"
+
+    # Save hostapd mode for later reference
+    echo "HOSTAPD_OVS_MODE=$using_hostapd_ovs" >> "${CONFIG_DIR}/fortress.conf"
 
     # 2.4GHz service
     if [ -n "$WIFI_24GHZ_DETECTED" ] && [ -f /etc/hostapd/hostapd-24ghz.conf ]; then
