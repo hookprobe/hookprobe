@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.8
-**Last Updated**: 2026-01-05
+**Version**: 5.9
+**Last Updated**: 2026-01-07
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -67,6 +67,8 @@
 | **Response orchestration** | Automated mitigation | `core/qsecbit/response/orchestrator.py` |
 | **WiFi DFS intelligence** | ML channel scoring | `shared/wireless/dfs_intelligence.py` |
 | **WiFi channel scanning** | Congestion analysis | `shared/wireless/channel_scanner.py` |
+| **hostapd-OVS patch** | Direct OVS bridge for WiFi | `shared/hostapd-ovs/build-hostapd-ovs.sh` |
+| **hostapd-OVS integration** | OVS WiFi architecture | `shared/hostapd-ovs/README.md` |
 | **Fortress LAN bridging** | OVS VLAN + DHCP | `products/fortress/install-container.sh` (search `setup_network`) |
 | **Fortress device scripts** | Hardware profiles | `products/fortress/devices/common/` |
 | **SLA AI / Business Continuity** | Intelligent failover | `shared/slaai/` |
@@ -350,6 +352,10 @@ hookprobe/
 │   │   └── containers/              # Containerized DFS API
 │   │       └── dfs-intelligence/
 │   │           └── dfs_api_server.py
+│   │
+│   ├── hostapd-ovs/                  # HOSTAPD OVS BRIDGE PATCH
+│   │   ├── build-hostapd-ovs.sh     # Build & install script
+│   │   └── README.md                # Integration documentation
 │   │
 │   ├── cortex/                       # HOOKPROBE CORTEX - Neural Command Center
 │   │   ├── README.md                # Documentation
@@ -966,6 +972,105 @@ from shared.wireless import (
     DFSMLTrainer,        # Model training
 )
 ```
+
+### hostapd-ovs - OVS Bridge Support for WiFi
+
+**Location**: `shared/hostapd-ovs/`
+**Status**: Production Ready
+
+This module provides a patched version of hostapd (2.10/2.11) that can directly bridge WiFi interfaces to Open vSwitch (OVS) bridges, eliminating the need for veth pairs and intermediate Linux bridges.
+
+**The Problem**:
+
+Standard hostapd uses sysfs (`/sys/class/net/<bridge>/brif/`) to detect bridge membership. This works for Linux bridges but **fails for OVS bridges** because OVS doesn't populate sysfs bridge interfaces.
+
+**Architecture Comparison**:
+
+| Mode | Traffic Flow | Components | Performance |
+|------|-------------|------------|-------------|
+| **hostapd-ovs** (direct) | WiFi → OVS (FTS) | Direct integration | Better |
+| **veth mode** (fallback) | WiFi → br-wifi → veth pair → OVS | Extra bridge + veth | Overhead |
+
+**The Solution**:
+
+The patch adds `linux_br_get_ovs()` helper function to `src/drivers/linux_ioctl.c`. When the standard sysfs lookup fails, it queries `ovs-vsctl port-to-br` to find the OVS bridge.
+
+```c
+/* OVS Bridge Support (HookProbe Patch) */
+static int linux_br_get_ovs(char *brname, const char *ifname)
+{
+    // Input validation prevents command injection
+    // Only alphanumeric, hyphens, underscores, dots allowed
+    snprintf(cmd, sizeof(cmd), "ovs-vsctl --timeout=1 port-to-br %s 2>/dev/null", ifname);
+    fp = popen(cmd, "r");
+    // ... reads bridge name from output
+}
+```
+
+**Key Files**:
+
+| File | Purpose |
+|------|---------|
+| `build-hostapd-ovs.sh` | Downloads, patches, builds, installs hostapd-ovs |
+| `README.md` | Comprehensive integration documentation |
+
+**Fortress Integration**:
+
+The Fortress installer automatically builds hostapd-ovs during `check_prerequisites()`:
+
+```bash
+# Automatic during Fortress install
+sudo ./install.sh
+
+# Manual build
+sudo ./shared/hostapd-ovs/build-hostapd-ovs.sh
+
+# Check installation
+./shared/hostapd-ovs/build-hostapd-ovs.sh --check
+
+# Uninstall
+sudo ./shared/hostapd-ovs/build-hostapd-ovs.sh --uninstall
+```
+
+**Configuration**:
+
+The mode is stored in `/etc/hookprobe/fortress.conf`:
+```bash
+HOSTAPD_OVS_MODE=true   # Direct OVS integration
+HOSTAPD_OVS_MODE=false  # veth fallback mode
+```
+
+**hostapd.conf with OVS**:
+```ini
+interface=wlan_24ghz
+bridge=FTS              # Direct OVS bridge name (no br-wifi needed)
+ap_isolate=1            # Recommended for OVS policy control
+```
+
+**Supported Versions**:
+
+| hostapd | WiFi Standards | Notes |
+|---------|----------------|-------|
+| 2.10 | WiFi 5 (802.11ac), WiFi 6 (802.11ax) | Stable, widely tested |
+| 2.11 | WiFi 5, WiFi 6, WiFi 7 (802.11be) | Latest features |
+
+**Build Features Enabled**:
+- `CONFIG_DRIVER_NL80211` - Modern Linux WiFi driver
+- `CONFIG_FULL_DYNAMIC_VLAN` - Network segmentation
+- `CONFIG_ACS` - Auto channel selection
+- `CONFIG_SAE`, `CONFIG_OWE` - WPA3 security
+- `CONFIG_IEEE80211BE` - WiFi 7 (2.11 only)
+
+**Security**:
+- Interface name validation prevents command injection
+- 1-second timeout on ovs-vsctl prevents hangs
+- Only alphanumeric, hyphens, underscores, and dots allowed in interface names
+
+**Future Work** (identified gaps):
+- OpenFlow rules for D2D client isolation
+- mDNS/DHCP broadcast handling
+- Dynamic VLAN infrastructure
+- OVS port VLAN trunk mode configuration
 
 ### SLA AI - Business Continuity Engine
 
