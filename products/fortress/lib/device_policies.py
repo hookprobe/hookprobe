@@ -15,6 +15,7 @@ Storage: SQLite database at /var/lib/hookprobe/devices.db
 import sqlite3
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -22,6 +23,113 @@ from enum import Enum
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_dnsmasq_hostname(hostname: str) -> str:
+    """Decode dnsmasq octal escapes (e.g., \\123 -> ASCII char)."""
+    if not hostname or '\\' not in hostname:
+        return hostname
+    try:
+        result = b''
+        i = 0
+        while i < len(hostname):
+            if hostname[i] == '\\' and i + 3 < len(hostname):
+                octal_str = hostname[i+1:i+4]
+                if all(c in '01234567' for c in octal_str):
+                    result += bytes([int(octal_str, 8)])
+                    i += 4
+                    continue
+            result += hostname[i].encode('utf-8', errors='replace')
+            i += 1
+        return result.decode('utf-8', errors='replace').strip()
+    except Exception:
+        return hostname
+
+
+def _clean_device_name(hostname: str, manufacturer: str = None) -> Optional[str]:
+    """Clean device hostname, returning None if unusable.
+
+    Handles:
+    - dnsmasq octal escapes (\\123)
+    - Hex prefixes (F6574fcbe4474hookprobepro -> hookprobepro)
+    - UUID-like strings (return None)
+    - Trailing numbers with punctuation ( 652!, 9!)
+    """
+    if not hostname:
+        return None
+
+    name = _decode_dnsmasq_hostname(hostname)
+    if not name:
+        return None
+
+    # Remove .local suffix first
+    if name.endswith('.local'):
+        name = name[:-6]
+
+    # Remove hex prefixes (e.g., "F6574fcbe4474hookprobepro" -> "hookprobepro")
+    hex_prefix_match = re.match(r'^[0-9a-fA-F]{8,}[-_]?(.+)$', name)
+    if hex_prefix_match:
+        remaining = hex_prefix_match.group(1)
+        # Only use if remaining part looks like a real name (has letters)
+        if re.search(r'[a-zA-Z]{3,}', remaining):
+            name = remaining
+
+    # Remove hex/UUID suffixes (e.g., "device-abc123def456")
+    name = re.sub(r'[-_][0-9a-fA-F]{6,}(?:[-_]\d+)?$', '', name)
+
+    # Remove trailing numbers with punctuation (e.g., " 652!", " 9!")
+    name = re.sub(r'\s+\d+[!@#$%^&*]+$', '', name)
+
+    # Remove pure UUID-like strings - return None to use fallback
+    if re.match(r'^[0-9a-fA-F]{8}[-_ ][0-9a-fA-F]{4}[-_ ][0-9a-fA-F]{4}', name):
+        return None
+
+    # Remove trailing punctuation artifacts
+    name = re.sub(r'[!@#$%^&*]+$', '', name)
+
+    # Clean up whitespace and special chars
+    name = re.sub(r'[-_]+', ' ', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+
+    # If name is mostly hex/numbers, return None for fallback
+    if name and len(re.sub(r'[0-9a-fA-F\s-]', '', name)) < 3:
+        return None
+
+    if not name or len(name) < 2:
+        return None
+
+    return name
+
+
+def _get_friendly_name(mac: str, hostname: str, manufacturer: str, device_type: str) -> str:
+    """Generate a user-friendly device name.
+
+    Priority:
+    1. Cleaned hostname (if usable)
+    2. Device type + last 4 MAC chars (e.g., "iPhone CE05")
+    3. Manufacturer + last 4 MAC chars (e.g., "Apple CE05")
+    4. Generic "Device CE05"
+    """
+    # Try cleaned hostname first
+    cleaned = _clean_device_name(hostname, manufacturer)
+    if cleaned:
+        return cleaned
+
+    # Get last 4 MAC chars for uniqueness
+    mac_suffix = mac[-5:].replace(':', '') if mac else '????'
+
+    # Try device type
+    if device_type and device_type.lower() not in ('unknown', '', 'none'):
+        # Make device type more readable
+        dt = device_type.replace('_', ' ').title()
+        return f"{dt} {mac_suffix}"
+
+    # Try manufacturer
+    if manufacturer and manufacturer.lower() not in ('unknown', 'private', '', 'none'):
+        return f"{manufacturer} {mac_suffix}"
+
+    # Fallback
+    return f"Device {mac_suffix}"
 
 # Database path
 DB_PATH = Path('/var/lib/hookprobe/devices.db')
@@ -375,12 +483,16 @@ def get_all_devices() -> List[Dict]:
             policy_info = POLICY_INFO[NetworkPolicy.QUARANTINE]
 
         # Merge device data
+        raw_hostname = device.get('hostname') or (stored.get('hostname') if stored else None)
+        manufacturer = device.get('manufacturer') or (stored.get('manufacturer') if stored else 'Unknown') or 'Unknown'
+        device_type = device.get('device_type') or (stored.get('device_type') if stored else 'unknown') or 'unknown'
+
         devices.append({
             'mac_address': mac,
             'ip_address': device.get('ip_address', ''),
-            'hostname': device.get('hostname') or stored.get('hostname') or f'device-{mac[-5:].replace(":", "")}',
-            'manufacturer': device.get('manufacturer') or stored.get('manufacturer', 'Unknown'),
-            'device_type': device.get('device_type') or stored.get('device_type', 'unknown'),
+            'hostname': _get_friendly_name(mac, raw_hostname, manufacturer, device_type),
+            'manufacturer': manufacturer,
+            'device_type': device_type,
             'policy': policy,
             'policy_name': policy_info['name'],
             'policy_icon': policy_info['icon'],
