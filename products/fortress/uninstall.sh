@@ -6,7 +6,7 @@
 #
 # Removes all Fortress components installed by install-container.sh:
 # - Systemd services (hookprobe-fortress, fts-qsecbit, fts-lte-failover, fts-wan-failover)
-# - Podman containers (VictoriaMetrics, Grafana)
+# - Podman containers (QSecBit, dnsXai, web UI, etc.)
 # - OVS bridge, VLANs, VXLAN tunnels
 # - PBR (Policy-Based Routing) for dual-WAN failover
 # - Management scripts (hookprobe-macsec, hookprobe-openflow, fts-lte-monitor)
@@ -126,8 +126,6 @@ parse_args() {
                 echo "Preserved volumes (with --keep-data):"
                 echo "  • fts-postgres-data    - PostgreSQL database"
                 echo "  • fts-redis-data       - Redis cache/sessions"
-                echo "  • fts-grafana-data     - Grafana dashboards"
-                echo "  • fts-victoria-data    - Metrics history"
                 echo "  • fts-*-data           - All other data volumes"
                 echo ""
                 echo "ALWAYS preserved (even with --purge):"
@@ -656,14 +654,11 @@ remove_containers() {
         podman rmi -f "$image" 2>/dev/null || true
     done
 
-    # Remove base images used by fortress (postgres, redis, grafana, etc.)
+    # Remove base images used by fortress (postgres, redis, etc.)
     log_info "Removing base images used by fortress..."
     local base_images=(
         "docker.io/library/postgres:15-alpine"
         "docker.io/library/redis:7-alpine"
-        "docker.io/grafana/grafana:11.4.0"
-        "docker.io/victoriametrics/victoria-metrics:latest"
-        "docker.io/victoriametrics/victoria-metrics:v1.106.1"
         "docker.io/library/python:3.11-slim-bookworm"
         "docker.io/library/debian:bookworm-slim"
         "docker.io/jasonish/suricata:latest"
@@ -1372,7 +1367,6 @@ remove_installation() {
     # Remove monitoring data directories
     if [ "$KEEP_DATA" = false ]; then
         rm -rf /opt/hookprobe/fortress/monitoring 2>/dev/null || true
-        rm -rf /opt/hookprobe/fortress/grafana 2>/dev/null || true
         # Remove security monitoring data
         rm -rf /opt/hookprobe/fortress/data/suricata-logs 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/data/zeek-logs 2>/dev/null || true
@@ -1634,9 +1628,9 @@ verify_uninstall() {
         issues=$((issues + 1))
     fi
 
-    # Check containers (core + monitoring + IDS)
+    # Check containers (core + IDS)
     if command -v podman &>/dev/null; then
-        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-victoria fts-grafana fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do
+        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))
@@ -1644,7 +1638,7 @@ verify_uninstall() {
         done
 
         # Check AIOCHI containers
-        for container in aiochi-clickhouse aiochi-victoria aiochi-grafana aiochi-narrative aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper; do
+        for container in aiochi-clickhouse aiochi-narrative aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper aiochi-bubble aiochi-ollama; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "AIOCHI container still exists: $container"
                 issues=$((issues + 1))
@@ -1751,7 +1745,7 @@ main() {
         echo -e "    • WiFi AP (hostapd), DHCP (dnsmasq)"
         echo ""
         echo -e "  ${BOLD}Containers:${NC}"
-        echo -e "    • VictoriaMetrics, Grafana, Suricata, Zeek"
+        echo -e "    • QSecBit, dnsXai, Suricata, Zeek"
         echo ""
         echo -e "  ${BOLD}Network:${NC}"
         echo -e "    • OVS bridge and VLAN/VXLAN configuration"
@@ -1850,7 +1844,6 @@ main() {
     echo -e "  • fts-lte-failover service"
     echo -e "  • fts-dnsmasq (DHCP server)"
     echo -e "  • fts-hostapd (WiFi AP)"
-    echo -e "  • Monitoring containers (VictoriaMetrics, Grafana)"
     echo -e "  • Security monitoring (Suricata, Zeek)"
     echo -e "  • ML/LSTM threat detection"
     echo -e "  • dnsXai privacy controls"
@@ -1871,11 +1864,10 @@ main() {
         echo ""
         echo -e "  ${BOLD}AIOCHI (AI Eyes) Components Removed:${NC}"
         echo -e "  • ClickHouse analytics database"
-        echo -e "  • VictoriaMetrics time-series"
-        echo -e "  • Grafana dashboards"
-        echo -e "  • n8n narrative engine"
+        echo -e "  • n8n narrative engine (optional)"
+        echo -e "  • Ollama LLM (optional)"
         echo -e "  • Suricata + Zeek network capture"
-        echo -e "  • Identity engine"
+        echo -e "  • Identity engine + Bubble manager"
         echo -e "  • Log shipper pipeline"
         [ "$KEEP_DATA" = true ] && echo -e "  ${DIM}(AIOCHI data volumes preserved)${NC}"
     fi
