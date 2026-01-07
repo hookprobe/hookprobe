@@ -236,6 +236,16 @@ setup_bridge_gateway() {
     # Verify IP assignment
     if ip addr show "$OVS_BRIDGE" 2>/dev/null | grep -q "${gateway_lan}/"; then
         log_success "$OVS_BRIDGE: UP with IP ${gateway_lan}/${lan_mask} (flat bridge)"
+
+        # Enable Proxy ARP PVLAN for ap_isolate=1 D2D support
+        # With ap_isolate=1, WiFi blocks direct client-to-client at wireless layer.
+        # Proxy ARP makes gateway respond to ALL ARP requests, so clients send
+        # traffic to gateway MAC. Gateway can then forward to destination.
+        # This enables D2D for smart_home/full_access while respecting policy blocks.
+        sysctl -w "net.ipv4.conf.${OVS_BRIDGE}.proxy_arp_pvlan=1" >/dev/null 2>&1 || true
+        sysctl -w "net.ipv4.conf.all.proxy_arp_pvlan=1" >/dev/null 2>&1 || true
+        log_info "  Proxy ARP PVLAN enabled for ap_isolate=1 D2D"
+
         return 0
     else
         log_error "$OVS_BRIDGE: Failed to assign IP ${gateway_lan}/${lan_mask}"
