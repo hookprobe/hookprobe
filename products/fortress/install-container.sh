@@ -727,7 +727,7 @@ collect_configuration() {
     echo "  • Performance health score with insights"
     echo "  • AI-powered security analysis via local Ollama LLM"
     echo ""
-    echo -e "${DIM}Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n${NC}"
+    echo -e "${DIM}Includes: ClickHouse, Suricata, Zeek, n8n (visualization via AdminLTE web UI)${NC}"
     echo -e "${DIM}Adds ~2GB RAM usage${NC}"
     echo ""
 
@@ -735,12 +735,11 @@ collect_configuration() {
         read -p "Install AIOCHI (AI Eyes)? [Y/n]: " aiochi_choice
         if [[ ! "${aiochi_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_AIOCHI=true
-            # AIOCHI bundles all monitoring components with cognitive layer
-            export INSTALL_MONITORING=true
+            # AIOCHI bundles all analytics components with cognitive layer
             export INSTALL_CLICKHOUSE=true
             export INSTALL_N8N=true
             export INSTALL_IDS=true
-            log_info "AIOCHI: enabled (includes Monitoring, ClickHouse, n8n, IDS/IPS)"
+            log_info "AIOCHI: enabled (includes ClickHouse, n8n, IDS/IPS)"
         fi
     fi
 
@@ -968,21 +967,6 @@ copy_application_files() {
         fi
     done
 
-    # Create grafana provisioning directory (for monitoring profile)
-    mkdir -p "${INSTALL_DIR}/containers/grafana/provisioning"/{dashboards,datasources,alerting}
-    # Create basic datasource config for VictoriaMetrics
-    cat > "${INSTALL_DIR}/containers/grafana/provisioning/datasources/victoria.yml" << 'EOF'
-apiVersion: 1
-datasources:
-  - name: VictoriaMetrics
-    type: prometheus
-    access: proxy
-    # VictoriaMetrics is on fts-internal network at 172.20.200.31
-    url: http://172.20.200.31:8428
-    isDefault: true
-    editable: false
-EOF
-
     # Copy device profiles
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
@@ -1079,13 +1063,6 @@ generate_secrets() {
         openssl rand -base64 48 | tr -d '/+=' | head -c 48 > "$secrets_dir/flask_secret"
         chmod 600 "$secrets_dir/flask_secret"
         log_info "Generated Flask secret key"
-    fi
-
-    # Grafana admin password (required for monitoring profile)
-    if [ ! -f "$secrets_dir/grafana_password" ]; then
-        openssl rand -base64 24 | tr -d '/+=' | head -c 24 > "$secrets_dir/grafana_password"
-        chmod 600 "$secrets_dir/grafana_password"
-        log_info "Generated Grafana password"
     fi
 
     # Copy to config dir for web app access
@@ -3094,7 +3071,6 @@ MDNSCONF
     #   - cloudflared (if tunnel configured)
     #
     # OPTIONAL services (NOT started by default - use profiles manually):
-    #   - grafana, victoria (monitoring) - use: --profile monitoring
     #   - n8n (automation) - use: --profile automation
     #   - clickhouse (analytics) - use: --profile analytics
     #   - suricata, zeek, xdp-protection (IDS) - use: --profile ids
@@ -3202,35 +3178,6 @@ start_optional_services() {
     # AIOCHI provides its own aiochi-* containers for all monitoring/analytics
     if [ "${INSTALL_AIOCHI:-}" = true ]; then
         log_info "AIOCHI enabled - skipping individual fts-* services (bundled in AIOCHI)"
-    fi
-
-    # Monitoring (Grafana + VictoriaMetrics) - ONLY if NOT using AIOCHI
-    if [ "${INSTALL_MONITORING:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
-        log_info "Starting monitoring services (Grafana + VictoriaMetrics)..."
-
-        # VictoriaMetrics
-        podman run -d --name fts-victoria \
-            --restart unless-stopped \
-            --network fts-internal \
-            --ip 172.20.200.31 \
-            -p 0.0.0.0:8428:8428 \
-            -v fts-victoria-data:/storage \
-            docker.io/victoriametrics/victoria-metrics:v1.106.1 \
-            -storageDataPath=/storage -retentionPeriod=30d -httpListenAddr=:8428 \
-            2>/dev/null || log_warn "VictoriaMetrics may already be running"
-
-        # Grafana
-        podman run -d --name fts-grafana \
-            --restart unless-stopped \
-            --network fts-internal \
-            --ip 172.20.200.30 \
-            -p 0.0.0.0:3000:3000 \
-            -v fts-grafana-data:/var/lib/grafana \
-            -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
-            docker.io/grafana/grafana:11.4.0 \
-            2>/dev/null || log_warn "Grafana may already be running"
-
-        log_info "Monitoring services started (Grafana: http://localhost:3000)"
     fi
 
     # n8n Workflow Automation - ONLY if NOT using AIOCHI
@@ -3791,17 +3738,15 @@ save_optional_services_config() {
 # AIOCHI is an all-or-nothing bundle that adds cognitive network layer
 
 # AIOCHI - AI Eyes (Cognitive Network Layer)
-# When true, includes ALL monitoring/analytics components:
+# When true, includes ALL analytics components:
 #   - ClickHouse analytics database
-#   - VictoriaMetrics time-series
-#   - Grafana monitoring dashboards
 #   - n8n AI Agent workflows + Ollama LLM
 #   - Suricata + Zeek network capture
-#   - Identity Engine + Log Shipper
+#   - Identity Engine + Log Shipper + Bubble Manager
+#   - Visualization via Fortress AdminLTE web UI
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 
 # Component flags (set automatically when AIOCHI=true)
-INSTALL_MONITORING=${INSTALL_MONITORING:-false}
 INSTALL_N8N=${INSTALL_N8N:-false}
 INSTALL_CLICKHOUSE=${INSTALL_CLICKHOUSE:-false}
 INSTALL_IDS=${INSTALL_IDS:-false}
@@ -3957,10 +3902,6 @@ connect_containers_to_ovs() {
 
     # ML tier (optional - only with --profile training)
     attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.200.40 ml true
-
-    # Mgmt tier (optional - only with --profile monitoring)
-    attach_container_if_running "$ovs_script" fts-grafana 172.20.200.30 mgmt true
-    attach_container_if_running "$ovs_script" fts-victoria 172.20.200.31 mgmt true
 
     log_info "OVS container integration complete"
     log_info "  Note: qsecbit and bubble-manager use host network (no OVS attachment needed)"
@@ -4171,10 +4112,8 @@ attach_if_ready fts-dfs 172.20.200.22 services
 
 # Note: fts-qsecbit and fts-bubble-manager use host network (no attachment needed)
 
-# Optional tiers (mgmt tier = no internet, ml tier = no internet)
+# Optional tiers (ml tier = no internet)
 attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
-attach_if_ready fts-grafana 172.20.200.30 mgmt true
-attach_if_ready fts-victoria 172.20.200.31 mgmt true
 
 # Clean up orphan veth interfaces from br-wifi
 # These can accumulate from container restarts or failed network setups
@@ -4691,8 +4630,6 @@ uninstall() {
     echo "    - fts-dnsxai (DNS ML protection)"
     echo "    - fts-dfs (WiFi DFS intelligence)"
     echo "    - fts-lstm-trainer (ML training)"
-    echo "    - fts-grafana (monitoring dashboard)"
-    echo "    - fts-victoria (metrics database)"
     echo "    - fts-n8n (workflow automation, if installed)"
     echo "    - fts-clickhouse (analytics database, if installed)"
     echo "    - fts-suricata (IDS, if installed)"
@@ -4733,12 +4670,11 @@ uninstall() {
     systemctl stop fts-hostapd-2g 2>/dev/null || true
     systemctl stop fts-hostapd-5g 2>/dev/null || true
     cd "${INSTALL_DIR}/containers" 2>/dev/null && \
-        podman-compose --profile monitoring --profile training down 2>/dev/null || true
+        podman-compose --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
     podman rm -f fts-web fts-qsecbit fts-dnsxai fts-dfs fts-lstm-trainer 2>/dev/null || true
-    podman rm -f fts-grafana fts-victoria 2>/dev/null || true
     # Optional services
     podman rm -f fts-n8n fts-clickhouse fts-cloudflared 2>/dev/null || true
     podman rm -f fts-suricata fts-zeek fts-xdp 2>/dev/null || true
@@ -4767,8 +4703,6 @@ uninstall() {
             fts-dnsxai-blocklists \
             fts-dfs-data \
             fts-ml-models \
-            fts-grafana-data \
-            fts-victoria-data \
             fts-n8n-data \
             fts-clickhouse-data \
             fts-clickhouse-logs \
@@ -4808,7 +4742,6 @@ uninstall() {
     # Remove container veth interfaces from OVS
     for veth in veth-fts-postgres veth-fts-redis veth-fts-web \
                 veth-fts-dnsxai veth-fts-dfs veth-fts-lstm-trainer \
-                veth-fts-grafana veth-fts-victoria \
                 veth-fts-n8n veth-fts-clickhouse veth-fts-cloudflared; do
         ovs-vsctl del-port "$OVS_BRIDGE" "$veth" 2>/dev/null || true
         ip link del "$veth" 2>/dev/null || true
@@ -4992,16 +4925,14 @@ main() {
                 ;;
             --enable-aiochi)
                 # AIOCHI (AI Eyes) - minimal core installation (~2GB RAM)
-                # Includes: ClickHouse, Suricata, Zeek, Grafana, Identity, Bubble, LogShipper
+                # Includes: ClickHouse, Suricata, Zeek, Identity, Bubble, LogShipper
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
                 ;;
             --aiochi-workflows)
                 # Add n8n workflow automation to AIOCHI
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
                 export AIOCHI_WORKFLOWS=true
@@ -5009,7 +4940,6 @@ main() {
             --aiochi-ai)
                 # Add Ollama LLM for AI narratives (~4GB additional RAM)
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
                 export AIOCHI_AI=true
@@ -5017,7 +4947,6 @@ main() {
             --aiochi-full)
                 # Full AIOCHI stack with all optional components (~8GB RAM)
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
                 export AIOCHI_WORKFLOWS=true

@@ -12,7 +12,6 @@
 #
 # Usage:
 #   podman-compose up -d                       # Start core services
-#   podman-compose --profile monitoring up -d  # Start with Grafana/Victoria
 #   podman-compose --profile training run lstm # Run LSTM training job
 #   podman-compose down                        # Stop all services
 #   podman-compose logs -f web                 # Follow web container logs
@@ -23,9 +22,9 @@
 # Container Groups:
 #   - Core: postgres, redis, web (always running)
 #   - Security: qsecbit-agent, dnsxai, dfs-intelligence (always running)
-#   - Monitoring: grafana, victoria (--profile monitoring)
 #   - Jobs: lstm-trainer (--profile training, one-shot)
 #   - Mesh: mesh-orchestrator (--profile mesh) - HTP/Neuro/DSM communication
+#   - Analytics: Visualization via Fortress AdminLTE web UI (no Grafana needed)
 #
 # Network (simplified for podman-compose 1.0.6 compatibility):
 #   - fts-internal: 172.20.200.0/24 (all app containers share this network)
@@ -35,8 +34,8 @@
 # Network isolation is achieved via nftables rules on the host.
 # Container IP assignments:
 #   .10 postgres, .11 redis, .20 web, .21 dnsxai, .22 dfs
-#   .30 grafana, .31 victoria, .40 lstm-trainer
-#   .50 n8n, .51 clickhouse, .60 cloudflared, .70 mesh-orchestrator
+#   .40 lstm-trainer, .50 n8n, .51 clickhouse
+#   .60 cloudflared, .70 mesh-orchestrator
 #
 # OVS Security Features:
 #   - OpenFlow 1.3+ tier isolation rules
@@ -157,8 +156,6 @@ services:
       QSECBIT_API_URL: http://localhost:9090
       DNSXAI_API_URL: http://fts-dnsxai:8080
       DFS_API_URL: http://fts-dfs:8050
-      # Monitoring endpoints
-      VICTORIA_URL: http://fts-victoria:8428
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
@@ -294,8 +291,6 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
-      # Metrics export to Victoria (mgmt tier)
-      VICTORIA_PUSH_URL: http://172.20.200.31:8428/api/v1/write
     volumes:
       # Bind mount for shared data (visible on host and other containers)
       # U suffix auto-adjusts ownership to container user (fixes GID mismatch)
@@ -402,27 +397,27 @@ volumes:
 # The OVS bridge (FTS) provides the security layer:
 #
 #   ┌─────────────────────────────────────────────────────────┐
-#   │                  OVS Bridge: FTS                      │
-#   │  ┌─────────────┬─────────────┬──────────┬────────────┐ │
-#   │  │FTS-data   │FTS-svc    │FTS-ml  │FTS-mgmt  │ │
-#   │  │(internal)   │(internet OK)│(internal) │(internal)  │ │
-#   │  └──────┬──────┴──────┬──────┴─────┬─────┴──────┬─────┘ │
-#   │         │             │            │            │       │
-#   │    ┌────┴────┐   ┌────┴────┐  ┌────┴────┐ ┌─────┴────┐ │
-#   │    │postgres │   │  web    │  │  lstm   │ │ grafana  │ │
-#   │    │redis    │   │dnsxai   │  │         │ │ victoria │ │
-#   │    └─────────┘   │dfs      │  └─────────┘ └──────────┘ │
-#   │                  └─────────┘                           │
-#   │  ┌───────────────────────────────────────────────────┐ │
-#   │  │ fts-lan (10.200.0.0/23-29) - WiFi/LAN clients │ │
-#   │  └───────────────────────────────────────────────────┘ │
-#   │                                                        │
-#   │  OpenFlow Rules:                                       │
-#   │  - Table 0:  Ingress classification (ARP, DHCP, DNS)   │
-#   │  - Table 10: Tier isolation (drop cross-tier traffic)  │
-#   │  - Table 20: Internet control (allow/deny per tier)    │
-#   │  - Table 30: Mirror (copy to QSecBit)                  │
-#   │  - Table 40: Output (L2 forwarding)                    │
+#   │                  OVS Bridge: FTS                        │
+#   │  ┌─────────────┬─────────────┬──────────┐               │
+#   │  │  FTS-data   │  FTS-svc    │  FTS-ml  │               │
+#   │  │  (internal) │ (internet)  │(internal)│               │
+#   │  └──────┬──────┴──────┬──────┴─────┬────┘               │
+#   │         │             │            │                    │
+#   │    ┌────┴────┐   ┌────┴────┐  ┌────┴────┐               │
+#   │    │postgres │   │  web    │  │  lstm   │               │
+#   │    │redis    │   │dnsxai   │  │         │               │
+#   │    └─────────┘   │dfs      │  └─────────┘               │
+#   │                  └─────────┘                            │
+#   │  ┌───────────────────────────────────────────────────┐  │
+#   │  │ fts-lan (10.200.0.0/23-29) - WiFi/LAN clients     │  │
+#   │  └───────────────────────────────────────────────────┘  │
+#   │                                                         │
+#   │  OpenFlow Rules:                                        │
+#   │  - Table 0:  Ingress classification (ARP, DHCP, DNS)    │
+#   │  - Table 10: Tier isolation (drop cross-tier traffic)   │
+#   │  - Table 20: Internet control (allow/deny per tier)     │
+#   │  - Table 30: Mirror (copy to QSecBit)                   │
+#   │  - Table 40: Output (L2 forwarding)                     │
 #   └─────────────────────────────────────────────────────────┘
 #
 networks:
