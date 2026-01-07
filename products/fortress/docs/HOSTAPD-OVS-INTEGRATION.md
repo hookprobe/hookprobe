@@ -348,31 +348,159 @@ PRIORITY   RULE TYPE                           POLICY
 
 ## Implementation Checklist
 
-### Phase 1: Device Identity Layer
-- [ ] Create `device_identities` and `mac_to_identity` tables
+### Phase 1: Device Identity Layer ✅
+- [x] Create `device_identities` and `mac_to_identity` tables - `lib/device_identity.py`
+- [x] Modify DHCP hook to capture Option 55 fingerprint - `scripts/dhcp-hook.sh`, `bin/dhcp-event.sh`
 - [ ] Modify `device_manager.py` to use identity linking
-- [ ] Modify DHCP hook to capture Option 55 fingerprint
 - [ ] Modify mDNS resolver to extract device ID/name
 - [ ] Update Web UI to show single device with MAC history
 
-### Phase 2: Cross-Band Multicast (hostapd-ovs mode)
-- [ ] Add `apply_multicast_reflection()` to `ovs-post-setup.sh`
-- [ ] Detect hostapd-ovs mode from `/etc/hookprobe/fortress.conf`
-- [ ] Apply multicast rules only when `HOSTAPD_OVS_MODE=true`
-- [ ] Test mDNS discovery between 2.4GHz and 5GHz devices
+### Phase 2: Cross-Band Multicast (hostapd-ovs mode) ✅
+- [x] Add `setup_multicast_reflection()` to `ovs-post-setup.sh`
+- [x] Detect hostapd-ovs mode from `/etc/hookprobe/fortress.conf`
+- [x] Skip br-wifi creation when `HOSTAPD_OVS_MODE=true`
+- [x] Apply multicast rules (priority 400) for cross-band mDNS
 
-### Phase 3: Policy-Aware mDNS
-- [ ] Add `apply_smart_home_mdns()` to `nac-policy-sync.sh`
-- [ ] Add `apply_lan_only_mdns()` to `nac-policy-sync.sh`
-- [ ] Update `apply_policy()` to call mDNS functions
-- [ ] Test HomeKit discovery between SMART_HOME devices
+### Phase 3: Policy-Aware mDNS ✅
+- [x] Add mDNS rules for SMART_HOME policy (priority 475) in `nac-policy-sync.sh`
+- [x] Add mDNS rules for LAN_ONLY policy (priority 475) in `nac-policy-sync.sh`
+- [x] Update `apply_policy()` to call mDNS functions
 
-### Phase 4: Testing & Validation
+### Phase 4: hostapd-generator Updates ✅
+- [x] Prefer hostapd-ovs binary when available (`/usr/local/bin/hostapd-ovs`)
+- [x] Auto-enable `HOSTAPD_OVS_MODE=true` in `fortress.conf`
+- [x] Skip wifi bridge helper generation in hostapd-ovs mode
+
+### Phase 5: Testing & Validation
 - [ ] Test MAC randomization tracking (iPhone, Android)
 - [ ] Test cross-band AirPlay (iPhone on 5GHz → HomePod on 2.4GHz)
 - [ ] Test policy isolation (Guest → Smart Home = blocked)
 - [ ] Test same-policy discovery (Smart Home ↔ Smart Home = allowed)
 - [ ] Performance benchmark (latency, throughput)
+
+---
+
+## Validation Commands
+
+### 1. Verify hostapd-ovs Mode
+
+```bash
+# Check if hostapd-ovs binary is installed
+ls -la /usr/local/bin/hostapd-ovs
+
+# Check mode in fortress.conf
+grep HOSTAPD_OVS_MODE /etc/hookprobe/fortress.conf
+# Expected: HOSTAPD_OVS_MODE=true
+
+# Verify hostapd is using correct binary
+ps aux | grep hostapd
+# Expected: /usr/local/bin/hostapd-ovs -B -P ...
+
+# Check hostapd config has bridge=FTS (not br-wifi)
+grep "^bridge=" /etc/hostapd/hostapd-*.conf
+# Expected: bridge=FTS
+```
+
+### 2. Verify WiFi Direct to OVS (No br-wifi)
+
+```bash
+# Verify br-wifi does NOT exist (hostapd-ovs mode)
+ip link show br-wifi 2>/dev/null && echo "ERROR: br-wifi exists!" || echo "OK: No br-wifi (direct OVS mode)"
+
+# Verify WiFi interfaces are OVS ports
+ovs-vsctl show | grep -E "wlan_24ghz|wlan_5ghz"
+# Expected: Both interfaces listed as OVS ports
+
+# Get OVS port numbers
+ovs-ofctl show FTS | grep -E "wlan_24ghz|wlan_5ghz"
+# Note the port numbers for OpenFlow rule verification
+```
+
+### 3. Verify Cross-Band Multicast Rules
+
+```bash
+# Check multicast reflection rules (priority 400)
+ovs-ofctl dump-flows FTS | grep "priority=400"
+
+# Expected output should include:
+# - IPv4 mDNS (224.0.0.251:5353) reflection between WiFi ports
+# - IPv6 mDNS (ff02::fb:5353) reflection
+# - SSDP (239.255.255.250:1900) reflection
+# - IPv6 NDP (ff02::1) reflection
+```
+
+### 4. Test mDNS Cross-Band Discovery
+
+```bash
+# From a device on 2.4GHz, scan for mDNS services
+avahi-browse -art
+
+# From a device on 5GHz, scan for mDNS services
+avahi-browse -art
+
+# Both should see each other's services (AirPlay, HomeKit, etc.)
+```
+
+### 5. Verify Device Identity Layer
+
+```bash
+# Check device identities database
+sqlite3 /var/lib/hookprobe/device_identities.db ".tables"
+# Expected: device_identities  mac_to_identity
+
+# Check recent identities
+sqlite3 /var/lib/hookprobe/device_identities.db \
+  "SELECT identity_id, display_name, current_mac FROM device_identities ORDER BY last_seen DESC LIMIT 5;"
+
+# Check MAC linking
+sqlite3 /var/lib/hookprobe/device_identities.db \
+  "SELECT mac, identity_id FROM mac_to_identity ORDER BY created_at DESC LIMIT 10;"
+```
+
+### 6. Test MAC Randomization Tracking
+
+```bash
+# Watch DHCP events
+tail -f /var/log/fortress/dhcp-hook.log
+
+# On iPhone/Android: Go to WiFi settings, "Forget" network, reconnect
+# Should see NEW MAC but linked to SAME identity (check identity_id)
+
+# Verify identity linking
+sqlite3 /var/lib/hookprobe/device_identities.db \
+  "SELECT identity_id, display_name, mac_history FROM device_identities WHERE display_name LIKE '%iPhone%';"
+```
+
+### 7. Performance Benchmark
+
+```bash
+# Test ping latency (should be <10ms, no 47% packet loss!)
+ping -c 100 10.200.0.1
+
+# Test throughput with iperf3
+# On Fortress: iperf3 -s
+# On client: iperf3 -c 10.200.0.1 -t 30
+
+# Compare before/after hostapd-ovs migration:
+# - br-wifi mode: Higher latency, potential packet loss
+# - hostapd-ovs mode: Lower latency, no packet loss
+```
+
+### 8. Verify Policy Isolation
+
+```bash
+# List current OpenFlow rules by priority
+ovs-ofctl dump-flows FTS | sort -t',' -k1 -rn | head -30
+
+# Test internet_only device cannot discover smart_home
+# 1. Set device A to internet_only policy
+# 2. Set device B to smart_home policy
+# 3. From device A, try: avahi-browse -art
+# 4. Device B services should NOT appear
+
+# Check internet_only mDNS block rules (priority 850)
+ovs-ofctl dump-flows FTS | grep "priority=850"
+```
 
 ---
 
@@ -409,9 +537,18 @@ If issues occur, rollback by:
 
 ## References
 
+### Core Scripts
 - [hostapd-ovs Build Script](../../../shared/hostapd-ovs/build-hostapd-ovs.sh)
 - [hostapd-ovs README](../../../shared/hostapd-ovs/README.md)
 - [OVS Post-Setup Script](../devices/common/ovs-post-setup.sh)
 - [NAC Policy Sync Script](../devices/common/nac-policy-sync.sh)
+- [hostapd Generator](../devices/common/hostapd-generator.sh)
+
+### Device Identity Layer
+- [Device Identity Tracker](../lib/device_identity.py) - MAC randomization tracking
+- [DHCP Event Handler](../bin/dhcp-event.sh) - DHCP lease events with Option 55
+- [DHCP Hook Script](../scripts/dhcp-hook.sh) - dnsmasq integration
+
+### Related Modules
 - [Ecosystem Bubble Manager](../lib/ecosystem_bubble.py)
 - [Device Manager](../lib/device_manager.py)
