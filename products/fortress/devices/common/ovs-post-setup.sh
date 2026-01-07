@@ -7,7 +7,8 @@
 # It configures things netplan cannot handle:
 #   - OpenFlow rules for traffic flow
 #   - Port VLAN tagging (access/trunk modes)
-#   - Container network bridge (veth to VLAN 200)
+#   - Cross-band multicast reflection for WiFi
+#   - Legacy br-wifi cleanup (direct OVS mode)
 #
 # The heavy lifting (bridge creation, VLAN interfaces, IP assignment) is done
 # by netplan/systemd-networkd for reliability and speed.
@@ -315,6 +316,79 @@ configure_openflow() {
 }
 
 # ============================================================
+# ============================================================
+# CROSS-BAND MULTICAST REFLECTION
+# ============================================================
+#
+# With direct OVS integration, multicast/mDNS traffic doesn't
+# automatically bridge between 2.4GHz and 5GHz WiFi bands
+# because OVS uses per-port MAC learning.
+#
+# These rules explicitly reflect multicast traffic between WiFi bands
+# to enable device discovery (HomeKit, AirPlay, Chromecast, etc.).
+#
+# Priority 400: Below base allow (500), above default (0)
+#
+# ============================================================
+
+setup_multicast_reflection() {
+    log_section "Cross-Band Multicast Reflection"
+
+    # Get OVS port numbers for WiFi interfaces
+    local wifi_24_port wifi_5_port
+    wifi_24_port=$(ovs-vsctl get interface wlan_24ghz ofport 2>/dev/null | tr -d '"') || wifi_24_port=""
+    wifi_5_port=$(ovs-vsctl get interface wlan_5ghz ofport 2>/dev/null | tr -d '"') || wifi_5_port=""
+
+    # Validate port numbers
+    if [ -z "$wifi_24_port" ] || [ "$wifi_24_port" = "-1" ]; then
+        log_warn "wlan_24ghz port not found in OVS - multicast reflection skipped"
+        return 0
+    fi
+
+    if [ -z "$wifi_5_port" ] || [ "$wifi_5_port" = "-1" ]; then
+        log_warn "wlan_5ghz port not found in OVS - multicast reflection skipped"
+        return 0
+    fi
+
+    log_info "Setting up cross-band multicast reflection"
+    log_info "  wlan_24ghz port: $wifi_24_port"
+    log_info "  wlan_5ghz port: $wifi_5_port"
+
+    # Clear any existing multicast reflection rules
+    ovs-ofctl del-flows "$OVS_BRIDGE" "priority=400" 2>/dev/null || true
+
+    # IPv4 mDNS (224.0.0.251:5353) - Bonjour/Zeroconf discovery
+    # Reflect from 2.4GHz to 5GHz and vice versa
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_24_port,nw_dst=224.0.0.251,tp_dst=5353,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_5_port,nw_dst=224.0.0.251,tp_dst=5353,actions=output:$wifi_24_port,NORMAL"
+
+    # IPv6 mDNS (ff02::fb) - HomeKit, AirPlay, Matter
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp6,in_port=$wifi_24_port,ipv6_dst=ff02::fb,tp_dst=5353,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp6,in_port=$wifi_5_port,ipv6_dst=ff02::fb,tp_dst=5353,actions=output:$wifi_24_port,NORMAL"
+
+    # SSDP/UPnP (239.255.255.250:1900) - Chromecast, Roku, smart TVs
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_24_port,nw_dst=239.255.255.250,tp_dst=1900,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,udp,in_port=$wifi_5_port,nw_dst=239.255.255.250,tp_dst=1900,actions=output:$wifi_24_port,NORMAL"
+
+    # IPv6 All-Nodes multicast (ff02::1) - Neighbor Discovery, router advertisements
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,ipv6,in_port=$wifi_24_port,ipv6_dst=ff02::1,actions=output:$wifi_5_port,NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" \
+        "priority=400,ipv6,in_port=$wifi_5_port,ipv6_dst=ff02::1,actions=output:$wifi_24_port,NORMAL"
+
+    log_success "Cross-band multicast reflection configured"
+    log_info "  mDNS (224.0.0.251, ff02::fb): 2.4GHz <-> 5GHz"
+    log_info "  SSDP (239.255.255.250): 2.4GHz <-> 5GHz"
+    log_info "  IPv6 NDP (ff02::1): 2.4GHz <-> 5GHz"
+}
+
+# ============================================================
 # PORT CONFIGURATION (FLAT BRIDGE - NO VLAN TAGGING)
 # ============================================================
 
@@ -392,7 +466,7 @@ setup_avahi_coexistence() {
         echo "disallow-other-stacks=no" >> "$avahi_conf"
     fi
 
-    # Also enable reflector for cross-interface mDNS (br-wifi ↔ FTS bridge)
+    # Enable reflector for cross-interface mDNS (WiFi ↔ wired devices)
     if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
         sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
     elif grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
@@ -413,161 +487,59 @@ setup_avahi_coexistence() {
 }
 
 # ============================================================
-# WIFI BRIDGE (SDN AUTOPILOT WITH HAIRPIN MODE)
+# WIFI BRIDGE CLEANUP (LEGACY INFRASTRUCTURE REMOVAL)
 # ============================================================
 #
-# Architecture:
-#   WiFi clients → hostapd (ap_isolate=1) → br-wifi → veth → OVS
+# Fortress uses direct OVS integration via hostapd-ovs.
+# This function cleans up any legacy br-wifi/veth infrastructure
+# from previous installations.
 #
-# Key: We use ap_isolate=1 + HAIRPIN MODE (NOT bridge port isolation):
-#   - ap_isolate=1 in hostapd forces ALL traffic through the bridge
-#   - hairpin mode allows D2D traffic to return to the same/different WiFi
-#   - OVS NAC rules handle policy enforcement
-#
-# Why NOT bridge port isolation (isolated=on)?
-#   - With isolated=on, traffic to veth works but return traffic is blocked
-#   - D2D fails even when OVS allows it because bridge blocks the return path
-#   - ap_isolate=1 already forces traffic through the bridge - isolation is redundant
-#
-# Policy enforcement via OVS NAC rules:
-#   - internet_only: OVS blocks LAN traffic (priority 700)
-#   - smart_home/full_access: OVS allows LAN traffic (no blocking rule)
-#
-# Traffic flow (D2D allowed - smart_home):
-#   1. iPhone sends AirPlay to HomePod (both on wlan_24ghz)
-#   2. ap_isolate=1 forces traffic through br-wifi
-#   3. Traffic goes to veth-wifi-a → veth-wifi-b → OVS
-#   4. OVS checks NAC: iPhone is smart_home → no blocking rule → ALLOW
-#   5. OVS returns via veth-wifi-b → veth-wifi-a (hairpin on)
-#   6. br-wifi forwards to wlan_24ghz (hairpin on) → HomePod
-#
-# Traffic flow (D2D blocked - internet_only):
-#   1. Guest iPad tries to ping HomePod
-#   2. ap_isolate=1 forces through br-wifi → veth → OVS
-#   3. OVS checks NAC: iPad is internet_only → priority 700 DROP rule
-#   4. Traffic blocked at OVS layer
+# Traffic flow: WiFi → OVS (FTS) directly → OpenFlow policy
+# No intermediate Linux bridge - best performance
 #
 # ============================================================
 
-setup_wifi_bridge() {
-    log_section "WiFi Bridge for SDN Autopilot"
+cleanup_legacy_wifi_bridge() {
+    log_section "WiFi Configuration (Direct OVS Mode)"
 
     local br_wifi="br-wifi"
-    local veth_br="veth-wifi-a"   # Linux bridge side
-    local veth_ovs="veth-wifi-b"  # OVS side
+    local veth_br="veth-wifi-a"
+    local veth_ovs="veth-wifi-b"
 
-    # Clean up orphan veth interfaces that may have accumulated
-    # These can appear from failed setup attempts or network changes
-    # Pattern: veth0@enp1s0, veth1@enp1s0, etc. (NOT veth-wifi-a)
-    cleanup_orphan_veths() {
-        local members
-        members=$(bridge link show master "$br_wifi" 2>/dev/null | awk '{print $2}' | tr -d ':')
-        for member in $members; do
-            # Extract base name (veth0 from veth0@enp1s0)
-            local base_name="${member%%@*}"
-            # Only remove numbered veths (veth0, veth1, etc.) not our veth-wifi-a
-            if [[ "$base_name" =~ ^veth[0-9]+$ ]]; then
-                log_info "Removing orphan veth: $base_name"
-                ip link set "$base_name" nomaster 2>/dev/null || true
-                ip link delete "$base_name" 2>/dev/null || true
-            fi
-        done
-    }
+    # Cleanup legacy br-wifi infrastructure if present
+    if ip link show "$br_wifi" &>/dev/null || ip link show "$veth_br" &>/dev/null; then
+        log_info "Removing legacy br-wifi infrastructure..."
 
-    # Create Linux bridge if not exists
-    if ! ip link show "$br_wifi" &>/dev/null; then
-        log_info "Creating WiFi bridge $br_wifi..."
-        ip link add "$br_wifi" type bridge
-        # Set STP off for faster convergence
-        ip link set "$br_wifi" type bridge stp_state 0
-        # Set forward delay to 0
-        echo 0 > "/sys/class/net/$br_wifi/bridge/forward_delay" 2>/dev/null || true
-    else
-        # Bridge exists, cleanup orphan interfaces
-        cleanup_orphan_veths
-    fi
-
-    # Bring up the bridge
-    ip link set "$br_wifi" up
-
-    # Create veth pair if not exists
-    if ! ip link show "$veth_br" &>/dev/null; then
-        log_info "Creating veth pair $veth_br <-> $veth_ovs..."
-        ip link add "$veth_br" type veth peer name "$veth_ovs"
-    fi
-
-    # Add veth_br to Linux bridge
-    if ! ip link show master "$br_wifi" | grep -q "$veth_br"; then
-        ip link set "$veth_br" master "$br_wifi" 2>/dev/null || true
-    fi
-
-    # Bring up veth interfaces
-    ip link set "$veth_br" up
-    ip link set "$veth_ovs" up
-
-    # Add veth_ovs to OVS (flat bridge - no VLAN tagging)
-    if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null; then
-        local current_br
-        current_br=$(ovs-vsctl port-to-br "$veth_ovs" 2>/dev/null || true)
-        if [ "$current_br" = "$OVS_BRIDGE" ]; then
-            # Clear any VLAN tags (flat bridge mode)
-            ovs-vsctl remove port "$veth_ovs" tag 2>/dev/null || true
-            log_info "$veth_ovs already on $OVS_BRIDGE (flat mode)"
-        else
-            ovs-vsctl --if-exists del-port "$current_br" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" || true
-            log_info "Moved $veth_ovs to $OVS_BRIDGE (flat mode)"
+        # Remove veth from OVS
+        if ovs-vsctl port-to-br "$veth_ovs" &>/dev/null 2>&1; then
+            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs" 2>/dev/null || true
+            log_info "  Removed $veth_ovs from OVS"
         fi
+
+        # Delete veth pair
+        if ip link show "$veth_br" &>/dev/null; then
+            ip link delete "$veth_br" 2>/dev/null || true
+            log_info "  Deleted veth pair"
+        fi
+
+        # Delete br-wifi
+        if ip link show "$br_wifi" &>/dev/null; then
+            ip link set "$br_wifi" down 2>/dev/null || true
+            ip link delete "$br_wifi" 2>/dev/null || true
+            log_info "  Deleted br-wifi bridge"
+        fi
+
+        # Remove legacy helper script
+        rm -f /usr/local/bin/fts-wifi-bridge-helper.sh 2>/dev/null || true
+
+        log_success "Legacy br-wifi infrastructure removed"
     else
-        ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" 2>/dev/null || {
-            ovs-vsctl --if-exists del-port "$OVS_BRIDGE" "$veth_ovs"
-            ovs-vsctl add-port "$OVS_BRIDGE" "$veth_ovs" || true
-        }
-        log_info "Added $veth_ovs to $OVS_BRIDGE (flat mode)"
+        log_info "No legacy infrastructure to clean up"
     fi
 
-    # ============================================================
-    # HAIRPIN MODE FOR D2D TRAFFIC
-    # ============================================================
-    # With ap_isolate=1 in hostapd, all WiFi traffic goes through br-wifi.
-    # Hairpin mode allows traffic to return to the same or different WiFi interface.
-    # OVS NAC rules handle policy enforcement (internet_only blocks LAN traffic).
-    #
-    # NO bridge port isolation! With ap_isolate=1, traffic already goes through
-    # the bridge. Setting isolated=on would BLOCK D2D even after OVS allows it.
-    # ============================================================
-
-    if command -v bridge &>/dev/null; then
-        # Enable hairpin on veth for OVS return traffic
-        bridge link set dev "$veth_br" hairpin on 2>/dev/null || true
-        log_info "Set $veth_br: hairpin=on (OVS return traffic)"
-
-        # Enable hairpin on WiFi interfaces for D2D reflection
-        # Do NOT set isolated=on - it breaks D2D even after OVS policy allows it
-        for wlan_if in $(ls /sys/class/net/ 2>/dev/null | grep -E "^wlan|^wlp|^wlx"); do
-            if ip link show master "$br_wifi" 2>/dev/null | grep -q "$wlan_if"; then
-                bridge link set dev "$wlan_if" hairpin on 2>/dev/null || true
-                bridge link set dev "$wlan_if" isolated off 2>/dev/null || true
-                log_info "Set $wlan_if: hairpin=on, isolated=off (D2D allowed)"
-            fi
-        done
-        # Also handle stable-named interfaces
-        for wlan_if in wlan_24ghz wlan_5ghz; do
-            if ip link show master "$br_wifi" 2>/dev/null | grep -q "$wlan_if"; then
-                bridge link set dev "$wlan_if" hairpin on 2>/dev/null || true
-                bridge link set dev "$wlan_if" isolated off 2>/dev/null || true
-                log_info "Set $wlan_if: hairpin=on, isolated=off (D2D allowed)"
-            fi
-        done
-    else
-        log_warn "bridge command not found - hairpin mode won't work"
-        log_warn "D2D traffic may not reflect properly"
-    fi
-
-    log_success "WiFi bridge configured for SDN Autopilot"
-    log_info "  Bridge: $br_wifi → $veth_br ↔ $veth_ovs → OVS ($OVS_BRIDGE)"
-    log_info "  All ports: hairpin=on (D2D reflection enabled)"
-    log_info "  OVS NAC rules handle policy (internet_only=blocked, smart_home=allowed)"
+    # WiFi interfaces will be added to OVS directly by hostapd-ovs using bridge=FTS
+    # The multicast reflection rules (priority 400) handle cross-band mDNS
+    log_success "Direct OVS mode: WiFi → OVS ($OVS_BRIDGE) → OpenFlow policy"
 }
 
 # ============================================================
@@ -700,46 +672,24 @@ show_status() {
         echo "  Run: ./ovs-post-setup.sh setup"
     fi
 
-    echo -e "\n${CYAN}WiFi Bridge (SDN Autopilot):${NC}"
-    if ip link show br-wifi &>/dev/null; then
-        local br_state
-        br_state=$(ip link show br-wifi 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
-        echo "  br-wifi: $br_state"
-        echo "  Members:"
-        # Check each interface in the bridge
-        for dev in $(bridge link show master br-wifi 2>/dev/null | awk '{print $2}' | tr -d ':'); do
-            local hairpin_status
-            local base_dev="${dev%%@*}"
-            # Check hairpin using /sys/class/net (more reliable than bridge -d)
-            if [ -f "/sys/class/net/$base_dev/brport/hairpin_mode" ]; then
-                local hp_val
-                hp_val=$(cat "/sys/class/net/$base_dev/brport/hairpin_mode" 2>/dev/null)
-                if [ "$hp_val" = "1" ]; then
-                    hairpin_status="hairpin on"
-                else
-                    hairpin_status="hairpin off"
-                fi
-            else
-                hairpin_status="hairpin n/a"
-            fi
-            echo "    $dev ($hairpin_status)"
-        done
-        echo "  veth-wifi-b → OVS:"
-        # Check OVS connection - may require root
-        local veth_tag
-        veth_tag=$(ovs-vsctl get port veth-wifi-b tag 2>/dev/null)
-        if [ -n "$veth_tag" ]; then
-            echo "  VLAN tag: $veth_tag"
-        else
-            # Could be permission issue or not connected
-            if ovs-vsctl port-to-br veth-wifi-b 2>/dev/null | grep -q "$OVS_BRIDGE"; then
-                echo "  Connected (run as root for VLAN details)"
-            else
-                echo "  (not connected)"
-            fi
+    echo -e "\n${CYAN}WiFi (Direct OVS Integration):${NC}"
+    # Check for WiFi interfaces directly on OVS
+    local wifi_found=false
+    for wlan_if in wlan_24ghz wlan_5ghz; do
+        if ovs-vsctl port-to-br "$wlan_if" 2>/dev/null | grep -q "$OVS_BRIDGE"; then
+            local port_num
+            port_num=$(ovs-vsctl get interface "$wlan_if" ofport 2>/dev/null || echo "?")
+            echo -e "  ${GREEN}✓${NC} $wlan_if → OVS ($OVS_BRIDGE) port $port_num"
+            wifi_found=true
         fi
-    else
-        echo "  (not configured)"
+    done
+    if [ "$wifi_found" = "false" ]; then
+        echo "  WiFi interfaces not yet added to OVS"
+        echo "  (hostapd will add them on start via bridge=FTS)"
+    fi
+    # Check for legacy br-wifi (should not exist)
+    if ip link show br-wifi &>/dev/null; then
+        echo -e "  ${YELLOW}⚠${NC} Legacy br-wifi detected - run cleanup"
     fi
 
     # Container Network Validation
@@ -839,13 +789,17 @@ main() {
             configure_openflow
             configure_bridge_ports
 
+            # Cross-band multicast reflection for hostapd-ovs mode
+            # Enables mDNS/SSDP discovery between 2.4GHz and 5GHz WiFi bands
+            setup_multicast_reflection || log_warn "Multicast reflection setup had issues (non-fatal)"
+
             # Avahi mDNS coexistence for Ecosystem Bubble detection
             # Enables HomeKit/AirPlay device grouping via PresenceSensor
             setup_avahi_coexistence || log_warn "Avahi setup had issues (non-fatal)"
 
             # WiFi bridge for SDN Autopilot (ap_isolate=1 + hairpin mDNS)
             # Allows full OVS control over WiFi traffic including device-to-device
-            setup_wifi_bridge || log_warn "WiFi bridge setup had issues (non-fatal)"
+            cleanup_legacy_wifi_bridge || log_warn "WiFi cleanup had issues (non-fatal)"
 
             # Traffic mirror for IDS/NSM capture (AIOCHI Suricata/Zeek)
             # Creates FTS-mirror port - proper way to capture without packet loss
