@@ -1645,15 +1645,29 @@ install_fortress() {
     echo "  • Visual presence map (who's home)"
     echo "  • Human-readable network feed (not tech jargon)"
     echo "  • One-touch actions (pause kids' internet, game mode)"
-    echo "  • Performance health score with insights"
-    echo "  • AI-powered security analysis via local Ollama LLM"
+    echo "  • Device fingerprinting & ecosystem bubbles"
     echo ""
-    echo -e "${DIM}Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n${NC}"
-    echo -e "${DIM}Adds ~2GB RAM usage${NC}"
+    echo -e "${BOLD}Choose your AIOCHI installation level:${NC}"
+    echo ""
+    echo "  ${GREEN}1) Skip${NC}        - No AIOCHI (core security only)"
+    echo "  ${GREEN}2) Core${NC}        - Analytics + IDS (~2GB RAM)"
+    echo "                   ClickHouse, Suricata, Zeek, Identity Engine"
+    echo "  ${GREEN}3) Standard${NC}    - Core + Workflows (~3GB RAM)"
+    echo "                   Adds n8n workflow automation"
+    echo "  ${GREEN}4) Full${NC}        - Standard + Local AI (~8GB RAM)"
+    echo "                   Adds Ollama LLM for AI-powered narratives"
+    echo ""
+    echo -e "${DIM}Note: Visualization is via Fortress web UI (no Grafana needed)${NC}"
     echo ""
 
-    read -p "Enable AIOCHI (AI Eyes)? (yes/no) [yes]: " enable_aiochi
-    enable_aiochi=${enable_aiochi:-yes}
+    local aiochi_level=""
+    while [[ ! "$aiochi_level" =~ ^[1-4]$ ]]; do
+        read -p "Select AIOCHI level [1-4, default=2]: " aiochi_level
+        aiochi_level=${aiochi_level:-2}
+        if [[ ! "$aiochi_level" =~ ^[1-4]$ ]]; then
+            echo -e "${RED}Please enter 1, 2, 3, or 4${NC}"
+        fi
+    done
     echo ""
 
     # ─────────────────────────────────────────────────────────────────
@@ -1675,14 +1689,20 @@ install_fortress() {
     echo "  ✓ Web Dashboard (https://localhost:8443)"
     echo "  ✓ Local Auth (max 5 users)"
     echo ""
-    if [ "$enable_aiochi" = "yes" ]; then
-        echo -e "${BOLD}AIOCHI - AI Eyes (Cognitive Layer):${NC}"
+    if [ "$aiochi_level" != "1" ]; then
+        local aiochi_label=""
+        case "$aiochi_level" in
+            2) aiochi_label="Core (~2GB RAM)" ;;
+            3) aiochi_label="Standard (~3GB RAM)" ;;
+            4) aiochi_label="Full (~8GB RAM)" ;;
+        esac
+        echo -e "${BOLD}AIOCHI - AI Eyes ($aiochi_label):${NC}"
         echo "  ✓ ClickHouse analytics database"
-        echo "  ✓ VictoriaMetrics time-series"
-        echo "  ✓ Grafana monitoring dashboards"
-        echo "  ✓ n8n AI Agent workflows + Ollama LLM"
         echo "  ✓ Suricata + Zeek network capture"
-        echo "  ✓ Identity Engine + Log Shipper"
+        echo "  ✓ Identity Engine + Bubble Manager"
+        echo "  ✓ Log Shipper data pipeline"
+        [ "$aiochi_level" -ge 3 ] && echo "  ✓ n8n workflow automation"
+        [ "$aiochi_level" -ge 4 ] && echo "  ✓ Ollama local LLM (AI narratives)"
         echo ""
     fi
     echo -e "${BOLD}Connectivity:${NC}"
@@ -1719,7 +1739,12 @@ CFEOF
         export FORTRESS_NETWORK_PREFIX="$network_prefix"
 
         local extra_args="--non-interactive"
-        [ "$enable_aiochi" = "yes" ] && extra_args="$extra_args --enable-aiochi"
+        # AIOCHI level flags
+        if [ "$aiochi_level" != "1" ]; then
+            extra_args="$extra_args --enable-aiochi"
+            [ "$aiochi_level" -ge 3 ] && extra_args="$extra_args --aiochi-workflows"
+            [ "$aiochi_level" -ge 4 ] && extra_args="$extra_args --aiochi-ai"
+        fi
         [ "$enable_remote" = "yes" ] && extra_args="$extra_args --enable-remote-access"
 
         if [ "$enable_lte" = "yes" ]; then
@@ -1737,13 +1762,16 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
-            # Export AIOCHI flag (bundles all monitoring/analytics)
-            if [ "$enable_aiochi" = "yes" ]; then
+            # Export AIOCHI flags based on level (1=skip, 2=core, 3=standard, 4=full)
+            if [ "$aiochi_level" != "1" ]; then
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
-                export INSTALL_N8N=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
+                export AIOCHI_LEVEL="$aiochi_level"
+                # Level 3+ includes n8n workflows
+                [ "$aiochi_level" -ge 3 ] && export AIOCHI_WORKFLOWS=true
+                # Level 4 includes Ollama AI
+                [ "$aiochi_level" -ge 4 ] && export AIOCHI_AI=true
             fi
             [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
             [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
@@ -1769,13 +1797,16 @@ CFEOF
             export WIFI_PASSWORD="$wifi_password"
             export FORTRESS_NETWORK_PREFIX="$network_prefix"
             export NON_INTERACTIVE=true
-            # Export AIOCHI flag (bundles all monitoring/analytics)
-            if [ "$enable_aiochi" = "yes" ]; then
+            # Export AIOCHI flags based on level (1=skip, 2=core, 3=standard, 4=full)
+            if [ "$aiochi_level" != "1" ]; then
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
-                export INSTALL_N8N=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
+                export AIOCHI_LEVEL="$aiochi_level"
+                # Level 3+ includes n8n workflows
+                [ "$aiochi_level" -ge 3 ] && export AIOCHI_WORKFLOWS=true
+                # Level 4 includes Ollama AI
+                [ "$aiochi_level" -ge 4 ] && export AIOCHI_AI=true
             fi
             [ "$enable_remote" = "yes" ] && export INSTALL_CLOUDFLARE_TUNNEL=true
             [ "$enable_lte" = "yes" ] && export INSTALL_LTE=true
