@@ -19,8 +19,12 @@ from dataclasses import dataclass
 from .config import get_config
 from .database import get_db
 from .vlan_manager import get_vlan_manager
+from .device_identity import DeviceIdentityManager, get_identity_manager
 
 logger = logging.getLogger(__name__)
+
+# Path to DHCP events JSON file (updated by dhcp-event.sh)
+DHCP_DEVICES_FILE = Path("/opt/hookprobe/fortress/data/devices.json")
 
 
 @dataclass
@@ -36,6 +40,8 @@ class DeviceInfo:
     is_known: bool
     first_seen: datetime
     last_seen: datetime
+    identity_id: Optional[str] = None
+    dhcp_fingerprint: Optional[str] = None
 
 
 # Common OUI (Organizationally Unique Identifier) database for manufacturer lookup
@@ -78,10 +84,12 @@ class DeviceManager:
         self.config = get_config()
         self.db = get_db()
         self.vlan_manager = get_vlan_manager()
+        self.identity_manager = get_identity_manager()
 
         # Cache for recent scans
         self._last_scan: Dict[str, Dict] = {}
         self._callbacks: List[callable] = []
+        self._dhcp_cache: Dict[str, Dict] = {}  # MAC -> DHCP info cache
 
     def _run_cmd(self, cmd: List[str], timeout: int = 30) -> Tuple[bool, str, str]:
         """Run command safely."""
@@ -144,9 +152,35 @@ class DeviceManager:
 
         return devices
 
+    def _get_dhcp_info(self, mac: str) -> Dict:
+        """
+        Get DHCP information for a device from the DHCP events file.
+
+        The dhcp-event.sh script writes device info to /opt/hookprobe/fortress/data/devices.json
+        This includes DHCP Option 55 fingerprint which is crucial for identity tracking.
+        """
+        mac_upper = mac.upper()
+
+        # Check cache first
+        if mac_upper in self._dhcp_cache:
+            return self._dhcp_cache[mac_upper]
+
+        # Load from DHCP devices file
+        try:
+            if DHCP_DEVICES_FILE.exists():
+                with open(DHCP_DEVICES_FILE, 'r') as f:
+                    devices = json.load(f)
+                    if mac_upper in devices:
+                        self._dhcp_cache[mac_upper] = devices[mac_upper]
+                        return devices[mac_upper]
+        except Exception as e:
+            logger.debug(f"Could not load DHCP info for {mac}: {e}")
+
+        return {}
+
     def discover_devices(self) -> List[Dict]:
         """
-        Full device discovery with manufacturer identification.
+        Full device discovery with manufacturer identification and identity tracking.
 
         Returns list of new or updated devices.
         """
@@ -165,6 +199,27 @@ class DeviceManager:
             manufacturer = self._lookup_manufacturer(mac)
             device_type = self._detect_device_type(mac, hostname, manufacturer)
 
+            # Get DHCP fingerprint for identity tracking
+            dhcp_info = self._get_dhcp_info(mac)
+            dhcp_fingerprint = dhcp_info.get('dhcp_fingerprint')
+            dhcp_hostname = dhcp_info.get('hostname') or hostname
+
+            # Link to persistent device identity (handles MAC randomization)
+            identity = None
+            try:
+                identity = self.identity_manager.find_or_create_identity(
+                    mac=mac,
+                    dhcp_option55=dhcp_fingerprint,
+                    hostname=dhcp_hostname,
+                    ip_address=ip,
+                    device_type=device_type,
+                    manufacturer=manufacturer,
+                )
+                if identity:
+                    logger.debug(f"Device {mac} linked to identity '{identity.display_name}'")
+            except Exception as e:
+                logger.warning(f"Could not link device {mac} to identity: {e}")
+
             if existing:
                 # Update existing device
                 self.db.upsert_device(
@@ -173,7 +228,9 @@ class DeviceManager:
                     hostname=hostname or existing.get('hostname'),
                     device_type=device_type or existing.get('device_type'),
                     manufacturer=manufacturer or existing.get('manufacturer'),
-                    vlan_id=existing['vlan_id']
+                    vlan_id=existing['vlan_id'],
+                    identity_id=identity.identity_id if identity else existing.get('identity_id'),
+                    dhcp_fingerprint=dhcp_fingerprint or existing.get('dhcp_fingerprint'),
                 )
             else:
                 # New device - determine VLAN
@@ -186,13 +243,16 @@ class DeviceManager:
                     hostname=hostname,
                     device_type=device_type,
                     manufacturer=manufacturer,
-                    vlan_id=vlan_id
+                    vlan_id=vlan_id,
+                    identity_id=identity.identity_id if identity else None,
+                    dhcp_fingerprint=dhcp_fingerprint,
                 )
 
                 # Trigger new device callbacks
                 self._notify_new_device(mac, ip, vlan_id, device_type)
 
-                logger.info(f"New device discovered: {mac} ({ip}) -> VLAN {vlan_id}")
+                logger.info(f"New device discovered: {mac} ({ip}) -> VLAN {vlan_id}" +
+                           (f" [Identity: {identity.display_name}]" if identity else ""))
 
             discovered.append({
                 'mac_address': mac,
@@ -200,6 +260,9 @@ class DeviceManager:
                 'hostname': hostname,
                 'manufacturer': manufacturer,
                 'device_type': device_type,
+                'identity_id': identity.identity_id if identity else None,
+                'identity_name': identity.display_name if identity else None,
+                'dhcp_fingerprint': dhcp_fingerprint,
                 'is_new': existing is None
             })
 

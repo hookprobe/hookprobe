@@ -297,13 +297,18 @@ apply_policy() {
             ;;
 
         smart_home)
-            # SMART_HOME: Full access + explicit mDNS allow rules
+            # SMART_HOME: Full LAN access + explicit mDNS allow rules
             # Priority 475: Ensures SMART_HOME devices can discover each other
             # even if they're in different ecosystem bubbles
             #
             # This is between INTERNET_ONLY mDNS block (850) and base allow (800)
             # Without this, SMART_HOME devices rely on base mDNS allow which works,
             # but explicit rules make policy intent clearer and enable future filtering
+            #
+            # SECURITY: Block access to container infrastructure (172.20.0.0/16)
+            # IoT devices should NOT interact with Fortress containers
+            add_flow "priority=720,ip,dl_src=$mac,nw_dst=$CONTAINER_NETWORK,actions=drop"
+            add_flow "priority=720,ip,dl_dst=$mac,nw_src=$CONTAINER_NETWORK,actions=drop"
             #
             # Allow mDNS queries FROM this device
             add_flow "priority=475,udp,dl_src=$mac,tp_dst=5353,actions=NORMAL"
@@ -314,7 +319,7 @@ apply_policy() {
             # Allow SSDP/UPnP (239.255.255.250:1900)
             add_flow "priority=475,udp,dl_src=$mac,nw_dst=239.255.255.250,tp_dst=1900,actions=NORMAL"
             add_flow "priority=475,udp,dl_dst=$mac,nw_src=239.255.255.250,tp_src=1900,actions=NORMAL"
-            log_info "Applied SMART_HOME policy for $mac (full access + mDNS/SSDP discovery)"
+            log_info "Applied SMART_HOME policy for $mac (LAN access + mDNS/SSDP, containers blocked)"
             ;;
 
         full_access|normal|default|"")
