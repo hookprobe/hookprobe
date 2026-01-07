@@ -2095,17 +2095,43 @@ generate_hostapd_24ghz() {
     mkdir -p "$HOSTAPD_DIR"
 
     # WiFi bridge configuration for SDN Autopilot
-    # OVS doesn't support nl80211 bridge integration directly.
-    # Solution: Use Linux bridge (br-wifi) connected to OVS via veth pair.
-    # This allows ap_isolate=1 to force all traffic through OVS for policy enforcement.
-    # mDNS reflection is handled by hairpin mode on br-wifi + OVS rules.
+    #
+    # Two modes are supported:
+    # 1. hostapd-ovs mode (preferred): Direct OVS bridge integration
+    #    - Requires patched hostapd that understands ovs-vsctl
+    #    - Traffic flow: WiFi → OVS directly (no intermediate bridge)
+    #    - Simpler, better performance, full OpenFlow control
+    #
+    # 2. veth mode (fallback): Linux bridge with veth pair to OVS
+    #    - Uses standard hostapd with br-wifi intermediate bridge
+    #    - Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement
+    #    - mDNS reflection via hairpin mode on br-wifi
+    #
     local use_bridge=""
+    local hostapd_ovs_mode=false
+
+    # Check if hostapd-ovs mode is enabled
+    if [ -f "/etc/hookprobe/fortress.conf" ]; then
+        hostapd_ovs_mode=$(grep "^HOSTAPD_OVS_MODE=" /etc/hookprobe/fortress.conf 2>/dev/null | cut -d= -f2 || echo "false")
+    fi
+    # Also check environment variable (for testing)
+    if [ "${HOSTAPD_OVS_MODE:-}" = "true" ]; then
+        hostapd_ovs_mode=true
+    fi
+
     if is_ovs_bridge "$bridge"; then
-        # OVS detected - use intermediate br-wifi bridge
-        # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
-        use_bridge="bridge=br-wifi"
-        log_info "  OVS bridge detected - using br-wifi intermediate bridge"
-        log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
+        if [ "$hostapd_ovs_mode" = "true" ]; then
+            # hostapd-ovs mode: Use OVS bridge directly
+            use_bridge="bridge=$bridge"
+            log_info "  hostapd-ovs mode: Direct OVS bridge integration"
+            log_info "  Traffic flow: WiFi → OVS ($bridge) → OpenFlow policy"
+        else
+            # veth mode: Use intermediate br-wifi bridge
+            # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
+            use_bridge="bridge=br-wifi"
+            log_info "  veth mode: Using br-wifi intermediate bridge"
+            log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
+        fi
     else
         use_bridge="bridge=$bridge"
         log_info "  Using Linux bridge mode: $bridge"
@@ -2585,17 +2611,43 @@ generate_hostapd_5ghz() {
     mkdir -p "$HOSTAPD_DIR"
 
     # WiFi bridge configuration for SDN Autopilot
-    # OVS doesn't support nl80211 bridge integration directly.
-    # Solution: Use Linux bridge (br-wifi) connected to OVS via veth pair.
-    # This allows ap_isolate=1 to force all traffic through OVS for policy enforcement.
-    # mDNS reflection is handled by hairpin mode on br-wifi + OVS rules.
+    #
+    # Two modes are supported:
+    # 1. hostapd-ovs mode (preferred): Direct OVS bridge integration
+    #    - Requires patched hostapd that understands ovs-vsctl
+    #    - Traffic flow: WiFi → OVS directly (no intermediate bridge)
+    #    - Simpler, better performance, full OpenFlow control
+    #
+    # 2. veth mode (fallback): Linux bridge with veth pair to OVS
+    #    - Uses standard hostapd with br-wifi intermediate bridge
+    #    - Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement
+    #    - mDNS reflection via hairpin mode on br-wifi
+    #
     local use_bridge=""
+    local hostapd_ovs_mode=false
+
+    # Check if hostapd-ovs mode is enabled
+    if [ -f "/etc/hookprobe/fortress.conf" ]; then
+        hostapd_ovs_mode=$(grep "^HOSTAPD_OVS_MODE=" /etc/hookprobe/fortress.conf 2>/dev/null | cut -d= -f2 || echo "false")
+    fi
+    # Also check environment variable (for testing)
+    if [ "${HOSTAPD_OVS_MODE:-}" = "true" ]; then
+        hostapd_ovs_mode=true
+    fi
+
     if is_ovs_bridge "$bridge"; then
-        # OVS detected - use intermediate br-wifi bridge
-        # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
-        use_bridge="bridge=br-wifi"
-        log_info "  OVS bridge detected - using br-wifi intermediate bridge"
-        log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
+        if [ "$hostapd_ovs_mode" = "true" ]; then
+            # hostapd-ovs mode: Use OVS bridge directly
+            use_bridge="bridge=$bridge"
+            log_info "  hostapd-ovs mode: Direct OVS bridge integration"
+            log_info "  Traffic flow: WiFi → OVS ($bridge) → OpenFlow policy"
+        else
+            # veth mode: Use intermediate br-wifi bridge
+            # br-wifi is created by ovs-post-setup.sh and connected to OVS via veth
+            use_bridge="bridge=br-wifi"
+            log_info "  veth mode: Using br-wifi intermediate bridge"
+            log_info "  Traffic flow: WiFi → br-wifi → veth → OVS → policy enforcement"
+        fi
     else
         use_bridge="bridge=$bridge"
         log_info "  Using Linux bridge mode: $bridge"
