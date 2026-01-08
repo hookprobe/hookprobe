@@ -306,6 +306,32 @@ class DeviceDataManager:
     # CRUD Operations
     # ========================================
 
+    def _validate_mac(self, mac_address: str) -> str:
+        """
+        Validate and normalize MAC address format.
+
+        Bug fix: was not validating MAC format, allowing invalid values.
+
+        Args:
+            mac_address: MAC address to validate
+
+        Returns:
+            Normalized MAC address (uppercase, colon-separated)
+
+        Raises:
+            ValueError: If MAC address format is invalid
+        """
+        if not mac_address:
+            raise ValueError("MAC address cannot be empty")
+
+        mac = mac_address.upper().replace('-', ':')
+
+        # Validate format: XX:XX:XX:XX:XX:XX where X is hex digit
+        if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac):
+            raise ValueError(f"Invalid MAC address format: {mac_address}")
+
+        return mac
+
     def create(self, mac_address: str, name: str = "", policy: str = "default",
                notes: str = "", is_trusted: bool = False) -> DeviceEntry:
         """
@@ -320,8 +346,12 @@ class DeviceDataManager:
 
         Returns:
             The created DeviceEntry
+
+        Raises:
+            ValueError: If MAC address format is invalid
         """
-        mac = mac_address.upper().replace('-', ':')
+        # Bug fix: validate MAC address format before processing
+        mac = self._validate_mac(mac_address)
 
         # Get classification
         manufacturer, category, rec_policy = self._classify_device(mac)
@@ -684,18 +714,42 @@ class DeviceDataManager:
         """
         Request sync of all device policies.
 
-        Note: For bulk sync, we write each policy trigger sequentially.
-        The host-side script processes them via the database sync.
+        Bug fix: Now writes all policies to a single trigger file as a list,
+        instead of overwriting the file for each device (which only applied the last one).
         """
         logger.info("Requesting sync of all device policies...")
-        synced = 0
+
+        # Bug fix: collect all policy changes into a list instead of overwriting
+        policy_requests = []
         for mac, entry in self._registry.items():
             if entry.is_blocked:
-                self._write_policy_trigger(mac, 'quarantine')
+                policy_requests.append({
+                    'mac': mac.upper(),
+                    'policy': 'quarantine',
+                    'timestamp': datetime.now().isoformat(),
+                })
             elif entry.policy not in ('full_access', 'default', 'smart_home', ''):
-                self._write_policy_trigger(mac, entry.policy)
-            synced += 1
-        logger.info(f"Requested sync for {synced} device policies")
+                policy_requests.append({
+                    'mac': mac.upper(),
+                    'policy': entry.policy,
+                    'timestamp': datetime.now().isoformat(),
+                })
+
+        # Write all requests to trigger file at once
+        if policy_requests:
+            try:
+                trigger_data = {
+                    'bulk_sync': True,
+                    'count': len(policy_requests),
+                    'timestamp': datetime.now().isoformat(),
+                    'policies': policy_requests,
+                }
+                POLICY_TRIGGER_FILE.write_text(json.dumps(trigger_data, indent=2))
+                logger.info(f"Bulk sync trigger written for {len(policy_requests)} devices")
+            except Exception as e:
+                logger.error(f"Failed to write bulk sync trigger: {e}")
+        else:
+            logger.info("No policies to sync")
 
 
 # Singleton instance

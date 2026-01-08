@@ -33,7 +33,8 @@ def _decode_dnsmasq_hostname(hostname: str) -> str:
         result = b''
         i = 0
         while i < len(hostname):
-            if hostname[i] == '\\' and i + 3 < len(hostname):
+            # Bug fix: was i + 3 < len, should be <= to handle escapes at end of string
+            if hostname[i] == '\\' and i + 3 <= len(hostname):
                 octal_str = hostname[i+1:i+4]
                 if all(c in '01234567' for c in octal_str):
                     result += bytes([int(octal_str, 8)])
