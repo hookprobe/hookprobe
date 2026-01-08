@@ -562,10 +562,15 @@ setup_avahi_coexistence() {
     fi
 
     # Disable IP record reflection to fix Apple naming conflicts
+    # Handle both uncommented and commented versions of the setting
     if grep -q "^reflect-ipv=" "$avahi_conf" 2>/dev/null; then
+        # Uncommented line exists - update it
         sed -i 's/^reflect-ipv=.*/reflect-ipv=no/' "$avahi_conf"
+    elif grep -q "^#reflect-ipv=" "$avahi_conf" 2>/dev/null; then
+        # Commented line exists - uncomment and set to no
+        sed -i 's/^#reflect-ipv=.*/reflect-ipv=no/' "$avahi_conf"
     else
-        # Add after enable-reflector line
+        # No line exists - add after enable-reflector line
         sed -i '/^enable-reflector=/a reflect-ipv=no' "$avahi_conf"
     fi
 
