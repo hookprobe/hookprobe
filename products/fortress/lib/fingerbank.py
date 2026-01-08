@@ -1560,6 +1560,11 @@ class Fingerbank:
         self.api_key = api_key or self._load_api_key()
         self._init_database()
         self._load_custom_data()
+        # Log API key status for debugging
+        if self.api_key:
+            logger.info(f"Fingerbank initialized with API key: {self.api_key[:8]}...")
+        else:
+            logger.warning("Fingerbank initialized WITHOUT API key - API lookups disabled")
 
     def _load_api_key(self) -> Optional[str]:
         """Load Fingerbank API key from file."""
@@ -1693,12 +1698,21 @@ class Fingerbank:
                 return self._build_result(vc_match, mac, hostname)
 
         # 6. Try Fingerbank API for unknown devices
-        if dhcp_fingerprint and self.api_key:
+        # DEBUG: Log why API might not be called
+        if not dhcp_fingerprint:
+            logger.debug(f"Fingerbank API skipped for {mac}: no DHCP fingerprint")
+        elif not self.api_key:
+            logger.warning(f"Fingerbank API skipped for {mac}: no API key configured")
+        else:
+            logger.info(f"Calling Fingerbank API for {mac} with fingerprint: {dhcp_fingerprint[:50]}...")
             api_result = self._query_fingerbank_api(
                 dhcp_fingerprint, mac, hostname, vendor_class
             )
             if api_result:
+                logger.info(f"Fingerbank API success for {mac}: {api_result.get('name', 'Unknown')}")
                 return self._build_result(api_result, mac, hostname)
+            else:
+                logger.debug(f"Fingerbank API returned no result for {mac}")
 
         # 7. Build best-effort identification
         return self._build_fallback_result(mac, vendor, hostname, dhcp_fingerprint)
@@ -2136,7 +2150,11 @@ class Fingerbank:
                               hostname: Optional[str],
                               vendor_class: Optional[str]) -> Optional[dict]:
         """Query Fingerbank API for unknown devices."""
-        if not HAS_REQUESTS or not self.api_key:
+        if not HAS_REQUESTS:
+            logger.warning("Fingerbank API unavailable: 'requests' library not installed")
+            return None
+        if not self.api_key:
+            logger.warning("Fingerbank API unavailable: no API key")
             return None
 
         try:
@@ -2151,14 +2169,18 @@ class Fingerbank:
             if vendor_class:
                 data['dhcp_vendor'] = vendor_class
 
+            logger.debug(f"Fingerbank API request: mac={mac[:8]}, fp={fingerprint[:30]}...")
             response = requests.post(url, params=params, json=data, timeout=5)
 
             if response.status_code == 200:
                 result = response.json()
                 device = result.get('device', {})
+                score = result.get('score', 0)
+
+                logger.info(f"Fingerbank API response for {mac}: score={score}, device={device.get('name', 'NONE')}")
 
                 # Build result from API response
-                if device:
+                if device and device.get('name'):
                     name = device.get('name', 'Unknown')
                     parents = device.get('parents', [])
 
@@ -2170,18 +2192,23 @@ class Fingerbank:
                         'vendor': parents[0] if parents else 'Unknown',
                         'category': category,
                         'os': name,
-                        'confidence': min(0.95, result.get('score', 50) / 100),
+                        'confidence': min(0.95, score / 100) if score else 0.5,
                         'hierarchy': parents + [name],
                         'source': 'fingerbank_api'
                     }
 
                     # Learn this fingerprint for future
                     self._learn_fingerprint(fingerprint, api_result)
+                    logger.info(f"Fingerbank API identified {mac} as: {name} ({category})")
 
                     return api_result
+                else:
+                    logger.info(f"Fingerbank API: no device match for {mac} (score={score})")
+            else:
+                logger.warning(f"Fingerbank API error for {mac}: HTTP {response.status_code}")
 
         except Exception as e:
-            logger.debug(f"Fingerbank API error: {e}")
+            logger.error(f"Fingerbank API exception for {mac}: {e}")
 
         return None
 
