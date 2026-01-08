@@ -8,8 +8,12 @@ Provides helper functions for secure logging and error handling to address:
 These utilities help maintain operational visibility while protecting sensitive data.
 """
 
+import logging
 import re
 from typing import Optional
+
+# Logger for internal error tracking
+logger = logging.getLogger(__name__)
 
 
 def mask_mac(mac: str, show_prefix: bool = True, show_suffix: bool = True) -> str:
@@ -79,47 +83,33 @@ def mask_ip(ip: str) -> str:
     return f"{parts[0]}.{parts[1]}.x.x"
 
 
-def safe_error_message(exception: Exception, include_type: bool = True) -> str:
+def safe_error_message(exception: Exception, context: str = "request") -> str:
     """
-    Create a safe error message for API responses (CWE-209 mitigation).
+    Handle exceptions securely for API responses (CWE-209 mitigation).
 
-    Prevents information exposure through error messages by:
-    - Not including stack traces
-    - Not including file paths
-    - Not including internal implementation details
+    Security: Returns ONLY a generic, opaque error message to prevent
+    information exposure. NO exception details (type, message, traceback)
+    are included in the response.
+
+    The full exception is logged internally for debugging.
 
     Args:
-        exception: The exception to process
-        include_type: Whether to include the exception type name
+        exception: The exception object that occurred
+        context: A developer-controlled string describing the operation
+                 (e.g., "device block", "policy update"). Used for both
+                 internal logging and the generic client message.
 
     Returns:
-        Sanitized error message safe for API responses
+        A generic, opaque error message safe for API responses.
+        Example: "An internal error occurred while processing the device block"
     """
-    # Get the error message
-    msg = str(exception) if exception else "An error occurred"
+    # Log full exception details internally for debugging
+    # logger.exception() includes the full traceback at ERROR level
+    logger.exception(f"Error during {context}")
 
-    # Remove potentially sensitive information
-    # Remove file paths (Unix and Windows)
-    msg = re.sub(r'(/[^\s:]+)+\.(py|sh|conf|json|yaml|yml)', '[path]', msg)
-    msg = re.sub(r'[A-Za-z]:\\[^\s:]+', '[path]', msg)
-
-    # Remove line numbers
-    msg = re.sub(r'line \d+', 'line [N]', msg, flags=re.IGNORECASE)
-
-    # Remove memory addresses
-    msg = re.sub(r'0x[0-9a-fA-F]+', '[addr]', msg)
-
-    # Remove stack trace indicators
-    msg = re.sub(r'Traceback.*:', '', msg, flags=re.IGNORECASE | re.DOTALL)
-
-    # Truncate long messages
-    if len(msg) > 200:
-        msg = msg[:197] + "..."
-
-    if include_type and exception:
-        return f"{type(exception).__name__}: {msg.strip()}"
-
-    return msg.strip() or "An error occurred"
+    # Return generic, opaque message to client
+    # NEVER include exception type, message, or any internal details
+    return f"An internal error occurred while processing the {context}"
 
 
 def sanitize_for_log(data: dict, sensitive_keys: Optional[set] = None) -> dict:
