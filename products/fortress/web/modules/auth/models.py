@@ -6,6 +6,9 @@ JSON-based user storage for MVP. Can be migrated to SQLite/PostgreSQL later.
 
 import json
 import hashlib
+import logging
+import os
+import re
 from pathlib import Path
 from datetime import datetime
 from enum import Enum
@@ -14,6 +17,9 @@ from dataclasses import dataclass, asdict
 
 import bcrypt
 from flask_login import UserMixin
+
+# Security: Logger for admin setup events
+logger = logging.getLogger(__name__)
 
 
 # Maximum users for Fortress (small business platform)
@@ -223,19 +229,72 @@ class User(UserMixin):
         except Exception:
             return False
 
+    @staticmethod
+    def _is_strong_password(password: str) -> bool:
+        """
+        Validate password strength requirements:
+        - Minimum 12 characters
+        - At least one uppercase letter
+        - At least one lowercase letter
+        - At least one digit
+        - At least one special character
+        """
+        if len(password) < 12:
+            return False
+        if not re.search(r"[a-z]", password):
+            return False
+        if not re.search(r"[A-Z]", password):
+            return False
+        if not re.search(r"\d", password):
+            return False
+        if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?`~]", password):
+            return False
+        return True
+
     @classmethod
     def ensure_admin_exists(cls) -> None:
-        """Ensure at least one admin user exists (for initial setup)."""
+        """
+        Ensure at least one admin user exists for initial setup.
+
+        Security: Reads admin password from FORTRESS_ADMIN_PASSWORD environment
+        variable. Will NOT create an admin with a hardcoded or weak password.
+        """
         users = cls._load_all_users()
         has_admin = any(
             u.get('role') == UserRole.ADMIN.value
             for u in users.values()
         )
-        if not has_admin:
-            # Create default admin (password should be changed immediately!)
-            cls.create(
-                username='admin',
-                password='hookprobe',  # CHANGE THIS!
-                role=UserRole.ADMIN.value,
-                display_name='Administrator'
+
+        if has_admin:
+            return  # Admin already exists
+
+        # Security: Get password from environment variable only
+        admin_password = os.environ.get('FORTRESS_ADMIN_PASSWORD')
+
+        # Defense in depth: Clear environment variable after reading
+        if admin_password and 'FORTRESS_ADMIN_PASSWORD' in os.environ:
+            del os.environ['FORTRESS_ADMIN_PASSWORD']
+
+        if not admin_password:
+            logger.warning(
+                "SECURITY: No FORTRESS_ADMIN_PASSWORD set. "
+                "Admin user not created. Set env var during installation."
             )
+            return
+
+        if not cls._is_strong_password(admin_password):
+            logger.error(
+                "SECURITY: FORTRESS_ADMIN_PASSWORD does not meet strength "
+                "requirements (min 12 chars, mixed case, digit, special char). "
+                "Admin user not created."
+            )
+            return
+
+        # Create admin with secure password from environment
+        cls.create(
+            username=os.environ.get('FORTRESS_ADMIN_USER', 'admin'),
+            password=admin_password,
+            role=UserRole.ADMIN.value,
+            display_name='Administrator'
+        )
+        logger.info("Initial admin user created successfully.")
