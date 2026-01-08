@@ -314,14 +314,23 @@ class StatsTracker:
             logger.info("Protection resumed")
             return True
 
-    def is_paused(self) -> bool:
-        """Check if protection is paused."""
-        with self._lock:
-            if self._paused and self._pause_until:
+    def _check_pause_expiry(self) -> None:
+        """Check and update pause state if expired. Must be called with lock held."""
+        # Bug fix: moved state modification out of getter to separate method
+        if self._paused and self._pause_until:
+            try:
                 if datetime.now() > datetime.fromisoformat(self._pause_until):
                     self._paused = False
                     self._pause_until = None
-                    return False
+                    logger.info("Protection pause expired, auto-resuming")
+            except ValueError:
+                # Invalid pause_until format, clear it
+                self._pause_until = None
+
+    def is_paused(self) -> bool:
+        """Check if protection is paused (also checks for pause expiry)."""
+        with self._lock:
+            self._check_pause_expiry()
             return self._paused
 
 
@@ -1098,8 +1107,11 @@ class APIHandler(BaseHTTPRequestHandler):
             if content_length > 0:
                 body = self.rfile.read(content_length)
                 return json.loads(body)
-        except:
-            pass
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            # Bug fix: was bare except that swallowed all errors silently
+            logger.warning(f"Failed to parse request body: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error parsing request body: {e}")
         return {}
 
     def do_OPTIONS(self):
@@ -1398,13 +1410,20 @@ class APIHandler(BaseHTTPRequestHandler):
             if search_query and search_query not in domain:
                 continue
 
-            # Time filter
+            # Time filter (Bug fix: now properly handles timezone-aware datetimes)
             if cutoff_time:
                 try:
-                    item_time = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00').split('+')[0])
+                    # Parse timestamp - handle both naive and timezone-aware formats
+                    ts_str = item['timestamp']
+                    if ts_str.endswith('Z'):
+                        ts_str = ts_str[:-1]  # Remove Z suffix
+                    elif '+' in ts_str:
+                        ts_str = ts_str.split('+')[0]  # Remove timezone offset
+                    item_time = datetime.fromisoformat(ts_str)
                     if item_time < cutoff_time:
                         continue
-                except:
+                except (ValueError, KeyError) as e:
+                    logger.debug(f"Could not parse timestamp: {e}")
                     pass
 
             # Categorize by detection reason

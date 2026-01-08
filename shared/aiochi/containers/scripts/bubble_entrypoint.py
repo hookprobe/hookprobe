@@ -116,20 +116,34 @@ def watch_zeek_logs():
 def watch_connections():
     """Watch Zeek conn.log for device-to-device connections."""
     global _health_status
+    import json
 
     conn_log = Path(os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/current/conn.log"))
     logger.info(f"Starting connection watcher on: {conn_log}")
 
     # Import connection graph analyzer if available
+    manager = None
     try:
         from shared.aiochi.bubble.manager import get_bubble_manager
         manager = get_bubble_manager()
-        has_manager = True
+        logger.info("Bubble manager loaded successfully")
     except ImportError:
         logger.warning("Bubble manager not available - connection analysis only")
-        has_manager = False
 
+    # Track file position and inode for rotation handling
     position = 0
+    last_inode = None
+    connections_processed = 0
+
+    # Local network prefixes for D2D detection
+    LOCAL_PREFIXES = ('10.', '172.16.', '172.17.', '172.18.', '172.19.',
+                      '172.20.', '172.21.', '172.22.', '172.23.', '172.24.',
+                      '172.25.', '172.26.', '172.27.', '172.28.', '172.29.',
+                      '172.30.', '172.31.', '192.168.')
+
+    def is_local_ip(ip: str) -> bool:
+        """Check if IP is in local network range."""
+        return ip and any(ip.startswith(p) for p in LOCAL_PREFIXES)
 
     while True:
         try:
@@ -137,12 +151,53 @@ def watch_connections():
                 time.sleep(5)
                 continue
 
+            # Check for log rotation (inode change)
+            current_inode = conn_log.stat().st_ino
+            if last_inode is not None and current_inode != last_inode:
+                logger.info("conn.log rotated, resetting position")
+                position = 0
+            last_inode = current_inode
+
             with open(conn_log) as f:
                 f.seek(position)
                 for line in f:
-                    # Parse Zeek conn.log JSON
-                    # TODO: Extract D2D connections and feed to bubble clustering
-                    pass
+                    # Bug fix: was just 'pass' - now actually parse connections
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    try:
+                        # Parse Zeek conn.log JSON format
+                        conn = json.loads(line)
+                        src_ip = conn.get('id.orig_h', '')
+                        dst_ip = conn.get('id.resp_h', '')
+                        proto = conn.get('proto', '')
+                        service = conn.get('service', '')
+
+                        # Detect D2D connections (both IPs are local)
+                        if is_local_ip(src_ip) and is_local_ip(dst_ip):
+                            connections_processed += 1
+
+                            # Update health status
+                            if 'd2d_connections' not in _health_status:
+                                _health_status['d2d_connections'] = 0
+                            _health_status['d2d_connections'] += 1
+
+                            logger.debug(f"D2D: {src_ip} -> {dst_ip} ({service or proto})")
+
+                            # Feed to bubble manager if available
+                            if manager:
+                                try:
+                                    manager.record_d2d_connection(src_ip, dst_ip, service or proto)
+                                except Exception as e:
+                                    logger.debug(f"Could not record D2D: {e}")
+
+                    except json.JSONDecodeError:
+                        # Skip non-JSON lines (comments, etc.)
+                        pass
+                    except Exception as e:
+                        logger.debug(f"Error parsing conn line: {e}")
+
                 position = f.tell()
 
         except Exception as e:

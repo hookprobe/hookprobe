@@ -235,6 +235,12 @@ class LogShipper:
         """Watch Zeek log directory."""
         logger.info(f"Watching Zeek logs: {ZEEK_LOG_PATH}")
 
+        # Track file positions to read only new data (Bug fix: was seeking to EOF every iteration)
+        conn_log_pos = 0
+        dns_log_pos = 0
+        conn_log_inode = None
+        dns_log_inode = None
+
         while not self.stop_event.is_set():
             try:
                 zeek_dir = Path(ZEEK_LOG_PATH)
@@ -245,33 +251,53 @@ class LogShipper:
                 conn_log = zeek_dir / 'conn.log'
                 dns_log = zeek_dir / 'dns.log'
 
-                # Watch conn.log
+                # Watch conn.log - track position across iterations
                 if conn_log.exists():
+                    # Check if file was rotated (inode changed)
+                    current_inode = conn_log.stat().st_ino
+                    if conn_log_inode is not None and current_inode != conn_log_inode:
+                        logger.info("conn.log rotated, resetting position")
+                        conn_log_pos = 0
+                    conn_log_inode = current_inode
+
                     with open(conn_log, 'r') as f:
-                        f.seek(0, 2)
-                        for _ in range(100):  # Read up to 100 lines per iteration
-                            line = f.readline()
-                            if not line:
-                                break
+                        f.seek(conn_log_pos)
+                        lines_read = 0
+                        for line in f:
                             if line.startswith('#'):
                                 continue
                             event = self.parse_zeek_conn(line)
                             if event:
                                 self.zeek_conn_buffer.append(event)
+                                lines_read += 1
+                        conn_log_pos = f.tell()
 
-                # Watch dns.log
+                        if lines_read > 0:
+                            logger.debug(f"Read {lines_read} lines from conn.log")
+
+                # Watch dns.log - track position across iterations
                 if dns_log.exists():
+                    # Check if file was rotated (inode changed)
+                    current_inode = dns_log.stat().st_ino
+                    if dns_log_inode is not None and current_inode != dns_log_inode:
+                        logger.info("dns.log rotated, resetting position")
+                        dns_log_pos = 0
+                    dns_log_inode = current_inode
+
                     with open(dns_log, 'r') as f:
-                        f.seek(0, 2)
-                        for _ in range(100):
-                            line = f.readline()
-                            if not line:
-                                break
+                        f.seek(dns_log_pos)
+                        lines_read = 0
+                        for line in f:
                             if line.startswith('#'):
                                 continue
                             event = self.parse_zeek_dns(line)
                             if event:
                                 self.zeek_dns_buffer.append(event)
+                                lines_read += 1
+                        dns_log_pos = f.tell()
+
+                        if lines_read > 0:
+                            logger.debug(f"Read {lines_read} lines from dns.log")
 
                 time.sleep(1)
 
