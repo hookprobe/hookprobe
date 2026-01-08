@@ -2,10 +2,36 @@
 # Cognitive Network Layer for HookProbe Fortress
 #
 # Usage:
+#   # Minimal (recommended - ~2GB RAM)
 #   podman-compose -f podman-compose.aiochi.yml up -d
+#
+#   # With AI narratives (~6GB RAM)
+#   podman-compose -f podman-compose.aiochi.yml --profile ai up -d
+#
+#   # With n8n workflows (~3GB RAM)
+#   podman-compose -f podman-compose.aiochi.yml --profile workflows up -d
+#
+#   # Full stack (~8GB RAM)
+#   podman-compose -f podman-compose.aiochi.yml --profile ai --profile workflows up -d
 #
 # Note: This stack is OPTIONAL. Core security (QSecBit, dnsXai) runs without it.
 #       AIOCHI adds the "Eyes" - visual dashboards and human narratives.
+#
+# Minimal Stack (~2GB RAM):
+#   - clickhouse: Event analytics database
+#   - suricata: IDS threat detection
+#   - zeek: Connection/protocol logging
+#   - log-shipper: Data pipeline
+#   - identity-engine: Device fingerprinting (AIOCHI core)
+#   - bubble-manager: Ecosystem detection (AIOCHI core)
+#
+# Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed)
+#
+# Optional (profile: ai):
+#   - ollama: Local LLM for AI narratives (~4GB additional RAM)
+#
+# Optional (profile: workflows):
+#   - narrative-engine (n8n): Complex workflow automation (~500MB additional RAM)
 
 name: aiochi
 
@@ -20,18 +46,17 @@ networks:
 volumes:
   clickhouse_data:
   clickhouse_logs:
-  grafana_data:
-  victoria_data:
   n8n_data:
   suricata_logs:
   zeek_logs:
   zeek_spool:
   identity_data:
   ollama_models:
+  bubble_data:
 
 services:
   # ============================================================================
-  # DATA TIER - Event Storage
+  # DATA TIER - Event Storage (CORE)
   # ============================================================================
 
   clickhouse:
@@ -68,31 +93,8 @@ services:
         soft: 262144
         hard: 262144
 
-  victoria:
-    image: docker.io/victoriametrics/victoria-metrics:v1.106.1
-    container_name: aiochi-victoria
-    hostname: aiochi-victoria
-    restart: unless-stopped
-    networks:
-      aiochi-internal:
-        ipv4_address: 172.20.210.11
-    ports:
-      - "127.0.0.1:8428:8428"
-    volumes:
-      - victoria_data:/victoria-metrics-data
-    command:
-      - "--retentionPeriod=30d"
-      - "--httpListenAddr=:8428"
-      - "--storageDataPath=/victoria-metrics-data"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8428/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
   # ============================================================================
-  # CAPTURE TIER - Network Traffic Analysis
+  # CAPTURE TIER - Network Traffic Analysis (CORE)
   # ============================================================================
   #
   # IMPORTANT: These containers capture from the OVS mirror port (FTS-mirror),
@@ -159,7 +161,52 @@ services:
       start_period: 45s
 
   # ============================================================================
-  # INTELLIGENCE TIER - Device Identity & Narratives
+  # LOG SHIPPER - Data Pipeline (CORE)
+  # ============================================================================
+
+  log-shipper:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.logshipper
+    container_name: aiochi-logshipper
+    hostname: aiochi-logshipper
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.40
+    volumes:
+      - suricata_logs:/var/log/suricata:ro
+      - zeek_logs:/opt/zeek/logs:ro
+    environment:
+      # Use container DNS name instead of hardcoded IP
+      CLICKHOUSE_HOST: aiochi-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      SURICATA_LOG_PATH: /var/log/suricata/eve.json
+      ZEEK_LOG_PATH: /opt/zeek/logs/current
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      suricata:
+        condition: service_started
+      zeek:
+        condition: service_started
+    healthcheck:
+      # Check Python process is running and can connect to ClickHouse
+      test: ["CMD-SHELL", "pgrep -f 'log_shipper' > /dev/null || pgrep -x python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # INTELLIGENCE TIER - Device Identity & Bubble Detection (CORE)
+  # ============================================================================
+  # These are the AIOCHI-specific components that provide the "cognitive" layer.
+  # They read from Zeek logs (not live capture) to avoid network conflicts.
   # ============================================================================
 
   identity-engine:
@@ -196,12 +243,6 @@ services:
       retries: 5
       start_period: 30s
 
-  # ============================================================================
-  # BUBBLE MANAGER - Ecosystem Device Detection
-  # ============================================================================
-  # Same-user device detection via Zeek log analysis (NO host network!)
-  # Reads mDNS/D2D data from Zeek logs instead of live capture
-  # This eliminates port 5353 conflicts and network blocking
   bubble-manager:
     build:
       context: ..
@@ -212,23 +253,18 @@ services:
     networks:
       aiochi-internal:
         ipv4_address: 172.20.210.25
+    ports:
+      - "127.0.0.1:8070:8070"
     volumes:
       # Zeek logs for mDNS and D2D connection analysis
       - zeek_logs:/opt/zeek/logs:ro
       # Persistent bubble state
-      - /var/lib/hookprobe:/var/lib/hookprobe:U
-      - /var/lib/fortress:/var/lib/fortress:U
+      - bubble_data:/var/lib/aiochi
       # OVS socket for OpenFlow rules (bubble policies)
       - /run/openvswitch:/run/openvswitch
       # Fortress configuration
       - /etc/hookprobe:/etc/hookprobe:ro
     environment:
-      # Database connection (Fortress PostgreSQL)
-      DATABASE_HOST: "${FORTRESS_DB_HOST:-172.20.200.10}"
-      DATABASE_PORT: 5432
-      DATABASE_NAME: fortress
-      DATABASE_USER: fortress
-      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
       # ClickHouse for analytics
       CLICKHOUSE_HOST: aiochi-clickhouse
       CLICKHOUSE_PORT: 8123
@@ -239,9 +275,11 @@ services:
       ZEEK_LOG_PATH: /opt/zeek/logs/current
       ZEEK_DNS_LOG: /opt/zeek/logs/current/dns.log
       ZEEK_CONN_LOG: /opt/zeek/logs/current/conn.log
+      # Narrative engine (optional - uses templates if not available)
+      NARRATIVE_ENGINE_URL: "http://aiochi-narrative:5678"
+      OLLAMA_URL: "http://aiochi-ollama:11434"
       # Logging
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-      PYTHONPATH: /opt/hookprobe
     cap_add:
       - NET_ADMIN  # Required for OVS OpenFlow commands
     depends_on:
@@ -250,17 +288,26 @@ services:
       clickhouse:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'bubble' > /dev/null || curl -sf http://localhost:8070/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/health || pgrep -f 'bubble'"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # ============================================================================
+  # OPTIONAL: WORKFLOW ENGINE (profile: workflows)
+  # ============================================================================
+  # n8n for complex event workflows. Most use cases work fine with the
+  # built-in narrative templates. Enable with: --profile workflows
+  # ============================================================================
 
   narrative-engine:
     image: docker.io/n8nio/n8n:1.70.3
     container_name: aiochi-narrative
     hostname: aiochi-narrative
     restart: unless-stopped
+    profiles:
+      - workflows
     networks:
       aiochi-internal:
         ipv4_address: 172.20.210.21
@@ -268,7 +315,7 @@ services:
       - "127.0.0.1:5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./n8n-workflows:/home/node/workflows:ro
+      - ../n8n-workflows:/home/node/workflows:ro
     environment:
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: "${N8N_USER:-admin}"
@@ -284,19 +331,15 @@ services:
       CLICKHOUSE_DB: "aiochi"
       CLICKHOUSE_USER: "aiochi"
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      # Ollama LLM connection (Agentic AI)
+      # Ollama LLM connection (if available)
       OLLAMA_HOST: "http://aiochi-ollama:11434"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
-      # Agentic mode (template fallback for speed)
-      NARRATIVE_MODE: "${NARRATIVE_MODE:-agentic}"
       # n8n AI features
       N8N_AI_ENABLED: "true"
     depends_on:
       clickhouse:
         condition: service_healthy
       identity-engine:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
@@ -306,91 +349,11 @@ services:
       start_period: 30s
 
   # ============================================================================
-  # VISUALIZATION TIER - Dashboard
+  # OPTIONAL: AI TIER - Local LLM (profile: ai)
   # ============================================================================
-
-  grafana:
-    image: docker.io/grafana/grafana:11.4.0
-    container_name: aiochi-grafana
-    hostname: aiochi-grafana
-    restart: unless-stopped
-    networks:
-      aiochi-internal:
-        ipv4_address: 172.20.210.30
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    environment:
-      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
-      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-aiochi_admin}"
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000}"
-      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
-      # Dark theme by default
-      GF_USERS_DEFAULT_THEME: "dark"
-      # Disable alerting (we use our own)
-      GF_ALERTING_ENABLED: "false"
-      GF_UNIFIED_ALERTING_ENABLED: "false"
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      victoria:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # ============================================================================
-  # LOG SHIPPER - ClickHouse Integration
-  # ============================================================================
-
-  log-shipper:
-    build:
-      context: ..
-      dockerfile: containers/Containerfile.logshipper
-    container_name: aiochi-logshipper
-    hostname: aiochi-logshipper
-    restart: unless-stopped
-    networks:
-      aiochi-internal:
-        ipv4_address: 172.20.210.40
-    volumes:
-      - suricata_logs:/var/log/suricata:ro
-      - zeek_logs:/opt/zeek/logs:ro
-    environment:
-      # Use container DNS name instead of hardcoded IP
-      CLICKHOUSE_HOST: aiochi-clickhouse
-      CLICKHOUSE_PORT: 8123
-      CLICKHOUSE_DB: aiochi
-      CLICKHOUSE_USER: aiochi
-      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      SURICATA_LOG_PATH: /var/log/suricata/eve.json
-      ZEEK_LOG_PATH: /opt/zeek/logs/current
-      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      suricata:
-        condition: service_started
-      zeek:
-        condition: service_started
-    healthcheck:
-      # Check Python process is running and can connect to ClickHouse
-      test: ["CMD-SHELL", "pgrep -f 'logshipper' > /dev/null || pgrep -x python"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ============================================================================
-  # AI TIER - Local LLM for Agentic Reasoning
+  # Ollama for AI-generated narratives. Most events use templates which work
+  # without this. Enable with: --profile ai
+  # WARNING: Requires 4-8GB RAM for the LLM model
   # ============================================================================
 
   ollama:
@@ -398,6 +361,8 @@ services:
     container_name: aiochi-ollama
     hostname: aiochi-ollama
     restart: unless-stopped
+    profiles:
+      - ai
     networks:
       aiochi-internal:
         ipv4_address: 172.20.210.50

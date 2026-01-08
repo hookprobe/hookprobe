@@ -405,16 +405,6 @@ validate_connectivity() {
         errors=$((errors + 1))
     fi
 
-    # grafana → postgres (if running)
-    if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-grafana"; then
-        if podman exec fts-grafana ping -c1 -W2 172.20.200.10 &>/dev/null; then
-            echo "  ✅ grafana → postgres: OK"
-        else
-            echo "  ❌ grafana → postgres: FAILED"
-            errors=$((errors + 1))
-        fi
-    fi
-
     # 6. Check DNS
     log_info "Checking DNS resolution..."
     if dig +short +timeout=2 hookprobe.com @127.0.0.1 | grep -q "[0-9]"; then
