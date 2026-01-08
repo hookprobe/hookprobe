@@ -281,3 +281,4 @@ config.local.sh
 
 # MacOS network storage
 ._.DS_Store
+.claude.local

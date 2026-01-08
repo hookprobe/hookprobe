@@ -82,8 +82,10 @@ def clean_device_name(hostname: Optional[str], max_length: int = 32) -> str:
     Clean and simplify device name for display.
 
     1. Decodes dnsmasq octal escapes
-    2. Removes common suffixes (_XXXX hex identifiers)
-    3. Truncates to max_length if needed
+    2. Detects UUID-like strings (returns "Unknown Device")
+    3. Removes hex prefixes (e.g., "F6574fcbe4474hookprobepro" -> "hookprobepro")
+    4. Removes hex suffixes with various separators (_XXXX, -XXXX, or space XXXX)
+    5. Truncates to max_length if needed
 
     Args:
         hostname: Raw hostname from DHCP/mDNS
@@ -101,13 +103,31 @@ def clean_device_name(hostname: Optional[str], max_length: int = 32) -> str:
     if not name:
         return "Unknown Device"
 
-    # Remove hex identifier suffixes like "_fcdc2e6bffd5_1" or "-abc123"
-    # Pattern: underscore/dash followed by 6+ hex chars, optionally followed by more
-    name = re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
-
-    # Remove ".local" suffix from mDNS names
+    # Remove ".local" suffix from mDNS names first
     if name.endswith('.local'):
         name = name[:-6]
+
+    # Detect UUID-like strings: "9bd3d706 9e8d 47d9 81a4 90feb..." or "9bd3d706-9e8d-47d9-..."
+    # These are not useful as device names
+    if re.match(r'^[0-9a-fA-F]{8}[-_ ][0-9a-fA-F]{4}[-_ ][0-9a-fA-F]{4}', name):
+        return "Unknown Device"
+
+    # Remove hex prefixes (e.g., "F6574fcbe4474hookprobepro" -> "hookprobepro")
+    hex_prefix_match = re.match(r'^[0-9a-fA-F]{8,}[-_]?(.+)$', name)
+    if hex_prefix_match:
+        remaining = hex_prefix_match.group(1)
+        # Only use if remaining part looks like a real name (has letters)
+        if re.search(r'[a-zA-Z]{3,}', remaining):
+            name = remaining
+
+    # Remove hex identifier suffixes like "_fcdc2e6bffd5_1", "-abc123", or " 40edcf82626b"
+    # Pattern: underscore/dash/space followed by 6+ hex chars, optionally followed by more
+    # IMPORTANT: Include space (\s) to catch "Hooksound 40edcf82626b" -> "Hooksound"
+    name = re.sub(r'[\s_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+
+    # Remove pure 12-char MAC addresses if that's the entire remaining name
+    if re.match(r'^[0-9a-fA-F]{12}$', name):
+        return "Unknown Device"
 
     # Clean up multiple spaces
     name = re.sub(r'\s+', ' ', name).strip()
@@ -119,5 +139,66 @@ def clean_device_name(hostname: Optional[str], max_length: int = 32) -> str:
     return name if name else "Unknown Device"
 
 
+def is_randomized_mac(mac: Optional[str]) -> bool:
+    """
+    Check if a MAC address is locally administered (randomized/privacy mode).
+
+    Modern devices (iOS 14+, Android 10+, Windows 10+) use randomized MAC addresses
+    for privacy. These have the "locally administered" bit set (bit 1 of first octet).
+
+    Format detection:
+    - xx:xx:xx:xx:xx:xx or xx-xx-xx-xx-xx-xx
+    - First octet bit 1 = 1 means locally administered (randomized)
+    - Examples: 46:xx, 4a:xx, 56:xx, 5a:xx, 6a:xx, 7e:xx are randomized
+    - Examples: 00:xx, 08:xx, AC:xx are real OUI (not randomized)
+
+    Args:
+        mac: MAC address string (any common format)
+
+    Returns:
+        True if MAC is randomized/locally administered, False otherwise
+    """
+    if not mac:
+        return False
+
+    # Normalize MAC format - remove separators and convert to uppercase
+    mac_clean = mac.replace(':', '').replace('-', '').replace('.', '').upper()
+
+    # Validate length
+    if len(mac_clean) != 12:
+        return False
+
+    # Check if it's valid hex
+    try:
+        first_octet = int(mac_clean[:2], 16)
+    except ValueError:
+        return False
+
+    # Check bit 1 (locally administered bit)
+    # If set, this is a locally administered address (often randomized)
+    return bool(first_octet & 0x02)
+
+
+def get_mac_type_label(mac: Optional[str]) -> str:
+    """
+    Get a human-readable label for the MAC address type.
+
+    Args:
+        mac: MAC address string
+
+    Returns:
+        "Private Address" for randomized MACs, "" for normal MACs, or "" if invalid
+    """
+    if is_randomized_mac(mac):
+        return "Private Address"
+    return ""
+
+
 # For convenience - define exports
-__all__ = ['decode_dnsmasq_hostname', 'is_escaped_hostname', 'clean_device_name']
+__all__ = [
+    'decode_dnsmasq_hostname',
+    'is_escaped_hostname',
+    'clean_device_name',
+    'is_randomized_mac',
+    'get_mac_type_label'
+]
