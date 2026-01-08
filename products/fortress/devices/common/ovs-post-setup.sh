@@ -537,14 +537,36 @@ setup_avahi_coexistence() {
     fi
 
     # Enable reflector for cross-interface mDNS (WiFi ↔ wired devices)
-    if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
-        sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
-    elif grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
-        sed -i '/^\[reflector\]/a enable-reflector=yes' "$avahi_conf"
-    else
+    # BUT disable IP record reflection to prevent Apple device naming conflicts
+    # ("iPad 202", "iPad 203" syndrome)
+    #
+    # When reflect-ipv=no:
+    # - Services (SRV/TXT/PTR) ARE reflected → AirPlay/HomeKit discovery works
+    # - Hostnames (A/AAAA) are NOT reflected → No naming conflicts
+    #
+    # Apple devices detect conflicts when they see another MAC claiming their hostname.
+    # With reflect-ipv=yes, avahi re-broadcasts hostname records with gateway's MAC,
+    # causing devices to think there's a conflict and increment their name.
+
+    # Ensure [reflector] section exists and configure it
+    if ! grep -q "^\[reflector\]" "$avahi_conf" 2>/dev/null; then
         echo "" >> "$avahi_conf"
         echo "[reflector]" >> "$avahi_conf"
-        echo "enable-reflector=yes" >> "$avahi_conf"
+    fi
+
+    # Enable reflector
+    if grep -q "^enable-reflector=" "$avahi_conf" 2>/dev/null; then
+        sed -i 's/^enable-reflector=.*/enable-reflector=yes/' "$avahi_conf"
+    else
+        sed -i '/^\[reflector\]/a enable-reflector=yes' "$avahi_conf"
+    fi
+
+    # Disable IP record reflection to fix Apple naming conflicts
+    if grep -q "^reflect-ipv=" "$avahi_conf" 2>/dev/null; then
+        sed -i 's/^reflect-ipv=.*/reflect-ipv=no/' "$avahi_conf"
+    else
+        # Add after enable-reflector line
+        sed -i '/^enable-reflector=/a reflect-ipv=no' "$avahi_conf"
     fi
 
     # Restart avahi-daemon to apply changes
@@ -554,6 +576,8 @@ setup_avahi_coexistence() {
     fi
 
     log_success "Avahi configured for mDNS coexistence"
+    log_info "  enable-reflector=yes (services reflected across interfaces)"
+    log_info "  reflect-ipv=no (hostnames NOT reflected - fixes Apple naming)"
 }
 
 # ============================================================
