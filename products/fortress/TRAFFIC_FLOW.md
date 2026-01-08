@@ -251,7 +251,6 @@ wan-failover-pbr.sh status
 
 # 2. Check container network connectivity
 podman exec fts-web ping -c1 172.20.200.10   # web → postgres
-podman exec fts-grafana ping -c1 172.20.200.10  # grafana → postgres
 podman exec fts-dnsxai ping -c1 8.8.8.8      # dnsxai → internet
 
 # 3. Check NAT rules

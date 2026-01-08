@@ -319,7 +319,7 @@ NARRATIVE_TEMPLATES = {
 │         ▼                                                                    │
 │  STAGE 5: VISUALIZE                                                          │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Grafana Dashboard                                                   │    │
+│  │  Fortress AdminLTE Web UI                                            │    │
 │  │                                                                       │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │    │
 │  │  │  PRESENCE   │  │   PRIVACY   │  │ PERFORMANCE │                  │    │
@@ -340,17 +340,45 @@ NARRATIVE_TEMPLATES = {
 
 AIOCHI containers are separate from core security (dnsXai, QSecBit remain standalone).
 
-### AIOCHI Containers (Profile: `aiochi`)
+### Deployment Tiers
 
-| Container | Image | Purpose | Ports | Network |
-|-----------|-------|---------|-------|---------|
-| `aiochi-clickhouse` | clickhouse/clickhouse-server | Event storage | 8123, 9000 | fts-internal |
-| `aiochi-suricata` | jasonish/suricata | IDS alerts | - | host (capture) |
-| `aiochi-zeek` | zeek/zeek | Connection logging | - | host (capture) |
-| `aiochi-identity` | custom (Python) | Device fingerprinting | 8060 | fts-internal |
-| `aiochi-narrative` | n8nio/n8n | Event translation | 5678 | fts-internal |
-| `aiochi-grafana` | grafana/grafana | Dashboard | 3000 | fts-internal |
-| `aiochi-victoria` | victoriametrics | Metrics storage | 8428 | fts-internal |
+AIOCHI supports three deployment tiers to match your resources:
+
+| Tier | RAM | Containers | Use Case |
+|------|-----|------------|----------|
+| **Minimal** | ~2GB | 7 core | Recommended for most users |
+| **Standard** | ~3GB | + n8n | Complex workflow automation |
+| **Full** | ~8GB | + Ollama | AI-generated narratives |
+
+### Core Containers (Always Installed)
+
+| Container | Image | Purpose | RAM | Ports |
+|-----------|-------|---------|-----|-------|
+| `aiochi-clickhouse` | clickhouse/clickhouse-server | Event analytics DB | ~1GB | 8123, 9000 |
+| `aiochi-suricata` | jasonish/suricata | IDS threat alerts | ~300MB | host |
+| `aiochi-zeek` | zeek/zeek | Connection logging | ~400MB | host |
+| `aiochi-logshipper` | custom (Python) | Data pipeline | ~100MB | - |
+| `aiochi-identity` | custom (Python) | Device fingerprinting | ~200MB | 8060 |
+| `aiochi-bubble` | custom (Python) | Ecosystem detection | ~200MB | 8070 |
+
+Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana container).
+
+### Optional Containers (Profiles)
+
+| Container | Profile | Purpose | RAM | Ports |
+|-----------|---------|---------|-----|-------|
+| `aiochi-narrative` (n8n) | `workflows` | Complex automation | ~500MB | 5678 |
+| `aiochi-ollama` | `ai` | Local LLM narratives | ~4-8GB | 11434 |
+
+### Removed Components (Optimization)
+
+| Component | Reason for Removal |
+|-----------|-------------------|
+| **Grafana** | Visualization via Fortress AdminLTE web UI; redundant |
+| **VictoriaMetrics** | ClickHouse handles time-series; redundant |
+| **Fortress lib/ecosystem_bubble.py** | Moved to AIOCHI bubble-manager |
+| **Fortress lib/presence_sensor.py** | Moved to AIOCHI bubble-manager |
+| **Fortress lib/behavior_clustering.py** | Moved to AIOCHI bubble-manager |
 
 ### Why Separate from Core Security?
 
@@ -358,11 +386,29 @@ AIOCHI containers are separate from core security (dnsXai, QSecBit remain standa
 |-----------|----------------|---------------|--------|
 | QSecBit | Yes | No | Real-time threat detection, always running |
 | dnsXai | Yes | No | DNS protection, always running |
-| Suricata | Optional | Yes | Alerting for narratives |
-| Zeek | Optional | Yes | Connection logging for identity |
-| ClickHouse | Optional | Yes | Analytics, not required for security |
-| Grafana | Optional | Yes | Visualization, not required for security |
-| n8n | Optional | Yes | Automation, not required for security |
+| Suricata | No | Yes | Alerting for narratives |
+| Zeek | No | Yes | Connection logging for identity |
+| ClickHouse | No | Yes | Analytics, not required for security |
+| Identity Engine | No | Yes | Device fingerprinting for narratives |
+| Bubble Manager | No | Yes | Ecosystem detection |
+| n8n | No | Optional | Complex workflows only |
+| Ollama | No | Optional | AI narratives only |
+
+### Installation Commands
+
+```bash
+# Minimal (recommended - ~2GB RAM)
+podman-compose -f podman-compose.aiochi.yml up -d
+
+# With n8n workflows (~3GB RAM)
+podman-compose -f podman-compose.aiochi.yml --profile workflows up -d
+
+# With AI narratives (~6GB RAM)
+podman-compose -f podman-compose.aiochi.yml --profile ai up -d
+
+# Full stack (~8GB RAM)
+podman-compose -f podman-compose.aiochi.yml --profile ai --profile workflows up -d
+```
 
 **Installation Decision Tree**:
 ```
@@ -372,10 +418,53 @@ Install Fortress?
     │
     └── "Do you want Eyes on the Network?" (Y/N)
             │
-            ├── Yes → Install AIOCHI stack (clickhouse, suricata, zeek, grafana, n8n)
+            ├── Yes → AIOCHI Minimal (7 containers, ~2GB)
+            │           │
+            │           └── "Do you want AI narratives?" (Y/N)
+            │                   │
+            │                   ├── Yes → Add Ollama (+4GB RAM)
+            │                   │
+            │                   └── No → Use template-based narratives
             │
             └── No → Skip AIOCHI (core security still active)
 ```
+
+---
+
+## Narrative Templates (LLM-Free)
+
+AIOCHI includes a template-based narrative engine that works without Ollama.
+Templates cover 95% of common events with human-readable messages.
+
+```python
+from aiochi.backend.narrative_templates import generate_narrative
+
+# Generate narrative without LLM
+narrative = generate_narrative(
+    "new_device",
+    device_name="iPhone",
+    network_name="Home WiFi"
+)
+# Returns: "A new device 'iPhone' just joined Home WiFi."
+
+# Security event
+narrative = generate_narrative(
+    "blocked_threat",
+    device_name="Smart TV",
+    threat_source="malware.example.com"
+)
+# Returns: "I blocked a suspicious connection from malware.example.com. Smart TV is safe."
+```
+
+### Supported Event Types
+
+| Category | Events |
+|----------|--------|
+| **Device** | new_device, device_online, device_offline, device_renamed, device_identified |
+| **Security** | blocked_threat, blocked_tracker, blocked_ad, suspicious_activity, port_scan_detected, malware_blocked, brute_force_blocked |
+| **Bubble** | bubble_created, device_added_to_bubble, bubble_detected_same_user, presence_detected, presence_left |
+| **Performance** | slow_connection, high_latency, wifi_interference, bandwidth_hog |
+| **Network** | policy_changed, device_quarantined, device_trusted, wan_failover, wan_restored |
 
 ---
 
@@ -492,7 +581,7 @@ POST /webhook/device-offline         # Triggered when device disconnects
 POST /webhook/performance-alert      # Triggered by QoS degradation
 ```
 
-### Dashboard API (Grafana data sources)
+### Dashboard API (Fortress Web UI data sources)
 
 ```
 GET  /api/v1/narratives?limit=20     # Recent narratives for feed
@@ -553,15 +642,14 @@ shared/aiochi/
 ├── containers/
 │   ├── podman-compose.aiochi.yml
 │   ├── Containerfile.identity
-│   ├── Containerfile.narrative
+│   ├── Containerfile.bubble
+│   ├── Containerfile.logshipper
 │   └── configs/
 │       ├── clickhouse/
-│       ├── grafana/
 │       ├── suricata/
 │       └── zeek/
 ├── schemas/
-│   ├── clickhouse-init.sql      # ClickHouse table definitions
-│   └── grafana-dashboards/      # Pre-built dashboard JSON
+│   └── clickhouse-init.sql      # ClickHouse table definitions
 ├── personas/
 │   ├── parent.yaml              # Parent persona config
 │   ├── gamer.yaml               # Gamer persona config
