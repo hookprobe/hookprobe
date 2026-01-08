@@ -327,22 +327,24 @@ configure_openflow() {
     # Policy enforcement order (higher priority = matches first):
     # - QUARANTINE: blocked at priority 1000 (never reaches hairpin)
     # - INTERNET_ONLY: blocked at priority 700 (never reaches hairpin)
-    # - SMART_HOME/FULL_ACCESS: allowed, reaches hairpin at 501-505
+    # - SMART_HOME/FULL_ACCESS: allowed, reaches hairpin at 501-504
     #
     # Actions: in_port sends back to same WiFi interface, normal forwards elsewhere
+    #
+    # NOTE: mDNS hairpin (was priority 505) REMOVED to fix Apple device naming
+    # conflicts ("iPad 202", "iPad 203" syndrome). mDNS cross-band discovery is
+    # handled by multicast reflection rules at priority 400 instead.
     # ================================================================
     local wifi_24_iface="${WIFI_24GHZ_IFACE:-wlan_24ghz}"
     local wifi_5_iface="${WIFI_5GHZ_IFACE:-wlan_5ghz}"
 
     for wifi_iface in "$wifi_24_iface" "$wifi_5_iface"; do
         if ovs-vsctl list-ports "$OVS_BRIDGE" 2>/dev/null | grep -q "^${wifi_iface}$"; then
-            # Priority 505: mDNS hairpin (224.0.0.251:5353) - AirPlay, HomeKit discovery
-            ovs-ofctl add-flow "$OVS_BRIDGE" \
-                "priority=505,udp,in_port=${wifi_iface},nw_dst=224.0.0.251,tp_dst=5353,actions=in_port,normal"
-
-            # Priority 505: IPv6 mDNS hairpin (ff02::fb) - HomeKit, Matter
-            ovs-ofctl add-flow "$OVS_BRIDGE" \
-                "priority=505,udp6,in_port=${wifi_iface},ipv6_dst=ff02::fb,tp_dst=5353,actions=in_port,normal"
+            # NOTE: mDNS hairpin REMOVED to fix Apple device naming conflicts
+            # ("iPad 202", "iPad 203" syndrome). Cross-band mDNS discovery is
+            # handled by the multicast reflection rules at priority 400.
+            # The hairpin was causing packets to return to the originating interface,
+            # which combined with avahi-reflector triggered Apple's conflict detection.
 
             # Priority 504: SSDP hairpin (239.255.255.250:1900) - Chromecast, UPnP
             ovs-ofctl add-flow "$OVS_BRIDGE" \
@@ -360,7 +362,7 @@ configure_openflow() {
             ovs-ofctl add-flow "$OVS_BRIDGE" \
                 "priority=501,ip,in_port=${wifi_iface},nw_dst=10.200.0.0/16,actions=in_port,normal"
 
-            log_info "  D2D hairpin enabled for ${wifi_iface} (mDNS, SSDP, ARP, NDP, IP)"
+            log_info "  D2D hairpin enabled for ${wifi_iface} (SSDP, ARP, NDP, IP)"
         fi
     done
 
@@ -375,12 +377,12 @@ configure_openflow() {
     log_info "  EAPOL (WPA auth): priority 65535"
     log_info "  ARP, DHCP, DNS, mDNS: priority 800-1000"
     log_info "  IPv4/IPv6 multicast (HomeKit, AirPlay): priority 700"
-    log_info "  D2D hairpin (WiFi ap_isolate=1): priority 501-505"
-    log_info "    ├─ mDNS (AirPlay/HomeKit): 505"
+    log_info "  D2D hairpin (WiFi ap_isolate=1): priority 501-504"
     log_info "    ├─ SSDP (Chromecast/UPnP): 504"
     log_info "    ├─ ARP (MAC resolution): 503"
     log_info "    ├─ ICMPv6/NDP: 502"
     log_info "    └─ Unicast IP: 501"
+    log_info "  Cross-band mDNS reflection: priority 400"
     log_info "  LAN (10.200.0.0/16): priority 500"
     log_info "  Containers (172.20.0.0/16): priority 500"
 }
