@@ -255,8 +255,8 @@ def api_history():
                 item['timestamp'] = str(item['recorded_at'])
         return jsonify({'history': history})
     except Exception as e:
-        logger.warning(f"Failed to get history: {e}")
-        return jsonify({'history': [], 'error': str(e)})
+        logger.exception("Failed to get security history")
+        return jsonify({'history': [], 'error': 'An internal error occurred while fetching history'})
 
 
 @security_bp.route('/api/threats/summary')
