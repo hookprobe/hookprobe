@@ -5,12 +5,42 @@ Simple local authentication for small business (max 5 users).
 Uses bcrypt password hashing and Flask-Login sessions.
 """
 
+import urllib.parse
+
 from flask import render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
 
 from . import auth_bp
 from .models import User, UserRole, MAX_USERS
 from .decorators import admin_required
+
+
+def is_safe_redirect_url(target: str) -> bool:
+    """
+    Validate redirect target to prevent open redirect vulnerabilities.
+
+    Security: Blocks protocol-relative URLs, absolute URLs, javascript: URLs,
+    and only allows paths starting with a single forward slash.
+    """
+    if not target or not isinstance(target, str):
+        return False
+
+    # Block javascript: URLs
+    if target.lower().startswith('javascript:'):
+        return False
+
+    # Parse the target URL
+    parsed = urllib.parse.urlparse(target)
+
+    # Block URLs with scheme (http://, https://, etc.) or netloc (//evil.com)
+    if parsed.scheme or parsed.netloc:
+        return False
+
+    # Only allow paths starting with single / but not //
+    if not parsed.path.startswith('/') or parsed.path.startswith('//'):
+        return False
+
+    return True
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
@@ -36,9 +66,9 @@ def login():
             login_user(user, remember=bool(remember))
             flash(f'Welcome back, {user.display_name or user.id}!', 'success')
 
-            # Redirect to requested page or dashboard
+            # Security: Validate redirect target to prevent open redirect attacks
             next_page = request.args.get('next')
-            if next_page and next_page.startswith('/'):
+            if next_page and is_safe_redirect_url(next_page):
                 return redirect(next_page)
             return redirect(url_for('dashboard.index'))
         else:

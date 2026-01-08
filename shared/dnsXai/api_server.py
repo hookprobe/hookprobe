@@ -23,6 +23,7 @@ Author: HookProbe Security
 License: AGPL-3.0
 """
 
+import ipaddress
 import json
 import logging
 import math
@@ -1084,15 +1085,69 @@ ml_manager = MLTrainingManager()
 class APIHandler(BaseHTTPRequestHandler):
     """HTTP request handler for dnsXai API."""
 
+    # Security: Allowed CIDR blocks for CORS (internal network only)
+    _ALLOWED_CIDRS = [
+        ipaddress.ip_network('127.0.0.0/8'),    # localhost
+        ipaddress.ip_network('10.0.0.0/8'),     # Private Class A
+        ipaddress.ip_network('172.16.0.0/12'),  # Private Class B
+        ipaddress.ip_network('192.168.0.0/16'), # Private Class C
+    ]
+
     def log_message(self, format, *args):
         """Override to use our logger."""
         logger.info("%s - %s", self.client_address[0], format % args)
 
+    def _is_allowed_origin(self, origin: str) -> bool:
+        """
+        Check if origin is from internal network for CORS.
+
+        Security: Only allows localhost and private IP ranges.
+        Blocks external domains to prevent cross-site data exfiltration.
+        """
+        if not origin:
+            return True  # Same-origin requests have no Origin header
+
+        try:
+            parsed = urlparse(origin)
+            hostname = parsed.hostname
+
+            if not hostname:
+                return False
+
+            # Allow explicit localhost
+            if hostname in ('localhost', '127.0.0.1'):
+                return True
+
+            # Check if hostname is a valid IP address
+            try:
+                ip_addr = ipaddress.ip_address(hostname)
+            except ValueError:
+                # Not an IP address (domain name) - not allowed
+                return False
+
+            # Check if IP is in allowed internal ranges
+            for cidr in self._ALLOWED_CIDRS:
+                if ip_addr in cidr:
+                    return True
+
+            return False
+
+        except Exception:
+            return False
+
     def _send_json(self, data: Any, status: int = 200):
-        """Send JSON response."""
+        """Send JSON response with secure CORS headers."""
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+
+        # Security: Only allow CORS from internal network origins
+        origin = self.headers.get('Origin')
+        if origin and self._is_allowed_origin(origin):
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key')
+        # If origin not allowed, no ACAO header is sent (blocks CORS)
+
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -1115,11 +1170,18 @@ class APIHandler(BaseHTTPRequestHandler):
         return {}
 
     def do_OPTIONS(self):
-        """Handle CORS preflight."""
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        """Handle CORS preflight with secure origin validation."""
+        self.send_response(204)  # No Content
+
+        # Security: Only allow CORS from internal network origins
+        origin = self.headers.get('Origin')
+        if origin and self._is_allowed_origin(origin):
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key')
+            self.send_header('Access-Control-Max-Age', '86400')  # Cache preflight 24h
+        # If origin not allowed, no ACAO header is sent
+
         self.end_headers()
 
     def do_GET(self):
