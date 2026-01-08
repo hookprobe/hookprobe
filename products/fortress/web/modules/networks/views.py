@@ -5,9 +5,13 @@ Network management is now part of the unified SDN AI page.
 This module provides backward-compatible redirects and API endpoints.
 """
 
+import logging
+
 from flask import redirect, url_for, jsonify
 from flask_login import login_required
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from . import networks_bp
 
@@ -58,4 +62,5 @@ def api_stats(vlan_id):
 
         return jsonify({'error': f'VLAN {vlan_id} not found'}), 404
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.exception(f"Error fetching VLAN {vlan_id}")
+        return jsonify({'error': 'An internal error occurred while fetching network data'}), 500
