@@ -54,6 +54,7 @@ def _clean_device_name(hostname: str, manufacturer: str = None) -> Optional[str]
     - Hex prefixes (F6574fcbe4474hookprobepro -> hookprobepro)
     - UUID-like strings (return None)
     - Trailing numbers with punctuation ( 652!, 9!)
+    - Auto-incremented numbers from OS conflicts (Hookprobe 10, Hookprobe's iPad 119)
     """
     if not hostname:
         return None
@@ -90,6 +91,41 @@ def _clean_device_name(hostname: str, manufacturer: str = None) -> Optional[str]
     # Clean up whitespace and special chars
     name = re.sub(r'[-_]+', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
+
+    # Remove OS auto-incremented numbers (e.g., "Hookprobe 10", "Hookprobe's iPad 119")
+    # These are added when a device sees a name conflict on the network.
+    # Pattern: name followed by space and number
+    trailing_num_match = re.match(r'^(.+?)\s+(\d+)$', name)
+    if trailing_num_match:
+        base_name = trailing_num_match.group(1)
+        num = int(trailing_num_match.group(2))
+
+        # Keep legitimate product model numbers - these patterns are unlikely auto-increment
+        # iPhone 15, Galaxy S24, Pixel 8, iPad Pro 12, Watch 9, etc.
+        model_patterns = [
+            r'(?i)\biphone\s*\d{1,2}$',        # iPhone 11, iPhone 15
+            r'(?i)\bipad\s*(pro|air|mini)?\s*\d{1,2}$',  # iPad Pro 12
+            r'(?i)\bgalaxy\s*[sazm]\d{1,2}$',  # Galaxy S24
+            r'(?i)\bpixel\s*\d{1,2}$',         # Pixel 8
+            r'(?i)\bwatch\s*(se|ultra)?\s*\d{1,2}$',  # Watch 9, Watch Ultra 2
+            r'(?i)\bmacbook\s*(pro|air)?\s*\d{2,4}$', # MacBook Pro 2023
+            r'(?i)\bsurface\s*(pro|go|laptop)?\s*\d{1,2}$',  # Surface Pro 9
+            r'(?i)\bps\d$',                     # PS5
+            r'(?i)\bxbox\s*(one|series)?\s*[sx]?$',  # Xbox Series X
+            r'(?i)\becho\s*(dot|show)?\s*\d{1,2}$',  # Echo Dot 5
+        ]
+
+        is_model_number = any(re.search(p, name) for p in model_patterns)
+
+        # Strip the number if:
+        # 1. It's a high number (>20) - unlikely to be a real model number
+        # 2. Name contains possessive ('s) - user's personal device with conflict number
+        # 3. Base name ends with common device words but isn't a known model pattern
+        is_possessive = "'s" in base_name.lower() or "'s" in base_name
+        is_high_number = num > 20
+
+        if not is_model_number and (is_high_number or is_possessive or num > 9):
+            name = base_name
 
     # If name is mostly hex/numbers, return None for fallback
     if name and len(re.sub(r'[0-9a-fA-F\s-]', '', name)) < 3:
