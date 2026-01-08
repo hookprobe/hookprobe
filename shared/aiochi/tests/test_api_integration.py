@@ -100,14 +100,16 @@ class TestContainerConnections(unittest.TestCase):
 
     def test_network_addresses(self):
         """Verify expected network addresses."""
+        # Core AIOCHI containers (always installed)
         expected_addresses = {
             'clickhouse': '172.20.210.10',
-            'victoria': '172.20.210.11',
             'identity': '172.20.210.20',
-            'narrative': '172.20.210.21',
-            'grafana': '172.20.210.30',
+            'narrative': '172.20.210.21',  # Optional (--profile workflows)
+            'bubble': '172.20.210.25',
             'logshipper': '172.20.210.40',
+            'ollama': '172.20.210.50',  # Optional (--profile ai)
         }
+        # Note: Grafana and VictoriaMetrics removed - visualization via Fortress AdminLTE
 
         for service, ip in expected_addresses.items():
             # Verify IP format
@@ -119,14 +121,16 @@ class TestContainerConnections(unittest.TestCase):
 
     def test_port_mappings(self):
         """Verify expected port mappings."""
+        # Core AIOCHI service ports
         expected_ports = {
             'clickhouse_http': 8123,
             'clickhouse_native': 9000,
-            'victoria': 8428,
             'identity': 8060,
-            'narrative': 5678,
-            'grafana': 3000,
+            'bubble': 8070,
+            'narrative': 5678,  # Optional (--profile workflows)
+            'ollama': 11434,  # Optional (--profile ai)
         }
+        # Note: Grafana (3000) and VictoriaMetrics (8428) removed
 
         for service, port in expected_ports.items():
             self.assertIsInstance(port, int)

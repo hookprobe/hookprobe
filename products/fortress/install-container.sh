@@ -727,7 +727,7 @@ collect_configuration() {
     echo "  • Performance health score with insights"
     echo "  • AI-powered security analysis via local Ollama LLM"
     echo ""
-    echo -e "${DIM}Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n${NC}"
+    echo -e "${DIM}Includes: ClickHouse, Suricata, Zeek, n8n (visualization via AdminLTE web UI)${NC}"
     echo -e "${DIM}Adds ~2GB RAM usage${NC}"
     echo ""
 
@@ -735,12 +735,11 @@ collect_configuration() {
         read -p "Install AIOCHI (AI Eyes)? [Y/n]: " aiochi_choice
         if [[ ! "${aiochi_choice:-Y}" =~ ^[Nn]$ ]]; then
             export INSTALL_AIOCHI=true
-            # AIOCHI bundles all monitoring components with cognitive layer
-            export INSTALL_MONITORING=true
+            # AIOCHI bundles all analytics components with cognitive layer
             export INSTALL_CLICKHOUSE=true
             export INSTALL_N8N=true
             export INSTALL_IDS=true
-            log_info "AIOCHI: enabled (includes Monitoring, ClickHouse, n8n, IDS/IPS)"
+            log_info "AIOCHI: enabled (includes ClickHouse, n8n, IDS/IPS)"
         fi
     fi
 
@@ -968,21 +967,6 @@ copy_application_files() {
         fi
     done
 
-    # Create grafana provisioning directory (for monitoring profile)
-    mkdir -p "${INSTALL_DIR}/containers/grafana/provisioning"/{dashboards,datasources,alerting}
-    # Create basic datasource config for VictoriaMetrics
-    cat > "${INSTALL_DIR}/containers/grafana/provisioning/datasources/victoria.yml" << 'EOF'
-apiVersion: 1
-datasources:
-  - name: VictoriaMetrics
-    type: prometheus
-    access: proxy
-    # VictoriaMetrics is on fts-internal network at 172.20.200.31
-    url: http://172.20.200.31:8428
-    isDefault: true
-    editable: false
-EOF
-
     # Copy device profiles
     mkdir -p "${INSTALL_DIR}/devices"
     cp -r "${DEVICES_DIR}/"* "${INSTALL_DIR}/devices/" 2>/dev/null || true
@@ -1045,9 +1029,8 @@ EOF
             # Create configs directory if it doesn't exist
             mkdir -p "$aiochi_dst/containers/configs/suricata/rules"
             mkdir -p "$aiochi_dst/containers/configs/zeek"
-            mkdir -p "$aiochi_dst/containers/configs/grafana/provisioning"/{dashboards,datasources}
-            mkdir -p "$aiochi_dst/containers/configs/grafana/dashboards"
             mkdir -p "$aiochi_dst/containers/n8n-workflows"
+            # Note: No Grafana - visualization handled by Fortress AdminLTE web UI
 
             log_info "  Installed: AIOCHI module to $aiochi_dst"
         else
@@ -1080,13 +1063,6 @@ generate_secrets() {
         openssl rand -base64 48 | tr -d '/+=' | head -c 48 > "$secrets_dir/flask_secret"
         chmod 600 "$secrets_dir/flask_secret"
         log_info "Generated Flask secret key"
-    fi
-
-    # Grafana admin password (required for monitoring profile)
-    if [ ! -f "$secrets_dir/grafana_password" ]; then
-        openssl rand -base64 24 | tr -d '/+=' | head -c 24 > "$secrets_dir/grafana_password"
-        chmod 600 "$secrets_dir/grafana_password"
-        log_info "Generated Grafana password"
     fi
 
     # Copy to config dir for web app access
@@ -3095,7 +3071,6 @@ MDNSCONF
     #   - cloudflared (if tunnel configured)
     #
     # OPTIONAL services (NOT started by default - use profiles manually):
-    #   - grafana, victoria (monitoring) - use: --profile monitoring
     #   - n8n (automation) - use: --profile automation
     #   - clickhouse (analytics) - use: --profile analytics
     #   - suricata, zeek, xdp-protection (IDS) - use: --profile ids
@@ -3203,35 +3178,6 @@ start_optional_services() {
     # AIOCHI provides its own aiochi-* containers for all monitoring/analytics
     if [ "${INSTALL_AIOCHI:-}" = true ]; then
         log_info "AIOCHI enabled - skipping individual fts-* services (bundled in AIOCHI)"
-    fi
-
-    # Monitoring (Grafana + VictoriaMetrics) - ONLY if NOT using AIOCHI
-    if [ "${INSTALL_MONITORING:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
-        log_info "Starting monitoring services (Grafana + VictoriaMetrics)..."
-
-        # VictoriaMetrics
-        podman run -d --name fts-victoria \
-            --restart unless-stopped \
-            --network fts-internal \
-            --ip 172.20.200.31 \
-            -p 0.0.0.0:8428:8428 \
-            -v fts-victoria-data:/storage \
-            docker.io/victoriametrics/victoria-metrics:v1.106.1 \
-            -storageDataPath=/storage -retentionPeriod=30d -httpListenAddr=:8428 \
-            2>/dev/null || log_warn "VictoriaMetrics may already be running"
-
-        # Grafana
-        podman run -d --name fts-grafana \
-            --restart unless-stopped \
-            --network fts-internal \
-            --ip 172.20.200.30 \
-            -p 0.0.0.0:3000:3000 \
-            -v fts-grafana-data:/var/lib/grafana \
-            -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
-            docker.io/grafana/grafana:11.4.0 \
-            2>/dev/null || log_warn "Grafana may already be running"
-
-        log_info "Monitoring services started (Grafana: http://localhost:3000)"
     fi
 
     # n8n Workflow Automation - ONLY if NOT using AIOCHI
@@ -3470,12 +3416,13 @@ AIOCHIENV
             }
 
             # Pull images with size estimates
+            # Core AIOCHI images (always pulled)
             pull_with_progress "docker.io/clickhouse/clickhouse-server:24.8" "ClickHouse" "~500MB"
-            pull_with_progress "docker.io/victoriametrics/victoria-metrics:v1.106.1" "VictoriaMetrics" "~30MB"
             pull_with_progress "docker.io/jasonish/suricata:7.0.8" "Suricata IDS" "~300MB"
             pull_with_progress "docker.io/zeek/zeek:7.0.3" "Zeek NSM" "~400MB"
+            # Optional AIOCHI images (n8n for --aiochi-workflows or --aiochi-full)
             pull_with_progress "docker.io/n8nio/n8n:1.70.3" "n8n Workflows" "~400MB"
-            pull_with_progress "docker.io/grafana/grafana:11.4.0" "Grafana" "~400MB"
+            # Note: No Grafana/VictoriaMetrics - visualization via Fortress AdminLTE web UI
 
             # Ollama is special - it's the LLM runtime
             log_info ""
@@ -3547,15 +3494,7 @@ AIOCHIENV
                 -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
                 docker.io/clickhouse/clickhouse-server:24.8
 
-            start_aiochi_container "aiochi-victoria" "VictoriaMetrics (time-series)" \
-                --name aiochi-victoria \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.11 \
-                -p 127.0.0.1:8428:8428 \
-                -v aiochi-victoria-data:/victoria-metrics-data \
-                docker.io/victoriametrics/victoria-metrics:v1.106.1 \
-                --retentionPeriod=30d --httpListenAddr=:8428 --storageDataPath=/victoria-metrics-data
+            # NOTE: VictoriaMetrics removed - ClickHouse handles time-series analytics
 
             # 2. Capture Tier
             # IMPORTANT: Capture from FTS-mirror (OVS mirror port), NOT FTS directly!
@@ -3579,33 +3518,27 @@ AIOCHIENV
                 docker.io/zeek/zeek:7.0.3 \
                 zeek -i FTS-mirror local LogAscii::use_json=T
 
-            # 3. Visualization Tier
-            start_aiochi_container "aiochi-grafana" "Grafana (dashboards)" \
-                --name aiochi-grafana \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.30 \
-                -p 0.0.0.0:3000:3000 \
-                -v aiochi-grafana-data:/var/lib/grafana \
-                -e GF_SECURITY_ADMIN_USER=admin \
-                -e GF_SECURITY_ADMIN_PASSWORD="${GRAFANA_PASSWORD:-fortress_grafana_admin}" \
-                -e GF_USERS_DEFAULT_THEME=dark \
-                docker.io/grafana/grafana:11.4.0
+            # Note: No Grafana container - visualization handled by Fortress AdminLTE web UI
+            # This saves ~200MB RAM and avoids redundant dashboarding
 
-            # 4. Intelligence Tier - n8n Narratives
-            start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
-                --name aiochi-narrative \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.21 \
-                -p 127.0.0.1:5678:5678 \
-                -v aiochi-n8n-data:/home/node/.n8n \
-                -e N8N_BASIC_AUTH_ACTIVE=true \
-                -e N8N_BASIC_AUTH_USER=admin \
-                -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
-                -e N8N_HOST=0.0.0.0 \
-                -e N8N_PORT=5678 \
-                docker.io/n8nio/n8n:1.70.3
+            # 3. Intelligence Tier - n8n Narratives (OPTIONAL: --aiochi-workflows or --aiochi-full)
+            if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                start_aiochi_container "aiochi-narrative" "n8n Workflows (narratives)" \
+                    --name aiochi-narrative \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.21 \
+                    -p 127.0.0.1:5678:5678 \
+                    -v aiochi-n8n-data:/home/node/.n8n \
+                    -e N8N_BASIC_AUTH_ACTIVE=true \
+                    -e N8N_BASIC_AUTH_USER=admin \
+                    -e N8N_BASIC_AUTH_PASSWORD="${N8N_PASSWORD:-fortress_n8n_admin}" \
+                    -e N8N_HOST=0.0.0.0 \
+                    -e N8N_PORT=5678 \
+                    docker.io/n8nio/n8n:1.70.3
+            else
+                log_info "    [SKIP] n8n Workflows (use --aiochi-workflows or --aiochi-full to enable)"
+            fi
 
             # 5. Identity Engine (CRITICAL for fts-web integration)
             # Only start if the image was built successfully
@@ -3655,41 +3588,48 @@ AIOCHIENV
                 AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-logshipper(build-failed)"
             fi
 
-            # 7. AI Tier - Ollama (starts in background, model downloads async)
-            log_info ""
-            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            log_info "  Starting Ollama LLM (model download is ASYNC)"
-            log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo -n "    [START] Ollama LLM runtime... "
-            # Start Ollama WITHOUT the model pull in entrypoint - we'll do that async
-            if podman run -d --name aiochi-ollama \
-                --restart unless-stopped \
-                --network aiochi-internal \
-                --ip 172.20.210.50 \
-                -p 127.0.0.1:11434:11434 \
-                -v aiochi-ollama-models:/root/.ollama \
-                -e OLLAMA_HOST=0.0.0.0 \
-                -e OLLAMA_KEEP_ALIVE=24h \
-                docker.io/ollama/ollama:latest \
-                serve >/dev/null 2>&1; then
-                echo "✓"
-                # Queue model download in background (don't block install)
-                log_info "    → Model download will start in background (~2GB)..."
-                log_info "    → Monitor: tail -f ${LOG_DIR}/aiochi-llm-download.log"
-                (
-                    sleep 15  # Wait for Ollama to fully start
-                    mkdir -p "$LOG_DIR"
-                    echo "[$(date -Iseconds)] Starting llama3.2:3b model download..." >> "${LOG_DIR}/aiochi-llm-download.log"
-                    podman exec aiochi-ollama ollama pull llama3.2:3b 2>&1 | while read line; do
-                        echo "[$(date -Iseconds)] $line" >> "${LOG_DIR}/aiochi-llm-download.log"
-                    done
-                    echo "[$(date -Iseconds)] Model download complete." >> "${LOG_DIR}/aiochi-llm-download.log"
-                ) &
-            elif podman ps -a --format "{{.Names}}" | grep -q "^aiochi-ollama$"; then
-                echo "○ (already exists)"
+            # 7. AI Tier - Ollama (OPTIONAL: --aiochi-ai or --aiochi-full)
+            # When not installed, AIOCHI uses template-based narratives instead
+            if [ "${AIOCHI_AI:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                log_info "  Starting Ollama LLM (model download is ASYNC)"
+                log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo -n "    [START] Ollama LLM runtime... "
+                # Start Ollama WITHOUT the model pull in entrypoint - we'll do that async
+                if podman run -d --name aiochi-ollama \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.50 \
+                    -p 127.0.0.1:11434:11434 \
+                    -v aiochi-ollama-models:/root/.ollama \
+                    -e OLLAMA_HOST=0.0.0.0 \
+                    -e OLLAMA_KEEP_ALIVE=24h \
+                    docker.io/ollama/ollama:latest \
+                    serve >/dev/null 2>&1; then
+                    echo "✓"
+                    # Queue model download in background (don't block install)
+                    log_info "    → Model download will start in background (~2GB)..."
+                    log_info "    → Monitor: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+                    (
+                        sleep 15  # Wait for Ollama to fully start
+                        mkdir -p "$LOG_DIR"
+                        echo "[$(date -Iseconds)] Starting llama3.2:3b model download..." >> "${LOG_DIR}/aiochi-llm-download.log"
+                        podman exec aiochi-ollama ollama pull llama3.2:3b 2>&1 | while read line; do
+                            echo "[$(date -Iseconds)] $line" >> "${LOG_DIR}/aiochi-llm-download.log"
+                        done
+                        echo "[$(date -Iseconds)] Model download complete." >> "${LOG_DIR}/aiochi-llm-download.log"
+                    ) &
+                elif podman ps -a --format "{{.Names}}" | grep -q "^aiochi-ollama$"; then
+                    echo "○ (already exists)"
+                else
+                    echo "✗ (AI narratives will use templates)"
+                    log_warn "Ollama failed to start - AI narratives will fall back to templates"
+                fi
             else
-                echo "✗ (AI narratives will use templates)"
-                log_warn "Ollama failed to start - AI narratives will fall back to templates"
+                log_info ""
+                log_info "    [SKIP] Ollama LLM (use --aiochi-ai or --aiochi-full to enable)"
+                log_info "           AIOCHI will use template-based narratives instead"
             fi
 
             echo ""
@@ -3704,18 +3644,69 @@ AIOCHIENV
             fi
             log_info "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             log_info ""
-            log_info "  Services available at:"
-            log_info "    • ClickHouse:      http://localhost:8123"
-            log_info "    • VictoriaMetrics: http://localhost:8428"
-            log_info "    • Grafana:         http://localhost:3000"
-            log_info "    • n8n Workflows:   http://localhost:5678"
-            log_info "    • Identity Engine: http://localhost:8060"
-            log_info "    • Ollama LLM:      http://localhost:11434"
-            log_info ""
-            log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
-            log_info "        in the background. AI features will activate once complete."
-            log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+            log_info "  AIOCHI Core Services:"
+            log_info "    • ClickHouse:      http://localhost:8123  (analytics)"
+            log_info "    • Grafana:         http://localhost:3000  (dashboards)"
+            log_info "    • Identity Engine: http://localhost:8060  (device fingerprinting)"
+            log_info "    • Suricata:        IDS on FTS-mirror"
+            log_info "    • Zeek:            NSM on FTS-mirror"
+            if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  Optional - Workflows:"
+                log_info "    • n8n Workflows:   http://localhost:5678"
+            fi
+            if [ "${AIOCHI_AI:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
+                log_info ""
+                log_info "  Optional - AI:"
+                log_info "    • Ollama LLM:      http://localhost:11434"
+                log_info ""
+                log_info "  NOTE: Ollama is downloading the llama3.2:3b model (~2GB)"
+                log_info "        in the background. AI features will activate once complete."
+                log_info "        Check progress: tail -f ${LOG_DIR}/aiochi-llm-download.log"
+            else
+                log_info ""
+                log_info "  Narratives: Using template-based generation (no LLM)"
+                log_info "  To enable AI narratives, reinstall with --aiochi-ai or --aiochi-full"
+            fi
             echo ""
+
+            # Install AIOCHI systemd service for auto-start on reboot
+            log_info "  Installing AIOCHI systemd service for boot persistence..."
+            local aiochi_service_src="${FORTRESS_ROOT}/systemd/aiochi.service"
+            local aiochi_service_dst="/etc/systemd/system/aiochi.service"
+            if [ -f "$aiochi_service_src" ]; then
+                cp "$aiochi_service_src" "$aiochi_service_dst"
+                systemctl daemon-reload
+                systemctl enable aiochi.service 2>/dev/null || true
+                log_info "  ✓ aiochi.service installed and enabled"
+            else
+                # Create inline if not found (matches systemd/aiochi.service)
+                cat > "$aiochi_service_dst" << 'AIOCHISERVICE'
+[Unit]
+Description=HookProbe AIOCHI (AI Eyes) Containers
+After=fortress.service fortress-vlan.service openvswitch-switch.service
+Wants=fortress.service
+Requires=podman.socket
+ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aiochi.yml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
+# Core: clickhouse, suricata, zeek, identity, bubble, logshipper
+# Optional (started if installed): narrative (n8n), ollama
+# Note: No Grafana - visualization via Fortress AdminLTE web UI
+ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
+ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-zeek aiochi-suricata aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+AIOCHISERVICE
+                systemctl daemon-reload
+                systemctl enable aiochi.service 2>/dev/null || true
+                log_info "  ✓ aiochi.service created and enabled"
+            fi
 
             cd "${INSTALL_DIR}/containers"
         else
@@ -3747,17 +3738,15 @@ save_optional_services_config() {
 # AIOCHI is an all-or-nothing bundle that adds cognitive network layer
 
 # AIOCHI - AI Eyes (Cognitive Network Layer)
-# When true, includes ALL monitoring/analytics components:
+# When true, includes ALL analytics components:
 #   - ClickHouse analytics database
-#   - VictoriaMetrics time-series
-#   - Grafana monitoring dashboards
 #   - n8n AI Agent workflows + Ollama LLM
 #   - Suricata + Zeek network capture
-#   - Identity Engine + Log Shipper
+#   - Identity Engine + Log Shipper + Bubble Manager
+#   - Visualization via Fortress AdminLTE web UI
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 
 # Component flags (set automatically when AIOCHI=true)
-INSTALL_MONITORING=${INSTALL_MONITORING:-false}
 INSTALL_N8N=${INSTALL_N8N:-false}
 INSTALL_CLICKHOUSE=${INSTALL_CLICKHOUSE:-false}
 INSTALL_IDS=${INSTALL_IDS:-false}
@@ -3913,10 +3902,6 @@ connect_containers_to_ovs() {
 
     # ML tier (optional - only with --profile training)
     attach_container_if_running "$ovs_script" fts-lstm-trainer 172.20.200.40 ml true
-
-    # Mgmt tier (optional - only with --profile monitoring)
-    attach_container_if_running "$ovs_script" fts-grafana 172.20.200.30 mgmt true
-    attach_container_if_running "$ovs_script" fts-victoria 172.20.200.31 mgmt true
 
     log_info "OVS container integration complete"
     log_info "  Note: qsecbit and bubble-manager use host network (no OVS attachment needed)"
@@ -4127,10 +4112,8 @@ attach_if_ready fts-dfs 172.20.200.22 services
 
 # Note: fts-qsecbit and fts-bubble-manager use host network (no attachment needed)
 
-# Optional tiers (mgmt tier = no internet, ml tier = no internet)
+# Optional tiers (ml tier = no internet)
 attach_if_ready fts-lstm-trainer 172.20.200.40 ml true
-attach_if_ready fts-grafana 172.20.200.30 mgmt true
-attach_if_ready fts-victoria 172.20.200.31 mgmt true
 
 # Clean up orphan veth interfaces from br-wifi
 # These can accumulate from container restarts or failed network setups
@@ -4647,8 +4630,6 @@ uninstall() {
     echo "    - fts-dnsxai (DNS ML protection)"
     echo "    - fts-dfs (WiFi DFS intelligence)"
     echo "    - fts-lstm-trainer (ML training)"
-    echo "    - fts-grafana (monitoring dashboard)"
-    echo "    - fts-victoria (metrics database)"
     echo "    - fts-n8n (workflow automation, if installed)"
     echo "    - fts-clickhouse (analytics database, if installed)"
     echo "    - fts-suricata (IDS, if installed)"
@@ -4689,12 +4670,11 @@ uninstall() {
     systemctl stop fts-hostapd-2g 2>/dev/null || true
     systemctl stop fts-hostapd-5g 2>/dev/null || true
     cd "${INSTALL_DIR}/containers" 2>/dev/null && \
-        podman-compose --profile monitoring --profile training down 2>/dev/null || true
+        podman-compose --profile training down 2>/dev/null || true
 
     # Stage 2: Remove application containers
     log_info "Stage 2: Removing application containers..."
     podman rm -f fts-web fts-qsecbit fts-dnsxai fts-dfs fts-lstm-trainer 2>/dev/null || true
-    podman rm -f fts-grafana fts-victoria 2>/dev/null || true
     # Optional services
     podman rm -f fts-n8n fts-clickhouse fts-cloudflared 2>/dev/null || true
     podman rm -f fts-suricata fts-zeek fts-xdp 2>/dev/null || true
@@ -4723,8 +4703,6 @@ uninstall() {
             fts-dnsxai-blocklists \
             fts-dfs-data \
             fts-ml-models \
-            fts-grafana-data \
-            fts-victoria-data \
             fts-n8n-data \
             fts-clickhouse-data \
             fts-clickhouse-logs \
@@ -4764,7 +4742,6 @@ uninstall() {
     # Remove container veth interfaces from OVS
     for veth in veth-fts-postgres veth-fts-redis veth-fts-web \
                 veth-fts-dnsxai veth-fts-dfs veth-fts-lstm-trainer \
-                veth-fts-grafana veth-fts-victoria \
                 veth-fts-n8n veth-fts-clickhouse veth-fts-cloudflared; do
         ovs-vsctl del-port "$OVS_BRIDGE" "$veth" 2>/dev/null || true
         ip link del "$veth" 2>/dev/null || true
@@ -4947,12 +4924,34 @@ main() {
                 uninstall_args="$uninstall_args $1"
                 ;;
             --enable-aiochi)
-                # AIOCHI bundles all monitoring/analytics components
+                # AIOCHI (AI Eyes) - minimal core installation (~2GB RAM)
+                # Includes: ClickHouse, Suricata, Zeek, Identity, Bubble, LogShipper
                 export INSTALL_AIOCHI=true
-                export INSTALL_MONITORING=true
                 export INSTALL_CLICKHOUSE=true
-                export INSTALL_N8N=true
                 export INSTALL_IDS=true
+                ;;
+            --aiochi-workflows)
+                # Add n8n workflow automation to AIOCHI
+                export INSTALL_AIOCHI=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_WORKFLOWS=true
+                ;;
+            --aiochi-ai)
+                # Add Ollama LLM for AI narratives (~4GB additional RAM)
+                export INSTALL_AIOCHI=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_AI=true
+                ;;
+            --aiochi-full)
+                # Full AIOCHI stack with all optional components (~8GB RAM)
+                export INSTALL_AIOCHI=true
+                export INSTALL_CLICKHOUSE=true
+                export INSTALL_IDS=true
+                export AIOCHI_WORKFLOWS=true
+                export AIOCHI_AI=true
+                export AIOCHI_FULL=true
                 ;;
             --enable-remote-access)
                 export INSTALL_CLOUDFLARE_TUNNEL=true
@@ -4994,10 +4993,15 @@ main() {
                 echo "  --preserve-data     Reinstall using existing data volumes"
                 echo "  --force-rebuild     Force rebuild of all containers"
                 echo ""
-                echo "Optional Components:"
-                echo "  --enable-aiochi           Install AIOCHI (AI Eyes) - Cognitive Network Layer"
-                echo "                            Bundles: ClickHouse, Grafana, VictoriaMetrics,"
-                echo "                            n8n, Suricata, Zeek, Ollama LLM"
+                echo "AIOCHI (AI Eyes) - Cognitive Network Layer:"
+                echo "  --enable-aiochi           Install AIOCHI minimal (~2GB RAM)"
+                echo "                            Core: ClickHouse, Grafana, Suricata, Zeek,"
+                echo "                            Identity Engine, Bubble Manager, Log Shipper"
+                echo "  --aiochi-workflows        Add n8n workflow automation (~500MB more)"
+                echo "  --aiochi-ai               Add Ollama LLM for AI narratives (~4GB more)"
+                echo "  --aiochi-full             Full AIOCHI stack with all components (~8GB total)"
+                echo ""
+                echo "Other Optional Components:"
                 echo "  --enable-remote-access    Configure Cloudflare Tunnel"
                 echo "  --enable-lte              Enable LTE modem failover"
                 echo ""
@@ -5018,7 +5022,10 @@ main() {
                 echo "  ADMIN_USER          Admin username"
                 echo "  ADMIN_PASS          Admin password"
                 echo "  WEB_PORT            Web UI port"
-                echo "  INSTALL_AIOCHI      true/false - Enable AIOCHI (AI Eyes)"
+                echo "  INSTALL_AIOCHI      true/false - Enable AIOCHI (AI Eyes) core"
+                echo "  AIOCHI_WORKFLOWS    true/false - Add n8n workflows"
+                echo "  AIOCHI_AI           true/false - Add Ollama LLM"
+                echo "  AIOCHI_FULL         true/false - Enable all AIOCHI components"
                 echo "  LTE_APN             LTE APN name"
                 echo "  LTE_AUTH            LTE auth type (none/pap/chap/mschapv2)"
                 echo "  LTE_USER            LTE username"

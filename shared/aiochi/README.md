@@ -62,10 +62,13 @@ sudo ./install.sh
 This installs the AIOCHI stack:
 - ClickHouse (event storage)
 - Suricata + Zeek (traffic analysis)
-- n8n (narrative generation)
-- Grafana (visualization)
-- VictoriaMetrics (metrics)
 - Identity Engine (device fingerprinting)
+- Bubble Manager (ecosystem detection)
+- Log Shipper (data pipeline)
+- n8n (workflow automation) - optional
+- Ollama (local LLM for AI narratives) - optional
+
+Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed).
 
 ---
 
@@ -76,15 +79,15 @@ This installs the AIOCHI stack:
 │                       AIOCHI DATA PIPELINE                           │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  CAPTURE         STORE          ENRICH         TRANSLATE    VISUALIZE│
+│  CAPTURE         STORE          ENRICH         TRANSLATE    DISPLAY  │
 │  ┌─────┐       ┌─────┐       ┌─────┐         ┌─────┐       ┌─────┐  │
-│  │Suri │──────▶│Click│──────▶│Ident│────────▶│n8n  │──────▶│Graf │  │
-│  │cata │       │House│       │ity  │         │+LLM │       │ana  │  │
-│  │Zeek │       │     │       │     │         │     │       │     │  │
+│  │Suri │──────▶│Click│──────▶│Ident│────────▶│n8n/ │──────▶│Admin│  │
+│  │cata │       │House│       │ity  │         │Templ│       │LTE  │  │
+│  │Zeek │       │     │       │     │         │ates │       │ UI  │  │
 │  └─────┘       └─────┘       └─────┘         └─────┘       └─────┘  │
 │                                                                      │
-│  Raw Packets → Structured   → Device Labels → Human       → 3 Pillars│
-│               History        "Dad's iPhone"   Sentences     Dashboard│
+│  Raw Packets → Structured   → Device Labels → Human       → Fortress │
+│               History        "Dad's iPhone"   Sentences     Web UI   │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -106,15 +109,16 @@ This installs the AIOCHI stack:
 
 ### Containers
 
-| Container | Purpose |
-|-----------|---------|
-| `aiochi-clickhouse` | Event storage |
-| `aiochi-suricata` | IDS alerts |
-| `aiochi-zeek` | Connection logging |
-| `aiochi-identity` | Device fingerprinting |
-| `aiochi-narrative` | n8n workflow engine |
-| `aiochi-grafana` | Dashboard |
-| `aiochi-victoria` | Metrics storage |
+| Container | Purpose | Required |
+|-----------|---------|----------|
+| `aiochi-clickhouse` | Event analytics database | Core |
+| `aiochi-suricata` | IDS threat alerts | Core |
+| `aiochi-zeek` | Connection/protocol logging | Core |
+| `aiochi-identity` | Device fingerprinting | Core |
+| `aiochi-bubble` | Ecosystem detection | Core |
+| `aiochi-logshipper` | Data pipeline | Core |
+| `aiochi-narrative` | n8n workflow engine | Optional |
+| `aiochi-ollama` | Local LLM for AI narratives | Optional |
 
 ---
 
@@ -140,11 +144,11 @@ print(story.narrative)  # "I blocked a suspicious connection. Your device is saf
 
 ```bash
 # Start AIOCHI containers
-cd /opt/hookprobe/fortress
-podman-compose -f containers/podman-compose.aiochi.yml up -d
+cd /opt/hookprobe/shared/aiochi/containers
+podman-compose -f podman-compose.aiochi.yml up -d
 
-# Access dashboard
-open http://localhost:3000  # Grafana (AIOCHI Home dashboard)
+# Access Fortress dashboard (includes AIOCHI visualization)
+open https://localhost:8443  # Fortress AdminLTE web UI
 ```
 
 ---
@@ -186,7 +190,7 @@ AIOCHI integrates with existing Fortress components:
 ### With External Systems
 
 - **Webhook API**: POST events to `/webhook/new-device`
-- **Grafana API**: Custom dashboards via JSON
+- **ClickHouse API**: Query events via HTTP (port 8123)
 - **n8n Workflows**: Extend with custom automations
 
 ---
