@@ -46,6 +46,16 @@ try:
 except ImportError:
     HAS_MDNS = False
 
+# Import hostname decoder for cleaning device names
+try:
+    from hostname_decoder import clean_device_name
+    HAS_HOSTNAME_DECODER = True
+except ImportError:
+    HAS_HOSTNAME_DECODER = False
+    def clean_device_name(name, max_length=32):
+        """Fallback - just return the name."""
+        return name
+
 logger = logging.getLogger(__name__)
 
 # Database paths
@@ -2053,6 +2063,12 @@ class SDNAutoPilot:
 
             device = dict(row)
 
+            # Clean device names (remove hex suffixes, UUID patterns, etc.)
+            if device.get('hostname'):
+                device['hostname'] = clean_device_name(device['hostname'])
+            if device.get('friendly_name'):
+                device['friendly_name'] = clean_device_name(device['friendly_name'])
+
             # Parse tags JSON
             try:
                 device['tags'] = json.loads(device.get('tags') or '[]')
@@ -2092,14 +2108,18 @@ class SDNAutoPilot:
                 device['history'] = []
 
             # Format traffic for display
-            rx_bytes = device.get('rx_bytes') or 0
-            tx_bytes = device.get('tx_bytes') or 0
+            # Note: rx/tx from WiFi driver is from AP perspective:
+            #   rx_bytes = bytes AP received FROM device = device's UPLOAD
+            #   tx_bytes = bytes AP sent TO device = device's DOWNLOAD
+            # We swap here to show from device's perspective in the UI
+            ap_rx_bytes = device.get('rx_bytes') or 0  # device upload
+            ap_tx_bytes = device.get('tx_bytes') or 0  # device download
             device['traffic'] = {
-                'rx_bytes': rx_bytes,
-                'tx_bytes': tx_bytes,
-                'rx_formatted': self._format_bytes(rx_bytes),
-                'tx_formatted': self._format_bytes(tx_bytes),
-                'total_formatted': self._format_bytes(rx_bytes + tx_bytes)
+                'rx_bytes': ap_tx_bytes,  # Device download (shown as "Download" in UI)
+                'tx_bytes': ap_rx_bytes,  # Device upload (shown as "Upload" in UI)
+                'rx_formatted': self._format_bytes(ap_tx_bytes),  # Device download
+                'tx_formatted': self._format_bytes(ap_rx_bytes),  # Device upload
+                'total_formatted': self._format_bytes(ap_rx_bytes + ap_tx_bytes)
             }
 
             return device
