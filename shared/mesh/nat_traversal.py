@@ -357,11 +357,11 @@ class STUNClient:
             pass
 
         # Try to get IP by connecting to external host
+        # Bug fix: use context manager to prevent socket leak on exception
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ips.add(s.getsockname()[0])
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ips.add(s.getsockname()[0])
         except Exception:
             pass
 
@@ -439,19 +439,19 @@ class ICEAgent:
         candidates = []
 
         # Get local IP
+        # Bug fix: use context manager to prevent socket leak on exception
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
 
-            candidate = ICECandidate.from_tuple(
-                (local_ip, self._local_port),
-                ctype="host",
-                priority=ICECandidate._calc_priority("host")
-            )
-            candidates.append(candidate)
-            logger.debug(f"[ICE] Host candidate: {local_ip}:{self._local_port}")
+                candidate = ICECandidate.from_tuple(
+                    (local_ip, self._local_port),
+                    ctype="host",
+                    priority=ICECandidate._calc_priority("host")
+                )
+                candidates.append(candidate)
+                logger.debug(f"[ICE] Host candidate: {local_ip}:{self._local_port}")
 
         except Exception as e:
             logger.warning(f"[ICE] Failed to get host candidate: {e}")

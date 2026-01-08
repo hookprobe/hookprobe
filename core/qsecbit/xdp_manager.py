@@ -31,8 +31,9 @@ XDP_DDOS_PROGRAM = """
 #include <linux/udp.h>
 #include <linux/icmp.h>
 
-// Rate limiting map: source IP -> packet count
-BPF_HASH(rate_limit, u32, u64, 65536);
+// Rate limiting maps: separate timestamp and count (Bug fix: was using single map for both)
+BPF_HASH(rate_limit_ts, u32, u64, 65536);    // source IP -> last window start timestamp
+BPF_HASH(rate_limit_count, u32, u64, 65536); // source IP -> packet count in current window
 
 // Blocked IPs map
 BPF_HASH(blocked_ips, u32, u8, 65536);
@@ -98,23 +99,22 @@ int xdp_ddos_filter(struct xdp_md *ctx) {
         return XDP_DROP;
     }
 
-    // Rate limiting
+    // Rate limiting (Bug fix: now using separate maps for timestamp and count)
     u64 now = bpf_ktime_get_ns();
-    u64 *last_time = rate_limit.lookup(&src_ip);
+    u64 *last_time = rate_limit_ts.lookup(&src_ip);
+    u64 *pkt_count = rate_limit_count.lookup(&src_ip);
 
     if (last_time) {
         u64 elapsed = now - *last_time;
 
-        // Reset counter every second
+        // Reset counter every second (new window)
         if (elapsed > RATE_WINDOW_NS) {
-            rate_limit.update(&src_ip, &now);
+            u64 init_count = 1;
+            rate_limit_ts.update(&src_ip, &now);
+            rate_limit_count.update(&src_ip, &init_count);
         } else {
-            // Count packets in current window
-            u64 count = 1;
-            u64 *pkt_count = rate_limit.lookup(&src_ip);
-            if (pkt_count) {
-                count = *pkt_count + 1;
-            }
+            // Increment count in current window
+            u64 count = pkt_count ? (*pkt_count + 1) : 1;
 
             if (count > RATE_LIMIT_PPS) {
                 // Rate limit exceeded - drop packet
@@ -123,11 +123,13 @@ int xdp_ddos_filter(struct xdp_md *ctx) {
                 return XDP_DROP;
             }
 
-            rate_limit.update(&src_ip, &count);
+            rate_limit_count.update(&src_ip, &count);
         }
     } else {
-        // First packet from this IP
-        rate_limit.update(&src_ip, &now);
+        // First packet from this IP - initialize both maps
+        u64 init_count = 1;
+        rate_limit_ts.update(&src_ip, &now);
+        rate_limit_count.update(&src_ip, &init_count);
     }
 
     // Protocol-specific flood detection
