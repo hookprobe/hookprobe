@@ -70,7 +70,7 @@ except ImportError as e:
 
 # Import hostname decoder for dnsmasq octal escapes
 try:
-    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name
+    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name, is_randomized_mac
 except ImportError:
     # Fallback implementations if module not found
     def decode_dnsmasq_hostname(hostname):
@@ -115,8 +115,9 @@ except ImportError:
             if re.search(r'[a-zA-Z]{3,}', remaining):
                 name = remaining
 
-        # Remove hex/UUID suffixes (e.g., "device-abc123def456")
-        name = re.sub(r'[-_][0-9a-fA-F]{6,}(?:[-_]\d+)?$', '', name)
+        # Remove hex/UUID suffixes (e.g., "device-abc123def456", "Hooksound 40edcf82626b")
+        # IMPORTANT: Include space (\s) to catch space+hex patterns
+        name = re.sub(r'[\s_-][0-9a-fA-F]{6,}(?:[-_]\d+)?$', '', name)
 
         # Remove trailing numbers with punctuation (e.g., " 652!", " 9!")
         name = re.sub(r'\s+\d+[!@#$%^&*]+$', '', name)
@@ -166,6 +167,19 @@ except ImportError:
 
         return name[:max_length-3] + '...' if len(name) > max_length else name
 
+    def is_randomized_mac(mac):
+        """Check if MAC is locally administered/randomized (fallback)."""
+        if not mac:
+            return False
+        mac_clean = mac.replace(':', '').replace('-', '').replace('.', '').upper()
+        if len(mac_clean) != 12:
+            return False
+        try:
+            first_octet = int(mac_clean[:2], 16)
+            return bool(first_octet & 0x02)
+        except ValueError:
+            return False
+
 
 def get_friendly_name(mac: str, hostname: str, manufacturer: str, device_type: str) -> str:
     """Generate a user-friendly device name with smart fallbacks.
@@ -174,15 +188,19 @@ def get_friendly_name(mac: str, hostname: str, manufacturer: str, device_type: s
     1. Cleaned hostname (if usable)
     2. Device type + last 4 MAC chars (e.g., "iPhone CE05")
     3. Manufacturer + last 4 MAC chars (e.g., "Withings 5A0A")
-    4. Generic "Device CE05"
+    4. For randomized MACs: "Private Device XXXX"
+    5. Generic "Device CE05"
     """
     # Try cleaned hostname first
     cleaned = clean_device_name(hostname)
-    if cleaned:
+    if cleaned and cleaned != "Unknown Device":
         return cleaned
 
     # Get last 4 MAC chars for uniqueness
     mac_suffix = mac[-5:].replace(':', '') if mac else '????'
+
+    # Check if this is a randomized/private MAC address
+    is_private_mac = is_randomized_mac(mac)
 
     # Try device type (skip generic types)
     if device_type and device_type.lower() not in ('unknown', '', 'none', 'other'):
@@ -190,8 +208,13 @@ def get_friendly_name(mac: str, hostname: str, manufacturer: str, device_type: s
         return f"{dt} {mac_suffix}"
 
     # Try manufacturer (this is key for devices like Withings)
+    # Skip "Unknown" and empty manufacturers
     if manufacturer and manufacturer.lower() not in ('unknown', 'private', '', 'none'):
         return f"{manufacturer} {mac_suffix}"
+
+    # For randomized MACs (no OUI possible), indicate it's a private address
+    if is_private_mac:
+        return f"Private Device {mac_suffix}"
 
     # Fallback
     return f"Device {mac_suffix}"
