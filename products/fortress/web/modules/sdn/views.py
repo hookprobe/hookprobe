@@ -762,7 +762,9 @@ def format_device_for_template(device):
         'router': 'fa-router',
         'unknown': 'fa-question-circle',
     }
-    category = device.get('oui_category', device.get('device_type', 'unknown'))
+    # Prefer device_type (Fingerbank name like "iPhone", "HomePod")
+    # Fall back to oui_category or category
+    category = device.get('device_type') or device.get('oui_category') or device.get('category', 'unknown')
 
     # Format bytes for display
     def format_bytes(b):
@@ -887,8 +889,11 @@ def index():
                     # Get friendly name with smart fallback
                     raw_name = d.get('friendly_name') or d.get('hostname', '')
                     vendor = d.get('vendor', 'Unknown')
-                    category = d.get('category', 'unknown')
-                    friendly = get_friendly_name(mac, raw_name, vendor, category)
+                    # device_type contains Fingerbank-identified name (e.g., "iPhone", "HomePod")
+                    # category is just the category (e.g., "phone", "smart_tv")
+                    # Use device_type for display, fallback to category
+                    device_type = d.get('device_type') or d.get('category', 'unknown')
+                    friendly = get_friendly_name(mac, raw_name, vendor, device_type)
 
                     device = {
                         'mac_address': mac,
@@ -896,7 +901,7 @@ def index():
                         'hostname': friendly,
                         'friendly_name': clean_device_name(d.get('friendly_name', '')),
                         'manufacturer': vendor,
-                        'device_type': category,
+                        'device_type': device_type,
                         'policy': policy,
                         'policy_name': policy_info.get('name', policy.replace('_', ' ').title()),
                         'policy_color': policy_info.get('color', 'secondary'),
@@ -2670,7 +2675,8 @@ def api_sdn_devices():
                 segment, trust = policy_to_segment.get(policy, ('GUEST', 1))
                 mac = device.get('mac', '')
                 vendor = device.get('vendor', 'Unknown')
-                category = device.get('category', device.get('device_type', 'unknown'))
+                # Prefer device_type (Fingerbank name) over category
+                category = device.get('device_type') or device.get('category', 'unknown')
                 raw_hostname = device.get('hostname') or device.get('friendly_name', '')
 
                 sdn_devices.append({
