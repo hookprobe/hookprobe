@@ -415,6 +415,60 @@ Extracts 20 features from domain names:
 }
 ```
 
+### G.N.C. Phase 2: Advanced Configuration
+
+The following environment variables enable advanced AI/ML features:
+
+#### Redis Integration (Distributed Caching)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DNSXAI_REDIS_ENABLED` | `false` | Enable Redis for cross-instance caching |
+| `DNSXAI_REDIS_HOST` | `localhost` | Redis server hostname |
+| `DNSXAI_REDIS_PORT` | `6379` | Redis server port |
+| `DNSXAI_REDIS_PASSWORD` | `null` | Redis authentication password |
+| `DNSXAI_REDIS_DB` | `0` | Redis database number |
+
+#### ML Model Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DNSXAI_MODEL_PATH` | `/opt/hookprobe/guardian/models/ad_classifier.pkl` | Neural network model path |
+| `DNSXAI_LIGHTGBM_PATH` | `/opt/hookprobe/guardian/models/lightgbm_classifier.txt` | LightGBM model path |
+
+#### Ensemble ML (Neural + LightGBM)
+
+dnsXai uses an **ensemble classifier** combining two ML models for improved accuracy:
+
+| Model | Weight | Strengths |
+|-------|--------|-----------|
+| Neural Network | 40% | Pattern-based detection (ad keywords, entropy) |
+| LightGBM | 60% | Complex feature interactions, edge cases |
+
+**Ensemble benefits:**
+- When both models agree: confidence boosted by 10%
+- When models disagree: use higher-confidence result with 15% reduction
+- Agreement rate tracked for model health monitoring
+
+#### ML Inference Layer Thresholds
+
+The inference layer provides fast-path decisions:
+
+| Score Range | Decision | Action |
+|-------------|----------|--------|
+| > 0.85 | `BLOCK_INSTANT` | Immediate block (high confidence ad/tracker) |
+| 0.5 - 0.85 | `ANALYZE_BACKGROUND` | Queue for deep analysis |
+| < 0.5 | `ALLOW` | Allow (likely legitimate) |
+
+#### Multi-Tier Whitelist Architecture
+
+| Tier | Priority | Source | Description |
+|------|----------|--------|-------------|
+| SYSTEM | 1 (highest) | Built-in | Critical infrastructure (never blocked) |
+| ENTERPRISE | 2 | Admin config | Business-critical domains |
+| USER | 3 | User input | Manually whitelisted domains |
+| ML_LEARNED | 4 (lowest) | AI/ML | Auto-learned from false positives |
+
 ---
 
 ## Integration

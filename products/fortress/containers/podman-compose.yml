@@ -184,8 +184,9 @@ services:
       retries: 3
       start_period: 90s
 
-  # dnsXai Engine - DNS ML Protection
-  # Provides both DNS filtering (5353/udp) and HTTP API (8080/tcp)
+  # dnsXai Engine - DNS ML Protection with AI/ML Ensemble
+  # Provides DNS filtering (5353/udp), HTTP API (8080/tcp), and DoT (853/tcp)
+  # G.N.C. Phase 2: LightGBM + Neural Network ensemble with Redis caching
   dnsxai:
     build:
       context: ../..
@@ -194,6 +195,9 @@ services:
     container_name: fts-dnsxai
     restart: unless-stopped
     hostname: fts-dnsxai
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       DNSXAI_UPSTREAM: "1.1.1.1"
       DNSXAI_PROTECTION_LEVEL: 3
@@ -203,6 +207,15 @@ services:
       # CRITICAL: /etc/hookprobe/persistent/ is NEVER removed by any uninstall
       DNSXAI_USERDATA_DIR: /etc/hookprobe/persistent/dnsxai
       LOG_DIR: /var/log/hookprobe
+      # G.N.C. Phase 2: Redis integration for AI/ML classification caching
+      DNSXAI_REDIS_ENABLED: "true"
+      DNSXAI_REDIS_HOST: fts-redis
+      DNSXAI_REDIS_PORT: "6379"
+      DNSXAI_REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+      DNSXAI_REDIS_DB: "1"  # Use DB 1 for dnsXai (DB 0 is for web sessions)
+      # G.N.C. Phase 2: ML model paths (use container default paths)
+      DNSXAI_MODEL_PATH: /opt/hookprobe/guardian/models/ad_classifier.pkl
+      DNSXAI_LIGHTGBM_PATH: /opt/hookprobe/guardian/models/lightgbm_classifier.txt
     volumes:
       # Mount over shared path to persist data while keeping bundled whitelist
       - dnsxai_data:/opt/hookprobe/shared/dnsXai/data

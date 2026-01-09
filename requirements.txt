@@ -9,6 +9,17 @@ scipy>=1.10.0,<2.0.0
 clickhouse-driver>=0.2.6,<1.0.0    # ClickHouse for edge deployments
 pymysql>=1.1.0,<2.0.0               # Doris (MySQL protocol) for cloud backend
 
+# DNS and networking
+dnslib>=0.9.0,<1.0.0                # DNS protocol library for dnsXai
+requests>=2.31.0,<3.0.0             # HTTP client for blocklist updates
+
+# Distributed caching and sessions (G.N.C. Phase 2)
+redis>=5.0.0,<6.0.0                 # Redis client for dnsXai AI/ML cache
+
+# Machine Learning - MANDATORY for dnsXai AI/ML
+scikit-learn>=1.3.0,<2.0.0          # Base ML utilities
+lightgbm>=4.0.0,<5.0.0              # LightGBM gradient boosting (lightweight, fast)
+
 # XDP/eBPF support (for edge deployments with kernel-level DDoS mitigation)
 # NOTE: BCC must be installed via system packages first:
 #   RHEL/Fedora: dnf install bcc python3-bcc
@@ -18,8 +29,7 @@ pymysql>=1.1.0,<2.0.0               # Doris (MySQL protocol) for cloud backend
 # Optional: For enhanced functionality
 # Uncomment if you need these features
 
-# Machine Learning (if extending Qsecbit)
-# scikit-learn>=1.3.0,<2.0.0
+# Additional Machine Learning (optional)
 # pandas>=2.0.0,<3.0.0
 
 # Visualization (for debugging/analysis)
