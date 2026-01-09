@@ -2109,6 +2109,12 @@ dhcp-option=6,10.200.0.1
 domain=hookprobe.local
 local=/hookprobe.local/
 
+# Ghost Name Collision Fix (mDNS/Avahi)
+# Ignore .local queries - let Avahi mDNS handle them exclusively
+# Prevents dnsmasq from responding with NXDOMAIN to .local queries
+# which causes ghost name collisions (device → device (2))
+server=/local/#
+
 # Logging
 log-dhcp
 log-queries
@@ -2222,6 +2228,12 @@ dhcp-option=6,${gateway_lan}
 # Domain
 domain=hookprobe.local
 local=/hookprobe.local/
+
+# Ghost Name Collision Fix (mDNS/Avahi)
+# Ignore .local queries - let Avahi mDNS handle them exclusively
+# Prevents dnsmasq from responding with NXDOMAIN to .local queries
+# which causes ghost name collisions (device → device (2))
+server=/local/#
 
 # Logging
 log-dhcp
