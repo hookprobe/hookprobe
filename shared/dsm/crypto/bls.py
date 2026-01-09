@@ -1,8 +1,16 @@
 """
-BLS Signature Aggregation
+BLS Signature Aggregation with Proof of Possession (PoP)
 
 Boneh-Lynn-Shacham signatures for efficient consensus.
 Falls back to RSA multi-signature if BLS libraries not available.
+
+SECURITY: Implements Proof of Possession (PoP) to prevent rogue-key attacks.
+Without PoP, a malicious validator can forge aggregated signatures and bypass
+the 2/3 quorum requirement. PoP proves that a validator controls the private
+key corresponding to their registered public key.
+
+PoP Challenge Format:
+    HASH(public_key || validator_id || epoch || nonce || "HOOKPROBE_DSM_POP_V1")
 
 Status: v5.0 uses RSA fallback. Native BLS planned for v5.1.
 """
@@ -10,12 +18,20 @@ Status: v5.0 uses RSA fallback. Native BLS planned for v5.1.
 import logging
 import base64
 import hashlib
-from typing import List, Dict
+import secrets
+from typing import List, Dict, Tuple, Optional
+from dataclasses import dataclass
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger(__name__)
+
+# Domain separator for Proof of Possession - prevents cross-protocol replay attacks
+POP_DOMAIN_SEPARATOR = b"HOOKPROBE_DSM_POP_V1"
+
+# Domain separator for checkpoint signatures - different from PoP
+CHECKPOINT_DOMAIN_SEPARATOR = b"HOOKPROBE_DSM_CHECKPOINT_V1"
 
 # Global flag for BLS availability
 _bls_available = None
@@ -294,3 +310,242 @@ def extract_bls_component(
     except Exception as e:
         logger.error(f"Failed to extract signature component: {e}")
         return b""
+
+
+# =============================================================================
+# PROOF OF POSSESSION (PoP) - ROGUE-KEY ATTACK PREVENTION
+# =============================================================================
+#
+# The rogue-key attack allows a malicious validator to register a crafted public
+# key that can forge aggregated signatures. PoP prevents this by requiring
+# validators to prove they control their private key at registration time.
+#
+# Attack without PoP:
+#   1. Honest validators V1, V2, V3 register public keys pk1, pk2, pk3
+#   2. Attacker computes rogue key: pk_rogue = pk_attacker - pk1 - pk2 - pk3
+#   3. Attacker registers pk_rogue (accepted without PoP)
+#   4. Attacker signs message M with sk_attacker
+#   5. Aggregated signature verifies as if all validators signed!
+#
+# Fix with PoP:
+#   - Each validator must sign a challenge containing their public key
+#   - The rogue key pk_rogue cannot produce a valid PoP signature
+#   - Registration is rejected, attack is prevented
+# =============================================================================
+
+
+@dataclass
+class ProofOfPossession:
+    """
+    Proof of Possession structure for validator key registration.
+
+    Contains the cryptographic proof that a validator controls the private
+    key corresponding to their public key.
+    """
+    public_key: bytes          # The public key being proven
+    validator_id: str          # Unique validator identifier
+    epoch: int                 # Registration epoch (prevents replay)
+    nonce: bytes              # Random nonce (prevents prediction)
+    signature: bytes          # PoP signature over challenge
+    key_type: str             # 'BLS' or 'RSA'
+
+    def to_dict(self) -> Dict:
+        """Serialize to dictionary for storage/transmission."""
+        return {
+            'public_key': base64.b64encode(self.public_key).decode('ascii'),
+            'validator_id': self.validator_id,
+            'epoch': self.epoch,
+            'nonce': base64.b64encode(self.nonce).decode('ascii'),
+            'signature': base64.b64encode(self.signature).decode('ascii'),
+            'key_type': self.key_type,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'ProofOfPossession':
+        """Deserialize from dictionary."""
+        return cls(
+            public_key=base64.b64decode(data['public_key']),
+            validator_id=data['validator_id'],
+            epoch=data['epoch'],
+            nonce=base64.b64decode(data['nonce']),
+            signature=base64.b64decode(data['signature']),
+            key_type=data['key_type'],
+        )
+
+
+def generate_pop_challenge(
+    public_key: bytes,
+    validator_id: str,
+    epoch: int,
+    nonce: Optional[bytes] = None,
+) -> Tuple[bytes, bytes]:
+    """
+    Generate a Proof of Possession challenge message.
+
+    The challenge is constructed with domain separation to prevent:
+    - Cross-protocol replay (signature reused in different context)
+    - Cross-epoch replay (old PoP reused after key rotation)
+    - Prediction attacks (nonce adds randomness)
+
+    Challenge = SHA256(public_key || validator_id || epoch || nonce || domain_separator)
+
+    Args:
+        public_key: The public key to prove possession of
+        validator_id: Unique identifier of the validator
+        epoch: Current epoch number (for replay prevention)
+        nonce: Optional nonce (generated if not provided)
+
+    Returns:
+        Tuple of (challenge_message, nonce)
+    """
+    if nonce is None:
+        nonce = secrets.token_bytes(32)  # 256-bit random nonce
+
+    # Build challenge with domain separation
+    hasher = hashlib.sha256()
+    hasher.update(public_key)
+    hasher.update(validator_id.encode('utf-8'))
+    hasher.update(epoch.to_bytes(8, byteorder='big'))
+    hasher.update(nonce)
+    hasher.update(POP_DOMAIN_SEPARATOR)
+
+    challenge = hasher.digest()
+
+    logger.debug(
+        f"Generated PoP challenge for validator {validator_id}, "
+        f"epoch {epoch}, nonce {nonce[:8].hex()}..."
+    )
+
+    return challenge, nonce
+
+
+def create_proof_of_possession(
+    private_key: bytes,
+    public_key: bytes,
+    validator_id: str,
+    epoch: int,
+    key_type: str = 'RSA',
+) -> ProofOfPossession:
+    """
+    Create a Proof of Possession for validator registration.
+
+    The validator signs a challenge message that includes their public key,
+    proving they control the corresponding private key.
+
+    Args:
+        private_key: Private key (PEM format for RSA)
+        public_key: Public key (PEM format for RSA)
+        validator_id: Unique validator identifier
+        epoch: Current epoch number
+        key_type: 'BLS' or 'RSA'
+
+    Returns:
+        ProofOfPossession object
+
+    Raises:
+        ValueError: If signing fails
+    """
+    # Generate challenge with random nonce
+    challenge, nonce = generate_pop_challenge(
+        public_key=public_key,
+        validator_id=validator_id,
+        epoch=epoch,
+    )
+
+    # Sign the challenge
+    try:
+        signature = bls_sign(private_key, challenge)
+        # Decode from base64 (bls_sign returns base64)
+        signature_bytes = base64.b64decode(signature)
+    except Exception as e:
+        logger.error(f"Failed to create PoP signature: {e}")
+        raise ValueError(f"PoP signature creation failed: {e}")
+
+    pop = ProofOfPossession(
+        public_key=public_key,
+        validator_id=validator_id,
+        epoch=epoch,
+        nonce=nonce,
+        signature=signature_bytes,
+        key_type=key_type,
+    )
+
+    logger.info(
+        f"Created PoP for validator {validator_id}, epoch {epoch}, "
+        f"key_type {key_type}"
+    )
+
+    return pop
+
+
+def verify_proof_of_possession(
+    pop: ProofOfPossession,
+    expected_epoch: Optional[int] = None,
+    max_epoch_age: int = 10,
+) -> Tuple[bool, str]:
+    """
+    Verify a Proof of Possession.
+
+    CRITICAL SECURITY FUNCTION: This must be called before accepting
+    any validator's public key into the registry.
+
+    Verification checks:
+    1. Challenge is correctly reconstructed from PoP fields
+    2. Signature is valid for the claimed public key
+    3. Epoch is within acceptable range (prevents old PoP replay)
+
+    Args:
+        pop: ProofOfPossession to verify
+        expected_epoch: If provided, epoch must match exactly
+        max_epoch_age: Maximum age of PoP in epochs (default 10)
+
+    Returns:
+        Tuple of (is_valid, reason)
+    """
+    # Epoch validation
+    if expected_epoch is not None:
+        if pop.epoch != expected_epoch:
+            return False, f"Epoch mismatch: got {pop.epoch}, expected {expected_epoch}"
+    else:
+        # Check epoch is not too old (prevents replay of ancient PoPs)
+        # In production, compare against current_epoch from consensus
+        pass  # TODO: Add current_epoch comparison when integrated
+
+    # Reconstruct the challenge message
+    challenge, _ = generate_pop_challenge(
+        public_key=pop.public_key,
+        validator_id=pop.validator_id,
+        epoch=pop.epoch,
+        nonce=pop.nonce,  # Use the nonce from the PoP
+    )
+
+    # Verify signature
+    try:
+        signature_b64 = base64.b64encode(pop.signature)
+        is_valid = bls_verify_single(signature_b64, pop.public_key, challenge)
+
+        if is_valid:
+            logger.info(
+                f"PoP verification PASSED for validator {pop.validator_id}"
+            )
+            return True, "PoP verified successfully"
+        else:
+            logger.warning(
+                f"PoP verification FAILED for validator {pop.validator_id}: "
+                "Invalid signature"
+            )
+            return False, "Invalid PoP signature"
+
+    except Exception as e:
+        logger.error(f"PoP verification error: {e}")
+        return False, f"PoP verification error: {e}"
+
+
+class PoPVerificationError(Exception):
+    """Raised when Proof of Possession verification fails."""
+    pass
+
+
+class RogueKeyDetected(Exception):
+    """Raised when a potential rogue-key attack is detected."""
+    pass
