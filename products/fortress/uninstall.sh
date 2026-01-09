@@ -1245,6 +1245,33 @@ remove_configuration() {
         rm -f /etc/dnsmasq.d/fts-bridge.conf
     fi
 
+    # G.N.C. Phase 2: Cleanup dnsmasq ghost name collision fix
+    # Remove server=/local/# entries from dnsmasq configs
+    log_info "Cleaning dnsmasq ghost name collision entries..."
+    for conf in /etc/dnsmasq.d/*.conf; do
+        if [ -f "$conf" ]; then
+            sed -i '/^server=\/local\/#/d' "$conf" 2>/dev/null || true
+        fi
+    done
+
+    # G.N.C. Phase 2: Restore Avahi configuration backup
+    if [ -f /etc/avahi/avahi-daemon.conf.bak.fts ]; then
+        log_info "Restoring original Avahi configuration..."
+        mv /etc/avahi/avahi-daemon.conf.bak.fts /etc/avahi/avahi-daemon.conf
+        systemctl restart avahi-daemon 2>/dev/null || true
+    fi
+
+    # G.N.C. Phase 2: Remove systemd-resolved mDNS configuration
+    if [ -f /etc/systemd/resolved.conf.d/no-mdns.conf ]; then
+        log_info "Removing systemd-resolved mDNS configuration..."
+        rm -f /etc/systemd/resolved.conf.d/no-mdns.conf
+        # Only restart if the directory is empty (no other fortress configs)
+        if [ -z "$(ls -A /etc/systemd/resolved.conf.d/ 2>/dev/null)" ]; then
+            rmdir /etc/systemd/resolved.conf.d/ 2>/dev/null || true
+        fi
+        systemctl restart systemd-resolved 2>/dev/null || true
+    fi
+
     # Remove VXLAN secrets
     if [ -d "$SECRETS_DIR/vxlan" ]; then
         log_info "Removing VXLAN secrets..."

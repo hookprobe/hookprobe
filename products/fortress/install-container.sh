@@ -866,6 +866,20 @@ create_directories() {
     # This is the canonical location for user data that must survive even --purge
     mkdir -p /etc/hookprobe/persistent/dnsxai
 
+    # G.N.C. Phase 2: Validate dnsXai paths were created correctly
+    # This ensures Redis-backed AI/ML classification works on fresh installs
+    local dnsxai_paths=(
+        "/etc/hookprobe/persistent/dnsxai"
+        "/var/lib/hookprobe/userdata/dnsxai"
+    )
+    for dnsxai_path in "${dnsxai_paths[@]}"; do
+        if [ ! -d "$dnsxai_path" ]; then
+            log_error "Failed to create dnsXai directory: $dnsxai_path"
+            return 1
+        fi
+    done
+    chmod 755 /etc/hookprobe/persistent/dnsxai
+
     chmod 755 "$INSTALL_DIR" "$CONFIG_DIR"
     chmod 700 "$INSTALL_DIR/containers/secrets"
     chmod 750 "$CONFIG_DIR/secrets"  # Group-readable for fortress user
