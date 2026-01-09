@@ -5,14 +5,20 @@ Implements BLS signature aggregation for Byzantine fault-tolerant consensus.
 Based on the architecture specified in docs/architecture/dsm-implementation.md
 
 Now integrated with Neural Synaptic Encryption (NSE) for TER-validated signatures.
+
+SECURITY: Enforces Proof of Possession (PoP) verification for all validators.
+Only validators with verified PoP can participate in consensus to prevent rogue-key attacks.
 """
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from .crypto.bls import bls_aggregate, bls_verify, bls_verify_single
 from .gossip import GossipProtocol
+
+if TYPE_CHECKING:
+    from .validator import ValidatorRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ class ConsensusEngine:
         quorum_threshold: float = 0.67,
         signature_timeout: int = 30,
         node_id: Optional[str] = None,
+        validator_registry: Optional['ValidatorRegistry'] = None,
     ):
         """
         Initialize consensus engine.
@@ -58,12 +65,22 @@ class ConsensusEngine:
             quorum_threshold: Minimum fraction of validators required (default 2/3)
             signature_timeout: Seconds to wait for validator signatures
             node_id: Node identifier for NSE integration
+            validator_registry: Registry for PoP verification (SECURITY: Required for production)
         """
         self.validators = validators
         self.quorum_threshold = quorum_threshold
         self.signature_timeout = signature_timeout
         self.pending_checkpoints = {}
         self.node_id = node_id or "consensus-engine"
+
+        # SECURITY: Validator registry for PoP verification
+        # Without this, rogue-key attacks could bypass BFT quorum requirements
+        self.validator_registry = validator_registry
+        if validator_registry is None:
+            logger.warning(
+                "[DSM SECURITY] No validator registry provided - PoP verification disabled! "
+                "This is unsafe for production. Rogue-key attacks are possible."
+            )
 
         # Initialize Neural Synaptic Encryption validator for TER proofs
         self.neuro_validator: Optional['DSMNeuroValidator'] = None
@@ -76,7 +93,8 @@ class ConsensusEngine:
 
         logger.info(
             f"Consensus engine initialized: {len(validators)} validators, "
-            f"quorum={quorum_threshold:.0%}, NSE={'enabled' if self.neuro_validator else 'disabled'}"
+            f"quorum={quorum_threshold:.0%}, NSE={'enabled' if self.neuro_validator else 'disabled'}, "
+            f"PoP={'enabled' if validator_registry else 'DISABLED (UNSAFE)'}"
         )
 
     def collect_validator_signatures(
@@ -219,6 +237,7 @@ class ConsensusEngine:
         """
         Verify individual validator signature before aggregation.
 
+        SECURITY: Enforces PoP verification to prevent rogue-key attacks.
         Now integrated with NSE for TER checkpoint proof validation.
 
         Args:
@@ -229,6 +248,18 @@ class ConsensusEngine:
         Returns:
             True if valid, False otherwise
         """
+        # SECURITY: Check PoP verification status FIRST
+        # A validator without verified PoP could be attempting a rogue-key attack
+        # where they craft a public key that allows forging aggregated signatures
+        if self.validator_registry is not None:
+            if not self.validator_registry.is_pop_verified(validator.node_id):
+                logger.warning(
+                    f"[DSM SECURITY] Rejecting signature from {validator.node_id}: "
+                    "PoP not verified - potential rogue-key attack"
+                )
+                return False
+            logger.debug(f"[DSM] PoP verified for {validator.node_id}")
+
         # NSE Integration: Verify TER checkpoint proof if available
         if self.neuro_validator and vote:
             try:
