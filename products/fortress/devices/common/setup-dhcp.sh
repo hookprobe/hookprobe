@@ -382,9 +382,18 @@ server=127.0.0.1
 server=1.1.1.1
 server=8.8.8.8
 
-# Local domain
-local=/hookprobe.local/
-domain=hookprobe.local
+# ============================================
+# CRITICAL: mDNS/Avahi Ghost Name Collision Fix
+# ============================================
+# .local is RESERVED for mDNS (Avahi/Bonjour) - dnsmasq MUST NOT handle it
+# Without this, dnsmasq responds to .local queries causing Avahi to detect
+# "collisions" and increment hostname (e.g., "device (2)", "device (3)")
+server=/local/#
+
+# Local domain - use .lan instead of .local to avoid mDNS conflicts
+# .local is for mDNS only, .lan is for traditional DNS
+local=/hookprobe.lan/
+domain=hookprobe.lan
 expand-hosts
 no-hosts
 
@@ -423,9 +432,9 @@ dhcp-option=lan,3,$LAN_GATEWAY
 # DNS (Fortress - dnsXai filtering)
 dhcp-option=lan,6,$LAN_GATEWAY
 
-# Domain search
-dhcp-option=lan,15,hookprobe.local
-dhcp-option=lan,119,hookprobe.local
+# Domain search (use .lan, NOT .local - .local is reserved for mDNS)
+dhcp-option=lan,15,hookprobe.lan
+dhcp-option=lan,119,hookprobe.lan
 
 # ============================================
 # Lease database and event handling

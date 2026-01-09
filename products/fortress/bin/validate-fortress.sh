@@ -254,6 +254,78 @@ else
 fi
 
 # ============================================================
+# GHOST NAME COLLISION DETECTION
+# ============================================================
+section "Ghost Name Collision Detection"
+
+# Check for hostname increment suffix (device (2), device (3), etc.)
+current_hostname=$(hostname)
+if echo "$current_hostname" | grep -qE ' ?\([0-9]+\)$'; then
+    fail "GHOST NAME DETECTED: '$current_hostname' has collision suffix"
+    info "Run: setup-avahi.sh fix"
+else
+    pass "Hostname clean: $current_hostname"
+fi
+
+# Check dnsmasq has server=/local/# fix
+local_fix_found=false
+for conf in /etc/dnsmasq.d/*.conf /etc/dnsmasq.conf; do
+    if [ -f "$conf" ] && grep -q "^server=/local/#" "$conf" 2>/dev/null; then
+        pass "server=/local/# present in $(basename "$conf")"
+        local_fix_found=true
+        break
+    fi
+done
+if [ "$local_fix_found" = false ]; then
+    fail "server=/local/# NOT FOUND - dnsmasq may interfere with mDNS!"
+    info "This causes ghost name collisions (device (2), (3), etc.)"
+    info "Fix: Add 'server=/local/#' to /etc/dnsmasq.d/fortress.conf"
+fi
+
+# Check dnsmasq doesn't respond to .local queries
+dns_local_response=$(dig +short "$(hostname).local" @127.0.0.1 2>/dev/null || echo "")
+if [ -z "$dns_local_response" ]; then
+    pass "dnsmasq correctly ignoring .local queries"
+else
+    fail "dnsmasq responding to .local: $dns_local_response"
+    info "This causes Avahi to detect false collisions"
+fi
+
+# Check Avahi configuration
+if [ -f /etc/avahi/avahi-daemon.conf ]; then
+    # Check disallow-other-stacks
+    if grep -q "^disallow-other-stacks=yes" /etc/avahi/avahi-daemon.conf; then
+        pass "Avahi disallow-other-stacks=yes"
+    else
+        warn "Avahi disallow-other-stacks not set"
+    fi
+
+    # Check reflector disabled
+    if grep -q "^enable-reflector=no" /etc/avahi/avahi-daemon.conf; then
+        pass "Avahi reflector disabled"
+    else
+        warn "Avahi reflector may be enabled (causes self-collision)"
+    fi
+
+    # Check allow-interfaces
+    avahi_iface=$(grep "^allow-interfaces" /etc/avahi/avahi-daemon.conf 2>/dev/null | cut -d= -f2)
+    if [ -n "$avahi_iface" ]; then
+        pass "Avahi restricted to: $avahi_iface"
+    else
+        warn "Avahi allow-interfaces not set (may listen on all interfaces)"
+    fi
+else
+    warn "Avahi config not found at /etc/avahi/avahi-daemon.conf"
+fi
+
+# Check Avahi service
+if systemctl is-active avahi-daemon &>/dev/null; then
+    pass "avahi-daemon running"
+else
+    info "avahi-daemon not running (optional for mDNS discovery)"
+fi
+
+# ============================================================
 # SERVICES STATUS
 # ============================================================
 section "Services Status"
