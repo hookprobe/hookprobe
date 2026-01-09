@@ -61,8 +61,12 @@ services:
       MSSP_ENDPOINT: "${MSSP_ENDPOINT:-}"
       MSSP_API_KEY: "${MSSP_API_KEY:-}"
       # Integration with local services
-      QSECBIT_API_URL: http://localhost:9090
+      # QSecBit runs on host network, access via gateway IP (172.20.200.1)
+      QSECBIT_API_URL: http://172.20.200.1:9090
       DNSXAI_API_URL: http://fts-dnsxai:8080
+      # Database credentials (for mesh consensus logging)
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_postgres_secure}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
       # Cortex visualization bridge
       CORTEX_ENABLED: "true"
       CORTEX_WS_PORT: 8766

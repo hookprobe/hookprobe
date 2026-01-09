@@ -23,6 +23,7 @@ Author: HookProbe Security
 License: AGPL-3.0
 """
 
+import fcntl
 import ipaddress
 import json
 import logging
@@ -223,14 +224,25 @@ class StatsTracker:
             }
 
     def get_blocked_domains(self, limit: int = 100) -> list:
-        """Get recently blocked domains from log file (deduplicated, whitelist filtered)."""
+        """Get recently blocked domains from log file (deduplicated, whitelist filtered).
+
+        G.N.C. Phase 2 (Nemotron Security Fix): Added file locking to prevent
+        concurrent read/write race conditions.
+        """
         blocked = []
         seen_domains = set()
 
         try:
             if BLOCKED_LOG.exists():
                 with open(BLOCKED_LOG, 'r') as f:
-                    lines = f.readlines()
+                    # Acquire shared lock for reading (allows concurrent reads, blocks writes)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    try:
+                        lines = f.readlines()
+                    finally:
+                        # Release lock
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
                     # Process from newest to oldest (reversed) to get most recent entries
                     for line in reversed(lines):
                         if len(blocked) >= limit:
