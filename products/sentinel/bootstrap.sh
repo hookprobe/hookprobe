@@ -54,6 +54,27 @@ SENTINEL_REGION="${SENTINEL_REGION:-auto}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
 ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
 
+# Security: Validate port number (CWE-78 prevention)
+validate_port() {
+    local port="$1"
+    local name="$2"
+    # Port must be numeric and in valid range
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        log_error "Invalid $name: must be numeric 1-65535"
+        exit 1
+    fi
+}
+
+# Security: Validate hostname/endpoint (CWE-78 prevention)
+validate_hostname() {
+    local hostname="$1"
+    # Only allow alphanumeric, dots, and hyphens
+    if ! [[ "$hostname" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
+        log_error "Invalid hostname format: $hostname"
+        exit 1
+    fi
+}
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -210,6 +231,30 @@ download_sentinel() {
         exit 1
     fi
 
+    # CWE-494: Download checksum file and verify integrity
+    log_security "Verifying download integrity..."
+    if curl -sSfL "$GITHUB_RAW/checksums.sha256" -o "$INSTALL_DIR/checksums.sha256" 2>/dev/null; then
+        # Extract expected checksum for sentinel.py
+        local expected_checksum=$(grep "sentinel.py" "$INSTALL_DIR/checksums.sha256" 2>/dev/null | awk '{print $1}')
+        if [ -n "$expected_checksum" ]; then
+            local actual_checksum=$(sha256sum "$INSTALL_DIR/sentinel.py" | awk '{print $1}')
+            if [ "$expected_checksum" != "$actual_checksum" ]; then
+                log_error "SECURITY: Checksum mismatch for sentinel.py!"
+                log_error "Expected: $expected_checksum"
+                log_error "Actual:   $actual_checksum"
+                log_error "Download may have been tampered with. Aborting."
+                rm -f "$INSTALL_DIR/sentinel.py"
+                exit 1
+            fi
+            log_security "Checksum verified for sentinel.py"
+        else
+            log_warn "No checksum available for sentinel.py, skipping verification"
+        fi
+        rm -f "$INSTALL_DIR/checksums.sha256"
+    else
+        log_warn "Checksum file not available, proceeding without verification"
+    fi
+
     # Download security module
     log_info "Downloading security module..."
     if ! curl -sSfL "$GITHUB_RAW/sentinel_security.py" -o "$INSTALL_DIR/sentinel_security.py"; then
@@ -227,7 +272,7 @@ download_sentinel() {
     chmod 755 "$INSTALL_DIR/sentinel.py"
     chmod 644 "$INSTALL_DIR/sentinel_security.py" 2>/dev/null || true
 
-    # Verify download integrity
+    # Verify download integrity (basic size check as fallback)
     local size=$(wc -c < "$INSTALL_DIR/sentinel.py" 2>/dev/null || echo "0")
     if [ "$size" -lt 1000 ]; then
         log_error "Downloaded file appears incomplete (${size} bytes)"
@@ -431,33 +476,50 @@ class FirewallManager:
     """Manage iptables rules for protection"""
 
     @staticmethod
+    def _run_iptables(rule: str) -> bool:
+        """Run iptables safely using subprocess (CWE-78 prevention)"""
+        import subprocess
+        try:
+            cmd_parts = ["iptables"] + rule.split()
+            result = subprocess.run(cmd_parts, capture_output=True, timeout=5)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    @staticmethod
     def setup_basic_rules(health_port: int = 9090):
         """Setup basic firewall protection"""
+        # Validate port to prevent command injection
+        if not isinstance(health_port, int) or health_port < 1 or health_port > 65535:
+            return
         rules = [
-            # Allow established connections
             "-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT",
-            # Allow loopback
             "-A INPUT -i lo -j ACCEPT",
-            # Allow health check port
             f"-A INPUT -p tcp --dport {health_port} -j ACCEPT",
-            # Rate limit new connections
             "-A INPUT -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT",
-            # Drop invalid packets
             "-A INPUT -m state --state INVALID -j DROP",
         ]
-
         for rule in rules:
-            os.system(f"iptables {rule} 2>/dev/null")
+            FirewallManager._run_iptables(rule)
 
     @staticmethod
     def block_ip(ip: str):
         """Block an IP address"""
-        os.system(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null")
+        # Validate IP to prevent injection
+        try:
+            ipaddress.ip_address(ip)
+            FirewallManager._run_iptables(f"-I INPUT -s {ip} -j DROP")
+        except ValueError:
+            pass
 
     @staticmethod
     def unblock_ip(ip: str):
         """Unblock an IP address"""
-        os.system(f"iptables -D INPUT -s {ip} -j DROP 2>/dev/null")
+        try:
+            ipaddress.ip_address(ip)
+            FirewallManager._run_iptables(f"-D INPUT -s {ip} -j DROP")
+        except ValueError:
+            pass
 
 
 class SecurityManager:
@@ -570,11 +632,15 @@ create_config() {
     # Generate secure node ID
     local NODE_ID="sentinel-$(hostname -s 2>/dev/null || echo 'node')-$(head -c 8 /dev/urandom | xxd -p)"
 
-    # Auto-detect region
+    # Auto-detect region (CWE-319: Use HTTPS instead of HTTP)
     if [ "$SENTINEL_REGION" = "auto" ]; then
-        SENTINEL_REGION=$(curl -sf --connect-timeout 3 http://ip-api.com/json/ 2>/dev/null | \
-            grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || echo "unknown")
-        [ -z "$SENTINEL_REGION" ] && SENTINEL_REGION="unknown"
+        # SECURITY: Use HTTPS to prevent MITM attacks
+        SENTINEL_REGION=$(curl -sf --connect-timeout 3 https://ipapi.co/country_code/ 2>/dev/null | \
+            tr '[:upper:]' '[:lower:]' || echo "unknown")
+        # Validate region format (2-letter country code only)
+        if ! [[ "$SENTINEL_REGION" =~ ^[a-z]{2}$ ]]; then
+            SENTINEL_REGION="unknown"
+        fi
     fi
 
     # Create main configuration
@@ -649,6 +715,9 @@ setup_firewall() {
 
     log_security "Configuring firewall rules..."
 
+    # CWE-78: Validate HEALTH_PORT before using in iptables command
+    validate_port "$HEALTH_PORT" "HEALTH_PORT"
+
     # Check for iptables
     if ! command -v iptables &>/dev/null; then
         log_warn "iptables not found, skipping firewall setup"
@@ -665,7 +734,7 @@ setup_firewall() {
     # Rate limit incoming connections
     iptables -A HOOKPROBE -p tcp --syn -m limit --limit 10/s --limit-burst 20 -j ACCEPT
 
-    # Allow health check port
+    # Allow health check port (HEALTH_PORT validated above)
     iptables -A HOOKPROBE -p tcp --dport "$HEALTH_PORT" -j ACCEPT
 
     # Drop invalid packets

@@ -272,6 +272,10 @@ class MicroblockValidator:
     MIN_SEQUENCE_GAP = 0
     MAX_SEQUENCE_GAP = 1000
 
+    # CWE-400: Bounds for data structures to prevent resource exhaustion
+    MAX_KNOWN_SOURCES = 500
+    MAX_SEQUENCE_TRACKER = 500
+
     def __init__(self, node_id: str):
         self.node_id = node_id
         self.known_sources: Set[bytes] = set()
@@ -305,14 +309,28 @@ class MicroblockValidator:
                     self.stats["rejected"] += 1
                     return False, "sequence_invalid"
 
+            # CWE-400: Enforce bounds on known_sources to prevent memory exhaustion
+            if len(self.known_sources) >= self.MAX_KNOWN_SOURCES:
+                # Evict oldest entry (convert to list, remove first added)
+                try:
+                    oldest = next(iter(self.known_sources))
+                    self.known_sources.discard(oldest)
+                except StopIteration:
+                    pass
+
             # Track source and sequence
             self.known_sources.add(block.source_id)
-            self.sequence_tracker[block.source_id] = block.sequence
 
-            # Keep sequence tracker bounded
-            if len(self.sequence_tracker) > 100:
-                oldest = list(self.sequence_tracker.keys())[0]
-                del self.sequence_tracker[oldest]
+            # CWE-400: Enforce bounds on sequence_tracker
+            if len(self.sequence_tracker) >= self.MAX_SEQUENCE_TRACKER:
+                # Evict oldest entry
+                try:
+                    oldest = next(iter(self.sequence_tracker))
+                    del self.sequence_tracker[oldest]
+                except (StopIteration, KeyError):
+                    pass
+
+            self.sequence_tracker[block.source_id] = block.sequence
 
             self.stats["validated"] += 1
             return True, "valid"
@@ -459,6 +477,17 @@ class SentinelMeshAgent:
     # Threat Intelligence
     # ----------------------------------------
 
+    # CWE-400: Rate limiting for threat reports
+    THREAT_REPORT_RATE_LIMIT = 100  # Max reports per minute
+    THREAT_REPORT_WINDOW = 60.0  # Rate limit window in seconds
+
+    # CWE-20: Valid threat types whitelist
+    VALID_THREAT_TYPES = frozenset([
+        "port_scan", "brute_force", "malware", "ddos", "exfiltration",
+        "c2", "lateral", "privilege", "rate_abuse", "malicious_request",
+        "unknown"
+    ])
+
     def report_threat(self, ioc_value: str, threat_type: str = "unknown",
                      severity: int = 2, context: dict = None) -> bool:
         """
@@ -473,6 +502,49 @@ class SentinelMeshAgent:
         Returns:
             True if reported successfully
         """
+        # CWE-20: Validate threat_type against whitelist
+        if threat_type not in self.VALID_THREAT_TYPES:
+            logger.warning(f"[MESH] Invalid threat_type: {threat_type[:30]}, using 'unknown'")
+            threat_type = "unknown"
+
+        # CWE-20: Validate severity range
+        if not isinstance(severity, int) or severity < 1 or severity > 5:
+            logger.warning(f"[MESH] Invalid severity: {severity}, defaulting to 3")
+            severity = 3
+
+        # CWE-20: Limit context size to prevent resource exhaustion
+        if context is not None:
+            if not isinstance(context, dict):
+                context = None
+            elif len(str(context)) > 4096:
+                logger.warning("[MESH] Context too large, truncating")
+                context = {"error": "context_truncated"}
+
+        # CWE-400: Simple rate limiting
+        with self._lock:
+            now = time.time()
+            if not hasattr(self, '_threat_report_count'):
+                self._threat_report_count = 0
+                self._threat_report_window_start = now
+
+            # Reset window if expired
+            if now - self._threat_report_window_start > self.THREAT_REPORT_WINDOW:
+                self._threat_report_count = 0
+                self._threat_report_window_start = now
+
+            # Check rate limit
+            if self._threat_report_count >= self.THREAT_REPORT_RATE_LIMIT:
+                logger.warning("[MESH] Threat report rate limit exceeded")
+                return False
+
+            self._threat_report_count += 1
+
+        # Validate IOC type first
+        ioc_type = self._detect_ioc_type(ioc_value)
+        if ioc_type == "unknown" and ioc_value:
+            # Still allow reporting but log for monitoring
+            logger.debug(f"[MESH] Reporting unknown IOC type for: {ioc_value[:20]}...")
+
         # Add to local cache first
         self.threat_cache.add(ioc_value, threat_type, severity)
 
@@ -482,7 +554,7 @@ class SentinelMeshAgent:
                 self.consciousness.report_threat(
                     threat_type=threat_type,
                     severity=severity,
-                    ioc_type=self._detect_ioc_type(ioc_value),
+                    ioc_type=ioc_type,
                     ioc_value=ioc_value,
                     confidence=0.8,
                     context=context
@@ -550,15 +622,44 @@ class SentinelMeshAgent:
                 logger.warning(f"[MESH] Threat handler error: {e}")
 
     def _detect_ioc_type(self, ioc_value: str) -> str:
-        """Detect IOC type from value"""
-        if "." in ioc_value and all(p.isdigit() for p in ioc_value.split(".")):
+        """
+        Detect IOC type from value with security validation.
+        CWE-20: Validates IOC format before classification.
+        """
+        import re
+        import ipaddress
+
+        # SECURITY: Limit IOC length to prevent resource exhaustion
+        if not ioc_value or len(ioc_value) > 256:
+            return "unknown"
+
+        # SECURITY: Reject IOCs with dangerous characters (prevent injection)
+        if any(c in ioc_value for c in [';', '|', '&', '$', '`', '\n', '\r', '<', '>', '"', "'"]):
+            logger.warning(f"[MESH] Rejected IOC with dangerous characters")
+            return "unknown"
+
+        # IPv4/IPv6 validation using ipaddress module
+        try:
+            ipaddress.ip_address(ioc_value)
             return "ip"
-        elif "." in ioc_value:
-            return "domain"
-        elif len(ioc_value) == 64 and all(c in "0123456789abcdef" for c in ioc_value.lower()):
+        except ValueError:
+            pass
+
+        # SHA256 hash (64 hex chars)
+        if len(ioc_value) == 64 and re.match(r'^[0-9a-f]{64}$', ioc_value.lower()):
             return "sha256"
-        elif len(ioc_value) == 32 and all(c in "0123456789abcdef" for c in ioc_value.lower()):
+
+        # MD5 hash (32 hex chars)
+        if len(ioc_value) == 32 and re.match(r'^[0-9a-f]{32}$', ioc_value.lower()):
             return "md5"
+
+        # Domain validation (RFC 1123 compliant)
+        if "." in ioc_value:
+            # Valid domain: alphanumeric, hyphens, dots; no consecutive dots; valid TLD
+            domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
+            if re.match(domain_pattern, ioc_value) and len(ioc_value) <= 253:
+                return "domain"
+
         return "unknown"
 
     # ----------------------------------------

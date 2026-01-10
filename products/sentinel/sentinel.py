@@ -92,8 +92,9 @@ RATE_LIMITS = {"community": 100, "professional": 1000, "enterprise": 10000}
 SECURITY_ENABLED = os.environ.get("ENABLE_THREAT_DETECTION", "true").lower() == "true"
 RATE_LIMITING_ENABLED = os.environ.get("ENABLE_RATE_LIMITING", "true").lower() == "true"
 BLOCK_ON_ATTACK = os.environ.get("BLOCK_ON_ATTACK", "true").lower() == "true"
-RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "100"))
-RATE_LIMIT_BURST = int(os.environ.get("RATE_LIMIT_BURST", "200"))
+# CWE-20: Bounds validation for rate limiting parameters
+RATE_LIMIT_REQUESTS = safe_int_env("RATE_LIMIT_REQUESTS", 100, min_val=1, max_val=10000)
+RATE_LIMIT_BURST = safe_int_env("RATE_LIMIT_BURST", 200, min_val=1, max_val=20000)
 
 # QSecBit - Quantum-Safe Security Capabilities
 QSECBIT_ENABLED = os.environ.get("QSECBIT_ENABLED", "true").lower() == "true"
