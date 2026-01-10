@@ -299,14 +299,40 @@ class StatsTracker:
             return False
 
     def set_protection_level(self, level: int) -> bool:
-        """Set protection level (0-5)."""
+        """Set protection level (0-5).
+
+        Also notifies registered callbacks (e.g., ML inference layer).
+        """
         if not 0 <= level <= 5:
             return False
         with self._lock:
             self._protection_level = level
             self._save_stats()
             logger.info(f"Protection level set to {level}")
+
+            # Notify all registered callbacks about level change
+            self._notify_level_change(level)
             return True
+
+    def register_level_callback(self, callback):
+        """Register a callback function to be called when protection level changes.
+
+        Callback signature: callback(level: int) -> None
+        Used by ML inference layer to update thresholds dynamically.
+        """
+        if not hasattr(self, '_level_callbacks'):
+            self._level_callbacks = []
+        self._level_callbacks.append(callback)
+        logger.info(f"Registered protection level callback: {callback.__name__ if hasattr(callback, '__name__') else 'anonymous'}")
+
+    def _notify_level_change(self, level: int):
+        """Notify all registered callbacks about protection level change."""
+        if hasattr(self, '_level_callbacks'):
+            for callback in self._level_callbacks:
+                try:
+                    callback(level)
+                except Exception as e:
+                    logger.warning(f"Level callback failed: {e}")
 
     def pause(self, minutes: int = 0) -> bool:
         """Pause protection."""
@@ -516,18 +542,74 @@ class WhitelistManager:
             return True
         return False
 
+    # Tracking keywords that should NOT inherit parent whitelist
+    # Per Gemini recommendation: use keyword detection, not fixed deny-list
+    TRACKING_SUBDOMAIN_KEYWORDS = {
+        'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream',
+        'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
+        'event', 'events', 'click', 'impression', 'fingerprint',
+        'sponsor', 'promo', 'affiliate', 'banner', 'pagead',
+    }
+
+    # High-confidence tracking prefixes (subdomain starts with these)
+    TRACKING_PREFIXES = {
+        'ads', 'ad', 'track', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo',
+    }
+
+    def _is_tracking_subdomain(self, domain: str, parent: str) -> bool:
+        """Check if subdomain contains tracking keywords.
+
+        Gemini recommendation: Use keyword detection to prevent tracking
+        subdomains from inheriting parent whitelist.
+
+        Example: ads.yahoo.com should NOT be whitelisted even if yahoo.com is.
+        """
+        # Get the subdomain part (everything before the parent)
+        if not domain.endswith('.' + parent) and domain != parent:
+            return False
+
+        subdomain_part = domain[:-len(parent)-1] if domain != parent else ''
+        if not subdomain_part:
+            return False  # No subdomain, allow parent whitelist
+
+        subdomain_lower = subdomain_part.lower()
+        subdomain_parts = subdomain_lower.split('.')
+
+        # Check if first subdomain part is a tracking prefix
+        if subdomain_parts and subdomain_parts[0] in self.TRACKING_PREFIXES:
+            return True
+
+        # Check if any part contains tracking keywords
+        for part in subdomain_parts:
+            if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                return True
+            # Check for keyword substrings in longer parts
+            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                if len(keyword) >= 3 and keyword in part:
+                    return True
+
+        return False
+
     def contains(self, domain: str) -> bool:
         """Check if domain matches whitelist (supports wildcards and parent domains).
 
         Whitelist patterns supported:
         - exact: example.com - matches only example.com
         - wildcard: *.example.com - matches sub.example.com, a.b.example.com, etc.
-        - parent: example.com also matches all subdomains (implicit wildcard)
+        - parent: example.com also matches subdomains (EXCEPT tracking subdomains)
+
+        SECURITY FIX: Tracking subdomains (ads.*, track.*, etc.) do NOT
+        inherit parent domain whitelist. Per Gemini security recommendation.
         """
         domain = domain.strip().lower()
         parts = domain.split('.')
 
-        # 1. Check exact match
+        # 1. Check exact match (always allow exact whitelist entries)
         if domain in self._whitelist:
             return True
 
@@ -535,16 +617,29 @@ class WhitelistManager:
         for i in range(len(parts)):
             wildcard = '*.' + '.'.join(parts[i:])
             if wildcard in self._whitelist:
+                # Wildcard match - still check for tracking subdomains
+                parent = '.'.join(parts[i:])
+                if self._is_tracking_subdomain(domain, parent):
+                    continue  # Don't allow tracking subdomain via wildcard
                 return True
 
         # 3. Check parent domain match (example.com whitelists sub.example.com)
+        # SECURITY: Check for tracking keywords before allowing inheritance
         for i in range(1, len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self._whitelist:
+                # Parent is whitelisted - check if this is a tracking subdomain
+                if self._is_tracking_subdomain(domain, parent):
+                    # Tracking subdomain detected - do NOT whitelist
+                    logger.debug(f"Blocked tracking subdomain '{domain}' despite whitelisted parent '{parent}'")
+                    return False
                 return True
             # Also check parent with wildcard
             wildcard = '*.' + parent
             if wildcard in self._whitelist:
+                if self._is_tracking_subdomain(domain, parent):
+                    logger.debug(f"Blocked tracking subdomain '{domain}' despite wildcard whitelist")
+                    return False
                 return True
 
         return False
@@ -798,8 +893,12 @@ class MLTrainingManager:
         except Exception as e:
             logger.warning(f"Could not save ML state: {e}")
 
-    def _load_blocklist_domains(self, limit: int = 5000) -> Set[str]:
-        """Load domains from blocklist file."""
+    def _load_blocklist_domains(self, limit: int = 50000) -> Set[str]:
+        """Load domains from blocklist file.
+
+        Default increased to 50K for better ML model training.
+        Gemini recommendation: 50K-100K samples for robust classification.
+        """
         domains = set()
         blocklist_file = DATA_DIR / 'blocklist.txt'
         try:
@@ -913,7 +1012,8 @@ class MLTrainingManager:
                 learned_patterns[pattern] = round(confidence, 2)
 
         # Sort by confidence and limit to top patterns
-        sorted_patterns = sorted(learned_patterns.items(), key=lambda x: -x[1])[:100]
+        # Gemini: Increased from 100 to 500 for better coverage
+        sorted_patterns = sorted(learned_patterns.items(), key=lambda x: -x[1])[:500]
         return dict(sorted_patterns)
 
     def get_status(self) -> Dict[str, Any]:
@@ -973,9 +1073,10 @@ class MLTrainingManager:
                 start_time = datetime.now()
 
                 # 1. Load positive examples (blocked domains)
+                # Gemini: 50K-100K samples for robust classification
                 logger.info("Loading blocked domains from blocklist...")
-                blocked_domains = self._load_blocklist_domains(limit=5000)
-                blocked_from_log = self._load_blocked_log_domains(limit=1000)
+                blocked_domains = self._load_blocklist_domains(limit=50000)
+                blocked_from_log = self._load_blocked_log_domains(limit=5000)
                 blocked_domains.update(blocked_from_log)
                 logger.info(f"Loaded {len(blocked_domains)} blocked domain samples")
 
@@ -987,17 +1088,19 @@ class MLTrainingManager:
                 logger.info(f"Loaded {len(legitimate)} legitimate domain samples")
 
                 # 3. SMART PATTERN LEARNING - Extract common patterns from blocklist
+                # Gemini: Use more samples for better pattern recognition
                 logger.info("Learning patterns from blocklist...")
                 learned_patterns = self._learn_patterns_from_domains(
-                    list(blocked_domains)[:3000],
+                    list(blocked_domains)[:30000],  # Increased from 3K to 30K
                     list(legitimate)
                 )
                 logger.info(f"Learned {len(learned_patterns)} new patterns")
 
                 # 4. Extract features from both sets
+                # Gemini: Feature extraction on larger sample for better stats
                 logger.info("Extracting features...")
                 blocked_features = []
-                for domain in list(blocked_domains)[:2000]:
+                for domain in list(blocked_domains)[:20000]:  # Increased from 2K to 20K
                     try:
                         features = self.feature_extractor.extract_features(domain)
                         blocked_features.append(features)
@@ -1908,6 +2011,26 @@ def is_protection_paused() -> bool:
 def get_protection_level() -> int:
     """Get current protection level."""
     return stats_tracker.get_stats()['protection_level']
+
+
+def register_engine_callback(engine):
+    """Register an AIAdBlocker engine to receive protection level updates.
+
+    This connects the HTTP API slider to the ML inference layer's
+    dynamic threshold adjustment.
+
+    Usage (in engine.py):
+        from shared.dnsXai.api_server import register_engine_callback
+        register_engine_callback(blocker)
+    """
+    if hasattr(engine, 'set_protection_level'):
+        stats_tracker.register_level_callback(engine.set_protection_level)
+        # Sync current level immediately
+        current_level = stats_tracker.get_stats()['protection_level']
+        engine.set_protection_level(current_level)
+        logger.info(f"Engine registered for protection level updates (current: {current_level})")
+    else:
+        logger.warning("Engine does not have set_protection_level method")
 
 
 # ============================================================
