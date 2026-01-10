@@ -511,7 +511,7 @@ class SDNAutoPilot:
 
         # Determine policy based on score thresholds
         policy, reason = self._determine_policy_from_fingerbank(
-            confidence, category, device.vendor, hostname, device.name
+            confidence, category, device.vendor, hostname, device.name, device.os
         )
 
         return IdentityScore(
@@ -531,7 +531,7 @@ class SDNAutoPilot:
 
     def _determine_policy_from_fingerbank(self, score: float, category: str,
                                           vendor: str, hostname: Optional[str],
-                                          device_name: str) -> Tuple[str, str]:
+                                          device_name: str, os_fingerprint: str = '') -> Tuple[str, str]:
         """
         Determine policy from Fingerbank identification.
 

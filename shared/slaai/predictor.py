@@ -17,9 +17,12 @@ import struct
 import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Tuple, Any
+from typing import Dict, Optional, List, Tuple, Any, TYPE_CHECKING
 from enum import Enum
 import math
+
+if TYPE_CHECKING:
+    from .metrics_collector import WANMetrics
 
 logger = logging.getLogger(__name__)
 

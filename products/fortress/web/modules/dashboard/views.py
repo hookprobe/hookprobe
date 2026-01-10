@@ -852,7 +852,7 @@ def api_stats():
 @login_required
 def api_refresh():
     """Force refresh all cached data."""
-    global _local_cache
+    # Modify dict in-place, no global needed
     _local_cache.clear()
     return jsonify({'success': True, 'message': 'Cache cleared'})
 
