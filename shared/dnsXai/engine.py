@@ -1212,7 +1212,29 @@ class MultiTierWhitelist:
     2. ENTERPRISE: Business-critical domains (SaaS, cloud providers)
     3. USER: User-defined domains (explicit user whitelist)
     4. ML_LEARNED: Domains learned from false positive feedback
+
+    SECURITY FIX: Tracking subdomains (ads.*, track.*, telemetry.*, etc.)
+    do NOT inherit parent domain whitelist. Per Gemini security recommendation.
     """
+
+    # Tracking keywords that should NOT inherit parent whitelist
+    # Per Gemini recommendation: use keyword detection, not fixed deny-list
+    TRACKING_SUBDOMAIN_KEYWORDS = {
+        'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream',
+        'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
+        'event', 'events', 'click', 'impression', 'fingerprint',
+        'sponsor', 'promo', 'affiliate', 'banner', 'pagead',
+    }
+
+    # High-confidence tracking prefixes (subdomain starts with these)
+    TRACKING_PREFIXES = {
+        'ads', 'ad', 'track', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo',
+    }
 
     # System-critical domains that should NEVER be blocked
     SYSTEM_DOMAINS = {
@@ -1322,11 +1344,48 @@ class MultiTierWhitelist:
                 except Exception:
                     pass
 
+    def _is_tracking_subdomain(self, domain: str, parent: str) -> bool:
+        """Check if subdomain contains tracking keywords.
+
+        SECURITY FIX: Tracking subdomains (ads.yahoo.com, telemetry.microsoft.com)
+        should NOT inherit parent domain whitelist.
+
+        Example: ads.yahoo.com should NOT be whitelisted even if yahoo.com is.
+        """
+        # Get the subdomain part (everything before the parent)
+        if not domain.endswith('.' + parent) and domain != parent:
+            return False
+
+        subdomain_part = domain[:-len(parent)-1] if domain != parent else ''
+        if not subdomain_part:
+            return False  # No subdomain, allow parent whitelist
+
+        subdomain_lower = subdomain_part.lower()
+        subdomain_parts = subdomain_lower.split('.')
+
+        # Check if first subdomain part is a tracking prefix
+        if subdomain_parts and subdomain_parts[0] in self.TRACKING_PREFIXES:
+            return True
+
+        # Check if any part contains tracking keywords
+        for part in subdomain_parts:
+            if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                return True
+            # Check for keyword substrings in longer parts
+            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                if len(keyword) >= 3 and keyword in part:
+                    return True
+
+        return False
+
     def is_whitelisted(self, domain: str) -> Tuple[bool, Optional[WhitelistTier]]:
         """
         Check if domain is whitelisted and return the tier.
 
         Returns: (is_whitelisted, tier or None)
+
+        SECURITY FIX: Tracking subdomains (ads.*, track.*, telemetry.*, etc.)
+        do NOT inherit parent domain whitelist. Per Gemini security recommendation.
         """
         domain = domain.lower().strip('.')
 
@@ -1335,24 +1394,33 @@ class MultiTierWhitelist:
             for tier in WhitelistTier:
                 domains = self._tiers[tier]
 
-                # Exact match
+                # Exact match (always allow - user explicitly whitelisted this domain)
                 if domain in domains:
                     self._hit_counts[tier] += 1
                     return True, tier
 
                 # Parent domain match (e.g., sub.example.com matches example.com)
+                # SECURITY: Check for tracking keywords before allowing inheritance
                 parts = domain.split('.')
                 for i in range(1, len(parts)):
                     parent = '.'.join(parts[i:])
                     if parent in domains:
+                        # SECURITY FIX: Block tracking subdomains even if parent is whitelisted
+                        if self._is_tracking_subdomain(domain, parent):
+                            # Don't whitelist tracking subdomain - continue checking other tiers
+                            continue
                         self._hit_counts[tier] += 1
                         return True, tier
 
                 # Wildcard match (*.example.com)
+                # SECURITY: Check for tracking keywords before allowing inheritance
                 for whitelisted in domains:
                     if whitelisted.startswith('*.'):
                         suffix = whitelisted[2:]
                         if domain.endswith(f'.{suffix}') or domain == suffix:
+                            # SECURITY FIX: Block tracking subdomains even if wildcard matches
+                            if self._is_tracking_subdomain(domain, suffix):
+                                continue
                             self._hit_counts[tier] += 1
                             return True, tier
 
@@ -2079,29 +2147,103 @@ class MLInferenceLayer:
     Performance Target: < 5ms inference time for instant decisions.
     """
 
+    # High-confidence tracking keywords for pre/post ML override
+    # Per Gemini recommendation: integrate keyword scoring into DNS path
+    TRACKER_KEYWORDS = {
+        'telemetry': 0.95, 'analytics': 0.90, 'metric': 0.85, 'metrics': 0.85,
+        'tracking': 0.95, 'tracker': 0.95, 'pixel': 0.90, 'beacon': 0.90,
+        'collect': 0.75, 'ingest': 0.70, 'adserv': 0.95, 'adtrack': 0.95,
+        'doubleclick': 0.95, 'adsense': 0.95, 'pagead': 0.90, 'googleads': 0.95,
+        'advert': 0.85, 'adtech': 0.90, 'clicktrack': 0.90, 'fingerprint': 0.90,
+    }
+
+    # Tracking prefixes for subdomain check
+    TRACKER_PREFIXES = {'track', 'pixel', 'stat', 'stats', 'log', 'logs', 'event',
+                        'events', 'data', 'collect', 'beacon', 'telemetry', 'ads', 'ad',
+                        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo'}
+
+    # Protection level to threshold mapping
+    # Per Gemini UX recommendation: slider controls blocking aggressiveness
+    PROTECTION_THRESHOLDS = {
+        0: {'high': 1.0, 'low': 1.0, 'keyword_min': 1.0},    # Off - allow everything
+        1: {'high': 0.95, 'low': 0.80, 'keyword_min': 0.95}, # Permissive
+        2: {'high': 0.90, 'low': 0.70, 'keyword_min': 0.90}, # Light
+        3: {'high': 0.85, 'low': 0.50, 'keyword_min': 0.85}, # Balanced (default)
+        4: {'high': 0.75, 'low': 0.40, 'keyword_min': 0.75}, # Strong
+        5: {'high': 0.60, 'low': 0.30, 'keyword_min': 0.60}, # Aggressive
+    }
+
     def __init__(
         self,
         classifier: DomainClassifier,
         high_threshold: float = 0.85,
         low_threshold: float = 0.50,
+        protection_level: int = 3,
     ):
         self.classifier = classifier
-        self.high_threshold = high_threshold
-        self.low_threshold = low_threshold
+        self._base_high_threshold = high_threshold
+        self._base_low_threshold = low_threshold
+        self._protection_level = protection_level
+        self._update_thresholds()
+
+        # Compile keyword regex for fast matching
+        import re
+        self._keyword_pattern = re.compile(
+            r'(' + '|'.join(re.escape(k) for k in sorted(self.TRACKER_KEYWORDS.keys(), key=len, reverse=True)) + r')',
+            re.IGNORECASE
+        )
 
         # Background analysis queue (domains needing deep analysis)
         self._analysis_queue: List[Tuple[str, float, Dict]] = []
         self._analysis_lock = threading.Lock()
         self._max_queue_size = 1000
 
-        # Statistics
+        # Statistics - added keyword and ml counters
         self.stats = {
             'instant_blocks': 0,
             'instant_allows': 0,
             'background_queued': 0,
             'avg_inference_time_ms': 0.0,
             'total_inferences': 0,
+            'keyword_blocks': 0,      # Pre-ML keyword blocks
+            'keyword_overrides': 0,   # Post-ML keyword overrides
+            'ml_classifications': 0,  # Actual ML classifications
         }
+
+    def _update_thresholds(self):
+        """Update thresholds based on protection level."""
+        thresholds = self.PROTECTION_THRESHOLDS.get(self._protection_level, self.PROTECTION_THRESHOLDS[3])
+        self.high_threshold = thresholds['high']
+        self.low_threshold = thresholds['low']
+        self.keyword_min_confidence = thresholds['keyword_min']
+
+    def set_protection_level(self, level: int):
+        """Update protection level and recalculate thresholds."""
+        if 0 <= level <= 5:
+            self._protection_level = level
+            self._update_thresholds()
+
+    def _keyword_score(self, domain: str) -> Tuple[float, str]:
+        """
+        Fast keyword-based scoring for pre-ML and post-ML override.
+
+        Returns: (confidence, matched_keyword) or (0.0, "") if no match
+        """
+        domain_lower = domain.lower()
+        parts = domain_lower.split('.')
+
+        # Check prefix (subdomain)
+        if parts and parts[0] in self.TRACKER_PREFIXES:
+            return 0.90, f"prefix:{parts[0]}"
+
+        # Check keywords
+        matches = self._keyword_pattern.findall(domain_lower)
+        if matches:
+            best_match = max(matches, key=lambda m: self.TRACKER_KEYWORDS.get(m.lower(), 0))
+            confidence = self.TRACKER_KEYWORDS.get(best_match.lower(), 0.7)
+            return confidence, f"keyword:{best_match}"
+
+        return 0.0, ""
 
     def infer(self, domain: str) -> MLInferenceResult:
         """
@@ -2109,19 +2251,57 @@ class MLInferenceLayer:
 
         Fast path for high-confidence decisions, queues uncertain domains
         for background analysis.
+
+        Per Gemini recommendation: Integrate keyword scoring with:
+        1. Pre-ML keyword filter: Block immediately if high-confidence keyword
+        2. Post-ML keyword override: Block if ML allows but keywords say block
         """
         start_time = time.perf_counter_ns()
 
+        # ============================================================
+        # PRE-ML KEYWORD DETECTION (fast path)
+        # Gemini: "For high-confidence keyword matches, block BEFORE ML inference"
+        # ============================================================
+        keyword_confidence, keyword_reason = self._keyword_score(domain)
+        if keyword_confidence >= self.keyword_min_confidence:
+            # High confidence keyword match - instant block without ML
+            self.stats['keyword_blocks'] += 1
+            self.stats['instant_blocks'] += 1
+            inference_time_ms = (time.perf_counter_ns() - start_time) / 1_000_000
+
+            return MLInferenceResult(
+                domain=domain,
+                decision=MLInferenceDecision.BLOCK_INSTANT,
+                score=keyword_confidence,
+                category=DomainCategory.TRACKING if 'track' in keyword_reason else DomainCategory.ADVERTISING,
+                features={'keyword_match': keyword_confidence, 'keyword_reason': keyword_reason},
+                behavioral_features={},
+                requires_deep_analysis=False,
+                reasons=[f"pre_ml_keyword:{keyword_reason}", f"confidence:{keyword_confidence:.2f}"],
+                inference_time_ms=inference_time_ms,
+            )
+
+        # ============================================================
+        # ML CLASSIFICATION
+        # ============================================================
         # Get classification from neural network
         category, confidence, features = self.classifier.classify(domain)
+
+        # Track ML classification
+        self.stats['ml_classifications'] += 1
 
         # Get behavioral features from query analyzer
         behavioral_features = query_pattern_analyzer.get_behavioral_features(domain)
 
         # Calculate combined score
-        # Weight: 70% ML confidence, 30% behavioral analysis
+        # Weight: 60% ML confidence, 25% behavioral analysis, 15% keyword score
+        # (Keyword score integrated into ML path per Gemini recommendation)
         behavioral_score = self._calculate_behavioral_score(behavioral_features)
-        combined_score = confidence * 0.7 + behavioral_score * 0.3
+        combined_score = confidence * 0.60 + behavioral_score * 0.25 + keyword_confidence * 0.15
+
+        # Add keyword info to features for debugging
+        features['keyword_score'] = keyword_confidence
+        features['keyword_reason'] = keyword_reason
 
         # Determine decision based on thresholds
         reasons = []
@@ -2141,6 +2321,8 @@ class MLInferenceLayer:
                 reasons.append(f"dga_score:{features['dga_combined_score']:.2f}")
             if features.get('is_typosquat', 0) > 0:
                 reasons.append("typosquat_detected")
+            if keyword_confidence > 0:
+                reasons.append(f"keyword:{keyword_reason}")
 
         elif combined_score >= self.low_threshold:
             # Uncertain: needs background analysis
@@ -2163,6 +2345,18 @@ class MLInferenceLayer:
                 reasons.append("burst_detected_but_allowed")
             if features.get('dictionary_coverage', 0) > 0.3:
                 reasons.append(f"has_dictionary_words")
+
+        # ============================================================
+        # POST-ML KEYWORD OVERRIDE (safety net)
+        # Gemini: "If ML allows but high-confidence keyword, override and block"
+        # ============================================================
+        if decision == MLInferenceDecision.ALLOW and keyword_confidence >= 0.85:
+            # ML allowed but keywords strongly indicate tracker - override
+            decision = MLInferenceDecision.BLOCK_INSTANT
+            reasons.append(f"post_ml_keyword_override:{keyword_reason}")
+            self.stats['keyword_overrides'] += 1
+            self.stats['instant_blocks'] += 1
+            self.stats['instant_allows'] -= 1  # Undo the allow count
 
         inference_time_ms = (time.perf_counter_ns() - start_time) / 1_000_000
         self._update_avg_inference_time(inference_time_ms)
@@ -3550,7 +3744,29 @@ class AIAdBlocker:
     - Bloom filter for O(1) blocklist negative lookups
     - Prefetch cache for frequently queried domains
     - TTFR benchmark for latency monitoring
+
+    SECURITY FIX: Tracking subdomains (ads.*, track.*, telemetry.*, etc.)
+    do NOT inherit parent domain whitelist. Per Gemini security recommendation.
     """
+
+    # Tracking keywords that should NOT inherit parent whitelist
+    # Per Gemini recommendation: use keyword detection, not fixed deny-list
+    TRACKING_SUBDOMAIN_KEYWORDS = {
+        'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream',
+        'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
+        'event', 'events', 'click', 'impression', 'fingerprint',
+        'sponsor', 'promo', 'affiliate', 'banner', 'pagead',
+    }
+
+    # High-confidence tracking prefixes (subdomain starts with these)
+    TRACKING_PREFIXES = {
+        'ads', 'ad', 'track', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo',
+    }
 
     def __init__(self, config: Optional[AdBlockConfig] = None):
         self.config = config or AdBlockConfig()
@@ -3592,11 +3808,14 @@ class AIAdBlocker:
         # G.N.C. Phase 2: ML Inference Layer with tiered scoring
         # Provides fast-path decisions: >0.85 = instant block, 0.5-0.85 = analyze, <0.5 = allow
         # Uses ensemble classifier if available for improved accuracy
+        # Protection level 3 (Balanced) is default - can be changed via set_protection_level()
         self.ml_inference = MLInferenceLayer(
             classifier=self.ensemble_classifier or self.classifier,
             high_threshold=0.85,
             low_threshold=0.50,
+            protection_level=3,
         )
+        self._protection_level = 3
 
         # G.N.C. Performance Optimizations
         # Bloom filter: O(1) negative lookup for blocklist (1% false positive rate)
@@ -4114,39 +4333,85 @@ class AIAdBlocker:
 
         return result
 
+    def _is_tracking_subdomain(self, domain: str, parent: str) -> bool:
+        """Check if subdomain contains tracking keywords.
+
+        SECURITY FIX: Tracking subdomains (ads.yahoo.com, telemetry.microsoft.com)
+        should NOT inherit parent domain whitelist.
+
+        Example: ads.yahoo.com should NOT be whitelisted even if yahoo.com is.
+        """
+        # Get the subdomain part (everything before the parent)
+        if not domain.endswith('.' + parent) and domain != parent:
+            return False
+
+        subdomain_part = domain[:-len(parent)-1] if domain != parent else ''
+        if not subdomain_part:
+            return False  # No subdomain, allow parent whitelist
+
+        subdomain_lower = subdomain_part.lower()
+        subdomain_parts = subdomain_lower.split('.')
+
+        # Check if first subdomain part is a tracking prefix
+        if subdomain_parts and subdomain_parts[0] in self.TRACKING_PREFIXES:
+            return True
+
+        # Check if any part contains tracking keywords
+        for part in subdomain_parts:
+            if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                return True
+            # Check for keyword substrings in longer parts
+            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                if len(keyword) >= 3 and keyword in part:
+                    return True
+
+        return False
+
     def _is_whitelisted(self, domain: str) -> bool:
         """Check if domain matches whitelist (supports wildcards and parent domains).
 
         Whitelist patterns supported:
         - exact: example.com - matches only example.com
         - wildcard: *.example.com - matches sub.example.com, a.b.example.com, etc.
-        - parent: example.com also matches all subdomains (implicit wildcard)
+        - parent: example.com also matches all subdomains (EXCEPT tracking subdomains)
 
-        The parent domain matching is the default behavior - whitelisting example.com
-        automatically whitelists all subdomains. Use explicit patterns for fine control.
+        SECURITY FIX: Tracking subdomains (ads.*, track.*, telemetry.*, etc.)
+        do NOT inherit parent domain whitelist. Per Gemini security recommendation.
         """
         domain = domain.lower()
 
-        # 1. Check exact match
+        # 1. Check exact match (always allow - user explicitly whitelisted this domain)
         if domain in self.whitelist:
             return True
 
-        # 2. Check wildcard patterns (*.example.com)
         parts = domain.split('.')
+
+        # 2. Check wildcard patterns (*.example.com)
+        # SECURITY: Check for tracking keywords before allowing inheritance
         for i in range(len(parts)):
             # Build wildcard pattern for this level
             wildcard = '*.' + '.'.join(parts[i:])
             if wildcard in self.whitelist:
+                parent = '.'.join(parts[i:])
+                # SECURITY FIX: Block tracking subdomains even if wildcard matches
+                if self._is_tracking_subdomain(domain, parent):
+                    continue
                 return True
 
         # 3. Check parent domain match (example.com whitelists sub.example.com)
+        # SECURITY: Check for tracking keywords before allowing inheritance
         for i in range(1, len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self.whitelist:
+                # SECURITY FIX: Block tracking subdomains even if parent is whitelisted
+                if self._is_tracking_subdomain(domain, parent):
+                    continue
                 return True
             # Also check parent with wildcard
             wildcard = '*.' + parent
             if wildcard in self.whitelist:
+                if self._is_tracking_subdomain(domain, parent):
+                    continue
                 return True
 
         return False
@@ -4268,6 +4533,29 @@ class AIAdBlocker:
         """Add domain to blocklist."""
         domain = domain.lower().strip('.')
         self.blocklist.add(domain)
+
+    def set_protection_level(self, level: int):
+        """
+        Set protection level and update ML inference thresholds.
+
+        Protection levels control blocking aggressiveness:
+        - Level 0: Off - allow everything
+        - Level 1: Permissive - only block high confidence (0.95+)
+        - Level 2: Light - moderate blocking (0.90+)
+        - Level 3: Balanced - default (0.85+)
+        - Level 4: Strong - aggressive blocking (0.75+)
+        - Level 5: Maximum - very aggressive (0.60+)
+
+        Per Gemini UX recommendation: slider controls ML confidence thresholds.
+        """
+        if 0 <= level <= 5:
+            self._protection_level = level
+            self.ml_inference.set_protection_level(level)
+            self.logger.info(f"Protection level set to {level}, thresholds updated")
+
+    def get_protection_level(self) -> int:
+        """Get current protection level."""
+        return self._protection_level
 
     def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics."""
@@ -4923,6 +5211,15 @@ def main():
         print(f"[*] Blocklist: {len(blocker.blocklist)} domains")
         print(f"[*] ML classification: {'enabled' if config.ml_enabled else 'disabled'}")
         print(f"[*] CNAME uncloaking: {'enabled' if config.cname_check_enabled else 'disabled'}")
+
+        # Register engine with API server for dynamic protection level updates
+        # This connects the HTTP slider to ML threshold adjustment
+        try:
+            from . import api_server
+            api_server.register_engine_callback(blocker)
+            print(f"[*] Protection level callback registered (dynamic ML thresholds enabled)")
+        except ImportError:
+            print(f"[!] API server not available, using static ML thresholds")
 
         # Start background tasks
         blocker.start_background_tasks()
