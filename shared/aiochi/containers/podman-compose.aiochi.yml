@@ -125,9 +125,13 @@ services:
       - suricata_logs:/var/log/suricata
       - ./configs/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
       - ./configs/suricata/rules:/etc/suricata/rules:ro
+      # Required config files for Suricata to start properly
+      - ./configs/suricata/classification.config:/etc/suricata/classification.config:ro
+      - ./configs/suricata/reference.config:/etc/suricata/reference.config:ro
     environment:
       SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS-mirror} --af-packet"
-    command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
+    # Use explicit suricata command (not entrypoint) for better control
+    command: ["suricata", "-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
     healthcheck:
       # Check Suricata process is running (uses -f for flexible match, handles Suricata-Main)
       test: ["CMD-SHELL", "pgrep -f Suricata || pgrep -f suricata || exit 1"]
@@ -147,15 +151,17 @@ services:
       - NET_RAW
     volumes:
       - zeek_logs:/opt/zeek/logs
-      - zeek_spool:/opt/zeek/spool
+      # Mount custom site scripts (optional)
       - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
-      - ./configs/zeek/node.cfg:/opt/zeek/etc/node.cfg:ro
     environment:
       ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
-    command: ["zeekctl", "deploy"]
+    # Use direct zeek command instead of zeekctl (more reliable for containers)
+    # -i: interface to capture on
+    # local.zeek is automatically loaded from site directory
+    command: ["zeek", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "local"]
     healthcheck:
-      # Check Zeek process is running (works with both zeekctl and direct zeek execution)
-      test: ["CMD-SHELL", "pgrep -f zeek || exit 1"]
+      # Check Zeek process is running (use pidof since pgrep not available in zeek image)
+      test: ["CMD-SHELL", "pidof zeek || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
