@@ -82,17 +82,27 @@ def save_text_file(filepath, lines):
 
 
 def get_container_status(container_name):
-    """Get status of a container."""
-    output, success = run_command(f"podman ps -a --format '{{{{.Names}}}}:{{{{.Status}}}}' | grep '^{container_name}:'")
+    """Get status of a container. CWE-78 fix: avoid shell injection."""
+    import re
+    # CWE-78: Validate container_name to prevent command injection
+    # Only allow alphanumeric, underscore, hyphen, and dot
+    if not container_name or not re.match(r'^[a-zA-Z0-9_.-]+$', container_name):
+        return {'name': container_name or '', 'running': False, 'status': 'Invalid name'}
+
+    # CWE-78 fix: Execute command without shell, filter in Python
+    output, success = run_command(['podman', 'ps', '-a', '--format', '{{.Names}}:{{.Status}}'])
     if success and output:
-        parts = output.split(':', 1)
-        if len(parts) == 2:
-            status = parts[1].lower()
-            return {
-                'name': container_name,
-                'running': 'up' in status,
-                'status': parts[1]
-            }
+        # Filter output in Python instead of using grep
+        for line in output.split('\n'):
+            if line.startswith(f'{container_name}:'):
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    status = parts[1].lower()
+                    return {
+                        'name': container_name,
+                        'running': 'up' in status,
+                        'status': parts[1]
+                    }
     return {'name': container_name, 'running': False, 'status': 'Not found'}
 
 

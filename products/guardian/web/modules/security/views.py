@@ -394,11 +394,18 @@ def api_qsecbit():
         return jsonify({'error': str(e)}), 500
 
 
+def _validate_ipv4(ip: str) -> bool:
+    """Validate IPv4 address with proper octet range checking. CWE-20 fix."""
+    import re
+    # Strict IPv4 validation: each octet must be 0-255
+    pattern = r'^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+    return bool(re.match(pattern, ip))
+
+
 @security_bp.route('/block_ip', methods=['POST'])
 def api_block_ip():
     """Block an IP address via XDP."""
     from flask import request
-    import re
 
     data = request.get_json() if request.is_json else {}
     ip = data.get('ip') or request.form.get('ip')
@@ -406,13 +413,13 @@ def api_block_ip():
     if not ip:
         return jsonify({'error': 'IP address required'}), 400
 
-    # Validate IP format
-    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
+    # CWE-20: Validate IP format with proper octet range checking
+    if not _validate_ipv4(ip):
         return jsonify({'error': 'Invalid IP address format'}), 400
 
     try:
-        # Add to XDP blocklist
-        output, success = run_command(f'/opt/hookprobe/shared/response/xdp-block.sh add {ip}')
+        # CWE-78 fix: Use list form to prevent command injection
+        output, success = run_command(['/opt/hookprobe/shared/response/xdp-block.sh', 'add', ip])
         if success:
             return jsonify({'success': True, 'message': f'Blocked {ip}'})
         return jsonify({'success': False, 'error': output}), 500
@@ -424,7 +431,6 @@ def api_block_ip():
 def api_unblock_ip():
     """Unblock an IP address."""
     from flask import request
-    import re
 
     data = request.get_json() if request.is_json else {}
     ip = data.get('ip') or request.form.get('ip')
@@ -432,11 +438,13 @@ def api_unblock_ip():
     if not ip:
         return jsonify({'error': 'IP address required'}), 400
 
-    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
+    # CWE-20: Validate IP format with proper octet range checking
+    if not _validate_ipv4(ip):
         return jsonify({'error': 'Invalid IP address format'}), 400
 
     try:
-        output, success = run_command(f'/opt/hookprobe/shared/response/xdp-block.sh remove {ip}')
+        # CWE-78 fix: Use list form to prevent command injection
+        output, success = run_command(['/opt/hookprobe/shared/response/xdp-block.sh', 'remove', ip])
         if success:
             return jsonify({'success': True, 'message': f'Unblocked {ip}'})
         return jsonify({'success': False, 'error': output}), 500
