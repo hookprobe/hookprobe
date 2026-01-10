@@ -71,6 +71,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./migrations/002_device_identity_integration.sql:/docker-entrypoint-initdb.d/02-device-identity.sql:ro
       - postgres_certs:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fortress -d fortress"]

@@ -456,3 +456,20 @@ $$ LANGUAGE plpgsql;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO fortress;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO fortress;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO fortress;
+
+-- ============================================================
+-- INCLUDE MIGRATION 002: DEVICE IDENTITY INTEGRATION
+-- G.N.C. Phase 2: Enhanced device tracking with MAC randomization support
+-- ============================================================
+-- Note: Migration 002 is in migrations/002_device_identity_integration.sql
+-- It will be applied via the apply_migration function or psql \i command
+-- during container initialization.
+--
+-- This migration adds:
+-- - Device status enum (ONLINE, STALE, OFFLINE, EXPIRED)
+-- - device_identities table for persistent identity tracking
+-- - device_identifiers table for all observed signals
+-- - dhcp_lease_history table for lease tracking
+-- - Correlation functions for MAC randomization handling
+-- - v_devices_with_identity view for device listing
+-- ============================================================

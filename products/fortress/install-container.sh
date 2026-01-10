@@ -4326,6 +4326,17 @@ install_fingerprinting_services() {
         log_info "  Installed: fts-wan-failover.service"
     fi
 
+    # Install device lifecycle service and timer (G.N.C. Phase 2)
+    # Manages device state transitions: ONLINE -> STALE -> OFFLINE -> EXPIRED
+    if [ -f "${SYSTEMD_SRC}/fts-device-lifecycle.service" ]; then
+        cp "${SYSTEMD_SRC}/fts-device-lifecycle.service" "${SYSTEMD_DST}/"
+        log_info "  Installed: fts-device-lifecycle.service (device status management)"
+    fi
+    if [ -f "${SYSTEMD_SRC}/fts-device-lifecycle.timer" ]; then
+        cp "${SYSTEMD_SRC}/fts-device-lifecycle.timer" "${SYSTEMD_DST}/"
+        log_info "  Installed: fts-device-lifecycle.timer (60s status updates)"
+    fi
+
     # Initialize fingerprinting databases
     log_info "Initializing fingerprinting databases..."
 
@@ -4461,6 +4472,13 @@ SQLEOF
     # Enable WAN failover service (only if config exists - ConditionPathExists checks this)
     # The service will be inactive until /etc/hookprobe/wan-failover.conf is created
     systemctl enable fts-wan-failover.service 2>/dev/null || true
+
+    # Enable device lifecycle timer (G.N.C. Phase 2 - device status management)
+    # Timer triggers every 60 seconds to update device states (ONLINE->STALE->OFFLINE->EXPIRED)
+    systemctl enable fts-device-lifecycle.timer 2>/dev/null || true
+    systemctl start fts-device-lifecycle.timer 2>/dev/null || {
+        log_warn "fts-device-lifecycle.timer failed to start (may need PostgreSQL)"
+    }
 
     # Start host-based services (fingerprint-engine and presence-sensor run on host)
     log_info "Starting AI Fingerprinting services..."
