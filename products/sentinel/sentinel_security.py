@@ -20,11 +20,63 @@ import time
 import hashlib
 import logging
 import subprocess
+import re
+import ipaddress
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, Set, Optional, Tuple, List
 
 logger = logging.getLogger("sentinel.security")
+
+
+def validate_ip_address(ip: str) -> bool:
+    """
+    Validate that a string is a valid IPv4 or IPv6 address.
+    Prevents command injection via malformed IP strings.
+
+    Args:
+        ip: String to validate as IP address
+
+    Returns:
+        True if valid IP address, False otherwise
+    """
+    if not ip or not isinstance(ip, str):
+        return False
+
+    # Reject obviously malicious patterns
+    if any(c in ip for c in [';', '|', '&', '$', '`', '\n', '\r', ' ', '\t']):
+        return False
+
+    try:
+        # Use ipaddress module for strict validation
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def sanitize_log_input(value: str, max_length: int = 100) -> str:
+    """
+    Sanitize input for safe logging to prevent log injection.
+
+    Args:
+        value: String to sanitize
+        max_length: Maximum length to truncate to
+
+    Returns:
+        Sanitized string safe for logging
+    """
+    if not isinstance(value, str):
+        value = str(value)
+
+    # Remove control characters and newlines
+    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', value)
+
+    # Truncate to max length
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "..."
+
+    return sanitized
 
 
 class RateLimiter:
@@ -83,7 +135,7 @@ class RateLimiter:
 
 
 class ThreatDetector:
-    """Lightweight threat detection for edge validators"""
+    """Lightweight threat detection for edge validators with thread safety"""
 
     # Known malicious patterns (lowercase for case-insensitive matching)
     SUSPICIOUS_PATTERNS = [
@@ -126,7 +178,12 @@ class ThreatDetector:
     THRESHOLD_ERRORS_PER_MIN = 50
     THRESHOLD_UNIQUE_PATHS = 100
 
+    # Maximum blocked IPs to prevent memory exhaustion
+    MAX_BLOCKED_IPS = 10000
+
     def __init__(self):
+        import threading
+        self._lock = threading.Lock()  # SECURITY: Thread safety (CWE-362)
         self.blocked_ips: Set[str] = set()
         self.request_counts: Dict[str, int] = defaultdict(int)
         self.error_counts: Dict[str, int] = defaultdict(int)
@@ -153,62 +210,92 @@ class ThreatDetector:
         Returns:
             Tuple of (allowed: bool, reason: str)
         """
-        # Check if IP is already blocked
-        if client_ip in self.blocked_ips:
-            return False, "IP blocked"
+        # SECURITY: Validate IP format to prevent injection attacks
+        if not validate_ip_address(client_ip):
+            logger.warning(f"[SECURITY] Invalid client IP format: {sanitize_log_input(client_ip, 50)}")
+            return False, "Invalid IP"
 
-        # Reset counters every minute
-        now = time.time()
-        if now - self.last_reset > 60:
-            self.request_counts.clear()
-            self.error_counts.clear()
-            self.path_counts.clear()
-            self.last_reset = now
+        with self._lock:  # SECURITY: Thread safety (CWE-362)
+            # Check if IP is already blocked
+            if client_ip in self.blocked_ips:
+                return False, "IP blocked"
 
-        # Check request rate
-        self.request_counts[client_ip] += 1
-        if self.request_counts[client_ip] > self.THRESHOLD_REQUESTS_PER_MIN:
-            self._block_ip(client_ip, "Rate limit exceeded")
-            return False, "Rate limit"
+            # Reset counters every minute
+            now = time.time()
+            if now - self.last_reset > 60:
+                self.request_counts.clear()
+                self.error_counts.clear()
+                self.path_counts.clear()
+                self.last_reset = now
 
-        # Check path scanning (too many unique paths = scanner)
-        self.path_counts[client_ip].add(path)
-        if len(self.path_counts[client_ip]) > self.THRESHOLD_UNIQUE_PATHS:
-            self._block_ip(client_ip, "Path scanning detected")
-            self.stats["scanners_detected"] += 1
-            return False, "Path scanning"
+            # Check request rate
+            self.request_counts[client_ip] += 1
+            if self.request_counts[client_ip] > self.THRESHOLD_REQUESTS_PER_MIN:
+                self._block_ip_internal(client_ip, "Rate limit exceeded")
+                return False, "Rate limit"
 
-        # Check for malicious patterns in path and body
-        combined = path.encode() + body
-        for pattern in self.SUSPICIOUS_PATTERNS:
-            if pattern.lower() in combined.lower():
-                self._block_ip(client_ip, f"Malicious pattern: {pattern.decode(errors='ignore')}")
-                self.stats["patterns_matched"] += 1
-                return False, "Malicious pattern"
+            # Check path scanning (too many unique paths = scanner)
+            self.path_counts[client_ip].add(path)
+            if len(self.path_counts[client_ip]) > self.THRESHOLD_UNIQUE_PATHS:
+                self._block_ip_internal(client_ip, "Path scanning detected")
+                self.stats["scanners_detected"] += 1
+                return False, "Path scanning"
 
-        # Check headers for scanner signatures
-        if headers:
-            user_agent = headers.get("user-agent", "").lower().encode()
-            for sig in self.SCANNER_SIGNATURES:
-                if sig in user_agent:
-                    self._block_ip(client_ip, f"Scanner detected: {sig.decode()}")
-                    self.stats["scanners_detected"] += 1
-                    return False, "Scanner detected"
+            # Check for malicious patterns in path and body
+            combined = path.encode() + body
+            for pattern in self.SUSPICIOUS_PATTERNS:
+                if pattern.lower() in combined.lower():
+                    self._block_ip_internal(client_ip, f"Malicious pattern: {pattern.decode(errors='ignore')}")
+                    self.stats["patterns_matched"] += 1
+                    return False, "Malicious pattern"
+
+            # Check headers for scanner signatures
+            if headers:
+                user_agent = headers.get("user-agent", "").lower().encode()
+                for sig in self.SCANNER_SIGNATURES:
+                    if sig in user_agent:
+                        self._block_ip_internal(client_ip, f"Scanner detected: {sig.decode()}")
+                        self.stats["scanners_detected"] += 1
+                        return False, "Scanner detected"
 
         return True, "OK"
 
     def record_error(self, client_ip: str):
         """Record an error from this IP (too many errors = suspicious)"""
-        self.error_counts[client_ip] += 1
-        if self.error_counts[client_ip] > self.THRESHOLD_ERRORS_PER_MIN:
-            self._block_ip(client_ip, "Too many errors")
+        if not validate_ip_address(client_ip):
+            return
+
+        with self._lock:
+            self.error_counts[client_ip] += 1
+            if self.error_counts[client_ip] > self.THRESHOLD_ERRORS_PER_MIN:
+                self._block_ip_internal(client_ip, "Too many errors")
 
     def _block_ip(self, ip: str, reason: str):
-        """Block an IP address"""
+        """Block an IP address (public API with validation)"""
+        if not validate_ip_address(ip):
+            logger.warning(f"[SECURITY] Rejected invalid IP for blocking: {sanitize_log_input(ip, 50)}")
+            return
+
+        with self._lock:
+            self._block_ip_internal(ip, reason)
+
+    def _block_ip_internal(self, ip: str, reason: str):
+        """
+        Internal method to block an IP address.
+        MUST be called while holding self._lock.
+        IP must be pre-validated.
+        """
         if ip not in self.blocked_ips:
+            # SECURITY: Prevent unbounded memory growth (CWE-400)
+            if len(self.blocked_ips) >= self.MAX_BLOCKED_IPS:
+                # Remove oldest blocked IP (convert to list, remove first)
+                oldest = next(iter(self.blocked_ips))
+                self.blocked_ips.discard(oldest)
+                logger.debug(f"[SECURITY] Evicted oldest blocked IP due to limit: {oldest}")
+
             self.blocked_ips.add(ip)
             self.stats["threats_detected"] += 1
-            logger.warning(f"[SECURITY] Blocked IP {ip}: {reason}")
+            logger.warning(f"[SECURITY] Blocked IP {ip}: {sanitize_log_input(reason, 100)}")
             if self.alert_callback:
                 try:
                     self.alert_callback("ip_blocked", {"ip": ip, "reason": reason})
@@ -328,6 +415,11 @@ class FirewallManager:
     @classmethod
     def setup_basic_rules(cls, health_port: int = 9090):
         """Setup basic firewall protection rules"""
+        # Validate health_port is in valid range
+        if not isinstance(health_port, int) or health_port < 1 or health_port > 65535:
+            logger.error(f"[FIREWALL] Invalid health port: {health_port}")
+            return False
+
         rules = [
             # Allow established connections
             f"-A {cls.CHAIN_NAME} -m state --state ESTABLISHED,RELATED -j ACCEPT",
@@ -351,15 +443,42 @@ class FirewallManager:
 
     @classmethod
     def block_ip(cls, ip: str, reason: str = ""):
-        """Block an IP address at firewall level"""
+        """
+        Block an IP address at firewall level.
+
+        Args:
+            ip: IPv4 or IPv6 address to block (validated before use)
+            reason: Optional reason for logging
+
+        Returns:
+            True if blocked successfully, False otherwise
+        """
+        # SECURITY: Validate IP to prevent command injection (CWE-78)
+        if not validate_ip_address(ip):
+            logger.warning(f"[FIREWALL] Rejected invalid IP: {sanitize_log_input(ip, 50)}")
+            return False
+
         if cls._run_iptables(f"-I INPUT -s {ip} -j DROP"):
-            logger.info(f"[FIREWALL] Blocked IP {ip}" + (f": {reason}" if reason else ""))
+            logger.info(f"[FIREWALL] Blocked IP {ip}" + (f": {sanitize_log_input(reason, 100)}" if reason else ""))
             return True
         return False
 
     @classmethod
     def unblock_ip(cls, ip: str):
-        """Unblock an IP address"""
+        """
+        Unblock an IP address.
+
+        Args:
+            ip: IPv4 or IPv6 address to unblock (validated before use)
+
+        Returns:
+            True if unblocked successfully, False otherwise
+        """
+        # SECURITY: Validate IP to prevent command injection (CWE-78)
+        if not validate_ip_address(ip):
+            logger.warning(f"[FIREWALL] Rejected invalid IP for unblock: {sanitize_log_input(ip, 50)}")
+            return False
+
         if cls._run_iptables(f"-D INPUT -s {ip} -j DROP"):
             logger.info(f"[FIREWALL] Unblocked IP {ip}")
             return True
@@ -378,21 +497,34 @@ class FirewallManager:
                 if "DROP" in line and "anywhere" not in line:
                     parts = line.split()
                     if len(parts) >= 4:
-                        blocked.append(parts[3])
+                        # Validate each IP before adding to list
+                        candidate_ip = parts[3]
+                        if validate_ip_address(candidate_ip):
+                            blocked.append(candidate_ip)
             return blocked
-        except Exception:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+            logger.debug(f"[FIREWALL] List blocked failed: {e}")
             return []
 
     @staticmethod
     def _run_iptables(rule: str) -> bool:
-        """Run an iptables command"""
+        """
+        Run an iptables command safely.
+
+        Args:
+            rule: iptables rule string (should not contain user input)
+
+        Returns:
+            True if command succeeded, False otherwise
+        """
         try:
-            cmd = f"iptables {rule}"
+            # Use list form to avoid shell injection
+            cmd_parts = ["iptables"] + rule.split()
             result = subprocess.run(
-                cmd.split(), capture_output=True, timeout=5
+                cmd_parts, capture_output=True, timeout=5
             )
             return result.returncode == 0
-        except Exception as e:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
             logger.debug(f"[FIREWALL] Command failed: {e}")
             return False
 
@@ -515,13 +647,15 @@ class SecurityManager:
             FirewallManager.unblock_ip(ip)
 
 
-# Export main classes
+# Export main classes and utilities
 __all__ = [
     "SecurityManager",
     "RateLimiter",
     "ThreatDetector",
     "IntegrityChecker",
-    "FirewallManager"
+    "FirewallManager",
+    "validate_ip_address",
+    "sanitize_log_input",
 ]
 
 
