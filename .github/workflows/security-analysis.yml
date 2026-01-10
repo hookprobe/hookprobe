@@ -1,0 +1,238 @@
+name: Security Analysis
+
+# G.N.C. Protocol: Security-first CI/CD with CodeQL integration
+# This workflow catches CWE-532 and other security issues before merge
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - '**.py'
+      - '**.sh'
+      - 'products/**'
+      - 'core/**'
+      - 'shared/**'
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly security scan on Mondays
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # Fast security checks (< 2 min)
+  quick-security-scan:
+    name: Quick Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install security tools
+        run: |
+          pip install bandit semgrep
+
+      - name: Bandit security scan (Python)
+        run: |
+          echo "Running Bandit security scan..."
+          bandit -r core/ shared/ products/ \
+            -f json -o bandit-results.json \
+            --severity-level medium \
+            --confidence-level medium \
+            -x '**/__pycache__/**,**/tests/**,**/test_*.py' || true
+
+          # Check for HIGH/CRITICAL issues (fails if found)
+          high_issues=$(bandit -r core/ shared/ products/ \
+            --severity-level high \
+            --confidence-level high \
+            -x '**/__pycache__/**,**/tests/**' \
+            -f json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))" 2>/dev/null || echo "0")
+
+          echo "High/Critical issues found: $high_issues"
+          if [ "$high_issues" -gt 0 ]; then
+            echo "::error::Found $high_issues HIGH/CRITICAL security issues"
+            bandit -r core/ shared/ products/ --severity-level high --confidence-level high -x '**/__pycache__/**,**/tests/**'
+            exit 1
+          fi
+
+      - name: Check for sensitive data patterns
+        run: |
+          echo "Scanning for hardcoded secrets..."
+
+          # Check for common secret patterns (CWE-798)
+          patterns=(
+            'password\s*=\s*["\x27][^"\x27]{8,}["\x27]'
+            'api_key\s*=\s*["\x27][^"\x27]{16,}["\x27]'
+            'secret\s*=\s*["\x27][^"\x27]{8,}["\x27]'
+            'token\s*=\s*["\x27][A-Za-z0-9_-]{20,}["\x27]'
+          )
+
+          found_issues=0
+          for pattern in "${patterns[@]}"; do
+            matches=$(grep -rE "$pattern" --include="*.py" --include="*.sh" \
+              core/ shared/ products/ 2>/dev/null | \
+              grep -v '_example\|\.example\|test_\|_test\|mock\|fixture' || true)
+            if [ -n "$matches" ]; then
+              echo "::warning::Potential hardcoded secret pattern found"
+              echo "$matches"
+              found_issues=$((found_issues + 1))
+            fi
+          done
+
+          if [ $found_issues -gt 3 ]; then
+            echo "::error::Too many potential hardcoded secrets found"
+            exit 1
+          fi
+
+      - name: Check for clear-text logging (CWE-532)
+        run: |
+          echo "Scanning for clear-text logging of sensitive data..."
+
+          # Check for raw MAC/IP logging without mask_mac/mask_ip
+          issues=$(grep -rE 'logger\.(info|warning|error|debug)\([^)]*\{(mac|ip)_?address' \
+            --include="*.py" core/ shared/ products/ 2>/dev/null | \
+            grep -v 'mask_mac\|mask_ip\|_masked\|# nosec' | wc -l || echo "0")
+
+          echo "Unmasked MAC/IP logging patterns: $issues"
+          if [ "$issues" -gt 10 ]; then
+            echo "::error::Found $issues unmasked MAC/IP logging instances. Use mask_mac() or mask_ip() from security_utils."
+            grep -rE 'logger\.(info|warning|error|debug)\([^)]*\{(mac|ip)_?address' \
+              --include="*.py" core/ shared/ products/ 2>/dev/null | \
+              grep -v 'mask_mac\|mask_ip\|_masked' | head -20
+            exit 1
+          fi
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-results
+          path: |
+            bandit-results.json
+          retention-days: 30
+
+  # CodeQL analysis (runs in parallel)
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
+  # Shell script security (runs in parallel)
+  shell-security:
+    name: Shell Script Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck scan
+        run: |
+          echo "Running ShellCheck on shell scripts..."
+
+          # Find all shell scripts
+          scripts=$(find products/ deploy/ scripts/ -name "*.sh" -type f 2>/dev/null || true)
+
+          if [ -z "$scripts" ]; then
+            echo "No shell scripts found"
+            exit 0
+          fi
+
+          # Run ShellCheck with severity filter
+          failed=0
+          for script in $scripts; do
+            echo "Checking: $script"
+            if ! shellcheck -S warning "$script" 2>/dev/null; then
+              failed=$((failed + 1))
+            fi
+          done
+
+          echo "Scripts with warnings: $failed"
+          # Don't fail on warnings, only errors
+
+      - name: Check for dangerous commands
+        run: |
+          echo "Checking for dangerous shell patterns..."
+
+          # Check for dangerous patterns
+          dangerous_patterns=(
+            'rm -rf /\s'           # Recursive delete from root
+            'chmod 777'            # World-writable
+            'eval "\$'             # Eval with variable expansion
+            '> /dev/null 2>&1 &'   # Background with suppressed output
+          )
+
+          found=0
+          for pattern in "${dangerous_patterns[@]}"; do
+            matches=$(grep -rE "$pattern" --include="*.sh" \
+              products/ deploy/ scripts/ 2>/dev/null | \
+              grep -v '# nosec\|# shellcheck' || true)
+            if [ -n "$matches" ]; then
+              echo "::warning::Potentially dangerous pattern: $pattern"
+              echo "$matches"
+              found=$((found + 1))
+            fi
+          done
+
+          if [ $found -gt 5 ]; then
+            echo "::error::Too many dangerous shell patterns found"
+            exit 1
+          fi
+
+  # Summary job
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [quick-security-scan, codeql-analysis, shell-security]
+    if: always()
+
+    steps:
+      - name: Security Check Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   Security Analysis Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Quick Security Scan: ${{ needs.quick-security-scan.result }}"
+          echo "CodeQL Analysis:     ${{ needs.codeql-analysis.result }}"
+          echo "Shell Security:      ${{ needs.shell-security.result }}"
+          echo ""
+
+          # Fail if any security check failed
+          if [ "${{ needs.quick-security-scan.result }}" = "failure" ] || \
+             [ "${{ needs.codeql-analysis.result }}" = "failure" ] || \
+             [ "${{ needs.shell-security.result }}" = "failure" ]; then
+            echo "::error::Security checks failed! Review and fix before merging."
+            exit 1
+          fi
+
+          echo "✓ All security checks passed"

@@ -53,6 +53,16 @@ repos:
       - id: bandit
         args: ['-ll', '--recursive', '--exclude', 'tests']
 
+  # Custom: Check for unmasked sensitive data logging (CWE-532)
+  - repo: local
+    hooks:
+      - id: sensitive-logging-check
+        name: Check for unmasked MAC/IP logging
+        entry: bash -c 'grep -rE "logger\.(info|warning|error)\([^)]*\{(mac|ip)(_address)?\}" --include="*.py" "$@" 2>/dev/null | grep -v "mask_mac\|mask_ip\|_masked" | grep -v "# nosec" && echo "ERROR: Found unmasked MAC/IP logging. Use mask_mac() or mask_ip() from security_utils." && exit 1 || exit 0'
+        language: system
+        types: [python]
+        pass_filenames: true
+
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.38.0

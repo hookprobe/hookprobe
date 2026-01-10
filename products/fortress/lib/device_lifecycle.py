@@ -48,6 +48,9 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+# Import security utilities for PII masking (CWE-532 mitigation)
+from security_utils import mask_mac, mask_ip
+
 import psycopg2
 import psycopg2.extensions
 import psycopg2.extras
@@ -538,6 +541,10 @@ def main():
     parser.add_argument("--status", metavar="MAC", help="Get device status")
     parser.add_argument("--list", action="store_true", help="List all devices")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--show-sensitive", "-s", action="store_true",
+        help="Show full MAC/IP addresses (requires authorized access)"
+    )
 
     args = parser.parse_args()
 
@@ -562,7 +569,12 @@ def main():
         elif args.list:
             devices = manager.get_all_devices()
             for d in devices:
-                print(f"{d['status']:8} {d['mac_address']} {d['ip_address'] or 'N/A':15} {d['display_name']}")
+                # Mask MAC/IP by default for CWE-532 compliance
+                # Use --show-sensitive flag for authorized full access
+                mac_display = d['mac_address'] if args.show_sensitive else mask_mac(d['mac_address'])
+                ip_val = d['ip_address'] or 'N/A'
+                ip_display = ip_val if args.show_sensitive else (mask_ip(ip_val) if ip_val != 'N/A' else 'N/A')
+                print(f"{d['status']:8} {mac_display:20} {ip_display:15} {d['display_name']}")
         else:
             parser.print_help()
     finally:
