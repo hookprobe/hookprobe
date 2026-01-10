@@ -1,14 +1,13 @@
 <?xml version="1.0"?>
+<!--
+  AIOCHI ClickHouse User Configuration
+  Note: User 'aiochi' is created by container entrypoint via CLICKHOUSE_PASSWORD env var.
+  This file only extends the user with additional settings.
+-->
 <clickhouse>
     <users>
         <aiochi>
-            <password_sha256_hex></password_sha256_hex>
-            <networks>
-                <ip>172.20.210.0/24</ip>
-                <ip>127.0.0.1</ip>
-            </networks>
-            <profile>default</profile>
-            <quota>default</quota>
+            <!-- Enable full access management for DDL operations -->
             <access_management>1</access_management>
         </aiochi>
     </users>
