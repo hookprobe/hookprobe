@@ -8,22 +8,36 @@
 # Environment variables from dnsmasq:
 #   DNSMASQ_REQUESTED_OPTIONS - DHCP Option 55 fingerprint (device DNA)
 #   DNSMASQ_VENDOR_CLASS - Vendor class identifier
-#   DNSMASQ_CLIENT_ID - Client identifier
+#   DNSMASQ_CLIENT_ID - Client identifier (CRITICAL for MAC randomization)
 #   DNSMASQ_INTERFACE - Network interface
+#   DNSMASQ_LEASE_LENGTH - Lease duration in seconds
 #
-# This script integrates with SDN Auto Pilot for device classification
-# and OpenFlow micro-segmentation policy enforcement.
+# G.N.C. Phase 2: Enhanced device tracking with MAC randomization support
+#
+# This script integrates with:
+# - PostgreSQL device_lifecycle (primary - real-time status tracking)
+# - SDN Auto Pilot for device classification
+# - OpenFlow micro-segmentation policy enforcement
 
 set -e
 
 ACTION="${1:-}"
 MAC="${2:-}"
 IP="${3:-}"
-HOSTNAME="${4:-}"
+HOSTNAME="${4:-${DNSMASQ_SUPPLIED_HOSTNAME:-}}"
 # CRITICAL: DHCP Option 55 fingerprint - the device "DNA"
 DHCP_FINGERPRINT="${DNSMASQ_REQUESTED_OPTIONS:-}"
+DHCP_OPTION61="${DNSMASQ_CLIENT_ID:-}"  # Client identifier - stable across MAC randomization
 VENDOR_CLASS="${DNSMASQ_VENDOR_CLASS:-}"
-INTERFACE="${DNSMASQ_INTERFACE:-}"
+INTERFACE="${DNSMASQ_INTERFACE:-FTS}"
+LEASE_LENGTH="${DNSMASQ_LEASE_LENGTH:-3600}"
+
+# Database configuration (for PostgreSQL device lifecycle)
+DATABASE_HOST="${DATABASE_HOST:-172.20.200.10}"
+DATABASE_PORT="${DATABASE_PORT:-5432}"
+DATABASE_NAME="${DATABASE_NAME:-fortress}"
+DATABASE_USER="${DATABASE_USER:-fortress}"
+DATABASE_PASSWORD="${DATABASE_PASSWORD:-fortress_db_secret}"
 
 # Paths
 DATA_DIR="/opt/hookprobe/fortress/data"
@@ -36,6 +50,124 @@ mkdir -p "$DATA_DIR"
 
 # Timestamp
 NOW=$(date '+%Y-%m-%d %H:%M:%S')
+
+# ============================================================
+# INPUT VALIDATION & SANITIZATION (Security)
+# ============================================================
+
+# Function to sanitize MAC address (only allow valid MAC characters)
+sanitize_mac() {
+    local mac="$1"
+    # Only allow hex characters and colons, uppercase
+    echo "$mac" | tr '[:lower:]' '[:upper:]' | sed 's/[^0-9A-F:]//g'
+}
+
+# Function to escape strings for PostgreSQL (prevent SQL injection)
+pg_escape() {
+    local val="$1"
+    if [[ -z "$val" ]]; then
+        echo "NULL"
+    else
+        # Escape single quotes by doubling them
+        val="${val//\'/\'\'}"
+        # Remove any control characters and null bytes
+        val=$(echo -n "$val" | tr -d '\0-\037')
+        echo "'${val}'"
+    fi
+}
+
+# Sanitize MAC address
+MAC=$(sanitize_mac "$MAC")
+
+# Validate MAC format
+if [[ ! "$MAC" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]]; then
+    echo "$NOW ERROR: Invalid MAC format: $MAC" >> "$LEASE_LOG"
+    exit 1
+fi
+
+# Validate LEASE_LENGTH is numeric
+if [[ ! "$LEASE_LENGTH" =~ ^[0-9]+$ ]]; then
+    LEASE_LENGTH=3600
+fi
+
+# ============================================================
+# POSTGRESQL DEVICE LIFECYCLE (G.N.C. Phase 2 - Primary)
+# ============================================================
+# Direct PostgreSQL registration for real-time device status tracking
+# This is FASTER than Python and provides immediate database updates
+
+register_device_postgres() {
+    # Skip if psql not available
+    command -v psql &>/dev/null || return 1
+
+    # Get manufacturer from OUI prefix
+    local OUI_PREFIX="${MAC:0:8}"
+    local MANUFACTURER=""
+
+    case "$OUI_PREFIX" in
+        "DC:A6:32"|"B8:27:EB"|"D8:3A:DD"|"E4:5F:01") MANUFACTURER="Raspberry Pi" ;;
+        "00:1C:B3"|"00:03:93"|"A4:5E:60"|"F4:5C:89"|"3C:06:30") MANUFACTURER="Apple" ;;
+        "80:8A:BD"|"00:09:18"|"34:23:BA"|"78:BD:BC") MANUFACTURER="Samsung" ;;
+        "3C:5A:B4"|"94:EB:2C"|"F4:F5:D8") MANUFACTURER="Google" ;;
+        "00:E0:4C"|"52:54:00") MANUFACTURER="Realtek" ;;
+        "00:24:E4") MANUFACTURER="Withings" ;;
+    esac
+
+    # Check for randomized MAC (locally administered bit set)
+    if [[ "${MAC:1:1}" =~ [26AaEe] ]]; then
+        [[ -z "$MANUFACTURER" ]] && MANUFACTURER="Randomized MAC"
+    fi
+
+    # Build escaped values
+    local ESC_MAC=$(pg_escape "$MAC")
+    local ESC_HOSTNAME=$(pg_escape "$HOSTNAME")
+    local ESC_OPT55=$(pg_escape "$DHCP_FINGERPRINT")
+    local ESC_OPT61=$(pg_escape "$DHCP_OPTION61")
+    local ESC_VENDOR=$(pg_escape "$VENDOR_CLASS")
+    local ESC_MANUFACTURER=$(pg_escape "$MANUFACTURER")
+
+    # Call register_device stored function
+    PGPASSWORD="$DATABASE_PASSWORD" psql -h "$DATABASE_HOST" -p "$DATABASE_PORT" \
+        -U "$DATABASE_USER" -d "$DATABASE_NAME" -t -A -q -c "
+        SELECT * FROM register_device(
+            ${ESC_MAC},
+            '${IP}'::inet,
+            ${ESC_HOSTNAME},
+            ${ESC_OPT55},
+            ${ESC_OPT61},
+            ${ESC_VENDOR},
+            NULL,
+            ${LEASE_LENGTH},
+            ${ESC_MANUFACTURER}
+        );
+    " 2>/dev/null
+}
+
+release_device_postgres() {
+    command -v psql &>/dev/null || return 1
+
+    PGPASSWORD="$DATABASE_PASSWORD" psql -h "$DATABASE_HOST" -p "$DATABASE_PORT" \
+        -U "$DATABASE_USER" -d "$DATABASE_NAME" -q -c "
+        UPDATE devices
+        SET status = 'OFFLINE', offline_at = NOW(), ip_address = NULL
+        WHERE mac_address = '$MAC'
+    " 2>/dev/null
+}
+
+renew_device_postgres() {
+    command -v psql &>/dev/null || return 1
+
+    PGPASSWORD="$DATABASE_PASSWORD" psql -h "$DATABASE_HOST" -p "$DATABASE_PORT" \
+        -U "$DATABASE_USER" -d "$DATABASE_NAME" -q -c "
+        UPDATE devices
+        SET status = 'ONLINE',
+            last_seen = NOW(),
+            dhcp_lease_expiry = NOW() + INTERVAL '$LEASE_LENGTH seconds',
+            stale_at = NULL,
+            offline_at = NULL
+        WHERE mac_address = '$MAC'
+    " 2>/dev/null
+}
 
 # Log event (fast, non-blocking)
 log_event() {
@@ -219,20 +351,34 @@ notify_ui() {
 
 # Main execution
 case "$ACTION" in
-    add|old)
-        # New or renewed lease - full classification pipeline
+    add)
+        # New lease - full classification pipeline + PostgreSQL registration
         log_event
+        # PostgreSQL device lifecycle (primary - real-time status)
+        register_device_postgres &
+        # Python SDN Auto Pilot (secondary - classification)
         process_device
         notify_ui
         ;;
-    del)
-        # Lease released - log only
+    old)
+        # Renewed lease - update status + refresh classification
         log_event
+        # PostgreSQL device lifecycle (primary - renew status)
+        renew_device_postgres &
+        # Python SDN Auto Pilot (secondary - refresh)
+        process_device
+        ;;
+    del)
+        # Lease released - mark offline
+        log_event
+        # PostgreSQL device lifecycle (primary - mark offline)
+        release_device_postgres &
+        # Python fallback
         process_device
         ;;
     init)
         # dnsmasq startup - initialize
-        echo "DHCP event handler initialized at $NOW (SDN Auto Pilot enabled)" >> "$LEASE_LOG"
+        echo "DHCP event handler initialized at $NOW (G.N.C. Phase 2 + SDN Auto Pilot)" >> "$LEASE_LOG"
         ;;
     tftp)
         # TFTP event - ignore

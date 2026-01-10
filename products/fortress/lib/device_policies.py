@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fortress Device Policy Manager - Simple SQLite-based device management
+Fortress Device Policy Manager - Hybrid SQLite/PostgreSQL device management
 
 Network Policies:
 - QUARANTINE: Unknown devices, no network access (default for unknowns)
@@ -9,20 +9,151 @@ Network Policies:
 - SMART_HOME: Curated IoT (HomePod, Echo, Matter/Thread bridges)
 - FULL_ACCESS: Management devices on VLAN 200, can manage other devices
 
-Storage: SQLite database at /var/lib/hookprobe/devices.db
+Storage:
+- Policies: SQLite at /var/lib/hookprobe/devices.db
+- Device Identity: PostgreSQL (when available) for real-time status
+
+G.N.C. Phase 2: Integrated device identity correlation with DHCP lifecycle
 """
 
 import sqlite3
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+# PostgreSQL connection settings (from environment or defaults)
+PG_HOST = os.environ.get('DATABASE_HOST', '172.20.200.10')
+PG_PORT = int(os.environ.get('DATABASE_PORT', '5432'))
+PG_NAME = os.environ.get('DATABASE_NAME', 'fortress')
+PG_USER = os.environ.get('DATABASE_USER', 'fortress')
+PG_PASSWORD = os.environ.get('DATABASE_PASSWORD', 'fortress_db_secret')
+
+
+class DeviceStatus(str, Enum):
+    """Device connection status (from PostgreSQL device lifecycle)."""
+    ONLINE = 'ONLINE'       # Active DHCP lease, recently seen
+    STALE = 'STALE'         # No activity for >30 mins but lease valid
+    OFFLINE = 'OFFLINE'     # Released lease or >24h inactive
+    EXPIRED = 'EXPIRED'     # No activity for >30 days, candidate for removal
+
+
+# Status display info for UI
+STATUS_INFO = {
+    DeviceStatus.ONLINE: {
+        'name': 'Online',
+        'icon': 'fa-circle',
+        'color': 'success',
+        'description': 'Device is active on the network',
+    },
+    DeviceStatus.STALE: {
+        'name': 'Stale',
+        'icon': 'fa-clock',
+        'color': 'warning',
+        'description': 'Device inactive for >30 minutes',
+    },
+    DeviceStatus.OFFLINE: {
+        'name': 'Offline',
+        'icon': 'fa-circle-xmark',
+        'color': 'secondary',
+        'description': 'Device disconnected or lease expired',
+    },
+    DeviceStatus.EXPIRED: {
+        'name': 'Expired',
+        'icon': 'fa-ghost',
+        'color': 'dark',
+        'description': 'Device not seen for >30 days',
+    },
+}
+
+
+def _get_pg_connection():
+    """Get PostgreSQL connection if available."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            dbname=PG_NAME,
+            user=PG_USER,
+            password=PG_PASSWORD,
+            connect_timeout=5,
+        )
+        return conn
+    except Exception as e:
+        logger.debug(f"PostgreSQL not available: {e}")
+        return None
+
+
+def _load_devices_from_postgres() -> Optional[List[Dict]]:
+    """Load devices from PostgreSQL v_devices_with_identity view.
+
+    Returns None if PostgreSQL is unavailable, otherwise a list of device dicts.
+    """
+    conn = _get_pg_connection()
+    if not conn:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    mac_address,
+                    ip_address,
+                    hostname,
+                    manufacturer,
+                    device_type,
+                    status,
+                    canonical_name,
+                    identity_id,
+                    first_seen,
+                    last_seen,
+                    stale_at,
+                    offline_at,
+                    dhcp_lease_expiry,
+                    dhcp_option55,
+                    dhcp_option61,
+                    is_mac_randomized
+                FROM v_devices_with_identity
+                ORDER BY
+                    CASE status
+                        WHEN 'ONLINE' THEN 1
+                        WHEN 'STALE' THEN 2
+                        WHEN 'OFFLINE' THEN 3
+                        ELSE 4
+                    END,
+                    last_seen DESC NULLS LAST
+            """)
+
+            columns = [desc[0] for desc in cur.description]
+            devices = []
+            for row in cur.fetchall():
+                device = dict(zip(columns, row))
+                # Convert datetime objects to ISO strings
+                for key in ('first_seen', 'last_seen', 'stale_at', 'offline_at', 'dhcp_lease_expiry'):
+                    if device.get(key) and hasattr(device[key], 'isoformat'):
+                        device[key] = device[key].isoformat()
+                # Convert inet to string
+                if device.get('ip_address'):
+                    device['ip_address'] = str(device['ip_address'])
+                # Convert UUID to string
+                if device.get('identity_id'):
+                    device['identity_id'] = str(device['identity_id'])
+                devices.append(device)
+
+            return devices
+    except Exception as e:
+        logger.warning(f"Failed to load devices from PostgreSQL: {e}")
+        return None
+    finally:
+        conn.close()
 
 
 def _decode_dnsmasq_hostname(hostname: str) -> str:
@@ -475,18 +606,131 @@ def get_recommended_policy(device: Dict) -> str:
     return NetworkPolicy.INTERNET_ONLY.value
 
 
-def get_all_devices() -> List[Dict]:
+def get_all_devices(use_postgres: bool = True) -> List[Dict]:
     """Get all devices merged with their policies.
 
-    Merges live data from agent with stored policies from database.
+    Data sources (in priority order):
+    1. PostgreSQL v_devices_with_identity (if available and use_postgres=True)
+    2. QSecBit agent JSON file merged with SQLite policies
+
     Auto-assigns policies to new devices based on their characteristics.
+
+    Args:
+        use_postgres: Try PostgreSQL first (default True). Set False to force legacy mode.
     """
     db = get_device_db()
-    agent_devices = load_agent_devices()
     stored_policies = db.get_all_policies()
-
-    devices = []
     now = datetime.now().isoformat()
+
+    # Try PostgreSQL first for real-time device status
+    pg_devices = _load_devices_from_postgres() if use_postgres else None
+
+    if pg_devices is not None:
+        # PostgreSQL mode - real-time identity-based tracking
+        logger.debug(f"Using PostgreSQL: {len(pg_devices)} devices with identity tracking")
+        return _process_postgres_devices(pg_devices, db, stored_policies, now)
+
+    # Fallback to legacy mode (agent JSON + SQLite)
+    logger.debug("Using legacy mode: agent JSON + SQLite")
+    agent_devices = load_agent_devices()
+    return _process_legacy_devices(agent_devices, db, stored_policies, now)
+
+
+def _process_postgres_devices(pg_devices: List[Dict], db: 'DevicePolicyDB',
+                               stored_policies: Dict[str, str], now: str) -> List[Dict]:
+    """Process devices from PostgreSQL with identity tracking."""
+    devices = []
+
+    for device in pg_devices:
+        mac = device.get('mac_address', '').upper()
+        if not mac:
+            continue
+
+        # Get stored policy or assign new one
+        if mac in stored_policies:
+            policy = stored_policies[mac]
+        else:
+            # New device - auto-assign policy
+            policy = get_recommended_policy(device)
+            db.set_policy(
+                mac=mac,
+                policy=policy,
+                hostname=device.get('hostname'),
+                manufacturer=device.get('manufacturer'),
+                device_type=device.get('device_type'),
+            )
+            logger.info(f"New device {mac}: auto-assigned policy '{policy}'")
+
+        # Get policy info
+        try:
+            policy_enum = NetworkPolicy(policy)
+            policy_info = POLICY_INFO.get(policy_enum, POLICY_INFO[NetworkPolicy.QUARANTINE])
+        except ValueError:
+            policy_info = POLICY_INFO[NetworkPolicy.QUARANTINE]
+
+        # Get status info
+        status_str = device.get('status', 'OFFLINE')
+        try:
+            status_enum = DeviceStatus(status_str)
+            status_info = STATUS_INFO.get(status_enum, STATUS_INFO[DeviceStatus.OFFLINE])
+        except ValueError:
+            status_info = STATUS_INFO[DeviceStatus.OFFLINE]
+
+        # Use canonical_name if available (identity-based), otherwise generate friendly name
+        raw_hostname = device.get('hostname')
+        canonical_name = device.get('canonical_name')
+        manufacturer = device.get('manufacturer', 'Unknown') or 'Unknown'
+        device_type = device.get('device_type', 'unknown') or 'unknown'
+
+        # Prefer canonical name (stable across MAC changes), then cleaned hostname
+        if canonical_name and canonical_name != raw_hostname:
+            display_name = canonical_name
+        else:
+            display_name = _get_friendly_name(mac, raw_hostname, manufacturer, device_type)
+
+        devices.append({
+            'mac_address': mac,
+            'ip_address': device.get('ip_address', ''),
+            'hostname': display_name,
+            'raw_hostname': raw_hostname,
+            'canonical_name': canonical_name,
+            'manufacturer': manufacturer,
+            'device_type': device_type,
+            'policy': policy,
+            'policy_name': policy_info['name'],
+            'policy_icon': policy_info['icon'],
+            'policy_color': policy_info['color'],
+            'internet_access': policy_info['internet'],
+            'lan_access': policy_info['lan'],
+            # Real-time status from PostgreSQL
+            'status': status_str,
+            'status_name': status_info['name'],
+            'status_icon': status_info['icon'],
+            'status_color': status_info['color'],
+            'is_online': status_str == 'ONLINE',
+            'is_stale': status_str == 'STALE',
+            # Identity tracking
+            'identity_id': device.get('identity_id'),
+            'is_mac_randomized': device.get('is_mac_randomized', False),
+            'dhcp_option55': device.get('dhcp_option55'),
+            'dhcp_option61': device.get('dhcp_option61'),
+            # Timestamps
+            'first_seen': device.get('first_seen', now),
+            'last_seen': device.get('last_seen', now),
+            'dhcp_lease_expiry': device.get('dhcp_lease_expiry'),
+            'stale_at': device.get('stale_at'),
+            'offline_at': device.get('offline_at'),
+            'interface': '',  # Not tracked in PostgreSQL yet
+            'notes': '',
+        })
+
+    return devices
+
+
+def _process_legacy_devices(agent_devices: List[Dict], db: 'DevicePolicyDB',
+                            stored_policies: Dict[str, str], now: str) -> List[Dict]:
+    """Process devices from legacy agent JSON + SQLite mode."""
+    devices = []
 
     for device in agent_devices:
         if not isinstance(device, dict):
@@ -524,10 +768,27 @@ def get_all_devices() -> List[Dict]:
         manufacturer = device.get('manufacturer') or (stored.get('manufacturer') if stored else 'Unknown') or 'Unknown'
         device_type = device.get('device_type') or (stored.get('device_type') if stored else 'unknown') or 'unknown'
 
+        # Infer status from agent state
+        agent_state = device.get('state', '')
+        if agent_state in ('REACHABLE', 'DELAY'):
+            status = 'ONLINE'
+        elif agent_state in ('STALE',):
+            status = 'STALE'
+        else:
+            status = 'OFFLINE'
+
+        try:
+            status_enum = DeviceStatus(status)
+            status_info = STATUS_INFO.get(status_enum, STATUS_INFO[DeviceStatus.OFFLINE])
+        except ValueError:
+            status_info = STATUS_INFO[DeviceStatus.OFFLINE]
+
         devices.append({
             'mac_address': mac,
             'ip_address': device.get('ip_address', ''),
             'hostname': _get_friendly_name(mac, raw_hostname, manufacturer, device_type),
+            'raw_hostname': raw_hostname,
+            'canonical_name': None,  # Not available in legacy mode
             'manufacturer': manufacturer,
             'device_type': device_type,
             'policy': policy,
@@ -536,10 +797,22 @@ def get_all_devices() -> List[Dict]:
             'policy_color': policy_info['color'],
             'internet_access': policy_info['internet'],
             'lan_access': policy_info['lan'],
-            'is_online': device.get('state') in ('REACHABLE', 'DELAY'),
-            'interface': device.get('interface', ''),
+            'status': status,
+            'status_name': status_info['name'],
+            'status_icon': status_info['icon'],
+            'status_color': status_info['color'],
+            'is_online': status == 'ONLINE',
+            'is_stale': status == 'STALE',
+            'identity_id': None,
+            'is_mac_randomized': False,
+            'dhcp_option55': None,
+            'dhcp_option61': None,
             'first_seen': stored.get('first_seen', now) if stored else now,
             'last_seen': device.get('last_seen', now),
+            'dhcp_lease_expiry': None,
+            'stale_at': None,
+            'offline_at': None,
+            'interface': device.get('interface', ''),
             'notes': stored.get('notes', '') if stored else '',
         })
 
@@ -547,18 +820,86 @@ def get_all_devices() -> List[Dict]:
 
 
 def get_device_stats() -> Dict:
-    """Get device statistics."""
+    """Get device statistics including status breakdown."""
     devices = get_all_devices()
     stats = {
         'total': len(devices),
-        'online': len([d for d in devices if d['is_online']]),
-        'offline': len([d for d in devices if not d['is_online']]),
+        'online': len([d for d in devices if d.get('status') == 'ONLINE']),
+        'stale': len([d for d in devices if d.get('status') == 'STALE']),
+        'offline': len([d for d in devices if d.get('status') == 'OFFLINE']),
+        'expired': len([d for d in devices if d.get('status') == 'EXPIRED']),
         'quarantined': len([d for d in devices if d['policy'] == 'quarantine']),
+        'mac_randomized': len([d for d in devices if d.get('is_mac_randomized')]),
+        'with_identity': len([d for d in devices if d.get('identity_id')]),
         'by_policy': {},
+        'by_status': {},
     }
     for policy in NetworkPolicy:
         stats['by_policy'][policy.value] = len([d for d in devices if d['policy'] == policy.value])
+    for status in DeviceStatus:
+        stats['by_status'][status.value] = len([d for d in devices if d.get('status') == status.value])
     return stats
+
+
+def get_status_info(status: str) -> Dict:
+    """Get status display information."""
+    try:
+        status_enum = DeviceStatus(status)
+        return STATUS_INFO.get(status_enum, STATUS_INFO[DeviceStatus.OFFLINE])
+    except ValueError:
+        return STATUS_INFO[DeviceStatus.OFFLINE]
+
+
+def get_devices_by_status(status: str) -> List[Dict]:
+    """Get all devices with a specific status."""
+    devices = get_all_devices()
+    return [d for d in devices if d.get('status') == status]
+
+
+def get_devices_by_identity(identity_id: str) -> List[Dict]:
+    """Get all devices (MACs) linked to a specific identity."""
+    devices = get_all_devices()
+    return [d for d in devices if d.get('identity_id') == identity_id]
+
+
+def purge_expired_devices(dry_run: bool = True) -> List[Dict]:
+    """Remove EXPIRED devices from the database.
+
+    Args:
+        dry_run: If True, only return devices that would be removed.
+
+    Returns:
+        List of devices that were (or would be) removed.
+    """
+    devices = get_all_devices()
+    expired = [d for d in devices if d.get('status') == 'EXPIRED']
+
+    if dry_run:
+        return expired
+
+    conn = _get_pg_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                for device in expired:
+                    cur.execute(
+                        "DELETE FROM devices WHERE mac_address = %s",
+                        (device['mac_address'],)
+                    )
+            conn.commit()
+            logger.info(f"Purged {len(expired)} expired devices from PostgreSQL")
+        except Exception as e:
+            logger.error(f"Failed to purge expired devices: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    # Also clean SQLite policies
+    db = get_device_db()
+    for device in expired:
+        db.delete_device(device['mac_address'])
+
+    return expired
 
 
 def set_device_policy(mac: str, policy: str) -> Dict:
