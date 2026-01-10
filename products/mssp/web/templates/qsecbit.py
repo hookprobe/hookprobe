@@ -1,5 +1,6 @@
 # In your Django views.py
 import requests
+from django.shortcuts import render
 
 QSECBIT_API = 'http://10.107.0.10:8888'
 

@@ -164,7 +164,7 @@ def is_locally_administered_mac(mac_address: str) -> bool:
 
 def _load_oui_database():
     """Load IEEE OUI database from system file."""
-    global _oui_cache, _oui_loaded
+    global _oui_loaded  # Only need global for _oui_loaded assignment; _oui_cache is modified in-place
 
     if _oui_loaded:
         return
@@ -631,8 +631,7 @@ _hostname_cache = {
 
 def refresh_hostname_cache():
     """Refresh all hostname caches from various sources."""
-    global _hostname_cache
-
+    # Note: We modify _hostname_cache dict contents in-place, no global needed
     _hostname_cache['dhcp'] = get_dhcp_hostnames()
     _hostname_cache['mdns'] = get_mdns_hostnames()
     _hostname_cache['netbios'] = get_netbios_hostnames()

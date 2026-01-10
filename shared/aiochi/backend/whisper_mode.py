@@ -74,7 +74,7 @@ class WhisperMessage:
             "timestamp": self.timestamp.isoformat(),
             "phase": self.phase.value,
             "emoji": PHASE_EMOJI.get(self.phase, "💭"),
-            "message": message,
+            "message": self.message,
             "details": self.details,
             "duration_ms": self.duration_ms,
         }

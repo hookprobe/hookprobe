@@ -42,8 +42,11 @@ import secrets
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from shared.mesh.consciousness import PeerNode
 
 # Add paths for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'shared'))
