@@ -21,9 +21,17 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # dnsXai API (running in fts-dnsxai container, port-mapped to localhost)
-DNSXAI_API_URL = os.environ.get('DNSXAI_API_URL', 'http://127.0.0.1:8080')
+# Note: fts-dnsxai maps port 8080 to 8053 on host
+DNSXAI_API_URL = os.environ.get('DNSXAI_API_URL', 'http://127.0.0.1:8053')
 
-# Log paths (mounted from containers)
+# ClickHouse connection (AIOCHI analytics database)
+CLICKHOUSE_HOST = os.environ.get('CLICKHOUSE_HOST', '127.0.0.1')
+CLICKHOUSE_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
+CLICKHOUSE_USER = os.environ.get('CLICKHOUSE_USER', 'aiochi')
+CLICKHOUSE_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', 'aiochi_secure_password')
+CLICKHOUSE_DB = os.environ.get('CLICKHOUSE_DB', 'aiochi')
+
+# Log paths (fallback - only accessible if volumes mounted)
 ZEEK_LOG_DIR = Path('/opt/zeek/logs/current')
 SURICATA_EVE_LOG = Path('/var/log/suricata/eve.json')
 
@@ -127,22 +135,81 @@ def get_recent_blocked_domains(limit: int = 20) -> List[Dict]:
 
 
 # ============================================================================
-# ZEEK LOG INTEGRATION
+# CLICKHOUSE INTEGRATION
+# ============================================================================
+
+def _query_clickhouse(query: str) -> List[Dict]:
+    """Execute a query against ClickHouse and return results as list of dicts."""
+    try:
+        import requests
+        from urllib.parse import urlencode
+
+        params = {
+            'user': CLICKHOUSE_USER,
+            'password': CLICKHOUSE_PASSWORD,
+            'database': CLICKHOUSE_DB,
+        }
+        url = f"http://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/?{urlencode(params)}"
+
+        # Request JSON format
+        full_query = f"{query} FORMAT JSONEachRow"
+        resp = requests.post(url, data=full_query, timeout=5)
+
+        if resp.status_code == 200 and resp.text.strip():
+            # Parse JSON lines
+            results = []
+            for line in resp.text.strip().split('\n'):
+                if line.strip():
+                    results.append(json.loads(line))
+            return results
+        return []
+    except Exception as e:
+        logger.debug(f"ClickHouse query failed: {e}")
+        return []
+
+
+# ============================================================================
+# ZEEK DATA FROM CLICKHOUSE
 # ============================================================================
 
 def get_zeek_conn_events(limit: int = 50) -> List[Dict]:
     """
-    Parse recent connection events from Zeek conn.log.
+    Get recent connection events from ClickHouse (zeek_connections table).
 
     Returns:
         List of connection event dicts.
     """
+    cached = _get_cached('zeek_conn', EVENT_CACHE_TTL)
+    if cached:
+        return cached[:limit]
+
+    # Try ClickHouse first
+    query = f"""
+        SELECT
+            ts as timestamp,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            proto,
+            service,
+            duration,
+            orig_bytes + resp_bytes as bytes
+        FROM zeek_connections
+        ORDER BY ts DESC
+        LIMIT {limit}
+    """
+    results = _query_clickhouse(query)
+    if results:
+        _set_cached('zeek_conn', results)
+        return results
+
+    # Fallback to log file if accessible
     conn_log = ZEEK_LOG_DIR / 'conn.log'
     if not conn_log.exists():
         return []
 
     try:
-        # Read last N lines efficiently
         result = subprocess.run(
             ['tail', '-n', str(limit * 2), str(conn_log)],
             capture_output=True, text=True, timeout=5
@@ -171,6 +238,7 @@ def get_zeek_conn_events(limit: int = 50) -> List[Dict]:
             except (IndexError, ValueError):
                 continue
 
+        _set_cached('zeek_conn', events[:limit])
         return events[:limit]
     except Exception as e:
         logger.debug(f"Could not parse Zeek conn.log: {e}")
@@ -179,11 +247,33 @@ def get_zeek_conn_events(limit: int = 50) -> List[Dict]:
 
 def get_zeek_dns_events(limit: int = 50) -> List[Dict]:
     """
-    Parse recent DNS queries from Zeek dns.log.
+    Get recent DNS queries from ClickHouse (zeek_dns table).
 
     Returns:
         List of DNS event dicts.
     """
+    cached = _get_cached('zeek_dns', EVENT_CACHE_TTL)
+    if cached:
+        return cached[:limit]
+
+    # Try ClickHouse first
+    query = f"""
+        SELECT
+            ts as timestamp,
+            src_ip,
+            query,
+            qtype,
+            rcode
+        FROM zeek_dns
+        ORDER BY ts DESC
+        LIMIT {limit}
+    """
+    results = _query_clickhouse(query)
+    if results:
+        _set_cached('zeek_dns', results)
+        return results
+
+    # Fallback to log file if accessible
     dns_log = ZEEK_LOG_DIR / 'dns.log'
     if not dns_log.exists():
         return []
@@ -213,6 +303,7 @@ def get_zeek_dns_events(limit: int = 50) -> List[Dict]:
             except (IndexError, ValueError):
                 continue
 
+        _set_cached('zeek_dns', events[:limit])
         return events[:limit]
     except Exception as e:
         logger.debug(f"Could not parse Zeek dns.log: {e}")
@@ -220,21 +311,44 @@ def get_zeek_dns_events(limit: int = 50) -> List[Dict]:
 
 
 # ============================================================================
-# SURICATA LOG INTEGRATION
+# SURICATA DATA FROM CLICKHOUSE
 # ============================================================================
 
 def get_suricata_alerts(limit: int = 50) -> List[Dict]:
     """
-    Parse recent IDS alerts from Suricata eve.json.
+    Get recent IDS alerts from ClickHouse (suricata_alerts table).
 
     Returns:
         List of alert dicts with severity, message, etc.
     """
+    cached = _get_cached('suricata_alerts', EVENT_CACHE_TTL)
+    if cached:
+        return cached[:limit]
+
+    # Try ClickHouse first
+    query = f"""
+        SELECT
+            timestamp,
+            src_ip,
+            dest_ip as dst_ip,
+            signature,
+            severity,
+            category,
+            action
+        FROM suricata_alerts
+        ORDER BY timestamp DESC
+        LIMIT {limit}
+    """
+    results = _query_clickhouse(query)
+    if results:
+        _set_cached('suricata_alerts', results)
+        return results
+
+    # Fallback to log file if accessible
     if not SURICATA_EVE_LOG.exists():
         return []
 
     try:
-        # Read last N lines
         result = subprocess.run(
             ['tail', '-n', str(limit * 2), str(SURICATA_EVE_LOG)],
             capture_output=True, text=True, timeout=5
@@ -262,6 +376,7 @@ def get_suricata_alerts(limit: int = 50) -> List[Dict]:
             except json.JSONDecodeError:
                 continue
 
+        _set_cached('suricata_alerts', alerts[:limit])
         return alerts[:limit]
     except Exception as e:
         logger.debug(f"Could not parse Suricata eve.json: {e}")
