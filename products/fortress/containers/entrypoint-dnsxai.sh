@@ -97,6 +97,25 @@ EOF
     cp "$DATA_DIR/config.json" "$USERDATA_DIR/config.json"
 fi
 
+# ============================================================
+# STATS SYNCHRONIZATION (Protection Level & Query Stats)
+# ============================================================
+# stats.json contains protection_level, query counts, and other runtime stats
+# This must be synced to preserve user's protection level preference
+if [ -f "$USERDATA_DIR/stats.json" ]; then
+    # User has persistent stats - use them (protection level preserved)
+    echo "[dnsXai] Using persistent stats from $USERDATA_DIR"
+    cp "$USERDATA_DIR/stats.json" "$DATA_DIR/stats.json"
+    # Extract protection level for logging
+    SAVED_LEVEL=$(python3 -c "import json; print(json.load(open('$USERDATA_DIR/stats.json')).get('protection_level', 3))" 2>/dev/null || echo "3")
+    echo "[dnsXai] Restored protection level: $SAVED_LEVEL"
+elif [ -f "$DATA_DIR/stats.json" ]; then
+    # No userdata stats, but data volume has them - sync to userdata
+    echo "[dnsXai] Syncing stats from data volume to persistent storage..."
+    cp "$DATA_DIR/stats.json" "$USERDATA_DIR/stats.json"
+fi
+# If no stats exist, API server will create defaults on startup
+
 # Export userdata dir for API server to use when saving whitelist changes
 export DNSXAI_USERDATA_DIR="$USERDATA_DIR"
 
@@ -132,6 +151,18 @@ sleep 1
 # Trap to cleanup on exit
 cleanup() {
     echo "[dnsXai] Shutting down..."
+
+    # Sync stats to persistent storage before exit
+    if [ -f "$DATA_DIR/stats.json" ]; then
+        echo "[dnsXai] Syncing stats to persistent storage..."
+        cp "$DATA_DIR/stats.json" "$USERDATA_DIR/stats.json" 2>/dev/null || true
+    fi
+
+    # Sync whitelist changes to persistent storage
+    if [ -f "$DATA_DIR/whitelist.txt" ]; then
+        cp "$DATA_DIR/whitelist.txt" "$USERDATA_DIR/whitelist.txt" 2>/dev/null || true
+    fi
+
     kill $API_PID 2>/dev/null || true
     exit 0
 }
