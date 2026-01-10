@@ -150,8 +150,8 @@ ovs-ofctl add-flow FTS "in_port=wlan0,udp,tp_src=68,tp_dst=67,actions=NORMAL"
 # Block WiFi-to-WiFi direct communication (force through controller)
 ovs-ofctl add-flow FTS "in_port=wlan0,dl_dst=ff:ff:ff:ff:ff:ff,actions=CONTROLLER"
 
-# Apply NAC policy based on MAC
-ovs-ofctl add-flow FTS "in_port=wlan0,dl_src=aa:bb:cc:dd:ee:ff,actions=output:vlan100"
+# Apply NAC policy based on MAC (route to LAN port)
+ovs-ofctl add-flow FTS "in_port=wlan0,dl_src=aa:bb:cc:dd:ee:ff,actions=NORMAL"
 ```
 
 ## Supported Versions

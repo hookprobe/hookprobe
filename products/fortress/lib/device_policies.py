@@ -7,7 +7,7 @@ Network Policies:
 - INTERNET_ONLY: Can access internet but not LAN devices
 - LAN_ONLY: Can access LAN but not internet (IoT, printers)
 - SMART_HOME: Curated IoT (HomePod, Echo, Matter/Thread bridges)
-- FULL_ACCESS: Management devices on VLAN 200, can manage other devices
+- FULL_ACCESS: Management devices with full network access
 
 Storage:
 - Policies: SQLite at /var/lib/hookprobe/devices.db

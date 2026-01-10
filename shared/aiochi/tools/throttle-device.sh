@@ -95,12 +95,8 @@ INTERFACE="$OVS_BRIDGE"
 
 # Check if bridge exists as network interface
 if ! ip link show "$INTERFACE" &> /dev/null; then
-    # Try vlan100 (LAN interface)
-    INTERFACE="vlan100"
-    if ! ip link show "$INTERFACE" &> /dev/null; then
-        echo '{"success": false, "error": "Cannot find network interface", "action": "THROTTLE"}'
-        exit 1
-    fi
+    echo '{"success": false, "error": "Cannot find OVS bridge interface", "action": "THROTTLE"}'
+    exit 1
 fi
 
 # ============================================================

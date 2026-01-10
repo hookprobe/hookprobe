@@ -25,8 +25,8 @@ The install scripts (`install-container.sh`, `ovs-post-setup.sh`) define a **fla
 
 The SDN Auto-Pilot defines segments for device classification:
 
-| Segment | VLAN Tag | Purpose | Trust Floor |
-|---------|----------|---------|-------------|
+| Segment | Segment ID | Purpose | Trust Floor |
+|---------|------------|---------|-------------|
 | SECMON | 10 | Security monitoring | L3 HIGH |
 | POS | 20 | Payment terminals | L3 HIGH |
 | CLIENTS | 30 | Staff devices | L2 STANDARD |
@@ -216,25 +216,23 @@ priority=200,dl_vlan=30,actions=NORMAL
 
 ## Configuration Alignment
 
-### 1. Update config.py VLANs
+### 1. Update config.py Segments
 
-Change from 10.250.x.x to 10.200.x.x subnet:
+Segment configuration aligned with 10.200.x.x subnet:
 
 ```python
-# OLD (10.250.x.x - INCORRECT)
-"management": VLANConfig(10, "Management", "10.250.10.0/24", "10.250.10.1"),
-
-# NEW (10.200.x.x - ALIGNED WITH INSTALL SCRIPTS)
-"lan": VLANConfig(100, "LAN", "10.200.0.0/24", "10.200.0.1"),
-"mgmt": VLANConfig(200, "MGMT", "10.200.100.0/30", "10.200.100.1"),
-# Segment VLANs (logical within FTS bridge)
-"secmon": VLANConfig(10, "Security Monitor", "10.200.0.0/24", "10.200.0.1", is_logical=True),
-"pos": VLANConfig(20, "POS", "10.200.0.0/24", "10.200.0.1", is_logical=True),
-"staff": VLANConfig(30, "Staff", "10.200.0.0/24", "10.200.0.1", is_logical=True),
-"guest": VLANConfig(40, "Guest", "10.200.0.0/24", "10.200.0.1", is_isolated=True, is_logical=True),
-"cameras": VLANConfig(50, "Cameras", "10.200.0.0/24", "10.200.0.1", is_logical=True),
-"iiot": VLANConfig(60, "Industrial IoT", "10.200.0.0/24", "10.200.0.1", is_logical=True),
-"quarantine": VLANConfig(99, "Quarantine", "10.200.0.0/24", "10.200.0.1", is_isolated=True, is_logical=True),
+# CURRENT ARCHITECTURE (Flat bridge with OpenFlow segments)
+# FTS Bridge: 10.200.0.0/XX - All devices share same L2 subnet
+# Segmentation via OpenFlow rules, not VLANs
+"lan": SegmentConfig(0, "LAN", "10.200.0.0/24", "10.200.0.1"),
+# Logical segments (OpenFlow-enforced within FTS bridge)
+"secmon": SegmentConfig(10, "Security Monitor", "10.200.0.0/24", "10.200.0.1", is_logical=True),
+"pos": SegmentConfig(20, "POS", "10.200.0.0/24", "10.200.0.1", is_logical=True),
+"staff": SegmentConfig(30, "Staff", "10.200.0.0/24", "10.200.0.1", is_logical=True),
+"guest": SegmentConfig(40, "Guest", "10.200.0.0/24", "10.200.0.1", is_isolated=True, is_logical=True),
+"cameras": SegmentConfig(50, "Cameras", "10.200.0.0/24", "10.200.0.1", is_logical=True),
+"iiot": SegmentConfig(60, "Industrial IoT", "10.200.0.0/24", "10.200.0.1", is_logical=True),
+"quarantine": SegmentConfig(99, "Quarantine", "10.200.0.0/24", "10.200.0.1", is_isolated=True, is_logical=True),
 ```
 
 ### 2. DHCP Configuration

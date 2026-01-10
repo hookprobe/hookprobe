@@ -9,8 +9,8 @@
 #
 # This service only configures what netplan cannot:
 #   - OpenFlow rules for traffic flow
-#   - Port VLAN tagging (access/trunk modes)
-#   - Container network bridge (veth to VLAN 200)
+#   - Port access modes
+#   - Container network bridge connectivity
 #
 # The bridge and VLAN interfaces are created by netplan, which is
 # faster and more reliable than bash scripts.
