@@ -68,6 +68,29 @@ except ImportError as e:
     def get_sdn_autopilot():
         return None
 
+# Import host agent client for WiFi device control (G.N.C. Architecture)
+HOST_AGENT_AVAILABLE = False
+try:
+    from host_agent_client import (
+        get_host_agent_client,
+        deauthenticate_device,
+        is_host_agent_available,
+    )
+    HOST_AGENT_AVAILABLE = True
+    logger.info("Host agent client loaded successfully")
+except ImportError as e:
+    logger.warning(f"Host agent client not available: {e}")
+
+    # Fallback stubs
+    def get_host_agent_client():
+        return None
+
+    def deauthenticate_device(mac, interfaces=None):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def is_host_agent_available():
+        return False
+
 # Import hostname decoder for dnsmasq octal escapes
 try:
     from hostname_decoder import decode_dnsmasq_hostname, clean_device_name, is_randomized_mac
@@ -3741,16 +3764,26 @@ def api_device_remove_tag(mac_address, tag):
 def api_device_disconnect(mac_address):
     """Disconnect a device from WiFi by deauthenticating it.
 
-    This sends a deauth frame via hostapd_cli to force the client to disconnect.
-    The client will typically reconnect automatically unless also blocked.
+    This sends a deauth frame via the FTS Host Agent (G.N.C. Architecture).
+    The host agent communicates with hostapd via Unix Domain Socket to force
+    the client to disconnect. The client will typically reconnect automatically
+    unless also blocked.
 
     Options (JSON body):
     - block: bool - Also quarantine the device
     - delete: bool - Remove device from database (for manual/test devices)
     """
-    import subprocess
+    import re
 
+    # Validate and normalize MAC address (security: prevent injection)
     mac = mac_address.upper().replace('-', ':')
+    mac_regex = re.compile(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
+    if not mac_regex.match(mac):
+        return jsonify({
+            'success': False,
+            'error': 'Invalid MAC address format'
+        }), 400
+
     data = request.get_json() or {}
     also_block = data.get('block', False)
     also_delete = data.get('delete', False)
@@ -3759,33 +3792,58 @@ def api_device_disconnect(mac_address):
         'deauth_sent': False,
         'interfaces_tried': [],
         'blocked': False,
-        'deleted': False
+        'deleted': False,
+        'host_agent_used': False
     }
 
-    # Try to deauth from all hostapd interfaces
-    wifi_interfaces = ['wlan_24ghz', 'wlan_5ghz', 'wlan0', 'wlan1']
-
-    for iface in wifi_interfaces:
+    # Use FTS Host Agent via Unix Domain Socket (G.N.C. Architecture)
+    # This allows the containerized web app to control hostapd on the host
+    if HOST_AGENT_AVAILABLE:
         try:
-            # hostapd_cli deauthenticate <MAC>
-            result = subprocess.run(
-                ['hostapd_cli', '-i', iface, 'deauthenticate', mac],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            results['interfaces_tried'].append(iface)
+            deauth_result = deauthenticate_device(mac)
+            results['host_agent_used'] = True
 
-            if result.returncode == 0 and 'OK' in result.stdout:
+            if deauth_result.get('success'):
                 results['deauth_sent'] = True
-                logger.info(f"Deauthenticated {mac} from {iface}")
-        except FileNotFoundError:
-            # hostapd_cli not available (container environment)
-            logger.debug(f"hostapd_cli not found for {iface}")
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Timeout deauthenticating from {iface}")
+                results['interfaces_tried'] = [
+                    r.get('interface') for r in deauth_result.get('interfaces_tried', [])
+                ]
+                logger.info(f"Deauthenticated {mask_mac(mac)} via host agent")
+            elif deauth_result.get('socket_missing'):
+                # Host agent socket not available - fall back to direct call
+                logger.warning("Host agent socket not available, trying direct hostapd_cli")
+                results['host_agent_used'] = False
+            else:
+                logger.warning(f"Host agent deauth failed: {deauth_result.get('error')}")
         except Exception as e:
-            logger.debug(f"Could not deauth from {iface}: {e}")
+            logger.error(f"Host agent error: {e}")
+            results['host_agent_used'] = False
+
+    # Fallback: Try direct hostapd_cli (works when not in container)
+    if not results['host_agent_used'] or not results['deauth_sent']:
+        import subprocess
+        wifi_interfaces = ['wlan_24ghz', 'wlan_5ghz', 'wlan0', 'wlan1']
+
+        for iface in wifi_interfaces:
+            try:
+                result = subprocess.run(
+                    ['hostapd_cli', '-i', iface, 'deauthenticate', mac],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if iface not in results['interfaces_tried']:
+                    results['interfaces_tried'].append(iface)
+
+                if result.returncode == 0 and 'OK' in result.stdout:
+                    results['deauth_sent'] = True
+                    logger.info(f"Deauthenticated {mask_mac(mac)} from {iface} (direct)")
+            except FileNotFoundError:
+                logger.debug(f"hostapd_cli not found for {iface}")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Timeout deauthenticating from {iface}")
+            except Exception as e:
+                logger.debug(f"Could not deauth from {iface}: {e}")
 
     # Also set policy to quarantine if requested
     if also_block and SDN_AUTOPILOT_AVAILABLE:
@@ -3793,6 +3851,7 @@ def api_device_disconnect(mac_address):
             autopilot = get_sdn_autopilot()
             autopilot.set_manual_policy(mac, 'quarantine')
             results['blocked'] = True
+            logger.info(f"Quarantined device {mask_mac(mac)}")
         except Exception as e:
             logger.warning(f"Failed to block device: {e}")
 
@@ -3818,32 +3877,33 @@ def api_device_disconnect(mac_address):
     if msg_parts:
         msg = 'Device ' + ' and '.join(msg_parts)
         return jsonify({'success': True, 'message': msg, 'details': results})
-    elif also_delete and results['deleted']:
-        # Device was only deleted (not on WiFi)
+    elif also_delete and results.get('deleted'):
         return jsonify({
             'success': True,
             'message': 'Device removed from database',
             'details': results
         })
-    elif not results['interfaces_tried']:
-        # Running in container - can't access hostapd directly
-        if results['deleted']:
+    elif not results['interfaces_tried'] and not results['host_agent_used']:
+        # Neither host agent nor direct hostapd_cli available
+        if results.get('deleted'):
             return jsonify({
                 'success': True,
                 'message': 'Device removed from database',
                 'details': results
             })
         return jsonify({
-            'success': True,
-            'message': 'Device marked as disconnected (hostapd not accessible from container)',
+            'success': False,
+            'error': 'WiFi control unavailable - host agent not running and hostapd_cli not accessible',
             'details': results
-        })
-    else:
+        }), 503
+    elif not results['deauth_sent']:
         return jsonify({
             'success': False,
             'error': 'Could not disconnect device - may not be connected via WiFi',
             'details': results
         }), 400
+    else:
+        return jsonify({'success': True, 'message': 'Device disconnected', 'details': results})
 
 
 @sdn_bp.route('/api/device/<mac_address>/timeline')

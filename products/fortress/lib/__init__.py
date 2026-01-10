@@ -242,6 +242,35 @@ def get_ipfix_collector():
     return _get_ic()
 
 
+# ============================================================
+# G.N.C. ARCHITECTURE - HOST AGENT CLIENT
+# ============================================================
+
+def get_host_agent_client():
+    """Get the FTS Host Agent client singleton.
+
+    Unix Domain Socket client for container-to-host communication.
+    Enables the containerized web UI to control hostapd on the host
+    for WiFi device disconnect and management.
+
+    G.N.C. Architecture:
+    - Container sends JSON command via UDS
+    - Host agent validates and executes hostapd_cli
+    - Response returned to container
+    """
+    from .host_agent_client import get_host_agent_client as _get_hac
+    return _get_hac()
+
+
+def is_host_agent_available():
+    """Check if the host agent is available and responding.
+
+    Returns True if the UDS socket exists and agent responds to ping.
+    """
+    from .host_agent_client import is_host_agent_available as _is_available
+    return _is_available()
+
+
 __all__ = [
     # Config
     'FortressConfig',
@@ -277,6 +306,9 @@ __all__ = [
     'get_mac_watcher',
     'get_probe_service',
     'get_ipfix_collector',
+    # G.N.C. Architecture - Host Agent
+    'get_host_agent_client',
+    'is_host_agent_available',
 ]
 
 __version__ = '5.6.0'
