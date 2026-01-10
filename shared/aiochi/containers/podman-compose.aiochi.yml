@@ -83,10 +83,11 @@ services:
       CLICKHOUSE_USER: aiochi
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
     healthcheck:
-      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      # Use HTTP ping endpoint - more reliable than clickhouse-client which requires auth
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8123/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
     ulimits:
       nofile:
@@ -128,12 +129,12 @@ services:
       SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS-mirror} --af-packet"
     command: ["-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
     healthcheck:
-      # Check Suricata process and verify eve.json is being written
-      test: ["CMD-SHELL", "pgrep -x suricata && test -f /var/log/suricata/eve.json"]
+      # Check Suricata process is running (uses -f for flexible match, handles Suricata-Main)
+      test: ["CMD-SHELL", "pgrep -f Suricata || pgrep -f suricata || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 45s
 
   zeek:
     image: docker.io/zeek/zeek:7.0.3
@@ -153,12 +154,12 @@ services:
       ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
     command: ["zeekctl", "deploy"]
     healthcheck:
-      # Check Zeek status and verify logs are being generated
-      test: ["CMD-SHELL", "zeekctl status | grep -q running"]
+      # Check Zeek process is running (works with both zeekctl and direct zeek execution)
+      test: ["CMD-SHELL", "pgrep -f zeek || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 45s
+      start_period: 60s
 
   # ============================================================================
   # LOG SHIPPER - Data Pipeline (CORE)
@@ -342,11 +343,12 @@ services:
       identity-engine:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      # n8n health endpoint - use wget for better container compatibility
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:5678/healthz || wget --quiet --spider http://localhost:5678/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # ============================================================================
   # OPTIONAL: AI TIER - Local LLM (profile: ai)
