@@ -1220,20 +1220,33 @@ class MultiTierWhitelist:
     # Tracking keywords that should NOT inherit parent whitelist
     # Per Gemini recommendation: use keyword detection, not fixed deny-list
     TRACKING_SUBDOMAIN_KEYWORDS = {
+        # Advertising
         'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
-        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream',
+        'pagead', 'adsense', 'adservice', 'adwords', 'doubleclick', 'an',  # 'an' = Facebook Audience Network
+        # Tracking
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream', 'trk',  # 'trk' = track abbreviation
+        # Analytics
         'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'omni', 'omniture', 'hit', 'hits',  # Omniture/Adobe Analytics
+        # Geolocation
+        'geo', 'geoip', 'geoloc', 'location',  # Geolocation tracking
+        # Telemetry
         'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        # Data collection
         'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
         'event', 'events', 'click', 'impression', 'fingerprint',
-        'sponsor', 'promo', 'affiliate', 'banner', 'pagead',
+        # Marketing
+        'sponsor', 'promo', 'affiliate', 'banner', 'syndication',
+        # Survey/feedback tracking
+        'survey', 'surveys', 'feedback', 'nps',  # Net Promoter Score
     }
 
     # High-confidence tracking prefixes (subdomain starts with these)
     TRACKING_PREFIXES = {
-        'ads', 'ad', 'track', 'pixel', 'stat', 'stats', 'log', 'logs',
-        'event', 'events', 'data', 'collect', 'beacon', 'telemetry',
-        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo',
+        'ads', 'ad', 'track', 'trk', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry', 'geo',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo', 'hit',
+        'pagead', 'adsense', 'adservice', 'syndication', 'an', 'omni',
     }
 
     # System-critical domains that should NEVER be blocked
@@ -3103,7 +3116,7 @@ class CNAMEUncloaker:
         'gmail.com', 'googlemail.com',
         'drive.google.com', 'docs.google.com', 'sheets.google.com',
         'meet.google.com', 'hangouts.google.com',
-        'chromium.org', 'googlesyndication.com',
+        'chromium.org',  # googlesyndication.com removed - it's Google Ads!
         'gvt1.com', 'gvt2.com', 'gvt3.com',
         'android.com', 'android.clients.google.com',
         'firebase.google.com', 'firebaseio.com', 'firebasestorage.googleapis.com',
@@ -3299,6 +3312,38 @@ class CNAMEUncloaker:
         'intel.com', 'downloadcenter.intel.com',
     }
 
+    # Tracking/advertising subdomain keywords - block even on legitimate parent domains
+    # Example: analytics.google.com should be blocked even though google.com is legitimate
+    TRACKING_SUBDOMAIN_KEYWORDS = {
+        # Advertising
+        'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
+        'pagead', 'adsense', 'adservice', 'adwords', 'doubleclick', 'an',  # 'an' = Facebook Audience Network
+        # Tracking
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream', 'trk',  # 'trk' = track abbreviation
+        # Analytics
+        'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'omni', 'omniture', 'hit', 'hits',  # Omniture/Adobe Analytics
+        # Geolocation
+        'geo', 'geoip', 'geoloc', 'location',  # Geolocation tracking
+        # Telemetry
+        'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        # Data collection
+        'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
+        'event', 'events', 'click', 'impression', 'fingerprint',
+        # Marketing
+        'sponsor', 'promo', 'affiliate', 'banner', 'syndication',
+        # Survey/feedback tracking
+        'survey', 'surveys', 'feedback', 'nps',  # Net Promoter Score
+    }
+
+    # Prefixes that indicate tracking subdomains
+    TRACKING_PREFIXES = {
+        'ads', 'ad', 'track', 'trk', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry', 'geo',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo', 'hit',
+        'pagead', 'adsense', 'adservice', 'syndication', 'an', 'omni',
+    }
+
     def __init__(self, config: AdBlockConfig):
         self.config = config
         self.cache: Dict[str, Tuple[List[str], datetime]] = {}
@@ -3372,9 +3417,55 @@ class CNAMEUncloaker:
 
         return None
 
-    def _is_legitimate_infrastructure(self, domain: str) -> bool:
-        """Check if domain belongs to legitimate CDN/infrastructure."""
+    def _is_tracking_subdomain(self, domain: str) -> bool:
+        """Check if domain is a tracking/advertising subdomain of a legitimate parent.
+
+        Example: analytics.google.com should be blocked even though google.com is legitimate.
+        This prevents advertisers from hiding tracking behind legitimate parent domains.
+        """
         domain_lower = domain.lower()
+        parts = domain_lower.split('.')
+
+        if len(parts) < 3:
+            # Need at least subdomain.domain.tld to check subdomain patterns
+            return False
+
+        # Check first subdomain part against tracking keywords
+        first_part = parts[0]
+
+        # Check exact keyword match (e.g., "analytics" in analytics.google.com)
+        if first_part in self.TRACKING_SUBDOMAIN_KEYWORDS:
+            return True
+
+        # Check if first part starts with tracking prefix (e.g., "ads" in ads2.google.com)
+        for prefix in self.TRACKING_PREFIXES:
+            if first_part.startswith(prefix) and (
+                len(first_part) == len(prefix) or
+                first_part[len(prefix):].isdigit() or
+                first_part[len(prefix)] in '-_'
+            ):
+                return True
+
+        # Check if any part contains tracking keywords (e.g., ad-delivery in x.ad-delivery.google.com)
+        for part in parts[:-2]:  # Exclude domain.tld
+            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                if keyword in part:
+                    return True
+
+        return False
+
+    def _is_legitimate_infrastructure(self, domain: str) -> bool:
+        """Check if domain belongs to legitimate CDN/infrastructure.
+
+        IMPORTANT: Tracking subdomains (analytics.google.com, pixel.facebook.com)
+        are NOT considered legitimate even if their parent domain is in the list.
+        """
+        domain_lower = domain.lower()
+
+        # FIRST: Check if this is a tracking subdomain - if so, NOT legitimate
+        # This prevents advertisers from hiding behind legitimate parent domains
+        if self._is_tracking_subdomain(domain_lower):
+            return False
 
         # Check system connectivity domains first (highest priority)
         if domain_lower in self.SYSTEM_CONNECTIVITY_DOMAINS:
@@ -3393,6 +3484,7 @@ class CNAMEUncloaker:
             return True
 
         # Check parent domains (e.g., subdomain.aaplimg.com -> aaplimg.com)
+        # Tracking subdomains already excluded above, so safe to allow parent matches
         parts = domain_lower.split('.')
         for i in range(len(parts)):
             parent = '.'.join(parts[i:])
@@ -3752,20 +3844,33 @@ class AIAdBlocker:
     # Tracking keywords that should NOT inherit parent whitelist
     # Per Gemini recommendation: use keyword detection, not fixed deny-list
     TRACKING_SUBDOMAIN_KEYWORDS = {
+        # Advertising
         'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert', 'advertising',
-        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream',
+        'pagead', 'adsense', 'adservice', 'adwords', 'doubleclick', 'an',  # 'an' = Facebook Audience Network
+        # Tracking
+        'track', 'tracker', 'tracking', 'clicktrack', 'clickstream', 'trk',  # 'trk' = track abbreviation
+        # Analytics
         'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat', 'statistic',
+        'omni', 'omniture', 'hit', 'hits',  # Omniture/Adobe Analytics
+        # Geolocation
+        'geo', 'geoip', 'geoloc', 'location',  # Geolocation tracking
+        # Telemetry
         'telemetry', 'telem', 'beacon', 'pixel', 'tag', 'tags',
+        # Data collection
         'collect', 'collector', 'ingest', 'ingestion', 'log', 'logs', 'logging',
         'event', 'events', 'click', 'impression', 'fingerprint',
-        'sponsor', 'promo', 'affiliate', 'banner', 'pagead',
+        # Marketing
+        'sponsor', 'promo', 'affiliate', 'banner', 'syndication',
+        # Survey/feedback tracking
+        'survey', 'surveys', 'feedback', 'nps',  # Net Promoter Score
     }
 
     # High-confidence tracking prefixes (subdomain starts with these)
     TRACKING_PREFIXES = {
-        'ads', 'ad', 'track', 'pixel', 'stat', 'stats', 'log', 'logs',
-        'event', 'events', 'data', 'collect', 'beacon', 'telemetry',
-        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo',
+        'ads', 'ad', 'track', 'trk', 'pixel', 'stat', 'stats', 'log', 'logs',
+        'event', 'events', 'data', 'collect', 'beacon', 'telemetry', 'geo',
+        'analytics', 'metric', 'metrics', 'click', 'tag', 'promo', 'hit',
+        'pagead', 'adsense', 'adservice', 'syndication', 'an', 'omni',
     }
 
     def __init__(self, config: Optional[AdBlockConfig] = None):
