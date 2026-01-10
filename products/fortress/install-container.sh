@@ -228,6 +228,7 @@ check_prerequisites() {
             fi
 
             # Try apt-get update + install
+            # shellcheck disable=SC2086
             if apt-get update && apt-get install -y $packages; then
                 return 0
             fi
@@ -991,6 +992,16 @@ copy_application_files() {
         cp -r "${SCRIPT_DIR}/bin/"* "${INSTALL_DIR}/bin/" 2>/dev/null || true
         chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
         log_info "  Installed: bin/ scripts (dhcp-event.sh, etc.)"
+    fi
+
+    # Copy scripts directory (fts-host-agent.py, etc.)
+    # G.N.C. Architecture: Host agent script for container-to-host WiFi control
+    if [ -d "${SCRIPT_DIR}/scripts" ]; then
+        mkdir -p "${INSTALL_DIR}/scripts"
+        cp -r "${SCRIPT_DIR}/scripts/"* "${INSTALL_DIR}/scripts/" 2>/dev/null || true
+        chmod +x "${INSTALL_DIR}/scripts/"*.py 2>/dev/null || true
+        chmod +x "${INSTALL_DIR}/scripts/"*.sh 2>/dev/null || true
+        log_info "  Installed: scripts/ (fts-host-agent.py, etc.)"
     fi
 
     # Ensure all shell scripts are executable (git may not preserve executable bit)
@@ -2071,11 +2082,11 @@ EOF
 setup_host_agent() {
     # G.N.C. Architecture: FTS Host Agent
     # Provides secure container-to-host communication for hostapd control
-    # Uses Unix Domain Socket for minimal attack surface
+    # Uses Unix Domain Socket in directory for container bind mount compatibility
 
     local agent_script="${INSTALL_DIR}/scripts/fts-host-agent.py"
-    local socket_unit="/etc/systemd/system/fts-host-agent.socket"
     local service_unit="/etc/systemd/system/fts-host-agent.service"
+    local socket_dir="/var/run/fts-host-agent"
 
     # Check if agent script exists
     if [ ! -f "$agent_script" ]; then
@@ -2087,31 +2098,17 @@ setup_host_agent() {
     # Make agent script executable
     chmod +x "$agent_script"
 
-    # Create systemd socket unit
-    cat > "$socket_unit" << 'EOF'
-[Unit]
-Description=FTS Host Agent Socket - G.N.C. Architecture
-Documentation=https://hookprobe.com/fortress
-PartOf=fortress.service
+    # Create socket directory (required for container bind mount)
+    mkdir -p "$socket_dir"
+    chmod 755 "$socket_dir"
 
-[Socket]
-ListenStream=/var/run/fts-host-agent.sock
-SocketMode=0660
-SocketUser=root
-SocketGroup=root
-Accept=no
-
-[Install]
-WantedBy=sockets.target
-EOF
-
-    # Create systemd service unit
+    # Create systemd service unit (standalone, no socket activation)
+    # Note: Socket activation was problematic - service creates its own socket
     cat > "$service_unit" << EOF
 [Unit]
 Description=FTS Host Agent - Hostapd Control Bridge (G.N.C.)
 Documentation=https://hookprobe.com/fortress
 After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
-Requires=fts-host-agent.socket
 PartOf=fortress.service
 
 [Service]
@@ -2120,12 +2117,8 @@ ExecStart=/usr/bin/python3 ${agent_script}
 Restart=on-failure
 RestartSec=5
 
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=/var/run /var/log/fortress
+# Note: No PrivateTmp - needs access to /var/run/hostapd control sockets
+# Socket permissions set to 666 by agent for container access
 
 # Logging
 StandardOutput=journal
@@ -2140,18 +2133,18 @@ EOF
     mkdir -p /var/log/fortress
     chmod 755 /var/log/fortress
 
-    # Reload systemd and enable services
+    # Reload systemd and enable service
     systemctl daemon-reload
 
-    # Enable and start socket (service starts on-demand via socket activation)
-    if systemctl enable fts-host-agent.socket 2>/dev/null; then
-        if systemctl start fts-host-agent.socket 2>/dev/null; then
-            log_info "  FTS Host Agent socket activated"
+    # Enable and start service
+    if systemctl enable fts-host-agent.service 2>/dev/null; then
+        if systemctl start fts-host-agent.service 2>/dev/null; then
+            log_info "  FTS Host Agent service started"
         else
-            log_warn "  FTS Host Agent socket failed to start"
+            log_warn "  FTS Host Agent service failed to start"
         fi
     else
-        log_warn "  Failed to enable FTS Host Agent socket"
+        log_warn "  Failed to enable FTS Host Agent service"
     fi
 
     log_info "  G.N.C. Architecture: Host agent ready for container WiFi control"
