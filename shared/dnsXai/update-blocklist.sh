@@ -297,25 +297,80 @@ process_blocklists() {
 }
 
 # Update dnsmasq if available
+# G.N.C. Optimization (Architect + Consultant Synthesis):
+# - cache-size: ~2.5 entries per MB of RAM (5000-25000 range)
+# - neg-ttl: 600s (10 min) for blocked domain NXDOMAIN caching
+# - min-cache-ttl: 60s for CDN/load balancer compatibility
+# - Security: no-resolv, bogus-priv, domain-needed
 update_dnsmasq() {
     local dnsmasq_hosts="/etc/dnsmasq.d/hookprobe-adblock.conf"
 
     if [[ -d "/etc/dnsmasq.d" ]]; then
-        log "INFO" "Updating dnsmasq configuration..."
+        log "INFO" "Updating dnsmasq configuration with G.N.C. optimizations..."
+
+        # Calculate optimal cache size based on system RAM
+        # G.N.C. Fix: Original formula was broken (always clamped to minimum)
+        # New rule: ~2.5 entries per MB of RAM (reasonable for DNS cache)
+        local total_ram_mb
+        total_ram_mb=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "2048")
+        # Formula: RAM_MB * 2.5 = RAM_MB * 25 / 10
+        local cache_size=$((total_ram_mb * 25 / 10))
+        [[ $cache_size -lt 5000 ]] && cache_size=5000
+        [[ $cache_size -gt 25000 ]] && cache_size=25000
 
         {
-            echo "# HookProbe Guardian Ad Blocker for dnsmasq"
+            echo "# HookProbe dnsXai - Optimized dnsmasq Configuration"
             echo "# Generated: $(date -Iseconds)"
-            echo "# Use AI ad blocker at 127.0.0.1:5353 for DNS"
+            echo "# G.N.C. Synthesis: Architect (Gemini) + Consultant (Nemotron)"
+            echo "# System RAM: ${total_ram_mb}MB"
             echo ""
-            echo "# Forward DNS queries to AI ad blocker"
+            echo "# Forward DNS queries to dnsXai AI ad blocker"
             echo "server=127.0.0.1#5353"
+            echo ""
+            echo "# --- Cache Optimization (G.N.C. Architect Recommendations) ---"
+            echo "# cache-size: Calculated based on system RAM (${total_ram_mb}MB)"
+            echo "cache-size=${cache_size}"
+            echo ""
+            echo "# neg-ttl: Cache NXDOMAIN/blocked domain responses for 10 minutes"
+            echo "# G.N.C. Consultant: 1 hour was too long - blocked domains couldn't unblock quickly"
+            echo "# 10 minutes balances performance with ability to unblock domains"
+            echo "neg-ttl=600"
+            echo ""
+            echo "# min-cache-ttl: Minimum cache time for upstream responses"
+            echo "# G.N.C. Consultant: Reduced from 300s to 60s for CDN/load balancer compatibility"
+            echo "# Still prevents cache churn from very aggressive short TTLs"
+            echo "min-cache-ttl=60"
+            echo ""
+            echo "# max-cache-ttl: Maximum cache time (1 hour)"
+            echo "# Ensures blocklist changes propagate within reasonable time"
+            echo "max-cache-ttl=3600"
+            echo ""
+            echo "# local-ttl: Default TTL for local entries (60 seconds)"
+            echo "local-ttl=60"
+            echo ""
+            echo "# --- Security Hardening (G.N.C. Consultant Recommendations) ---"
+            echo "# no-resolv: Don't use /etc/resolv.conf, only our configured upstreams"
+            echo "no-resolv"
+            echo ""
+            echo "# bogus-priv: Don't forward reverse lookups for private IP ranges"
+            echo "bogus-priv"
+            echo ""
+            echo "# domain-needed: Don't forward queries without a domain part"
+            echo "domain-needed"
+            echo ""
+            echo "# --- Performance Tuning ---"
+            echo "# dns-forward-max: Max concurrent DNS queries (default 150)"
+            echo "dns-forward-max=300"
         } > "$dnsmasq_hosts"
 
-        # Reload dnsmasq if running
+        log "INFO" "dnsmasq optimized: cache-size=${cache_size} (for ${total_ram_mb}MB RAM)"
+
+        # Restart dnsmasq if running (restart clears cache, reload does not)
+        # G.N.C. Consultant: Must restart (not reload) to clear cached blocked domains
+        # This ensures newly whitelisted domains take effect immediately
         if systemctl is-active --quiet dnsmasq 2>/dev/null; then
-            systemctl reload dnsmasq 2>/dev/null || true
-            log "INFO" "dnsmasq configuration reloaded"
+            systemctl restart dnsmasq 2>/dev/null || true
+            log "INFO" "dnsmasq restarted (cache cleared for blocklist changes)"
         fi
     fi
 }
