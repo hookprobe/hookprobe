@@ -453,6 +453,16 @@ remove_systemd_services() {
     systemctl disable fts-nac-sync.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fts-nac-sync.timer
 
+    # G.N.C. Architecture: Remove FTS Host Agent (container-to-host WiFi control)
+    log_info "Removing fts-host-agent (G.N.C. Architecture)..."
+    systemctl stop fts-host-agent.service 2>/dev/null || true
+    systemctl stop fts-host-agent.socket 2>/dev/null || true
+    systemctl disable fts-host-agent.service 2>/dev/null || true
+    systemctl disable fts-host-agent.socket 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-host-agent.service
+    rm -f /etc/systemd/system/fts-host-agent.socket
+    rm -f /var/run/fts-host-agent.sock
+
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
             log_info "Disabling $service..."
