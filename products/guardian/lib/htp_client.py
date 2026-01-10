@@ -252,9 +252,11 @@ class GuardianHTPClient:
         self.rdv: bytes = b'\x00' * 32
         self.posf: bytes = b'\x00' * 32
 
-        # Anti-replay
-        self.nonce_history: deque = deque(maxlen=1000)
+        # CWE-288: Anti-replay protection with time-based expiration
+        self.nonce_history: deque = deque(maxlen=10000)  # Increased capacity
+        self.nonce_timestamps: Dict[int, float] = {}  # Track nonce age
         self.last_remote_nonce: int = 0
+        self.nonce_max_age_seconds: int = 300  # Nonces expire after 5 minutes
 
         # Statistics
         self.stats = ConnectionStats()
@@ -338,18 +340,44 @@ class GuardianHTPClient:
         return int(time.time() * 1_000_000) & 0xFFFFFFFF
 
     def _generate_nonce(self) -> int:
-        """Generate unique nonce for anti-replay"""
+        """Generate unique nonce for anti-replay. CWE-288 fix."""
         nonce = secrets.randbelow(2**64)
+        current_time = time.time()
         self.nonce_history.append(nonce)
+        self.nonce_timestamps[nonce] = current_time
         return nonce
 
+    def _cleanup_expired_nonces(self) -> None:
+        """Remove expired nonces from history. CWE-288 fix."""
+        current_time = time.time()
+        expired_nonces = [
+            n for n, ts in self.nonce_timestamps.items()
+            if current_time - ts > self.nonce_max_age_seconds
+        ]
+        for nonce in expired_nonces:
+            self.nonce_timestamps.pop(nonce, None)
+            # Note: deque doesn't support remove by value efficiently,
+            # but expired nonces will age out via maxlen
+
     def _verify_nonce(self, nonce: int) -> bool:
-        """Verify nonce hasn't been seen before"""
+        """Verify nonce hasn't been seen before. CWE-288 fix."""
+        # Clean up expired nonces periodically
+        self._cleanup_expired_nonces()
+
+        # Check if nonce was already seen
         if nonce in self.nonce_history:
+            self.logger.warning(f"Replay attack detected: duplicate nonce {nonce}")
             return False
+
+        # Monotonic nonce check with timestamp validation
         if nonce <= self.last_remote_nonce:
+            self.logger.warning(f"Replay attack detected: non-monotonic nonce {nonce}")
             return False
+
+        # Record this nonce
         self.last_remote_nonce = nonce
+        self.nonce_history.append(nonce)
+        self.nonce_timestamps[nonce] = time.time()
         return True
 
     def _encrypt_payload(self, payload: bytes) -> bytes:

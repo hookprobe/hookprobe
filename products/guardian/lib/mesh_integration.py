@@ -275,6 +275,18 @@ class GuardianMeshAgent:
     # THREAT HANDLING
     # =========================================================================
 
+    # CWE-20: Valid threat types and IOC types (whitelist)
+    VALID_THREAT_TYPES = frozenset([
+        "port_scan", "brute_force", "malware", "ddos", "exfiltration",
+        "c2", "lateral", "privilege", "rate_abuse", "malicious_request",
+        "sql_injection", "xss", "path_traversal", "unknown"
+    ])
+    VALID_IOC_TYPES = frozenset(["ip", "domain", "hash", "pattern", "url", "email"])
+
+    # CWE-400: Rate limit for threat reporting
+    THREAT_REPORT_RATE_LIMIT = 100  # Max reports per minute
+    _threat_report_times: List[float] = []
+
     def report_threat(
         self,
         threat_type: str,
@@ -300,6 +312,46 @@ class GuardianMeshAgent:
         """
         if not self.consciousness:
             return False
+
+        # CWE-20: Validate threat_type against whitelist
+        if threat_type not in self.VALID_THREAT_TYPES:
+            self.logger.warning(f"[MESH] Invalid threat_type rejected: {threat_type[:50]}")
+            threat_type = "unknown"
+
+        # CWE-20: Validate ioc_type against whitelist
+        if ioc_type not in self.VALID_IOC_TYPES:
+            self.logger.warning(f"[MESH] Invalid ioc_type rejected: {ioc_type[:50]}")
+            return False
+
+        # CWE-20: Validate severity range
+        if not isinstance(severity, int) or not 1 <= severity <= 5:
+            severity = 3  # Default to medium
+
+        # CWE-20: Validate confidence range
+        if not isinstance(confidence, (int, float)) or not 0.0 <= confidence <= 1.0:
+            confidence = 0.5
+
+        # CWE-20: Validate ioc_value - prevent injection and limit size
+        if not ioc_value or len(ioc_value) > 256:
+            self.logger.warning("[MESH] Invalid ioc_value length")
+            return False
+        # Reject dangerous characters
+        if any(c in ioc_value for c in [';', '|', '&', '`', '\n', '\r', '<', '>', '"', "'"]):
+            self.logger.warning("[MESH] Rejected ioc_value with dangerous characters")
+            return False
+
+        # CWE-20: Limit context size to prevent memory exhaustion
+        if context and len(str(context)) > 4096:
+            context = {"truncated": True, "reason": "context too large"}
+
+        # CWE-400: Rate limiting
+        current_time = time.time()
+        # Clean old entries (older than 60 seconds)
+        self._threat_report_times = [t for t in self._threat_report_times if current_time - t < 60]
+        if len(self._threat_report_times) >= self.THREAT_REPORT_RATE_LIMIT:
+            self.logger.warning("[MESH] Rate limit exceeded for threat reporting")
+            return False
+        self._threat_report_times.append(current_time)
 
         try:
             intel = self.consciousness.report_threat(
@@ -335,6 +387,14 @@ class GuardianMeshAgent:
             List of matching intelligence
         """
         if not self.consciousness:
+            return []
+
+        # CWE-20: Validate ioc_value before lookup
+        if not ioc_value or len(ioc_value) > 256:
+            return []
+        # Reject dangerous characters
+        if any(c in ioc_value for c in [';', '|', '&', '`', '\n', '\r', '<', '>', '"', "'"]):
+            self.logger.warning("[MESH] Rejected lookup with dangerous characters")
             return []
 
         return self.consciousness.lookup_threat(ioc_value)
