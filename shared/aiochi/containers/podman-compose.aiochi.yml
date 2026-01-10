@@ -155,10 +155,10 @@ services:
       - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
     environment:
       ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
-    # Use direct zeek command instead of zeekctl (more reliable for containers)
-    # -i: interface to capture on
-    # local.zeek is automatically loaded from site directory
-    command: ["zeek", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "local"]
+    # Use direct zeek command with explicit log directory
+    # -C: ignore checksum errors (common with NIC offloading)
+    working_dir: /opt/zeek/logs
+    command: ["zeek", "-C", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "local"]
     healthcheck:
       # Check Zeek process is running (use pidof since pgrep not available in zeek image)
       test: ["CMD-SHELL", "pidof zeek || exit 1"]
