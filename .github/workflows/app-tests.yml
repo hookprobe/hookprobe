@@ -7,18 +7,20 @@ on:
   push:
     branches: [ main, master, develop, 'claude/**' ]
     paths:
-      - 'src/**/*.py'
-      - 'scripts/install-edge.sh'
-      - 'scripts/lib/**'
-      - 'install/addons/**'
+      - 'core/**/*.py'
+      - 'shared/**/*.py'
+      - 'products/**/*.py'
+      - 'deploy/**/*.sh'
+      - 'scripts/**'
       - '.github/workflows/app-tests.yml'
   pull_request:
     branches: [ main, master, develop ]
     paths:
-      - 'src/**/*.py'
-      - 'scripts/install-edge.sh'
-      - 'scripts/lib/**'
-      - 'install/addons/**'
+      - 'core/**/*.py'
+      - 'shared/**/*.py'
+      - 'products/**/*.py'
+      - 'deploy/**/*.sh'
+      - 'scripts/**'
   workflow_dispatch:
 
 jobs:
@@ -29,13 +31,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: ./.github/actions/setup-python
+      - name: Setup Python with cache
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          install-requirements: 'false'
+          cache: 'pip'
 
       - name: Install Django dependencies
         run: |
@@ -81,7 +83,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Validate Nginx configuration
         run: |
