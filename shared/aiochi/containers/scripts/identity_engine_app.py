@@ -122,7 +122,7 @@ def create_app():
 
         Used by Fortress SDN to get current bubble state for NAC enforcement.
         """
-        global _bubble_registry
+        # Reading dict only, no global needed
         return jsonify({
             'bubbles': list(_bubble_registry.values()),
             'total': len(_bubble_registry),
@@ -132,7 +132,7 @@ def create_app():
     @app.route('/api/bubble/<bubble_id>', methods=['GET'])
     def get_bubble(bubble_id):
         """Get a specific bubble by ID."""
-        global _bubble_registry
+        # Reading dict only, no global needed
         if bubble_id in _bubble_registry:
             return jsonify(_bubble_registry[bubble_id])
         return jsonify({'error': 'Bubble not found'}), 404
@@ -155,7 +155,7 @@ def create_app():
             }
         }
         """
-        global _bubble_registry, _device_bubble_map, _sync_timestamp
+        global _sync_timestamp  # Only need global for _sync_timestamp assignment; dicts modified in-place
         data = request.get_json() or {}
 
         bubble_id = data.get('bubble_id')
@@ -191,7 +191,7 @@ def create_app():
     @app.route('/api/bubble/<bubble_id>', methods=['PUT'])
     def update_bubble(bubble_id):
         """Update an existing bubble."""
-        global _bubble_registry, _device_bubble_map, _sync_timestamp
+        global _sync_timestamp  # Only need global for _sync_timestamp assignment; dicts modified in-place
         data = request.get_json() or {}
 
         if bubble_id not in _bubble_registry:
@@ -224,7 +224,7 @@ def create_app():
     @app.route('/api/bubble/<bubble_id>', methods=['DELETE'])
     def delete_bubble(bubble_id):
         """Delete a bubble."""
-        global _bubble_registry, _device_bubble_map, _sync_timestamp
+        global _sync_timestamp  # Only need global for _sync_timestamp assignment; dicts modified in-place
 
         if bubble_id not in _bubble_registry:
             return jsonify({'error': 'Bubble not found'}), 404
@@ -247,7 +247,7 @@ def create_app():
 
         Used by Fortress SDN to determine NAC policy for a device.
         """
-        global _device_bubble_map, _bubble_registry
+        # Reading dicts only, no global needed
         mac = mac.upper().replace('-', ':')
 
         bubble_id = _device_bubble_map.get(mac)
@@ -286,7 +286,7 @@ def create_app():
             "reason": "Same ecosystem as existing devices"
         }
         """
-        global _bubble_registry, _device_bubble_map, _sync_timestamp
+        global _sync_timestamp  # Only need global for _sync_timestamp assignment; dicts modified in-place
         data = request.get_json() or {}
         mac = mac.upper().replace('-', ':')
 
@@ -403,7 +403,7 @@ def create_app():
 
         Used for initial sync or full refresh.
         """
-        global _bubble_registry, _device_bubble_map, _sync_timestamp
+        global _sync_timestamp  # Only need global for _sync_timestamp assignment; dicts modified in-place
         data = request.get_json() or {}
 
         bubbles_synced = 0

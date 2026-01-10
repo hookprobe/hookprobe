@@ -119,6 +119,31 @@ try:
 except ImportError as e:
     logger.warning(f"Device policies module not available: {e}")
 
+# Import device and VLAN management modules
+DEVICE_MANAGERS_AVAILABLE = False
+try:
+    from device_manager import get_device_manager
+    from vlan_manager import get_vlan_manager
+    from device_data_manager import get_device_data_manager
+    from database import get_db
+    DEVICE_MANAGERS_AVAILABLE = True
+    logger.info("Device/VLAN managers loaded successfully")
+except ImportError as e:
+    logger.debug(f"Device managers not available: {e}")
+
+    # Stub functions to prevent NameError
+    def get_device_manager():
+        return None
+
+    def get_vlan_manager():
+        return None
+
+    def get_device_data_manager():
+        return None
+
+    def get_db():
+        return None
+
 # Import SDN Auto Pilot module (premium heuristic scoring engine)
 SDN_AUTOPILOT_AVAILABLE = False
 try:

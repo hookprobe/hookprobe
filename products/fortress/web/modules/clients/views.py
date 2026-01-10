@@ -154,8 +154,7 @@ def index():
 @operator_required
 def discover():
     """Trigger device discovery scan using ARP ping."""
-    # Clear cache to force refresh
-    global _local_cache
+    # Clear cache to force refresh (modify in-place, no global needed)
     _local_cache.clear()
 
     # Try to ping broadcast to trigger ARP responses

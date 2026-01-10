@@ -35,7 +35,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Any, Callable
+from typing import Dict, List, Optional, Set, Tuple, Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .connection_graph import ConnectionGraphAnalyzer
 
 logger = logging.getLogger(__name__)
 
