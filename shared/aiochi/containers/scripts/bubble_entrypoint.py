@@ -71,7 +71,7 @@ def run_health_server():
 
 def watch_zeek_logs():
     """Watch Zeek logs for mDNS and connection events."""
-    global _health_status
+    # Note: We modify _health_status dict in-place, no global needed
 
     # Import parser
     try:
@@ -115,7 +115,7 @@ def watch_zeek_logs():
 
 def watch_connections():
     """Watch Zeek conn.log for device-to-device connections."""
-    global _health_status
+    # Note: We modify _health_status dict in-place, no global needed
     import json
 
     conn_log = Path(os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/current/conn.log"))
