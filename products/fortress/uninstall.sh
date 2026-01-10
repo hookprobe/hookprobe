@@ -771,7 +771,7 @@ remove_ovs_config() {
     local interfaces_to_restore=""
 
     # First, remove any ports from interfaces that are attached to wrong bridges
-    # This fixes the "enp3s0 attached to bridge vlan100" issue
+    # This fixes interfaces incorrectly attached to OVS bridges
     for port_iface in $(ip link show 2>/dev/null | grep -oP '^\d+:\s+\K[^:@]+' | grep -E '^(eth|enp|eno|ens)'); do
         # Skip the WAN interface - don't touch it
         if [ "$port_iface" = "$wan_iface" ]; then
@@ -788,8 +788,8 @@ remove_ovs_config() {
     done
 
     # Remove stray OVS bridges that might have been created incorrectly
-    # vlan100 and vlan200 should be internal ports, not separate bridges
-    for stray_bridge in vlan100 vlan200 vlan1; do
+    # These should be internal ports on FTS bridge, not separate bridges
+    for stray_bridge in br-lan br-mgmt vlan1; do
         if ovs-vsctl br-exists "$stray_bridge" 2>/dev/null; then
             log_warn "Found stray OVS bridge: $stray_bridge (removing)"
             # Remove all ports from the stray bridge first

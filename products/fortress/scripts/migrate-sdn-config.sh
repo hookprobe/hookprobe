@@ -2,10 +2,12 @@
 #
 # HookProbe Fortress - SDN Configuration Migration Script
 #
+# DEPRECATED: This script was for VLAN-based architecture which is no longer used.
+# Fortress now uses a flat OVS bridge with OpenFlow-based micro-segmentation.
+#
 # Migrates existing installations to the unified SDN architecture:
-# - VLAN 100 (LAN): 10.200.0.0/24 - All WiFi/LAN clients
-# - VLAN 200 (MGMT): 10.200.100.0/30 - Admin access
-# - Segment VLANs (10-99): Logical tags via OpenFlow within VLAN 100
+# - LAN: 10.200.0.0/24 - All WiFi/LAN clients on OVS bridge
+# - Segments: Logical isolation via OpenFlow rules (no VLAN tagging)
 #
 # Usage: sudo ./migrate-sdn-config.sh [--dry-run] [--force]
 #
@@ -28,12 +30,11 @@ DNSMASQ_CONF="/etc/dnsmasq.d/fortress.conf"
 BACKUP_DIR="/var/backups/hookprobe/migration-$(date +%Y%m%d-%H%M%S)"
 
 # Network configuration (aligned with install scripts)
-LAN_VLAN=100
-MGMT_VLAN=200
+# NOTE: VLANs no longer used - flat bridge with OpenFlow segmentation
+LAN_SEGMENT=100   # Legacy - kept for migration compatibility
+MGMT_SEGMENT=200  # Legacy - kept for migration compatibility
 LAN_SUBNET="10.200.0.0/24"
 LAN_GATEWAY="10.200.0.1"
-MGMT_SUBNET="10.200.100.0/30"
-MGMT_GATEWAY="10.200.100.1"
 DHCP_START="10.200.0.100"
 DHCP_END="10.200.0.200"
 
@@ -338,19 +339,16 @@ else
     fi
 fi
 
-# Create FTS if needed
+# NOTE: FTS bridge interface setup is now handled by netplan/ovs-post-setup.sh
+# This section is kept for legacy migration only
 if ! ip link show FTS &>/dev/null; then
-    log_info "Creating FTS (MGMT) interface..."
-    ovs-vsctl add-port "$OVS_BRIDGE" FTS -- set interface FTS type=internal
-    ovs-vsctl set port FTS tag=$MGMT_VLAN
-    ip link set FTS up
-    ip addr add "$MGMT_GATEWAY/30" dev FTS 2>/dev/null || true
-    log_success "FTS created with IP $MGMT_GATEWAY"
+    log_info "FTS bridge not found - should be created by netplan"
+    log_warn "Run install.sh to set up FTS bridge properly"
 else
-    # Ensure correct IP
-    if ! ip addr show FTS | grep -q "$MGMT_GATEWAY"; then
-        ip addr add "$MGMT_GATEWAY/30" dev FTS 2>/dev/null || true
-        log_info "Added $MGMT_GATEWAY to FTS"
+    # Verify FTS has correct IP
+    if ! ip addr show FTS | grep -q "$LAN_GATEWAY"; then
+        ip addr add "$LAN_GATEWAY/24" dev FTS 2>/dev/null || true
+        log_info "Added $LAN_GATEWAY to FTS"
     fi
 fi
 
@@ -362,7 +360,7 @@ echo ""
 
 log_step "Step 6: Installing segment OpenFlow rules..."
 
-# Base rules for VLAN 100 traffic
+# Base rules for LAN traffic
 ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
 ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
 
@@ -469,8 +467,7 @@ fi
 
 echo ""
 echo "Configuration Summary:"
-echo "  LAN (VLAN 100):  10.200.0.0/24 → Gateway: 10.200.0.1"
-echo "  MGMT (VLAN 200): 10.200.100.0/30 → Gateway: 10.200.100.1"
+echo "  FTS Bridge:     10.200.0.0/24 → Gateway: 10.200.0.1"
 echo "  DHCP Range:      $DHCP_START - $DHCP_END"
 echo ""
 echo "Backup location: $BACKUP_DIR"

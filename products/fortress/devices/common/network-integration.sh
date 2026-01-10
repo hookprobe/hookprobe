@@ -88,7 +88,7 @@ export_for_setup() {
     export WAN_PRESERVED="$NET_WAN_PRESERVED"  # Flag: WAN should not be modified
     export LAN_INTERFACES="$NET_LAN_IFACES"
 
-    # Management interface (for VLAN 200 trunk access)
+    # Management interface (for admin access)
     export MGMT_INTERFACE="$NET_MGMT_IFACE"
     export MGMT_ENABLED="$NET_MGMT_ENABLED"
     export FORTRESS_MGMT_IFACE="$NET_MGMT_IFACE"

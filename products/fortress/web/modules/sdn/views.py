@@ -6,7 +6,7 @@ Network Policies:
 - INTERNET_ONLY: Can access internet but not LAN devices
 - LAN_ONLY: Can access LAN but not internet (IoT, printers)
 - NORMAL: Curated IoT (HomePod, Echo, Matter/Thread bridges)
-- FULL_ACCESS: Management devices on VLAN 200, can manage other devices
+- FULL_ACCESS: Management devices with full network access
 """
 
 from flask import render_template, request, jsonify, flash, redirect, url_for
@@ -843,7 +843,7 @@ def index():
     - INTERNET_ONLY: Internet access but not LAN
     - LAN_ONLY: LAN access but not internet (IoT, printers)
     - NORMAL: Curated IoT (HomePod, Echo, Matter/Thread bridges)
-    - FULL_ACCESS: Management devices on VLAN 200
+    - FULL_ACCESS: Management devices with full network access
     """
     devices = []
     policies = []

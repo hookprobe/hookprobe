@@ -175,8 +175,8 @@ services:
       # Enables container to send hostapd commands via Unix Domain Socket
       # Socket is created by fts-host-agent.service on the host
       - /var/run/fts-host-agent.sock:/var/run/fts-host-agent.sock:rw
-    # Container network - accessible via VLAN 200 routing from management network
-    # Access: MGMT VLAN (10.200.100.x) → veth bridge → Container (172.20.200.20:8443)
+    # Container network - accessible via host port publishing
+    # Access: Host IP:8443 → Container (172.20.200.20:8443)
     networks:
       fts-internal:
         ipv4_address: 172.20.200.20

@@ -1,7 +1,7 @@
 """
-Fortress Clients Views - Device management with VLAN assignment.
+Fortress Clients Views - Device management with policy assignment.
 
-Provides device inventory, discovery, blocking, and VLAN assignment.
+Provides device inventory, discovery, blocking, and policy assignment.
 Uses real system data from ARP table and data files.
 """
 

@@ -44,7 +44,7 @@ class VLANConfig:
     dhcp_enabled: bool = True
     dns_policy: str = "standard"
     is_isolated: bool = False
-    is_logical: bool = False  # True for segment VLANs (OpenFlow tags within VLAN 100)
+    is_logical: bool = False  # True for logical segments (OpenFlow-based isolation)
     trust_floor: int = 1  # Minimum trust level required (0-4)
 
 
