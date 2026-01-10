@@ -27,6 +27,9 @@ from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from contextlib import contextmanager
 
+# Import security utilities for PII masking (CWE-532 mitigation)
+from security_utils import mask_mac
+
 logger = logging.getLogger(__name__)
 
 # PostgreSQL connection settings (from environment or defaults)
@@ -659,7 +662,7 @@ def _process_postgres_devices(pg_devices: List[Dict], db: 'DevicePolicyDB',
                 manufacturer=device.get('manufacturer'),
                 device_type=device.get('device_type'),
             )
-            logger.info(f"New device {mac}: auto-assigned policy '{policy}'")
+            logger.info(f"New device {mask_mac(mac)}: auto-assigned policy '{policy}'")
 
         # Get policy info
         try:
@@ -754,7 +757,7 @@ def _process_legacy_devices(agent_devices: List[Dict], db: 'DevicePolicyDB',
                 manufacturer=device.get('manufacturer'),
                 device_type=device.get('device_type'),
             )
-            logger.info(f"New device {mac}: auto-assigned policy '{policy}'")
+            logger.info(f"New device {mask_mac(mac)}: auto-assigned policy '{policy}'")
 
         # Get policy info
         try:
