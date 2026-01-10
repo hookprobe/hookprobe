@@ -61,10 +61,61 @@ BLOCKED_LOG = LOG_DIR / 'dnsxai-blocked.log'
 QUERIES_LOG = LOG_DIR / 'dnsxai-queries.log'
 TRAINING_LOG = LOG_DIR / 'dnsxai-training.log'
 
+# Cross-process config file for slider → ML threshold sync
+# The DNS engine polls this file to get protection level updates
+PROTECTION_CONFIG_FILE = DATA_DIR / 'protection_config.json'
+
+# Protection level to ML threshold mapping (matches engine.py PROTECTION_THRESHOLDS)
+PROTECTION_LEVEL_THRESHOLDS = {
+    0: {'high': 1.0, 'low': 1.0, 'keyword_min': 1.0},    # Off - allow everything
+    1: {'high': 0.95, 'low': 0.80, 'keyword_min': 0.95}, # Permissive
+    2: {'high': 0.90, 'low': 0.70, 'keyword_min': 0.90}, # Light
+    3: {'high': 0.85, 'low': 0.50, 'keyword_min': 0.85}, # Balanced (default)
+    4: {'high': 0.75, 'low': 0.40, 'keyword_min': 0.75}, # Strong
+    5: {'high': 0.60, 'low': 0.30, 'keyword_min': 0.60}, # Aggressive
+}
+
 # Ensure directories exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 USERDATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# CROSS-PROCESS PROTECTION LEVEL SYNC
+# ============================================================
+def write_protection_config(level: int):
+    """
+    Write protection level and thresholds to shared config file.
+
+    The DNS engine polls this file to sync ML thresholds with the UI slider.
+    Uses atomic write (write to temp file, then rename) to prevent partial reads.
+    """
+    try:
+        thresholds = PROTECTION_LEVEL_THRESHOLDS.get(level, PROTECTION_LEVEL_THRESHOLDS[3])
+        config_data = {
+            'protection_level': level,
+            'thresholds': thresholds,
+            'updated_at': datetime.now().isoformat()
+        }
+
+        # Atomic write: write to temp file, then rename
+        temp_file = PROTECTION_CONFIG_FILE.with_suffix('.tmp')
+        with open(temp_file, 'w') as f:
+            json.dump(config_data, f, indent=2)
+
+        # Atomic rename (works on POSIX systems)
+        os.rename(temp_file, PROTECTION_CONFIG_FILE)
+        logger.info(f"Protection config written: level={level}, thresholds={thresholds}")
+
+    except Exception as e:
+        logger.error(f"Failed to write protection config: {e}")
+        # Clean up temp file if it exists
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -104,6 +155,11 @@ class StatsTracker:
                     logger.info(f"Loaded stats: {self._stats['total_queries']} total queries")
         except Exception as e:
             logger.warning(f"Could not load stats: {e}")
+
+        # Write initial protection config for DNS engine to pick up
+        # This ensures the config file exists when engine starts
+        write_protection_config(self._protection_level)
+        logger.info(f"Initial protection config written: level={self._protection_level}")
 
     def _save_stats(self):
         """Persist stats to file."""
@@ -302,6 +358,7 @@ class StatsTracker:
         """Set protection level (0-5).
 
         Also notifies registered callbacks (e.g., ML inference layer).
+        Writes to shared config file for cross-process sync with DNS engine.
         """
         if not 0 <= level <= 5:
             return False
@@ -310,7 +367,11 @@ class StatsTracker:
             self._save_stats()
             logger.info(f"Protection level set to {level}")
 
-            # Notify all registered callbacks about level change
+            # Write to shared config file for DNS engine to pick up
+            # This enables cross-process sync (API server -> DNS engine)
+            write_protection_config(level)
+
+            # Notify all registered callbacks about level change (same-process only)
             self._notify_level_change(level)
             return True
 
