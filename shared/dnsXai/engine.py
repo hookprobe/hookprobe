@@ -371,6 +371,8 @@ class AdBlockConfig:
     whitelist_file: str = "whitelist.txt"
     model_file: str = "classifier_model.json"
     stats_file: str = "adblock_stats.json"
+    protection_config_file: str = "protection_config.json"  # Cross-process config from API server
+    default_protection_level: int = 3  # Default protection level (0-5), 3=Balanced
 
     # G.N.C. Phase 2: Redis configuration for distributed caching
     redis_enabled: bool = field(default_factory=lambda: os.environ.get(
@@ -3984,6 +3986,10 @@ class AIAdBlocker:
         self._whitelist_mtime: float = 0.0
         self._whitelist_check_interval: int = 5  # Check every 5 seconds
 
+        # Protection config file tracking for cross-process sync from API server
+        self._protection_config_mtime: float = 0.0
+        self._last_protection_level: int = self.config.default_protection_level
+
         # Load blocklists
         self._load_lists()
 
@@ -4150,6 +4156,56 @@ class AIAdBlocker:
             return False
         except Exception as e:
             self.logger.debug(f"Error checking whitelist mtime: {e}")
+            return False
+
+    def _check_and_apply_protection_config(self) -> bool:
+        """
+        Check for protection config changes from API server and apply them.
+
+        The API server writes a JSON config file when the slider changes.
+        We poll this file and update the ML inference layer's thresholds.
+
+        Returns True if config was updated, False otherwise.
+        """
+        try:
+            config_path = self.data_dir / self.config.protection_config_file
+
+            if not config_path.exists():
+                return False
+
+            # Check if file was modified
+            current_mtime = config_path.stat().st_mtime
+            if current_mtime <= self._protection_config_mtime:
+                return False
+
+            # File was modified, read it
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+
+            new_level = config_data.get('protection_level', 3)
+
+            # Only apply if level actually changed
+            if new_level != self._last_protection_level:
+                # Update ML inference layer
+                if self.ml_inference:
+                    self.ml_inference.set_protection_level(new_level)
+                    self.logger.info(
+                        f"Protection level synced from API server: {self._last_protection_level} -> {new_level}"
+                    )
+
+                self._last_protection_level = new_level
+                self._protection_config_mtime = current_mtime
+                return True
+
+            # Update mtime even if level didn't change
+            self._protection_config_mtime = current_mtime
+            return False
+
+        except json.JSONDecodeError as e:
+            self.logger.debug(f"Error parsing protection config (may be mid-write): {e}")
+            return False
+        except Exception as e:
+            self.logger.debug(f"Error checking protection config: {e}")
             return False
 
     def _save_blocklist(self):
@@ -4825,6 +4881,22 @@ class AIAdBlocker:
         watcher_thread.start()
         self._threads.append(watcher_thread)
 
+        # Protection config watcher - sync ML thresholds from API server slider
+        def protection_config_watcher():
+            while not self._stop_event.wait(self._whitelist_check_interval):
+                try:
+                    self._check_and_apply_protection_config()
+                except Exception as e:
+                    self.logger.error(f"Protection config watcher error: {e}")
+
+        config_watcher_thread = threading.Thread(
+            target=protection_config_watcher,
+            daemon=True,
+            name="ProtectionConfigWatcher"
+        )
+        config_watcher_thread.start()
+        self._threads.append(config_watcher_thread)
+
         # G.N.C. Phase 2: Background analysis queue processor
         # Processes domains queued for deep analysis (score 0.5-0.85)
         def analysis_queue_processor():
@@ -4842,7 +4914,10 @@ class AIAdBlocker:
         analysis_thread.start()
         self._threads.append(analysis_thread)
 
-        self.logger.info("Background tasks started (blocklist updater + whitelist watcher + ML analysis)")
+        # Apply any existing protection config from API server on startup
+        self._check_and_apply_protection_config()
+
+        self.logger.info("Background tasks started (blocklist updater + whitelist watcher + protection config watcher + ML analysis)")
 
     def stop(self):
         """Stop background tasks and cleanup resources."""
