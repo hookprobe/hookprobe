@@ -53,8 +53,6 @@ class XDPAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Handle GET requests"""
-        global xdp_manager
-
         if self.path == '/health':
             self._send_json({
                 'status': 'healthy',
@@ -127,8 +125,6 @@ class XDPAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Handle POST requests"""
-        global xdp_manager
-
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode() if content_length > 0 else '{}'
 
@@ -181,7 +177,6 @@ def run_http_server(port: int = 9091) -> None:
 
 def signal_handler(signum, frame) -> None:
     """Handle shutdown signals"""
-    global xdp_manager
     logger.info(f"Received signal {signum}, shutting down...")
     if xdp_manager:
         xdp_manager.unload_program()

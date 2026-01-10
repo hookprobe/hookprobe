@@ -697,9 +697,9 @@ logging:
 
 
 # Export classes and functions
+# Note: RADIUSConfig removed - Guardian uses HTP mesh for device tracking
 __all__ = [
     'GuardianConfig',
-    'RADIUSConfig',
     'VLANConfig',
     'OpenFlowConfig',
     'HTPConfig',
