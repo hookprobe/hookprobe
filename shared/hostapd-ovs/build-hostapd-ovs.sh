@@ -116,6 +116,7 @@ check_deps() {
     if [ -n "$MISSING" ]; then
         log_info "Installing:$MISSING"
         apt-get update -qq
+        # shellcheck disable=SC2086
         apt-get install -y -qq $MISSING
     fi
 
