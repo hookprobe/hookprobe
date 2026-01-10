@@ -55,6 +55,7 @@ USERDATA_DIR = Path(os.environ.get('DNSXAI_USERDATA_DIR', '/opt/hookprobe/shared
 LOG_DIR = Path(os.environ.get('LOG_DIR', '/var/log/hookprobe'))
 CONFIG_FILE = DATA_DIR / 'config.json'
 STATS_FILE = DATA_DIR / 'stats.json'
+USERDATA_STATS_FILE = USERDATA_DIR / 'stats.json'  # Persistent stats for reinstall survival
 WHITELIST_FILE = DATA_DIR / 'whitelist.txt'
 USERDATA_WHITELIST_FILE = USERDATA_DIR / 'whitelist.txt'
 BLOCKED_LOG = LOG_DIR / 'dnsxai-blocked.log'
@@ -145,16 +146,33 @@ class StatsTracker:
         self._load_stats()
 
     def _load_stats(self):
-        """Load persisted stats from file."""
+        """Load persisted stats from file (checks both DATA_DIR and USERDATA_DIR)."""
+        stats_loaded = False
+
+        # Try DATA_DIR first (fast volume, most recent)
         try:
             if STATS_FILE.exists():
                 with open(STATS_FILE, 'r') as f:
                     saved = json.load(f)
                     self._stats.update(saved.get('counters', {}))
                     self._protection_level = saved.get('protection_level', 3)
-                    logger.info(f"Loaded stats: {self._stats['total_queries']} total queries")
+                    logger.info(f"Loaded stats from data dir: {self._stats['total_queries']} queries, level={self._protection_level}")
+                    stats_loaded = True
         except Exception as e:
-            logger.warning(f"Could not load stats: {e}")
+            logger.warning(f"Could not load stats from data dir: {e}")
+
+        # Fallback to USERDATA_DIR (persistent, survives reinstall)
+        if not stats_loaded:
+            try:
+                if USERDATA_STATS_FILE.exists():
+                    with open(USERDATA_STATS_FILE, 'r') as f:
+                        saved = json.load(f)
+                        self._stats.update(saved.get('counters', {}))
+                        self._protection_level = saved.get('protection_level', 3)
+                        logger.info(f"Loaded stats from userdata (reinstall recovery): level={self._protection_level}")
+                        stats_loaded = True
+            except Exception as e:
+                logger.warning(f"Could not load stats from userdata: {e}")
 
         # Write initial protection config for DNS engine to pick up
         # This ensures the config file exists when engine starts
@@ -162,16 +180,25 @@ class StatsTracker:
         logger.info(f"Initial protection config written: level={self._protection_level}")
 
     def _save_stats(self):
-        """Persist stats to file."""
+        """Persist stats to file (both DATA_DIR and USERDATA_DIR for reinstall survival)."""
+        stats_data = {
+            'counters': self._stats,
+            'protection_level': self._protection_level,
+            'saved_at': datetime.now().isoformat()
+        }
+        # Save to data directory (fast volume)
         try:
             with open(STATS_FILE, 'w') as f:
-                json.dump({
-                    'counters': self._stats,
-                    'protection_level': self._protection_level,
-                    'saved_at': datetime.now().isoformat()
-                }, f, indent=2)
+                json.dump(stats_data, f, indent=2)
         except Exception as e:
-            logger.warning(f"Could not save stats: {e}")
+            logger.warning(f"Could not save stats to data dir: {e}")
+
+        # Also save to userdata for reinstall persistence
+        try:
+            with open(USERDATA_STATS_FILE, 'w') as f:
+                json.dump(stats_data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save stats to userdata dir: {e}")
 
     def record_query(self, domain: str, blocked: bool, reason: str = '', ml_classified: bool = False):
         """Record a DNS query."""
