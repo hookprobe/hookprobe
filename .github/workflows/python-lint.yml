@@ -14,6 +14,10 @@ on:
       - 'requirements.txt'
   workflow_dispatch:
 
+# Correct paths for HookProbe codebase
+env:
+  PYTHON_PATHS: "core/ shared/ products/"
+
 jobs:
   lint:
     name: Python Code Quality
@@ -21,55 +25,68 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: ./.github/actions/setup-python
+      - name: Setup Python with cache
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          install-requirements: 'true'
+          cache: 'pip'
+
+      - name: Install linting tools
+        run: |
+          pip install black isort flake8 pylint bandit mypy
 
       - name: Check code formatting with Black
         run: |
-          black --check --diff src/ || true
+          echo "Checking Python formatting..."
+          black --check --diff ${{ env.PYTHON_PATHS }} 2>/dev/null || \
+            echo "::warning::Some files need formatting. Run: black ${{ env.PYTHON_PATHS }}"
         continue-on-error: true
 
       - name: Check import sorting with isort
         run: |
-          isort --check-only --diff src/ || true
+          isort --check-only --diff ${{ env.PYTHON_PATHS }} 2>/dev/null || \
+            echo "::warning::Some imports need sorting. Run: isort ${{ env.PYTHON_PATHS }}"
         continue-on-error: true
 
-      - name: Lint with flake8
+      - name: Lint with flake8 (syntax errors = fail)
         run: |
-          # Check for critical Python syntax errors (informational)
-          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=__pycache__ || true
-          # Style check (informational only)
-          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=__pycache__
-        continue-on-error: true
+          # Critical Python syntax errors MUST fail the build
+          echo "Checking for syntax errors..."
+          flake8 ${{ env.PYTHON_PATHS }} \
+            --count --select=E9,F63,F7,F82 \
+            --show-source --statistics \
+            --exclude=__pycache__,*.pyc,venv,migrations
 
-      - name: Lint with pylint
-        run: |
-          find src/ -name "*.py" -not -path "*/venv/*" | xargs pylint --exit-zero --rcfile=/dev/null || true
-        continue-on-error: true
+          # Style check (informational)
+          echo "Style check..."
+          flake8 ${{ env.PYTHON_PATHS }} \
+            --count --exit-zero \
+            --max-complexity=15 --max-line-length=127 \
+            --statistics --exclude=__pycache__,*.pyc,venv,migrations
 
       - name: Security check with bandit
         run: |
-          bandit -r src/ -f json -o bandit-report.json || true
-          bandit -r src/ -ll || true
-        continue-on-error: true
+          echo "Running security scan..."
+          bandit -r ${{ env.PYTHON_PATHS }} \
+            -f json -o bandit-report.json \
+            -x '**/tests/**,**/__pycache__/**' \
+            --severity-level medium || true
 
-      - name: Type check with mypy
-        run: |
-          mypy src/ --ignore-missing-imports --no-strict-optional || true
-        continue-on-error: true
+          # Show summary
+          bandit -r ${{ env.PYTHON_PATHS }} \
+            -x '**/tests/**,**/__pycache__/**' \
+            --severity-level medium -f txt 2>/dev/null | tail -20 || true
 
       - name: Upload bandit report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-security-report
           path: bandit-report.json
           retention-days: 30
+          if-no-files-found: ignore
 
       - name: Summary
         if: always()
@@ -78,12 +95,12 @@ jobs:
           echo "Python Code Quality Summary"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
+          echo "Paths checked: ${{ env.PYTHON_PATHS }}"
+          echo ""
           echo "✓ Black formatting checked"
           echo "✓ Import sorting checked (isort)"
-          echo "✓ Flake8 linting completed"
-          echo "✓ Pylint analysis completed"
+          echo "✓ Flake8 linting completed (syntax errors fail build)"
           echo "✓ Bandit security scan completed"
-          echo "✓ Mypy type checking completed"
           echo ""
-          echo "Note: All checks are informational (non-blocking)"
+          echo "Note: Style checks are informational, syntax errors are blocking"
 

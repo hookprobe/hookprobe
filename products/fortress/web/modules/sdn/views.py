@@ -321,7 +321,7 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                 for mac, device in dhcp_data.items():
                     # Skip entries that aren't dicts (corrupt data)
                     if not isinstance(device, dict):
-                        logger.debug(f"Skipping non-dict entry for {mac}: {type(device)}")
+                        logger.debug(f"Skipping non-dict entry for {mask_mac(mac)}: {type(device)}")
                         continue
                     mac_upper = mac.upper()
                     cache[mac_upper] = {
@@ -894,7 +894,7 @@ def index():
                         try:
                             policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
                         except ValueError:
-                            logger.warning(f"Unknown policy '{policy}' for device {mac}")
+                            logger.warning(f"Unknown policy '{policy}' for device {mask_mac(mac)}")
 
                     # Get status from cache, fall back to DB status or 'offline'
                     cached = status_cache.get(mac, {})
@@ -1030,7 +1030,7 @@ def index():
 
     logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
     if devices:
-        logger.info(f"First device sample: mac={devices[0].get('mac_address')}, hostname={devices[0].get('hostname')}")
+        logger.info(f"First device sample: mac={mask_mac(devices[0].get('mac_address') or '')}, hostname={devices[0].get('hostname')}")
 
     return render_template(
         'sdn/index.html',
@@ -1118,7 +1118,7 @@ def set_policy():
 
         # Use new simple device_policies module
         result = set_device_policy(mac_address, policy)
-        logger.info(f"Policy for {mac_address} set to {policy} by user {current_user.id}")
+        logger.info(f"Policy for {mask_mac(mac_address)} set to {policy} by user {current_user.id}")
 
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({
@@ -3784,6 +3784,10 @@ def api_device_disconnect(mac_address):
             'error': 'Invalid MAC address format'
         }), 400
 
+    # Pre-compute masked MAC for secure logging (CWE-532 mitigation)
+    # This breaks the taint chain for static analysis tools like CodeQL
+    mac_masked = mask_mac(mac)
+
     data = request.get_json() or {}
     also_block = data.get('block', False)
     also_delete = data.get('delete', False)
@@ -3808,7 +3812,7 @@ def api_device_disconnect(mac_address):
                 results['interfaces_tried'] = [
                     r.get('interface') for r in deauth_result.get('interfaces_tried', [])
                 ]
-                logger.info(f"Deauthenticated {mask_mac(mac)} via host agent")
+                logger.info(f"Deauthenticated {mac_masked} via host agent")
             elif deauth_result.get('socket_missing'):
                 # Host agent socket not available - fall back to direct call
                 logger.warning("Host agent socket not available, trying direct hostapd_cli")
@@ -3837,7 +3841,7 @@ def api_device_disconnect(mac_address):
 
                 if result.returncode == 0 and 'OK' in result.stdout:
                     results['deauth_sent'] = True
-                    logger.info(f"Deauthenticated {mask_mac(mac)} from {iface} (direct)")
+                    logger.info(f"Deauthenticated {mac_masked} from {iface} (direct)")
             except FileNotFoundError:
                 logger.debug(f"hostapd_cli not found for {iface}")
             except subprocess.TimeoutExpired:
@@ -3851,7 +3855,7 @@ def api_device_disconnect(mac_address):
             autopilot = get_sdn_autopilot()
             autopilot.set_manual_policy(mac, 'quarantine')
             results['blocked'] = True
-            logger.info(f"Quarantined device {mask_mac(mac)}")
+            logger.info(f"Quarantined device {mac_masked}")
         except Exception as e:
             logger.warning(f"Failed to block device: {e}")
 
@@ -3861,7 +3865,7 @@ def api_device_disconnect(mac_address):
             autopilot = get_sdn_autopilot()
             if autopilot.delete_device(mac):
                 results['deleted'] = True
-                logger.info(f"Deleted device {mask_mac(mac)} from database")
+                logger.info(f"Deleted device {mac_masked} from database")
         except Exception as e:
             logger.warning(f"Failed to delete device: {e}")
 
