@@ -26,6 +26,7 @@ import time
 import math
 import struct
 import socket
+import signal
 import hashlib
 import logging
 import threading
@@ -5335,6 +5336,18 @@ def main():
         level=logging.DEBUG if args.verbose else logging.INFO,
         format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
     )
+
+    # Setup SIGHUP handler for graceful log rotation
+    # Logrotate sends SIGHUP to signal log file rotation
+    # Without this handler, Python terminates on SIGHUP causing container restart
+    def sighup_handler(signum, frame):
+        logging.info("[SIGHUP] Received log rotation signal - continuing operation")
+        # Python logging module doesn't need explicit file reopen for basic handlers
+        # The container bind-mounts logs, so rotation happens on host side
+        # This handler just prevents process termination
+
+    signal.signal(signal.SIGHUP, sighup_handler)
+    logging.info("SIGHUP handler installed for graceful log rotation")
 
     # Create config
     config = AdBlockConfig()
