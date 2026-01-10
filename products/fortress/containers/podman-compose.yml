@@ -174,7 +174,8 @@ services:
       # G.N.C. Architecture: FTS Host Agent socket for WiFi device control
       # Enables container to send hostapd commands via Unix Domain Socket
       # Socket is created by fts-host-agent.service on the host
-      - /var/run/fts-host-agent.sock:/var/run/fts-host-agent.sock:rw
+      # Note: Must mount directory (not file) for container socket bind mounts
+      - /var/run/fts-host-agent:/var/run/fts-host-agent:rw
     # Container network - accessible via host port publishing
     # Access: Host IP:8443 → Container (172.20.200.20:8443)
     networks:

@@ -2174,6 +2174,8 @@ wpa_passphrase=$password
 # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
 # This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
+# MAC deny list for blocking devices (managed by fts-host-agent)
+deny_mac_file=/etc/hostapd/deny.mac
 ap_isolate=1
 max_num_sta=64
 
@@ -2771,6 +2773,8 @@ wpa_passphrase=$password
 # Policy DROP rules (700+) block D2D for internet_only/quarantine BEFORE hairpin
 # This enables policy-controlled D2D: smart_home/full_access can D2D, others cannot
 macaddr_acl=0
+# MAC deny list for blocking devices (managed by fts-host-agent)
+deny_mac_file=/etc/hostapd/deny.mac
 ap_isolate=1
 max_num_sta=128
 

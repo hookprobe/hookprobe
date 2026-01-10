@@ -16,6 +16,7 @@ Security Model:
 Part of HookProbe Fortress - G.N.C. Security Architecture
 """
 
+import fcntl
 import json
 import hashlib
 import hmac
@@ -31,7 +32,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 # Configuration
-SOCKET_PATH = "/var/run/fts-host-agent.sock"
+# Note: Socket in directory for container bind mount compatibility
+SOCKET_PATH = "/var/run/fts-host-agent/fts-host-agent.sock"
 SECRET_FILE = "/etc/hookprobe/fts-agent-secret"
 LOG_FILE = "/var/log/fortress/fts-host-agent.log"
 PID_FILE = "/var/run/fts-host-agent.pid"
@@ -43,7 +45,8 @@ MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 ALLOWED_INTERFACES = frozenset(['wlan_24ghz', 'wlan_5ghz', 'wlan0', 'wlan1'])
 
 # Security: Whitelisted commands only
-ALLOWED_COMMANDS = frozenset(['deauthenticate', 'list_sta', 'status'])
+# deny_acl ADD/DEL for WiFi MAC blocking (prevents reconnection after deauth)
+ALLOWED_COMMANDS = frozenset(['deauthenticate', 'list_sta', 'status', 'deny_acl'])
 
 # Logging setup
 logging.basicConfig(
@@ -189,6 +192,10 @@ class HostAgent:
             return self._handle_list_clients(request)
         elif action == 'status':
             return self._handle_status(request)
+        elif action == 'block_mac':
+            return self._handle_block_mac(request)
+        elif action == 'unblock_mac':
+            return self._handle_unblock_mac(request)
         elif action == 'ping':
             return json.dumps({'success': True, 'message': 'pong', 'version': '1.0.0'}).encode()
         else:
@@ -274,6 +281,246 @@ class HostAgent:
             'error': result.get('error')
         }).encode()
 
+    def _handle_block_mac(self, request: dict) -> bytes:
+        """Handle block_mac request - adds MAC to hostapd deny ACL.
+
+        Uses file-based blocking: modifies deny.mac file once, then
+        reloads config on all requested interfaces.
+        """
+        mac = request.get('mac', '')
+        interfaces = request.get('interfaces', list(ALLOWED_INTERFACES))
+
+        # Validate MAC
+        valid, mac_or_error = self._validate_mac(mac)
+        if not valid:
+            return json.dumps({'success': False, 'error': mac_or_error}).encode()
+        mac = mac_or_error
+
+        results = {
+            'success': False,
+            'mac': mac,
+            'interfaces_blocked': [],
+        }
+
+        # Add MAC to deny file (single file modification)
+        file_result = self._modify_deny_file('ADD', mac)
+        if not file_result.get('success') and not file_result.get('already_blocked'):
+            return json.dumps({'success': False, 'error': file_result.get('error', 'Failed to modify deny file')}).encode()
+
+        # Reload config on each valid interface
+        for iface in interfaces:
+            valid, iface_or_error = self._validate_interface(iface)
+            if not valid:
+                continue
+
+            reload_result = self._reload_hostapd_config(iface)
+            if reload_result.get('success'):
+                results['interfaces_blocked'].append(iface)
+                results['success'] = True
+                logger.info(f"Blocked {mac} on {iface}")
+
+        return json.dumps(results).encode()
+
+    def _handle_unblock_mac(self, request: dict) -> bytes:
+        """Handle unblock_mac request - removes MAC from hostapd deny ACL.
+
+        Uses file-based blocking: modifies deny.mac file once, then
+        reloads config on all requested interfaces.
+        """
+        mac = request.get('mac', '')
+        interfaces = request.get('interfaces', list(ALLOWED_INTERFACES))
+
+        # Validate MAC
+        valid, mac_or_error = self._validate_mac(mac)
+        if not valid:
+            return json.dumps({'success': False, 'error': mac_or_error}).encode()
+        mac = mac_or_error
+
+        results = {
+            'success': False,
+            'mac': mac,
+            'interfaces_unblocked': [],
+        }
+
+        # Remove MAC from deny file (single file modification)
+        file_result = self._modify_deny_file('DEL', mac)
+        if not file_result.get('success') and not file_result.get('not_blocked'):
+            return json.dumps({'success': False, 'error': file_result.get('error', 'Failed to modify deny file')}).encode()
+
+        # Reload config on each valid interface
+        for iface in interfaces:
+            valid, iface_or_error = self._validate_interface(iface)
+            if not valid:
+                continue
+
+            reload_result = self._reload_hostapd_config(iface)
+            if reload_result.get('success'):
+                results['interfaces_unblocked'].append(iface)
+                results['success'] = True
+                logger.info(f"Unblocked {mac} on {iface}")
+
+        return json.dumps(results).encode()
+
+    def _modify_deny_file(self, action: str, mac: str) -> dict:
+        """Modify the deny.mac file (add or remove a MAC address).
+
+        Uses file locking (fcntl.flock) to prevent race conditions when
+        multiple requests try to modify the file simultaneously.
+        """
+        deny_file = '/etc/hostapd/deny.mac'
+        lock_file = '/var/run/fts-host-agent/deny.mac.lock'
+        mac_upper = mac.upper()
+
+        try:
+            # Ensure lock file directory exists
+            os.makedirs(os.path.dirname(lock_file), exist_ok=True)
+
+            # Use exclusive lock to prevent race conditions
+            with open(lock_file, 'w') as lock_fd:
+                try:
+                    # Acquire exclusive lock (blocks until available, timeout via SIGALRM if needed)
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+                    logger.debug(f"Acquired lock for deny file modification")
+
+                    # Read current deny list
+                    current_macs = set()
+                    if os.path.exists(deny_file):
+                        with open(deny_file, 'r') as f:
+                            for line in f:
+                                line = line.strip().upper()
+                                if line and MAC_REGEX.match(line):
+                                    current_macs.add(line)
+
+                    # Modify the list
+                    if action == 'ADD':
+                        if mac_upper in current_macs:
+                            logger.info(f"MAC {mac_upper} already in deny list")
+                            return {'success': True, 'already_blocked': True}
+                        current_macs.add(mac_upper)
+                    elif action == 'DEL':
+                        if mac_upper not in current_macs:
+                            logger.info(f"MAC {mac_upper} not in deny list")
+                            return {'success': True, 'not_blocked': True}
+                        current_macs.discard(mac_upper)
+                    else:
+                        return {'success': False, 'error': 'Invalid action'}
+
+                    # Write updated list atomically (write to temp, then rename)
+                    temp_file = deny_file + '.tmp'
+                    with open(temp_file, 'w') as f:
+                        for m in sorted(current_macs):
+                            f.write(m + '\n')
+                    os.rename(temp_file, deny_file)
+
+                    logger.info(f"Updated deny file: {action} {mac_upper}")
+                    return {'success': True}
+
+                finally:
+                    # Release lock (automatic on fd close, but explicit is clearer)
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                    logger.debug(f"Released lock for deny file modification")
+
+        except PermissionError:
+            return {'success': False, 'error': f'Permission denied writing to {deny_file}'}
+        except BlockingIOError:
+            return {'success': False, 'error': 'Could not acquire file lock (timeout)'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _reload_hostapd_config(self, interface: str) -> dict:
+        """Reload hostapd config for an interface to apply ACL changes."""
+        cmd = ['hostapd_cli', '-i', interface, 'reload_config']
+        logger.info(f"Executing: {' '.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            success = result.returncode == 0 and 'OK' in result.stdout
+            return {
+                'success': success,
+                'stdout': result.stdout.strip(),
+                'stderr': result.stderr.strip(),
+                'returncode': result.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Command timeout'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _execute_deny_acl(self, action: str, interface: str, mac: str) -> dict:
+        """Execute hostapd deny ACL modification via file + reload_config.
+
+        Note: hostapd_cli deny_acl ADD/DEL doesn't work on hostapd 2.11,
+        so we use file-based blocking instead:
+        1. Read/modify /etc/hostapd/deny.mac
+        2. Call reload_config to apply changes
+        """
+        if action not in ('ADD', 'DEL'):
+            return {'success': False, 'error': 'Invalid deny_acl action'}
+
+        deny_file = '/etc/hostapd/deny.mac'
+        mac_upper = mac.upper()
+
+        try:
+            # Read current deny list
+            current_macs = set()
+            if os.path.exists(deny_file):
+                with open(deny_file, 'r') as f:
+                    for line in f:
+                        line = line.strip().upper()
+                        if line and MAC_REGEX.match(line):
+                            current_macs.add(line)
+
+            # Modify the list
+            if action == 'ADD':
+                if mac_upper in current_macs:
+                    logger.info(f"MAC {mac_upper} already in deny list")
+                    return {'success': True, 'stdout': 'Already blocked', 'already_blocked': True}
+                current_macs.add(mac_upper)
+            else:  # DEL
+                if mac_upper not in current_macs:
+                    logger.info(f"MAC {mac_upper} not in deny list")
+                    return {'success': True, 'stdout': 'Not blocked', 'not_blocked': True}
+                current_macs.discard(mac_upper)
+
+            # Write updated list
+            with open(deny_file, 'w') as f:
+                for m in sorted(current_macs):
+                    f.write(m + '\n')
+
+            logger.info(f"Updated deny list: {action} {mac_upper}")
+
+            # Reload config to apply changes
+            cmd = ['hostapd_cli', '-i', interface, 'reload_config']
+            logger.info(f"Executing: {' '.join(cmd)}")
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            success = result.returncode == 0 and 'OK' in result.stdout
+
+            return {
+                'success': success,
+                'stdout': result.stdout.strip(),
+                'stderr': result.stderr.strip(),
+                'returncode': result.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Command timeout'}
+        except PermissionError:
+            return {'success': False, 'error': f'Permission denied writing to {deny_file}'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
     def cleanup(self) -> None:
         """Clean up socket and PID file."""
         self.running = False
@@ -304,6 +551,12 @@ class HostAgent:
         except Exception as e:
             logger.warning(f"Could not write PID file: {e}")
 
+        # Ensure socket directory exists
+        socket_dir = os.path.dirname(self.socket_path)
+        if socket_dir and not os.path.exists(socket_dir):
+            os.makedirs(socket_dir, mode=0o755)
+            logger.info(f"Created socket directory: {socket_dir}")
+
         # Remove existing socket
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
@@ -314,8 +567,19 @@ class HostAgent:
 
         try:
             self.server_socket.bind(self.socket_path)
-            # Set permissions: owner rw, group rw, others none
+            # Security: Set restrictive permissions (owner + group rw)
+            # Container runs as uid/gid 1000 (fortress user), so we set group to 1000
+            # This prevents arbitrary local users from sending commands
             os.chmod(self.socket_path, 0o660)
+            # Set group to container's gid (1000) for fts-web access
+            CONTAINER_GID = 1000  # Container runs as uid/gid 1000
+            try:
+                os.chown(self.socket_path, -1, CONTAINER_GID)
+                logger.info(f"Socket permissions: 0660, group gid {CONTAINER_GID}")
+            except PermissionError:
+                # Running as non-root, fall back to world-accessible
+                logger.warning("Cannot chown socket (not root), using 0o666")
+                os.chmod(self.socket_path, 0o666)
             self.server_socket.listen(5)
             self.server_socket.settimeout(1.0)  # Allow periodic running check
 

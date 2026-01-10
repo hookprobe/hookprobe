@@ -18,8 +18,9 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
-# Socket path (mounted into container)
-SOCKET_PATH = "/var/run/fts-host-agent.sock"
+# Socket path (mounted into container as directory)
+# Note: Directory mount required for podman/docker socket bind mounts
+SOCKET_PATH = "/var/run/fts-host-agent/fts-host-agent.sock"
 SECRET_FILE = "/etc/hookprobe/fts-agent-secret"
 
 # MAC validation regex
@@ -187,6 +188,70 @@ class HostAgentClient:
 
         return self._send_request(request)
 
+    def block_mac(
+        self,
+        mac: str,
+        interfaces: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Block a MAC address from connecting to WiFi (adds to deny ACL).
+
+        Args:
+            mac: MAC address to block
+            interfaces: List of interfaces to block on (default: all)
+
+        Returns:
+            Dict with success status and interfaces blocked
+        """
+        try:
+            mac = self._validate_mac(mac)
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+
+        if interfaces is None:
+            interfaces = DEFAULT_INTERFACES
+
+        request = {
+            'action': 'block_mac',
+            'mac': mac,
+            'interfaces': interfaces,
+            'signature': self._sign_request('block_mac', mac)
+        }
+
+        return self._send_request(request)
+
+    def unblock_mac(
+        self,
+        mac: str,
+        interfaces: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Unblock a MAC address (removes from deny ACL).
+
+        Args:
+            mac: MAC address to unblock
+            interfaces: List of interfaces to unblock on (default: all)
+
+        Returns:
+            Dict with success status and interfaces unblocked
+        """
+        try:
+            mac = self._validate_mac(mac)
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+
+        if interfaces is None:
+            interfaces = DEFAULT_INTERFACES
+
+        request = {
+            'action': 'unblock_mac',
+            'mac': mac,
+            'interfaces': interfaces,
+            'signature': self._sign_request('unblock_mac', mac)
+        }
+
+        return self._send_request(request)
+
 
 # Module-level singleton
 _client: Optional[HostAgentClient] = None
@@ -213,6 +278,66 @@ def deauthenticate_device(mac: str, interfaces: Optional[List[str]] = None) -> D
     """
     client = get_host_agent_client()
     return client.deauthenticate(mac, interfaces)
+
+
+def block_device(mac: str, interfaces: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Block a device from WiFi (adds MAC to deny ACL).
+
+    Args:
+        mac: MAC address of device to block
+        interfaces: Optional list of interfaces to block on
+
+    Returns:
+        Dict with success status and details
+    """
+    client = get_host_agent_client()
+    return client.block_mac(mac, interfaces)
+
+
+def unblock_device(mac: str, interfaces: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Unblock a device from WiFi (removes MAC from deny ACL).
+
+    Args:
+        mac: MAC address of device to unblock
+        interfaces: Optional list of interfaces to unblock on
+
+    Returns:
+        Dict with success status and details
+    """
+    client = get_host_agent_client()
+    return client.unblock_mac(mac, interfaces)
+
+
+def disconnect_device(mac: str, interfaces: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Properly disconnect a device: block MAC first, then deauth.
+
+    This prevents the device from immediately reconnecting.
+
+    Args:
+        mac: MAC address of device to disconnect
+        interfaces: Optional list of interfaces
+
+    Returns:
+        Dict with success status and details
+    """
+    client = get_host_agent_client()
+
+    # Step 1: Block the MAC to prevent reconnection
+    block_result = client.block_mac(mac, interfaces)
+
+    # Step 2: Deauthenticate to kick the device
+    deauth_result = client.deauthenticate(mac, interfaces)
+
+    return {
+        'success': block_result.get('success', False) or deauth_result.get('success', False),
+        'blocked': block_result.get('success', False),
+        'deauth_sent': deauth_result.get('deauth_sent', False),
+        'interfaces_blocked': block_result.get('interfaces_blocked', []),
+        'interfaces_tried': deauth_result.get('interfaces_tried', []),
+    }
 
 
 def is_host_agent_available() -> bool:
