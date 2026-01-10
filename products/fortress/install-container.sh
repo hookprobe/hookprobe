@@ -2102,6 +2102,27 @@ setup_host_agent() {
     mkdir -p "$socket_dir"
     chmod 755 "$socket_dir"
 
+    # Create MAC deny list file for hostapd (required for device blocking)
+    # This file is referenced by hostapd.conf: deny_mac_file=/etc/hostapd/deny.mac
+    local deny_file="/etc/hostapd/deny.mac"
+    if [ ! -f "$deny_file" ]; then
+        mkdir -p /etc/hostapd
+        touch "$deny_file"
+        chmod 644 "$deny_file"
+        log_info "  Created MAC deny list: $deny_file"
+    fi
+
+    # Create HMAC secret for host agent authentication (container ↔ host)
+    # Without this, the host agent accepts unsigned commands (less secure)
+    local secret_file="/etc/hookprobe/fts-agent-secret"
+    if [ ! -f "$secret_file" ]; then
+        mkdir -p /etc/hookprobe
+        # Generate 32-byte random secret
+        head -c 32 /dev/urandom | base64 | tr -d '\n' > "$secret_file"
+        chmod 600 "$secret_file"
+        log_info "  Generated host agent HMAC secret"
+    fi
+
     # Create systemd service unit (standalone, no socket activation)
     # Note: Socket activation was problematic - service creates its own socket
     cat > "$service_unit" << EOF
@@ -2117,8 +2138,13 @@ ExecStart=/usr/bin/python3 ${agent_script}
 Restart=on-failure
 RestartSec=5
 
+# RuntimeDirectory creates /run/fts-host-agent on boot (tmpfs-safe)
+# This ensures the socket directory exists before the service starts
+RuntimeDirectory=fts-host-agent
+RuntimeDirectoryMode=0755
+
 # Note: No PrivateTmp - needs access to /var/run/hostapd control sockets
-# Socket permissions set to 666 by agent for container access
+# Socket permissions set by agent for container access
 
 # Logging
 StandardOutput=journal
@@ -4271,6 +4297,9 @@ OVSEOF
         after_deps="$after_deps fortress-vlan.service"
         wants_deps="$wants_deps fortress-vlan.service"
     fi
+
+    # Host agent provides Unix socket for container-to-host commands (MAC blocking, etc.)
+    wants_deps="$wants_deps fts-host-agent.service"
 
     cat > /etc/systemd/system/fortress.service << EOF
 [Unit]

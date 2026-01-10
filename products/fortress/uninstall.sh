@@ -461,7 +461,13 @@ remove_systemd_services() {
     systemctl disable fts-host-agent.socket 2>/dev/null || true
     rm -f /etc/systemd/system/fts-host-agent.service
     rm -f /etc/systemd/system/fts-host-agent.socket
+    # Remove socket directory (new directory-based socket path)
+    rm -rf /var/run/fts-host-agent
+    # Remove legacy socket file if it exists
     rm -f /var/run/fts-host-agent.sock
+    # Remove HMAC secret (security credential)
+    rm -f /etc/hookprobe/fts-agent-secret
+    # Note: /etc/hostapd/deny.mac (blocked devices list) is preserved as user data
 
     for service in "${services[@]}"; do
         if systemctl is-enabled "$service" &>/dev/null; then
