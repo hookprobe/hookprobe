@@ -33,6 +33,7 @@ EARLY_NET_RESILIENCE_LOADED=1
 : "${RED:=\033[0;31m}"
 : "${GREEN:=\033[0;32m}"
 : "${YELLOW:=\033[1;33m}"
+: "${CYAN:=\033[0;36m}"
 : "${NC:=\033[0m}"
 
 _enr_log_info()  { echo -e "${GREEN}[NET-RESIL]${NC} $1"; }
@@ -861,16 +862,16 @@ enr_status() {
 
     if [ -n "$ENR_PRIMARY_IFACE" ]; then
         echo "Primary ($ENR_PRIMARY_IFACE):"
-        echo "  State: $(cat /sys/class/net/$ENR_PRIMARY_IFACE/operstate 2>/dev/null || echo 'unknown')"
-        echo "  IP: $(ip -4 addr show $ENR_PRIMARY_IFACE 2>/dev/null | grep -oP 'inet \K[0-9./]+' | head -1)"
-        echo "  Connectivity: $(_enr_check_connectivity $ENR_PRIMARY_IFACE && echo 'OK' || echo 'FAILED')"
+        echo "  State: $(cat "/sys/class/net/${ENR_PRIMARY_IFACE}/operstate" 2>/dev/null || echo 'unknown')"
+        echo "  IP: $(ip -4 addr show "$ENR_PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9./]+' | head -1)"
+        echo "  Connectivity: $(_enr_check_connectivity "$ENR_PRIMARY_IFACE" && echo 'OK' || echo 'FAILED')"
     fi
 
     if [ -n "$ENR_BACKUP_IFACE" ]; then
         echo "Backup ($ENR_BACKUP_IFACE):"
-        echo "  State: $(cat /sys/class/net/$ENR_BACKUP_IFACE/operstate 2>/dev/null || echo 'unknown')"
-        echo "  IP: $(ip -4 addr show $ENR_BACKUP_IFACE 2>/dev/null | grep -oP 'inet \K[0-9./]+' | head -1)"
-        echo "  Connectivity: $(_enr_check_connectivity $ENR_BACKUP_IFACE && echo 'OK' || echo 'FAILED')"
+        echo "  State: $(cat "/sys/class/net/${ENR_BACKUP_IFACE}/operstate" 2>/dev/null || echo 'unknown')"
+        echo "  IP: $(ip -4 addr show "$ENR_BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[0-9./]+' | head -1)"
+        echo "  Connectivity: $(_enr_check_connectivity "$ENR_BACKUP_IFACE" && echo 'OK' || echo 'FAILED')"
     fi
 }
 
