@@ -14,6 +14,9 @@ on:
       - 'requirements.txt'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Correct paths for HookProbe codebase
 env:
   PYTHON_PATHS: "core/ shared/ products/"
@@ -22,6 +25,8 @@ jobs:
   lint:
     name: Python Code Quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
