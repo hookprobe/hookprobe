@@ -1479,14 +1479,14 @@ sudo ./install.sh --quick
 | fts-mesh | HTP/Neuro/DSM mesh orchestrator | Optional (`--profile mesh`) |
 | fts-cloudflared | Cloudflare Tunnel | Optional (`--profile tunnel`) |
 
-**Network Architecture (VLAN Mode)**:
-- **OVS Bridge**: `FTS` - Layer 2 switch (NO IP address)
-- **VLAN 100 (LAN)**: `vlan100` interface with IP 10.200.0.1/XX (configurable subnet)
-- **VLAN 200 (MGMT)**: `vlan200` interface with IP 10.200.100.1/30
-- **DHCP**: dnsmasq on `vlan100` (range calculated based on subnet size)
+**Network Architecture**:
+- **OVS Bridge**: `FTS` - Layer 2 switch with OpenFlow-based micro-segmentation
+- **LAN**: 10.200.0.0/XX subnet on OVS bridge (configurable subnet size)
+- **DHCP**: dnsmasq on OVS bridge (range calculated based on subnet size)
 - **NAT**: iptables masquerade on WAN interface
 - **Container Network**: `fts-internal` (172.20.200.0/24) for inter-container communication
 - **WiFi**: hostapd bridged to OVS (`wlan_24ghz`, `wlan_5ghz` stable names)
+- **Segmentation**: OpenFlow rules for device isolation (no VLAN tagging)
 
 **Subnet Sizes**:
 
@@ -1561,9 +1561,8 @@ podman logs fts-dnsxai                # DNS protection logs
 
 # Network status
 ovs-vsctl show                        # OVS bridge status
-ip addr show vlan100                  # LAN VLAN IP
-ip addr show vlan200                  # MGMT VLAN IP
-cat /etc/dnsmasq.d/fts-vlan.conf      # DHCP config
+ip addr show FTS                      # OVS bridge IP
+cat /etc/dnsmasq.d/fts-lan.conf       # DHCP config
 
 # Backup
 ./fortress-ctl.sh backup              # Create backup

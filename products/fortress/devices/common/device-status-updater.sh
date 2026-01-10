@@ -177,10 +177,10 @@ ENTRY
     while IFS='|' read -r mac state ip; do
         [ -z "$mac" ] && continue
 
-        # Filter: Only include LAN devices (10.200.x.x for VLAN 100/200)
+        # Filter: Only include LAN devices (10.200.x.x)
         # Skip container network (172.20.x.x), loopback, and other non-LAN IPs
         case "$ip" in
-            10.200.*) ;; # LAN VLAN - include
+            10.200.*) ;; # LAN network - include
             *) continue ;; # Skip all other networks (containers, etc.)
         esac
 
