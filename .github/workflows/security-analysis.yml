@@ -1,7 +1,8 @@
 name: Security Analysis
 
-# G.N.C. Protocol: Security-first CI/CD with CodeQL integration
-# This workflow catches CWE-532 and other security issues before merge
+# G.N.C. Protocol: Security-first CI/CD
+# Note: CodeQL analysis is handled by GitHub's Default Setup (enabled in repo settings)
+# This workflow provides additional security scans (Bandit, ShellCheck, secret detection)
 
 on:
   push:
@@ -19,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   # Fast security checks (< 2 min)
@@ -120,35 +120,6 @@ jobs:
             bandit-results.json
           retention-days: 30
 
-  # CodeQL analysis (runs in parallel)
-  # Note: If CodeQL Default Setup is enabled in repo settings, this job will be skipped
-  # to avoid "advanced configurations cannot be processed" error
-  codeql-analysis:
-    name: CodeQL Analysis
-    runs-on: ubuntu-latest
-    # Allow this job to fail gracefully if Default Setup is enabled
-    continue-on-error: true
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
-          queries: security-and-quality
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:python"
-          # Don't fail if Default Setup is also enabled
-          upload: ${{ github.event_name != 'schedule' }}
-
   # Shell script security (runs in parallel)
   shell-security:
     name: Shell Script Security
@@ -218,7 +189,7 @@ jobs:
   security-summary:
     name: Security Summary
     runs-on: ubuntu-latest
-    needs: [quick-security-scan, codeql-analysis, shell-security]
+    needs: [quick-security-scan, shell-security]
     if: always()
 
     steps:
@@ -229,21 +200,15 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "Quick Security Scan: ${{ needs.quick-security-scan.result }}"
-          echo "CodeQL Analysis:     ${{ needs.codeql-analysis.result }}"
           echo "Shell Security:      ${{ needs.shell-security.result }}"
           echo ""
+          echo "Note: CodeQL analysis is handled by GitHub Default Setup"
+          echo ""
 
-          # CodeQL can fail if Default Setup is enabled (not a real failure)
-          # Only fail on quick-security-scan and shell-security failures
           if [ "${{ needs.quick-security-scan.result }}" = "failure" ] || \
              [ "${{ needs.shell-security.result }}" = "failure" ]; then
             echo "::error::Security checks failed! Review and fix before merging."
             exit 1
-          fi
-
-          # Note CodeQL issues but don't fail (may be due to Default Setup conflict)
-          if [ "${{ needs.codeql-analysis.result }}" = "failure" ]; then
-            echo "::warning::CodeQL Analysis had issues (may be due to Default Setup enabled in repo settings)"
           fi
 
           echo "✓ All security checks passed"
