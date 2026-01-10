@@ -2062,6 +2062,99 @@ EOF
             log_warn "  5GHz AP failed to start - check: journalctl -u fts-hostapd-5ghz"
         fi
     fi
+
+    # G.N.C. Architecture: Setup FTS Host Agent for container-to-host WiFi control
+    log_info "Setting up FTS Host Agent (G.N.C. Architecture)..."
+    setup_host_agent
+}
+
+setup_host_agent() {
+    # G.N.C. Architecture: FTS Host Agent
+    # Provides secure container-to-host communication for hostapd control
+    # Uses Unix Domain Socket for minimal attack surface
+
+    local agent_script="${INSTALL_DIR}/scripts/fts-host-agent.py"
+    local socket_unit="/etc/systemd/system/fts-host-agent.socket"
+    local service_unit="/etc/systemd/system/fts-host-agent.service"
+
+    # Check if agent script exists
+    if [ ! -f "$agent_script" ]; then
+        log_warn "FTS Host Agent script not found at $agent_script"
+        log_warn "Device disconnect from web UI may not work properly"
+        return 0
+    fi
+
+    # Make agent script executable
+    chmod +x "$agent_script"
+
+    # Create systemd socket unit
+    cat > "$socket_unit" << 'EOF'
+[Unit]
+Description=FTS Host Agent Socket - G.N.C. Architecture
+Documentation=https://hookprobe.com/fortress
+PartOf=fortress.service
+
+[Socket]
+ListenStream=/var/run/fts-host-agent.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=root
+Accept=no
+
+[Install]
+WantedBy=sockets.target
+EOF
+
+    # Create systemd service unit
+    cat > "$service_unit" << EOF
+[Unit]
+Description=FTS Host Agent - Hostapd Control Bridge (G.N.C.)
+Documentation=https://hookprobe.com/fortress
+After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Requires=fts-host-agent.socket
+PartOf=fortress.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${agent_script}
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/run /var/log/fortress
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-host-agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Ensure log directory exists
+    mkdir -p /var/log/fortress
+    chmod 755 /var/log/fortress
+
+    # Reload systemd and enable services
+    systemctl daemon-reload
+
+    # Enable and start socket (service starts on-demand via socket activation)
+    if systemctl enable fts-host-agent.socket 2>/dev/null; then
+        if systemctl start fts-host-agent.socket 2>/dev/null; then
+            log_info "  FTS Host Agent socket activated"
+        else
+            log_warn "  FTS Host Agent socket failed to start"
+        fi
+    else
+        log_warn "  Failed to enable FTS Host Agent socket"
+    fi
+
+    log_info "  G.N.C. Architecture: Host agent ready for container WiFi control"
 }
 
 setup_ovs_dhcp() {

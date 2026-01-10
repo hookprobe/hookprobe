@@ -1,0 +1,14 @@
+[Unit]
+Description=FTS Host Agent Socket
+Documentation=https://hookprobe.com/fortress
+PartOf=fortress.service
+
+[Socket]
+ListenStream=/var/run/fts-host-agent.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=fts-web
+Accept=no
+
+[Install]
+WantedBy=sockets.target
