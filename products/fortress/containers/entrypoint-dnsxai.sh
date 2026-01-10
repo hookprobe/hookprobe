@@ -39,6 +39,12 @@ mkdir -p "$DATA_DIR" "$USERDATA_DIR" "$LOG_DIR"
 # 3. DEFAULTS_DIR/whitelist.txt (bundled defaults)
 # ============================================================
 
+# Handle dangling symlinks in userdata (can happen if target doesn't exist)
+if [ -L "$USERDATA_DIR/whitelist.txt" ] && [ ! -e "$USERDATA_DIR/whitelist.txt" ]; then
+    echo "[dnsXai] Removing dangling symlink for whitelist"
+    rm -f "$USERDATA_DIR/whitelist.txt"
+fi
+
 if [ -f "$USERDATA_DIR/whitelist.txt" ]; then
     # User has a persistent whitelist - use it
     echo "[dnsXai] Using persistent user whitelist from $USERDATA_DIR"
