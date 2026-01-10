@@ -3,6 +3,7 @@ AIOCHI Views - AI Eyes Dashboard
 Flask views for the Cognitive Network Layer.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta
@@ -11,6 +12,26 @@ from flask_login import login_required
 
 from . import aiochi_bp
 from ...security_utils import safe_error_message
+
+# Import real data integration module
+try:
+    from .real_data import (
+        get_dnsxai_stats,
+        get_recent_blocked_domains,
+        get_suricata_alerts,
+        get_device_events,
+        get_system_performance,
+        get_ambient_state,
+        generate_privacy_feed,
+        get_quick_actions_state,
+        get_color_palette,
+        get_icon_palette,
+    )
+    REAL_DATA_AVAILABLE = True
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Real data module not available: {e}")
+    REAL_DATA_AVAILABLE = False
 
 # Security: MAC address validation pattern
 MAC_PATTERN = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
@@ -405,14 +426,25 @@ def cortex():
 def api_status():
     """Get full AIOCHI status for dashboard."""
     try:
-        if AIOCHI_ENABLED:
-            # TODO: Integrate with real AIOCHI backend
-            pass
+        # Use real data if available
+        if REAL_DATA_AVAILABLE:
+            return jsonify({
+                'success': True,
+                'demo_mode': False,
+                'real_data': True,
+                'timestamp': datetime.now().isoformat(),
+                'ambient': get_ambient_state(),
+                'presence': _get_real_presence(),
+                'privacy': generate_privacy_feed(),
+                'performance': _get_real_performance(),
+                'quick_actions': get_quick_actions_state()
+            })
 
-        # Demo mode response
+        # Fallback to demo mode
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_ENABLED,
+            'demo_mode': True,
+            'real_data': False,
             'timestamp': datetime.now().isoformat(),
             'ambient': get_demo_ambient_state(),
             'presence': get_demo_presence(),
@@ -426,6 +458,151 @@ def api_status():
             'success': False,
             'error': safe_error_message(e)
         }), 500
+
+
+def _get_real_presence():
+    """Get real presence data from bubble manager and SDN devices."""
+    try:
+        # Try local bubble manager first
+        if LOCAL_BUBBLE_AVAILABLE:
+            manager = get_local_bubble_manager()
+            if manager:
+                bubbles_list = manager.get_all_bubbles()
+                all_devices = get_sdn_devices()
+                all_devices_map = {d['mac'].upper(): d for d in all_devices}
+
+                bubbles_data = []
+                total_devices = 0
+                online_devices = 0
+                ecosystems = {}
+
+                for bubble in bubbles_list:
+                    devices_in_bubble = []
+                    for mac in bubble.devices:
+                        mac_upper = mac.upper()
+                        device_info = all_devices_map.get(mac_upper, {})
+                        is_online = device_info.get('online', False)
+                        devices_in_bubble.append({
+                            'name': device_info.get('label', mac_upper[:8]),
+                            'type': device_info.get('device_type', 'unknown'),
+                            'online': is_online,
+                            'last_seen': 'Now' if is_online else 'Unknown',
+                        })
+                        total_devices += 1
+                        if is_online:
+                            online_devices += 1
+
+                    # Detect ecosystem based on vendor
+                    ecosystem = 'mixed'
+                    vendor = bubble.ecosystem or 'mixed'
+                    if 'apple' in vendor.lower():
+                        ecosystem = 'apple'
+                    elif 'samsung' in vendor.lower() or 'galaxy' in vendor.lower():
+                        ecosystem = 'samsung'
+                    elif 'google' in vendor.lower():
+                        ecosystem = 'google'
+
+                    ecosystems[ecosystem] = ecosystems.get(ecosystem, 0) + len(devices_in_bubble)
+
+                    bubbles_data.append({
+                        'id': bubble.bubble_id,
+                        'label': bubble.name,
+                        'icon': bubble.icon or 'fa-layer-group',
+                        'color': bubble.color or '#2196F3',
+                        'devices': devices_in_bubble,
+                        'ecosystem': ecosystem,
+                        'trust_level': 'CORE' if bubble.bubble_type.value in ('family', 'FAMILY') else 'KNOWN',
+                    })
+
+                return {
+                    'bubbles': bubbles_data,
+                    'total_devices': total_devices,
+                    'online_devices': online_devices,
+                    'ecosystems': ecosystems,
+                }
+
+        # Fallback to demo
+        return get_demo_presence()
+    except Exception as e:
+        logger.warning(f"Could not get real presence: {e}")
+        return get_demo_presence()
+
+
+def _get_real_performance():
+    """Get real performance metrics."""
+    try:
+        if REAL_DATA_AVAILABLE:
+            system_perf = get_system_performance()
+            dns_stats = get_dnsxai_stats()
+
+            # Count devices from SDN
+            devices = get_sdn_devices()
+            devices_active = sum(1 for d in devices if d.get('online', False))
+            devices_total = len(devices)
+
+            return {
+                'health_score': system_perf.get('health_score', 85),
+                'health_trend': system_perf.get('health_trend', 'stable'),
+                'insight': _generate_performance_insight(system_perf, dns_stats),
+                'metrics': {
+                    'latency_ms': system_perf.get('latency_ms', 10),
+                    'latency_trend': system_perf.get('latency_trend', 'good'),
+                    'bandwidth_used_pct': system_perf.get('bandwidth_used_pct', 25),
+                    'bandwidth_trend': system_perf.get('bandwidth_trend', 'normal'),
+                    'devices_active': devices_active,
+                    'devices_total': devices_total,
+                    'uptime_pct': system_perf.get('uptime_pct', 99.9),
+                    'threats_blocked_24h': dns_stats.get('blocked_today', 0),
+                },
+                'recommendations': _generate_recommendations(system_perf, dns_stats),
+            }
+    except Exception as e:
+        logger.warning(f"Could not get real performance: {e}")
+
+    return get_demo_performance()
+
+
+def _generate_performance_insight(system_perf: dict, dns_stats: dict) -> str:
+    """Generate a human-readable performance insight."""
+    health_score = system_perf.get('health_score', 85)
+    blocked = dns_stats.get('blocked_today', 0)
+
+    if health_score >= 90:
+        return f"Excellent network health! Protected from {blocked} threats today."
+    elif health_score >= 75:
+        return f"Your network is performing well. Blocked {blocked} tracking attempts."
+    elif health_score >= 60:
+        return "Network performance is acceptable. Consider checking for interference."
+    else:
+        return "Network health needs attention. High load detected."
+
+
+def _generate_recommendations(system_perf: dict, dns_stats: dict) -> list:
+    """Generate performance recommendations."""
+    recommendations = []
+
+    if system_perf.get('latency_ms', 0) > 50:
+        recommendations.append({
+            'priority': 'medium',
+            'icon': 'fa-gauge-high',
+            'text': "High latency detected. Check your internet connection."
+        })
+
+    if system_perf.get('health_trend') == 'degrading':
+        recommendations.append({
+            'priority': 'high',
+            'icon': 'fa-triangle-exclamation',
+            'text': "System load is increasing. Consider restarting services."
+        })
+
+    if not recommendations:
+        recommendations.append({
+            'priority': 'low',
+            'icon': 'fa-check-circle',
+            'text': "Everything looks good! No actions needed."
+        })
+
+    return recommendations
 
 
 @aiochi_bp.route('/api/presence')
@@ -459,9 +636,19 @@ def api_presence():
 def api_feed():
     """Get privacy feed (narrative events)."""
     try:
+        # Use real data if available
+        if REAL_DATA_AVAILABLE:
+            return jsonify({
+                'success': True,
+                'demo_mode': False,
+                'real_data': True,
+                'data': generate_privacy_feed()
+            })
+
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_ENABLED,
+            'demo_mode': True,
+            'real_data': False,
             'data': get_demo_privacy_feed()
         })
     except Exception as e:
@@ -474,9 +661,19 @@ def api_feed():
 def api_performance():
     """Get performance metrics."""
     try:
+        # Use real data if available
+        if REAL_DATA_AVAILABLE:
+            return jsonify({
+                'success': True,
+                'demo_mode': False,
+                'real_data': True,
+                'data': _get_real_performance()
+            })
+
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_ENABLED,
+            'demo_mode': True,
+            'real_data': False,
             'data': get_demo_performance()
         })
     except Exception as e:
@@ -1934,3 +2131,159 @@ def api_bubble_types():
         'types': types,
         'presets': presets
     })
+
+
+# ============================================================================
+# Color and Icon Palette API
+# ============================================================================
+
+@aiochi_bp.route('/api/bubbles/colors')
+@login_required
+def api_bubble_colors():
+    """Get available colors for bubble customization."""
+    try:
+        if REAL_DATA_AVAILABLE:
+            colors = get_color_palette()
+        else:
+            colors = [
+                {'name': 'Blue', 'value': '#2196F3', 'class': 'primary'},
+                {'name': 'Green', 'value': '#4CAF50', 'class': 'success'},
+                {'name': 'Orange', 'value': '#FF9800', 'class': 'warning'},
+                {'name': 'Red', 'value': '#f44336', 'class': 'danger'},
+                {'name': 'Purple', 'value': '#9C27B0', 'class': 'purple'},
+                {'name': 'Pink', 'value': '#E91E63', 'class': 'pink'},
+                {'name': 'Cyan', 'value': '#00BCD4', 'class': 'info'},
+                {'name': 'Grey', 'value': '#607D8B', 'class': 'secondary'},
+            ]
+
+        return jsonify({
+            'success': True,
+            'colors': colors
+        })
+    except Exception as e:
+        logger.error(f"Bubble colors API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/bubbles/icons')
+@login_required
+def api_bubble_icons():
+    """Get available icons for bubble customization."""
+    try:
+        if REAL_DATA_AVAILABLE:
+            icons = get_icon_palette()
+        else:
+            icons = [
+                {'name': 'Users', 'value': 'fa-users', 'label': 'Family'},
+                {'name': 'User', 'value': 'fa-user', 'label': 'Person'},
+                {'name': 'Child', 'value': 'fa-child', 'label': 'Kids'},
+                {'name': 'Home', 'value': 'fa-home', 'label': 'Smart Home'},
+                {'name': 'Laptop', 'value': 'fa-laptop', 'label': 'Work'},
+                {'name': 'Layer Group', 'value': 'fa-layer-group', 'label': 'Custom'},
+            ]
+
+        return jsonify({
+            'success': True,
+            'icons': icons
+        })
+    except Exception as e:
+        logger.error(f"Bubble icons API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+# ============================================================================
+# SSE Endpoint for Real-time Updates
+# ============================================================================
+
+@aiochi_bp.route('/api/events/stream')
+@login_required
+def api_events_stream():
+    """Server-Sent Events endpoint for real-time dashboard updates.
+
+    Streams:
+    - Security events (Suricata alerts)
+    - DNS blocking events
+    - Device events (join/leave)
+    - Bubble changes
+    """
+    from flask import Response, stream_with_context
+    import time
+
+    def generate():
+        """Generate SSE events."""
+        last_event_time = datetime.now()
+        event_id = 0
+
+        while True:
+            try:
+                # Check for new events every 5 seconds
+                time.sleep(5)
+
+                events_to_send = []
+
+                # Get recent Suricata alerts
+                if REAL_DATA_AVAILABLE:
+                    alerts = get_suricata_alerts(limit=5)
+                    for alert in alerts:
+                        try:
+                            alert_time = datetime.fromisoformat(alert.get('timestamp', '').replace('Z', '+00:00'))
+                            if alert_time > last_event_time:
+                                event_id += 1
+                                events_to_send.append({
+                                    'type': 'security',
+                                    'id': event_id,
+                                    'data': {
+                                        'severity': alert.get('severity', 3),
+                                        'message': alert.get('signature', 'Security event'),
+                                        'timestamp': alert.get('timestamp'),
+                                    }
+                                })
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Get recent blocked domains
+                    blocked = get_recent_blocked_domains(limit=5)
+                    for domain_event in blocked:
+                        event_id += 1
+                        events_to_send.append({
+                            'type': 'dns_block',
+                            'id': event_id,
+                            'data': {
+                                'domain': domain_event.get('domain', ''),
+                                'category': domain_event.get('category', 'tracking'),
+                            }
+                        })
+
+                # Send heartbeat if no events
+                if not events_to_send:
+                    event_id += 1
+                    events_to_send.append({
+                        'type': 'heartbeat',
+                        'id': event_id,
+                        'data': {'timestamp': datetime.now().isoformat()}
+                    })
+
+                # Send events
+                for event in events_to_send:
+                    yield f"event: {event['type']}\n"
+                    yield f"id: {event['id']}\n"
+                    yield f"data: {json.dumps(event['data'])}\n\n"
+
+                last_event_time = datetime.now()
+
+            except GeneratorExit:
+                break
+            except Exception as e:
+                logger.error(f"SSE error: {e}")
+                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                break
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
