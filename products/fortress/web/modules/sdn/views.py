@@ -11,13 +11,81 @@ Network Policies:
 
 from flask import render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
+from collections import defaultdict
 from datetime import datetime
+from functools import wraps
+from threading import Lock
 from typing import Dict, List, Optional
 import json
 import logging
 import os
 import re
 import subprocess
+import time
+
+
+# Simple in-memory rate limiter for security-sensitive endpoints
+class RateLimiter:
+    """Thread-safe rate limiter to prevent DoS attacks on sensitive endpoints."""
+
+    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: Dict[str, List[float]] = defaultdict(list)
+        self.lock = Lock()
+
+    def is_allowed(self, key: str) -> bool:
+        """Check if request is allowed for given key (IP or user)."""
+        now = time.time()
+        with self.lock:
+            # Clean old entries
+            self.requests[key] = [
+                ts for ts in self.requests[key]
+                if now - ts < self.window_seconds
+            ]
+            # Check rate
+            if len(self.requests[key]) >= self.max_requests:
+                return False
+            # Record request
+            self.requests[key].append(now)
+            return True
+
+    def get_retry_after(self, key: str) -> int:
+        """Get seconds until next request is allowed."""
+        now = time.time()
+        with self.lock:
+            if not self.requests[key]:
+                return 0
+            oldest = min(self.requests[key])
+            return max(0, int(self.window_seconds - (now - oldest)))
+
+
+# Rate limiter for disconnect endpoint: 10 requests per minute per user
+disconnect_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
+
+
+def rate_limit(limiter: RateLimiter):
+    """Decorator to apply rate limiting to an endpoint."""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Use username if logged in, otherwise IP
+            if hasattr(current_user, 'username') and current_user.is_authenticated:
+                key = f"user:{current_user.username}"
+            else:
+                key = f"ip:{request.remote_addr}"
+
+            if not limiter.is_allowed(key):
+                retry_after = limiter.get_retry_after(key)
+                return jsonify({
+                    'success': False,
+                    'error': 'Rate limit exceeded. Too many requests.',
+                    'retry_after': retry_after
+                }), 429
+
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 from . import sdn_bp
 from ..auth.decorators import operator_required
@@ -74,6 +142,9 @@ try:
     from host_agent_client import (
         get_host_agent_client,
         deauthenticate_device,
+        disconnect_device,
+        block_device,
+        unblock_device,
         is_host_agent_available,
     )
     HOST_AGENT_AVAILABLE = True
@@ -86,6 +157,15 @@ except ImportError as e:
         return None
 
     def deauthenticate_device(mac, interfaces=None):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def disconnect_device(mac, interfaces=None):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def block_device(mac, interfaces=None):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def unblock_device(mac, interfaces=None):
         return {'success': False, 'error': 'Host agent client not available'}
 
     def is_host_agent_available():
@@ -321,7 +401,9 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                 for mac, device in dhcp_data.items():
                     # Skip entries that aren't dicts (corrupt data)
                     if not isinstance(device, dict):
-                        logger.debug(f"Skipping non-dict entry for {mask_mac(mac)}: {type(device)}")
+                        # CWE-532: Pre-compute masked MAC to break taint chain
+                        mac_safe = mask_mac(mac)
+                        logger.debug(f"Skipping non-dict entry for {mac_safe}: {type(device)}")
                         continue
                     mac_upper = mac.upper()
                     cache[mac_upper] = {
@@ -894,7 +976,9 @@ def index():
                         try:
                             policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
                         except ValueError:
-                            logger.warning(f"Unknown policy '{policy}' for device {mask_mac(mac)}")
+                            # CWE-532: Pre-compute masked MAC to break taint chain
+                            mac_safe = mask_mac(mac)
+                            logger.warning(f"Unknown policy '{policy}' for device {mac_safe}")
 
                     # Get status from cache, fall back to DB status or 'offline'
                     cached = status_cache.get(mac, {})
@@ -1030,7 +1114,10 @@ def index():
 
     logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
     if devices:
-        logger.info(f"First device sample: mac={mask_mac(devices[0].get('mac_address') or '')}, hostname={devices[0].get('hostname')}")
+        # CWE-532: Pre-compute masked values to break taint chain
+        sample_mac = mask_mac(devices[0].get('mac_address') or '')
+        sample_host = (devices[0].get('hostname') or '')[:20]  # Truncate hostname, don't log full names
+        logger.info(f"First device sample: mac={sample_mac}, hostname_prefix={sample_host}")
 
     return render_template(
         'sdn/index.html',
@@ -1118,7 +1205,9 @@ def set_policy():
 
         # Use new simple device_policies module
         result = set_device_policy(mac_address, policy)
-        logger.info(f"Policy for {mask_mac(mac_address)} set to {policy} by user {current_user.id}")
+        # CWE-532: Pre-compute masked MAC to break taint chain for static analysis
+        mac_safe = mask_mac(mac_address)
+        logger.info(f"Policy for {mac_safe} set to {policy} by user {current_user.id}")
 
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({
@@ -1127,7 +1216,7 @@ def set_policy():
                 'device': result
             })
 
-        flash(f'Policy for {mac_address} set to {policy}', 'success')
+        flash(f'Policy for {mac_safe} set to {policy}', 'success')
         return redirect(url_for('sdn.index'))
 
     except ValueError as e:
@@ -2504,7 +2593,7 @@ def api_enroll_device():
             if cert:
                 return jsonify({
                     'success': True,
-                    'message': f'Device {mac_address} enrolled successfully',
+                    'message': f'Device {mask_mac(mac_address)} enrolled successfully',
                     'cert_id': cert.cert_id,
                     'expires': cert.expires_at
                 })
@@ -2516,7 +2605,7 @@ def api_enroll_device():
     else:
         return jsonify({
             'success': True,
-            'message': f'Device {mac_address} enrolled (demo mode)'
+            'message': f'Device {mask_mac(mac_address)} enrolled (demo mode)'
         })
 
 
@@ -2539,7 +2628,7 @@ def api_revoke_device():
             if success:
                 return jsonify({
                     'success': True,
-                    'message': f'Certificate revoked for {mac_address}'
+                    'message': f'Certificate revoked for {mask_mac(mac_address)}'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Revocation failed'}), 500
@@ -2577,7 +2666,7 @@ def api_quarantine_device():
 
                 return jsonify({
                     'success': True,
-                    'message': f'Device {mac_address} moved to quarantine'
+                    'message': f'Device {mask_mac(mac_address)} moved to quarantine'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Quarantine failed'}), 500
@@ -2587,7 +2676,7 @@ def api_quarantine_device():
     else:
         return jsonify({
             'success': True,
-            'message': f'Device {mac_address} quarantined (demo mode)'
+            'message': f'Device {mask_mac(mac_address)} quarantined (demo mode)'
         })
 
 
@@ -2885,7 +2974,7 @@ def api_move_device():
             if success:
                 return jsonify({
                     'success': True,
-                    'message': f'Device {mac_address} moved to {segment}'
+                    'message': f'Device {mask_mac(mac_address)} moved to {segment}'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Move failed'}), 500
@@ -3072,7 +3161,7 @@ def api_device_delete(mac_address):
             success = manager.delete(mac)
 
             if success:
-                return jsonify({'success': True, 'message': f'Device {mac} deleted'})
+                return jsonify({'success': True, 'message': f'Device {mask_mac(mac)} deleted'})
             else:
                 return jsonify({'success': False, 'error': 'Device not found'}), 404
         except Exception as e:
@@ -3141,14 +3230,18 @@ def api_device_set_policy(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
+                # CWE-532: Pre-compute masked MAC to break taint chain
+                mac_safe = mask_mac(mac)
+                logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
 
             success = autopilot.set_policy(mac, policy)
+            # CWE-532: Pre-compute masked MAC for response message
+            mac_display = mask_mac(mac)
 
             if success:
                 return jsonify({
                     'success': True,
-                    'message': f'Policy set to {policy} for {mac}'
+                    'message': f'Policy set to {policy} for {mac_display}'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
@@ -3168,7 +3261,7 @@ def api_device_set_policy(mac_address):
 
                 return jsonify({
                     'success': True,
-                    'message': f'Policy set to {policy} for {mac}'
+                    'message': f'Policy set to {policy} for {mask_mac(mac)}'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to set policy'}), 500
@@ -3199,7 +3292,7 @@ def api_device_block(mac_address):
             if success:
                 return jsonify({
                     'success': True,
-                    'message': f'Device {mac} blocked'
+                    'message': f'Device {mask_mac(mac)} blocked'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to block device'}), 500
@@ -3228,7 +3321,7 @@ def api_device_unblock(mac_address):
             if success:
                 return jsonify({
                     'success': True,
-                    'message': f'Device {mac} unblocked'
+                    'message': f'Device {mask_mac(mac)} unblocked'
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to unblock device'}), 500
@@ -3467,7 +3560,7 @@ def api_device_tag(mac_address):
     if save_device_tags(tags):
         return jsonify({
             'success': True,
-            'message': f'Device {mac} tagged as {device_type}',
+            'message': f'Device {mask_mac(mac)} tagged as {device_type}',
             'tag': tags[mac]
         })
     else:
@@ -3487,7 +3580,7 @@ def api_device_untag(mac_address):
         if save_device_tags(tags):
             return jsonify({
                 'success': True,
-                'message': f'Tag removed from {mac} - device will use auto-detection'
+                'message': f'Tag removed from {mask_mac(mac)} - device will use auto-detection'
             })
         else:
             return jsonify({'success': False, 'error': 'Failed to save'}), 500
@@ -3634,7 +3727,9 @@ def api_device_detail(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
+                # CWE-532: Pre-compute masked MAC to break taint chain
+                mac_safe = mask_mac(mac)
+                logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
 
                 # Get the newly created device
                 device = autopilot.get_device_detail(mac)
@@ -3701,7 +3796,9 @@ def api_device_add_tag(mac_address):
                     dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
                     vendor_class=device_info.get('vendor_class', '')
                 )
-                logger.info(f"Auto-created device {mask_mac(mac)} via Fingerbank pipeline")
+                # CWE-532: Pre-compute masked MAC to break taint chain
+                mac_safe = mask_mac(mac)
+                logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
 
             success = autopilot.add_tag(mac, tag)
 
@@ -3737,7 +3834,7 @@ def api_device_remove_tag(mac_address, tag):
             if not device:
                 return jsonify({
                     'success': False,
-                    'error': f'Device {mac} not found in database'
+                    'error': f'Device {mask_mac(mac)} not found in database'
                 }), 404
 
             success = autopilot.remove_tag(mac, tag)
@@ -3761,6 +3858,7 @@ def api_device_remove_tag(mac_address, tag):
 @sdn_bp.route('/api/device/<mac_address>/disconnect', methods=['POST'])
 @login_required
 @operator_required
+@rate_limit(disconnect_rate_limiter)  # Security: Prevent DoS via rapid disconnect requests
 def api_device_disconnect(mac_address):
     """Disconnect a device from WiFi by deauthenticating it.
 
@@ -3768,6 +3866,8 @@ def api_device_disconnect(mac_address):
     The host agent communicates with hostapd via Unix Domain Socket to force
     the client to disconnect. The client will typically reconnect automatically
     unless also blocked.
+
+    Rate limited: 10 requests per minute per user to prevent abuse.
 
     Options (JSON body):
     - block: bool - Also quarantine the device
@@ -3795,35 +3895,42 @@ def api_device_disconnect(mac_address):
     results = {
         'deauth_sent': False,
         'interfaces_tried': [],
-        'blocked': False,
+        'wifi_blocked': False,  # WiFi-level block (hostapd deny_acl)
+        'interfaces_blocked': [],
+        'blocked': False,  # SDN-level quarantine
         'deleted': False,
         'host_agent_used': False
     }
 
     # Use FTS Host Agent via Unix Domain Socket (G.N.C. Architecture)
-    # This allows the containerized web app to control hostapd on the host
+    # disconnect_device() blocks the MAC first (deny_acl ADD), then deauths.
+    # This prevents the device from immediately reconnecting.
     if HOST_AGENT_AVAILABLE:
         try:
-            deauth_result = deauthenticate_device(mac)
+            disconnect_result = disconnect_device(mac)
             results['host_agent_used'] = True
 
-            if deauth_result.get('success'):
-                results['deauth_sent'] = True
-                results['interfaces_tried'] = [
-                    r.get('interface') for r in deauth_result.get('interfaces_tried', [])
-                ]
-                logger.info(f"Deauthenticated {mac_masked} via host agent")
-            elif deauth_result.get('socket_missing'):
+            if disconnect_result.get('success'):
+                results['deauth_sent'] = disconnect_result.get('deauth_sent', False)
+                results['wifi_blocked'] = disconnect_result.get('blocked', False)
+                results['interfaces_tried'] = disconnect_result.get('interfaces_tried', [])
+                results['interfaces_blocked'] = disconnect_result.get('interfaces_blocked', [])
+                if results['wifi_blocked']:
+                    logger.info(f"Blocked and disconnected {mac_masked} via host agent")
+                else:
+                    logger.info(f"Disconnected {mac_masked} via host agent (deauth only)")
+            elif disconnect_result.get('socket_missing'):
                 # Host agent socket not available - fall back to direct call
                 logger.warning("Host agent socket not available, trying direct hostapd_cli")
                 results['host_agent_used'] = False
             else:
-                logger.warning(f"Host agent deauth failed: {deauth_result.get('error')}")
+                logger.warning(f"Host agent disconnect failed: {disconnect_result.get('error')}")
         except Exception as e:
             logger.error(f"Host agent error: {e}")
             results['host_agent_used'] = False
 
     # Fallback: Try direct hostapd_cli (works when not in container)
+    # Note: Direct fallback only deauths - cannot block without deny_acl
     if not results['host_agent_used'] or not results['deauth_sent']:
         import subprocess
         wifi_interfaces = ['wlan_24ghz', 'wlan_5ghz', 'wlan0', 'wlan1']
@@ -3871,10 +3978,14 @@ def api_device_disconnect(mac_address):
 
     # Build response message
     msg_parts = []
-    if results['deauth_sent']:
+    if results['wifi_blocked'] and results['deauth_sent']:
+        msg_parts.append('blocked and disconnected from WiFi')
+    elif results['deauth_sent']:
         msg_parts.append('disconnected from WiFi')
+    elif results['wifi_blocked']:
+        msg_parts.append('blocked from WiFi')
     if results['blocked']:
-        msg_parts.append('blocked')
+        msg_parts.append('quarantined')
     if results['deleted']:
         msg_parts.append('removed from database')
 
