@@ -856,7 +856,7 @@ class SDNAutoPilot:
     # =========================================================================
 
     def generate_openflow_rules(self, mac: str, ip: str, policy: str) -> List[Dict]:
-        """Generate OpenFlow rules for micro-segmentation on VLAN 100."""
+        """Generate OpenFlow rules for micro-segmentation on OVS bridge."""
         mac = mac.upper()
         rules = []
 
