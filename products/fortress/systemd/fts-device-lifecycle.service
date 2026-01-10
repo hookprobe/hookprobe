@@ -1,0 +1,44 @@
+[Unit]
+Description=HookProbe Fortress Device Lifecycle Manager
+Documentation=https://hookprobe.com/docs/fortress/device-lifecycle
+After=network.target fortress.service fts-postgres.service
+Wants=fortress.service
+Requires=fts-postgres.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Environment
+Environment=PYTHONPATH=/opt/hookprobe/fortress/lib
+Environment=DATABASE_HOST=172.20.200.10
+Environment=DATABASE_PORT=5432
+Environment=DATABASE_NAME=fortress
+Environment=DATABASE_USER=fortress
+EnvironmentFile=-/etc/hookprobe/fortress.conf
+
+# Run the device lifecycle daemon
+ExecStart=/usr/bin/python3 -m device_lifecycle --daemon --verbose
+WorkingDirectory=/opt/hookprobe/fortress/lib
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-device-lifecycle
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/fortress /var/lib/hookprobe
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
