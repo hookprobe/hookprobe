@@ -35,17 +35,48 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 
 # ============================================================
-# CONFIGURATION (from environment)
+# CONFIGURATION (from environment with bounds checking)
 # ============================================================
 
-NODE_ID = os.environ.get("SENTINEL_NODE_ID", f"sentinel-{socket.gethostname()}")
+
+def safe_int_env(name: str, default: int, min_val: int = 0, max_val: int = 65535) -> int:
+    """
+    Safely parse integer from environment variable with bounds checking.
+
+    Args:
+        name: Environment variable name
+        default: Default value if not set or invalid
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+
+    Returns:
+        Bounded integer value
+    """
+    try:
+        value = int(os.environ.get(name, str(default)))
+        return max(min_val, min(max_val, value))
+    except (ValueError, TypeError):
+        return default
+
+
+def sanitize_node_id(node_id: str) -> str:
+    """Sanitize node ID to prevent log injection and invalid characters."""
+    import re
+    # Only allow alphanumeric, hyphens, underscores
+    sanitized = re.sub(r'[^a-zA-Z0-9\-_]', '', node_id)
+    return sanitized[:64] if sanitized else "sentinel-unknown"
+
+
+NODE_ID = sanitize_node_id(os.environ.get("SENTINEL_NODE_ID", f"sentinel-{socket.gethostname()}"))
 MSSP_ENDPOINT = os.environ.get("MSSP_ENDPOINT", "mssp.hookprobe.com")
-MSSP_PORT = int(os.environ.get("MSSP_PORT", "8443"))
-LISTEN_PORT = int(os.environ.get("SENTINEL_PORT", "8443"))
-METRICS_PORT = int(os.environ.get("METRICS_PORT", "9090"))
-REGION = os.environ.get("SENTINEL_REGION", "unknown")
+MSSP_PORT = safe_int_env("MSSP_PORT", 8443, 1, 65535)
+LISTEN_PORT = safe_int_env("SENTINEL_PORT", 8443, 1, 65535)
+METRICS_PORT = safe_int_env("METRICS_PORT", 9090, 1, 65535)
+REGION = sanitize_node_id(os.environ.get("SENTINEL_REGION", "unknown"))
 TIER = os.environ.get("SENTINEL_TIER", "community")
-MEMORY_LIMIT = int(os.environ.get("MEMORY_LIMIT_MB", "256"))
+if TIER not in ("community", "professional", "enterprise"):
+    TIER = "community"
+MEMORY_LIMIT = safe_int_env("MEMORY_LIMIT_MB", 256, 64, 4096)
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 # Memory optimization
@@ -94,37 +125,50 @@ log = logging.getLogger("sentinel")
 # ============================================================
 
 class LRUCache:
-    """Minimal LRU cache with TTL"""
+    """
+    Minimal LRU cache with TTL.
+
+    SECURITY: Fixed memory bounding to prevent DoS via memory exhaustion (CWE-400).
+    Uses collections.deque for O(1) operations instead of list.
+    """
 
     def __init__(self, max_size=500, ttl=300):
+        from collections import OrderedDict
         self.max_size = max_size
         self.ttl = ttl
-        self.cache = {}
-        self.order = []
+        self.cache: OrderedDict = OrderedDict()  # Maintains insertion order
 
     def get(self, key):
         if key in self.cache:
             entry = self.cache[key]
             if time.time() - entry['t'] < self.ttl:
+                # Move to end (most recently used)
+                self.cache.move_to_end(key)
                 return entry['v']
+            # Expired - remove
             del self.cache[key]
         return None
 
     def set(self, key, value):
-        while len(self.cache) >= self.max_size and self.order:
-            del self.cache[self.order.pop(0)]
+        # If key exists, update and move to end
+        if key in self.cache:
+            self.cache[key] = {'v': value, 't': time.time()}
+            self.cache.move_to_end(key)
+            return
+
+        # Evict oldest entries if at capacity
+        while len(self.cache) >= self.max_size:
+            self.cache.popitem(last=False)  # Remove oldest
+
+        # Add new entry
         self.cache[key] = {'v': value, 't': time.time()}
-        if key in self.order:
-            self.order.remove(key)
-        self.order.append(key)
 
     def cleanup(self):
         now = time.time()
+        # Create list of expired keys (can't modify dict during iteration)
         expired = [k for k, v in self.cache.items() if now - v['t'] > self.ttl]
         for k in expired:
             del self.cache[k]
-            if k in self.order:
-                self.order.remove(k)
 
 # ============================================================
 # SECURITY MODULE (optional - loads if available)
@@ -186,10 +230,18 @@ class Sentinel:
 
     def _handle_mesh_threat(self, intel):
         """Handle threat intelligence from mesh"""
-        log.info(f"[MESH] Threat received: {intel.threat_type} - {intel.ioc_value[:20]}... (severity: {intel.severity})")
+        # SECURITY: Sanitize log input to prevent log injection (CWE-117)
+        safe_type = str(intel.threat_type)[:30] if intel.threat_type else "unknown"
+        safe_ioc = str(intel.ioc_value)[:20] if intel.ioc_value else ""
+        # Remove control characters
+        import re
+        safe_type = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', safe_type)
+        safe_ioc = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', safe_ioc)
+
+        log.info(f"[MESH] Threat received: {safe_type} - {safe_ioc}... (severity: {intel.severity})")
         # Could trigger local blocking if severity is critical
         if intel.severity <= 1 and self.security:
-            self.security.threat_detector._block_ip(intel.ioc_value, f"mesh:{intel.threat_type}")
+            self.security.threat_detector._block_ip(intel.ioc_value, f"mesh:{safe_type}")
 
     def validate(self, data: bytes, addr: tuple) -> dict:
         """Validate HTP message from edge device with security checks"""
@@ -251,7 +303,9 @@ class Sentinel:
             ts = int.from_bytes(ts_bytes, 'big')
             if abs(int(time.time()) - ts) > 300:
                 return {'valid': False, 'reason': 'stale'}
-        except:
+        except (ValueError, OverflowError, TypeError) as e:
+            # SECURITY: Avoid bare except (CWE-754)
+            log.debug(f"Timestamp parse error: {type(e).__name__}")
             return {'valid': False, 'reason': 'bad_ts'}
 
         # Rate limit
