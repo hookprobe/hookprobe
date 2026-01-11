@@ -13,6 +13,20 @@
 -- License: AGPL-3.0
 
 -- ============================================================
+-- TRANSACTION WRAPPER: Ensures atomic migration
+-- ============================================================
+-- Check if migration already applied before starting transaction
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM schema_version WHERE version = 2) THEN
+        RAISE NOTICE 'Migration 002 already applied, skipping';
+        RETURN;
+    END IF;
+END$$;
+
+BEGIN;
+
+-- ============================================================
 -- STEP 1: Add device status and identity columns to devices table
 -- ============================================================
 
@@ -461,3 +475,8 @@ ON CONFLICT DO NOTHING;
 INSERT INTO system_events (event_type, description, details)
 VALUES ('upgrade', 'Migration 002 applied - Device identity integration',
         '{"version": 2, "features": ["device_status_enum", "identity_tracking", "lease_history", "correlation_functions"]}');
+
+-- ============================================================
+-- COMMIT TRANSACTION: All changes applied atomically
+-- ============================================================
+COMMIT;
