@@ -3989,7 +3989,7 @@ class AIAdBlocker:
 
         # Protection config file tracking for cross-process sync from API server
         self._protection_config_mtime: float = 0.0
-        self._last_protection_level: int = self.config.default_protection_level
+        self._last_protection_level: int = getattr(self.config, 'default_protection_level', 3)
 
         # Load blocklists
         self._load_lists()
