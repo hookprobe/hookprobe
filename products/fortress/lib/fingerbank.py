@@ -353,6 +353,17 @@ AMBIGUOUS_APPLE_FINGERPRINTS = {
         ],
         "default": {"name": "iPhone 16 Pro/Pro Max", "category": "phone", "os": "iOS 18"},
     },
+    # "1,121,3,6,15,119,252,95,44,46,47" can be: iPhone (iOS 17+) or Apple Watch
+    # Apple Watch uses similar DHCP fingerprint but hostname often contains "watch"
+    "1,121,3,6,15,119,252,95,44,46,47": {
+        "candidates": [
+            {"name": "Apple Watch", "category": "wearable", "os": "watchOS",
+             "match_keywords": ["watch", "timeprobe"], "match_services": ["_companion-link._tcp"]},
+            {"name": "iPhone (iOS 17+)", "category": "phone", "os": "iOS 17",
+             "match_keywords": ["iphone"], "match_services": ["_apple-mobdev2._tcp"]},
+        ],
+        "default": {"name": "iPhone (iOS 17+)", "category": "phone", "os": "iOS 17"},
+    },
 }
 
 
