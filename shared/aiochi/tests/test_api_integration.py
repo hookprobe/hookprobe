@@ -43,10 +43,10 @@ class TestAIOCHIAPIEndpoints(unittest.TestCase):
         """Verify demo data has correct structure."""
         from backend.ambient_state import AmbientState
 
-        # Test ambient states
-        self.assertIn('CALM', [s.value for s in AmbientState])
-        self.assertIn('CURIOUS', [s.value for s in AmbientState])
-        self.assertIn('ALERT', [s.value for s in AmbientState])
+        # Test ambient states (enum values are lowercase)
+        self.assertIn('calm', [s.value for s in AmbientState])
+        self.assertIn('curious', [s.value for s in AmbientState])
+        self.assertIn('alert', [s.value for s in AmbientState])
 
     def test_presence_bubble_structure(self):
         """Verify presence bubble data structure."""
