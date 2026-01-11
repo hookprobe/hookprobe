@@ -452,6 +452,49 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- ============================================================
+-- BUBBLES TABLE (Device grouping / segmentation)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS bubbles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    bubble_id VARCHAR(100) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    bubble_type VARCHAR(20) NOT NULL DEFAULT 'custom',  -- family, guest, iot, work, custom
+    icon VARCHAR(50) DEFAULT 'fa-layer-group',
+    color VARCHAR(20) DEFAULT '#2196F3',
+    is_manual BOOLEAN DEFAULT TRUE,
+    is_pinned BOOLEAN DEFAULT FALSE,
+    confidence DECIMAL(3,2) DEFAULT 1.00,
+    ecosystem VARCHAR(50),  -- apple, samsung, google, mixed
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bubbles_bubble_id ON bubbles(bubble_id);
+CREATE INDEX IF NOT EXISTS idx_bubbles_type ON bubbles(bubble_type);
+
+-- ============================================================
+-- DEVICE BUBBLE ASSIGNMENTS TABLE (Many-to-many)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS device_bubble_assignments (
+    id SERIAL PRIMARY KEY,
+    bubble_id VARCHAR(100) NOT NULL REFERENCES bubbles(bubble_id) ON DELETE CASCADE,
+    mac_address VARCHAR(17) NOT NULL,
+    assigned_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    assigned_by VARCHAR(50) DEFAULT 'system',
+    UNIQUE(bubble_id, mac_address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_bubble_mac ON device_bubble_assignments(mac_address);
+CREATE INDEX IF NOT EXISTS idx_device_bubble_bubble ON device_bubble_assignments(bubble_id);
+
+-- ============================================================
+-- DEFAULT BUBBLES (Starter bubbles for new installations)
+-- ============================================================
+INSERT INTO bubbles (bubble_id, name, bubble_type, icon, color, is_manual, is_pinned) VALUES
+    ('bubble-guest', 'Guests', 'guest', 'fa-user-friends', '#607D8B', true, true)
+ON CONFLICT (bubble_id) DO NOTHING;
+
 -- Grant permissions
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO fortress;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO fortress;

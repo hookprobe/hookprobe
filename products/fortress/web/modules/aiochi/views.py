@@ -198,6 +198,9 @@ try:
 except ImportError as e:
     logger.warning(f"SDN Autopilot not available: {e}")
 
+# DHCP leases file path (fallback when SDN Autopilot unavailable)
+DHCP_LEASES_PATH = Path('/var/lib/misc/dnsmasq.leases')
+
 # Import hostname decoder
 try:
     from hostname_decoder import clean_device_name
@@ -214,28 +217,486 @@ def get_local_bubble_manager():
     return LOCAL_BUBBLE_MANAGER
 
 
-def get_sdn_devices():
-    """Get all devices from SDN Autopilot."""
-    if not SDN_AUTOPILOT_AVAILABLE:
-        return []
+# =============================================================================
+# BUBBLES MODULE FALLBACK (SQLite-based bubble storage)
+# =============================================================================
+BUBBLES_MODULE_AVAILABLE = False
+try:
+    from ..bubbles.views import (
+        get_db_connection as get_bubbles_db,
+        BUBBLE_TYPE_POLICIES,
+        BubbleType as BubbleTypeEnum,
+    )
+    BUBBLES_MODULE_AVAILABLE = True
+    logger.info("Bubbles module database available for fallback storage")
+except ImportError as e:
+    logger.warning(f"Bubbles module not available: {e}")
+
+
+def get_bubbles_from_module():
+    """
+    Get bubbles from the bubbles module SQLite database.
+    Returns data in the same format as the AIOCHI API.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return None
 
     try:
-        autopilot = get_sdn_autopilot()
-        if autopilot:
-            devices = autopilot.get_all_devices()
-            return [
-                {
-                    'mac': d.get('mac', ''),
-                    'label': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
-                    'vendor': d.get('vendor', 'Unknown'),
-                    'ip': d.get('ip', ''),
-                    'online': d.get('is_online', False),
-                    'device_type': d.get('device_type', 'unknown'),
-                }
-                for d in devices if d.get('mac')
-            ]
+        import json
+        with get_bubbles_db() as conn:
+            # Get all bubbles
+            rows = conn.execute('''
+                SELECT * FROM bubbles
+                WHERE state != 'dissolved' OR state IS NULL
+                ORDER BY is_manual DESC, last_activity DESC NULLS LAST
+            ''').fetchall()
+
+            bubbles = []
+            all_devices = get_sdn_devices()  # Get real device info
+            all_devices_map = {d['mac'].upper(): d for d in all_devices}
+            assigned_macs = set()
+
+            for row in rows:
+                bubble_id = row['bubble_id']
+
+                # Get devices in bubble from manual_assignments
+                device_rows = conn.execute('''
+                    SELECT mac FROM manual_assignments WHERE bubble_id = ?
+                ''', (bubble_id,)).fetchall()
+
+                devices = [r['mac'] for r in device_rows]
+
+                # Also check devices field in bubbles table
+                if row['devices']:
+                    try:
+                        stored_devices = json.loads(row['devices'])
+                        devices.extend(stored_devices)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                devices = list(set(devices))  # Deduplicate
+                for mac in devices:
+                    assigned_macs.add(mac.upper())
+
+                # Enrich device data with real info
+                devices_with_info = []
+                for mac in devices:
+                    mac_upper = mac.upper()
+                    device_info = all_devices_map.get(mac_upper, {})
+                    devices_with_info.append({
+                        'mac': mac_upper,
+                        'label': device_info.get('label', mac_upper[:8]),
+                        'vendor': device_info.get('vendor', 'Unknown'),
+                        'online': device_info.get('online', False),
+                        'ip': device_info.get('ip', ''),
+                    })
+
+                # Get policy
+                bubble_type = row['bubble_type'] or 'custom'
+                try:
+                    policy = BUBBLE_TYPE_POLICIES.get(
+                        BubbleTypeEnum(bubble_type),
+                        BUBBLE_TYPE_POLICIES[BubbleTypeEnum.CUSTOM]
+                    ).copy()
+                except (ValueError, KeyError):
+                    policy = {'internet': True, 'lan': True, 'd2d': True, 'vlan': 100}
+
+                bubbles.append({
+                    'bubble_id': bubble_id,
+                    'name': row['display_name'] or f"Bubble {bubble_id[:8]}",
+                    'bubble_type': bubble_type.upper(),
+                    'icon': row['icon'] or 'fa-layer-group',
+                    'color': row['color'] or '#2196F3',
+                    'devices': devices_with_info,
+                    'policy': policy,
+                    'is_manual': bool(row['is_manual']),
+                    'is_pinned': bool(row['is_pinned']),
+                    'confidence': float(row['confidence'] or 1.0),
+                })
+
+            # Unassigned devices - devices not in any bubble
+            unassigned = []
+            for device in all_devices:
+                if device['mac'].upper() not in assigned_macs:
+                    unassigned.append({
+                        'mac': device['mac'],
+                        'label': device.get('label', device['mac'][:8]),
+                        'vendor': device.get('vendor', 'Unknown'),
+                        'online': device.get('online', False),
+                        'ip': device.get('ip', ''),
+                    })
+
+            return {
+                'bubbles': bubbles,
+                'unassigned_devices': unassigned,
+            }
+
     except Exception as e:
-        logger.warning(f"Failed to get SDN devices: {e}")
+        logger.error(f"Failed to get bubbles from module: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def create_bubble_in_module(name, bubble_type, devices, icon, color):
+    """
+    Create a bubble in the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return None
+
+    try:
+        import json
+        import hashlib
+        from flask_login import current_user
+
+        with get_bubbles_db() as conn:
+            now = datetime.now().isoformat()
+
+            # Generate bubble ID
+            bubble_id = f"bubble-{name.lower().replace(' ', '-')}-{hashlib.sha256(f'{name}{now}'.encode()).hexdigest()[:8]}"
+
+            # Get default policy for type
+            try:
+                bt = BubbleTypeEnum(bubble_type.lower())
+                policy = BUBBLE_TYPE_POLICIES.get(bt, BUBBLE_TYPE_POLICIES[BubbleTypeEnum.CUSTOM])
+            except (ValueError, KeyError):
+                policy = {'internet': True, 'lan': True, 'd2d': True, 'vlan': 100}
+
+            # Create bubble
+            conn.execute('''
+                INSERT INTO bubbles
+                (bubble_id, ecosystem, state, confidence, devices,
+                 bubble_type, display_name, icon, color, is_manual, is_pinned,
+                 created_by, policy_json, created_at, last_activity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                bubble_id, 'mixed', 'active', 1.0, json.dumps(devices),
+                bubble_type.lower(), name, icon, color, 1, 0,
+                current_user.username if hasattr(current_user, 'username') else 'system',
+                json.dumps(policy), now, now
+            ))
+
+            # Assign devices
+            for mac in devices:
+                conn.execute('''
+                    INSERT OR REPLACE INTO manual_assignments
+                    (mac, bubble_id, assigned_by, assigned_at, is_pinned)
+                    VALUES (?, ?, ?, ?, 0)
+                ''', (mac.upper(), bubble_id,
+                      current_user.username if hasattr(current_user, 'username') else 'system',
+                      now))
+
+            conn.commit()
+
+        logger.info(f"Created bubble {bubble_id} ({name}) via bubbles module")
+        return bubble_id
+
+    except Exception as e:
+        logger.error(f"Failed to create bubble in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def add_device_to_bubble_in_module(bubble_id, mac):
+    """
+    Add a device to a bubble in the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return False
+
+    try:
+        import json
+        from flask_login import current_user
+
+        with get_bubbles_db() as conn:
+            now = datetime.now().isoformat()
+
+            # Check bubble exists
+            row = conn.execute(
+                'SELECT bubble_id, devices FROM bubbles WHERE bubble_id = ?',
+                (bubble_id,)
+            ).fetchone()
+
+            if not row:
+                logger.warning(f"Bubble {bubble_id} not found in module database")
+                return False
+
+            # Add to manual_assignments (removes from any other bubble first)
+            conn.execute(
+                'DELETE FROM manual_assignments WHERE mac = ?',
+                (mac.upper(),)
+            )
+            conn.execute('''
+                INSERT INTO manual_assignments
+                (mac, bubble_id, assigned_by, assigned_at, is_pinned)
+                VALUES (?, ?, ?, ?, 0)
+            ''', (mac.upper(), bubble_id,
+                  current_user.username if hasattr(current_user, 'username') else 'system',
+                  now))
+
+            # Update bubble devices list
+            devices = []
+            if row['devices']:
+                try:
+                    devices = json.loads(row['devices'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if mac.upper() not in [d.upper() for d in devices]:
+                devices.append(mac.upper())
+                conn.execute(
+                    'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                    (json.dumps(devices), now, bubble_id)
+                )
+
+            conn.commit()
+
+        logger.info(f"Added device {mac} to bubble {bubble_id} via bubbles module")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to add device to bubble in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def remove_device_from_bubble_in_module(bubble_id, mac):
+    """
+    Remove a device from a bubble in the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return False
+
+    try:
+        import json
+
+        with get_bubbles_db() as conn:
+            now = datetime.now().isoformat()
+
+            # Remove from manual_assignments
+            conn.execute(
+                'DELETE FROM manual_assignments WHERE mac = ? AND bubble_id = ?',
+                (mac.upper(), bubble_id)
+            )
+
+            # Update bubble devices list
+            row = conn.execute(
+                'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                (bubble_id,)
+            ).fetchone()
+
+            if row and row['devices']:
+                try:
+                    devices = json.loads(row['devices'])
+                    devices = [d for d in devices if d.upper() != mac.upper()]
+                    conn.execute(
+                        'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                        (json.dumps(devices), now, bubble_id)
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            conn.commit()
+
+        logger.info(f"Removed device {mac} from bubble {bubble_id} via bubbles module")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to remove device from bubble in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def move_device_in_module(mac, from_bubble, to_bubble):
+    """
+    Move a device between bubbles in the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return False
+
+    try:
+        import json
+        from flask_login import current_user
+
+        with get_bubbles_db() as conn:
+            now = datetime.now().isoformat()
+
+            # Check target bubble exists
+            row = conn.execute(
+                'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+                (to_bubble,)
+            ).fetchone()
+
+            if not row:
+                logger.warning(f"Target bubble {to_bubble} not found in module database")
+                return False
+
+            # Remove from old bubble's device list if specified
+            if from_bubble:
+                from_row = conn.execute(
+                    'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                    (from_bubble,)
+                ).fetchone()
+                if from_row and from_row['devices']:
+                    try:
+                        devices = json.loads(from_row['devices'])
+                        devices = [d for d in devices if d.upper() != mac.upper()]
+                        conn.execute(
+                            'UPDATE bubbles SET devices = ? WHERE bubble_id = ?',
+                            (json.dumps(devices), from_bubble)
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            # Remove from any existing assignment
+            conn.execute('DELETE FROM manual_assignments WHERE mac = ?', (mac.upper(),))
+
+            # Add to new bubble
+            conn.execute('''
+                INSERT INTO manual_assignments
+                (mac, bubble_id, assigned_by, assigned_at, is_pinned)
+                VALUES (?, ?, ?, ?, 0)
+            ''', (mac.upper(), to_bubble,
+                  current_user.username if hasattr(current_user, 'username') else 'system',
+                  now))
+
+            # Update target bubble devices list
+            to_row = conn.execute(
+                'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                (to_bubble,)
+            ).fetchone()
+
+            devices = []
+            if to_row and to_row['devices']:
+                try:
+                    devices = json.loads(to_row['devices'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if mac.upper() not in [d.upper() for d in devices]:
+                devices.append(mac.upper())
+                conn.execute(
+                    'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                    (json.dumps(devices), now, to_bubble)
+                )
+
+            conn.commit()
+
+        logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} via bubbles module")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to move device in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def get_dhcp_devices():
+    """
+    Get devices from DHCP leases file (fallback when SDN Autopilot unavailable).
+
+    Reads /var/lib/misc/dnsmasq.leases which has format:
+    <expiry_timestamp> <mac> <ip> <hostname> <client_id>
+
+    Returns:
+        List of device dicts with mac, label, ip, online, vendor, device_type
+    """
+    devices = []
+    try:
+        if not DHCP_LEASES_PATH.exists():
+            logger.debug(f"DHCP leases file not found: {DHCP_LEASES_PATH}")
+            return []
+
+        import time
+        current_time = int(time.time())
+
+        with open(DHCP_LEASES_PATH, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    try:
+                        expiry = int(parts[0])
+                        mac = parts[1].upper()
+                        ip = parts[2]
+                        hostname = parts[3] if parts[3] != '*' else ''
+
+                        # Validate MAC format
+                        if not _validate_mac_address(mac):
+                            continue
+
+                        # Determine if device is online (lease not expired)
+                        # Add 5 minute grace period for recently expired leases
+                        is_online = expiry > (current_time - 300)
+
+                        # Try to detect device type from hostname
+                        device_type = 'unknown'
+                        hostname_lower = hostname.lower()
+                        if any(x in hostname_lower for x in ['iphone', 'ipad', 'macbook', 'mac', 'apple']):
+                            device_type = 'apple'
+                        elif any(x in hostname_lower for x in ['android', 'galaxy', 'samsung', 'pixel']):
+                            device_type = 'android'
+                        elif any(x in hostname_lower for x in ['tv', 'roku', 'firestick', 'chromecast']):
+                            device_type = 'tv'
+                        elif any(x in hostname_lower for x in ['hooksound', 'speaker', 'echo', 'alexa']):
+                            device_type = 'speaker'
+                        elif any(x in hostname_lower for x in ['windows', 'desktop', 'laptop', 'pc']):
+                            device_type = 'computer'
+
+                        devices.append({
+                            'mac': mac,
+                            'label': clean_device_name(hostname) if hostname else f"Device ({mac[-8:]})",
+                            'vendor': 'Unknown',  # Would need OUI lookup
+                            'ip': ip,
+                            'online': is_online,
+                            'device_type': device_type,
+                        })
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Failed to parse DHCP lease line: {line.strip()}: {e}")
+                        continue
+
+        logger.debug(f"Found {len(devices)} devices from DHCP leases")
+        return devices
+
+    except Exception as e:
+        logger.warning(f"Failed to read DHCP leases: {e}")
+        return []
+
+
+def get_sdn_devices():
+    """Get all devices from SDN Autopilot or DHCP leases fallback."""
+    # Try SDN Autopilot first
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                devices = autopilot.get_all_devices()
+                result = [
+                    {
+                        'mac': d.get('mac', ''),
+                        'label': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                        'vendor': d.get('vendor', 'Unknown'),
+                        'ip': d.get('ip', ''),
+                        'online': d.get('is_online', False),
+                        'device_type': d.get('device_type', 'unknown'),
+                    }
+                    for d in devices if d.get('mac')
+                ]
+                if result:
+                    return result
+        except Exception as e:
+            logger.warning(f"Failed to get SDN devices: {e}")
+
+    # Fallback to DHCP leases
+    dhcp_devices = get_dhcp_devices()
+    if dhcp_devices:
+        logger.info(f"Using DHCP fallback: found {len(dhcp_devices)} devices")
+        return dhcp_devices
+
     return []
 
 
@@ -601,7 +1062,83 @@ def _get_real_presence():
                     'ecosystems': ecosystems,
                 }
 
-        # Fallback to demo
+        # Try bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            module_data = get_bubbles_from_module()
+            if module_data and module_data.get('bubbles'):
+                all_devices = get_sdn_devices()
+                all_devices_map = {d['mac'].upper(): d for d in all_devices}
+
+                bubbles_data = []
+                total_devices = 0
+                online_devices = 0
+                ecosystems = {}
+
+                for bubble in module_data['bubbles']:
+                    devices_in_bubble = []
+                    for device in bubble.get('devices', []):
+                        mac = device.get('mac', '').upper()
+                        device_info = all_devices_map.get(mac, {})
+                        is_online = device.get('online', device_info.get('online', False))
+                        devices_in_bubble.append({
+                            'name': device.get('label', mac[:8]),
+                            'type': device_info.get('device_type', 'unknown'),
+                            'online': is_online,
+                            'last_seen': 'Now' if is_online else 'Unknown',
+                        })
+                        total_devices += 1
+                        if is_online:
+                            online_devices += 1
+
+                    ecosystem = 'mixed'
+                    ecosystems[ecosystem] = ecosystems.get(ecosystem, 0) + len(devices_in_bubble)
+
+                    bubbles_data.append({
+                        'id': bubble['bubble_id'],
+                        'label': bubble['name'],
+                        'icon': bubble.get('icon', 'fa-layer-group'),
+                        'color': bubble.get('color', '#2196F3'),
+                        'devices': devices_in_bubble,
+                        'ecosystem': ecosystem,
+                        'trust_level': 'CORE' if bubble.get('bubble_type', '').upper() == 'FAMILY' else 'KNOWN',
+                    })
+
+                if bubbles_data:
+                    return {
+                        'bubbles': bubbles_data,
+                        'total_devices': total_devices,
+                        'online_devices': online_devices,
+                        'ecosystems': ecosystems,
+                    }
+
+        # Try DHCP devices only (no bubbles, just show who's online)
+        dhcp_devices = get_sdn_devices()
+        if dhcp_devices:
+            online_count = sum(1 for d in dhcp_devices if d.get('online', False))
+            return {
+                'bubbles': [{
+                    'id': 'unassigned',
+                    'label': 'All Devices',
+                    'icon': 'fa-network-wired',
+                    'color': '#607D8B',
+                    'devices': [
+                        {
+                            'name': d.get('label', d.get('mac', 'Unknown')[:8]),
+                            'type': d.get('device_type', 'unknown'),
+                            'online': d.get('online', False),
+                            'last_seen': 'Now' if d.get('online', False) else 'Unknown',
+                        }
+                        for d in dhcp_devices
+                    ],
+                    'ecosystem': 'mixed',
+                    'trust_level': 'KNOWN',
+                }],
+                'total_devices': len(dhcp_devices),
+                'online_devices': online_count,
+                'ecosystems': {'mixed': len(dhcp_devices)},
+            }
+
+        # Fallback to demo only if nothing else available
         return get_demo_presence()
     except Exception as e:
         logger.warning(f"Could not get real presence: {e}")
@@ -1745,7 +2282,32 @@ def api_bubbles_list():
                     'unassigned_devices': unassigned,
                 })
 
-        # Fallback to demo data
+        # Try bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            module_data = get_bubbles_from_module()
+            if module_data:
+                logger.info(f"Returning {len(module_data.get('bubbles', []))} bubbles from bubbles module")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    **module_data
+                })
+
+        # Try DHCP devices even if bubble manager unavailable
+        # This gives real device visibility without full bubble management
+        dhcp_devices = get_sdn_devices()  # Uses DHCP fallback when SDN unavailable
+        if dhcp_devices:
+            logger.info(f"Returning {len(dhcp_devices)} devices from DHCP (no bubble manager)")
+            return jsonify({
+                'success': True,
+                'demo_mode': False,
+                'dhcp_only_mode': True,
+                'bubbles': [],  # No bubbles without manager
+                'unassigned_devices': dhcp_devices,
+            })
+
+        # Fallback to demo data only if no DHCP devices found
         return jsonify({
             'success': True,
             'demo_mode': True,
@@ -1886,7 +2448,20 @@ def api_bubble_create():
                     'message': f"Bubble '{name}' created"
                 })
 
-        # Demo mode fallback
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            bubble_id = create_bubble_in_module(name, bubble_type, devices, icon, color)
+            if bubble_id:
+                logger.info(f"Created bubble via bubbles module: {bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'bubble_id': bubble_id,
+                    'message': f"Bubble '{name}' created"
+                })
+
+        # Demo mode fallback - should rarely happen now
         import hashlib
         bubble_id = f"DEMO-{hashlib.sha256(f'{name}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
         logger.info(f"Created demo bubble: {bubble_id}")
@@ -1895,7 +2470,7 @@ def api_bubble_create():
             'success': True,
             'demo_mode': True,
             'bubble_id': bubble_id,
-            'message': f"Bubble '{name}' created (demo mode)"
+            'message': f"Bubble '{name}' created (demo mode - no storage available)"
         })
     except Exception as e:
         logger.error(f"Bubble create API error: {e}")
@@ -2090,12 +2665,29 @@ def api_bubble_add_device(bubble_id):
                         'error': 'Failed to add device (bubble not found or device already assigned)'
                     }), 400
 
-        # Demo mode
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            result = add_device_to_bubble_in_module(bubble_id, mac)
+            if result:
+                logger.info(f"Assigned device {mac} to bubble {bubble_id} via bubbles module")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'message': f'Device {mac} added to bubble'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to add device (bubble not found)'
+                }), 400
+
+        # Demo mode - only if no storage available
         logger.info(f"Assigned device {mac} to demo bubble {bubble_id}")
         return jsonify({
             'success': True,
             'demo_mode': True,
-            'message': f'Device {mac} added to bubble (demo mode)'
+            'message': f'Device {mac} added to bubble (demo mode - not persisted)'
         })
     except Exception as e:
         logger.error(f"Bubble add device API error: {e}")
@@ -2152,12 +2744,24 @@ def api_bubble_remove_device(bubble_id, mac):
                         'error': 'Failed to remove device (bubble or device not found)'
                     }), 400
 
-        # Demo mode
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            result = remove_device_from_bubble_in_module(bubble_id, mac)
+            if result:
+                logger.info(f"Removed device {mac} from bubble {bubble_id} via bubbles module")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'message': f'Device {mac} removed from bubble'
+                })
+
+        # Demo mode - only if no storage available
         logger.info(f"Removed device {mac} from demo bubble {bubble_id}")
         return jsonify({
             'success': True,
             'demo_mode': True,
-            'message': f'Device {mac} removed from bubble (demo mode)'
+            'message': f'Device {mac} removed from bubble (demo mode - not persisted)'
         })
     except Exception as e:
         logger.error(f"Bubble remove device API error: {e}")
@@ -2230,12 +2834,32 @@ def api_bubble_move_device():
                         'error': 'Failed to move device (target bubble not found)'
                     }), 400
 
-        # Demo mode
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            result = move_device_in_module(mac, from_bubble, to_bubble)
+            if result:
+                logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} via bubbles module")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'message': 'Device moved to bubble',
+                    'device': mac,
+                    'from_bubble': from_bubble,
+                    'to_bubble': to_bubble,
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to move device (target bubble not found)'
+                }), 400
+
+        # Demo mode - only if no storage available
         logger.info(f"Moved device {mac} in demo mode")
         return jsonify({
             'success': True,
             'demo_mode': True,
-            'message': 'Device moved (demo mode)',
+            'message': 'Device moved (demo mode - not persisted)',
             'device': mac,
             'from_bubble': from_bubble,
             'to_bubble': to_bubble,
