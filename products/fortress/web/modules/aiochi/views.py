@@ -5,6 +5,7 @@ Flask views for the Cognitive Network Layer.
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from flask import render_template, jsonify, request
@@ -12,6 +13,7 @@ from flask_login import login_required
 
 from . import aiochi_bp
 from ...security_utils import safe_error_message
+from ..auth.decorators import admin_required
 
 # Import real data integration module
 try:
@@ -29,8 +31,16 @@ try:
     )
     REAL_DATA_AVAILABLE = True
 except ImportError as e:
-    logger = logging.getLogger(__name__)
-    logger.warning(f"Real data module not available: {e}")
+    import traceback
+    _import_logger = logging.getLogger(__name__)
+    _import_logger.warning(f"Real data module not available: {e}")
+    _import_logger.debug(f"Import traceback: {traceback.format_exc()}")
+    REAL_DATA_AVAILABLE = False
+except Exception as e:
+    import traceback
+    _import_logger = logging.getLogger(__name__)
+    _import_logger.error(f"Real data module failed to load: {type(e).__name__}: {e}")
+    _import_logger.debug(f"Import traceback: {traceback.format_exc()}")
     REAL_DATA_AVAILABLE = False
 
 # Security: MAC address validation pattern
@@ -64,14 +74,67 @@ logger = logging.getLogger(__name__)
 AIOCHI_IDENTITY_URL = 'http://127.0.0.1:8060'
 AIOCHI_ENABLED = False
 
-def check_aiochi_available():
-    """Check if AIOCHI Identity Engine is reachable."""
+def check_aiochi_available(check_full_stack: bool = False) -> bool:
+    """
+    Check if AIOCHI services are available.
+
+    Args:
+        check_full_stack: If True, also check real_data and bubble manager availability
+
+    Returns:
+        True if AIOCHI is available and functional
+    """
     import requests
     try:
+        # Check identity engine health
         resp = requests.get(f'{AIOCHI_IDENTITY_URL}/health', timeout=2)
-        return resp.status_code == 200
-    except Exception:
+        identity_ok = resp.status_code == 200
+
+        if not identity_ok:
+            logger.debug("AIOCHI identity engine health check failed")
+            return False
+
+        if check_full_stack:
+            # Verify real_data module is available
+            if not REAL_DATA_AVAILABLE:
+                logger.debug("AIOCHI full stack check: real_data module not available")
+                return False
+
+            # Verify bubble manager is available
+            if not LOCAL_BUBBLE_AVAILABLE:
+                logger.debug("AIOCHI full stack check: bubble manager not available")
+                return False
+
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.debug(f"AIOCHI health check failed: {e}")
         return False
+    except Exception as e:
+        logger.debug(f"AIOCHI check error: {type(e).__name__}: {e}")
+        return False
+
+
+def get_aiochi_status() -> dict:
+    """Get detailed AIOCHI status for debugging/dashboard."""
+    import requests
+    status = {
+        'identity_engine': False,
+        'real_data_available': REAL_DATA_AVAILABLE,
+        'bubble_manager_available': LOCAL_BUBBLE_AVAILABLE,
+        'sdn_autopilot_available': SDN_AUTOPILOT_AVAILABLE,
+        'overall': False,
+    }
+
+    try:
+        resp = requests.get(f'{AIOCHI_IDENTITY_URL}/health', timeout=2)
+        status['identity_engine'] = resp.status_code == 200
+    except Exception:
+        pass
+
+    # Overall is true if we have at least real_data OR identity_engine
+    status['overall'] = status['identity_engine'] or status['real_data_available']
+    return status
+
 
 # Check on module load (but don't fail startup)
 try:
@@ -80,7 +143,11 @@ try:
     if AIOCHI_ENABLED:
         logger.info("AIOCHI Identity Engine available at %s", AIOCHI_IDENTITY_URL)
     else:
-        logger.info("AIOCHI Identity Engine not reachable, using demo mode")
+        # Even if identity engine is down, check if real_data is available
+        if REAL_DATA_AVAILABLE:
+            logger.info("AIOCHI Identity Engine not reachable, but real_data module available")
+        else:
+            logger.info("AIOCHI Identity Engine not reachable and real_data unavailable, using demo mode")
 except ImportError:
     logger.warning("requests module not available, AIOCHI integration disabled")
 
@@ -93,15 +160,28 @@ LOCAL_BUBBLE_AVAILABLE = False
 
 try:
     import sys
+    import os
     from pathlib import Path
-    # Add shared/aiochi to path
-    aiochi_path = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared' / 'aiochi'
-    if aiochi_path.exists() and str(aiochi_path.parent) not in sys.path:
+    # Add shared/aiochi to path using environment variable or fallback to known paths
+    aiochi_path = None
+    # 1. Check HOOKPROBE_ROOT environment variable (preferred)
+    hookprobe_root = os.environ.get('HOOKPROBE_ROOT', '/opt/hookprobe')
+    aiochi_env_path = Path(hookprobe_root) / 'shared' / 'aiochi'
+    if aiochi_env_path.exists():
+        aiochi_path = aiochi_env_path
+    else:
+        # 2. Fallback to relative path from this file (for development)
+        aiochi_relative = Path(__file__).parent.parent.parent.parent.parent.parent / 'shared' / 'aiochi'
+        if aiochi_relative.exists():
+            aiochi_path = aiochi_relative
+
+    if aiochi_path and str(aiochi_path.parent) not in sys.path:
         sys.path.insert(0, str(aiochi_path.parent))
+        logger.debug(f"Added aiochi path to sys.path: {aiochi_path.parent}")
 
     from aiochi.bubble import get_bubble_manager, BubbleType, NetworkPolicy
     LOCAL_BUBBLE_AVAILABLE = True
-    logger.info("Local bubble manager available as fallback")
+    logger.info(f"Local bubble manager available (path: {aiochi_path})")
 except ImportError as e:
     logger.warning(f"Local bubble manager not available: {e}")
 
@@ -1226,25 +1306,110 @@ def api_feedback_submit(action_id):
         return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
-def _execute_tool(tool_name, args):
-    """Execute an AIOCHI tool script."""
+# Security: Allowed tool names (whitelist approach - CWE-78 prevention)
+ALLOWED_TOOLS = {
+    'trust-device.sh',
+    'block-device.sh',
+    'unblock-device.sh',
+    'migrate-device.sh',
+}
+
+# Security: Tool name validation pattern (alphanumeric, hyphen, underscore, dot only)
+TOOL_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_\-\.]+$')
+
+# Security: Base directory for tools (prevent path traversal)
+TOOLS_BASE_DIR = '/opt/hookprobe/shared/aiochi/tools'
+
+
+def _validate_tool_arg(arg: str) -> bool:
+    """
+    Validate a single tool argument for security (CWE-78 prevention).
+
+    Only allows:
+    - MAC addresses (validated by _validate_mac_address)
+    - Simple alphanumeric strings with limited punctuation
+    - Short text descriptions (sanitized elsewhere)
+    """
+    if not arg or not isinstance(arg, str):
+        return False
+
+    # Length limit
+    if len(arg) > 500:
+        return False
+
+    # Check if it's a valid MAC address
+    if _validate_mac_address(arg):
+        return True
+
+    # Check if it's a safe simple string (alphanumeric + limited punctuation)
+    # Allows: a-z, A-Z, 0-9, space, hyphen, underscore, period, comma
+    safe_pattern = re.compile(r'^[a-zA-Z0-9\s\-_\.,]+$')
+    return bool(safe_pattern.match(arg))
+
+
+def _execute_tool(tool_name: str, args: list):
+    """
+    Execute an AIOCHI tool script with security validation.
+
+    Security measures (CWE-78 prevention):
+    - Tool name whitelist validation
+    - Path traversal prevention (realpath check)
+    - Argument sanitization
+    - Subprocess without shell=True
+    """
     try:
-        tool_path = f'/opt/hookprobe/shared/aiochi/tools/{tool_name}'
+        # Security: Validate tool name format
+        if not tool_name or not isinstance(tool_name, str):
+            logger.warning("Tool execution rejected: invalid tool name")
+            return {'action_taken': None, 'error': 'Invalid tool name'}
 
-        # Build command
-        cmd = [tool_path] + args
+        if not TOOL_NAME_PATTERN.match(tool_name):
+            logger.warning(f"Tool execution rejected: invalid tool name format: {tool_name[:50]}")
+            return {'action_taken': None, 'error': 'Invalid tool name format'}
 
-        # Execute
+        # Security: Whitelist check
+        if tool_name not in ALLOWED_TOOLS:
+            logger.warning(f"Tool execution rejected: tool not in whitelist: {tool_name}")
+            return {'action_taken': None, 'error': f'Tool not allowed: {tool_name}'}
+
+        # Security: Build and validate path (prevent path traversal)
+        tool_path = os.path.join(TOOLS_BASE_DIR, tool_name)
+        real_path = os.path.realpath(tool_path)
+
+        # Ensure the resolved path is still within the tools directory
+        if not real_path.startswith(os.path.realpath(TOOLS_BASE_DIR)):
+            logger.warning(f"Tool execution rejected: path traversal attempt: {tool_name}")
+            return {'action_taken': None, 'error': 'Invalid tool path'}
+
+        # Security: Validate all arguments
+        if not isinstance(args, list):
+            args = []
+
+        validated_args = []
+        for arg in args:
+            if not _validate_tool_arg(str(arg)):
+                logger.warning(f"Tool execution rejected: invalid argument: {str(arg)[:50]}")
+                return {'action_taken': tool_name, 'error': 'Invalid argument format'}
+            validated_args.append(str(arg))
+
+        # Build command (using list - no shell injection possible)
+        cmd = [real_path] + validated_args
+
+        # Execute with strict controls
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            cwd=TOOLS_BASE_DIR,  # Restrict working directory
+            env={  # Minimal environment
+                'PATH': '/usr/bin:/bin',
+                'HOME': '/tmp',
+            }
         )
 
         if result.returncode == 0:
             # Parse JSON output
-            import json
             try:
                 output = json.loads(result.stdout)
                 return output
@@ -1807,9 +1972,9 @@ def api_bubble_update(bubble_id):
 
 
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['DELETE'])
-@login_required
+@admin_required
 def api_bubble_delete(bubble_id):
-    """Delete a bubble. Devices become unassigned."""
+    """Delete a bubble. Devices become unassigned. Requires admin privileges."""
     import requests
     try:
         if AIOCHI_ENABLED:
