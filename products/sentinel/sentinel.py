@@ -98,9 +98,25 @@ RATE_LIMIT_BURST = safe_int_env("RATE_LIMIT_BURST", 200, min_val=1, max_val=2000
 
 # QSecBit - Quantum-Safe Security Capabilities
 QSECBIT_ENABLED = os.environ.get("QSECBIT_ENABLED", "true").lower() == "true"
+
+# SECURITY FIX: Validate HMAC algorithm against allowlist (CWE-327)
+ALLOWED_HMAC_ALGOS = {'sha3-256', 'sha256', 'sha384', 'sha512'}
 QSECBIT_HMAC_ALGO = os.environ.get("QSECBIT_HMAC_ALGO", "sha3-256")
-QSECBIT_KEY_ROTATION_HOURS = int(os.environ.get("QSECBIT_KEY_ROTATION_HOURS", "24"))
-QSECBIT_SESSION_TIMEOUT = int(os.environ.get("QSECBIT_SESSION_TIMEOUT", "3600"))
+if QSECBIT_HMAC_ALGO not in ALLOWED_HMAC_ALGOS:
+    raise ValueError(f"Invalid HMAC algorithm: {QSECBIT_HMAC_ALGO}. Allowed: {ALLOWED_HMAC_ALGOS}")
+
+QSECBIT_KEY_ROTATION_HOURS = safe_int_env("QSECBIT_KEY_ROTATION_HOURS", 24, min_val=1, max_val=8760)
+QSECBIT_SESSION_TIMEOUT = safe_int_env("QSECBIT_SESSION_TIMEOUT", 3600, min_val=60, max_val=86400)
+
+# SECURITY FIX: Signature enforcement mode for backward compatibility
+# "WARN" = log invalid signatures but allow (migration period)
+# "REJECT" = block invalid signatures (production)
+SIGNATURE_ENFORCEMENT_MODE = os.environ.get("SIGNATURE_ENFORCEMENT_MODE", "REJECT")
+if SIGNATURE_ENFORCEMENT_MODE not in ("WARN", "REJECT"):
+    SIGNATURE_ENFORCEMENT_MODE = "REJECT"
+
+# Shared secret for HMAC (must be set in production)
+QSECBIT_SHARED_SECRET = os.environ.get("QSECBIT_SHARED_SECRET", None)
 
 # ============================================================
 # LOGGING
@@ -244,42 +260,150 @@ class Sentinel:
         if intel.severity <= 1 and self.security:
             self.security.threat_detector._block_ip(intel.ioc_value, f"mesh:{safe_type}")
 
+    # ================================================================
+    # SECURITY FIX: HMAC Signature Verification (CWE-326, CWE-285)
+    # ================================================================
+
+    def _get_hmac_key(self, edge_id: bytes) -> bytes:
+        """
+        Derive HMAC key for edge device.
+
+        In production, this should use a key derivation function (KDF)
+        with the edge_id and a master secret.
+        """
+        import hmac
+        if QSECBIT_SHARED_SECRET:
+            # Derive per-edge key from shared secret
+            master = QSECBIT_SHARED_SECRET.encode() if isinstance(QSECBIT_SHARED_SECRET, str) else QSECBIT_SHARED_SECRET
+            return hmac.new(master, edge_id, hashlib.sha256).digest()
+        else:
+            # WARN: No shared secret configured - using edge_id as key (insecure for production)
+            log.warning("[SECURITY] No QSECBIT_SHARED_SECRET set - signature verification weakened")
+            return hashlib.sha256(edge_id).digest()
+
+    def _verify_signature(self, message: bytes, signature: bytes, key: bytes) -> bool:
+        """
+        Verify HMAC signature using configured algorithm.
+
+        SECURITY FIX: Actually verify the signature that was previously ignored (CWE-347).
+
+        Args:
+            message: The data that was signed (edge_id + timestamp)
+            signature: The 8-byte signature from the message
+            key: The HMAC key for this edge device
+
+        Returns:
+            True if signature is valid, False otherwise
+        """
+        import hmac
+
+        # Map algorithm names to hashlib functions
+        algo_map = {
+            'sha3-256': hashlib.sha3_256,
+            'sha256': hashlib.sha256,
+            'sha384': hashlib.sha384,
+            'sha512': hashlib.sha512,
+        }
+
+        algo = algo_map.get(QSECBIT_HMAC_ALGO, hashlib.sha3_256)
+        expected = hmac.new(key, message, algo).digest()[:8]  # First 8 bytes
+
+        # Constant-time comparison to prevent timing attacks
+        return hmac.compare_digest(signature, expected)
+
     def validate(self, data: bytes, addr: tuple) -> dict:
-        """Validate HTP message from edge device with security checks"""
+        """
+        Validate HTP message from edge device with security checks.
+
+        SECURITY FIX: Reordered validation flow (CWE-285, CWE-400):
+        1. Parse message (no state changes)
+        2. SIGNATURE VERIFICATION (before any rate limiting!)
+        3. Cache lookup (only after authentication)
+        4. Rate limiting (per authenticated edge_id)
+        5. Timestamp and additional checks
+        6. Security module checks
+        """
         client_ip = addr[0] if addr else "unknown"
 
         try:
-            # Security check first (if enabled)
-            if self.security and SECURITY_ENABLED:
+            # ============================================================
+            # STEP 1: Parse message (no state changes, no rate limiting)
+            # ============================================================
+            if len(data) < 32:
+                self.stats['fail'] += 1
+                return {'valid': False, 'reason': 'short'}
+
+            edge_id_bytes = data[:16]
+            ts_bytes = data[16:24]
+            sig_bytes = data[24:32]
+
+            edge_id = edge_id_bytes.hex()
+
+            # ============================================================
+            # STEP 2: SIGNATURE VERIFICATION (before rate limiting!)
+            # SECURITY FIX: This was completely missing before (CWE-347)
+            # ============================================================
+            if QSECBIT_ENABLED:
+                message = edge_id_bytes + ts_bytes  # What was signed
+                key = self._get_hmac_key(edge_id_bytes)
+
+                if not self._verify_signature(message, sig_bytes, key):
+                    self.stats['fail'] += 1
+
+                    if SIGNATURE_ENFORCEMENT_MODE == "REJECT":
+                        log.warning(f"[SECURITY] Invalid signature from {client_ip} (edge: {edge_id[:12]}...)")
+                        # Report to mesh but don't trigger rate limiting
+                        if self.mesh:
+                            self.mesh.report_threat(client_ip, "invalid_signature", severity=3,
+                                                  context={"edge_id": edge_id[:16]})
+                        return {'valid': False, 'reason': 'invalid_signature'}
+                    else:
+                        # WARN mode - log but continue (migration period)
+                        log.warning(f"[SECURITY] Invalid signature WARN from {client_ip} (edge: {edge_id[:12]}...) - allowing for migration")
+
+            # ============================================================
+            # STEP 3: Cache lookup (only after signature verification)
+            # ============================================================
+            cache_key = hashlib.sha256(data[:24]).hexdigest()[:16]
+            cached = self.cache.get(cache_key)
+            if cached:
+                return cached
+
+            # ============================================================
+            # STEP 4: Rate limiting (per AUTHENTICATED edge_id)
+            # SECURITY FIX: Now only counts authenticated requests (CWE-400)
+            # ============================================================
+            window = int(time.time() / 60)
+            if window != self.rate_window:
+                self.rates.clear()
+                self.rate_window = window
+
+            self.rates[edge_id[:16]] += 1
+            if self.rates[edge_id[:16]] > RATE_LIMITS.get(TIER, 100):
+                # Report rate abuse to mesh
+                if self.mesh:
+                    self.mesh.report_threat(client_ip, "rate_abuse", severity=3,
+                                          context={"edge_id": edge_id[:16]})
+                return {'valid': False, 'reason': 'rate'}
+
+            # ============================================================
+            # STEP 5: Timestamp and additional validation
+            # ============================================================
+            result = self._check(edge_id, ts_bytes, addr)
+            self.cache.set(cache_key, result)
+
+            # ============================================================
+            # STEP 6: Security module checks (pattern matching, etc.)
+            # ============================================================
+            if result['valid'] and self.security and SECURITY_ENABLED:
                 allowed, reason = self.security.check_request(client_ip, "/validate", data)
                 if not allowed:
                     self.stats['blocked'] += 1
                     log.warning(f"[SECURITY] Blocked {client_ip}: {reason}")
-                    # Share threat with mesh
                     if self.mesh:
                         self.mesh.report_threat(client_ip, "malicious_request", severity=2,
                                               context={"reason": reason})
                     return {'valid': False, 'reason': 'blocked', 'security': reason}
-
-            if len(data) < 32:
-                self.stats['fail'] += 1
-                if self.security:
-                    self.security.threat_detector.record_error(client_ip)
-                return {'valid': False, 'reason': 'short'}
-
-            edge_id = data[:16].hex()
-            ts_bytes = data[16:24]
-            sig = data[24:32].hex()
-
-            # Check cache
-            key = f"{edge_id}:{sig[:8]}"
-            cached = self.cache.get(key)
-            if cached:
-                return cached
-
-            # Validate
-            result = self._check(edge_id, ts_bytes, addr)
-            self.cache.set(key, result)
 
             if result['valid']:
                 self.stats['ok'] += 1
@@ -290,13 +414,19 @@ class Sentinel:
                     self.security.threat_detector.record_error(client_ip)
 
             return result
+
         except Exception as e:
             self.stats['err'] += 1
             log.error(f"Validation error: {e}")
             return {'valid': False, 'reason': 'error'}
 
     def _check(self, edge_id: str, ts_bytes: bytes, addr: tuple) -> dict:
-        """Internal validation checks"""
+        """
+        Internal validation checks (timestamp only).
+
+        NOTE: Rate limiting is now handled in validate() AFTER signature verification.
+        This method only handles timestamp validation.
+        """
         if len(edge_id) != 32:
             return {'valid': False, 'reason': 'bad_id'}
 
@@ -309,19 +439,7 @@ class Sentinel:
             log.debug(f"Timestamp parse error: {type(e).__name__}")
             return {'valid': False, 'reason': 'bad_ts'}
 
-        # Rate limit
-        window = int(time.time() / 60)
-        if window != self.rate_window:
-            self.rates.clear()
-            self.rate_window = window
-
-        self.rates[edge_id[:16]] += 1
-        if self.rates[edge_id[:16]] > RATE_LIMITS.get(TIER, 100):
-            # Report rate limit abuse to mesh (potential DDoS)
-            if self.mesh and addr:
-                self.mesh.report_threat(addr[0], "rate_abuse", severity=3,
-                                      context={"edge_id": edge_id[:16]})
-            return {'valid': False, 'reason': 'rate'}
+        # Rate limiting removed - now handled in validate() after signature verification
 
         return {'valid': True, 'edge_id': edge_id, 'ts': ts, 'sentinel': NODE_ID}
 
