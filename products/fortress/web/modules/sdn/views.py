@@ -167,7 +167,7 @@ try:
     from host_agent_client import (
         get_host_agent_client,
         deauthenticate_device,
-        disconnect_device,
+        disconnect_device as host_agent_disconnect,  # Renamed to avoid collision with Flask route
         block_device,
         unblock_device,
         is_host_agent_available,
@@ -184,7 +184,7 @@ except ImportError as e:
     def deauthenticate_device(mac, interfaces=None):
         return {'success': False, 'error': 'Host agent client not available'}
 
-    def disconnect_device(mac, interfaces=None):
+    def host_agent_disconnect(mac, interfaces=None):
         return {'success': False, 'error': 'Host agent client not available'}
 
     def block_device(mac, interfaces=None):
@@ -193,8 +193,66 @@ except ImportError as e:
     def unblock_device(mac, interfaces=None):
         return {'success': False, 'error': 'Host agent client not available'}
 
+# Import device names from bubbles module
+DEVICE_NAMES_AVAILABLE = False
+try:
+    from ..bubbles.views import (
+        get_all_device_names,
+        get_device_custom_name,
+        get_db_connection as get_bubbles_db,
+    )
+    DEVICE_NAMES_AVAILABLE = True
+    logger.info("Device names module loaded successfully")
+except ImportError as e:
+    logger.debug(f"Device names module not available: {e}")
+
+    # Fallback stubs
+    def get_all_device_names():
+        return {}
+
+    def get_device_custom_name(mac):
+        return None
+
     def is_host_agent_available():
         return False
+
+
+# Shared ARP status file (updated every 5s by fts-arp-export.timer)
+ARP_STATUS_FILE = Path('/var/lib/hookprobe/arp-status.json')
+
+
+def get_arp_online_status():
+    """
+    Get real-time online status from ARP table.
+
+    Reads from /var/lib/hookprobe/arp-status.json which is updated
+    every 5 seconds by the fts-arp-export.timer systemd service.
+
+    Returns:
+        Dict mapping MAC address (uppercase) to online status dict:
+        {'online': bool, 'state': str, 'ip': str}
+    """
+    arp_status = {}
+    try:
+        if ARP_STATUS_FILE.exists():
+            import time as time_module
+            # Check file age - if older than 30 seconds, data may be stale
+            file_age = time_module.time() - ARP_STATUS_FILE.stat().st_mtime
+            if file_age > 30:
+                logger.warning(f"ARP status file is {file_age:.0f}s old, data may be stale")
+
+            with open(ARP_STATUS_FILE, 'r') as f:
+                arp_status = json.load(f)
+
+            logger.debug(f"ARP status: {len(arp_status)} devices loaded")
+        else:
+            logger.debug(f"ARP status file not found: {ARP_STATUS_FILE}")
+
+    except Exception as e:
+        logger.warning(f"Failed to read ARP status: {e}")
+
+    return arp_status
+
 
 # Import hostname decoder for dnsmasq octal escapes
 try:
@@ -488,6 +546,50 @@ def _load_device_status_cache() -> Dict[str, Dict]:
             logger.debug(f"Merged status cache: {len(cache)} total devices")
     except Exception as e:
         logger.warning(f"Failed to load status cache: {e}")
+
+    # Finally, merge with ARP status file (source of truth for online/offline)
+    # This file is updated every 5 seconds by the host ARP export timer
+    try:
+        arp_status = get_arp_online_status()
+        if arp_status:
+            for mac, arp_info in arp_status.items():
+                mac_upper = mac.upper()
+                state = arp_info.get('state', 'UNKNOWN')
+                ip = arp_info.get('ip', '')
+
+                # Map ARP state to status more accurately:
+                # REACHABLE = actively communicating = online
+                # STALE/DELAY/PROBE = was seen recently but idle = idle
+                # FAILED/INCOMPLETE = unreachable = offline
+                if state == 'REACHABLE':
+                    status = 'online'
+                elif state in ('STALE', 'DELAY', 'PROBE'):
+                    status = 'idle'
+                else:
+                    status = 'offline'
+
+                if mac_upper in cache:
+                    # Update status based on ARP state
+                    cache[mac_upper]['status'] = status
+                    cache[mac_upper]['neighbor_state'] = state
+                    if ip and not cache[mac_upper].get('ip'):
+                        cache[mac_upper]['ip'] = ip
+                else:
+                    # New device from ARP (not in DHCP or status cache)
+                    cache[mac_upper] = {
+                        'status': status,
+                        'neighbor_state': state,
+                        'last_packet_count': 0,
+                        'ip': ip,
+                        'hostname': '',
+                        'vendor': '',
+                        'dhcp_fingerprint': '',
+                        'vendor_class': '',
+                    }
+            logger.debug(f"Merged ARP status: {len([m for m, d in cache.items() if d.get('status') == 'online'])} online, "
+                        f"{len([m for m, d in cache.items() if d.get('status') == 'idle'])} idle")
+    except Exception as e:
+        logger.warning(f"Failed to merge ARP status: {e}")
 
     return cache
 
@@ -1579,46 +1681,61 @@ def discover_devices():
         return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
-def _scan_network_devices() -> List[Dict]:
-    """Scan network for devices using ARP table.
+def _get_dhcp_hostnames() -> Dict[str, str]:
+    """Get hostname mapping from DHCP leases file.
 
-    Simple network scan that doesn't require PostgreSQL.
+    Reads /var/lib/misc/dnsmasq.leases which has format:
+    <expiry_timestamp> <mac> <ip> <hostname> <client_id>
+
+    Returns:
+        Dict mapping uppercase MAC address to hostname
+    """
+    hostnames = {}
+    dhcp_leases_path = Path('/var/lib/misc/dnsmasq.leases')
+
+    try:
+        if dhcp_leases_path.exists():
+            with open(dhcp_leases_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 4:
+                        mac = parts[1].upper()
+                        hostname = parts[3] if parts[3] != '*' else None
+                        if hostname:
+                            hostnames[mac] = hostname
+    except Exception as e:
+        logger.debug(f"Failed to read DHCP leases: {e}")
+
+    return hostnames
+
+
+def _scan_network_devices() -> List[Dict]:
+    """Scan network for devices using ARP table and DHCP leases.
+
+    Reads from shared ARP status file updated by fts-arp-export.timer.
+    Enriches with hostname from DHCP leases for accurate device names.
     Returns list of discovered devices with basic info.
     """
     devices = []
 
     try:
-        # Get ARP table entries
-        result = subprocess.run(
-            ['ip', 'neigh', 'show'],
-            capture_output=True, text=True, timeout=30
-        )
+        # Get ARP status from shared file (updated every 5s by host-side timer)
+        arp_status = get_arp_online_status()
 
-        if result.returncode != 0:
-            logger.warning(f"ip neigh failed: {result.stderr}")
+        if not arp_status:
+            logger.warning("No ARP status available")
             return devices
 
-        for line in result.stdout.strip().split('\n'):
-            if not line or 'FAILED' in line:
-                continue
+        # Get hostnames from DHCP leases (much more reliable than reverse DNS)
+        dhcp_hostnames = _get_dhcp_hostnames()
 
-            parts = line.split()
-            if len(parts) < 4:
-                continue
+        # Get custom device names (user-defined aliases)
+        custom_names = get_all_device_names()
 
-            ip_address = parts[0]
-            mac_address = None
-            state = 'STALE'
-
-            # Find MAC address and state
-            for i, part in enumerate(parts):
-                if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', part):
-                    mac_address = part.upper()
-                if part in ['REACHABLE', 'STALE', 'DELAY', 'PROBE']:
-                    state = part
-
-            if not mac_address:
-                continue
+        for mac_address, arp_info in arp_status.items():
+            ip_address = arp_info.get('ip', '')
+            state = arp_info.get('state', 'UNKNOWN')
+            is_online = arp_info.get('online', False)
 
             # Skip localhost/gateway MACs
             if mac_address.startswith('00:00:00') or mac_address == 'FF:FF:FF:FF:FF:FF':
@@ -1627,24 +1744,32 @@ def _scan_network_devices() -> List[Dict]:
             # Get manufacturer from OUI
             manufacturer = _lookup_oui(mac_address)
 
-            # Try to resolve hostname
-            hostname = _resolve_hostname(ip_address)
+            # Get hostname from DHCP leases (primary) or reverse DNS (fallback)
+            hostname = dhcp_hostnames.get(mac_address) or _resolve_hostname(ip_address)
 
             # Detect device type
             device_type = _detect_device_type(mac_address, hostname, manufacturer)
+
+            # Get custom name if available (takes priority for display)
+            custom_name = custom_names.get(mac_address)
+
+            # Build display name: custom > hostname > manufacturer > MAC prefix
+            display_name = custom_name or hostname or manufacturer
+            if display_name == 'Unknown':
+                display_name = mac_address[:8]
 
             devices.append({
                 'mac_address': mac_address,
                 'ip_address': ip_address,
                 'hostname': hostname,
+                'custom_name': custom_name,  # User-defined alias
+                'display_name': display_name,
                 'manufacturer': manufacturer,
                 'device_type': device_type,
                 'state': state,
-                'is_online': state == 'REACHABLE',
+                'is_online': is_online,
             })
 
-    except subprocess.TimeoutExpired:
-        logger.error("Network scan timed out")
     except Exception as e:
         logger.error(f"Network scan error: {e}")
 
@@ -1898,6 +2023,12 @@ def api_stats():
         try:
             autopilot = get_sdn_autopilot()
             if autopilot:
+                # Update online status from ARP data (logs connection events)
+                try:
+                    autopilot.update_online_status()
+                except Exception as e:
+                    logger.debug(f"Failed to update online status: {e}")
+
                 # Load status from cache
                 status_cache = _load_device_status_cache()
                 devices = autopilot.get_all_devices()
@@ -3199,6 +3330,124 @@ def api_device_delete(mac_address):
         })
 
 
+@sdn_bp.route('/api/device/<mac_address>/name', methods=['GET'])
+@login_required
+def api_device_get_name(mac_address):
+    """Get custom name for a device."""
+    mac = mac_address.upper().replace('-', ':')
+
+    # Validate MAC format
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    custom_name = get_device_custom_name(mac)
+    return jsonify({
+        'success': True,
+        'mac': mac,
+        'custom_name': custom_name
+    })
+
+
+@sdn_bp.route('/api/device/<mac_address>/name', methods=['PUT', 'POST'])
+@login_required
+@operator_required
+def api_device_set_name(mac_address):
+    """
+    Set custom name for a device.
+
+    Body: {"name": "Living Room Light", "original_hostname": "013_aio-nap"}
+
+    This name will be used as the display label throughout the dashboard.
+    The MAC address and hostname remain the primary identifiers.
+    """
+    mac = mac_address.upper().replace('-', ':')
+
+    # Validate MAC format
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    if not DEVICE_NAMES_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Device naming not available'}), 503
+
+    data = request.get_json() or {}
+    custom_name = data.get('name', '').strip()
+
+    if not custom_name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+
+    if len(custom_name) > 64:
+        return jsonify({'success': False, 'error': 'Name too long (max 64 chars)'}), 400
+
+    # Sanitize name - only allow safe characters
+    if not re.match(r'^[\w\s\-\'\.]+$', custom_name):
+        return jsonify({
+            'success': False,
+            'error': 'Name contains invalid characters (only letters, numbers, spaces, hyphens, apostrophes, periods allowed)'
+        }), 400
+
+    try:
+        with get_bubbles_db() as conn:
+            original_hostname = data.get('original_hostname', '')
+            conn.execute('''
+                INSERT OR REPLACE INTO device_names
+                (mac, custom_name, original_hostname, updated_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                mac,
+                custom_name,
+                original_hostname,
+                current_user.username if hasattr(current_user, 'username') else 'system',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+
+        # Also update the SDN autopilot database for immediate display
+        if SDN_AUTOPILOT_AVAILABLE:
+            try:
+                autopilot = get_sdn_autopilot()
+                if autopilot:
+                    autopilot.update_friendly_name(mac, custom_name)
+            except Exception as e:
+                logger.debug(f"Failed to update autopilot friendly_name: {e}")
+
+        logger.info(f"Device {mask_mac(mac)} renamed to '{custom_name}'")
+        return jsonify({
+            'success': True,
+            'message': f'Device renamed to {custom_name}',
+            'mac': mac,
+            'custom_name': custom_name
+        })
+    except Exception as e:
+        logger.error(f"Failed to set device name: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@sdn_bp.route('/api/device/<mac_address>/name', methods=['DELETE'])
+@login_required
+@operator_required
+def api_device_delete_name(mac_address):
+    """Remove custom name for a device (revert to hostname)."""
+    mac = mac_address.upper().replace('-', ':')
+
+    # Validate MAC format
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    if not DEVICE_NAMES_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Device naming not available'}), 503
+
+    try:
+        with get_bubbles_db() as conn:
+            conn.execute('DELETE FROM device_names WHERE mac = ?', (mac,))
+            conn.commit()
+
+        logger.info(f"Device {mask_mac(mac)} name reset to default")
+        return jsonify({'success': True, 'message': 'Device name reset to default'})
+    except Exception as e:
+        logger.error(f"Failed to delete device name: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
 @sdn_bp.route('/api/device/<mac_address>/policy', methods=['POST'])
 @login_required
 @operator_required
@@ -3928,11 +4177,11 @@ def api_device_disconnect(mac_address):
     }
 
     # Use FTS Host Agent via Unix Domain Socket (G.N.C. Architecture)
-    # disconnect_device() blocks the MAC first (deny_acl ADD), then deauths.
+    # host_agent_disconnect() blocks the MAC first (deny_acl ADD), then deauths.
     # This prevents the device from immediately reconnecting.
     if HOST_AGENT_AVAILABLE:
         try:
-            disconnect_result = disconnect_device(mac)
+            disconnect_result = host_agent_disconnect(mac)
             results['host_agent_used'] = True
 
             if disconnect_result.get('success'):
