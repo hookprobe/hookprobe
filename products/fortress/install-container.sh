@@ -78,7 +78,7 @@ build_hostapd_ovs() {
         log_error "hostapd-ovs build script not found!"
         log_error "Expected at: shared/hostapd-ovs/build-hostapd-ovs.sh"
         log_error "This is required for WiFi to work with OVS."
-        return 1
+        exit 1
     fi
 
     # Check if hostapd-ovs is already installed
@@ -111,7 +111,7 @@ build_hostapd_ovs() {
         log_error "hostapd-ovs build failed!"
         log_error "WiFi will not work without hostapd-ovs."
         log_error "Check build log for errors."
-        return 1
+        exit 1
     fi
 }
 
@@ -190,16 +190,38 @@ check_prerequisites() {
             log_info "Network connectivity: OK (basic check passed)"
         fi
     else
-        # Fallback: Original simple connectivity check
-        log_warn "Early network resilience script not found, using basic check"
+        # Fallback: Enhanced connectivity check with retry logic
+        log_warn "Early network resilience script not found, using enhanced fallback check"
 
-        if ! timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
-            if ! timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
-                log_error "No network connectivity detected!"
-                log_error "Cannot reach archive.ubuntu.com or 8.8.8.8"
-                log_error "Please ensure the WAN interface has internet access"
-                exit 1
+        local network_retry=0
+        local network_max_retries=3
+        local network_ok=false
+
+        while [ $network_retry -lt $network_max_retries ]; do
+            # Try multiple endpoints in parallel
+            if timeout 5 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null; then
+                network_ok=true
+                break
+            elif timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
+                network_ok=true
+                break
+            elif timeout 5 bash -c 'exec 3<>/dev/tcp/1.1.1.1/53' 2>/dev/null; then
+                network_ok=true
+                break
             fi
+
+            network_retry=$((network_retry + 1))
+            if [ $network_retry -lt $network_max_retries ]; then
+                log_warn "Network check failed, retrying in 5 seconds (attempt $((network_retry + 1))/$network_max_retries)..."
+                sleep 5
+            fi
+        done
+
+        if [ "$network_ok" = false ]; then
+            log_error "No network connectivity detected after $network_max_retries attempts!"
+            log_error "Cannot reach archive.ubuntu.com, 8.8.8.8, or 1.1.1.1"
+            log_error "Please ensure the WAN interface has internet access"
+            exit 1
         fi
         log_info "Network connectivity: OK"
     fi
@@ -571,12 +593,46 @@ collect_configuration() {
         ADMIN_USER="${admin_input:-$ADMIN_USER}"
 
         while true; do
-            read -sp "Admin password (min 8 chars): " ADMIN_PASS
+            read -sp "Admin password (min 8 chars, requires uppercase, lowercase, and digit): " ADMIN_PASS
             echo ""
+
+            # Length check
             if [ ${#ADMIN_PASS} -lt 8 ]; then
                 log_warn "Password must be at least 8 characters"
                 continue
             fi
+
+            # Complexity checks
+            local pass_valid=true
+
+            # Check for uppercase letter
+            if ! echo "$ADMIN_PASS" | grep -q '[A-Z]'; then
+                log_warn "Password must contain at least one uppercase letter"
+                pass_valid=false
+            fi
+
+            # Check for lowercase letter
+            if ! echo "$ADMIN_PASS" | grep -q '[a-z]'; then
+                log_warn "Password must contain at least one lowercase letter"
+                pass_valid=false
+            fi
+
+            # Check for digit
+            if ! echo "$ADMIN_PASS" | grep -q '[0-9]'; then
+                log_warn "Password must contain at least one digit"
+                pass_valid=false
+            fi
+
+            # Check password is not same as username
+            if [ "$ADMIN_PASS" = "$ADMIN_USER" ]; then
+                log_warn "Password cannot be the same as username"
+                pass_valid=false
+            fi
+
+            if [ "$pass_valid" = false ]; then
+                continue
+            fi
+
             read -sp "Confirm password: " ADMIN_PASS_CONFIRM
             echo ""
             if [ "$ADMIN_PASS" != "$ADMIN_PASS_CONFIRM" ]; then
