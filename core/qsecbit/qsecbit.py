@@ -227,18 +227,34 @@ class Qsecbit:
         # ClickHouse integration (for edge deployments)
         if self.deployment_type == 'edge' and CLICKHOUSE_AVAILABLE and os.getenv('CLICKHOUSE_ENABLED', 'true').lower() == 'true':
             try:
+                # SECURITY FIX: Require password, no empty default (CWE-798)
+                ch_password = os.getenv('CLICKHOUSE_PASSWORD')
+                if not ch_password:
+                    if os.getenv('ALLOW_INSECURE_DB', 'false').lower() == 'true':
+                        print("⚠ WARNING: CLICKHOUSE_PASSWORD not set - using empty password (INSECURE)")
+                        ch_password = ''
+                    else:
+                        raise ValueError("CLICKHOUSE_PASSWORD required (set ALLOW_INSECURE_DB=true to bypass)")
+
                 self.db_client = ClickHouseClient(
                     host=os.getenv('CLICKHOUSE_HOST', '10.200.5.11'),
                     port=int(os.getenv('CLICKHOUSE_PORT', '9001')),
                     database=os.getenv('CLICKHOUSE_DB', 'security'),
                     user=os.getenv('CLICKHOUSE_USER', 'hookprobe'),
-                    password=os.getenv('CLICKHOUSE_PASSWORD', '')
+                    password=ch_password,
+                    # SECURITY FIX: Add TLS support (CWE-319)
+                    secure=os.getenv('CLICKHOUSE_SSL', 'false').lower() == 'true',
+                    verify=os.getenv('CLICKHOUSE_VERIFY_SSL', 'true').lower() == 'true',
                 )
                 # Test connection
                 self.db_client.execute('SELECT 1')
                 self.db_enabled = True
                 self.db_type = 'clickhouse'
-                print("✓ ClickHouse integration enabled (edge deployment)")
+                ssl_status = "with TLS" if os.getenv('CLICKHOUSE_SSL', 'false').lower() == 'true' else "without TLS"
+                print(f"✓ ClickHouse integration enabled (edge deployment, {ssl_status})")
+            except ValueError as e:
+                print(f"Error: {e}")
+                self.db_enabled = False
             except Exception as e:
                 print(f"Warning: ClickHouse not available: {e}")
                 self.db_enabled = False
@@ -246,20 +262,41 @@ class Qsecbit:
         # Doris integration (for cloud backend MSSP deployments)
         elif self.deployment_type == 'cloud-backend' and DORIS_AVAILABLE and os.getenv('DORIS_ENABLED', 'true').lower() == 'true':
             try:
+                # SECURITY FIX: Require password, no empty default (CWE-798)
+                doris_password = os.getenv('DORIS_PASSWORD')
+                if not doris_password:
+                    if os.getenv('ALLOW_INSECURE_DB', 'false').lower() == 'true':
+                        print("⚠ WARNING: DORIS_PASSWORD not set - using empty password (INSECURE)")
+                        doris_password = ''
+                    else:
+                        raise ValueError("DORIS_PASSWORD required (set ALLOW_INSECURE_DB=true to bypass)")
+
+                # SECURITY FIX: Add TLS support (CWE-319)
+                ssl_config = None
+                if os.getenv('DORIS_SSL', 'false').lower() == 'true':
+                    ssl_config = {
+                        'check_hostname': os.getenv('DORIS_VERIFY_SSL', 'true').lower() == 'true',
+                    }
+
                 self.db_client = pymysql.connect(
                     host=os.getenv('DORIS_HOST', '10.100.1.10'),
                     port=int(os.getenv('DORIS_PORT', '9030')),
                     user=os.getenv('DORIS_USER', 'root'),
-                    password=os.getenv('DORIS_PASSWORD', ''),
+                    password=doris_password,
                     database=os.getenv('DORIS_DB', 'security'),
-                    autocommit=True
+                    autocommit=True,
+                    ssl=ssl_config,
                 )
                 # Test connection
                 with self.db_client.cursor() as cursor:
                     cursor.execute('SELECT 1')
                 self.db_enabled = True
                 self.db_type = 'doris'
-                print(f"✓ Doris integration enabled (cloud backend, tenant: {self.tenant_id})")
+                ssl_status = "with TLS" if ssl_config else "without TLS"
+                print(f"✓ Doris integration enabled (cloud backend, tenant: {self.tenant_id}, {ssl_status})")
+            except ValueError as e:
+                print(f"Error: {e}")
+                self.db_enabled = False
             except Exception as e:
                 print(f"Warning: Doris not available: {e}")
                 self.db_enabled = False
