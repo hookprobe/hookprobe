@@ -120,11 +120,34 @@ CATEGORY_POLICIES = {
 # =============================================================================
 
 APPLE_FINGERPRINTS = {
-    # macOS - Laptops/Desktops
+    # ==========================================================================
+    # iOS 18 - iPhone 16 Series (2024+)
+    # NOTE: "1,121,3,6,15,119,252,95,44,46,47,77" is AMBIGUOUS (iPhone 16 Pro vs iPad Pro)
+    # Handled by AMBIGUOUS_APPLE_FINGERPRINTS with hostname/mDNS disambiguation
+    # ==========================================================================
+    "1,121,3,6,15,119,252,95,44,46,47,77,80": {
+        "name": "iPhone 16", "vendor": "Apple", "category": "phone",
+        "os": "iOS 18", "confidence": 0.99,
+        "hierarchy": ["Apple", "iPhone", "iPhone 16"]
+    },
+    "1,121,3,6,15,108,114,119,162,252,95,44,46,47": {
+        "name": "iPhone (iOS 18)", "vendor": "Apple", "category": "phone",
+        "os": "iOS 18", "confidence": 0.98,
+        "hierarchy": ["Apple", "iPhone", "iOS 18"]
+    },
+
+    # ==========================================================================
+    # macOS - Laptops/Desktops (Sequoia, Sonoma, Ventura, etc.)
+    # ==========================================================================
     "1,121,3,6,15,108,114,119,162,252,95,44,46": {
         "name": "macOS Sonoma/Sequoia", "vendor": "Apple", "category": "laptop",
         "os": "macOS 14/15", "confidence": 0.98,
         "hierarchy": ["Apple", "Mac", "macOS Sonoma"]
+    },
+    "1,121,3,6,15,108,114,119,162,252,95,44,46,77": {
+        "name": "MacBook Pro (Apple Silicon)", "vendor": "Apple", "category": "laptop",
+        "os": "macOS 15", "confidence": 0.99,
+        "hierarchy": ["Apple", "MacBook Pro", "macOS Sequoia"]
     },
     "1,121,3,6,15,119,252,95,44,46": {
         "name": "macOS Ventura", "vendor": "Apple", "category": "laptop",
@@ -136,47 +159,59 @@ APPLE_FINGERPRINTS = {
         "os": "macOS 12", "confidence": 0.97,
         "hierarchy": ["Apple", "Mac", "macOS Monterey"]
     },
-    "1,3,6,15,119,252": {
-        "name": "macOS (Legacy)", "vendor": "Apple", "category": "laptop",
-        "os": "macOS 10.x-11", "confidence": 0.95,
-        "hierarchy": ["Apple", "Mac", "macOS"]
-    },
+    # NOTE: "1,3,6,15,119,252" is AMBIGUOUS - handled by disambiguation logic
+    # Was macOS Legacy but also matches iOS Legacy and HomePod Mini
     "1,3,6,15,119,95,252,44,46": {
         "name": "macOS Big Sur", "vendor": "Apple", "category": "laptop",
         "os": "macOS 11", "confidence": 0.96,
         "hierarchy": ["Apple", "Mac", "macOS Big Sur"]
     },
 
-    # iOS - iPhones
+    # ==========================================================================
+    # iOS - iPhones (iOS 17, 16, 15, etc.)
+    # ==========================================================================
     "1,121,3,6,15,119,252,95,44,46,47": {
         "name": "iPhone (iOS 17+)", "vendor": "Apple", "category": "phone",
         "os": "iOS 17", "confidence": 0.98,
         "hierarchy": ["Apple", "iPhone", "iOS 17"]
     },
-    "1,121,3,6,15,119,252,95,44,46": {
+    # Note: "1,121,3,6,15,119,252,95,44,46" also matches iPad - use mDNS/hostname
+    "1,121,3,6,15,119,252,95,44,46,43": {
         "name": "iPhone (iOS 16)", "vendor": "Apple", "category": "phone",
         "os": "iOS 16", "confidence": 0.97,
         "hierarchy": ["Apple", "iPhone", "iOS 16"]
     },
-    "1,121,3,6,15,119,252": {
+    # iPhone with option 50 (requested IP) - distinctive pattern
+    "1,121,3,6,15,119,252,50,51,58,59": {
         "name": "iPhone (iOS 14-15)", "vendor": "Apple", "category": "phone",
         "os": "iOS 14-15", "confidence": 0.96,
         "hierarchy": ["Apple", "iPhone", "iOS 14"]
     },
-    "1,3,6,15,119,252": {
-        "name": "iPhone (iOS Legacy)", "vendor": "Apple", "category": "phone",
-        "os": "iOS 12-13", "confidence": 0.94,
-        "hierarchy": ["Apple", "iPhone", "iOS Legacy"]
-    },
 
-    # iPadOS
+    # ==========================================================================
+    # iPadOS - iPad models (differentiated by Option 60 and mDNS)
+    # ==========================================================================
     "1,121,3,6,15,119,252,95,44,46": {
         "name": "iPad (iPadOS 16+)", "vendor": "Apple", "category": "tablet",
         "os": "iPadOS 16+", "confidence": 0.97,
         "hierarchy": ["Apple", "iPad", "iPadOS"]
     },
+    "1,121,3,6,15,119,252,95,44,46,47,12": {
+        "name": "iPad mini", "vendor": "Apple", "category": "tablet",
+        "os": "iPadOS 17+", "confidence": 0.98,
+        "hierarchy": ["Apple", "iPad", "iPad mini"]
+    },
+    # NOTE: "1,121,3,6,15,119,252,95,44,46,47,77" is shared between iPad Pro and iPhone 16 Pro
+    # Disambiguation is handled via AMBIGUOUS_APPLE_FINGERPRINTS using hostname/mDNS
+    "1,121,3,6,15,119,252,95,44,46,47,77,12": {
+        "name": "iPad Pro", "vendor": "Apple", "category": "tablet",
+        "os": "iPadOS 18", "confidence": 0.99,
+        "hierarchy": ["Apple", "iPad", "iPad Pro"]
+    },
 
-    # Apple TV
+    # ==========================================================================
+    # Apple TV (tvOS)
+    # ==========================================================================
     "1,3,6,15,119,95,252": {
         "name": "Apple TV", "vendor": "Apple", "category": "streaming",
         "os": "tvOS", "confidence": 0.99,
@@ -187,62 +222,219 @@ APPLE_FINGERPRINTS = {
         "os": "tvOS 16+", "confidence": 0.99,
         "hierarchy": ["Apple", "Apple TV", "Apple TV 4K"]
     },
+    "1,121,3,6,15,119,95,252,44,46": {
+        "name": "Apple TV 4K (3rd Gen)", "vendor": "Apple", "category": "streaming",
+        "os": "tvOS 17+", "confidence": 0.99,
+        "hierarchy": ["Apple", "Apple TV", "Apple TV 4K 3rd Gen"]
+    },
 
-    # HomePod
+    # ==========================================================================
+    # HomePod (audioOS) - Distinctive patterns to avoid collision
+    # ==========================================================================
     "1,3,6,15,119,252,95": {
         "name": "HomePod", "vendor": "Apple", "category": "voice_assistant",
         "os": "audioOS", "confidence": 0.99,
         "hierarchy": ["Apple", "HomePod", "HomePod"]
     },
-    "1,3,6,15,119,252": {
-        "name": "HomePod Mini", "vendor": "Apple", "category": "voice_assistant",
-        "os": "audioOS", "confidence": 0.95,
-        "hierarchy": ["Apple", "HomePod", "HomePod Mini"]
+    # HomePod mini has shorter fingerprint - disambiguated via mDNS/hostname
+    "1,3,6,15,119,252,12": {
+        "name": "HomePod mini", "vendor": "Apple", "category": "voice_assistant",
+        "os": "audioOS", "confidence": 0.98,
+        "hierarchy": ["Apple", "HomePod", "HomePod mini"]
     },
     "1,121,3,6,15,119,252,95": {
         "name": "HomePod (2nd Gen)", "vendor": "Apple", "category": "voice_assistant",
         "os": "audioOS 17", "confidence": 0.99,
         "hierarchy": ["Apple", "HomePod", "HomePod 2nd Gen"]
     },
-
-    # Apple Watch (multiple watchOS versions)
-    "1,3,6,15,119,252,78,79": {
-        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
-        "os": "watchOS 7-8", "confidence": 0.97,
-        "hierarchy": ["Apple", "Apple Watch", "watchOS"]
+    "1,121,3,6,15,119,252,95,12": {
+        "name": "HomePod mini (audioOS 17)", "vendor": "Apple", "category": "voice_assistant",
+        "os": "audioOS 17", "confidence": 0.99,
+        "hierarchy": ["Apple", "HomePod", "HomePod mini"]
     },
-    "1,121,3,6,15,119,252,78,79": {
-        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
-        "os": "watchOS 9+", "confidence": 0.98,
-        "hierarchy": ["Apple", "Apple Watch", "watchOS 9"]
+
+    # ==========================================================================
+    # Apple Watch (watchOS) - Series 9, Ultra 2, SE, etc.
+    # ==========================================================================
+    "1,121,3,6,15,119,252,95,78,79": {
+        "name": "Apple Watch Series 9/10", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 10/11", "confidence": 0.99,
+        "hierarchy": ["Apple", "Apple Watch", "Series 9"]
+    },
+    "1,121,3,6,15,119,252,95,78,79,77": {
+        "name": "Apple Watch Ultra 2", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 10+", "confidence": 0.99,
+        "hierarchy": ["Apple", "Apple Watch", "Ultra 2"]
     },
     "1,121,3,6,15,119,252,78,79,95": {
         "name": "Apple Watch Ultra", "vendor": "Apple", "category": "wearable",
         "os": "watchOS 9+", "confidence": 0.99,
         "hierarchy": ["Apple", "Apple Watch", "Ultra"]
     },
+    "1,121,3,6,15,119,252,78,79": {
+        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 9+", "confidence": 0.98,
+        "hierarchy": ["Apple", "Apple Watch", "watchOS 9"]
+    },
+    "1,3,6,15,119,252,78,79": {
+        "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+        "os": "watchOS 7-8", "confidence": 0.97,
+        "hierarchy": ["Apple", "Apple Watch", "watchOS"]
+    },
     "1,3,6,15,119,252,78": {
         "name": "Apple Watch", "vendor": "Apple", "category": "wearable",
         "os": "watchOS 6-7", "confidence": 0.96,
         "hierarchy": ["Apple", "Apple Watch", "watchOS Legacy"]
-    },
-    "1,121,3,6,15,119,252,95,78,79": {
-        "name": "Apple Watch Series 9", "vendor": "Apple", "category": "wearable",
-        "os": "watchOS 10", "confidence": 0.99,
-        "hierarchy": ["Apple", "Apple Watch", "Series 9"]
     },
     "1,3,6,15,119,78,79,252": {
         "name": "Apple Watch SE", "vendor": "Apple", "category": "wearable",
         "os": "watchOS", "confidence": 0.97,
         "hierarchy": ["Apple", "Apple Watch", "SE"]
     },
-    # Generic Apple signature (fallback for any Apple device)
-    "1,3,6,15,119,252,95": {
-        "name": "Apple Device", "vendor": "Apple", "category": "laptop",
-        "os": "macOS/iOS", "confidence": 0.92,
-        "hierarchy": ["Apple"]
+}
+
+# =============================================================================
+# AMBIGUOUS APPLE FINGERPRINTS - Require hostname/mDNS disambiguation
+# These fingerprints match multiple device types and need additional signals
+# =============================================================================
+
+AMBIGUOUS_APPLE_FINGERPRINTS = {
+    # "1,3,6,15,119,252" can be: macOS Legacy, iOS Legacy, OR HomePod mini
+    # Disambiguation rules:
+    #   - hostname contains "iphone" or starts with "*s-iphone" -> iPhone
+    #   - hostname contains "ipad" -> iPad
+    #   - hostname contains "macbook", "imac", "mac-pro", "mac-mini" -> Mac
+    #   - hostname contains "homepod" or mDNS has _homekit._tcp -> HomePod
+    #   - OUI is 40:ED:CF (HomePod-specific OUI) -> HomePod mini
+    #   - mDNS services include _companion-link._tcp -> Apple Watch
+    "1,3,6,15,119,252": {
+        "candidates": [
+            {"name": "HomePod mini", "category": "voice_assistant", "os": "audioOS",
+             "match_keywords": ["homepod", "hooksound"], "match_oui": ["40:ED:CF"],
+             "match_services": ["_homekit._tcp", "_airplay._tcp"]},
+            {"name": "iPhone (iOS Legacy)", "category": "phone", "os": "iOS 12-13",
+             "match_keywords": ["iphone"], "match_services": ["_apple-mobdev2._tcp"]},
+            {"name": "iPad (Legacy)", "category": "tablet", "os": "iPadOS",
+             "match_keywords": ["ipad"]},
+            {"name": "macOS (Legacy)", "category": "laptop", "os": "macOS 10.x-11",
+             "match_keywords": ["macbook", "imac", "mac-pro", "mac-mini", "mac pro", "mac mini"]},
+        ],
+        "default": {"name": "Apple Device", "category": "phone", "os": "iOS/macOS"},
+    },
+    # "1,121,3,6,15,119,252" can be: macOS Monterey or iPhone (iOS 14-15)
+    "1,121,3,6,15,119,252": {
+        "candidates": [
+            {"name": "iPhone (iOS 14-15)", "category": "phone", "os": "iOS 14-15",
+             "match_keywords": ["iphone"], "match_services": ["_apple-mobdev2._tcp"]},
+            {"name": "macOS Monterey", "category": "laptop", "os": "macOS 12",
+             "match_keywords": ["macbook", "imac", "mac"]},
+        ],
+        "default": {"name": "Apple Device (Modern)", "category": "laptop", "os": "macOS/iOS"},
+    },
+    # "1,121,3,6,15,119,252,95,44,46" can be: iPad or iPhone (iOS 16)
+    "1,121,3,6,15,119,252,95,44,46": {
+        "candidates": [
+            {"name": "iPad", "category": "tablet", "os": "iPadOS 16+",
+             "match_keywords": ["ipad"]},
+            {"name": "iPhone (iOS 16)", "category": "phone", "os": "iOS 16",
+             "match_keywords": ["iphone"]},
+            {"name": "macOS Ventura", "category": "laptop", "os": "macOS 13",
+             "match_keywords": ["macbook", "imac", "mac"]},
+        ],
+        "default": {"name": "iPad (iPadOS 16+)", "category": "tablet", "os": "iPadOS 16+"},
+    },
+    # "1,121,3,6,15,119,252,95,44,46,47,77" can be: iPhone 16 Pro/Max or iPad Pro
+    "1,121,3,6,15,119,252,95,44,46,47,77": {
+        "candidates": [
+            {"name": "iPhone 16 Pro", "category": "phone", "os": "iOS 18",
+             "match_keywords": ["iphone", "hookprobe"], "match_services": ["_apple-mobdev2._tcp"]},
+            {"name": "iPad Pro", "category": "tablet", "os": "iPadOS 18",
+             "match_keywords": ["ipad"]},
+        ],
+        "default": {"name": "iPhone 16 Pro/Pro Max", "category": "phone", "os": "iOS 18"},
     },
 }
+
+
+def disambiguate_apple_fingerprint(fingerprint: str, hostname: Optional[str] = None,
+                                    mac: Optional[str] = None,
+                                    mdns_services: Optional[List[str]] = None) -> Optional[dict]:
+    """
+    Disambiguate ambiguous Apple DHCP fingerprints using additional signals.
+
+    Args:
+        fingerprint: DHCP Option 55 fingerprint
+        hostname: Device hostname (DHCP Option 12 or mDNS)
+        mac: MAC address (for OUI matching)
+        mdns_services: List of mDNS service types advertised by device
+
+    Returns:
+        Device info dict or None if fingerprint is not ambiguous
+    """
+    if fingerprint not in AMBIGUOUS_APPLE_FINGERPRINTS:
+        return None
+
+    ambig = AMBIGUOUS_APPLE_FINGERPRINTS[fingerprint]
+    hn = (hostname or "").lower()
+    oui = (mac or "")[:8].upper() if mac else ""
+    services = mdns_services or []
+
+    # Check each candidate
+    for candidate in ambig["candidates"]:
+        # Check hostname keywords
+        if "match_keywords" in candidate:
+            for kw in candidate["match_keywords"]:
+                if kw in hn:
+                    return {
+                        "name": candidate["name"],
+                        "vendor": "Apple",
+                        "category": candidate["category"],
+                        "os": candidate["os"],
+                        "confidence": 0.95,
+                        "hierarchy": ["Apple", candidate["name"]],
+                        "match_type": "disambiguated_hostname"
+                    }
+
+        # Check OUI
+        if "match_oui" in candidate:
+            for match_oui in candidate["match_oui"]:
+                if oui.startswith(match_oui):
+                    return {
+                        "name": candidate["name"],
+                        "vendor": "Apple",
+                        "category": candidate["category"],
+                        "os": candidate["os"],
+                        "confidence": 0.96,
+                        "hierarchy": ["Apple", candidate["name"]],
+                        "match_type": "disambiguated_oui"
+                    }
+
+        # Check mDNS services
+        if "match_services" in candidate and services:
+            for svc in candidate["match_services"]:
+                if svc in services:
+                    return {
+                        "name": candidate["name"],
+                        "vendor": "Apple",
+                        "category": candidate["category"],
+                        "os": candidate["os"],
+                        "confidence": 0.94,
+                        "hierarchy": ["Apple", candidate["name"]],
+                        "match_type": "disambiguated_mdns"
+                    }
+
+    # Return default if no specific match
+    default = ambig["default"]
+    return {
+        "name": default["name"],
+        "vendor": "Apple",
+        "category": default["category"],
+        "os": default["os"],
+        "confidence": 0.85,
+        "hierarchy": ["Apple", default["name"]],
+        "match_type": "ambiguous_default"
+    }
+
 
 # =============================================================================
 # PRIORITY 2: WINDOWS DEVICES
@@ -1352,7 +1544,21 @@ OUI_DATABASE = {
 SPECIFIC_OUI_DEVICES = {
     # Apple HomePod (distinct from general Apple OUIs)
     "40:ED:CF": {"name": "HomePod", "vendor": "Apple", "category": "voice_assistant",
-                 "os": "audioOS", "confidence": 0.92, "hierarchy": ["Apple", "HomePod"]},
+                 "os": "audioOS", "confidence": 0.95, "hierarchy": ["Apple", "HomePod"]},
+
+    # Apple Watch (common OUIs for wearables)
+    "38:EC:0D": {"name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+                 "os": "watchOS", "confidence": 0.92, "hierarchy": ["Apple", "Apple Watch"]},
+    "7C:04:D0": {"name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+                 "os": "watchOS", "confidence": 0.92, "hierarchy": ["Apple", "Apple Watch"]},
+    "9C:35:EB": {"name": "Apple Watch", "vendor": "Apple", "category": "wearable",
+                 "os": "watchOS", "confidence": 0.92, "hierarchy": ["Apple", "Apple Watch"]},
+
+    # Apple TV (common OUIs)
+    "68:FE:F7": {"name": "Apple TV", "vendor": "Apple", "category": "streaming",
+                 "os": "tvOS", "confidence": 0.94, "hierarchy": ["Apple", "Apple TV"]},
+    "40:3C:FC": {"name": "Apple TV", "vendor": "Apple", "category": "streaming",
+                 "os": "tvOS", "confidence": 0.94, "hierarchy": ["Apple", "Apple TV"]},
 
     # Raspberry Pi Foundation
     "DC:A6:32": {"name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
@@ -1666,38 +1872,48 @@ class Fingerbank:
             specific['match_type'] = 'specific_oui'
             return self._build_result(specific, mac, hostname)
 
-        # 1. Try exact fingerprint match (fastest, highest confidence)
+        # 1. Check for AMBIGUOUS Apple fingerprints first
+        # These require hostname/mDNS disambiguation to correctly identify
+        if dhcp_fingerprint and dhcp_fingerprint in AMBIGUOUS_APPLE_FINGERPRINTS:
+            disambiguated = disambiguate_apple_fingerprint(
+                dhcp_fingerprint, hostname, mac, mdns_services=None
+            )
+            if disambiguated and disambiguated['confidence'] >= 0.85:
+                logger.info(f"Disambiguated Apple device: {disambiguated['name']} (via {disambiguated.get('match_type', 'unknown')})")
+                return self._build_result(disambiguated, mac, hostname)
+
+        # 2. Try exact fingerprint match (fastest, highest confidence)
         if dhcp_fingerprint:
             exact = self._match_fingerprint_exact(dhcp_fingerprint)
             if exact and exact['confidence'] >= 0.90:
                 return self._build_result(exact, mac, hostname)
 
-        # 2. Try vendor signature family detection (Apple, Samsung, etc.)
+        # 3. Try vendor signature family detection (Apple, Samsung, etc.)
         # This runs BEFORE fuzzy match to give higher confidence to known patterns
         if dhcp_fingerprint:
             family_match = self._match_vendor_signature(dhcp_fingerprint, is_randomized)
             if family_match and family_match['confidence'] >= 0.85:
                 return self._build_result(family_match, mac, hostname)
 
-        # 3. Try fuzzy fingerprint match (reduced confidence for partial matches)
+        # 4. Try fuzzy fingerprint match (reduced confidence for partial matches)
         if dhcp_fingerprint:
             fuzzy = self._match_fingerprint_fuzzy(dhcp_fingerprint)
             if fuzzy and fuzzy['confidence'] >= 0.75:
                 return self._build_result(fuzzy, mac, hostname)
 
-        # 4. Try OUI + hostname combination
+        # 5. Try OUI + hostname combination
         vendor = self._lookup_oui(mac)
         hostname_match = self._match_hostname(hostname, vendor)
         if hostname_match and hostname_match['confidence'] >= 0.70:
             return self._build_result(hostname_match, mac, hostname, vendor)
 
-        # 5. For randomized MACs with vendor_class, try lower threshold
+        # 6. For randomized MACs with vendor_class, try lower threshold
         if is_randomized and vendor_class:
             vc_match = self._match_vendor_class(vendor_class, mac, hostname)
             if vc_match and vc_match['confidence'] >= 0.70:
                 return self._build_result(vc_match, mac, hostname)
 
-        # 6. Try Fingerbank API for unknown devices
+        # 7. Try Fingerbank API for unknown devices
         # DEBUG: Log why API might not be called
         if not dhcp_fingerprint:
             logger.debug(f"Fingerbank API skipped for {mac}: no DHCP fingerprint")
