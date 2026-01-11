@@ -74,11 +74,29 @@ class DeviceIdentity:
 
     @property
     def display_name(self) -> str:
-        """Human-friendly display name for the device."""
-        if self.canonical_name:
-            return self.canonical_name
-        if self.mdns_device_id:
-            return self.mdns_device_id
+        """
+        Human-friendly display name for the device.
+
+        Combines user-set friendly name with device model when both are available.
+        Examples:
+            - "hookprobe" (mDNS) + "iPhone 16 Pro" (type) = "hookprobe (iPhone 16 Pro)"
+            - "hookprobe Pro" + "MacBook Pro" = "hookprobe Pro (MacBook Pro)"
+            - "hooksound" + "HomePod mini" = "hooksound (HomePod mini)"
+        """
+        user_name = self.canonical_name or self.mdns_device_id
+
+        # If we have both user name and device type, combine them
+        if user_name and self.device_type:
+            # Avoid duplication if user_name already contains device type
+            device_lower = self.device_type.lower()
+            user_lower = user_name.lower()
+
+            # Check for common patterns to avoid "iPhone (iPhone)"
+            if device_lower not in user_lower:
+                return f"{user_name} ({self.device_type})"
+
+        if user_name:
+            return user_name
         if self.device_type and self.manufacturer:
             return f"{self.manufacturer} {self.device_type}"
         if self.current_mac:
