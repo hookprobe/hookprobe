@@ -266,10 +266,10 @@ def get_bubbles_from_module():
 
                 devices = [r['mac'] for r in device_rows]
 
-                # Also check devices field in bubbles table
-                if row['devices']:
+                # Also check devices_json field in bubbles table
+                if row['devices_json']:
                     try:
-                        stored_devices = json.loads(row['devices'])
+                        stored_devices = json.loads(row['devices_json'])
                         devices.extend(stored_devices)
                     except (json.JSONDecodeError, TypeError):
                         pass
@@ -366,13 +366,13 @@ def create_bubble_in_module(name, bubble_type, devices, icon, color):
             # Create bubble
             conn.execute('''
                 INSERT INTO bubbles
-                (bubble_id, ecosystem, state, confidence, devices,
-                 bubble_type, display_name, icon, color, is_manual, is_pinned,
-                 created_by, policy_json, created_at, last_activity)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (bubble_id, ecosystem, state, confidence, devices_json,
+                 bubble_type, name, display_name, icon, color, is_manual, is_pinned,
+                 created_by, policies_json, created_at, last_activity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 bubble_id, 'mixed', 'active', 1.0, json.dumps(devices),
-                bubble_type.lower(), name, icon, color, 1, 0,
+                bubble_type.lower(), name, name, icon, color, 1, 0,
                 current_user.username if hasattr(current_user, 'username') else 'system',
                 json.dumps(policy), now, now
             ))
@@ -415,7 +415,7 @@ def add_device_to_bubble_in_module(bubble_id, mac):
 
             # Check bubble exists
             row = conn.execute(
-                'SELECT bubble_id, devices FROM bubbles WHERE bubble_id = ?',
+                'SELECT bubble_id, devices_json FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
@@ -438,16 +438,16 @@ def add_device_to_bubble_in_module(bubble_id, mac):
 
             # Update bubble devices list
             devices = []
-            if row['devices']:
+            if row['devices_json']:
                 try:
-                    devices = json.loads(row['devices'])
+                    devices = json.loads(row['devices_json'])
                 except (json.JSONDecodeError, TypeError):
                     pass
 
             if mac.upper() not in [d.upper() for d in devices]:
                 devices.append(mac.upper())
                 conn.execute(
-                    'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                    'UPDATE bubbles SET devices_json = ?, last_activity = ? WHERE bubble_id = ?',
                     (json.dumps(devices), now, bubble_id)
                 )
 
@@ -484,16 +484,16 @@ def remove_device_from_bubble_in_module(bubble_id, mac):
 
             # Update bubble devices list
             row = conn.execute(
-                'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                'SELECT devices_json FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
-            if row and row['devices']:
+            if row and row['devices_json']:
                 try:
-                    devices = json.loads(row['devices'])
+                    devices = json.loads(row['devices_json'])
                     devices = [d for d in devices if d.upper() != mac.upper()]
                     conn.execute(
-                        'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                        'UPDATE bubbles SET devices_json = ?, last_activity = ? WHERE bubble_id = ?',
                         (json.dumps(devices), now, bubble_id)
                     )
                 except (json.JSONDecodeError, TypeError):
@@ -538,15 +538,15 @@ def move_device_in_module(mac, from_bubble, to_bubble):
             # Remove from old bubble's device list if specified
             if from_bubble:
                 from_row = conn.execute(
-                    'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                    'SELECT devices_json FROM bubbles WHERE bubble_id = ?',
                     (from_bubble,)
                 ).fetchone()
-                if from_row and from_row['devices']:
+                if from_row and from_row['devices_json']:
                     try:
-                        devices = json.loads(from_row['devices'])
+                        devices = json.loads(from_row['devices_json'])
                         devices = [d for d in devices if d.upper() != mac.upper()]
                         conn.execute(
-                            'UPDATE bubbles SET devices = ? WHERE bubble_id = ?',
+                            'UPDATE bubbles SET devices_json = ? WHERE bubble_id = ?',
                             (json.dumps(devices), from_bubble)
                         )
                     except (json.JSONDecodeError, TypeError):
@@ -566,21 +566,21 @@ def move_device_in_module(mac, from_bubble, to_bubble):
 
             # Update target bubble devices list
             to_row = conn.execute(
-                'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                'SELECT devices_json FROM bubbles WHERE bubble_id = ?',
                 (to_bubble,)
             ).fetchone()
 
             devices = []
-            if to_row and to_row['devices']:
+            if to_row and to_row['devices_json']:
                 try:
-                    devices = json.loads(to_row['devices'])
+                    devices = json.loads(to_row['devices_json'])
                 except (json.JSONDecodeError, TypeError):
                     pass
 
             if mac.upper() not in [d.upper() for d in devices]:
                 devices.append(mac.upper())
                 conn.execute(
-                    'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                    'UPDATE bubbles SET devices_json = ?, last_activity = ? WHERE bubble_id = ?',
                     (json.dumps(devices), now, to_bubble)
                 )
 
