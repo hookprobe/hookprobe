@@ -1811,15 +1811,24 @@ def api_bubble_create():
         color = data.get('color', '#9C27B0')
 
         if AIOCHI_ENABLED:
+            # Generate bubble_id from name (required by identity engine)
+            import hashlib
+            import uuid
+            bubble_id = f"bubble-{name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
+
+            # Map bubble_type to default policy
+            from .types_helper import get_bubble_type_policy
+            policy = get_bubble_type_policy(bubble_type)
+
             # Forward to AIOCHI Identity Engine
             resp = requests.post(
                 f'{AIOCHI_IDENTITY_URL}/api/bubble',
                 json={
+                    'bubble_id': bubble_id,
                     'name': name,
                     'bubble_type': bubble_type,
                     'devices': devices,
-                    'icon': icon,
-                    'color': color,
+                    'policy': policy,
                 },
                 timeout=5
             )
