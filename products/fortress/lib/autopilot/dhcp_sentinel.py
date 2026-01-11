@@ -42,15 +42,32 @@ CONFIG_FILE = Path(os.getenv('FORTRESS_CONFIG', '/etc/hookprobe/fortress.conf'))
 N8N_WEBHOOK_URL = os.getenv('N8N_WEBHOOK_URL', 'http://localhost:5678/webhook/dhcp-event')
 LOG_FILE = Path('/var/log/fortress/dhcp-sentinel.log')
 
-# DHCP Option 55 fingerprint database (common patterns)
+# Import fingerbank for comprehensive device identification
+try:
+    from ..fingerbank import Fingerbank, get_fingerbank
+    HAS_FINGERBANK = True
+except ImportError:
+    HAS_FINGERBANK = False
+
+# Fallback DHCP Option 55 fingerprint database (used if fingerbank unavailable)
 DHCP_FINGERPRINTS = {
+    # Apple Devices (iOS 18, iOS 17, macOS)
+    '1,121,3,6,15,119,252,95,44,46,47,77': 'iphone_16',
+    '1,121,3,6,15,119,252,95,44,46,47': 'ios_17',
+    '1,121,3,6,15,108,114,119,162,252,95,44,46': 'macos_sonoma',
+    '1,121,3,6,15,119,252,95,44,46': 'ios_16',
+    '1,121,3,6,15,119,252': 'macos_monterey',
+    '1,3,6,15,119,252,95': 'homepod',
+    '1,121,3,6,15,119,252,95,78,79': 'apple_watch_series9',
+    '1,121,3,6,15,119,252,78,79': 'apple_watch',
+    # Windows
     '1,3,6,15,26,28,51,58,59,43': 'windows',
-    '1,3,6,15,119,252': 'macos',
-    '1,121,3,6,15,119,252': 'macos_ventura',
-    '1,3,6,15,119,95,252,44,46': 'ios',
-    '1,3,6,15,119,252,95,44,46': 'ios_16',
+    '1,3,6,15,31,33,43,44,46,47,121,249,252': 'windows_11',
+    # Android
     '1,3,6,28,33,121': 'android',
     '1,3,6,15,28,33,121': 'android_12',
+    '1,121,3,6,15,28,51,58,59,119,252': 'android_13',
+    # Linux/IoT
     '1,3,6,12,15,17,28,40,41,42': 'linux',
     '1,28,2,3,15,6,12': 'linux_embedded',
     '1,3,6,15,44,46,47,31,33,121,249,43': 'samsung_tv',
@@ -133,9 +150,25 @@ class DHCPEvent:
             interface=interface,
         )
 
-        # Determine OS from fingerprint
+        # Determine OS/device from fingerprint using fingerbank (comprehensive)
         if option55:
-            event.os_fingerprint = DHCP_FINGERPRINTS.get(option55, 'unknown')
+            if HAS_FINGERBANK:
+                try:
+                    fb = get_fingerbank()
+                    device_info = fb.identify(
+                        mac=mac,
+                        dhcp_fingerprint=option55,
+                        hostname=hostname,
+                        vendor_class=vendor_class
+                    )
+                    # Use device name as OS fingerprint for now
+                    event.os_fingerprint = device_info.name if device_info else 'unknown'
+                    logger.info(f"Fingerbank identified {mac}: {device_info.name} ({device_info.category})")
+                except Exception as e:
+                    logger.warning(f"Fingerbank identification failed: {e}")
+                    event.os_fingerprint = DHCP_FINGERPRINTS.get(option55, 'unknown')
+            else:
+                event.os_fingerprint = DHCP_FINGERPRINTS.get(option55, 'unknown')
 
         return event
 
