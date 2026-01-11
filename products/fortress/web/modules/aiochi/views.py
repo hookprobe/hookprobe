@@ -291,19 +291,31 @@ def get_bubbles_from_module():
                         'ip': device_info.get('ip', ''),
                     })
 
-                # Get policy
+                # Get policy - normalize key names for frontend
                 bubble_type = row['bubble_type'] or 'custom'
+                # Map common type aliases
+                type_aliases = {'work': 'corporate', 'iot': 'smart_home'}
+                mapped_type = type_aliases.get(bubble_type.lower(), bubble_type.lower())
                 try:
-                    policy = BUBBLE_TYPE_POLICIES.get(
-                        BubbleTypeEnum(bubble_type),
+                    raw_policy = BUBBLE_TYPE_POLICIES.get(
+                        BubbleTypeEnum(mapped_type),
                         BUBBLE_TYPE_POLICIES[BubbleTypeEnum.CUSTOM]
                     ).copy()
+                    # Normalize policy keys for frontend compatibility
+                    policy = {
+                        'internet': raw_policy.get('internet_access', True),
+                        'lan': raw_policy.get('lan_access', True),
+                        'd2d': raw_policy.get('d2d_allowed', True),
+                        'vlan': raw_policy.get('vlan', 100),
+                        'smart_home': raw_policy.get('smart_home_access', False),
+                        'shared_devices': raw_policy.get('shared_devices', False),
+                    }
                 except (ValueError, KeyError):
-                    policy = {'internet': True, 'lan': True, 'd2d': True, 'vlan': 100}
+                    policy = {'internet': True, 'lan': True, 'd2d': True, 'vlan': 100, 'smart_home': False, 'shared_devices': False}
 
                 bubbles.append({
                     'bubble_id': bubble_id,
-                    'name': row['display_name'] or f"Bubble {bubble_id[:8]}",
+                    'name': row['name'] or row['display_name'] or f"Bubble {bubble_id[:8]}",
                     'bubble_type': bubble_type.upper(),
                     'icon': row['icon'] or 'fa-layer-group',
                     'color': row['color'] or '#2196F3',
@@ -353,8 +365,10 @@ def create_bubble_in_module(name, bubble_type, devices, icon, color):
         with get_bubbles_db() as conn:
             now = datetime.now().isoformat()
 
-            # Generate bubble ID
-            bubble_id = f"bubble-{name.lower().replace(' ', '-')}-{hashlib.sha256(f'{name}{now}'.encode()).hexdigest()[:8]}"
+            # Generate bubble ID - sanitize to alphanumeric and hyphens only
+            import re
+            sanitized_name = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+            bubble_id = f"bubble-{sanitized_name}-{hashlib.sha256(f'{name}{now}'.encode()).hexdigest()[:8]}"
 
             # Get default policy for type
             try:
@@ -591,6 +605,115 @@ def move_device_in_module(mac, from_bubble, to_bubble):
 
     except Exception as e:
         logger.error(f"Failed to move device in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def update_bubble_in_module(bubble_id, name=None, bubble_type=None, icon=None, color=None):
+    """
+    Update a bubble in the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return False
+
+    try:
+        import json
+
+        with get_bubbles_db() as conn:
+            now = datetime.now().isoformat()
+
+            # Check bubble exists
+            row = conn.execute(
+                'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+                (bubble_id,)
+            ).fetchone()
+
+            if not row:
+                logger.warning(f"Bubble {bubble_id} not found in module database")
+                return False
+
+            # Build update query dynamically
+            updates = []
+            params = []
+
+            if name is not None:
+                updates.append('name = ?')
+                updates.append('display_name = ?')
+                params.extend([name, name])
+
+            if bubble_type is not None:
+                updates.append('bubble_type = ?')
+                params.append(bubble_type.lower() if isinstance(bubble_type, str) else bubble_type.value)
+
+                # Update policy when type changes
+                try:
+                    bt = BubbleTypeEnum(bubble_type.lower() if isinstance(bubble_type, str) else bubble_type.value)
+                    policy = BUBBLE_TYPE_POLICIES.get(bt, BUBBLE_TYPE_POLICIES[BubbleTypeEnum.CUSTOM])
+                    updates.append('policies_json = ?')
+                    params.append(json.dumps(policy))
+                except (ValueError, KeyError):
+                    pass
+
+            if icon is not None:
+                updates.append('icon = ?')
+                params.append(icon)
+
+            if color is not None:
+                updates.append('color = ?')
+                params.append(color)
+
+            if updates:
+                updates.append('last_activity = ?')
+                params.append(now)
+                params.append(bubble_id)
+
+                query = f"UPDATE bubbles SET {', '.join(updates)} WHERE bubble_id = ?"
+                conn.execute(query, params)
+                conn.commit()
+
+        logger.info(f"Updated bubble {bubble_id} via bubbles module")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to update bubble in module: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def delete_bubble_in_module(bubble_id):
+    """
+    Delete a bubble from the bubbles module SQLite database.
+    """
+    if not BUBBLES_MODULE_AVAILABLE:
+        return False
+
+    try:
+        with get_bubbles_db() as conn:
+            # Remove all device assignments
+            conn.execute(
+                'DELETE FROM manual_assignments WHERE bubble_id = ?',
+                (bubble_id,)
+            )
+
+            # Delete the bubble
+            cursor = conn.execute(
+                'DELETE FROM bubbles WHERE bubble_id = ?',
+                (bubble_id,)
+            )
+
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"Deleted bubble {bubble_id} via bubbles module")
+                return True
+            else:
+                logger.warning(f"Bubble {bubble_id} not found for deletion")
+                return False
+
+    except Exception as e:
+        logger.error(f"Failed to delete bubble in module: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -2543,6 +2666,26 @@ def api_bubble_update(bubble_id):
                 else:
                     return jsonify({'success': False, 'error': 'Bubble not found'}), 404
 
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            result = update_bubble_in_module(
+                bubble_id=bubble_id,
+                name=data.get('name'),
+                bubble_type=data.get('bubble_type'),
+                icon=data.get('icon'),
+                color=data.get('color'),
+            )
+            if result:
+                logger.info(f"Updated bubble via bubbles module: {bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'message': 'Bubble updated'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+
         # Demo mode
         logger.info(f"Updated demo bubble: {bubble_id}")
         return jsonify({
@@ -2596,6 +2739,20 @@ def api_bubble_delete(bubble_id):
                     })
                 else:
                     return jsonify({'success': False, 'error': 'Bubble not found'}), 404
+
+        # Use bubbles module database (SQLite fallback)
+        if BUBBLES_MODULE_AVAILABLE:
+            result = delete_bubble_in_module(bubble_id)
+            if result:
+                logger.info(f"Deleted bubble via bubbles module: {bubble_id}")
+                return jsonify({
+                    'success': True,
+                    'demo_mode': False,
+                    'module_mode': True,
+                    'message': 'Bubble deleted'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Bubble not found'}), 404
 
         # Demo mode
         logger.info(f"Deleted demo bubble: {bubble_id}")
