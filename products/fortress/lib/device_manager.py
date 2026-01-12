@@ -20,6 +20,7 @@ from .config import get_config
 from .database import get_db
 from .vlan_manager import get_vlan_manager
 from .device_identity import DeviceIdentityManager, get_identity_manager
+from .security_utils import mask_mac
 
 # Import mDNS resolver for Apple device name discovery
 try:
@@ -224,7 +225,7 @@ class DeviceManager:
             # Get mDNS friendly name separately (for Apple devices like "hookprobe's iPhone")
             mdns_name = self._resolve_mdns_name(ip, mac)
             if mdns_name:
-                logger.info(f"Device {mac} has mDNS name: '{mdns_name}'")
+                logger.info(f"Device {mask_mac(mac)} has mDNS name: '{mdns_name}'")
                 # Prefer mDNS name over DHCP hostname for display
                 dhcp_hostname = mdns_name
 
@@ -305,10 +306,10 @@ class DeviceManager:
             try:
                 mdns_result = self.mdns_resolver.resolve(ip_address, mac, timeout=2.0)
                 if mdns_result and mdns_result.friendly_name:
-                    logger.debug(f"mDNS resolved {ip_address} -> '{mdns_result.friendly_name}'")
+                    logger.debug(f"mDNS resolved for {mask_mac(mac) if mac else 'unknown'}")
                     return mdns_result.friendly_name
             except Exception as e:
-                logger.debug(f"mDNS resolution failed for {ip_address}: {e}")
+                logger.debug(f"mDNS resolution failed: {type(e).__name__}")
 
         # Fall back to reverse DNS
         try:
@@ -333,7 +334,7 @@ class DeviceManager:
             if mdns_result and mdns_result.friendly_name:
                 return mdns_result.friendly_name
         except Exception as e:
-            logger.debug(f"mDNS name lookup failed for {ip_address}: {e}")
+            logger.debug(f"mDNS name lookup failed for {mask_mac(mac) if mac else 'unknown'}: {type(e).__name__}")
 
         return None
 
