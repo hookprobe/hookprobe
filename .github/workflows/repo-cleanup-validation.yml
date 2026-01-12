@@ -15,6 +15,9 @@ on:
         default: 'true'
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
   validate-repo-structure:
     name: Validate Repository Structure
