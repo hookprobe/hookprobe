@@ -9,17 +9,15 @@ import sys
 import struct
 import secrets
 import time
-from collections import deque
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from core.htp.transport.htp import (
+from core.htp.transport.htp import (  # noqa: E402
     HTPHeader, ResonanceLayer, NeuroLayer, PacketMode, HTPState,
     QsecbitGenerator, NeuroStateEvolver, HookProbeTransport,
     generate_rdv, generate_posf, anti_replay_nonce,
     generate_entropy_echo, verify_entropy_echo, hamming_distance,
-    blake3_hash
 )
 
 
