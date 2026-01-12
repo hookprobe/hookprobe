@@ -18,6 +18,7 @@ Manual Override Features:
 
 import json
 import logging
+import re
 import sqlite3
 from datetime import datetime
 from enum import Enum
@@ -32,6 +33,9 @@ from ..auth.decorators import admin_required
 from ...security_utils import safe_error_message, mask_mac
 
 logger = logging.getLogger(__name__)
+
+# MAC address validation pattern
+MAC_PATTERN = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 # Bubble database
 BUBBLE_DB = Path('/var/lib/hookprobe/bubbles.db')
