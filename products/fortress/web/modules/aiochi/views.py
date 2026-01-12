@@ -221,16 +221,25 @@ def get_local_bubble_manager():
 # BUBBLES MODULE FALLBACK (SQLite-based bubble storage)
 # =============================================================================
 BUBBLES_MODULE_AVAILABLE = False
+DEVICE_NAMES_AVAILABLE = False
 try:
     from ..bubbles.views import (
         get_db_connection as get_bubbles_db,
         BUBBLE_TYPE_POLICIES,
         BubbleType as BubbleTypeEnum,
+        get_all_device_names,
+        get_device_custom_name,
     )
     BUBBLES_MODULE_AVAILABLE = True
+    DEVICE_NAMES_AVAILABLE = True
     logger.info("Bubbles module database available for fallback storage")
 except ImportError as e:
     logger.warning(f"Bubbles module not available: {e}")
+    # Fallback stub functions
+    def get_all_device_names():
+        return {}
+    def get_device_custom_name(mac):
+        return None
 
 
 def get_bubbles_from_module():
@@ -294,7 +303,7 @@ def get_bubbles_from_module():
                 # Get policy - normalize key names for frontend
                 bubble_type = row['bubble_type'] or 'custom'
                 # Map common type aliases
-                type_aliases = {'work': 'corporate', 'iot': 'smart_home'}
+                type_aliases = {'work': 'corporate', 'iot': 'smart_home', 'lan': 'lan_only'}
                 mapped_type = type_aliases.get(bubble_type.lower(), bubble_type.lower())
                 try:
                     raw_policy = BUBBLE_TYPE_POLICIES.get(
@@ -719,6 +728,49 @@ def delete_bubble_in_module(bubble_id):
         return False
 
 
+ARP_STATUS_FILE = Path('/var/lib/hookprobe/arp-status.json')
+
+def get_arp_online_status():
+    """
+    Get real-time online status from ARP table.
+
+    Reads from /var/lib/hookprobe/arp-status.json which is updated
+    every 5 seconds by the fts-arp-export.timer systemd service.
+
+    ARP states:
+    - REACHABLE: Device actively communicating (definitely online)
+    - STALE: Device was seen recently (likely online, within ~30-60s)
+    - DELAY/PROBE: Device being checked (transitional)
+    - FAILED: Device not reachable (offline)
+
+    Returns:
+        Dict mapping MAC address (uppercase) to online status dict:
+        {'online': bool, 'state': str, 'ip': str}
+    """
+    arp_status = {}
+    try:
+        if ARP_STATUS_FILE.exists():
+            import json
+            import time
+            # Check file age - if older than 30 seconds, data may be stale
+            file_age = time.time() - ARP_STATUS_FILE.stat().st_mtime
+            if file_age > 30:
+                logger.warning(f"ARP status file is {file_age:.0f}s old, data may be stale")
+
+            with open(ARP_STATUS_FILE, 'r') as f:
+                arp_status = json.load(f)
+
+            online_count = sum(1 for s in arp_status.values() if s.get('online', False))
+            logger.debug(f"ARP status: {len(arp_status)} devices, {online_count} online (file age: {file_age:.1f}s)")
+        else:
+            logger.debug(f"ARP status file not found: {ARP_STATUS_FILE}")
+
+    except Exception as e:
+        logger.warning(f"Failed to read ARP status: {e}")
+
+    return arp_status
+
+
 def get_dhcp_devices():
     """
     Get devices from DHCP leases file (fallback when SDN Autopilot unavailable).
@@ -738,6 +790,9 @@ def get_dhcp_devices():
         import time
         current_time = int(time.time())
 
+        # Get real-time ARP status for accurate online detection
+        arp_status = get_arp_online_status()
+
         with open(DHCP_LEASES_PATH, 'r') as f:
             for line in f:
                 parts = line.strip().split()
@@ -752,9 +807,16 @@ def get_dhcp_devices():
                         if not _validate_mac_address(mac):
                             continue
 
-                        # Determine if device is online (lease not expired)
-                        # Add 5 minute grace period for recently expired leases
-                        is_online = expiry > (current_time - 300)
+                        # Use ARP for real-time online status (primary)
+                        # Fall back to DHCP lease expiry if not in ARP table
+                        arp_info = arp_status.get(mac)
+                        if arp_info:
+                            is_online = arp_info['online']
+                            arp_state = arp_info['state']
+                        else:
+                            # Device not in ARP table - check if lease is recent
+                            is_online = expiry > current_time
+                            arp_state = 'UNKNOWN'
 
                         # Try to detect device type from hostname
                         device_type = 'unknown'
@@ -776,13 +838,15 @@ def get_dhcp_devices():
                             'vendor': 'Unknown',  # Would need OUI lookup
                             'ip': ip,
                             'online': is_online,
+                            'arp_state': arp_state,
                             'device_type': device_type,
                         })
                     except (ValueError, IndexError) as e:
                         logger.debug(f"Failed to parse DHCP lease line: {line.strip()}: {e}")
                         continue
 
-        logger.debug(f"Found {len(devices)} devices from DHCP leases")
+        online_count = sum(1 for d in devices if d['online'])
+        logger.debug(f"Found {len(devices)} devices from DHCP leases, {online_count} online (ARP-based)")
         return devices
 
     except Exception as e:
@@ -792,23 +856,39 @@ def get_dhcp_devices():
 
 def get_sdn_devices():
     """Get all devices from SDN Autopilot or DHCP leases fallback."""
+    # Get real-time ARP status for accurate online detection
+    arp_status = get_arp_online_status()
+
+    # Get custom device names (user-defined names take priority)
+    custom_names = get_all_device_names()
+
     # Try SDN Autopilot first
     if SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
             if autopilot:
                 devices = autopilot.get_all_devices()
-                result = [
-                    {
-                        'mac': d.get('mac', ''),
-                        'label': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                result = []
+                for d in devices:
+                    if not d.get('mac'):
+                        continue
+                    mac = d.get('mac', '').upper()
+                    # Use ARP status for real-time online detection
+                    arp_info = arp_status.get(mac, {})
+                    is_online = arp_info.get('online', d.get('is_online', False))
+                    # Custom name (user-defined) takes priority over hostname
+                    hostname = d.get('friendly_name') or d.get('hostname', '')
+                    label = custom_names.get(mac) or clean_device_name(hostname) or d.get('device_type', 'Unknown')
+                    result.append({
+                        'mac': mac,
+                        'label': label,
+                        'hostname': hostname,  # Keep original for reference
                         'vendor': d.get('vendor', 'Unknown'),
-                        'ip': d.get('ip', ''),
-                        'online': d.get('is_online', False),
+                        'ip': arp_info.get('ip', '') or d.get('ip', ''),
+                        'online': is_online,
                         'device_type': d.get('device_type', 'unknown'),
-                    }
-                    for d in devices if d.get('mac')
-                ]
+                        'arp_state': arp_info.get('state', 'UNKNOWN'),
+                    })
                 if result:
                     return result
         except Exception as e:
@@ -817,6 +897,12 @@ def get_sdn_devices():
     # Fallback to DHCP leases
     dhcp_devices = get_dhcp_devices()
     if dhcp_devices:
+        # Apply custom names to DHCP devices too
+        for device in dhcp_devices:
+            mac = device['mac']
+            if mac in custom_names:
+                device['hostname'] = device.get('label', '')  # Keep original as hostname
+                device['label'] = custom_names[mac]
         logger.info(f"Using DHCP fallback: found {len(dhcp_devices)} devices")
         return dhcp_devices
 
@@ -1962,7 +2048,8 @@ def api_feedback_submit(action_id):
             'result': result
         })
     except Exception as e:
-        logger.error(f"Feedback submit error: {e}")
+        # CWE-532 SECURITY FIX: Log only exception type, not full message which may contain sensitive data
+        logger.error(f"Feedback submit error: {type(e).__name__}")
         return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
@@ -2003,6 +2090,10 @@ def _validate_tool_arg(arg: str) -> bool:
 
     # Check if it's a safe simple string (alphanumeric + limited punctuation)
     # Allows: a-z, A-Z, 0-9, space, hyphen, underscore, period, comma
+    # CWE-78 SECURITY FIX: Reject arguments starting with '-' to prevent argument injection
+    # (except MAC addresses which are already validated above)
+    if arg.startswith('-'):
+        return False
     safe_pattern = re.compile(r'^[a-zA-Z0-9\s\-_\.,]+$')
     return bool(safe_pattern.match(arg))
 
@@ -2940,8 +3031,47 @@ def api_bubble_move_device():
         to_bubble = data.get('to_bubble')
         reason = data.get('reason', 'Moved via drag-and-drop')
 
-        if not mac or not to_bubble:
-            return jsonify({'success': False, 'error': 'MAC and to_bubble required'}), 400
+        if not mac:
+            return jsonify({'success': False, 'error': 'MAC address required'}), 400
+
+        # Handle moving to unassigned (to_bubble is None, empty, or "unassigned")
+        is_unassign = not to_bubble or to_bubble == 'unassigned'
+
+        if is_unassign:
+            # Moving to unassigned = remove from current bubble
+            if not from_bubble:
+                return jsonify({'success': False, 'error': 'from_bubble required when unassigning'}), 400
+
+            # Use bubbles module to remove device from bubble
+            if BUBBLES_MODULE_AVAILABLE:
+                result = remove_device_from_bubble_in_module(from_bubble, mac)
+                if result:
+                    logger.info(f"Unassigned device {mac} from bubble {from_bubble} via bubbles module")
+                    return jsonify({
+                        'success': True,
+                        'demo_mode': False,
+                        'module_mode': True,
+                        'message': 'Device unassigned from bubble',
+                        'device': mac,
+                        'from_bubble': from_bubble,
+                        'to_bubble': None,
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to unassign device'
+                    }), 400
+
+            # Demo mode fallback
+            logger.info(f"Unassigned device {mac} from demo bubble {from_bubble}")
+            return jsonify({
+                'success': True,
+                'demo_mode': True,
+                'message': 'Device unassigned (demo mode - not persisted)',
+                'device': mac,
+                'from_bubble': from_bubble,
+                'to_bubble': None,
+            })
 
         if AIOCHI_ENABLED:
             resp = requests.post(
@@ -3143,6 +3273,126 @@ def api_bubble_icons():
         })
     except Exception as e:
         logger.error(f"Bubble icons API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+# ============================================================================
+# Device Names API
+# ============================================================================
+
+@aiochi_bp.route('/api/device/<mac>/name', methods=['GET'])
+@login_required
+def api_get_device_name(mac):
+    """Get custom name for a device."""
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    try:
+        custom_name = get_device_custom_name(mac)
+        return jsonify({
+            'success': True,
+            'mac': mac.upper(),
+            'custom_name': custom_name
+        })
+    except Exception as e:
+        logger.error(f"Get device name error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/device/<mac>/name', methods=['PUT', 'POST'])
+@login_required
+def api_set_device_name(mac):
+    """Set custom name for a device.
+
+    Body: {"name": "Living Room Light", "original_hostname": "013_aio-nap"}
+    """
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    if not BUBBLES_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Device naming not available'}), 503
+
+    data = request.get_json() or {}
+    custom_name = data.get('name', '').strip()
+
+    if not custom_name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+
+    if len(custom_name) > 64:
+        return jsonify({'success': False, 'error': 'Name too long (max 64 chars)'}), 400
+
+    # Sanitize name - only allow safe characters
+    import re
+    if not re.match(r'^[\w\s\-\'\.]+$', custom_name):
+        return jsonify({
+            'success': False,
+            'error': 'Name contains invalid characters'
+        }), 400
+
+    try:
+        from flask_login import current_user
+
+        with get_bubbles_db() as conn:
+            original_hostname = data.get('original_hostname', '')
+            conn.execute('''
+                INSERT OR REPLACE INTO device_names
+                (mac, custom_name, original_hostname, updated_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                mac.upper(),
+                custom_name,
+                original_hostname,
+                current_user.username if hasattr(current_user, 'username') else 'system',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+
+        logger.info(f"Device {mac} renamed to '{custom_name}'")
+        return jsonify({
+            'success': True,
+            'message': f'Device renamed to {custom_name}',
+            'mac': mac.upper(),
+            'custom_name': custom_name
+        })
+    except Exception as e:
+        logger.error(f"Set device name error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/device/<mac>/name', methods=['DELETE'])
+@login_required
+def api_delete_device_name(mac):
+    """Remove custom name for a device (revert to hostname)."""
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    if not BUBBLES_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Device naming not available'}), 503
+
+    try:
+        with get_bubbles_db() as conn:
+            conn.execute('DELETE FROM device_names WHERE mac = ?', (mac.upper(),))
+            conn.commit()
+
+        logger.info(f"Device {mac} name reset to default")
+        return jsonify({'success': True, 'message': 'Device name reset to default'})
+    except Exception as e:
+        logger.error(f"Delete device name error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/device-names')
+@login_required
+def api_list_device_names():
+    """List all custom device names."""
+    if not BUBBLES_MODULE_AVAILABLE:
+        return jsonify({'success': True, 'names': {}})
+
+    try:
+        names = get_all_device_names()
+        return jsonify({'success': True, 'names': names})
+    except Exception as e:
+        logger.error(f"List device names error: {e}")
         return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 

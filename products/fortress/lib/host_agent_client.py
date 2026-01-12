@@ -252,6 +252,72 @@ class HostAgentClient:
 
         return self._send_request(request)
 
+    def revoke_lease(self, mac: str) -> Dict[str, Any]:
+        """
+        Revoke DHCP lease and clear ARP entry for a device.
+
+        Args:
+            mac: MAC address of device
+
+        Returns:
+            Dict with success status and details (lease_removed, arp_cleared, ip_address)
+        """
+        try:
+            mac = self._validate_mac(mac)
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+
+        request = {
+            'action': 'revoke_lease',
+            'mac': mac,
+            'signature': self._sign_request('revoke_lease', mac)
+        }
+
+        return self._send_request(request)
+
+    def timed_block(
+        self,
+        mac: str,
+        block_duration_seconds: int = 60,
+        interfaces: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Block, deauth, revoke lease, then auto-unblock after duration.
+
+        This is the enterprise-style disconnect that prevents immediate reconnection
+        but allows the device to reconnect after the block period expires.
+
+        Args:
+            mac: MAC address of device
+            block_duration_seconds: How long to block (default: 60s, min: 10s, max: 3600s)
+            interfaces: List of interfaces to block on (default: all)
+
+        Returns:
+            Dict with success status and details including:
+            - blocked: Whether MAC was blocked
+            - deauth_sent: Whether deauth was sent
+            - lease_revoked: Whether DHCP lease was revoked
+            - unblock_scheduled: Whether auto-unblock timer was started
+            - block_duration_seconds: Actual block duration used
+        """
+        try:
+            mac = self._validate_mac(mac)
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+
+        if interfaces is None:
+            interfaces = DEFAULT_INTERFACES
+
+        request = {
+            'action': 'timed_block',
+            'mac': mac,
+            'interfaces': interfaces,
+            'block_duration_seconds': block_duration_seconds,
+            'signature': self._sign_request('timed_block', mac)
+        }
+
+        return self._send_request(request)
+
 
 # Module-level singleton
 _client: Optional[HostAgentClient] = None
@@ -344,3 +410,47 @@ def is_host_agent_available() -> bool:
     """Check if the host agent is available."""
     client = get_host_agent_client()
     return client.is_available()
+
+
+def revoke_lease(mac: str) -> Dict[str, Any]:
+    """
+    Revoke DHCP lease and clear ARP entry for a device.
+
+    Args:
+        mac: MAC address of device
+
+    Returns:
+        Dict with success status and details
+    """
+    client = get_host_agent_client()
+    return client.revoke_lease(mac)
+
+
+def timed_block_device(
+    mac: str,
+    block_duration_seconds: int = 60,
+    interfaces: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Block, deauth, revoke lease, then auto-unblock after duration.
+
+    This is the enterprise-style disconnect (Cisco/Aruba pattern):
+    - Blocks the MAC to prevent immediate reconnection
+    - Sends deauth frame to kick from WiFi
+    - Revokes DHCP lease and clears ARP
+    - Automatically unblocks after the specified duration
+
+    The device cannot reconnect during the block period (typically 60s),
+    which stops the auto-reconnect loop. After the timer expires, the
+    device can manually reconnect.
+
+    Args:
+        mac: MAC address of device
+        block_duration_seconds: How long to block (default: 60s)
+        interfaces: Optional list of interfaces
+
+    Returns:
+        Dict with success status and details
+    """
+    client = get_host_agent_client()
+    return client.timed_block(mac, block_duration_seconds, interfaces)

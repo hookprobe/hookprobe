@@ -1,0 +1,12 @@
+[Unit]
+Description=Fortress ARP Status Export
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/scripts/arp-export.sh
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

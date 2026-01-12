@@ -13,6 +13,7 @@ set -e
 
 OUTPUT_FILE="/opt/hookprobe/fortress/data/device_status.json"
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
+BLOCKED_MACS_FILE="/var/lib/hookprobe/blocked_macs.json"
 OVS_BRIDGE="FTS"
 DATA_DIR="$(dirname "$OUTPUT_FILE")"
 
@@ -28,6 +29,19 @@ OFFLINE_THRESHOLD=600
 
 log() {
     logger -t "device-status" "$1"
+}
+
+# Check if a MAC is in the blocked list (disconnected devices)
+is_mac_blocked() {
+    local mac="$1"
+    mac=$(echo "$mac" | tr 'a-f' 'A-F')
+    if [ -f "$BLOCKED_MACS_FILE" ]; then
+        # Check if MAC exists in JSON array
+        if jq -e --arg mac "$mac" '.[] | select(. == $mac)' "$BLOCKED_MACS_FILE" >/dev/null 2>&1; then
+            return 0  # blocked
+        fi
+    fi
+    return 1  # not blocked
 }
 
 # Get kernel neighbor states
@@ -104,6 +118,12 @@ update_status() {
     while IFS='|' read -r mac ip hostname policy; do
         [ -z "$mac" ] && continue
         mac=$(echo "$mac" | tr 'a-f' 'A-F')
+
+        # Skip blocked MACs (disconnected devices)
+        if is_mac_blocked "$mac"; then
+            log "Skipping blocked MAC: $mac"
+            continue
+        fi
 
         # Get current state
         local state="${neighbor_state[$mac]:-UNKNOWN}"
@@ -183,6 +203,11 @@ ENTRY
             10.200.*) ;; # LAN network - include
             *) continue ;; # Skip all other networks (containers, etc.)
         esac
+
+        # Skip blocked MACs (disconnected devices)
+        if is_mac_blocked "$mac"; then
+            continue
+        fi
 
         # Skip if already processed from autopilot.db
         if sqlite3 "$AUTOPILOT_DB" "SELECT 1 FROM device_identity WHERE mac = '$mac'" 2>/dev/null | grep -q 1; then
