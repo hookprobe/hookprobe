@@ -887,7 +887,7 @@ def get_device_custom_name(mac):
             ).fetchone()
             return row['custom_name'] if row else None
     except Exception as e:
-        logger.debug(f"Failed to get device name for {mask_mac(mac)}: {e}")
+        logger.debug(f"Failed to get device name for {mask_mac(mac)}: {safe_error_message(e)}")
         return None
 
 
@@ -898,7 +898,7 @@ def get_all_device_names():
             rows = conn.execute('SELECT mac, custom_name FROM device_names').fetchall()
             return {row['mac']: row['custom_name'] for row in rows}
     except Exception as e:
-        logger.debug(f"Failed to get device names: {e}")
+        logger.debug(f"Failed to get device names: {safe_error_message(e)}")
         return {}
 
 
