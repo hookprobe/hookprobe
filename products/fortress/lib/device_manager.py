@@ -191,7 +191,7 @@ class DeviceManager:
                         self._dhcp_cache[mac_upper] = devices[mac_upper]
                         return devices[mac_upper]
         except Exception as e:
-            logger.debug(f"Could not load DHCP info for {mac}: {e}")
+            logger.debug(f"Could not load DHCP info for {mask_mac(mac)}: {type(e).__name__}")
 
         return {}
 
@@ -242,9 +242,9 @@ class DeviceManager:
                     manufacturer=manufacturer,
                 )
                 if identity:
-                    logger.debug(f"Device {mac} linked to identity '{identity.display_name}'")
+                    logger.debug(f"Device {mask_mac(mac)} linked to identity")
             except Exception as e:
-                logger.warning(f"Could not link device {mac} to identity: {e}")
+                logger.warning(f"Could not link device {mask_mac(mac)}: {type(e).__name__}")
 
             if existing:
                 # Update existing device
@@ -277,8 +277,7 @@ class DeviceManager:
                 # Trigger new device callbacks
                 self._notify_new_device(mac, ip, vlan_id, device_type)
 
-                logger.info(f"New device discovered: {mac} ({ip}) -> VLAN {vlan_id}" +
-                           (f" [Identity: {identity.display_name}]" if identity else ""))
+                logger.info(f"New device discovered: {mask_mac(mac)} -> VLAN {vlan_id}")
 
             discovered.append({
                 'mac_address': mac,
@@ -451,7 +450,7 @@ class DeviceManager:
                 details={"reason": reason}
             )
 
-            logger.info(f"Blocked device: {mac}")
+            logger.info(f"Blocked device: {mask_mac(mac)}")
 
         return success
 
@@ -479,7 +478,7 @@ class DeviceManager:
                 resource_id=mac
             )
 
-            logger.info(f"Unblocked device: {mac}")
+            logger.info(f"Unblocked device: {mask_mac(mac)}")
 
         return success
 

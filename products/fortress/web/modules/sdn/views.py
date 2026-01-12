@@ -525,7 +525,7 @@ def _remove_blocked_mac(mac: str) -> bool:
             return True
         return False
     except Exception as e:
-        logger.error(f"Failed to remove blocked MAC: {e}")
+        logger.error(f"Failed to remove blocked MAC: {safe_error_message(e)}")
         return False
 
 
