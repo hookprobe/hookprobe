@@ -29,7 +29,7 @@ from flask_login import login_required, current_user
 
 from . import bubbles_bp
 from ..auth.decorators import admin_required
-from ...security_utils import safe_error_message
+from ...security_utils import safe_error_message, mask_mac
 
 logger = logging.getLogger(__name__)
 
@@ -883,7 +883,7 @@ def get_device_custom_name(mac):
             ).fetchone()
             return row['custom_name'] if row else None
     except Exception as e:
-        logger.debug(f"Failed to get device name for {mac}: {e}")
+        logger.debug(f"Failed to get device name for {mask_mac(mac)}: {e}")
         return None
 
 
@@ -915,7 +915,7 @@ def list_device_names():
             })
     except Exception as e:
         logger.error(f"Failed to list device names: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/device-names/<mac>', methods=['GET'])
@@ -938,7 +938,7 @@ def get_device_name(mac):
                 return jsonify({'success': True, 'name': None})
     except Exception as e:
         logger.error(f"Failed to get device name: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/device-names/<mac>', methods=['PUT', 'POST'])
@@ -986,11 +986,11 @@ def set_device_name(mac):
             ))
             conn.commit()
 
-        logger.info(f"Device {mac} renamed to '{custom_name}'")
+        logger.info(f"Device {mask_mac(mac)} renamed to '{custom_name}'")
         return jsonify({'success': True, 'message': f'Device renamed to {custom_name}'})
     except Exception as e:
         logger.error(f"Failed to set device name: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @bubbles_bp.route('/api/device-names/<mac>', methods=['DELETE'])
@@ -1005,11 +1005,11 @@ def delete_device_name(mac):
             conn.execute('DELETE FROM device_names WHERE mac = ?', (mac.upper(),))
             conn.commit()
 
-        logger.info(f"Device {mac} name reset to default")
+        logger.info(f"Device {mask_mac(mac)} name reset to default")
         return jsonify({'success': True, 'message': 'Device name reset to default'})
     except Exception as e:
         logger.error(f"Failed to delete device name: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 # =============================================================================
