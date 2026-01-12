@@ -663,6 +663,7 @@ def _process_postgres_devices(pg_devices: List[Dict], db: 'DevicePolicyDB',
                 device_type=device.get('device_type'),
             )
             # CWE-532: Pre-compute masked MAC to break taint chain for static analysis
+            # codeql[py/clear-text-logging-sensitive-data] - mac_safe is sanitized via mask_mac(), policy is enum value
             mac_safe = mask_mac(mac)
             logger.info(f"New device {mac_safe}: auto-assigned policy '{policy}'")
 
@@ -760,6 +761,7 @@ def _process_legacy_devices(agent_devices: List[Dict], db: 'DevicePolicyDB',
                 device_type=device.get('device_type'),
             )
             # CWE-532: Pre-compute masked MAC to break taint chain for static analysis
+            # codeql[py/clear-text-logging-sensitive-data] - mac_safe is sanitized via mask_mac(), policy is enum value
             mac_safe = mask_mac(mac)
             logger.info(f"New device {mac_safe}: auto-assigned policy '{policy}'")
 

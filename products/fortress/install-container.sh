@@ -1023,11 +1023,31 @@ create_directories() {
 copy_application_files() {
     log_step "Copying application files"
 
+    # Pre-flight check: Verify critical source directories exist
+    local missing_dirs=""
+    if [ ! -d "${SCRIPT_DIR}/web" ]; then
+        missing_dirs="${missing_dirs} web/"
+    fi
+    if [ ! -d "${SCRIPT_DIR}/lib" ]; then
+        missing_dirs="${missing_dirs} lib/"
+    fi
+    if [ ! -d "${CONTAINERS_DIR}" ]; then
+        missing_dirs="${missing_dirs} containers/"
+    fi
+    if [ -n "$missing_dirs" ]; then
+        log_error "Critical source directories missing:${missing_dirs}"
+        log_error "Installation may be incomplete or running from wrong directory."
+        log_error "Expected location: ${SCRIPT_DIR}"
+        exit 1
+    fi
+
     # Copy web application
     cp -r "${SCRIPT_DIR}/web/"* "${INSTALL_DIR}/web/"
+    log_info "  Copied: web/ application files"
 
     # Copy library files
     cp -r "${SCRIPT_DIR}/lib/"* "${INSTALL_DIR}/lib/"
+    log_info "  Copied: lib/ library files"
 
     # Copy container files (compose file, Containerfiles, etc.)
     # Note: Don't overwrite secrets directory if it exists
@@ -2725,6 +2745,72 @@ EOF
     systemctl enable fts-device-status.timer 2>/dev/null || true
     systemctl start fts-device-status.timer 2>/dev/null || true
     log_success "Device status updater installed (timer runs every 30s)"
+
+    # -------------------------------------------------------------------------
+    # ARP Status Export (provides online device detection for SDN dashboard)
+    # Runs every 5 seconds to keep device status current
+    # -------------------------------------------------------------------------
+    log_info "Installing ARP status export service..."
+
+    local arp_script_src="${FORTRESS_ROOT}/scripts/arp-export.sh"
+    local arp_script_dst="${INSTALL_DIR}/scripts/arp-export.sh"
+    if [ -f "$arp_script_src" ]; then
+        mkdir -p "${INSTALL_DIR}/scripts"
+        cp "$arp_script_src" "$arp_script_dst"
+        chmod +x "$arp_script_dst"
+    else
+        log_warn "  arp-export.sh not found at $arp_script_src"
+    fi
+
+    # Install systemd service
+    local arp_service_src="${FORTRESS_ROOT}/systemd/fts-arp-export.service"
+    local arp_service_dst="/etc/systemd/system/fts-arp-export.service"
+    if [ -f "$arp_service_src" ]; then
+        cp "$arp_service_src" "$arp_service_dst"
+    else
+        # Create service inline if file not found
+        cat > "$arp_service_dst" << 'EOF'
+[Unit]
+Description=Fortress ARP Status Export
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hookprobe/fortress/scripts/arp-export.sh
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+
+    # Install systemd timer
+    local arp_timer_src="${FORTRESS_ROOT}/systemd/fts-arp-export.timer"
+    local arp_timer_dst="/etc/systemd/system/fts-arp-export.timer"
+    if [ -f "$arp_timer_src" ]; then
+        cp "$arp_timer_src" "$arp_timer_dst"
+    else
+        # Create timer inline if file not found
+        cat > "$arp_timer_dst" << 'EOF'
+[Unit]
+Description=Fortress ARP Status Export Timer (5 second interval)
+After=network.target
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+    fi
+
+    systemctl daemon-reload
+    systemctl enable fts-arp-export.timer 2>/dev/null || true
+    systemctl start fts-arp-export.timer 2>/dev/null || true
+    log_success "ARP status export installed (timer runs every 5s)"
 
     # -------------------------------------------------------------------------
     # LTE Usage Tracker (watermark-based metered data tracking)
