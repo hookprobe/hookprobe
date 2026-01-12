@@ -1123,6 +1123,46 @@ var DeviceDetailModal = {
         });
     },
 
+    saveName: function() {
+        var self = this;
+        if (!this.currentMac) return;
+
+        var newName = $('#modal-device-name-input').val().trim();
+        if (!newName) {
+            toastr.warning('Please enter a device name');
+            return;
+        }
+
+        $.ajax({
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/name',
+            method: 'PUT',
+            contentType: 'application/json',
+            data: JSON.stringify({ name: newName })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Device name updated');
+                // Update the display immediately
+                $('#modal-device-name').text(newName);
+                $('#modal-device-name-edit').addClass('d-none');
+                $('#modal-device-name').parent().removeClass('d-none');
+                // Refresh device list to show updated name
+                if (typeof loadDevices === 'function') {
+                    loadDevices();
+                }
+            } else {
+                toastr.error(data.error || 'Failed to update name');
+            }
+        })
+        .fail(function(xhr) {
+            var error = 'Failed to update device name';
+            if (xhr.responseJSON && xhr.responseJSON.error) {
+                error = xhr.responseJSON.error;
+            }
+            toastr.error(error);
+        });
+    },
+
     formatDate: function(dateStr) {
         if (!dateStr) return '--';
         try {
@@ -1195,6 +1235,30 @@ $(document).ready(function() {
         DeviceDetailModal.removeTag(tag);
     });
 
+    // Edit device name
+    $('#modal-edit-name-btn').click(function() {
+        var currentName = $('#modal-device-name').text();
+        $('#modal-device-name-input').val(currentName === 'Unknown Device' ? '' : currentName);
+        $('#modal-device-name').parent().addClass('d-none');
+        $('#modal-device-name-edit').removeClass('d-none');
+        $('#modal-device-name-input').focus();
+    });
+
+    $('#modal-cancel-name-btn').click(function() {
+        $('#modal-device-name-edit').addClass('d-none');
+        $('#modal-device-name').parent().removeClass('d-none');
+    });
+
+    $('#modal-save-name-btn').click(function() {
+        DeviceDetailModal.saveName();
+    });
+
+    $('#modal-device-name-input').keypress(function(e) {
+        if (e.which === 13) {  // Enter key
+            DeviceDetailModal.saveName();
+        }
+    });
+
     // Block device
     $('#modal-block-btn').click(function() {
         if (confirm('Block this device? It will be completely isolated from the network.')) {
@@ -1220,8 +1284,10 @@ $(document).ready(function() {
             .done(function(data) {
                 if (data.success) {
                     toastr.success(data.message || 'Device disconnected');
-                    // Refresh device data
-                    DeviceDetailModal.loadDevice(DeviceDetailModal.currentMac);
+                    // Close modal and refresh device list (don't try to reload details
+                    // as the device is now blocked and will return 404)
+                    $('#deviceDetailModal').modal('hide');
+                    loadDevices();
                 } else {
                     toastr.error(data.error || 'Failed to disconnect device');
                 }

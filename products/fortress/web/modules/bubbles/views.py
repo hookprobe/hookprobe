@@ -47,6 +47,7 @@ class BubbleType(str, Enum):
     GUEST = 'guest'           # Internet only
     CORPORATE = 'corporate'   # Isolated, internet access
     SMART_HOME = 'smart_home' # IoT devices
+    LAN_ONLY = 'lan_only'     # LAN access only, no internet
     CUSTOM = 'custom'         # User-defined
 
 
@@ -95,6 +96,17 @@ BUBBLE_TYPE_POLICIES = {
         'icon': 'fa-home',
         'color': '#FF9800',         # Orange
         'description': 'Smart home devices shared by family',
+    },
+    BubbleType.LAN_ONLY: {
+        'internet_access': False,
+        'lan_access': True,
+        'smart_home_access': False,
+        'd2d_allowed': True,
+        'shared_devices': True,
+        'vlan': 60,                 # LAN-only VLAN
+        'icon': 'fa-network-wired',
+        'color': '#795548',         # Brown
+        'description': 'Local network only, no internet access (printers, NAS)',
     },
     BubbleType.CUSTOM: {
         'internet_access': True,
@@ -165,6 +177,19 @@ def ensure_schema():
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_assignments_bubble
             ON manual_assignments(bubble_id)
+        ''')
+
+        # Create device_names table for custom device naming
+        # This allows users to assign friendly names to devices
+        # e.g., "013_aio-nap" -> "Living Room Light"
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS device_names (
+                mac TEXT PRIMARY KEY,
+                custom_name TEXT NOT NULL,
+                original_hostname TEXT,
+                updated_by TEXT,
+                updated_at TEXT
+            )
         ''')
         conn.commit()
 
@@ -842,6 +867,149 @@ def get_suggestions():
         logger.error(f"Failed to get suggestions: {e}")
 
     return jsonify({'suggestions': suggestions[:10]})  # Limit to 10
+
+
+# =============================================================================
+# DEVICE NAMES API
+# =============================================================================
+
+def get_device_custom_name(mac):
+    """Get custom name for a device by MAC address."""
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                'SELECT custom_name FROM device_names WHERE mac = ?',
+                (mac.upper(),)
+            ).fetchone()
+            return row['custom_name'] if row else None
+    except Exception as e:
+        logger.debug(f"Failed to get device name for {mac}: {e}")
+        return None
+
+
+def get_all_device_names():
+    """Get all custom device names as a dict mapping MAC -> name."""
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute('SELECT mac, custom_name FROM device_names').fetchall()
+            return {row['mac']: row['custom_name'] for row in rows}
+    except Exception as e:
+        logger.debug(f"Failed to get device names: {e}")
+        return {}
+
+
+@bubbles_bp.route('/api/device-names')
+@login_required
+def list_device_names():
+    """List all custom device names."""
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute('''
+                SELECT mac, custom_name, original_hostname, updated_by, updated_at
+                FROM device_names
+                ORDER BY updated_at DESC
+            ''').fetchall()
+            return jsonify({
+                'success': True,
+                'names': [dict(row) for row in rows]
+            })
+    except Exception as e:
+        logger.error(f"Failed to list device names: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bubbles_bp.route('/api/device-names/<mac>', methods=['GET'])
+@login_required
+def get_device_name(mac):
+    """Get custom name for a specific device."""
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute('''
+                SELECT mac, custom_name, original_hostname, updated_by, updated_at
+                FROM device_names WHERE mac = ?
+            ''', (mac.upper(),)).fetchone()
+
+            if row:
+                return jsonify({'success': True, 'name': dict(row)})
+            else:
+                return jsonify({'success': True, 'name': None})
+    except Exception as e:
+        logger.error(f"Failed to get device name: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bubbles_bp.route('/api/device-names/<mac>', methods=['PUT', 'POST'])
+@login_required
+def set_device_name(mac):
+    """Set custom name for a device."""
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    data = request.get_json() or {}
+    custom_name = data.get('name', '').strip()
+
+    if not custom_name:
+        return jsonify({'success': False, 'error': 'Name is required'}), 400
+
+    if len(custom_name) > 64:
+        return jsonify({'success': False, 'error': 'Name too long (max 64 chars)'}), 400
+
+    # Sanitize name - only allow safe characters
+    import re
+    if not re.match(r'^[\w\s\-\'\.]+$', custom_name):
+        return jsonify({
+            'success': False,
+            'error': 'Name contains invalid characters (only letters, numbers, spaces, hyphens, apostrophes, periods allowed)'
+        }), 400
+
+    try:
+        from flask_login import current_user
+        from datetime import datetime
+
+        with get_db_connection() as conn:
+            # Get original hostname for reference
+            original_hostname = data.get('original_hostname', '')
+
+            conn.execute('''
+                INSERT OR REPLACE INTO device_names
+                (mac, custom_name, original_hostname, updated_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                mac.upper(),
+                custom_name,
+                original_hostname,
+                current_user.username if hasattr(current_user, 'username') else 'system',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+
+        logger.info(f"Device {mac} renamed to '{custom_name}'")
+        return jsonify({'success': True, 'message': f'Device renamed to {custom_name}'})
+    except Exception as e:
+        logger.error(f"Failed to set device name: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bubbles_bp.route('/api/device-names/<mac>', methods=['DELETE'])
+@login_required
+def delete_device_name(mac):
+    """Remove custom name for a device (revert to hostname)."""
+    if not MAC_PATTERN.match(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
+
+    try:
+        with get_db_connection() as conn:
+            conn.execute('DELETE FROM device_names WHERE mac = ?', (mac.upper(),))
+            conn.commit()
+
+        logger.info(f"Device {mac} name reset to default")
+        return jsonify({'success': True, 'message': 'Device name reset to default'})
+    except Exception as e:
+        logger.error(f"Failed to delete device name: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # =============================================================================

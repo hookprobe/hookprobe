@@ -21,6 +21,13 @@ from .database import get_db
 from .vlan_manager import get_vlan_manager
 from .device_identity import DeviceIdentityManager, get_identity_manager
 
+# Import mDNS resolver for Apple device name discovery
+try:
+    from .mdns_resolver import MDNSResolver, get_mdns_resolver
+    HAS_MDNS_RESOLVER = True
+except ImportError:
+    HAS_MDNS_RESOLVER = False
+
 logger = logging.getLogger(__name__)
 
 # Path to DHCP events JSON file (updated by dhcp-event.sh)
@@ -85,6 +92,15 @@ class DeviceManager:
         self.db = get_db()
         self.vlan_manager = get_vlan_manager()
         self.identity_manager = get_identity_manager()
+
+        # Initialize mDNS resolver for Apple device friendly names
+        self.mdns_resolver = None
+        if HAS_MDNS_RESOLVER:
+            try:
+                self.mdns_resolver = get_mdns_resolver()
+                logger.info("mDNS resolver initialized for device name discovery")
+            except Exception as e:
+                logger.warning(f"Could not initialize mDNS resolver: {e}")
 
         # Cache for recent scans
         self._last_scan: Dict[str, Dict] = {}
@@ -194,15 +210,23 @@ class DeviceManager:
             # Check if device exists
             existing = self.db.get_device(mac)
 
-            # Get additional info
-            hostname = self._resolve_hostname(ip)
+            # Get additional info - pass MAC for mDNS cache lookup
+            hostname = self._resolve_hostname(ip, mac)
             manufacturer = self._lookup_manufacturer(mac)
             device_type = self._detect_device_type(mac, hostname, manufacturer)
 
             # Get DHCP fingerprint for identity tracking
             dhcp_info = self._get_dhcp_info(mac)
             dhcp_fingerprint = dhcp_info.get('dhcp_fingerprint')
+            dhcp_vendor_class = dhcp_info.get('vendor_class')
             dhcp_hostname = dhcp_info.get('hostname') or hostname
+
+            # Get mDNS friendly name separately (for Apple devices like "hookprobe's iPhone")
+            mdns_name = self._resolve_mdns_name(ip, mac)
+            if mdns_name:
+                logger.info(f"Device {mac} has mDNS name: '{mdns_name}'")
+                # Prefer mDNS name over DHCP hostname for display
+                dhcp_hostname = mdns_name
 
             # Link to persistent device identity (handles MAC randomization)
             identity = None
@@ -210,6 +234,7 @@ class DeviceManager:
                 identity = self.identity_manager.find_or_create_identity(
                     mac=mac,
                     dhcp_option55=dhcp_fingerprint,
+                    mdns_name=mdns_name,  # Pass mDNS friendly name
                     hostname=dhcp_hostname,
                     ip_address=ip,
                     device_type=device_type,
@@ -268,14 +293,49 @@ class DeviceManager:
 
         return discovered
 
-    def _resolve_hostname(self, ip_address: str) -> Optional[str]:
-        """Resolve hostname via reverse DNS."""
+    def _resolve_hostname(self, ip_address: str, mac: str = None) -> Optional[str]:
+        """
+        Resolve hostname via mDNS first, then fall back to reverse DNS.
+
+        For Apple devices, mDNS gives us the friendly name like "hookprobe's iPhone"
+        instead of just "Johns-iPhone".
+        """
+        # Try mDNS first (gives us premium Apple device names)
+        if self.mdns_resolver:
+            try:
+                mdns_result = self.mdns_resolver.resolve(ip_address, mac, timeout=2.0)
+                if mdns_result and mdns_result.friendly_name:
+                    logger.debug(f"mDNS resolved {ip_address} -> '{mdns_result.friendly_name}'")
+                    return mdns_result.friendly_name
+            except Exception as e:
+                logger.debug(f"mDNS resolution failed for {ip_address}: {e}")
+
+        # Fall back to reverse DNS
         try:
             import socket
             hostname = socket.gethostbyaddr(ip_address)[0]
             return hostname if hostname != ip_address else None
         except Exception:
             return None
+
+    def _resolve_mdns_name(self, ip_address: str, mac: str = None) -> Optional[str]:
+        """
+        Get friendly mDNS name for Apple devices like "hookprobe's iPhone".
+
+        This is specifically for the premium device name feature.
+        Returns None if mDNS is not available or device doesn't advertise.
+        """
+        if not self.mdns_resolver:
+            return None
+
+        try:
+            mdns_result = self.mdns_resolver.resolve(ip_address, mac, timeout=2.0)
+            if mdns_result and mdns_result.friendly_name:
+                return mdns_result.friendly_name
+        except Exception as e:
+            logger.debug(f"mDNS name lookup failed for {ip_address}: {e}")
+
+        return None
 
     def _lookup_manufacturer(self, mac_address: str) -> Optional[str]:
         """Lookup manufacturer from MAC OUI."""

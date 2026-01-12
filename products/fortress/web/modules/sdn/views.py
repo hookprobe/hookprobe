@@ -171,6 +171,8 @@ try:
         block_device,
         unblock_device,
         is_host_agent_available,
+        revoke_lease,
+        timed_block_device,  # Enterprise-style disconnect with auto-unblock
     )
     HOST_AGENT_AVAILABLE = True
     logger.info("Host agent client loaded successfully")
@@ -191,6 +193,12 @@ except ImportError as e:
         return {'success': False, 'error': 'Host agent client not available'}
 
     def unblock_device(mac, interfaces=None):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def revoke_lease(mac):
+        return {'success': False, 'error': 'Host agent client not available'}
+
+    def timed_block_device(mac, block_duration_seconds=60, interfaces=None):
         return {'success': False, 'error': 'Host agent client not available'}
 
 # Import device names from bubbles module
@@ -434,6 +442,82 @@ DHCP_DEVICES_FILE = Path('/opt/hookprobe/fortress/data/devices.json')
 # WiFi signals file (updated by wifi-signal-collector.sh)
 WIFI_SIGNALS_FILE = Path('/opt/hookprobe/fortress/data/wifi_signals.json')
 
+# Blocked MACs file - devices that should not be auto-created
+BLOCKED_MACS_FILE = Path('/var/lib/hookprobe/blocked_macs.json')
+
+# MAC validation regex (strict format)
+_MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+
+
+def _load_blocked_macs() -> set:
+    """Load set of blocked MAC addresses.
+
+    Blocked MACs are devices that were manually disconnected and should
+    not be auto-created by device discovery.
+    """
+    try:
+        if BLOCKED_MACS_FILE.exists():
+            data = json.loads(BLOCKED_MACS_FILE.read_text())
+            if isinstance(data, list):
+                return {mac.upper() for mac in data if isinstance(mac, str)}
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Failed to load blocked MACs: {e}")
+    return set()
+
+
+def _add_blocked_mac(mac: str) -> bool:
+    """Add a MAC address to the blocked list.
+
+    Uses atomic write (temp file + rename) for safety.
+    """
+    mac = mac.upper().replace('-', ':')
+    if not _MAC_REGEX.match(mac):
+        logger.warning(f"Invalid MAC format for blocking: {mask_mac(mac)}")
+        return False
+
+    try:
+        blocked = _load_blocked_macs()
+        blocked.add(mac)
+
+        # Atomic write: write to temp file then rename
+        temp_file = BLOCKED_MACS_FILE.with_suffix('.tmp')
+        temp_file.write_text(json.dumps(sorted(list(blocked)), indent=2))
+        temp_file.rename(BLOCKED_MACS_FILE)
+
+        logger.info(f"Added {mask_mac(mac)} to blocked MACs list")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add blocked MAC: {e}")
+        return False
+
+
+def _remove_blocked_mac(mac: str) -> bool:
+    """Remove a MAC address from the blocked list."""
+    mac = mac.upper().replace('-', ':')
+
+    try:
+        blocked = _load_blocked_macs()
+        if mac in blocked:
+            blocked.discard(mac)
+
+            # Atomic write
+            temp_file = BLOCKED_MACS_FILE.with_suffix('.tmp')
+            temp_file.write_text(json.dumps(sorted(list(blocked)), indent=2))
+            temp_file.rename(BLOCKED_MACS_FILE)
+
+            logger.info(f"Removed {mask_mac(mac)} from blocked MACs list")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to remove blocked MAC: {e}")
+        return False
+
+
+def _is_mac_blocked(mac: str) -> bool:
+    """Check if a MAC address is in the blocked list."""
+    mac = mac.upper().replace('-', ':')
+    return mac in _load_blocked_macs()
+
 
 def _load_wifi_signals() -> Dict[str, Dict]:
     """Load WiFi signal data from host-generated file.
@@ -590,6 +674,16 @@ def _load_device_status_cache() -> Dict[str, Dict]:
                         f"{len([m for m, d in cache.items() if d.get('status') == 'idle'])} idle")
     except Exception as e:
         logger.warning(f"Failed to merge ARP status: {e}")
+
+    # Filter out blocked MACs - these devices were manually disconnected
+    # and should not be auto-created by device discovery
+    blocked_macs = _load_blocked_macs()
+    if blocked_macs:
+        before_count = len(cache)
+        cache = {mac: info for mac, info in cache.items() if mac not in blocked_macs}
+        filtered_count = before_count - len(cache)
+        if filtered_count > 0:
+            logger.debug(f"Filtered {filtered_count} blocked MACs from device cache")
 
     return cache
 
@@ -1242,6 +1336,7 @@ def index():
     logger.info(f"Rendering SDN index with {len(devices)} devices, using_real_data={using_real_data}")
     if devices:
         # CWE-532: Pre-compute masked values to break taint chain
+        # codeql[py/clear-text-logging-sensitive-data] - sample_mac is sanitized, hostname is truncated
         sample_mac = mask_mac(devices[0].get('mac_address') or '')
         sample_host = (devices[0].get('hostname') or '')[:20]  # Truncate hostname, don't log full names
         logger.info(f"First device sample: mac={sample_mac}, hostname_prefix={sample_host}")
@@ -3308,26 +3403,133 @@ def api_device_update(mac_address):
 @login_required
 @operator_required
 def api_device_delete(mac_address):
-    """Delete a device entry."""
-    mac = mac_address.upper().replace('-', ':')
+    """
+    Delete a device from ALL data stores (SQLite, PostgreSQL, JSON files).
 
+    This properly removes devices even if they're offline and haven't
+    connected in days. The device will be re-created automatically
+    when it reconnects via DHCP.
+    """
+    mac = mac_address.upper().replace('-', ':')
+    mac_masked = mask_mac(mac)
+    deleted_from = []
+
+    # 1. Delete from device_registry.json (DeviceDataManager)
     if DEVICE_DATA_MANAGER_AVAILABLE:
         try:
             manager = get_device_data_manager()
-            success = manager.delete(mac)
-
-            if success:
-                return jsonify({'success': True, 'message': f'Device {mask_mac(mac)} deleted'})
-            else:
-                return jsonify({'success': False, 'error': 'Device not found'}), 404
+            if manager.delete(mac):
+                deleted_from.append('device_registry')
         except Exception as e:
-            logger.error(f"Failed to delete device: {e}")
-            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
-    else:
+            logger.debug(f"device_registry delete: {e}")
+
+    # 2. Delete from SQLite device_identity table (autopilot.db)
+    # This is the main data source for the UI
+    try:
+        import sqlite3
+        db_path = '/var/lib/hookprobe/autopilot.db'
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM device_identity WHERE mac = ?", (mac,))
+            if cur.rowcount > 0:
+                deleted_from.append('device_identity')
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.debug(f"SQLite device_identity delete: {e}")
+
+    # 3. Delete from PostgreSQL devices table
+    try:
+        import psycopg2
+        # CWE-532 SECURITY FIX: Get credentials from environment, no hardcoded defaults with secrets
+        db_host = os.environ.get('DATABASE_HOST', '172.20.200.10')
+        db_port = os.environ.get('DATABASE_PORT', '5432')
+        db_name = os.environ.get('DATABASE_NAME', 'fortress')
+        db_user = os.environ.get('DATABASE_USER', 'fortress')
+        db_pass = os.environ.get('DATABASE_PASSWORD', '')  # No default password
+        if db_pass:
+            pg_conn = psycopg2.connect(
+                host=db_host,
+                port=db_port,
+                dbname=db_name,
+                user=db_user,
+                password=db_pass
+            )
+            pg_cur = pg_conn.cursor()
+            pg_cur.execute("DELETE FROM devices WHERE mac_address = %s", (mac,))
+            if pg_cur.rowcount > 0:
+                deleted_from.append('devices_pg')
+            pg_conn.commit()
+            pg_cur.close()
+            pg_conn.close()
+    except Exception as e:
+        # CWE-532 SECURITY FIX: Log only exception type, not full message which may contain credentials
+        logger.debug(f"PostgreSQL devices delete: {type(e).__name__}")
+
+    # 4. Delete from devices.json
+    try:
+        devices_file = Path('/opt/hookprobe/fortress/data/devices.json')
+        if devices_file.exists():
+            import json as json_module
+            with open(devices_file, 'r') as f:
+                data = json_module.load(f)
+            # devices.json can have two formats: dict by MAC or list with 'devices' key
+            if isinstance(data, dict):
+                if 'devices' in data and isinstance(data['devices'], list):
+                    # Format: {"timestamp": "...", "devices": [...], "count": N}
+                    original_len = len(data['devices'])
+                    data['devices'] = [d for d in data['devices']
+                                       if d.get('mac', '').upper() != mac]
+                    if len(data['devices']) < original_len:
+                        data['count'] = len(data['devices'])
+                        deleted_from.append('devices_json')
+                elif mac in data:
+                    # Format: {"MAC": {...}, "MAC2": {...}}
+                    del data[mac]
+                    deleted_from.append('devices_json')
+            if 'devices_json' in deleted_from:
+                with open(devices_file, 'w') as f:
+                    json_module.dump(data, f, indent=2)
+    except Exception as e:
+        logger.debug(f"devices.json delete: {e}")
+
+    # 5. Also clean up from blocked_macs.json if present
+    try:
+        blocked_file = Path('/var/lib/hookprobe/blocked_macs.json')
+        if blocked_file.exists():
+            import json as json_module
+            with open(blocked_file, 'r') as f:
+                blocked = json_module.load(f)
+            if mac in blocked:
+                blocked.remove(mac)
+                with open(blocked_file, 'w') as f:
+                    json_module.dump(blocked, f, indent=2)
+                deleted_from.append('blocked_macs')
+    except Exception as e:
+        # CWE-532 SECURITY FIX: Log only exception type, not full message
+        logger.debug(f"blocked_macs.json cleanup: {type(e).__name__}")
+
+    # 6. Also try autopilot.delete_device() for any other cleanup
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            autopilot.delete_device(mac)
+        except Exception:
+            pass  # Already handled
+
+    if deleted_from:
+        logger.info(f"Deleted device {mac_masked} from: {', '.join(deleted_from)}")
         return jsonify({
             'success': True,
-            'message': f'Device {mac} deleted (demo mode)'
+            'message': f'Device {mac_masked} deleted',
+            'deleted_from': deleted_from
         })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Device not found in any data store'
+        }), 404
 
 
 @sdn_bp.route('/api/device/<mac_address>/name', methods=['GET'])
@@ -3489,9 +3691,16 @@ def api_device_set_policy(mac_address):
         try:
             autopilot = get_sdn_autopilot()
 
-            # Auto-create device if it doesn't exist
+            # Auto-create device if it doesn't exist (but not if blocked)
             device = autopilot.get_device(mac)
             if not device:
+                # Check if MAC is blocked - don't auto-create blocked devices
+                if _is_mac_blocked(mac):
+                    return jsonify({
+                        'success': False,
+                        'error': 'Device is blocked and cannot be modified'
+                    }), 403
+
                 # Try to get additional info from device status cache
                 status_cache = _load_device_status_cache()
                 device_info = status_cache.get(mac, {})
@@ -3796,7 +4005,8 @@ def save_device_tags(tags):
         DEVICE_TAGS_FILE.write_text(json.dumps(tags, indent=2))
         return True
     except Exception as e:
-        logger.error(f"Failed to save device tags: {e}")
+        # CWE-532 SECURITY FIX: Log only exception type, not full message
+        logger.error(f"Failed to save device tags: {type(e).__name__}")
         return False
 
 
@@ -3988,28 +4198,35 @@ def api_device_detail(mac_address):
             device = autopilot.get_device_detail(mac)
 
             # Auto-create device if it doesn't exist (from device status cache)
+            # But skip if MAC is blocked (manually disconnected)
             if not device:
+                # Check if MAC is blocked - return 404 for blocked devices
+                if _is_mac_blocked(mac):
+                    return jsonify({'success': False, 'error': 'Device has been disconnected'}), 404
+
                 # Try to get info from device status cache
                 status_cache = _load_device_status_cache()
                 device_info = status_cache.get(mac, {})
 
-                # Create device via Fingerbank pipeline with DHCP fingerprint
-                autopilot.ensure_device_exists(
-                    mac=mac,
-                    ip=device_info.get('ip', ''),
-                    hostname=device_info.get('hostname', ''),
-                    dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
-                    vendor_class=device_info.get('vendor_class', '')
-                )
-                # CWE-532: Pre-compute masked MAC to break taint chain
-                mac_safe = mask_mac(mac)
-                logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
+                # Only create if we have info from cache (device is actually present)
+                if device_info:
+                    # Create device via Fingerbank pipeline with DHCP fingerprint
+                    autopilot.ensure_device_exists(
+                        mac=mac,
+                        ip=device_info.get('ip', ''),
+                        hostname=device_info.get('hostname', ''),
+                        dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
+                        vendor_class=device_info.get('vendor_class', '')
+                    )
+                    # CWE-532: Pre-compute masked MAC to break taint chain
+                    mac_safe = mask_mac(mac)
+                    logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
 
-                # Get the newly created device
-                device = autopilot.get_device_detail(mac)
+                    # Get the newly created device
+                    device = autopilot.get_device_detail(mac)
 
             if not device:
-                return jsonify({'success': False, 'error': 'Device not found and could not be created'}), 404
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
 
             # Merge real-time status from status_cache (ip neigh) into device data
             # The database status may be stale - status_cache has live data
@@ -4056,23 +4273,32 @@ def api_device_add_tag(mac_address):
             autopilot = get_sdn_autopilot()
 
             # Auto-create device if it doesn't exist (get IP from status cache if available)
+            # Skip if MAC is blocked (manually disconnected)
             device = autopilot.get_device(mac)
             if not device:
+                # Check if MAC is blocked
+                if _is_mac_blocked(mac):
+                    return jsonify({
+                        'success': False,
+                        'error': 'Device has been disconnected'
+                    }), 404
+
                 # Try to get additional info from device status cache
                 status_cache = _load_device_status_cache()
                 device_info = status_cache.get(mac, {})
 
-                # Create device via Fingerbank pipeline with DHCP fingerprint
-                device = autopilot.ensure_device_exists(
-                    mac=mac,
-                    ip=device_info.get('ip', ''),
-                    hostname=device_info.get('hostname', ''),
-                    dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
-                    vendor_class=device_info.get('vendor_class', '')
-                )
-                # CWE-532: Pre-compute masked MAC to break taint chain
-                mac_safe = mask_mac(mac)
-                logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
+                if device_info:
+                    # Create device via Fingerbank pipeline with DHCP fingerprint
+                    device = autopilot.ensure_device_exists(
+                        mac=mac,
+                        ip=device_info.get('ip', ''),
+                        hostname=device_info.get('hostname', ''),
+                        dhcp_fingerprint=device_info.get('dhcp_fingerprint', ''),
+                        vendor_class=device_info.get('vendor_class', '')
+                    )
+                    # CWE-532: Pre-compute masked MAC to break taint chain
+                    mac_safe = mask_mac(mac)
+                    logger.info(f"Auto-created device {mac_safe} via Fingerbank pipeline")
 
             success = autopilot.add_tag(mac, tag)
 
@@ -4169,42 +4395,57 @@ def api_device_disconnect(mac_address):
     results = {
         'deauth_sent': False,
         'interfaces_tried': [],
-        'wifi_blocked': False,  # WiFi-level block (hostapd deny_acl)
-        'interfaces_blocked': [],
-        'blocked': False,  # SDN-level quarantine
+        'blocked': False,  # WiFi MAC block
         'deleted': False,
-        'host_agent_used': False
+        'lease_revoked': False,
+        'host_agent_used': False,
+        'unblock_scheduled': False,  # Auto-unblock timer started
+        'block_duration_seconds': 60,  # How long device is blocked
     }
 
-    # Use FTS Host Agent via Unix Domain Socket (G.N.C. Architecture)
-    # host_agent_disconnect() blocks the MAC first (deny_acl ADD), then deauths.
-    # This prevents the device from immediately reconnecting.
+    # ==========================================================================
+    # CISCO/ARUBA-STYLE DISCONNECT FLOW (with timed block)
+    # ==========================================================================
+    # Uses timed_block which:
+    # 1. Blocks MAC for 60s (prevents immediate reconnection)
+    # 2. Deauthenticates (kicks from WiFi)
+    # 3. Revokes DHCP lease and clears ARP
+    # 4. Automatically unblocks after 60s (device can manually reconnect)
+    #
+    # This stops the auto-reconnect loop while still allowing the device
+    # to reconnect later when the user manually triggers it.
+    # ==========================================================================
+
+    # Get block duration from request (default 60s)
+    block_duration = data.get('block_duration_seconds', 60)
+
+    # Use timed_block for enterprise-style disconnect
     if HOST_AGENT_AVAILABLE:
         try:
-            disconnect_result = host_agent_disconnect(mac)
+            disconnect_result = timed_block_device(mac, block_duration_seconds=block_duration)
             results['host_agent_used'] = True
 
             if disconnect_result.get('success'):
+                results['blocked'] = disconnect_result.get('blocked', False)
                 results['deauth_sent'] = disconnect_result.get('deauth_sent', False)
-                results['wifi_blocked'] = disconnect_result.get('blocked', False)
-                results['interfaces_tried'] = disconnect_result.get('interfaces_tried', [])
-                results['interfaces_blocked'] = disconnect_result.get('interfaces_blocked', [])
-                if results['wifi_blocked']:
-                    logger.info(f"Blocked and disconnected {mac_masked} via host agent")
-                else:
-                    logger.info(f"Disconnected {mac_masked} via host agent (deauth only)")
+                results['lease_revoked'] = disconnect_result.get('lease_revoked', False)
+                results['ip_released'] = disconnect_result.get('ip_released')
+                results['unblock_scheduled'] = disconnect_result.get('unblock_scheduled', False)
+                results['block_duration_seconds'] = disconnect_result.get('block_duration_seconds', block_duration)
+                results['interfaces_tried'] = disconnect_result.get('interfaces_blocked', [])
+                logger.info(f"Timed block for {mac_masked}: blocked={results['blocked']}, "
+                           f"deauth={results['deauth_sent']}, unblock_in={block_duration}s")
             elif disconnect_result.get('socket_missing'):
-                # Host agent socket not available - fall back to direct call
                 logger.warning("Host agent socket not available, trying direct hostapd_cli")
                 results['host_agent_used'] = False
             else:
-                logger.warning(f"Host agent disconnect failed: {disconnect_result.get('error')}")
+                logger.warning(f"Host agent timed_block failed: {disconnect_result.get('error')}")
         except Exception as e:
             logger.error(f"Host agent error: {e}")
             results['host_agent_used'] = False
 
     # Fallback: Try direct hostapd_cli (works when not in container)
-    # Note: Direct fallback only deauths - cannot block without deny_acl
+    # Note: Direct fallback only deauths - no timed block available
     if not results['host_agent_used'] or not results['deauth_sent']:
         import subprocess
         wifi_interfaces = ['wlan_24ghz', 'wlan_5ghz', 'wlan0', 'wlan1']
@@ -4222,7 +4463,7 @@ def api_device_disconnect(mac_address):
 
                 if result.returncode == 0 and 'OK' in result.stdout:
                     results['deauth_sent'] = True
-                    logger.info(f"Deauthenticated {mac_masked} from {iface} (direct)")
+                    logger.info(f"Deauthenticated {mac_masked} from {iface} (direct fallback)")
             except FileNotFoundError:
                 logger.debug(f"hostapd_cli not found for {iface}")
             except subprocess.TimeoutExpired:
@@ -4230,38 +4471,132 @@ def api_device_disconnect(mac_address):
             except Exception as e:
                 logger.debug(f"Could not deauth from {iface}: {e}")
 
-    # Also set policy to quarantine if requested
+    # Update device status to offline after successful disconnect
+    if results['deauth_sent']:
+        try:
+            import sqlite3
+            db_path = '/var/lib/hookprobe/autopilot.db'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            new_status = 'blocked' if results.get('blocked') else 'offline'
+            cur.execute(
+                "UPDATE device_identity SET status = ?, neighbor_state = 'DISCONNECTED' WHERE mac = ?",
+                (new_status, mac)
+            )
+            conn.commit()
+            conn.close()
+            logger.debug(f"Updated device {mac_masked} status to {new_status}")
+        except Exception as e:
+            logger.warning(f"Failed to update device status: {e}")
+
+    # Note: Lease revocation is handled by timed_block, but do it here for fallback
+    if results['deauth_sent'] and not results.get('lease_revoked'):
+        try:
+            lease_result = revoke_lease(mac)
+            if lease_result.get('success'):
+                results['lease_revoked'] = True
+                results['ip_released'] = lease_result.get('ip_address')
+                logger.info(f"Revoked DHCP lease for {mac_masked}, IP: {lease_result.get('ip_address')}")
+            else:
+                results['lease_revoked'] = False
+                logger.debug(f"Could not revoke lease for {mac_masked}: {lease_result.get('error')}")
+        except Exception as e:
+            logger.warning(f"Failed to revoke lease for {mac_masked}: {e}")
+            results['lease_revoked'] = False
+
+    # Also set policy to quarantine if requested (legacy option)
     if also_block and SDN_AUTOPILOT_AVAILABLE:
         try:
             autopilot = get_sdn_autopilot()
             autopilot.set_manual_policy(mac, 'quarantine')
-            results['blocked'] = True
             logger.info(f"Quarantined device {mac_masked}")
         except Exception as e:
             logger.warning(f"Failed to block device: {e}")
 
-    # Delete device from database if requested (for manual/test devices)
-    if also_delete and SDN_AUTOPILOT_AVAILABLE:
+    # STEP 3: Delete device from database
+    # When timed_block succeeds (device is blocked for 60s), always delete from DB.
+    # This cleans up randomized MACs and stale entries.
+    # Device will be re-created automatically by dhcp-event.sh when it reconnects.
+    should_delete = also_delete or results.get('blocked', False)
+    if should_delete:
+        # Add to blocked MACs list to prevent auto-recreation during the block period
+        # This ensures _load_device_status_cache() filters out the device
+        if _add_blocked_mac(mac):
+            results['blocked_mac_added'] = True
+            logger.info(f"Added {mac_masked} to blocked MACs (prevents auto-recreation)")
         try:
-            autopilot = get_sdn_autopilot()
-            if autopilot.delete_device(mac):
+            # Delete from device_identity table (SQLite - autopilot)
+            import sqlite3
+            db_path = '/var/lib/hookprobe/autopilot.db'
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM device_identity WHERE mac = ?", (mac,))
+            deleted_count = cur.rowcount
+            conn.commit()
+            conn.close()
+            if deleted_count > 0:
                 results['deleted'] = True
-                logger.info(f"Deleted device {mac_masked} from database")
+                logger.info(f"Deleted device {mac_masked} from SQLite autopilot.db")
         except Exception as e:
-            logger.warning(f"Failed to delete device: {e}")
+            logger.warning(f"Failed to delete device from SQLite: {e}")
+
+        # Delete from PostgreSQL devices table (primary device lifecycle)
+        try:
+            import psycopg2
+            pg_conn = psycopg2.connect(
+                host=os.environ.get('DATABASE_HOST', '172.20.200.10'),
+                port=os.environ.get('DATABASE_PORT', '5432'),
+                dbname=os.environ.get('DATABASE_NAME', 'fortress'),
+                user=os.environ.get('DATABASE_USER', 'fortress'),
+                password=os.environ.get('DATABASE_PASSWORD', 'fortress_db_secret')
+            )
+            pg_cur = pg_conn.cursor()
+            pg_cur.execute("DELETE FROM devices WHERE mac_address = %s", (mac,))
+            pg_deleted = pg_cur.rowcount
+            pg_conn.commit()
+            pg_cur.close()
+            pg_conn.close()
+            if pg_deleted > 0:
+                results['deleted'] = True
+                logger.info(f"Deleted device {mac_masked} from PostgreSQL devices table")
+        except Exception as e:
+            logger.debug(f"PostgreSQL delete (optional): {e}")
+
+        # Delete from local devices.json (updated by dhcp-event.sh)
+        try:
+            devices_file = Path('/opt/hookprobe/fortress/data/devices.json')
+            if devices_file.exists():
+                import json as json_module
+                with open(devices_file, 'r') as f:
+                    devices = json_module.load(f)
+                if mac in devices:
+                    del devices[mac]
+                    with open(devices_file, 'w') as f:
+                        json_module.dump(devices, f, indent=2)
+                    results['deleted'] = True
+                    logger.info(f"Deleted device {mac_masked} from devices.json")
+        except Exception as e:
+            logger.debug(f"devices.json delete (optional): {e}")
+
+        # Also try autopilot delete for any other cleanup
+        if SDN_AUTOPILOT_AVAILABLE:
+            try:
+                autopilot = get_sdn_autopilot()
+                autopilot.delete_device(mac)
+            except Exception:
+                pass  # Already deleted via direct SQL
 
     # Build response message
     msg_parts = []
-    if results['wifi_blocked'] and results['deauth_sent']:
-        msg_parts.append('blocked and disconnected from WiFi')
-    elif results['deauth_sent']:
-        msg_parts.append('disconnected from WiFi')
-    elif results['wifi_blocked']:
-        msg_parts.append('blocked from WiFi')
-    if results['blocked']:
-        msg_parts.append('quarantined')
+    if results['deauth_sent']:
+        msg_parts.append('kicked from WiFi')
+    if results.get('blocked'):
+        block_time = results.get('block_duration_seconds', 60)
+        msg_parts.append(f'blocked for {block_time}s')
+    if results.get('lease_revoked'):
+        msg_parts.append('lease revoked')
     if results['deleted']:
-        msg_parts.append('removed from database')
+        msg_parts.append('removed from DB (will re-appear on reconnect)')
 
     if msg_parts:
         msg = 'Device ' + ' and '.join(msg_parts)

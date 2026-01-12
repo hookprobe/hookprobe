@@ -83,6 +83,35 @@ def mask_ip(ip: str) -> str:
     return f"{parts[0]}.{parts[1]}.x.x"
 
 
+def safe_log_exception(
+    logger_instance: logging.Logger,
+    message: str,
+    exc: Exception,
+    level: str = 'error'
+) -> None:
+    """
+    Log exception securely with only the type name, not the full message (CWE-532 mitigation).
+
+    This prevents sensitive data that may be embedded in exception messages
+    from being written to log files.
+
+    Args:
+        logger_instance: Logger to use
+        message: Context message describing the operation that failed
+        exc: The exception that was caught
+        level: Log level ('debug', 'info', 'warning', 'error')
+
+    Example:
+        try:
+            do_something()
+        except Exception as e:
+            safe_log_exception(logger, "Database operation failed", e)
+        # Logs: "Database operation failed: ValueError"
+    """
+    log_fn = getattr(logger_instance, level, logger_instance.error)
+    log_fn(f"{message}: {type(exc).__name__}")
+
+
 def safe_error_message(exception: Exception, context: str = "request") -> str:
     """
     Handle exceptions securely for API responses (CWE-209 mitigation).
@@ -91,7 +120,7 @@ def safe_error_message(exception: Exception, context: str = "request") -> str:
     information exposure. NO exception details (type, message, traceback)
     are included in the response.
 
-    The full exception is logged internally for debugging.
+    The exception type is logged internally for debugging.
 
     Args:
         exception: The exception object that occurred
@@ -103,9 +132,8 @@ def safe_error_message(exception: Exception, context: str = "request") -> str:
         A generic, opaque error message safe for API responses.
         Example: "An internal error occurred while processing the device block"
     """
-    # Log full exception details internally for debugging
-    # logger.exception() includes the full traceback at ERROR level
-    logger.exception(f"Error during {context}")
+    # CWE-209 FIX: Log only exception type, not full stack trace
+    logger.error(f"Error during {context}: {type(exception).__name__}")
 
     # Return generic, opaque message to client
     # NEVER include exception type, message, or any internal details

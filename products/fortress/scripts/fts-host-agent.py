@@ -196,6 +196,8 @@ class HostAgent:
             return self._handle_block_mac(request)
         elif action == 'unblock_mac':
             return self._handle_unblock_mac(request)
+        elif action == 'revoke_lease':
+            return self._handle_revoke_lease(request)
         elif action == 'ping':
             return json.dumps({'success': True, 'message': 'pong', 'version': '1.0.0'}).encode()
         else:
@@ -358,6 +360,83 @@ class HostAgent:
                 results['interfaces_unblocked'].append(iface)
                 results['success'] = True
                 logger.info(f"Unblocked {mac} on {iface}")
+
+        return json.dumps(results).encode()
+
+    def _handle_revoke_lease(self, request: dict) -> bytes:
+        """Handle revoke_lease request - removes DHCP lease and clears ARP entry.
+
+        This fully disconnects a device by:
+        1. Removing the DHCP lease from dnsmasq.leases
+        2. Sending SIGHUP to dnsmasq to reload leases
+        3. Deleting the ARP entry for the device's IP
+        """
+        mac = request.get('mac', '')
+
+        # Validate MAC
+        valid, mac_or_error = self._validate_mac(mac)
+        if not valid:
+            return json.dumps({'success': False, 'error': mac_or_error}).encode()
+        mac = mac_or_error.lower()  # dnsmasq uses lowercase
+
+        results = {
+            'success': False,
+            'mac': mac,
+            'lease_removed': False,
+            'arp_cleared': False,
+            'ip_address': None
+        }
+
+        # Find and remove lease from dnsmasq.leases
+        lease_file = '/var/lib/misc/dnsmasq.leases'
+        try:
+            if os.path.exists(lease_file):
+                with open(lease_file, 'r') as f:
+                    lines = f.readlines()
+
+                new_lines = []
+                removed_ip = None
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) >= 3 and parts[1].lower() == mac:
+                        removed_ip = parts[2]
+                        results['ip_address'] = removed_ip
+                        logger.info(f"Removing lease for {mac} (IP: {removed_ip})")
+                    else:
+                        new_lines.append(line)
+
+                if removed_ip:
+                    # Write updated lease file
+                    with open(lease_file, 'w') as f:
+                        f.writelines(new_lines)
+                    results['lease_removed'] = True
+
+                    # Send SIGHUP to dnsmasq to reload leases
+                    try:
+                        subprocess.run(['pkill', '-HUP', 'dnsmasq'], timeout=5)
+                        logger.info("Sent SIGHUP to dnsmasq")
+                    except Exception as e:
+                        logger.warning(f"Failed to signal dnsmasq: {e}")
+
+                    # Clear ARP entry
+                    try:
+                        subprocess.run(['ip', 'neigh', 'del', removed_ip, 'dev', 'FTS'],
+                                       timeout=5, capture_output=True)
+                        results['arp_cleared'] = True
+                        logger.info(f"Cleared ARP entry for {removed_ip}")
+                    except Exception as e:
+                        logger.warning(f"Failed to clear ARP: {e}")
+
+                    results['success'] = True
+                else:
+                    results['error'] = 'No lease found for this MAC'
+            else:
+                results['error'] = f'Lease file not found: {lease_file}'
+
+        except PermissionError:
+            results['error'] = f'Permission denied accessing {lease_file}'
+        except Exception as e:
+            results['error'] = str(e)
 
         return json.dumps(results).encode()
 

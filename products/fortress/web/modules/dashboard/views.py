@@ -221,8 +221,20 @@ def _load_device_status_cache():
     """Load device status from host-generated cache file.
 
     Same implementation as SDN module to ensure consistent device data.
+    Uses ARP status as primary source for real-time online detection.
     """
     cache = {}
+
+    # Primary: Load ARP status (real-time, updated every 5s)
+    arp_file = Path('/var/lib/hookprobe/arp-status.json')
+    arp_status = {}
+    try:
+        if arp_file.exists():
+            arp_status = json.loads(arp_file.read_text())
+            logger.debug(f"Loaded {len(arp_status)} devices from ARP status")
+    except Exception as e:
+        logger.debug(f"Failed to load ARP status: {e}")
+
     # DHCP devices file (updated by dhcp-event.sh)
     dhcp_file = DATA_DIR / 'devices.json'
     try:
@@ -232,17 +244,31 @@ def _load_device_status_cache():
                 for mac, device in data.items():
                     if isinstance(device, dict):
                         mac_upper = mac.upper()
+                        # Use ARP status for online detection (priority)
+                        arp_info = arp_status.get(mac_upper, {})
+                        is_online = arp_info.get('online', device.get('is_active', False))
                         cache[mac_upper] = {
-                            'status': 'online' if device.get('is_active', False) else 'offline',
-                            'ip': device.get('ip_address', ''),
+                            'status': 'online' if is_online else 'offline',
+                            'ip': arp_info.get('ip', '') or device.get('ip_address', ''),
                             'hostname': clean_device_name(device.get('hostname', '')),
                             'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
                             'vendor_class': device.get('vendor_class', ''),
+                            'arp_state': arp_info.get('state', 'UNKNOWN'),
                         }
     except Exception as e:
         logger.debug(f"Failed to load DHCP devices: {e}")
 
-    # Device status cache (updated by device-status-updater.sh)
+    # Add devices from ARP that weren't in DHCP (recently joined without DHCP refresh)
+    for mac, arp_info in arp_status.items():
+        if mac not in cache:
+            cache[mac] = {
+                'status': 'online' if arp_info.get('online', False) else 'offline',
+                'ip': arp_info.get('ip', ''),
+                'hostname': '',
+                'arp_state': arp_info.get('state', 'UNKNOWN'),
+            }
+
+    # Device status cache (updated by device-status-updater.sh) - additional metadata only
     status_file = Path('/opt/hookprobe/fortress/data/device_status.json')
     try:
         if status_file.exists():
@@ -251,16 +277,20 @@ def _load_device_status_cache():
                 mac = device.get('mac', '').upper()
                 if mac:
                     if mac in cache:
-                        cache[mac].update({
-                            'status': device.get('status', cache[mac].get('status', 'offline')),
-                            'ip': device.get('ip', '') or cache[mac].get('ip', ''),
-                            'hostname': clean_device_name(device.get('hostname', '') or cache[mac].get('hostname', '')),
-                        })
+                        # Only update hostname if not already set, keep ARP-based status
+                        if not cache[mac].get('hostname'):
+                            cache[mac]['hostname'] = clean_device_name(device.get('hostname', ''))
+                        if not cache[mac].get('ip'):
+                            cache[mac]['ip'] = device.get('ip', '')
                     else:
+                        # Device not in ARP - check ARP status for online
+                        arp_info = arp_status.get(mac, {})
+                        is_online = arp_info.get('online', device.get('status') == 'online')
                         cache[mac] = {
-                            'status': device.get('status', 'offline'),
+                            'status': 'online' if is_online else 'offline',
                             'ip': device.get('ip', ''),
                             'hostname': clean_device_name(device.get('hostname', '')),
+                            'arp_state': arp_info.get('state', 'UNKNOWN'),
                         }
     except Exception as e:
         logger.debug(f"Failed to load status cache: {e}")
