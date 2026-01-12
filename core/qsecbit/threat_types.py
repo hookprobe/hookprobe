@@ -160,6 +160,46 @@ MITRE_ATTACK_MAP: Dict[AttackType, str] = {
     AttackType.UNKNOWN: "T1000",
 }
 
+# Alias for backward compatibility
+MITRE_ATTACK_MAPPING = MITRE_ATTACK_MAP
+
+
+# Attack type to OSI layer mapping
+ATTACK_TO_LAYER: Dict[AttackType, OSILayer] = {
+    # Layer 2 - Data Link
+    AttackType.ARP_SPOOFING: OSILayer.L2_DATA_LINK,
+    AttackType.MAC_FLOODING: OSILayer.L2_DATA_LINK,
+    AttackType.VLAN_HOPPING: OSILayer.L2_DATA_LINK,
+    AttackType.EVIL_TWIN: OSILayer.L2_DATA_LINK,
+    AttackType.ROGUE_DHCP: OSILayer.L2_DATA_LINK,
+    # Layer 3 - Network
+    AttackType.IP_SPOOFING: OSILayer.L3_NETWORK,
+    AttackType.ICMP_FLOOD: OSILayer.L3_NETWORK,
+    AttackType.SMURF_ATTACK: OSILayer.L3_NETWORK,
+    AttackType.ROUTING_ATTACK: OSILayer.L3_NETWORK,
+    AttackType.FRAGMENTATION_ATTACK: OSILayer.L3_NETWORK,
+    # Layer 4 - Transport
+    AttackType.SYN_FLOOD: OSILayer.L4_TRANSPORT,
+    AttackType.PORT_SCAN: OSILayer.L4_TRANSPORT,
+    AttackType.TCP_RESET_ATTACK: OSILayer.L4_TRANSPORT,
+    AttackType.SESSION_HIJACK: OSILayer.L4_TRANSPORT,
+    AttackType.UDP_FLOOD: OSILayer.L4_TRANSPORT,
+    # Layer 5 - Session
+    AttackType.SSL_STRIP: OSILayer.L5_SESSION,
+    AttackType.TLS_DOWNGRADE: OSILayer.L5_SESSION,
+    AttackType.CERT_PINNING_BYPASS: OSILayer.L5_SESSION,
+    AttackType.AUTH_BYPASS: OSILayer.L5_SESSION,
+    # Layer 7 - Application
+    AttackType.SQL_INJECTION: OSILayer.L7_APPLICATION,
+    AttackType.XSS: OSILayer.L7_APPLICATION,
+    AttackType.DNS_TUNNELING: OSILayer.L7_APPLICATION,
+    AttackType.HTTP_FLOOD: OSILayer.L7_APPLICATION,
+    AttackType.MALWARE_C2: OSILayer.L7_APPLICATION,
+    AttackType.COMMAND_INJECTION: OSILayer.L7_APPLICATION,
+    AttackType.PATH_TRAVERSAL: OSILayer.L7_APPLICATION,
+    AttackType.UNKNOWN: OSILayer.L7_APPLICATION,
+}
+
 
 # Default severity mapping (can be overridden by detection confidence)
 DEFAULT_SEVERITY_MAP: Dict[AttackType, ThreatSeverity] = {
