@@ -3042,6 +3042,9 @@ ExecStartPre=-/sbin/ip link set ${iface_24ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_24ghz} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-24ghz.pid $HOSTAPD_24GHZ_CONF
+# Refresh OVS multicast reflection rules with correct port numbers (AirPlay/HomeKit fix)
+ExecStartPost=-/bin/sleep 1
+ExecStartPost=-/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh wifi-refresh
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_24ghz} down
 ExecReload=/bin/kill -HUP \$MAINPID
@@ -3083,6 +3086,9 @@ ExecStartPre=-/sbin/ip link set ${iface_5ghz} down
 ExecStartPre=/bin/sleep 0.5
 ExecStartPre=/sbin/ip link set ${iface_5ghz} up
 ExecStart=${hostapd_bin} -B -P /run/hostapd-5ghz.pid $HOSTAPD_5GHZ_CONF
+# Refresh OVS multicast reflection rules with correct port numbers (AirPlay/HomeKit fix)
+ExecStartPost=-/bin/sleep 1
+ExecStartPost=-/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh wifi-refresh
 ExecStop=-/bin/kill -TERM \$MAINPID
 ExecStopPost=-/sbin/ip link set ${iface_5ghz} down
 ExecReload=/bin/kill -HUP \$MAINPID
