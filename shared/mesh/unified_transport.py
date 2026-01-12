@@ -267,7 +267,7 @@ class PeerInfo:
     last_seen: float = 0.0
     latency_ms: float = 0.0
     channel_port: int = 0
-    channel_mode: TransportMode = TransportMode.PRIMARY
+    channel_mode: TransportMode = TransportMode.PRIMARY_UDP
 
 
 class UnifiedTransport:
