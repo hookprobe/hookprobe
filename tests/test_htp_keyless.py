@@ -11,10 +11,10 @@ import secrets
 import time
 from collections import deque
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add project root to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from neuro.transport.htp import (
+from core.htp.transport.htp import (
     HTPHeader, ResonanceLayer, NeuroLayer, PacketMode, HTPState,
     QsecbitGenerator, NeuroStateEvolver, HookProbeTransport,
     generate_rdv, generate_posf, anti_replay_nonce,
