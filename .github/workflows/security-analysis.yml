@@ -119,6 +119,7 @@ jobs:
           path: |
             bandit-results.json
           retention-days: 30
+          if-no-files-found: ignore
 
   # Shell script security (runs in parallel)
   shell-security:
