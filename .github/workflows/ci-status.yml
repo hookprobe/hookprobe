@@ -195,7 +195,7 @@ jobs:
           cat ci_status_report.md
 
       - name: Upload status report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-status-report
           path: ci_status_report.md
