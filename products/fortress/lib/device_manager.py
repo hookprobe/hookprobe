@@ -225,7 +225,7 @@ class DeviceManager:
             # Get mDNS friendly name separately (for Apple devices like "hookprobe's iPhone")
             mdns_name = self._resolve_mdns_name(ip, mac)
             if mdns_name:
-                logger.info(f"Device {mask_mac(mac)} has mDNS name: '{mdns_name}'")
+                logger.info(f"Device {mask_mac(mac)} mDNS: '{mdns_name}'")
                 # Prefer mDNS name over DHCP hostname for display
                 dhcp_hostname = mdns_name
 
@@ -306,7 +306,8 @@ class DeviceManager:
             try:
                 mdns_result = self.mdns_resolver.resolve(ip_address, mac, timeout=2.0)
                 if mdns_result and mdns_result.friendly_name:
-                    logger.debug(f"mDNS resolved for {mask_mac(mac) if mac else 'unknown'}")
+                    masked = mask_mac(mac) if mac else 'unknown'
+                    logger.debug(f"mDNS resolved for {masked}")
                     return mdns_result.friendly_name
             except Exception as e:
                 logger.debug(f"mDNS resolution failed: {type(e).__name__}")
@@ -334,7 +335,8 @@ class DeviceManager:
             if mdns_result and mdns_result.friendly_name:
                 return mdns_result.friendly_name
         except Exception as e:
-            logger.debug(f"mDNS name lookup failed for {mask_mac(mac) if mac else 'unknown'}: {type(e).__name__}")
+            masked = mask_mac(mac) if mac else 'unknown'
+            logger.debug(f"mDNS lookup failed [{masked}]: {type(e).__name__}")
 
         return None
 
