@@ -16,6 +16,7 @@ from datetime import datetime
 from functools import wraps
 from threading import Lock
 from typing import Dict, List, Optional
+import hashlib
 import json
 import logging
 import os
@@ -449,26 +450,39 @@ BLOCKED_MACS_FILE = Path('/var/lib/hookprobe/blocked_macs.json')
 _MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 
 
+def _hash_mac(mac: str) -> str:
+    """Hash a MAC address for secure storage (CWE-312 mitigation).
+
+    Uses SHA-256 with a fixed salt to create a one-way hash.
+    This allows checking if a MAC is blocked without storing the raw MAC.
+    """
+    # Fixed salt - consistent for comparison purposes
+    salt = b'hookprobe_blocked_mac_v1'
+    mac_normalized = mac.upper().replace('-', ':').encode('utf-8')
+    return hashlib.sha256(salt + mac_normalized).hexdigest()[:32]
+
+
 def _load_blocked_macs() -> set:
-    """Load set of blocked MAC addresses.
+    """Load set of blocked MAC hashes.
 
     Blocked MACs are devices that were manually disconnected and should
-    not be auto-created by device discovery.
+    not be auto-created by device discovery. Stored as hashes for security.
     """
     try:
         if BLOCKED_MACS_FILE.exists():
             data = json.loads(BLOCKED_MACS_FILE.read_text())
             if isinstance(data, list):
-                return {mac.upper() for mac in data if isinstance(mac, str)}
+                return set(data)  # Already hashes
     except (json.JSONDecodeError, IOError) as e:
         logger.debug(f"Failed to load blocked MACs: {e}")
     return set()
 
 
 def _add_blocked_mac(mac: str) -> bool:
-    """Add a MAC address to the blocked list.
+    """Add a MAC address to the blocked list (stored as hash).
 
     Uses atomic write (temp file + rename) for safety.
+    CWE-312 mitigation: Stores hash instead of plain MAC.
     """
     mac = mac.upper().replace('-', ':')
     if not _MAC_REGEX.match(mac):
@@ -477,9 +491,10 @@ def _add_blocked_mac(mac: str) -> bool:
 
     try:
         blocked = _load_blocked_macs()
-        blocked.add(mac)
+        mac_hash = _hash_mac(mac)
+        blocked.add(mac_hash)
 
-        # Atomic write: write to temp file then rename
+        # Atomic write: write to temp file then rename (hashes only)
         temp_file = BLOCKED_MACS_FILE.with_suffix('.tmp')
         temp_file.write_text(json.dumps(sorted(list(blocked)), indent=2))
         temp_file.rename(BLOCKED_MACS_FILE)
@@ -497,10 +512,11 @@ def _remove_blocked_mac(mac: str) -> bool:
 
     try:
         blocked = _load_blocked_macs()
-        if mac in blocked:
-            blocked.discard(mac)
+        mac_hash = _hash_mac(mac)
+        if mac_hash in blocked:
+            blocked.discard(mac_hash)
 
-            # Atomic write
+            # Atomic write (hashes only)
             temp_file = BLOCKED_MACS_FILE.with_suffix('.tmp')
             temp_file.write_text(json.dumps(sorted(list(blocked)), indent=2))
             temp_file.rename(BLOCKED_MACS_FILE)
@@ -516,7 +532,7 @@ def _remove_blocked_mac(mac: str) -> bool:
 def _is_mac_blocked(mac: str) -> bool:
     """Check if a MAC address is in the blocked list."""
     mac = mac.upper().replace('-', ':')
-    return mac in _load_blocked_macs()
+    return _hash_mac(mac) in _load_blocked_macs()
 
 
 def _load_wifi_signals() -> Dict[str, Dict]:
@@ -3495,17 +3511,10 @@ def api_device_delete(mac_address):
         logger.debug(f"devices.json delete: {e}")
 
     # 5. Also clean up from blocked_macs.json if present
+    # CWE-312 FIX: Use hash-based lookup (blocked_macs.json stores hashes)
     try:
-        blocked_file = Path('/var/lib/hookprobe/blocked_macs.json')
-        if blocked_file.exists():
-            import json as json_module
-            with open(blocked_file, 'r') as f:
-                blocked = json_module.load(f)
-            if mac in blocked:
-                blocked.remove(mac)
-                with open(blocked_file, 'w') as f:
-                    json_module.dump(blocked, f, indent=2)
-                deleted_from.append('blocked_macs')
+        if _remove_blocked_mac(mac):
+            deleted_from.append('blocked_macs')
     except Exception as e:
         # CWE-532 SECURITY FIX: Log only exception type, not full message
         logger.debug(f"blocked_macs.json cleanup: {type(e).__name__}")
