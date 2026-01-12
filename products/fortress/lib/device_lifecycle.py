@@ -577,6 +577,7 @@ def main():
 
                 # Display either masked (default) or unmasked (--show-sensitive)
                 # Note: --show-sensitive is an explicit CLI opt-in for local admin use
+                # codeql[py/clear-text-logging-sensitive-data] - Intentional CLI feature with explicit admin opt-in
                 if args.show_sensitive:
                     # Authorized admin access via CLI flag - output unmasked values
                     # The status line format: STATUS   MAC_ADDRESS          IP_ADDRESS      DISPLAY_NAME

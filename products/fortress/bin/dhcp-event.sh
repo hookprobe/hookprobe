@@ -37,7 +37,8 @@ DATABASE_HOST="${DATABASE_HOST:-172.20.200.10}"
 DATABASE_PORT="${DATABASE_PORT:-5432}"
 DATABASE_NAME="${DATABASE_NAME:-fortress}"
 DATABASE_USER="${DATABASE_USER:-fortress}"
-DATABASE_PASSWORD="${DATABASE_PASSWORD:-fortress_db_secret}"
+# CWE-532 SECURITY FIX: No hardcoded default password
+DATABASE_PASSWORD="${DATABASE_PASSWORD:-}"
 
 # Paths
 DATA_DIR="/opt/hookprobe/fortress/data"
@@ -74,6 +75,24 @@ pg_escape() {
         val=$(echo -n "$val" | tr -d '\0-\037')
         echo "'${val}'"
     fi
+}
+
+# Function to check if MAC is in blocked list (prevents recreation of deleted devices)
+BLOCKED_MACS_FILE="/var/lib/hookprobe/blocked_macs.json"
+is_mac_blocked() {
+    local mac="${1:-}"
+    [[ -z "$mac" ]] && return 1
+
+    # Normalize MAC to uppercase
+    mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]')
+
+    # Check if blocked_macs.json exists and contains the MAC
+    if [[ -f "$BLOCKED_MACS_FILE" ]]; then
+        if grep -q "\"$mac\"" "$BLOCKED_MACS_FILE" 2>/dev/null; then
+            return 0  # MAC is blocked
+        fi
+    fi
+    return 1  # MAC is not blocked
 }
 
 # Sanitize MAC address

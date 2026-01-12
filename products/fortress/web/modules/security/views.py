@@ -255,7 +255,8 @@ def api_history():
                 item['timestamp'] = str(item['recorded_at'])
         return jsonify({'history': history})
     except Exception as e:
-        logger.exception("Failed to get security history")
+        # CWE-209 SECURITY FIX: Avoid logging full stack traces which expose internal paths
+        logger.error(f"Failed to get security history: {type(e).__name__}")
         return jsonify({'history': [], 'error': 'An internal error occurred while fetching history'})
 
 

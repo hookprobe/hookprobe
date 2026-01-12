@@ -169,8 +169,8 @@ services:
       # Read-only, world-readable (644) - no secrets stored here
       - /etc/hookprobe:/etc/hookprobe:ro
       # SDN Auto Pilot database (device classification data)
-      # NOTE: rw,U required for web UI to set policies (quarantine, move segment, etc.)
-      - /var/lib/hookprobe:/var/lib/hookprobe:rw,U
+      # Direct mount without U flag to ensure container and host see same database
+      - /var/lib/hookprobe:/var/lib/hookprobe:rw
       # G.N.C. Architecture: FTS Host Agent socket for WiFi device control
       # Enables container to send hostapd commands via Unix Domain Socket
       # Socket is created by fts-host-agent.service on the host
