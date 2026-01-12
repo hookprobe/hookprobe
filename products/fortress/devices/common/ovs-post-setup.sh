@@ -930,15 +930,40 @@ main() {
             configure_bridge_ports
             ;;
 
+        multicast|mcast)
+            # Refresh multicast reflection rules (call after hostapd adds WiFi to OVS)
+            # This fixes the port number mismatch when WiFi interfaces are recreated
+            wait_for_bridge || exit 1
+            setup_multicast_reflection || log_warn "Multicast reflection setup had issues"
+            ;;
+
+        hairpin)
+            # Refresh D2D hairpin rules for WiFi ap_isolate=1
+            wait_for_bridge || exit 1
+            cleanup_legacy_wifi_bridge || log_warn "WiFi hairpin setup had issues"
+            ;;
+
+        wifi-refresh)
+            # Full WiFi rule refresh (multicast + hairpin) - call from hostapd ExecStartPost
+            wait_for_bridge || exit 1
+            log_section "WiFi Rule Refresh (hostapd trigger)"
+            setup_multicast_reflection || log_warn "Multicast reflection setup had issues"
+            cleanup_legacy_wifi_bridge || log_warn "WiFi hairpin setup had issues"
+            log_success "WiFi OpenFlow rules refreshed for current port numbers"
+            ;;
+
         *)
-            echo "Usage: $0 {setup|status|openflow|gateway|ports}"
+            echo "Usage: $0 {setup|status|openflow|gateway|ports|multicast|hairpin|wifi-refresh}"
             echo ""
             echo "Flat Bridge Architecture - OpenFlow NAC"
-            echo "  setup     - Full setup (gateway + openflow + ports)"
-            echo "  status    - Show bridge status"
-            echo "  openflow  - Configure OpenFlow rules"
-            echo "  gateway   - Setup gateway IP on FTS bridge"
-            echo "  ports     - Configure ports (flat mode)"
+            echo "  setup        - Full setup (gateway + openflow + ports + multicast)"
+            echo "  status       - Show bridge status"
+            echo "  openflow     - Configure OpenFlow rules"
+            echo "  gateway      - Setup gateway IP on FTS bridge"
+            echo "  ports        - Configure ports (flat mode)"
+            echo "  multicast    - Refresh cross-band mDNS/SSDP reflection rules"
+            echo "  hairpin      - Refresh D2D hairpin rules for WiFi"
+            echo "  wifi-refresh - Full WiFi rule refresh (call from hostapd ExecStartPost)"
             exit 1
             ;;
     esac
