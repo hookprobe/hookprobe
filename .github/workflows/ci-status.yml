@@ -200,6 +200,7 @@ jobs:
           name: ci-status-report
           path: ci_status_report.md
           retention-days: 30
+          if-no-files-found: ignore
 
       - name: Display report summary
         run: |
