@@ -1,9 +1,12 @@
 [Unit]
 Description=HookProbe Fortress Device Lifecycle Manager
 Documentation=https://hookprobe.com/docs/fortress/device-lifecycle
-After=network.target fortress.service fts-postgres.service
+# Wait for fortress.service which runs postgres via podman-compose
+After=network.target fortress.service
 Wants=fortress.service
-Requires=fts-postgres.service
+# Rate limiting (in [Unit] section for older systemd compatibility)
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -25,8 +28,6 @@ WorkingDirectory=/opt/hookprobe/fortress/lib
 # Restart policy
 Restart=on-failure
 RestartSec=10
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 # Logging
 StandardOutput=journal

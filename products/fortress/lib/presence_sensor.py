@@ -1291,15 +1291,32 @@ def get_presence_sensor(interface: str = "FTS") -> PresenceSensor:
 
 def main():
     import argparse
+    import signal
+    import sys
 
     parser = argparse.ArgumentParser(description='Presence Sensor')
     parser.add_argument('--interface', default='FTS', help='Network interface')
     parser.add_argument('--scan', action='store_true', help='Run discovery scan')
     parser.add_argument('--stats', action='store_true', help='Show statistics')
+    parser.add_argument('--daemon', action='store_true', help='Run as daemon (systemd service mode)')
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    # Configure logging based on mode
+    if args.daemon:
+        # Daemon mode: log to file with timestamps
+        log_file = Path('/var/log/fortress/presence-sensor.log')
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)s [presence-sensor]: %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)  # Also log to stdout for journald
+            ]
+        )
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     sensor = get_presence_sensor(args.interface)
 
@@ -1308,6 +1325,31 @@ def main():
         print("\nPresence Sensor Statistics:")
         for key, value in stats.items():
             print(f"  {key}: {value}")
+
+    elif args.daemon:
+        # Daemon mode for systemd service
+        logger.info(f"Starting presence sensor daemon on interface {args.interface}")
+        logger.info(f"mDNS support: {HAS_ZEROCONF}, BLE support: {HAS_BLEAK}")
+
+        # Signal handlers for graceful shutdown
+        def handle_signal(signum, frame):
+            logger.info(f"Received signal {signum}, shutting down...")
+            sensor.stop()
+            sys.exit(0)
+
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        sensor.start()
+        try:
+            while True:
+                time.sleep(30)  # Periodic health check
+                devices = sensor.get_all_devices()
+                logger.debug(f"Active devices: {len(devices)}")
+        except Exception as e:
+            logger.error(f"Daemon error: {e}")
+            sensor.stop()
+            sys.exit(1)
 
     elif args.scan:
         print("Starting presence scan (Ctrl+C to stop)...")
