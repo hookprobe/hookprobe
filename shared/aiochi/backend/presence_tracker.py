@@ -150,7 +150,7 @@ class PresenceTracker:
         self._fortress_bubble = None
         if use_fortress_bubble:
             try:
-                from products.fortress.lib.ecosystem_bubble import EcosystemBubble
+                from shared.aiochi.bubble.ecosystem_bubble import EcosystemBubble
                 self._fortress_bubble = EcosystemBubble()
                 logger.info("Using Fortress Ecosystem Bubble")
             except ImportError:

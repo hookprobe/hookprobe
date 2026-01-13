@@ -129,12 +129,13 @@ parse_args() {
                 echo "  • fts-*-data           - All other data volumes"
                 echo ""
                 echo "ALWAYS preserved (even with --purge):"
-                echo "  • /etc/hookprobe/persistent/dnsxai/whitelist.txt"
-                echo "    - User's DNS whitelist is NEVER removed"
-                echo "    - Symlinked from /var/lib/hookprobe/userdata/dnsxai/whitelist.txt"
+                echo "  • /etc/hookprobe/persistent/ directory (ENTIRE directory protected)"
+                echo "    - dnsxai/whitelist.txt  - User's DNS whitelist"
+                echo "    - dnsxai/config.json    - User's dnsXai configuration"
+                echo "    - dnsxai/stats.json     - Protection statistics"
                 echo ""
                 echo "Removed with --purge:"
-                echo "  • Other userdata files (blocked traffic logs, etc.)"
+                echo "  • All other config files, databases, logs, userdata"
                 echo ""
                 exit 0
                 ;;
@@ -181,6 +182,8 @@ stop_services() {
         "fts-fingerprint-engine"
         "fts-presence-sensor"
         "fts-bubble-manager"
+        "fts-device-lifecycle"
+        "fts-arp-export"
     )
 
     # Stop timers first
@@ -189,9 +192,11 @@ stop_services() {
     systemctl stop fts-channel-calibrate.timer 2>/dev/null || true
     systemctl stop fts-lstm-train.timer 2>/dev/null || true
     systemctl stop fts-device-status.timer 2>/dev/null || true
+    systemctl stop fts-device-lifecycle.timer 2>/dev/null || true
     systemctl stop fts-lte-collector.timer 2>/dev/null || true
     systemctl stop fts-wifi-signal.timer 2>/dev/null || true
     systemctl stop fts-nac-sync.timer 2>/dev/null || true
+    systemctl stop fts-arp-export.timer 2>/dev/null || true
 
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
@@ -443,6 +448,8 @@ remove_systemd_services() {
         "fts-fingerprint-engine"
         "fts-presence-sensor"
         "fts-bubble-manager"
+        "fts-device-lifecycle"
+        "fts-arp-export"
     )
 
     # Disable and remove channel optimization timer
@@ -479,6 +486,16 @@ remove_systemd_services() {
     log_info "Removing fts-nac-sync.timer..."
     systemctl disable fts-nac-sync.timer 2>/dev/null || true
     rm -f /etc/systemd/system/fts-nac-sync.timer
+
+    # Disable and remove device lifecycle timer
+    log_info "Removing fts-device-lifecycle.timer..."
+    systemctl disable fts-device-lifecycle.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-device-lifecycle.timer
+
+    # Disable and remove ARP export timer
+    log_info "Removing fts-arp-export.timer..."
+    systemctl disable fts-arp-export.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/fts-arp-export.timer
 
     # G.N.C. Architecture: Remove FTS Host Agent (container-to-host WiFi control)
     log_info "Removing fts-host-agent (G.N.C. Architecture)..."
@@ -1246,6 +1263,12 @@ remove_configuration() {
         "$CONFIG_DIR/macsec.conf"
         "$CONFIG_DIR/lte-failover.conf"
         "$CONFIG_DIR/wan-failover.conf"
+        "$CONFIG_DIR/oui_policies.conf"
+        "$CONFIG_DIR/wifi-interfaces.conf"
+        "$CONFIG_DIR/optional-services.conf"
+        # API credentials - SENSITIVE (always remove)
+        "$CONFIG_DIR/openrouter.json"
+        "$CONFIG_DIR/fingerbank.json"
     )
 
     for conf in "${config_files[@]}"; do
@@ -1333,6 +1356,19 @@ remove_configuration() {
         rm -rf /etc/hookprobe/ssl
     fi
 
+    # Remove TLS certs directory
+    if [ -d /etc/hookprobe/certs ]; then
+        log_info "Removing TLS certificates..."
+        rm -rf /etc/hookprobe/certs
+    fi
+
+    # Remove dnsmasq systemd drop-ins
+    if [ -d /etc/systemd/system/dnsmasq.service.d ]; then
+        log_info "Removing dnsmasq systemd drop-ins..."
+        rm -rf /etc/systemd/system/dnsmasq.service.d
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+
     # Remove admin password and secret key
     rm -f "$SECRETS_DIR/admin_password" 2>/dev/null || true
     rm -f "$SECRETS_DIR/fortress_secret_key" 2>/dev/null || true
@@ -1399,6 +1435,22 @@ remove_lte_config() {
         rm -f /var/lib/fortress/netplan-config.conf
     fi
 
+    # Remove additional /var/lib/fortress/ state files and directories
+    local fortress_state_items=(
+        "/var/lib/fortress/network-interfaces.conf"
+        "/var/lib/fortress/regulatory-state.json"
+        "/var/lib/fortress/wan-failover-setup-done"
+        "/var/lib/fortress/bubbles"
+        "/var/lib/fortress/filters"
+        "/var/lib/fortress/ovs"
+    )
+    for item in "${fortress_state_items[@]}"; do
+        if [ -e "$item" ]; then
+            log_info "Removing $(basename "$item")..."
+            rm -rf "$item"
+        fi
+    done
+
     # Remove Fortress netplan configuration
     if [ -f "/etc/netplan/60-fortress-ovs.yaml" ]; then
         log_info "Removing Fortress netplan configuration..."
@@ -1448,8 +1500,38 @@ remove_installation() {
         # Remove ML training logs
         rm -f /var/log/hookprobe/ml-aggregator.log 2>/dev/null || true
         rm -f /var/log/hookprobe/lstm-training.log 2>/dev/null || true
-        # Remove SDN Auto Pilot database
-        rm -f /var/lib/hookprobe/autopilot.db 2>/dev/null || true
+
+        # Remove ALL SQLite databases in /var/lib/hookprobe/ (device fingerprints, ML models, etc.)
+        log_info "Removing Fortress databases..."
+        local hookprobe_databases=(
+            "autopilot.db"
+            "bubbles.db"
+            "clustering.db"
+            "d2d_graph.db"
+            "device_identity.db"
+            "devices.db"
+            "dfs_intelligence.db"
+            "ecosystem_bubbles.db"
+            "feedback.db"
+            "fingerbank.db"
+            "fingerprint.db"
+            "ja3_fingerprints.db"
+            "lte_usage.db"
+            "mdns_cache.db"
+            "ml_fingerprints.db"
+            "presence.db"
+            "unified_fingerprint.db"
+        )
+        for db in "${hookprobe_databases[@]}"; do
+            rm -f "/var/lib/hookprobe/$db" 2>/dev/null || true
+        done
+        # Remove ML model directories
+        rm -rf /var/lib/hookprobe/ml_fingerprint_models 2>/dev/null || true
+        rm -rf /var/lib/hookprobe/ml_models 2>/dev/null || true
+        # Remove state files
+        rm -f /var/lib/hookprobe/hostapd-ovs.state 2>/dev/null || true
+        rm -f /var/lib/hookprobe/blocked_macs.json 2>/dev/null || true
+        rm -f /var/lib/hookprobe/arp-status.json 2>/dev/null || true
 
         # Remove AIOCHI shared module
         if [ -d "/opt/hookprobe/shared/aiochi" ]; then
@@ -1461,7 +1543,7 @@ remove_installation() {
             rmdir /opt/hookprobe/shared 2>/dev/null || true
         fi
     else
-        log_info "SDN Auto Pilot database preserved: /var/lib/hookprobe/autopilot.db"
+        log_info "Databases preserved in /var/lib/hookprobe/"
         if [ -d "/opt/hookprobe/shared/aiochi" ]; then
             log_info "AIOCHI shared module preserved: /opt/hookprobe/shared/aiochi"
         fi
@@ -1801,8 +1883,11 @@ main() {
         echo -e "  • User data (blocked traffic logs, etc.)"
         echo -e "  • Fortress user and group"
         echo ""
-        echo -e "${GREEN}PROTECTED (never removed):${NC}"
-        echo -e "  • dnsXai whitelist (/etc/hookprobe/persistent/dnsxai/whitelist.txt)"
+        echo -e "${GREEN}PROTECTED (never removed - even in purge mode):${NC}"
+        echo -e "  • /etc/hookprobe/persistent/ directory"
+        echo -e "    - dnsxai/whitelist.txt  - User's DNS whitelist"
+        echo -e "    - dnsxai/config.json    - User's dnsXai settings"
+        echo -e "    - dnsxai/stats.json     - Protection statistics"
         echo ""
     fi
 
