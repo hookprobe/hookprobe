@@ -348,6 +348,22 @@ def list_devices():
             if device.get(key) and not isinstance(device[key], str):
                 device[key] = str(device[key])
 
+    # Merge D2D cluster colors if available
+    d2d_colors = {}
+    try:
+        from aiochi_bubble_client import get_device_colors as _get_d2d_colors
+        d2d_colors = _get_d2d_colors()
+    except (ImportError, Exception):
+        pass
+
+    if d2d_colors:
+        for device in devices:
+            mac = device.get('mac', device.get('mac_address', '')).upper()
+            if mac in d2d_colors:
+                device['d2d_cluster_id'] = d2d_colors[mac].get('cluster_id')
+                device['d2d_cluster_color'] = d2d_colors[mac].get('cluster_color')
+                device['d2d_ecosystem'] = d2d_colors[mac].get('ecosystem')
+
     return jsonify({'devices': devices, 'count': len(devices), 'source': source})
 
 
@@ -770,20 +786,25 @@ def fingerprint_stats():
 
 
 # ========================================
-# Ecosystem Bubble API (Proprietary)
+# Ecosystem Bubble API (via AIOCHI container)
 # ========================================
 
-# Lazy import for bubble modules
+# Use AIOCHI bubble API client (consolidated in aiochi-bubble container)
 BUBBLE_AVAILABLE = False
 try:
-    from products.fortress.lib import (
-        get_ecosystem_bubble_manager,
-        get_presence_sensor,
-        get_behavior_clustering_engine,
+    from aiochi_bubble_client import (
+        get_aiochi_bubble_client,
+        get_ecosystem_bubbles as get_aiochi_bubbles,
+        is_aiochi_available,
     )
-    BUBBLE_AVAILABLE = True
+    if is_aiochi_available():
+        BUBBLE_AVAILABLE = True
 except ImportError:
     pass
+
+def get_ecosystem_bubble_manager():
+    """Get AIOCHI bubble client (compatibility wrapper)."""
+    return get_aiochi_bubble_client() if BUBBLE_AVAILABLE else None
 
 
 def bubble_required(f):
@@ -928,6 +949,154 @@ def bubble_stats():
         pass
 
     return jsonify(stats)
+
+
+# ========================================
+# D2D Communication API (Device Coloring)
+# ========================================
+
+# Import D2D client
+D2D_AVAILABLE = False
+try:
+    from aiochi_bubble_client import (
+        get_d2d_client,
+        get_device_colors,
+        get_device_cluster_color,
+    )
+    D2D_AVAILABLE = True
+except ImportError:
+    pass
+
+
+def d2d_required(f):
+    """Decorator to check D2D client availability."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not D2D_AVAILABLE:
+            return jsonify({'error': 'D2D communication tracking not available'}), 503
+        return f(*args, **kwargs)
+    return decorated
+
+
+@api_bp.route('/d2d/colors')
+@login_required
+def get_d2d_colors():
+    """
+    Get D2D cluster colors for all devices.
+
+    Returns a mapping of MAC -> cluster color info for coloring devices in UI.
+    Each cluster of communicating devices gets a unique color.
+    """
+    if not D2D_AVAILABLE:
+        return jsonify({'colors': {}, 'available': False})
+
+    try:
+        colors = get_device_colors()
+        return jsonify({
+            'colors': colors,
+            'count': len(colors),
+            'available': True
+        })
+    except Exception as e:
+        logger.error(f"Error fetching D2D colors: {e}")
+        return jsonify({'colors': {}, 'error': str(e), 'available': False}), 500
+
+
+@api_bp.route('/d2d/device/<mac_address>/color')
+@login_required
+def get_d2d_device_color(mac_address):
+    """
+    Get D2D cluster color for a specific device.
+
+    Returns the cluster color and communication info for a device.
+    """
+    if not D2D_AVAILABLE:
+        return jsonify({'error': 'D2D not available'}), 503
+
+    try:
+        color_info = get_device_cluster_color(mac_address)
+        if not color_info:
+            return jsonify({
+                'mac': mac_address,
+                'cluster_id': None,
+                'cluster_color': None,
+                'message': 'Device not found in D2D tracking'
+            })
+
+        return jsonify({
+            'mac': mac_address,
+            **color_info
+        })
+    except Exception as e:
+        logger.error(f"Error fetching D2D color for {mac_address}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/d2d/clusters')
+@login_required
+def get_d2d_clusters():
+    """
+    Get all D2D communication clusters.
+
+    Returns list of clusters, each with a unique color and member devices.
+    """
+    if not D2D_AVAILABLE:
+        return jsonify({'clusters': [], 'available': False})
+
+    try:
+        client = get_d2d_client()
+        clusters = client.get_communication_clusters()
+        return jsonify({
+            'clusters': clusters,
+            'count': len(clusters),
+            'available': True
+        })
+    except Exception as e:
+        logger.error(f"Error fetching D2D clusters: {e}")
+        return jsonify({'clusters': [], 'error': str(e), 'available': False}), 500
+
+
+@api_bp.route('/d2d/graph')
+@login_required
+def get_d2d_graph():
+    """
+    Get D2D communication graph for visualization.
+
+    Returns nodes (devices) and edges (communication links) for graph display.
+    """
+    if not D2D_AVAILABLE:
+        return jsonify({'nodes': [], 'edges': [], 'available': False})
+
+    try:
+        client = get_d2d_client()
+        graph = client.get_communication_graph()
+        return jsonify({
+            **graph,
+            'available': True
+        })
+    except Exception as e:
+        logger.error(f"Error fetching D2D graph: {e}")
+        return jsonify({'nodes': [], 'edges': [], 'error': str(e), 'available': False}), 500
+
+
+@api_bp.route('/d2d/stats')
+@login_required
+def get_d2d_stats():
+    """Get D2D communication tracking statistics."""
+    if not D2D_AVAILABLE:
+        return jsonify({'available': False})
+
+    try:
+        client = get_d2d_client()
+        stats = client.get_stats()
+        return jsonify({
+            **stats,
+            'available': True
+        })
+    except Exception as e:
+        logger.error(f"Error fetching D2D stats: {e}")
+        return jsonify({'error': str(e), 'available': False}), 500
 
 
 @api_bp.route('/presence/status')
