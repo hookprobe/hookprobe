@@ -1555,7 +1555,8 @@ def api_action(action_id):
                     'details': result
                 })
             except Exception as e:
-                logger.error(f"Quick action executor failed: {e}")
+                # CWE-209: Don't expose exception details in logs
+                logger.error(f"Quick action executor failed: {type(e).__name__}")
                 # Fall through to demo mode
 
         # Demo mode fallback

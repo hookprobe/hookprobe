@@ -341,8 +341,9 @@ class DataGravityMonitor:
                 regex = re.compile(pattern, re.IGNORECASE)
                 sf = SensitiveFile.from_pattern(pattern, sensitivity, data_types, description)
                 self._pattern_cache.append((regex, sf))
-            except re.error as e:
-                logger.warning(f"Invalid pattern {pattern}: {e}")
+            except re.error:
+                # CWE-532/CWE-209: Don't log pattern or exception details
+                logger.warning(f"Invalid regex pattern in SENSITIVE_PATTERNS (index {len(self._pattern_cache)})")
 
     def register_exfil_callback(self, callback: Callable):
         """Register callback for exfiltration detection events."""
