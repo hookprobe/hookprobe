@@ -96,47 +96,125 @@ class LogShipper:
             logger.debug(f"Failed to parse Suricata event: {e}")
             return None
 
-    def parse_zeek_conn(self, line):
-        """Parse a Zeek conn.log line (JSON format)."""
+    def parse_zeek_conn(self, line, fields=None):
+        """Parse a Zeek conn.log line (TSV or JSON format)."""
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return None
         try:
-            event = json.loads(line.strip())
+            # Try JSON first
+            if line.startswith('{'):
+                event = json.loads(line)
+                return {
+                    'ts': datetime.fromtimestamp(float(event.get('ts', 0))),
+                    'uid': event.get('uid', ''),
+                    'id_orig_h': event.get('id.orig_h', ''),
+                    'id_orig_p': event.get('id.orig_p', 0),
+                    'id_resp_h': event.get('id.resp_h', ''),
+                    'id_resp_p': event.get('id.resp_p', 0),
+                    'proto': event.get('proto', ''),
+                    'service': event.get('service', ''),
+                    'duration': float(event.get('duration', 0) or 0),
+                    'orig_bytes': int(event.get('orig_bytes', 0) or 0),
+                    'resp_bytes': int(event.get('resp_bytes', 0) or 0),
+                    'conn_state': event.get('conn_state', ''),
+                    'orig_pkts': int(event.get('orig_pkts', 0) or 0),
+                    'resp_pkts': int(event.get('resp_pkts', 0) or 0),
+                }
+            # Parse TSV format
+            if fields is None:
+                return None
+            values = line.split('\t')
+            if len(values) < len(fields):
+                return None
+            data = dict(zip(fields, values))
+            # Handle unset fields (-) and empty fields
+            def get_val(key, default=''):
+                v = data.get(key, default)
+                return default if v in ('-', '(empty)') else v
+            def get_float(key, default=0.0):
+                v = data.get(key, '')
+                return default if v in ('-', '(empty)', '') else float(v)
+            def get_int(key, default=0):
+                v = data.get(key, '')
+                return default if v in ('-', '(empty)', '') else int(v)
             return {
-                'timestamp': datetime.fromtimestamp(float(event.get('ts', 0))),
-                'uid': event.get('uid', ''),
-                'src_ip': event.get('id.orig_h', ''),
-                'src_port': event.get('id.orig_p', 0),
-                'dest_ip': event.get('id.resp_h', ''),
-                'dest_port': event.get('id.resp_p', 0),
-                'proto': event.get('proto', ''),
-                'service': event.get('service', ''),
-                'duration': float(event.get('duration', 0) or 0),
-                'orig_bytes': int(event.get('orig_bytes', 0) or 0),
-                'resp_bytes': int(event.get('resp_bytes', 0) or 0),
-                'conn_state': event.get('conn_state', ''),
-                'orig_pkts': int(event.get('orig_pkts', 0) or 0),
-                'resp_pkts': int(event.get('resp_pkts', 0) or 0),
+                'ts': datetime.fromtimestamp(get_float('ts')),
+                'uid': get_val('uid'),
+                'id_orig_h': get_val('id.orig_h'),
+                'id_orig_p': get_int('id.orig_p'),
+                'id_resp_h': get_val('id.resp_h'),
+                'id_resp_p': get_int('id.resp_p'),
+                'proto': get_val('proto'),
+                'service': get_val('service'),
+                'duration': get_float('duration'),
+                'orig_bytes': get_int('orig_bytes'),
+                'resp_bytes': get_int('resp_bytes'),
+                'conn_state': get_val('conn_state'),
+                'orig_pkts': get_int('orig_pkts'),
+                'resp_pkts': get_int('resp_pkts'),
             }
         except Exception as e:
             logger.debug(f"Failed to parse Zeek conn: {e}")
             return None
 
-    def parse_zeek_dns(self, line):
-        """Parse a Zeek dns.log line (JSON format)."""
+    def parse_zeek_dns(self, line, fields=None):
+        """Parse a Zeek dns.log line (TSV or JSON format)."""
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return None
         try:
-            event = json.loads(line.strip())
+            # Try JSON first
+            if line.startswith('{'):
+                event = json.loads(line)
+                return {
+                    'ts': datetime.fromtimestamp(float(event.get('ts', 0))),
+                    'uid': event.get('uid', ''),
+                    'id_orig_h': event.get('id.orig_h', ''),
+                    'id_orig_p': event.get('id.orig_p', 0),
+                    'id_resp_h': event.get('id.resp_h', ''),
+                    'id_resp_p': event.get('id.resp_p', 0),
+                    'query': event.get('query', ''),
+                    'qclass_name': event.get('qclass_name', ''),
+                    'qtype_name': event.get('qtype_name', ''),
+                    'rcode_name': event.get('rcode_name', ''),
+                    'answers': event.get('answers', []) or [],
+                    'TTLs': [float(t) for t in (event.get('TTLs', []) or [])],
+                }
+            # Parse TSV format
+            if fields is None:
+                return None
+            values = line.split('\t')
+            if len(values) < len(fields):
+                return None
+            data = dict(zip(fields, values))
+            def get_val(key, default=''):
+                v = data.get(key, default)
+                return default if v in ('-', '(empty)') else v
+            def get_float(key, default=0.0):
+                v = data.get(key, '')
+                return default if v in ('-', '(empty)', '') else float(v)
+            def get_int(key, default=0):
+                v = data.get(key, '')
+                return default if v in ('-', '(empty)', '') else int(v)
+            # Parse comma-separated arrays
+            answers_raw = get_val('answers')
+            answers = answers_raw.split(',') if answers_raw else []
+            ttls_raw = get_val('TTLs')
+            ttls = [float(t) for t in ttls_raw.split(',') if t] if ttls_raw else []
             return {
-                'timestamp': datetime.fromtimestamp(float(event.get('ts', 0))),
-                'uid': event.get('uid', ''),
-                'src_ip': event.get('id.orig_h', ''),
-                'src_port': event.get('id.orig_p', 0),
-                'dest_ip': event.get('id.resp_h', ''),
-                'dest_port': event.get('id.resp_p', 0),
-                'query': event.get('query', ''),
-                'qclass_name': event.get('qclass_name', ''),
-                'qtype_name': event.get('qtype_name', ''),
-                'rcode_name': event.get('rcode_name', ''),
-                'answers': ','.join(event.get('answers', []) or []),
-                'ttls': ','.join(str(t) for t in (event.get('TTLs', []) or [])),
+                'ts': datetime.fromtimestamp(get_float('ts')),
+                'uid': get_val('uid'),
+                'id_orig_h': get_val('id.orig_h'),
+                'id_orig_p': get_int('id.orig_p'),
+                'id_resp_h': get_val('id.resp_h'),
+                'id_resp_p': get_int('id.resp_p'),
+                'query': get_val('query'),
+                'qclass_name': get_val('qclass_name'),
+                'qtype_name': get_val('qtype_name'),
+                'rcode_name': get_val('rcode_name'),
+                'answers': answers,
+                'TTLs': ttls,
             }
         except Exception as e:
             logger.debug(f"Failed to parse Zeek dns: {e}")
@@ -235,11 +313,14 @@ class LogShipper:
         """Watch Zeek log directory."""
         logger.info(f"Watching Zeek logs: {ZEEK_LOG_PATH}")
 
-        # Track file positions to read only new data (Bug fix: was seeking to EOF every iteration)
+        # Track file positions to read only new data
         conn_log_pos = 0
         dns_log_pos = 0
         conn_log_inode = None
         dns_log_inode = None
+        # Track field headers for TSV parsing
+        conn_fields = None
+        dns_fields = None
 
         while not self.stop_event.is_set():
             try:
@@ -256,17 +337,23 @@ class LogShipper:
                     # Check if file was rotated (inode changed)
                     current_inode = conn_log.stat().st_ino
                     if conn_log_inode is not None and current_inode != conn_log_inode:
-                        logger.info("conn.log rotated, resetting position")
+                        logger.info("conn.log rotated, resetting position and fields")
                         conn_log_pos = 0
+                        conn_fields = None
                     conn_log_inode = current_inode
 
                     with open(conn_log, 'r') as f:
                         f.seek(conn_log_pos)
                         lines_read = 0
                         for line in f:
+                            # Extract field names from TSV header
+                            if line.startswith('#fields'):
+                                conn_fields = line.strip().split('\t')[1:]
+                                logger.info(f"conn.log fields: {len(conn_fields)} columns")
+                                continue
                             if line.startswith('#'):
                                 continue
-                            event = self.parse_zeek_conn(line)
+                            event = self.parse_zeek_conn(line, conn_fields)
                             if event:
                                 self.zeek_conn_buffer.append(event)
                                 lines_read += 1
@@ -280,17 +367,23 @@ class LogShipper:
                     # Check if file was rotated (inode changed)
                     current_inode = dns_log.stat().st_ino
                     if dns_log_inode is not None and current_inode != dns_log_inode:
-                        logger.info("dns.log rotated, resetting position")
+                        logger.info("dns.log rotated, resetting position and fields")
                         dns_log_pos = 0
+                        dns_fields = None
                     dns_log_inode = current_inode
 
                     with open(dns_log, 'r') as f:
                         f.seek(dns_log_pos)
                         lines_read = 0
                         for line in f:
+                            # Extract field names from TSV header
+                            if line.startswith('#fields'):
+                                dns_fields = line.strip().split('\t')[1:]
+                                logger.info(f"dns.log fields: {len(dns_fields)} columns")
+                                continue
                             if line.startswith('#'):
                                 continue
-                            event = self.parse_zeek_dns(line)
+                            event = self.parse_zeek_dns(line, dns_fields)
                             if event:
                                 self.zeek_dns_buffer.append(event)
                                 lines_read += 1

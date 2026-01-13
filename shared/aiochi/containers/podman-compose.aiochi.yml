@@ -5,14 +5,8 @@
 #   # Minimal (recommended - ~2GB RAM)
 #   podman-compose -f podman-compose.aiochi.yml up -d
 #
-#   # With AI narratives (~6GB RAM)
-#   podman-compose -f podman-compose.aiochi.yml --profile ai up -d
-#
 #   # With n8n workflows (~3GB RAM)
 #   podman-compose -f podman-compose.aiochi.yml --profile workflows up -d
-#
-#   # Full stack (~8GB RAM)
-#   podman-compose -f podman-compose.aiochi.yml --profile ai --profile workflows up -d
 #
 # Note: This stack is OPTIONAL. Core security (QSecBit, dnsXai) runs without it.
 #       AIOCHI adds the "Eyes" - visual dashboards and human narratives.
@@ -27,8 +21,9 @@
 #
 # Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed)
 #
-# Optional (profile: ai):
-#   - ollama: Local LLM for AI narratives (~4GB additional RAM)
+# AI Narratives:
+#   - Uses OpenRouter API for LLM access (configure via: fortress-ctl openrouter add-api-key)
+#   - No local LLM required - uses cloud models via OpenRouter
 #
 # Optional (profile: workflows):
 #   - narrative-engine (n8n): Complex workflow automation (~500MB additional RAM)
@@ -51,7 +46,6 @@ volumes:
   zeek_logs:
   zeek_spool:
   identity_data:
-  ollama_models:
   bubble_data:
 
 services:
@@ -137,23 +131,8 @@ services:
     # This enables dual-capture: LAN (FTS-mirror) + WAN (wan-mirror) for complete visibility
     # Dual-Path Architecture: Suricata captures from wan-mirror which receives traffic
     # from both wired (AF_XDP/TC-BPF optimized) and mobile (TC-BPF with sampling) WANs
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        IFACES="-i ${CAPTURE_INTERFACE:-FTS-mirror}"
-        # Add WAN interface if configured and exists
-        if [ -n "${WAN_CAPTURE_INTERFACE}" ] && ip link show "${WAN_CAPTURE_INTERFACE}" >/dev/null 2>&1; then
-          echo "AIOCHI: Adding WAN capture interface: ${WAN_CAPTURE_INTERFACE}"
-          IFACES="$IFACES -i ${WAN_CAPTURE_INTERFACE}"
-          # Log dual-path architecture info if available
-          if [ -f /run/fortress/wan-mirror.state ]; then
-            . /run/fortress/wan-mirror.state 2>/dev/null || true
-            [ -n "${WAN_PATH_TYPE:-}" ] && echo "AIOCHI: WAN path type: ${WAN_PATH_TYPE} (dual-path enabled)"
-            [ -n "${WWAN_PATH_TYPE:-}" ] && echo "AIOCHI: WWAN path type: ${WWAN_PATH_TYPE}"
-          fi
-        fi
-        echo "AIOCHI: Starting Suricata with interfaces: $IFACES"
-        exec suricata -c /etc/suricata/suricata.yaml $IFACES --af-packet
+    # Simple entrypoint - use LAN interface only (WAN monitoring via wan-mirror if configured)
+    command: ["suricata", "-c", "/etc/suricata/suricata.yaml", "-i", "FTS-mirror", "--af-packet"]
     healthcheck:
       # Check Suricata process is running (uses -f for flexible match, handles Suricata-Main)
       test: ["CMD-SHELL", "pgrep -f Suricata || pgrep -f suricata || exit 1"]
@@ -196,8 +175,8 @@ services:
             # For now, just use primary interface - WAN threat detection handled by Suricata
           fi
         fi
-        echo "AIOCHI: Starting Zeek on interface: $IFACE"
-        exec zeek -C -i "$IFACE" local
+        echo "AIOCHI: Starting Zeek on interface: $$IFACE"
+        exec zeek -C -i "$$IFACE" local
     healthcheck:
       # Check Zeek process is running (use pidof since pgrep not available in zeek image)
       test: ["CMD-SHELL", "pidof zeek || exit 1"]
@@ -231,7 +210,7 @@ services:
       CLICKHOUSE_USER: aiochi
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
       SURICATA_LOG_PATH: /var/log/suricata/eve.json
-      ZEEK_LOG_PATH: /opt/zeek/logs/current
+      ZEEK_LOG_PATH: /opt/zeek/logs
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       clickhouse:
@@ -300,7 +279,8 @@ services:
       aiochi-internal:
         ipv4_address: 172.20.210.25
     ports:
-      - "127.0.0.1:8070:8070"
+      # Bind to all interfaces so fts-web can reach via host gateway
+      - "8070:8070"
     volumes:
       # Zeek logs for mDNS and D2D connection analysis
       - zeek_logs:/opt/zeek/logs:ro
@@ -310,6 +290,12 @@ services:
       - /run/openvswitch:/run/openvswitch
       # Fortress configuration
       - /etc/hookprobe:/etc/hookprobe:ro
+      # Mount scripts for development (override built-in)
+      - ../containers/scripts/bubble_entrypoint.py:/opt/hookprobe/bubble_entrypoint.py:ro
+      - ../containers/scripts/d2d_tracker.py:/opt/hookprobe/d2d_tracker.py:ro
+      - ../bubble:/opt/hookprobe/shared/aiochi/bubble:ro
+      # dnsmasq leases for IP→MAC resolution in D2D tracking
+      - /var/lib/misc:/var/lib/misc:ro
     environment:
       # ClickHouse for analytics
       CLICKHOUSE_HOST: aiochi-clickhouse
@@ -318,12 +304,14 @@ services:
       CLICKHOUSE_USER: aiochi
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
       # Zeek log paths
-      ZEEK_LOG_PATH: /opt/zeek/logs/current
-      ZEEK_DNS_LOG: /opt/zeek/logs/current/dns.log
-      ZEEK_CONN_LOG: /opt/zeek/logs/current/conn.log
+      ZEEK_LOG_PATH: /opt/zeek/logs
+      ZEEK_DNS_LOG: /opt/zeek/logs/dns.log
+      ZEEK_CONN_LOG: /opt/zeek/logs/conn.log
       # Narrative engine (optional - uses templates if not available)
       NARRATIVE_ENGINE_URL: "http://aiochi-narrative:5678"
-      OLLAMA_URL: "http://aiochi-ollama:11434"
+      # OpenRouter API for LLM access (configure via fortress-ctl openrouter add-api-key)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-google/gemma-3-27b-it:free}"
       # Logging
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     cap_add:
@@ -377,9 +365,9 @@ services:
       CLICKHOUSE_DB: "aiochi"
       CLICKHOUSE_USER: "aiochi"
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      # Ollama LLM connection (if available)
-      OLLAMA_HOST: "http://aiochi-ollama:11434"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
+      # OpenRouter API for LLM access
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-google/gemma-3-27b-it:free}"
       # n8n AI features
       N8N_AI_ENABLED: "true"
     depends_on:
@@ -394,62 +382,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  # ============================================================================
-  # OPTIONAL: AI TIER - Local LLM (profile: ai)
-  # ============================================================================
-  # Ollama for AI-generated narratives. Most events use templates which work
-  # without this. Enable with: --profile ai
-  # WARNING: Requires 4-8GB RAM for the LLM model
-  # ============================================================================
-
-  ollama:
-    image: docker.io/ollama/ollama:latest
-    container_name: aiochi-ollama
-    hostname: aiochi-ollama
-    restart: unless-stopped
-    profiles:
-      - ai
-    networks:
-      aiochi-internal:
-        ipv4_address: 172.20.210.50
-    ports:
-      - "127.0.0.1:11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    environment:
-      OLLAMA_HOST: "0.0.0.0"
-      OLLAMA_KEEP_ALIVE: "24h"
-      # GPU acceleration (optional - auto-detected)
-      # NVIDIA_VISIBLE_DEVICES: all
-    # Pull default model on first start (async - don't block container ready)
-    # Model download (~2GB) happens in background, healthcheck waits for API
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        /bin/ollama serve &
-        OLLAMA_PID=$!
-        # Wait for Ollama API to be ready (up to 30s)
-        for i in $(seq 1 30); do
-          if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-            echo "Ollama API ready, pulling model in background..."
-            # Pull model in background (don't block container startup)
-            nohup /bin/ollama pull llama3.2:3b >/var/log/ollama-pull.log 2>&1 &
-            break
-          fi
-          sleep 1
-        done
-        wait $OLLAMA_PID
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # Extended start period for slow systems (model download is async now)
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 4G

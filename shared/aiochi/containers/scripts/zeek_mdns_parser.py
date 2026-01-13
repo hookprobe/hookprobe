@@ -102,23 +102,13 @@ class ZeekMDNSParser:
     """
     Parses Zeek dns.log for mDNS traffic.
 
-    Zeek dns.log format (JSON):
-    {
-        "ts": 1234567890.123,
-        "uid": "...",
-        "id.orig_h": "10.200.0.45",
-        "id.orig_p": 5353,
-        "id.resp_h": "224.0.0.251",
-        "id.resp_p": 5353,
-        "proto": "udp",
-        "query": "_airplay._tcp.local",
-        "qclass": 1,
-        "qtype": 12,  # PTR
-        "rcode": 0,
-        "AA": true,
-        "answers": ["..."],
-        "TTLs": [120]
-    }
+    Supports both JSON and TSV formats (Zeek default is TSV).
+
+    TSV format has header lines starting with #:
+        #fields ts uid id.orig_h id.orig_p ...
+
+    JSON format (if configured):
+        {"ts": 1234567890.123, "uid": "...", ...}
     """
 
     # Zeek query type mapping
@@ -140,6 +130,65 @@ class ZeekMDNSParser:
         self._position = 0
         self._mac_cache: Dict[str, str] = {}  # IP -> MAC cache
         self._discovery_pairs: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._fields: Optional[List[str]] = None  # TSV field names
+
+    def _parse_tsv_line(self, line: str) -> Optional[Dict[str, Any]]:
+        """Parse a TSV line into a dict using field names from header."""
+        if not self._fields:
+            return None
+
+        values = line.split('\t')
+        if len(values) != len(self._fields):
+            return None
+
+        record = {}
+        for i, field in enumerate(self._fields):
+            val = values[i]
+            # Handle Zeek special values
+            if val == '-' or val == '(empty)':
+                val = None
+            elif field in ('id.orig_p', 'id.resp_p', 'trans_id', 'qclass', 'qtype', 'rcode', 'Z'):
+                try:
+                    val = int(val) if val else 0
+                except ValueError:
+                    val = 0
+            elif field == 'ts':
+                try:
+                    val = float(val) if val else 0.0
+                except ValueError:
+                    val = 0.0
+            elif field in ('AA', 'TC', 'RD', 'RA', 'rejected'):
+                val = val == 'T'
+            elif field in ('answers', 'TTLs'):
+                # Parse comma-separated lists
+                val = val.split(',') if val else []
+            record[field] = val
+
+        return record
+
+    def _parse_line(self, line: str) -> Optional[Dict[str, Any]]:
+        """Parse a line (JSON or TSV) into a dict."""
+        line = line.strip()
+        if not line:
+            return None
+
+        # Handle TSV header lines
+        if line.startswith('#fields'):
+            self._fields = line.split('\t')[1:]  # Skip '#fields'
+            logger.debug(f"Parsed {len(self._fields)} TSV fields")
+            return None
+        elif line.startswith('#'):
+            return None  # Skip other comments
+
+        # Try JSON first
+        if line.startswith('{'):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                pass
+
+        # Parse as TSV
+        return self._parse_tsv_line(line)
 
     def _detect_ecosystem(self, query: str) -> tuple[str, Optional[str]]:
         """Detect ecosystem from mDNS query."""
@@ -268,17 +317,13 @@ class ZeekMDNSParser:
         try:
             with open(self.dns_log_path) as f:
                 for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
+                    record = self._parse_line(line)
+                    if not record:
                         continue
 
-                    try:
-                        record = json.loads(line)
-                        event = self._parse_record(record)
-                        if event:
-                            yield event
-                    except json.JSONDecodeError:
-                        continue
+                    event = self._parse_record(record)
+                    if event:
+                        yield event
         except Exception as e:
             logger.error(f"Failed to parse dns.log: {e}")
 
@@ -305,23 +350,20 @@ class ZeekMDNSParser:
                     f.seek(self._position)
 
                     for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
+                        record = self._parse_line(line)
+                        if not record:
                             continue
 
-                        try:
-                            record = json.loads(line)
-                            event = self._parse_record(record)
-                            if event:
-                                yield event
-                        except json.JSONDecodeError:
-                            continue
+                        event = self._parse_record(record)
+                        if event:
+                            yield event
 
                     # Save position for next iteration
                     self._position = f.tell()
 
             except FileNotFoundError:
                 self._position = 0
+                self._fields = None  # Reset fields on rotation
             except Exception as e:
                 logger.error(f"Error watching dns.log: {e}")
 
