@@ -30,6 +30,29 @@ except ImportError as e:
     D2D_CONNECTION_AVAILABLE = False
     logging.getLogger(__name__).debug(f"D2D connection graph not available: {e}")
 
+# Import AIOCHI Bubble Client for D2D cluster colors from container
+# This is the primary source for D2D communication tracking
+try:
+    from lib.aiochi_bubble_client import (
+        get_d2d_client,
+        get_device_colors as get_d2d_device_colors,
+        is_aiochi_available,
+    )
+    AIOCHI_D2D_AVAILABLE = True
+except ImportError as e:
+    AIOCHI_D2D_AVAILABLE = False
+    logging.getLogger(__name__).debug(f"AIOCHI D2D client not available: {e}")
+
+    # Stub functions
+    def get_d2d_client():
+        return None
+
+    def get_d2d_device_colors():
+        return {}
+
+    def is_aiochi_available():
+        return False
+
 # Import real data integration module
 try:
     from .real_data import (
@@ -2357,6 +2380,95 @@ def fetch_aiochi_bubbles():
         return None
 
 
+def fetch_d2d_clusters_from_container(ip_to_mac_map=None):
+    """Fetch D2D communication clusters from aiochi-bubble container.
+
+    Returns a dict mapping MAC address -> d2d_cluster info for UI rendering.
+    Format matches what the AIOCHI dashboard JS expects.
+
+    Args:
+        ip_to_mac_map: Optional dict mapping IP -> MAC for device resolution.
+                       If not provided, will try to build from SDN devices.
+    """
+    if not AIOCHI_D2D_AVAILABLE:
+        return {}
+
+    try:
+        client = get_d2d_client()
+        if not client:
+            return {}
+
+        clusters = client.get_communication_clusters()
+        if not clusters:
+            return {}
+
+        # Build IP-to-MAC map if not provided
+        if ip_to_mac_map is None:
+            ip_to_mac_map = {}
+            try:
+                # Try to get from SDN devices
+                sdn_devices = get_sdn_devices()
+                for d in sdn_devices:
+                    ip = d.get('ip', '')
+                    mac = d.get('mac', '').upper()
+                    if ip and mac:
+                        ip_to_mac_map[ip] = mac
+            except Exception as e:
+                logger.debug(f"Could not build IP-to-MAC map: {e}")
+
+        d2d_device_clusters = {}
+        for cluster in clusters:
+            cluster_id = cluster.get('cluster_id', '')
+            color = cluster.get('color', '#6B7280')
+            device_count = cluster.get('device_count', 0)
+            devices = cluster.get('devices', [])
+
+            # Calculate average affinity from cluster data if available
+            avg_connections = cluster.get('avg_connections', 0)
+            # Normalize to 0-1 range (assume 10+ connections = 1.0 affinity)
+            avg_affinity = min(avg_connections / 10.0, 1.0) if avg_connections else 0.5
+
+            cluster_info = {
+                'cluster_id': cluster_id,
+                'cluster_color': color,
+                'device_count': device_count,
+                'avg_affinity': round(avg_affinity, 2),
+            }
+
+            for device in devices:
+                device_id = device.get('mac', '').upper()
+                device_ip = device.get('ip', '')
+
+                # Handle IP-based device IDs from aiochi-bubble (e.g., "IP:10.200.0.9")
+                if device_id.startswith('IP:'):
+                    ip_addr = device_id[3:]  # Remove "IP:" prefix
+                    # Try to resolve to MAC
+                    if ip_addr in ip_to_mac_map:
+                        mac = ip_to_mac_map[ip_addr]
+                        d2d_device_clusters[mac] = cluster_info
+                    # Also store by IP for devices we couldn't resolve
+                    if ip_addr:
+                        d2d_device_clusters[f"IP:{ip_addr}"] = cluster_info
+                elif device_id:
+                    # Real MAC address
+                    d2d_device_clusters[device_id] = cluster_info
+
+                # Also try matching by IP field
+                if device_ip and device_ip in ip_to_mac_map:
+                    mac = ip_to_mac_map[device_ip]
+                    d2d_device_clusters[mac] = cluster_info
+
+        if d2d_device_clusters:
+            resolved_macs = [k for k in d2d_device_clusters.keys() if not k.startswith('IP:')]
+            logger.info(f"AIOCHI D2D: {len(clusters)} clusters, {len(d2d_device_clusters)} entries, {len(resolved_macs)} MAC-resolved")
+
+        return d2d_device_clusters
+
+    except Exception as e:
+        logger.debug(f"Failed to fetch D2D clusters from container: {e}")
+        return {}
+
+
 def get_demo_bubbles():
     """Generate demo bubbles data."""
     return {
@@ -2454,12 +2566,19 @@ def api_bubbles_list():
             data = fetch_aiochi_bubbles()
             if data:
                 # Enrich devices with D2D cluster colors
-                if D2D_CONNECTION_AVAILABLE:
+                # Priority: 1. aiochi-bubble container, 2. local connection_graph
+                d2d_device_clusters = {}
+
+                # Try aiochi-bubble container first (primary source)
+                if AIOCHI_D2D_AVAILABLE:
+                    d2d_device_clusters = fetch_d2d_clusters_from_container()
+
+                # Fallback to local connection analyzer if container didn't have data
+                if not d2d_device_clusters and D2D_CONNECTION_AVAILABLE:
                     try:
                         analyzer = get_connection_analyzer()
                         cluster_colors = analyzer.assign_bubble_colors()
                         clusters = analyzer.find_d2d_clusters()
-                        d2d_device_clusters = {}
                         for i, cluster in enumerate(clusters):
                             color = cluster_colors.get(i, get_user_bubble_color(i))
                             for mac in cluster.devices:
@@ -2469,23 +2588,30 @@ def api_bubbles_list():
                                     'device_count': len(cluster.devices),
                                     'avg_affinity': round(cluster.avg_affinity, 2),
                                 }
+                    except Exception as e:
+                        logger.debug(f"Local D2D enrichment failed: {e}")
 
-                        # Add D2D info to devices in bubbles
-                        for bubble in data.get('bubbles', []):
-                            for device in bubble.get('devices', []):
-                                mac_upper = device.get('mac', '').upper()
-                                if mac_upper in d2d_device_clusters:
-                                    device['d2d_cluster'] = d2d_device_clusters[mac_upper]
-
-                        # Add D2D info to unassigned devices
-                        for device in data.get('unassigned_devices', []):
+                # Add D2D info to devices in bubbles
+                if d2d_device_clusters:
+                    for bubble in data.get('bubbles', []):
+                        for device in bubble.get('devices', []):
                             mac_upper = device.get('mac', '').upper()
+                            ip = device.get('ip', '')
                             if mac_upper in d2d_device_clusters:
                                 device['d2d_cluster'] = d2d_device_clusters[mac_upper]
+                            elif ip and f"IP:{ip}" in d2d_device_clusters:
+                                device['d2d_cluster'] = d2d_device_clusters[f"IP:{ip}"]
 
-                        logger.info(f"AIOCHI enriched with D2D: {len(clusters)} clusters, {len(d2d_device_clusters)} devices")
-                    except Exception as e:
-                        logger.debug(f"D2D enrichment failed for AIOCHI data: {e}")
+                    # Add D2D info to unassigned devices
+                    for device in data.get('unassigned_devices', []):
+                        mac_upper = device.get('mac', '').upper()
+                        ip = device.get('ip', '')
+                        if mac_upper in d2d_device_clusters:
+                            device['d2d_cluster'] = d2d_device_clusters[mac_upper]
+                        elif ip and f"IP:{ip}" in d2d_device_clusters:
+                            device['d2d_cluster'] = d2d_device_clusters[f"IP:{ip}"]
+
+                    logger.info(f"AIOCHI enriched with D2D: {len(d2d_device_clusters)} devices with cluster colors")
 
                 return jsonify({
                     'success': True,
@@ -2505,9 +2631,16 @@ def api_bubbles_list():
                 all_devices_map = {d['mac'].upper(): d for d in all_devices}
 
                 # Get D2D colors for devices that communicate
+                # Priority: 1. aiochi-bubble container, 2. local connection_graph
                 d2d_device_colors = {}
                 d2d_device_clusters = {}
-                if D2D_CONNECTION_AVAILABLE:
+
+                # Try aiochi-bubble container first (primary source)
+                if AIOCHI_D2D_AVAILABLE:
+                    d2d_device_clusters = fetch_d2d_clusters_from_container()
+
+                # Fallback to local connection analyzer if container didn't have data
+                if not d2d_device_clusters and D2D_CONNECTION_AVAILABLE:
                     try:
                         analyzer = get_connection_analyzer()
                         d2d_device_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
@@ -2522,14 +2655,8 @@ def api_bubbles_list():
                                     'device_count': len(cluster.devices),
                                     'avg_affinity': round(cluster.avg_affinity, 2),
                                 }
-                        # Debug: Log D2D cluster info
-                        logger.info(f"D2D clusters found: {len(clusters)}, cluster_macs: {list(d2d_device_clusters.keys())}")
-                        logger.info(f"All device MACs: {list(all_devices_map.keys())}")
-                        # Check for matches
-                        matches = set(d2d_device_clusters.keys()) & set(all_devices_map.keys())
-                        logger.info(f"D2D MACs matching devices: {list(matches)}")
                     except Exception as e:
-                        logger.debug(f"D2D colors unavailable: {e}")
+                        logger.debug(f"Local D2D colors unavailable: {e}")
 
                 # Track which devices are already assigned
                 assigned_macs = set()
@@ -2553,8 +2680,12 @@ def api_bubbles_list():
                         # Add D2D color info if available
                         if mac_upper in d2d_device_colors:
                             device_entry['d2d_type_color'] = d2d_device_colors[mac_upper]
+                        # D2D cluster - try MAC first, then IP fallback
+                        ip = device_entry.get('ip', '')
                         if mac_upper in d2d_device_clusters:
                             device_entry['d2d_cluster'] = d2d_device_clusters[mac_upper]
+                        elif ip and f"IP:{ip}" in d2d_device_clusters:
+                            device_entry['d2d_cluster'] = d2d_device_clusters[f"IP:{ip}"]
                         devices_in_bubble.append(device_entry)
 
                     # Get policy info based on bubble type
@@ -2589,8 +2720,12 @@ def api_bubbles_list():
                         # Add D2D color info if available
                         if mac in d2d_device_colors:
                             device_entry['d2d_type_color'] = d2d_device_colors[mac]
+                        # D2D cluster - try MAC first, then IP fallback
+                        ip = device_entry.get('ip', '')
                         if mac in d2d_device_clusters:
                             device_entry['d2d_cluster'] = d2d_device_clusters[mac]
+                        elif ip and f"IP:{ip}" in d2d_device_clusters:
+                            device_entry['d2d_cluster'] = d2d_device_clusters[f"IP:{ip}"]
                         unassigned.append(device_entry)
 
                 return jsonify({
@@ -2608,13 +2743,40 @@ def api_bubbles_list():
                 logger.info(f"Returning {len(module_data.get('bubbles', []))} bubbles from bubbles module")
 
                 # Enrich devices with D2D cluster colors
-                if D2D_CONNECTION_AVAILABLE:
+                # Priority: 1. AIOCHI container API, 2. Local connection_graph
+                d2d_clusters = {}
+
+                # Try AIOCHI container API first (primary source)
+                if AIOCHI_D2D_AVAILABLE:
+                    try:
+                        # Build IP-to-MAC map from module_data devices
+                        ip_to_mac_map = {}
+                        for bubble in module_data.get('bubbles', []):
+                            for d in bubble.get('devices', []):
+                                ip = d.get('ip', '')
+                                mac = d.get('mac', '').upper()
+                                if ip and mac:
+                                    ip_to_mac_map[ip] = mac
+                        for d in module_data.get('unassigned_devices', []):
+                            ip = d.get('ip', '')
+                            mac = d.get('mac', '').upper()
+                            if ip and mac:
+                                ip_to_mac_map[ip] = mac
+
+                        d2d_clusters = fetch_d2d_clusters_from_container(ip_to_mac_map)
+                        if d2d_clusters:
+                            logger.info(f"Module data: Fetched {len(d2d_clusters)} D2D clusters from AIOCHI container")
+                    except Exception as e:
+                        logger.debug(f"AIOCHI D2D unavailable for module data: {e}")
+
+                # Fallback to local connection_graph if container didn't have data
+                d2d_colors = {}
+                if not d2d_clusters and D2D_CONNECTION_AVAILABLE:
                     try:
                         analyzer = get_connection_analyzer()
                         d2d_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
                         cluster_colors = analyzer.assign_bubble_colors()
                         clusters = analyzer.find_d2d_clusters()
-                        d2d_clusters = {}
                         for i, cluster in enumerate(clusters):
                             color = cluster_colors.get(i, get_user_bubble_color(i))
                             for mac in cluster.devices:
@@ -2624,25 +2786,44 @@ def api_bubbles_list():
                                     'device_count': len(cluster.devices),
                                     'avg_affinity': round(cluster.avg_affinity, 2),
                                 }
+                        logger.info(f"Module data: Using local D2D: {len(clusters)} clusters, {len(d2d_clusters)} devices")
+                    except Exception as e:
+                        logger.warning(f"Local D2D connection_graph failed: {e}")
 
+                # Always enrich devices with D2D cluster colors if we have data
+                if d2d_clusters:
+                    try:
+                        enriched_count = 0
                         # Add D2D info to devices in bubbles
                         for bubble in module_data.get('bubbles', []):
                             for device in bubble.get('devices', []):
                                 mac_upper = device.get('mac', '').upper()
+                                device_ip = device.get('ip', '')
                                 if mac_upper in d2d_colors:
                                     device['d2d_type_color'] = d2d_colors[mac_upper]
+                                # Try MAC first, then IP fallback for aiochi-bubble
                                 if mac_upper in d2d_clusters:
                                     device['d2d_cluster'] = d2d_clusters[mac_upper]
+                                    enriched_count += 1
+                                elif device_ip and f"IP:{device_ip}" in d2d_clusters:
+                                    device['d2d_cluster'] = d2d_clusters[f"IP:{device_ip}"]
+                                    enriched_count += 1
 
                         # Add D2D info to unassigned devices
                         for device in module_data.get('unassigned_devices', []):
                             mac_upper = device.get('mac', '').upper()
+                            device_ip = device.get('ip', '')
                             if mac_upper in d2d_colors:
                                 device['d2d_type_color'] = d2d_colors[mac_upper]
+                            # Try MAC first, then IP fallback for aiochi-bubble
                             if mac_upper in d2d_clusters:
                                 device['d2d_cluster'] = d2d_clusters[mac_upper]
+                                enriched_count += 1
+                            elif device_ip and f"IP:{device_ip}" in d2d_clusters:
+                                device['d2d_cluster'] = d2d_clusters[f"IP:{device_ip}"]
+                                enriched_count += 1
 
-                        logger.info(f"Module data enriched with D2D: {len(clusters)} clusters, {len(d2d_clusters)} devices")
+                        logger.info(f"D2D enrichment complete: {len(d2d_clusters)} clusters, {enriched_count} devices enriched")
                     except Exception as e:
                         logger.warning(f"D2D enrichment failed for module data: {e}")
 
@@ -2655,18 +2836,40 @@ def api_bubbles_list():
 
         # Try DHCP devices even if bubble manager unavailable
         # This gives real device visibility without full bubble management
+        logger.info(f"D2D Debug: AIOCHI_ENABLED={AIOCHI_ENABLED}, LOCAL_BUBBLE={LOCAL_BUBBLE_AVAILABLE}, AIOCHI_D2D={AIOCHI_D2D_AVAILABLE}")
         dhcp_devices = get_sdn_devices()  # Uses DHCP fallback when SDN unavailable
+        logger.info(f"D2D Debug: dhcp_devices={len(dhcp_devices) if dhcp_devices else 0}")
         if dhcp_devices:
             logger.info(f"Returning {len(dhcp_devices)} devices from DHCP (no bubble manager)")
 
+            # Build IP-to-MAC map for D2D resolution
+            ip_to_mac_map = {}
+            for d in dhcp_devices:
+                ip = d.get('ip', '')
+                mac = d.get('mac', '').upper()
+                if ip and mac:
+                    ip_to_mac_map[ip] = mac
+
             # Add D2D colors to DHCP-only devices
-            if D2D_CONNECTION_AVAILABLE:
+            # Priority: 1. AIOCHI container API, 2. Local connection_graph
+            d2d_clusters = {}
+
+            # Try AIOCHI container API first (primary source)
+            if AIOCHI_D2D_AVAILABLE:
+                try:
+                    d2d_clusters = fetch_d2d_clusters_from_container(ip_to_mac_map)
+                    if d2d_clusters:
+                        logger.info(f"DHCP devices: Fetched {len(d2d_clusters)} D2D clusters from AIOCHI container")
+                except Exception as e:
+                    logger.debug(f"AIOCHI D2D unavailable for DHCP devices: {e}")
+
+            # Fallback to local connection_graph if container didn't have data
+            if not d2d_clusters and D2D_CONNECTION_AVAILABLE:
                 try:
                     analyzer = get_connection_analyzer()
                     d2d_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
                     cluster_colors = analyzer.assign_bubble_colors()
                     clusters = analyzer.find_d2d_clusters()
-                    d2d_clusters = {}
                     for i, cluster in enumerate(clusters):
                         color = cluster_colors.get(i, get_user_bubble_color(i))
                         for mac in cluster.devices:
@@ -2676,15 +2879,26 @@ def api_bubbles_list():
                                 'device_count': len(cluster.devices),
                                 'avg_affinity': round(cluster.avg_affinity, 2),
                             }
-                    # Enrich devices with D2D colors
+                    # Also add d2d_colors
                     for device in dhcp_devices:
                         mac = device.get('mac', '').upper()
                         if mac in d2d_colors:
                             device['d2d_type_color'] = d2d_colors[mac]
-                        if mac in d2d_clusters:
-                            device['d2d_cluster'] = d2d_clusters[mac]
                 except Exception as e:
-                    logger.debug(f"D2D colors unavailable for DHCP devices: {e}")
+                    logger.debug(f"Local D2D unavailable for DHCP devices: {e}")
+
+            # Enrich devices with D2D cluster colors
+            # Match by MAC first, then try IP as fallback
+            if d2d_clusters:
+                for device in dhcp_devices:
+                    mac = device.get('mac', '').upper()
+                    ip = device.get('ip', '')
+                    # Try MAC first
+                    if mac in d2d_clusters:
+                        device['d2d_cluster'] = d2d_clusters[mac]
+                    # Fallback to IP-based lookup (for aiochi-bubble which uses IP:x.x.x.x)
+                    elif ip and f"IP:{ip}" in d2d_clusters:
+                        device['d2d_cluster'] = d2d_clusters[f"IP:{ip}"]
 
             return jsonify({
                 'success': True,
