@@ -3,12 +3,14 @@
 AIOCHI Bubble Manager Entrypoint
 
 This is the main entry point for the aiochi-bubble container.
-It runs the bubble detection engine using Zeek logs instead of live mDNS capture.
+It runs the D2D communication tracking using Zeek logs.
 
-Key differences from Fortress fts-bubble-manager:
-- Reads mDNS from Zeek dns.log (no port 5353 binding)
-- Uses bridge network (no host network blocking)
-- Provides REST API for health checks
+Key features:
+- Reads mDNS from Zeek dns.log (ecosystem detection)
+- Reads conn.log for D2D communication patterns
+- Exposes REST API for fts-web to get device communication colors
+- Bubbles are MANUAL (created by users in fts-web)
+- D2D data helps users see which devices communicate (for bubble decisions)
 
 Usage:
     python3 bubble_entrypoint.py
@@ -26,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Flask for health endpoint
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 # Configure logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -43,7 +45,7 @@ _health_status = {
     "status": "starting",
     "started_at": datetime.now().isoformat(),
     "mdns_events": 0,
-    "bubbles_detected": 0,
+    "d2d_connections": 0,
     "last_event": None,
 }
 
@@ -59,9 +61,134 @@ def status():
     """Detailed status endpoint."""
     return jsonify({
         **_health_status,
-        "zeek_dns_log": os.environ.get("ZEEK_DNS_LOG", "/opt/zeek/logs/current/dns.log"),
-        "zeek_conn_log": os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/current/conn.log"),
+        "zeek_dns_log": os.environ.get("ZEEK_DNS_LOG", "/opt/zeek/logs/dns.log"),
+        "zeek_conn_log": os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/conn.log"),
     })
+
+
+# ==============================================================================
+# D2D Tracker for FTS Web Integration
+# ==============================================================================
+_d2d_tracker = None
+
+
+def get_d2d_tracker():
+    """Get or create the D2D tracker singleton."""
+    global _d2d_tracker
+    if _d2d_tracker is None:
+        try:
+            from d2d_tracker import get_d2d_tracker as _get_tracker
+            _d2d_tracker = _get_tracker()
+            logger.info("D2D tracker initialized")
+        except Exception as e:
+            logger.warning(f"Could not initialize D2D tracker: {e}")
+    return _d2d_tracker
+
+
+# ==============================================================================
+# REST API for FTS Web Integration
+# ==============================================================================
+
+@app.route("/api/devices", methods=["GET"])
+def list_devices():
+    """List all known devices with ecosystem colors."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available", "devices": []}), 503
+
+        devices = tracker.get_all_devices()
+        return jsonify({
+            "devices": [d.to_dict() for d in devices],
+            "count": len(devices)
+        })
+    except Exception as e:
+        logger.error(f"Error listing devices: {e}")
+        return jsonify({"error": str(e), "devices": []}), 500
+
+
+@app.route("/api/devices/<mac>", methods=["GET"])
+def get_device(mac):
+    """Get device info with communication colors."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available"}), 503
+
+        # Get device with full communication info for coloring
+        info = tracker.get_device_communication_color(mac)
+        return jsonify(info)
+    except Exception as e:
+        logger.error(f"Error getting device {mac}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/communication/graph", methods=["GET"])
+def get_communication_graph():
+    """Get full communication graph (nodes and edges) for visualization."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available"}), 503
+
+        graph = tracker.get_communication_graph()
+        return jsonify(graph)
+    except Exception as e:
+        logger.error(f"Error getting communication graph: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/communication/clusters", methods=["GET"])
+def get_communication_clusters():
+    """Get clusters of devices that communicate with each other."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available"}), 503
+
+        clusters = tracker.get_communication_clusters()
+        return jsonify({
+            "clusters": clusters,
+            "count": len(clusters)
+        })
+    except Exception as e:
+        logger.error(f"Error getting communication clusters: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/communication/<mac1>/<mac2>", methods=["GET"])
+def get_communication_strength(mac1, mac2):
+    """Get communication strength between two devices."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available"}), 503
+
+        strength = tracker.get_communication_strength(mac1, mac2)
+        return jsonify({
+            "mac1": mac1,
+            "mac2": mac2,
+            "strength": strength.value,
+        })
+    except Exception as e:
+        logger.error(f"Error getting communication strength: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stats", methods=["GET"])
+def get_stats():
+    """Get D2D tracker statistics."""
+    try:
+        tracker = get_d2d_tracker()
+        if not tracker:
+            return jsonify({"error": "D2D tracker not available"}), 503
+
+        stats = tracker.get_stats()
+        stats.update(_health_status)
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def run_health_server():
@@ -70,9 +197,7 @@ def run_health_server():
 
 
 def watch_zeek_logs():
-    """Watch Zeek logs for mDNS and connection events."""
-    # Note: We modify _health_status dict in-place, no global needed
-
+    """Watch Zeek logs for mDNS events (ecosystem detection)."""
     # Import parser
     try:
         from shared.aiochi.bubble.zeek_mdns_parser import ZeekMDNSParser
@@ -86,6 +211,9 @@ def watch_zeek_logs():
 
     parser = ZeekMDNSParser(dns_log)
     _health_status["status"] = "running"
+
+    # Get D2D tracker
+    tracker = get_d2d_tracker()
 
     # Check if Zeek logs exist
     if not Path(dns_log).exists():
@@ -102,11 +230,18 @@ def watch_zeek_logs():
                 f"mDNS: [{event.ecosystem}] {event.source_ip} -> {event.query}"
             )
 
-            # Record discovery for affinity calculation
-            parser.record_discovery(event.source_mac, event.query)
-
-            # TODO: Feed to bubble manager for clustering
-            # This will be integrated with the shared/aiochi/bubble/manager.py
+            # Feed to D2D tracker for ecosystem detection
+            if tracker:
+                try:
+                    tracker.record_mdns_event(
+                        source_mac=event.source_mac,
+                        source_ip=event.source_ip,
+                        query=event.query,
+                        ecosystem=event.ecosystem,
+                        hostname=getattr(event, 'hostname', ''),
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not record mDNS event: {e}")
 
     except Exception as e:
         logger.error(f"Error in mDNS watcher: {e}")
@@ -115,25 +250,24 @@ def watch_zeek_logs():
 
 def watch_connections():
     """Watch Zeek conn.log for device-to-device connections."""
-    # Note: We modify _health_status dict in-place, no global needed
     import json
 
     conn_log = Path(os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/current/conn.log"))
     logger.info(f"Starting connection watcher on: {conn_log}")
 
-    # Import connection graph analyzer if available
-    manager = None
-    try:
-        from shared.aiochi.bubble.manager import get_bubble_manager
-        manager = get_bubble_manager()
-        logger.info("Bubble manager loaded successfully")
-    except ImportError:
-        logger.warning("Bubble manager not available - connection analysis only")
+    # Get D2D tracker
+    tracker = get_d2d_tracker()
+    if tracker:
+        logger.info("D2D tracker ready for connection tracking")
+    else:
+        logger.warning("D2D tracker not available - connection counts only")
 
     # Track file position and inode for rotation handling
     position = 0
     last_inode = None
-    connections_processed = 0
+    conn_fields = None  # TSV field names
+    save_interval = 60  # Save state every 60 seconds
+    last_save = time.time()
 
     # Local network prefixes for D2D detection
     LOCAL_PREFIXES = ('10.', '172.16.', '172.17.', '172.18.', '172.19.',
@@ -144,6 +278,15 @@ def watch_connections():
     def is_local_ip(ip: str) -> bool:
         """Check if IP is in local network range."""
         return ip and any(ip.startswith(p) for p in LOCAL_PREFIXES)
+
+    def parse_conn_line(line: str, fields: list) -> dict:
+        """Parse TSV conn.log line into dict."""
+        if not fields:
+            return {}
+        values = line.split('\t')
+        if len(values) != len(fields):
+            return {}
+        return {fields[i]: values[i] for i in range(len(fields))}
 
     while True:
         try:
@@ -156,49 +299,69 @@ def watch_connections():
             if last_inode is not None and current_inode != last_inode:
                 logger.info("conn.log rotated, resetting position")
                 position = 0
+                conn_fields = None
             last_inode = current_inode
 
             with open(conn_log) as f:
                 f.seek(position)
                 for line in f:
-                    # Bug fix: was just 'pass' - now actually parse connections
                     line = line.strip()
-                    if not line or line.startswith('#'):
+                    if not line:
                         continue
 
-                    try:
-                        # Parse Zeek conn.log JSON format
-                        conn = json.loads(line)
-                        src_ip = conn.get('id.orig_h', '')
-                        dst_ip = conn.get('id.resp_h', '')
-                        proto = conn.get('proto', '')
-                        service = conn.get('service', '')
+                    # Parse TSV header
+                    if line.startswith('#fields'):
+                        conn_fields = line.split('\t')[1:]  # Skip '#fields'
+                        logger.info(f"conn.log fields: {len(conn_fields)} columns")
+                        continue
+                    elif line.startswith('#'):
+                        continue
 
-                        # Detect D2D connections (both IPs are local)
-                        if is_local_ip(src_ip) and is_local_ip(dst_ip):
-                            connections_processed += 1
+                    # Parse record (JSON or TSV)
+                    conn = {}
+                    if line.startswith('{'):
+                        try:
+                            conn = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                    else:
+                        conn = parse_conn_line(line, conn_fields)
+                        if not conn:
+                            continue
 
-                            # Update health status
-                            if 'd2d_connections' not in _health_status:
-                                _health_status['d2d_connections'] = 0
-                            _health_status['d2d_connections'] += 1
+                    # Handle both field name formats
+                    src_ip = conn.get('id.orig_h', '')
+                    dst_ip = conn.get('id.resp_h', '')
+                    proto = conn.get('proto', '')
+                    service = conn.get('service', '')
 
-                            logger.debug(f"D2D: {src_ip} -> {dst_ip} ({service or proto})")
+                    # Handle Zeek unset values
+                    if service == '-':
+                        service = ''
 
-                            # Feed to bubble manager if available
-                            if manager:
-                                try:
-                                    manager.record_d2d_connection(src_ip, dst_ip, service or proto)
-                                except Exception as e:
-                                    logger.debug(f"Could not record D2D: {e}")
+                    # Detect D2D connections (both IPs are local)
+                    if is_local_ip(src_ip) and is_local_ip(dst_ip):
+                        _health_status['d2d_connections'] += 1
 
-                    except json.JSONDecodeError:
-                        # Skip non-JSON lines (comments, etc.)
-                        pass
-                    except Exception as e:
-                        logger.debug(f"Error parsing conn line: {e}")
+                        logger.debug(f"D2D: {src_ip} -> {dst_ip} ({service or proto})")
+
+                        # Feed to D2D tracker
+                        if tracker:
+                            try:
+                                tracker.record_d2d_connection(
+                                    src_ip=src_ip,
+                                    dst_ip=dst_ip,
+                                    service=service or proto,
+                                )
+                            except Exception as e:
+                                logger.debug(f"Could not record D2D: {e}")
 
                 position = f.tell()
+
+            # Periodically save state
+            if tracker and time.time() - last_save > save_interval:
+                tracker.save_state()
+                last_save = time.time()
 
         except Exception as e:
             logger.error(f"Error in connection watcher: {e}")
