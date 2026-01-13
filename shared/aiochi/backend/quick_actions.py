@@ -465,6 +465,30 @@ class QuickActionExecutor:
         self._handlers["force_failover"] = self._handle_force_failover
         self._handlers["restart_wifi"] = self._handle_restart_wifi
 
+    # =========================================================================
+    # OVS/tc Configuration Constants
+    # =========================================================================
+    OVS_BRIDGE = "FTS"
+    PAUSE_FLOW_PRIORITY = 100  # High priority to ensure drops happen first
+    GAME_MODE_MARK = 0x10  # DSCP marking for game traffic
+
+    # Gaming ports for QoS prioritization
+    GAMING_PORTS = {
+        "xbox": [3074],
+        "steam": list(range(27000, 27051)),  # 27000-27050
+        "blizzard": list(range(5000, 6001)),  # 5000-6000
+        "epic": [5222],
+        "playstation": [3478, 3479, 3480],
+        "nintendo": [45000, 45001],
+    }
+
+    # Kids domains for behavioral detection (DNS-based)
+    KIDS_DOMAINS = [
+        "youtubekids.com", "roblox.com", "coolmathgames.com", "pbskids.org",
+        "nickjr.com", "cartoonnetwork.com", "disney.com", "minecraft.net",
+        "scratch.mit.edu", "abcmouse.com", "starfall.com", "funbrain.com"
+    ]
+
     # Handler implementations
     def _handle_pause_bubble(
         self,
@@ -473,19 +497,113 @@ class QuickActionExecutor:
         parameters: Dict[str, Any],
         revert: bool = False,
     ) -> str:
-        """Pause/unpause internet for a bubble."""
+        """
+        Pause/unpause internet for a bubble using OVS flow rules.
+
+        Implementation:
+        - Gets all MAC addresses in the target bubble
+        - Adds high-priority OVS drop rules for each MAC
+        - On revert, removes the drop rules
+
+        OVS Commands:
+        - Block: ovs-ofctl add-flow FTS "priority=100,dl_src=<MAC>,actions=drop"
+        - Unblock: ovs-ofctl del-flows FTS "dl_src=<MAC>,priority=100"
+        """
         if not target:
             raise ValueError("Target bubble_id required")
 
-        # In production, this would:
-        # 1. Get all MACs in the bubble
-        # 2. Add/remove OVS flow rules to drop traffic
-        logger.info(f"{'Unpausing' if revert else 'Pausing'} bubble: {target}")
+        # Get MACs for the bubble (from parameters or lookup)
+        macs = parameters.get("macs", [])
+        if not macs:
+            # Try to look up from bubble registry
+            macs = self._get_bubble_macs(target)
 
-        # Example OVS command (would be executed in production)
-        # ovs-ofctl add-flow FTS "priority=100,dl_src=XX:XX:XX:XX:XX:XX,actions=drop"
+        if not macs:
+            logger.warning(f"No MACs found for bubble: {target}")
+            return f"No devices found in bubble {target}"
 
-        return f"{'Resumed' if revert else 'Paused'} internet for {target}"
+        blocked_count = 0
+        errors = []
+
+        for mac in macs:
+            try:
+                if revert:
+                    # Remove drop rule
+                    cmd = [
+                        "ovs-ofctl", "del-flows", self.OVS_BRIDGE,
+                        f"dl_src={mac},priority={self.PAUSE_FLOW_PRIORITY}"
+                    ]
+                else:
+                    # Add drop rule (blocks all traffic from this MAC)
+                    cmd = [
+                        "ovs-ofctl", "add-flow", self.OVS_BRIDGE,
+                        f"priority={self.PAUSE_FLOW_PRIORITY},dl_src={mac},actions=drop"
+                    ]
+
+                if self.use_ovs:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        blocked_count += 1
+                        logger.info(f"{'Unpaused' if revert else 'Paused'} MAC: {mac}")
+                    else:
+                        errors.append(f"{mac}: {result.stderr}")
+                        logger.error(f"OVS command failed for {mac}: {result.stderr}")
+                else:
+                    # Dry run mode
+                    logger.info(f"[DRY RUN] Would execute: {' '.join(cmd)}")
+                    blocked_count += 1
+
+            except subprocess.TimeoutExpired:
+                errors.append(f"{mac}: timeout")
+                logger.error(f"OVS command timeout for {mac}")
+            except Exception as e:
+                errors.append(f"{mac}: {str(e)}")
+                logger.error(f"Error processing {mac}: {e}")
+
+        action_word = "Resumed" if revert else "Paused"
+        if errors:
+            return f"{action_word} {blocked_count}/{len(macs)} devices for {target}. Errors: {len(errors)}"
+        return f"{action_word} internet for {target} ({blocked_count} devices)"
+
+    def _get_bubble_macs(self, bubble_id: str) -> List[str]:
+        """
+        Get MAC addresses for devices in a bubble.
+
+        Looks up from:
+        1. /run/fortress/bubbles/<bubble_id>.json
+        2. Ecosystem bubble manager (if available)
+        """
+        import json
+        import os
+
+        # Try file-based lookup first
+        bubble_file = f"/run/fortress/bubbles/{bubble_id}.json"
+        if os.path.exists(bubble_file):
+            try:
+                with open(bubble_file, 'r') as f:
+                    data = json.load(f)
+                    return data.get("devices", [])
+            except Exception as e:
+                logger.debug(f"Could not read bubble file: {e}")
+
+        # Try ecosystem bubble manager
+        try:
+            from products.fortress.lib.ecosystem_bubble import get_ecosystem_bubble_manager
+            manager = get_ecosystem_bubble_manager()
+            bubble = manager.get_bubble(bubble_id)
+            if bubble:
+                return list(bubble.devices)
+        except ImportError:
+            logger.debug("Ecosystem bubble manager not available")
+        except Exception as e:
+            logger.debug(f"Could not get bubble from manager: {e}")
+
+        return []
 
     def _handle_rate_limit_bubble(
         self,
@@ -510,11 +628,170 @@ class QuickActionExecutor:
         parameters: Dict[str, Any],
         revert: bool = False,
     ) -> str:
-        """Enable/disable game mode."""
-        # In production: Apply QoS rules for gaming traffic
-        logger.info(f"{'Disabling' if revert else 'Enabling'} game mode")
+        """
+        Enable/disable game mode using tc (traffic control) QoS rules.
 
-        return f"Game mode {'disabled' if revert else 'enabled'}"
+        Implementation:
+        - Creates priority queues on the WAN interface
+        - Gaming traffic (by port) gets highest priority
+        - Background traffic (streaming, downloads) deprioritized
+
+        tc Architecture:
+        - Root qdisc: HTB (Hierarchical Token Bucket)
+        - Class 1:10 - Gaming (priority, 50% guaranteed bandwidth)
+        - Class 1:20 - Interactive (medium priority, 30%)
+        - Class 1:30 - Bulk (low priority, 20%)
+
+        Gaming ports prioritized:
+        - Xbox Live: 3074
+        - Steam: 27000-27050
+        - Blizzard: 5000-6000
+        - Epic Games: 5222
+        - PlayStation: 3478-3480
+        """
+        wan_interface = self._get_wan_interface()
+        if not wan_interface:
+            logger.warning("Could not detect WAN interface")
+            return "Game mode: WAN interface not found"
+
+        try:
+            if revert:
+                # Remove tc rules - delete the root qdisc
+                self._run_tc_command(["tc", "qdisc", "del", "dev", wan_interface, "root"], ignore_errors=True)
+                logger.info(f"Game mode disabled on {wan_interface}")
+                return "Game mode disabled (QoS rules removed)"
+
+            # Set up tc QoS hierarchy
+            errors = []
+
+            # Step 1: Remove any existing qdisc
+            self._run_tc_command(["tc", "qdisc", "del", "dev", wan_interface, "root"], ignore_errors=True)
+
+            # Step 2: Create HTB root qdisc
+            # Using 1000mbit as ceiling, actual rate managed by classes
+            cmd = ["tc", "qdisc", "add", "dev", wan_interface, "root", "handle", "1:", "htb", "default", "30"]
+            if not self._run_tc_command(cmd):
+                errors.append("Failed to create root qdisc")
+
+            # Step 3: Create parent class (full bandwidth)
+            cmd = ["tc", "class", "add", "dev", wan_interface, "parent", "1:", "classid", "1:1",
+                   "htb", "rate", "1000mbit", "burst", "15k"]
+            if not self._run_tc_command(cmd):
+                errors.append("Failed to create parent class")
+
+            # Step 4: Create Gaming class (highest priority, 50% guaranteed)
+            cmd = ["tc", "class", "add", "dev", wan_interface, "parent", "1:1", "classid", "1:10",
+                   "htb", "rate", "500mbit", "ceil", "1000mbit", "burst", "15k", "prio", "1"]
+            if not self._run_tc_command(cmd):
+                errors.append("Failed to create gaming class")
+
+            # Step 5: Create Interactive class (medium priority, 30%)
+            cmd = ["tc", "class", "add", "dev", wan_interface, "parent", "1:1", "classid", "1:20",
+                   "htb", "rate", "300mbit", "ceil", "800mbit", "burst", "15k", "prio", "2"]
+            if not self._run_tc_command(cmd):
+                errors.append("Failed to create interactive class")
+
+            # Step 6: Create Bulk class (lowest priority, 20%)
+            cmd = ["tc", "class", "add", "dev", wan_interface, "parent", "1:1", "classid", "1:30",
+                   "htb", "rate", "200mbit", "ceil", "500mbit", "burst", "15k", "prio", "3"]
+            if not self._run_tc_command(cmd):
+                errors.append("Failed to create bulk class")
+
+            # Step 7: Add SFQ (Stochastic Fair Queuing) to gaming class for fairness
+            cmd = ["tc", "qdisc", "add", "dev", wan_interface, "parent", "1:10", "handle", "10:", "sfq", "perturb", "10"]
+            self._run_tc_command(cmd, ignore_errors=True)
+
+            # Step 8: Add filters for gaming ports -> class 1:10
+            gaming_ports_added = 0
+            for platform, ports in self.GAMING_PORTS.items():
+                for port in ports:
+                    # UDP filter (most games use UDP)
+                    cmd = ["tc", "filter", "add", "dev", wan_interface, "parent", "1:", "protocol", "ip",
+                           "prio", "1", "u32", "match", "ip", "dport", str(port), "0xffff",
+                           "match", "ip", "protocol", "17", "0xff", "flowid", "1:10"]
+                    if self._run_tc_command(cmd, ignore_errors=True):
+                        gaming_ports_added += 1
+
+                    # TCP filter (for game downloads, updates)
+                    cmd = ["tc", "filter", "add", "dev", wan_interface, "parent", "1:", "protocol", "ip",
+                           "prio", "2", "u32", "match", "ip", "dport", str(port), "0xffff",
+                           "match", "ip", "protocol", "6", "0xff", "flowid", "1:10"]
+                    self._run_tc_command(cmd, ignore_errors=True)
+
+            logger.info(f"Game mode enabled on {wan_interface} ({gaming_ports_added} port filters)")
+
+            if errors:
+                return f"Game mode partially enabled. Errors: {', '.join(errors)}"
+            return f"Game mode enabled ({gaming_ports_added} gaming port filters active)"
+
+        except Exception as e:
+            logger.error(f"Game mode setup failed: {e}")
+            return f"Game mode failed: {str(e)}"
+
+    def _run_tc_command(self, cmd: List[str], ignore_errors: bool = False) -> bool:
+        """Execute a tc command, optionally ignoring errors."""
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode != 0 and not ignore_errors:
+                logger.error(f"tc command failed: {' '.join(cmd)} -> {result.stderr}")
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            logger.error(f"tc command timeout: {' '.join(cmd)}")
+            return False
+        except Exception as e:
+            logger.error(f"tc command error: {e}")
+            return False
+
+    def _get_wan_interface(self) -> Optional[str]:
+        """
+        Detect the WAN interface (default route interface).
+
+        Checks:
+        1. /run/fortress/wan-interface (if written by setup)
+        2. Default route via `ip route`
+        3. Fall back to common names
+        """
+        import os
+
+        # Check fortress config
+        wan_file = "/run/fortress/wan-interface"
+        if os.path.exists(wan_file):
+            try:
+                with open(wan_file, 'r') as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+
+        # Parse default route
+        try:
+            result = subprocess.run(
+                ["ip", "route", "show", "default"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout:
+                # Parse: "default via X.X.X.X dev eth0 ..."
+                parts = result.stdout.split()
+                if "dev" in parts:
+                    dev_idx = parts.index("dev")
+                    if dev_idx + 1 < len(parts):
+                        return parts[dev_idx + 1]
+        except Exception as e:
+            logger.debug(f"Could not parse default route: {e}")
+
+        # Fall back to common names
+        for iface in ["eth0", "eno1", "enp0s31f6", "wan0"]:
+            if os.path.exists(f"/sys/class/net/{iface}"):
+                return iface
+
+        return None
 
     def _handle_boost_device(
         self,

@@ -1,0 +1,180 @@
+# ==============================================================================
+# AIOCHI Small Business MITRE ATT&CK Rules
+# Optimized for flower shops, bakeries, retail, and trades
+#
+# Philosophy: Low false-positive detections that work without a security team.
+# Each rule maps to a specific MITRE ATT&CK technique.
+#
+# TRIO+ Consultation: Nemotron (security) + Devstral (architecture)
+# ==============================================================================
+
+# ==============================================================================
+# 1. POS/PAYMENT CARD THEFT
+# MITRE ATT&CK: T1557.001 (Payment Card Data Theft), T1119 (Automated Collection)
+# ==============================================================================
+
+# Track 1/2 magnetic stripe data patterns (PCI DSS focus)
+alert tcp $HOME_NET any -> $EXTERNAL_NET $HTTP_PORTS (msg:"AIOCHI POS - Track 1/2 Data Exfiltration Attempt"; flow:to_server,established; content:"^B"; depth:1; fast_pattern; content:"|3B|"; distance:0; within:200; content:"|3F|"; within:200; classtype:policy-violation; sid:9000001; rev:1; metadata:mitre_attack T1119,service http; priority:1;)
+
+# POS memory scraping patterns (PoSRAM-style)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI POS - Memory Scraping Pattern Detected"; flow:to_server,established; content:"DWLEAD"; nocase; content:"TRACK1"; distance:0; within:50; classtype:trojan-activity; sid:9000002; rev:1; metadata:mitre_attack T1005; priority:1;)
+
+# Credit card number patterns in HTTP (should never happen unencrypted)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI POS - Possible Card Number in HTTP"; flow:to_server,established; content:"cardnumber="; nocase; classtype:policy-violation; sid:9000003; rev:1; metadata:mitre_attack T1557.001; priority:1;)
+
+# Square/Clover device connecting to unexpected destination
+alert tcp [10.200.0.0/16,192.168.0.0/16] any -> !$HOME_NET any (msg:"AIOCHI POS - Terminal Connecting to Non-Standard Destination"; flow:to_server; threshold:type threshold, track by_src, count 5, seconds 60; classtype:policy-violation; sid:9000004; rev:1; metadata:mitre_attack T1041; priority:2;)
+
+# ==============================================================================
+# 2. RANSOMWARE
+# MITRE ATT&CK: T1486 (Data Encrypted for Impact)
+# ==============================================================================
+
+# Common ransomware file extension download
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Suspicious Encrypted File Extension"; flow:to_server,established; content:".locked"; nocase; classtype:trojan-activity; sid:9000011; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Suspicious Encrypted File Extension"; flow:to_server,established; content:".encrypted"; nocase; classtype:trojan-activity; sid:9000012; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Suspicious Encrypted File Extension"; flow:to_server,established; content:".crypto"; nocase; classtype:trojan-activity; sid:9000013; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+# Ransom note keywords
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Ransom Note Pattern"; flow:to_server,established; content:"HOW_TO_DECRYPT"; nocase; classtype:trojan-activity; sid:9000014; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Ransom Note Pattern"; flow:to_server,established; content:"YOUR FILES HAVE BEEN ENCRYPTED"; nocase; classtype:trojan-activity; sid:9000015; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Ransomware - Bitcoin Payment Request"; flow:to_server,established; content:"bitcoin"; nocase; content:"wallet"; distance:0; within:100; classtype:trojan-activity; sid:9000016; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+# Rapid SMB file operations (ransomware spreading)
+alert tcp $HOME_NET any -> $HOME_NET 445 (msg:"AIOCHI Ransomware - Rapid SMB File Operations"; flow:to_server,established; content:"|FF 53 4D 42|"; depth:4; threshold:type threshold, track by_src, count 200, seconds 60; classtype:trojan-activity; sid:9000017; rev:1; metadata:mitre_attack T1486; priority:1;)
+
+# ==============================================================================
+# 3. COMMAND & CONTROL (C2)
+# MITRE ATT&CK: T1071.001 (Web Protocols), T1571 (Non-Standard Port)
+# ==============================================================================
+
+# Cobalt Strike beacon pattern
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI C2 - Cobalt Strike Beacon Pattern"; flow:to_server,established; content:"|00 00 00 BE|"; depth:4; content:"|AC 00 00 00|"; distance:0; within:20; classtype:trojan-activity; sid:9000021; rev:1; metadata:mitre_attack T1071.001; priority:1;)
+
+# Cobalt Strike default SSL certificate
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI C2 - Cobalt Strike Default Certificate"; tls.cert_subject; content:"CN=Major Cobalt Strike"; classtype:trojan-activity; sid:9000022; rev:1; metadata:mitre_attack T1071.001; priority:1;)
+
+# Metasploit default user-agent
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI C2 - Metasploit User-Agent"; flow:to_server,established; content:"User-Agent|3a 20|Mozilla/4.0 (compatible|3b 20|MSIE 6.0|3b 20|Windows NT 5.1"; nocase; classtype:trojan-activity; sid:9000023; rev:1; metadata:mitre_attack T1071.001; priority:1;)
+
+# Regular beaconing (fixed interval connections)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI C2 - Suspicious Periodic Beaconing"; flow:to_server; threshold:type threshold, track by_src, count 20, seconds 300; classtype:trojan-activity; sid:9000024; rev:1; metadata:mitre_attack T1071.001; priority:2;)
+
+# DNS beaconing (excessive DNS queries to same domain)
+alert dns $HOME_NET any -> any any (msg:"AIOCHI C2 - DNS Beaconing Pattern"; dns.query; threshold:type threshold, track by_src, count 50, seconds 300; classtype:trojan-activity; sid:9000025; rev:1; metadata:mitre_attack T1071.004; priority:2;)
+
+# Known malicious infrastructure
+alert tcp $HOME_NET any -> [185.220.101.0/24,185.129.61.0/24,5.188.86.0/24] any (msg:"AIOCHI C2 - Connection to Known Malicious Infrastructure"; flow:to_server; classtype:trojan-activity; sid:9000026; rev:1; metadata:mitre_attack T1071.001; priority:1;)
+
+# ==============================================================================
+# 4. DATA EXFILTRATION
+# MITRE ATT&CK: T1048 (Exfiltration Over Alternative Protocol), T1567 (Exfil to Cloud)
+# ==============================================================================
+
+# DNS tunneling (long subdomain queries)
+alert dns $HOME_NET any -> any any (msg:"AIOCHI Exfil - DNS Tunneling Suspected (Long Query)"; dns.query; pcre:"/^[a-z0-9]{32,}\./i"; classtype:policy-violation; sid:9000031; rev:1; metadata:mitre_attack T1048.003; priority:1;)
+
+# High-entropy DNS queries (DGA domains)
+alert dns $HOME_NET any -> any any (msg:"AIOCHI Exfil - DGA Domain Query"; dns.query; pcre:"/^[a-z0-9]{15,}[0-9]{3,}\.[a-z]{2,4}$/i"; classtype:trojan-activity; sid:9000032; rev:1; metadata:mitre_attack T1568.002; priority:1;)
+
+# Large HTTP POST (data exfiltration)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Exfil - Large HTTP POST"; flow:to_server,established; http.method; content:"POST"; http.content_len; content:">1000000"; classtype:policy-violation; sid:9000033; rev:1; metadata:mitre_attack T1048.001; priority:2;)
+
+# Base64 encoded uploads
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Exfil - Base64 Encoded Data Upload"; flow:to_server,established; http.method; content:"POST"; content:"Content-Type|3a 20|application/octet-stream"; classtype:policy-violation; sid:9000034; rev:1; metadata:mitre_attack T1132.001; priority:2;)
+
+# Exfiltration to cloud storage (uncommon for small business)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Exfil - Upload to Cloud Storage"; flow:to_server,established; http.method; content:"PUT"; http.host; content:"storage.googleapis.com"; classtype:policy-violation; sid:9000035; rev:1; metadata:mitre_attack T1567.002; priority:3;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Exfil - Upload to Cloud Storage"; flow:to_server,established; http.method; content:"PUT"; http.host; content:"s3.amazonaws.com"; classtype:policy-violation; sid:9000036; rev:1; metadata:mitre_attack T1567.002; priority:3;)
+
+# ==============================================================================
+# 5. CREDENTIAL THEFT
+# MITRE ATT&CK: T1187 (Forced Authentication), T1110 (Brute Force)
+# ==============================================================================
+
+# NTLM relay attempt
+alert tcp $HOME_NET any -> $HOME_NET 445 (msg:"AIOCHI Credential - NTLM Relay Attempt"; flow:to_server,established; content:"|FF 53 4D 42|"; depth:4; content:"|00 00 00 09 02|"; distance:0; within:20; classtype:attempted-user; sid:9000041; rev:1; metadata:mitre_attack T1187; priority:1;)
+
+# Kerberos AS-REQ flooding (Kerberoasting prep)
+alert udp $HOME_NET any -> $HOME_NET 88 (msg:"AIOCHI Credential - Kerberos AS-REQ Flood"; content:"|6A 82|"; depth:2; threshold:type threshold, track by_src, count 50, seconds 10; classtype:attempted-user; sid:9000042; rev:1; metadata:mitre_attack T1558.003; priority:1;)
+
+# SMB password spraying
+alert tcp $HOME_NET any -> $HOME_NET 445 (msg:"AIOCHI Credential - SMB Password Spraying"; flow:to_server,established; content:"|FF 53 4D 42|"; depth:4; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-user; sid:9000043; rev:1; metadata:mitre_attack T1110.003; priority:1;)
+
+# SSH brute force
+alert tcp any any -> $HOME_NET 22 (msg:"AIOCHI Credential - SSH Brute Force"; flow:to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-user; sid:9000044; rev:1; metadata:mitre_attack T1110.001; priority:1;)
+
+# RDP brute force
+alert tcp any any -> $HOME_NET 3389 (msg:"AIOCHI Credential - RDP Brute Force"; flow:to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-user; sid:9000045; rev:1; metadata:mitre_attack T1110.001; priority:1;)
+
+# ==============================================================================
+# 6. PHISHING / INITIAL ACCESS
+# MITRE ATT&CK: T1566 (Phishing), T1204 (User Execution)
+# ==============================================================================
+
+# Office macro download
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Phishing - Office Document with Macros"; flow:to_server,established; file.magic; content:"Microsoft Office"; content:"vbaProject"; classtype:trojan-activity; sid:9000051; rev:1; metadata:mitre_attack T1566.001; priority:2;)
+
+# PowerShell download cradle
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Phishing - PowerShell Download Cradle"; flow:to_server,established; content:"powershell"; nocase; content:"-enc"; nocase; distance:0; within:50; classtype:trojan-activity; sid:9000052; rev:1; metadata:mitre_attack T1059.001; priority:1;)
+
+# Suspicious file download (executable)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Phishing - Executable Download"; flow:to_server,established; file.magic; content:"executable"; content:"PE32"; classtype:policy-violation; sid:9000053; rev:1; metadata:mitre_attack T1204.002; priority:2;)
+
+# ==============================================================================
+# 7. LATERAL MOVEMENT
+# MITRE ATT&CK: T1021 (Remote Services), T1570 (Lateral Tool Transfer)
+# ==============================================================================
+
+# Internal port scanning
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"AIOCHI Lateral - Internal Port Scan"; flow:to_server; threshold:type threshold, track by_src, count 100, seconds 60; classtype:attempted-recon; sid:9000061; rev:1; metadata:mitre_attack T1046; priority:2;)
+
+# PsExec-style remote execution
+alert tcp $HOME_NET any -> $HOME_NET 445 (msg:"AIOCHI Lateral - PsExec Remote Execution"; flow:to_server,established; content:"|FF 53 4D 42|"; content:"PSEXESVC"; nocase; classtype:trojan-activity; sid:9000062; rev:1; metadata:mitre_attack T1021.002; priority:1;)
+
+# WMI remote execution
+alert tcp $HOME_NET any -> $HOME_NET 135 (msg:"AIOCHI Lateral - WMI Remote Execution"; flow:to_server,established; content:"WMI"; nocase; classtype:trojan-activity; sid:9000063; rev:1; metadata:mitre_attack T1047; priority:2;)
+
+# ==============================================================================
+# 8. DEFENSE EVASION
+# MITRE ATT&CK: T1070 (Indicator Removal), T1562 (Impair Defenses)
+# ==============================================================================
+
+# Windows Event Log clearing
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"AIOCHI Evasion - Event Log Clearing Attempt"; flow:to_server,established; content:"wevtutil"; nocase; content:"cl"; distance:0; within:20; classtype:policy-violation; sid:9000071; rev:1; metadata:mitre_attack T1070.001; priority:1;)
+
+# Security tool termination
+alert tcp $HOME_NET any -> $HOME_NET any (msg:"AIOCHI Evasion - Security Tool Termination"; flow:to_server,established; content:"taskkill"; nocase; content:"MsMpEng"; nocase; distance:0; within:50; classtype:trojan-activity; sid:9000072; rev:1; metadata:mitre_attack T1562.001; priority:1;)
+
+# ==============================================================================
+# 9. CRYPTOMINING
+# MITRE ATT&CK: T1496 (Resource Hijacking)
+# ==============================================================================
+
+# Stratum mining protocol
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"AIOCHI Cryptomining - Stratum Protocol"; flow:to_server,established; content:"mining.subscribe"; nocase; classtype:policy-violation; sid:9000081; rev:1; metadata:mitre_attack T1496; priority:2;)
+
+# Known mining pool domains
+alert dns $HOME_NET any -> any any (msg:"AIOCHI Cryptomining - Mining Pool DNS Query"; dns.query; content:"pool."; classtype:policy-violation; sid:9000082; rev:1; metadata:mitre_attack T1496; priority:2;)
+
+alert dns $HOME_NET any -> any any (msg:"AIOCHI Cryptomining - Mining Pool DNS Query"; dns.query; content:"mining."; classtype:policy-violation; sid:9000083; rev:1; metadata:mitre_attack T1496; priority:2;)
+
+# ==============================================================================
+# 10. NETWORK RECONNAISSANCE
+# MITRE ATT&CK: T1040 (Network Sniffing), T1046 (Network Service Scanning)
+# ==============================================================================
+
+# ARP scanning (internal reconnaissance)
+alert arp any any -> any any (msg:"AIOCHI Recon - ARP Scan Detected"; threshold:type threshold, track by_src, count 50, seconds 10; classtype:attempted-recon; sid:9000091; rev:1; metadata:mitre_attack T1016.001; priority:3;)
+
+# SNMP community string brute force
+alert udp any any -> $HOME_NET 161 (msg:"AIOCHI Recon - SNMP Community String Probe"; content:"|30|"; depth:1; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:9000092; rev:1; metadata:mitre_attack T1046; priority:2;)
+
+# ==============================================================================
+# END OF RULES
+# ==============================================================================

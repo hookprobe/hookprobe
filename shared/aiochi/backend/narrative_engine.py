@@ -50,6 +50,7 @@ class Persona(Enum):
     GAMER = "gamer"            # Performance-focused, technical
     REMOTE_WORKER = "worker"   # Productivity-focused
     PRIVACY_CONSCIOUS = "privacy"  # Security-focused
+    BUSINESS_OWNER = "business"  # Small business (flower shop, bakery, retail)
     DEFAULT = "default"        # Balanced
 
 
@@ -355,8 +356,221 @@ NARRATIVE_TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "privacy": [
             "Guest device connected: '{device_label}'. Isolated on guest VLAN. No access to internal resources.",
         ],
+        "business": [
+            "A customer or visitor connected to your Guest WiFi. They can't access your business systems.",
+            "Guest device '{device_label}' joined. Safely separated from your POS and business network.",
+        ],
         "default": [
             "Guest '{device_label}' connected to Guest WiFi.",
+        ],
+    },
+
+    # =========================================================================
+    # PLAYBOOK EVENTS (AIOCHI Security Response)
+    # =========================================================================
+
+    "playbook_executed": {
+        "business": [
+            "I detected a security threat and automatically protected your business. {playbook_name} activated.",
+            "Security playbook '{playbook_name}' ran automatically. Your shop is protected.",
+            "Threat detected! I immediately ran '{playbook_name}' to keep your business safe.",
+        ],
+        "parent": [
+            "I spotted something suspicious and took action. Your network is secure.",
+            "Security protection activated: '{playbook_name}'. Everything is safe now.",
+        ],
+        "default": [
+            "Security playbook '{playbook_name}' executed successfully.",
+        ],
+    },
+
+    "phishing_blocked": {
+        "business": [
+            "I blocked a phishing attempt! Someone tried to trick you with a fake login page for {domain}. No customer data was at risk.",
+            "Phishing alert: Blocked a fake '{domain}' website. Your staff almost clicked a scam link - all safe now!",
+            "Caught a phishing scam! The fake {domain} site was blocked before anyone entered credentials.",
+        ],
+        "parent": [
+            "I blocked a trick website trying to steal passwords. Nobody in your house was affected!",
+        ],
+        "default": [
+            "Phishing attempt blocked: {domain}",
+        ],
+    },
+
+    "ransomware_stopped": {
+        "business": [
+            "IMPORTANT: I stopped ransomware on '{device_label}'! This device has been isolated to protect your business. Call your IT support.",
+            "CRITICAL: Ransomware attack stopped! '{device_label}' tried to encrypt your files but I caught it in time. Device is quarantined.",
+            "Ransomware blocked! Your business files are safe. '{device_label}' has been disconnected - please don't reconnect it without professional help.",
+        ],
+        "parent": [
+            "URGENT: I stopped a ransomware attack! '{device_label}' has been disconnected to protect your family's files.",
+        ],
+        "default": [
+            "CRITICAL: Ransomware blocked on '{device_label}'. Device quarantined.",
+        ],
+    },
+
+    "pos_threat_blocked": {
+        "business": [
+            "Your payment terminal is safe! I detected suspicious activity on '{device_label}' and blocked it immediately. Customer cards are protected.",
+            "POS Alert: Blocked suspicious connection from your card reader '{device_label}'. Customer payment data is secure.",
+            "Payment protection activated! '{device_label}' tried to send data somewhere unusual - I stopped it. Your customers' cards are safe.",
+        ],
+        "default": [
+            "POS security alert: Blocked suspicious activity on '{device_label}'.",
+        ],
+    },
+
+    "guest_scan_blocked": {
+        "business": [
+            "Someone on your Guest WiFi was snooping around. I kicked them off and blocked their device for 24 hours.",
+            "Security alert: A guest device tried to access your business network. They've been disconnected and blocked.",
+            "Caught someone on Guest WiFi trying to hack your shop! Device blocked - your business systems are safe.",
+        ],
+        "parent": [
+            "Someone on Guest WiFi was being nosy. I've kicked them off for 24 hours.",
+        ],
+        "default": [
+            "Guest device blocked for unauthorized network scanning.",
+        ],
+    },
+
+    "data_exfil_stopped": {
+        "business": [
+            "I stopped a data leak! '{device_label}' was uploading lots of data to an unusual server. I've slowed it down and captured evidence.",
+            "Data theft attempt blocked! Something on '{device_label}' tried to send {size}MB of data somewhere suspicious.",
+            "Alert: '{device_label}' was sending your business data somewhere it shouldn't. Transfer stopped and evidence saved.",
+        ],
+        "parent": [
+            "Blocked unusual data upload from '{device_label}'. Your personal files are protected.",
+        ],
+        "default": [
+            "Data exfiltration attempt blocked: {size}MB from '{device_label}'.",
+        ],
+    },
+
+    "fix_applied": {
+        "business": [
+            "I fixed the problem! {action_description}",
+            "Done! {action_description}. Your business network is secure.",
+        ],
+        "default": [
+            "Action completed: {action_description}",
+        ],
+    },
+
+    "fix_rolled_back": {
+        "business": [
+            "I undid the previous fix as you requested. {rollback_description}",
+        ],
+        "default": [
+            "Action rolled back: {rollback_description}",
+        ],
+    },
+
+    "device_quarantined": {
+        "business": [
+            "'{device_label}' has been quarantined for safety. It can't access your network until you clear it.",
+            "Security quarantine: '{device_label}' is isolated. Other devices in your shop are safe.",
+        ],
+        "parent": [
+            "'{device_label}' is in timeout! It showed suspicious behavior so I've disconnected it.",
+        ],
+        "default": [
+            "Device '{device_label}' quarantined.",
+        ],
+    },
+
+    "device_released": {
+        "business": [
+            "'{device_label}' has been released from quarantine and can now access your network.",
+        ],
+        "default": [
+            "Device '{device_label}' released from quarantine.",
+        ],
+    },
+
+    "ip_blocked": {
+        "business": [
+            "Blocked a suspicious server ({ip}) trying to connect to your business. Your network is protected.",
+            "Bad server blocked! {ip} tried to connect to your shop but I stopped it.",
+        ],
+        "default": [
+            "IP address {ip} has been blocked.",
+        ],
+    },
+
+    "domain_blocked": {
+        "business": [
+            "Blocked a dangerous website: {domain}. Your staff and customers are protected.",
+        ],
+        "default": [
+            "Domain {domain} has been blocked.",
+        ],
+    },
+
+    "mitre_technique_detected": {
+        "business": [
+            "{icon} {owner_friendly}",
+            "{icon} Security alert: {technique_name}. {owner_friendly}",
+        ],
+        "default": [
+            "MITRE ATT&CK {mitre_id}: {technique_name} detected.",
+        ],
+    },
+
+    # =========================================================================
+    # BUSINESS-SPECIFIC EVENTS
+    # =========================================================================
+
+    "pos_connected": {
+        "business": [
+            "Payment terminal '{device_label}' is online and protected. Ready to accept cards!",
+            "Your card reader '{device_label}' just connected. It's on your secure business network.",
+        ],
+        "default": [
+            "POS device '{device_label}' connected.",
+        ],
+    },
+
+    "pos_offline": {
+        "business": [
+            "Heads up: Your payment terminal '{device_label}' went offline. Check if it's powered on.",
+            "'{device_label}' (card reader) disconnected. You may not be able to process cards.",
+        ],
+        "default": [
+            "POS device '{device_label}' offline.",
+        ],
+    },
+
+    "business_hours_summary": {
+        "business": [
+            "Today's security summary: {threats_blocked} threats blocked, {devices_connected} devices connected, {ads_blocked} ads stopped. Your business stayed safe!",
+            "End of day report: Blocked {threats_blocked} security threats and {trackers_blocked} trackers. All clear!",
+        ],
+        "default": [
+            "Daily summary: {threats_blocked} threats blocked, {devices_connected} devices active.",
+        ],
+    },
+
+    "unusual_hours_activity": {
+        "business": [
+            "Unusual activity: '{device_label}' is active at an odd time ({time}). Was someone working late?",
+            "Late night alert: '{device_label}' connected outside business hours. Is this expected?",
+        ],
+        "default": [
+            "Activity detected outside normal hours on '{device_label}'.",
+        ],
+    },
+
+    "camera_tamper": {
+        "business": [
+            "Alert: Your security camera '{device_label}' might have been tampered with or blocked.",
+        ],
+        "default": [
+            "Camera '{device_label}' may be compromised.",
         ],
     },
 }
@@ -380,6 +594,26 @@ HEADLINE_TEMPLATES: Dict[str, str] = {
     "wan_failover": "Switched to backup internet",
     "wan_restored": "Main internet restored",
     "guest_joined": "Guest connected",
+    # Playbook events
+    "playbook_executed": "{playbook_name} activated",
+    "phishing_blocked": "Phishing blocked!",
+    "ransomware_stopped": "RANSOMWARE STOPPED!",
+    "pos_threat_blocked": "POS protected",
+    "guest_scan_blocked": "Guest blocked for snooping",
+    "data_exfil_stopped": "Data leak stopped",
+    "fix_applied": "Fix applied",
+    "fix_rolled_back": "Fix undone",
+    "device_quarantined": "{device_label} quarantined",
+    "device_released": "{device_label} released",
+    "ip_blocked": "Server {ip} blocked",
+    "domain_blocked": "Site {domain} blocked",
+    "mitre_technique_detected": "{icon} {technique_name}",
+    # Business events
+    "pos_connected": "POS online: {device_label}",
+    "pos_offline": "POS offline: {device_label}",
+    "business_hours_summary": "Daily security report",
+    "unusual_hours_activity": "After-hours activity",
+    "camera_tamper": "Camera alert",
 }
 
 
@@ -551,6 +785,7 @@ class NarrativeEngine:
             Persona.GAMER: "a performance-focused assistant helping a gamer",
             Persona.REMOTE_WORKER: "a productivity-focused assistant for a remote worker",
             Persona.PRIVACY_CONSCIOUS: "a security-focused assistant for a privacy-conscious user",
+            Persona.BUSINESS_OWNER: "a protective security assistant for a small business owner (flower shop, bakery, or retail store)",
             Persona.DEFAULT: "a friendly network assistant",
         }
 
@@ -595,6 +830,193 @@ Response:"""
         """Get recent narratives (requires ClickHouse in production)."""
         # In production, this would query ClickHouse
         return []
+
+    def translate_suricata_alert(
+        self,
+        alert: Dict[str, Any],
+        device_label: Optional[str] = None,
+    ) -> Narrative:
+        """
+        Translate a Suricata EVE JSON alert into a human-readable narrative.
+
+        Uses MITRE ATT&CK mapping for context-aware narratives.
+
+        Args:
+            alert: Suricata EVE JSON alert
+            device_label: Optional device label override
+
+        Returns:
+            Human-readable Narrative
+        """
+        try:
+            from .mitre_mapping import get_mitre_mapper
+            mapper = get_mitre_mapper()
+        except ImportError:
+            mapper = None
+
+        # Extract alert details
+        signature = alert.get("alert", {}).get("signature", "Unknown alert")
+        sid = alert.get("alert", {}).get("signature_id", 0)
+        severity = alert.get("alert", {}).get("severity", 3)
+        src_ip = alert.get("src_ip", "")
+        dest_ip = alert.get("dest_ip", "")
+
+        # Map severity to our enum
+        severity_map = {1: Severity.CRITICAL, 2: Severity.HIGH, 3: Severity.MEDIUM, 4: Severity.LOW}
+        event_severity = severity_map.get(severity, Severity.MEDIUM)
+
+        # Get MITRE info if available
+        mitre_info = None
+        if mapper and sid:
+            mitre_info = mapper.get_by_sid(sid)
+
+        # Build the event
+        event = NetworkEvent(
+            event_type="mitre_technique_detected" if mitre_info else "threat_detected",
+            severity=event_severity,
+            category=EventCategory.SECURITY,
+            source_ip=src_ip,
+            destination_ip=dest_ip,
+            threat_type=mitre_info["name"] if mitre_info else signature,
+            blocked=True,  # Suricata alerts are often blocked
+            technical_details={
+                "signature": signature,
+                "sid": sid,
+                "mitre_id": mitre_info["mitre_id"] if mitre_info else "",
+                "technique_name": mitre_info["name"] if mitre_info else signature,
+                "icon": mitre_info["icon"] if mitre_info else "⚠️",
+                "owner_friendly": mitre_info["owner_friendly"] if mitre_info else signature,
+                "playbook_id": mitre_info["playbook_id"] if mitre_info else None,
+            },
+        )
+
+        if device_label:
+            event.device_label = device_label
+
+        # Get device label from identity engine if not provided
+        if not event.device_label and self.identity_engine:
+            # Try to look up by IP
+            pass  # Would lookup device by IP here
+
+        return self.translate(event)
+
+    def translate_playbook_execution(
+        self,
+        playbook_name: str,
+        playbook_id: str,
+        device_label: str,
+        success: bool,
+        narrative_from_playbook: str = "",
+        mitre_id: str = "",
+    ) -> Narrative:
+        """
+        Generate narrative for a playbook execution.
+
+        Args:
+            playbook_name: Human-readable playbook name
+            playbook_id: Playbook ID for mapping
+            device_label: Affected device label
+            success: Whether execution succeeded
+            narrative_from_playbook: Optional narrative from playbook JSON
+            mitre_id: Optional MITRE ATT&CK ID
+
+        Returns:
+            Narrative for the playbook execution
+        """
+        # Map playbook IDs to event types
+        playbook_event_map = {
+            "phish_hook": "phishing_blocked",
+            "ransomware_airgap": "ransomware_stopped",
+            "cashier_guard": "pos_threat_blocked",
+            "guest_wall": "guest_scan_blocked",
+            "data_sieve": "data_exfil_stopped",
+        }
+
+        event_type = playbook_event_map.get(playbook_id, "playbook_executed")
+
+        # Map severity
+        severity_map = {
+            "ransomware_airgap": Severity.CRITICAL,
+            "cashier_guard": Severity.CRITICAL,
+            "data_sieve": Severity.HIGH,
+            "guest_wall": Severity.HIGH,
+            "phish_hook": Severity.MEDIUM,
+        }
+
+        event = NetworkEvent(
+            event_type=event_type,
+            severity=severity_map.get(playbook_id, Severity.MEDIUM),
+            category=EventCategory.SECURITY,
+            device_label=device_label,
+            blocked=success,
+            technical_details={
+                "playbook_name": playbook_name,
+                "playbook_id": playbook_id,
+                "mitre_id": mitre_id,
+                "success": success,
+            },
+        )
+
+        narrative = self.translate(event)
+
+        # Override with playbook-provided narrative if better
+        if narrative_from_playbook and self.persona == Persona.BUSINESS_OWNER:
+            narrative.narrative = narrative_from_playbook
+
+        return narrative
+
+    def create_fix_narrative(
+        self,
+        action_type: str,
+        target: str,
+        success: bool,
+        is_rollback: bool = False,
+    ) -> Narrative:
+        """
+        Generate narrative for a one-click fix action.
+
+        Args:
+            action_type: Type of action (block_mac, unblock_ip, etc.)
+            target: Target of the action (MAC, IP, domain)
+            success: Whether action succeeded
+            is_rollback: Whether this is undoing a previous action
+
+        Returns:
+            Narrative for the fix action
+        """
+        # Map action types to descriptions
+        action_descriptions = {
+            "block_mac": f"Blocked device {target} from your network",
+            "unblock_mac": f"Unblocked device {target}",
+            "block_ip": f"Blocked server {target}",
+            "unblock_ip": f"Unblocked server {target}",
+            "block_domain": f"Blocked website {target}",
+            "quarantine_device": f"Quarantined device {target} for safety",
+            "release_quarantine": f"Released device {target} from quarantine",
+            "throttle_bandwidth": f"Slowed down {target} to prevent data theft",
+            "restore_bandwidth": f"Restored normal speed for {target}",
+        }
+
+        description = action_descriptions.get(action_type, f"Action {action_type} on {target}")
+
+        event_type = "fix_rolled_back" if is_rollback else "fix_applied"
+
+        event = NetworkEvent(
+            event_type=event_type,
+            severity=Severity.INFO,
+            category=EventCategory.SECURITY,
+            blocked=success,
+            technical_details={
+                "action_type": action_type,
+                "target": target,
+                "action_description": description,
+                "rollback_description": description if is_rollback else "",
+                "ip": target if "ip" in action_type else "",
+                "domain": target if "domain" in action_type else "",
+            },
+        )
+
+        return self.translate(event)
 
 
 # Pre-built LLM prompt templates for n8n workflows

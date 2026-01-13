@@ -15,6 +15,21 @@ from . import aiochi_bp
 from ...security_utils import safe_error_message
 from ..auth.decorators import admin_required
 
+# Import D2D Connection Graph for device color visualization
+# Uses absolute import since lib/ is at /app/lib (sibling to web/)
+try:
+    from lib.connection_graph import (
+        get_connection_analyzer,
+        get_user_bubble_color,
+        DEVICE_TYPE_COLORS,
+        USER_BUBBLE_COLORS,
+        DeviceType,
+    )
+    D2D_CONNECTION_AVAILABLE = True
+except ImportError as e:
+    D2D_CONNECTION_AVAILABLE = False
+    logging.getLogger(__name__).debug(f"D2D connection graph not available: {e}")
+
 # Import real data integration module
 try:
     from .real_data import (
@@ -1526,14 +1541,30 @@ def api_action(action_id):
 
         logger.info(f"AIOCHI action: {action_id} -> {'activate' if activate else 'deactivate'}")
 
-        # TODO: Integrate with real action executor
-        # For now, just acknowledge
+        # Use real action executor if available
+        if REAL_DATA_AVAILABLE:
+            try:
+                from .real_data import execute_quick_action
+                result = execute_quick_action(action_id, activate)
+                return jsonify({
+                    'success': result.get('success', False),
+                    'demo_mode': False,
+                    'action': action_id,
+                    'activated': activate if result.get('success') else not activate,
+                    'message': result.get('message', f"Action '{action_id}' processed"),
+                    'details': result
+                })
+            except Exception as e:
+                logger.error(f"Quick action executor failed: {e}")
+                # Fall through to demo mode
+
+        # Demo mode fallback
         return jsonify({
             'success': True,
-            'demo_mode': not AIOCHI_ENABLED,
+            'demo_mode': True,
             'action': action_id,
             'activated': activate,
-            'message': f"Action '{action_id}' {'activated' if activate else 'deactivate'} successfully"
+            'message': f"Action '{action_id}' {'activated' if activate else 'deactivated'} (demo mode)"
         })
     except Exception as e:
         logger.error(f"AIOCHI action API error: {e}")
@@ -2421,6 +2452,40 @@ def api_bubbles_list():
         if AIOCHI_ENABLED:
             data = fetch_aiochi_bubbles()
             if data:
+                # Enrich devices with D2D cluster colors
+                if D2D_CONNECTION_AVAILABLE:
+                    try:
+                        analyzer = get_connection_analyzer()
+                        cluster_colors = analyzer.assign_bubble_colors()
+                        clusters = analyzer.find_d2d_clusters()
+                        d2d_device_clusters = {}
+                        for i, cluster in enumerate(clusters):
+                            color = cluster_colors.get(i, get_user_bubble_color(i))
+                            for mac in cluster.devices:
+                                d2d_device_clusters[mac.upper()] = {
+                                    'cluster_id': i,
+                                    'cluster_color': color,
+                                    'device_count': len(cluster.devices),
+                                    'avg_affinity': round(cluster.avg_affinity, 2),
+                                }
+
+                        # Add D2D info to devices in bubbles
+                        for bubble in data.get('bubbles', []):
+                            for device in bubble.get('devices', []):
+                                mac_upper = device.get('mac', '').upper()
+                                if mac_upper in d2d_device_clusters:
+                                    device['d2d_cluster'] = d2d_device_clusters[mac_upper]
+
+                        # Add D2D info to unassigned devices
+                        for device in data.get('unassigned_devices', []):
+                            mac_upper = device.get('mac', '').upper()
+                            if mac_upper in d2d_device_clusters:
+                                device['d2d_cluster'] = d2d_device_clusters[mac_upper]
+
+                        logger.info(f"AIOCHI enriched with D2D: {len(clusters)} clusters, {len(d2d_device_clusters)} devices")
+                    except Exception as e:
+                        logger.debug(f"D2D enrichment failed for AIOCHI data: {e}")
+
                 return jsonify({
                     'success': True,
                     'demo_mode': False,
@@ -2438,6 +2503,33 @@ def api_bubbles_list():
                 all_devices = get_sdn_devices()
                 all_devices_map = {d['mac'].upper(): d for d in all_devices}
 
+                # Get D2D colors for devices that communicate
+                d2d_device_colors = {}
+                d2d_device_clusters = {}
+                if D2D_CONNECTION_AVAILABLE:
+                    try:
+                        analyzer = get_connection_analyzer()
+                        d2d_device_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
+                        cluster_colors = analyzer.assign_bubble_colors()
+                        clusters = analyzer.find_d2d_clusters()
+                        for i, cluster in enumerate(clusters):
+                            color = cluster_colors.get(i, get_user_bubble_color(i))
+                            for mac in cluster.devices:
+                                d2d_device_clusters[mac.upper()] = {
+                                    'cluster_id': i,
+                                    'cluster_color': color,
+                                    'device_count': len(cluster.devices),
+                                    'avg_affinity': round(cluster.avg_affinity, 2),
+                                }
+                        # Debug: Log D2D cluster info
+                        logger.info(f"D2D clusters found: {len(clusters)}, cluster_macs: {list(d2d_device_clusters.keys())}")
+                        logger.info(f"All device MACs: {list(all_devices_map.keys())}")
+                        # Check for matches
+                        matches = set(d2d_device_clusters.keys()) & set(all_devices_map.keys())
+                        logger.info(f"D2D MACs matching devices: {list(matches)}")
+                    except Exception as e:
+                        logger.debug(f"D2D colors unavailable: {e}")
+
                 # Track which devices are already assigned
                 assigned_macs = set()
 
@@ -2450,13 +2542,19 @@ def api_bubbles_list():
                         mac_upper = mac.upper()
                         assigned_macs.add(mac_upper)
                         device_info = all_devices_map.get(mac_upper, {})
-                        devices_in_bubble.append({
+                        device_entry = {
                             'mac': mac_upper,
                             'label': device_info.get('label', mac_upper[:8]),
                             'vendor': device_info.get('vendor', 'Unknown'),
                             'online': device_info.get('online', False),
                             'ip': device_info.get('ip', ''),
-                        })
+                        }
+                        # Add D2D color info if available
+                        if mac_upper in d2d_device_colors:
+                            device_entry['d2d_type_color'] = d2d_device_colors[mac_upper]
+                        if mac_upper in d2d_device_clusters:
+                            device_entry['d2d_cluster'] = d2d_device_clusters[mac_upper]
+                        devices_in_bubble.append(device_entry)
 
                     # Get policy info based on bubble type
                     from .types_helper import get_bubble_type_policy
@@ -2479,14 +2577,20 @@ def api_bubbles_list():
                 unassigned = []
                 for mac, device in all_devices_map.items():
                     if mac not in assigned_macs:
-                        unassigned.append({
+                        device_entry = {
                             'mac': mac,
                             'label': device.get('label', 'Unknown'),
                             'vendor': device.get('vendor', 'Unknown'),
                             'online': device.get('online', False),
                             'ip': device.get('ip', ''),
                             'device_type': device.get('device_type', 'unknown'),
-                        })
+                        }
+                        # Add D2D color info if available
+                        if mac in d2d_device_colors:
+                            device_entry['d2d_type_color'] = d2d_device_colors[mac]
+                        if mac in d2d_device_clusters:
+                            device_entry['d2d_cluster'] = d2d_device_clusters[mac]
+                        unassigned.append(device_entry)
 
                 return jsonify({
                     'success': True,
@@ -2501,6 +2605,46 @@ def api_bubbles_list():
             module_data = get_bubbles_from_module()
             if module_data:
                 logger.info(f"Returning {len(module_data.get('bubbles', []))} bubbles from bubbles module")
+
+                # Enrich devices with D2D cluster colors
+                if D2D_CONNECTION_AVAILABLE:
+                    try:
+                        analyzer = get_connection_analyzer()
+                        d2d_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
+                        cluster_colors = analyzer.assign_bubble_colors()
+                        clusters = analyzer.find_d2d_clusters()
+                        d2d_clusters = {}
+                        for i, cluster in enumerate(clusters):
+                            color = cluster_colors.get(i, get_user_bubble_color(i))
+                            for mac in cluster.devices:
+                                d2d_clusters[mac.upper()] = {
+                                    'cluster_id': i,
+                                    'cluster_color': color,
+                                    'device_count': len(cluster.devices),
+                                    'avg_affinity': round(cluster.avg_affinity, 2),
+                                }
+
+                        # Add D2D info to devices in bubbles
+                        for bubble in module_data.get('bubbles', []):
+                            for device in bubble.get('devices', []):
+                                mac_upper = device.get('mac', '').upper()
+                                if mac_upper in d2d_colors:
+                                    device['d2d_type_color'] = d2d_colors[mac_upper]
+                                if mac_upper in d2d_clusters:
+                                    device['d2d_cluster'] = d2d_clusters[mac_upper]
+
+                        # Add D2D info to unassigned devices
+                        for device in module_data.get('unassigned_devices', []):
+                            mac_upper = device.get('mac', '').upper()
+                            if mac_upper in d2d_colors:
+                                device['d2d_type_color'] = d2d_colors[mac_upper]
+                            if mac_upper in d2d_clusters:
+                                device['d2d_cluster'] = d2d_clusters[mac_upper]
+
+                        logger.info(f"Module data enriched with D2D: {len(clusters)} clusters, {len(d2d_clusters)} devices")
+                    except Exception as e:
+                        logger.warning(f"D2D enrichment failed for module data: {e}")
+
                 return jsonify({
                     'success': True,
                     'demo_mode': False,
@@ -2513,6 +2657,34 @@ def api_bubbles_list():
         dhcp_devices = get_sdn_devices()  # Uses DHCP fallback when SDN unavailable
         if dhcp_devices:
             logger.info(f"Returning {len(dhcp_devices)} devices from DHCP (no bubble manager)")
+
+            # Add D2D colors to DHCP-only devices
+            if D2D_CONNECTION_AVAILABLE:
+                try:
+                    analyzer = get_connection_analyzer()
+                    d2d_colors = {k.upper(): v for k, v in analyzer.get_device_colors().items()}
+                    cluster_colors = analyzer.assign_bubble_colors()
+                    clusters = analyzer.find_d2d_clusters()
+                    d2d_clusters = {}
+                    for i, cluster in enumerate(clusters):
+                        color = cluster_colors.get(i, get_user_bubble_color(i))
+                        for mac in cluster.devices:
+                            d2d_clusters[mac.upper()] = {
+                                'cluster_id': i,
+                                'cluster_color': color,
+                                'device_count': len(cluster.devices),
+                                'avg_affinity': round(cluster.avg_affinity, 2),
+                            }
+                    # Enrich devices with D2D colors
+                    for device in dhcp_devices:
+                        mac = device.get('mac', '').upper()
+                        if mac in d2d_colors:
+                            device['d2d_type_color'] = d2d_colors[mac]
+                        if mac in d2d_clusters:
+                            device['d2d_cluster'] = d2d_clusters[mac]
+                except Exception as e:
+                    logger.debug(f"D2D colors unavailable for DHCP devices: {e}")
+
             return jsonify({
                 'success': True,
                 'demo_mode': False,
@@ -3156,6 +3328,168 @@ def api_bubble_move_device():
         return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
+# ============================================================================
+# D2D Bubble Suggestions API (Trio+ Enhanced)
+# ============================================================================
+
+@aiochi_bp.route('/api/bubbles/suggestions')
+@login_required
+def api_bubble_suggestions():
+    """
+    Get D2D-based bubble suggestions for the dashboard.
+
+    Uses Zeek conn.log analysis to identify devices that communicate
+    and should be grouped into the same user bubble.
+
+    Enhanced with Trio+ recommended algorithm:
+    - IoT vs Personal device classification
+    - D2D affinity scoring (frequency, bytes, recency, symmetry, overlap)
+    - Color assignments for visualization
+
+    Returns:
+        JSON with suggestions, device colors, and stats
+    """
+    try:
+        from lib.connection_graph import get_connection_analyzer
+        from lib.behavior_clustering import get_clustering_engine
+
+        # Get the connection analyzer
+        analyzer = get_connection_analyzer()
+
+        # Get bubble suggestions from D2D analysis
+        suggestions = analyzer.get_bubble_suggestions(min_affinity=0.4)
+
+        # Get device color assignments
+        device_colors = analyzer.get_device_colors()
+
+        # Get D2D stats
+        d2d_stats = analyzer.get_stats()
+
+        # Get clustering stats
+        engine = get_clustering_engine()
+        clustering_stats = engine.get_stats()
+
+        # Get clustering suggestions (if available)
+        cluster_suggestions = engine.get_bubble_suggestions()
+
+        return jsonify({
+            'success': True,
+            'd2d_suggestions': suggestions[:20],  # Top 20 suggestions
+            'cluster_suggestions': cluster_suggestions[:10],  # Top 10 from clustering
+            'device_colors': device_colors,
+            'd2d_stats': d2d_stats,
+            'clustering_stats': clustering_stats,
+            'summary': {
+                'total_suggestions': len(suggestions),
+                'personal_device_pairs': sum(1 for s in suggestions if s.get('bubble_type') == 'user'),
+                'iot_device_pairs': sum(1 for s in suggestions if s.get('bubble_type') == 'iot'),
+                'high_confidence': sum(1 for s in suggestions if s.get('confidence', 0) >= 0.7),
+            }
+        })
+
+    except ImportError as e:
+        logger.warning(f"D2D modules not available: {e}")
+        return jsonify({
+            'success': True,
+            'd2d_suggestions': [],
+            'cluster_suggestions': [],
+            'device_colors': {},
+            'd2d_stats': {'available': False},
+            'clustering_stats': {'available': False},
+            'summary': {
+                'total_suggestions': 0,
+                'personal_device_pairs': 0,
+                'iot_device_pairs': 0,
+                'high_confidence': 0,
+            },
+            'note': 'D2D analysis modules not available - Zeek data collection in progress'
+        })
+
+    except Exception as e:
+        logger.error(f"Bubble suggestions API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/device/<mac>/classification')
+@login_required
+def api_device_classification(mac):
+    """
+    Get device classification (Personal vs IoT) for a specific device.
+
+    Uses D2D communication patterns and OUI lookup to classify.
+
+    Args:
+        mac: Device MAC address
+
+    Returns:
+        JSON with device type, confidence, and supporting evidence
+    """
+    try:
+        # Validate MAC address
+        if not _validate_mac_address(mac):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid MAC address format'
+            }), 400
+
+        from lib.connection_graph import (
+            get_connection_analyzer,
+            get_oui,
+            IOT_VENDOR_OUIS,
+            PERSONAL_VENDOR_OUIS,
+        )
+
+        analyzer = get_connection_analyzer()
+
+        # Classify the device
+        device_type, confidence = analyzer.classify_device(mac)
+
+        # Get additional evidence
+        oui = get_oui(mac)
+        vendor_type = None
+        vendor_name = None
+
+        if oui in IOT_VENDOR_OUIS:
+            vendor_type = 'iot'
+            vendor_name = IOT_VENDOR_OUIS[oui]
+        elif oui in PERSONAL_VENDOR_OUIS:
+            vendor_type = 'personal'
+            vendor_name = PERSONAL_VENDOR_OUIS[oui]
+
+        # Get D2D peers
+        peers = analyzer.get_device_peers(mac)
+
+        return jsonify({
+            'success': True,
+            'mac': mac.upper(),
+            'device_type': device_type.value,
+            'confidence': round(confidence, 2),
+            'color': device_type.color,
+            'oui': oui,
+            'vendor_type': vendor_type,
+            'vendor_name': vendor_name,
+            'd2d_peers': len(peers),
+            'top_peers': [
+                {'mac': peer, 'affinity': round(aff, 2)}
+                for peer, aff in peers[:5]
+            ],
+        })
+
+    except ImportError as e:
+        logger.warning(f"D2D modules not available: {e}")
+        return jsonify({
+            'success': True,
+            'mac': mac.upper(),
+            'device_type': 'unknown',
+            'confidence': 0.0,
+            'note': 'D2D classification not available'
+        })
+
+    except Exception as e:
+        logger.error(f"Device classification API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
 @aiochi_bp.route('/api/bubbles/types')
 @login_required
 def api_bubble_types():
@@ -3492,3 +3826,939 @@ def api_events_stream():
             'X-Accel-Buffering': 'no',
         }
     )
+
+
+# ============================================================================
+# Active Defenses API - 5 HookProbe Innovations
+# ============================================================================
+
+# Try to import the defense backend modules
+try:
+    from shared.aiochi.backend.dynamic_friction import DynamicFrictionEngine, FrictionLevel
+    FRICTION_ENGINE_AVAILABLE = True
+except ImportError:
+    FRICTION_ENGINE_AVAILABLE = False
+
+try:
+    from shared.aiochi.backend.nse_ghost_probe import NSEGhostProbe
+    GHOST_PROBE_AVAILABLE = True
+except ImportError:
+    GHOST_PROBE_AVAILABLE = False
+
+try:
+    from shared.aiochi.backend.attack_chain_predictor import AttackChainPredictor
+    CHAIN_PREDICTOR_AVAILABLE = True
+except ImportError:
+    CHAIN_PREDICTOR_AVAILABLE = False
+
+try:
+    from shared.aiochi.backend.honeypot_mesh import HoneypotMesh
+    HONEYPOT_MESH_AVAILABLE = True
+except ImportError:
+    HONEYPOT_MESH_AVAILABLE = False
+
+try:
+    from shared.aiochi.backend.data_gravity_monitor import DataGravityMonitor
+    GRAVITY_MONITOR_AVAILABLE = True
+except ImportError:
+    GRAVITY_MONITOR_AVAILABLE = False
+
+
+# Lazy-load singleton instances
+_friction_engine = None
+_ghost_probe = None
+_chain_predictor = None
+_honeypot_mesh = None
+_gravity_monitor = None
+
+
+def get_friction_engine():
+    """Get or create friction engine singleton."""
+    global _friction_engine
+    if _friction_engine is None and FRICTION_ENGINE_AVAILABLE:
+        _friction_engine = DynamicFrictionEngine()
+    return _friction_engine
+
+
+def get_ghost_probe():
+    """Get or create ghost probe singleton."""
+    global _ghost_probe
+    if _ghost_probe is None and GHOST_PROBE_AVAILABLE:
+        _ghost_probe = NSEGhostProbe()
+    return _ghost_probe
+
+
+def get_chain_predictor():
+    """Get or create chain predictor singleton."""
+    global _chain_predictor
+    if _chain_predictor is None and CHAIN_PREDICTOR_AVAILABLE:
+        _chain_predictor = AttackChainPredictor()
+    return _chain_predictor
+
+
+def get_honeypot_mesh():
+    """Get or create honeypot mesh singleton."""
+    global _honeypot_mesh
+    if _honeypot_mesh is None and HONEYPOT_MESH_AVAILABLE:
+        _honeypot_mesh = HoneypotMesh()
+    return _honeypot_mesh
+
+
+def get_gravity_monitor():
+    """Get or create gravity monitor singleton."""
+    global _gravity_monitor
+    if _gravity_monitor is None and GRAVITY_MONITOR_AVAILABLE:
+        _gravity_monitor = DataGravityMonitor()
+    return _gravity_monitor
+
+
+@aiochi_bp.route('/api/defenses/friction')
+@login_required
+def api_defense_friction():
+    """Get Dynamic Friction Control status.
+
+    Returns devices with applied friction and statistics.
+    """
+    engine = get_friction_engine()
+
+    # Demo mode if engine not available
+    if not engine:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'active': 2,
+                'subtle': 1,
+                'degraded': 1,
+                'severe': 0,
+            },
+            'devices': [
+                {
+                    'mac': 'AA:BB:CC:DD:EE:01',
+                    'label': 'Suspicious IoT Camera',
+                    'level': 'subtle',
+                    'delay_ms': 50,
+                    'qsecbit': 0.42,
+                    'reason': 'Unusual outbound traffic pattern detected',
+                },
+                {
+                    'mac': 'AA:BB:CC:DD:EE:02',
+                    'label': 'Guest Laptop',
+                    'level': 'degraded',
+                    'delay_ms': 500,
+                    'qsecbit': 0.28,
+                    'reason': 'Port scanning activity detected',
+                },
+            ],
+        })
+
+    try:
+        # Get friction statistics and active frictions from engine
+        engine_stats = engine.get_stats()
+        all_friction = engine.get_all_friction()
+
+        # Count by level
+        stats = {
+            'active': engine_stats.get('active_friction_count', 0),
+            'subtle': engine_stats.get('level_distribution', {}).get('subtle', 0),
+            'degraded': engine_stats.get('level_distribution', {}).get('degraded', 0),
+            'severe': engine_stats.get('level_distribution', {}).get('severe', 0),
+        }
+
+        devices = []
+        for key, friction_record in all_friction.items():
+            # FrictionRecord is a dataclass
+            level_name = friction_record.level.value if hasattr(friction_record.level, 'value') else str(friction_record.level).lower()
+            delay_ms = 50 if level_name == 'subtle' else 500 if level_name == 'degraded' else 2000
+
+            devices.append({
+                'mac': friction_record.device_mac or key,
+                'label': friction_record.device_ip,
+                'level': level_name,
+                'delay_ms': delay_ms,
+                'qsecbit': friction_record.qsecbit_score,
+                'reason': friction_record.reason or 'Security policy',
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': stats,
+            'devices': devices,
+        })
+    except Exception as e:
+        logger.error(f"Friction API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+@aiochi_bp.route('/api/defenses/ghost')
+@login_required
+def api_defense_ghost():
+    """Get NSE Ghost Probe status.
+
+    Returns recent probe results and statistics.
+    """
+    probe = get_ghost_probe()
+
+    # Demo mode if probe not available
+    if not probe:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'probes_24h': 15,
+                'clean': 12,
+                'suspicious': 2,
+                'masquerading': 1,
+            },
+            'probes': [
+                {
+                    'mac': 'AA:BB:CC:DD:EE:03',
+                    'claimed_vendor': 'Apple, Inc.',
+                    'actual_vendor': 'Apple, Inc.',
+                    'verdict': 'clean',
+                    'confidence': 0.95,
+                    'action': 'none',
+                    'label': 'iPhone 15 Pro',
+                },
+                {
+                    'mac': 'AA:BB:CC:DD:EE:04',
+                    'claimed_vendor': 'Samsung',
+                    'actual_vendor': 'Unknown (Chinese OEM)',
+                    'verdict': 'suspicious',
+                    'confidence': 0.72,
+                    'action': 'friction_applied',
+                    'label': 'Smart Bulb',
+                },
+                {
+                    'mac': 'AA:BB:CC:DD:EE:05',
+                    'claimed_vendor': 'Apple, Inc.',
+                    'actual_vendor': 'Raspberry Pi Foundation',
+                    'verdict': 'masquerading',
+                    'confidence': 0.88,
+                    'action': 'quarantined',
+                    'label': 'Unknown Device',
+                },
+            ],
+        })
+
+    try:
+        # Get probe statistics from engine
+        probe_stats = probe.get_stats()
+
+        stats = {
+            'probes_24h': probe_stats.get('probes_completed', 0),
+            'clean': probe_stats.get('probes_completed', 0) - probe_stats.get('masquerading_detected', 0) - probe_stats.get('compromised_detected', 0),
+            'suspicious': probe_stats.get('compromised_detected', 0),
+            'masquerading': probe_stats.get('masquerading_detected', 0),
+        }
+
+        # Probe results come from cache (recent probes only)
+        probes = []
+        if hasattr(probe, '_cache') and probe._cache:
+            for ip, result in list(probe._cache.items())[:20]:
+                probes.append({
+                    'mac': getattr(result, 'target_mac', '') or '',
+                    'claimed_vendor': getattr(result, 'dhcp_hostname', 'Unknown'),
+                    'actual_vendor': getattr(result, 'oui_vendor', 'Unknown'),
+                    'verdict': result.verdict.value if hasattr(result.verdict, 'value') else str(result.verdict),
+                    'confidence': getattr(result, 'confidence', 0),
+                    'action': 'none',
+                    'label': getattr(result, 'dhcp_hostname', ip),
+                })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': stats,
+            'probes': probes,
+        })
+    except Exception as e:
+        logger.error(f"Ghost Probe API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+@aiochi_bp.route('/api/defenses/ghost/probe-all', methods=['POST'])
+@login_required
+def api_defense_ghost_probe_all():
+    """Trigger probing of all connected devices."""
+    probe = get_ghost_probe()
+
+    if not probe:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'message': 'Demo mode - would probe all devices',
+            'devices_queued': 5,
+        })
+
+    try:
+        result = probe.probe_all_devices()
+        return jsonify({
+            'success': True,
+            'message': 'Probe initiated for all devices',
+            'devices_queued': result.get('queued_count', 0),
+        })
+    except Exception as e:
+        logger.error(f"Probe All error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+@aiochi_bp.route('/api/defenses/chain')
+@login_required
+def api_defense_chain():
+    """Get Attack Chain Predictor status.
+
+    Returns active attack chains and predictions.
+    """
+    predictor = get_chain_predictor()
+
+    # Demo mode if predictor not available
+    if not predictor:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'predictions_24h': 8,
+                'hardened': 5,
+                'prevented': 3,
+                'active_chains': 1,
+            },
+            'chains': [
+                {
+                    'chain_id': 'chain-abc12345',
+                    'device_mac': 'AA:BB:CC:DD:EE:06',
+                    'techniques': ['T1595.001', 'T1046', 'T1110.003'],
+                    'current_stage': 3,
+                    'total_stages': 5,
+                    'confidence': 0.78,
+                    'predicted_next': [
+                        {'technique': 'T1021.001', 'probability': 0.65},
+                        {'technique': 'T1078', 'probability': 0.45},
+                    ],
+                    'status': 'monitoring',
+                },
+            ],
+        })
+
+    try:
+        # Get all tracked chains from predictor
+        all_chains = predictor.get_all_chains()
+        stats = predictor.get_stats()
+
+        chains = []
+        for chain_id, chain_data in list(all_chains.items())[:10]:
+            # chain_data is an AttackChain object
+            techniques = getattr(chain_data, 'observed_techniques', [])
+            if hasattr(chain_data, 'events'):
+                techniques = [e.mitre_id for e in chain_data.events if hasattr(e, 'mitre_id')]
+
+            chains.append({
+                'chain_id': chain_id,
+                'device_mac': getattr(chain_data, 'source_ip', 'Unknown'),
+                'techniques': techniques,
+                'current_stage': len(techniques),
+                'total_stages': max(len(techniques) + 2, 5),
+                'confidence': getattr(chain_data, 'confidence', 0),
+                'predicted_next': getattr(chain_data, 'predicted_next', []),
+                'status': 'monitoring' if getattr(chain_data, 'is_active', True) else 'completed',
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': {
+                'predictions_24h': stats.get('predictions_made', 0),
+                'hardened': stats.get('hardenings_triggered', 0),
+                'prevented': stats.get('hardenings_triggered', 0),
+                'active_chains': len(all_chains),
+            },
+            'chains': chains,
+        })
+    except Exception as e:
+        logger.error(f"Chain Predictor API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+@aiochi_bp.route('/api/defenses/honeypot')
+@login_required
+def api_defense_honeypot():
+    """Get Honeypot Mesh status.
+
+    Returns attacker profiles and touch statistics.
+    """
+    mesh = get_honeypot_mesh()
+
+    # Demo mode if mesh not available
+    if not mesh:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'touches_24h': 47,
+                'dark_ports': 12,
+                'unique_attackers': 8,
+                'critical_threats': 2,
+            },
+            'attackers': [
+                {
+                    'source_ip': '185.234.219.xxx',
+                    'threat_level': 'critical',
+                    'ports_touched': [22, 3389, 445, 23],
+                    'ttp_count': 5,
+                    'reputation': 'Known Scanner',
+                    'country': 'RU',
+                    'action': 'blocked',
+                    'last_seen': '2 min ago',
+                },
+                {
+                    'source_ip': '103.152.xxx.xxx',
+                    'threat_level': 'high',
+                    'ports_touched': [80, 8080, 443],
+                    'ttp_count': 3,
+                    'reputation': 'Bot Network',
+                    'country': 'CN',
+                    'action': 'tarpitted',
+                    'last_seen': '15 min ago',
+                },
+                {
+                    'source_ip': '192.168.1.xxx',
+                    'threat_level': 'low',
+                    'ports_touched': [8888],
+                    'ttp_count': 1,
+                    'reputation': 'Internal',
+                    'country': 'Local',
+                    'action': 'logged',
+                    'last_seen': '1 hour ago',
+                },
+            ],
+        })
+
+    try:
+        # Get honeypot data from mesh (using synchronous get_stats)
+        mesh_stats = mesh.get_stats()
+
+        # Access attacker profiles directly (they're stored as dict)
+        attacker_profiles_dict = getattr(mesh, 'attacker_profiles', {})
+        touches_list = getattr(mesh, 'touches', [])
+        dark_ports_dict = getattr(mesh, 'dark_ports', {})
+
+        # Count 24h touches
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(hours=24)
+        recent_touches = [t for t in touches_list if hasattr(t, 'timestamp') and t.timestamp > cutoff]
+
+        stats = {
+            'touches_24h': len(recent_touches),
+            'dark_ports': mesh_stats.get('dark_ports', 0),
+            'unique_attackers': mesh_stats.get('attacker_profiles', 0),
+            'critical_threats': mesh_stats.get('active_threats', 0),
+        }
+
+        attackers = []
+        for ip, profile in list(attacker_profiles_dict.items())[:15]:
+            # AttackerProfile is a dataclass
+            threat_level = profile.threat_level.value if hasattr(profile.threat_level, 'value') else str(profile.threat_level)
+            touched_ports = getattr(profile, 'touched_ports', [])
+            ports_list = [p.port for p in touched_ports] if touched_ports else []
+
+            attackers.append({
+                'source_ip': ip,
+                'threat_level': threat_level,
+                'ports_touched': ports_list,
+                'ttp_count': len(getattr(profile, 'observed_ttps', [])),
+                'reputation': getattr(profile, 'reputation', 'Unknown'),
+                'country': getattr(profile, 'country_code', '??'),
+                'action': 'logged',
+                'last_seen': str(getattr(profile, 'last_seen', 'Unknown')),
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': stats,
+            'attackers': attackers,
+        })
+    except Exception as e:
+        logger.error(f"Honeypot API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+@aiochi_bp.route('/api/defenses/gravity')
+@login_required
+def api_defense_gravity():
+    """Get Data Gravity Monitor status.
+
+    Returns exfiltration events and sensitive file movements.
+    """
+    monitor = get_gravity_monitor()
+
+    # Demo mode if monitor not available
+    if not monitor:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'events_24h': 23,
+                'blocked': 5,
+                'sensitive_files': 18,
+                'high_risk_sources': 2,
+            },
+            'events': [
+                {
+                    'filename': 'customer_db_backup.sql',
+                    'size_bytes': 52428800,
+                    'source_device': 'Server-01',
+                    'dest_ip': '203.0.113.xxx (DigitalOcean)',
+                    'risk_level': 'critical',
+                    'risk_score': 0.92,
+                    'mitre_techniques': ['T1048.002', 'T1567'],
+                    'action': 'blocked',
+                    'timestamp': '5 min ago',
+                },
+                {
+                    'filename': 'quarterly_report.xlsx',
+                    'size_bytes': 2097152,
+                    'source_device': 'Finance-PC',
+                    'dest_ip': 'OneDrive (Microsoft)',
+                    'risk_level': 'medium',
+                    'risk_score': 0.45,
+                    'mitre_techniques': ['T1567.002'],
+                    'action': 'allowed',
+                    'timestamp': '20 min ago',
+                },
+                {
+                    'filename': 'photo_001.jpg',
+                    'size_bytes': 4194304,
+                    'source_device': 'iPhone-Sarah',
+                    'dest_ip': 'iCloud (Apple)',
+                    'risk_level': 'low',
+                    'risk_score': 0.12,
+                    'mitre_techniques': [],
+                    'action': 'allowed',
+                    'timestamp': '1 hour ago',
+                },
+            ],
+        })
+
+    try:
+        # Get gravity data from monitor (using synchronous methods)
+        stats = monitor.get_stats()
+
+        # Access events directly from the monitor
+        from datetime import datetime, timedelta
+        exfil_events = getattr(monitor, 'exfil_events', [])
+        cutoff = datetime.now() - timedelta(hours=24)
+        recent_events = [e for e in exfil_events if hasattr(e, 'timestamp') and e.timestamp > cutoff]
+
+        formatted_events = []
+        for e in recent_events[:20]:
+            # ExfilEvent is a dataclass
+            risk_level = 'critical' if e.risk_score >= 0.8 else 'high' if e.risk_score >= 0.6 else 'medium' if e.risk_score >= 0.4 else 'low'
+            sensitivity = getattr(e.sensitivity, 'value', str(e.sensitivity)) if hasattr(e, 'sensitivity') else 'unknown'
+
+            formatted_events.append({
+                'filename': getattr(e, 'filename', 'Unknown'),
+                'size_bytes': getattr(e, 'file_size', 0),
+                'source_device': getattr(e, 'source_ip', 'Unknown'),
+                'dest_ip': getattr(e, 'dest_ip', 'Unknown'),
+                'risk_level': risk_level,
+                'risk_score': e.risk_score,
+                'mitre_techniques': getattr(e, 'mitre_techniques', []),
+                'action': 'blocked' if getattr(e, 'blocked', False) else 'allowed',
+                'timestamp': str(e.timestamp) if hasattr(e, 'timestamp') else 'Unknown',
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': {
+                'events_24h': len(recent_events),
+                'blocked': stats.get('blocked_transfers', 0),
+                'sensitive_files': stats.get('total_events', 0),
+                'high_risk_sources': len([e for e in recent_events if e.risk_score >= 0.7]),
+            },
+            'events': formatted_events,
+        })
+    except Exception as e:
+        logger.error(f"Gravity Monitor API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))})
+
+
+# =============================================================================
+# D2D (DEVICE-TO-DEVICE) COMMUNICATION COLOR APIs
+# =============================================================================
+# These endpoints expose the D2D connection graph analysis to the frontend,
+# enabling visualization of device relationships with color coding.
+
+@aiochi_bp.route('/api/d2d/colors')
+@login_required
+def api_d2d_colors():
+    """Get device colors based on D2D communication clusters.
+
+    Returns a mapping of MAC addresses to hex colors based on:
+    1. Device type (Personal=green, IoT=orange, Infra=blue, Unknown=gray)
+    2. D2D cluster membership (devices that communicate get same color)
+
+    This enables the UI to color-code devices by their relationships.
+    """
+    if not D2D_CONNECTION_AVAILABLE:
+        # Return demo colors based on common device types
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'device_colors': {},
+            'cluster_colors': {},
+            'palette': {
+                'device_types': {
+                    'personal': '#4CAF50',
+                    'iot': '#FF9800',
+                    'infrastructure': '#2196F3',
+                    'unknown': '#9E9E9E',
+                },
+                'user_bubbles': USER_BUBBLE_COLORS if 'USER_BUBBLE_COLORS' in dir() else [
+                    '#E91E63', '#3F51B5', '#009688', '#FF5722',
+                    '#673AB7', '#00BCD4', '#795548', '#607D8B',
+                ],
+            },
+        })
+
+    try:
+        analyzer = get_connection_analyzer()
+
+        # Get device type colors (based on classification)
+        device_colors = analyzer.get_device_colors()
+
+        # Assign and get cluster colors (based on D2D communication)
+        cluster_colors = analyzer.assign_bubble_colors()
+
+        # Build device-to-cluster mapping
+        clusters = analyzer.find_d2d_clusters()
+        device_to_cluster = {}
+        for i, cluster in enumerate(clusters):
+            color = cluster_colors.get(i, get_user_bubble_color(i))
+            for mac in cluster.devices:
+                device_to_cluster[mac.upper()] = {
+                    'cluster_id': i,
+                    'cluster_color': color,
+                    'type_color': device_colors.get(mac, '#9E9E9E'),
+                    'device_count': len(cluster.devices),
+                    'avg_affinity': round(cluster.avg_affinity, 2),
+                }
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'device_colors': {k.upper(): v for k, v in device_colors.items()},
+            'device_clusters': device_to_cluster,
+            'cluster_colors': cluster_colors,
+            'cluster_count': len(clusters),
+            'palette': {
+                'device_types': {
+                    'personal': DEVICE_TYPE_COLORS[DeviceType.PERSONAL],
+                    'iot': DEVICE_TYPE_COLORS[DeviceType.IOT],
+                    'infrastructure': DEVICE_TYPE_COLORS[DeviceType.INFRASTRUCTURE],
+                    'unknown': DEVICE_TYPE_COLORS[DeviceType.UNKNOWN],
+                },
+                'user_bubbles': USER_BUBBLE_COLORS,
+            },
+        })
+    except Exception as e:
+        logger.error(f"D2D colors API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500
+
+
+@aiochi_bp.route('/api/d2d/clusters')
+@login_required
+def api_d2d_clusters():
+    """Get D2D communication clusters.
+
+    Returns groups of devices that communicate with each other,
+    with color assignments for visualization.
+    """
+    if not D2D_CONNECTION_AVAILABLE:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'clusters': [
+                {
+                    'cluster_id': 0,
+                    'color': '#E91E63',
+                    'devices': ['AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02'],
+                    'device_count': 2,
+                    'avg_affinity': 0.85,
+                    'services': ['airplay', 'mdns'],
+                    'label': 'Dad\'s Devices',
+                },
+                {
+                    'cluster_id': 1,
+                    'color': '#3F51B5',
+                    'devices': ['BB:CC:DD:EE:FF:01', 'BB:CC:DD:EE:FF:02', 'BB:CC:DD:EE:FF:03'],
+                    'device_count': 3,
+                    'avg_affinity': 0.72,
+                    'services': ['smb', 'mdns', 'spotify'],
+                    'label': 'Mom\'s Devices',
+                },
+            ],
+        })
+
+    try:
+        analyzer = get_connection_analyzer()
+        clusters = analyzer.find_d2d_clusters()
+        cluster_colors = analyzer.assign_bubble_colors()
+
+        formatted_clusters = []
+        for i, cluster in enumerate(clusters):
+            color = cluster_colors.get(i, get_user_bubble_color(i))
+
+            # Get device details for each MAC
+            devices_with_info = []
+            for mac in cluster.devices:
+                device_type, confidence = analyzer.classify_device(mac)
+                devices_with_info.append({
+                    'mac': mac.upper(),
+                    'device_type': device_type.value,
+                    'type_confidence': round(confidence, 2),
+                    'type_color': device_type.color,
+                })
+
+            formatted_clusters.append({
+                'cluster_id': i,
+                'color': color,
+                'devices': [mac.upper() for mac in cluster.devices],
+                'devices_detailed': devices_with_info,
+                'device_count': len(cluster.devices),
+                'avg_affinity': round(cluster.avg_affinity, 2),
+                'services': cluster.primary_services,
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'clusters': formatted_clusters,
+            'total_clusters': len(formatted_clusters),
+        })
+    except Exception as e:
+        logger.error(f"D2D clusters API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500
+
+
+@aiochi_bp.route('/api/d2d/relationships')
+@login_required
+def api_d2d_relationships():
+    """Get all D2D relationships with colors and affinity scores.
+
+    Returns edges between devices that communicate, with:
+    - Affinity score (0.0-1.0)
+    - Connection count
+    - Services used
+    - Assigned bubble color
+    """
+    if not D2D_CONNECTION_AVAILABLE:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'relationships': [
+                {
+                    'device_a': 'AA:BB:CC:DD:EE:01',
+                    'device_b': 'AA:BB:CC:DD:EE:02',
+                    'affinity': 0.85,
+                    'connection_count': 150,
+                    'services': ['airplay', 'mdns'],
+                    'bubble_color': '#E91E63',
+                    'should_suggest': True,
+                },
+            ],
+            'stats': {
+                'total_relationships': 1,
+                'high_affinity_pairs': 1,
+            },
+        })
+
+    try:
+        analyzer = get_connection_analyzer()
+
+        # Ensure colors are assigned
+        analyzer.assign_bubble_colors()
+
+        relationships = []
+        for key, rel in analyzer.relationships.items():
+            mac_a, mac_b = key
+            affinity = rel.calculate_affinity_score()
+            suggestion = rel.get_suggestion_details()
+
+            relationships.append({
+                'device_a': mac_a.upper(),
+                'device_b': mac_b.upper(),
+                'affinity': round(affinity, 3),
+                'connection_count': rel.connection_count,
+                'services': rel.services,
+                'bubble_color': rel.bubble_color or '#9E9E9E',
+                'temporal_sync': round(rel.temporal_sync_score, 2),
+                'discovery_hits': rel.discovery_hits,
+                'device_type_a': rel.device_type_a,
+                'device_type_b': rel.device_type_b,
+                'should_suggest': suggestion.get('should_suggest', False),
+                'suggestion_reason': suggestion.get('reason', ''),
+            })
+
+        # Sort by affinity (highest first)
+        relationships.sort(key=lambda x: x['affinity'], reverse=True)
+
+        stats = analyzer.get_stats()
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'relationships': relationships,
+            'stats': stats,
+        })
+    except Exception as e:
+        logger.error(f"D2D relationships API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500
+
+
+@aiochi_bp.route('/api/d2d/peers/<mac>')
+@login_required
+def api_d2d_peers(mac):
+    """Get communication peers for a specific device.
+
+    Returns devices that the specified device communicates with,
+    sorted by affinity score.
+    """
+    # Validate MAC address
+    if not _validate_mac_address(mac):
+        return jsonify({'success': False, 'error': 'Invalid MAC address format'}), 400
+
+    mac_normalized = mac.upper()
+
+    if not D2D_CONNECTION_AVAILABLE:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'device': mac_normalized,
+            'peers': [],
+            'device_type': 'unknown',
+            'type_color': '#9E9E9E',
+        })
+
+    try:
+        analyzer = get_connection_analyzer()
+
+        # Get device classification
+        device_type, type_confidence = analyzer.classify_device(mac_normalized)
+
+        # Get high-affinity peers
+        peers = analyzer.get_high_affinity_peers(mac_normalized)
+
+        # Format peer data with colors
+        peer_data = []
+        for peer_mac, affinity in peers:
+            peer_type, peer_confidence = analyzer.classify_device(peer_mac)
+
+            # Get relationship details
+            key = analyzer._normalize_mac_pair(mac_normalized, peer_mac)
+            rel = analyzer.relationships.get(key)
+
+            peer_data.append({
+                'mac': peer_mac.upper(),
+                'affinity': round(affinity, 3),
+                'device_type': peer_type.value,
+                'type_color': peer_type.color,
+                'type_confidence': round(peer_confidence, 2),
+                'bubble_color': rel.bubble_color if rel else '#9E9E9E',
+                'services': rel.services if rel else [],
+                'connection_count': rel.connection_count if rel else 0,
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'device': mac_normalized,
+            'device_type': device_type.value,
+            'type_color': device_type.color,
+            'type_confidence': round(type_confidence, 2),
+            'peers': peer_data,
+            'peer_count': len(peer_data),
+        })
+    except Exception as e:
+        logger.error(f"D2D peers API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500
+
+
+@aiochi_bp.route('/api/d2d/stats')
+@login_required
+def api_d2d_stats():
+    """Get D2D connection graph statistics.
+
+    Returns overview stats about device relationships and clusters.
+    """
+    if not D2D_CONNECTION_AVAILABLE:
+        return jsonify({
+            'success': True,
+            'demo_mode': True,
+            'stats': {
+                'total_relationships': 0,
+                'total_connections': 0,
+                'high_affinity_pairs': 0,
+                'unique_devices': 0,
+                'device_types': {'personal': 0, 'iot': 0, 'unknown': 0},
+                'bubble_suggestions': 0,
+            },
+        })
+
+    try:
+        analyzer = get_connection_analyzer()
+        stats = analyzer.get_stats()
+
+        # Add cluster info
+        clusters = analyzer.find_d2d_clusters()
+
+        return jsonify({
+            'success': True,
+            'demo_mode': False,
+            'stats': stats,
+            'cluster_count': len(clusters),
+            'palette': {
+                'device_types': {
+                    'personal': DEVICE_TYPE_COLORS[DeviceType.PERSONAL],
+                    'iot': DEVICE_TYPE_COLORS[DeviceType.IOT],
+                    'infrastructure': DEVICE_TYPE_COLORS[DeviceType.INFRASTRUCTURE],
+                    'unknown': DEVICE_TYPE_COLORS[DeviceType.UNKNOWN],
+                },
+                'user_bubbles': USER_BUBBLE_COLORS,
+            },
+        })
+    except Exception as e:
+        logger.error(f"D2D stats API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500
+
+
+@aiochi_bp.route('/api/d2d/analyze', methods=['POST'])
+@login_required
+@admin_required
+def api_d2d_analyze():
+    """Trigger D2D connection analysis.
+
+    Parses Zeek logs and updates device relationships.
+    Admin only as this can be resource-intensive.
+    """
+    if not D2D_CONNECTION_AVAILABLE:
+        return jsonify({
+            'success': False,
+            'error': 'D2D connection graph module not available',
+        }), 503
+
+    try:
+        analyzer = get_connection_analyzer()
+        analyzer.update_relationships()
+        stats = analyzer.get_stats()
+
+        return jsonify({
+            'success': True,
+            'message': 'D2D analysis completed',
+            'stats': stats,
+        })
+    except Exception as e:
+        logger.error(f"D2D analyze API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(str(e))}), 500

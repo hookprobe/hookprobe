@@ -1,0 +1,96 @@
+{
+  "id": "guest_wall",
+  "name": "Guest Wall",
+  "version": "1.0",
+  "description": "Blocks guests from accessing internal business systems",
+  "mitre_attack": ["T1021", "T1046", "T1018"],
+  "category": "lateral_movement",
+  "severity_threshold": 2,
+
+  "triggers": [
+    {
+      "type": "port_scan",
+      "description": "Guest device scanning internal ports",
+      "conditions": {
+        "source_vlan": [150],
+        "destination_ports": [22, 23, 139, 445, 3389, 5900, 5985],
+        "scan_threshold": 5
+      }
+    },
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "AIOCHI Lateral",
+        "ET SCAN",
+        "Internal Port Scan",
+        "SMB Probe"
+      ],
+      "conditions": {
+        "source_vlan": [150]
+      }
+    },
+    {
+      "type": "cross_vlan_attempt",
+      "description": "Guest trying to reach non-guest VLANs",
+      "conditions": {
+        "source_vlan": [150],
+        "destination_vlan_not": [150]
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "mac_blacklist",
+      "description": "Disconnect device from AP",
+      "command": "hostapd_cli -i {{trigger.ap_interface}} disassociate {{trigger.src_mac}}"
+    },
+    {
+      "order": 2,
+      "type": "ovs_block",
+      "description": "Block MAC at network level",
+      "command": "ovs-ofctl add-flow FTS \"priority=500,dl_src={{trigger.src_mac}},actions=drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"dl_src={{trigger.src_mac}},priority=500\""
+    },
+    {
+      "order": 3,
+      "type": "persistent_block",
+      "description": "Prevent re-entry for 24 hours",
+      "command": "add_mac_blocklist",
+      "parameters": {
+        "mac": "{{trigger.src_mac}}",
+        "duration_hours": 24,
+        "reason": "Scanning internal network from guest WiFi"
+      }
+    },
+    {
+      "order": 4,
+      "type": "notification",
+      "description": "Alert owner",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "high",
+        "persona": "parent"
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Blocked suspicious guest",
+    "owner_friendly": "Someone on your Guest WiFi was trying to access your business computers. I've disconnected them and blocked their device for 24 hours. Your systems are safe.",
+    "technical": "Guest device {{trigger.src_mac}} from VLAN 150 attempted to scan internal ports ({{trigger.ports_scanned}}). Device disconnected from AP and MAC blacklisted for 24h.",
+    "action_prompt": "This might be someone with bad intentions, or just a misconfigured device.",
+    "resolution_options": [
+      {"label": "Keep blocked (recommended)", "action": "acknowledge"},
+      {"label": "It's a known device, unblock", "action": "unblock_mac"},
+      {"label": "Report to authorities", "action": "generate_report"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "timeout_hours": 24,
+    "action": "unblock_mac"
+  }
+}
