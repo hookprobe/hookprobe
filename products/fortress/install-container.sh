@@ -3759,6 +3759,28 @@ AIOCHIENV
             # Create AIOCHI network
             podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal 2>/dev/null || true
 
+            # ============================================================
+            # Setup WAN Mirror for AIOCHI (IDS/NSM capture WAN traffic)
+            # ============================================================
+            # FTS-mirror captures LAN/OVS traffic
+            # wan-mirror captures WAN/WWAN traffic (pre-NAT for inbound visibility)
+            # This enables AIOCHI to monitor BOTH internal and external threats
+            log_info "  Setting up WAN traffic mirroring for AIOCHI..."
+            local ovs_script="${INSTALL_DIR}/devices/common/ovs-post-setup.sh"
+            if [ -x "$ovs_script" ]; then
+                if "$ovs_script" wan-mirror 2>/dev/null; then
+                    log_info "    ✓ WAN mirror configured (wan-mirror interface)"
+                    # Update env with WAN mirror info
+                    echo "" >> "${aiochi_dir}/.env"
+                    echo "# WAN capture interface (TC mirror of WAN/WWAN interfaces)" >> "${aiochi_dir}/.env"
+                    echo "WAN_CAPTURE_INTERFACE=wan-mirror" >> "${aiochi_dir}/.env"
+                else
+                    log_warn "    ⚠ WAN mirror setup had issues (AIOCHI will only capture LAN traffic)"
+                fi
+            else
+                log_warn "    ⚠ ovs-post-setup.sh not found - WAN mirror not configured"
+            fi
+
             # 1. Data Tier
             start_aiochi_container "aiochi-clickhouse" "ClickHouse (analytics)" \
                 --name aiochi-clickhouse \
@@ -3780,15 +3802,29 @@ AIOCHIENV
             # IMPORTANT: Capture from FTS-mirror (OVS mirror port), NOT FTS directly!
             # Direct AF_PACKET capture on OVS bridge causes packet loss and CPU starvation.
             # See: devices/common/ovs-post-setup.sh (setup_traffic_mirror function)
+            #
+            # Dual-interface capture: FTS-mirror (LAN) + wan-mirror (WAN) for complete visibility
+            local suricata_interfaces="-i FTS-mirror"
+            local zeek_interface="FTS-mirror"
+            if ip link show wan-mirror &>/dev/null; then
+                suricata_interfaces="-i FTS-mirror -i wan-mirror"
+                log_info "    ✓ Suricata will capture from both FTS-mirror and wan-mirror"
+            else
+                log_info "    ℹ Suricata will capture from FTS-mirror only (wan-mirror not available)"
+            fi
+
             start_aiochi_container "aiochi-suricata" "Suricata IDS (host network)" \
                 --name aiochi-suricata \
                 --restart unless-stopped \
                 --network host \
                 --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
                 -v aiochi-suricata-logs:/var/log/suricata \
+                -v /run/fortress:/run/fortress:ro \
                 docker.io/jasonish/suricata:7.0.8 \
-                -i FTS-mirror --af-packet
+                $suricata_interfaces --af-packet
 
+            # Zeek captures LAN only (device fingerprinting focus)
+            # WAN threat detection handled by Suricata
             start_aiochi_container "aiochi-zeek" "Zeek NSM (host network)" \
                 --name aiochi-zeek \
                 --restart unless-stopped \
@@ -3796,7 +3832,7 @@ AIOCHIENV
                 --cap-add NET_ADMIN --cap-add NET_RAW \
                 -v aiochi-zeek-logs:/opt/zeek/logs \
                 docker.io/zeek/zeek:7.0.3 \
-                zeek -i FTS-mirror local LogAscii::use_json=T
+                zeek -i "$zeek_interface" local LogAscii::use_json=T
 
             # Note: No Grafana container - visualization handled by Fortress AdminLTE web UI
             # This saves ~200MB RAM and avoids redundant dashboarding

@@ -2080,6 +2080,14 @@ do_health_check() {
         # but we check as a safety net in case something disrupted OVS
         verify_ovs_health
 
+        # Refresh WAN traffic mirroring for AIOCHI IDS/NSM
+        # TC mirrors need to track the active WAN interface for threat detection
+        local ovs_script="${INSTALL_DIR:-/opt/hookprobe/fortress}/devices/common/ovs-post-setup.sh"
+        if [ -x "$ovs_script" ] && [ -e /run/fortress/wan-mirror.state ]; then
+            log_debug "Refreshing WAN mirror for AIOCHI..."
+            "$ovs_script" wan-mirror-refresh &>/dev/null &
+        fi
+
         logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
     fi
 
