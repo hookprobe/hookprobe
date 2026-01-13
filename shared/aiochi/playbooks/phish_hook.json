@@ -1,0 +1,90 @@
+{
+  "id": "phish_hook",
+  "name": "Phish-Hook",
+  "version": "1.0",
+  "description": "Blocks phishing attempts when employees click suspicious links",
+  "mitre_attack": ["T1566", "T1566.001", "T1566.002"],
+  "category": "initial_access",
+  "severity_threshold": 2,
+
+  "triggers": [
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "ET PHISHING",
+        "ETPRO PHISHING",
+        "Phishing URL",
+        "Credential Harvest"
+      ]
+    },
+    {
+      "type": "dns_query",
+      "patterns": [
+        "micros0ft",
+        "paypa1",
+        "goog1e",
+        "amaz0n",
+        "app1e",
+        "-login.com",
+        "-verify.com",
+        "-secure.com"
+      ]
+    },
+    {
+      "type": "dnsxai_classification",
+      "categories": ["phishing", "malware"]
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "dns_block",
+      "description": "Block the phishing domain",
+      "command": "dnsxai_block_domain",
+      "parameters": {
+        "domain": "{{trigger.domain}}",
+        "duration_hours": 24
+      }
+    },
+    {
+      "order": 2,
+      "type": "device_flag",
+      "description": "Flag the device as potentially compromised",
+      "command": "set_device_status",
+      "parameters": {
+        "mac": "{{trigger.src_mac}}",
+        "status": "monitoring",
+        "color": "yellow"
+      }
+    },
+    {
+      "order": 3,
+      "type": "notification",
+      "description": "Alert the owner",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "medium",
+        "persona": "parent"
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Blocked a suspicious link",
+    "owner_friendly": "Someone at {{device.name}} clicked a fake website that was pretending to be {{phishing_target}}. I've blocked it so no passwords can be stolen.",
+    "technical": "Phishing domain {{trigger.domain}} blocked via dnsXai. Device {{device.mac}} flagged for monitoring. Suricata SID: {{trigger.sid}}.",
+    "action_prompt": "Do you recognize this website? If not, I recommend checking if any passwords were entered.",
+    "resolution_options": [
+      {"label": "It's safe, unblock it", "action": "unblock_domain"},
+      {"label": "Run password check", "action": "credential_audit"},
+      {"label": "Keep blocked", "action": "acknowledge"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "timeout_hours": 24,
+    "action": "acknowledge"
+  }
+}

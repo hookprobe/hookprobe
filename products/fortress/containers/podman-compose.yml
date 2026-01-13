@@ -120,8 +120,8 @@ services:
   # Services tier with access to data tier for database connectivity
   web:
     build:
-      context: ..
-      dockerfile: containers/Containerfile.web
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.web
     image: localhost/fts-web:latest
     container_name: fts-web
     restart: unless-stopped
@@ -179,6 +179,9 @@ services:
       # DHCP leases file for device discovery fallback
       # Used by AIOCHI views when SDN Autopilot is unavailable
       - /var/lib/misc:/var/lib/misc:ro
+      # Zeek logs from AIOCHI for D2D connection graph analysis
+      # Required for device communication clustering and bubble color assignment
+      - aiochi_zeek_logs:/var/log/zeek/current:ro
     # Container network - accessible via host port publishing
     # Access: Host IP:8443 → Container (172.20.200.20:8443)
     networks:
@@ -410,6 +413,11 @@ volumes:
   zeek_logs:
     driver: local
     name: fts-zeek-logs
+
+  # AIOCHI Zeek logs (external) - D2D connection graph analysis
+  # This volume is created by AIOCHI stack and contains real Zeek logs
+  aiochi_zeek_logs:
+    external: true
 
 # ============================================================
 # NETWORKS - OVS-Integrated 4-Tier Security Architecture

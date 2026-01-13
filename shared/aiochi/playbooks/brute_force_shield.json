@@ -1,0 +1,122 @@
+{
+  "id": "brute_force_shield",
+  "name": "Brute Force Shield",
+  "version": "1.0",
+  "description": "Blocks brute force attacks against SSH, RDP, and other authentication services",
+  "mitre_attack": ["T1110", "T1110.001", "T1110.003"],
+  "category": "credential_access",
+  "severity_threshold": 2,
+
+  "triggers": [
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "AIOCHI SSH Brute Force",
+        "SSH Brute Force",
+        "ET SCAN SSH",
+        "Failed SSH",
+        "Multiple SSH Failures"
+      ]
+    },
+    {
+      "type": "auth_failure",
+      "description": "Multiple failed authentication attempts",
+      "conditions": {
+        "failed_attempts": ">5",
+        "time_window_seconds": 60,
+        "services": ["ssh", "rdp", "smb", "ftp", "telnet"]
+      }
+    },
+    {
+      "type": "password_spray",
+      "description": "Same password tried across multiple accounts",
+      "conditions": {
+        "unique_usernames": ">3",
+        "time_window_seconds": 300
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "service_block",
+      "description": "Block attacker from authentication services",
+      "command": "ovs-ofctl add-flow FTS \"priority=900,tcp,nw_src={{trigger.src_ip}},tp_dst=22,actions=drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"tcp,nw_src={{trigger.src_ip}},tp_dst=22,priority=900\""
+    },
+    {
+      "order": 2,
+      "type": "rate_limit",
+      "description": "Rate limit the source to slow further attempts",
+      "command": "ovs-ofctl add-meter FTS meter={{meter_id}},kbps,burst,stats,bands=type=drop,rate=100",
+      "rollback": "ovs-ofctl del-meter FTS meter={{meter_id}}"
+    },
+    {
+      "order": 3,
+      "type": "fail2ban_sync",
+      "description": "Add to fail2ban if available",
+      "command": "fail2ban-client set sshd banip {{trigger.src_ip}}",
+      "optional": true
+    },
+    {
+      "order": 4,
+      "type": "ip_reputation_check",
+      "description": "Check if IP is a known attacker",
+      "command": "check_threat_intel",
+      "parameters": {
+        "ip": "{{trigger.src_ip}}",
+        "sources": ["abuseipdb", "spamhaus", "local_blocklist"]
+      }
+    },
+    {
+      "order": 5,
+      "type": "notification",
+      "description": "Alert owner about attack",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "high",
+        "persona": "parent"
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Blocked login attack",
+    "owner_friendly": "Someone tried to guess the password to your {{trigger.service}} service {{trigger.failed_attempts}} times. I've blocked them. If this was you, wait a few minutes and try again.",
+    "technical": "Brute force attack detected from {{trigger.src_ip}} against {{trigger.service}} (port {{trigger.dst_port}}). {{trigger.failed_attempts}} failed attempts in {{trigger.time_window}}s. Source IP blocked for authentication services.",
+    "action_prompt": "Was this you trying to login? If not, your systems are protected.",
+    "resolution_options": [
+      {"label": "Not me, keep blocked", "action": "acknowledge"},
+      {"label": "It was me, unblock", "action": "unblock_ip"},
+      {"label": "Block permanently", "action": "permanent_ban"},
+      {"label": "View attack details", "action": "show_logs"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "timeout_hours": 1,
+    "action": "unblock_ip",
+    "escalate_if_repeated": true,
+    "escalation_threshold": 3
+  },
+
+  "internal_attack_handling": {
+    "description": "Special handling for attacks from internal devices",
+    "if_internal": {
+      "actions": [
+        {
+          "type": "device_quarantine",
+          "description": "Quarantine the infected internal device",
+          "command": "ovs-ofctl add-flow FTS \"priority=950,dl_src={{trigger.src_mac}},actions=mod_vlan_vid:99,drop\""
+        },
+        {
+          "type": "notification",
+          "severity": "critical",
+          "message": "An internal device is attacking your network - it may be infected with malware"
+        }
+      ]
+    }
+  }
+}
