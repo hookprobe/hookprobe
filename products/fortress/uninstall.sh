@@ -212,6 +212,33 @@ stop_services() {
 cleanup_network_interfaces() {
     log_step "Cleaning up network interfaces..."
 
+    # ============================================================
+    # Cleanup WAN mirror (TC qdiscs) FIRST - before any interface changes
+    # ============================================================
+    log_info "Cleaning up WAN traffic mirroring (AIOCHI)..."
+    local ovs_script="${INSTALL_DIR}/devices/common/ovs-post-setup.sh"
+    if [ -x "$ovs_script" ]; then
+        "$ovs_script" wan-mirror-cleanup 2>/dev/null || true
+        log_info "  WAN mirror TC qdiscs and dummy interface removed"
+    else
+        # Manual cleanup if script not available
+        # Remove wan-mirror dummy interface
+        if ip link show wan-mirror &>/dev/null; then
+            ip link set wan-mirror down 2>/dev/null || true
+            ip link delete wan-mirror type dummy 2>/dev/null || true
+            log_info "  wan-mirror interface removed"
+        fi
+        # Clean up TC qdiscs on WAN interfaces (if any)
+        for iface in eth0 enp1s0 enp2s0 wwan0 wwp0s20f0u6 usb0; do
+            if ip link show "$iface" &>/dev/null; then
+                tc qdisc del dev "$iface" ingress 2>/dev/null || true
+                tc qdisc del dev "$iface" root 2>/dev/null || true
+            fi
+        done
+    fi
+    # Remove WAN mirror state file
+    rm -f /run/fortress/wan-mirror.state 2>/dev/null || true
+
     # Stop hostapd services (dual-band)
     log_info "Stopping hostapd services..."
     systemctl stop fts-hostapd-24ghz 2>/dev/null || true

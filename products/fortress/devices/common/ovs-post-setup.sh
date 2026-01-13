@@ -70,6 +70,14 @@ LAN_MASK="${LAN_MASK:-24}"
 # Container network
 CONTAINER_SUBNET="${CONTAINER_SUBNET:-172.20.200.0/24}"
 
+# Source dual-path WAN selector (if available)
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+WAN_PATH_SELECTOR="$SCRIPT_DIR/wan-path-selector.sh"
+if [ -f "$WAN_PATH_SELECTOR" ]; then
+    # shellcheck source=wan-path-selector.sh
+    source "$WAN_PATH_SELECTOR"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -726,6 +734,389 @@ setup_traffic_mirror() {
 }
 
 # ============================================================
+# WAN TRAFFIC MIRROR (FOR EXTERNAL THREAT DETECTION)
+# ============================================================
+#
+# Creates a separate capture interface for WAN traffic using Linux TC.
+# This enables AIOCHI (Suricata/Zeek) to monitor:
+#   - Pre-NAT incoming traffic (original source IPs)
+#   - Attacks targeting the router itself
+#   - WAN failover traffic and health checks
+#   - LTE/WWAN traffic when on backup
+#
+# The FTS-mirror captures LAN traffic, wan-mirror captures WAN traffic.
+# Together they provide complete network visibility.
+#
+# Uses TC (traffic control) instead of OVS because WAN interfaces
+# cannot be added to OVS without breaking NAT/PBR routing.
+#
+# ============================================================
+
+# Network interfaces config file (written by install)
+NETWORK_INTERFACES_CONF="/var/lib/fortress/network-interfaces.conf"
+WAN_MIRROR_STATE="/run/fortress/wan-mirror.state"
+
+setup_tc_mirror_for_interface() {
+    local src_iface="$1"
+    local dst_iface="$2"
+
+    if ! ip link show "$src_iface" &>/dev/null; then
+        log_warn "Interface $src_iface not found, skipping TC mirror"
+        return 1
+    fi
+
+    # Remove any existing qdiscs (ignore errors)
+    tc qdisc del dev "$src_iface" handle ffff: ingress 2>/dev/null || true
+    tc qdisc del dev "$src_iface" handle 1: root 2>/dev/null || true
+
+    # Add ingress qdisc and mirror filter
+    if tc qdisc add dev "$src_iface" handle ffff: ingress 2>/dev/null; then
+        tc filter add dev "$src_iface" parent ffff: protocol all matchall \
+            action mirred egress mirror dev "$dst_iface" 2>/dev/null || {
+            log_warn "Failed to add ingress mirror filter on $src_iface"
+            return 1
+        }
+    else
+        log_warn "Failed to add ingress qdisc on $src_iface"
+        return 1
+    fi
+
+    # Add egress qdisc and mirror filter
+    if tc qdisc add dev "$src_iface" handle 1: root prio 2>/dev/null; then
+        tc filter add dev "$src_iface" parent 1: protocol all matchall \
+            action mirred egress mirror dev "$dst_iface" 2>/dev/null || {
+            log_warn "Failed to add egress mirror filter on $src_iface"
+            return 1
+        }
+    else
+        log_warn "Failed to add egress qdisc on $src_iface"
+        return 1
+    fi
+
+    return 0
+}
+
+cleanup_tc_mirror_for_interface() {
+    local iface="$1"
+
+    if ip link show "$iface" &>/dev/null; then
+        tc qdisc del dev "$iface" handle ffff: ingress 2>/dev/null || true
+        tc qdisc del dev "$iface" handle 1: root 2>/dev/null || true
+    fi
+}
+
+detect_wan_interface() {
+    local wan_iface=""
+
+    # Priority 1: Read from network-interfaces.conf (set during install)
+    if [ -f "$NETWORK_INTERFACES_CONF" ]; then
+        # shellcheck source=/dev/null
+        source "$NETWORK_INTERFACES_CONF"
+        wan_iface="${NET_WAN_IFACE:-}"
+    fi
+
+    # Priority 2: Read from fortress.conf
+    if [ -z "$wan_iface" ] && [ -f "$FORTRESS_CONF" ]; then
+        # shellcheck source=/dev/null
+        source "$FORTRESS_CONF"
+        wan_iface="${WAN_IFACE:-}"
+    fi
+
+    # Priority 3: Detect from default route
+    if [ -z "$wan_iface" ]; then
+        wan_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+    fi
+
+    # Validate it's not the OVS bridge or a virtual interface
+    if [ "$wan_iface" = "$OVS_BRIDGE" ] || [ "$wan_iface" = "lo" ]; then
+        wan_iface=""
+    fi
+
+    echo "$wan_iface"
+}
+
+detect_wwan_interface() {
+    local wwan_iface=""
+
+    # Priority 1: Read from network-interfaces.conf
+    if [ -f "$NETWORK_INTERFACES_CONF" ]; then
+        # shellcheck source=/dev/null
+        source "$NETWORK_INTERFACES_CONF"
+        wwan_iface="${NET_WWAN_IFACE:-}"
+    fi
+
+    # Priority 2: Read from fortress.conf
+    if [ -z "$wwan_iface" ] && [ -f "$FORTRESS_CONF" ]; then
+        # shellcheck source=/dev/null
+        source "$FORTRESS_CONF"
+        wwan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    # Priority 3: Auto-detect WWAN interfaces
+    if [ -z "$wwan_iface" ]; then
+        for pattern in wwan0 wwp0s* ww* usb0 enp0s20u*; do
+            # shellcheck disable=SC2086
+            for iface in /sys/class/net/$pattern; do
+                [ -e "$iface" ] || continue  # Skip if glob didn't match
+                local name
+                name=$(basename "$iface" 2>/dev/null) || continue
+                if [ -d "$iface" ] && [ "$name" != "$pattern" ]; then
+                    wwan_iface="$name"
+                    break 2
+                fi
+            done
+        done
+    fi
+
+    echo "$wwan_iface"
+}
+
+setup_wan_mirror() {
+    log_section "WAN Traffic Mirror (for external threat detection)"
+
+    local wan_mirror_iface="wan-mirror"
+    local wan_iface
+    local wwan_iface
+    local mirrored_interfaces=""
+    local wan_path_type=""
+    local wwan_path_type=""
+    local dual_path_available=false
+
+    # Check if dual-path selector is available
+    if type detect_wan_path &>/dev/null; then
+        dual_path_available=true
+        log_info "Dual-path WAN selector enabled (AF_XDP/TC-BPF auto-detect)"
+    fi
+
+    # Detect WAN interfaces
+    wan_iface=$(detect_wan_interface)
+    wwan_iface=$(detect_wwan_interface)
+
+    if [ -z "$wan_iface" ] && [ -z "$wwan_iface" ]; then
+        log_warn "No WAN interfaces detected, skipping WAN mirror setup"
+        log_info "  WAN mirror can be configured later with: $0 wan-mirror"
+        return 0
+    fi
+
+    log_info "Detected WAN: ${wan_iface:-none}, WWAN: ${wwan_iface:-none}"
+
+    # Detect path types if dual-path selector available
+    if [ "$dual_path_available" = true ]; then
+        [ -n "$wan_iface" ] && wan_path_type=$(detect_wan_path "$wan_iface")
+        [ -n "$wwan_iface" ] && wwan_path_type=$(detect_wan_path "$wwan_iface")
+        log_info "WAN path: ${wan_path_type:-none}, WWAN path: ${wwan_path_type:-none}"
+    fi
+
+    # Create dummy interface for WAN capture (if not exists)
+    if ! ip link show "$wan_mirror_iface" &>/dev/null; then
+        log_info "Creating $wan_mirror_iface dummy interface..."
+        ip link add "$wan_mirror_iface" type dummy || {
+            log_error "Failed to create $wan_mirror_iface dummy interface"
+            return 1
+        }
+    fi
+
+    # Bring interface up
+    ip link set "$wan_mirror_iface" up
+
+    # Set promiscuous mode for capture
+    ip link set "$wan_mirror_iface" promisc on 2>/dev/null || true
+
+    # Setup monitoring for primary WAN
+    if [ -n "$wan_iface" ]; then
+        if [ "$dual_path_available" = true ]; then
+            # Use dual-path setup with adaptive optimization
+            log_info "Setting up dual-path monitoring: $wan_iface (${wan_path_type:-unknown})"
+            if setup_wan_monitoring_path "$wan_iface" "$wan_mirror_iface"; then
+                log_success "Dual-path configured: $wan_iface → $wan_mirror_iface ($wan_path_type)"
+            else
+                log_warn "Dual-path setup failed, falling back to TC mirror"
+            fi
+        fi
+        # Always set up TC mirror as the transport to wan-mirror
+        log_info "Setting up TC mirror: $wan_iface → $wan_mirror_iface"
+        if setup_tc_mirror_for_interface "$wan_iface" "$wan_mirror_iface"; then
+            log_success "Primary WAN mirror: $wan_iface → $wan_mirror_iface"
+            mirrored_interfaces="$wan_iface"
+        else
+            log_warn "Failed to setup mirror for $wan_iface (non-fatal)"
+        fi
+    fi
+
+    # Setup monitoring for WWAN/LTE backup (if different from primary)
+    if [ -n "$wwan_iface" ] && [ "$wwan_iface" != "$wan_iface" ]; then
+        if [ "$dual_path_available" = true ]; then
+            log_info "Setting up dual-path monitoring: $wwan_iface (${wwan_path_type:-mobile})"
+            if setup_wan_monitoring_path "$wwan_iface" "$wan_mirror_iface"; then
+                log_success "Dual-path configured: $wwan_iface → $wan_mirror_iface ($wwan_path_type)"
+            else
+                log_warn "Dual-path setup failed, falling back to TC mirror"
+            fi
+        fi
+        log_info "Setting up TC mirror: $wwan_iface → $wan_mirror_iface"
+        if setup_tc_mirror_for_interface "$wwan_iface" "$wan_mirror_iface"; then
+            log_success "WWAN/LTE mirror: $wwan_iface → $wan_mirror_iface"
+            mirrored_interfaces="$mirrored_interfaces $wwan_iface"
+        else
+            log_warn "Failed to setup mirror for $wwan_iface (non-fatal)"
+        fi
+    fi
+
+    # Verify wan-mirror is up
+    if ip link show "$wan_mirror_iface" &>/dev/null; then
+        local state
+        state=$(ip link show "$wan_mirror_iface" 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
+        if [ "$state" = "UNKNOWN" ] || [ "$state" = "UP" ]; then
+            log_success "WAN mirror interface ready: $wan_mirror_iface"
+            log_info "  AIOCHI Suricata/Zeek can capture from: $wan_mirror_iface"
+            log_info "  Mirrored interfaces:$mirrored_interfaces"
+            if [ "$dual_path_available" = true ]; then
+                log_info "  Path types: WAN=${wan_path_type:-n/a}, WWAN=${wwan_path_type:-n/a}"
+            fi
+        fi
+    fi
+
+    # Save enhanced state for status display and failover updates
+    mkdir -p "$(dirname "$WAN_MIRROR_STATE")"
+    cat > "$WAN_MIRROR_STATE" <<EOF
+# WAN Mirror State - Generated by ovs-post-setup.sh
+# Do not edit manually
+TIMESTAMP="$(date -Iseconds)"
+WAN_MIRROR_IFACE="$wan_mirror_iface"
+WAN_IFACE="$wan_iface"
+WWAN_IFACE="$wwan_iface"
+MIRRORED_INTERFACES="$mirrored_interfaces"
+# Dual-path architecture state
+DUAL_PATH_ENABLED="$dual_path_available"
+WAN_PATH_TYPE="$wan_path_type"
+WWAN_PATH_TYPE="$wwan_path_type"
+EOF
+
+    return 0
+}
+
+cleanup_wan_mirror() {
+    log_section "Cleaning up WAN Traffic Mirror"
+
+    local wan_mirror_iface="wan-mirror"
+
+    # Load state to get mirrored interfaces
+    if [ -f "$WAN_MIRROR_STATE" ]; then
+        # shellcheck source=/dev/null
+        source "$WAN_MIRROR_STATE"
+    fi
+
+    # Also detect current interfaces in case state is stale
+    local wan_iface wwan_iface
+    wan_iface=$(detect_wan_interface)
+    wwan_iface=$(detect_wwan_interface)
+
+    # Remove TC mirrors from all potential WAN interfaces
+    for iface in $wan_iface $wwan_iface eth0 enp1s0 eno1 wwan0 wwp0s20f0u4; do
+        if [ -n "$iface" ]; then
+            cleanup_tc_mirror_for_interface "$iface"
+        fi
+    done
+
+    # Remove dummy interface
+    if ip link show "$wan_mirror_iface" &>/dev/null; then
+        ip link set "$wan_mirror_iface" down 2>/dev/null || true
+        ip link del "$wan_mirror_iface" 2>/dev/null || true
+        log_info "Removed $wan_mirror_iface interface"
+    fi
+
+    # Remove state file
+    rm -f "$WAN_MIRROR_STATE"
+
+    log_success "WAN mirror cleanup complete"
+}
+
+refresh_wan_mirror() {
+    # Called when WAN failover changes the active interface
+    # Re-applies TC mirrors and dual-path configs to current WAN interfaces
+    log_section "Refreshing WAN Traffic Mirror (failover detected)"
+
+    local wan_mirror_iface="wan-mirror"
+    local dual_path_available=false
+    local wan_path_type=""
+    local wwan_path_type=""
+
+    # Check if dual-path selector is available
+    if type detect_wan_path &>/dev/null; then
+        dual_path_available=true
+    fi
+
+    # Ensure dummy interface exists
+    if ! ip link show "$wan_mirror_iface" &>/dev/null; then
+        log_info "WAN mirror interface missing, running full setup..."
+        setup_wan_mirror
+        return $?
+    fi
+
+    # Re-detect and re-apply mirrors
+    local wan_iface wwan_iface
+    wan_iface=$(detect_wan_interface)
+    wwan_iface=$(detect_wwan_interface)
+
+    # Detect path types for new interfaces
+    if [ "$dual_path_available" = true ]; then
+        [ -n "$wan_iface" ] && wan_path_type=$(detect_wan_path "$wan_iface")
+        [ -n "$wwan_iface" ] && wwan_path_type=$(detect_wan_path "$wwan_iface")
+        log_info "Path types: WAN=${wan_path_type:-n/a}, WWAN=${wwan_path_type:-n/a}"
+    fi
+
+    # Cleanup old mirrors
+    if [ -f "$WAN_MIRROR_STATE" ]; then
+        # shellcheck source=/dev/null
+        source "$WAN_MIRROR_STATE"
+        for iface in $MIRRORED_INTERFACES; do
+            cleanup_tc_mirror_for_interface "$iface"
+        done
+    fi
+
+    # Re-apply mirrors with dual-path optimization
+    local mirrored_interfaces=""
+
+    if [ -n "$wan_iface" ]; then
+        # Apply dual-path setup if available
+        if [ "$dual_path_available" = true ]; then
+            setup_wan_monitoring_path "$wan_iface" "$wan_mirror_iface" 2>/dev/null || true
+        fi
+        if setup_tc_mirror_for_interface "$wan_iface" "$wan_mirror_iface"; then
+            log_success "Refreshed WAN mirror: $wan_iface ($wan_path_type)"
+            mirrored_interfaces="$wan_iface"
+        fi
+    fi
+
+    if [ -n "$wwan_iface" ] && [ "$wwan_iface" != "$wan_iface" ]; then
+        # Apply dual-path setup if available
+        if [ "$dual_path_available" = true ]; then
+            setup_wan_monitoring_path "$wwan_iface" "$wan_mirror_iface" 2>/dev/null || true
+        fi
+        if setup_tc_mirror_for_interface "$wwan_iface" "$wan_mirror_iface"; then
+            log_success "Refreshed WWAN mirror: $wwan_iface ($wwan_path_type)"
+            mirrored_interfaces="$mirrored_interfaces $wwan_iface"
+        fi
+    fi
+
+    # Update state with enhanced dual-path info
+    cat > "$WAN_MIRROR_STATE" <<EOF
+# WAN Mirror State - Refreshed by ovs-post-setup.sh
+TIMESTAMP="$(date -Iseconds)"
+WAN_MIRROR_IFACE="$wan_mirror_iface"
+WAN_IFACE="$wan_iface"
+WWAN_IFACE="$wwan_iface"
+MIRRORED_INTERFACES="$mirrored_interfaces"
+# Dual-path architecture state
+DUAL_PATH_ENABLED="$dual_path_available"
+WAN_PATH_TYPE="$wan_path_type"
+WWAN_PATH_TYPE="$wwan_path_type"
+EOF
+
+    log_success "WAN mirror refresh complete"
+}
+
+# ============================================================
 # STATUS
 # ============================================================
 
@@ -769,6 +1160,61 @@ show_status() {
         echo -e "  ${RED}FTS-mirror: NOT FOUND${NC}"
         echo "  AIOCHI containers may cause packet loss!"
         echo "  Run: ./ovs-post-setup.sh setup"
+    fi
+
+    echo -e "\n${CYAN}WAN Traffic Mirror (External Threat Detection):${NC}"
+    if ip link show wan-mirror &>/dev/null; then
+        local wan_mirror_state
+        wan_mirror_state=$(ip link show wan-mirror 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
+        echo "  wan-mirror: $wan_mirror_state"
+
+        # Show mirrored interfaces from state file
+        if [ -f "$WAN_MIRROR_STATE" ]; then
+            # shellcheck source=/dev/null
+            source "$WAN_MIRROR_STATE"
+            echo "  Mirrored WAN interfaces: ${MIRRORED_INTERFACES:-none}"
+
+            # Verify TC mirrors are actually configured
+            local tc_active=true
+            for iface in $MIRRORED_INTERFACES; do
+                if ! tc qdisc show dev "$iface" 2>/dev/null | grep -q "ingress"; then
+                    tc_active=false
+                    break
+                fi
+            done
+
+            if [ "$tc_active" = "true" ] && [ -n "$MIRRORED_INTERFACES" ]; then
+                echo -e "  ${GREEN}TC Mirroring: ACTIVE${NC}"
+                echo "  AIOCHI can capture WAN traffic from: wan-mirror"
+            else
+                echo -e "  ${YELLOW}TC Mirroring: NEEDS REFRESH${NC}"
+                echo "  Run: ./ovs-post-setup.sh wan-mirror"
+            fi
+
+            # Show dual-path architecture status
+            if [ "${DUAL_PATH_ENABLED:-false}" = "true" ]; then
+                echo -e "\n  ${CYAN}Dual-Path Architecture:${NC} ENABLED"
+                [ -n "$WAN_PATH_TYPE" ] && echo "    WAN path: $WAN_PATH_TYPE"
+                [ -n "$WWAN_PATH_TYPE" ] && echo "    WWAN path: $WWAN_PATH_TYPE"
+                # Check sampling configs
+                if [ -d "/run/fortress/sampling" ]; then
+                    for sconf in /run/fortress/sampling/*.conf; do
+                        [ -f "$sconf" ] || continue
+                        local siface srate
+                        # shellcheck source=/dev/null
+                        source "$sconf"
+                        echo "    Sampling: $INTERFACE @ ${SAMPLE_RATE:-100}%"
+                    done
+                fi
+            fi
+        else
+            echo -e "  ${YELLOW}State file missing - mirrors may be stale${NC}"
+            echo "  Run: ./ovs-post-setup.sh wan-mirror"
+        fi
+    else
+        echo -e "  ${YELLOW}wan-mirror: NOT CONFIGURED${NC}"
+        echo "  External WAN traffic not visible to AIOCHI"
+        echo "  Run: ./ovs-post-setup.sh setup (includes WAN mirror)"
     fi
 
     echo -e "\n${CYAN}WiFi (Direct OVS Integration):${NC}"
@@ -904,8 +1350,13 @@ main() {
             # Creates FTS-mirror port - proper way to capture without packet loss
             setup_traffic_mirror || log_warn "Traffic mirror setup had issues (non-fatal)"
 
+            # WAN traffic mirror for external threat detection (AIOCHI)
+            # Creates wan-mirror interface using TC to capture WAN traffic pre-NAT
+            # This enables detection of attacks targeting the router and WAN failover monitoring
+            setup_wan_mirror || log_warn "WAN mirror setup had issues (non-fatal)"
+
             log_section "OVS Post-Setup Complete"
-            log_success "VLAN interfaces, OpenFlow rules, port tags, WiFi bridge, and traffic mirror configured"
+            log_success "VLAN interfaces, OpenFlow rules, port tags, WiFi bridge, LAN mirror, and WAN mirror configured"
             ;;
 
         status)
@@ -952,8 +1403,54 @@ main() {
             log_success "WiFi OpenFlow rules refreshed for current port numbers"
             ;;
 
+        wan-mirror)
+            # Setup WAN traffic mirroring for AIOCHI IDS/NSM
+            # Mirrors WAN/WWAN ingress+egress to wan-mirror dummy interface
+            log_section "WAN Mirror Setup (AIOCHI)"
+            setup_wan_mirror
+            ;;
+
+        wan-mirror-cleanup)
+            # Remove WAN traffic mirroring (for uninstall or maintenance)
+            log_section "WAN Mirror Cleanup"
+            cleanup_wan_mirror
+            ;;
+
+        wan-mirror-refresh)
+            # Refresh WAN mirrors after failover event
+            # Called by SLA AI engine or wan-failover-pbr.sh
+            log_section "WAN Mirror Refresh (failover trigger)"
+            refresh_wan_mirror
+            ;;
+
+        wan-mirror-status)
+            # Show WAN mirror status only
+            log_section "WAN Mirror Status"
+            if ip link show wan-mirror &>/dev/null; then
+                echo "wan-mirror interface: UP"
+                echo ""
+                # Show mirrored interfaces
+                if [[ -f "$WAN_MIRROR_STATE" ]]; then
+                    echo "Mirrored interfaces:"
+                    cat "$WAN_MIRROR_STATE"
+                    echo ""
+                fi
+                # Show TC rules
+                for iface in $(grep -oP 'WAN_INTERFACE=\K\S+' "$WAN_MIRROR_STATE" 2>/dev/null) \
+                             $(grep -oP 'WWAN_INTERFACE=\K\S+' "$WAN_MIRROR_STATE" 2>/dev/null); do
+                    if [[ -n "$iface" ]] && ip link show "$iface" &>/dev/null; then
+                        echo "TC rules on $iface:"
+                        tc qdisc show dev "$iface" 2>/dev/null | head -5
+                        echo ""
+                    fi
+                done
+            else
+                echo "wan-mirror interface: NOT CONFIGURED"
+            fi
+            ;;
+
         *)
-            echo "Usage: $0 {setup|status|openflow|gateway|ports|multicast|hairpin|wifi-refresh}"
+            echo "Usage: $0 {setup|status|openflow|gateway|ports|multicast|hairpin|wifi-refresh|wan-mirror|wan-mirror-cleanup|wan-mirror-refresh|wan-mirror-status}"
             echo ""
             echo "Flat Bridge Architecture - OpenFlow NAC"
             echo "  setup        - Full setup (gateway + openflow + ports + multicast)"
@@ -964,6 +1461,12 @@ main() {
             echo "  multicast    - Refresh cross-band mDNS/SSDP reflection rules"
             echo "  hairpin      - Refresh D2D hairpin rules for WiFi"
             echo "  wifi-refresh - Full WiFi rule refresh (call from hostapd ExecStartPost)"
+            echo ""
+            echo "WAN Traffic Mirroring (AIOCHI IDS/NSM)"
+            echo "  wan-mirror         - Setup WAN/WWAN traffic mirroring to wan-mirror interface"
+            echo "  wan-mirror-cleanup - Remove WAN mirror (TC qdiscs + dummy interface)"
+            echo "  wan-mirror-refresh - Refresh mirrors after WAN failover event"
+            echo "  wan-mirror-status  - Show WAN mirror status and TC rules"
             exit 1
             ;;
     esac
