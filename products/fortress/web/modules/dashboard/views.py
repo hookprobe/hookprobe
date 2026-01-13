@@ -62,22 +62,48 @@ except ImportError as e:
     def get_sdn_autopilot():
         return None
 
-# Import ecosystem bubble manager for same-user device grouping
-# Uses unified module from shared/aiochi/bubble
+# Import AIOCHI Bubble API client (consolidated bubble logic in aiochi-bubble container)
+# All bubble functionality now accessed via REST API at localhost:8070
 ECOSYSTEM_BUBBLE_AVAILABLE = False
 try:
-    # Prefer unified module from shared/aiochi
-    from shared.aiochi.bubble import get_bubble_manager
-    ECOSYSTEM_BUBBLE_AVAILABLE = True
-    logger.info("Dashboard: AIOCHI bubble module loaded successfully")
-except ImportError:
-    try:
-        # Fallback to deprecated local module
-        from ecosystem_bubble import get_bubble_manager
+    from aiochi_bubble_client import (
+        get_aiochi_bubble_client,
+        get_ecosystem_bubbles,
+        is_aiochi_available,
+    )
+    if is_aiochi_available():
         ECOSYSTEM_BUBBLE_AVAILABLE = True
-        logger.info("Dashboard: legacy ecosystem_bubble module loaded (deprecated)")
-    except ImportError as e:
-        logger.warning(f"Dashboard: ecosystem_bubble module not available: {e}")
+        logger.info("Dashboard: AIOCHI bubble API connected (localhost:8070)")
+    else:
+        logger.warning("Dashboard: AIOCHI bubble container not available")
+except ImportError as e:
+    logger.warning(f"Dashboard: aiochi_bubble_client not available: {e}")
+
+    # Stub function when API client not available
+    def get_ecosystem_bubbles():
+        return []
+
+    def is_aiochi_available():
+        return False
+
+# Import D2D communication client (for device cluster coloring)
+D2D_CLIENT_AVAILABLE = False
+try:
+    from aiochi_bubble_client import (
+        get_d2d_client,
+        get_device_colors as get_d2d_device_colors,
+    )
+    D2D_CLIENT_AVAILABLE = True
+    logger.info("Dashboard: D2D communication client available")
+except ImportError as e:
+    logger.debug(f"Dashboard: D2D client not available: {e}")
+
+    # Stub functions
+    def get_d2d_client():
+        return None
+
+    def get_d2d_device_colors():
+        return {}
 
 # Import hostname decoder for dnsmasq octal escapes
 try:
@@ -328,12 +354,23 @@ def get_all_devices():
     2. device_policies module (devices.db) - fallback
     3. JSON file from agent - fallback
     4. ARP table - final fallback
+
+    Each device includes D2D cluster colors if available.
     """
     devices = []
 
     # Load device status and WiFi signals from host-generated files
     status_cache = _load_device_status_cache()
     wifi_signals = _load_wifi_signals()
+
+    # Load D2D communication cluster colors (for device coloring)
+    d2d_colors = {}
+    if D2D_CLIENT_AVAILABLE:
+        try:
+            d2d_colors = get_d2d_device_colors()
+            logger.debug(f"Loaded D2D colors for {len(d2d_colors)} devices")
+        except Exception as e:
+            logger.debug(f"Could not load D2D colors: {e}")
 
     # Primary: Use SDN Auto Pilot (autopilot.db) - same as SDN page
     if SDN_AUTOPILOT_AVAILABLE:
@@ -377,6 +414,9 @@ def get_all_devices():
                     # Get WiFi signal data
                     wifi_data = wifi_signals.get(mac, {})
 
+                    # Get D2D cluster color for device
+                    d2d_info = d2d_colors.get(mac, {})
+
                     devices.append({
                         'mac_address': mac,
                         'ip_address': d.get('ip', ''),
@@ -395,6 +435,10 @@ def get_all_devices():
                         'last_seen': d.get('last_seen'),
                         'wifi_rssi': wifi_data.get('wifi_rssi'),
                         'wifi_quality': wifi_data.get('wifi_quality'),
+                        # D2D communication cluster (for visual grouping)
+                        'd2d_cluster_id': d2d_info.get('cluster_id'),
+                        'd2d_cluster_color': d2d_info.get('cluster_color'),
+                        'd2d_ecosystem': d2d_info.get('ecosystem'),
                     })
 
                 if devices:
@@ -412,6 +456,7 @@ def get_all_devices():
                     mac = d.get('mac_address', '').upper()
                     wifi_data = wifi_signals.get(mac, {})
                     cached = status_cache.get(mac, {})
+                    d2d_info = d2d_colors.get(mac, {})
 
                     devices.append({
                         'mac_address': mac,
@@ -431,6 +476,10 @@ def get_all_devices():
                         'last_seen': d.get('last_seen'),
                         'wifi_rssi': wifi_data.get('wifi_rssi'),
                         'wifi_quality': wifi_data.get('wifi_quality'),
+                        # D2D communication cluster
+                        'd2d_cluster_id': d2d_info.get('cluster_id'),
+                        'd2d_cluster_color': d2d_info.get('cluster_color'),
+                        'd2d_ecosystem': d2d_info.get('ecosystem'),
                     })
 
                 if devices:
@@ -443,6 +492,7 @@ def get_all_devices():
     if status_cache:
         for mac, info in status_cache.items():
             wifi_data = wifi_signals.get(mac, {})
+            d2d_info = d2d_colors.get(mac, {})
             devices.append({
                 'mac_address': mac,
                 'ip_address': info.get('ip', ''),
@@ -459,6 +509,10 @@ def get_all_devices():
                 'interface': wifi_data.get('wifi_interface', ''),
                 'first_seen': None,
                 'last_seen': None,
+                # D2D communication cluster
+                'd2d_cluster_id': d2d_info.get('cluster_id'),
+                'd2d_cluster_color': d2d_info.get('cluster_color'),
+                'd2d_ecosystem': d2d_info.get('ecosystem'),
             })
 
     return devices
@@ -1015,12 +1069,24 @@ def get_topology_data():
 
     Shows FTS Bridge with connected devices organized by policy zones.
     WAN interfaces are excluded - focus on internal network visibility.
+    Devices are colored by D2D communication clusters.
     """
     # Get devices from autopilot database (same source as SDN page)
+    # Devices already include D2D cluster colors from get_all_devices()
     devices = get_all_devices()
 
     # Get ecosystem bubbles (same-user device groupings)
     ecosystem_bubbles = get_ecosystem_bubbles()
+
+    # Get D2D communication clusters for visualization
+    d2d_clusters = []
+    if D2D_CLIENT_AVAILABLE:
+        try:
+            client = get_d2d_client()
+            if client:
+                d2d_clusters = client.get_communication_clusters()
+        except Exception as e:
+            logger.debug(f"Could not load D2D clusters: {e}")
 
     # Build MAC -> bubble_id mapping
     mac_to_bubble = {}
@@ -1119,6 +1185,10 @@ def get_topology_data():
             'icon': icon,
             'is_wifi': device.get('is_wifi', False),
             'bubble_id': bubble_id,  # Ecosystem bubble membership
+            # D2D communication cluster (for visual grouping/coloring)
+            'd2d_cluster_id': device.get('d2d_cluster_id'),
+            'd2d_cluster_color': device.get('d2d_cluster_color'),
+            'd2d_ecosystem': device.get('d2d_ecosystem'),
         })
 
         # Link device to its policy
@@ -1140,11 +1210,13 @@ def get_topology_data():
         'nodes': nodes,
         'links': links,
         'ecosystem_bubbles': ecosystem_bubbles,  # Same-user device groupings (30% opacity)
+        'd2d_clusters': d2d_clusters,  # D2D communication clusters with colors
         'stats': {
             'total_devices': len(devices),
             'online_devices': len([d for d in devices if d.get('state') in ['REACHABLE', 'STALE'] or d.get('is_online')]),
             'policy_counts': policy_counts,
             'bubble_count': len(ecosystem_bubbles),
+            'd2d_cluster_count': len(d2d_clusters),
         }
     }
 
