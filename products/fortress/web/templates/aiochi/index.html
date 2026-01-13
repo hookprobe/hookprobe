@@ -670,9 +670,31 @@
         border: 1px solid transparent;
     }
 
+    /* D2D cluster styling - devices that communicate show same color */
+    /* This makes it visually obvious across bubbles which devices talk to each other */
+    .device-tag[data-d2d-cluster] {
+        border-left-width: 4px;
+        border-left-style: solid;
+        padding-left: 10px;
+    }
+
     .device-tag:hover {
         background: rgba(255,255,255,0.1);
         color: var(--aiochi-text);
+    }
+
+    /* D2D cluster color - prominent styling for cross-bubble communication */
+    .device-tag.d2d-clustered {
+        font-weight: 600;
+        /* The background color will be set via inline style with cluster color */
+        border-radius: 20px;
+        box-shadow: 0 0 8px currentColor;
+    }
+
+    .device-tag.d2d-clustered:hover {
+        /* Enhance glow on hover to make D2D relationship more visible */
+        box-shadow: 0 0 12px currentColor;
+        transform: scale(1.02);
     }
 
     .device-tag.dragging {
@@ -997,6 +1019,587 @@
     .pillar-body::-webkit-scrollbar-thumb:hover {
         background: rgba(255,255,255,0.15);
     }
+
+    /* =========================================================================
+       ACTIVE DEFENSES SECTION - 5 Innovations
+       ========================================================================= */
+    .defenses-card {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        margin-top: 24px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        overflow: hidden;
+    }
+
+    .defenses-header {
+        padding: 20px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+
+    .defenses-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .defenses-title i {
+        color: var(--aiochi-alert);
+        font-size: 1.2rem;
+    }
+
+    .defenses-title small {
+        font-weight: 400;
+        color: var(--aiochi-text-muted);
+        font-size: 0.75rem;
+        display: block;
+    }
+
+    .defenses-tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .defense-tab {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 20px;
+        padding: 8px 14px;
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .defense-tab:hover {
+        background: rgba(255,255,255,0.08);
+        color: var(--aiochi-text);
+    }
+
+    .defense-tab.active {
+        background: rgba(79, 195, 247, 0.15);
+        border-color: var(--aiochi-primary);
+        color: var(--aiochi-primary);
+    }
+
+    .defense-tab i {
+        font-size: 0.85rem;
+    }
+
+    .defenses-body {
+        padding: 20px;
+    }
+
+    .defense-panel {
+        display: none;
+    }
+
+    .defense-panel.active {
+        display: block;
+    }
+
+    .defense-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+
+    @media (max-width: 992px) {
+        .defense-stats {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    .stat-card {
+        background: rgba(255,255,255,0.03);
+        border-radius: 10px;
+        padding: 16px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .stat-icon {
+        width: 40px;
+        height: 40px;
+        margin: 0 auto 10px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        background: rgba(79, 195, 247, 0.15);
+        color: var(--aiochi-primary);
+    }
+
+    .stat-icon.subtle { background: rgba(255, 183, 77, 0.15); color: #ffb74d; }
+    .stat-icon.degraded { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
+    .stat-icon.severe { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .stat-icon.clean { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .stat-icon.suspicious { background: rgba(255, 183, 77, 0.15); color: #ffb74d; }
+    .stat-icon.masquerade { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .stat-icon.hardened { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .stat-icon.prevented { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
+    .stat-icon.active-chains { background: rgba(255, 183, 77, 0.15); color: #ffb74d; }
+    .stat-icon.dark-ports { background: rgba(156, 39, 176, 0.15); color: #ba68c8; }
+    .stat-icon.attackers { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .stat-icon.critical-threats { background: rgba(183, 28, 28, 0.2); color: #ef5350; }
+    .stat-icon.blocked-exfil { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .stat-icon.sensitive { background: rgba(255, 183, 77, 0.15); color: #ffb74d; }
+    .stat-icon.high-risk { background: rgba(183, 28, 28, 0.2); color: #ef5350; }
+
+    .stat-value {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: var(--aiochi-text);
+        line-height: 1;
+        margin-bottom: 4px;
+    }
+
+    .stat-label {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* List headers */
+    .friction-list-header,
+    .ghost-list-header,
+    .chain-list-header,
+    .honeypot-list-header,
+    .gravity-list-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .friction-list-header h5,
+    .ghost-list-header h5,
+    .chain-list-header h5,
+    .honeypot-list-header h5,
+    .gravity-list-header h5 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+        color: var(--aiochi-text);
+    }
+
+    /* List containers */
+    .friction-list,
+    .ghost-list,
+    .chain-list,
+    .honeypot-list,
+    .gravity-list {
+        max-height: 350px;
+        overflow-y: auto;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--aiochi-text-muted);
+    }
+
+    .empty-state i {
+        font-size: 2.5rem;
+        margin-bottom: 12px;
+        opacity: 0.5;
+    }
+
+    .empty-state p {
+        font-size: 0.85rem;
+        margin: 0;
+    }
+
+    /* Friction item */
+    .friction-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border-left: 3px solid transparent;
+    }
+
+    .friction-item.subtle { border-left-color: #ffb74d; }
+    .friction-item.noticeable { border-left-color: #ff9800; }
+    .friction-item.degraded { border-left-color: #f57c00; }
+    .friction-item.severe { border-left-color: var(--aiochi-alert); }
+
+    .friction-device {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .friction-device-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.05);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--aiochi-text-muted);
+    }
+
+    .friction-device-info {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .friction-device-name {
+        font-weight: 500;
+        font-size: 0.85rem;
+        color: var(--aiochi-text);
+    }
+
+    .friction-device-ip {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .friction-level {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .friction-level-badge {
+        font-size: 0.7rem;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .friction-level-badge.subtle { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .friction-level-badge.noticeable { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
+    .friction-level-badge.degraded { background: rgba(245, 124, 0, 0.2); color: #f57c00; }
+    .friction-level-badge.severe { background: rgba(229, 115, 115, 0.2); color: var(--aiochi-alert); }
+
+    .friction-latency {
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .friction-qsecbit {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 8px;
+        background: rgba(79, 195, 247, 0.1);
+        color: var(--aiochi-primary);
+    }
+
+    /* Ghost Probe item */
+    .ghost-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border-left: 3px solid transparent;
+    }
+
+    .ghost-item.clean { border-left-color: var(--aiochi-calm); }
+    .ghost-item.suspicious { border-left-color: #ffb74d; }
+    .ghost-item.masquerading { border-left-color: var(--aiochi-alert); }
+    .ghost-item.compromised { border-left-color: #b71c1c; }
+
+    .ghost-verdict {
+        font-size: 0.7rem;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .ghost-verdict.clean { background: rgba(129, 199, 132, 0.2); color: var(--aiochi-calm); }
+    .ghost-verdict.suspicious { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .ghost-verdict.masquerading { background: rgba(229, 115, 115, 0.2); color: var(--aiochi-alert); }
+    .ghost-verdict.compromised { background: rgba(183, 28, 28, 0.3); color: #ef5350; }
+
+    .btn-probe-all {
+        background: rgba(79, 195, 247, 0.15);
+        border: 1px solid rgba(79, 195, 247, 0.3);
+        color: var(--aiochi-primary);
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.2s;
+    }
+
+    .btn-probe-all:hover {
+        background: rgba(79, 195, 247, 0.25);
+    }
+
+    /* Chain Predictor item */
+    .chain-item {
+        padding: 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .chain-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 12px;
+    }
+
+    .chain-source {
+        font-weight: 500;
+        color: var(--aiochi-text);
+    }
+
+    .chain-confidence {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 10px;
+        background: rgba(255, 183, 77, 0.2);
+        color: #ffb74d;
+    }
+
+    .chain-sequence {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+
+    .chain-technique {
+        font-size: 0.75rem;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: rgba(79, 195, 247, 0.15);
+        color: var(--aiochi-primary);
+        font-family: monospace;
+    }
+
+    .chain-technique.observed {
+        background: rgba(255, 183, 77, 0.2);
+        color: #ffb74d;
+    }
+
+    .chain-technique.predicted {
+        background: rgba(229, 115, 115, 0.2);
+        color: var(--aiochi-alert);
+        border: 1px dashed rgba(229, 115, 115, 0.4);
+    }
+
+    .chain-arrow {
+        color: var(--aiochi-text-muted);
+        font-size: 0.8rem;
+    }
+
+    .chain-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .chain-action {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 4px;
+        background: rgba(129, 199, 132, 0.15);
+        color: var(--aiochi-calm);
+    }
+
+    /* Honeypot item */
+    .honeypot-item {
+        padding: 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border-left: 3px solid var(--aiochi-alert);
+    }
+
+    .honeypot-item.low { border-left-color: var(--aiochi-calm); }
+    .honeypot-item.medium { border-left-color: #ffb74d; }
+    .honeypot-item.high { border-left-color: #ff9800; }
+    .honeypot-item.critical { border-left-color: #b71c1c; }
+
+    .honeypot-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+
+    .honeypot-ip {
+        font-weight: 600;
+        font-family: monospace;
+        color: var(--aiochi-text);
+    }
+
+    .honeypot-threat {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .honeypot-threat.low { background: rgba(129, 199, 132, 0.2); color: var(--aiochi-calm); }
+    .honeypot-threat.medium { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .honeypot-threat.high { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
+    .honeypot-threat.critical { background: rgba(183, 28, 28, 0.3); color: #ef5350; }
+
+    .honeypot-details {
+        display: flex;
+        gap: 16px;
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .honeypot-ports {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+    }
+
+    .honeypot-port {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+        background: rgba(229, 115, 115, 0.1);
+        border-radius: 4px;
+        color: var(--aiochi-alert);
+        font-family: monospace;
+    }
+
+    /* Data Gravity item */
+    .gravity-item {
+        padding: 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border-left: 3px solid #ffb74d;
+    }
+
+    .gravity-item.blocked { border-left-color: var(--aiochi-alert); }
+    .gravity-item.allowed { border-left-color: var(--aiochi-calm); }
+
+    .gravity-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 8px;
+    }
+
+    .gravity-file {
+        font-weight: 500;
+        color: var(--aiochi-text);
+        font-size: 0.85rem;
+    }
+
+    .gravity-file-type {
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .gravity-action {
+        font-size: 0.7rem;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .gravity-action.blocked { background: rgba(229, 115, 115, 0.2); color: var(--aiochi-alert); }
+    .gravity-action.throttled { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .gravity-action.logged { background: rgba(79, 195, 247, 0.1); color: var(--aiochi-primary); }
+    .gravity-action.allowed { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+
+    .gravity-details {
+        display: flex;
+        gap: 16px;
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .gravity-sensitivity {
+        font-size: 0.65rem;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .gravity-sensitivity.public { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .gravity-sensitivity.internal { background: rgba(79, 195, 247, 0.1); color: var(--aiochi-primary); }
+    .gravity-sensitivity.confidential { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
+    .gravity-sensitivity.restricted { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
+    .gravity-sensitivity.secret { background: rgba(183, 28, 28, 0.3); color: #ef5350; }
+
+    .gravity-risk {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .gravity-risk-bar {
+        width: 60px;
+        height: 6px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .gravity-risk-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.3s ease;
+    }
+
+    .gravity-risk-fill.low { background: var(--aiochi-calm); }
+    .gravity-risk-fill.medium { background: #ffb74d; }
+    .gravity-risk-fill.high { background: #ff9800; }
+    .gravity-risk-fill.critical { background: var(--aiochi-alert); }
+
+    .gravity-mitre {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+
+    .gravity-mitre-tag {
+        font-size: 0.65rem;
+        padding: 2px 5px;
+        background: rgba(79, 195, 247, 0.1);
+        border-radius: 3px;
+        color: var(--aiochi-primary);
+        font-family: monospace;
+    }
 </style>
 {% endblock %}
 
@@ -1125,6 +1728,219 @@
         </div>
     </div>
 
+    <!-- Active Defenses Section - 5 Innovations -->
+    <div class="defenses-card">
+        <div class="defenses-header">
+            <div class="defenses-title">
+                <i class="fas fa-shield-virus"></i>
+                <div>
+                    <span>Active Defenses</span>
+                    <small>Advanced threat mitigation systems</small>
+                </div>
+            </div>
+            <div class="defenses-tabs" id="defense-tabs">
+                <button class="defense-tab active" data-tab="friction" onclick="switchDefenseTab('friction')">
+                    <i class="fas fa-hourglass-half"></i> Friction
+                </button>
+                <button class="defense-tab" data-tab="ghost" onclick="switchDefenseTab('ghost')">
+                    <i class="fas fa-ghost"></i> Ghost Probe
+                </button>
+                <button class="defense-tab" data-tab="chain" onclick="switchDefenseTab('chain')">
+                    <i class="fas fa-link"></i> Chain Predict
+                </button>
+                <button class="defense-tab" data-tab="honeypot" onclick="switchDefenseTab('honeypot')">
+                    <i class="fas fa-spider"></i> Honeypots
+                </button>
+                <button class="defense-tab" data-tab="gravity" onclick="switchDefenseTab('gravity')">
+                    <i class="fas fa-magnet"></i> Data Gravity
+                </button>
+            </div>
+        </div>
+        <div class="defenses-body">
+            <!-- Friction Control Tab -->
+            <div class="defense-panel active" id="panel-friction">
+                <div class="defense-stats">
+                    <div class="stat-card friction-stat">
+                        <div class="stat-icon"><i class="fas fa-hourglass-half"></i></div>
+                        <div class="stat-value" id="friction-active">0</div>
+                        <div class="stat-label">Active Frictions</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon subtle"><i class="fas fa-clock"></i></div>
+                        <div class="stat-value" id="friction-subtle">0</div>
+                        <div class="stat-label">Subtle (50ms)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon degraded"><i class="fas fa-exclamation-triangle"></i></div>
+                        <div class="stat-value" id="friction-degraded">0</div>
+                        <div class="stat-label">Degraded (500ms)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon severe"><i class="fas fa-ban"></i></div>
+                        <div class="stat-value" id="friction-severe">0</div>
+                        <div class="stat-label">Severe (1000ms)</div>
+                    </div>
+                </div>
+                <div class="friction-list-header">
+                    <h5>Devices with Applied Friction</h5>
+                    <span class="badge bg-info" id="friction-count">0 devices</span>
+                </div>
+                <div class="friction-list" id="friction-list">
+                    <div class="empty-state">
+                        <i class="fas fa-check-circle"></i>
+                        <p>No friction applied. All devices are operating normally.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ghost Probe Tab -->
+            <div class="defense-panel" id="panel-ghost">
+                <div class="defense-stats">
+                    <div class="stat-card ghost-stat">
+                        <div class="stat-icon"><i class="fas fa-ghost"></i></div>
+                        <div class="stat-value" id="ghost-probes">0</div>
+                        <div class="stat-label">Probes Run (24h)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon clean"><i class="fas fa-check"></i></div>
+                        <div class="stat-value" id="ghost-clean">0</div>
+                        <div class="stat-label">Clean</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon suspicious"><i class="fas fa-question"></i></div>
+                        <div class="stat-value" id="ghost-suspicious">0</div>
+                        <div class="stat-label">Suspicious</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon masquerade"><i class="fas fa-mask"></i></div>
+                        <div class="stat-value" id="ghost-masquerade">0</div>
+                        <div class="stat-label">Masquerading</div>
+                    </div>
+                </div>
+                <div class="ghost-list-header">
+                    <h5>Recent Probe Results</h5>
+                    <button class="btn-probe-all" onclick="runProbeAll()">
+                        <i class="fas fa-radar"></i> Probe All Devices
+                    </button>
+                </div>
+                <div class="ghost-list" id="ghost-list">
+                    <div class="empty-state">
+                        <i class="fas fa-search"></i>
+                        <p>No recent probes. Click "Probe All Devices" to start active interrogation.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chain Predictor Tab -->
+            <div class="defense-panel" id="panel-chain">
+                <div class="defense-stats">
+                    <div class="stat-card chain-stat">
+                        <div class="stat-icon"><i class="fas fa-link"></i></div>
+                        <div class="stat-value" id="chain-predictions">0</div>
+                        <div class="stat-label">Predictions (24h)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon hardened"><i class="fas fa-shield-alt"></i></div>
+                        <div class="stat-value" id="chain-hardened">0</div>
+                        <div class="stat-label">Pre-Hardened</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon prevented"><i class="fas fa-hand-paper"></i></div>
+                        <div class="stat-value" id="chain-prevented">0</div>
+                        <div class="stat-label">Attacks Prevented</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon active-chains"><i class="fas fa-project-diagram"></i></div>
+                        <div class="stat-value" id="chain-active">0</div>
+                        <div class="stat-label">Active Chains</div>
+                    </div>
+                </div>
+                <div class="chain-list-header">
+                    <h5>Attack Chain Predictions</h5>
+                    <span class="badge bg-warning" id="chain-count">0 active</span>
+                </div>
+                <div class="chain-list" id="chain-list">
+                    <div class="empty-state">
+                        <i class="fas fa-brain"></i>
+                        <p>No attack chains detected. The AI is monitoring for MITRE ATT&CK sequences.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Honeypot Mesh Tab -->
+            <div class="defense-panel" id="panel-honeypot">
+                <div class="defense-stats">
+                    <div class="stat-card honeypot-stat">
+                        <div class="stat-icon"><i class="fas fa-spider"></i></div>
+                        <div class="stat-value" id="honeypot-touches">0</div>
+                        <div class="stat-label">Touches (24h)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon dark-ports"><i class="fas fa-door-closed"></i></div>
+                        <div class="stat-value" id="honeypot-ports">0</div>
+                        <div class="stat-label">Dark Ports</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon attackers"><i class="fas fa-user-secret"></i></div>
+                        <div class="stat-value" id="honeypot-attackers">0</div>
+                        <div class="stat-label">Unique Attackers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon critical-threats"><i class="fas fa-skull-crossbones"></i></div>
+                        <div class="stat-value" id="honeypot-critical">0</div>
+                        <div class="stat-label">Critical Threats</div>
+                    </div>
+                </div>
+                <div class="honeypot-list-header">
+                    <h5>Attacker Profiles</h5>
+                    <span class="badge bg-danger" id="honeypot-count">0 tracked</span>
+                </div>
+                <div class="honeypot-list" id="honeypot-list">
+                    <div class="empty-state">
+                        <i class="fas fa-shield-check"></i>
+                        <p>No honeypot touches detected. Dark ports are active and monitoring.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Gravity Tab -->
+            <div class="defense-panel" id="panel-gravity">
+                <div class="defense-stats">
+                    <div class="stat-card gravity-stat">
+                        <div class="stat-icon"><i class="fas fa-magnet"></i></div>
+                        <div class="stat-value" id="gravity-events">0</div>
+                        <div class="stat-label">Events (24h)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon blocked-exfil"><i class="fas fa-hand-paper"></i></div>
+                        <div class="stat-value" id="gravity-blocked">0</div>
+                        <div class="stat-label">Blocked Exfil</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon sensitive"><i class="fas fa-file-shield"></i></div>
+                        <div class="stat-value" id="gravity-sensitive">0</div>
+                        <div class="stat-label">Sensitive Files</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon high-risk"><i class="fas fa-exclamation-circle"></i></div>
+                        <div class="stat-value" id="gravity-highrisk">0</div>
+                        <div class="stat-label">High Risk Sources</div>
+                    </div>
+                </div>
+                <div class="gravity-list-header">
+                    <h5>Recent Exfiltration Events</h5>
+                    <span class="badge bg-warning" id="gravity-count">0 detected</span>
+                </div>
+                <div class="gravity-list" id="gravity-list">
+                    <div class="empty-state">
+                        <i class="fas fa-database"></i>
+                        <p>No sensitive data movement detected. Zeek file monitoring is active.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bubble Manager Section -->
     <div class="bubble-manager-card">
         <div class="bubble-manager-header">
@@ -1158,6 +1974,7 @@
                     <!-- Unassigned devices populated by JS -->
                 </div>
             </div>
+
         </div>
     </div>
 
@@ -1542,16 +2359,33 @@
                     </div>
                 </div>
                 <div class="bubble-card-devices">
-                    ${devices.map(d => `
-                        <div class="device-tag ${d.online !== false ? 'online' : 'offline'}"
+                    ${devices.map(d => {
+                        // Apply D2D cluster color - devices that communicate show same color
+                        // This makes it visually obvious across bubbles which devices talk to each other
+                        const hasCluster = d.d2d_cluster && d.d2d_cluster.cluster_color;
+                        const clusterColor = hasCluster ? d.d2d_cluster.cluster_color : '';
+                        // Convert hex to rgba for background with opacity
+                        const bgColor = hasCluster ? clusterColor + '25' : '';  // 25 = ~15% opacity in hex
+                        const clusterStyle = hasCluster
+                            ? `color: ${clusterColor} !important; border-left-color: ${clusterColor}; border-color: ${clusterColor}40; background: ${bgColor}; font-weight: 600;`
+                            : '';
+                        const clusterClass = hasCluster ? 'd2d-clustered' : '';
+                        const clusterTitle = hasCluster
+                            ? `D2D Cluster #${d.d2d_cluster.cluster_id + 1}: ${d.d2d_cluster.device_count} devices communicate together (affinity: ${(d.d2d_cluster.avg_affinity * 100).toFixed(0)}%)`
+                            : '';
+                        return `
+                        <div class="device-tag ${d.online !== false ? 'online' : 'offline'} ${clusterClass}"
                              draggable="true"
                              data-mac="${d.mac}"
                              data-bubble="${bubble.bubble_id}"
+                             data-d2d-cluster="${hasCluster ? d.d2d_cluster.cluster_id : ''}"
+                             style="${clusterStyle}"
+                             title="${clusterTitle || d.vendor || ''}"
                              ondragstart="handleDragStart(event, '${d.mac}', '${bubble.bubble_id}')"
                              ondragend="handleDragEnd(event)">
                             ${d.label || d.mac}
-                        </div>
-                    `).join('')}
+                        </div>`;
+                    }).join('')}
                     ${devices.length === 0 ? '<span style="color: var(--aiochi-text-muted); font-size: 0.75rem;">Drop devices here</span>' : ''}
                 </div>
                 <div class="bubble-card-footer">
@@ -1577,16 +2411,33 @@
         // Render unassigned devices
         const unassigned = bubblesData.unassigned_devices || [];
         if (unassigned.length > 0) {
-            unassignedEl.innerHTML = unassigned.map(d => `
-                <div class="device-tag"
+            unassignedEl.innerHTML = unassigned.map(d => {
+                // Apply D2D cluster color - devices that communicate show same color
+                // This makes it visually obvious which unassigned devices should be grouped together
+                const hasCluster = d.d2d_cluster && d.d2d_cluster.cluster_color;
+                const clusterColor = hasCluster ? d.d2d_cluster.cluster_color : '';
+                // Convert hex to rgba for background with opacity
+                const bgColor = hasCluster ? clusterColor + '25' : '';  // 25 = ~15% opacity in hex
+                const clusterStyle = hasCluster
+                    ? `color: ${clusterColor} !important; border-left-color: ${clusterColor}; border-color: ${clusterColor}40; background: ${bgColor}; font-weight: 600;`
+                    : '';
+                const clusterClass = hasCluster ? 'd2d-clustered' : '';
+                const clusterTitle = hasCluster
+                    ? `D2D Cluster #${d.d2d_cluster.cluster_id + 1}: ${d.d2d_cluster.device_count} devices communicate together (affinity: ${(d.d2d_cluster.avg_affinity * 100).toFixed(0)}%)`
+                    : '';
+                return `
+                <div class="device-tag ${clusterClass}"
                      draggable="true"
                      data-mac="${d.mac}"
                      data-bubble=""
+                     data-d2d-cluster="${hasCluster ? d.d2d_cluster.cluster_id : ''}"
+                     style="${clusterStyle}"
+                     title="${clusterTitle || d.vendor || ''}"
                      ondragstart="handleDragStart(event, '${d.mac}', '')"
                      ondragend="handleDragEnd(event)">
                     ${d.label || d.mac}
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
             document.getElementById('unassigned-section').style.display = 'block';
         } else {
             unassignedEl.innerHTML = '<span style="color: var(--aiochi-text-muted); font-size: 0.75rem;">No unassigned devices</span>';
@@ -1772,6 +2623,287 @@
     // Initialize bubbles on load
     document.addEventListener('DOMContentLoaded', function() {
         fetchBubbles();
+    });
+
+    // =========================================================================
+    // ACTIVE DEFENSES - 5 INNOVATIONS
+    // =========================================================================
+
+    // Switch defense tabs
+    window.switchDefenseTab = function(tabName) {
+        // Update tab buttons
+        document.querySelectorAll('.defense-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+
+        // Update panels
+        document.querySelectorAll('.defense-panel').forEach(panel => {
+            panel.classList.toggle('active', panel.id === `panel-${tabName}`);
+        });
+
+        // Fetch data for the active tab
+        fetchDefenseData(tabName);
+    };
+
+    // Fetch defense data based on active tab
+    async function fetchDefenseData(tabName) {
+        try {
+            const response = await fetch(`${API_BASE}/defenses/${tabName}`);
+            const data = await response.json();
+
+            if (data.success) {
+                switch(tabName) {
+                    case 'friction': updateFriction(data); break;
+                    case 'ghost': updateGhostProbe(data); break;
+                    case 'chain': updateChainPredictor(data); break;
+                    case 'honeypot': updateHoneypot(data); break;
+                    case 'gravity': updateGravity(data); break;
+                }
+            }
+        } catch (error) {
+            console.error(`Failed to fetch ${tabName} data:`, error);
+        }
+    }
+
+    // Update Friction Control panel
+    function updateFriction(data) {
+        document.getElementById('friction-active').textContent = data.stats.active || 0;
+        document.getElementById('friction-subtle').textContent = data.stats.subtle || 0;
+        document.getElementById('friction-degraded').textContent = data.stats.degraded || 0;
+        document.getElementById('friction-severe').textContent = data.stats.severe || 0;
+        document.getElementById('friction-count').textContent = `${data.devices?.length || 0} devices`;
+
+        const listEl = document.getElementById('friction-list');
+        if (!data.devices || data.devices.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-check-circle"></i>
+                    <p>No friction applied. All devices are operating normally.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = data.devices.map(d => `
+            <div class="friction-item">
+                <div class="friction-device">
+                    <span class="friction-mac">${d.mac}</span>
+                    <span class="friction-label">${d.label || 'Unknown'}</span>
+                </div>
+                <div class="friction-details">
+                    <span class="friction-level ${d.level}">${d.level}</span>
+                    <span class="friction-delay">${d.delay_ms}ms</span>
+                    <span class="friction-qsecbit">QSecBit: ${(d.qsecbit * 100).toFixed(0)}%</span>
+                </div>
+                <div class="friction-reason">${d.reason}</div>
+            </div>
+        `).join('');
+    }
+
+    // Update Ghost Probe panel
+    function updateGhostProbe(data) {
+        document.getElementById('ghost-probes').textContent = data.stats.probes_24h || 0;
+        document.getElementById('ghost-clean').textContent = data.stats.clean || 0;
+        document.getElementById('ghost-suspicious').textContent = data.stats.suspicious || 0;
+        document.getElementById('ghost-masquerade').textContent = data.stats.masquerading || 0;
+
+        const listEl = document.getElementById('ghost-list');
+        if (!data.probes || data.probes.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-search"></i>
+                    <p>No recent probes. Click "Probe All Devices" to start active interrogation.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = data.probes.map(p => `
+            <div class="ghost-item">
+                <div class="ghost-device">
+                    <span class="ghost-mac">${p.mac}</span>
+                    <span class="ghost-label">${p.label || p.claimed_vendor || 'Unknown'}</span>
+                </div>
+                <div class="ghost-verdict-row">
+                    <span class="ghost-verdict ${p.verdict}">${p.verdict}</span>
+                    <span class="ghost-confidence">${(p.confidence * 100).toFixed(0)}% confidence</span>
+                </div>
+                <div class="ghost-details">
+                    <span>Claimed: ${p.claimed_vendor || 'None'}</span>
+                    <span>Actual: ${p.actual_vendor || 'Unknown'}</span>
+                    <span class="ghost-action ${p.action}">${p.action}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Run probe on all devices
+    window.runProbeAll = async function() {
+        const btn = document.querySelector('.btn-probe-all');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Probing...';
+
+        try {
+            const response = await fetch(`${API_BASE}/defenses/ghost/probe-all`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+            if (data.success) {
+                fetchDefenseData('ghost');
+            }
+        } catch (error) {
+            console.error('Failed to run probe:', error);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-radar"></i> Probe All Devices';
+        }
+    };
+
+    // Update Chain Predictor panel
+    function updateChainPredictor(data) {
+        document.getElementById('chain-predictions').textContent = data.stats.predictions_24h || 0;
+        document.getElementById('chain-hardened').textContent = data.stats.hardened || 0;
+        document.getElementById('chain-prevented').textContent = data.stats.prevented || 0;
+        document.getElementById('chain-active').textContent = data.stats.active_chains || 0;
+        document.getElementById('chain-count').textContent = `${data.chains?.length || 0} active`;
+
+        const listEl = document.getElementById('chain-list');
+        if (!data.chains || data.chains.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-brain"></i>
+                    <p>No attack chains detected. The AI is monitoring for MITRE ATT&CK sequences.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = data.chains.map(c => `
+            <div class="chain-item">
+                <div class="chain-header">
+                    <span class="chain-id">${c.chain_id.slice(0, 8)}</span>
+                    <span class="chain-stage">${c.current_stage}/${c.total_stages}</span>
+                    <span class="chain-confidence ${c.confidence > 0.7 ? 'high' : 'medium'}">${(c.confidence * 100).toFixed(0)}%</span>
+                </div>
+                <div class="chain-techniques">
+                    ${c.techniques.map(t => `<span class="mitre-tag">${t}</span>`).join('')}
+                </div>
+                <div class="chain-prediction">
+                    <span class="chain-label">Next likely:</span>
+                    ${c.predicted_next.map(p => `<span class="predicted-technique">${p.technique} (${(p.probability * 100).toFixed(0)}%)</span>`).join('')}
+                </div>
+                <div class="chain-device">
+                    <span>Device: ${c.device_mac}</span>
+                    <span class="chain-status ${c.status}">${c.status}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Update Honeypot Mesh panel
+    function updateHoneypot(data) {
+        document.getElementById('honeypot-touches').textContent = data.stats.touches_24h || 0;
+        document.getElementById('honeypot-ports').textContent = data.stats.dark_ports || 0;
+        document.getElementById('honeypot-attackers').textContent = data.stats.unique_attackers || 0;
+        document.getElementById('honeypot-critical').textContent = data.stats.critical_threats || 0;
+        document.getElementById('honeypot-count').textContent = `${data.attackers?.length || 0} tracked`;
+
+        const listEl = document.getElementById('honeypot-list');
+        if (!data.attackers || data.attackers.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-shield-check"></i>
+                    <p>No honeypot touches detected. Dark ports are active and monitoring.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = data.attackers.map(a => `
+            <div class="honeypot-item ${a.threat_level}">
+                <div class="honeypot-header">
+                    <span class="attacker-ip">${a.source_ip}</span>
+                    <span class="threat-level-badge ${a.threat_level}">${a.threat_level}</span>
+                </div>
+                <div class="honeypot-ports">
+                    ${a.ports_touched.map(p => `<span class="port-tag">${p}</span>`).join('')}
+                </div>
+                <div class="honeypot-intel">
+                    <span>TTPs: ${a.ttp_count || 0}</span>
+                    <span>Reputation: ${a.reputation || 'Unknown'}</span>
+                    <span>Country: ${a.country || '??'}</span>
+                </div>
+                <div class="honeypot-action">
+                    <span class="action-badge ${a.action}">${a.action}</span>
+                    <span class="honeypot-time">${a.last_seen}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Update Data Gravity panel
+    function updateGravity(data) {
+        document.getElementById('gravity-events').textContent = data.stats.events_24h || 0;
+        document.getElementById('gravity-blocked').textContent = data.stats.blocked || 0;
+        document.getElementById('gravity-sensitive').textContent = data.stats.sensitive_files || 0;
+        document.getElementById('gravity-highrisk').textContent = data.stats.high_risk_sources || 0;
+        document.getElementById('gravity-count').textContent = `${data.events?.length || 0} detected`;
+
+        const listEl = document.getElementById('gravity-list');
+        if (!data.events || data.events.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-database"></i>
+                    <p>No sensitive data movement detected. Zeek file monitoring is active.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = data.events.map(e => `
+            <div class="gravity-item ${e.risk_level}">
+                <div class="gravity-header">
+                    <span class="gravity-filename">${e.filename}</span>
+                    <span class="gravity-size">${formatBytes(e.size_bytes)}</span>
+                </div>
+                <div class="gravity-flow">
+                    <span class="gravity-source">${e.source_device}</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <span class="gravity-dest">${e.dest_ip}</span>
+                </div>
+                <div class="gravity-risk">
+                    <div class="gravity-risk-bar">
+                        <div class="gravity-risk-fill ${e.risk_level}" style="width: ${e.risk_score * 100}%"></div>
+                    </div>
+                    <span class="gravity-risk-score">${(e.risk_score * 100).toFixed(0)}%</span>
+                </div>
+                <div class="gravity-mitre">
+                    ${e.mitre_techniques.map(t => `<span class="gravity-mitre-tag">${t}</span>`).join('')}
+                </div>
+                <div class="gravity-action">
+                    <span class="action-badge ${e.action}">${e.action}</span>
+                    <span class="gravity-time">${e.timestamp}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Helper: format bytes
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    // Initialize defenses on load
+    document.addEventListener('DOMContentLoaded', function() {
+        // Fetch initial defense data for the active tab (friction)
+        fetchDefenseData('friction');
+
+        // Refresh defense data every 10 seconds
+        setInterval(() => {
+            const activeTab = document.querySelector('.defense-tab.active');
+            if (activeTab) {
+                fetchDefenseData(activeTab.dataset.tab);
+            }
+        }, 10000);
     });
 
 })();

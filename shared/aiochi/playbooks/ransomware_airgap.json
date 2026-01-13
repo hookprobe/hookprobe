@@ -1,0 +1,105 @@
+{
+  "id": "ransomware_airgap",
+  "name": "Ransomware Air-Gap",
+  "version": "1.0",
+  "description": "Instantly isolates devices showing ransomware behavior",
+  "mitre_attack": ["T1486", "T1071.001", "T1021.002"],
+  "category": "impact",
+  "severity_threshold": 1,
+
+  "triggers": [
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "AIOCHI Ransomware",
+        "ET MALWARE Ransomware",
+        "ET TROJAN Ransomware",
+        "CryptoLocker",
+        "WannaCry",
+        "Locky",
+        "Ryuk"
+      ]
+    },
+    {
+      "type": "file_activity",
+      "description": "High-frequency file modifications",
+      "conditions": {
+        "smb_operations_per_minute": ">200",
+        "file_extension_changes": ">50"
+      }
+    },
+    {
+      "type": "c2_connection",
+      "description": "Connection to known C2 infrastructure",
+      "conditions": {
+        "destination_in": "threat_blocklist"
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "ovs_quarantine",
+      "description": "VLAN shift to quarantine",
+      "command": "ovs-ofctl add-flow FTS \"priority=1000,dl_src={{trigger.src_mac}},actions=mod_vlan_vid:99,drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"dl_src={{trigger.src_mac}},priority=1000\""
+    },
+    {
+      "order": 2,
+      "type": "broadcast_block",
+      "description": "Stop device from talking to any local device",
+      "command": "ovs-ofctl add-flow FTS \"priority=1000,dl_dst={{trigger.src_mac}},actions=drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"dl_dst={{trigger.src_mac}},priority=1000\""
+    },
+    {
+      "order": 3,
+      "type": "smb_block",
+      "description": "Block SMB to prevent lateral spread",
+      "command": "ovs-ofctl add-flow FTS \"priority=1000,tcp,tp_dst=445,dl_src={{trigger.src_mac}},actions=drop\""
+    },
+    {
+      "order": 4,
+      "type": "c2_block",
+      "description": "Block the C2 destination",
+      "command": "ovs-ofctl add-flow FTS \"priority=1000,ip,nw_dst={{trigger.dst_ip}},actions=drop\""
+    },
+    {
+      "order": 5,
+      "type": "notification",
+      "description": "Emergency alert",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "critical",
+        "persona": "parent",
+        "push_notification": true,
+        "sms_alert": true
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "EMERGENCY: Ransomware stopped",
+    "owner_friendly": "I detected ransomware trying to encrypt your files! I've completely disconnected {{device.name}} from your network. Your other computers and payment systems are safe. DO NOT reconnect this device until a professional checks it.",
+    "technical": "Ransomware activity detected from {{device.mac}} ({{device.name}}). Device quarantined to VLAN 99. All inbound/outbound traffic dropped. SMB blocked. C2 destination {{trigger.dst_ip}} blocked network-wide.",
+    "action_prompt": "This is serious. Your files on {{device.name}} may be encrypted. Do NOT pay any ransom.",
+    "resolution_options": [
+      {"label": "Call IT support", "action": "escalate_urgent"},
+      {"label": "I have backups, wipe device", "action": "mark_for_wipe"},
+      {"label": "View what happened", "action": "show_timeline"}
+    ],
+    "emergency_contact": "If you don't have IT support, call your local cybersecurity hotline."
+  },
+
+  "auto_resolve": {
+    "enabled": false,
+    "reason": "Ransomware requires professional remediation"
+  },
+
+  "evidence_collection": {
+    "pcap_capture": true,
+    "pcap_duration_seconds": 300,
+    "memory_snapshot": true,
+    "log_all_connections": true
+  }
+}

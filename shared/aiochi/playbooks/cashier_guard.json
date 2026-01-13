@@ -1,0 +1,89 @@
+{
+  "id": "cashier_guard",
+  "name": "Cashier Guard",
+  "version": "1.0",
+  "description": "Protects POS terminals from unauthorized communications",
+  "mitre_attack": ["T1059", "T1071", "T1041"],
+  "category": "pos_protection",
+  "severity_threshold": 1,
+
+  "triggers": [
+    {
+      "type": "pos_connection",
+      "description": "POS device connecting outside whitelist",
+      "conditions": {
+        "device_type": ["pos_terminal", "payment_gateway"],
+        "destination_not_in": "payment_processor_whitelist"
+      }
+    },
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "AIOCHI POS",
+        "POS - Track",
+        "Card Data",
+        "Credit Card"
+      ]
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "ovs_isolate",
+      "description": "Strict isolation - drop all non-whitelist traffic",
+      "command": "ovs-ofctl add-flow FTS \"priority=1000,dl_src={{trigger.src_mac}},actions=drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"dl_src={{trigger.src_mac}},priority=1000\""
+    },
+    {
+      "order": 2,
+      "type": "session_terminate",
+      "description": "Terminate all active sessions",
+      "command": "conntrack -D -s {{trigger.src_ip}}"
+    },
+    {
+      "order": 3,
+      "type": "pos_lock",
+      "description": "Lock POS until manual clearance",
+      "command": "set_pos_status",
+      "parameters": {
+        "mac": "{{trigger.src_mac}}",
+        "status": "locked",
+        "require_manual_unlock": true
+      }
+    },
+    {
+      "order": 4,
+      "type": "notification",
+      "description": "Critical alert to owner",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "critical",
+        "persona": "parent",
+        "push_notification": true
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Payment terminal protected",
+    "owner_friendly": "Your card reader tried to send data somewhere unexpected. I've locked it down to protect your customers' payment information. No card data was stolen.",
+    "technical": "POS device {{device.mac}} attempted connection to {{trigger.dst_ip}}:{{trigger.dst_port}} (not in payment processor whitelist). Device isolated via OVS. All sessions terminated.",
+    "action_prompt": "Your payment terminal needs to be manually unlocked. This is a safety measure.",
+    "resolution_options": [
+      {"label": "Unlock terminal (safe)", "action": "unlock_pos"},
+      {"label": "Keep locked, call support", "action": "escalate"},
+      {"label": "View details", "action": "show_technical"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": false,
+    "reason": "POS incidents require manual verification"
+  },
+
+  "compliance": {
+    "pci_dss": ["3.4", "11.5"],
+    "log_retention_days": 365
+  }
+}

@@ -58,6 +58,28 @@ try:
 except ImportError:
     HAS_SKLEARN = False
 
+# Optional Leiden clustering (better than DBSCAN for community detection)
+try:
+    import leidenalg
+    import igraph
+    HAS_LEIDEN = True
+except ImportError:
+    HAS_LEIDEN = False
+
+# Import D2D connection graph for affinity scoring
+try:
+    from .connection_graph import (
+        get_connection_analyzer,
+        DeviceType,
+        classify_device_type,
+        get_user_bubble_color,
+        USER_BUBBLE_COLORS,
+    )
+    HAS_D2D = True
+except ImportError:
+    HAS_D2D = False
+    DeviceType = None
+
 # Database
 CLUSTERING_DB = Path('/var/lib/hookprobe/clustering.db')
 
@@ -94,6 +116,20 @@ class DeviceBehavior:
     mdns_device_id: Optional[str] = None
     hostname_pattern: Optional[str] = None
 
+    # D2D Affinity features (from Zeek connection graph)
+    d2d_affinity_score: float = 0.0    # Overall D2D affinity with peers
+    d2d_peer_count: int = 0            # Number of D2D communication peers
+    d2d_frequency: float = 0.0         # Normalized connection frequency
+    d2d_symmetry: float = 0.0          # Bidirectional traffic ratio
+
+    # Device classification (IoT vs Personal)
+    device_type: str = 'unknown'       # 'personal', 'iot', 'infra', 'unknown'
+    device_type_confidence: float = 0.0
+
+    # Bubble assignment
+    bubble_color: Optional[str] = None
+    suggested_bubble_id: Optional[str] = None
+
     def to_feature_vector(self) -> List[float]:
         """Convert to feature vector for clustering."""
         return [
@@ -105,7 +141,25 @@ class DeviceBehavior:
             min(self.continuity_events / 20, 1.0),  # Normalize
             self.session_regularity,
             len(self.mdns_services) / 10,         # Normalize
+            # D2D features (from Trio+ recommendation)
+            self.d2d_affinity_score,              # 0-1 already normalized
+            min(self.d2d_peer_count / 5, 1.0),    # Normalize (5+ peers = 1.0)
+            self.d2d_frequency,                    # 0-1 already normalized
+            self.d2d_symmetry,                     # 0-1 already normalized
         ]
+
+    def is_personal_device(self) -> bool:
+        """Check if this is a personal device (not IoT)."""
+        return self.device_type == 'personal'
+
+    def should_suggest_bubble(self) -> bool:
+        """Check if this device should get bubble suggestions."""
+        # Only suggest bubbles for personal devices with D2D activity
+        return (
+            self.device_type == 'personal' and
+            self.d2d_affinity_score >= 0.3 and
+            self.d2d_peer_count >= 1
+        )
 
 
 @dataclass
@@ -119,6 +173,13 @@ class ClusterResult:
     silhouette: float = 0.0
     bubble_id: Optional[str] = None
 
+    # D2D enhanced fields
+    bubble_type: str = 'user'          # 'user', 'iot', 'mixed'
+    bubble_color: Optional[str] = None  # Hex color for visualization
+    avg_d2d_affinity: float = 0.0       # Average D2D affinity in cluster
+    personal_device_count: int = 0       # Count of personal devices
+    iot_device_count: int = 0            # Count of IoT devices
+
     def to_dict(self) -> Dict:
         return {
             'cluster_id': self.cluster_id,
@@ -127,6 +188,12 @@ class ClusterResult:
             'confidence': self.confidence,
             'bubble_id': self.bubble_id,
             'device_count': len(self.devices),
+            # D2D enhanced fields
+            'bubble_type': self.bubble_type,
+            'bubble_color': self.bubble_color,
+            'avg_d2d_affinity': round(self.avg_d2d_affinity, 3),
+            'personal_device_count': self.personal_device_count,
+            'iot_device_count': self.iot_device_count,
         }
 
 
@@ -136,25 +203,41 @@ class ClusterResult:
 
 class BehavioralClusteringEngine:
     """
-    DBSCAN-based clustering engine for ecosystem bubble detection.
+    DBSCAN/Leiden-based clustering engine for ecosystem bubble detection.
 
     Uses unsupervised learning to group devices that "breathe together"
     into the same user bubble.
+
+    Enhanced with D2D affinity scoring from Zeek connection graph.
     """
 
     # DBSCAN parameters (tuned for device clustering)
     DBSCAN_EPS = 0.5          # Maximum distance between samples
     DBSCAN_MIN_SAMPLES = 2    # Minimum cluster size (2 = pair of devices)
 
+    # Leiden parameters (for community detection)
+    LEIDEN_RESOLUTION = 0.8   # Higher = more, smaller clusters
+
     # Confidence thresholds
     HIGH_CONFIDENCE = 0.85
     MEDIUM_CONFIDENCE = 0.65
     LOW_CONFIDENCE = 0.45
 
-    def __init__(self):
+    # D2D affinity threshold for bubble suggestion
+    D2D_SUGGESTION_THRESHOLD = 0.4
+
+    def __init__(self, use_leiden: bool = False):
+        """
+        Initialize clustering engine.
+
+        Args:
+            use_leiden: If True and available, use Leiden algorithm instead of DBSCAN
+        """
         self._behaviors: Dict[str, DeviceBehavior] = {}
         self._clusters: Dict[int, ClusterResult] = {}
         self._lock = threading.RLock()
+        self._use_leiden = use_leiden and HAS_LEIDEN
+        self._bubble_color_assignments: Dict[str, str] = {}  # bubble_id -> color
 
         # Initialize database
         self._init_database()
@@ -218,6 +301,100 @@ class BehavioralClusteringEngine:
             for key, value in updates.items():
                 if hasattr(behavior, key):
                     setattr(behavior, key, value)
+
+    def enrich_with_d2d(self):
+        """
+        Enrich device behaviors with D2D affinity data from connection graph.
+
+        This is the key integration point between behavioral clustering
+        and D2D network analysis (Zeek conn.log).
+        """
+        if not HAS_D2D:
+            logger.debug("D2D module not available, skipping enrichment")
+            return
+
+        with self._lock:
+            try:
+                analyzer = get_connection_analyzer()
+
+                # Get all device MACs from behaviors
+                for mac, behavior in self._behaviors.items():
+                    # Get D2D peers for this device
+                    peers = analyzer.get_device_peers(mac)
+
+                    if peers:
+                        # Calculate aggregate D2D metrics
+                        total_affinity = sum(aff for _, aff in peers)
+                        avg_affinity = total_affinity / len(peers) if peers else 0.0
+
+                        behavior.d2d_peer_count = len(peers)
+                        behavior.d2d_affinity_score = avg_affinity
+
+                        # Get detailed metrics from relationships
+                        for key, rel in analyzer.relationships.items():
+                            if mac in key:
+                                metrics = rel.get_normalized_metrics()
+                                # Take the max of each metric across all relationships
+                                behavior.d2d_frequency = max(
+                                    behavior.d2d_frequency,
+                                    metrics.frequency
+                                )
+                                behavior.d2d_symmetry = max(
+                                    behavior.d2d_symmetry,
+                                    metrics.symmetry
+                                )
+
+                    # Classify device type (Personal vs IoT)
+                    device_type, confidence = analyzer.classify_device(mac)
+                    behavior.device_type = device_type.value
+                    behavior.device_type_confidence = confidence
+
+                logger.info(f"Enriched {len(self._behaviors)} devices with D2D data")
+
+            except Exception as e:
+                logger.warning(f"Failed to enrich with D2D data: {e}")
+
+    def get_bubble_suggestions(self) -> List[Dict]:
+        """
+        Get bubble suggestions based on D2D affinity.
+
+        Returns list of device pairs that should be grouped together.
+        """
+        if not HAS_D2D:
+            return []
+
+        try:
+            analyzer = get_connection_analyzer()
+            return analyzer.get_bubble_suggestions(
+                min_affinity=self.D2D_SUGGESTION_THRESHOLD
+            )
+        except Exception as e:
+            logger.warning(f"Failed to get bubble suggestions: {e}")
+            return []
+
+    def assign_bubble_color(self, bubble_id: str) -> str:
+        """
+        Assign a unique color to a bubble.
+
+        Uses rotating palette from USER_BUBBLE_COLORS.
+        """
+        if bubble_id in self._bubble_color_assignments:
+            return self._bubble_color_assignments[bubble_id]
+
+        if HAS_D2D:
+            color_idx = len(self._bubble_color_assignments)
+            color = get_user_bubble_color(color_idx)
+        else:
+            # Fallback colors
+            fallback_colors = [
+                "#E91E63", "#3F51B5", "#009688", "#FF5722",
+                "#673AB7", "#00BCD4", "#795548", "#607D8B"
+            ]
+            color_idx = len(self._bubble_color_assignments) % len(fallback_colors)
+            color = fallback_colors[color_idx]
+
+        self._bubble_color_assignments[bubble_id] = color
+        return color
 
     def compute_protocol_overlap(self, mac_a: str, mac_b: str) -> float:
         """Compute protocol/service overlap between two devices."""
@@ -403,8 +580,15 @@ class BehavioralClusteringEngine:
             return macs, X_scaled
 
     def cluster_devices(self) -> List[ClusterResult]:
-        """Run DBSCAN clustering on all devices."""
+        """
+        Run clustering on all devices using DBSCAN or Leiden algorithm.
+
+        Enhanced with D2D affinity enrichment and device type classification.
+        """
         with self._lock:
+            # First, enrich behaviors with D2D data
+            self.enrich_with_d2d()
+
             if not HAS_NUMPY or not HAS_SKLEARN:
                 logger.warning("ML libraries not available for clustering")
                 return self._rule_based_clustering()
@@ -414,14 +598,17 @@ class BehavioralClusteringEngine:
             if X is None or len(macs) < 2:
                 return []
 
-            # Run DBSCAN
-            dbscan = DBSCAN(
-                eps=self.DBSCAN_EPS,
-                min_samples=self.DBSCAN_MIN_SAMPLES,
-                metric='euclidean'
-            )
-
-            labels = dbscan.fit_predict(X)
+            # Choose clustering algorithm
+            if self._use_leiden and HAS_LEIDEN:
+                labels = self._leiden_cluster(macs)
+            else:
+                # Run DBSCAN
+                dbscan = DBSCAN(
+                    eps=self.DBSCAN_EPS,
+                    min_samples=self.DBSCAN_MIN_SAMPLES,
+                    metric='euclidean'
+                )
+                labels = dbscan.fit_predict(X)
 
             # Build cluster results
             clusters: Dict[int, List[str]] = defaultdict(list)
@@ -446,12 +633,48 @@ class BehavioralClusteringEngine:
                     # Generate bubble ID
                     bubble_id = self._generate_bubble_id(devices, ecosystem)
 
+                    # Assign bubble color
+                    bubble_color = self.assign_bubble_color(bubble_id)
+
+                    # Calculate D2D metrics and device type breakdown
+                    personal_count = 0
+                    iot_count = 0
+                    d2d_affinities = []
+
+                    for mac in devices:
+                        behavior = self._behaviors.get(mac)
+                        if behavior:
+                            if behavior.device_type == 'personal':
+                                personal_count += 1
+                            elif behavior.device_type == 'iot':
+                                iot_count += 1
+                            if behavior.d2d_affinity_score > 0:
+                                d2d_affinities.append(behavior.d2d_affinity_score)
+                            # Update device with bubble color
+                            behavior.bubble_color = bubble_color
+                            behavior.suggested_bubble_id = bubble_id
+
+                    avg_d2d = sum(d2d_affinities) / len(d2d_affinities) if d2d_affinities else 0.0
+
+                    # Determine bubble type based on device composition
+                    if iot_count == 0 and personal_count > 0:
+                        bubble_type = 'user'
+                    elif personal_count == 0 and iot_count > 0:
+                        bubble_type = 'iot'
+                    else:
+                        bubble_type = 'mixed'
+
                     result = ClusterResult(
                         cluster_id=cluster_id,
                         devices=devices,
                         ecosystem=ecosystem,
                         confidence=confidence,
-                        bubble_id=bubble_id
+                        bubble_id=bubble_id,
+                        bubble_type=bubble_type,
+                        bubble_color=bubble_color,
+                        avg_d2d_affinity=avg_d2d,
+                        personal_device_count=personal_count,
+                        iot_device_count=iot_count,
                     )
 
                     # Calculate silhouette if enough clusters
@@ -466,7 +689,8 @@ class BehavioralClusteringEngine:
 
                     # Update device behaviors with cluster assignment
                     for mac in devices:
-                        self._behaviors[mac].cluster_id = cluster_id
+                        if hasattr(self._behaviors[mac], 'cluster_id'):
+                            self._behaviors[mac].cluster_id = cluster_id
 
             self._clusters = {r.cluster_id: r for r in results}
 
@@ -474,6 +698,65 @@ class BehavioralClusteringEngine:
             self._persist_clusters(results)
 
             return results
+
+    def _leiden_cluster(self, macs: List[str]) -> List[int]:
+        """
+        Run Leiden community detection algorithm.
+
+        Leiden is better than DBSCAN for community detection in graphs
+        because it optimizes modularity directly.
+
+        Args:
+            macs: List of MAC addresses
+
+        Returns:
+            List of cluster labels (same order as macs)
+        """
+        if not HAS_LEIDEN or not HAS_D2D:
+            return [-1] * len(macs)
+
+        try:
+            analyzer = get_connection_analyzer()
+
+            # Build adjacency graph from D2D relationships
+            mac_to_idx = {mac: i for i, mac in enumerate(macs)}
+            edges = []
+            weights = []
+
+            for key, rel in analyzer.relationships.items():
+                mac_a, mac_b = key
+                if mac_a in mac_to_idx and mac_b in mac_to_idx:
+                    affinity = rel.calculate_affinity_score()
+                    if affinity >= self.D2D_SUGGESTION_THRESHOLD:
+                        edges.append((mac_to_idx[mac_a], mac_to_idx[mac_b]))
+                        weights.append(affinity)
+
+            if not edges:
+                return [-1] * len(macs)
+
+            # Create igraph graph
+            g = igraph.Graph(n=len(macs), edges=edges)
+
+            # Run Leiden algorithm
+            partition = leidenalg.find_partition(
+                g,
+                leidenalg.RBConfigurationVertexPartition,
+                resolution_parameter=self.LEIDEN_RESOLUTION,
+                weights=weights,
+            )
+
+            # Convert partition to labels
+            labels = [-1] * len(macs)
+            for cluster_id, members in enumerate(partition):
+                for node_idx in members:
+                    labels[node_idx] = cluster_id
+
+            logger.info(f"Leiden found {len(partition)} communities")
+            return labels
+
+        except Exception as e:
+            logger.warning(f"Leiden clustering failed: {e}")
+            return [-1] * len(macs)
 
     def _rule_based_clustering(self) -> List[ClusterResult]:
         """Fallback rule-based clustering when ML is not available."""
@@ -681,10 +964,33 @@ class BehavioralClusteringEngine:
     def get_stats(self) -> Dict:
         """Get clustering engine statistics."""
         with self._lock:
+            # Count device types
+            device_types = {'personal': 0, 'iot': 0, 'unknown': 0}
+            d2d_enabled_count = 0
+
+            for behavior in self._behaviors.values():
+                if behavior.device_type == 'personal':
+                    device_types['personal'] += 1
+                elif behavior.device_type == 'iot':
+                    device_types['iot'] += 1
+                else:
+                    device_types['unknown'] += 1
+
+                if behavior.d2d_affinity_score > 0:
+                    d2d_enabled_count += 1
+
+            # Count cluster types
+            user_bubbles = sum(1 for c in self._clusters.values() if c.bubble_type == 'user')
+            iot_bubbles = sum(1 for c in self._clusters.values() if c.bubble_type == 'iot')
+            mixed_bubbles = sum(1 for c in self._clusters.values() if c.bubble_type == 'mixed')
+
             return {
                 'total_devices': len(self._behaviors),
                 'total_clusters': len(self._clusters),
                 'ml_available': HAS_NUMPY and HAS_SKLEARN,
+                'leiden_available': HAS_LEIDEN,
+                'd2d_available': HAS_D2D,
+                'using_leiden': self._use_leiden,
                 'avg_cluster_size': (
                     sum(len(c.devices) for c in self._clusters.values()) / len(self._clusters)
                     if self._clusters else 0
@@ -693,6 +999,13 @@ class BehavioralClusteringEngine:
                     1 for c in self._clusters.values()
                     if c.confidence >= self.HIGH_CONFIDENCE
                 ),
+                # D2D enhanced stats
+                'device_types': device_types,
+                'd2d_enriched_devices': d2d_enabled_count,
+                'user_bubbles': user_bubbles,
+                'iot_bubbles': iot_bubbles,
+                'mixed_bubbles': mixed_bubbles,
+                'assigned_colors': len(self._bubble_color_assignments),
             }
 
 

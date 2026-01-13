@@ -1,0 +1,119 @@
+{
+  "id": "data_sieve",
+  "name": "Data Sieve",
+  "version": "1.0",
+  "description": "Detects and stops data theft attempts",
+  "mitre_attack": ["T1048", "T1048.001", "T1048.003", "T1567"],
+  "category": "exfiltration",
+  "severity_threshold": 2,
+
+  "triggers": [
+    {
+      "type": "large_upload",
+      "description": "Sudden large upload to cloud storage",
+      "conditions": {
+        "upload_size_mb": ">500",
+        "destination_not_in": "approved_cloud_services",
+        "time_window_minutes": 30
+      }
+    },
+    {
+      "type": "dns_tunneling",
+      "description": "High-entropy DNS queries indicating tunneling",
+      "conditions": {
+        "query_length": ">50",
+        "entropy_score": ">0.8",
+        "queries_per_minute": ">10"
+      }
+    },
+    {
+      "type": "suricata_signature",
+      "patterns": [
+        "AIOCHI Exfil",
+        "DNS Tunneling",
+        "Data Exfiltration",
+        "Large HTTP POST"
+      ]
+    },
+    {
+      "type": "unusual_destination",
+      "description": "Upload to country not usually accessed",
+      "conditions": {
+        "destination_country_not_in": ["US", "CA", "GB", "DE", "AU"],
+        "upload_size_mb": ">100"
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "bandwidth_throttle",
+      "description": "Throttle to 10 Kbps to stall the theft",
+      "command": "tc class change dev {{wan_interface}} parent 1:1 classid 1:{{device_class}} htb rate 10kbit ceil 10kbit",
+      "rollback": "tc class change dev {{wan_interface}} parent 1:1 classid 1:{{device_class}} htb rate 100mbit ceil 1000mbit"
+    },
+    {
+      "order": 2,
+      "type": "pcap_snapshot",
+      "description": "Capture traffic for evidence",
+      "command": "tcpdump -i {{lan_interface}} ether src {{trigger.src_mac}} -c 10000 -w /var/log/aiochi/evidence/{{trigger.id}}.pcap &",
+      "parameters": {
+        "duration_seconds": 60,
+        "max_packets": 10000
+      }
+    },
+    {
+      "order": 3,
+      "type": "dns_block",
+      "description": "Block DNS tunneling domains",
+      "command": "dnsxai_block_domain",
+      "parameters": {
+        "domain": "{{trigger.domain}}",
+        "duration_hours": 168
+      },
+      "condition": "trigger.type == 'dns_tunneling'"
+    },
+    {
+      "order": 4,
+      "type": "destination_block",
+      "description": "Block the exfil destination",
+      "command": "ovs-ofctl add-flow FTS \"priority=800,ip,nw_dst={{trigger.dst_ip}},actions=drop\"",
+      "rollback": "ovs-ofctl del-flows FTS \"ip,nw_dst={{trigger.dst_ip}},priority=800\""
+    },
+    {
+      "order": 5,
+      "type": "notification",
+      "description": "Alert owner",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "high",
+        "persona": "parent"
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Stopped data from leaving",
+    "owner_friendly": "{{device.name}} was sending a lot of data ({{trigger.size_mb}} MB) to an unusual location. I've slowed it down to a crawl and captured evidence. Your business data is likely safe.",
+    "technical": "Potential data exfiltration detected from {{device.mac}}. {{trigger.size_mb}} MB upload to {{trigger.dst_ip}} ({{trigger.dst_country}}). Bandwidth throttled to 10Kbps. PCAP captured: {{evidence_file}}.",
+    "action_prompt": "Was {{device.name}} supposed to upload a large file? This could be a backup or an employee sharing files.",
+    "resolution_options": [
+      {"label": "This was expected, restore speed", "action": "restore_bandwidth"},
+      {"label": "Not expected, investigate", "action": "quarantine_device"},
+      {"label": "Download evidence file", "action": "download_pcap"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "timeout_hours": 2,
+    "action": "restore_bandwidth",
+    "notify_on_resolve": true
+  },
+
+  "evidence_retention": {
+    "pcap_retention_days": 30,
+    "auto_delete_if_resolved": false
+  }
+}
