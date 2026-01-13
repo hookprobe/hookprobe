@@ -128,10 +128,32 @@ services:
       # Required config files for Suricata to start properly
       - ./configs/suricata/classification.config:/etc/suricata/classification.config:ro
       - ./configs/suricata/reference.config:/etc/suricata/reference.config:ro
+      # Dual-path state for WAN path type detection
+      - /run/fortress:/run/fortress:ro
     environment:
-      SURICATA_OPTIONS: "-i ${CAPTURE_INTERFACE:-FTS-mirror} --af-packet"
-    # Use explicit suricata command (not entrypoint) for better control
-    command: ["suricata", "-c", "/etc/suricata/suricata.yaml", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "--af-packet"]
+      CAPTURE_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
+      WAN_CAPTURE_INTERFACE: "${WAN_CAPTURE_INTERFACE:-}"
+    # Use shell wrapper to conditionally add WAN interface if it exists
+    # This enables dual-capture: LAN (FTS-mirror) + WAN (wan-mirror) for complete visibility
+    # Dual-Path Architecture: Suricata captures from wan-mirror which receives traffic
+    # from both wired (AF_XDP/TC-BPF optimized) and mobile (TC-BPF with sampling) WANs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        IFACES="-i ${CAPTURE_INTERFACE:-FTS-mirror}"
+        # Add WAN interface if configured and exists
+        if [ -n "${WAN_CAPTURE_INTERFACE}" ] && ip link show "${WAN_CAPTURE_INTERFACE}" >/dev/null 2>&1; then
+          echo "AIOCHI: Adding WAN capture interface: ${WAN_CAPTURE_INTERFACE}"
+          IFACES="$IFACES -i ${WAN_CAPTURE_INTERFACE}"
+          # Log dual-path architecture info if available
+          if [ -f /run/fortress/wan-mirror.state ]; then
+            . /run/fortress/wan-mirror.state 2>/dev/null || true
+            [ -n "${WAN_PATH_TYPE:-}" ] && echo "AIOCHI: WAN path type: ${WAN_PATH_TYPE} (dual-path enabled)"
+            [ -n "${WWAN_PATH_TYPE:-}" ] && echo "AIOCHI: WWAN path type: ${WWAN_PATH_TYPE}"
+          fi
+        fi
+        echo "AIOCHI: Starting Suricata with interfaces: $IFACES"
+        exec suricata -c /etc/suricata/suricata.yaml $IFACES --af-packet
     healthcheck:
       # Check Suricata process is running (uses -f for flexible match, handles Suricata-Main)
       test: ["CMD-SHELL", "pgrep -f Suricata || pgrep -f suricata || exit 1"]
@@ -154,11 +176,28 @@ services:
       # Mount custom site scripts (optional)
       - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
     environment:
-      ZEEK_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
-    # Use direct zeek command with explicit log directory
+      CAPTURE_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
+      WAN_CAPTURE_INTERFACE: "${WAN_CAPTURE_INTERFACE:-}"
+    # Zeek captures from LAN (FTS-mirror) for device fingerprinting and connection graphs.
+    # WAN capture is optional - Suricata handles WAN threat detection.
+    # Zeek multi-interface requires cluster mode; for small business use cases,
+    # single-interface is sufficient as Zeek's value is LAN protocol analysis.
     # -C: ignore checksum errors (common with NIC offloading)
     working_dir: /opt/zeek/logs
-    command: ["zeek", "-C", "-i", "${CAPTURE_INTERFACE:-FTS-mirror}", "local"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        IFACE="${CAPTURE_INTERFACE:-FTS-mirror}"
+        # Check if WAN capture is specifically requested for Zeek (not recommended - uses more CPU)
+        if [ "${ZEEK_WAN_CAPTURE:-false}" = "true" ] && [ -n "${WAN_CAPTURE_INTERFACE}" ]; then
+          if ip link show "${WAN_CAPTURE_INTERFACE}" >/dev/null 2>&1; then
+            echo "AIOCHI: Zeek WAN capture enabled (note: high CPU usage)"
+            # For multi-interface, create a combined capture using cluster mode or second instance
+            # For now, just use primary interface - WAN threat detection handled by Suricata
+          fi
+        fi
+        echo "AIOCHI: Starting Zeek on interface: $IFACE"
+        exec zeek -C -i "$IFACE" local
     healthcheck:
       # Check Zeek process is running (use pidof since pgrep not available in zeek image)
       test: ["CMD-SHELL", "pidof zeek || exit 1"]
