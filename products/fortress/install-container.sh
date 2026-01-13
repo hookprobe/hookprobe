@@ -2589,6 +2589,17 @@ install_vlan_service() {
         return 1
     fi
 
+    # Install WAN path selector (dual-path AF_XDP/TC-BPF monitoring)
+    local wan_path_src="${DEVICES_DIR}/common/wan-path-selector.sh"
+    local wan_path_dst="$install_base/wan-path-selector.sh"
+    if [ -f "$wan_path_src" ]; then
+        cp "$wan_path_src" "$wan_path_dst"
+        chmod +x "$wan_path_dst"
+        log_info "  Installed: wan-path-selector.sh (dual-path WAN monitoring)"
+    else
+        log_warn "  wan-path-selector.sh not found - WAN monitoring will use default TC"
+    fi
+
     # Install NAC policy sync script (syncs device policies to OpenFlow after boot)
     local nac_sync_src="${DEVICES_DIR}/common/nac-policy-sync.sh"
     local nac_sync_dst="$install_base/nac-policy-sync.sh"
