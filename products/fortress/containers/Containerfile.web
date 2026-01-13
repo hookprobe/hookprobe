@@ -1,7 +1,8 @@
 # HookProbe Fortress - Flask Web Application Container
 # Self-contained with all dependencies - no system-wide pip
 #
-# Build: podman build -f Containerfile.web -t fts-web .
+# Build context: repo root (../../)
+# Build: podman-compose build web
 # Run:   podman run -d -p 8443:8443 -v /etc/hookprobe:/etc/hookprobe:ro fts-web
 #
 # Version: 5.5.0
@@ -23,7 +24,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install dependencies
 # All dependencies including psycopg2-binary and redis are in requirements.txt
-COPY web/requirements.txt /tmp/requirements.txt
+COPY products/fortress/web/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 
@@ -37,9 +38,16 @@ LABEL version="5.5.0"
 LABEL description="HookProbe Fortress Admin Portal - Self-contained Flask application"
 
 # Install runtime dependencies only
+# iputils-ping: for latency measurement via ping
+# iproute2: for network interface and route detection
+# ethtool: for link speed detection
+# iproute2 includes tc for traffic shaping (friction engine)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    iputils-ping \
+    iproute2 \
+    ethtool \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1000 fortress \
     && useradd -g fortress -u 1000 -d /app -s /sbin/nologin fortress
@@ -53,12 +61,22 @@ ENV PYTHONUNBUFFERED=1
 # Application directory
 WORKDIR /app
 
-# Copy application code
-COPY web/ /app/web/
-COPY lib/ /app/lib/
+# Copy application code (context is repo root)
+COPY products/fortress/web/ /app/web/
+COPY products/fortress/lib/ /app/lib/
+
+# Copy shared AIOCHI backend modules for Active Defenses
+# Structure: /app/shared/aiochi/backend/*.py
+# These provide: DynamicFrictionEngine, NSEGhostProbe, AttackChainPredictor,
+#                HoneypotMesh, DataGravityMonitor
+RUN mkdir -p /app/shared/aiochi/backend /app/shared/aiochi/playbooks
+COPY shared/aiochi/backend/ /app/shared/aiochi/backend/
+COPY shared/aiochi/playbooks/ /app/shared/aiochi/playbooks/
+COPY shared/aiochi/__init__.py /app/shared/aiochi/__init__.py
+RUN touch /app/shared/__init__.py
 
 # Copy gunicorn configuration
-COPY web/gunicorn.conf.py /app/gunicorn.conf.py
+COPY products/fortress/web/gunicorn.conf.py /app/gunicorn.conf.py
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/logs /app/certs && \
@@ -72,7 +90,7 @@ RUN openssl req -x509 -newkey rsa:4096 -keyout /app/certs/key.pem \
     chown fortress:fortress /app/certs/*
 
 # Copy entrypoint script
-COPY containers/entrypoint-web.sh /entrypoint.sh
+COPY products/fortress/containers/entrypoint-web.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Environment configuration

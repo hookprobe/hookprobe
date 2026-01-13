@@ -51,11 +51,332 @@ import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any
 import ipaddress
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# DEVICE TYPE CLASSIFICATION (IoT vs Personal)
+# =============================================================================
+
+class DeviceType(Enum):
+    """Device type classification for bubble coloring."""
+    PERSONAL = "personal"      # Laptops, phones, tablets, watches, headphones
+    IOT = "iot"                # Smart home devices, sensors, hubs
+    INFRASTRUCTURE = "infra"   # Routers, switches, servers
+    UNKNOWN = "unknown"
+
+    @property
+    def color(self) -> str:
+        """Get bubble visualization color for device type."""
+        return DEVICE_TYPE_COLORS.get(self, "#808080")
+
+
+# Bubble visualization colors (for UI)
+DEVICE_TYPE_COLORS = {
+    DeviceType.PERSONAL: "#4CAF50",      # Green - personal devices
+    DeviceType.IOT: "#FF9800",           # Orange - IoT devices
+    DeviceType.INFRASTRUCTURE: "#2196F3", # Blue - infrastructure
+    DeviceType.UNKNOWN: "#9E9E9E",       # Gray - unknown
+}
+
+# User bubble colors (rotating palette for different users)
+USER_BUBBLE_COLORS = [
+    "#E91E63",  # Pink - User 1 (e.g., Mom)
+    "#3F51B5",  # Indigo - User 2 (e.g., Dad)
+    "#009688",  # Teal - User 3 (e.g., Kids)
+    "#FF5722",  # Deep Orange - User 4 (e.g., Guest)
+    "#673AB7",  # Deep Purple - User 5
+    "#00BCD4",  # Cyan - User 6
+    "#795548",  # Brown - User 7
+    "#607D8B",  # Blue Gray - User 8
+]
+
+# Known IoT vendor OUIs (first 3 bytes of MAC address)
+IOT_VENDOR_OUIS = {
+    # Smart home hubs
+    "B0:FC:36": "tp-link",      # TP-Link smart devices
+    "50:C7:BF": "tp-link",
+    "60:A4:23": "tp-link",
+    "70:4F:57": "tp-link",
+    "98:DA:C4": "tp-link",
+    "C0:06:C3": "tp-link",
+    "60:32:B1": "wemo",         # Belkin WeMo
+    "B4:79:A7": "wemo",
+    "94:10:3E": "belkin",
+    "C4:41:1E": "belkin",
+    "00:17:88": "philips-hue",  # Philips Hue
+    "EC:B5:FA": "philips-hue",
+    "00:1E:06": "wemo",
+    "7C:B2:7D": "orbi",         # Netgear Orbi
+    "A4:2B:8C": "amazon-echo",  # Amazon devices
+    "FC:65:DE": "amazon",
+    "44:65:0D": "amazon",
+    "68:54:FD": "amazon",
+    "84:D6:D0": "amazon",
+    "F0:F0:A4": "amazon",
+    "18:B4:30": "nest",         # Google/Nest
+    "64:16:66": "nest",
+    "D8:EB:46": "google-home",
+    "30:FD:38": "google",
+    "F4:F5:D8": "google",
+    "54:60:09": "google",
+    "F8:0F:F9": "google",
+    "34:36:3B": "apple-home",   # Apple HomePod
+    "70:56:81": "apple-home",
+    "58:D3:49": "apple-home",
+    "1C:36:BB": "xiaomi",       # Xiaomi IoT
+    "28:6C:07": "xiaomi",
+    "64:09:80": "xiaomi",
+    "78:02:F8": "xiaomi",
+    "7C:49:EB": "xiaomi",
+    "9C:9D:7E": "xiaomi",
+    "B0:E2:35": "xiaomi",
+    "00:9E:C8": "xiaomi",
+    "04:CF:8C": "xiaomi",
+    "0C:1D:AF": "xiaomi",
+    "10:2A:B3": "xiaomi",
+    "34:CE:00": "xiaomi",
+    "3C:BD:D8": "xiaomi",
+    "5C:E5:0C": "xiaomi",
+    "74:23:44": "xiaomi",
+    "7C:1C:4E": "xiaomi",
+    "E4:AA:EC": "tuya",         # Tuya IoT platform
+    "D8:1F:12": "tuya",
+    "10:D5:61": "tuya",
+    "24:62:AB": "tuya",
+    "44:59:E3": "tuya",
+    "50:02:91": "tuya",
+    "58:8E:81": "tuya",
+    "68:57:2D": "tuya",
+    "7C:F6:66": "tuya",
+    "84:0D:8E": "tuya",
+    "90:8D:78": "espressif",    # ESP32/ESP8266 (IoT maker)
+    "30:AE:A4": "espressif",
+    "84:CC:A8": "espressif",
+    "24:B2:DE": "espressif",
+    "5C:CF:7F": "espressif",
+    "A4:CF:12": "espressif",
+    "BC:DD:C2": "espressif",
+    "60:01:94": "espressif",
+    "AC:D0:74": "espressif",
+    "C4:4F:33": "espressif",
+    "3C:71:BF": "espressif",
+    "B4:E6:2D": "espressif",
+    "CC:50:E3": "espressif",
+    "8C:AA:B5": "espressif",
+    "50:8C:B1": "sonoff",       # Sonoff/ITEAD
+    "D8:BF:C0": "sonoff",
+    "5C:CF:7F": "sonoff",
+    "2C:F4:32": "sonoff",
+    "08:3A:F2": "wyze",         # Wyze devices
+    "2C:AA:8E": "wyze",
+    "D0:3F:27": "wyze",
+    "78:8C:B5": "ring",         # Ring devices
+    "B0:09:DA": "ring",
+    "EC:FA:5C": "ring",
+    "00:62:6E": "ecobee",       # Ecobee thermostat
+    "44:61:32": "ecobee",
+    # Smart scales, fitness
+    "88:C6:26": "withings",     # Withings scales
+    "00:24:E4": "withings",
+}
+
+# Known personal device vendor OUIs
+PERSONAL_VENDOR_OUIS = {
+    # Apple devices (typically personal)
+    "00:03:93": "apple",
+    "00:05:02": "apple",
+    "00:0A:27": "apple",
+    "00:0A:95": "apple",
+    "00:0D:93": "apple",
+    "00:10:FA": "apple",
+    "00:11:24": "apple",
+    "00:14:51": "apple",
+    "00:16:CB": "apple",
+    "00:17:F2": "apple",
+    "00:19:E3": "apple",
+    "00:1B:63": "apple",
+    "00:1C:B3": "apple",
+    "00:1D:4F": "apple",
+    "00:1E:52": "apple",
+    "00:1E:C2": "apple",
+    "00:1F:5B": "apple",
+    "00:1F:F3": "apple",
+    "00:21:E9": "apple",
+    "00:22:41": "apple",
+    "00:23:12": "apple",
+    "00:23:32": "apple",
+    "00:23:6C": "apple",
+    "00:23:DF": "apple",
+    "00:24:36": "apple",
+    "00:25:00": "apple",
+    "00:25:4B": "apple",
+    "00:25:BC": "apple",
+    "00:26:08": "apple",
+    "00:26:4A": "apple",
+    "00:26:B0": "apple",
+    "00:26:BB": "apple",
+    "00:C6:10": "apple",
+    "04:0C:CE": "apple",
+    "04:15:52": "apple",
+    "04:1E:64": "apple",
+    "04:26:65": "apple",
+    "04:48:9A": "apple",
+    "04:4B:ED": "apple",
+    "04:52:F3": "apple",
+    "04:54:53": "apple",
+    "04:69:F8": "apple",
+    "04:D3:CF": "apple",
+    "04:DB:56": "apple",
+    "04:E5:36": "apple",
+    "04:F1:3E": "apple",
+    "04:F7:E4": "apple",
+    # Samsung phones/tablets
+    "00:07:AB": "samsung",
+    "00:09:18": "samsung",
+    "00:0D:AE": "samsung",
+    "00:12:47": "samsung",
+    "00:12:FB": "samsung",
+    "00:13:77": "samsung",
+    "00:15:99": "samsung",
+    "00:15:B9": "samsung",
+    "00:16:32": "samsung",
+    "00:16:6B": "samsung",
+    "00:16:6C": "samsung",
+    "00:16:DB": "samsung",
+    "00:17:C9": "samsung",
+    "00:17:D5": "samsung",
+    "00:18:AF": "samsung",
+    "00:1A:8A": "samsung",
+    "00:1B:98": "samsung",
+    "00:1C:43": "samsung",
+    "00:1D:25": "samsung",
+    "00:1D:F6": "samsung",
+    "00:1E:7D": "samsung",
+    "00:1F:CC": "samsung",
+    "00:1F:CD": "samsung",
+    "00:21:19": "samsung",
+    "00:21:4C": "samsung",
+    "00:21:D1": "samsung",
+    "00:21:D2": "samsung",
+    # Google Pixel
+    "3C:28:6D": "google-pixel",
+    "F4:F5:E8": "google-pixel",
+    "94:EB:2C": "google-pixel",
+}
+
+
+def get_oui(mac: str) -> str:
+    """Extract OUI (first 3 bytes) from MAC address."""
+    mac = mac.upper().replace('-', ':')
+    parts = mac.split(':')
+    if len(parts) >= 3:
+        return ':'.join(parts[:3])
+    return ""
+
+
+def classify_device_type(
+    mac: str,
+    cloud_traffic_ratio: float = 0.0,
+    d2d_connection_weight: float = 0.0,
+    services: Optional[Set[str]] = None
+) -> Tuple[DeviceType, float]:
+    """
+    Classify device as Personal vs IoT based on multiple heuristics.
+
+    Algorithm (from Trio+ consultation):
+    1. OUI lookup - Known IoT/Personal vendors
+    2. Cloud traffic ratio - IoT devices talk mostly to cloud
+    3. D2D weight - Personal devices have high D2D communication
+    4. Service analysis - mDNS services reveal device type
+
+    Args:
+        mac: Device MAC address
+        cloud_traffic_ratio: Ratio of cloud vs local traffic (0-1)
+        d2d_connection_weight: Total D2D affinity weight
+        services: Set of mDNS service types observed
+
+    Returns:
+        Tuple of (DeviceType, confidence 0-1)
+    """
+    oui = get_oui(mac)
+    score_personal = 0.0
+    score_iot = 0.0
+    confidence_factors = 0
+
+    # 1. OUI lookup (weight: 0.35)
+    if oui in IOT_VENDOR_OUIS:
+        score_iot += 0.35
+        confidence_factors += 1
+        logger.debug(f"OUI {oui} matches IoT vendor: {IOT_VENDOR_OUIS[oui]}")
+    elif oui in PERSONAL_VENDOR_OUIS:
+        score_personal += 0.35
+        confidence_factors += 1
+        logger.debug(f"OUI {oui} matches Personal vendor: {PERSONAL_VENDOR_OUIS[oui]}")
+
+    # 2. Cloud traffic ratio (weight: 0.25)
+    # IoT devices typically have 70%+ cloud traffic
+    if cloud_traffic_ratio > 0:
+        confidence_factors += 1
+        if cloud_traffic_ratio > 0.7:
+            score_iot += 0.25 * cloud_traffic_ratio
+        elif cloud_traffic_ratio < 0.3:
+            score_personal += 0.25 * (1 - cloud_traffic_ratio)
+        else:
+            # Ambiguous - slight lean to personal
+            score_personal += 0.1
+
+    # 3. D2D connection weight (weight: 0.25)
+    # Personal devices communicate with each other (AirDrop, Handoff)
+    # IoT devices talk to hub/cloud, not to user devices
+    if d2d_connection_weight > 0:
+        confidence_factors += 1
+        if d2d_connection_weight > 0.5:
+            score_personal += 0.25 * min(d2d_connection_weight, 1.0)
+        elif d2d_connection_weight < 0.1:
+            score_iot += 0.20
+
+    # 4. Service analysis (weight: 0.15)
+    if services:
+        confidence_factors += 1
+        personal_services = {
+            '_airplay', '_airdrop', '_spotify-connect', '_companion-link',
+            '_presence', '_ssh', '_sftp-ssh', '_smb', '_afpovertcp',
+            '_raop', '_touch-able', '_homekit', '_sleep-proxy'
+        }
+        iot_services = {
+            '_hap', '_hue', '_matter', '_matterc', '_coap', '_mqtt',
+            '_zigbee', '_zwave', '_tuya', '_miio', '_smartthings'
+        }
+
+        personal_match = len(services & personal_services)
+        iot_match = len(services & iot_services)
+
+        if personal_match > iot_match:
+            score_personal += 0.15 * min(personal_match / 3, 1.0)
+        elif iot_match > personal_match:
+            score_iot += 0.15 * min(iot_match / 2, 1.0)
+
+    # Calculate confidence based on evidence
+    confidence = min(0.95, 0.5 + (confidence_factors * 0.15))
+
+    # Determine type
+    if score_personal > score_iot and score_personal > 0.2:
+        return DeviceType.PERSONAL, confidence
+    elif score_iot > score_personal and score_iot > 0.2:
+        return DeviceType.IOT, confidence
+    else:
+        return DeviceType.UNKNOWN, max(0.3, confidence - 0.2)
+
+
+def get_user_bubble_color(bubble_index: int) -> str:
+    """Get a unique color for a user bubble."""
+    return USER_BUBBLE_COLORS[bubble_index % len(USER_BUBBLE_COLORS)]
 
 # Optional ClickHouse integration
 try:
@@ -68,6 +389,9 @@ except ImportError:
 # Zeek log locations
 ZEEK_LOG_DIR = Path('/var/log/zeek/current')
 ZEEK_CONN_LOG = ZEEK_LOG_DIR / 'conn.log'
+
+# dnsmasq leases file for IP→MAC mapping (container-friendly)
+DNSMASQ_LEASES = Path('/var/lib/misc/dnsmasq.leases')
 
 # Database for D2D relationship storage
 D2D_DB = Path('/var/lib/hookprobe/d2d_graph.db')
@@ -167,6 +491,38 @@ class D2DConnection:
 
 
 @dataclass
+class D2DMetrics:
+    """
+    Normalized D2D metrics for enhanced affinity scoring.
+
+    Used by the Trio+ recommended formula:
+    w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap
+
+    All values normalized to 0-1 range.
+    """
+    frequency: float = 0.0      # Normalized connection frequency (f̂)
+    bytes_exchanged: float = 0.0  # Normalized bytes (b̂)
+    recency: float = 0.0        # Recency score (r̂), 1.0 = just now
+    symmetry: float = 0.0       # Bidirectional traffic ratio
+    service_overlap: float = 0.0  # Service diversity score
+
+    # Additional metrics for bubble suggestion
+    discovery_score: float = 0.0   # mDNS discovery correlation
+    temporal_score: float = 0.0    # Wake/sleep pattern correlation
+
+    def to_dict(self) -> Dict:
+        return {
+            'frequency': round(self.frequency, 3),
+            'bytes': round(self.bytes_exchanged, 3),
+            'recency': round(self.recency, 3),
+            'symmetry': round(self.symmetry, 3),
+            'overlap': round(self.service_overlap, 3),
+            'discovery': round(self.discovery_score, 3),
+            'temporal': round(self.temporal_score, 3),
+        }
+
+
+@dataclass
 class DeviceRelationship:
     """Relationship between two devices based on communication."""
     mac_a: str
@@ -192,61 +548,157 @@ class DeviceRelationship:
     discovery_hits: int = 0       # mDNS query/response pairs
     temporal_sync_score: float = 0.0  # Join/leave timing correlation
 
+    # Device classification cache
+    device_type_a: Optional[str] = None
+    device_type_b: Optional[str] = None
+
+    # Assigned bubble color (for visualization)
+    bubble_color: Optional[str] = None
+
+    def get_normalized_metrics(self) -> D2DMetrics:
+        """
+        Calculate normalized D2D metrics for affinity scoring.
+
+        Returns metrics normalized to 0-1 scale for the Trio+ formula.
+        """
+        # Frequency normalization (log scale, max ~1000 connections/day = 1.0)
+        freq_norm = min(1.0, self.connection_count / 100) if self.connection_count > 0 else 0.0
+
+        # Bytes normalization (log scale, 100MB = 1.0)
+        bytes_norm = 0.0
+        if self.total_bytes > 0:
+            import math
+            # Log scale: 1KB = 0.1, 1MB = 0.5, 100MB = 1.0
+            bytes_norm = min(1.0, math.log10(self.total_bytes + 1) / 8)
+
+        # Recency calculation (exponential decay)
+        recency = 0.0
+        if self.last_seen:
+            age_hours = (datetime.now() - self.last_seen).total_seconds() / 3600
+            # Exponential decay: half-life of 12 hours
+            recency = min(1.0, 2 ** (-age_hours / 12))
+
+        # Symmetry (bidirectional ratio)
+        symmetry = 0.0
+        if self.connection_count > 0:
+            symmetry = self.bidirectional_count / self.connection_count
+
+        # Service overlap (diversity score)
+        overlap = 0.0
+        if self.services_used:
+            # High-affinity services boost the score
+            ha_count = self.high_affinity_count
+            total_services = len(self.services_used)
+            # Normalize: 5+ services with some high-affinity = 1.0
+            overlap = min(1.0, (total_services * 0.15) + (ha_count * 0.25))
+
+        # Discovery score (mDNS)
+        discovery = min(1.0, self.discovery_hits * 0.1) if self.discovery_hits > 0 else 0.0
+
+        return D2DMetrics(
+            frequency=freq_norm,
+            bytes_exchanged=bytes_norm,
+            recency=recency,
+            symmetry=symmetry,
+            service_overlap=overlap,
+            discovery_score=discovery,
+            temporal_score=self.temporal_sync_score,
+        )
+
     def calculate_affinity_score(self) -> float:
         """
-        Calculate D2D affinity score using weighted algorithm.
+        Calculate D2D affinity score using Trio+ recommended weighted algorithm.
 
-        Formula: S_aff = (Discovery Hits × 10) + (D2D Flows × 5) + (Temporal Sync × 2)
+        Formula (from Devstral + Nemotron consultation):
+        w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap + ζ·discovery + η·temporal
 
-        Normalized to 0.0 - 1.0 scale.
+        Weights:
+        - α = 0.20 (frequency - how often they communicate)
+        - β = 0.15 (bytes - volume of data exchanged)
+        - γ = 0.15 (recency - recent activity counts more)
+        - δ = 0.15 (symmetry - bidirectional = same user)
+        - ε = 0.10 (overlap - service diversity)
+        - ζ = 0.15 (discovery - mDNS browsing correlation)
+        - η = 0.10 (temporal - wake/sleep together)
 
-        Components:
-        - Discovery Hits: mDNS query/response exchanges (strongest indicator)
-        - D2D Flows: Direct packet exchanges (AirPlay, sync, file sharing)
-        - Temporal Sync: Devices join/leave network together (physical proximity)
+        Returns:
+            Normalized affinity score (0.0 - 1.0)
         """
-        # Raw affinity score (unbounded)
-        raw_score = 0.0
+        metrics = self.get_normalized_metrics()
 
-        # Discovery Hits (weight: 10) - mDNS browsing indicates same ecosystem
-        # Each mDNS exchange is a strong indicator
-        raw_score += self.discovery_hits * 10
+        # Trio+ recommended weights for D2D bubble detection
+        WEIGHT_FREQUENCY = 0.20
+        WEIGHT_BYTES = 0.15
+        WEIGHT_RECENCY = 0.15
+        WEIGHT_SYMMETRY = 0.15
+        WEIGHT_OVERLAP = 0.10
+        WEIGHT_DISCOVERY = 0.15
+        WEIGHT_TEMPORAL = 0.10
 
-        # D2D Flows (weight: 5) - Direct communication
-        # High-affinity services count more
-        d2d_score = self.connection_count + (self.high_affinity_count * 2)
-        raw_score += d2d_score * 5
+        # Calculate weighted sum
+        score = (
+            WEIGHT_FREQUENCY * metrics.frequency +
+            WEIGHT_BYTES * metrics.bytes_exchanged +
+            WEIGHT_RECENCY * metrics.recency +
+            WEIGHT_SYMMETRY * metrics.symmetry +
+            WEIGHT_OVERLAP * metrics.service_overlap +
+            WEIGHT_DISCOVERY * metrics.discovery_score +
+            WEIGHT_TEMPORAL * metrics.temporal_score
+        )
 
-        # Temporal Sync (weight: 2) - Join/leave together
-        # temporal_sync_score is already 0-1, scale appropriately
-        raw_score += self.temporal_sync_score * 20  # Scale up before weighting
+        # High-affinity service bonus (AirPlay, AirDrop, etc.)
+        # These are strong indicators of same-user ownership
+        if self.high_affinity_count >= 3:
+            score = min(1.0, score + 0.15)
+        elif self.high_affinity_count >= 1:
+            score = min(1.0, score + 0.08)
 
-        # Bidirectional bonus - devices that talk both ways are strongly linked
-        if self.connection_count > 0:
-            bidir_ratio = self.bidirectional_count / self.connection_count
-            raw_score += bidir_ratio * 15
+        # Personal device bonus (from device type classification)
+        # Two personal devices communicating = likely same user
+        if self.device_type_a == 'personal' and self.device_type_b == 'personal':
+            score = min(1.0, score + 0.10)
 
-        # Service diversity bonus - multiple services = stronger relationship
-        service_count = len(self.services_used)
-        raw_score += min(service_count, 5) * 3
+        return min(1.0, max(0.0, score))
 
-        # Recency decay - recent activity counts more
-        recency_multiplier = 1.0
-        if self.last_seen:
-            age = datetime.now() - self.last_seen
-            if age > timedelta(hours=24):
-                recency_multiplier = 0.5
-            elif age > timedelta(hours=1):
-                recency_multiplier = 0.8
+    def get_bubble_suggestion(self) -> Dict:
+        """
+        Get bubble suggestion for UI display.
 
-        raw_score *= recency_multiplier
+        Returns dict with:
+        - should_suggest: bool - whether to suggest same bubble
+        - confidence: float - confidence level (0-1)
+        - reason: str - human-readable reason
+        - color: str - suggested bubble color
+        """
+        affinity = self.calculate_affinity_score()
+        metrics = self.get_normalized_metrics()
 
-        # Normalize to 0-1 scale
-        # Threshold: 100 points = definitely same user (1.0)
-        # 50 points = high confidence (0.5+)
-        normalized = min(raw_score / 100, 1.0)
+        # Determine suggestion
+        should_suggest = affinity >= 0.4  # 40% threshold for suggestion
+        confidence = affinity
 
-        return normalized
+        # Build reason
+        reasons = []
+        if metrics.frequency > 0.3:
+            reasons.append("communicate frequently")
+        if metrics.symmetry > 0.5:
+            reasons.append("bidirectional traffic")
+        if metrics.discovery_score > 0.3:
+            reasons.append("discover each other via mDNS")
+        if metrics.temporal_score > 0.4:
+            reasons.append("wake/sleep together")
+        if self.high_affinity_count > 0:
+            reasons.append("share files/media")
+
+        reason = "Devices " + ", ".join(reasons) if reasons else "Low affinity detected"
+
+        return {
+            'should_suggest': should_suggest,
+            'confidence': round(confidence, 2),
+            'reason': reason,
+            'color': self.bubble_color or get_user_bubble_color(0),
+            'metrics': metrics.to_dict(),
+        }
 
 
 @dataclass
@@ -441,7 +893,53 @@ class ConnectionGraphAnalyzer:
             conn.commit()
 
     def _load_ip_mac_mapping(self):
-        """Load IP to MAC mapping from ARP table."""
+        """
+        Load IP to MAC mapping from multiple sources.
+
+        Priority order:
+        1. dnsmasq leases file (works in containers, authoritative for DHCP)
+        2. ARP table (fallback, requires host network access)
+        """
+        # First try dnsmasq leases (container-friendly, authoritative)
+        self._load_from_dnsmasq_leases()
+
+        # Fallback to ARP table if no mappings found
+        if not self.ip_to_mac:
+            self._load_from_arp_table()
+
+        logger.debug(f"Loaded {len(self.ip_to_mac)} IP→MAC mappings")
+
+    def _load_from_dnsmasq_leases(self):
+        """
+        Load IP→MAC mappings from dnsmasq leases file.
+
+        Format: timestamp mac_address ip_address hostname client_id
+        Example: 1768320904 40:ed:cf:82:62:6b 10.200.0.13 hooksound 01:40:ed:cf:82:62:6b
+        """
+        try:
+            if not DNSMASQ_LEASES.exists():
+                logger.debug(f"dnsmasq leases file not found: {DNSMASQ_LEASES}")
+                return
+
+            with open(DNSMASQ_LEASES, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 3:
+                        # Format: timestamp mac ip [hostname] [client_id]
+                        mac = parts[1].upper()
+                        ip = parts[2]
+
+                        # Validate IP is in LAN range
+                        if self._is_lan_ip(ip):
+                            self.ip_to_mac[ip] = mac
+
+            logger.debug(f"Loaded {len(self.ip_to_mac)} IP→MAC from dnsmasq leases")
+
+        except Exception as e:
+            logger.debug(f"Could not load from dnsmasq leases: {e}")
+
+    def _load_from_arp_table(self):
+        """Load IP→MAC mappings from ARP table (fallback)."""
         try:
             result = subprocess.run(
                 ['ip', 'neigh', 'show'],
@@ -459,9 +957,9 @@ class ConnectionGraphAnalyzer:
                         mac = parts[mac_idx].upper()
                         self.ip_to_mac[ip] = mac
 
-            logger.debug(f"Loaded {len(self.ip_to_mac)} IP→MAC mappings")
+            logger.debug(f"Loaded {len(self.ip_to_mac)} IP→MAC from ARP table")
         except Exception as e:
-            logger.warning(f"Failed to load IP→MAC mapping: {e}")
+            logger.debug(f"Could not load from ARP table: {e}")
 
     def _is_lan_ip(self, ip: str) -> bool:
         """Check if IP is in LAN range."""
@@ -1289,6 +1787,131 @@ class ConnectionGraphAnalyzer:
         logger.info(f"Found {len(clusters)} D2D clusters")
         return clusters
 
+    def classify_device(self, mac: str) -> Tuple[DeviceType, float]:
+        """
+        Classify a device as Personal/IoT/Infrastructure.
+
+        Uses D2D communication patterns and OUI lookup.
+
+        Args:
+            mac: Device MAC address
+
+        Returns:
+            Tuple of (DeviceType, confidence)
+        """
+        mac = mac.upper()
+
+        # Calculate D2D weight for this device
+        d2d_weight = 0.0
+        services = set()
+
+        for key, rel in self.relationships.items():
+            if mac in key:
+                d2d_weight += rel.calculate_affinity_score()
+                services.update(rel.services_used.keys())
+
+        # Use the classification function
+        return classify_device_type(
+            mac=mac,
+            d2d_connection_weight=d2d_weight,
+            services=services
+        )
+
+    def get_bubble_suggestions(self, min_affinity: float = 0.4) -> List[Dict]:
+        """
+        Get bubble suggestions for the dashboard UI.
+
+        Returns list of device pairs that should be in the same bubble,
+        sorted by confidence.
+
+        Args:
+            min_affinity: Minimum affinity threshold for suggestions
+
+        Returns:
+            List of suggestion dicts with device pairs and reasons
+        """
+        suggestions = []
+
+        for key, rel in self.relationships.items():
+            suggestion = rel.get_bubble_suggestion()
+
+            if suggestion['confidence'] >= min_affinity:
+                # Add device info
+                suggestion['mac_a'] = rel.mac_a
+                suggestion['mac_b'] = rel.mac_b
+
+                # Classify devices
+                type_a, conf_a = self.classify_device(rel.mac_a)
+                type_b, conf_b = self.classify_device(rel.mac_b)
+
+                suggestion['device_type_a'] = type_a.value
+                suggestion['device_type_b'] = type_b.value
+                suggestion['type_confidence_a'] = round(conf_a, 2)
+                suggestion['type_confidence_b'] = round(conf_b, 2)
+
+                # Only suggest same bubble for personal devices
+                if type_a == DeviceType.PERSONAL and type_b == DeviceType.PERSONAL:
+                    suggestion['bubble_type'] = 'user'
+                    suggestion['should_suggest'] = True
+                elif type_a == DeviceType.IOT or type_b == DeviceType.IOT:
+                    suggestion['bubble_type'] = 'iot'
+                    # IoT devices go to IoT bubble, not user bubble
+                    suggestion['should_suggest'] = False
+                    suggestion['reason'] = "IoT device detected - suggest IoT bubble instead"
+                else:
+                    suggestion['bubble_type'] = 'unknown'
+
+                suggestions.append(suggestion)
+
+        # Sort by confidence (highest first)
+        suggestions.sort(key=lambda x: x['confidence'], reverse=True)
+
+        return suggestions
+
+    def get_device_colors(self) -> Dict[str, str]:
+        """
+        Get color assignments for all devices based on type.
+
+        Returns dict mapping MAC address to hex color.
+        """
+        colors = {}
+
+        # Get all unique MACs
+        all_macs = set()
+        for key in self.relationships.keys():
+            all_macs.add(key[0])
+            all_macs.add(key[1])
+
+        for mac in all_macs:
+            device_type, _ = self.classify_device(mac)
+            colors[mac] = device_type.color
+
+        return colors
+
+    def assign_bubble_colors(self) -> Dict[int, str]:
+        """
+        Assign colors to D2D clusters/bubbles.
+
+        Returns dict mapping cluster index to hex color.
+        """
+        clusters = self.find_d2d_clusters()
+        bubble_colors = {}
+
+        for i, cluster in enumerate(clusters):
+            # Use rotating user bubble colors
+            color = get_user_bubble_color(i)
+            bubble_colors[i] = color
+
+            # Update relationships with assigned color
+            for mac_a in cluster.devices:
+                for mac_b in cluster.devices:
+                    if mac_a < mac_b:
+                        key = self._normalize_mac_pair(mac_a, mac_b)
+                        if key in self.relationships:
+                            self.relationships[key].bubble_color = color
+
+        return bubble_colors
+
     def get_stats(self) -> Dict:
         """Get D2D graph statistics."""
         total_connections = sum(r.connection_count for r in self.relationships.values())
@@ -1303,17 +1926,40 @@ class ConnectionGraphAnalyzer:
             if r.temporal_sync_score > 0.3
         )
 
+        # Device type breakdown
+        device_types = {'personal': 0, 'iot': 0, 'unknown': 0}
+        all_macs = set()
+        for key in self.relationships.keys():
+            all_macs.add(key[0])
+            all_macs.add(key[1])
+
+        for mac in all_macs:
+            dtype, _ = self.classify_device(mac)
+            if dtype == DeviceType.PERSONAL:
+                device_types['personal'] += 1
+            elif dtype == DeviceType.IOT:
+                device_types['iot'] += 1
+            else:
+                device_types['unknown'] += 1
+
+        # Bubble suggestions count
+        suggestions = self.get_bubble_suggestions(min_affinity=0.4)
+        personal_suggestions = [s for s in suggestions if s.get('bubble_type') == 'user']
+
         return {
             'total_relationships': len(self.relationships),
             'total_connections': total_connections,
             'high_affinity_pairs': high_affinity,
-            'unique_devices': len(set(
-                mac for key in self.relationships.keys() for mac in key
-            )),
+            'unique_devices': len(all_macs),
             # Temporal stats
             'temporal_patterns_tracked': len(self._temporal_patterns),
             'temporal_high_affinity_pairs': temporal_pairs,
             'buffered_events': len(self._temporal_event_buffer),
+            # Device classification
+            'device_types': device_types,
+            # Bubble suggestions
+            'bubble_suggestions': len(personal_suggestions),
+            'total_suggestions': len(suggestions),
         }
 
 
