@@ -3628,6 +3628,7 @@ AIOCHIENV
             # Track which images were built successfully (default: false)
             AIOCHI_IDENTITY_BUILT=false
             AIOCHI_LOGSHIPPER_BUILT=false
+            AIOCHI_BUBBLE_BUILT=false
 
             # Verify required files exist before building
             log_info "    Verifying AIOCHI build context..."
@@ -3675,6 +3676,25 @@ AIOCHIENV
                         fi
                     else
                         log_warn "    ✗ Containerfile.logshipper appears invalid (no FROM statement)"
+                    fi
+                fi
+
+                # Build bubble-manager (ecosystem device grouping)
+                local containerfile_bubble="${aiochi_containers}/Containerfile.bubble"
+                if [ -f "$containerfile_bubble" ]; then
+                    log_info "    Building bubble-manager..."
+                    if head -20 "$containerfile_bubble" | grep -q "^FROM "; then
+                        if podman build --format docker \
+                            -f "$containerfile_bubble" \
+                            -t localhost/aiochi-bubble:latest \
+                            "$aiochi_parent" 2>&1; then
+                            log_info "    ✓ bubble-manager built successfully"
+                            AIOCHI_BUBBLE_BUILT=true
+                        else
+                            log_warn "    ✗ Failed to build bubble-manager (container will be skipped)"
+                        fi
+                    else
+                        log_warn "    ✗ Containerfile.bubble appears invalid (no FROM statement)"
                     fi
                 fi
             fi
@@ -3915,7 +3935,36 @@ AIOCHIENV
                 AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-logshipper(build-failed)"
             fi
 
-            # 7. AI Tier - Ollama (OPTIONAL: --aiochi-ai or --aiochi-full)
+            # 7. Bubble Manager (ecosystem device grouping)
+            # Only start if the image was built successfully
+            if [ "${AIOCHI_BUBBLE_BUILT:-false}" = "true" ]; then
+                start_aiochi_container "aiochi-bubble" "Bubble Manager" \
+                    --name aiochi-bubble \
+                    --restart unless-stopped \
+                    --network aiochi-internal \
+                    --ip 172.20.210.25 \
+                    -p 127.0.0.1:8070:8070 \
+                    --cap-add NET_ADMIN \
+                    -v aiochi-zeek-logs:/opt/zeek/logs:ro \
+                    -v aiochi-bubble-data:/var/lib/aiochi \
+                    -v /run/openvswitch:/run/openvswitch \
+                    -v /etc/hookprobe:/etc/hookprobe:ro \
+                    -e CLICKHOUSE_HOST=172.20.210.10 \
+                    -e CLICKHOUSE_PORT=8123 \
+                    -e CLICKHOUSE_DB=aiochi \
+                    -e CLICKHOUSE_USER=aiochi \
+                    -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
+                    -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
+                    -e ZEEK_DNS_LOG=/opt/zeek/logs/current/dns.log \
+                    -e ZEEK_CONN_LOG=/opt/zeek/logs/current/conn.log \
+                    -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+                    localhost/aiochi-bubble:latest
+            else
+                echo "    [SKIP] Bubble Manager (image build failed)"
+                AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-bubble(build-failed)"
+            fi
+
+            # 8. AI Tier - Ollama (OPTIONAL: --aiochi-ai or --aiochi-full)
             # When not installed, AIOCHI uses template-based narratives instead
             if [ "${AIOCHI_AI:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
                 log_info ""
