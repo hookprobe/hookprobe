@@ -505,6 +505,8 @@ uninstall_staged() {
 AUTOPILOT_DB="/var/lib/hookprobe/autopilot.db"
 FINGERBANK_CONFIG="${CONFIG_DIR}/fingerbank.json"
 FINGERBANK_API_URL="https://api.fingerbank.org"
+OPENROUTER_CONFIG="${CONFIG_DIR}/openrouter.json"
+OPENROUTER_API_URL="https://openrouter.ai/api/v1"
 
 # ============================================================
 # FINGERBANK MANAGEMENT
@@ -714,6 +716,265 @@ with open('$FINGERBANK_CONFIG', 'w') as f:
     json.dump(config, f, indent=2)
 "
     log_info "Fingerbank API disabled"
+}
+
+# ============================================================
+# OPENROUTER MANAGEMENT
+# ============================================================
+openrouter_set_key() {
+    local api_key="${1:-}"
+
+    if [ -z "$api_key" ]; then
+        log_error "API key required"
+        echo ""
+        echo "Usage: fortress-ctl openrouter set-api-key <your-api-key>"
+        echo ""
+        echo "Get your API key:"
+        echo "  1. Visit https://openrouter.ai/keys"
+        echo "  2. Sign up or log in"
+        echo "  3. Create a new API key"
+        echo ""
+        echo "Free models available (no credit card required):"
+        echo "  - google/gemma-3-27b-it:free"
+        echo "  - mistralai/devstral-2512:free"
+        echo "  - google/gemini-2.0-flash-exp:free"
+        echo ""
+        exit 1
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+
+    # Test API key first
+    log_substep "Testing API key..."
+    local test_result
+    test_result=$(curl -s -o /dev/null -w "%{http_code}" -m 10 --connect-timeout 5 \
+        -H "Authorization: Bearer ${api_key}" \
+        -H "Content-Type: application/json" \
+        "${OPENROUTER_API_URL}/models" 2>/dev/null) || test_result="000"
+
+    if [ "$test_result" = "200" ]; then
+        log_info "API key validated successfully"
+    elif [ "$test_result" = "401" ]; then
+        log_error "Invalid API key"
+        exit 1
+    elif [ "$test_result" = "403" ]; then
+        log_error "API key forbidden - key may be revoked"
+        exit 1
+    else
+        log_warn "Could not verify API key (HTTP $test_result) - storing anyway"
+    fi
+
+    # Save API key
+    cat > "$OPENROUTER_CONFIG" << EOF
+{
+    "api_key": "${api_key}",
+    "model": "google/gemma-3-27b-it:free",
+    "enabled": true,
+    "created_at": "$(date -Iseconds)"
+}
+EOF
+    chmod 600 "$OPENROUTER_CONFIG"
+
+    # Also update fortress.conf for container environment variable
+    if [ -f "${CONFIG_DIR}/fortress.conf" ]; then
+        if grep -q "^OPENROUTER_API_KEY=" "${CONFIG_DIR}/fortress.conf"; then
+            sed -i "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=\"${api_key}\"|" "${CONFIG_DIR}/fortress.conf"
+        else
+            echo "OPENROUTER_API_KEY=\"${api_key}\"" >> "${CONFIG_DIR}/fortress.conf"
+        fi
+    fi
+
+    log_info "OpenRouter API key configured"
+    log_info "Config saved to: $OPENROUTER_CONFIG"
+    echo ""
+    echo "AIOCHI will now use OpenRouter for AI narratives."
+    echo "Default model: google/gemma-3-27b-it:free"
+    echo ""
+    echo "To apply changes, restart AIOCHI containers:"
+    echo "  cd /opt/hookprobe/shared/aiochi/containers && sudo podman-compose -f podman-compose.aiochi.yml up -d"
+}
+
+openrouter_status() {
+    log_step "OpenRouter API Status"
+    echo ""
+
+    if [ ! -f "$OPENROUTER_CONFIG" ]; then
+        echo -e "  Status:  ${RED}Not configured${NC}"
+        echo ""
+        echo "To enable OpenRouter for AI narratives:"
+        echo "  fortress-ctl openrouter set-api-key <your-api-key>"
+        echo ""
+        echo "Get your API key at:"
+        echo "  https://openrouter.ai/keys"
+        echo ""
+        return
+    fi
+
+    # Read config
+    local api_key enabled model
+    api_key=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('api_key', '')[:12] + '...')" 2>/dev/null)
+    enabled=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('enabled', False))" 2>/dev/null)
+    model=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('model', 'not set'))" 2>/dev/null)
+
+    if [ "$enabled" = "True" ]; then
+        echo -e "  Status:   ${GREEN}Enabled${NC}"
+    else
+        echo -e "  Status:   ${YELLOW}Disabled${NC}"
+    fi
+    echo "  API Key:  ${api_key}"
+    echo "  Model:    ${model}"
+    echo ""
+
+    # Test API connectivity
+    log_substep "Testing API connectivity..."
+    local test_api_key
+    test_api_key=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('api_key', ''))" 2>/dev/null)
+
+    if [ -n "$test_api_key" ]; then
+        local test_result
+        test_result=$(curl -s -o /dev/null -w "%{http_code}" -m 10 --connect-timeout 5 \
+            -H "Authorization: Bearer ${test_api_key}" \
+            -H "Content-Type: application/json" \
+            "${OPENROUTER_API_URL}/models" 2>/dev/null) || test_result="000"
+
+        case "$test_result" in
+            200) echo -e "  API Test: ${GREEN}OK${NC}" ;;
+            401) echo -e "  API Test: ${RED}Invalid API key${NC}" ;;
+            403) echo -e "  API Test: ${RED}API key forbidden${NC}" ;;
+            429) echo -e "  API Test: ${YELLOW}Rate limited${NC}" ;;
+            000) echo -e "  API Test: ${RED}Connection failed${NC}" ;;
+            *)   echo -e "  API Test: ${YELLOW}HTTP $test_result${NC}" ;;
+        esac
+    fi
+    echo ""
+}
+
+openrouter_test() {
+    local prompt="${1:-Hello, please respond with a short greeting.}"
+
+    log_step "Testing OpenRouter API"
+    echo ""
+
+    if [ ! -f "$OPENROUTER_CONFIG" ]; then
+        log_error "OpenRouter not configured. Run: fortress-ctl openrouter set-api-key <key>"
+        exit 1
+    fi
+
+    local api_key model
+    api_key=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('api_key', ''))" 2>/dev/null)
+    model=$(python3 -c "import json; print(json.load(open('$OPENROUTER_CONFIG')).get('model', 'google/gemma-3-27b-it:free'))" 2>/dev/null)
+
+    if [ -z "$api_key" ]; then
+        log_error "No API key found in configuration"
+        exit 1
+    fi
+
+    log_substep "Querying model: $model"
+    log_substep "Prompt: $prompt"
+    echo ""
+
+    local response
+    response=$(curl -sf "${OPENROUTER_API_URL}/chat/completions" \
+        -H "Authorization: Bearer ${api_key}" \
+        -H "Content-Type: application/json" \
+        -H "HTTP-Referer: https://hookprobe.com" \
+        -H "X-Title: HookProbe Fortress" \
+        -d "{
+            \"model\": \"${model}\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"${prompt}\"}],
+            \"max_tokens\": 100
+        }" 2>/dev/null)
+
+    if [ -z "$response" ]; then
+        log_error "API query failed"
+        exit 1
+    fi
+
+    echo "API Response:"
+    echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+    echo ""
+
+    # Parse result
+    local content
+    content=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('choices',[{}])[0].get('message',{}).get('content','No response'))" 2>/dev/null)
+
+    log_info "Response: $content"
+}
+
+openrouter_set_model() {
+    local model="${1:-}"
+
+    if [ -z "$model" ]; then
+        log_error "Model name required"
+        echo ""
+        echo "Usage: fortress-ctl openrouter set-model <model-name>"
+        echo ""
+        echo "Free models:"
+        echo "  google/gemma-3-27b-it:free      (27B, recommended)"
+        echo "  google/gemini-2.0-flash-exp:free (fast)"
+        echo "  mistralai/devstral-2512:free    (code-focused)"
+        echo "  nvidia/nemotron-3-nano-30b-a3b:free (security)"
+        echo ""
+        exit 1
+    fi
+
+    if [ ! -f "$OPENROUTER_CONFIG" ]; then
+        log_error "OpenRouter not configured. Run: fortress-ctl openrouter set-api-key <key>"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+with open('$OPENROUTER_CONFIG', 'r') as f:
+    config = json.load(f)
+config['model'] = '$model'
+with open('$OPENROUTER_CONFIG', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+    log_info "OpenRouter model set to: $model"
+
+    # Also update fortress.conf
+    if [ -f "${CONFIG_DIR}/fortress.conf" ]; then
+        if grep -q "^OPENROUTER_MODEL=" "${CONFIG_DIR}/fortress.conf"; then
+            sed -i "s|^OPENROUTER_MODEL=.*|OPENROUTER_MODEL=\"${model}\"|" "${CONFIG_DIR}/fortress.conf"
+        else
+            echo "OPENROUTER_MODEL=\"${model}\"" >> "${CONFIG_DIR}/fortress.conf"
+        fi
+    fi
+}
+
+openrouter_enable() {
+    if [ ! -f "$OPENROUTER_CONFIG" ]; then
+        log_error "OpenRouter not configured. Run: fortress-ctl openrouter set-api-key <key>"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+with open('$OPENROUTER_CONFIG', 'r') as f:
+    config = json.load(f)
+config['enabled'] = True
+with open('$OPENROUTER_CONFIG', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+    log_info "OpenRouter API enabled"
+}
+
+openrouter_disable() {
+    if [ ! -f "$OPENROUTER_CONFIG" ]; then
+        log_error "OpenRouter not configured"
+        exit 1
+    fi
+
+    python3 -c "
+import json
+with open('$OPENROUTER_CONFIG', 'r') as f:
+    config = json.load(f)
+config['enabled'] = False
+with open('$OPENROUTER_CONFIG', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+    log_info "OpenRouter API disabled"
 }
 
 device_list() {
@@ -972,6 +1233,14 @@ Commands:
     enable                      Enable Fingerbank enrichment
     disable                     Disable Fingerbank enrichment
 
+  openrouter    Manage OpenRouter API for AI narratives
+    status                      Show OpenRouter API status
+    set-api-key <key>           Configure API key
+    set-model <model>           Set the default model
+    test [prompt]               Test API with a prompt
+    enable                      Enable OpenRouter API
+    disable                     Disable OpenRouter API
+
   backup        Create backup
     --full        Full backup (all data)
     --db          Database only
@@ -1158,6 +1427,54 @@ main() {
                     echo ""
                     echo "Get your free API key (600 requests/month):"
                     echo "  https://api.fingerbank.org/email_registrations/current"
+                    echo ""
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        openrouter)
+            local subcommand="${1:-status}"
+            shift || true
+
+            case "$subcommand" in
+                status)
+                    openrouter_status
+                    ;;
+                set-api-key|set-key|key|add-api-key)
+                    openrouter_set_key "$1"
+                    ;;
+                set-model|model)
+                    openrouter_set_model "$1"
+                    ;;
+                test)
+                    openrouter_test "$1"
+                    ;;
+                enable)
+                    openrouter_enable
+                    ;;
+                disable)
+                    openrouter_disable
+                    ;;
+                *)
+                    log_error "Unknown openrouter subcommand: $subcommand"
+                    echo ""
+                    echo "Usage: fortress-ctl openrouter [status|set-api-key|set-model|test|enable|disable]"
+                    echo ""
+                    echo "Commands:"
+                    echo "  status                 Show OpenRouter API status"
+                    echo "  set-api-key <key>      Configure OpenRouter API key"
+                    echo "  set-model <model>      Set the default model"
+                    echo "  test [prompt]          Test API with a prompt"
+                    echo "  enable                 Enable OpenRouter API"
+                    echo "  disable                Disable OpenRouter API"
+                    echo ""
+                    echo "Free models available:"
+                    echo "  google/gemma-3-27b-it:free      (recommended)"
+                    echo "  google/gemini-2.0-flash-exp:free"
+                    echo "  mistralai/devstral-2512:free"
+                    echo ""
+                    echo "Get your API key at: https://openrouter.ai/keys"
                     echo ""
                     exit 1
                     ;;

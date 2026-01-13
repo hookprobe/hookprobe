@@ -593,7 +593,7 @@ class QuickActionExecutor:
 
         # Try ecosystem bubble manager
         try:
-            from products.fortress.lib.ecosystem_bubble import get_ecosystem_bubble_manager
+            from shared.aiochi.bubble.ecosystem_bubble import get_ecosystem_bubble_manager
             manager = get_ecosystem_bubble_manager()
             bubble = manager.get_bubble(bubble_id)
             if bubble:
