@@ -177,6 +177,7 @@ class DeviceManager:
         This includes DHCP Option 55 fingerprint which is crucial for identity tracking.
         """
         mac_upper = mac.upper()
+        masked = mask_mac(mac)  # CWE-532: Pre-mask for safe logging
 
         # Check cache first
         if mac_upper in self._dhcp_cache:
@@ -191,7 +192,7 @@ class DeviceManager:
                         self._dhcp_cache[mac_upper] = devices[mac_upper]
                         return devices[mac_upper]
         except Exception as e:
-            logger.debug(f"Could not load DHCP info for {mask_mac(mac)}: {type(e).__name__}")
+            logger.debug(f"Could not load DHCP info for {masked}: {type(e).__name__}")
 
         return {}
 
@@ -207,6 +208,7 @@ class DeviceManager:
         for device in scanned:
             mac = device['mac_address']
             ip = device['ip_address']
+            masked = mask_mac(mac)  # CWE-532: Pre-mask for safe logging
 
             # Check if device exists
             existing = self.db.get_device(mac)
@@ -225,7 +227,7 @@ class DeviceManager:
             # Get mDNS friendly name separately (for Apple devices like "hookprobe's iPhone")
             mdns_name = self._resolve_mdns_name(ip, mac)
             if mdns_name:
-                logger.info(f"Device {mask_mac(mac)} mDNS: '{mdns_name}'")
+                logger.info(f"Device {masked} mDNS: '{mdns_name}'")
                 # Prefer mDNS name over DHCP hostname for display
                 dhcp_hostname = mdns_name
 
@@ -242,9 +244,9 @@ class DeviceManager:
                     manufacturer=manufacturer,
                 )
                 if identity:
-                    logger.debug(f"Device {mask_mac(mac)} linked to identity")
+                    logger.debug(f"Device {masked} linked to identity")
             except Exception as e:
-                logger.warning(f"Could not link device {mask_mac(mac)}: {type(e).__name__}")
+                logger.warning(f"Could not link device {masked}: {type(e).__name__}")
 
             if existing:
                 # Update existing device
@@ -277,7 +279,7 @@ class DeviceManager:
                 # Trigger new device callbacks
                 self._notify_new_device(mac, ip, vlan_id, device_type)
 
-                logger.info(f"New device discovered: {mask_mac(mac)} -> VLAN {vlan_id}")
+                logger.info(f"New device discovered: {masked} -> VLAN {vlan_id}")
 
             discovered.append({
                 'mac_address': mac,
@@ -426,6 +428,7 @@ class DeviceManager:
     def block_device(self, mac_address: str, reason: str = None) -> bool:
         """Block a device from the network."""
         mac = mac_address.upper()
+        masked = mask_mac(mac)  # CWE-532: Pre-mask for safe logging
 
         # Update database
         success = self.db.block_device(mac, blocked=True)
@@ -450,13 +453,14 @@ class DeviceManager:
                 details={"reason": reason}
             )
 
-            logger.info(f"Blocked device: {mask_mac(mac)}")
+            logger.info(f"Blocked device: {masked}")
 
         return success
 
     def unblock_device(self, mac_address: str) -> bool:
         """Unblock a device."""
         mac = mac_address.upper()
+        masked = mask_mac(mac)  # CWE-532: Pre-mask for safe logging
 
         success = self.db.block_device(mac, blocked=False)
 
@@ -478,7 +482,7 @@ class DeviceManager:
                 resource_id=mac
             )
 
-            logger.info(f"Unblocked device: {mask_mac(mac)}")
+            logger.info(f"Unblocked device: {masked}")
 
         return success
 
