@@ -879,6 +879,7 @@ def get_suggestions():
 
 def get_device_custom_name(mac):
     """Get custom name for a device by MAC address."""
+    masked = mask_mac(mac)  # CWE-532: Pre-mask for safe logging
     try:
         with get_db_connection() as conn:
             row = conn.execute(
@@ -887,7 +888,7 @@ def get_device_custom_name(mac):
             ).fetchone()
             return row['custom_name'] if row else None
     except Exception as e:
-        logger.debug(f"Failed to get device name for {mask_mac(mac)}: {safe_error_message(e)}")
+        logger.debug(f"Failed to get device name for {masked}: {safe_error_message(e)}")
         return None
 
 
