@@ -120,8 +120,8 @@ services:
   # Services tier with access to data tier for database connectivity
   web:
     build:
-      context: ../..
-      dockerfile: products/fortress/containers/Containerfile.web
+      context: ..
+      dockerfile: containers/Containerfile.web
     image: localhost/fts-web:latest
     container_name: fts-web
     restart: unless-stopped
@@ -157,6 +157,7 @@ services:
       QSECBIT_API_URL: http://localhost:9090
       DNSXAI_API_URL: http://fts-dnsxai:8080
       DFS_API_URL: http://fts-dfs:8050
+      AIOCHI_BUBBLE_URL: http://172.20.200.1:8070
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
@@ -169,19 +170,12 @@ services:
       # Read-only, world-readable (644) - no secrets stored here
       - /etc/hookprobe:/etc/hookprobe:ro
       # SDN Auto Pilot database (device classification data)
-      # Direct mount without U flag to ensure container and host see same database
-      - /var/lib/hookprobe:/var/lib/hookprobe:rw
+      # NOTE: rw,U required for web UI to set policies (quarantine, move segment, etc.)
+      - /var/lib/hookprobe:/var/lib/hookprobe:rw,U
       # G.N.C. Architecture: FTS Host Agent socket for WiFi device control
       # Enables container to send hostapd commands via Unix Domain Socket
       # Socket is created by fts-host-agent.service on the host
-      # Note: Must mount directory (not file) for container socket bind mounts
       - /var/run/fts-host-agent:/var/run/fts-host-agent:rw
-      # DHCP leases file for device discovery fallback
-      # Used by AIOCHI views when SDN Autopilot is unavailable
-      - /var/lib/misc:/var/lib/misc:ro
-      # Zeek logs from AIOCHI for D2D connection graph analysis
-      # Required for device communication clustering and bubble color assignment
-      - aiochi_zeek_logs:/var/log/zeek/current:ro
     # Container network - accessible via host port publishing
     # Access: Host IP:8443 → Container (172.20.200.20:8443)
     networks:
@@ -413,11 +407,6 @@ volumes:
   zeek_logs:
     driver: local
     name: fts-zeek-logs
-
-  # AIOCHI Zeek logs (external) - D2D connection graph analysis
-  # This volume is created by AIOCHI stack and contains real Zeek logs
-  aiochi_zeek_logs:
-    external: true
 
 # ============================================================
 # NETWORKS - OVS-Integrated 4-Tier Security Architecture
