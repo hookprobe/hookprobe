@@ -29,6 +29,13 @@ if [ "${EARLY_NET_RESILIENCE_LOADED:-}" = "1" ]; then
 fi
 EARLY_NET_RESILIENCE_LOADED=1
 
+# Source shared network library if available (for consistency)
+_ENR_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$_ENR_SCRIPT_DIR/lib-network.sh" ]; then
+    # shellcheck source=lib-network.sh
+    source "$_ENR_SCRIPT_DIR/lib-network.sh" 2>/dev/null || true
+fi
+
 # Colors (only if not already defined)
 : "${RED:=\033[0;31m}"
 : "${GREEN:=\033[0;32m}"
