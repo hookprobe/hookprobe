@@ -26,6 +26,21 @@
 set -u
 
 # ============================================================
+# SHARED LIBRARY
+# ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared network library for gateway discovery (if available)
+# This handles DHCP routers option correctly when never-default=yes
+if [ -f "$SCRIPT_DIR/lib-network.sh" ]; then
+    # shellcheck source=lib-network.sh
+    source "$SCRIPT_DIR/lib-network.sh"
+elif [ -f "/opt/hookprobe/fortress/devices/common/lib-network.sh" ]; then
+    source "/opt/hookprobe/fortress/devices/common/lib-network.sh"
+fi
+
+# ============================================================
 # CONFIGURATION
 # ============================================================
 
@@ -250,32 +265,79 @@ check_connectivity() {
 # ROUTE MANAGEMENT
 # ============================================================
 
+# Validate IPv4 address format and octet ranges (security: prevents command injection)
+is_valid_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    local IFS='.'
+    read -r o1 o2 o3 o4 <<< "$ip"
+    ((o1 >= 0 && o1 <= 255)) || return 1
+    ((o2 >= 0 && o2 <= 255)) || return 1
+    ((o3 >= 0 && o3 <= 255)) || return 1
+    ((o4 >= 0 && o4 <= 255)) || return 1
+    return 0
+}
+
 get_gateway_for_interface() {
-    # Get the gateway IP for an interface
+    # Get the gateway IP for an interface - DEFENSIVE VERSION
+    # Priority: Shared library > DHCP routers option > Routes > IP4.GATEWAY
+    # Does NOT auto-probe for gateways (can detect wrong ones)
     local iface="$1"
-
-    # Try to get from current routes
     local gw
-    gw=$(ip route show dev "$iface" 2>/dev/null | grep "^default" | awk '{print $3}' | head -1)
 
-    if [ -z "$gw" ]; then
-        # Try DHCP lease file
-        for lease_file in /var/lib/dhcp/dhclient."$iface".leases /var/lib/dhclient/dhclient-"$iface".leases /var/lib/NetworkManager/*.lease; do
-            if [ -f "$lease_file" ]; then
-                gw=$(grep "option routers" "$lease_file" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d ';')
-                [ -n "$gw" ] && break
-            fi
-        done 2>/dev/null
-    fi
-
-    if [ -z "$gw" ]; then
-        # Try nmcli
-        if command -v nmcli &>/dev/null; then
-            gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2)
+    # Method 0: Use shared library if available (preferred - handles all edge cases)
+    if declare -f get_interface_gateway &>/dev/null; then
+        gw=$(get_interface_gateway "$iface")
+        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+            echo "$gw"
+            return 0
         fi
     fi
 
-    echo "$gw"
+    # Method 1: Check existing default routes for this interface
+    # This is what the system is actually using
+    gw=$(ip route show default 2>/dev/null | grep "dev $iface" | awk '{print $3}' | head -1)
+    if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+        echo "$gw"
+        return 0
+    fi
+
+    # Method 2: DHCP routers option (handles never-default=yes correctly)
+    # This gets the actual gateway from DHCP lease even when NM doesn't add default route
+    if command -v nmcli &>/dev/null; then
+        gw=$(nmcli -t -f DHCP4.OPTION device show "$iface" 2>/dev/null | \
+             grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+            echo "$gw"
+            return 0
+        fi
+    fi
+
+    # Method 3: IP4.GATEWAY fallback (for static IP or older NM versions)
+    if command -v nmcli &>/dev/null; then
+        gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
+        if [ -n "$gw" ] && [ "$gw" != "--" ] && is_valid_ipv4 "$gw"; then
+            echo "$gw"
+            return 0
+        fi
+    fi
+
+    # Method 4: DHCP lease files (for reference only)
+    for lease_file in /var/lib/dhcp/dhclient."$iface".leases /var/lib/dhclient/dhclient-"$iface".leases /var/lib/NetworkManager/*.lease; do
+        if [ -f "$lease_file" ]; then
+            gw=$(grep "option routers" "$lease_file" 2>/dev/null | tail -1 | awk '{print $NF}' | tr -d ';')
+            if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+                echo "$gw"
+                return 0
+            fi
+        fi
+    done 2>/dev/null
+
+    # NO AUTO-PROBING of .1, .254, etc.
+    # This was causing problems by detecting gateways that don't actually route traffic
+    # Let NetworkManager handle gateway discovery
+
+    return 1
 }
 
 activate_primary() {
