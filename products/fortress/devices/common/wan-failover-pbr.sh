@@ -44,6 +44,22 @@
 set -u
 
 # ============================================================
+# Shared Library
+# ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared network library for common functions
+# Note: This script has its own get_gateway() function with additional
+# PBR-specific validation. We source lib for utility functions.
+if [ -f "$SCRIPT_DIR/lib-network.sh" ]; then
+    # shellcheck source=lib-network.sh
+    source "$SCRIPT_DIR/lib-network.sh"
+elif [ -f "/opt/hookprobe/fortress/devices/common/lib-network.sh" ]; then
+    source "/opt/hookprobe/fortress/devices/common/lib-network.sh"
+fi
+
+# ============================================================
 # Configuration
 # ============================================================
 
@@ -162,37 +178,152 @@ load_config() {
 # Gateway Discovery
 # ============================================================
 
-get_gateway() {
-    # Discover gateway for an interface using multiple methods
-    # Priority: existing routes > nmcli > ModemManager > DHCP lease > probe
+# Validate IPv4 address format and octet ranges (security: prevents command injection)
+is_valid_ipv4() {
+    local ip="$1"
+    # Quick format check - only allow digits and dots
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    # Validate each octet is in range 0-255
+    local IFS='.'
+    read -r o1 o2 o3 o4 <<< "$ip"
+    ((o1 >= 0 && o1 <= 255)) || return 1
+    ((o2 >= 0 && o2 <= 255)) || return 1
+    ((o3 >= 0 && o3 <= 255)) || return 1
+    ((o4 >= 0 && o4 <= 255)) || return 1
+    return 0
+}
+
+# Validate that a gateway actually provides internet connectivity
+# Returns 0 if gateway provides real internet access, 1 otherwise
+# CRITICAL: Don't add gateway to PBR if this fails - it will break routing
+validate_gateway_connectivity() {
     local iface="$1"
+    local gateway="$2"
+    local test_target="${3:-1.1.1.1}"
+
+    [ -z "$iface" ] || [ -z "$gateway" ] && return 1
+
+    # Method 1: Check NetworkManager connectivity status (most reliable)
+    if command -v nmcli &>/dev/null; then
+        local connectivity
+        connectivity=$(nmcli -t -f GENERAL.IP4-CONNECTIVITY device show "$iface" 2>/dev/null | cut -d: -f2)
+        # 4 = full, 3 = limited, 2 = portal, 1 = none
+        if [ "$connectivity" = "4" ]; then
+            log_debug "Gateway $gateway validated: NM reports full connectivity"
+            return 0
+        elif [ "$connectivity" = "3" ]; then
+            log_debug "Gateway $gateway has LIMITED connectivity - will validate further"
+        fi
+    fi
+
+    # Method 2: Test actual internet connectivity through this gateway
+    # Use source IP binding to force traffic through the specific interface
+    local iface_ip
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+
+    if [ -n "$iface_ip" ]; then
+        # Try to ping external IP through this interface
+        # The -I flag binds to the interface, forcing traffic through its gateway
+        if ping -c 2 -W 3 -I "$iface" "$test_target" &>/dev/null; then
+            log_debug "Gateway $gateway validated: can reach $test_target via $iface"
+            return 0
+        fi
+    fi
+
+    # Method 3: Try HTTP check (catches captive portals)
+    if command -v curl &>/dev/null; then
+        if curl -s -m 5 --interface "$iface" -o /dev/null -w "%{http_code}" "http://httpbin.org/ip" 2>/dev/null | grep -q "200"; then
+            log_debug "Gateway $gateway validated: HTTP check passed"
+            return 0
+        fi
+    fi
+
+    log_warn "Gateway $gateway on $iface FAILED connectivity validation"
+    return 1
+}
+
+# Get gateway for an interface - DEFENSIVE VERSION
+# Only returns gateway if:
+#   1. Explicitly configured in config file, OR
+#   2. Detected from existing routes/NM AND validated for connectivity
+#
+# This prevents pushing non-working gateways into PBR which breaks routing
+get_gateway() {
+    local iface="$1"
+    local validate="${2:-true}"  # Set to "false" to skip validation
     local gw
 
-    # Method 1: Check existing default routes for this interface (MOST RELIABLE)
-    # This catches routes added by DHCP, ModemManager, or other tools
-    gw=$(ip route show default 2>/dev/null | grep "dev $iface" | awk '{print $3}' | head -1)
-    if [ -n "$gw" ] && [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$gw"
+    # Method 1: Check if gateway is explicitly configured (highest priority)
+    # If user set PRIMARY_GATEWAY or BACKUP_GATEWAY in config, trust it
+    if [ "$iface" = "$PRIMARY_IFACE" ] && [ -n "${CONFIGURED_PRIMARY_GATEWAY:-}" ]; then
+        echo "$CONFIGURED_PRIMARY_GATEWAY"
+        return 0
+    fi
+    if [ "$iface" = "$BACKUP_IFACE" ] && [ -n "${CONFIGURED_BACKUP_GATEWAY:-}" ]; then
+        echo "$CONFIGURED_BACKUP_GATEWAY"
         return 0
     fi
 
-    # Method 2: NetworkManager
-    if command -v nmcli &>/dev/null; then
-        gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
-        if [ -n "$gw" ] && [ "$gw" != "--" ]; then
+    # Method 2: Check existing default routes for this interface
+    # This is the most reliable - it's what the system is actually using
+    gw=$(ip route show default 2>/dev/null | grep "dev $iface" | awk '{print $3}' | head -1)
+    if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+        if [ "$validate" = "true" ]; then
+            if validate_gateway_connectivity "$iface" "$gw"; then
+                echo "$gw"
+                return 0
+            else
+                log_warn "Gateway $gw from routes failed validation - not using"
+            fi
+        else
             echo "$gw"
             return 0
         fi
     fi
 
-    # Method 3: ip route show dev (for directly attached routes)
-    gw=$(ip route show dev "$iface" 2>/dev/null | grep -E '^default|^0\.0\.0\.0' | awk '{print $3}' | head -1)
-    if [ -n "$gw" ]; then
-        echo "$gw"
-        return 0
+    # Method 3: NetworkManager DHCP routers option (most reliable for DHCP)
+    # This gets the actual gateway from DHCP lease, even when:
+    #   - ipv4.never-default=yes is set (no default route added)
+    #   - ipv4.ignore-auto-routes=yes is set
+    # The DHCP4.OPTION routers field contains the real gateway from DHCP server
+    if command -v nmcli &>/dev/null; then
+        # First try DHCP routers option - this is the ACTUAL gateway from DHCP server
+        # Use ':routers =' to exclude 'requested_routers' which is a different field
+        gw=$(nmcli -t -f DHCP4.OPTION device show "$iface" 2>/dev/null | grep ':routers =' | cut -d= -f2 | tr -d ' ')
+        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+            if [ "$validate" = "true" ]; then
+                if validate_gateway_connectivity "$iface" "$gw"; then
+                    log_debug "Gateway $gw from DHCP routers option validated"
+                    echo "$gw"
+                    return 0
+                else
+                    log_warn "Gateway $gw from DHCP routers option failed validation - trying fallbacks"
+                fi
+            else
+                echo "$gw"
+                return 0
+            fi
+        fi
+
+        # Fallback: IP4.GATEWAY (may differ from DHCP routers if statically configured)
+        gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
+        if [ -n "$gw" ] && [ "$gw" != "--" ] && is_valid_ipv4 "$gw"; then
+            if [ "$validate" = "true" ]; then
+                if validate_gateway_connectivity "$iface" "$gw"; then
+                    echo "$gw"
+                    return 0
+                else
+                    log_warn "Gateway $gw from IP4.GATEWAY failed validation - not using"
+                fi
+            else
+                echo "$gw"
+                return 0
+            fi
+        fi
     fi
 
-    # Method 4: For LTE/WWAN interfaces, check ModemManager FIRST (works even without routes)
+    # Method 4: For LTE/WWAN interfaces, check ModemManager
+    # LTE gateways are more reliable since carrier provides them
     case "$iface" in
         wwan*|usb*|wwp*|cdc*|mbim*|qmi*|ww*|enp*s*u*)
             if command -v mmcli &>/dev/null; then
@@ -203,16 +334,23 @@ get_gateway() {
                     bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
                     if [ -n "$bearer_idx" ]; then
                         gw=$(mmcli -b "$bearer_idx" 2>/dev/null | grep -oP 'gateway:\s*\K[\d.]+')
-                        if [ -n "$gw" ]; then
-                            echo "$gw"
-                            return 0
+                        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+                            # LTE gateways are generally reliable, but validate if requested
+                            if [ "$validate" = "true" ]; then
+                                if validate_gateway_connectivity "$iface" "$gw"; then
+                                    echo "$gw"
+                                    return 0
+                                fi
+                            else
+                                echo "$gw"
+                                return 0
+                            fi
                         fi
                     fi
                 fi
             fi
 
-            # Fallback for LTE: Calculate gateway from point-to-point /30 or /31 network
-            # LTE carriers often use /30 subnets where the other IP is the gateway
+            # For LTE: Calculate gateway from point-to-point /30 or /31 network
             local lte_info
             lte_info=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d./]+')
             if [ -n "$lte_info" ]; then
@@ -225,19 +363,14 @@ get_gateway() {
                     local last_octet base_ip other_ip
                     last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
                     base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
-
-                    # In a /30, usable IPs are .1/.2 or .5/.6 etc (offset 1 and 2 in each block of 4)
                     local block_start=$((last_octet / 4 * 4))
                     local offset=$((last_octet - block_start))
-
-                    # The other usable IP
                     if [ $offset -eq 1 ]; then
                         other_ip="${base_ip}$((block_start + 2))"
                     elif [ $offset -eq 2 ]; then
                         other_ip="${base_ip}$((block_start + 1))"
                     fi
-
-                    if [ -n "$other_ip" ]; then
+                    if [ -n "$other_ip" ] && is_valid_ipv4 "$other_ip"; then
                         echo "$other_ip"
                         return 0
                     fi
@@ -245,84 +378,89 @@ get_gateway() {
 
                 # For /31 point-to-point (RFC 3021): the other IP is gateway
                 if [ "$lte_mask" = "31" ]; then
-                    local last_octet base_ip
+                    local last_octet base_ip candidate
                     last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
                     base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
-
                     if [ $((last_octet % 2)) -eq 0 ]; then
-                        echo "${base_ip}$((last_octet + 1))"
+                        candidate="${base_ip}$((last_octet + 1))"
                     else
-                        echo "${base_ip}$((last_octet - 1))"
+                        candidate="${base_ip}$((last_octet - 1))"
                     fi
-                    return 0
+                    if is_valid_ipv4 "$candidate"; then
+                        echo "$candidate"
+                        return 0
+                    fi
                 fi
             fi
             ;;
     esac
 
-    # Method 5: Check routing table for the interface's network
-    local iface_ip
-    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
-    if [ -n "$iface_ip" ]; then
-        # Get the network and find a gateway
-        local network
-        network=$(ip route show dev "$iface" 2>/dev/null | grep "$iface_ip" | head -1 | awk '{print $1}')
-        if [ -n "$network" ]; then
-            # Look for a gateway in this network (usually .1 or .254)
-            local base
-            base=$(echo "$iface_ip" | cut -d. -f1-3)
-            for gw_candidate in "${base}.1" "${base}.254"; do
-                if ping -c 1 -W 1 -I "$iface" "$gw_candidate" &>/dev/null; then
-                    echo "$gw_candidate"
-                    return 0
-                fi
-            done
-        fi
-    fi
+    # NO AUTO-PROBING of .1, .254, etc. for wired interfaces
+    # This was causing problems by detecting gateways that don't actually route traffic
+    # Let NetworkManager handle gateway discovery for wired interfaces
 
-    # Method 6: DHCP lease file (NetworkManager)
-    if [ -f "/var/lib/NetworkManager/dhclient-$iface.lease" ]; then
-        gw=$(grep 'option routers' "/var/lib/NetworkManager/dhclient-$iface.lease" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
-        [ -n "$gw" ] && echo "$gw" && return 0
-    fi
-
-    # Method 7: DHCP lease file (dhclient)
-    if [ -f "/var/lib/dhcp/dhclient.$iface.leases" ]; then
-        gw=$(grep 'option routers' "/var/lib/dhcp/dhclient.$iface.leases" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';')
-        [ -n "$gw" ] && echo "$gw" && return 0
-    fi
-
+    log_debug "No validated gateway found for $iface - letting NetworkManager handle routing"
     return 1
 }
 
 discover_gateways() {
     # Discover gateways for both interfaces
-    # Forces rediscovery even if values are set (they may have changed)
+    # DEFENSIVE: Only use gateways that have been validated for connectivity
+    # If validation fails, DON'T push gateway to PBR - let NetworkManager handle it
 
     local old_primary="${PRIMARY_GATEWAY:-}"
     local old_backup="${BACKUP_GATEWAY:-}"
 
-    # Always try to discover current gateway (DHCP may have renewed)
+    # Save user-configured gateways for reference (from config file)
+    CONFIGURED_PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-}"
+    CONFIGURED_BACKUP_GATEWAY="${BACKUP_GATEWAY:-}"
+
+    # Try to discover primary gateway (with validation)
     local new_primary
-    new_primary=$(get_gateway "$PRIMARY_IFACE")
+    new_primary=$(get_gateway "$PRIMARY_IFACE" "true")
     if [ -n "$new_primary" ]; then
         PRIMARY_GATEWAY="$new_primary"
         if [ "$new_primary" != "$old_primary" ] && [ -n "$old_primary" ]; then
-            log_info "Primary gateway changed: $old_primary -> $new_primary"
+            log_info "Primary gateway changed: $old_primary -> $new_primary (validated)"
+        else
+            log_info "Primary gateway: $new_primary (validated)"
         fi
-    elif [ -z "$PRIMARY_GATEWAY" ]; then
-        log_warn "Could not discover gateway for $PRIMARY_IFACE"
+    else
+        # Gateway discovery/validation failed
+        # IMPORTANT: Clear PRIMARY_GATEWAY so we don't add broken routes to PBR
+        PRIMARY_GATEWAY=""
+        if [ -n "$old_primary" ]; then
+            log_warn "Primary gateway $old_primary failed validation - NOT adding to PBR"
+            log_warn "NetworkManager will handle routing for $PRIMARY_IFACE"
+        else
+            log_info "No validated gateway for $PRIMARY_IFACE - NetworkManager handles routing"
+        fi
     fi
 
+    # Try to discover backup gateway (with validation)
     local new_backup
-    new_backup=$(get_gateway "$BACKUP_IFACE")
+    new_backup=$(get_gateway "$BACKUP_IFACE" "true")
     if [ -n "$new_backup" ]; then
         BACKUP_GATEWAY="$new_backup"
         if [ "$new_backup" != "$old_backup" ] && [ -n "$old_backup" ]; then
-            log_info "Backup gateway changed: $old_backup -> $new_backup"
+            log_info "Backup gateway changed: $old_backup -> $new_backup (validated)"
+        else
+            log_info "Backup gateway: $new_backup (validated)"
         fi
+    else
+        # For backup (LTE), we're more lenient - it might just be disconnected
+        BACKUP_GATEWAY=""
+        log_debug "No validated gateway for $BACKUP_IFACE (may not be connected)"
+    fi
+
+    # Summary log
+    if [ -z "$PRIMARY_GATEWAY" ] && [ -z "$BACKUP_GATEWAY" ]; then
+        log_warn "No validated gateways available - PBR failover disabled"
+        log_warn "System will use NetworkManager's default routing"
+    elif [ -z "$PRIMARY_GATEWAY" ]; then
+        log_info "Only backup WAN ($BACKUP_IFACE) has validated gateway"
     elif [ -z "$BACKUP_GATEWAY" ]; then
-        log_debug "Could not discover gateway for $BACKUP_IFACE (may not be connected)"
+        log_info "Only primary WAN ($PRIMARY_IFACE) has validated gateway"
     fi
 }
 
