@@ -210,10 +210,12 @@ get_interface_gateway() {
     # This gets the actual gateway from DHCP lease, even when:
     #   - ipv4.never-default=yes is set (no default route added)
     #   - ipv4.ignore-auto-routes=yes is set
-    # Use ':routers =' to exclude 'requested_routers' which is a different field
-    # Use awk to handle multiple routers (take first only)
-    gw=$(nmcli -t -f DHCP4.OPTION device show "$iface" 2>/dev/null | \
-         grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+    # NOTE: -t (terse mode) does NOT work with DHCP4.OPTION fields - outputs nothing!
+    # Must use non-terse mode and parse with grep/awk
+    # Exclude 'requested_routers' which is a different field (DHCP option request)
+    local dhcp_output
+    dhcp_output=$(nmcli -f DHCP4.OPTION device show "$iface" 2>/dev/null)
+    gw=$(echo "$dhcp_output" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
 
     if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
         _lib_net_log_debug "Gateway $gw from DHCP routers option for $iface"

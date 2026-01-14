@@ -304,9 +304,12 @@ get_gateway_for_interface() {
 
     # Method 2: DHCP routers option (handles never-default=yes correctly)
     # This gets the actual gateway from DHCP lease even when NM doesn't add default route
+    # NOTE: -t (terse mode) does NOT work with DHCP4.OPTION fields - outputs nothing!
+    # Must use non-terse mode and parse with grep/awk
     if command -v nmcli &>/dev/null; then
-        gw=$(nmcli -t -f DHCP4.OPTION device show "$iface" 2>/dev/null | \
-             grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        local dhcp_output
+        dhcp_output=$(nmcli -f DHCP4.OPTION device show "$iface" 2>/dev/null)
+        gw=$(echo "$dhcp_output" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
         if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
             echo "$gw"
             return 0
