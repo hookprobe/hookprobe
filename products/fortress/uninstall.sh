@@ -1413,6 +1413,9 @@ remove_lte_config() {
     # Remove WAN failover lock file
     rm -f /var/run/fts-wan-failover.lock 2>/dev/null || true
 
+    # Remove early network resilience monitor PID file (used during installation)
+    rm -f /run/enr-health-monitor.pid 2>/dev/null || true
+
     # Remove PBR runtime state directory
     if [ -d "/run/fortress" ]; then
         log_info "Removing PBR runtime state..."
