@@ -69,6 +69,7 @@ try:
     from aiochi_bubble_client import (
         get_aiochi_bubble_client,
         get_ecosystem_bubbles,
+        get_bubble_manager,
         is_aiochi_available,
     )
     if is_aiochi_available():
@@ -79,9 +80,12 @@ try:
 except ImportError as e:
     logger.warning(f"Dashboard: aiochi_bubble_client not available: {e}")
 
-    # Stub function when API client not available
+    # Stub functions when API client not available
     def get_ecosystem_bubbles():
         return []
+
+    def get_bubble_manager():
+        return None
 
     def is_aiochi_available():
         return False
@@ -994,6 +998,8 @@ def get_ecosystem_bubbles():
     if ECOSYSTEM_BUBBLE_AVAILABLE:
         try:
             manager = get_bubble_manager()
+            if manager is None:
+                raise ValueError("Bubble manager not available")
             active_bubbles = manager.get_active_bubbles()
             for bubble in active_bubbles:
                 bubbles.append({
