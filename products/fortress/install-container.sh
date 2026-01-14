@@ -40,6 +40,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -4220,6 +4221,232 @@ wait_for_container_healthy() {
     return 1
 }
 
+# ============================================================
+# POST-INSTALLATION VERIFICATION
+# ============================================================
+# Comprehensive validation that all services are functioning
+# after installation completes. Returns 0 if all critical
+# services pass, 1 if any critical service fails.
+
+verify_installation() {
+    log_step "Verifying installation"
+
+    local errors=0
+    local warnings=0
+
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    echo "│                 POST-INSTALLATION VERIFICATION              │"
+    echo "└─────────────────────────────────────────────────────────────┘"
+    echo ""
+
+    # ========================================
+    # PHASE 1: CONTAINER SERVICES
+    # ========================================
+    echo -e "${CYAN}[1/5] Container Services${NC}"
+
+    local core_containers="fts-postgres fts-redis fts-web fts-qsecbit fts-dnsxai fts-dfs"
+    for container in $core_containers; do
+        local state
+        state=$(podman inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "not found")
+        if [ "$state" = "running" ]; then
+            echo -e "  ${GREEN}✓${NC} $container: running"
+        else
+            echo -e "  ${RED}✗${NC} $container: $state"
+            if [[ "$container" =~ ^(fts-postgres|fts-redis|fts-web)$ ]]; then
+                ((errors++))
+            else
+                ((warnings++))
+            fi
+        fi
+    done
+
+    # Check container health where applicable
+    for container in fts-postgres fts-redis; do
+        local health
+        health=$(podman inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null || echo "none")
+        if [ "$health" = "healthy" ]; then
+            echo -e "  ${GREEN}✓${NC} $container healthcheck: healthy"
+        elif [ "$health" != "none" ] && [ "$health" != "" ]; then
+            echo -e "  ${YELLOW}⚠${NC} $container healthcheck: $health"
+            ((warnings++))
+        fi
+    done
+
+    # ========================================
+    # PHASE 2: SYSTEMD SERVICES
+    # ========================================
+    echo ""
+    echo -e "${CYAN}[2/5] Systemd Services${NC}"
+
+    # Critical services that must be running
+    local critical_services="fortress dnsmasq"
+    for service in $critical_services; do
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} $service: active"
+        else
+            echo -e "  ${RED}✗${NC} $service: $(systemctl is-active "$service" 2>/dev/null || echo 'inactive')"
+            ((errors++))
+        fi
+    done
+
+    # Optional services (warn if enabled but not running)
+    local optional_services="fts-wan-failover fts-hostapd-24ghz fts-hostapd-5ghz fts-fingerprint-engine fortress-vlan"
+    for service in $optional_services; do
+        if systemctl is-enabled --quiet "$service" 2>/dev/null; then
+            if systemctl is-active --quiet "$service" 2>/dev/null; then
+                echo -e "  ${GREEN}✓${NC} $service: active"
+            else
+                echo -e "  ${YELLOW}⚠${NC} $service: enabled but not active"
+                ((warnings++))
+            fi
+        else
+            echo -e "  ${DIM}○${NC} $service: not enabled (optional)"
+        fi
+    done
+
+    # ========================================
+    # PHASE 3: NETWORK CONFIGURATION
+    # ========================================
+    echo ""
+    echo -e "${CYAN}[3/5] Network Configuration${NC}"
+
+    # Check OVS bridge
+    if ovs-vsctl br-exists "${OVS_BRIDGE:-FTS}" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} OVS bridge ${OVS_BRIDGE:-FTS}: exists"
+
+        # Check bridge has IP
+        local bridge_ip
+        bridge_ip=$(ip -4 addr show "${OVS_BRIDGE:-FTS}" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+        if [ -n "$bridge_ip" ]; then
+            echo -e "  ${GREEN}✓${NC} Bridge IP: $bridge_ip"
+        else
+            echo -e "  ${RED}✗${NC} Bridge has no IP address"
+            ((errors++))
+        fi
+    else
+        echo -e "  ${RED}✗${NC} OVS bridge ${OVS_BRIDGE:-FTS}: not found"
+        ((errors++))
+    fi
+
+    # Check DHCP is serving on bridge
+    if pgrep -f "dnsmasq.*${OVS_BRIDGE:-FTS}" &>/dev/null || \
+       grep -q "interface=${OVS_BRIDGE:-FTS}" /etc/dnsmasq.d/fts-*.conf 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} DHCP configured for bridge"
+    else
+        echo -e "  ${YELLOW}⚠${NC} DHCP may not be serving on bridge"
+        ((warnings++))
+    fi
+
+    # Check WAN interface connectivity
+    local wan_iface
+    wan_iface=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
+    if [ -n "$wan_iface" ]; then
+        echo -e "  ${GREEN}✓${NC} WAN interface: $wan_iface"
+        if ping -c1 -W2 8.8.8.8 &>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} Internet connectivity: OK"
+        else
+            echo -e "  ${YELLOW}⚠${NC} Internet connectivity: limited"
+            ((warnings++))
+        fi
+    else
+        echo -e "  ${RED}✗${NC} No default route found"
+        ((errors++))
+    fi
+
+    # Check WAN failover config if dual-WAN
+    if [ -f "/etc/hookprobe/wan-failover.conf" ]; then
+        echo -e "  ${GREEN}✓${NC} WAN failover config: present"
+        # Verify the config has valid settings
+        if grep -q "PRIMARY_IFACE=" /etc/hookprobe/wan-failover.conf 2>/dev/null && \
+           grep -q "BACKUP_IFACE=" /etc/hookprobe/wan-failover.conf 2>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} WAN failover: dual-WAN configured"
+        fi
+    fi
+
+    # ========================================
+    # PHASE 4: WEB UI HEALTH
+    # ========================================
+    echo ""
+    echo -e "${CYAN}[4/5] Web UI Health${NC}"
+
+    local web_port="${WEB_PORT:-8443}"
+
+    # Check if port is listening
+    if ss -tlnp 2>/dev/null | grep -q ":${web_port}"; then
+        echo -e "  ${GREEN}✓${NC} Port $web_port: listening"
+    else
+        echo -e "  ${RED}✗${NC} Port $web_port: not listening"
+        ((errors++))
+    fi
+
+    # Check health endpoint
+    if curl -sf -k --max-time 5 "https://localhost:${web_port}/health" &>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Health endpoint: responsive"
+    elif curl -sf -k --max-time 5 "https://127.0.0.1:${web_port}/health" &>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Health endpoint: responsive (via 127.0.0.1)"
+    else
+        echo -e "  ${YELLOW}⚠${NC} Health endpoint: not responding (may need more time)"
+        ((warnings++))
+    fi
+
+    # ========================================
+    # PHASE 5: WIFI ACCESS POINTS
+    # ========================================
+    echo ""
+    echo -e "${CYAN}[5/5] WiFi Access Points${NC}"
+
+    local wifi_found=false
+    for band in 24ghz 5ghz; do
+        local hostapd_service="fts-hostapd-${band}"
+        if systemctl is-enabled --quiet "$hostapd_service" 2>/dev/null; then
+            wifi_found=true
+            if systemctl is-active --quiet "$hostapd_service" 2>/dev/null; then
+                echo -e "  ${GREEN}✓${NC} $hostapd_service: broadcasting"
+            else
+                echo -e "  ${YELLOW}⚠${NC} $hostapd_service: enabled but not active"
+                # Check if interface exists
+                local iface="wlan_${band}"
+                if [ -d "/sys/class/net/${iface}" ]; then
+                    echo -e "      Interface ${iface} exists - check hostapd logs"
+                else
+                    echo -e "      Interface ${iface} not found - WiFi adapter may not support this band"
+                fi
+                ((warnings++))
+            fi
+        fi
+    done
+
+    if [ "$wifi_found" = "false" ]; then
+        echo -e "  ${DIM}○${NC} No WiFi access points configured"
+    fi
+
+    # ========================================
+    # SUMMARY
+    # ========================================
+    echo ""
+    echo "─────────────────────────────────────────────────────────────"
+
+    if [ $errors -eq 0 ] && [ $warnings -eq 0 ]; then
+        echo -e "${GREEN}✓ Installation verified: All services operational${NC}"
+        return 0
+    elif [ $errors -eq 0 ]; then
+        echo -e "${YELLOW}⚠ Installation verified with $warnings warning(s)${NC}"
+        echo "  Some optional services may need attention"
+        return 0
+    else
+        echo -e "${RED}✗ Installation has $errors critical error(s) and $warnings warning(s)${NC}"
+        echo ""
+        echo "Troubleshooting commands:"
+        echo "  podman logs fts-web              # Web UI logs"
+        echo "  podman logs fts-postgres         # Database logs"
+        echo "  systemctl status fortress        # Container orchestration"
+        echo "  journalctl -u fortress -n 50     # Recent fortress logs"
+        echo "  ovs-vsctl show                   # OVS bridge status"
+        return 1
+    fi
+}
+
 connect_containers_to_ovs() {
     log_step "Connecting containers to OVS"
 
@@ -5509,6 +5736,14 @@ main() {
     fi
 
     log_success "Services finalized"
+
+    # Cleanup early network resilience monitor (if running during installation)
+    if type -t enr_stop_monitor &>/dev/null; then
+        enr_stop_monitor 2>/dev/null || true
+    fi
+
+    # Verify all services are operational
+    verify_installation
 
     # Final message
     echo ""
