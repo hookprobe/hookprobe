@@ -23,6 +23,13 @@ WIFI_MANAGER="$SCRIPT_DIR/wifi-manager.sh"
 LTE_MANAGER="$SCRIPT_DIR/lte-manager.sh"
 BRIDGE_MANAGER="$SCRIPT_DIR/bridge-manager.sh"
 VALIDATOR="$SCRIPT_DIR/validate-network.sh"
+LIB_NETWORK="$SCRIPT_DIR/lib-network.sh"
+
+# Source shared network library for gateway discovery
+if [ -f "$LIB_NETWORK" ]; then
+    # shellcheck source=lib-network.sh
+    source "$LIB_NETWORK"
+fi
 
 # Colors (if not already defined)
 RED="${RED:-\033[0;31m}"
@@ -793,12 +800,32 @@ setup_wan_failover() {
     log_info "[WAN]   Primary: $primary_wan (table wan_primary)"
     log_info "[WAN]   Backup:  $lte_iface (table wan_backup)"
 
-    # Step 1: Get gateways
+    # Step 1: Get gateways using shared library (handles DHCP routers option correctly)
     local primary_gw backup_gw
-    if command -v nmcli &>/dev/null; then
-        primary_gw=$(nmcli -t -f IP4.GATEWAY device show "$primary_wan" 2>/dev/null | cut -d: -f2)
-        backup_gw=$(nmcli -t -f IP4.GATEWAY device show "$lte_iface" 2>/dev/null | cut -d: -f2)
+
+    # Use shared library function if available (preferred - handles never-default correctly)
+    if declare -f get_interface_gateway &>/dev/null; then
+        primary_gw=$(get_interface_gateway "$primary_wan")
+        backup_gw=$(get_interface_gateway "$lte_iface")
+        log_info "[WAN] Gateway discovery via lib-network.sh"
+    elif command -v nmcli &>/dev/null; then
+        # Fallback: Try DHCP routers option first (handles never-default=yes)
+        primary_gw=$(nmcli -t -f DHCP4.OPTION device show "$primary_wan" 2>/dev/null | \
+                     grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        [ -z "$primary_gw" ] && \
+            primary_gw=$(nmcli -t -f IP4.GATEWAY device show "$primary_wan" 2>/dev/null | cut -d: -f2)
+
+        backup_gw=$(nmcli -t -f DHCP4.OPTION device show "$lte_iface" 2>/dev/null | \
+                    grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        [ -z "$backup_gw" ] && \
+            backup_gw=$(nmcli -t -f IP4.GATEWAY device show "$lte_iface" 2>/dev/null | cut -d: -f2)
+
+        log_info "[WAN] Gateway discovery via nmcli (fallback)"
     fi
+
+    # Log discovered gateways
+    [ -n "$primary_gw" ] && log_info "[WAN]   Primary gateway: $primary_gw"
+    [ -n "$backup_gw" ] && log_info "[WAN]   Backup gateway: $backup_gw"
 
     # Step 2: Create PBR configuration
     log_info "[WAN] Creating PBR configuration..."
