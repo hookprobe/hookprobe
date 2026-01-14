@@ -999,8 +999,8 @@ def get_d2d_colors():
             'available': True
         })
     except Exception as e:
-        logger.error(f"Error fetching D2D colors: {e}")
-        return jsonify({'colors': {}, 'error': str(e), 'available': False}), 500
+        logger.exception("Error fetching D2D colors")
+        return jsonify({'colors': {}, 'error': 'Failed to fetch D2D colors', 'available': False}), 500
 
 
 @api_bp.route('/d2d/device/<mac_address>/color')
@@ -1029,8 +1029,8 @@ def get_d2d_device_color(mac_address):
             **color_info
         })
     except Exception as e:
-        logger.error(f"Error fetching D2D color for {mac_address}: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.exception("Error fetching D2D color for device")
+        return jsonify({'error': 'Failed to fetch D2D device color'}), 500
 
 
 @api_bp.route('/d2d/clusters')
@@ -1053,8 +1053,8 @@ def get_d2d_clusters():
             'available': True
         })
     except Exception as e:
-        logger.error(f"Error fetching D2D clusters: {e}")
-        return jsonify({'clusters': [], 'error': str(e), 'available': False}), 500
+        logger.exception("Error fetching D2D clusters")
+        return jsonify({'clusters': [], 'error': 'Failed to fetch D2D clusters', 'available': False}), 500
 
 
 @api_bp.route('/d2d/graph')
@@ -1076,8 +1076,8 @@ def get_d2d_graph():
             'available': True
         })
     except Exception as e:
-        logger.error(f"Error fetching D2D graph: {e}")
-        return jsonify({'nodes': [], 'edges': [], 'error': str(e), 'available': False}), 500
+        logger.exception("Error fetching D2D graph")
+        return jsonify({'nodes': [], 'edges': [], 'error': 'Failed to fetch D2D graph', 'available': False}), 500
 
 
 @api_bp.route('/d2d/stats')
@@ -1095,8 +1095,8 @@ def get_d2d_stats():
             'available': True
         })
     except Exception as e:
-        logger.error(f"Error fetching D2D stats: {e}")
-        return jsonify({'error': str(e), 'available': False}), 500
+        logger.exception("Error fetching D2D stats")
+        return jsonify({'error': 'Failed to fetch D2D stats', 'available': False}), 500
 
 
 @api_bp.route('/presence/status')

@@ -103,8 +103,8 @@ def list_devices():
             "count": len(devices)
         })
     except Exception as e:
-        logger.error(f"Error listing devices: {e}")
-        return jsonify({"error": str(e), "devices": []}), 500
+        logger.exception("Error listing devices")
+        return jsonify({"error": "Failed to list devices", "devices": []}), 500
 
 
 @app.route("/api/devices/<mac>", methods=["GET"])
@@ -119,8 +119,8 @@ def get_device(mac):
         info = tracker.get_device_communication_color(mac)
         return jsonify(info)
     except Exception as e:
-        logger.error(f"Error getting device {mac}: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error getting device info")
+        return jsonify({"error": "Failed to get device info"}), 500
 
 
 @app.route("/api/communication/graph", methods=["GET"])
@@ -134,8 +134,8 @@ def get_communication_graph():
         graph = tracker.get_communication_graph()
         return jsonify(graph)
     except Exception as e:
-        logger.error(f"Error getting communication graph: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error getting communication graph")
+        return jsonify({"error": "Failed to get communication graph"}), 500
 
 
 @app.route("/api/communication/clusters", methods=["GET"])
@@ -152,8 +152,8 @@ def get_communication_clusters():
             "count": len(clusters)
         })
     except Exception as e:
-        logger.error(f"Error getting communication clusters: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error getting communication clusters")
+        return jsonify({"error": "Failed to get communication clusters"}), 500
 
 
 @app.route("/api/communication/<mac1>/<mac2>", methods=["GET"])
@@ -171,8 +171,8 @@ def get_communication_strength(mac1, mac2):
             "strength": strength.value,
         })
     except Exception as e:
-        logger.error(f"Error getting communication strength: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error getting communication strength")
+        return jsonify({"error": "Failed to get communication strength"}), 500
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -187,8 +187,8 @@ def get_stats():
         stats.update(_health_status)
         return jsonify(stats)
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error getting stats")
+        return jsonify({"error": "Failed to get stats"}), 500
 
 
 def run_health_server():
