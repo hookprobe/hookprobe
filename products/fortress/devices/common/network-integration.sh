@@ -810,13 +810,16 @@ setup_wan_failover() {
         log_info "[WAN] Gateway discovery via lib-network.sh"
     elif command -v nmcli &>/dev/null; then
         # Fallback: Try DHCP routers option first (handles never-default=yes)
-        primary_gw=$(nmcli -t -f DHCP4.OPTION device show "$primary_wan" 2>/dev/null | \
-                     grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        # NOTE: -t (terse mode) does NOT work with DHCP4.OPTION fields - outputs nothing!
+        # Must use non-terse mode and parse with grep/awk
+        local dhcp_primary dhcp_backup
+        dhcp_primary=$(nmcli -f DHCP4.OPTION device show "$primary_wan" 2>/dev/null)
+        primary_gw=$(echo "$dhcp_primary" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
         [ -z "$primary_gw" ] && \
             primary_gw=$(nmcli -t -f IP4.GATEWAY device show "$primary_wan" 2>/dev/null | cut -d: -f2)
 
-        backup_gw=$(nmcli -t -f DHCP4.OPTION device show "$lte_iface" 2>/dev/null | \
-                    grep ':routers =' | cut -d= -f2 | awk '{print $1}' | tr -d ' ')
+        dhcp_backup=$(nmcli -f DHCP4.OPTION device show "$lte_iface" 2>/dev/null)
+        backup_gw=$(echo "$dhcp_backup" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
         [ -z "$backup_gw" ] && \
             backup_gw=$(nmcli -t -f IP4.GATEWAY device show "$lte_iface" 2>/dev/null | cut -d: -f2)
 
