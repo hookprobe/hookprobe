@@ -288,8 +288,12 @@ get_gateway() {
     # The DHCP4.OPTION routers field contains the real gateway from DHCP server
     if command -v nmcli &>/dev/null; then
         # First try DHCP routers option - this is the ACTUAL gateway from DHCP server
-        # Use ':routers =' to exclude 'requested_routers' which is a different field
-        gw=$(nmcli -t -f DHCP4.OPTION device show "$iface" 2>/dev/null | grep ':routers =' | cut -d= -f2 | tr -d ' ')
+        # NOTE: -t (terse mode) does NOT work with DHCP4.OPTION fields - outputs nothing!
+        # Must use non-terse mode and parse with grep/awk
+        # Exclude 'requested_routers' which is a different field (DHCP option request, not the actual value)
+        local dhcp_output
+        dhcp_output=$(nmcli -f DHCP4.OPTION device show "$iface" 2>/dev/null)
+        gw=$(echo "$dhcp_output" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
         if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
             if [ "$validate" = "true" ]; then
                 if validate_gateway_connectivity "$iface" "$gw"; then
