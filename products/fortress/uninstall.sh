@@ -251,6 +251,11 @@ cleanup_network_interfaces() {
     systemctl stop hostapd 2>/dev/null || true
     pkill -f hostapd 2>/dev/null || true
 
+    # Clean up hostapd PID files (safety cleanup - systemd should handle these)
+    rm -f /run/hostapd-24ghz.pid 2>/dev/null || true
+    rm -f /run/hostapd-5ghz.pid 2>/dev/null || true
+    rm -f /run/hostapd.pid 2>/dev/null || true
+
     # Stop dnsmasq
     systemctl stop fts-dnsmasq 2>/dev/null || true
 
@@ -1696,8 +1701,16 @@ remove_sysctl_settings() {
         iptables -t nat -D POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
     done
 
-    # Remove container SNAT rule for LAN client access
+    # Remove container SNAT/MASQUERADE rules for LAN client access
     iptables -t nat -D POSTROUTING -s 172.20.200.0/24 -d 10.200.0.0/8 -j SNAT --to-source 10.200.100.1 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 172.20.200.0/24 -o "$OVS_BRIDGE" -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 172.20.200.0/24 -o FTS -j MASQUERADE 2>/dev/null || true
+
+    # Remove web UI DNAT rules (all possible ports)
+    for port in 8443 443 8080 80; do
+        iptables -t nat -D PREROUTING -i "$OVS_BRIDGE" -p tcp --dport "$port" -j DNAT --to-destination 172.20.200.20:"$port" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i FTS -p tcp --dport "$port" -j DNAT --to-destination 172.20.200.20:"$port" 2>/dev/null || true
+    done
 
     # Clean up FORWARD rules for fortress bridge and OVS bridge
     iptables -D FORWARD -i fortress -j ACCEPT 2>/dev/null || true
@@ -1705,7 +1718,11 @@ remove_sysctl_settings() {
     iptables -D FORWARD -i "$OVS_BRIDGE" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -o "$OVS_BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 
-    log_info "Sysctl settings removed"
+    # Clean up container network FORWARD rules
+    iptables -D FORWARD -d 172.20.200.0/24 -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -s 172.20.200.0/24 -j ACCEPT 2>/dev/null || true
+
+    log_info "Sysctl settings and iptables rules removed"
 }
 
 # ============================================================
