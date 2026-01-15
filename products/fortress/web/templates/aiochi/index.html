@@ -3606,6 +3606,46 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- TAC Consistency (Gemini: PRIMARY indicator) -->
+                        <div class="l1-security-gauge" id="gauge-tac-check">
+                            <div class="l1-gauge-icon">
+                                <i class="fas fa-map-marker-alt"></i>
+                            </div>
+                            <div class="l1-gauge-content">
+                                <div class="l1-gauge-label">TAC Consistency</div>
+                                <div class="l1-gauge-value" id="gauge-tac-value">
+                                    <span class="l1-gauge-number" id="gauge-tac-number">--</span>
+                                    <span class="l1-gauge-unit">TAC</span>
+                                </div>
+                                <div class="l1-gauge-bar">
+                                    <div class="l1-gauge-bar-fill normal" id="gauge-tac-bar" style="width: 100%;"></div>
+                                </div>
+                                <div class="l1-gauge-status normal" id="gauge-tac-status">
+                                    <i class="fas fa-check-circle"></i> Stable
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tower Distance (Timing Advance) -->
+                        <div class="l1-security-gauge" id="gauge-distance">
+                            <div class="l1-gauge-icon">
+                                <i class="fas fa-ruler"></i>
+                            </div>
+                            <div class="l1-gauge-content">
+                                <div class="l1-gauge-label">Tower Distance</div>
+                                <div class="l1-gauge-value" id="gauge-distance-value">
+                                    <span class="l1-gauge-number" id="gauge-distance-number">--</span>
+                                    <span class="l1-gauge-unit">km</span>
+                                </div>
+                                <div class="l1-gauge-bar">
+                                    <div class="l1-gauge-bar-fill normal" id="gauge-distance-bar" style="width: 50%;"></div>
+                                </div>
+                                <div class="l1-gauge-status normal" id="gauge-distance-status">
+                                    <i class="fas fa-check-circle"></i> Normal
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Alert Banner (hidden by default) -->
@@ -4764,18 +4804,24 @@
     function updateSecurityGauges(data) {
         if (!data) return;
 
-        // Update Neighbor Density Meter
-        updateNeighborDensityGauge(data.neighbor_count);
+        // Update Neighbor Density Meter (now with baseline comparison)
+        updateNeighborDensityGauge(data.neighbor_count, data.neighbor_baseline, data.neighbor_deviation);
 
         // Update EARFCN Consistency Check
         updateEarfcnConsistencyGauge(data.earfcn, data.band, data.earfcn_valid, data.expected_band);
 
         // Update RRC State Watcher
         updateRrcStateGauge(data.rrc_state);
+
+        // Update TAC Consistency (Gemini: PRIMARY indicator)
+        updateTacConsistencyGauge(data.tac, data.tac_changed, data.tac_previous);
+
+        // Update Tower Distance (Timing Advance)
+        updateDistanceGauge(data.distance_km, data.distance_anomaly);
     }
 
-    // Neighbor Density Meter
-    function updateNeighborDensityGauge(count) {
+    // Neighbor Density Meter (Gemini: Use RELATIVE change, not absolute)
+    function updateNeighborDensityGauge(count, baseline, deviation) {
         const gauge = document.getElementById('gauge-neighbor-density');
         const numberEl = gauge.querySelector('.l1-gauge-number');
         const barFill = document.getElementById('gauge-neighbor-bar');
@@ -4786,39 +4832,49 @@
             return;
         }
 
-        numberEl.textContent = count;
+        // Show count with baseline comparison
+        if (baseline !== null && baseline !== undefined) {
+            numberEl.textContent = `${count}/${baseline.toFixed(0)}`;
+        } else {
+            numberEl.textContent = count;
+        }
 
-        // Calculate bar width (0 neighbors = 0%, 5+ neighbors = 100%)
-        const barPercent = Math.min(count * 20, 100);
+        // Calculate bar width based on deviation from baseline
+        let barPercent;
+        if (baseline && baseline > 0) {
+            barPercent = Math.min((count / baseline) * 100, 100);
+        } else {
+            barPercent = Math.min(count * 20, 100);
+        }
         barFill.style.width = `${barPercent}%`;
 
-        // Determine status
+        // Determine status based on RELATIVE deviation (Gemini recommendation)
         gauge.classList.remove('alert', 'warning');
         barFill.classList.remove('normal', 'warning', 'alert');
         statusEl.classList.remove('normal', 'warning', 'alert');
 
-        // Check for Radio Isolation Alert (drop from 4+ to 1)
-        if (previousNeighborCount !== null && previousNeighborCount >= 4 && count <= 1) {
-            // Radio Isolation Alert!
+        // Check for significant drop from baseline (>50% drop when baseline >= 3)
+        if (baseline >= 3 && deviation !== null && deviation <= -baseline * 0.5) {
+            // Significant drop alert!
             gauge.classList.add('alert');
             barFill.classList.add('alert');
             statusEl.classList.add('alert');
-            statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Radio Isolation!';
-            showL1SecurityAlert('Radio Isolation Alert',
-                `Neighbor PCIs dropped from ${previousNeighborCount} to ${count}. Possible IMSI catcher or jammer nearby.`);
-        } else if (count <= 1) {
-            // Warning: Low neighbor count
+            statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Sudden Drop!';
+            showL1SecurityAlert('Neighbor Drop Alert',
+                `Neighbors dropped ${Math.abs(deviation).toFixed(0)} below baseline (${baseline.toFixed(0)}). Possible IMSI catcher.`);
+        } else if (count === 0) {
+            // No neighbors - isolated cell
             gauge.classList.add('warning');
             barFill.classList.add('warning');
             statusEl.classList.add('warning');
-            statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Low Density';
-        } else if (count <= 2) {
-            // Caution
+            statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Isolated';
+        } else if (deviation !== null && deviation < -1) {
+            // Below baseline
             barFill.classList.add('warning');
             statusEl.classList.add('warning');
-            statusEl.innerHTML = '<i class="fas fa-minus-circle"></i> Sparse';
+            statusEl.innerHTML = '<i class="fas fa-arrow-down"></i> Below Baseline';
         } else {
-            // Normal
+            // Normal - at or above baseline
             barFill.classList.add('normal');
             statusEl.classList.add('normal');
             statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Normal';
@@ -4944,6 +5000,101 @@
             barFill.style.width = '50%';
             statusEl.classList.add('warning');
             statusEl.innerHTML = '<i class="fas fa-question-circle"></i> Unknown';
+        }
+    }
+
+    // TAC Consistency Gauge (Gemini: PRIMARY IMSI catcher indicator)
+    function updateTacConsistencyGauge(tac, tacChanged, tacPrevious) {
+        const gauge = document.getElementById('gauge-tac-check');
+        if (!gauge) return;
+
+        const numberEl = document.getElementById('gauge-tac-number');
+        const barFill = document.getElementById('gauge-tac-bar');
+        const statusEl = document.getElementById('gauge-tac-status');
+
+        if (tac === null || tac === undefined) {
+            numberEl.textContent = '--';
+            return;
+        }
+
+        numberEl.textContent = tac;
+
+        gauge.classList.remove('alert', 'warning');
+        barFill.classList.remove('normal', 'warning', 'alert');
+        statusEl.classList.remove('normal', 'warning', 'alert');
+
+        if (tacChanged === true) {
+            // TAC CHANGED - Classic IMSI catcher indicator!
+            gauge.classList.add('alert');
+            barFill.classList.add('alert');
+            barFill.style.width = '100%';
+            statusEl.classList.add('alert');
+            statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Changed!';
+            showL1SecurityAlert('TAC Change Detected',
+                `Location Area changed from ${tacPrevious} to ${tac}. Classic IMSI catcher "Location Update" trap.`);
+        } else {
+            // TAC stable
+            barFill.classList.add('normal');
+            barFill.style.width = '100%';
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Stable';
+        }
+    }
+
+    // Tower Distance Gauge (Timing Advance indicator)
+    function updateDistanceGauge(distanceKm, distanceAnomaly) {
+        const gauge = document.getElementById('gauge-distance');
+        if (!gauge) return;
+
+        const numberEl = document.getElementById('gauge-distance-number');
+        const barFill = document.getElementById('gauge-distance-bar');
+        const statusEl = document.getElementById('gauge-distance-status');
+
+        if (distanceKm === null || distanceKm === undefined) {
+            numberEl.textContent = '--';
+            return;
+        }
+
+        // Show distance with appropriate precision
+        if (distanceKm < 1) {
+            numberEl.textContent = (distanceKm * 1000).toFixed(0);
+            gauge.querySelector('.l1-gauge-unit').textContent = 'm';
+        } else {
+            numberEl.textContent = distanceKm.toFixed(1);
+            gauge.querySelector('.l1-gauge-unit').textContent = 'km';
+        }
+
+        // Bar width based on distance (0-10km range)
+        const barPercent = Math.min((distanceKm / 10) * 100, 100);
+        barFill.style.width = `${Math.max(barPercent, 10)}%`;
+
+        gauge.classList.remove('alert', 'warning');
+        barFill.classList.remove('normal', 'warning', 'alert');
+        statusEl.classList.remove('normal', 'warning', 'alert');
+
+        if (distanceAnomaly === true) {
+            // Suspiciously close tower - possible portable RBS
+            gauge.classList.add('warning');
+            barFill.classList.add('warning');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Very Close!';
+            showL1SecurityAlert('Distance Anomaly',
+                `Tower distance is only ${(distanceKm * 1000).toFixed(0)}m. Possible portable RBS in nearby vehicle.`);
+        } else if (distanceKm < 0.3) {
+            // Close but not anomalous
+            barFill.classList.add('normal');
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Close';
+        } else if (distanceKm > 5) {
+            // Far from tower
+            barFill.classList.add('warning');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-signal"></i> Far';
+        } else {
+            // Normal distance
+            barFill.classList.add('normal');
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Normal';
         }
     }
 
