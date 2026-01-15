@@ -2600,37 +2600,11 @@ def api_l1_status():
                 'error': l1_data.get('error')
             })
         else:
-            # Fallback to demo data if host agent not available
+            # No modem available - return minimal response so UI hides the section
             return jsonify({
                 'success': True,
                 'available': False,
-                'demo_mode': True,
-                'network_type': _l1_state['current_cell'].get('network_type', '5G SA'),
-                'carrier': _l1_state['current_cell'].get('carrier', 'Demo Carrier'),
-                'cell_id': _l1_state['current_cell'].get('cell_id', '12345678'),
-                'pci': _l1_state['current_cell'].get('pci', '42'),
-                'tac': _l1_state['current_cell'].get('tac', '1234'),
-                'band': _l1_state['current_cell'].get('band', 'n78'),
-                'mcc_mnc': _l1_state['current_cell'].get('mcc_mnc', '310-260'),
-                'rsrp': _l1_state['current_cell'].get('rsrp', -85),
-                'sinr': _l1_state['current_cell'].get('sinr', 22),
-                'snr': _l1_state['current_cell'].get('snr', 20.5),
-                'distance_km': 1.2,
-                'handovers_1h': 2,
-                'tower_status': 'verified',
-                'trust_score': _l1_state['trust_score'],
-                'trust_components': _l1_state['trust_components'],
-                'survival_mode': _l1_state['survival_mode'],
-                'vpn_ready': False,
-                # Demo security gauge fields
-                'earfcn': '1400',
-                'neighbors': '114,116,118',
-                'nr_arfcn': '634000',
-                'rrc_state': 'rrc-idle',
-                'neighbor_count': 3,
-                'earfcn_valid': True,
-                'expected_band': None,
-                'host_agent_error': l1_data.get('error', 'Host agent not available')
+                'reason': l1_data.get('error', 'No modem detected')
             })
     except Exception as e:
         logger.error(f"L1 status API error: {e}")
