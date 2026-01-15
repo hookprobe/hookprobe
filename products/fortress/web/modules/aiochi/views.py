@@ -2576,11 +2576,14 @@ def api_l1_status():
                 'rsrp': l1_data.get('rsrp'),
                 'sinr': l1_data.get('sinr'),
                 'snr': l1_data.get('snr'),
-                # Additional detailed signal info from mbimcli
+                # Additional detailed signal info from mbimcli/qmicli
                 'rsrp_5g': l1_data.get('rsrp_5g'),
                 'rsrp_lte': l1_data.get('rsrp_lte'),
                 'snr_5g': l1_data.get('snr_5g'),
                 'snr_lte': l1_data.get('snr_lte'),
+                'rsrq_5g': l1_data.get('rsrq_5g'),
+                'rsrq_lte': l1_data.get('rsrq_lte'),
+                'rssi': l1_data.get('rssi'),
                 'distance_km': l1_data.get('distance_km'),
                 'handovers_1h': l1_data.get('handovers_1h', 0),
                 'tower_status': l1_data.get('tower_status', 'unknown'),
