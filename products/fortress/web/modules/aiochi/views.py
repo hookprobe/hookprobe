@@ -103,6 +103,108 @@ def _sanitize_notes(notes: str, max_length: int = 200) -> str:
     sanitized = re.sub(r'[^a-zA-Z0-9\s.,!?\-_\']', '', notes)
     return sanitized[:max_length]
 
+
+# =============================================================================
+# BUBBLE TYPE TO NETWORK POLICY MAPPING
+# =============================================================================
+# Maps bubble/group types to their corresponding network policies
+# These policy names match NetworkPolicy enum in device_policies.py
+BUBBLE_TYPE_TO_POLICY = {
+    'family': 'smart_home',       # Full access with smart home (home-friendly)
+    'guest': 'internet_only',     # Internet only, no LAN
+    'corporate': 'internet_only', # Work devices: Internet only, isolated from home
+    'work': 'internet_only',      # Alias for corporate
+    'smart_home': 'smart_home',   # IoT devices with full smart home access
+    'iot': 'smart_home',          # Alias for smart_home
+    'lan_only': 'lan_only',       # LAN only, no internet
+    'quarantine': 'quarantine',   # Fully isolated
+    'custom': 'smart_home',       # Default to smart_home for custom groups
+}
+
+
+def _apply_bubble_network_policy(mac: str, bubble_type: str):
+    """
+    Apply network policy for a device based on its bubble/group type.
+
+    This function syncs ALL THREE databases and applies OpenFlow rules:
+    1. autopilot.db (device_identity table) - Dashboard reads FIRST
+    2. devices.db (devices table) - device_policies module, SDN fallback
+    3. OpenFlow rules via host agent for actual network enforcement
+
+    Args:
+        mac: Device MAC address
+        bubble_type: The bubble type (family, guest, corporate, smart_home, lan_only, quarantine, custom)
+    """
+    _logger = logging.getLogger(__name__)
+    mac_upper = mac.upper().replace('-', ':')
+
+    # Map bubble type to network policy
+    bubble_type_lower = (bubble_type or 'custom').lower()
+    policy_name = BUBBLE_TYPE_TO_POLICY.get(bubble_type_lower, 'smart_home')
+
+    _logger.info(f"Applying bubble policy: {mac_upper} -> bubble_type={bubble_type_lower} -> policy={policy_name}")
+
+    # Step 1: Update autopilot.db (PRIMARY source for Dashboard)
+    try:
+        from lib.sdn_autopilot import get_autopilot
+        autopilot = get_autopilot()
+        if autopilot:
+            result = autopilot.set_policy(mac_upper, policy_name)
+            if result:
+                _logger.info(f"Updated autopilot.db: {mac_upper} -> {policy_name}")
+            else:
+                _logger.warning(f"Failed to update autopilot.db for {mac_upper}")
+    except ImportError as e:
+        _logger.warning(f"sdn_autopilot module not available: {e}")
+    except Exception as e:
+        _logger.error(f"Failed to update autopilot.db for {mac_upper}: {e}")
+
+    # Step 2: Update device policy in devices.db
+    try:
+        from lib.device_policies import set_device_policy
+        result = set_device_policy(mac_upper, policy_name)
+        if result:
+            _logger.info(f"Updated devices.db: {mac_upper} -> {policy_name}")
+        else:
+            _logger.warning(f"Failed to update devices.db for {mac_upper}")
+    except ImportError as e:
+        _logger.warning(f"device_policies module not available: {e}")
+    except Exception as e:
+        _logger.error(f"Failed to update devices.db for {mac_upper}: {e}")
+
+    # Step 3: Apply OpenFlow rules via host agent
+    try:
+        from lib.host_agent_client import apply_policy, is_host_agent_available
+
+        if not is_host_agent_available():
+            _logger.warning(f"Host agent not available, cannot apply OpenFlow policy for {mac_upper}")
+            return
+
+        result = apply_policy(mac_upper, policy_name)
+        if result.get('success'):
+            _logger.info(f"Applied {policy_name} OpenFlow policy to device {mac_upper}")
+        else:
+            _logger.error(f"Failed to apply {policy_name} OpenFlow policy: {result.get('error')}")
+    except ImportError as e:
+        _logger.warning(f"host_agent_client not available, skipping OpenFlow policy: {e}")
+    except Exception as e:
+        _logger.error(f"Failed to apply OpenFlow policy for {mac_upper}: {e}")
+
+
+def _apply_quarantine_network_policy(mac: str, quarantine: bool = True):
+    """
+    Apply or remove quarantine network policy for a device.
+
+    This is a convenience wrapper around _apply_bubble_network_policy for quarantine.
+
+    Args:
+        mac: Device MAC address
+        quarantine: True to apply quarantine (block all), False to remove (smart_home)
+    """
+    bubble_type = 'quarantine' if quarantine else 'smart_home'
+    _apply_bubble_network_policy(mac, bubble_type)
+
+
 logger = logging.getLogger(__name__)
 
 # AIOCHI API configuration
@@ -463,6 +565,12 @@ def create_bubble_in_module(name, bubble_type, devices, icon, color):
 def add_device_to_bubble_in_module(bubble_id, mac):
     """
     Add a device to a bubble in the bubbles module SQLite database.
+
+    Applies the bubble's network policy to the device across all databases:
+    - quarantine -> quarantine policy (fully isolated)
+    - guest/corporate/work -> internet_only policy
+    - family/smart_home/iot -> smart_home policy
+    - lan_only -> lan_only policy
     """
     if not BUBBLES_MODULE_AVAILABLE:
         return False
@@ -471,18 +579,23 @@ def add_device_to_bubble_in_module(bubble_id, mac):
         import json
         from flask_login import current_user
 
+        bubble_type = None
+
         with get_bubbles_db() as conn:
             now = datetime.now().isoformat()
 
-            # Check bubble exists
+            # Check bubble exists and get bubble_type
             row = conn.execute(
-                'SELECT bubble_id, devices_json FROM bubbles WHERE bubble_id = ?',
+                'SELECT bubble_id, devices_json, bubble_type FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
             if not row:
                 logger.warning(f"Bubble {bubble_id} not found in module database")
                 return False
+
+            # Get the bubble type for policy mapping
+            bubble_type = row['bubble_type'] or 'custom'
 
             # Add to manual_assignments (removes from any other bubble first)
             conn.execute(
@@ -514,7 +627,10 @@ def add_device_to_bubble_in_module(bubble_id, mac):
 
             conn.commit()
 
-        logger.info(f"Added device {mac} to bubble {bubble_id} via bubbles module")
+        # Apply the bubble's network policy to the device (syncs all 3 databases)
+        _apply_bubble_network_policy(mac.upper(), bubble_type)
+
+        logger.info(f"Added device {mac} to bubble {bubble_id} (type={bubble_type}) via bubbles module")
         return True
 
     except Exception as e:
@@ -527,6 +643,9 @@ def add_device_to_bubble_in_module(bubble_id, mac):
 def remove_device_from_bubble_in_module(bubble_id, mac):
     """
     Remove a device from a bubble in the bubbles module SQLite database.
+
+    If removing from quarantine (SYSTEM-QUARANTINE), also removes the ISOLATED
+    network policy to unblock the device.
     """
     if not BUBBLES_MODULE_AVAILABLE:
         return False
@@ -534,8 +653,20 @@ def remove_device_from_bubble_in_module(bubble_id, mac):
     try:
         import json
 
+        # Check if this is quarantine before removing
+        is_quarantine = bubble_id == 'SYSTEM-QUARANTINE'
+
         with get_bubbles_db() as conn:
             now = datetime.now().isoformat()
+
+            # Also check bubble_type in case bubble_id doesn't match
+            if not is_quarantine:
+                row = conn.execute(
+                    'SELECT bubble_type FROM bubbles WHERE bubble_id = ?',
+                    (bubble_id,)
+                ).fetchone()
+                if row and row['bubble_type'] == 'quarantine':
+                    is_quarantine = True
 
             # Remove from manual_assignments
             conn.execute(
@@ -562,6 +693,10 @@ def remove_device_from_bubble_in_module(bubble_id, mac):
 
             conn.commit()
 
+        # Remove quarantine network policy if removing from quarantine
+        if is_quarantine:
+            _apply_quarantine_network_policy(mac.upper(), quarantine=False)
+
         logger.info(f"Removed device {mac} from bubble {bubble_id} via bubbles module")
         return True
 
@@ -575,6 +710,12 @@ def remove_device_from_bubble_in_module(bubble_id, mac):
 def move_device_in_module(mac, from_bubble, to_bubble):
     """
     Move a device between bubbles in the bubbles module SQLite database.
+
+    Applies the TARGET bubble's network policy to the device:
+    - quarantine -> quarantine policy (fully isolated)
+    - guest/corporate/work -> internet_only policy
+    - family/smart_home/iot -> smart_home policy
+    - lan_only -> lan_only policy
     """
     if not BUBBLES_MODULE_AVAILABLE:
         return False
@@ -583,20 +724,24 @@ def move_device_in_module(mac, from_bubble, to_bubble):
         import json
         from flask_login import current_user
 
+        to_bubble_type = None
+
         with get_bubbles_db() as conn:
             now = datetime.now().isoformat()
 
-            # Check target bubble exists
-            row = conn.execute(
-                'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+            # Check target bubble exists and get bubble_type
+            to_row = conn.execute(
+                'SELECT bubble_id, bubble_type FROM bubbles WHERE bubble_id = ?',
                 (to_bubble,)
             ).fetchone()
 
-            if not row:
+            if not to_row:
                 logger.warning(f"Target bubble {to_bubble} not found in module database")
                 return False
 
-            # Remove from old bubble's device list if specified
+            to_bubble_type = to_row['bubble_type'] or 'custom'
+
+            # Remove device from source bubble's devices_json
             if from_bubble:
                 from_row = conn.execute(
                     'SELECT devices_json FROM bubbles WHERE bubble_id = ?',
@@ -626,15 +771,14 @@ def move_device_in_module(mac, from_bubble, to_bubble):
                   now))
 
             # Update target bubble devices list
-            to_row = conn.execute(
+            devices = []
+            to_devices_row = conn.execute(
                 'SELECT devices_json FROM bubbles WHERE bubble_id = ?',
                 (to_bubble,)
             ).fetchone()
-
-            devices = []
-            if to_row and to_row['devices_json']:
+            if to_devices_row and to_devices_row['devices_json']:
                 try:
-                    devices = json.loads(to_row['devices_json'])
+                    devices = json.loads(to_devices_row['devices_json'])
                 except (json.JSONDecodeError, TypeError):
                     pass
 
@@ -647,7 +791,10 @@ def move_device_in_module(mac, from_bubble, to_bubble):
 
             conn.commit()
 
-        logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} via bubbles module")
+        # Apply the TARGET bubble's network policy (syncs all 3 databases)
+        _apply_bubble_network_policy(mac.upper(), to_bubble_type)
+
+        logger.info(f"Moved device {mac} from {from_bubble} to {to_bubble} (type={to_bubble_type}) via bubbles module")
         return True
 
     except Exception as e:
@@ -2361,6 +2508,355 @@ def api_agent_trust_set(mac_address):
 
 
 # ============================================================================
+# L1 SOC API - Physical Layer Security Operations Center
+# ============================================================================
+# These endpoints provide L1 (cellular/radio) security status for the dashboard.
+# When AIOCHI is enabled, these proxy to the L1 SOC backend. When disabled,
+# they return demo data.
+
+# In-memory state for demo/fallback
+_l1_state = {
+    'available': False,
+    'survival_mode': False,
+    'survival_trigger': None,
+    'survival_since': None,
+    'trust_score': 85,
+    'trust_components': {
+        'tower_identity': 100,
+        'snr_score': 75,
+        'signal_stability': 90,
+        'temporal_consistency': 95,
+        'handover_score': 100
+    },
+    'current_cell': {
+        'cell_id': '12345678',
+        'pci': 42,
+        'tac': 1234,
+        'mcc_mnc': '310-260',
+        'band': 'n78',
+        'rsrp': -85,
+        'sinr': 22,
+        'snr': 20.5,
+        'ta': 15,
+        'carrier': 'Verizon',
+        'network_type': '5G SA',
+        'status': 'trusted'
+    }
+}
+
+
+@aiochi_bp.route('/api/l1/status')
+@login_required
+def api_l1_status():
+    """Get L1 SOC status including trust score and survival mode state.
+
+    Uses fts-host-agent to read modem data via mmcli on the host.
+    """
+    try:
+        # Try to get L1 data from host agent
+        # Uses absolute import since lib/ is at /app/lib (sibling to web/)
+        from lib.host_agent_client import get_l1_status
+        l1_data = get_l1_status()
+
+        if l1_data.get('success') and not l1_data.get('socket_missing'):
+            # Real L1 data from host modem
+            # Use network_type_detail if available (more accurate from mbimcli)
+            network_type = l1_data.get('network_type_detail') or l1_data.get('network_type')
+            return jsonify({
+                'success': True,
+                'available': True,
+                'demo_mode': False,
+                'network_type': network_type,
+                'carrier': l1_data.get('carrier'),
+                'cell_id': l1_data.get('cell_id'),
+                'pci': l1_data.get('pci'),
+                'tac': l1_data.get('tac'),
+                'band': l1_data.get('band'),
+                'mcc_mnc': l1_data.get('mcc_mnc'),
+                'rsrp': l1_data.get('rsrp'),
+                'sinr': l1_data.get('sinr'),
+                'snr': l1_data.get('snr'),
+                # Additional detailed signal info from mbimcli
+                'rsrp_5g': l1_data.get('rsrp_5g'),
+                'rsrp_lte': l1_data.get('rsrp_lte'),
+                'snr_5g': l1_data.get('snr_5g'),
+                'snr_lte': l1_data.get('snr_lte'),
+                'distance_km': l1_data.get('distance_km'),
+                'handovers_1h': l1_data.get('handovers_1h', 0),
+                'tower_status': l1_data.get('tower_status', 'unknown'),
+                'trust_score': l1_data.get('trust_score', 50),
+                'trust_components': l1_data.get('trust_components', {}),
+                'survival_mode': l1_data.get('survival_mode', False),
+                'vpn_ready': l1_data.get('vpn_ready', False),
+                # Extended fields from qmicli
+                'earfcn': l1_data.get('earfcn'),
+                'neighbors': l1_data.get('neighbors'),
+                'nr_arfcn': l1_data.get('nr_arfcn'),
+                # Security gauge fields
+                'rrc_state': l1_data.get('rrc_state'),
+                'neighbor_count': l1_data.get('neighbor_count'),
+                'earfcn_valid': l1_data.get('earfcn_valid'),
+                'expected_band': l1_data.get('expected_band'),
+                'error': l1_data.get('error')
+            })
+        else:
+            # Fallback to demo data if host agent not available
+            return jsonify({
+                'success': True,
+                'available': False,
+                'demo_mode': True,
+                'network_type': _l1_state['current_cell'].get('network_type', '5G SA'),
+                'carrier': _l1_state['current_cell'].get('carrier', 'Demo Carrier'),
+                'cell_id': _l1_state['current_cell'].get('cell_id', '12345678'),
+                'pci': _l1_state['current_cell'].get('pci', '42'),
+                'tac': _l1_state['current_cell'].get('tac', '1234'),
+                'band': _l1_state['current_cell'].get('band', 'n78'),
+                'mcc_mnc': _l1_state['current_cell'].get('mcc_mnc', '310-260'),
+                'rsrp': _l1_state['current_cell'].get('rsrp', -85),
+                'sinr': _l1_state['current_cell'].get('sinr', 22),
+                'snr': _l1_state['current_cell'].get('snr', 20.5),
+                'distance_km': 1.2,
+                'handovers_1h': 2,
+                'tower_status': 'verified',
+                'trust_score': _l1_state['trust_score'],
+                'trust_components': _l1_state['trust_components'],
+                'survival_mode': _l1_state['survival_mode'],
+                'vpn_ready': False,
+                # Demo security gauge fields
+                'earfcn': '1400',
+                'neighbors': '114,116,118',
+                'nr_arfcn': '634000',
+                'rrc_state': 'rrc-idle',
+                'neighbor_count': 3,
+                'earfcn_valid': True,
+                'expected_band': None,
+                'host_agent_error': l1_data.get('error', 'Host agent not available')
+            })
+    except Exception as e:
+        logger.error(f"L1 status API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/l1/survival/enter', methods=['POST'])
+@login_required
+def api_l1_survival_enter():
+    """Manually enter survival mode."""
+    try:
+        data = request.get_json() or {}
+        trigger = data.get('trigger', 'manual')
+
+        if AIOCHI_ENABLED:
+            try:
+                import requests
+                resp = requests.post(
+                    'http://localhost:8061/api/l1/survival/enter',
+                    json={'trigger': trigger},
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    return jsonify(resp.json())
+            except Exception as e:
+                logger.warning(f"Failed to contact L1 SOC for survival mode: {e}")
+
+        # Fallback: update local state
+        _l1_state['survival_mode'] = True
+        _l1_state['survival_trigger'] = trigger
+        _l1_state['survival_since'] = datetime.utcnow().isoformat()
+
+        logger.warning(f"Survival mode entered manually: {trigger}")
+
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_ENABLED,
+            'survival_mode': True,
+            'trigger': trigger,
+            'message': 'Survival mode activated'
+        })
+    except Exception as e:
+        logger.error(f"Survival enter API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/l1/survival/exit', methods=['POST'])
+@login_required
+def api_l1_survival_exit():
+    """Exit survival mode."""
+    try:
+        if AIOCHI_ENABLED:
+            try:
+                import requests
+                resp = requests.post(
+                    'http://localhost:8061/api/l1/survival/exit',
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    return jsonify(resp.json())
+            except Exception as e:
+                logger.warning(f"Failed to contact L1 SOC to exit survival mode: {e}")
+
+        # Fallback: update local state
+        _l1_state['survival_mode'] = False
+        _l1_state['survival_trigger'] = None
+        _l1_state['survival_since'] = None
+
+        logger.info("Survival mode exited")
+
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_ENABLED,
+            'survival_mode': False,
+            'message': 'Survival mode deactivated'
+        })
+    except Exception as e:
+        logger.error(f"Survival exit API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+# ============================================================================
+# AI Agent Activity & Prompts API
+# ============================================================================
+# These endpoints provide AI activity feed and user prompt management for
+# the "Less is More" UX approach.
+
+# In-memory storage for pending prompts and decisions
+_pending_prompts = []
+_ai_decisions = []
+
+
+@aiochi_bp.route('/api/agent/activity')
+@login_required
+def api_agent_activity():
+    """Get recent AI activity for the activity feed."""
+    try:
+        # Try to get from autonomous agent if available
+        activity_items = []
+
+        if AIOCHI_ENABLED:
+            try:
+                import requests
+                resp = requests.get('http://localhost:8060/api/agent/decisions', timeout=2)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    activity_items = data.get('decisions', [])[:10]  # Last 10
+            except Exception:
+                pass
+
+        if not activity_items:
+            # Return demo/empty state
+            activity_items = []
+
+        # Format for frontend
+        formatted = []
+        for item in activity_items:
+            formatted.append({
+                'id': item.get('id', ''),
+                'type': item.get('type', 'action'),
+                'narrative': item.get('narrative', item.get('description', '')),
+                'icon': item.get('icon', 'fa-robot'),
+                'color': _get_decision_color(item.get('confidence', 1.0)),
+                'confidence': item.get('confidence', 1.0),
+                'auto_execute': item.get('auto_execute', False),
+                'countdown': item.get('countdown', 0),
+                'timestamp': item.get('timestamp', datetime.utcnow().isoformat())
+            })
+
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_ENABLED,
+            'activity': formatted,
+            'pending_count': len([i for i in formatted if i.get('auto_execute')])
+        })
+    except Exception as e:
+        logger.error(f"Agent activity API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+def _get_decision_color(confidence):
+    """Map confidence to UI color class."""
+    if confidence >= 0.85:
+        return 'success'
+    elif confidence >= 0.60:
+        return 'info'
+    elif confidence >= 0.30:
+        return 'warning'
+    else:
+        return 'danger'
+
+
+@aiochi_bp.route('/api/agent/prompts')
+@login_required
+def api_agent_prompts():
+    """Get pending user prompts (confidence < 30%)."""
+    try:
+        prompts = []
+
+        if AIOCHI_ENABLED:
+            try:
+                import requests
+                resp = requests.get('http://localhost:8060/api/agent/prompts', timeout=2)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    prompts = data.get('prompts', [])
+            except Exception:
+                pass
+
+        # Filter to only low-confidence prompts that need user input
+        user_prompts = [p for p in prompts if p.get('confidence', 1.0) < 0.30]
+
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_ENABLED,
+            'prompts': user_prompts
+        })
+    except Exception as e:
+        logger.error(f"Agent prompts API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+@aiochi_bp.route('/api/agent/decision/<decision_id>', methods=['POST'])
+@login_required
+def api_agent_decision_respond(decision_id):
+    """Submit user response to an AI decision prompt."""
+    from flask_login import current_user
+    try:
+        data = request.get_json() or {}
+        action = data.get('action', 'dismiss')
+        user_decision = data.get('user_decision', True)
+
+        username = current_user.username if hasattr(current_user, 'username') else 'unknown'
+        logger.info(f"User decision for {decision_id}: {action} by {username}")
+
+        if AIOCHI_ENABLED:
+            try:
+                import requests
+                resp = requests.post(
+                    f'http://localhost:8060/api/agent/decisions/{decision_id}/respond',
+                    json={
+                        'action': action,
+                        'user_decision': user_decision,
+                        'user': username
+                    },
+                    timeout=5
+                )
+                if resp.status_code == 200:
+                    return jsonify(resp.json())
+            except Exception as e:
+                logger.warning(f"Failed to submit decision to agent: {e}")
+
+        # Fallback: acknowledge locally
+        return jsonify({
+            'success': True,
+            'demo_mode': not AIOCHI_ENABLED,
+            'decision_id': decision_id,
+            'action': action,
+            'message': 'Decision recorded'
+        })
+    except Exception as e:
+        logger.error(f"Agent decision API error: {e}")
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+
+# ============================================================================
 # Bubble Management API (AIOCHI Identity Engine Integration)
 # ============================================================================
 # These endpoints proxy to the AIOCHI Identity Engine for unified bubble
@@ -3083,7 +3579,19 @@ def api_bubble_create():
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['PUT'])
 @login_required
 def api_bubble_update(bubble_id):
-    """Update a bubble (name, type, color, icon)."""
+    """Update a bubble (name, type, color, icon).
+
+    Note: Quarantine (SYSTEM-QUARANTINE) is a system-managed group
+    and cannot be modified.
+    """
+    # Protect system groups (like Quarantine)
+    if bubble_id == 'SYSTEM-QUARANTINE':
+        return jsonify({
+            'success': False,
+            'error': 'Quarantine is a system-managed group and cannot be modified.',
+            'is_system': True
+        }), 403
+
     import requests
     try:
         data = request.get_json() or {}
@@ -3179,7 +3687,19 @@ def api_bubble_update(bubble_id):
 @aiochi_bp.route('/api/bubbles/<bubble_id>', methods=['DELETE'])
 @admin_required
 def api_bubble_delete(bubble_id):
-    """Delete a bubble. Devices become unassigned. Requires admin privileges."""
+    """Delete a bubble. Devices become unassigned. Requires admin privileges.
+
+    Note: Quarantine (SYSTEM-QUARANTINE) is a system-managed group
+    and cannot be deleted.
+    """
+    # Protect system groups (like Quarantine)
+    if bubble_id == 'SYSTEM-QUARANTINE':
+        return jsonify({
+            'success': False,
+            'error': 'Quarantine is a system-managed group and cannot be deleted. Move devices out of Quarantine instead.',
+            'is_system': True
+        }), 403
+
     import requests
     try:
         if AIOCHI_ENABLED:
