@@ -1317,6 +1317,64 @@
         color: var(--aiochi-text);
     }
 
+    /* Signal Quality Sections (LTE/5G dual display) */
+    .l1-signal-section {
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .l1-signal-section:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+    .l1-signal-section-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+    .l1-signal-tech {
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .l1-signal-tech.lte {
+        background: rgba(79, 195, 247, 0.2);
+        color: #4fc3f7;
+        border: 1px solid rgba(79, 195, 247, 0.3);
+    }
+    .l1-signal-tech.nr {
+        background: rgba(171, 71, 188, 0.2);
+        color: #ce93d8;
+        border: 1px solid rgba(171, 71, 188, 0.3);
+    }
+    .l1-signal-subtitle {
+        font-size: 0.65rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .l1-signal-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .l1-connection-status {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    .l1-connection-status .l1-info-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    /* Signal value coloring based on quality */
+    .l1-info-value.signal-excellent { color: var(--aiochi-calm); }
+    .l1-info-value.signal-good { color: #81c784; }
+    .l1-info-value.signal-fair { color: var(--aiochi-curious); }
+    .l1-info-value.signal-poor { color: var(--aiochi-alert); }
+
     /* L1 Trust Score Gauge */
     .l1-trust-gauge {
         display: flex;
@@ -3408,37 +3466,64 @@
                     </div>
                 </div>
 
-                <!-- Signal Metrics Panel -->
+                <!-- Signal Metrics Panel (Enhanced for 5G NSA dual connectivity) -->
                 <div class="l1-panel">
                     <div class="l1-panel-header">
                         <i class="fas fa-chart-line"></i>
                         <span>Signal Quality</span>
                     </div>
-                    <div class="l1-info-grid">
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">RSRP</div>
-                            <div class="l1-info-value" id="l1-rsrp">--</div>
+                    <!-- LTE Anchor Signal -->
+                    <div class="l1-signal-section">
+                        <div class="l1-signal-section-header">
+                            <span class="l1-signal-tech lte">LTE</span>
+                            <span class="l1-signal-subtitle">Anchor</span>
                         </div>
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">SINR</div>
-                            <div class="l1-info-value" id="l1-sinr">--</div>
+                        <div class="l1-info-grid l1-signal-grid">
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">RSRP</div>
+                                <div class="l1-info-value" id="l1-rsrp-lte">--</div>
+                            </div>
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">SNR</div>
+                                <div class="l1-info-value" id="l1-snr-lte">--</div>
+                            </div>
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">RSRQ</div>
+                                <div class="l1-info-value" id="l1-rsrq-lte">--</div>
+                            </div>
                         </div>
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">SNR</div>
-                            <div class="l1-info-value" id="l1-snr">--</div>
+                    </div>
+                    <!-- 5G NR Signal -->
+                    <div class="l1-signal-section" id="l1-5g-section">
+                        <div class="l1-signal-section-header">
+                            <span class="l1-signal-tech nr">5G NR</span>
+                            <span class="l1-signal-subtitle">Secondary</span>
                         </div>
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">Distance</div>
-                            <div class="l1-info-value" id="l1-distance">--</div>
+                        <div class="l1-info-grid l1-signal-grid">
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">RSRP</div>
+                                <div class="l1-info-value" id="l1-rsrp-5g">--</div>
+                            </div>
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">SNR</div>
+                                <div class="l1-info-value" id="l1-snr-5g">--</div>
+                            </div>
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">RSSI</div>
+                                <div class="l1-info-value" id="l1-rssi">--</div>
+                            </div>
                         </div>
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">Handovers (1h)</div>
-                            <div class="l1-info-value" id="l1-handovers">--</div>
-                        </div>
-                        <div class="l1-info-item">
-                            <div class="l1-info-label">Tower Status</div>
-                            <div class="l1-info-value" id="l1-tower-status">
-                                <i class="fas fa-question-circle"></i> --
+                    </div>
+                    <!-- Connection Status -->
+                    <div class="l1-signal-section l1-connection-status">
+                        <div class="l1-info-grid">
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">RRC State</div>
+                                <div class="l1-info-value" id="l1-rrc-state">--</div>
+                            </div>
+                            <div class="l1-info-item">
+                                <div class="l1-info-label">Handovers (1h)</div>
+                                <div class="l1-info-value" id="l1-handovers">--</div>
                             </div>
                         </div>
                     </div>
@@ -3540,128 +3625,6 @@
                     </div>
                 </div>
 
-                <!-- Security Gauges Panel -->
-                <div class="l1-panel l1-security-gauges">
-                    <div class="l1-panel-header">
-                        <i class="fas fa-shield-virus"></i>
-                        <span>Security Gauges</span>
-                    </div>
-                    <div class="l1-security-gauge-grid">
-                        <!-- Neighbor Density Meter -->
-                        <div class="l1-security-gauge" id="gauge-neighbor-density">
-                            <div class="l1-gauge-icon">
-                                <i class="fas fa-broadcast-tower"></i>
-                            </div>
-                            <div class="l1-gauge-content">
-                                <div class="l1-gauge-label">Neighbor Density</div>
-                                <div class="l1-gauge-value" id="gauge-neighbor-value">
-                                    <span class="l1-gauge-number">--</span>
-                                    <span class="l1-gauge-unit">PCIs</span>
-                                </div>
-                                <div class="l1-gauge-bar">
-                                    <div class="l1-gauge-bar-fill normal" id="gauge-neighbor-bar" style="width: 75%;"></div>
-                                </div>
-                                <div class="l1-gauge-status normal" id="gauge-neighbor-status">
-                                    <i class="fas fa-check-circle"></i> Normal
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- EARFCN Consistency Check -->
-                        <div class="l1-security-gauge" id="gauge-earfcn-check">
-                            <div class="l1-gauge-icon">
-                                <i class="fas fa-wave-square"></i>
-                            </div>
-                            <div class="l1-gauge-content">
-                                <div class="l1-gauge-label">EARFCN Consistency</div>
-                                <div class="l1-gauge-value" id="gauge-earfcn-value">
-                                    <span class="l1-gauge-number" id="gauge-earfcn-number">--</span>
-                                    <span class="l1-gauge-unit">&rarr;</span>
-                                    <span class="l1-gauge-band" id="gauge-earfcn-band">--</span>
-                                </div>
-                                <div class="l1-gauge-bar">
-                                    <div class="l1-gauge-bar-fill normal" id="gauge-earfcn-bar" style="width: 100%;"></div>
-                                </div>
-                                <div class="l1-gauge-status normal" id="gauge-earfcn-status">
-                                    <i class="fas fa-check-circle"></i> Verified
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- RRC State Watcher -->
-                        <div class="l1-security-gauge" id="gauge-rrc-state">
-                            <div class="l1-gauge-icon">
-                                <i class="fas fa-random"></i>
-                            </div>
-                            <div class="l1-gauge-content">
-                                <div class="l1-gauge-label">RRC State</div>
-                                <div class="l1-gauge-value" id="gauge-rrc-value">
-                                    <span class="l1-gauge-state" id="gauge-rrc-current">--</span>
-                                </div>
-                                <div class="l1-gauge-bar">
-                                    <div class="l1-gauge-bar-fill normal" id="gauge-rrc-bar" style="width: 100%;"></div>
-                                </div>
-                                <div class="l1-gauge-status normal" id="gauge-rrc-status">
-                                    <i class="fas fa-check-circle"></i> Healthy
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- TAC Consistency (Gemini: PRIMARY indicator) -->
-                        <div class="l1-security-gauge" id="gauge-tac-check">
-                            <div class="l1-gauge-icon">
-                                <i class="fas fa-map-marker-alt"></i>
-                            </div>
-                            <div class="l1-gauge-content">
-                                <div class="l1-gauge-label">TAC Consistency</div>
-                                <div class="l1-gauge-value" id="gauge-tac-value">
-                                    <span class="l1-gauge-number" id="gauge-tac-number">--</span>
-                                    <span class="l1-gauge-unit">TAC</span>
-                                </div>
-                                <div class="l1-gauge-bar">
-                                    <div class="l1-gauge-bar-fill normal" id="gauge-tac-bar" style="width: 100%;"></div>
-                                </div>
-                                <div class="l1-gauge-status normal" id="gauge-tac-status">
-                                    <i class="fas fa-check-circle"></i> Stable
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Tower Distance (Timing Advance) -->
-                        <div class="l1-security-gauge" id="gauge-distance">
-                            <div class="l1-gauge-icon">
-                                <i class="fas fa-ruler"></i>
-                            </div>
-                            <div class="l1-gauge-content">
-                                <div class="l1-gauge-label">Tower Distance</div>
-                                <div class="l1-gauge-value" id="gauge-distance-value">
-                                    <span class="l1-gauge-number" id="gauge-distance-number">--</span>
-                                    <span class="l1-gauge-unit">km</span>
-                                </div>
-                                <div class="l1-gauge-bar">
-                                    <div class="l1-gauge-bar-fill normal" id="gauge-distance-bar" style="width: 50%;"></div>
-                                </div>
-                                <div class="l1-gauge-status normal" id="gauge-distance-status">
-                                    <i class="fas fa-check-circle"></i> Normal
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Alert Banner (hidden by default) -->
-                    <div class="l1-security-alert hidden" id="l1-security-alert">
-                        <div class="l1-alert-icon">
-                            <i class="fas fa-exclamation-triangle"></i>
-                        </div>
-                        <div class="l1-alert-content">
-                            <div class="l1-alert-title" id="l1-alert-title">Security Alert</div>
-                            <div class="l1-alert-message" id="l1-alert-message">No alerts</div>
-                        </div>
-                        <button class="l1-alert-dismiss" onclick="dismissL1Alert()">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -4616,25 +4579,58 @@
         document.getElementById('l1-carrier').textContent = data.carrier || '--';
         document.getElementById('l1-mccmnc').textContent = data.mcc_mnc || '--';
 
-        // Update signal metrics
-        document.getElementById('l1-rsrp').textContent = data.rsrp ? `${data.rsrp} dBm` : '--';
-        document.getElementById('l1-sinr').textContent = data.sinr ? `${data.sinr} dB` : '--';
-        document.getElementById('l1-snr').textContent = data.snr ? `${data.snr} dB` : '--';
-        document.getElementById('l1-distance').textContent = data.distance_km ? `~${data.distance_km} km` : '--';
-        document.getElementById('l1-handovers').textContent = data.handovers_1h ?? '--';
-
-        // Update tower status
-        const towerStatus = document.getElementById('l1-tower-status');
-        if (data.tower_status === 'verified') {
-            towerStatus.innerHTML = '<i class="fas fa-check-circle"></i> Verified';
-            towerStatus.style.color = 'var(--aiochi-calm)';
-        } else if (data.tower_status === 'unknown') {
-            towerStatus.innerHTML = '<i class="fas fa-question-circle"></i> Unknown';
-            towerStatus.style.color = 'var(--aiochi-curious)';
-        } else {
-            towerStatus.innerHTML = '<i class="fas fa-exclamation-circle"></i> Suspicious';
-            towerStatus.style.color = 'var(--aiochi-alert)';
+        // Update signal metrics (Enhanced LTE/5G dual display)
+        // LTE Anchor signals
+        const rsrpLteEl = document.getElementById('l1-rsrp-lte');
+        const snrLteEl = document.getElementById('l1-snr-lte');
+        const rsrqLteEl = document.getElementById('l1-rsrq-lte');
+        if (rsrpLteEl) {
+            rsrpLteEl.textContent = data.rsrp_lte ? `${data.rsrp_lte} dBm` : '--';
+            rsrpLteEl.className = 'l1-info-value ' + getRsrpSignalClass(data.rsrp_lte);
         }
+        if (snrLteEl) {
+            snrLteEl.textContent = data.snr_lte ? `${data.snr_lte} dB` : (data.sinr ? `${data.sinr} dB` : '--');
+            snrLteEl.className = 'l1-info-value ' + getSnrSignalClass(data.snr_lte || data.sinr);
+        }
+        if (rsrqLteEl) {
+            rsrqLteEl.textContent = data.rsrq_lte ? `${data.rsrq_lte} dB` : '--';
+        }
+
+        // 5G NR signals
+        const rsrp5gEl = document.getElementById('l1-rsrp-5g');
+        const snr5gEl = document.getElementById('l1-snr-5g');
+        const rssiEl = document.getElementById('l1-rssi');
+        const section5g = document.getElementById('l1-5g-section');
+
+        // Show/hide 5G section based on availability
+        const has5g = data.rsrp_5g !== null && data.rsrp_5g !== undefined && data.network_type_detail?.includes('5G');
+        if (section5g) {
+            section5g.style.display = has5g ? 'block' : 'none';
+        }
+        if (rsrp5gEl) {
+            rsrp5gEl.textContent = data.rsrp_5g ? `${data.rsrp_5g} dBm` : '--';
+            rsrp5gEl.className = 'l1-info-value ' + getRsrpSignalClass(data.rsrp_5g);
+        }
+        if (snr5gEl) {
+            snr5gEl.textContent = data.snr_5g ? `${data.snr_5g} dB` : (data.snr ? `${data.snr} dB` : '--');
+            snr5gEl.className = 'l1-info-value ' + getSnrSignalClass(data.snr_5g || data.snr);
+        }
+        if (rssiEl) {
+            rssiEl.textContent = data.rssi ? `${data.rssi} dBm` : '--';
+        }
+
+        // Connection status
+        const rrcStateEl = document.getElementById('l1-rrc-state');
+        if (rrcStateEl) {
+            if (data.rrc_state) {
+                const state = data.rrc_state.replace('rrc-', '').toUpperCase();
+                rrcStateEl.textContent = state;
+                rrcStateEl.style.color = state === 'CONNECTED' ? 'var(--aiochi-calm)' : 'var(--aiochi-curious)';
+            } else {
+                rrcStateEl.textContent = '--';
+            }
+        }
+        document.getElementById('l1-handovers').textContent = data.handovers_1h ?? '--';
 
         // Update trust score gauge
         updateL1TrustGauge(data.trust_score);
@@ -4684,8 +4680,6 @@
             vpnText.textContent = 'VPN Not Ready';
         }
 
-        // Update Security Gauges
-        updateSecurityGauges(data);
     }
 
     // Update L1 network type badge
@@ -4709,6 +4703,23 @@
         } else {
             badge.classList.add('offline');
         }
+    }
+
+    // Signal quality classification helpers
+    function getRsrpSignalClass(rsrp) {
+        if (rsrp === null || rsrp === undefined) return '';
+        if (rsrp >= -80) return 'signal-excellent';
+        if (rsrp >= -90) return 'signal-good';
+        if (rsrp >= -105) return 'signal-fair';
+        return 'signal-poor';
+    }
+
+    function getSnrSignalClass(snr) {
+        if (snr === null || snr === undefined) return '';
+        if (snr >= 20) return 'signal-excellent';
+        if (snr >= 10) return 'signal-good';
+        if (snr >= 0) return 'signal-fair';
+        return 'signal-poor';
     }
 
     // Update L1 signal bars
