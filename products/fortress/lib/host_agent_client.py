@@ -275,6 +275,108 @@ class HostAgentClient:
 
         return self._send_request(request)
 
+    def apply_policy(
+        self,
+        mac: str,
+        policy: str,
+        priority_mode: str = 'default'
+    ) -> Dict[str, Any]:
+        """
+        Apply OpenFlow network policy rules for a device.
+
+        This calls the host-side nac-policy-sync.sh script to apply OpenFlow
+        rules on the OVS bridge for network access control.
+
+        Args:
+            mac: MAC address of device
+            policy: Policy to apply. Valid values:
+                - 'quarantine': Block all traffic except DHCP/DNS (highest priority)
+                - 'lan_only': Device-to-device only, no internet
+                - 'internet_only': Internet only, no LAN access
+                - 'smart_home': Full LAN + internet access with discovery
+                - 'full_access': Unrestricted access (removes all per-device rules)
+            priority_mode: 'default' for bubble rules, 'override' for device-specific
+
+        Returns:
+            Dict with success status, policy applied, and any output/errors
+        """
+        try:
+            mac = self._validate_mac(mac)
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+
+        valid_policies = ['quarantine', 'isolated', 'lan_only', 'internet_only', 'smart_home', 'full_access']
+        if policy not in valid_policies:
+            return {
+                'success': False,
+                'error': f'Invalid policy: {policy}. Valid: {", ".join(valid_policies)}'
+            }
+
+        request = {
+            'action': 'apply_policy',
+            'mac': mac,
+            'policy': policy,
+            'priority_mode': priority_mode,
+            'signature': self._sign_request('apply_policy', mac)
+        }
+
+        return self._send_request(request)
+
+    def l1_status(self) -> Dict[str, Any]:
+        """
+        Get L1/Cellular status including signal metrics and trust score.
+
+        Returns:
+            Dict with cellular connection info:
+            - network_type: 5G SA, 5G, LTE, 4G, 3G, etc.
+            - carrier: Carrier/operator name
+            - cell_id, pci, tac, band: Cell identification
+            - rsrp, sinr, snr: Signal metrics
+            - trust_score: L1 trust score (0-100)
+            - trust_components: Breakdown of trust score
+            - survival_mode: Whether survival mode is active
+            - vpn_ready: Whether VPN is pre-established
+        """
+        request = {
+            'action': 'l1_status',
+            'signature': self._sign_request('l1_status')
+        }
+        return self._send_request(request)
+
+    def l1_survival_enter(self, trigger: str = 'manual') -> Dict[str, Any]:
+        """
+        Enter L1 survival mode - lock down cellular protocols.
+
+        This activates survival mode protections:
+        - Disables 2G/3G fallback (forces LTE/5G)
+        - Prepares VPN tunnel activation
+
+        Args:
+            trigger: Reason for entering ('manual', 'imsi_catcher', 'jamming', 'low_trust')
+
+        Returns:
+            Dict with success status and actions taken
+        """
+        request = {
+            'action': 'l1_survival_enter',
+            'trigger': trigger,
+            'signature': self._sign_request('l1_survival_enter')
+        }
+        return self._send_request(request)
+
+    def l1_survival_exit(self) -> Dict[str, Any]:
+        """
+        Exit L1 survival mode - restore normal operation.
+
+        Returns:
+            Dict with success status and actions taken
+        """
+        request = {
+            'action': 'l1_survival_exit',
+            'signature': self._sign_request('l1_survival_exit')
+        }
+        return self._send_request(request)
+
     def timed_block(
         self,
         mac: str,
@@ -454,3 +556,68 @@ def timed_block_device(
     """
     client = get_host_agent_client()
     return client.timed_block(mac, block_duration_seconds, interfaces)
+
+
+def apply_policy(
+    mac: str,
+    policy: str,
+    priority_mode: str = 'default'
+) -> Dict[str, Any]:
+    """
+    Apply OpenFlow network policy rules for a device.
+
+    This is the main function for network access control. It calls the host-side
+    nac-policy-sync.sh script to apply OpenFlow rules on the OVS bridge.
+
+    Args:
+        mac: MAC address of device
+        policy: Policy to apply:
+            - 'quarantine': Block all traffic except DHCP/DNS (highest priority)
+            - 'lan_only': Device-to-device only, no internet
+            - 'internet_only': Internet only, no LAN access
+            - 'smart_home': Full LAN + internet access with discovery
+            - 'full_access': Unrestricted access (removes all per-device rules)
+        priority_mode: 'default' for bubble rules, 'override' for device-specific
+
+    Returns:
+        Dict with success status, policy applied, and any output/errors
+    """
+    client = get_host_agent_client()
+    return client.apply_policy(mac, policy, priority_mode)
+
+
+def get_l1_status() -> Dict[str, Any]:
+    """
+    Get L1/Cellular status from the host modem.
+
+    Returns:
+        Dict with cellular connection info including network type, carrier,
+        signal metrics, cell info, trust score, and survival mode status.
+    """
+    client = get_host_agent_client()
+    return client.l1_status()
+
+
+def enter_l1_survival_mode(trigger: str = 'manual') -> Dict[str, Any]:
+    """
+    Enter L1 survival mode - lock down cellular protocols.
+
+    Args:
+        trigger: Reason for entering ('manual', 'imsi_catcher', 'jamming', 'low_trust')
+
+    Returns:
+        Dict with success status and actions taken
+    """
+    client = get_host_agent_client()
+    return client.l1_survival_enter(trigger)
+
+
+def exit_l1_survival_mode() -> Dict[str, Any]:
+    """
+    Exit L1 survival mode - restore normal operation.
+
+    Returns:
+        Dict with success status and actions taken
+    """
+    client = get_host_agent_client()
+    return client.l1_survival_exit()

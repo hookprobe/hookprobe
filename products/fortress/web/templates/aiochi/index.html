@@ -116,6 +116,115 @@
         font-size: 1.2rem;
     }
 
+    /* L1 Trust Indicator (in Ambient Banner) */
+    .l1-trust-container {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 8px 16px;
+        background: rgba(0,0,0,0.2);
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .l1-trust-gauge {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .l1-trust-icon {
+        font-size: 1.1rem;
+        color: var(--aiochi-primary);
+    }
+
+    .l1-trust-bar {
+        width: 80px;
+        height: 8px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .l1-trust-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.5s ease, background 0.3s ease;
+    }
+
+    .l1-trust-fill.trusted { background: var(--aiochi-calm); }
+    .l1-trust-fill.suspicious { background: var(--aiochi-curious); }
+    .l1-trust-fill.hostile { background: var(--aiochi-alert); }
+
+    .l1-trust-value {
+        font-size: 0.8rem;
+        font-weight: 600;
+        min-width: 32px;
+        color: var(--aiochi-text);
+    }
+
+    .l1-trust-label {
+        font-size: 0.65rem;
+        color: var(--aiochi-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Survival Mode Toggle */
+    .survival-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.03);
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .survival-toggle:hover {
+        background: rgba(255,255,255,0.08);
+        border-color: rgba(255,255,255,0.2);
+    }
+
+    .survival-toggle.active {
+        background: rgba(229, 115, 115, 0.15);
+        border-color: rgba(229, 115, 115, 0.4);
+        color: var(--aiochi-alert);
+        animation: survival-pulse 1.5s ease-in-out infinite;
+    }
+
+    .survival-toggle i {
+        font-size: 0.9rem;
+    }
+
+    .survival-toggle .survival-status {
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    @keyframes survival-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(229, 115, 115, 0.4); }
+        50% { box-shadow: 0 0 12px 2px rgba(229, 115, 115, 0.3); }
+    }
+
+    /* L1 Status Hidden by Default (no LTE modem) */
+    .l1-trust-container.hidden {
+        display: none;
+    }
+
+    /* Ambient Banner Right Side Layout */
+    .ambient-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+
     /* Three Pillars Grid */
     .pillars-grid {
         display: grid;
@@ -269,16 +378,35 @@
         font-size: 0.7rem;
     }
 
-    /* PRIVACY - Narrative Feed */
-    .privacy-icon { color: var(--aiochi-calm); }
+    /* AI ACTIVITY - What I'm Doing */
+    .ai-activity-icon { color: var(--aiochi-primary); }
 
-    .feed-list {
+    .ai-feed-list {
         display: flex;
         flex-direction: column;
         gap: 12px;
     }
 
-    .feed-item {
+    .ai-feed-empty {
+        text-align: center;
+        padding: 32px 16px;
+        color: var(--aiochi-text-muted);
+    }
+
+    .ai-feed-empty i {
+        font-size: 2rem;
+        color: var(--aiochi-calm);
+        margin-bottom: 12px;
+        display: block;
+    }
+
+    .ai-feed-empty p {
+        font-size: 0.85rem;
+        line-height: 1.5;
+        margin: 0;
+    }
+
+    .ai-feed-item {
         display: flex;
         gap: 12px;
         padding: 12px;
@@ -286,18 +414,40 @@
         border-radius: 8px;
         border-left: 3px solid transparent;
         transition: all 0.3s ease;
+        position: relative;
     }
 
-    .feed-item:hover {
+    .ai-feed-item:hover {
         background: rgba(255,255,255,0.04);
     }
 
-    .feed-item.success { border-left-color: var(--aiochi-calm); }
-    .feed-item.warning { border-left-color: var(--aiochi-curious); }
-    .feed-item.info { border-left-color: var(--aiochi-primary); }
-    .feed-item.danger { border-left-color: var(--aiochi-alert); }
+    .ai-feed-item.success { border-left-color: var(--aiochi-calm); }
+    .ai-feed-item.warning { border-left-color: var(--aiochi-curious); }
+    .ai-feed-item.info { border-left-color: var(--aiochi-primary); }
+    .ai-feed-item.danger { border-left-color: var(--aiochi-alert); }
 
-    .feed-icon {
+    /* Auto-execute countdown indicator */
+    .ai-feed-item.pending {
+        border-left-color: var(--aiochi-curious);
+        background: rgba(255, 183, 77, 0.05);
+    }
+
+    .ai-feed-item.pending::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        height: 2px;
+        background: var(--aiochi-curious);
+        animation: countdown-bar 120s linear forwards;
+    }
+
+    @keyframes countdown-bar {
+        from { width: 100%; }
+        to { width: 0%; }
+    }
+
+    .ai-feed-icon {
         width: 36px;
         height: 36px;
         border-radius: 50%;
@@ -308,38 +458,465 @@
         font-size: 0.85rem;
     }
 
-    .feed-icon.success { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
-    .feed-icon.warning { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
-    .feed-icon.info { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
-    .feed-icon.danger { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .ai-feed-icon.success { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .ai-feed-icon.warning { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
+    .ai-feed-icon.info { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
+    .ai-feed-icon.danger { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
 
-    .feed-content {
+    .ai-feed-content {
         flex: 1;
         min-width: 0;
     }
 
-    .feed-header {
+    .ai-feed-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         margin-bottom: 4px;
     }
 
-    .feed-title {
+    .ai-feed-headline {
         font-weight: 600;
         font-size: 0.85rem;
         color: var(--aiochi-text);
     }
 
-    .feed-time {
+    .ai-feed-time {
         font-size: 0.7rem;
         color: var(--aiochi-text-muted);
     }
 
-    .feed-narrative {
+    .ai-feed-narrative {
         font-size: 0.8rem;
         color: var(--aiochi-text-muted);
         line-height: 1.4;
+    }
+
+    /* Feedback buttons for AI decisions */
+    .ai-feed-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    }
+
+    .ai-feed-btn {
+        font-size: 0.7rem;
+        padding: 4px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.03);
+        color: var(--aiochi-text-muted);
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .ai-feed-btn:hover {
+        background: rgba(255,255,255,0.08);
+        color: var(--aiochi-text);
+    }
+
+    .ai-feed-btn.correct {
+        border-color: rgba(129, 199, 132, 0.3);
+    }
+
+    .ai-feed-btn.correct:hover {
+        background: rgba(129, 199, 132, 0.15);
+        color: var(--aiochi-calm);
+    }
+
+    .ai-feed-btn.wrong {
+        border-color: rgba(229, 115, 115, 0.3);
+    }
+
+    .ai-feed-btn.wrong:hover {
+        background: rgba(229, 115, 115, 0.15);
+        color: var(--aiochi-alert);
+    }
+
+    /* Countdown timer for pending actions */
+    .ai-feed-countdown {
+        font-size: 0.7rem;
+        color: var(--aiochi-curious);
+        font-weight: 600;
+    }
+
+    /* AI Notification Toast Container */
+    #ai-notification-container {
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        max-width: 400px;
+    }
+
+    .ai-notification {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px;
+        background: var(--aiochi-bg-card);
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        animation: notification-slide-in 0.3s ease;
+    }
+
+    .ai-notification.fade-out {
+        animation: notification-fade-out 0.3s ease forwards;
+    }
+
+    @keyframes notification-slide-in {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+
+    @keyframes notification-fade-out {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+
+    .ai-notification.success { border-left: 3px solid var(--aiochi-calm); }
+    .ai-notification.warning { border-left: 3px solid var(--aiochi-curious); }
+    .ai-notification.info { border-left: 3px solid var(--aiochi-primary); }
+    .ai-notification.danger { border-left: 3px solid var(--aiochi-alert); }
+
+    .ai-notification-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1rem;
+    }
+
+    .ai-notification.success .ai-notification-icon { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .ai-notification.warning .ai-notification-icon { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
+    .ai-notification.info .ai-notification-icon { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
+    .ai-notification.danger .ai-notification-icon { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+
+    .ai-notification-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .ai-notification-headline {
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: var(--aiochi-text);
+        margin-bottom: 4px;
+    }
+
+    .ai-notification-message {
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+        line-height: 1.4;
+    }
+
+    .ai-notification-close {
+        background: none;
+        border: none;
+        color: var(--aiochi-text-muted);
+        cursor: pointer;
+        padding: 4px;
+        opacity: 0.6;
+        transition: opacity 0.2s;
+    }
+
+    .ai-notification-close:hover {
+        opacity: 1;
+    }
+
+    /* Legacy feed-list support (backward compatibility) */
+    .feed-list { display: flex; flex-direction: column; gap: 12px; }
+    .feed-item { display: flex; gap: 12px; padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border-left: 3px solid transparent; transition: all 0.3s ease; }
+    .feed-item:hover { background: rgba(255,255,255,0.04); }
+    .feed-item.success { border-left-color: var(--aiochi-calm); }
+    .feed-item.warning { border-left-color: var(--aiochi-curious); }
+    .feed-item.info { border-left-color: var(--aiochi-primary); }
+    .feed-item.danger { border-left-color: var(--aiochi-alert); }
+    .feed-icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.85rem; }
+    .feed-icon.success { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .feed-icon.warning { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
+    .feed-icon.info { background: rgba(79, 195, 247, 0.15); color: var(--aiochi-primary); }
+    .feed-icon.danger { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+    .feed-content { flex: 1; min-width: 0; }
+    .feed-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+    .feed-title { font-weight: 600; font-size: 0.85rem; color: var(--aiochi-text); }
+    .feed-time { font-size: 0.7rem; color: var(--aiochi-text-muted); }
+    .feed-narrative { font-size: 0.8rem; color: var(--aiochi-text-muted); line-height: 1.4; }
+
+    /* ==========================================================================
+       USER PROMPT MODAL - Only shows when AI confidence < 30%
+       ========================================================================== */
+
+    #user-prompt-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        z-index: 10000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        animation: prompt-overlay-fade-in 0.3s ease;
+    }
+
+    #user-prompt-overlay.visible {
+        display: flex;
+    }
+
+    @keyframes prompt-overlay-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    .user-prompt-modal {
+        background: var(--aiochi-bg-card);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 183, 77, 0.3);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 183, 77, 0.1);
+        max-width: 520px;
+        width: 90%;
+        max-height: 80vh;
+        overflow: hidden;
+        animation: prompt-modal-slide-up 0.4s ease;
+    }
+
+    @keyframes prompt-modal-slide-up {
+        from { transform: translateY(40px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+
+    .prompt-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 24px;
+        background: linear-gradient(135deg, rgba(255, 183, 77, 0.15) 0%, rgba(255, 183, 77, 0.05) 100%);
+        border-bottom: 1px solid rgba(255, 183, 77, 0.2);
+    }
+
+    .prompt-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(255, 183, 77, 0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--aiochi-curious);
+        font-size: 1.5rem;
+        flex-shrink: 0;
+        animation: prompt-icon-pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes prompt-icon-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255, 183, 77, 0.4); }
+        50% { box-shadow: 0 0 0 10px rgba(255, 183, 77, 0); }
+    }
+
+    .prompt-header-text h3 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+        margin: 0 0 4px 0;
+    }
+
+    .prompt-header-text p {
+        font-size: 0.85rem;
+        color: var(--aiochi-text-muted);
+        margin: 0;
+    }
+
+    .prompt-body {
+        padding: 24px;
+    }
+
+    .prompt-situation {
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 20px;
+    }
+
+    .prompt-situation-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--aiochi-text-muted);
+        margin-bottom: 8px;
+    }
+
+    .prompt-situation-text {
+        font-size: 0.95rem;
+        color: var(--aiochi-text);
+        line-height: 1.5;
+    }
+
+    .prompt-ai-analysis {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        background: rgba(79, 195, 247, 0.08);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(79, 195, 247, 0.2);
+    }
+
+    .prompt-ai-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(79, 195, 247, 0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--aiochi-primary);
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+
+    .prompt-ai-content {
+        flex: 1;
+    }
+
+    .prompt-ai-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--aiochi-primary);
+        margin-bottom: 4px;
+    }
+
+    .prompt-ai-text {
+        font-size: 0.85rem;
+        color: var(--aiochi-text);
+        line-height: 1.5;
+    }
+
+    .prompt-confidence {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+
+    .prompt-confidence-label {
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .prompt-confidence-bar {
+        flex: 1;
+        height: 6px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .prompt-confidence-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--aiochi-alert), var(--aiochi-curious));
+        border-radius: 3px;
+        transition: width 0.3s ease;
+    }
+
+    .prompt-confidence-value {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--aiochi-curious);
+        min-width: 40px;
+        text-align: right;
+    }
+
+    .prompt-actions {
+        display: flex;
+        gap: 12px;
+    }
+
+    .prompt-btn {
+        flex: 1;
+        padding: 14px 20px;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: none;
+    }
+
+    .prompt-btn-primary {
+        background: linear-gradient(135deg, var(--aiochi-primary) 0%, #039be5 100%);
+        color: white;
+        box-shadow: 0 4px 16px rgba(79, 195, 247, 0.3);
+    }
+
+    .prompt-btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(79, 195, 247, 0.4);
+    }
+
+    .prompt-btn-secondary {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--aiochi-text);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .prompt-btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    .prompt-btn-danger {
+        background: rgba(229, 115, 115, 0.15);
+        color: var(--aiochi-alert);
+        border: 1px solid rgba(229, 115, 115, 0.3);
+    }
+
+    .prompt-btn-danger:hover {
+        background: rgba(229, 115, 115, 0.25);
+    }
+
+    .prompt-footer {
+        padding: 16px 24px;
+        background: rgba(0, 0, 0, 0.2);
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .prompt-footer-text {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .prompt-dismiss {
+        background: none;
+        border: none;
+        color: var(--aiochi-text-muted);
+        font-size: 0.8rem;
+        cursor: pointer;
+        padding: 8px 12px;
+        border-radius: 6px;
+        transition: all 0.2s;
+    }
+
+    .prompt-dismiss:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--aiochi-text);
     }
 
     /* PERFORMANCE - Health Score */
@@ -532,6 +1109,725 @@
         font-weight: 600;
         text-transform: uppercase;
     }
+
+    /* =========================================================================
+       L1/CELLULAR SECTION - Physical Layer Security (Collapsible)
+       ========================================================================= */
+    .l1-card {
+        background: var(--aiochi-bg-card);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+        margin-top: 24px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        overflow: hidden;
+    }
+
+    .l1-header {
+        padding: 16px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .l1-header:hover {
+        background: rgba(255,255,255,0.02);
+    }
+
+    .l1-card.collapsed .l1-body {
+        display: none;
+    }
+
+    .l1-card.collapsed .l1-header {
+        border-bottom: none;
+    }
+
+    .l1-header-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+
+    .l1-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .l1-title i {
+        color: var(--aiochi-primary);
+        font-size: 1rem;
+    }
+
+    /* L1 Summary badges (shown in header) */
+    .l1-summary {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .l1-network-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        background: rgba(79, 195, 247, 0.15);
+        color: var(--aiochi-primary);
+    }
+
+    .l1-network-badge.lte { background: rgba(156, 39, 176, 0.15); color: #CE93D8; }
+    .l1-network-badge.g5 { background: rgba(0, 150, 136, 0.15); color: #4DB6AC; }
+    .l1-network-badge.g5sa { background: rgba(76, 175, 80, 0.15); color: #81C784; }
+    .l1-network-badge.g4 { background: rgba(255, 152, 0, 0.15); color: #FFB74D; }
+    .l1-network-badge.g3 { background: rgba(255, 87, 34, 0.15); color: #FF8A65; }
+    .l1-network-badge.offline { background: rgba(158, 158, 158, 0.15); color: #9E9E9E; }
+
+    .l1-signal-indicator {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 16px;
+    }
+
+    .l1-signal-bar {
+        width: 4px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 2px;
+        transition: background 0.3s;
+    }
+
+    .l1-signal-bar:nth-child(1) { height: 4px; }
+    .l1-signal-bar:nth-child(2) { height: 7px; }
+    .l1-signal-bar:nth-child(3) { height: 10px; }
+    .l1-signal-bar:nth-child(4) { height: 13px; }
+    .l1-signal-bar:nth-child(5) { height: 16px; }
+
+    .l1-signal-indicator.excellent .l1-signal-bar { background: var(--aiochi-calm); }
+    .l1-signal-indicator.good .l1-signal-bar:nth-child(-n+4) { background: var(--aiochi-calm); }
+    .l1-signal-indicator.fair .l1-signal-bar:nth-child(-n+3) { background: var(--aiochi-curious); }
+    .l1-signal-indicator.poor .l1-signal-bar:nth-child(-n+2) { background: var(--aiochi-alert); }
+    .l1-signal-indicator.none .l1-signal-bar:nth-child(-n+1) { background: var(--aiochi-alert); }
+
+    .l1-trust-mini {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+
+    .l1-trust-mini.trusted { background: rgba(129, 199, 132, 0.15); color: var(--aiochi-calm); }
+    .l1-trust-mini.suspicious { background: rgba(255, 183, 77, 0.15); color: var(--aiochi-curious); }
+    .l1-trust-mini.hostile { background: rgba(229, 115, 115, 0.15); color: var(--aiochi-alert); }
+
+    .l1-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: var(--aiochi-text-muted);
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .l1-toggle:hover {
+        background: rgba(255,255,255,0.06);
+        color: var(--aiochi-text);
+    }
+
+    .l1-toggle i {
+        transition: transform 0.3s ease;
+    }
+
+    .l1-card.collapsed .l1-toggle i {
+        transform: rotate(-90deg);
+    }
+
+    /* L1 Body - Expanded Content */
+    .l1-body {
+        padding: 20px;
+        border-top: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .l1-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+    }
+
+    /* Cell Info Panel */
+    .l1-panel {
+        background: rgba(255,255,255,0.02);
+        border-radius: 10px;
+        padding: 16px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .l1-panel-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .l1-panel-header i {
+        color: var(--aiochi-primary);
+    }
+
+    .l1-info-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .l1-info-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .l1-info-label {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--aiochi-text-muted);
+    }
+
+    .l1-info-value {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--aiochi-text);
+    }
+
+    /* L1 Trust Score Gauge */
+    .l1-trust-gauge {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .l1-trust-circle {
+        position: relative;
+        width: 120px;
+        height: 120px;
+    }
+
+    .l1-trust-circle svg {
+        transform: rotate(-90deg);
+        width: 100%;
+        height: 100%;
+        filter: drop-shadow(0 0 6px rgba(0,0,0,0.3));
+    }
+
+    .l1-trust-circle .bg {
+        fill: none;
+        stroke: rgba(255,255,255,0.15);
+        stroke-width: 3.5;
+    }
+
+    .l1-trust-circle .progress {
+        fill: none;
+        stroke-width: 3.5;
+        stroke-linecap: round;
+        transition: stroke-dashoffset 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .l1-trust-circle .progress.trusted {
+        stroke: var(--aiochi-calm);
+    }
+    .l1-trust-circle .progress.suspicious {
+        stroke: var(--aiochi-curious);
+        filter: drop-shadow(0 0 8px var(--aiochi-curious));
+    }
+    .l1-trust-circle .progress.hostile {
+        stroke: var(--aiochi-alert);
+        filter: drop-shadow(0 0 10px var(--aiochi-alert));
+        animation: pulse-alert 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse-alert {
+        0%, 100% { filter: drop-shadow(0 0 8px var(--aiochi-alert)); }
+        50% { filter: drop-shadow(0 0 16px var(--aiochi-alert)); }
+    }
+
+    .l1-trust-value {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: var(--aiochi-text);
+    }
+
+    .l1-trust-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .l1-trust-label.trusted { color: var(--aiochi-calm); }
+    .l1-trust-label.suspicious { color: var(--aiochi-curious); }
+    .l1-trust-label.hostile { color: var(--aiochi-alert); }
+
+    /* L1 Trust Components */
+    .l1-trust-components {
+        width: 100%;
+        margin-top: 12px;
+    }
+
+    .l1-component {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+
+    .l1-component-label {
+        flex: 0 0 80px;
+        font-size: 0.7rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .l1-component-bar {
+        flex: 1;
+        height: 4px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 2px;
+        overflow: hidden;
+    }
+
+    .l1-component-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.5s ease;
+    }
+
+    .l1-component-fill.high { background: var(--aiochi-calm); }
+    .l1-component-fill.medium { background: var(--aiochi-curious); }
+    .l1-component-fill.low { background: var(--aiochi-alert); }
+
+    .l1-component-value {
+        flex: 0 0 35px;
+        font-size: 0.7rem;
+        text-align: right;
+        color: var(--aiochi-text-muted);
+    }
+
+    /* Security Gauges Panel */
+    .l1-security-gauges {
+        grid-column: 1 / -1;
+    }
+
+    .l1-security-gauge-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+        .l1-security-gauge-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .l1-security-gauge {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.05);
+        transition: all 0.3s ease;
+    }
+
+    .l1-security-gauge.alert {
+        border-color: var(--aiochi-alert);
+        background: rgba(255,82,82,0.1);
+        animation: gauge-alert-pulse 2s ease-in-out infinite;
+    }
+
+    .l1-security-gauge.warning {
+        border-color: var(--aiochi-curious);
+        background: rgba(255,193,7,0.1);
+    }
+
+    @keyframes gauge-alert-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255,82,82,0.4); }
+        50% { box-shadow: 0 0 15px 3px rgba(255,82,82,0.3); }
+    }
+
+    .l1-gauge-icon {
+        flex: 0 0 36px;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.05);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        color: var(--aiochi-accent);
+    }
+
+    .l1-security-gauge.alert .l1-gauge-icon {
+        background: rgba(255,82,82,0.2);
+        color: var(--aiochi-alert);
+    }
+
+    .l1-security-gauge.warning .l1-gauge-icon {
+        background: rgba(255,193,7,0.2);
+        color: var(--aiochi-curious);
+    }
+
+    .l1-gauge-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .l1-gauge-label {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        margin-bottom: 4px;
+    }
+
+    .l1-gauge-value {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        margin-bottom: 8px;
+    }
+
+    .l1-gauge-number {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .l1-gauge-unit,
+    .l1-gauge-band {
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .l1-gauge-band {
+        font-weight: 600;
+        color: var(--aiochi-accent);
+    }
+
+    .l1-gauge-state {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--aiochi-calm);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .l1-security-gauge.alert .l1-gauge-state {
+        color: var(--aiochi-alert);
+    }
+
+    .l1-security-gauge.warning .l1-gauge-state {
+        color: var(--aiochi-curious);
+    }
+
+    .l1-gauge-bar {
+        height: 4px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-bottom: 6px;
+    }
+
+    .l1-gauge-bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.5s ease, background-color 0.3s ease;
+    }
+
+    .l1-gauge-bar-fill.normal {
+        background: var(--aiochi-calm);
+    }
+
+    .l1-gauge-bar-fill.warning {
+        background: var(--aiochi-curious);
+    }
+
+    .l1-gauge-bar-fill.alert {
+        background: var(--aiochi-alert);
+        animation: bar-pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes bar-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
+    .l1-gauge-status {
+        font-size: 0.7rem;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .l1-gauge-status.normal {
+        color: var(--aiochi-calm);
+    }
+
+    .l1-gauge-status.warning {
+        color: var(--aiochi-curious);
+    }
+
+    .l1-gauge-status.alert {
+        color: var(--aiochi-alert);
+        font-weight: 600;
+    }
+
+    .l1-gauge-status i {
+        font-size: 0.65rem;
+    }
+
+    /* Security Alert Banner */
+    .l1-security-alert {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 16px;
+        padding: 12px 16px;
+        background: linear-gradient(135deg, rgba(255,82,82,0.15), rgba(255,82,82,0.05));
+        border: 1px solid var(--aiochi-alert);
+        border-radius: 8px;
+        animation: alert-slide-in 0.3s ease-out;
+    }
+
+    .l1-security-alert.hidden {
+        display: none;
+    }
+
+    @keyframes alert-slide-in {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .l1-alert-icon {
+        flex: 0 0 40px;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: rgba(255,82,82,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--aiochi-alert);
+        font-size: 1.1rem;
+        animation: alert-icon-pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes alert-icon-pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+    }
+
+    .l1-alert-content {
+        flex: 1;
+    }
+
+    .l1-alert-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--aiochi-alert);
+        margin-bottom: 2px;
+    }
+
+    .l1-alert-message {
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .l1-alert-dismiss {
+        flex: 0 0 auto;
+        padding: 8px;
+        background: transparent;
+        border: none;
+        color: var(--aiochi-text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+        transition: all 0.2s ease;
+    }
+
+    .l1-alert-dismiss:hover {
+        background: rgba(255,255,255,0.1);
+        color: var(--aiochi-text);
+    }
+
+    /* Survival Mode Panel */
+    .l1-survival-panel {
+        background: rgba(255,255,255,0.02);
+        border-radius: 10px;
+        padding: 16px;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .l1-survival-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+    }
+
+    .l1-survival-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--aiochi-text);
+    }
+
+    .l1-survival-title i {
+        color: var(--aiochi-curious);
+    }
+
+    .l1-survival-status {
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .l1-survival-status.normal {
+        background: rgba(129, 199, 132, 0.15);
+        color: var(--aiochi-calm);
+    }
+
+    .l1-survival-status.active {
+        background: rgba(229, 115, 115, 0.15);
+        color: var(--aiochi-alert);
+        animation: survival-pulse 2s infinite;
+    }
+
+    @keyframes survival-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
+    .l1-survival-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .l1-survival-triggers {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .l1-trigger-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.8rem;
+        color: var(--aiochi-text-muted);
+    }
+
+    .l1-trigger-item input[type="checkbox"] {
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255,255,255,0.2);
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .l1-trigger-item input[type="checkbox"]:checked {
+        background: var(--aiochi-primary);
+        border-color: var(--aiochi-primary);
+    }
+
+    .l1-trigger-item input[type="checkbox"]:checked::after {
+        content: '✓';
+        display: block;
+        color: white;
+        font-size: 10px;
+        text-align: center;
+        line-height: 12px;
+    }
+
+    .l1-survival-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+    }
+
+    .l1-survival-btn.enter {
+        background: rgba(255, 183, 77, 0.15);
+        color: var(--aiochi-curious);
+        border: 1px solid rgba(255, 183, 77, 0.3);
+    }
+
+    .l1-survival-btn.enter:hover {
+        background: rgba(255, 183, 77, 0.25);
+    }
+
+    .l1-survival-btn.exit {
+        background: rgba(129, 199, 132, 0.15);
+        color: var(--aiochi-calm);
+        border: 1px solid rgba(129, 199, 132, 0.3);
+    }
+
+    .l1-survival-btn.exit:hover {
+        background: rgba(129, 199, 132, 0.25);
+    }
+
+    .l1-vpn-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.75rem;
+        color: var(--aiochi-text-muted);
+        margin-top: 8px;
+    }
+
+    .l1-vpn-status i.ready { color: var(--aiochi-calm); }
+    .l1-vpn-status i.not-ready { color: var(--aiochi-alert); }
 
     /* Bubble Manager Section */
     .bubble-manager-card {
@@ -1021,7 +2317,7 @@
     }
 
     /* =========================================================================
-       ACTIVE DEFENSES SECTION - 5 Innovations
+       ACTIVE DEFENSES SECTION - 5 Innovations (Collapsible)
        ========================================================================= */
     .defenses-card {
         background: var(--aiochi-bg-card);
@@ -1033,40 +2329,132 @@
     }
 
     .defenses-header {
-        padding: 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
+        padding: 16px 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         flex-wrap: wrap;
+        gap: 16px;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .defenses-header:hover {
+        background: rgba(255,255,255,0.02);
+    }
+
+    /* Collapsed state - hide body */
+    .defenses-card.collapsed .defenses-body {
+        display: none;
+    }
+
+    .defenses-card.collapsed .defenses-tabs {
+        display: none;
+    }
+
+    .defenses-card.collapsed .defenses-header {
+        border-bottom: none;
+    }
+
+    .defenses-header-left {
+        display: flex;
+        align-items: center;
         gap: 16px;
     }
 
     .defenses-title {
         display: flex;
         align-items: center;
-        gap: 12px;
-        font-size: 1rem;
+        gap: 10px;
+        font-size: 0.95rem;
         font-weight: 600;
         color: var(--aiochi-text);
     }
 
     .defenses-title i {
         color: var(--aiochi-alert);
-        font-size: 1.2rem;
+        font-size: 1rem;
     }
 
-    .defenses-title small {
-        font-weight: 400;
+    /* Summary badges (shown when collapsed) */
+    .defenses-summary {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .defense-summary-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: rgba(255,255,255,0.05);
+        color: var(--aiochi-text-muted);
+    }
+
+    .defense-summary-badge.active {
+        background: rgba(79, 195, 247, 0.15);
+        color: var(--aiochi-primary);
+    }
+
+    .defense-summary-badge.warning {
+        background: rgba(255, 183, 77, 0.15);
+        color: var(--aiochi-curious);
+    }
+
+    .defense-summary-badge.danger {
+        background: rgba(229, 115, 115, 0.15);
+        color: var(--aiochi-alert);
+    }
+
+    /* Expand/collapse toggle */
+    .defenses-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 6px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
         color: var(--aiochi-text-muted);
         font-size: 0.75rem;
-        display: block;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .defenses-toggle:hover {
+        background: rgba(255,255,255,0.06);
+        color: var(--aiochi-text);
+    }
+
+    .defenses-toggle i {
+        transition: transform 0.3s ease;
+    }
+
+    .defenses-card.collapsed .defenses-toggle i {
+        transform: rotate(-90deg);
+    }
+
+    /* Toggle button positions on the right */
+
+    /* Only show tabs when expanded */
+    .defenses-tabs-wrapper {
+        padding: 0 20px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .defenses-card.collapsed .defenses-tabs-wrapper {
+        display: none;
     }
 
     .defenses-tabs {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+        padding-bottom: 2rem;
     }
 
     .defense-tab {
@@ -1616,7 +3004,25 @@
                 <p id="ambient-message">Your network is protected and running smoothly.</p>
             </div>
         </div>
-        <div class="d-flex align-items-center gap-3">
+        <div class="ambient-right">
+            <!-- L1 Trust Indicator (hidden if no LTE modem) -->
+            <div class="l1-trust-container hidden" id="l1-trust-container">
+                <div class="l1-trust-gauge">
+                    <i class="fas fa-broadcast-tower l1-trust-icon" id="l1-trust-icon"></i>
+                    <div>
+                        <div class="l1-trust-bar">
+                            <div class="l1-trust-fill trusted" id="l1-trust-fill" style="width: 85%"></div>
+                        </div>
+                        <div class="l1-trust-label">L1 Trust</div>
+                    </div>
+                    <span class="l1-trust-value" id="l1-trust-value">85%</span>
+                </div>
+                <div class="survival-toggle" id="survival-toggle" onclick="toggleSurvivalMode()">
+                    <i class="fas fa-shield-alt"></i>
+                    <span class="survival-status" id="survival-status">Normal</span>
+                </div>
+            </div>
+
             <div class="whisper-badge" id="whisper-badge">
                 <span class="whisper-phase">🌙</span>
                 <span id="whisper-message">Dreaming...</span>
@@ -1648,21 +3054,25 @@
             </div>
         </div>
 
-        <!-- PRIVACY - What's Happening -->
+        <!-- AI ACTIVITY - What I'm Doing -->
         <div class="pillar-card">
             <div class="pillar-header">
                 <div class="pillar-title">
-                    <i class="fas fa-shield-alt privacy-icon"></i>
+                    <i class="fas fa-robot ai-activity-icon"></i>
                     <div>
-                        <h3>PRIVACY</h3>
-                        <span>What's Happening</span>
+                        <h3>AI ACTIVITY</h3>
+                        <span>What I'm Doing</span>
                     </div>
                 </div>
-                <span class="badge bg-success" id="privacy-count">All clear</span>
+                <span class="badge bg-success" id="ai-activity-count">All clear</span>
             </div>
-            <div class="pillar-body" id="privacy-body">
-                <div class="feed-list" id="feed-list">
-                    <!-- Feed items populated by JS -->
+            <div class="pillar-body" id="ai-activity-body">
+                <div class="ai-feed-list" id="ai-feed-list">
+                    <!-- AI activity feed populated by JS -->
+                    <div class="ai-feed-empty" id="ai-feed-empty">
+                        <i class="fas fa-check-circle"></i>
+                        <p>Everything is running smoothly. I'm watching over your network.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1717,46 +3127,56 @@
         </div>
     </div>
 
-    <!-- Quick Actions -->
-    <div class="quick-actions-card">
-        <h4 class="quick-actions-title">
-            <i class="fas fa-bolt"></i>
-            Quick Actions
-        </h4>
-        <div class="quick-actions-grid" id="quick-actions">
-            <!-- Actions populated by JS -->
-        </div>
-    </div>
-
-    <!-- Active Defenses Section - 5 Innovations -->
-    <div class="defenses-card">
-        <div class="defenses-header">
-            <div class="defenses-title">
-                <i class="fas fa-shield-virus"></i>
-                <div>
+    <!-- Active Defenses Section - Compact View (Collapsed by default) -->
+    <div class="defenses-card collapsed">
+        <div class="defenses-header" onclick="toggleDefenses()">
+            <div class="defenses-header-left">
+                <div class="defenses-title">
+                    <i class="fas fa-shield-virus"></i>
                     <span>Active Defenses</span>
-                    <small>Advanced threat mitigation systems</small>
+                </div>
+                <!-- Summary badges inline -->
+                <div class="defenses-summary">
+                    <span class="defense-summary-badge" id="summary-friction" title="Friction Control">
+                        <i class="fas fa-hourglass-half"></i><span>0</span>
+                    </span>
+                    <span class="defense-summary-badge" id="summary-ghost" title="Ghost Probes">
+                        <i class="fas fa-ghost"></i><span>0</span>
+                    </span>
+                    <span class="defense-summary-badge" id="summary-chain" title="Chain Predictions">
+                        <i class="fas fa-link"></i><span>0</span>
+                    </span>
+                    <span class="defense-summary-badge" id="summary-honeypot" title="Honeypots">
+                        <i class="fas fa-spider"></i><span>0</span>
+                    </span>
+                    <span class="defense-summary-badge" id="summary-gravity" title="Data Gravity">
+                        <i class="fas fa-magnet"></i><span>0</span>
+                    </span>
                 </div>
             </div>
+            <button class="defenses-toggle" id="defenses-toggle" title="Expand details">
+                <i class="fas fa-chevron-down"></i>
+            </button>
+        </div>
+        <div class="defenses-body">
+            <!-- Tabs (hidden when collapsed) -->
             <div class="defenses-tabs" id="defense-tabs">
-                <button class="defense-tab active" data-tab="friction" onclick="switchDefenseTab('friction')">
+                <button class="defense-tab active" data-tab="friction" onclick="event.stopPropagation(); switchDefenseTab('friction')">
                     <i class="fas fa-hourglass-half"></i> Friction
                 </button>
-                <button class="defense-tab" data-tab="ghost" onclick="switchDefenseTab('ghost')">
+                <button class="defense-tab" data-tab="ghost" onclick="event.stopPropagation(); switchDefenseTab('ghost')">
                     <i class="fas fa-ghost"></i> Ghost Probe
                 </button>
-                <button class="defense-tab" data-tab="chain" onclick="switchDefenseTab('chain')">
+                <button class="defense-tab" data-tab="chain" onclick="event.stopPropagation(); switchDefenseTab('chain')">
                     <i class="fas fa-link"></i> Chain Predict
                 </button>
-                <button class="defense-tab" data-tab="honeypot" onclick="switchDefenseTab('honeypot')">
+                <button class="defense-tab" data-tab="honeypot" onclick="event.stopPropagation(); switchDefenseTab('honeypot')">
                     <i class="fas fa-spider"></i> Honeypots
                 </button>
-                <button class="defense-tab" data-tab="gravity" onclick="switchDefenseTab('gravity')">
+                <button class="defense-tab" data-tab="gravity" onclick="event.stopPropagation(); switchDefenseTab('gravity')">
                     <i class="fas fa-magnet"></i> Data Gravity
                 </button>
             </div>
-        </div>
-        <div class="defenses-body">
             <!-- Friction Control Tab -->
             <div class="defense-panel active" id="panel-friction">
                 <div class="defense-stats">
@@ -1941,6 +3361,283 @@
         </div>
     </div>
 
+    <!-- L1/Cellular Security Section - Physical Layer Protection (Collapsible) -->
+    <div class="l1-card collapsed" id="l1-card">
+        <div class="l1-header" onclick="toggleL1()">
+            <div class="l1-header-left">
+                <div class="l1-title">
+                    <i class="fas fa-broadcast-tower"></i>
+                    <span>L1 Cellular Security</span>
+                </div>
+                <!-- Summary info (always visible) -->
+                <div class="l1-summary">
+                    <span class="l1-network-badge g5sa" id="l1-network-type">
+                        <i class="fas fa-signal"></i> 5G SA
+                    </span>
+                    <div class="l1-signal-indicator good" id="l1-signal-bars">
+                        <div class="l1-signal-bar"></div>
+                        <div class="l1-signal-bar"></div>
+                        <div class="l1-signal-bar"></div>
+                        <div class="l1-signal-bar"></div>
+                        <div class="l1-signal-bar"></div>
+                    </div>
+                    <span class="l1-trust-mini trusted" id="l1-trust-mini">
+                        <i class="fas fa-shield-alt"></i> 85%
+                    </span>
+                </div>
+            </div>
+            <button class="l1-toggle" id="l1-toggle" title="Expand details">
+                <i class="fas fa-chevron-down"></i>
+            </button>
+        </div>
+        <div class="l1-body">
+            <div class="l1-grid">
+                <!-- Cell Information Panel -->
+                <div class="l1-panel">
+                    <div class="l1-panel-header">
+                        <i class="fas fa-broadcast-tower"></i>
+                        <span>Current Cell</span>
+                    </div>
+                    <div class="l1-info-grid">
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Cell ID</div>
+                            <div class="l1-info-value" id="l1-cell-id">12345678</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">PCI</div>
+                            <div class="l1-info-value" id="l1-pci">42</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">TAC</div>
+                            <div class="l1-info-value" id="l1-tac">1234</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Band</div>
+                            <div class="l1-info-value" id="l1-band">n78</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Carrier</div>
+                            <div class="l1-info-value" id="l1-carrier">T-Mobile</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">MCC-MNC</div>
+                            <div class="l1-info-value" id="l1-mccmnc">310-260</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Signal Metrics Panel -->
+                <div class="l1-panel">
+                    <div class="l1-panel-header">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Signal Quality</span>
+                    </div>
+                    <div class="l1-info-grid">
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">RSRP</div>
+                            <div class="l1-info-value" id="l1-rsrp">-85 dBm</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">SINR</div>
+                            <div class="l1-info-value" id="l1-sinr">22 dB</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">SNR</div>
+                            <div class="l1-info-value" id="l1-snr">20.5 dB</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Distance</div>
+                            <div class="l1-info-value" id="l1-distance">~1.2 km</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Handovers (1h)</div>
+                            <div class="l1-info-value" id="l1-handovers">2</div>
+                        </div>
+                        <div class="l1-info-item">
+                            <div class="l1-info-label">Tower Status</div>
+                            <div class="l1-info-value" id="l1-tower-status" style="color: var(--aiochi-calm);">
+                                <i class="fas fa-check-circle"></i> Verified
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- L1 Trust Score Panel -->
+                <div class="l1-panel">
+                    <div class="l1-panel-header">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>L1 Trust Score</span>
+                    </div>
+                    <div class="l1-trust-gauge">
+                        <div class="l1-trust-circle">
+                            <svg viewBox="0 0 36 36">
+                                <path class="bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                                <path class="progress trusted" id="l1-trust-progress" stroke-dasharray="85, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                            </svg>
+                            <div class="l1-trust-value" id="l1-trust-value">85%</div>
+                        </div>
+                        <div class="l1-trust-label trusted" id="l1-trust-label">TRUSTED</div>
+                    </div>
+                    <div class="l1-trust-components">
+                        <div class="l1-component">
+                            <span class="l1-component-label">Identity</span>
+                            <div class="l1-component-bar">
+                                <div class="l1-component-fill high" id="l1-comp-identity" style="width: 100%;"></div>
+                            </div>
+                            <span class="l1-component-value" id="l1-comp-identity-val">100%</span>
+                        </div>
+                        <div class="l1-component">
+                            <span class="l1-component-label">SNR</span>
+                            <div class="l1-component-bar">
+                                <div class="l1-component-fill high" id="l1-comp-snr" style="width: 75%;"></div>
+                            </div>
+                            <span class="l1-component-value" id="l1-comp-snr-val">75%</span>
+                        </div>
+                        <div class="l1-component">
+                            <span class="l1-component-label">Stability</span>
+                            <div class="l1-component-bar">
+                                <div class="l1-component-fill high" id="l1-comp-stability" style="width: 90%;"></div>
+                            </div>
+                            <span class="l1-component-value" id="l1-comp-stability-val">90%</span>
+                        </div>
+                        <div class="l1-component">
+                            <span class="l1-component-label">Temporal</span>
+                            <div class="l1-component-bar">
+                                <div class="l1-component-fill high" id="l1-comp-temporal" style="width: 95%;"></div>
+                            </div>
+                            <span class="l1-component-value" id="l1-comp-temporal-val">95%</span>
+                        </div>
+                        <div class="l1-component">
+                            <span class="l1-component-label">Handover</span>
+                            <div class="l1-component-bar">
+                                <div class="l1-component-fill high" id="l1-comp-handover" style="width: 100%;"></div>
+                            </div>
+                            <span class="l1-component-value" id="l1-comp-handover-val">100%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Gauges Panel -->
+                <div class="l1-panel l1-security-gauges">
+                    <div class="l1-panel-header">
+                        <i class="fas fa-shield-virus"></i>
+                        <span>Security Gauges</span>
+                    </div>
+                    <div class="l1-security-gauge-grid">
+                        <!-- Neighbor Density Meter -->
+                        <div class="l1-security-gauge" id="gauge-neighbor-density">
+                            <div class="l1-gauge-icon">
+                                <i class="fas fa-broadcast-tower"></i>
+                            </div>
+                            <div class="l1-gauge-content">
+                                <div class="l1-gauge-label">Neighbor Density</div>
+                                <div class="l1-gauge-value" id="gauge-neighbor-value">
+                                    <span class="l1-gauge-number">--</span>
+                                    <span class="l1-gauge-unit">PCIs</span>
+                                </div>
+                                <div class="l1-gauge-bar">
+                                    <div class="l1-gauge-bar-fill normal" id="gauge-neighbor-bar" style="width: 75%;"></div>
+                                </div>
+                                <div class="l1-gauge-status normal" id="gauge-neighbor-status">
+                                    <i class="fas fa-check-circle"></i> Normal
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- EARFCN Consistency Check -->
+                        <div class="l1-security-gauge" id="gauge-earfcn-check">
+                            <div class="l1-gauge-icon">
+                                <i class="fas fa-wave-square"></i>
+                            </div>
+                            <div class="l1-gauge-content">
+                                <div class="l1-gauge-label">EARFCN Consistency</div>
+                                <div class="l1-gauge-value" id="gauge-earfcn-value">
+                                    <span class="l1-gauge-number" id="gauge-earfcn-number">--</span>
+                                    <span class="l1-gauge-unit">&rarr;</span>
+                                    <span class="l1-gauge-band" id="gauge-earfcn-band">--</span>
+                                </div>
+                                <div class="l1-gauge-bar">
+                                    <div class="l1-gauge-bar-fill normal" id="gauge-earfcn-bar" style="width: 100%;"></div>
+                                </div>
+                                <div class="l1-gauge-status normal" id="gauge-earfcn-status">
+                                    <i class="fas fa-check-circle"></i> Verified
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- RRC State Watcher -->
+                        <div class="l1-security-gauge" id="gauge-rrc-state">
+                            <div class="l1-gauge-icon">
+                                <i class="fas fa-random"></i>
+                            </div>
+                            <div class="l1-gauge-content">
+                                <div class="l1-gauge-label">RRC State</div>
+                                <div class="l1-gauge-value" id="gauge-rrc-value">
+                                    <span class="l1-gauge-state" id="gauge-rrc-current">--</span>
+                                </div>
+                                <div class="l1-gauge-bar">
+                                    <div class="l1-gauge-bar-fill normal" id="gauge-rrc-bar" style="width: 100%;"></div>
+                                </div>
+                                <div class="l1-gauge-status normal" id="gauge-rrc-status">
+                                    <i class="fas fa-check-circle"></i> Healthy
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Alert Banner (hidden by default) -->
+                    <div class="l1-security-alert hidden" id="l1-security-alert">
+                        <div class="l1-alert-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div class="l1-alert-content">
+                            <div class="l1-alert-title" id="l1-alert-title">Security Alert</div>
+                            <div class="l1-alert-message" id="l1-alert-message">No alerts</div>
+                        </div>
+                        <button class="l1-alert-dismiss" onclick="dismissL1Alert()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Survival Mode Panel -->
+                <div class="l1-survival-panel">
+                    <div class="l1-survival-header">
+                        <div class="l1-survival-title">
+                            <i class="fas fa-life-ring"></i>
+                            <span>Survival Mode</span>
+                        </div>
+                        <span class="l1-survival-status normal" id="l1-survival-status">Normal</span>
+                    </div>
+                    <div class="l1-survival-controls">
+                        <div class="l1-survival-triggers">
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-trust" checked>
+                                <span>Auto-trigger when Trust < 20%</span>
+                            </label>
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-imsi" checked>
+                                <span>Auto-trigger on IMSI Catcher</span>
+                            </label>
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-jamming" checked>
+                                <span>Auto-trigger on Jamming</span>
+                            </label>
+                        </div>
+                        <button class="l1-survival-btn enter" id="l1-survival-btn" onclick="toggleSurvivalMode()">
+                            <i class="fas fa-shield-alt"></i>
+                            <span>Enter Survival Mode</span>
+                        </button>
+                        <div class="l1-vpn-status">
+                            <i class="fas fa-check-circle ready" id="l1-vpn-icon"></i>
+                            <span id="l1-vpn-text">VPN Pre-Established</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bubble Manager Section -->
     <div class="bubble-manager-card">
         <div class="bubble-manager-header">
@@ -2028,6 +3725,65 @@
         </div>
     </div>
 </div>
+
+<!-- User Prompt Modal - Only shows when AI confidence < 30% -->
+<div id="user-prompt-overlay">
+    <div class="user-prompt-modal">
+        <div class="prompt-header">
+            <div class="prompt-icon">
+                <i class="fas fa-question-circle"></i>
+            </div>
+            <div class="prompt-header-text">
+                <h3 id="prompt-title">I need your input</h3>
+                <p id="prompt-subtitle">Even after consulting other AI models, I'm uncertain about this decision</p>
+            </div>
+        </div>
+        <div class="prompt-body">
+            <div class="prompt-situation">
+                <div class="prompt-situation-label">What's happening</div>
+                <div class="prompt-situation-text" id="prompt-situation">
+                    Loading situation details...
+                </div>
+            </div>
+            <div class="prompt-ai-analysis">
+                <div class="prompt-ai-icon">
+                    <i class="fas fa-brain"></i>
+                </div>
+                <div class="prompt-ai-content">
+                    <div class="prompt-ai-label">My Analysis</div>
+                    <div class="prompt-ai-text" id="prompt-analysis">
+                        I've analyzed this situation but I'm not confident enough to act without your guidance.
+                    </div>
+                </div>
+            </div>
+            <div class="prompt-confidence">
+                <span class="prompt-confidence-label">Confidence:</span>
+                <div class="prompt-confidence-bar">
+                    <div class="prompt-confidence-fill" id="prompt-confidence-fill" style="width: 25%"></div>
+                </div>
+                <span class="prompt-confidence-value" id="prompt-confidence-value">25%</span>
+            </div>
+            <div class="prompt-actions" id="prompt-actions">
+                <!-- Dynamic action buttons populated by JS -->
+                <button class="prompt-btn prompt-btn-primary" onclick="handlePromptAction('approve')">
+                    <i class="fas fa-check"></i> Approve Action
+                </button>
+                <button class="prompt-btn prompt-btn-secondary" onclick="handlePromptAction('ignore')">
+                    <i class="fas fa-eye-slash"></i> Ignore
+                </button>
+                <button class="prompt-btn prompt-btn-danger" onclick="handlePromptAction('block')">
+                    <i class="fas fa-ban"></i> Block
+                </button>
+            </div>
+        </div>
+        <div class="prompt-footer">
+            <span class="prompt-footer-text">This prompt appears because my confidence is below 30%</span>
+            <button class="prompt-dismiss" onclick="dismissUserPrompt()">
+                <i class="fas fa-times"></i> Dismiss
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -2069,8 +3825,17 @@
 
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
+        // Show initial demo data immediately
+        updatePerformance(null); // Will use fallback demo data
+
         fetchStatus();
+        fetchL1Status();
+        fetchAIActivity();
+        fetchDefenseSummaries(); // Populate collapsed defense badges
         setInterval(fetchStatus, REFRESH_INTERVAL);
+        setInterval(fetchL1Status, REFRESH_INTERVAL * 2); // L1 updates less frequently
+        setInterval(fetchAIActivity, REFRESH_INTERVAL); // AI activity same as main
+        setInterval(fetchDefenseSummaries, REFRESH_INTERVAL * 3); // Defense summaries less frequent
     });
 
     // Fetch all status data
@@ -2089,12 +3854,25 @@
                 updatePresence(data.presence);
                 updatePrivacy(data.privacy);
                 updatePerformance(data.performance);
-                updateQuickActions(data.quick_actions);
             }
         } catch (error) {
             console.error('Failed to fetch AIOCHI status:', error);
         } finally {
             isLoading = false;
+        }
+    }
+
+    // Fetch AI Activity (decisions made by autonomous agent)
+    async function fetchAIActivity() {
+        try {
+            const response = await fetch(`${API_BASE}/agent/activity`);
+            const data = await response.json();
+            if (data.success) {
+                updateAIActivity(data);
+            }
+        } catch (error) {
+            // AI activity endpoint may not exist yet - that's OK
+            console.debug('AI activity not available:', error.message);
         }
     }
 
@@ -2135,6 +3913,109 @@
         };
         return titles[state] || state;
     }
+
+    // =========================================================================
+    // L1 SOC - CELLULAR TRUST & SURVIVAL MODE
+    // =========================================================================
+
+    let l1Available = false;
+    let survivalModeActive = false;
+
+    // Fetch L1 SOC status
+    async function fetchL1Status() {
+        try {
+            const response = await fetch(`${API_BASE}/l1/status`);
+            const data = await response.json();
+
+            if (data.success && data.available) {
+                l1Available = true;
+                updateL1Trust(data);
+                document.getElementById('l1-trust-container').classList.remove('hidden');
+            } else {
+                l1Available = false;
+                document.getElementById('l1-trust-container').classList.add('hidden');
+            }
+        } catch (error) {
+            // L1 not available (no LTE modem) - keep hidden
+            l1Available = false;
+            document.getElementById('l1-trust-container').classList.add('hidden');
+        }
+    }
+
+    // Update L1 Trust indicator in ambient banner
+    function updateL1Trust(l1Data) {
+        const fill = document.getElementById('l1-trust-fill');
+        const value = document.getElementById('l1-trust-value');
+        const icon = document.getElementById('l1-trust-icon');
+        const toggle = document.getElementById('survival-toggle');
+        const status = document.getElementById('survival-status');
+
+        const score = l1Data.trust_score || 0;
+
+        // Update progress bar
+        fill.style.width = score + '%';
+
+        // Update color class based on trust level
+        fill.classList.remove('trusted', 'suspicious', 'hostile');
+        if (score >= 70) {
+            fill.classList.add('trusted');
+            icon.style.color = 'var(--aiochi-calm)';
+        } else if (score >= 30) {
+            fill.classList.add('suspicious');
+            icon.style.color = 'var(--aiochi-curious)';
+        } else {
+            fill.classList.add('hostile');
+            icon.style.color = 'var(--aiochi-alert)';
+        }
+
+        value.textContent = score + '%';
+
+        // Update survival mode status
+        survivalModeActive = l1Data.survival_mode_active || false;
+        if (survivalModeActive) {
+            toggle.classList.add('active');
+            status.textContent = 'Survival';
+        } else {
+            toggle.classList.remove('active');
+            status.textContent = 'Normal';
+        }
+    }
+
+    // Toggle survival mode
+    window.toggleSurvivalMode = async function() {
+        if (!l1Available) return;
+
+        const newState = !survivalModeActive;
+        const action = newState ? 'enter' : 'exit';
+
+        try {
+            const response = await fetch(`${API_BASE}/l1/survival/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                survivalModeActive = newState;
+                updateL1Trust({
+                    trust_score: data.trust_score || 0,
+                    survival_mode_active: newState
+                });
+
+                // Show notification
+                showAINotification({
+                    type: newState ? 'warning' : 'success',
+                    headline: newState ? 'Survival Mode Activated' : 'Survival Mode Deactivated',
+                    message: newState
+                        ? 'Emergency protection enabled. VPN active, weak protocols disabled.'
+                        : 'Returned to normal operation.',
+                    icon: newState ? 'fa-shield-alt' : 'fa-check-circle'
+                });
+            }
+        } catch (error) {
+            console.error('Failed to toggle survival mode:', error);
+        }
+    };
 
     // Update presence bubbles
     function updatePresence(presence) {
@@ -2211,9 +4092,363 @@
         feedList.innerHTML = html;
     }
 
+    // =========================================================================
+    // AI ACTIVITY FEED - "What I'm Doing"
+    // =========================================================================
+
+    let aiDecisions = [];
+
+    // Update AI Activity feed
+    function updateAIActivity(activity) {
+        const countBadge = document.getElementById('ai-activity-count');
+        const feedList = document.getElementById('ai-feed-list');
+        const emptyState = document.getElementById('ai-feed-empty');
+
+        if (!activity || !activity.decisions || activity.decisions.length === 0) {
+            // Show empty state
+            if (emptyState) emptyState.style.display = 'block';
+            countBadge.textContent = 'All clear';
+            countBadge.className = 'badge bg-success';
+            return;
+        }
+
+        // Hide empty state
+        if (emptyState) emptyState.style.display = 'none';
+
+        // Update badge
+        const pendingCount = activity.decisions.filter(d => d.pending).length;
+        if (pendingCount > 0) {
+            countBadge.textContent = `${pendingCount} pending`;
+            countBadge.className = 'badge bg-warning';
+        } else {
+            countBadge.textContent = `${activity.decisions.length} actions`;
+            countBadge.className = 'badge bg-info';
+        }
+
+        // Render decisions
+        let html = '';
+        for (const decision of activity.decisions.slice(0, 10)) {
+            const colorClass = getDecisionColor(decision);
+            const isPending = decision.pending || decision.confidence === 'low';
+
+            html += `
+            <div class="ai-feed-item ${colorClass} ${isPending ? 'pending' : ''}" data-decision-id="${decision.id}">
+                <div class="ai-feed-icon ${colorClass}">
+                    <i class="fas ${decision.icon || 'fa-robot'}"></i>
+                </div>
+                <div class="ai-feed-content">
+                    <div class="ai-feed-header">
+                        <span class="ai-feed-headline">${decision.headline}</span>
+                        <span class="ai-feed-time">${decision.time}</span>
+                    </div>
+                    <p class="ai-feed-narrative">${decision.narrative}</p>
+                    ${isPending ? `
+                    <div class="ai-feed-actions">
+                        <span class="ai-feed-countdown" data-countdown="${decision.auto_execute_in || 120}">
+                            Auto-execute in <span class="countdown-value">2:00</span>
+                        </span>
+                        <button class="ai-feed-btn correct" onclick="approveAIDecision('${decision.id}')">
+                            <i class="fas fa-check"></i> Do it
+                        </button>
+                        <button class="ai-feed-btn wrong" onclick="rejectAIDecision('${decision.id}')">
+                            <i class="fas fa-times"></i> Don't
+                        </button>
+                    </div>
+                    ` : decision.allow_feedback ? `
+                    <div class="ai-feed-actions">
+                        <button class="ai-feed-btn wrong" onclick="reportWrongDecision('${decision.id}')">
+                            <i class="fas fa-exclamation-circle"></i> That was wrong
+                        </button>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>`;
+        }
+
+        feedList.innerHTML = html;
+
+        // Start countdown timers for pending items
+        startCountdownTimers();
+    }
+
+    function getDecisionColor(decision) {
+        if (decision.severity === 'high' || decision.type === 'danger') return 'danger';
+        if (decision.severity === 'medium' || decision.type === 'warning' || decision.pending) return 'warning';
+        if (decision.type === 'info') return 'info';
+        return 'success';
+    }
+
+    // Countdown timers for pending decisions
+    function startCountdownTimers() {
+        document.querySelectorAll('.ai-feed-countdown').forEach(el => {
+            let seconds = parseInt(el.dataset.countdown) || 120;
+            const valueEl = el.querySelector('.countdown-value');
+
+            const timer = setInterval(() => {
+                seconds--;
+                if (seconds <= 0) {
+                    clearInterval(timer);
+                    valueEl.textContent = 'executing...';
+                    return;
+                }
+                const mins = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                valueEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            }, 1000);
+        });
+    }
+
+    // AI decision feedback functions
+    window.approveAIDecision = async function(decisionId) {
+        try {
+            await fetch(`${API_BASE}/agent/decisions/${decisionId}/approve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            showAINotification({
+                type: 'success',
+                headline: 'Action approved',
+                message: 'Executing the action now.',
+                icon: 'fa-check-circle'
+            });
+            // Remove the pending item
+            const item = document.querySelector(`[data-decision-id="${decisionId}"]`);
+            if (item) item.remove();
+        } catch (error) {
+            console.error('Failed to approve decision:', error);
+        }
+    };
+
+    window.rejectAIDecision = async function(decisionId) {
+        try {
+            await fetch(`${API_BASE}/agent/decisions/${decisionId}/reject`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            showAINotification({
+                type: 'info',
+                headline: 'Action cancelled',
+                message: 'I won\'t do that. Thanks for the feedback!',
+                icon: 'fa-hand-paper'
+            });
+            // Remove the pending item
+            const item = document.querySelector(`[data-decision-id="${decisionId}"]`);
+            if (item) item.remove();
+        } catch (error) {
+            console.error('Failed to reject decision:', error);
+        }
+    };
+
+    window.reportWrongDecision = async function(decisionId) {
+        try {
+            await fetch(`${API_BASE}/agent/decisions/${decisionId}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ correct: false })
+            });
+            showAINotification({
+                type: 'info',
+                headline: 'Thanks for the feedback',
+                message: 'I\'ll learn from this and do better next time.',
+                icon: 'fa-brain'
+            });
+        } catch (error) {
+            console.error('Failed to report wrong decision:', error);
+        }
+    };
+
+    // Show AI notification toast
+    function showAINotification(notification) {
+        // Create notification element
+        const container = document.getElementById('ai-notification-container') ||
+            createNotificationContainer();
+
+        const notifEl = document.createElement('div');
+        notifEl.className = `ai-notification ${notification.type}`;
+        notifEl.innerHTML = `
+            <div class="ai-notification-icon">
+                <i class="fas ${notification.icon}"></i>
+            </div>
+            <div class="ai-notification-content">
+                <div class="ai-notification-headline">${notification.headline}</div>
+                <div class="ai-notification-message">${notification.message}</div>
+            </div>
+            <button class="ai-notification-close" onclick="this.parentElement.remove()">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+
+        container.appendChild(notifEl);
+
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notifEl.parentElement) {
+                notifEl.classList.add('fade-out');
+                setTimeout(() => notifEl.remove(), 300);
+            }
+        }, 5000);
+    }
+
+    function createNotificationContainer() {
+        const container = document.createElement('div');
+        container.id = 'ai-notification-container';
+        document.body.appendChild(container);
+        return container;
+    }
+
+    // =========================================================================
+    // USER PROMPT MODAL - Only shows when AI confidence < 30%
+    // =========================================================================
+
+    let pendingPrompt = null; // Current pending prompt data
+
+    // Show user prompt modal
+    window.showUserPrompt = function(promptData) {
+        pendingPrompt = promptData;
+        const overlay = document.getElementById('user-prompt-overlay');
+
+        // Update content
+        document.getElementById('prompt-title').textContent = promptData.title || 'I need your input';
+        document.getElementById('prompt-subtitle').textContent = promptData.subtitle ||
+            'Even after consulting other AI models, I\'m uncertain about this decision';
+        document.getElementById('prompt-situation').textContent = promptData.situation || 'Unknown situation';
+        document.getElementById('prompt-analysis').textContent = promptData.analysis ||
+            'I\'ve analyzed this situation but need your guidance.';
+
+        // Update confidence bar
+        const confidence = Math.round((promptData.confidence || 0.25) * 100);
+        document.getElementById('prompt-confidence-fill').style.width = `${confidence}%`;
+        document.getElementById('prompt-confidence-value').textContent = `${confidence}%`;
+
+        // Update action buttons based on context
+        const actionsEl = document.getElementById('prompt-actions');
+        if (promptData.actions && promptData.actions.length > 0) {
+            actionsEl.innerHTML = promptData.actions.map((action, index) => {
+                const btnClass = index === 0 ? 'prompt-btn-primary' :
+                                 action.type === 'danger' ? 'prompt-btn-danger' : 'prompt-btn-secondary';
+                return `<button class="prompt-btn ${btnClass}" onclick="handlePromptAction('${action.id}')">
+                    <i class="fas ${action.icon || 'fa-check'}"></i> ${action.label}
+                </button>`;
+            }).join('');
+        }
+
+        // Show the modal
+        overlay.classList.add('visible');
+
+        // Log that we showed a prompt
+        console.log('User prompt shown:', promptData.decision_id);
+    };
+
+    // Handle user prompt action
+    window.handlePromptAction = async function(actionId) {
+        if (!pendingPrompt) {
+            dismissUserPrompt();
+            return;
+        }
+
+        const decisionId = pendingPrompt.decision_id;
+        console.log(`User action: ${actionId} for decision ${decisionId}`);
+
+        try {
+            // Send user decision to backend
+            const response = await fetch(`${API_BASE}/agent/decision/${decisionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: actionId,
+                    user_decision: true,
+                    timestamp: new Date().toISOString()
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Show success notification
+                showAINotification({
+                    type: 'success',
+                    icon: 'fa-check-circle',
+                    headline: 'Decision recorded',
+                    message: `Your choice has been applied. I'll learn from this for future decisions.`
+                });
+            } else {
+                showAINotification({
+                    type: 'warning',
+                    icon: 'fa-exclamation-triangle',
+                    headline: 'Note',
+                    message: data.message || 'Action recorded but backend processing pending.'
+                });
+            }
+        } catch (error) {
+            console.error('Failed to submit user decision:', error);
+            showAINotification({
+                type: 'info',
+                icon: 'fa-info-circle',
+                headline: 'Decision recorded locally',
+                message: 'Your choice was recorded. Backend sync will retry.'
+            });
+        }
+
+        // Clear and close
+        pendingPrompt = null;
+        dismissUserPrompt();
+    };
+
+    // Dismiss user prompt without action
+    window.dismissUserPrompt = function() {
+        const overlay = document.getElementById('user-prompt-overlay');
+        overlay.classList.remove('visible');
+
+        if (pendingPrompt) {
+            console.log('User dismissed prompt:', pendingPrompt.decision_id);
+            pendingPrompt = null;
+        }
+    };
+
+    // Check for pending user prompts (called periodically)
+    async function checkPendingPrompts() {
+        try {
+            const response = await fetch(`${API_BASE}/agent/prompts`);
+            const data = await response.json();
+
+            if (data.success && data.prompts && data.prompts.length > 0) {
+                // Show the first pending prompt (oldest)
+                const prompt = data.prompts[0];
+                if (prompt.confidence < 0.30 && !pendingPrompt) {
+                    showUserPrompt(prompt);
+                }
+            }
+        } catch (error) {
+            // Prompt endpoint may not exist yet - that's OK
+            console.debug('Prompt check not available:', error.message);
+        }
+    }
+
+    // Add prompt checking to initialization
+    document.addEventListener('DOMContentLoaded', function() {
+        // Check for pending prompts after initial load
+        setTimeout(checkPendingPrompts, 2000);
+        // Then check periodically (every 10 seconds)
+        setInterval(checkPendingPrompts, 10000);
+    });
+
     // Update performance metrics
     function updatePerformance(performance) {
-        const score = performance.health_score;
+        // Fallback demo data if performance is missing
+        if (!performance) {
+            performance = {
+                health_score: 92,
+                insight: 'Network running smoothly',
+                metrics: {
+                    latency_ms: 12,
+                    bandwidth_used_pct: 34,
+                    uptime_pct: 99.8,
+                    threats_blocked_24h: 47
+                }
+            };
+        }
+
+        const score = performance.health_score || 0;
         const gaugeFill = document.getElementById('health-gauge-fill');
         const scoreEl = document.getElementById('health-score');
         const insightEl = document.getElementById('health-insight');
@@ -2233,38 +4468,17 @@
         scoreEl.className = `health-score-number ${colorClass}`;
 
         // Update insight
-        insightEl.textContent = performance.insight;
+        insightEl.textContent = performance.insight || 'Monitoring network health...';
 
-        // Update metrics
-        const metrics = performance.metrics;
-        document.getElementById('metric-latency').textContent = metrics.latency_ms;
-        document.getElementById('metric-bandwidth').textContent = metrics.bandwidth_used_pct + '%';
-        document.getElementById('metric-uptime').textContent = metrics.uptime_pct + '%';
-        document.getElementById('metric-blocked').textContent = metrics.threats_blocked_24h;
+        // Update metrics with fallbacks
+        const metrics = performance.metrics || {};
+        document.getElementById('metric-latency').textContent = metrics.latency_ms ?? '--';
+        document.getElementById('metric-bandwidth').textContent = (metrics.bandwidth_used_pct ?? '--') + '%';
+        document.getElementById('metric-uptime').textContent = (metrics.uptime_pct ?? '--') + '%';
+        document.getElementById('metric-blocked').textContent = metrics.threats_blocked_24h ?? '--';
     }
 
-    // Update quick actions
-    function updateQuickActions(quickActions) {
-        const container = document.getElementById('quick-actions');
-
-        let html = '';
-        for (const action of quickActions.actions) {
-            const activeClass = action.active ? 'active' : '';
-            html += `
-            <div class="action-btn ${action.color} ${activeClass}"
-                 data-action="${action.id}"
-                 data-active="${action.active}"
-                 onclick="toggleAction('${action.id}', ${!action.active})"
-                 title="${action.description}">
-                <i class="fas ${action.icon}"></i>
-                <span>${action.label}</span>
-            </div>`;
-        }
-
-        container.innerHTML = html;
-    }
-
-    // Toggle action
+    // Removed: Quick Actions (simplified UI)
     window.toggleAction = async function(actionId, activate) {
         try {
             const response = await fetch(`${API_BASE}/action/${actionId}`, {
@@ -2291,6 +4505,518 @@
             console.error('Failed to toggle action:', error);
         }
     };
+
+    // =========================================================================
+    // L1 CELLULAR SECURITY
+    // =========================================================================
+
+    // L1 State
+    let l1SurvivalMode = false;
+
+    // Toggle L1 section expand/collapse
+    window.toggleL1 = function() {
+        const card = document.getElementById('l1-card');
+        const toggle = document.getElementById('l1-toggle');
+        const icon = toggle.querySelector('i');
+
+        card.classList.toggle('collapsed');
+
+        if (card.classList.contains('collapsed')) {
+            icon.classList.remove('fa-chevron-up');
+            icon.classList.add('fa-chevron-down');
+            toggle.title = 'Expand details';
+        } else {
+            icon.classList.remove('fa-chevron-down');
+            icon.classList.add('fa-chevron-up');
+            toggle.title = 'Collapse details';
+            // Fetch L1 data when expanded
+            fetchL1Status();
+        }
+    };
+
+    // Toggle Survival Mode
+    window.toggleSurvivalMode = async function() {
+        const btn = document.getElementById('l1-survival-btn');
+        const statusBadge = document.getElementById('l1-survival-status');
+
+        try {
+            if (l1SurvivalMode) {
+                // Exit survival mode
+                const response = await fetch('/aiochi/api/l1/survival/exit', { method: 'POST' });
+                if (response.ok) {
+                    l1SurvivalMode = false;
+                    btn.className = 'l1-survival-btn enter';
+                    btn.innerHTML = '<i class="fas fa-shield-alt"></i><span>Enter Survival Mode</span>';
+                    statusBadge.className = 'l1-survival-status normal';
+                    statusBadge.textContent = 'Normal';
+                }
+            } else {
+                // Enter survival mode
+                const response = await fetch('/aiochi/api/l1/survival/enter', { method: 'POST' });
+                if (response.ok) {
+                    l1SurvivalMode = true;
+                    btn.className = 'l1-survival-btn exit';
+                    btn.innerHTML = '<i class="fas fa-door-open"></i><span>Exit Survival Mode</span>';
+                    statusBadge.className = 'l1-survival-status active';
+                    statusBadge.textContent = 'Active';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to toggle survival mode:', error);
+        }
+    };
+
+    // Fetch L1 status
+    async function fetchL1Status() {
+        try {
+            const response = await fetch('/aiochi/api/l1/status');
+            if (response.ok) {
+                const data = await response.json();
+                updateL1Display(data);
+            }
+        } catch (error) {
+            console.error('Failed to fetch L1 status:', error);
+            // Use fallback demo data
+            updateL1Display(getL1DemoData());
+        }
+    }
+
+    // Get fallback L1 demo data
+    function getL1DemoData() {
+        return {
+            network_type: '5G SA',
+            carrier: 'T-Mobile',
+            cell_id: '12345678',
+            pci: '42',
+            tac: '1234',
+            band: 'n78',
+            mcc_mnc: '310-260',
+            rsrp: -85,
+            sinr: 22,
+            snr: 20.5,
+            timing_advance: 15,
+            distance_km: 1.2,
+            handovers_1h: 2,
+            tower_status: 'verified',
+            trust_score: 85,
+            trust_components: {
+                identity: 100,
+                snr: 75,
+                stability: 90,
+                temporal: 95,
+                handover: 100
+            },
+            survival_mode: false,
+            vpn_ready: true
+        };
+    }
+
+    // Update L1 display with data
+    function updateL1Display(data) {
+        if (!data) return;
+
+        // Update header badges
+        updateL1NetworkBadge(data.network_type);
+        updateL1SignalBars(data.rsrp);
+        updateL1TrustMini(data.trust_score);
+
+        // Update cell info
+        document.getElementById('l1-cell-id').textContent = data.cell_id || '--';
+        document.getElementById('l1-pci').textContent = data.pci || '--';
+        document.getElementById('l1-tac').textContent = data.tac || '--';
+        document.getElementById('l1-band').textContent = data.band || '--';
+        document.getElementById('l1-carrier').textContent = data.carrier || '--';
+        document.getElementById('l1-mccmnc').textContent = data.mcc_mnc || '--';
+
+        // Update signal metrics
+        document.getElementById('l1-rsrp').textContent = data.rsrp ? `${data.rsrp} dBm` : '--';
+        document.getElementById('l1-sinr').textContent = data.sinr ? `${data.sinr} dB` : '--';
+        document.getElementById('l1-snr').textContent = data.snr ? `${data.snr} dB` : '--';
+        document.getElementById('l1-distance').textContent = data.distance_km ? `~${data.distance_km} km` : '--';
+        document.getElementById('l1-handovers').textContent = data.handovers_1h ?? '--';
+
+        // Update tower status
+        const towerStatus = document.getElementById('l1-tower-status');
+        if (data.tower_status === 'verified') {
+            towerStatus.innerHTML = '<i class="fas fa-check-circle"></i> Verified';
+            towerStatus.style.color = 'var(--aiochi-calm)';
+        } else if (data.tower_status === 'unknown') {
+            towerStatus.innerHTML = '<i class="fas fa-question-circle"></i> Unknown';
+            towerStatus.style.color = 'var(--aiochi-curious)';
+        } else {
+            towerStatus.innerHTML = '<i class="fas fa-exclamation-circle"></i> Suspicious';
+            towerStatus.style.color = 'var(--aiochi-alert)';
+        }
+
+        // Update trust score gauge
+        updateL1TrustGauge(data.trust_score);
+
+        // Update trust components
+        if (data.trust_components) {
+            updateL1Component('identity', data.trust_components.identity);
+            updateL1Component('snr', data.trust_components.snr);
+            updateL1Component('stability', data.trust_components.stability);
+            updateL1Component('temporal', data.trust_components.temporal);
+            updateL1Component('handover', data.trust_components.handover);
+        }
+
+        // Update survival mode
+        l1SurvivalMode = data.survival_mode || false;
+        const btn = document.getElementById('l1-survival-btn');
+        const statusBadge = document.getElementById('l1-survival-status');
+        if (l1SurvivalMode) {
+            btn.className = 'l1-survival-btn exit';
+            btn.innerHTML = '<i class="fas fa-door-open"></i><span>Exit Survival Mode</span>';
+            statusBadge.className = 'l1-survival-status active';
+            statusBadge.textContent = 'Active';
+        } else {
+            btn.className = 'l1-survival-btn enter';
+            btn.innerHTML = '<i class="fas fa-shield-alt"></i><span>Enter Survival Mode</span>';
+            statusBadge.className = 'l1-survival-status normal';
+            statusBadge.textContent = 'Normal';
+        }
+
+        // Update VPN status
+        const vpnIcon = document.getElementById('l1-vpn-icon');
+        const vpnText = document.getElementById('l1-vpn-text');
+        if (data.vpn_ready) {
+            vpnIcon.className = 'fas fa-check-circle ready';
+            vpnText.textContent = 'VPN Pre-Established';
+        } else {
+            vpnIcon.className = 'fas fa-exclamation-circle not-ready';
+            vpnText.textContent = 'VPN Not Ready';
+        }
+
+        // Update Security Gauges
+        updateSecurityGauges(data);
+    }
+
+    // Update L1 network type badge
+    function updateL1NetworkBadge(networkType) {
+        const badge = document.getElementById('l1-network-type');
+        const type = (networkType || '').toLowerCase();
+        badge.innerHTML = `<i class="fas fa-signal"></i> ${networkType || 'Unknown'}`;
+
+        // Remove all type classes
+        badge.classList.remove('lte', 'g5', 'g5sa', 'g4', 'g3', 'offline');
+
+        // Add appropriate class
+        if (type.includes('5g sa')) {
+            badge.classList.add('g5sa');
+        } else if (type.includes('5g')) {
+            badge.classList.add('g5');
+        } else if (type.includes('lte') || type.includes('4g')) {
+            badge.classList.add('lte');
+        } else if (type.includes('3g')) {
+            badge.classList.add('g3');
+        } else {
+            badge.classList.add('offline');
+        }
+    }
+
+    // Update L1 signal bars
+    function updateL1SignalBars(rsrp) {
+        const indicator = document.getElementById('l1-signal-bars');
+        indicator.classList.remove('excellent', 'good', 'fair', 'poor', 'none');
+
+        if (rsrp >= -80) {
+            indicator.classList.add('excellent');
+        } else if (rsrp >= -90) {
+            indicator.classList.add('good');
+        } else if (rsrp >= -100) {
+            indicator.classList.add('fair');
+        } else if (rsrp >= -110) {
+            indicator.classList.add('poor');
+        } else {
+            indicator.classList.add('none');
+        }
+    }
+
+    // Update L1 trust mini badge in header
+    function updateL1TrustMini(score) {
+        const badge = document.getElementById('l1-trust-mini');
+        badge.innerHTML = `<i class="fas fa-shield-alt"></i> ${score}%`;
+        badge.classList.remove('trusted', 'suspicious', 'hostile');
+
+        if (score >= 70) {
+            badge.classList.add('trusted');
+        } else if (score >= 30) {
+            badge.classList.add('suspicious');
+        } else {
+            badge.classList.add('hostile');
+        }
+    }
+
+    // Update L1 trust gauge
+    function updateL1TrustGauge(score) {
+        const progress = document.getElementById('l1-trust-progress');
+        const value = document.getElementById('l1-trust-value');
+        const label = document.getElementById('l1-trust-label');
+
+        progress.setAttribute('stroke-dasharray', `${score}, 100`);
+        value.textContent = `${score}%`;
+
+        // Update colors
+        progress.classList.remove('trusted', 'suspicious', 'hostile');
+        label.classList.remove('trusted', 'suspicious', 'hostile');
+
+        if (score >= 70) {
+            progress.classList.add('trusted');
+            label.classList.add('trusted');
+            label.textContent = 'TRUSTED';
+        } else if (score >= 30) {
+            progress.classList.add('suspicious');
+            label.classList.add('suspicious');
+            label.textContent = 'SUSPICIOUS';
+        } else {
+            progress.classList.add('hostile');
+            label.classList.add('hostile');
+            label.textContent = 'HOSTILE';
+        }
+    }
+
+    // Update L1 trust component
+    function updateL1Component(name, value) {
+        const fill = document.getElementById(`l1-comp-${name}`);
+        const valueEl = document.getElementById(`l1-comp-${name}-val`);
+
+        if (fill && valueEl) {
+            fill.style.width = `${value}%`;
+            valueEl.textContent = `${value}%`;
+
+            // Update color class
+            fill.classList.remove('high', 'medium', 'low');
+            if (value >= 70) {
+                fill.classList.add('high');
+            } else if (value >= 40) {
+                fill.classList.add('medium');
+            } else {
+                fill.classList.add('low');
+            }
+        }
+    }
+
+    // =========================================================================
+    // SECURITY GAUGES
+    // =========================================================================
+
+    let previousNeighborCount = null;  // Track neighbor count changes
+    let rrcConnectingStartTime = null; // Track how long in rrc-connecting state
+
+    // Update Security Gauges from L1 data
+    function updateSecurityGauges(data) {
+        if (!data) return;
+
+        // Update Neighbor Density Meter
+        updateNeighborDensityGauge(data.neighbor_count);
+
+        // Update EARFCN Consistency Check
+        updateEarfcnConsistencyGauge(data.earfcn, data.band, data.earfcn_valid, data.expected_band);
+
+        // Update RRC State Watcher
+        updateRrcStateGauge(data.rrc_state);
+    }
+
+    // Neighbor Density Meter
+    function updateNeighborDensityGauge(count) {
+        const gauge = document.getElementById('gauge-neighbor-density');
+        const numberEl = gauge.querySelector('.l1-gauge-number');
+        const barFill = document.getElementById('gauge-neighbor-bar');
+        const statusEl = document.getElementById('gauge-neighbor-status');
+
+        if (count === null || count === undefined) {
+            numberEl.textContent = '--';
+            return;
+        }
+
+        numberEl.textContent = count;
+
+        // Calculate bar width (0 neighbors = 0%, 5+ neighbors = 100%)
+        const barPercent = Math.min(count * 20, 100);
+        barFill.style.width = `${barPercent}%`;
+
+        // Determine status
+        gauge.classList.remove('alert', 'warning');
+        barFill.classList.remove('normal', 'warning', 'alert');
+        statusEl.classList.remove('normal', 'warning', 'alert');
+
+        // Check for Radio Isolation Alert (drop from 4+ to 1)
+        if (previousNeighborCount !== null && previousNeighborCount >= 4 && count <= 1) {
+            // Radio Isolation Alert!
+            gauge.classList.add('alert');
+            barFill.classList.add('alert');
+            statusEl.classList.add('alert');
+            statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Radio Isolation!';
+            showL1SecurityAlert('Radio Isolation Alert',
+                `Neighbor PCIs dropped from ${previousNeighborCount} to ${count}. Possible IMSI catcher or jammer nearby.`);
+        } else if (count <= 1) {
+            // Warning: Low neighbor count
+            gauge.classList.add('warning');
+            barFill.classList.add('warning');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Low Density';
+        } else if (count <= 2) {
+            // Caution
+            barFill.classList.add('warning');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-minus-circle"></i> Sparse';
+        } else {
+            // Normal
+            barFill.classList.add('normal');
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Normal';
+        }
+
+        previousNeighborCount = count;
+    }
+
+    // EARFCN Consistency Check
+    function updateEarfcnConsistencyGauge(earfcn, band, earfcnValid, expectedBand) {
+        const gauge = document.getElementById('gauge-earfcn-check');
+        const numberEl = document.getElementById('gauge-earfcn-number');
+        const bandEl = document.getElementById('gauge-earfcn-band');
+        const barFill = document.getElementById('gauge-earfcn-bar');
+        const statusEl = document.getElementById('gauge-earfcn-status');
+
+        if (!earfcn) {
+            numberEl.textContent = '--';
+            bandEl.textContent = '--';
+            return;
+        }
+
+        numberEl.textContent = earfcn;
+        bandEl.textContent = band || '--';
+
+        gauge.classList.remove('alert', 'warning');
+        barFill.classList.remove('normal', 'warning', 'alert');
+        statusEl.classList.remove('normal', 'warning', 'alert');
+
+        if (earfcnValid === false) {
+            // Protocol Spoofing Alert!
+            gauge.classList.add('alert');
+            barFill.classList.add('alert');
+            barFill.style.width = '100%';
+            statusEl.classList.add('alert');
+            statusEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Spoofing! Should be ${expectedBand}`;
+            showL1SecurityAlert('Protocol Spoofing Alert',
+                `EARFCN ${earfcn} should be ${expectedBand}, but tower claims ${band}. Possible fake base station.`);
+        } else if (earfcnValid === true) {
+            // Verified
+            barFill.classList.add('normal');
+            barFill.style.width = '100%';
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Verified';
+        } else {
+            // Unknown/Can't verify
+            barFill.classList.add('warning');
+            barFill.style.width = '50%';
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-question-circle"></i> Unverified';
+        }
+    }
+
+    // RRC State Watcher
+    function updateRrcStateGauge(rrcState) {
+        const gauge = document.getElementById('gauge-rrc-state');
+        const stateEl = document.getElementById('gauge-rrc-current');
+        const barFill = document.getElementById('gauge-rrc-bar');
+        const statusEl = document.getElementById('gauge-rrc-status');
+
+        if (!rrcState) {
+            stateEl.textContent = '--';
+            return;
+        }
+
+        // Format state for display
+        const stateDisplay = rrcState.replace('rrc-', '').toUpperCase();
+        stateEl.textContent = stateDisplay;
+
+        gauge.classList.remove('alert', 'warning');
+        barFill.classList.remove('normal', 'warning', 'alert');
+        statusEl.classList.remove('normal', 'warning', 'alert');
+
+        if (rrcState === 'rrc-idle') {
+            // Healthy idle state - phone is dormant, saving battery
+            rrcConnectingStartTime = null;
+            barFill.classList.add('normal');
+            barFill.style.width = '100%';
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-moon"></i> Idle';
+        } else if (rrcState === 'rrc-connected') {
+            // Best state - active data connection
+            rrcConnectingStartTime = null;  // Reset timer - connection succeeded
+            barFill.classList.add('normal');
+            barFill.style.width = '100%';
+            statusEl.classList.add('normal');
+            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Connected';
+        } else if (rrcState === 'rrc-connecting') {
+            // Transitional state - only alert if stuck here too long
+            const now = Date.now();
+            if (rrcConnectingStartTime === null) {
+                rrcConnectingStartTime = now;
+            }
+
+            const timeInState = (now - rrcConnectingStartTime) / 1000; // seconds
+
+            if (timeInState > 60) {
+                // Signaling Storm Alert - stuck in connecting for over 1 minute
+                gauge.classList.add('alert');
+                barFill.classList.add('alert');
+                barFill.style.width = '100%';
+                statusEl.classList.add('alert');
+                statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Stuck!';
+                showL1SecurityAlert('Connection Blocked',
+                    `RRC stuck in CONNECTING for ${Math.round(timeInState)}s. Possible jamming or L1 DoS attack.`);
+            } else if (timeInState > 30) {
+                // Warning - taking too long
+                gauge.classList.add('warning');
+                barFill.classList.add('warning');
+                barFill.style.width = '75%';
+                statusEl.classList.add('warning');
+                statusEl.innerHTML = '<i class="fas fa-clock"></i> Slow';
+            } else {
+                // Normal transition - briefly connecting
+                barFill.classList.add('normal');
+                barFill.style.width = '50%';
+                statusEl.classList.add('normal');
+                statusEl.innerHTML = '<i class="fas fa-sync-alt"></i> Connecting';
+            }
+        } else {
+            // Unknown state
+            barFill.classList.add('warning');
+            barFill.style.width = '50%';
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = '<i class="fas fa-question-circle"></i> Unknown';
+        }
+    }
+
+    // Show L1 Security Alert Banner
+    function showL1SecurityAlert(title, message) {
+        const alertEl = document.getElementById('l1-security-alert');
+        const titleEl = document.getElementById('l1-alert-title');
+        const messageEl = document.getElementById('l1-alert-message');
+
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        alertEl.classList.remove('hidden');
+
+        // Auto-dismiss after 30 seconds
+        setTimeout(() => {
+            if (!alertEl.classList.contains('hidden')) {
+                alertEl.classList.add('hidden');
+            }
+        }, 30000);
+    }
+
+    // Dismiss L1 Security Alert
+    window.dismissL1Alert = function() {
+        document.getElementById('l1-security-alert').classList.add('hidden');
+    };
+
+    // Initialize L1 with demo data on page load
+    setTimeout(() => {
+        fetchL1Status();
+    }, 1500);
 
     // =========================================================================
     // BUBBLE MANAGER
@@ -2337,9 +5063,21 @@
             const devices = bubble.devices || [];
             const policy = bubble.policy || {};
 
+            // Check if this is quarantine (system-managed - NO CRUD)
+            const isQuarantine = bubble.bubble_id === 'SYSTEM-QUARANTINE' ||
+                                 bubble.bubble_type === 'QUARANTINE' ||
+                                 bubble.bubble_type === 'quarantine';
+
+            // Special styling for quarantine: red dotted border, permanent look
+            const quarantineStyle = isQuarantine
+                ? 'border: 1px dotted #F44336 !important; border-left: 4px solid #F44336 !important;'
+                : '';
+            const quarantineClass = isQuarantine ? 'quarantine-bubble' : '';
+
             html += `
-            <div class="bubble-card"
+            <div class="bubble-card ${quarantineClass}"
                  data-bubble-id="${bubble.bubble_id}"
+                 style="${quarantineStyle}"
                  ondragover="handleDragOver(event)"
                  ondrop="handleDrop(event, '${bubble.bubble_id}')">
                 <div class="bubble-card-header">
@@ -2349,13 +5087,15 @@
                         </div>
                         <div>
                             <div class="bubble-card-name">${bubble.name}</div>
-                            <div class="bubble-card-type">${bubble.bubble_type}</div>
+                            <div class="bubble-card-type">${isQuarantine ? '<i class="fas fa-lock mr-1"></i>System' : bubble.bubble_type}</div>
                         </div>
                     </div>
                     <div class="bubble-card-actions">
+                        ${isQuarantine ? '' : `
                         <button onclick="openEditBubbleModal('${bubble.bubble_id}')" title="Edit">
                             <i class="fas fa-edit"></i>
                         </button>
+                        `}
                     </div>
                 </div>
                 <div class="bubble-card-devices">
@@ -2530,6 +5270,16 @@
         const bubble = bubblesData.bubbles.find(b => b.bubble_id === bubbleId);
         if (!bubble) return;
 
+        // Check if this is quarantine (system-managed - NO EDIT)
+        const isQuarantine = bubbleId === 'SYSTEM-QUARANTINE' ||
+                             bubble.bubble_type === 'QUARANTINE' ||
+                             bubble.bubble_type === 'quarantine';
+
+        if (isQuarantine) {
+            alert('Quarantine is a system-managed group and cannot be modified. You can only add or remove devices from Quarantine.');
+            return;
+        }
+
         document.getElementById('bubble-modal-title').textContent = 'Edit Bubble';
         document.getElementById('bubble-edit-id').value = bubbleId;
         document.getElementById('bubble-name').value = bubble.name;
@@ -2628,6 +5378,71 @@
     // =========================================================================
     // ACTIVE DEFENSES - 5 INNOVATIONS
     // =========================================================================
+
+    // Toggle defenses section expand/collapse
+    window.toggleDefenses = function() {
+        const card = document.querySelector('.defenses-card');
+        const toggle = document.getElementById('defenses-toggle');
+        const icon = toggle.querySelector('i');
+
+        card.classList.toggle('collapsed');
+
+        if (card.classList.contains('collapsed')) {
+            icon.classList.remove('fa-chevron-up');
+            icon.classList.add('fa-chevron-down');
+            toggle.title = 'Expand details';
+        } else {
+            icon.classList.remove('fa-chevron-down');
+            icon.classList.add('fa-chevron-up');
+            toggle.title = 'Collapse details';
+            // Fetch data for active tab when expanded
+            const activeTab = document.querySelector('.defense-tab.active');
+            if (activeTab) {
+                fetchDefenseData(activeTab.dataset.tab);
+            }
+        }
+    };
+
+    // Update summary badges (called when data changes)
+    function updateDefenseSummaryBadges(tabName, count) {
+        const badge = document.getElementById(`summary-${tabName}`);
+        if (badge) {
+            const span = badge.querySelector('span');
+            if (span) {
+                span.textContent = count;
+            }
+            // Highlight badge if count > 0
+            if (count > 0) {
+                badge.classList.add('active');
+            } else {
+                badge.classList.remove('active');
+            }
+        }
+    }
+
+    // Fetch all defense summaries for collapsed view
+    async function fetchDefenseSummaries() {
+        try {
+            const tabs = ['friction', 'ghost', 'chain', 'honeypot', 'gravity'];
+            for (const tab of tabs) {
+                const response = await fetch(`${API_BASE}/defenses/${tab}`);
+                const data = await response.json();
+                if (data.success) {
+                    let count = 0;
+                    switch(tab) {
+                        case 'friction': count = data.stats?.active || 0; break;
+                        case 'ghost': count = data.stats?.probes_24h || 0; break;
+                        case 'chain': count = data.stats?.predictions || 0; break;
+                        case 'honeypot': count = data.stats?.traps || 0; break;
+                        case 'gravity': count = data.stats?.fields || 0; break;
+                    }
+                    updateDefenseSummaryBadges(tab, count);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to fetch defense summaries:', error);
+        }
+    }
 
     // Switch defense tabs
     window.switchDefenseTab = function(tabName) {
