@@ -733,7 +733,10 @@ class HostAgent:
             'rrc_state': None,
             'neighbor_count': None,
             'earfcn_valid': None,
-            'expected_band': None
+            'expected_band': None,
+            # Security alerts (Gemini 3 innovations)
+            'security_alerts': [],
+            'is_suspicious': False
         }
 
         try:
@@ -816,6 +819,9 @@ class HostAgent:
                     results['rsrq_lte'] = qmi_info['rsrq_lte']
                 if qmi_info.get('rssi') is not None:
                     results['rssi'] = qmi_info['rssi']
+                # SINR - mapped from SNR (Trio+ validated: equivalent for practical purposes)
+                if qmi_info.get('sinr') is not None:
+                    results['sinr'] = qmi_info['sinr']
                 # Security gauge fields
                 if qmi_info.get('rrc_state'):
                     results['rrc_state'] = qmi_info['rrc_state']
@@ -826,7 +832,10 @@ class HostAgent:
                 if qmi_info.get('expected_band'):
                     results['expected_band'] = qmi_info['expected_band']
 
-            # Compute trust score based on signal quality
+            # Security heuristics (Gemini 3 innovations)
+            results['security_alerts'], results['is_suspicious'] = self._check_l1_security_anomalies(results)
+
+            # Compute trust score based on signal quality (includes security alerts penalty)
             results['trust_score'], results['trust_components'] = self._compute_l1_trust(results)
 
             # Check VPN readiness
@@ -1188,6 +1197,8 @@ class HostAgent:
             )
             if result.returncode == 0:
                 output = result.stdout
+                packet_service_state = None  # Track PS state for RRC mapping
+                emm_state = None
                 for line in output.split('\n'):
                     line_stripped = line.strip()
                     if "Band:" in line_stripped:
@@ -1200,12 +1211,44 @@ class HostAgent:
                                 info['band'] = f"B{band_raw[3:]}"
                             else:
                                 info['band'] = band_raw
-                    # RRC State - EMM connection state
-                    elif "EMM connection state:" in line_stripped:
-                        # Parse: EMM connection state: 'rrc-connecting' -> rrc-connecting
+                    # Packet service state - AUTHORITATIVE for RRC (Trio+ approach)
+                    # "attached" = device CAN send/receive data = CONNECTED
+                    # "detached/not-attached" = device is IDLE
+                    elif "Packet service state:" in line_stripped:
                         match = line_stripped.split("'")
                         if len(match) >= 2:
-                            info['rrc_state'] = match[1]  # rrc-idle, rrc-connecting, rrc-connected
+                            packet_service_state = match[1].lower()
+                    # EMM state for additional context
+                    elif "EMM state:" in line_stripped and "sub state" not in line_stripped:
+                        match = line_stripped.split("'")
+                        if len(match) >= 2:
+                            emm_state = match[1].lower()
+                    # UE In Idle - alternative field (some modem firmware)
+                    elif "UE In Idle:" in line_stripped:
+                        match = line_stripped.split("'")
+                        if len(match) >= 2:
+                            ue_in_idle = match[1].lower()
+                            if ue_in_idle == 'no':
+                                info['rrc_state'] = 'rrc-connected'
+                            else:
+                                info['rrc_state'] = 'rrc-idle'
+                    # EMM connection state - keep for debugging only
+                    elif "EMM connection state:" in line_stripped:
+                        match = line_stripped.split("'")
+                        if len(match) >= 2:
+                            info['rrc_state_emm'] = match[1]  # Debug field
+
+                # Derive RRC state from Packet Service + EMM if not already set
+                # (Trio+ validated: PS attached + EMM registered = actively connected)
+                if 'rrc_state' not in info:
+                    if packet_service_state == 'attached' and emm_state == 'registered':
+                        info['rrc_state'] = 'rrc-connected'  # Device is ACTIVE
+                    elif packet_service_state == 'attached':
+                        info['rrc_state'] = 'rrc-connected'  # PS attached = can send data
+                    elif emm_state in ('deregistered', 'not-registered'):
+                        info['rrc_state'] = 'rrc-idle'
+                    else:
+                        info['rrc_state'] = 'rrc-idle'  # Default to idle if uncertain
 
             # Get signal info
             result = subprocess.run(
@@ -1333,6 +1376,14 @@ class HostAgent:
                 logger.warning(f"EARFCN spoofing detected: EARFCN {info['earfcn']} "
                               f"should be {expected_band}, not {info['band']}")
 
+        # Map SNR to SINR (Trio+ validated: SNR and SINR are equivalent for practical purposes)
+        # UI expects 'sinr' field - populate from best available SNR value
+        if 'sinr' not in info:
+            if info.get('snr_5g') is not None:
+                info['sinr'] = info['snr_5g']
+            elif info.get('snr_lte') is not None:
+                info['sinr'] = info['snr_lte']
+
         return info
 
     def _validate_earfcn_band(self, earfcn: int, claimed_band: str) -> Tuple[bool, str]:
@@ -1416,6 +1467,88 @@ class HostAgent:
 
         return actual_band == claimed_upper, actual_band
 
+    def _check_l1_security_anomalies(self, data: dict) -> Tuple[list, bool]:
+        """Check for L1 security anomalies (Gemini 3 innovations).
+
+        Detects:
+        1. Isolated Cell (Lone Tower) - Connected but no neighbors (typical of IMSI catchers)
+        2. High Power/Low SNR - Strong signal but poor quality (jamming/spoofing indicator)
+        3. EARFCN Spoofing - Frequency doesn't match claimed band
+
+        Returns:
+            Tuple of (alerts_list, is_suspicious)
+        """
+        alerts = []
+
+        rrc_state = data.get('rrc_state', '')
+        neighbor_count = data.get('neighbor_count')
+
+        # Get best RSRP value
+        rsrp_candidates = [
+            data.get('rsrp'),
+            data.get('rsrp_5g'),
+            data.get('rsrp_lte')
+        ]
+        rsrp = max((r for r in rsrp_candidates if r is not None), default=None)
+
+        # Get best SNR/SINR value
+        snr_candidates = [
+            data.get('snr'),
+            data.get('snr_5g'),
+            data.get('snr_lte'),
+            data.get('sinr')
+        ]
+        snr = max((s for s in snr_candidates if s is not None), default=None)
+
+        # Detection 1: Isolated Cell (Lone Tower Anomaly)
+        # IMSI catchers often fail to broadcast valid neighbor lists
+        if rrc_state == 'rrc-connected' and neighbor_count is not None:
+            if neighbor_count == 0:
+                alerts.append({
+                    'type': 'isolated_cell',
+                    'severity': 'warning',
+                    'message': 'Connected to isolated cell (no neighbors visible)',
+                    'detail': 'Rogue base stations often fail to broadcast neighbor lists'
+                })
+
+        # Detection 2: High Power / Low SNR Anomaly (Jamming/Spoofing)
+        # If RSRP is very high but SNR is very low = interference present
+        if rsrp is not None and snr is not None:
+            if rsrp > -60 and snr < 3.0:
+                alerts.append({
+                    'type': 'high_power_low_snr',
+                    'severity': 'critical',
+                    'message': f'High power ({rsrp} dBm) with low SNR ({snr} dB)',
+                    'detail': 'May indicate noise jammer or spoofed cell'
+                })
+            elif rsrp > -70 and snr < 5.0:
+                alerts.append({
+                    'type': 'power_snr_mismatch',
+                    'severity': 'warning',
+                    'message': f'Strong signal ({rsrp} dBm) with degraded SNR ({snr} dB)',
+                    'detail': 'Possible interference or congested cell'
+                })
+
+        # Detection 3: EARFCN Spoofing (already validated in _get_qmi_info)
+        if data.get('earfcn_valid') is False:
+            expected = data.get('expected_band', 'unknown')
+            claimed = data.get('band', 'unknown')
+            alerts.append({
+                'type': 'earfcn_spoofing',
+                'severity': 'critical',
+                'message': f'EARFCN mismatch: claims {claimed}, should be {expected}',
+                'detail': 'Frequency does not match claimed band - possible protocol spoofing'
+            })
+
+        is_suspicious = any(a['severity'] == 'critical' for a in alerts)
+
+        if alerts:
+            logger.warning(f"L1 Security: {len(alerts)} anomalies detected, suspicious={is_suspicious}")
+            for alert in alerts:
+                logger.warning(f"  - {alert['type']}: {alert['message']}")
+
+        return alerts, is_suspicious
+
     def _compute_l1_trust(self, data: dict) -> Tuple[int, dict]:
         """Compute L1 trust score based on signal quality and tower verification.
 
@@ -1491,23 +1624,18 @@ class HostAgent:
             else:
                 components['stability'] = 30
 
-        # Rule 2: 5G NSA Anchor Logic - rrc-connecting is normal during 5G handshake
+        # Rule 2: RRC State scoring (now using authoritative UE In Idle mapping)
         rrc_state = data.get('rrc_state', '')
-        network_type = data.get('network_type_detail', '') or data.get('network_type', '')
-        is_5g = '5g' in network_type.lower()
 
-        if rrc_state == 'rrc-connecting' and is_5g:
-            # 5G NSA requires LTE anchor - connecting state is normal during handshake
-            components['temporal'] = 95  # Don't penalize for 5G handshake
-        elif rrc_state == 'rrc-connected':
-            # Best state - active data connection
+        if rrc_state == 'rrc-connected':
+            # Best state - device is actively connected (UE In Idle = no)
             components['temporal'] = 100
         elif rrc_state == 'rrc-idle':
-            # Normal idle state - phone is dormant
+            # Normal idle state - device is dormant (UE In Idle = yes)
             components['temporal'] = 95
-        elif rrc_state == 'rrc-connecting':
-            # LTE-only connecting state - could be suspicious if prolonged
-            components['temporal'] = 75  # Slightly lower for non-5G connecting
+        else:
+            # Unknown or fallback state
+            components['temporal'] = 70
 
         # Rule 3: Dynamic Neighbor Density - adjust for signal range
         neighbor_count = data.get('neighbor_count')
@@ -1534,6 +1662,22 @@ class HostAgent:
             components['temporal'] * 0.15 +
             components['handover'] * 0.15
         )
+
+        # Apply security alerts penalty (Gemini 3 innovation)
+        security_alerts = data.get('security_alerts', [])
+        is_suspicious = data.get('is_suspicious', False)
+
+        if security_alerts:
+            # Count critical and warning alerts
+            critical_count = sum(1 for a in security_alerts if a.get('severity') == 'critical')
+            warning_count = sum(1 for a in security_alerts if a.get('severity') == 'warning')
+
+            # Penalty: -20 per critical, -10 per warning
+            penalty = (critical_count * 20) + (warning_count * 10)
+            trust_score = max(0, trust_score - penalty)
+
+            # Add security component for visibility
+            components['security'] = max(0, 100 - (critical_count * 40) - (warning_count * 20))
 
         return trust_score, components
 
