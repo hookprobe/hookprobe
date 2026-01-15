@@ -3011,11 +3011,11 @@
                     <i class="fas fa-broadcast-tower l1-trust-icon" id="l1-trust-icon"></i>
                     <div>
                         <div class="l1-trust-bar">
-                            <div class="l1-trust-fill trusted" id="l1-trust-fill" style="width: 85%"></div>
+                            <div class="l1-trust-fill" id="l1-trust-fill" style="width: 0%"></div>
                         </div>
                         <div class="l1-trust-label">L1 Trust</div>
                     </div>
-                    <span class="l1-trust-value" id="l1-trust-value">85%</span>
+                    <span class="l1-trust-value" id="l1-trust-value">--%</span>
                 </div>
                 <div class="survival-toggle" id="survival-toggle" onclick="toggleSurvivalMode()">
                     <i class="fas fa-shield-alt"></i>
@@ -3381,8 +3381,8 @@
                         <div class="l1-signal-bar"></div>
                         <div class="l1-signal-bar"></div>
                     </div>
-                    <span class="l1-trust-mini trusted" id="l1-trust-mini">
-                        <i class="fas fa-shield-alt"></i> 85%
+                    <span class="l1-trust-mini" id="l1-trust-mini">
+                        <i class="fas fa-shield-alt"></i> --%
                     </span>
                 </div>
             </div>
@@ -3464,19 +3464,25 @@
 
                 <!-- L1 Trust Score Panel -->
                 <div class="l1-panel">
-                    <div class="l1-panel-header">
-                        <i class="fas fa-shield-alt"></i>
-                        <span>L1 Trust Score</span>
+                    <div class="l1-panel-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <i class="fas fa-shield-alt"></i>
+                            <span>L1 Trust Score</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85em;">
+                            <span style="color: var(--aiochi-text-muted);">Survival Mode</span>
+                            <span class="l1-survival-status normal" id="l1-survival-status-mini">Normal</span>
+                        </div>
                     </div>
                     <div class="l1-trust-gauge">
                         <div class="l1-trust-circle">
                             <svg viewBox="0 0 36 36">
                                 <path class="bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
-                                <path class="progress trusted" id="l1-trust-progress" stroke-dasharray="85, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                                <path class="progress" id="l1-trust-progress" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
                             </svg>
-                            <div class="l1-trust-value" id="l1-trust-value">85%</div>
+                            <div class="l1-trust-value" id="l1-trust-value">--%</div>
                         </div>
-                        <div class="l1-trust-label trusted" id="l1-trust-label">TRUSTED</div>
+                        <div class="l1-trust-label" id="l1-trust-label">--</div>
                     </div>
                     <div class="l1-trust-components">
                         <div class="l1-component">
@@ -4668,16 +4674,25 @@
         l1SurvivalMode = data.survival_mode || false;
         const btn = document.getElementById('l1-survival-btn');
         const statusBadge = document.getElementById('l1-survival-status');
+        const statusMini = document.getElementById('l1-survival-status-mini');
         if (l1SurvivalMode) {
             btn.className = 'l1-survival-btn exit';
             btn.innerHTML = '<i class="fas fa-door-open"></i><span>Exit Survival Mode</span>';
             statusBadge.className = 'l1-survival-status active';
             statusBadge.textContent = 'Active';
+            if (statusMini) {
+                statusMini.className = 'l1-survival-status active';
+                statusMini.textContent = 'Active';
+            }
         } else {
             btn.className = 'l1-survival-btn enter';
             btn.innerHTML = '<i class="fas fa-shield-alt"></i><span>Enter Survival Mode</span>';
             statusBadge.className = 'l1-survival-status normal';
             statusBadge.textContent = 'Normal';
+            if (statusMini) {
+                statusMini.className = 'l1-survival-status normal';
+                statusMini.textContent = 'Normal';
+            }
         }
 
         // Update VPN status
