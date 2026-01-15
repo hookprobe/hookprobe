@@ -37,6 +37,7 @@ SOCKET_PATH = "/var/run/fts-host-agent/fts-host-agent.sock"
 SECRET_FILE = "/etc/hookprobe/fts-agent-secret"
 LOG_FILE = "/var/log/fortress/fts-host-agent.log"
 PID_FILE = "/var/run/fts-host-agent.pid"
+L1_STATE_FILE = "/var/run/fortress/l1_state.json"  # TAC/neighbor history
 
 # Security: Strict MAC address validation (prevents command injection)
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
@@ -736,7 +737,13 @@ class HostAgent:
             'expected_band': None,
             # Security alerts (Gemini 3 innovations)
             'security_alerts': [],
-            'is_suspicious': False
+            'is_suspicious': False,
+            # Enhanced security metrics (Gemini recommendations)
+            'tac_changed': False,
+            'tac_previous': None,
+            'neighbor_baseline': None,
+            'neighbor_deviation': None,  # How far from baseline
+            'distance_anomaly': False
         }
 
         try:
@@ -832,7 +839,11 @@ class HostAgent:
                 if qmi_info.get('expected_band'):
                     results['expected_band'] = qmi_info['expected_band']
 
-            # Security heuristics (Gemini 3 innovations)
+            # Update L1 state and get enriched metrics (TAC tracking, neighbor baseline)
+            enriched = self._update_l1_state(results)
+            results.update(enriched)
+
+            # Security heuristics (Gemini 3 innovations + TAC/neighbor/distance)
             results['security_alerts'], results['is_suspicious'] = self._check_l1_security_anomalies(results)
 
             # Compute trust score based on signal quality (includes security alerts penalty)
@@ -1467,6 +1478,99 @@ class HostAgent:
 
         return actual_band == claimed_upper, actual_band
 
+    def _load_l1_state(self) -> dict:
+        """Load L1 state history (TAC, neighbor baseline) from file."""
+        try:
+            if os.path.exists(L1_STATE_FILE):
+                with open(L1_STATE_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.debug(f"Could not load L1 state: {e}")
+        return {
+            'tac_history': [],  # Last 10 TACs seen
+            'neighbor_samples': [],  # Last 20 neighbor counts for baseline
+            'last_tac': None,
+            'neighbor_baseline': None,
+            'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+
+    def _save_l1_state(self, state: dict) -> None:
+        """Save L1 state history to file."""
+        try:
+            state_dir = os.path.dirname(L1_STATE_FILE)
+            if state_dir and not os.path.exists(state_dir):
+                os.makedirs(state_dir, mode=0o755)
+            with open(L1_STATE_FILE, 'w') as f:
+                json.dump(state, f)
+        except Exception as e:
+            logger.debug(f"Could not save L1 state: {e}")
+
+    def _update_l1_state(self, data: dict) -> dict:
+        """Update L1 state with current data and return enriched data.
+
+        Tracks:
+        - TAC changes (primary IMSI catcher indicator per Gemini)
+        - Neighbor count baseline (for relative alerting)
+        - Distance anomalies (Timing Advance)
+        """
+        state = self._load_l1_state()
+        enriched = {}
+
+        # TAC Change Detection (Gemini: "Classic hallmark of rogue cell")
+        current_tac = data.get('tac')
+        if current_tac:
+            last_tac = state.get('last_tac')
+            if last_tac and last_tac != current_tac:
+                enriched['tac_changed'] = True
+                enriched['tac_previous'] = last_tac
+                logger.warning(f"TAC changed: {last_tac} -> {current_tac}")
+
+                # Track TAC history (keep last 10)
+                tac_history = state.get('tac_history', [])
+                if current_tac not in tac_history:
+                    tac_history.append(current_tac)
+                    if len(tac_history) > 10:
+                        tac_history = tac_history[-10:]
+                    state['tac_history'] = tac_history
+            else:
+                enriched['tac_changed'] = False
+
+            state['last_tac'] = current_tac
+
+        # Neighbor Baseline Tracking (Gemini: "Relative change, not absolute")
+        neighbor_count = data.get('neighbor_count')
+        if neighbor_count is not None:
+            samples = state.get('neighbor_samples', [])
+            samples.append(neighbor_count)
+            if len(samples) > 20:  # Keep last 20 samples
+                samples = samples[-20:]
+            state['neighbor_samples'] = samples
+
+            # Calculate baseline (average of samples)
+            if len(samples) >= 3:
+                baseline = sum(samples) / len(samples)
+                state['neighbor_baseline'] = round(baseline, 1)
+                enriched['neighbor_baseline'] = round(baseline, 1)
+
+                # Deviation from baseline (Gemini: alert on significant drop)
+                deviation = neighbor_count - baseline
+                enriched['neighbor_deviation'] = round(deviation, 1)
+
+        # Distance Anomaly (Gemini: "TA says 10m but no tower visible")
+        distance_km = data.get('distance_km')
+        if distance_km is not None:
+            # Flag if distance is suspiciously short (< 0.1 km = 100m)
+            # and we're connected (could be portable RBS in vehicle)
+            if distance_km < 0.1 and data.get('rrc_state') == 'rrc-connected':
+                enriched['distance_anomaly'] = True
+            else:
+                enriched['distance_anomaly'] = False
+
+        # Save updated state
+        self._save_l1_state(state)
+
+        return enriched
+
     def _check_l1_security_anomalies(self, data: dict) -> Tuple[list, bool]:
         """Check for L1 security anomalies (Gemini 3 innovations).
 
@@ -1538,6 +1642,42 @@ class HostAgent:
                 'severity': 'critical',
                 'message': f'EARFCN mismatch: claims {claimed}, should be {expected}',
                 'detail': 'Frequency does not match claimed band - possible protocol spoofing'
+            })
+
+        # Detection 4: TAC Change (Gemini: "Classic hallmark of rogue cell")
+        # TAC changes while stationary = suspicious
+        if data.get('tac_changed'):
+            previous_tac = data.get('tac_previous', 'unknown')
+            current_tac = data.get('tac', 'unknown')
+            alerts.append({
+                'type': 'tac_change',
+                'severity': 'warning',
+                'message': f'TAC changed: {previous_tac} → {current_tac}',
+                'detail': 'Location Area changed - classic IMSI catcher "Location Update" trap'
+            })
+
+        # Detection 5: Neighbor Deviation (Gemini: "Relative change, not absolute")
+        # Significant drop from baseline = suspicious
+        neighbor_deviation = data.get('neighbor_deviation')
+        neighbor_baseline = data.get('neighbor_baseline')
+        if neighbor_deviation is not None and neighbor_baseline is not None:
+            # Alert if dropped by more than 50% from baseline and baseline was >= 3
+            if neighbor_baseline >= 3 and neighbor_deviation <= -neighbor_baseline * 0.5:
+                alerts.append({
+                    'type': 'neighbor_drop',
+                    'severity': 'warning',
+                    'message': f'Neighbors dropped {abs(neighbor_deviation):.0f} below baseline ({neighbor_baseline:.0f})',
+                    'detail': 'Significant drop in visible cells - possible IMSI catcher or jammer'
+                })
+
+        # Detection 6: Distance Anomaly (Gemini: "TA says 10m but no tower visible")
+        if data.get('distance_anomaly'):
+            distance = data.get('distance_km', 0)
+            alerts.append({
+                'type': 'distance_anomaly',
+                'severity': 'warning',
+                'message': f'Tower distance suspicious: {distance*1000:.0f}m',
+                'detail': 'Extremely close tower - possible portable RBS in nearby vehicle'
             })
 
         is_suspicious = any(a['severity'] == 'critical' for a in alerts)
