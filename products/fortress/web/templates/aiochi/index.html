@@ -3401,27 +3401,27 @@
                     <div class="l1-info-grid">
                         <div class="l1-info-item">
                             <div class="l1-info-label">Cell ID</div>
-                            <div class="l1-info-value" id="l1-cell-id">12345678</div>
+                            <div class="l1-info-value" id="l1-cell-id">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">PCI</div>
-                            <div class="l1-info-value" id="l1-pci">42</div>
+                            <div class="l1-info-value" id="l1-pci">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">TAC</div>
-                            <div class="l1-info-value" id="l1-tac">1234</div>
+                            <div class="l1-info-value" id="l1-tac">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">Band</div>
-                            <div class="l1-info-value" id="l1-band">n78</div>
+                            <div class="l1-info-value" id="l1-band">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">Carrier</div>
-                            <div class="l1-info-value" id="l1-carrier">T-Mobile</div>
+                            <div class="l1-info-value" id="l1-carrier">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">MCC-MNC</div>
-                            <div class="l1-info-value" id="l1-mccmnc">310-260</div>
+                            <div class="l1-info-value" id="l1-mccmnc">--</div>
                         </div>
                     </div>
                 </div>
@@ -3435,28 +3435,28 @@
                     <div class="l1-info-grid">
                         <div class="l1-info-item">
                             <div class="l1-info-label">RSRP</div>
-                            <div class="l1-info-value" id="l1-rsrp">-85 dBm</div>
+                            <div class="l1-info-value" id="l1-rsrp">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">SINR</div>
-                            <div class="l1-info-value" id="l1-sinr">22 dB</div>
+                            <div class="l1-info-value" id="l1-sinr">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">SNR</div>
-                            <div class="l1-info-value" id="l1-snr">20.5 dB</div>
+                            <div class="l1-info-value" id="l1-snr">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">Distance</div>
-                            <div class="l1-info-value" id="l1-distance">~1.2 km</div>
+                            <div class="l1-info-value" id="l1-distance">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">Handovers (1h)</div>
-                            <div class="l1-info-value" id="l1-handovers">2</div>
+                            <div class="l1-info-value" id="l1-handovers">--</div>
                         </div>
                         <div class="l1-info-item">
                             <div class="l1-info-label">Tower Status</div>
-                            <div class="l1-info-value" id="l1-tower-status" style="color: var(--aiochi-calm);">
-                                <i class="fas fa-check-circle"></i> Verified
+                            <div class="l1-info-value" id="l1-tower-status">
+                                <i class="fas fa-question-circle"></i> --
                             </div>
                         </div>
                     </div>
@@ -3923,22 +3923,33 @@
 
     // Fetch L1 SOC status
     async function fetchL1Status() {
+        const l1Card = document.getElementById('l1-card');
+        const l1TrustContainer = document.getElementById('l1-trust-container');
+
         try {
             const response = await fetch(`${API_BASE}/l1/status`);
             const data = await response.json();
 
             if (data.success && data.available) {
+                // Modem available - show L1 section with real data
                 l1Available = true;
+                l1Card.classList.remove('hidden');
+                l1TrustContainer.classList.remove('hidden');
                 updateL1Trust(data);
-                document.getElementById('l1-trust-container').classList.remove('hidden');
+                updateL1Display(data);  // Update the detailed L1 panel
             } else {
+                // No modem or modem not responding - hide L1 section entirely
                 l1Available = false;
-                document.getElementById('l1-trust-container').classList.add('hidden');
+                l1Card.classList.add('hidden');
+                l1TrustContainer.classList.add('hidden');
+                console.log('L1 Cellular: No modem detected, hiding section');
             }
         } catch (error) {
-            // L1 not available (no LTE modem) - keep hidden
+            // L1 not available (no LTE modem or API error) - hide section
             l1Available = false;
-            document.getElementById('l1-trust-container').classList.add('hidden');
+            l1Card.classList.add('hidden');
+            l1TrustContainer.classList.add('hidden');
+            console.log('L1 Cellular: API error, hiding section:', error.message);
         }
     }
 
@@ -4566,48 +4577,41 @@
         }
     };
 
-    // Fetch L1 status
-    async function fetchL1Status() {
-        try {
-            const response = await fetch('/aiochi/api/l1/status');
-            if (response.ok) {
-                const data = await response.json();
-                updateL1Display(data);
-            }
-        } catch (error) {
-            console.error('Failed to fetch L1 status:', error);
-            // Use fallback demo data
-            updateL1Display(getL1DemoData());
-        }
-    }
+    // Fetch L1 status - merged with main fetchL1Status function
+    // NOTE: The primary fetchL1Status is defined earlier in the code (line ~3925)
+    // This block handles the L1 panel display updates only
 
-    // Get fallback L1 demo data
-    function getL1DemoData() {
+    // Get empty L1 data (when modem not available)
+    function getEmptyL1Data() {
         return {
-            network_type: '5G SA',
-            carrier: 'T-Mobile',
-            cell_id: '12345678',
-            pci: '42',
-            tac: '1234',
-            band: 'n78',
-            mcc_mnc: '310-260',
-            rsrp: -85,
-            sinr: 22,
-            snr: 20.5,
-            timing_advance: 15,
-            distance_km: 1.2,
-            handovers_1h: 2,
-            tower_status: 'verified',
-            trust_score: 85,
+            available: false,
+            network_type: 'N/A',
+            carrier: 'No Modem',
+            cell_id: '0x00000000',
+            pci: '--',
+            tac: '0x0000',
+            band: '--',
+            mcc_mnc: '--',
+            rsrp: null,
+            sinr: null,
+            snr: null,
+            distance_km: null,
+            handovers_1h: 0,
+            tower_status: 'unavailable',
+            trust_score: 0,
             trust_components: {
-                identity: 100,
-                snr: 75,
-                stability: 90,
-                temporal: 95,
-                handover: 100
+                identity: 0,
+                snr: 0,
+                stability: 0,
+                temporal: 0,
+                handover: 0
             },
             survival_mode: false,
-            vpn_ready: true
+            vpn_ready: false,
+            rrc_state: null,
+            neighbor_count: 0,
+            earfcn_valid: null,
+            expected_band: null
         };
     }
 
@@ -5013,10 +5017,11 @@
         document.getElementById('l1-security-alert').classList.add('hidden');
     };
 
-    // Initialize L1 with demo data on page load
+    // Initialize L1 - will auto-hide if no modem detected
+    // No demo data - only show real modem data
     setTimeout(() => {
         fetchL1Status();
-    }, 1500);
+    }, 1000);
 
     // =========================================================================
     // BUBBLE MANAGER
