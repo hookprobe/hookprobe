@@ -3005,24 +3005,6 @@
             </div>
         </div>
         <div class="ambient-right">
-            <!-- L1 Trust Indicator (hidden if no LTE modem) -->
-            <div class="l1-trust-container hidden" id="l1-trust-container">
-                <div class="l1-trust-gauge">
-                    <i class="fas fa-broadcast-tower l1-trust-icon" id="l1-trust-icon"></i>
-                    <div>
-                        <div class="l1-trust-bar">
-                            <div class="l1-trust-fill" id="l1-trust-fill" style="width: 0%"></div>
-                        </div>
-                        <div class="l1-trust-label">L1 Trust</div>
-                    </div>
-                    <span class="l1-trust-value" id="l1-trust-value-banner">--%</span>
-                </div>
-                <div class="survival-toggle" id="survival-toggle" onclick="toggleSurvivalMode()">
-                    <i class="fas fa-shield-alt"></i>
-                    <span class="survival-status" id="survival-status">Normal</span>
-                </div>
-            </div>
-
             <div class="whisper-badge" id="whisper-badge">
                 <span class="whisper-phase">🌙</span>
                 <span id="whisper-message">Dreaming...</span>
@@ -3930,7 +3912,6 @@
     // Fetch L1 SOC status
     async function fetchL1Status() {
         const l1Card = document.getElementById('l1-card');
-        const l1TrustContainer = document.getElementById('l1-trust-container');
 
         try {
             const response = await fetch(`${API_BASE}/l1/status`);
@@ -3940,61 +3921,18 @@
                 // Modem available - show L1 section with real data
                 l1Available = true;
                 l1Card.classList.remove('hidden');
-                l1TrustContainer.classList.remove('hidden');
-                updateL1Trust(data);
                 updateL1Display(data);  // Update the detailed L1 panel
             } else {
                 // No modem or modem not responding - hide L1 section entirely
                 l1Available = false;
                 l1Card.classList.add('hidden');
-                l1TrustContainer.classList.add('hidden');
                 console.log('L1 Cellular: No modem detected, hiding section');
             }
         } catch (error) {
             // L1 not available (no LTE modem or API error) - hide section
             l1Available = false;
             l1Card.classList.add('hidden');
-            l1TrustContainer.classList.add('hidden');
             console.log('L1 Cellular: API error, hiding section:', error.message);
-        }
-    }
-
-    // Update L1 Trust indicator in ambient banner
-    function updateL1Trust(l1Data) {
-        const fill = document.getElementById('l1-trust-fill');
-        const valueBanner = document.getElementById('l1-trust-value-banner');
-        const icon = document.getElementById('l1-trust-icon');
-        const toggle = document.getElementById('survival-toggle');
-        const status = document.getElementById('survival-status');
-
-        const score = l1Data.trust_score || 0;
-
-        // Update progress bar
-        fill.style.width = score + '%';
-
-        // Update color class based on trust level
-        fill.classList.remove('trusted', 'suspicious', 'hostile');
-        if (score >= 70) {
-            fill.classList.add('trusted');
-            icon.style.color = 'var(--aiochi-calm)';
-        } else if (score >= 30) {
-            fill.classList.add('suspicious');
-            icon.style.color = 'var(--aiochi-curious)';
-        } else {
-            fill.classList.add('hostile');
-            icon.style.color = 'var(--aiochi-alert)';
-        }
-
-        if (valueBanner) valueBanner.textContent = score + '%';
-
-        // Update survival mode status
-        survivalModeActive = l1Data.survival_mode_active || false;
-        if (survivalModeActive) {
-            toggle.classList.add('active');
-            status.textContent = 'Survival';
-        } else {
-            toggle.classList.remove('active');
-            status.textContent = 'Normal';
         }
     }
 
