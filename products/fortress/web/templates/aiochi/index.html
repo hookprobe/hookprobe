@@ -3523,6 +3523,41 @@
                     </div>
                 </div>
 
+                <!-- Survival Mode Panel -->
+                <div class="l1-survival-panel">
+                    <div class="l1-survival-header">
+                        <div class="l1-survival-title">
+                            <i class="fas fa-life-ring"></i>
+                            <span>Survival Mode</span>
+                        </div>
+                        <span class="l1-survival-status normal" id="l1-survival-status">Normal</span>
+                    </div>
+                    <div class="l1-survival-controls">
+                        <div class="l1-survival-triggers">
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-trust" checked>
+                                <span>Auto-trigger when Trust < 20%</span>
+                            </label>
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-imsi" checked>
+                                <span>Auto-trigger on IMSI Catcher</span>
+                            </label>
+                            <label class="l1-trigger-item">
+                                <input type="checkbox" id="l1-trigger-jamming" checked>
+                                <span>Auto-trigger on Jamming</span>
+                            </label>
+                        </div>
+                        <button class="l1-survival-btn enter" id="l1-survival-btn" onclick="toggleSurvivalMode()">
+                            <i class="fas fa-shield-alt"></i>
+                            <span>Enter Survival Mode</span>
+                        </button>
+                        <div class="l1-vpn-status">
+                            <i class="fas fa-exclamation-circle not-ready" id="l1-vpn-icon"></i>
+                            <span id="l1-vpn-text">VPN Not Ready</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Security Gauges Panel -->
                 <div class="l1-panel l1-security-gauges">
                     <div class="l1-panel-header">
@@ -3603,41 +3638,6 @@
                         <button class="l1-alert-dismiss" onclick="dismissL1Alert()">
                             <i class="fas fa-times"></i>
                         </button>
-                    </div>
-                </div>
-
-                <!-- Survival Mode Panel -->
-                <div class="l1-survival-panel">
-                    <div class="l1-survival-header">
-                        <div class="l1-survival-title">
-                            <i class="fas fa-life-ring"></i>
-                            <span>Survival Mode</span>
-                        </div>
-                        <span class="l1-survival-status normal" id="l1-survival-status">Normal</span>
-                    </div>
-                    <div class="l1-survival-controls">
-                        <div class="l1-survival-triggers">
-                            <label class="l1-trigger-item">
-                                <input type="checkbox" id="l1-trigger-trust" checked>
-                                <span>Auto-trigger when Trust < 20%</span>
-                            </label>
-                            <label class="l1-trigger-item">
-                                <input type="checkbox" id="l1-trigger-imsi" checked>
-                                <span>Auto-trigger on IMSI Catcher</span>
-                            </label>
-                            <label class="l1-trigger-item">
-                                <input type="checkbox" id="l1-trigger-jamming" checked>
-                                <span>Auto-trigger on Jamming</span>
-                            </label>
-                        </div>
-                        <button class="l1-survival-btn enter" id="l1-survival-btn" onclick="toggleSurvivalMode()">
-                            <i class="fas fa-shield-alt"></i>
-                            <span>Enter Survival Mode</span>
-                        </button>
-                        <div class="l1-vpn-status">
-                            <i class="fas fa-check-circle ready" id="l1-vpn-icon"></i>
-                            <span id="l1-vpn-text">VPN Pre-Established</span>
-                        </div>
                     </div>
                 </div>
             </div>
