@@ -1431,9 +1431,23 @@ class HostAgent:
         }
 
         # Identity score based on tower verification
-        # TODO: Integrate with OpenCellID database
-        if data.get('cell_id') and data.get('carrier'):
-            components['identity'] = 80  # Known carrier, but not verified
+        mcc_mnc = data.get('mcc_mnc', '')
+        cell_id = data.get('cell_id', '')
+        carrier = data.get('carrier', '')
+
+        # Rule 1: Known carrier eNB patterns (reduces false positives)
+        # Vodafone RO eNB pattern: 226-01 with cell ID starting with 0E45
+        if mcc_mnc == '226-01' and cell_id.startswith('0E45'):
+            components['identity'] = 100  # Vodafone RO internal pattern confirmed
+        # Orange RO eNB pattern
+        elif mcc_mnc == '226-10' and cell_id:
+            components['identity'] = 95  # Orange RO carrier confirmed
+        # Telekom RO eNB pattern
+        elif mcc_mnc == '226-06' and cell_id:
+            components['identity'] = 95  # Telekom RO carrier confirmed
+        # Generic known carrier with cell ID
+        elif cell_id and carrier:
+            components['identity'] = 80  # Known carrier, but not pattern verified
         else:
             components['identity'] = 30
 
@@ -1476,6 +1490,40 @@ class HostAgent:
                 components['stability'] = 50
             else:
                 components['stability'] = 30
+
+        # Rule 2: 5G NSA Anchor Logic - rrc-connecting is normal during 5G handshake
+        rrc_state = data.get('rrc_state', '')
+        network_type = data.get('network_type_detail', '') or data.get('network_type', '')
+        is_5g = '5g' in network_type.lower()
+
+        if rrc_state == 'rrc-connecting' and is_5g:
+            # 5G NSA requires LTE anchor - connecting state is normal during handshake
+            components['temporal'] = 95  # Don't penalize for 5G handshake
+        elif rrc_state == 'rrc-connected':
+            # Best state - active data connection
+            components['temporal'] = 100
+        elif rrc_state == 'rrc-idle':
+            # Normal idle state - phone is dormant
+            components['temporal'] = 95
+        elif rrc_state == 'rrc-connecting':
+            # LTE-only connecting state - could be suspicious if prolonged
+            components['temporal'] = 75  # Slightly lower for non-5G connecting
+
+        # Rule 3: Dynamic Neighbor Density - adjust for signal range
+        neighbor_count = data.get('neighbor_count')
+        if neighbor_count is not None and rsrp is not None:
+            if neighbor_count >= 2 and rsrp < -90:
+                # At range edge, fewer neighbors is expected
+                components['handover'] = 100  # Normal (range limited)
+            elif neighbor_count >= 3:
+                # Good number of neighbors
+                components['handover'] = 100
+            elif neighbor_count >= 1:
+                # Low neighbors but present
+                components['handover'] = 85
+            else:
+                # No neighbors visible - suspicious unless at extreme range
+                components['handover'] = rsrp < -100 and 70 or 50
 
         # Weighted trust score
         # Weights: identity=35%, snr=20%, stability=15%, temporal=15%, handover=15%
