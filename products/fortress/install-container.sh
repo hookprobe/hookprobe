@@ -393,6 +393,68 @@ check_prerequisites() {
         log_info "ebtables: available (WiFi isolation via OVS enabled)"
     fi
 
+    # ============================================================
+    # LTE/5G Modem dependencies (only if modem detected)
+    # ============================================================
+    # Check for USB modem presence (Sierra Wireless, Quectel, etc.)
+    local modem_detected=false
+    if lsusb 2>/dev/null | grep -qiE "sierra|quectel|telit|fibocom|simcom|huawei.*modem|zte.*modem|1199:|2c7c:|2cb7:"; then
+        modem_detected=true
+        log_info "LTE/5G modem detected"
+    elif ls /dev/cdc-wdm* &>/dev/null || ls /dev/ttyUSB* &>/dev/null; then
+        modem_detected=true
+        log_info "Modem device nodes detected"
+    fi
+
+    if [ "$modem_detected" = true ]; then
+        local modem_packages_needed=""
+
+        # ModemManager for mmcli
+        if ! command -v mmcli &>/dev/null; then
+            modem_packages_needed="modemmanager"
+        fi
+
+        # libqmi-utils for qmicli (advanced modem control)
+        if ! command -v qmicli &>/dev/null; then
+            modem_packages_needed="$modem_packages_needed libqmi-utils"
+        fi
+
+        # socat for AT commands via serial port
+        if ! command -v socat &>/dev/null; then
+            modem_packages_needed="$modem_packages_needed socat"
+        fi
+
+        if [ -n "$modem_packages_needed" ]; then
+            log_warn "Installing modem packages: $modem_packages_needed"
+            # shellcheck disable=SC2086
+            _apt_install_resilient $modem_packages_needed || {
+                log_warn "Failed to install some modem packages - L1 features may be limited"
+            }
+        fi
+
+        # Log installed versions
+        if command -v mmcli &>/dev/null; then
+            log_info "ModemManager: $(mmcli --version 2>&1 | head -1 || echo 'available')"
+        fi
+        if command -v qmicli &>/dev/null; then
+            log_info "libqmi: $(qmicli --version 2>&1 | head -1 || echo 'available')"
+        fi
+        if command -v socat &>/dev/null; then
+            log_info "socat: $(socat -V 2>&1 | head -1 || echo 'available')"
+        fi
+
+        # Add fortress user to dialout group for serial port access
+        if getent group dialout &>/dev/null; then
+            # The fts-host-agent runs as root, but add current user too for debugging
+            if [ -n "$SUDO_USER" ]; then
+                usermod -aG dialout "$SUDO_USER" 2>/dev/null || true
+                log_info "Added $SUDO_USER to dialout group for modem access"
+            fi
+        fi
+    else
+        log_info "No LTE/5G modem detected - skipping modem packages"
+    fi
+
     # Check for nftables (optional, for additional filtering)
     if command -v nft &>/dev/null; then
         log_info "nftables: available"
