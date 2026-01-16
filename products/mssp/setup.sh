@@ -342,12 +342,33 @@ create_directories() {
     chmod 700 "$MSSP_SECRETS_DIR"
     chmod -R 700 "$MSSP_SECRETS_DIR"/*
 
-    # Django static/media dirs need to be writable by container user
+    # Container data dirs need to be writable by container users
+    # Django static/media (gunicorn user)
     chmod 777 "$MSSP_DATA_DIR/django/static"
     chmod 777 "$MSSP_DATA_DIR/django/media"
 
-    # Grafana data dir needs to be writable by grafana user (UID 472)
+    # Grafana data dir (UID 472)
     chmod 777 "$MSSP_DATA_DIR/grafana"
+
+    # ClickHouse data dirs (UID 101)
+    chmod 777 "$MSSP_DATA_DIR/clickhouse"
+    chmod 777 "$MSSP_DATA_DIR/clickhouse/format_schemas"
+    chmod 777 "$MSSP_DATA_DIR/clickhouse/access"
+
+    # n8n data dir (UID 1000)
+    chmod 777 "$MSSP_DATA_DIR/n8n"
+
+    # Logto data dir
+    chmod 777 "$MSSP_DATA_DIR/logto"
+
+    # VictoriaMetrics data dir
+    chmod 777 "$MSSP_DATA_DIR/victoriametrics"
+
+    # Valkey data dir
+    chmod 777 "$MSSP_DATA_DIR/valkey"
+
+    # PostgreSQL data dir (UID 70 on alpine)
+    chmod 777 "$MSSP_DATA_DIR/postgres"
 
     log_success "Directory structure created"
 }
