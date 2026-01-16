@@ -1222,6 +1222,9 @@ deploy_pod_002_iam() {
         -v "$MSSP_DATA_DIR/logto:/etc/logto:Z" \
         "${CONTAINER_IMAGES[logto]}"
 
+    # Connect Logto to database network
+    podman network connect mssp-pod-003-db "$container_name"
+
     log_success "POD-002 (Logto IAM) deployed at $ip"
 }
 
@@ -1252,6 +1255,10 @@ deploy_pod_001_dmz() {
         -v "$HOOKPROBE_ROOT/products/mssp/web:/app:Z" \
         "localhost/mssp-django:latest"
 
+    # Connect Django to database and cache networks
+    podman network connect mssp-pod-003-db "$django_container"
+    podman network connect mssp-pod-004-cache "$django_container"
+
     log_success "Django deployed at $django_ip:8000"
 
     # Celery Worker
@@ -1270,6 +1277,10 @@ deploy_pod_001_dmz() {
         -v "$HOOKPROBE_ROOT/products/mssp/web:/app:Z" \
         "localhost/mssp-django:latest" \
         celery -A hookprobe worker -l INFO
+
+    # Connect Celery to database and cache networks
+    podman network connect mssp-pod-003-db "$celery_container"
+    podman network connect mssp-pod-004-cache "$celery_container"
 
     log_success "Celery worker deployed at $celery_ip"
 
