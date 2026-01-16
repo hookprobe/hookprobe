@@ -342,6 +342,13 @@ create_directories() {
     chmod 700 "$MSSP_SECRETS_DIR"
     chmod -R 700 "$MSSP_SECRETS_DIR"/*
 
+    # Django static/media dirs need to be writable by container user
+    chmod 777 "$MSSP_DATA_DIR/django/static"
+    chmod 777 "$MSSP_DATA_DIR/django/media"
+
+    # Grafana data dir needs to be writable by grafana user (UID 472)
+    chmod 777 "$MSSP_DATA_DIR/grafana"
+
     log_success "Directory structure created"
 }
 
