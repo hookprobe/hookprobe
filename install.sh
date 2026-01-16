@@ -1160,12 +1160,11 @@ show_capability_summary() {
 
     # MSSP
     if [ "$CAN_MSSP" = true ]; then
-        option_num=$((option_num + 1))
-        echo "$option_num) mssp"
-        echo -e "  ${option_num}) ${GREEN}█████${NC} MSSP ${GREEN}[AVAILABLE]${NC}"
-        echo -e "       \"The Central Brain\""
-        echo -e "       Cloud MSSP platform with Django portal"
-        echo -e "       Installs: PostgreSQL, ClickHouse, Django, Grafana, n8n (~5GB)"
+        echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}█████${NC} ${BOLD}${WHITE}MSSP${NC} ${GREEN}[AVAILABLE]${NC}"
+        echo -e "       ${ITALIC}\"The Central Brain\"${NC}"
+        echo -e "       ${DIM}Cloud MSSP platform with Django portal${NC}"
+        echo -e "       ${DIM}Installs: PostgreSQL, ClickHouse, Django, Grafana, n8n (~5GB)${NC}"
+        tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░░ MSSP ${YELLOW}[NOT AVAILABLE]${NC}"
         echo -e "       ${DIM}Requires: 8GB+ RAM, 20GB+ storage, Internet${NC}"
