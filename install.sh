@@ -755,8 +755,8 @@ evaluate_deployment_tiers() {
     if [ "$SYS_CPU_CORES" -ge 4 ] && [ "$SYS_RAM_MB" -ge 16384 ] && [ "$SYS_STORAGE_GB" -ge 100 ]; then
         CAN_MSSP=true
     fi
-    # Allow MSSP on smaller systems for lightweight POC (8GB RAM)
-    if [ "$SYS_CPU_CORES" -ge 2 ] && [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 50 ]; then
+    # Allow MSSP on smaller systems for lightweight POC (8GB RAM, 40GB storage)
+    if [ "$SYS_CPU_CORES" -ge 2 ] && [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 40 ]; then
         CAN_MSSP=true  # POC mode with reduced resources
     fi
 }
@@ -1158,10 +1158,18 @@ show_capability_summary() {
     echo -e "       ${DIM}ML/AI compute hub with edge orchestration${NC}"
     echo ""
 
-    # MSSP - Coming Soon
-    echo -e "  ${DIM}░░░░░ MSSP ${YELLOW}[COMING SOON]${NC}"
-    echo -e "       ${DIM}\"The Central Brain\"${NC}"
-    echo -e "       ${DIM}Cloud MSSP platform with Django portal${NC}"
+    # MSSP
+    if [ "$CAN_MSSP" = true ]; then
+        option_num=$((option_num + 1))
+        echo "$option_num) mssp"
+        echo -e "  ${option_num}) ${GREEN}█████${NC} MSSP ${GREEN}[AVAILABLE]${NC}"
+        echo -e "       \"The Central Brain\""
+        echo -e "       Cloud MSSP platform with Django portal"
+        echo -e "       Installs: PostgreSQL, ClickHouse, Django, Grafana, n8n (~5GB)"
+    else
+        echo -e "  ${DIM}░░░░░ MSSP ${YELLOW}[NOT AVAILABLE]${NC}"
+        echo -e "       ${DIM}Requires: 8GB+ RAM, 40GB+ storage, Internet${NC}"
+    fi
 
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────────────────────────${NC}"
@@ -1175,11 +1183,11 @@ handle_capability_check() {
         read -p "Select option: " choice
 
         # Build list of available tiers in order
-        # Nexus and MSSP are coming soon and not selectable
         local available_tiers=()
         [ "$CAN_SENTINEL" = true ] && available_tiers+=("sentinel")
         [ "$CAN_GUARDIAN" = true ] && available_tiers+=("guardian")
         [ "$CAN_FORTRESS" = true ] && available_tiers+=("fortress")
+        [ "$CAN_MSSP" = true ] && available_tiers+=("mssp")
 
         case $choice in
             b|B|m|M) return ;;
@@ -1192,6 +1200,7 @@ handle_capability_check() {
                         sentinel) install_sentinel; return ;;
                         guardian) install_guardian; return ;;
                         fortress) install_fortress; return ;;
+                        mssp) install_mssp; return ;;
                     esac
                 else
                     echo -e "${RED}Invalid selection. Choose from available tiers.${NC}"; sleep 1

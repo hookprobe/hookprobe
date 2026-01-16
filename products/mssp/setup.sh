@@ -30,16 +30,18 @@ OVS_BRIDGE="mssp-bridge"
 MSSP_NETWORK="10.200.0.0/16"
 MSSP_GATEWAY="10.200.0.1"
 
-# POD Networks (VNI assignments)
+# POD Networks - Using 172.20.x.x for Podman (separate from OVS 10.200.x.x)
+# OVS uses 10.200.0.0/16 for VXLAN mesh connectivity to edge devices
+# Podman uses 172.20.x.0/24 for container networking (no conflict)
 declare -A POD_CONFIG=(
-    ["pod-001-dmz"]="10.200.1.0/24:201"
-    ["pod-002-iam"]="10.200.2.0/24:202"
-    ["pod-003-db"]="10.200.3.0/24:203"
-    ["pod-004-cache"]="10.200.4.0/24:204"
-    ["pod-005-monitoring"]="10.200.5.0/24:205"
-    ["pod-006-security"]="10.200.6.0/24:206"
-    ["pod-007-response"]="10.200.7.0/24:207"
-    ["pod-008-automation"]="10.200.8.0/24:208"
+    ["pod-001-dmz"]="172.20.1.0/24:201"
+    ["pod-002-iam"]="172.20.2.0/24:202"
+    ["pod-003-db"]="172.20.3.0/24:203"
+    ["pod-004-cache"]="172.20.4.0/24:204"
+    ["pod-005-monitoring"]="172.20.5.0/24:205"
+    ["pod-006-security"]="172.20.6.0/24:206"
+    ["pod-007-response"]="172.20.7.0/24:207"
+    ["pod-008-automation"]="172.20.8.0/24:208"
 )
 
 # Container Images (using Podman with docker.io registry)
@@ -155,12 +157,12 @@ check_requirements() {
         log_success "CPU: ${cpu_cores} cores (OK)"
     fi
 
-    # Check storage (minimum 50GB for POC, 100GB+ recommended)
+    # Check storage (minimum 40GB for POC, 100GB+ recommended)
     local storage_gb=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
     if [ "$storage_gb" -lt 100 ]; then
         log_warning "Storage: ${storage_gb}GB available (100GB+ recommended)"
-        if [ "$storage_gb" -lt 50 ]; then
-            log_error "Insufficient storage. MSSP requires at least 50GB."
+        if [ "$storage_gb" -lt 40 ]; then
+            log_error "Insufficient storage. MSSP requires at least 40GB."
             ((errors++))
         fi
     else
@@ -325,6 +327,8 @@ create_directories() {
         "$MSSP_SECRETS_DIR/postgres"
         "$MSSP_SECRETS_DIR/django"
         "$MSSP_SECRETS_DIR/logto"
+        "$MSSP_SECRETS_DIR/clickhouse"
+        "$MSSP_SECRETS_DIR/grafana"
     )
 
     for dir in "${dirs[@]}"; do
@@ -571,8 +575,8 @@ create_pod_networks() {
         log_info "Creating external network: mssp-external"
         podman network create \
             --driver bridge \
-            --subnet "10.200.100.0/24" \
-            --gateway "10.200.100.1" \
+            --subnet "172.20.100.0/24" \
+            --gateway "172.20.100.1" \
             "mssp-external"
     fi
 
@@ -635,13 +639,13 @@ http {
 
     # Upstream for Django
     upstream django {
-        server 10.200.1.10:8000;
+        server 172.20.1.10:8000;
         keepalive 32;
     }
 
     # Upstream for Logto
     upstream logto {
-        server 10.200.2.10:3001;
+        server 172.20.2.10:3001;
     }
 
     # HTTP -> HTTPS redirect
@@ -748,13 +752,11 @@ random_page_cost = 1.1
 effective_io_concurrency = 200
 default_statistics_target = 100
 
-# Logging
+# Logging (container-friendly - use stderr, no collector)
 log_destination = 'stderr'
-logging_collector = on
-log_directory = '/var/log/postgresql'
-log_filename = 'postgresql-%Y-%m-%d.log'
-log_rotation_age = 1d
-log_rotation_size = 100MB
+logging_collector = off
+# log_directory = '/var/log/postgresql'  # Disabled for container
+# log_filename = 'postgresql-%Y-%m-%d.log'  # Disabled for container
 log_min_duration_statement = 1000
 log_checkpoints = on
 log_connections = on
@@ -773,7 +775,7 @@ EOF
 local   all             all                                     trust
 host    all             all             127.0.0.1/32            scram-sha-256
 host    all             all             ::1/128                 scram-sha-256
-host    all             all             10.200.0.0/16           scram-sha-256
+host    all             all             172.20.0.0/16           scram-sha-256
 EOF
 
     log_success "PostgreSQL configuration generated"
@@ -854,7 +856,7 @@ EOF
         <default>
             <password_sha256_hex>$(echo -n "$ch_password" | sha256sum | cut -d' ' -f1)</password_sha256_hex>
             <networks>
-                <ip>10.200.0.0/16</ip>
+                <ip>172.20.0.0/16</ip>
                 <ip>127.0.0.1</ip>
             </networks>
             <profile>default</profile>
@@ -941,43 +943,43 @@ generate_django_env() {
 # Django Settings
 DJANGO_ENV=production
 DJANGO_SECRET_KEY=$django_secret
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,10.200.1.10,${MSSP_DOMAIN:-mssp.local}
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,172.20.1.10,${MSSP_DOMAIN:-mssp.local}
 DEBUG=False
 
 # PostgreSQL
-POSTGRES_HOST=10.200.3.10
+POSTGRES_HOST=172.20.3.10
 POSTGRES_PORT=5432
 POSTGRES_DB=hookprobe
 POSTGRES_USER=hookprobe
 POSTGRES_PASSWORD=$postgres_password
 
 # Redis/Valkey
-REDIS_HOST=10.200.4.10
+REDIS_HOST=172.20.4.10
 REDIS_PORT=6379
 
 # ClickHouse
-CLICKHOUSE_HOST=10.200.5.10
+CLICKHOUSE_HOST=172.20.5.10
 CLICKHOUSE_PORT=8123
 CLICKHOUSE_DATABASE=security
 CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=$clickhouse_password
 
 # VictoriaMetrics
-VICTORIAMETRICS_URL=http://10.200.5.11:8428
+VICTORIAMETRICS_URL=http://172.20.5.11:8428
 
 # Grafana
-GRAFANA_URL=http://10.200.5.12:3000
+GRAFANA_URL=http://172.20.5.12:3000
 
 # Qsecbit
-QSECBIT_API_URL=http://10.200.6.10:8888
+QSECBIT_API_URL=http://172.20.6.10:8888
 
 # Logto IAM
-LOGTO_ENDPOINT=http://10.200.2.10:3001
+LOGTO_ENDPOINT=http://172.20.2.10:3001
 LOGTO_APP_ID=hookprobe-mssp
 LOGTO_APP_SECRET=
 
 # n8n Automation
-N8N_WEBHOOK_URL=http://10.200.8.10:5678/webhook
+N8N_WEBHOOK_URL=http://172.20.8.10:5678/webhook
 EOF
 
     chmod 600 "$MSSP_CONFIG_DIR/django.env"
@@ -1031,7 +1033,7 @@ deploy_pod_003_database() {
 
     local container_name="mssp-postgres"
     local network="mssp-pod-003-db"
-    local ip="10.200.3.10"
+    local ip="172.20.3.10"
     local postgres_password
     postgres_password=$(cat "$MSSP_SECRETS_DIR/postgres/password")
 
@@ -1084,7 +1086,7 @@ deploy_pod_004_cache() {
 
     local container_name="mssp-valkey"
     local network="mssp-pod-004-cache"
-    local ip="10.200.4.10"
+    local ip="172.20.4.10"
 
     # Stop existing container
     podman stop "$container_name" 2>/dev/null || true
@@ -1113,7 +1115,7 @@ deploy_pod_005_monitoring() {
 
     # VictoriaMetrics
     local vm_container="mssp-victoriametrics"
-    local vm_ip="10.200.5.10"
+    local vm_ip="172.20.5.10"
 
     podman stop "$vm_container" 2>/dev/null || true
     podman rm "$vm_container" 2>/dev/null || true
@@ -1133,7 +1135,7 @@ deploy_pod_005_monitoring() {
 
     # ClickHouse
     local ch_container="mssp-clickhouse"
-    local ch_ip="10.200.5.11"
+    local ch_ip="172.20.5.11"
 
     podman stop "$ch_container" 2>/dev/null || true
     podman rm "$ch_container" 2>/dev/null || true
@@ -1153,7 +1155,7 @@ deploy_pod_005_monitoring() {
 
     # Grafana
     local grafana_container="mssp-grafana"
-    local grafana_ip="10.200.5.12"
+    local grafana_ip="172.20.5.12"
 
     podman stop "$grafana_container" 2>/dev/null || true
     podman rm "$grafana_container" 2>/dev/null || true
@@ -1176,7 +1178,7 @@ deploy_pod_002_iam() {
 
     local container_name="mssp-logto"
     local network="mssp-pod-002-iam"
-    local ip="10.200.2.10"
+    local ip="172.20.2.10"
     local postgres_password
     local logto_db_password
     local cookie_keys
@@ -1195,7 +1197,7 @@ deploy_pod_002_iam() {
         --network "$network" \
         --ip "$ip" \
         -e TRUST_PROXY_HEADER=1 \
-        -e DB_URL="postgresql://hookprobe:${postgres_password}@10.200.3.10:5432/logto" \
+        -e DB_URL="postgresql://hookprobe:${postgres_password}@172.20.3.10:5432/logto" \
         -e ENDPOINT="http://${MSSP_DOMAIN:-localhost}:3001" \
         -e ADMIN_ENDPOINT="http://${MSSP_DOMAIN:-localhost}:3002" \
         -e COOKIE_KEYS="$cookie_keys" \
@@ -1216,7 +1218,7 @@ deploy_pod_001_dmz() {
 
     # Django
     local django_container="mssp-django"
-    local django_ip="10.200.1.10"
+    local django_ip="172.20.1.10"
 
     podman stop "$django_container" 2>/dev/null || true
     podman rm "$django_container" 2>/dev/null || true
@@ -1236,7 +1238,7 @@ deploy_pod_001_dmz() {
 
     # Celery Worker
     local celery_container="mssp-celery"
-    local celery_ip="10.200.1.11"
+    local celery_ip="172.20.1.11"
 
     podman stop "$celery_container" 2>/dev/null || true
     podman rm "$celery_container" 2>/dev/null || true
@@ -1255,7 +1257,7 @@ deploy_pod_001_dmz() {
 
     # Nginx
     local nginx_container="mssp-nginx"
-    local nginx_ip="10.200.1.12"
+    local nginx_ip="172.20.1.12"
 
     podman stop "$nginx_container" 2>/dev/null || true
     podman rm "$nginx_container" 2>/dev/null || true
@@ -1287,7 +1289,7 @@ deploy_pod_006_security() {
 
     # Qsecbit Agent
     local qsecbit_container="mssp-qsecbit"
-    local qsecbit_ip="10.200.6.10"
+    local qsecbit_ip="172.20.6.10"
 
     podman stop "$qsecbit_container" 2>/dev/null || true
     podman rm "$qsecbit_container" 2>/dev/null || true
@@ -1314,7 +1316,7 @@ deploy_pod_008_automation() {
 
     local container_name="mssp-n8n"
     local network="mssp-pod-008-automation"
-    local ip="10.200.8.10"
+    local ip="172.20.8.10"
 
     podman stop "$container_name" 2>/dev/null || true
     podman rm "$container_name" 2>/dev/null || true
