@@ -1153,11 +1153,16 @@ deploy_pod_005_monitoring() {
     podman stop "$ch_container" 2>/dev/null || true
     podman rm "$ch_container" 2>/dev/null || true
 
+    # Read ClickHouse password for env var
+    local ch_password
+    ch_password=$(cat "$MSSP_SECRETS_DIR/clickhouse/password")
+
     log_info "Starting ClickHouse..."
     podman run -d \
         --name "$ch_container" \
         --network "$network" \
         --ip "$ch_ip" \
+        -e CLICKHOUSE_PASSWORD="$ch_password" \
         -v "$MSSP_DATA_DIR/clickhouse:/var/lib/clickhouse:Z" \
         -v "$MSSP_CONFIG_DIR/clickhouse/config.xml:/etc/clickhouse-server/config.xml:ro,Z" \
         -v "$MSSP_CONFIG_DIR/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro,Z" \
@@ -1519,8 +1524,7 @@ init_clickhouse_schema() {
 
     log_info "Creating security database and tables..."
 
-    podman exec mssp-clickhouse clickhouse-client --password="$ch_password" << 'EOF'
--- Create security database
+    podman exec mssp-clickhouse clickhouse-client --password="$ch_password" --multiquery << 'EOF'
 CREATE DATABASE IF NOT EXISTS security;
 
 -- Security events table
