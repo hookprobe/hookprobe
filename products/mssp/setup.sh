@@ -1145,6 +1145,9 @@ deploy_pod_005_monitoring() {
         --name "$vm_container" \
         --network "$network" \
         --ip "$vm_ip" \
+        --health-cmd="wget -qO- http://localhost:8428/-/healthy || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -v "$MSSP_DATA_DIR/victoriametrics:/victoria-metrics-data:Z" \
         "${CONTAINER_IMAGES[victoriametrics]}" \
         -storageDataPath=/victoria-metrics-data \
@@ -1169,6 +1172,9 @@ deploy_pod_005_monitoring() {
         --name "$ch_container" \
         --network "$network" \
         --ip "$ch_ip" \
+        --health-cmd="clickhouse-client --password=$ch_password -q 'SELECT 1' || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -e CLICKHOUSE_PASSWORD="$ch_password" \
         -v "$MSSP_DATA_DIR/clickhouse:/var/lib/clickhouse:Z" \
         -v "$MSSP_CONFIG_DIR/clickhouse/config.xml:/etc/clickhouse-server/config.xml:ro,Z" \
@@ -1190,6 +1196,9 @@ deploy_pod_005_monitoring() {
         --name "$grafana_container" \
         --network "$network" \
         --ip "$grafana_ip" \
+        --health-cmd="wget -qO- http://localhost:3000/api/health || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -v "$MSSP_DATA_DIR/grafana:/var/lib/grafana:Z" \
         -v "$MSSP_CONFIG_DIR/grafana/grafana.ini:/etc/grafana/grafana.ini:ro,Z" \
         -e GF_INSTALL_PLUGINS=grafana-clickhouse-datasource \
@@ -1221,6 +1230,9 @@ deploy_pod_002_iam() {
         --name "$container_name" \
         --network "$network" \
         --ip "$ip" \
+        --health-cmd="wget -qO- http://localhost:3001/api/status || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -e TRUST_PROXY_HEADER=1 \
         -e DB_URL="postgresql://hookprobe:${postgres_password}@172.20.3.10:5432/logto" \
         -e ENDPOINT="http://${MSSP_DOMAIN:-localhost}:3001" \
@@ -1256,6 +1268,9 @@ deploy_pod_001_dmz() {
         --name "$django_container" \
         --network "$network" \
         --ip "$django_ip" \
+        --health-cmd="python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health/\")' || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         --env-file "$MSSP_CONFIG_DIR/django.env" \
         -v "$MSSP_DATA_DIR/django/static:/app/staticfiles:Z" \
         -v "$MSSP_DATA_DIR/django/media:/app/media:Z" \
@@ -1280,6 +1295,9 @@ deploy_pod_001_dmz() {
         --name "$celery_container" \
         --network "$network" \
         --ip "$celery_ip" \
+        --health-cmd="celery -A hookprobe inspect ping -d celery@\$HOSTNAME || exit 1" \
+        --health-interval=60s \
+        --health-retries=3 \
         --env-file "$MSSP_CONFIG_DIR/django.env" \
         -v "$HOOKPROBE_ROOT/products/mssp/web:/app:Z" \
         "localhost/mssp-django:latest" \
@@ -1304,6 +1322,9 @@ deploy_pod_001_dmz() {
         --name "$nginx_container" \
         --network "$network" \
         --ip "$nginx_ip" \
+        --health-cmd="wget -qO- http://localhost/health || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -p 80:80 \
         -p 443:443 \
         -v "$MSSP_CONFIG_DIR/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z" \
@@ -1338,6 +1359,9 @@ deploy_pod_006_security() {
         --name "$qsecbit_container" \
         --network "$network" \
         --ip "$qsecbit_ip" \
+        --health-cmd="wget -qO- http://localhost:8888/health || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -v "$MSSP_BASE_DIR/qsecbit:/app:Z" \
         -v "$HOOKPROBE_ROOT/core/qsecbit:/opt/qsecbit:ro,Z" \
         "localhost/mssp-qsecbit:latest"
@@ -1365,6 +1389,9 @@ deploy_pod_008_automation() {
         --name "$container_name" \
         --network "$network" \
         --ip "$ip" \
+        --health-cmd="wget -qO- http://localhost:5678/healthz || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -e N8N_HOST=0.0.0.0 \
         -e N8N_PORT=5678 \
         -e N8N_PROTOCOL=http \
@@ -1391,6 +1418,9 @@ deploy_htp_endpoint() {
     podman run -d \
         --name "$container_name" \
         --network host \
+        --health-cmd="python -c 'import socket; s=socket.socket(); s.connect((\"127.0.0.1\", 4478)); s.close()' || exit 1" \
+        --health-interval=30s \
+        --health-retries=3 \
         -v "$MSSP_BASE_DIR/htp:/app:Z" \
         -v "$HOOKPROBE_ROOT/core/htp:/opt/htp:ro,Z" \
         -v "$MSSP_DATA_DIR:/var/lib/hookprobe/mssp:Z" \
