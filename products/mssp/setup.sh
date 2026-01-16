@@ -157,12 +157,12 @@ check_requirements() {
         log_success "CPU: ${cpu_cores} cores (OK)"
     fi
 
-    # Check storage (minimum 40GB for POC, 100GB+ recommended)
+    # Check storage (minimum 20GB for POC, 100GB+ recommended)
     local storage_gb=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
     if [ "$storage_gb" -lt 100 ]; then
         log_warning "Storage: ${storage_gb}GB available (100GB+ recommended)"
-        if [ "$storage_gb" -lt 40 ]; then
-            log_error "Insufficient storage. MSSP requires at least 40GB."
+        if [ "$storage_gb" -lt 20 ]; then
+            log_error "Insufficient storage. MSSP requires at least 20GB."
             ((errors++))
         fi
     else

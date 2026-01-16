@@ -755,8 +755,8 @@ evaluate_deployment_tiers() {
     if [ "$SYS_CPU_CORES" -ge 4 ] && [ "$SYS_RAM_MB" -ge 16384 ] && [ "$SYS_STORAGE_GB" -ge 100 ]; then
         CAN_MSSP=true
     fi
-    # Allow MSSP on smaller systems for lightweight POC (8GB RAM, 40GB storage)
-    if [ "$SYS_CPU_CORES" -ge 2 ] && [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 40 ]; then
+    # Allow MSSP on smaller systems for lightweight POC (8GB RAM, 20GB storage)
+    if [ "$SYS_CPU_CORES" -ge 2 ] && [ "$SYS_RAM_MB" -ge 8192 ] && [ "$SYS_STORAGE_GB" -ge 20 ]; then
         CAN_MSSP=true  # POC mode with reduced resources
     fi
 }
@@ -1168,7 +1168,7 @@ show_capability_summary() {
         echo -e "       Installs: PostgreSQL, ClickHouse, Django, Grafana, n8n (~5GB)"
     else
         echo -e "  ${DIM}░░░░░ MSSP ${YELLOW}[NOT AVAILABLE]${NC}"
-        echo -e "       ${DIM}Requires: 8GB+ RAM, 40GB+ storage, Internet${NC}"
+        echo -e "       ${DIM}Requires: 8GB+ RAM, 20GB+ storage, Internet${NC}"
     fi
 
     echo ""
