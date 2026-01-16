@@ -314,6 +314,8 @@ create_directories() {
         "$MSSP_DATA_DIR"
         "$MSSP_DATA_DIR/postgres"
         "$MSSP_DATA_DIR/clickhouse"
+        "$MSSP_DATA_DIR/clickhouse/format_schemas"
+        "$MSSP_DATA_DIR/clickhouse/access"
         "$MSSP_DATA_DIR/victoriametrics"
         "$MSSP_DATA_DIR/grafana"
         "$MSSP_DATA_DIR/valkey"
@@ -811,6 +813,17 @@ generate_clickhouse_config() {
     <path>/var/lib/clickhouse/</path>
     <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
     <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+    <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
+
+    <!-- User directories configuration (required for ClickHouse 24.x) -->
+    <user_directories>
+        <users_xml>
+            <path>/etc/clickhouse-server/users.xml</path>
+        </users_xml>
+        <local_directory>
+            <path>/var/lib/clickhouse/access/</path>
+        </local_directory>
+    </user_directories>
 
     <users_config>users.xml</users_config>
     <default_profile>default</default_profile>
