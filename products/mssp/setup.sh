@@ -1263,10 +1263,10 @@ deploy_pod_001_dmz() {
     podman rm "$nginx_container" 2>/dev/null || true
 
     log_info "Starting Nginx container..."
+    # Note: Can't use --ip with multiple networks, so start with primary network first
     podman run -d \
         --name "$nginx_container" \
         --network "$network" \
-        --network "$external_network" \
         --ip "$nginx_ip" \
         -p 80:80 \
         -p 443:443 \
@@ -1275,6 +1275,9 @@ deploy_pod_001_dmz() {
         -v "$MSSP_DATA_DIR/django/static:/var/www/static:ro,Z" \
         -v "$MSSP_DATA_DIR/django/media:/var/www/media:ro,Z" \
         "${CONTAINER_IMAGES[nginx]}"
+
+    # Connect to external network for host port exposure
+    podman network connect "$external_network" "$nginx_container"
 
     log_success "Nginx deployed at $nginx_ip (ports 80, 443)"
 }
