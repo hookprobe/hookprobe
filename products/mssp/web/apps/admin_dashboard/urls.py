@@ -1,5 +1,8 @@
 """
 Admin Dashboard URL Configuration
+
+NOTE: Merchandise management has been moved to hookprobe.com.
+This dashboard focuses on AI content management for AIOCHI.
 """
 
 from django.urls import path
@@ -16,12 +19,6 @@ urlpatterns = [
     path('ai/drafts/<int:draft_id>/', views.ai_draft_detail, name='ai_draft_detail'),
     path('ai/generate/', views.ai_generate, name='ai_generate'),
     path('ai/research/', views.research_tasks_list, name='research_tasks'),
-
-    # Merchandise Management
-    path('products/', views.products_list, name='products'),
-    path('orders/', views.orders_list, name='orders'),
-    path('orders/<int:order_id>/', views.order_detail, name='order_detail'),
-    path('categories/', views.categories_list, name='categories'),
 
     # n8n Webhook API Endpoints
     path('api/n8n/create-draft/', views.n8n_webhook_create_draft, name='n8n_create_draft'),
