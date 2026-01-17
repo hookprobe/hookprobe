@@ -1,6 +1,9 @@
 """
 Admin Dashboard Views
-AdminLTE-based interface for content and merchandise management.
+AdminLTE-based interface for AI content management.
+
+NOTE: CMS and Merchandise management has been moved to hookprobe.com.
+This dashboard focuses on AIOCHI MSSP functionality and AI content drafts.
 """
 
 from django.conf import settings
@@ -16,8 +19,6 @@ from datetime import timedelta
 import json
 
 from .models import AIContentDraft, ContentResearchTask, N8NWebhookLog
-from apps.cms.models import BlogPost, BlogCategory
-from apps.merchandise.models import Product, ProductCategory, Order
 
 
 def is_staff(user):
@@ -31,27 +32,13 @@ def dashboard_home(request):
     """
     Admin dashboard homepage with overview statistics.
     """
-    # Get counts
-    blog_post_count = BlogPost.objects.filter(is_published=True).count()
+    # Get AI draft counts
     ai_drafts_pending = AIContentDraft.objects.filter(
         status__in=['draft', 'review']
-    ).count()
-    product_count = Product.objects.filter(active=True).count()
-    pending_orders = Order.objects.filter(
-        status__in=['pending', 'processing']
     ).count()
 
     # Recent AI drafts
     recent_ai_drafts = AIContentDraft.objects.all()[:5]
-
-    # Recent orders
-    recent_orders = Order.objects.all()[:5]
-
-    # Low stock products
-    low_stock_products = Product.objects.filter(
-        track_inventory=True,
-        stock_quantity__lte=5
-    ).order_by('stock_quantity')[:10]
 
     # Active research tasks
     active_research_tasks = ContentResearchTask.objects.filter(
@@ -59,13 +46,8 @@ def dashboard_home(request):
     )[:5]
 
     context = {
-        'blog_post_count': blog_post_count,
         'ai_drafts_pending': ai_drafts_pending,
-        'product_count': product_count,
-        'pending_orders': pending_orders,
         'recent_ai_drafts': recent_ai_drafts,
-        'recent_orders': recent_orders,
-        'low_stock_products': low_stock_products,
         'active_research_tasks': active_research_tasks,
         'pending_drafts_count': ai_drafts_pending,  # For navbar
     }
@@ -120,9 +102,9 @@ def ai_draft_detail(request, draft_id):
             return redirect('admin_dashboard:ai_drafts')
 
         elif action == 'publish':
-            blog_post = draft.publish_to_blog(request.user)
-            messages.success(request, f'Draft published as blog post: {blog_post.title}')
-            return redirect('cms:post_detail', slug=blog_post.slug)
+            # Note: Publishing to blog requires hookprobe.com API integration
+            messages.info(request, 'Blog publishing requires hookprobe.com API integration.')
+            return redirect('admin_dashboard:ai_drafts')
 
         elif action == 'reject':
             draft.status = 'rejected'
@@ -181,124 +163,6 @@ def research_tasks_list(request):
     }
 
     return render(request, 'admin_dashboard/research_tasks.html', context)
-
-
-@login_required
-@user_passes_test(is_staff)
-def products_list(request):
-    """
-    List all products with filtering and search.
-    """
-    category_filter = request.GET.get('category', '')
-    search_query = request.GET.get('q', '')
-
-    products = Product.objects.filter(active=True)
-
-    if category_filter:
-        products = products.filter(category_id=category_filter)
-    if search_query:
-        products = products.filter(
-            Q(name__icontains=search_query) |
-            Q(sku__icontains=search_query)
-        )
-
-    products = products.order_by('-created_at')
-    categories = ProductCategory.objects.filter(active=True)
-
-    context = {
-        'products': products,
-        'categories': categories,
-        'category_filter': category_filter,
-        'search_query': search_query,
-        'pending_drafts_count': AIContentDraft.objects.filter(
-            status__in=['draft', 'review']
-        ).count(),
-    }
-
-    return render(request, 'admin_dashboard/products_list.html', context)
-
-
-@login_required
-@user_passes_test(is_staff)
-def orders_list(request):
-    """
-    List all orders with filtering.
-    """
-    status_filter = request.GET.get('status', '')
-
-    orders = Order.objects.all()
-
-    if status_filter:
-        orders = orders.filter(status=status_filter)
-
-    orders = orders.order_by('-created_at')
-
-    context = {
-        'orders': orders,
-        'status_filter': status_filter,
-        'pending_drafts_count': AIContentDraft.objects.filter(
-            status__in=['draft', 'review']
-        ).count(),
-    }
-
-    return render(request, 'admin_dashboard/orders_list.html', context)
-
-
-@login_required
-@user_passes_test(is_staff)
-def order_detail(request, order_id):
-    """
-    View order details.
-    """
-    order = get_object_or_404(Order, id=order_id)
-
-    if request.method == 'POST':
-        action = request.POST.get('action')
-
-        if action == 'mark_paid':
-            order.mark_as_paid(transaction_id=f'MOCK-{order.order_number}')
-            messages.success(request, f'Order {order.order_number} marked as paid.')
-
-        elif action == 'mark_shipped':
-            order.mark_as_shipped()
-            messages.success(request, f'Order {order.order_number} marked as shipped.')
-
-        elif action == 'mark_delivered':
-            order.mark_as_delivered()
-            messages.success(request, f'Order {order.order_number} marked as delivered.')
-
-        elif action == 'cancel':
-            order.cancel()
-            messages.warning(request, f'Order {order.order_number} cancelled.')
-
-        return redirect('admin_dashboard:order_detail', order_id=order.id)
-
-    context = {
-        'order': order,
-        'pending_drafts_count': AIContentDraft.objects.filter(
-            status__in=['draft', 'review']
-        ).count(),
-    }
-
-    return render(request, 'admin_dashboard/order_detail.html', context)
-
-
-@login_required
-@user_passes_test(is_staff)
-def categories_list(request):
-    """
-    List all product categories.
-    """
-    categories = ProductCategory.objects.all().order_by('order', 'name')
-
-    context = {
-        'categories': categories,
-        'pending_drafts_count': AIContentDraft.objects.filter(
-            status__in=['draft', 'review']
-        ).count(),
-    }
-
-    return render(request, 'admin_dashboard/categories_list.html', context)
 
 
 # ====================
@@ -375,6 +239,7 @@ def n8n_webhook_create_draft(request):
 def n8n_webhook_publish_draft(request):
     """
     n8n webhook endpoint to publish an approved draft.
+    NOTE: Blog publishing now requires hookprobe.com API integration.
     """
     try:
         data = json.loads(request.body)
@@ -395,25 +260,11 @@ def n8n_webhook_publish_draft(request):
                 'error': 'Draft must be approved before publishing'
             }, status=400)
 
-        # Publish to blog
-        blog_post = draft.publish_to_blog(user=None)
-
-        # Log webhook
-        N8NWebhookLog.objects.create(
-            webhook_type='publish_draft',
-            payload=data,
-            response_status=200,
-            response_data={'blog_post_id': blog_post.id},
-            success=True,
-            related_draft=draft
-        )
-
+        # TODO: Implement hookprobe.com API integration for blog publishing
         return JsonResponse({
-            'success': True,
-            'blog_post_id': blog_post.id,
-            'blog_post_slug': blog_post.slug,
-            'message': 'Draft published successfully'
-        })
+            'success': False,
+            'error': 'Blog publishing requires hookprobe.com API integration'
+        }, status=501)
 
     except Exception as e:
         # Log error
