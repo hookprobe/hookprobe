@@ -323,6 +323,8 @@ create_directories() {
         "$MSSP_DATA_DIR/logto"
         "$MSSP_DATA_DIR/django/static"
         "$MSSP_DATA_DIR/django/media"
+        "$MSSP_DATA_DIR/qsecbit"
+        "$MSSP_DATA_DIR/htp"
         "$MSSP_LOG_DIR"
         "$MSSP_SECRETS_DIR"
         "$MSSP_SECRETS_DIR/vxlan"
@@ -369,6 +371,12 @@ create_directories() {
 
     # PostgreSQL data dir (UID 70 on alpine)
     chmod 777 "$MSSP_DATA_DIR/postgres"
+
+    # Qsecbit data dir
+    chmod 777 "$MSSP_DATA_DIR/qsecbit"
+
+    # HTP data dir
+    chmod 777 "$MSSP_DATA_DIR/htp"
 
     log_success "Directory structure created"
 }
@@ -1303,8 +1311,8 @@ deploy_pod_001_dmz() {
 
     log_success "Django deployed at $django_ip:8000"
 
-    # Celery Worker (disabled for POC - requires Django celery app configuration)
-    if [ "${ENABLE_CELERY:-false}" = "true" ]; then
+    # Celery Worker
+    if [ "${ENABLE_CELERY:-true}" = "true" ]; then
         local celery_container="mssp-celery"
         local celery_ip="172.20.1.11"
 
@@ -1330,7 +1338,7 @@ deploy_pod_001_dmz() {
 
         log_success "Celery worker deployed at $celery_ip"
     else
-        log_info "Celery worker disabled (set ENABLE_CELERY=true to enable)"
+        log_info "Celery worker disabled (set ENABLE_CELERY=false to disable)"
     fi
 
     # Nginx
@@ -1366,8 +1374,8 @@ deploy_pod_001_dmz() {
 deploy_pod_006_security() {
     log_section "Deploying POD-006: Security (Qsecbit)"
 
-    # Qsecbit disabled for POC - container build needs proper Python path setup
-    if [ "${ENABLE_QSECBIT:-false}" = "true" ]; then
+    # Qsecbit Security Agent
+    if [ "${ENABLE_QSECBIT:-true}" = "true" ]; then
         local network="mssp-pod-006-security"
 
         # Build Qsecbit container
@@ -1388,13 +1396,12 @@ deploy_pod_006_security() {
             --health-cmd="wget -qO- http://localhost:8888/health || exit 1" \
             --health-interval=30s \
             --health-retries=3 \
-            -v "$MSSP_BASE_DIR/qsecbit:/app:Z" \
-            -v "$HOOKPROBE_ROOT/core/qsecbit:/opt/qsecbit:ro,Z" \
+            -v "$MSSP_DATA_DIR/qsecbit:/var/lib/qsecbit:Z" \
             "localhost/mssp-qsecbit:latest"
 
         log_success "POD-006 (Qsecbit) deployed at $qsecbit_ip:8888"
     else
-        log_info "Qsecbit security agent disabled for POC (set ENABLE_QSECBIT=true to enable)"
+        log_info "Qsecbit security agent disabled (set ENABLE_QSECBIT=false to disable)"
     fi
 }
 
@@ -1435,8 +1442,8 @@ deploy_pod_008_automation() {
 deploy_htp_endpoint() {
     log_section "Deploying HTP Validator Endpoint"
 
-    # HTP disabled for POC - htp_validator.py needs to be implemented
-    if [ "${ENABLE_HTP:-false}" = "true" ]; then
+    # HTP Validator Endpoint
+    if [ "${ENABLE_HTP:-true}" = "true" ]; then
         # Build HTP container
         build_htp_container
 
@@ -1452,15 +1459,13 @@ deploy_htp_endpoint() {
             --health-cmd="python -c 'import socket; s=socket.socket(); s.connect((\"127.0.0.1\", 4478)); s.close()' || exit 1" \
             --health-interval=30s \
             --health-retries=3 \
-            -v "$MSSP_BASE_DIR/htp:/app:Z" \
-            -v "$HOOKPROBE_ROOT/core/htp:/opt/htp:ro,Z" \
-            -v "$MSSP_DATA_DIR:/var/lib/hookprobe/mssp:Z" \
+            -v "$MSSP_DATA_DIR/htp:/var/lib/hookprobe/mssp:Z" \
             -v "$MSSP_SECRETS_DIR:/etc/hookprobe/secrets/mssp:ro,Z" \
             "localhost/mssp-htp:latest"
 
         log_success "HTP validator deployed on UDP/TCP 4478"
     else
-        log_info "HTP validator disabled for POC (set ENABLE_HTP=true to enable)"
+        log_info "HTP validator disabled (set ENABLE_HTP=false to disable)"
     fi
 }
 
@@ -1506,11 +1511,175 @@ EOF
 build_qsecbit_container() {
     log_info "Building Qsecbit container..."
 
+    # Create MSSP-specific Qsecbit API server
+    mkdir -p "$MSSP_BASE_DIR/containers/qsecbit_build"
+
+    # Copy core qsecbit modules to build context
+    cp -r "$HOOKPROBE_ROOT/core" "$MSSP_BASE_DIR/containers/qsecbit_build/"
+
+    # Create __init__.py files for proper package structure
+    touch "$MSSP_BASE_DIR/containers/qsecbit_build/__init__.py"
+
+    # Create MSSP-specific qsecbit API server
+    cat > "$MSSP_BASE_DIR/containers/qsecbit_build/qsecbit_api.py" << 'PYEOF'
+#!/usr/bin/env python3
+"""
+HookProbe MSSP Qsecbit API Server
+Provides REST API for security scoring aggregation from edge devices.
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime
+from typing import Dict, Any, Optional
+
+from flask import Flask, jsonify, request
+
+# Add parent to path for core imports
+sys.path.insert(0, '/opt/hookprobe')
+
+# Try to import core qsecbit modules (graceful fallback if not available)
+try:
+    from core.qsecbit import QsecbitCalculator
+    QSECBIT_AVAILABLE = True
+except ImportError:
+    QSECBIT_AVAILABLE = False
+    print("Warning: core.qsecbit not available, using standalone mode")
+
+app = Flask(__name__)
+
+# In-memory storage for device scores (for POC)
+device_scores: Dict[str, Dict[str, Any]] = {}
+global_qsecbit = {
+    'score': 0.0,
+    'rag_status': 'GREEN',
+    'device_count': 0,
+    'last_updated': None
+}
+
+
+def calculate_rag_status(score: float) -> str:
+    """Calculate RAG status from Qsecbit score (lower = better)."""
+    if score < 0.30:
+        return 'GREEN'
+    elif score < 0.55:
+        return 'AMBER'
+    else:
+        return 'RED'
+
+
+def update_global_qsecbit():
+    """Recalculate global Qsecbit score from all device scores."""
+    global global_qsecbit
+
+    if not device_scores:
+        global_qsecbit = {
+            'score': 0.0,
+            'rag_status': 'GREEN',
+            'device_count': 0,
+            'last_updated': datetime.utcnow().isoformat()
+        }
+        return
+
+    # Average all device scores
+    total_score = sum(d['score'] for d in device_scores.values())
+    avg_score = total_score / len(device_scores)
+
+    global_qsecbit = {
+        'score': round(avg_score, 4),
+        'rag_status': calculate_rag_status(avg_score),
+        'device_count': len(device_scores),
+        'last_updated': datetime.utcnow().isoformat()
+    }
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'mssp-qsecbit',
+        'qsecbit_core_available': QSECBIT_AVAILABLE,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+
+@app.route('/api/v1/status', methods=['GET'])
+def get_status():
+    """Get current global Qsecbit status."""
+    return jsonify({
+        'global': global_qsecbit,
+        'devices': len(device_scores)
+    })
+
+
+@app.route('/api/v1/score', methods=['POST'])
+def report_score():
+    """Receive Qsecbit score from an edge device."""
+    data = request.get_json()
+
+    if not data or 'device_id' not in data:
+        return jsonify({'error': 'device_id required'}), 400
+
+    device_id = data['device_id']
+    score = float(data.get('score', 0.0))
+
+    device_scores[device_id] = {
+        'score': score,
+        'rag_status': data.get('rag_status', calculate_rag_status(score)),
+        'drift': data.get('drift', 0.0),
+        'attack_probability': data.get('attack_probability', 0.0),
+        'classifier_decay': data.get('classifier_decay', 0.0),
+        'quantum_drift': data.get('quantum_drift', 0.0),
+        'energy_anomaly': data.get('energy_anomaly', 0.0),
+        'last_seen': datetime.utcnow().isoformat()
+    }
+
+    update_global_qsecbit()
+
+    return jsonify({
+        'status': 'accepted',
+        'device_id': device_id,
+        'global_qsecbit': global_qsecbit
+    })
+
+
+@app.route('/api/v1/devices', methods=['GET'])
+def list_devices():
+    """List all devices with their scores."""
+    return jsonify({
+        'devices': device_scores,
+        'count': len(device_scores)
+    })
+
+
+@app.route('/api/v1/device/<device_id>', methods=['GET'])
+def get_device(device_id: str):
+    """Get score for a specific device."""
+    if device_id not in device_scores:
+        return jsonify({'error': 'Device not found'}), 404
+
+    return jsonify({
+        'device_id': device_id,
+        **device_scores[device_id]
+    })
+
+
+if __name__ == '__main__':
+    port = int(os.getenv('QSECBIT_PORT', '8888'))
+    print(f"Starting MSSP Qsecbit API on port {port}")
+    print(f"Qsecbit core available: {QSECBIT_AVAILABLE}")
+    app.run(host='0.0.0.0', port=port, debug=False)
+PYEOF
+
     cat > "$MSSP_BASE_DIR/containers/Containerfile.qsecbit" << 'EOF'
 FROM docker.io/python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/opt/hookprobe
 
 WORKDIR /app
 
@@ -1527,28 +1696,51 @@ RUN pip install --no-cache-dir \
     requests \
     clickhouse-driver
 
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core
+
+# Copy core qsecbit modules
+COPY qsecbit_build/core/ /opt/hookprobe/core/
+
+# Copy MSSP-specific API server
+COPY qsecbit_build/qsecbit_api.py /app/
+
 # Create non-root user
-RUN useradd -m -u 1000 hookprobe
+RUN useradd -m -u 1000 hookprobe && \
+    chown -R hookprobe:hookprobe /app /opt/hookprobe
 USER hookprobe
 
 EXPOSE 8888
 
-CMD ["python", "/opt/qsecbit/qsecbit-agent.py", "--mode", "mssp", "--port", "8888"]
+CMD ["python", "/app/qsecbit_api.py"]
 EOF
 
     podman build -t localhost/mssp-qsecbit:latest \
         -f "$MSSP_BASE_DIR/containers/Containerfile.qsecbit" \
         "$MSSP_BASE_DIR/containers"
+
+    # Cleanup build context
+    rm -rf "$MSSP_BASE_DIR/containers/qsecbit_build"
 }
 
 build_htp_container() {
     log_info "Building HTP validator container..."
+
+    # Create build context with required files
+    mkdir -p "$MSSP_BASE_DIR/containers/htp_build"
+
+    # Copy HTP validator from lib to build context
+    cp "$SCRIPT_DIR/lib/htp_validator.py" "$MSSP_BASE_DIR/containers/htp_build/"
+
+    # Copy core HTP modules for imports
+    cp -r "$HOOKPROBE_ROOT/core" "$MSSP_BASE_DIR/containers/htp_build/"
 
     cat > "$MSSP_BASE_DIR/containers/Containerfile.htp" << 'EOF'
 FROM docker.io/python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/opt/hookprobe
 
 WORKDIR /app
 
@@ -1561,14 +1753,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     cryptography \
     pynacl \
-    requests
+    requests \
+    flask
 
-# Create non-root user
-RUN useradd -m -u 1000 hookprobe
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core /var/lib/hookprobe/mssp
+
+# Copy core HTP modules
+COPY htp_build/core/ /opt/hookprobe/core/
+
+# Copy HTP validator
+COPY htp_build/htp_validator.py /app/
+
+# Create non-root user with proper permissions
+RUN useradd -m -u 1000 hookprobe && \
+    chown -R hookprobe:hookprobe /app /opt/hookprobe /var/lib/hookprobe
 USER hookprobe
 
 EXPOSE 4478/udp
 EXPOSE 4478/tcp
+EXPOSE 8889
 
 CMD ["python", "/app/htp_validator.py"]
 EOF
@@ -1576,6 +1780,9 @@ EOF
     podman build -t localhost/mssp-htp:latest \
         -f "$MSSP_BASE_DIR/containers/Containerfile.htp" \
         "$MSSP_BASE_DIR/containers"
+
+    # Cleanup build context
+    rm -rf "$MSSP_BASE_DIR/containers/htp_build"
 }
 
 # =============================================================================

@@ -32,6 +32,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'django_filters',
+    'django_celery_beat',      # Periodic task scheduling
+    'django_celery_results',   # Task result storage
 
     # HookProbe apps
     'apps.cms',
@@ -200,6 +202,25 @@ CACHES = {
 # Session configuration
 SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
 SESSION_CACHE_ALIAS = 'default'
+
+# Celery Configuration
+CELERY_BROKER_URL = redis_url
+CELERY_RESULT_BACKEND = 'django-db'  # Store results in Django database
+CELERY_CACHE_BACKEND = 'default'     # Use Django cache as Celery cache
+
+# Celery settings
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes max task time
+CELERY_RESULT_EXTENDED = True
+
+# Celery beat scheduler
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Task serialization
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
 
 # Security settings (override in production)
 SECURE_BROWSER_XSS_FILTER = True
