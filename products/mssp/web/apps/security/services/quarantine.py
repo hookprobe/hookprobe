@@ -21,12 +21,15 @@ import uuid
 import logging
 import subprocess
 from datetime import timedelta
-from typing import Optional, List
+from typing import TYPE_CHECKING, Optional, List
 
 from django.utils import timezone
 from django.conf import settings
 
 from apps.common.security_utils import mask_ip
+
+if TYPE_CHECKING:
+    from apps.security.models import QuarantineAction
 
 logger = logging.getLogger(__name__)
 
