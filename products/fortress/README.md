@@ -109,6 +109,33 @@ Fortress is a full-featured edge gateway with local monitoring, dashboards, and 
 - **Inter-VLAN Firewall** — Control traffic between segments
 - **MAC-to-VLAN Assignment** — Auto-assign devices
 
+### Device Groups vs D2D Bubbles
+
+Fortress distinguishes between two independent device organization concepts:
+
+| Feature | Device Groups | D2D Bubbles |
+|---------|--------------|-------------|
+| **Purpose** | Manual device organization | Automatic relationship detection |
+| **Control** | User-managed (CRUD) | AI-managed (background) |
+| **UI** | Web UI → Device Groups | Visual coloring indicators |
+| **Policies** | OpenFlow network policies | Color-coding only |
+| **Example** | "Work Devices" group | "Devices that communicate" |
+
+**Device Groups** let you:
+- Create custom groups (e.g., "Dad's Devices", "Kids' Tablets", "Work")
+- Assign network policies (internet only, LAN only, full access)
+- Move devices between groups with drag-and-drop
+- Pin groups to prevent AI changes
+- Quarantine suspicious devices (built-in, undeletable)
+
+**D2D Bubbles** (AIOCHI background algorithm):
+- Automatically detects devices that communicate frequently
+- Colors related devices similarly in the UI
+- Independent of manual Device Groups
+- Example: Dad's iPhone and MacBook are colored the same because they share files via AirDrop
+
+These systems are **independent**: A device can be in the "Work" group but colored the same as "Dad's iPhone" based on D2D traffic patterns.
+
 ### dnsXai Advanced
 - **Full ML Classifier** — All 20 features enabled with higher accuracy
 - **CNAME Uncloaking** — Deep chain resolution (5+ levels)

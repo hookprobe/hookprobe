@@ -39,9 +39,10 @@
 | **Fortress WiFi setup** | hostapd config | `products/fortress/devices/common/hostapd-generator.sh` |
 | **Fortress network setup** | OVS VLAN, DHCP, NAT | `products/fortress/devices/common/ovs-post-setup.sh` |
 | **Fortress containers** | Podman compose | `products/fortress/containers/podman-compose.yml` |
-| **Ecosystem Bubble (Same-user detection)** | Atmospheric Presence | `products/fortress/lib/ecosystem_bubble.py` |
+| **Device Groups (UI)** | Manual device organization | `products/fortress/web/modules/bubbles/views.py` |
+| **D2D Bubble Algorithm** | Automatic relationship detection | `products/fortress/lib/ecosystem_bubble.py` |
 | **Device Fingerprinting (ML)** | 99% accuracy classifier | `products/fortress/lib/ml_fingerprint_classifier.py` |
-| **Behavioral Clustering** | DBSCAN user bubbles | `products/fortress/lib/behavior_clustering.py` |
+| **Behavioral Clustering** | DBSCAN D2D bubbles | `products/fortress/lib/behavior_clustering.py` |
 | **Multi-Modal Presence** | mDNS, BLE, spatial | `products/fortress/lib/presence_sensor.py` |
 | **mDNS Query/Response Pairing** | Device discovery tracking | `products/fortress/lib/presence_sensor.py` |
 | **D2D Connection Graph** | Zeek-based device affinity | `products/fortress/lib/connection_graph.py` |
@@ -1575,15 +1576,23 @@ cat /etc/dnsmasq.d/fts-lan.conf       # DHCP config
 
 **Development Plan**: See `products/fortress/DEVELOPMENT_PLAN.md`
 
-### Ecosystem Bubble - Same-User Device Detection
+### D2D Bubble System (Ecosystem Bubble) - Automatic Device Relationship Detection
 
 **Location**: `products/fortress/lib/`
 **Status**: Production Ready
 **Branding**: "Atmospheric Presence" - Detecting device relationships through behavioral patterns
 
-Ecosystem Bubble is Fortress's proprietary system for automatically grouping devices by owner (Dad, Mom, Kids, Guests) using multi-modal signals without requiring manual configuration.
+> **IMPORTANT: Device Groups vs D2D Bubbles**
+> | Concept | Description | Code Location |
+> |---------|-------------|---------------|
+> | **Device Groups** | Manual CRUD for user-organized device grouping with OpenFlow policies. Users create, edit, delete groups via Web UI. | `web/modules/bubbles/views.py` |
+> | **D2D Bubbles** | Automatic background algorithm that detects device relationships through network traffic and colors them similarly. | `lib/ecosystem_bubble.py` |
+>
+> These are **INDEPENDENT** - a device can be in "Work" group but colored same as "Dad's iPhone" based on D2D patterns.
 
-> *"Dad's iPhone and MacBook wake up together at 7am, share files via AirDrop, and query the same Apple TV - they belong in the same bubble"*
+The D2D Bubble system (also called "Ecosystem Bubble" or "Atmospheric Presence") automatically detects which devices belong to the same user through multi-modal signals without requiring manual configuration.
+
+> *"Dad's iPhone and MacBook wake up together at 7am, share files via AirDrop, and query the same Apple TV - they're colored the same in the UI"*
 
 **Architecture Overview**:
 
