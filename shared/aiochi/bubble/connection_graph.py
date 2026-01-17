@@ -6,6 +6,28 @@ PROPRIETARY AND CONFIDENTIAL
 Copyright (c) 2024-2025 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
 
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                        D2D BUBBLES vs DEVICE GROUPS                            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  This module is part of the D2D BUBBLE COLORING system, which is INDEPENDENT  ║
+║  of Device Groups:                                                             ║
+║                                                                                 ║
+║  • D2D Bubbles (this module): Automatic background algorithm that detects     ║
+║    device relationships through network traffic patterns (Zeek conn.log).     ║
+║    Devices that communicate frequently are colored similarly in the UI.       ║
+║    This is PASSIVE and AUTOMATIC - users don't manage these.                  ║
+║                                                                                 ║
+║  • Device Groups (web UI): Manual CRUD feature for users to organize devices  ║
+║    into named groups (Dad's Devices, Kids' Devices, Work, etc.) with          ║
+║    OpenFlow network policies. Users CREATE, EDIT, DELETE groups manually.     ║
+║                                                                                 ║
+║  The two systems are INDEPENDENT:                                             ║
+║    - D2D coloring happens in background based on network traffic              ║
+║    - Device Groups are user-managed organizational containers                  ║
+║    - A device can be in a "Work" group but colored same as "Dad's iPhone"    ║
+║      if they communicate frequently via D2D                                    ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
 This module parses Zeek connection logs to detect device-to-device
 communication patterns, enabling cross-ecosystem bubble detection.
 
@@ -34,13 +56,14 @@ Data Flow:
 │       ├──▶ Filter LAN-only traffic (exclude internet)            │
 │       ├──▶ Build device relationship graph                       │
 │       ├──▶ Calculate D2D affinity scores                         │
-│       └──▶ Return clusters for bubble formation                  │
+│       └──▶ Return clusters for D2D bubble coloring               │
 │                                                                   │
 └─────────────────────────────────────────────────────────────────┘
 
 Integration:
 This module feeds into BehavioralClusteringEngine to add D2D features
-that enable cross-ecosystem bubble detection.
+that enable cross-ecosystem bubble detection. D2D bubble coloring is
+displayed in the UI as visual indicators separate from Device Groups.
 """
 
 import json
@@ -74,6 +97,57 @@ class DeviceType(Enum):
     def color(self) -> str:
         """Get bubble visualization color for device type."""
         return DEVICE_TYPE_COLORS.get(self, "#808080")
+
+
+class DeviceRole(Enum):
+    """
+    Device role for ecosystem mismatch penalty calculation.
+
+    TRIO+ Recommendation (2026-01-14):
+    Primary devices (phones, laptops, tablets) from different ecosystems
+    should have a MUCH higher penalty than secondary devices (IoT, TVs).
+    """
+    PRIMARY = "primary"    # Phones, laptops, tablets - user's main devices
+    SECONDARY = "secondary"  # Smart TVs, speakers, IoT - shared/utility devices
+    UNKNOWN = "unknown"
+
+
+def get_device_role(device_type: DeviceType, services: Optional[Set[str]] = None) -> DeviceRole:
+    """
+    Determine device role (PRIMARY vs SECONDARY) for ecosystem penalty calculation.
+
+    TRIO+ Recommendation: Apply stronger penalty for PRIMARY-PRIMARY cross-ecosystem pairs.
+
+    Args:
+        device_type: DeviceType classification
+        services: Optional mDNS services for additional classification
+
+    Returns:
+        DeviceRole enum value
+    """
+    # Personal devices are PRIMARY
+    if device_type == DeviceType.PERSONAL:
+        return DeviceRole.PRIMARY
+
+    # IoT devices are SECONDARY
+    if device_type == DeviceType.IOT:
+        return DeviceRole.SECONDARY
+
+    # Infrastructure is SECONDARY
+    if device_type == DeviceType.INFRASTRUCTURE:
+        return DeviceRole.SECONDARY
+
+    # Check services for additional classification
+    if services:
+        services_lower = {s.lower() for s in services}
+        # TV/media services -> SECONDARY
+        if any(s in services_lower for s in ['_googlecast._tcp', '_airplay._tcp', '_raop._tcp']):
+            return DeviceRole.SECONDARY
+        # Companion/sync services -> PRIMARY (indicates phone/laptop)
+        if any(s in services_lower for s in ['_companion-link._tcp', '_rdlink._tcp']):
+            return DeviceRole.PRIMARY
+
+    return DeviceRole.UNKNOWN
 
 
 # Bubble visualization colors (for UI)
@@ -278,6 +352,75 @@ def get_oui(mac: str) -> str:
     if len(parts) >= 3:
         return ':'.join(parts[:3])
     return ""
+
+
+def detect_ecosystem(mac: str, services: Optional[Set[str]] = None) -> str:
+    """
+    Detect device ecosystem from MAC OUI and mDNS services.
+
+    TRIO+ Addition (2026-01-14):
+    Ecosystem detection is critical for preventing false bubble groupings.
+    Devices from different ecosystems (Apple + Android) should NOT be
+    grouped together unless they have very strong affinity scores.
+
+    Args:
+        mac: Device MAC address
+        services: Set of mDNS service types observed
+
+    Returns:
+        Ecosystem string: 'apple', 'android', 'google', 'samsung', 'amazon', 'windows', 'unknown'
+    """
+    oui = get_oui(mac)
+
+    # Check OUI for known ecosystems
+    if oui in PERSONAL_VENDOR_OUIS:
+        vendor = PERSONAL_VENDOR_OUIS[oui].lower()
+        if 'apple' in vendor:
+            return 'apple'
+        elif 'samsung' in vendor:
+            return 'samsung'
+        elif 'google' in vendor or 'pixel' in vendor:
+            return 'google'
+        elif 'xiaomi' in vendor or 'huawei' in vendor or 'oppo' in vendor or 'vivo' in vendor:
+            return 'android'
+
+    if oui in IOT_VENDOR_OUIS:
+        vendor = IOT_VENDOR_OUIS[oui].lower()
+        if 'amazon' in vendor or 'echo' in vendor or 'alexa' in vendor:
+            return 'amazon'
+        elif 'google' in vendor or 'nest' in vendor:
+            return 'google'
+        elif 'apple' in vendor:
+            return 'apple'
+
+    # Check services for ecosystem hints
+    if services:
+        services_lower = {s.lower() for s in services}
+        # Apple services
+        if any(s in services_lower for s in ['_airplay._tcp', '_raop._tcp', '_companion-link._tcp', '_homekit._tcp']):
+            return 'apple'
+        # Google services
+        if any(s in services_lower for s in ['_googlecast._tcp', '_googlezone._tcp']):
+            return 'google'
+        # Amazon services
+        if any(s in services_lower for s in ['_amzn-wplay._tcp', '_alexa._tcp']):
+            return 'amazon'
+        # Samsung services
+        if any(s in services_lower for s in ['_smartthings._tcp', '_samsungtv._tcp']):
+            return 'samsung'
+
+    # Check MAC for randomized Android patterns
+    # Android 10+ uses randomized MACs - often starting with locally administered bit
+    mac_upper = mac.upper()
+    if len(mac_upper) >= 2:
+        first_byte = int(mac_upper[:2], 16) if mac_upper[:2].replace(':', '').isalnum() else 0
+        # Locally administered bit (bit 1 of first byte) - common in Android random MACs
+        if first_byte & 0x02:
+            # This is a randomized MAC - could be Android or iOS
+            # Without more context, we can't determine ecosystem
+            pass
+
+    return 'unknown'
 
 
 def classify_device_type(
@@ -495,8 +638,8 @@ class D2DMetrics:
     """
     Normalized D2D metrics for enhanced affinity scoring.
 
-    Used by the Trio+ recommended formula:
-    w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap
+    Used by the Trio+ recommended formula (2026-01-14 update):
+    w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap + ζ·discovery + η·temporal + θ·activity_hour
 
     All values normalized to 0-1 range.
     """
@@ -510,6 +653,9 @@ class D2DMetrics:
     discovery_score: float = 0.0   # mDNS discovery correlation
     temporal_score: float = 0.0    # Wake/sleep pattern correlation
 
+    # Trio+ 2026-01-14: Activity hour similarity (Jaccard index of active hours)
+    activity_hour_similarity: float = 0.0  # 0-1 similarity of daily activity patterns
+
     def to_dict(self) -> Dict:
         return {
             'frequency': round(self.frequency, 3),
@@ -519,6 +665,7 @@ class D2DMetrics:
             'overlap': round(self.service_overlap, 3),
             'discovery': round(self.discovery_score, 3),
             'temporal': round(self.temporal_score, 3),
+            'activity_hour_similarity': round(self.activity_hour_similarity, 3),
         }
 
 
@@ -552,6 +699,27 @@ class DeviceRelationship:
     device_type_a: Optional[str] = None
     device_type_b: Optional[str] = None
 
+    # Ecosystem classification (Trio+ recommendation for cross-ecosystem penalty)
+    ecosystem_a: Optional[str] = None  # 'apple', 'android', 'windows', 'unknown'
+    ecosystem_b: Optional[str] = None
+
+    # Device role classification (Trio+ 2026-01-14: PRIMARY/SECONDARY for penalty tiers)
+    device_role_a: Optional[str] = None  # 'primary', 'secondary', 'unknown'
+    device_role_b: Optional[str] = None
+
+    # Activity hour tracking (Trio+ 2026-01-14: Activity hour similarity signal)
+    # Tracks which hours of the day devices are active (0-23)
+    activity_hours_a: Set[int] = field(default_factory=set)
+    activity_hours_b: Set[int] = field(default_factory=set)
+
+    # Session tracking for sustained traffic detection (Trio+ recommendation)
+    distinct_sessions: int = 0  # Number of distinct communication sessions
+    session_timestamps: List[datetime] = field(default_factory=list)
+
+    # Daily decay tracking (Trio+ 2026-01-14: 0.97 daily decay factor)
+    last_decay_date: Optional[datetime] = None
+    days_since_interaction: int = 0
+
     # Assigned bubble color (for visualization)
     bubble_color: Optional[str] = None
 
@@ -572,11 +740,13 @@ class DeviceRelationship:
             bytes_norm = min(1.0, math.log10(self.total_bytes + 1) / 8)
 
         # Recency calculation (exponential decay)
+        # Trio+ Recommendation: Reduced half-life from 12h to 6h for faster decay
+        # Old data should lose influence faster to prevent stale associations
         recency = 0.0
         if self.last_seen:
             age_hours = (datetime.now() - self.last_seen).total_seconds() / 3600
-            # Exponential decay: half-life of 12 hours
-            recency = min(1.0, 2 ** (-age_hours / 12))
+            # Exponential decay: half-life of 6 hours (was 12 - too slow)
+            recency = min(1.0, 2 ** (-age_hours / 6))
 
         # Symmetry (bidirectional ratio)
         symmetry = 0.0
@@ -595,6 +765,15 @@ class DeviceRelationship:
         # Discovery score (mDNS)
         discovery = min(1.0, self.discovery_hits * 0.1) if self.discovery_hits > 0 else 0.0
 
+        # Activity hour similarity (Trio+ 2026-01-14)
+        # Jaccard index of active hours: |A ∩ B| / |A ∪ B|
+        activity_similarity = 0.0
+        if self.activity_hours_a and self.activity_hours_b:
+            intersection = len(self.activity_hours_a & self.activity_hours_b)
+            union = len(self.activity_hours_a | self.activity_hours_b)
+            if union > 0:
+                activity_similarity = intersection / union
+
         return D2DMetrics(
             frequency=freq_norm,
             bytes_exchanged=bytes_norm,
@@ -603,37 +782,64 @@ class DeviceRelationship:
             service_overlap=overlap,
             discovery_score=discovery,
             temporal_score=self.temporal_sync_score,
+            activity_hour_similarity=activity_similarity,
         )
 
     def calculate_affinity_score(self) -> float:
         """
         Calculate D2D affinity score using Trio+ recommended weighted algorithm.
 
-        Formula (from Devstral + Nemotron consultation):
-        w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap + ζ·discovery + η·temporal
+        TRIO+ UPDATE 2026-01-14 (Gemini 2.5 Flash + Nemotron analysis):
+        - New weights optimized for owner detection
+        - Added activity_hour_similarity signal (0.13)
+        - Tiered ecosystem penalties: -0.45 for PRIMARY-PRIMARY, -0.15 for mixed
+        - Daily decay factor: 0.97 (3% daily reduction)
+        - Reduced bytes weight to 0.02 (too easily skewed by streaming)
 
-        Weights:
-        - α = 0.20 (frequency - how often they communicate)
-        - β = 0.15 (bytes - volume of data exchanged)
-        - γ = 0.15 (recency - recent activity counts more)
-        - δ = 0.15 (symmetry - bidirectional = same user)
-        - ε = 0.10 (overlap - service diversity)
-        - ζ = 0.15 (discovery - mDNS browsing correlation)
-        - η = 0.10 (temporal - wake/sleep together)
+        Formula:
+        w_uv = α·freq + β·bytes + γ·recency + δ·symmetry + ε·overlap
+               + ζ·discovery + η·temporal + θ·activity_hour
+
+        Weights (sum = 1.0):
+        - α = 0.05 (frequency - reduced, less critical for owner than presence)
+        - β = 0.02 (bytes - significantly reduced, too easily skewed)
+        - γ = 0.20 (recency - high, essential for current relevance)
+        - δ = 0.05 (symmetry - reduced, common for P2P but less owner-specific)
+        - ε = 0.15 (overlap - maintained, shared services are good)
+        - ζ = 0.20 (discovery - increased, strong owner signal via mDNS)
+        - η = 0.20 (temporal - increased, strongest owner signal)
+        - θ = 0.13 (activity_hour_similarity - NEW, strong owner pattern)
 
         Returns:
             Normalized affinity score (0.0 - 1.0)
         """
+        # TRIO+ FIX: Sustained traffic requirement
+        # Prevent transient/one-time connections from inflating scores
+        MIN_SUSTAINED_CONNECTIONS = 10  # Minimum connections for sustained traffic
+        MIN_SUSTAINED_SESSIONS = 3       # Minimum distinct sessions
+
+        if self.connection_count < MIN_SUSTAINED_CONNECTIONS:
+            # Not enough data for reliable affinity - return low score
+            # This prevents one-time streaming/sharing from creating false bubbles
+            return 0.0
+
+        if self.distinct_sessions < MIN_SUSTAINED_SESSIONS:
+            # Single burst of traffic (e.g., one AirPlay session) - cap score
+            # Real same-user devices communicate across multiple sessions
+            return min(0.3, self.connection_count / 100)
+
         metrics = self.get_normalized_metrics()
 
-        # Trio+ recommended weights for D2D bubble detection
-        WEIGHT_FREQUENCY = 0.20
-        WEIGHT_BYTES = 0.15
-        WEIGHT_RECENCY = 0.15
-        WEIGHT_SYMMETRY = 0.15
-        WEIGHT_OVERLAP = 0.10
-        WEIGHT_DISCOVERY = 0.15
-        WEIGHT_TEMPORAL = 0.10
+        # TRIO+ 2026-01-14: Optimized weights for owner detection
+        # Sum = 1.0 (0.05 + 0.02 + 0.20 + 0.05 + 0.15 + 0.20 + 0.20 + 0.13)
+        WEIGHT_FREQUENCY = 0.05    # Reduced - less critical for owner detection
+        WEIGHT_BYTES = 0.02        # Significantly reduced - streaming skews this
+        WEIGHT_RECENCY = 0.20      # High - essential for current relevance
+        WEIGHT_SYMMETRY = 0.05     # Reduced - common for P2P but less owner-specific
+        WEIGHT_OVERLAP = 0.15      # Maintained - shared services indicate ownership
+        WEIGHT_DISCOVERY = 0.20    # Increased - mDNS discovery is strong owner signal
+        WEIGHT_TEMPORAL = 0.20     # Increased - wake/sleep together is strongest signal
+        WEIGHT_ACTIVITY_HOUR = 0.13  # NEW - activity hour similarity (Jaccard)
 
         # Calculate weighted sum
         score = (
@@ -643,8 +849,21 @@ class DeviceRelationship:
             WEIGHT_SYMMETRY * metrics.symmetry +
             WEIGHT_OVERLAP * metrics.service_overlap +
             WEIGHT_DISCOVERY * metrics.discovery_score +
-            WEIGHT_TEMPORAL * metrics.temporal_score
+            WEIGHT_TEMPORAL * metrics.temporal_score +
+            WEIGHT_ACTIVITY_HOUR * metrics.activity_hour_similarity
         )
+
+        # TRIO+ 2026-01-14: Apply daily decay factor (0.97 per day)
+        # Relationships need "maintenance" - if no communication, score decays
+        DAILY_DECAY_FACTOR = 0.97  # 3% daily reduction
+        if self.days_since_interaction > 0:
+            decay_multiplier = DAILY_DECAY_FACTOR ** self.days_since_interaction
+            score *= decay_multiplier
+            if self.days_since_interaction > 5:
+                logger.debug(
+                    f"Daily decay applied: {self.mac_a} <-> {self.mac_b}, "
+                    f"days={self.days_since_interaction}, multiplier={decay_multiplier:.3f}"
+                )
 
         # High-affinity service bonus (AirPlay, AirDrop, etc.)
         # These are strong indicators of same-user ownership
@@ -657,6 +876,40 @@ class DeviceRelationship:
         # Two personal devices communicating = likely same user
         if self.device_type_a == 'personal' and self.device_type_b == 'personal':
             score = min(1.0, score + 0.10)
+
+        # TRIO+ 2026-01-14: Tiered ecosystem mismatch penalties
+        # Primary-Primary cross-ecosystem pairs get MUCH higher penalty
+        # This prevents false groupings like Android work phone + Apple family devices
+        ECOSYSTEM_MISMATCH_PENALTY_PRIMARY = 0.45  # Was 0.25 - increased for primary pairs
+        ECOSYSTEM_MISMATCH_PENALTY_MIXED = 0.15    # Lower for IoT/mixed pairs
+
+        if self.ecosystem_a and self.ecosystem_b:
+            # Both ecosystems are known
+            if self.ecosystem_a != self.ecosystem_b:
+                # Different ecosystems - apply tiered penalty based on device roles
+                role_a = self.device_role_a or 'unknown'
+                role_b = self.device_role_b or 'unknown'
+
+                # Determine penalty tier
+                if role_a == 'primary' and role_b == 'primary':
+                    # PRIMARY-PRIMARY: Strongest penalty (e.g., Android phone + iPhone)
+                    penalty = ECOSYSTEM_MISMATCH_PENALTY_PRIMARY
+                    logger.debug(
+                        f"PRIMARY ecosystem mismatch: {self.mac_a} ({self.ecosystem_a}/{role_a}) "
+                        f"<-> {self.mac_b} ({self.ecosystem_b}/{role_b}), penalty={penalty}"
+                    )
+                else:
+                    # Mixed pair (IoT, secondary) - lower penalty
+                    penalty = ECOSYSTEM_MISMATCH_PENALTY_MIXED
+                    logger.debug(
+                        f"MIXED ecosystem mismatch: {self.mac_a} ({self.ecosystem_a}/{role_a}) "
+                        f"<-> {self.mac_b} ({self.ecosystem_b}/{role_b}), penalty={penalty}"
+                    )
+
+                score = max(0.0, score - penalty)
+            else:
+                # Same ecosystem - small bonus
+                score = min(1.0, score + 0.05)
 
         return min(1.0, max(0.0, score))
 
@@ -674,7 +927,8 @@ class DeviceRelationship:
         metrics = self.get_normalized_metrics()
 
         # Determine suggestion
-        should_suggest = affinity >= 0.4  # 40% threshold for suggestion
+        # TRIO+ FIX: Increased threshold from 0.4 to 0.55 to prevent false groupings
+        should_suggest = affinity >= 0.55  # 55% threshold for suggestion (was 0.4)
         confidence = affinity
 
         # Build reason
@@ -797,7 +1051,9 @@ class ConnectionGraphAnalyzer:
     # Analysis parameters
     LOOKBACK_HOURS = 24           # Analyze last 24 hours of logs
     MIN_CONNECTIONS = 3           # Minimum connections to consider relationship
-    AFFINITY_THRESHOLD = 0.3      # Minimum affinity for clustering
+    # TRIO+ FIX: Increased from 0.3 to 0.55 to prevent false D2D cluster coloring
+    # This was causing devices with brief interactions to get the same color
+    AFFINITY_THRESHOLD = 0.55     # Minimum affinity for clustering (was 0.3)
 
     def __init__(self, db_path: Path = D2D_DB, enable_clickhouse: bool = True):
         self.db_path = db_path
@@ -888,6 +1144,18 @@ class ConnectionGraphAnalyzer:
                     coincident_sleep_count INTEGER DEFAULT 0,
                     last_calculated TEXT,
                     PRIMARY KEY (mac_a, mac_b)
+                )
+            ''')
+
+            # TRIO+ 2026-01-14: Color persistence for D2D bubbles
+            # Ensures consistent bubble colors across restarts
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS bubble_color_persistence (
+                    cluster_id TEXT PRIMARY KEY,
+                    color TEXT NOT NULL,
+                    device_macs_json TEXT,
+                    created_at TEXT,
+                    last_updated TEXT
                 )
             ''')
             conn.commit()
@@ -1122,6 +1390,9 @@ class ConnectionGraphAnalyzer:
                         mac_a=key[0],
                         mac_b=key[1],
                         first_seen=conn.timestamp,
+                        # TRIO+ FIX: Detect ecosystems at relationship creation
+                        ecosystem_a=detect_ecosystem(key[0]),
+                        ecosystem_b=detect_ecosystem(key[1]),
                     )
 
                 rel = self.relationships[key]
@@ -1130,10 +1401,28 @@ class ConnectionGraphAnalyzer:
                 rel.total_duration += conn.duration
                 rel.last_seen = conn.timestamp
 
+                # TRIO+ FIX: Track distinct sessions for sustained traffic detection
+                # A session is a connection with a gap of >30 minutes from previous
+                if rel.session_timestamps:
+                    last_session = rel.session_timestamps[-1]
+                    gap = (conn.timestamp - last_session).total_seconds() / 60
+                    if gap > 30:  # New session if >30 min gap
+                        rel.distinct_sessions += 1
+                        rel.session_timestamps.append(conn.timestamp)
+                else:
+                    rel.distinct_sessions = 1
+                    rel.session_timestamps = [conn.timestamp]
+
                 # Track services
                 if conn.service:
                     rel.services_used[conn.service] = \
                         rel.services_used.get(conn.service, 0) + 1
+                    # TRIO+ FIX: Update ecosystems based on observed services
+                    services_set = set(rel.services_used.keys())
+                    if not rel.ecosystem_a or rel.ecosystem_a == 'unknown':
+                        rel.ecosystem_a = detect_ecosystem(key[0], services_set)
+                    if not rel.ecosystem_b or rel.ecosystem_b == 'unknown':
+                        rel.ecosystem_b = detect_ecosystem(key[1], services_set)
 
                 # Track bidirectional and high-affinity
                 if conn.is_bidirectional:
@@ -1166,13 +1455,29 @@ class ConnectionGraphAnalyzer:
         self._capture_mdns_traffic()
 
     def _parse_zeek_dns_log(self, log_path: Path):
-        """Parse Zeek dns.log for mDNS query/response pairs."""
+        """
+        Parse Zeek dns.log for mDNS query/response pairs.
+
+        TRIO+ FIX (2026-01-14):
+        The old algorithm created false relationships when two devices
+        simply queried the same service (e.g., both looking for AirPlay).
+        This is WRONG - just because two devices search for the same thing
+        doesn't mean they're communicating.
+
+        Correct behavior:
+        - Device A QUERIES for a service (e.g., "_airplay._tcp.local")
+        - Device B RESPONDS with that service (advertising itself)
+        - THEN they get a discovery_hit (A discovered B)
+
+        This prevents false groupings like Android + iPhone that both
+        happen to query for similar services.
+        """
         try:
             cutoff = datetime.now() - timedelta(hours=self.LOOKBACK_HOURS)
 
-            # Track queries and responses
-            queries: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # query → [(src_mac, time)]
-            responses: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # query → [(src_mac, time)]
+            # TRIO+ FIX: Track queries and responses SEPARATELY
+            queries: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # service → [(querier_mac, time)]
+            responses: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # service → [(responder_mac, time)]
 
             with open(log_path, 'r') as f:
                 for line in f:
@@ -1180,7 +1485,7 @@ class ConnectionGraphAnalyzer:
                         continue
 
                     parts = line.strip().split('\t')
-                    if len(parts) < 10:
+                    if len(parts) < 14:  # Need at least 14 fields for QR flag
                         continue
 
                     try:
@@ -1202,30 +1507,56 @@ class ConnectionGraphAnalyzer:
                     if not src_mac:
                         continue
 
-                    # Check if query or response (QR flag in parts[13] if available)
-                    # Simplified: track all mDNS activity per device
-                    queries[query].append((src_mac, ts))
+                    # TRIO+ FIX: Properly distinguish queries from responses
+                    # Zeek dns.log field layout: ts, uid, src_ip, src_port, dst_ip, dst_port, proto, trans_id, rtt, query, qclass, qtype, rcode, answers
+                    # QR (Query/Response) is determined by presence of answers (field 13+)
+                    is_response = len(parts) > 13 and parts[13] != '-' and parts[13] != ''
 
-            # Find devices that query/respond to same services
-            for query, query_list in queries.items():
-                macs = list(set(m for m, t in query_list))
-                if len(macs) >= 2:
-                    # These devices are interacting via mDNS
-                    for i in range(len(macs)):
-                        for j in range(i + 1, len(macs)):
-                            key = self._normalize_mac_pair(macs[i], macs[j])
-                            if key in self.relationships:
-                                self.relationships[key].discovery_hits += 1
-                            else:
-                                self.relationships[key] = DeviceRelationship(
-                                    mac_a=key[0],
-                                    mac_b=key[1],
-                                    discovery_hits=1,
-                                    first_seen=datetime.now(),
-                                    last_seen=datetime.now(),
-                                )
+                    if is_response:
+                        # This is a response - device is ADVERTISING a service
+                        responses[query].append((src_mac, ts))
+                    else:
+                        # This is a query - device is SEARCHING for a service
+                        queries[query].append((src_mac, ts))
 
-            logger.info(f"Analyzed mDNS browsing patterns")
+            # TRIO+ FIX: Only create discovery hits for query→response pairs
+            # Device A queries for service, Device B responds = A discovered B
+            discovery_pairs = 0
+            for service, query_list in queries.items():
+                # Get responders for this service
+                responders = responses.get(service, [])
+                if not responders:
+                    continue
+
+                for querier_mac, query_time in query_list:
+                    for responder_mac, response_time in responders:
+                        # Skip self-discovery
+                        if querier_mac == responder_mac:
+                            continue
+
+                        # Response must be within 60 seconds of query
+                        time_diff = abs((response_time - query_time).total_seconds())
+                        if time_diff > 60:
+                            continue
+
+                        # Valid discovery: querier found responder
+                        key = self._normalize_mac_pair(querier_mac, responder_mac)
+                        if key in self.relationships:
+                            self.relationships[key].discovery_hits += 1
+                        else:
+                            self.relationships[key] = DeviceRelationship(
+                                mac_a=key[0],
+                                mac_b=key[1],
+                                discovery_hits=1,
+                                first_seen=datetime.now(),
+                                last_seen=datetime.now(),
+                                # TRIO+ FIX: Detect ecosystems at relationship creation
+                                ecosystem_a=detect_ecosystem(key[0]),
+                                ecosystem_b=detect_ecosystem(key[1]),
+                            )
+                        discovery_pairs += 1
+
+            logger.info(f"Analyzed mDNS browsing patterns: {discovery_pairs} valid discovery pairs")
 
         except Exception as e:
             logger.warning(f"Failed to parse Zeek dns.log: {e}")
@@ -1234,13 +1565,20 @@ class ConnectionGraphAnalyzer:
         """
         Quick tshark capture for mDNS traffic.
 
-        One-liner approach for lightweight mDNS analysis.
+        TRIO+ FIX (2026-01-14):
+        The old algorithm created false relationships when two devices
+        simply queried the same service. Now we properly capture both
+        queries and responses, and only create discovery hits for
+        actual query→response pairs.
         """
         try:
-            # Run tshark for quick capture
+            # TRIO+ FIX: Capture both queries AND responses separately
             result = subprocess.run(
                 ['tshark', '-i', 'FTS', '-Y', 'mdns',
-                 '-T', 'fields', '-e', 'eth.src', '-e', 'mdns.qry.name',
+                 '-T', 'fields',
+                 '-e', 'eth.src',           # Source MAC
+                 '-e', 'mdns.qry.name',     # Query name (when querying)
+                 '-e', 'mdns.resp.name',    # Response name (when advertising)
                  '-a', f'duration:{duration}'],
                 capture_output=True, text=True, timeout=duration + 5
             )
@@ -1249,36 +1587,56 @@ class ConnectionGraphAnalyzer:
                 logger.debug(f"tshark capture failed: {result.stderr}")
                 return
 
-            # Parse output: each line is "src_mac\tquery_name"
-            queries: Dict[str, Set[str]] = defaultdict(set)  # query → {macs}
+            # TRIO+ FIX: Track queries and responses SEPARATELY
+            queries: Dict[str, Set[str]] = defaultdict(set)    # service → {querier_macs}
+            responses: Dict[str, Set[str]] = defaultdict(set)  # service → {responder_macs}
 
             for line in result.stdout.strip().split('\n'):
                 if not line:
                     continue
                 parts = line.split('\t')
-                if len(parts) >= 2:
-                    mac = parts[0].upper().replace(':', ':')
-                    query = parts[1]
-                    if query and '.local' in query:
-                        queries[query].add(mac)
+                if len(parts) < 3:
+                    continue
 
-            # Find relationships from shared mDNS queries
-            for query, macs in queries.items():
-                macs_list = list(macs)
-                if len(macs_list) >= 2:
-                    for i in range(len(macs_list)):
-                        for j in range(i + 1, len(macs_list)):
-                            key = self._normalize_mac_pair(macs_list[i], macs_list[j])
-                            if key not in self.relationships:
-                                self.relationships[key] = DeviceRelationship(
-                                    mac_a=key[0],
-                                    mac_b=key[1],
-                                    first_seen=datetime.now(),
-                                    last_seen=datetime.now(),
-                                )
-                            self.relationships[key].discovery_hits += 1
+                mac = parts[0].upper().replace(':', ':')
+                query_name = parts[1] if len(parts) > 1 else ''
+                response_name = parts[2] if len(parts) > 2 else ''
 
-            logger.debug(f"Captured mDNS for {duration}s, found {len(queries)} unique queries")
+                # Track queries (device searching for service)
+                if query_name and '.local' in query_name:
+                    queries[query_name].add(mac)
+
+                # Track responses (device advertising service)
+                if response_name and '.local' in response_name:
+                    responses[response_name].add(mac)
+
+            # TRIO+ FIX: Only create discovery hits for query→response pairs
+            discovery_pairs = 0
+            for service, querier_macs in queries.items():
+                responder_macs = responses.get(service, set())
+                if not responder_macs:
+                    continue
+
+                for querier in querier_macs:
+                    for responder in responder_macs:
+                        # Skip self-discovery
+                        if querier == responder:
+                            continue
+
+                        key = self._normalize_mac_pair(querier, responder)
+                        if key not in self.relationships:
+                            self.relationships[key] = DeviceRelationship(
+                                mac_a=key[0],
+                                mac_b=key[1],
+                                first_seen=datetime.now(),
+                                last_seen=datetime.now(),
+                                ecosystem_a=detect_ecosystem(key[0]),
+                                ecosystem_b=detect_ecosystem(key[1]),
+                            )
+                        self.relationships[key].discovery_hits += 1
+                        discovery_pairs += 1
+
+            logger.debug(f"Captured mDNS for {duration}s: {discovery_pairs} valid discovery pairs")
 
         except subprocess.TimeoutExpired:
             logger.debug("tshark capture timed out")
@@ -1890,16 +2248,43 @@ class ConnectionGraphAnalyzer:
 
     def assign_bubble_colors(self) -> Dict[int, str]:
         """
-        Assign colors to D2D clusters/bubbles.
+        Assign colors to D2D clusters/bubbles with persistence.
+
+        TRIO+ 2026-01-14: Colors are now persisted to SQLite to ensure
+        consistency across restarts. Uses stable cluster ID based on
+        sorted MAC addresses of core members.
 
         Returns dict mapping cluster index to hex color.
         """
         clusters = self.find_d2d_clusters()
         bubble_colors = {}
 
+        # Load existing color assignments from database
+        persisted_colors = self._load_persisted_colors()
+        used_colors = set(persisted_colors.values())
+
         for i, cluster in enumerate(clusters):
-            # Use rotating user bubble colors
-            color = get_user_bubble_color(i)
+            # Generate stable cluster ID from sorted MAC addresses
+            cluster_id = self._generate_cluster_id(cluster.devices)
+
+            # Check if this cluster already has a persisted color
+            if cluster_id in persisted_colors:
+                color = persisted_colors[cluster_id]
+            else:
+                # Find next available color not already in use
+                for j in range(len(USER_BUBBLE_COLORS)):
+                    candidate = get_user_bubble_color(j)
+                    if candidate not in used_colors:
+                        color = candidate
+                        break
+                else:
+                    # All colors in use - use rotating index
+                    color = get_user_bubble_color(i)
+
+                # Persist the new color assignment
+                self._persist_color(cluster_id, color, cluster.devices)
+
+            used_colors.add(color)
             bubble_colors[i] = color
 
             # Update relationships with assigned color
@@ -1911,6 +2296,52 @@ class ConnectionGraphAnalyzer:
                             self.relationships[key].bubble_color = color
 
         return bubble_colors
+
+    def _generate_cluster_id(self, devices: Set[str]) -> str:
+        """
+        Generate stable cluster ID from device MACs.
+
+        Uses hash of sorted MACs to create a consistent identifier
+        that survives restarts and device reordering.
+        """
+        import hashlib
+        sorted_macs = sorted(devices)
+        mac_string = ','.join(sorted_macs)
+        return hashlib.sha256(mac_string.encode()).hexdigest()[:16]
+
+    def _load_persisted_colors(self) -> Dict[str, str]:
+        """Load persisted cluster colors from database."""
+        colors = {}
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.execute(
+                    'SELECT cluster_id, color FROM bubble_color_persistence'
+                )
+                for row in cursor:
+                    colors[row[0]] = row[1]
+        except Exception as e:
+            logger.warning(f"Failed to load persisted colors: {e}")
+        return colors
+
+    def _persist_color(self, cluster_id: str, color: str, devices: Set[str]):
+        """Persist cluster color assignment to database."""
+        import json
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                now = datetime.now().isoformat()
+                conn.execute('''
+                    INSERT OR REPLACE INTO bubble_color_persistence
+                    (cluster_id, color, device_macs_json, created_at, last_updated)
+                    VALUES (?, ?, ?, COALESCE(
+                        (SELECT created_at FROM bubble_color_persistence WHERE cluster_id = ?),
+                        ?
+                    ), ?)
+                ''', (cluster_id, color, json.dumps(sorted(devices)),
+                      cluster_id, now, now))
+                conn.commit()
+                logger.debug(f"Persisted color {color} for cluster {cluster_id[:8]}...")
+        except Exception as e:
+            logger.warning(f"Failed to persist color: {e}")
 
     def get_stats(self) -> Dict:
         """Get D2D graph statistics."""

@@ -1274,6 +1274,32 @@ def api_update_device_policy(mac):
                     # Clear cache to reflect change
                     _local_cache.clear()
 
+                    # SYNC: Also update devices.db for consistency across all views
+                    if DEVICE_POLICIES_AVAILABLE:
+                        try:
+                            set_device_policy(mac_normalized, new_policy)
+                            logger.debug(f"Synced policy to devices.db: {mac_normalized} -> {new_policy}")
+                        except Exception as e:
+                            logger.warning(f"Failed to sync policy to devices.db: {e}")
+
+                    # SYNC: Update bubbles.db for quarantine group membership
+                    try:
+                        from modules.aiochi.views import move_device_in_module, BUBBLES_MODULE_AVAILABLE
+                        if BUBBLES_MODULE_AVAILABLE:
+                            if new_policy == 'quarantine':
+                                # Move to quarantine bubble
+                                move_device_in_module(mac_normalized, None, 'SYSTEM-QUARANTINE')
+                                logger.debug(f"Moved {mac_normalized} to SYSTEM-QUARANTINE bubble")
+                            else:
+                                # Remove from quarantine bubble if currently there
+                                from modules.aiochi.views import remove_device_from_bubble_in_module
+                                remove_device_from_bubble_in_module('SYSTEM-QUARANTINE', mac_normalized)
+                                logger.debug(f"Removed {mac_normalized} from SYSTEM-QUARANTINE bubble")
+                    except ImportError:
+                        pass  # Bubbles module not available
+                    except Exception as e:
+                        logger.warning(f"Failed to sync quarantine bubble membership: {e}")
+
                     # Get updated device info for response
                     device = autopilot.get_device(mac_normalized)
 

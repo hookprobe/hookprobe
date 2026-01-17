@@ -1,19 +1,29 @@
 """
-Fortress Bubble Management Views
+Fortress Device Group Management Views
 
-REST API and Web UI for managing device bubbles.
+REST API and Web UI for managing device groups.
 
-Bubble Types:
+IMPORTANT TERMINOLOGY:
+- "Device Groups" = Manual CRUD for user-organized device grouping with OpenFlow policies
+- "D2D Bubbles" = Background algorithm for automatic device relationship detection/coloring
+
+These are INDEPENDENT concepts:
+- Device Groups: User manages manually (create, edit, delete, assign devices)
+- D2D Bubbles: AI detects which devices communicate and colors them accordingly (in background)
+
+Group Types:
 - FAMILY: Full smart home access, mDNS D2D, shared components
 - GUEST: Internet only, isolated from family/corporate
 - CORPORATE: Work devices, separate from family
-- SMART_HOME: IoT hub, shared by all family bubbles
+- SMART_HOME: IoT hub, shared by all family groups
+- QUARANTINE: Isolated devices (like a trash can) - cannot be deleted
 
 Manual Override Features:
-- Create custom bubbles (e.g., "Dad's Bubble", "Mom's Bubble")
-- Move devices between bubbles
-- Pin bubble assignments (prevent AI changes)
-- Rename and customize bubbles
+- Create custom groups (e.g., "Dad's Group", "Mom's Group")
+- Move devices between groups
+- Pin group assignments (prevent AI changes)
+- Rename and customize groups
+- Quarantine group: permanent, undeletable isolation zone for devices
 """
 
 import json
@@ -45,14 +55,18 @@ BUBBLE_DB = Path('/var/lib/hookprobe/bubbles.db')
 # BUBBLE TYPES & POLICIES
 # =============================================================================
 
-class BubbleType(str, Enum):
-    """Types of bubbles with default policies."""
+class GroupType(str, Enum):
+    """Types of device groups with default policies."""
     FAMILY = 'family'         # Full smart home access
     GUEST = 'guest'           # Internet only
     CORPORATE = 'corporate'   # Isolated, internet access
     SMART_HOME = 'smart_home' # IoT devices
     LAN_ONLY = 'lan_only'     # LAN access only, no internet
+    QUARANTINE = 'quarantine' # Fully isolated (no internet, no LAN) - cannot be deleted
     CUSTOM = 'custom'         # User-defined
+
+# Alias for backward compatibility
+BubbleType = GroupType
 
 
 # Default policies for bubble types
@@ -112,6 +126,18 @@ BUBBLE_TYPE_POLICIES = {
         'color': '#795548',         # Brown
         'description': 'Local network only, no internet access (printers, NAS)',
     },
+    BubbleType.QUARANTINE: {
+        'internet_access': False,
+        'lan_access': False,
+        'smart_home_access': False,
+        'd2d_allowed': False,
+        'shared_devices': False,
+        'vlan': 99,                 # Quarantine VLAN (fully isolated)
+        'icon': 'fa-ban',
+        'color': '#F44336',         # Red
+        'description': 'Fully isolated - no network access (device jail)',
+        'is_system': True,          # Cannot be deleted by user
+    },
     BubbleType.CUSTOM: {
         'internet_access': True,
         'lan_access': True,
@@ -125,14 +151,17 @@ BUBBLE_TYPE_POLICIES = {
     },
 }
 
-# Preset family bubble templates
+# Preset family group templates
 FAMILY_PRESETS = {
-    'dad': {'name': "Dad's Bubble", 'icon': 'fa-user-tie', 'color': '#1976D2'},
-    'mom': {'name': "Mom's Bubble", 'icon': 'fa-user', 'color': '#E91E63'},
-    'kids': {'name': "Kids' Bubble", 'icon': 'fa-child', 'color': '#FF5722'},
+    'dad': {'name': "Dad's Group", 'icon': 'fa-user-tie', 'color': '#1976D2'},
+    'mom': {'name': "Mom's Group", 'icon': 'fa-user', 'color': '#E91E63'},
+    'kids': {'name': "Kids' Group", 'icon': 'fa-child', 'color': '#FF5722'},
     'guest': {'name': 'Guests', 'icon': 'fa-user-friends', 'color': '#607D8B'},
     'work': {'name': 'Work Devices', 'icon': 'fa-laptop', 'color': '#455A64'},
 }
+
+# System group IDs (cannot be deleted)
+QUARANTINE_GROUP_ID = "SYSTEM-QUARANTINE"
 
 
 # =============================================================================
@@ -198,11 +227,122 @@ def ensure_schema():
         conn.commit()
 
 
+def ensure_quarantine_group():
+    """Ensure the system Quarantine group exists. This group cannot be deleted."""
+    with get_db_connection() as conn:
+        row = conn.execute(
+            'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+            (QUARANTINE_GROUP_ID,)
+        ).fetchone()
+
+        if not row:
+            # Create Quarantine group
+            from datetime import datetime
+            now = datetime.now().isoformat()
+            policy = BUBBLE_TYPE_POLICIES[BubbleType.QUARANTINE]
+
+            conn.execute('''
+                INSERT INTO bubbles (
+                    bubble_id, ecosystem, devices_json, state, privilege, confidence,
+                    owner_hint, primary_device, created_at, last_activity,
+                    handoff_count, sync_count, bubble_type, policies_json, pinned, name,
+                    is_manual, display_name, icon, color, is_pinned, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                QUARANTINE_GROUP_ID,
+                'unknown',
+                '[]',
+                'active',
+                'isolated',
+                1.0,
+                None,
+                None,
+                now,
+                now,
+                0, 0,
+                'quarantine',
+                json.dumps(policy),
+                1,  # pinned
+                'Quarantine',
+                1,  # is_manual (so it shows in manual list)
+                'Quarantine',
+                'fa-ban',
+                '#F44336',
+                1,  # is_pinned
+                'system'
+            ))
+            conn.commit()
+            logger.info("Created system Quarantine group")
+
+
+def sync_isolated_devices_to_quarantine():
+    """
+    Find all devices with ISOLATED network policy and add them to the quarantine group.
+
+    This ensures devices with quarantine policy are visible in the Quarantine group UI.
+    Called on module initialization.
+    """
+    try:
+        from ...lib.network_policy_manager import get_policy_manager, NetworkPolicy
+        manager = get_policy_manager()
+
+        # Get all devices with ISOLATED policy
+        isolated_devices = manager.get_policies_by_type(NetworkPolicy.ISOLATED)
+        if not isolated_devices:
+            return
+
+        with get_db_connection() as conn:
+            now = datetime.now().isoformat()
+
+            # Get existing devices in quarantine group
+            existing = conn.execute(
+                'SELECT devices FROM bubbles WHERE bubble_id = ?',
+                (QUARANTINE_GROUP_ID,)
+            ).fetchone()
+
+            devices = []
+            if existing and existing['devices']:
+                try:
+                    devices = json.loads(existing['devices'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            added_count = 0
+            for policy in isolated_devices:
+                mac = policy.mac_address.upper()
+                if mac not in devices:
+                    devices.append(mac)
+                    added_count += 1
+
+                    # Add to manual_assignments
+                    conn.execute('''
+                        INSERT OR REPLACE INTO manual_assignments
+                        (mac, bubble_id, assigned_by, assigned_at, is_pinned, notes)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (mac, QUARANTINE_GROUP_ID, 'system', now, 0,
+                          'Auto-added: device has ISOLATED network policy'))
+
+            if added_count > 0:
+                conn.execute(
+                    'UPDATE bubbles SET devices = ?, last_activity = ? WHERE bubble_id = ?',
+                    (json.dumps(devices), now, QUARANTINE_GROUP_ID)
+                )
+                conn.commit()
+                logger.info(f"Synced {added_count} isolated devices to Quarantine group")
+
+    except ImportError:
+        logger.debug("NetworkPolicyManager not available, skipping isolated device sync")
+    except Exception as e:
+        logger.warning(f"Could not sync isolated devices to quarantine: {e}")
+
+
 # Initialize schema on module load
 try:
     ensure_schema()
+    ensure_quarantine_group()
+    sync_isolated_devices_to_quarantine()
 except Exception as e:
-    logger.warning(f"Could not initialize bubble schema: {e}")
+    logger.warning(f"Could not initialize device group schema: {e}")
 
 
 # =============================================================================
@@ -274,9 +414,13 @@ def list_bubbles():
                     except (json.JSONDecodeError, TypeError):
                         pass
 
+                # Determine if this is a system-managed group
+                is_system_group = (bubble_id == QUARANTINE_GROUP_ID or
+                                   row['bubble_type'] == 'quarantine')
+
                 bubbles.append({
                     'bubble_id': bubble_id,
-                    'display_name': row['display_name'] or f"Bubble {bubble_id[:8]}",
+                    'display_name': row['display_name'] or f"Group {bubble_id[:8]}",
                     'bubble_type': row['bubble_type'] or 'custom',
                     'ecosystem': row['ecosystem'],
                     'state': row['state'],
@@ -287,13 +431,14 @@ def list_bubbles():
                     'color': row['color'] or '#9C27B0',
                     'is_manual': bool(row['is_manual']),
                     'is_pinned': bool(row['is_pinned']),
+                    'is_system': is_system_group,
                     'policy': policy,
                     'created_at': row['created_at'],
                     'last_activity': row['last_activity'],
                 })
 
     except Exception as e:
-        logger.error(f"Failed to list bubbles: {e}")
+        logger.error(f"Failed to list device groups: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
     return jsonify({'bubbles': bubbles, 'count': len(bubbles)})
@@ -314,6 +459,8 @@ def create_bubble():
         "icon": "fa-user-tie",
         "color": "#1976D2"
     }
+
+    Note: Quarantine type cannot be created manually - it's a system-managed group.
     """
     data = request.get_json() or {}
 
@@ -322,6 +469,13 @@ def create_bubble():
     devices = data.get('devices', [])
     icon = data.get('icon', 'fa-layer-group')
     color = data.get('color', '#9C27B0')
+
+    # Block creating quarantine groups (system-managed)
+    if bubble_type == 'quarantine':
+        return jsonify({
+            'error': 'Quarantine group cannot be created manually. Use the system Quarantine group to isolate devices.',
+            'is_system': True
+        }), 403
 
     # Validate bubble type
     try:
@@ -364,7 +518,7 @@ def create_bubble():
 
             conn.commit()
 
-        logger.info(f"Created manual bubble {bubble_id} ({name}) with {len(devices)} devices")
+        logger.info(f"Created device group {bubble_id} ({name}) with {len(devices)} devices")
 
         return jsonify({
             'success': True,
@@ -373,7 +527,7 @@ def create_bubble():
         })
 
     except Exception as e:
-        logger.error(f"Failed to create bubble: {e}")
+        logger.error(f"Failed to create device group: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -421,7 +575,7 @@ def get_bubble(bubble_id):
             })
 
     except Exception as e:
-        logger.error(f"Failed to get bubble {bubble_id}: {e}")
+        logger.error(f"Failed to get device group {bubble_id}: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -440,19 +594,35 @@ def update_bubble(bubble_id):
         "color": "#4CAF50",
         "is_pinned": true
     }
+
+    Note: Quarantine group cannot be modified (system-managed).
     """
+    # Protect system groups (like Quarantine)
+    if bubble_id == QUARANTINE_GROUP_ID:
+        return jsonify({
+            'error': 'Quarantine group cannot be modified. It is system-managed.',
+            'is_system': True
+        }), 403
+
     data = request.get_json() or {}
 
     try:
         with get_db_connection() as conn:
-            # Check bubble exists
+            # Check bubble exists and is not quarantine type
             row = conn.execute(
-                'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+                'SELECT bubble_id, bubble_type FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
             if not row:
                 return jsonify({'error': 'Bubble not found'}), 404
+
+            # Additional protection for quarantine type
+            if row['bubble_type'] == 'quarantine':
+                return jsonify({
+                    'error': 'Quarantine group cannot be modified. It is system-managed.',
+                    'is_system': True
+                }), 403
 
             # Build update query
             updates = []
@@ -499,7 +669,7 @@ def update_bubble(bubble_id):
         return jsonify({'success': True, 'message': 'Bubble updated'})
 
     except Exception as e:
-        logger.error(f"Failed to update bubble {bubble_id}: {e}")
+        logger.error(f"Failed to update device group {bubble_id}: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -507,23 +677,37 @@ def update_bubble(bubble_id):
 @login_required
 @admin_required
 def delete_bubble(bubble_id):
-    """Delete a bubble (manual only, AI bubbles are dissolved)."""
+    """Delete a group (manual only, AI groups are dissolved). Quarantine group cannot be deleted."""
+    # Protect system groups (like Quarantine)
+    if bubble_id == QUARANTINE_GROUP_ID:
+        return jsonify({
+            'error': 'Quarantine group cannot be deleted. Move devices out of Quarantine to other groups instead.',
+            'is_system': True
+        }), 403
+
     try:
         with get_db_connection() as conn:
             row = conn.execute(
-                'SELECT is_manual FROM bubbles WHERE bubble_id = ?',
+                'SELECT is_manual, bubble_type FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
             if not row:
-                return jsonify({'error': 'Bubble not found'}), 404
+                return jsonify({'error': 'Group not found'}), 404
+
+            # Additional check: protect quarantine type even if ID doesn't match
+            if row['bubble_type'] == 'quarantine':
+                return jsonify({
+                    'error': 'Quarantine group cannot be deleted',
+                    'is_system': True
+                }), 403
 
             if row['is_manual']:
-                # Delete manual bubble
+                # Delete manual group
                 conn.execute('DELETE FROM bubbles WHERE bubble_id = ?', (bubble_id,))
                 conn.execute('DELETE FROM manual_assignments WHERE bubble_id = ?', (bubble_id,))
             else:
-                # Mark AI bubble as dissolved
+                # Mark AI group as dissolved
                 conn.execute(
                     'UPDATE bubbles SET state = "dissolved" WHERE bubble_id = ?',
                     (bubble_id,)
@@ -531,11 +715,36 @@ def delete_bubble(bubble_id):
 
             conn.commit()
 
-        return jsonify({'success': True, 'message': 'Bubble deleted'})
+        return jsonify({'success': True, 'message': 'Group deleted'})
 
     except Exception as e:
-        logger.error(f"Failed to delete bubble {bubble_id}: {e}")
+        logger.error(f"Failed to delete device group {bubble_id}: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
+
+
+def _apply_quarantine_policy(mac: str, quarantine: bool = True):
+    """
+    Apply or remove quarantine network policy for a device.
+
+    Args:
+        mac: Device MAC address
+        quarantine: True to apply quarantine (ISOLATED), False to remove
+    """
+    try:
+        from ...lib.network_policy_manager import get_policy_manager, NetworkPolicy
+        manager = get_policy_manager()
+
+        if quarantine:
+            manager.set_policy(mac, NetworkPolicy.ISOLATED, assigned_by="quarantine_group")
+            logger.info(f"Applied quarantine policy to device {mac}")
+        else:
+            # Remove isolation, revert to auto-classification
+            manager.auto_classify(mac)
+            logger.info(f"Removed quarantine policy from device {mac}")
+    except ImportError:
+        logger.warning("NetworkPolicyManager not available, skipping quarantine policy")
+    except Exception as e:
+        logger.error(f"Failed to apply quarantine policy for {mac}: {e}")
 
 
 @bubbles_bp.route('/api/<bubble_id>/devices', methods=['POST'])
@@ -550,6 +759,8 @@ def add_device_to_bubble(bubble_id):
         "mac": "AA:BB:CC:DD:EE:FF",
         "pin": true  // Optional: prevent AI from moving device
     }
+
+    Note: Adding device to Quarantine group automatically applies ISOLATED network policy.
     """
     data = request.get_json() or {}
     mac = data.get('mac', '').upper()
@@ -560,14 +771,17 @@ def add_device_to_bubble(bubble_id):
 
     try:
         with get_db_connection() as conn:
-            # Check bubble exists
+            # Check bubble exists and get its type
             row = conn.execute(
-                'SELECT bubble_id FROM bubbles WHERE bubble_id = ?',
+                'SELECT bubble_id, bubble_type FROM bubbles WHERE bubble_id = ?',
                 (bubble_id,)
             ).fetchone()
 
             if not row:
                 return jsonify({'error': 'Bubble not found'}), 404
+
+            is_quarantine = (bubble_id == QUARANTINE_GROUP_ID or
+                            row['bubble_type'] == 'quarantine')
 
             now = datetime.now().isoformat()
 
@@ -600,11 +814,15 @@ def add_device_to_bubble(bubble_id):
 
             conn.commit()
 
-        logger.info(f"Added device {mac} to bubble {bubble_id}")
+        # Apply quarantine policy if adding to quarantine group
+        if is_quarantine:
+            _apply_quarantine_policy(mac, quarantine=True)
+
+        logger.info(f"Added device {mac} to group {bubble_id}")
         return jsonify({'success': True, 'message': f'Device {mac} added to bubble'})
 
     except Exception as e:
-        logger.error(f"Failed to add device to bubble: {e}")
+        logger.error(f"Failed to add device to group: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -612,11 +830,24 @@ def add_device_to_bubble(bubble_id):
 @login_required
 @admin_required
 def remove_device_from_bubble(bubble_id, mac):
-    """Remove a device from a bubble."""
+    """
+    Remove a device from a bubble.
+
+    Note: Removing device from Quarantine group also removes the ISOLATED network policy.
+    """
     mac = mac.upper()
 
     try:
         with get_db_connection() as conn:
+            # Check if this is the quarantine group
+            row = conn.execute(
+                'SELECT bubble_type FROM bubbles WHERE bubble_id = ?',
+                (bubble_id,)
+            ).fetchone()
+
+            is_quarantine = (bubble_id == QUARANTINE_GROUP_ID or
+                            (row and row['bubble_type'] == 'quarantine'))
+
             # Remove assignment
             conn.execute(
                 'DELETE FROM manual_assignments WHERE mac = ? AND bubble_id = ?',
@@ -643,11 +874,15 @@ def remove_device_from_bubble(bubble_id, mac):
 
             conn.commit()
 
-        logger.info(f"Removed device {mac} from bubble {bubble_id}")
+        # Remove quarantine policy if removing from quarantine group
+        if is_quarantine:
+            _apply_quarantine_policy(mac, quarantine=False)
+
+        logger.info(f"Removed device {mac} from group {bubble_id}")
         return jsonify({'success': True, 'message': f'Device {mac} removed from bubble'})
 
     except Exception as e:
-        logger.error(f"Failed to remove device from bubble: {e}")
+        logger.error(f"Failed to remove device from group: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -667,6 +902,8 @@ def move_device():
         "to_bubble": "new_bubble_id",
         "pin": true  // Optional: prevent AI from moving device back
     }
+
+    Note: Moving device to/from Quarantine group automatically applies/removes ISOLATED network policy.
     """
     data = request.get_json() or {}
     mac = data.get('mac', '').upper()
@@ -678,8 +915,28 @@ def move_device():
         return jsonify({'error': 'MAC and to_bubble required'}), 400
 
     try:
+        from_is_quarantine = False
+        to_is_quarantine = False
+
         with get_db_connection() as conn:
             now = datetime.now().isoformat()
+
+            # Check if from_bubble is quarantine
+            if from_bubble:
+                from_row = conn.execute(
+                    'SELECT bubble_type FROM bubbles WHERE bubble_id = ?',
+                    (from_bubble,)
+                ).fetchone()
+                from_is_quarantine = (from_bubble == QUARANTINE_GROUP_ID or
+                                     (from_row and from_row['bubble_type'] == 'quarantine'))
+
+            # Check if to_bubble is quarantine
+            to_row = conn.execute(
+                'SELECT bubble_type FROM bubbles WHERE bubble_id = ?',
+                (to_bubble,)
+            ).fetchone()
+            to_is_quarantine = (to_bubble == QUARANTINE_GROUP_ID or
+                               (to_row and to_row['bubble_type'] == 'quarantine'))
 
             # Remove from old bubble if specified
             if from_bubble:
@@ -734,7 +991,15 @@ def move_device():
 
             conn.commit()
 
-        logger.info(f"Moved device {mac} to bubble {to_bubble}")
+        # Handle quarantine policy changes
+        if to_is_quarantine:
+            # Moving TO quarantine: apply isolation
+            _apply_quarantine_policy(mac, quarantine=True)
+        elif from_is_quarantine:
+            # Moving FROM quarantine: remove isolation
+            _apply_quarantine_policy(mac, quarantine=False)
+
+        logger.info(f"Moved device {mac} to group {to_bubble}")
         return jsonify({
             'success': True,
             'message': f'Device moved to bubble',
@@ -768,7 +1033,7 @@ def pin_bubble(bubble_id):
         return jsonify({'success': True, 'message': 'Bubble pinned'})
 
     except Exception as e:
-        logger.error(f"Failed to pin bubble: {e}")
+        logger.error(f"Failed to pin group: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
@@ -788,7 +1053,7 @@ def unpin_bubble(bubble_id):
         return jsonify({'success': True, 'message': 'Bubble unpinned'})
 
     except Exception as e:
-        logger.error(f"Failed to unpin bubble: {e}")
+        logger.error(f"Failed to unpin group: {e}")
         return jsonify({'error': safe_error_message(e)}), 500
 
 
