@@ -12,6 +12,7 @@ from django.utils import timezone
 import json
 
 from ..models import RegisteredDevice, DeviceCategory, GuardianConfig, NetworkScan
+from apps.common.security_utils import mask_mac, mask_ip
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ def radius_authorize(request):
             device.save(update_fields=['last_seen'])
 
             vlan_id = device.get_vlan_id()
-            logger.info(f"RADIUS auth: {mac_address} -> VLAN {vlan_id} ({device.friendly_name})")
+            logger.info(f"RADIUS auth: {mask_mac(mac_address)} -> VLAN {vlan_id} ({device.friendly_name})")
 
             return JsonResponse({
                 'authorized': True,
@@ -87,7 +88,7 @@ def radius_authorize(request):
         ).exists()
 
         if blocked:
-            logger.warning(f"RADIUS auth: {mac_address} BLOCKED")
+            logger.warning(f"RADIUS auth: {mask_mac(mac_address)} BLOCKED")
             return JsonResponse({'authorized': False, 'reason': 'Device blocked'})
 
         # Unknown device - assign to quarantine VLAN
@@ -97,7 +98,7 @@ def radius_authorize(request):
             if config:
                 quarantine_vlan = config.quarantine_vlan
 
-        logger.info(f"RADIUS auth: {mac_address} -> Quarantine VLAN {quarantine_vlan}")
+        logger.info(f"RADIUS auth: {mask_mac(mac_address)} -> Quarantine VLAN {quarantine_vlan}")
 
         return JsonResponse({
             'authorized': True,
@@ -140,7 +141,7 @@ def radius_accounting(request):
                 device.last_ip = client_ip
             device.save(update_fields=['last_seen', 'last_ip'])
 
-        logger.info(f"RADIUS acct: {mac_address} {acct_status} IP={client_ip}")
+        logger.info(f"RADIUS acct: {mask_mac(mac_address)} {acct_status} IP={mask_ip(client_ip) if client_ip else 'N/A'}")
         return JsonResponse({'status': 'ok'})
 
     except Exception as e:

@@ -41,6 +41,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from threading import Lock
 import ipaddress
 
+from .security_utils import mask_mac
+
 logger = logging.getLogger(__name__)
 
 
@@ -792,7 +794,7 @@ class DeviceTrustFramework:
                     (mac_address.upper(),)
                 )
                 conn.commit()
-            logger.info(f"Revoked certificate for {mac_address}: {reason}")
+            logger.info(f"Revoked certificate for {mask_mac(mac_address)}: {reason}")
             return True
         except Exception:
             return False
