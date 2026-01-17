@@ -14,6 +14,8 @@ Security Notes:
 - IP addresses validated before blocking
 """
 
+from __future__ import annotations
+
 import re
 import uuid
 import logging
@@ -23,6 +25,8 @@ from typing import Optional, List
 
 from django.utils import timezone
 from django.conf import settings
+
+from apps.common.security_utils import mask_ip
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +116,17 @@ class QuarantineManager:
 
         # Validate IP
         if not self._validate_ip(ip_address):
-            logger.warning(f"Invalid IP address for quarantine: {ip_address}")
+            logger.warning(f"Invalid IP address for quarantine: {mask_ip(ip_address)}")
             return None
 
         # Check if reserved
         if ip_address in self.RESERVED_IPS:
-            logger.warning(f"Attempted to quarantine reserved IP: {ip_address}")
+            logger.warning(f"Attempted to quarantine reserved IP: {mask_ip(ip_address)}")
             return None
 
         # Check for private IP ranges (optional - might want to block)
         if self._is_private_ip(ip_address):
-            logger.info(f"Quarantining private IP: {ip_address}")
+            logger.info(f"Quarantining private IP: {mask_ip(ip_address)}")
 
         duration = duration_minutes or self.DEFAULT_DURATION_MINUTES
         expires_at = timezone.now() + timedelta(minutes=duration)
@@ -144,7 +148,7 @@ class QuarantineManager:
         nft_handle = self._add_to_nft_set(ip_address, duration)
 
         if nft_handle is None and not self.dry_run:
-            logger.error(f"Failed to add {ip_address} to nftables quarantine set")
+            logger.error(f"Failed to add {mask_ip(ip_address)} to nftables quarantine set")
             return None
 
         # Create database record
@@ -162,7 +166,7 @@ class QuarantineManager:
                 reason=reason or f"Auto-quarantine: {classification_method} detection",
                 nft_rule_handle=nft_handle or 'dry-run',
             )
-            logger.info(f"Quarantined IP {ip_address} until {expires_at} (action: {action_id})")
+            logger.info(f"Quarantined IP {mask_ip(ip_address)} until {expires_at} (action: {action_id})")
             return action
         except Exception as e:
             logger.error(f"Failed to create QuarantineAction: {e}")
@@ -206,7 +210,7 @@ class QuarantineManager:
             action.release(by=released_by, reason=reason)
 
         if success or self.dry_run:
-            logger.info(f"Released IP {ip_address} from quarantine (by: {released_by})")
+            logger.info(f"Released IP {mask_ip(ip_address)} from quarantine (by: {released_by})")
             return True
 
         return False
