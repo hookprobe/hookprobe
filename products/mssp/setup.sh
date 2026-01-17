@@ -1259,7 +1259,6 @@ deploy_pod_002_iam() {
         -e ENDPOINT="http://${MSSP_DOMAIN:-localhost}:3001" \
         -e ADMIN_ENDPOINT="http://${MSSP_DOMAIN:-localhost}:3002" \
         -e COOKIE_KEYS="$cookie_keys" \
-        -v "$MSSP_DATA_DIR/logto:/etc/logto:Z" \
         "${CONTAINER_IMAGES[logto]}"
 
     # Connect Logto to database network
@@ -1304,31 +1303,35 @@ deploy_pod_001_dmz() {
 
     log_success "Django deployed at $django_ip:8000"
 
-    # Celery Worker
-    local celery_container="mssp-celery"
-    local celery_ip="172.20.1.11"
+    # Celery Worker (disabled for POC - requires Django celery app configuration)
+    if [ "${ENABLE_CELERY:-false}" = "true" ]; then
+        local celery_container="mssp-celery"
+        local celery_ip="172.20.1.11"
 
-    podman stop "$celery_container" 2>/dev/null || true
-    podman rm "$celery_container" 2>/dev/null || true
+        podman stop "$celery_container" 2>/dev/null || true
+        podman rm "$celery_container" 2>/dev/null || true
 
-    log_info "Starting Celery worker..."
-    podman run -d \
-        --name "$celery_container" \
-        --network "$network" \
-        --ip "$celery_ip" \
-        --health-cmd="celery -A hookprobe inspect ping -d celery@\$HOSTNAME || exit 1" \
-        --health-interval=60s \
-        --health-retries=3 \
-        --env-file "$MSSP_CONFIG_DIR/django.env" \
-        -v "$HOOKPROBE_ROOT/products/mssp/web:/app:Z" \
-        "localhost/mssp-django:latest" \
-        celery -A hookprobe worker -l INFO
+        log_info "Starting Celery worker..."
+        podman run -d \
+            --name "$celery_container" \
+            --network "$network" \
+            --ip "$celery_ip" \
+            --health-cmd="celery -A hookprobe inspect ping -d celery@\$HOSTNAME || exit 1" \
+            --health-interval=60s \
+            --health-retries=3 \
+            --env-file "$MSSP_CONFIG_DIR/django.env" \
+            -v "$HOOKPROBE_ROOT/products/mssp/web:/app:Z" \
+            "localhost/mssp-django:latest" \
+            celery -A hookprobe worker -l INFO
 
-    # Connect Celery to database and cache networks
-    podman network connect mssp-pod-003-db "$celery_container"
-    podman network connect mssp-pod-004-cache "$celery_container"
+        # Connect Celery to database and cache networks
+        podman network connect mssp-pod-003-db "$celery_container"
+        podman network connect mssp-pod-004-cache "$celery_container"
 
-    log_success "Celery worker deployed at $celery_ip"
+        log_success "Celery worker deployed at $celery_ip"
+    else
+        log_info "Celery worker disabled (set ENABLE_CELERY=true to enable)"
+    fi
 
     # Nginx
     local nginx_container="mssp-nginx"
@@ -1363,31 +1366,36 @@ deploy_pod_001_dmz() {
 deploy_pod_006_security() {
     log_section "Deploying POD-006: Security (Qsecbit)"
 
-    local network="mssp-pod-006-security"
+    # Qsecbit disabled for POC - container build needs proper Python path setup
+    if [ "${ENABLE_QSECBIT:-false}" = "true" ]; then
+        local network="mssp-pod-006-security"
 
-    # Build Qsecbit container
-    build_qsecbit_container
+        # Build Qsecbit container
+        build_qsecbit_container
 
-    # Qsecbit Agent
-    local qsecbit_container="mssp-qsecbit"
-    local qsecbit_ip="172.20.6.10"
+        # Qsecbit Agent
+        local qsecbit_container="mssp-qsecbit"
+        local qsecbit_ip="172.20.6.10"
 
-    podman stop "$qsecbit_container" 2>/dev/null || true
-    podman rm "$qsecbit_container" 2>/dev/null || true
+        podman stop "$qsecbit_container" 2>/dev/null || true
+        podman rm "$qsecbit_container" 2>/dev/null || true
 
-    log_info "Starting Qsecbit agent..."
-    podman run -d \
-        --name "$qsecbit_container" \
-        --network "$network" \
-        --ip "$qsecbit_ip" \
-        --health-cmd="wget -qO- http://localhost:8888/health || exit 1" \
-        --health-interval=30s \
-        --health-retries=3 \
-        -v "$MSSP_BASE_DIR/qsecbit:/app:Z" \
-        -v "$HOOKPROBE_ROOT/core/qsecbit:/opt/qsecbit:ro,Z" \
-        "localhost/mssp-qsecbit:latest"
+        log_info "Starting Qsecbit agent..."
+        podman run -d \
+            --name "$qsecbit_container" \
+            --network "$network" \
+            --ip "$qsecbit_ip" \
+            --health-cmd="wget -qO- http://localhost:8888/health || exit 1" \
+            --health-interval=30s \
+            --health-retries=3 \
+            -v "$MSSP_BASE_DIR/qsecbit:/app:Z" \
+            -v "$HOOKPROBE_ROOT/core/qsecbit:/opt/qsecbit:ro,Z" \
+            "localhost/mssp-qsecbit:latest"
 
-    log_success "POD-006 (Qsecbit) deployed at $qsecbit_ip:8888"
+        log_success "POD-006 (Qsecbit) deployed at $qsecbit_ip:8888"
+    else
+        log_info "Qsecbit security agent disabled for POC (set ENABLE_QSECBIT=true to enable)"
+    fi
 }
 
 deploy_pod_008_automation() {
@@ -1427,28 +1435,33 @@ deploy_pod_008_automation() {
 deploy_htp_endpoint() {
     log_section "Deploying HTP Validator Endpoint"
 
-    # Build HTP container
-    build_htp_container
+    # HTP disabled for POC - htp_validator.py needs to be implemented
+    if [ "${ENABLE_HTP:-false}" = "true" ]; then
+        # Build HTP container
+        build_htp_container
 
-    local container_name="mssp-htp"
+        local container_name="mssp-htp"
 
-    podman stop "$container_name" 2>/dev/null || true
-    podman rm "$container_name" 2>/dev/null || true
+        podman stop "$container_name" 2>/dev/null || true
+        podman rm "$container_name" 2>/dev/null || true
 
-    log_info "Starting HTP validator endpoint..."
-    podman run -d \
-        --name "$container_name" \
-        --network host \
-        --health-cmd="python -c 'import socket; s=socket.socket(); s.connect((\"127.0.0.1\", 4478)); s.close()' || exit 1" \
-        --health-interval=30s \
-        --health-retries=3 \
-        -v "$MSSP_BASE_DIR/htp:/app:Z" \
-        -v "$HOOKPROBE_ROOT/core/htp:/opt/htp:ro,Z" \
-        -v "$MSSP_DATA_DIR:/var/lib/hookprobe/mssp:Z" \
-        -v "$MSSP_SECRETS_DIR:/etc/hookprobe/secrets/mssp:ro,Z" \
-        "localhost/mssp-htp:latest"
+        log_info "Starting HTP validator endpoint..."
+        podman run -d \
+            --name "$container_name" \
+            --network host \
+            --health-cmd="python -c 'import socket; s=socket.socket(); s.connect((\"127.0.0.1\", 4478)); s.close()' || exit 1" \
+            --health-interval=30s \
+            --health-retries=3 \
+            -v "$MSSP_BASE_DIR/htp:/app:Z" \
+            -v "$HOOKPROBE_ROOT/core/htp:/opt/htp:ro,Z" \
+            -v "$MSSP_DATA_DIR:/var/lib/hookprobe/mssp:Z" \
+            -v "$MSSP_SECRETS_DIR:/etc/hookprobe/secrets/mssp:ro,Z" \
+            "localhost/mssp-htp:latest"
 
-    log_success "HTP validator deployed on UDP/TCP 4478"
+        log_success "HTP validator deployed on UDP/TCP 4478"
+    else
+        log_info "HTP validator disabled for POC (set ENABLE_HTP=true to enable)"
+    fi
 }
 
 # =============================================================================
