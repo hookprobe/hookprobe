@@ -212,19 +212,29 @@ class BehavioralClusteringEngine:
     """
 
     # DBSCAN parameters (tuned for device clustering)
-    DBSCAN_EPS = 0.5          # Maximum distance between samples
-    DBSCAN_MIN_SAMPLES = 2    # Minimum cluster size (2 = pair of devices)
+    # Trio+ Recommendation: EPS=0.5 is too permissive in 15D space (curse of dimensionality)
+    # Increased to 1.0 for stricter clustering, MIN_SAMPLES=3 to prevent spurious pairs
+    DBSCAN_EPS = 1.0          # Maximum distance between samples (was 0.5 - too permissive)
+    DBSCAN_MIN_SAMPLES = 3    # Minimum cluster size (was 2 - allowed spurious pairs)
 
     # Leiden parameters (for community detection)
-    LEIDEN_RESOLUTION = 0.8   # Higher = more, smaller clusters
+    LEIDEN_RESOLUTION = 1.0   # Higher = more, smaller clusters (increased for stricter separation)
 
     # Confidence thresholds
     HIGH_CONFIDENCE = 0.85
-    MEDIUM_CONFIDENCE = 0.65
-    LOW_CONFIDENCE = 0.45
+    MEDIUM_CONFIDENCE = 0.70  # Increased from 0.65
+    LOW_CONFIDENCE = 0.50     # Increased from 0.45
 
     # D2D affinity threshold for bubble suggestion
-    D2D_SUGGESTION_THRESHOLD = 0.4
+    # Trio+ Recommendation: 0.4 is too low, causes false groupings
+    D2D_SUGGESTION_THRESHOLD = 0.55  # Increased from 0.4 (Trio+ recommendation)
+
+    # Ecosystem mismatch penalty - cross-ecosystem devices require higher affinity
+    ECOSYSTEM_MISMATCH_PENALTY = 0.25  # Subtract 25% from affinity for cross-ecosystem
+
+    # Sustained traffic requirements - prevent transient connections from inflating scores
+    MIN_SUSTAINED_CONNECTIONS = 10     # Minimum connections to consider "sustained"
+    MIN_SUSTAINED_SESSIONS = 3         # Minimum distinct sessions (not just packet bursts)
 
     def __init__(self, use_leiden: bool = False):
         """

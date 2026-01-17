@@ -1,0 +1,106 @@
+{
+  "id": "l1_jamming_defense",
+  "name": "L1 Jamming Defense",
+  "version": "1.0",
+  "description": "Defends against RF jamming attacks on cellular connectivity",
+  "mitre_attack": ["T1498"],
+  "category": "l1_soc",
+  "severity_threshold": 1,
+
+  "triggers": [
+    {
+      "type": "l1_anomaly",
+      "anomaly_types": ["jamming"],
+      "conditions": {
+        "rsrp_dbm": ">-80",
+        "snr_db": "<5",
+        "snr_drop": ">15"
+      }
+    },
+    {
+      "type": "l1_pattern",
+      "description": "High power, terrible quality (jamming signature)",
+      "conditions": {
+        "rsrp_dbm": ">-75",
+        "sinr_db": "<0",
+        "packet_loss": ">80"
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "band_switch",
+      "description": "Switch to alternate frequency band",
+      "command": "l1_band_switch",
+      "parameters": {
+        "strategy": "least_interference",
+        "exclude_current": true,
+        "prefer_lte_bands": ["b13", "b7", "b12"]
+      }
+    },
+    {
+      "order": 2,
+      "type": "airplane_pulse",
+      "description": "Pulse connectivity to reduce targeting",
+      "command": "l1_airplane_pulse",
+      "parameters": {
+        "on_seconds": 5,
+        "off_seconds": 30,
+        "max_cycles": 10,
+        "purpose": "emergency_burst"
+      }
+    },
+    {
+      "order": 3,
+      "type": "wan_failover",
+      "description": "Switch to WiFi/Ethernet if available",
+      "command": "slaai_failover",
+      "parameters": {
+        "reason": "cellular_jamming",
+        "prefer": ["ethernet", "wifi"],
+        "avoid": ["cellular"]
+      }
+    },
+    {
+      "order": 4,
+      "type": "notification",
+      "description": "Alert user",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "high",
+        "persona": "parent",
+        "push_notification": true
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Cellular jamming detected",
+    "owner_friendly": "Someone nearby is blocking cellular signals. I've switched to a different frequency and am trying to maintain your connection. If you have WiFi available, I recommend using that instead. This could be intentional interference or a malfunctioning device nearby.",
+    "technical": "L1 SOC detected jamming pattern: RSRP {{trigger.rsrp_dbm}} dBm (strong signal) but SNR {{trigger.snr_db}} dB (noise floor). Pattern indicates active RF interference. Actions: Band switch attempted, airplane pulse mode if needed, WAN failover to WiFi/Ethernet.",
+    "action_prompt": "Your connectivity may be degraded. If this continues, try moving to a different location.",
+    "resolution_options": [
+      {"label": "Switch to WiFi", "action": "force_wifi"},
+      {"label": "Report interference", "action": "log_interference_report"},
+      {"label": "View signal details", "action": "show_l1_dashboard"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "conditions": {
+      "snr_db": ">15",
+      "stable_duration_minutes": 5
+    },
+    "reason": "Jamming stopped - SNR returned to normal"
+  },
+
+  "evidence_collection": {
+    "l1_metrics_log": true,
+    "l1_log_duration_seconds": 300,
+    "snr_waterfall": true,
+    "rsrp_timeline": true
+  }
+}
