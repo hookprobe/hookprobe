@@ -1,5 +1,18 @@
 # Bubble Management Migration Test Plan
 
+## Terminology: Device Groups vs D2D Bubbles
+
+> **IMPORTANT**: As of v5.5, we distinguish between two independent concepts:
+>
+> | Concept | Description | UI Location |
+> |---------|-------------|-------------|
+> | **Device Groups** | Manual CRUD for user-organized device grouping with OpenFlow policies. Users create, edit, delete groups and assign devices manually. | Web UI → Device Groups |
+> | **D2D Bubbles** | Background algorithm for automatic device relationship detection/coloring based on network traffic patterns. Devices that communicate frequently are colored similarly. | Background (AIOCHI) |
+>
+> The "bubble" code in `shared/aiochi/bubble/` and `products/fortress/lib/` is primarily for **D2D bubble coloring**.
+> The "Device Groups" UI (formerly "Device Bubbles") manages user-created groups with network policies.
+> These systems are INDEPENDENT - a device can be in a "Work" group but colored the same as "Dad's iPhone" based on D2D traffic.
+
 ## Overview
 
 This document outlines the end-to-end test plan for the unified bubble management architecture migration from `products/fortress/lib/` to `shared/aiochi/bubble/`.

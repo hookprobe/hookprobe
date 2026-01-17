@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block page_title %}Device Bubbles{% endblock %}
+{% block page_title %}Device Groups{% endblock %}
 
 {% block breadcrumb %}
 <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
-<li class="breadcrumb-item active">Device Bubbles</li>
+<li class="breadcrumb-item active">Device Groups</li>
 {% endblock %}
 
 {% block content %}
@@ -14,16 +14,16 @@
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-layer-group mr-2"></i>Device Bubbles
+                    <i class="fas fa-layer-group mr-2"></i>Device Groups
                 </h3>
                 <div class="card-tools">
-                    <button type="button" class="btn btn-success btn-sm" onclick="showCreateBubbleModal()">
-                        <i class="fas fa-plus mr-1"></i> Create Bubble
+                    <button type="button" class="btn btn-success btn-sm" onclick="showCreateGroupModal()">
+                        <i class="fas fa-plus mr-1"></i> Create Group
                     </button>
                     <button type="button" class="btn btn-info btn-sm ml-2" onclick="loadSuggestions()">
                         <i class="fas fa-lightbulb mr-1"></i> AI Suggestions
                     </button>
-                    <button type="button" class="btn btn-secondary btn-sm ml-2" onclick="loadBubbles()">
+                    <button type="button" class="btn btn-secondary btn-sm ml-2" onclick="loadGroups()">
                         <i class="fas fa-sync mr-1"></i> Refresh
                     </button>
                 </div>
@@ -31,8 +31,9 @@
             <div class="card-body">
                 <p class="text-muted mb-0">
                     <i class="fas fa-info-circle mr-1"></i>
-                    Drag and drop devices between bubbles to manually organize them.
-                    <strong>Pin</strong> bubbles to prevent AI from changing them.
+                    Drag and drop devices between groups to organize them. Each group has its own network policy (OpenFlow rules).
+                    <strong>Pin</strong> groups to prevent AI from changing them.
+                    <br><small class="text-info">Note: Device groups are separate from D2D bubble coloring (which shows device relationships in the background).</small>
                 </p>
             </div>
         </div>
@@ -57,13 +58,13 @@
         </div>
     </div>
 
-    <!-- Bubbles Grid -->
+    <!-- Groups Grid -->
     <div class="col-12">
-        <div class="row" id="bubbles-container">
-            <!-- Bubbles loaded dynamically -->
+        <div class="row" id="groups-container">
+            <!-- Groups loaded dynamically -->
             <div class="col-12 text-center py-5" id="loading-indicator">
                 <i class="fas fa-spinner fa-spin fa-3x text-muted"></i>
-                <p class="mt-3 text-muted">Loading bubbles...</p>
+                <p class="mt-3 text-muted">Loading device groups...</p>
             </div>
         </div>
     </div>
@@ -85,7 +86,7 @@
                 <div class="row" id="unassigned-devices">
                     <div class="col-12 text-muted text-center py-3">
                         <i class="fas fa-check-circle mr-1"></i>
-                        All devices are assigned to bubbles
+                        All devices are assigned to groups
                     </div>
                 </div>
             </div>
@@ -93,18 +94,18 @@
     </div>
 </div>
 
-<!-- Create Bubble Modal -->
-<div class="modal fade" id="createBubbleModal" tabindex="-1">
+<!-- Create Group Modal -->
+<div class="modal fade" id="createGroupModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="fas fa-plus-circle mr-2"></i>Create New Bubble</h5>
+                <h5 class="modal-title"><i class="fas fa-plus-circle mr-2"></i>Create New Device Group</h5>
                 <button type="button" class="close" data-dismiss="modal">
                     <span>&times;</span>
                 </button>
             </div>
             <div class="modal-body">
-                <form id="createBubbleForm">
+                <form id="createGroupForm">
                     <!-- Preset buttons -->
                     <div class="form-group">
                         <label>Quick Presets</label>
@@ -130,25 +131,26 @@
                     <hr>
 
                     <div class="form-group">
-                        <label for="bubbleName">Bubble Name</label>
-                        <input type="text" class="form-control" id="bubbleName" placeholder="e.g., Dad's Devices" required>
+                        <label for="groupName">Group Name</label>
+                        <input type="text" class="form-control" id="groupName" placeholder="e.g., Dad's Devices" required>
                     </div>
 
                     <div class="form-group">
-                        <label for="bubbleType">Bubble Type</label>
-                        <select class="form-control" id="bubbleType">
+                        <label for="groupType">Group Type</label>
+                        <select class="form-control" id="groupType">
                             <option value="family">Family (Full Access + Smart Home)</option>
                             <option value="guest">Guest (Internet Only)</option>
                             <option value="corporate">Corporate (Isolated)</option>
                             <option value="smart_home">Smart Home (IoT Devices)</option>
+                            <!-- Quarantine removed: system-managed group, cannot be created manually -->
                             <option value="custom">Custom</option>
                         </select>
                     </div>
 
                     <div class="form-row">
                         <div class="form-group col-md-6">
-                            <label for="bubbleIcon">Icon</label>
-                            <select class="form-control" id="bubbleIcon">
+                            <label for="groupIcon">Icon</label>
+                            <select class="form-control" id="groupIcon">
                                 <option value="fa-users">Users</option>
                                 <option value="fa-user-tie">Dad</option>
                                 <option value="fa-user">Mom</option>
@@ -157,59 +159,62 @@
                                 <option value="fa-laptop">Work</option>
                                 <option value="fa-home">Home</option>
                                 <option value="fa-wifi">IoT</option>
+                                <option value="fa-ban">Quarantine</option>
                             </select>
                         </div>
                         <div class="form-group col-md-6">
-                            <label for="bubbleColor">Color</label>
-                            <input type="color" class="form-control" id="bubbleColor" value="#4CAF50" style="height: 38px;">
+                            <label for="groupColor">Color</label>
+                            <input type="color" class="form-control" id="groupColor" value="#4CAF50" style="height: 38px;">
                         </div>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-success" onclick="createBubble()">
-                    <i class="fas fa-plus mr-1"></i>Create Bubble
+                <button type="button" class="btn btn-success" onclick="createGroup()">
+                    <i class="fas fa-plus mr-1"></i>Create Group
                 </button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Edit Bubble Modal -->
-<div class="modal fade" id="editBubbleModal" tabindex="-1">
+<!-- Edit Group Modal -->
+<div class="modal fade" id="editGroupModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="fas fa-edit mr-2"></i>Edit Bubble</h5>
+                <h5 class="modal-title"><i class="fas fa-edit mr-2"></i>Edit Device Group</h5>
                 <button type="button" class="close" data-dismiss="modal">
                     <span>&times;</span>
                 </button>
             </div>
             <div class="modal-body">
-                <form id="editBubbleForm">
-                    <input type="hidden" id="editBubbleId">
+                <form id="editGroupForm">
+                    <input type="hidden" id="editGroupId">
 
                     <div class="form-group">
-                        <label for="editBubbleName">Bubble Name</label>
-                        <input type="text" class="form-control" id="editBubbleName" required>
+                        <label for="editGroupName">Group Name</label>
+                        <input type="text" class="form-control" id="editGroupName" required>
                     </div>
 
                     <div class="form-group">
-                        <label for="editBubbleType">Bubble Type</label>
-                        <select class="form-control" id="editBubbleType">
+                        <label for="editGroupType">Group Type</label>
+                        <select class="form-control" id="editGroupType">
                             <option value="family">Family</option>
                             <option value="guest">Guest</option>
                             <option value="corporate">Corporate</option>
                             <option value="smart_home">Smart Home</option>
+                            <option value="lan_only">LAN Only</option>
+                            <option value="quarantine">Quarantine</option>
                             <option value="custom">Custom</option>
                         </select>
                     </div>
 
                     <div class="form-row">
                         <div class="form-group col-md-6">
-                            <label for="editBubbleIcon">Icon</label>
-                            <select class="form-control" id="editBubbleIcon">
+                            <label for="editGroupIcon">Icon</label>
+                            <select class="form-control" id="editGroupIcon">
                                 <option value="fa-users">Users</option>
                                 <option value="fa-user-tie">Dad</option>
                                 <option value="fa-user">Mom</option>
@@ -217,31 +222,39 @@
                                 <option value="fa-user-friends">Guests</option>
                                 <option value="fa-laptop">Work</option>
                                 <option value="fa-home">Home</option>
+                                <option value="fa-wifi">IoT</option>
+                                <option value="fa-ban">Quarantine</option>
                             </select>
                         </div>
                         <div class="form-group col-md-6">
-                            <label for="editBubbleColor">Color</label>
-                            <input type="color" class="form-control" id="editBubbleColor" style="height: 38px;">
+                            <label for="editGroupColor">Color</label>
+                            <input type="color" class="form-control" id="editGroupColor" style="height: 38px;">
                         </div>
                     </div>
 
                     <div class="form-group">
                         <div class="custom-control custom-switch">
-                            <input type="checkbox" class="custom-control-input" id="editBubblePinned">
-                            <label class="custom-control-label" for="editBubblePinned">
+                            <input type="checkbox" class="custom-control-input" id="editGroupPinned">
+                            <label class="custom-control-label" for="editGroupPinned">
                                 <i class="fas fa-thumbtack mr-1"></i>Pin (prevent AI changes)
                             </label>
                         </div>
                     </div>
+
+                    <!-- System group warning -->
+                    <div class="alert alert-warning d-none" id="systemGroupWarning">
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        This is a system group and cannot be deleted.
+                    </div>
                 </form>
             </div>
             <div class="modal-footer justify-content-between">
-                <button type="button" class="btn btn-danger" onclick="deleteBubble()">
+                <button type="button" class="btn btn-danger" id="deleteGroupBtn" onclick="deleteGroup()">
                     <i class="fas fa-trash mr-1"></i>Delete
                 </button>
                 <div>
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" onclick="saveBubble()">
+                    <button type="button" class="btn btn-primary" onclick="saveGroup()">
                         <i class="fas fa-save mr-1"></i>Save
                     </button>
                 </div>
@@ -254,20 +267,20 @@
 {% block scripts %}
 {{ super() }}
 <script>
-// Bubble data
-let bubbles = [];
+// Device Groups data (separate from D2D bubble coloring which runs in background)
+let groups = [];
 let allDevices = [];
 const presets = {
-    dad: { name: "Dad's Bubble", icon: 'fa-user-tie', color: '#1976D2', type: 'family' },
-    mom: { name: "Mom's Bubble", icon: 'fa-user', color: '#E91E63', type: 'family' },
-    kids: { name: "Kids' Bubble", icon: 'fa-child', color: '#FF5722', type: 'family' },
+    dad: { name: "Dad's Group", icon: 'fa-user-tie', color: '#1976D2', type: 'family' },
+    mom: { name: "Mom's Group", icon: 'fa-user', color: '#E91E63', type: 'family' },
+    kids: { name: "Kids' Group", icon: 'fa-child', color: '#FF5722', type: 'family' },
     guest: { name: 'Guests', icon: 'fa-user-friends', color: '#607D8B', type: 'guest' },
     work: { name: 'Work Devices', icon: 'fa-laptop', color: '#455A64', type: 'corporate' }
 };
 
-// Load bubbles on page load
+// Load groups on page load
 document.addEventListener('DOMContentLoaded', function() {
-    loadBubbles();
+    loadGroups();
     loadAllDevices();
 
     // Setup preset buttons
@@ -275,26 +288,26 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', function() {
             const preset = presets[this.dataset.preset];
             if (preset) {
-                document.getElementById('bubbleName').value = preset.name;
-                document.getElementById('bubbleType').value = preset.type;
-                document.getElementById('bubbleIcon').value = preset.icon;
-                document.getElementById('bubbleColor').value = preset.color;
+                document.getElementById('groupName').value = preset.name;
+                document.getElementById('groupType').value = preset.type;
+                document.getElementById('groupIcon').value = preset.icon;
+                document.getElementById('groupColor').value = preset.color;
             }
         });
     });
 });
 
-function loadBubbles() {
+function loadGroups() {
     fetch('/bubbles/api/list')
         .then(r => r.json())
         .then(data => {
-            bubbles = data.bubbles || [];
-            renderBubbles();
+            groups = data.bubbles || [];
+            renderGroups();
         })
         .catch(err => {
-            console.error('Failed to load bubbles:', err);
+            console.error('Failed to load groups:', err);
             document.getElementById('loading-indicator').innerHTML =
-                '<p class="text-danger"><i class="fas fa-exclamation-circle mr-2"></i>Failed to load bubbles</p>';
+                '<p class="text-danger"><i class="fas fa-exclamation-circle mr-2"></i>Failed to load device groups</p>';
         });
 }
 
@@ -308,26 +321,26 @@ function loadAllDevices() {
         .catch(err => console.error('Failed to load devices:', err));
 }
 
-function renderBubbles() {
-    const container = document.getElementById('bubbles-container');
+function renderGroups() {
+    const container = document.getElementById('groups-container');
     container.innerHTML = '';
 
-    if (bubbles.length === 0) {
+    if (groups.length === 0) {
         container.innerHTML = `
             <div class="col-12 text-center py-5">
                 <i class="fas fa-layer-group fa-3x text-muted mb-3"></i>
-                <h5 class="text-muted">No bubbles yet</h5>
-                <p class="text-muted">Create your first bubble to organize devices by user</p>
-                <button class="btn btn-success" onclick="showCreateBubbleModal()">
-                    <i class="fas fa-plus mr-1"></i>Create Bubble
+                <h5 class="text-muted">No device groups yet</h5>
+                <p class="text-muted">Create your first device group to organize devices by user or purpose</p>
+                <button class="btn btn-success" onclick="showCreateGroupModal()">
+                    <i class="fas fa-plus mr-1"></i>Create Group
                 </button>
             </div>
         `;
         return;
     }
 
-    bubbles.forEach(bubble => {
-        const card = createBubbleCard(bubble);
+    groups.forEach(group => {
+        const card = createGroupCard(group);
         container.appendChild(card);
     });
 
@@ -336,37 +349,49 @@ function renderBubbles() {
     updateUnassignedDevices();
 }
 
-function createBubbleCard(bubble) {
+function createGroupCard(group) {
     const col = document.createElement('div');
     col.className = 'col-lg-4 col-md-6 mb-4';
 
-    const pinnedBadge = bubble.is_pinned ?
+    // Check if this is the quarantine group (system-managed)
+    const isQuarantine = group.bubble_type === 'quarantine' ||
+                         group.bubble_id === 'SYSTEM-QUARANTINE';
+
+    const pinnedBadge = group.is_pinned ?
         '<span class="badge badge-warning ml-2"><i class="fas fa-thumbtack"></i> Pinned</span>' : '';
 
-    const manualBadge = bubble.is_manual ?
+    const manualBadge = group.is_manual ?
         '<span class="badge badge-info ml-2">Manual</span>' :
         '<span class="badge badge-secondary ml-2">AI</span>';
 
-    const policyInfo = bubble.policy || {};
+    // System group badge (e.g., Quarantine)
+    const systemBadge = (group.is_system || isQuarantine) ?
+        '<span class="badge badge-danger ml-2"><i class="fas fa-lock"></i> System</span>' : '';
+
+    const policyInfo = group.policy || {};
     const accessBadges = [];
     if (policyInfo.internet_access) accessBadges.push('<span class="badge badge-success badge-sm">Internet</span>');
     if (policyInfo.lan_access) accessBadges.push('<span class="badge badge-primary badge-sm">LAN</span>');
     if (policyInfo.smart_home_access) accessBadges.push('<span class="badge badge-warning badge-sm">Smart Home</span>');
     if (policyInfo.d2d_allowed) accessBadges.push('<span class="badge badge-info badge-sm">D2D</span>');
+    // Show isolation for quarantine groups
+    if (!policyInfo.internet_access && !policyInfo.lan_access) {
+        accessBadges.push('<span class="badge badge-danger badge-sm">Isolated</span>');
+    }
 
     let devicesHtml = '';
-    if (bubble.devices && bubble.devices.length > 0) {
-        bubble.devices.forEach(mac => {
+    if (group.devices && group.devices.length > 0) {
+        group.devices.forEach(mac => {
             const device = allDevices.find(d => d.mac_address === mac) || { mac_address: mac };
             devicesHtml += `
                 <div class="device-item d-flex justify-content-between align-items-center mb-2 p-2 bg-light rounded"
-                     draggable="true" data-mac="${mac}" data-bubble="${bubble.bubble_id}">
+                     draggable="true" data-mac="${mac}" data-group="${group.bubble_id}">
                     <div>
                         <i class="fas fa-microchip mr-2 text-muted"></i>
                         <span class="device-name">${device.hostname || device.friendly_name || mac.substr(0,11)}</span>
                         <small class="text-muted d-block ml-4">${mac}</small>
                     </div>
-                    <button class="btn btn-xs btn-outline-danger" onclick="removeDevice('${bubble.bubble_id}', '${mac}')">
+                    <button class="btn btn-xs btn-outline-danger" onclick="removeDevice('${group.bubble_id}', '${mac}')">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
@@ -377,16 +402,17 @@ function createBubbleCard(bubble) {
     }
 
     col.innerHTML = `
-        <div class="card bubble-card" data-bubble-id="${bubble.bubble_id}"
-             style="border-left: 4px solid ${bubble.color || '#9C27B0'};">
-            <div class="card-header" style="background-color: ${bubble.color || '#9C27B0'}20;">
+        <div class="card group-card" data-group-id="${group.bubble_id}"
+             style="border-left: 4px solid ${group.color || '#9C27B0'};">
+            <div class="card-header" style="background-color: ${group.color || '#9C27B0'}20;">
                 <div class="d-flex justify-content-between align-items-center">
                     <h3 class="card-title">
-                        <i class="fas ${bubble.icon || 'fa-layer-group'} mr-2" style="color: ${bubble.color || '#9C27B0'};"></i>
-                        ${bubble.display_name || 'Unnamed Bubble'}
+                        <i class="fas ${group.icon || 'fa-layer-group'} mr-2" style="color: ${group.color || '#9C27B0'};"></i>
+                        ${group.display_name || 'Unnamed Group'}
                     </h3>
                     <div>
                         ${pinnedBadge}
+                        ${systemBadge}
                         ${manualBadge}
                     </div>
                 </div>
@@ -395,22 +421,26 @@ function createBubbleCard(bubble) {
                 <div class="mb-2">
                     ${accessBadges.join(' ')}
                 </div>
-                <div class="bubble-devices dropzone" data-bubble-id="${bubble.bubble_id}">
+                <div class="group-devices dropzone" data-group-id="${group.bubble_id}">
                     ${devicesHtml}
                 </div>
             </div>
             <div class="card-footer">
                 <div class="d-flex justify-content-between">
                     <span class="text-muted">
-                        <i class="fas fa-laptop mr-1"></i>${bubble.device_count || 0} devices
+                        <i class="fas fa-laptop mr-1"></i>${group.device_count || 0} devices
                     </span>
                     <div>
-                        <button class="btn btn-xs btn-outline-primary" onclick="editBubble('${bubble.bubble_id}')">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="btn btn-xs btn-outline-warning ml-1" onclick="togglePin('${bubble.bubble_id}', ${!bubble.is_pinned})">
-                            <i class="fas fa-thumbtack"></i>
-                        </button>
+                        ${isQuarantine ? `
+                            <span class="text-muted small"><i class="fas fa-info-circle mr-1"></i>System-managed</span>
+                        ` : `
+                            <button class="btn btn-xs btn-outline-primary" onclick="editGroup('${group.bubble_id}')">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="btn btn-xs btn-outline-warning ml-1" onclick="togglePin('${group.bubble_id}', ${!group.is_pinned})">
+                                <i class="fas fa-thumbtack"></i>
+                            </button>
+                        `}
                     </div>
                 </div>
             </div>
@@ -424,8 +454,8 @@ function updateUnassignedDevices() {
     const container = document.getElementById('unassigned-devices');
     const assignedMacs = new Set();
 
-    bubbles.forEach(b => {
-        (b.devices || []).forEach(mac => assignedMacs.add(mac.toUpperCase()));
+    groups.forEach(g => {
+        (g.devices || []).forEach(mac => assignedMacs.add(mac.toUpperCase()));
     });
 
     const unassigned = allDevices.filter(d => !assignedMacs.has(d.mac_address.toUpperCase()));
@@ -434,7 +464,7 @@ function updateUnassignedDevices() {
         container.innerHTML = `
             <div class="col-12 text-muted text-center py-3">
                 <i class="fas fa-check-circle mr-1"></i>
-                All devices are assigned to bubbles
+                All devices are assigned to groups
             </div>
         `;
         return;
@@ -446,7 +476,7 @@ function updateUnassignedDevices() {
         div.className = 'col-md-3 col-sm-4 mb-2';
         div.innerHTML = `
             <div class="device-item d-flex justify-content-between align-items-center p-2 bg-light rounded"
-                 draggable="true" data-mac="${device.mac_address}" data-bubble="">
+                 draggable="true" data-mac="${device.mac_address}" data-group="">
                 <div>
                     <i class="fas fa-question-circle mr-2 text-warning"></i>
                     <span class="device-name">${device.hostname || device.friendly_name || device.mac_address.substr(0,11)}</span>
@@ -468,7 +498,7 @@ function initDragDrop() {
     });
 
     // Make dropzones accept drops
-    document.querySelectorAll('.dropzone, .bubble-devices').forEach(zone => {
+    document.querySelectorAll('.dropzone, .group-devices').forEach(zone => {
         zone.addEventListener('dragover', handleDragOver);
         zone.addEventListener('drop', handleDrop);
         zone.addEventListener('dragleave', handleDragLeave);
@@ -482,7 +512,7 @@ function handleDragStart(e) {
     this.classList.add('dragging');
     e.dataTransfer.setData('text/plain', JSON.stringify({
         mac: this.dataset.mac,
-        fromBubble: this.dataset.bubble
+        fromGroup: this.dataset.group
     }));
 }
 
@@ -506,31 +536,31 @@ function handleDrop(e) {
 
     try {
         const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-        const toBubble = this.dataset.bubbleId;
+        const toGroup = this.dataset.groupId;
 
-        if (toBubble && data.mac) {
-            moveDevice(data.mac, data.fromBubble, toBubble);
+        if (toGroup && data.mac) {
+            moveDevice(data.mac, data.fromGroup, toGroup);
         }
     } catch (err) {
         console.error('Drop error:', err);
     }
 }
 
-function moveDevice(mac, fromBubble, toBubble) {
+function moveDevice(mac, fromGroup, toGroup) {
     fetch('/bubbles/api/move-device', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             mac: mac,
-            from_bubble: fromBubble || null,
-            to_bubble: toBubble
+            from_bubble: fromGroup || null,
+            to_bubble: toGroup
         })
     })
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            loadBubbles();
-            toastr.success(`Device moved to bubble`);
+            loadGroups();
+            toastr.success(`Device moved to group`);
         } else {
             toastr.error(data.error || 'Failed to move device');
         }
@@ -541,14 +571,14 @@ function moveDevice(mac, fromBubble, toBubble) {
     });
 }
 
-function removeDevice(bubbleId, mac) {
-    if (!confirm('Remove device from bubble?')) return;
+function removeDevice(groupId, mac) {
+    if (!confirm('Remove device from group?')) return;
 
-    fetch(`/bubbles/api/${bubbleId}/devices/${mac}`, { method: 'DELETE' })
+    fetch(`/bubbles/api/${groupId}/devices/${mac}`, { method: 'DELETE' })
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                loadBubbles();
+                loadGroups();
                 toastr.success('Device removed');
             } else {
                 toastr.error(data.error || 'Failed to remove device');
@@ -556,19 +586,19 @@ function removeDevice(bubbleId, mac) {
         });
 }
 
-function showCreateBubbleModal() {
-    document.getElementById('createBubbleForm').reset();
-    $('#createBubbleModal').modal('show');
+function showCreateGroupModal() {
+    document.getElementById('createGroupForm').reset();
+    $('#createGroupModal').modal('show');
 }
 
-function createBubble() {
-    const name = document.getElementById('bubbleName').value;
-    const type = document.getElementById('bubbleType').value;
-    const icon = document.getElementById('bubbleIcon').value;
-    const color = document.getElementById('bubbleColor').value;
+function createGroup() {
+    const name = document.getElementById('groupName').value;
+    const type = document.getElementById('groupType').value;
+    const icon = document.getElementById('groupIcon').value;
+    const color = document.getElementById('groupColor').value;
 
     if (!name) {
-        toastr.error('Please enter a bubble name');
+        toastr.error('Please enter a group name');
         return;
     }
 
@@ -586,80 +616,85 @@ function createBubble() {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            $('#createBubbleModal').modal('hide');
-            loadBubbles();
-            toastr.success(`Bubble "${name}" created`);
+            $('#createGroupModal').modal('hide');
+            loadGroups();
+            toastr.success(`Group "${name}" created`);
         } else {
-            toastr.error(data.error || 'Failed to create bubble');
+            toastr.error(data.error || 'Failed to create group');
         }
     });
 }
 
-function editBubble(bubbleId) {
-    const bubble = bubbles.find(b => b.bubble_id === bubbleId);
-    if (!bubble) return;
+function editGroup(groupId) {
+    const group = groups.find(g => g.bubble_id === groupId);
+    if (!group) return;
 
-    document.getElementById('editBubbleId').value = bubbleId;
-    document.getElementById('editBubbleName').value = bubble.display_name || '';
-    document.getElementById('editBubbleType').value = bubble.bubble_type || 'custom';
-    document.getElementById('editBubbleIcon').value = bubble.icon || 'fa-layer-group';
-    document.getElementById('editBubbleColor').value = bubble.color || '#9C27B0';
-    document.getElementById('editBubblePinned').checked = bubble.is_pinned;
+    document.getElementById('editGroupId').value = groupId;
+    document.getElementById('editGroupName').value = group.display_name || '';
+    document.getElementById('editGroupType').value = group.bubble_type || 'custom';
+    document.getElementById('editGroupIcon').value = group.icon || 'fa-layer-group';
+    document.getElementById('editGroupColor').value = group.color || '#9C27B0';
+    document.getElementById('editGroupPinned').checked = group.is_pinned;
 
-    $('#editBubbleModal').modal('show');
+    // Show warning and hide delete button for system groups (e.g., Quarantine)
+    const isSystem = group.is_system || group.bubble_type === 'quarantine';
+    document.getElementById('systemGroupWarning').classList.toggle('d-none', !isSystem);
+    document.getElementById('deleteGroupBtn').classList.toggle('d-none', isSystem);
+
+    $('#editGroupModal').modal('show');
 }
 
-function saveBubble() {
-    const bubbleId = document.getElementById('editBubbleId').value;
+function saveGroup() {
+    const groupId = document.getElementById('editGroupId').value;
 
-    fetch(`/bubbles/api/${bubbleId}`, {
+    fetch(`/bubbles/api/${groupId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            display_name: document.getElementById('editBubbleName').value,
-            bubble_type: document.getElementById('editBubbleType').value,
-            icon: document.getElementById('editBubbleIcon').value,
-            color: document.getElementById('editBubbleColor').value,
-            is_pinned: document.getElementById('editBubblePinned').checked
+            display_name: document.getElementById('editGroupName').value,
+            bubble_type: document.getElementById('editGroupType').value,
+            icon: document.getElementById('editGroupIcon').value,
+            color: document.getElementById('editGroupColor').value,
+            is_pinned: document.getElementById('editGroupPinned').checked
         })
     })
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            $('#editBubbleModal').modal('hide');
-            loadBubbles();
-            toastr.success('Bubble updated');
+            $('#editGroupModal').modal('hide');
+            loadGroups();
+            toastr.success('Group updated');
         } else {
-            toastr.error(data.error || 'Failed to update bubble');
+            toastr.error(data.error || 'Failed to update group');
         }
     });
 }
 
-function deleteBubble() {
-    const bubbleId = document.getElementById('editBubbleId').value;
-    if (!confirm('Delete this bubble? Devices will become unassigned.')) return;
+function deleteGroup() {
+    const groupId = document.getElementById('editGroupId').value;
+    if (!confirm('Delete this group? Devices will become unassigned.')) return;
 
-    fetch(`/bubbles/api/${bubbleId}`, { method: 'DELETE' })
+    fetch(`/bubbles/api/${groupId}`, { method: 'DELETE' })
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                $('#editBubbleModal').modal('hide');
-                loadBubbles();
-                toastr.success('Bubble deleted');
+                $('#editGroupModal').modal('hide');
+                loadGroups();
+                toastr.success('Group deleted');
             } else {
-                toastr.error(data.error || 'Failed to delete bubble');
+                toastr.error(data.error || 'Failed to delete group');
             }
         });
 }
 
-function togglePin(bubbleId, pin) {
+function togglePin(groupId, pin) {
     const endpoint = pin ? 'pin' : 'unpin';
-    fetch(`/bubbles/api/${bubbleId}/${endpoint}`, { method: 'POST' })
+    fetch(`/bubbles/api/${groupId}/${endpoint}`, { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                loadBubbles();
-                toastr.success(pin ? 'Bubble pinned' : 'Bubble unpinned');
+                loadGroups();
+                toastr.success(pin ? 'Group pinned' : 'Group unpinned');
             }
         });
 }
@@ -707,8 +742,8 @@ function applySuggestion(action) {
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                loadBubbles();
-                toastr.success('Device added to bubble');
+                loadGroups();
+                toastr.success('Device added to group');
             }
         });
     }
@@ -716,10 +751,10 @@ function applySuggestion(action) {
 </script>
 
 <style>
-.bubble-card {
+.group-card {
     transition: transform 0.2s;
 }
-.bubble-card:hover {
+.group-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
@@ -742,11 +777,15 @@ function applySuggestion(action) {
     font-size: 0.7rem;
     padding: 0.2em 0.5em;
 }
-.bubble-devices {
+.group-devices {
     min-height: 100px;
     border: 1px dashed #dee2e6;
     border-radius: 4px;
     padding: 8px;
+}
+/* Quarantine group highlight */
+.group-card[data-group-id*="QUARANTINE"] {
+    border-left-color: #F44336 !important;
 }
 </style>
 {% endblock %}

@@ -1,0 +1,97 @@
+# aiochi.service - AIOCHI (AI Eyes) Container Orchestration
+#
+# This service starts AIOCHI containers after the main Fortress containers.
+# Uses podman-compose to properly create and manage containers with health checks.
+#
+# CORE (always started - ~2GB RAM):
+#   - ClickHouse (analytics database)
+#   - Suricata IDS (deep packet inspection)
+#   - Zeek NSM (network security monitor)
+#   - Identity Engine (device fingerprinting)
+#   - Bubble Manager (ecosystem detection)
+#   - Log Shipper (event pipeline)
+#
+# Install:
+#   sudo cp aiochi.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable aiochi.service
+#
+
+[Unit]
+Description=HookProbe AIOCHI (AI Eyes) Containers
+Documentation=https://hookprobe.com/docs/aiochi
+
+# Run after fortress containers are up
+After=fortress.service fortress-vlan.service openvswitch-switch.service network-online.target
+Wants=fortress.service network-online.target
+Requires=podman.socket
+
+# Only start if AIOCHI was installed
+ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aiochi.yml
+
+# Prevent rapid restarts on repeated failures
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hookprobe/shared/aiochi/containers
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin
+
+# Load AIOCHI config (passwords, etc.)
+EnvironmentFile=-/opt/hookprobe/shared/aiochi/containers/.env
+
+# NOTE: Network creation is handled by podman-compose from the compose file.
+# Do NOT create network manually here - it causes subnet conflicts because
+# podman-compose prefixes network names with project name (aiochi_aiochi-internal)
+# while manual creation would be just (aiochi-internal), both using same subnet.
+
+# Wait for FTS-mirror interface (required for Suricata/Zeek capture)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip link show FTS-mirror >/dev/null 2>&1 && exit 0; sleep 1; done; echo "[AIOCHI] Warning: FTS-mirror not found, capture may fail"; exit 0'
+
+# Start AIOCHI containers using podman-compose
+# This will create containers if they don't exist, or start existing ones
+# Core services: clickhouse, suricata, zeek, log-shipper, identity-engine, bubble-manager
+ExecStart=/bin/bash -c '\
+    cd /opt/hookprobe/shared/aiochi/containers && \
+    echo "[AIOCHI] Starting containers via podman-compose..." && \
+    CORE="clickhouse suricata zeek log-shipper identity-engine bubble-manager" && \
+    /usr/bin/podman-compose -f podman-compose.aiochi.yml up -d --no-build $CORE 2>&1 && \
+    echo "[AIOCHI] Container startup complete"'
+
+# Wait for containers to be healthy (up to 60s each)
+ExecStartPost=/bin/bash -c '\
+    echo "[AIOCHI] Waiting for containers to be healthy..." && \
+    for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper aiochi-bubble; do \
+        if podman container exists $c 2>/dev/null; then \
+            for i in $(seq 1 20); do \
+                STATUS=$(podman inspect --format "{{.State.Health.Status}}" $c 2>/dev/null || echo "none"); \
+                if [ "$STATUS" = "healthy" ]; then echo "  ✓ $c (healthy)"; break; fi; \
+                if [ "$STATUS" = "none" ]; then \
+                    RUNNING=$(podman inspect --format "{{.State.Running}}" $c 2>/dev/null); \
+                    if [ "$RUNNING" = "true" ]; then echo "  ✓ $c (running)"; break; fi; \
+                fi; \
+                sleep 3; \
+            done; \
+        fi; \
+    done; \
+    echo "[AIOCHI] Health check complete"'
+
+# Stop all AIOCHI containers gracefully
+ExecStop=/bin/bash -c '\
+    cd /opt/hookprobe/shared/aiochi/containers && \
+    echo "[AIOCHI] Stopping containers..." && \
+    /usr/bin/podman-compose -f podman-compose.aiochi.yml down 2>&1 && \
+    echo "[AIOCHI] Container shutdown complete"'
+
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aiochi
+
+[Install]
+WantedBy=multi-user.target

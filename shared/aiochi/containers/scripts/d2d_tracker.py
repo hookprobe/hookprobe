@@ -59,9 +59,38 @@ def generate_cluster_color(cluster_id: str) -> str:
     return CLUSTER_COLOR_PALETTE[hash_val % len(CLUSTER_COLOR_PALETTE)]
 
 
+# =============================================================================
+# TRIO+ 2026-01-14: Affinity-based clustering constants
+# =============================================================================
+# Affinity threshold for same-bubble membership (0.0-1.0)
+# Devices with affinity >= threshold are grouped together
+AFFINITY_THRESHOLD = 0.35
+
+# Ecosystem mismatch penalties (TRIO+ recommendation)
+# PRIMARY-PRIMARY cross-ecosystem: -0.85 (iPhone + Samsung Galaxy = extremely unlikely same user)
+# MIXED pairs (one IoT): -0.55 (Apple TV + Android phone = unlikely same home unless proven)
+# TRIO+ 2026-01-14: Increased penalties to ensure proper separation
+ECOSYSTEM_MISMATCH_PENALTY_PRIMARY = 0.85  # Effectively prevents cross-ecosystem PRIMARY grouping
+ECOSYSTEM_MISMATCH_PENALTY_MIXED = 0.55    # Also prevents most cross-ecosystem grouping
+
+# Device types considered "primary" (user's main devices)
+PRIMARY_DEVICE_INDICATORS = {
+    "iphone", "ipad", "macbook", "imac", "mac-", "android", "galaxy",
+    "pixel", "oneplus", "xiaomi", "huawei", "oppo", "windows", "surface"
+}
+
+# Device types considered "secondary" (shared/IoT devices)
+SECONDARY_DEVICE_INDICATORS = {
+    "homepod", "appletv", "apple-tv", "hooksound", "chromecast", "echo", "alexa",
+    "nest", "roku", "firetv", "fire-tv", "smartthings", "hue", "sonos",
+    "speaker", "tv", "printer", "camera", "_sleep-proxy", "mini", "sound"
+}
+
+
 def generate_random_color() -> str:
     """Generate a random distinct color."""
     return random.choice(CLUSTER_COLOR_PALETTE)
+
 
 # Persistence path
 D2D_STATE_FILE = Path("/var/lib/aiochi/d2d_state.json")
@@ -107,6 +136,124 @@ ECOSYSTEM_COLORS = {
     EcosystemType.MICROSOFT: "#00A4EF",  # Microsoft blue
     EcosystemType.UNKNOWN: "#6B7280",    # Gray
 }
+
+
+# =============================================================================
+# TRIO+ 2026-01-14: Helper functions for affinity-based clustering
+# =============================================================================
+
+def is_primary_device(device: 'Device') -> bool:
+    """
+    TRIO+ 2026-01-14: Check if device is a primary device (phone, laptop, tablet).
+    Primary devices from different ecosystems should have higher mismatch penalty.
+    """
+    # Check hostname
+    hostname_lower = device.hostname.lower() if device.hostname else ""
+    for indicator in PRIMARY_DEVICE_INDICATORS:
+        if indicator in hostname_lower:
+            return True
+
+    # Check services for device type hints
+    services_str = " ".join(device.services).lower()
+    for indicator in PRIMARY_DEVICE_INDICATORS:
+        if indicator in services_str:
+            return True
+
+    # Unknown ecosystem devices default to primary (conservative)
+    if device.ecosystem == EcosystemType.UNKNOWN:
+        return True
+
+    return False
+
+
+def is_secondary_device(device: 'Device') -> bool:
+    """
+    TRIO+ 2026-01-14: Check if device is a secondary device (IoT, TV, speaker).
+    Secondary devices have lower ecosystem mismatch penalty.
+    """
+    hostname_lower = device.hostname.lower() if device.hostname else ""
+    for indicator in SECONDARY_DEVICE_INDICATORS:
+        if indicator in hostname_lower:
+            return True
+
+    services_str = " ".join(device.services).lower()
+    for indicator in SECONDARY_DEVICE_INDICATORS:
+        if indicator in services_str:
+            return True
+
+    return False
+
+
+def ecosystems_compatible(eco_a: EcosystemType, eco_b: EcosystemType) -> bool:
+    """
+    TRIO+ 2026-01-14: Check if two ecosystems are compatible (same or one unknown).
+    """
+    if eco_a == eco_b:
+        return True
+    # TRIO+ 2026-01-14: Only treat as compatible if BOTH are unknown
+    # If one is known, they should be treated as potentially different
+    if eco_a == EcosystemType.UNKNOWN and eco_b == EcosystemType.UNKNOWN:
+        return True
+    return False
+
+
+def detect_ecosystem_from_signals(device: 'Device') -> EcosystemType:
+    """
+    TRIO+ 2026-01-14: Detect ecosystem from hostname and services when ecosystem is unknown.
+    This helps catch devices that weren't properly classified during mDNS detection.
+    """
+    if device.ecosystem != EcosystemType.UNKNOWN:
+        return device.ecosystem
+
+    # Combine hostname and services for matching
+    signals = device.hostname.lower() + " " + " ".join(device.services).lower()
+
+    # Apple indicators
+    apple_indicators = [
+        "iphone", "ipad", "macbook", "imac", "apple", "airplay", "airdrop",
+        "homepod", "apple-tv", "appletv", "mac-", "mac.", "macos",
+        "_companion-link", "_airplay", "_homekit", "hooksound", "hookprobe-pro"
+    ]
+    if any(ind in signals for ind in apple_indicators):
+        return EcosystemType.APPLE
+
+    # Samsung/Android indicators
+    samsung_indicators = [
+        "samsung", "galaxy", "samsungcloud", "s24", "s23", "s22", "s21",
+        "note20", "note21", "smartthings"
+    ]
+    if any(ind in signals for ind in samsung_indicators):
+        return EcosystemType.SAMSUNG
+
+    # Google indicators
+    google_indicators = [
+        "pixel", "google", "chromecast", "nest", "android", "googlehome"
+    ]
+    if any(ind in signals for ind in google_indicators):
+        return EcosystemType.GOOGLE
+
+    # Amazon indicators
+    amazon_indicators = [
+        "amazon", "echo", "alexa", "kindle", "firetv", "fire-tv"
+    ]
+    if any(ind in signals for ind in amazon_indicators):
+        return EcosystemType.AMAZON
+
+    # Microsoft indicators
+    microsoft_indicators = [
+        "windows", "microsoft", "surface", "xbox", "cortana"
+    ]
+    if any(ind in signals for ind in microsoft_indicators):
+        return EcosystemType.MICROSOFT
+
+    # Huawei/Xiaomi/other Android - treat as generic Android (use Google)
+    android_other_indicators = [
+        "huawei", "hicloud", "dbankcloud", "xiaomi", "mi.com", "oppo", "oneplus", "vivo"
+    ]
+    if any(ind in signals for ind in android_other_indicators):
+        return EcosystemType.GOOGLE  # Treat as Google/Android ecosystem
+
+    return EcosystemType.UNKNOWN
 
 
 @dataclass
@@ -493,23 +640,100 @@ class D2DTracker:
                 "timestamp": datetime.now().isoformat(),
             }
 
+    def _calculate_edge_affinity(self, edge: CommunicationEdge) -> float:
+        """
+        TRIO+ 2026-01-14: Calculate affinity score for an edge.
+        Returns 0.0-1.0 with ecosystem penalties applied.
+        """
+        # Base affinity from communication patterns
+        # Normalize connection count (log scale to handle high-traffic edges)
+        import math
+        conn_score = min(1.0, math.log10(max(1, edge.connection_count)) / 4.0)  # 10K connections = 1.0
+
+        # Normalize bytes (log scale)
+        bytes_score = min(1.0, math.log10(max(1, edge.bytes_transferred)) / 10.0)  # 10GB = 1.0
+
+        # Recency score (higher if recently active)
+        try:
+            last_seen = datetime.fromisoformat(edge.last_seen)
+            hours_ago = (datetime.now() - last_seen).total_seconds() / 3600
+            recency_score = max(0, 1.0 - (hours_ago / 168))  # Decay over 7 days
+        except (ValueError, TypeError):
+            recency_score = 0.5
+
+        # Communication strength bonus
+        strength_bonus = {
+            CommunicationStrength.STRONG: 0.3,
+            CommunicationStrength.MODERATE: 0.15,
+            CommunicationStrength.WEAK: 0.05,
+            CommunicationStrength.NONE: 0.0,
+        }.get(edge.strength, 0.0)
+
+        # Calculate base affinity (TRIO+ weights)
+        # TRIO+ 2026-01-14: Reduced base score from 0.35 to 0.15
+        # This makes ecosystem penalty more impactful
+        base_affinity = (
+            0.20 * conn_score +       # Connection frequency
+            0.05 * bytes_score +      # Bytes transferred
+            0.30 * recency_score +    # Recent activity
+            0.30 * strength_bonus +   # Communication strength
+            0.15                      # Base relationship score for any connection
+        )
+
+        # Get devices for ecosystem check
+        device_a = self._devices.get(edge.mac_a)
+        device_b = self._devices.get(edge.mac_b)
+
+        if device_a and device_b:
+            # TRIO+ 2026-01-14: Detect ecosystem from hostname/services if unknown
+            eco_a = detect_ecosystem_from_signals(device_a)
+            eco_b = detect_ecosystem_from_signals(device_b)
+
+            # TRIO+ 2026-01-14: Apply ecosystem mismatch penalty
+            if not ecosystems_compatible(eco_a, eco_b):
+                # Determine device roles
+                a_is_primary = is_primary_device(device_a) and not is_secondary_device(device_a)
+                b_is_primary = is_primary_device(device_b) and not is_secondary_device(device_b)
+
+                if a_is_primary and b_is_primary:
+                    # Both primary devices from different ecosystems = high penalty
+                    # iPhone + Samsung Galaxy = very unlikely same user
+                    base_affinity -= ECOSYSTEM_MISMATCH_PENALTY_PRIMARY
+                else:
+                    # Mixed pair (at least one IoT/secondary device) = lower penalty
+                    # Apple TV + Android phone = could be same household
+                    base_affinity -= ECOSYSTEM_MISMATCH_PENALTY_MIXED
+
+        return max(0.0, min(1.0, base_affinity))
+
     def get_communication_clusters(self) -> List[Dict]:
         """
-        Find clusters of devices that communicate with each other.
-        Each cluster gets a randomly generated color for easy identification.
+        TRIO+ 2026-01-14: Find clusters of devices using affinity-based clustering.
+        Only groups devices with affinity >= AFFINITY_THRESHOLD.
+        Applies ecosystem mismatch penalties to prevent cross-ecosystem grouping.
 
         Returns:
             List of clusters, each with devices, stats, and assigned color
         """
         with self._lock:
-            # Build adjacency list
+            # Build adjacency list with affinity filtering
             adjacency: Dict[str, Set[str]] = defaultdict(set)
-            for edge in self._edges.values():
-                if edge.strength != CommunicationStrength.NONE:
+            edge_affinities: Dict[Tuple[str, str], float] = {}
+
+            for key, edge in self._edges.items():
+                if edge.strength == CommunicationStrength.NONE:
+                    continue
+
+                # Calculate affinity with ecosystem penalties
+                affinity = self._calculate_edge_affinity(edge)
+                edge_affinities[key] = affinity
+
+                # Only include edges meeting affinity threshold
+                if affinity >= AFFINITY_THRESHOLD:
                     adjacency[edge.mac_a].add(edge.mac_b)
                     adjacency[edge.mac_b].add(edge.mac_a)
 
-            # Find connected components using BFS
+            # Find connected components using BFS (only high-affinity edges)
             visited: Set[str] = set()
             clusters: List[Set[str]] = []
 

@@ -120,8 +120,8 @@ services:
   # Services tier with access to data tier for database connectivity
   web:
     build:
-      context: ..
-      dockerfile: containers/Containerfile.web
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.web
     image: localhost/fts-web:latest
     container_name: fts-web
     restart: unless-stopped
