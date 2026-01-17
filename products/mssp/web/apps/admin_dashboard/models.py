@@ -1,6 +1,9 @@
 """
 Admin Dashboard Models
 Models for AI-powered content generation and management.
+
+NOTE: Blog publishing has been moved to hookprobe.com.
+Content drafts are managed here and can be exported via API to hookprobe.com.
 """
 
 from django.db import models
@@ -11,12 +14,14 @@ from django.utils import timezone
 class AIContentDraft(models.Model):
     """
     AI-generated content drafts for blog posts.
+
+    NOTE: Publishing to blog now requires hookprobe.com API integration.
     """
     STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('review', 'Under Review'),
         ('approved', 'Approved'),
-        ('published', 'Published'),
+        ('exported', 'Exported to hookprobe.com'),
         ('rejected', 'Rejected'),
     ]
 
@@ -49,14 +54,14 @@ class AIContentDraft(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='ai_drafts_created')
     reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ai_drafts_reviewed')
 
-    # Publishing
-    blog_post = models.ForeignKey('cms.BlogPost', on_delete=models.SET_NULL, null=True, blank=True, related_name='ai_draft')
-    scheduled_publish_date = models.DateTimeField(null=True, blank=True)
+    # External reference (when exported to hookprobe.com)
+    external_blog_id = models.IntegerField(null=True, blank=True, help_text="Blog post ID on hookprobe.com")
+    external_blog_url = models.URLField(blank=True, help_text="URL of published post on hookprobe.com")
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    published_at = models.DateTimeField(null=True, blank=True)
+    exported_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
@@ -67,31 +72,31 @@ class AIContentDraft(models.Model):
         return f"{self.title} ({self.get_status_display()})"
 
     def approve(self, reviewer):
-        """Approve the draft for publishing."""
+        """Approve the draft for exporting."""
         self.status = 'approved'
         self.reviewed_by = reviewer
         self.save()
 
-    def publish_to_blog(self, user):
-        """Convert draft to published blog post."""
-        from apps.cms.models import BlogPost
-
-        blog_post = BlogPost.objects.create(
-            title=self.title,
-            content=self.content,
-            excerpt=self.summary,
-            author=user,
-            is_published=True,
-            published_at=timezone.now(),
-            ai_generated=True,
-        )
-
-        self.blog_post = blog_post
-        self.status = 'published'
-        self.published_at = timezone.now()
+    def mark_exported(self, blog_id, blog_url):
+        """Mark the draft as exported to hookprobe.com."""
+        self.status = 'exported'
+        self.external_blog_id = blog_id
+        self.external_blog_url = blog_url
+        self.exported_at = timezone.now()
         self.save()
 
-        return blog_post
+    def to_export_dict(self):
+        """Return dict for exporting to hookprobe.com API."""
+        return {
+            'title': self.title,
+            'content': self.content,
+            'excerpt': self.summary,
+            'seo_title': self.seo_title,
+            'seo_description': self.seo_description,
+            'seo_keywords': self.seo_keywords,
+            'ai_generated': True,
+            'source_draft_id': self.id,
+        }
 
 
 class ContentResearchTask(models.Model):
@@ -121,7 +126,7 @@ class ContentResearchTask(models.Model):
 
     # Status
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
 
     # Related draft (if generated)
     generated_draft = models.ForeignKey(AIContentDraft, on_delete=models.SET_NULL, null=True, blank=True)

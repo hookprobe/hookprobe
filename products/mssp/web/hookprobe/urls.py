@@ -1,5 +1,8 @@
 """
-HookProbe URL Configuration
+HookProbe AIOCHI MSSP URL Configuration
+
+NOTE: Public website (CMS, blog, merchandise) has been moved to hookprobe.com repository.
+This MSSP platform (aiochi.hookprobe.com) handles only dashboard and API functionality.
 """
 
 from django.contrib import admin
@@ -13,40 +16,37 @@ urlpatterns = [
     # Admin interface
     path('admin/', admin.site.urls),
 
-    # Authentication URLs
-    path('login/', auth_views.LoginView.as_view(template_name='public/auth/login.html'), name='login'),
-    path('logout/', auth_views.LogoutView.as_view(next_page='/'), name='logout'),
+    # Root redirects to MSSP dashboard
+    path('', RedirectView.as_view(url='/mssp/', permanent=False), name='home'),
+
+    # Authentication URLs (using admin_dashboard templates)
+    path('login/', auth_views.LoginView.as_view(template_name='admin_dashboard/auth/login.html'), name='login'),
+    path('logout/', auth_views.LogoutView.as_view(next_page='/login/'), name='logout'),
     path('password-reset/', auth_views.PasswordResetView.as_view(
-        template_name='public/auth/password_reset.html',
-        email_template_name='public/auth/password_reset_email.html',
-        subject_template_name='public/auth/password_reset_subject.txt',
+        template_name='admin_dashboard/auth/password_reset.html',
+        email_template_name='admin_dashboard/auth/password_reset_email.html',
+        subject_template_name='admin_dashboard/auth/password_reset_subject.txt',
     ), name='password_reset'),
     path('password-reset/done/', auth_views.PasswordResetDoneView.as_view(
-        template_name='public/auth/password_reset_done.html'
+        template_name='admin_dashboard/auth/password_reset_done.html'
     ), name='password_reset_done'),
     path('password-reset-confirm/<uidb64>/<token>/', auth_views.PasswordResetConfirmView.as_view(
-        template_name='public/auth/password_reset_confirm.html'
+        template_name='admin_dashboard/auth/password_reset_confirm.html'
     ), name='password_reset_confirm'),
     path('password-reset-complete/', auth_views.PasswordResetCompleteView.as_view(
-        template_name='public/auth/password_reset_complete.html'
+        template_name='admin_dashboard/auth/password_reset_complete.html'
     ), name='password_reset_complete'),
 
-    # Public CMS (Forty theme)
-    path('', include('apps.cms.urls', namespace='cms')),
-
-    # Admin Dashboard (AdminLTE)
+    # Admin Dashboard (AdminLTE) - Internal team management
     path('dashboard/', include('apps.dashboard.urls', namespace='dashboard')),
 
-    # Admin Dashboard - HookProbe Team (AdminLTE with AI & Merchandise)
+    # Admin Dashboard - HookProbe Team (AdminLTE with AI features)
     path('admin-dashboard/', include('apps.admin_dashboard.urls', namespace='admin_dashboard')),
 
-    # Merchandise Store
-    path('merchandise/', include('apps.merchandise.urls', namespace='merchandise')),
-
-    # MSSP Dashboard - Customer-Facing (SIEM-like)
+    # MSSP Dashboard - Customer-Facing (AIOCHI - main entry point)
     path('mssp/', include('apps.mssp_dashboard.urls', namespace='mssp_dashboard')),
 
-    # Device Management
+    # Device Management API
     path('devices/', include('apps.devices.urls', namespace='devices')),
 
     # Monitoring
@@ -74,12 +74,7 @@ if settings.DEBUG:
     except ImportError:
         pass
 
-# Custom error handlers
-handler404 = 'apps.cms.views.error_404'
-handler500 = 'apps.cms.views.error_500'
-handler403 = 'apps.cms.views.error_403'
-
 # Admin site customization
-admin.site.site_header = "HookProbe Administration"
-admin.site.site_title = "HookProbe Admin"
-admin.site.index_title = "Welcome to HookProbe Administration"
+admin.site.site_header = "AIOCHI Administration"
+admin.site.site_title = "AIOCHI Admin"
+admin.site.index_title = "Welcome to AIOCHI MSSP Administration"
