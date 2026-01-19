@@ -11,8 +11,18 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.views.generic import RedirectView
 from django.contrib.auth import views as auth_views
+from django.http import HttpResponse
+
+
+def health_check(request):
+    """Health check endpoint for container orchestration."""
+    return HttpResponse("mssp-healthy\n", content_type="text/plain")
+
 
 urlpatterns = [
+    # Health check (before auth)
+    path('health/', health_check, name='health_check'),
+
     # Admin interface
     path('admin/', admin.site.urls),
 
