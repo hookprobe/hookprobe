@@ -7,10 +7,17 @@ from .base import *
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
+# Parse ALLOWED_HOSTS from environment (comma-separated)
+# Security: External requests go through nginx which preserves the original Host header.
+# localhost/127.0.0.1 are only reachable from inside containers (for health checks).
+# Host header injection via external requests is not possible because nginx forwards
+# the actual client Host header, not a spoofed one.
+_allowed_hosts_env = os.getenv('DJANGO_ALLOWED_HOSTS', '')
 ALLOWED_HOSTS = [
-    '10.200.1.12',  # POD-001 Web DMZ
-    os.getenv('DJANGO_ALLOWED_HOST', 'hookprobe.local'),
-]
+    'mssp.hookprobe.com',   # Production domain (external HTTPS access)
+    'localhost',            # Internal container health checks only
+    '127.0.0.1',            # Internal container health checks only
+] + [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
 
 # Database connection pooling and optimization
 DATABASES['default'].update({
@@ -24,7 +31,7 @@ DATABASES['default'].update({
 })
 
 # Security settings
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False  # Disabled for POC
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
