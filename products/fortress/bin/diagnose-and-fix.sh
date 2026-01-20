@@ -20,7 +20,10 @@ echo -e "${BLUE}1. Checking file versions...${NC}"
 echo "-------------------------------------------"
 
 PROD_DIR="/opt/hookprobe/fortress/lib"
-GIT_DIR="/home/andrei/hookprobe/products/fortress/lib"
+# Dynamically detect git repo root from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+GIT_DIR="${GIT_ROOT}/products/fortress/lib"
 
 for file in fingerbank.py sdn_autopilot.py mdns_resolver.py; do
     if [[ -f "$PROD_DIR/$file" ]] && [[ -f "$GIT_DIR/$file" ]]; then
