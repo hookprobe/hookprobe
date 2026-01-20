@@ -1,6 +1,42 @@
 # HookProbe IAM Integration Guide
 
-This guide explains how to integrate HookProbe's Django web application with Logto (POD-002) for centralized identity and access management.
+This guide explains how HookProbe's Django applications integrate with Logto for **unified, centralized identity and access management**.
+
+## Architecture: One Database, One Identity, One Login
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LOGTO (POD-002)                              │
+│                 Central Identity Provider                        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │   Users     │  │   Roles     │  │   OIDC      │             │
+│  │ (accounts)  │  │  (groups)   │  │  (clients)  │             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+            ┌───────────────┴───────────────┐
+            │                               │
+     ┌──────▼──────┐               ┌───────▼───────┐
+     │    MSSP     │               │ hookprobe.com │
+     │  Dashboard  │               │   Website     │
+     │  (JWT auth) │               │  (OIDC auth)  │
+     └──────┬──────┘               └───────┬───────┘
+            │                               │
+            └───────────────┬───────────────┘
+                            │
+                   ┌────────▼────────┐
+                   │   PostgreSQL    │
+                   │   (POD-003)     │
+                   │  Shared Users   │
+                   └─────────────────┘
+```
+
+**Key Principles:**
+- **ONE database** - PostgreSQL for all user data
+- **ONE identity provider** - Logto handles all authentication
+- **ONE login flow** - OIDC for website, JWT for API
+- **NO local password auth** - ModelBackend is removed
+- **Shadow users** - Django keeps User records for foreign keys only
 
 ## Overview
 
@@ -419,7 +455,7 @@ print(payload)
 Override `_get_or_create_user` method:
 
 ```python
-from apps.dashboard.authentication import LogtoAuthenticationBackend
+from shared.iam import LogtoAuthenticationBackend
 
 class CustomLogtoBackend(LogtoAuthenticationBackend):
     def _get_or_create_user(self, logto_user_id, username, email, payload):

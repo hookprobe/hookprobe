@@ -19,6 +19,10 @@ pass() { echo -e "${GREEN}✓ PASS${NC}: $1"; }
 fail() { echo -e "${RED}✗ FAIL${NC}: $1"; }
 warn() { echo -e "${YELLOW}⚠ WARN${NC}: $1"; }
 
+# Dynamically detect git repo root from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
 echo "1. Checking file locations..."
 echo "-------------------------------------------"
 
@@ -152,7 +156,7 @@ echo ""
 echo "4. Comparing git repo vs production..."
 echo "-------------------------------------------"
 
-GIT_FB="/home/user/hookprobe/products/fortress/lib/fingerbank.py"
+GIT_FB="$GIT_ROOT/products/fortress/lib/fingerbank.py"
 PROD_FB="/opt/hookprobe/fortress/lib/fingerbank.py"
 
 if [ -f "$GIT_FB" ] && [ -f "$PROD_FB" ]; then
@@ -186,7 +190,7 @@ echo ""
 echo "5. Fix Commands (if needed)..."
 echo "-------------------------------------------"
 echo "# Sync all lib files from git to production:"
-echo "sudo cp /home/user/hookprobe/products/fortress/lib/*.py /opt/hookprobe/fortress/lib/"
+echo "sudo cp $GIT_ROOT/products/fortress/lib/*.py /opt/hookprobe/fortress/lib/"
 echo ""
 echo "# Then restart dnsmasq to trigger new DHCP events:"
 echo "sudo systemctl restart dnsmasq"

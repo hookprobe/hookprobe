@@ -3,76 +3,536 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AIOCHI | Login</title>
+    <title>AIOCHI | Sign In</title>
 
-    <!-- Google Font: Source Sans Pro -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,700&display=fallback">
+    <!-- Google Font: Inter -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
     <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha384-iw3OoTErCYJJB9mLW8FF3eDoxzpVTSJyLijHRFEL5+U7LPkXh1+vgNrpRE4Z1fJ0" crossorigin="anonymous">
-    <!-- AdminLTE -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/css/adminlte.min.css" integrity="sha384-S5E5q6h1MYnSBRMVJPlZNmVA5+vSS9XbWvWv7B3J0Z3qI3F3f0X8RfiKD5e0eFxB" crossorigin="anonymous">
-</head>
-<body class="hold-transition login-page">
-<div class="login-box">
-    <div class="card card-outline card-primary">
-        <div class="card-header text-center">
-            <a href="/" class="h1"><b>AIOCHI</b> MSSP</a>
-        </div>
-        <div class="card-body">
-            <p class="login-box-msg">Sign in to access the dashboard</p>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
 
+    <style>
+        :root {
+            --hp-prussian-blue: #002742;
+            --hp-siren: #850033;
+            --hp-tangerine: #e69500;
+            --hp-primary: #1e3a8a;
+            --hp-primary-light: #3b82f6;
+            --hp-dark-bg: #1f2937;
+            --hp-dark-sidebar: #111827;
+            --hp-dark-card: #374151;
+            --hp-dark-border: #4b5563;
+            --hp-dark-text: #f9fafb;
+            --hp-dark-text-muted: #9ca3af;
+            --rag-green: #22c55e;
+            --rag-amber: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--hp-dark-sidebar) 0%, var(--hp-prussian-blue) 50%, var(--hp-dark-bg) 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Animated background grid */
+        .bg-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridMove 20s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+
+        /* Floating orbs */
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(60px);
+            opacity: 0.3;
+            animation: float 15s ease-in-out infinite;
+        }
+
+        .orb-1 {
+            width: 400px;
+            height: 400px;
+            background: var(--hp-primary-light);
+            top: -100px;
+            right: -100px;
+            animation-delay: 0s;
+        }
+
+        .orb-2 {
+            width: 300px;
+            height: 300px;
+            background: var(--hp-tangerine);
+            bottom: -50px;
+            left: -50px;
+            animation-delay: -5s;
+        }
+
+        .orb-3 {
+            width: 200px;
+            height: 200px;
+            background: var(--rag-green);
+            top: 50%;
+            right: 20%;
+            animation-delay: -10s;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(20px, -20px) scale(1.05); }
+            50% { transform: translate(-10px, 10px) scale(0.95); }
+            75% { transform: translate(15px, 15px) scale(1.02); }
+        }
+
+        /* Login container */
+        .login-container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 420px;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: rgba(55, 65, 81, 0.8);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow:
+                0 25px 50px -12px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+            padding: 48px 40px;
+            animation: slideUp 0.6s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Logo section */
+        .logo-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .logo-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--hp-primary-light) 0%, var(--hp-primary) 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            box-shadow: 0 10px 30px -5px rgba(59, 130, 246, 0.4);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 10px 30px -5px rgba(59, 130, 246, 0.4); }
+            50% { box-shadow: 0 10px 40px -5px rgba(59, 130, 246, 0.6); }
+        }
+
+        .logo-icon i {
+            font-size: 36px;
+            color: white;
+        }
+
+        .logo-text {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--hp-dark-text);
+            letter-spacing: -0.5px;
+        }
+
+        .logo-text span {
+            color: var(--hp-tangerine);
+        }
+
+        .logo-subtitle {
+            color: var(--hp-dark-text-muted);
+            font-size: 14px;
+            margin-top: 8px;
+            font-weight: 400;
+        }
+
+        /* Alert */
+        .alert {
+            background: rgba(220, 38, 38, 0.15);
+            border: 1px solid rgba(220, 38, 38, 0.3);
+            border-radius: 12px;
+            padding: 14px 18px;
+            margin-bottom: 24px;
+            color: #fca5a5;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: shake 0.5s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        .alert i {
+            font-size: 18px;
+        }
+
+        /* Form styles */
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-label {
+            display: block;
+            color: var(--hp-dark-text-muted);
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-wrapper i {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--hp-dark-text-muted);
+            font-size: 16px;
+            transition: color 0.25s ease;
+        }
+
+        .form-input {
+            width: 100%;
+            background: rgba(17, 24, 39, 0.6);
+            border: 2px solid var(--hp-dark-border);
+            border-radius: 12px;
+            padding: 16px 16px 16px 48px;
+            font-size: 15px;
+            color: var(--hp-dark-text);
+            font-family: inherit;
+            transition: all 0.25s ease;
+        }
+
+        .form-input::placeholder {
+            color: var(--hp-dark-text-muted);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--hp-primary-light);
+            background: rgba(17, 24, 39, 0.8);
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+        }
+
+        .form-input:focus + i,
+        .input-wrapper:focus-within i {
+            color: var(--hp-primary-light);
+        }
+
+        /* Remember me */
+        .remember-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .checkbox-wrapper input {
+            display: none;
+        }
+
+        .checkbox-custom {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--hp-dark-border);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.25s ease;
+        }
+
+        .checkbox-custom i {
+            font-size: 12px;
+            color: white;
+            opacity: 0;
+            transform: scale(0);
+            transition: all 0.2s ease;
+        }
+
+        .checkbox-wrapper input:checked + .checkbox-custom {
+            background: var(--hp-primary-light);
+            border-color: var(--hp-primary-light);
+        }
+
+        .checkbox-wrapper input:checked + .checkbox-custom i {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .checkbox-label {
+            color: var(--hp-dark-text-muted);
+            font-size: 14px;
+        }
+
+        .forgot-link {
+            color: var(--hp-primary-light);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: color 0.25s ease;
+        }
+
+        .forgot-link:hover {
+            color: var(--hp-tangerine);
+        }
+
+        /* Submit button */
+        .btn-submit {
+            width: 100%;
+            background: linear-gradient(135deg, var(--hp-primary-light) 0%, var(--hp-primary) 100%);
+            border: none;
+            border-radius: 12px;
+            padding: 18px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-submit::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px -5px rgba(59, 130, 246, 0.5);
+        }
+
+        .btn-submit:hover::before {
+            left: 100%;
+        }
+
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+
+        .btn-submit i {
+            margin-left: 8px;
+            transition: transform 0.25s ease;
+        }
+
+        .btn-submit:hover i {
+            transform: translateX(4px);
+        }
+
+        /* Footer */
+        .login-footer {
+            text-align: center;
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--hp-dark-border);
+        }
+
+        .footer-text {
+            color: var(--hp-dark-text-muted);
+            font-size: 13px;
+        }
+
+        .footer-text a {
+            color: var(--hp-tangerine);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .footer-text a:hover {
+            text-decoration: underline;
+        }
+
+        /* Status indicators */
+        .status-bar {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 16px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--hp-dark-text-muted);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--rag-green);
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .login-card {
+                padding: 36px 24px;
+                border-radius: 20px;
+            }
+
+            .logo-icon {
+                width: 64px;
+                height: 64px;
+            }
+
+            .logo-icon i {
+                font-size: 28px;
+            }
+
+            .logo-text {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="bg-grid"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="login-container">
+        <div class="login-card">
+            <!-- Logo Section -->
+            <div class="logo-section">
+                <div class="logo-icon">
+                    <i class="fas fa-shield-halved"></i>
+                </div>
+                <div class="logo-text">AIOCHI <span>MSSP</span></div>
+                <div class="logo-subtitle">Managed Security Service Platform</div>
+            </div>
+
+            <!-- Error Alert -->
             {% if form.errors %}
-            <div class="alert alert-danger">
-                Invalid username or password.
+            <div class="alert">
+                <i class="fas fa-exclamation-circle"></i>
+                <span>Invalid username or password. Please try again.</span>
             </div>
             {% endif %}
 
+            <!-- Login Form -->
             <form action="{% url 'login' %}" method="post">
                 {% csrf_token %}
-                <div class="input-group mb-3">
-                    <input type="text" name="username" class="form-control" placeholder="Username" required autofocus>
-                    <div class="input-group-append">
-                        <div class="input-group-text">
-                            <span class="fas fa-user"></span>
-                        </div>
+
+                <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <div class="input-wrapper">
+                        <input type="text" name="username" class="form-input" placeholder="Enter your username" required autofocus>
+                        <i class="fas fa-user"></i>
                     </div>
                 </div>
-                <div class="input-group mb-3">
-                    <input type="password" name="password" class="form-control" placeholder="Password" required>
-                    <div class="input-group-append">
-                        <div class="input-group-text">
-                            <span class="fas fa-lock"></span>
-                        </div>
+
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <div class="input-wrapper">
+                        <input type="password" name="password" class="form-input" placeholder="Enter your password" required>
+                        <i class="fas fa-lock"></i>
                     </div>
                 </div>
-                <div class="row">
-                    <div class="col-8">
-                        <div class="icheck-primary">
-                            <input type="checkbox" id="remember">
-                            <label for="remember">
-                                Remember Me
-                            </label>
-                        </div>
-                    </div>
-                    <div class="col-4">
-                        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
-                    </div>
+
+                <div class="remember-row">
+                    <label class="checkbox-wrapper">
+                        <input type="checkbox" name="remember" id="remember">
+                        <span class="checkbox-custom">
+                            <i class="fas fa-check"></i>
+                        </span>
+                        <span class="checkbox-label">Remember me</span>
+                    </label>
+                    <a href="{% url 'password_reset' %}" class="forgot-link">Forgot password?</a>
                 </div>
+
                 <input type="hidden" name="next" value="{{ next }}">
+
+                <button type="submit" class="btn-submit">
+                    Sign In
+                    <i class="fas fa-arrow-right"></i>
+                </button>
             </form>
 
-            <p class="mb-1">
-                <a href="{% url 'password_reset' %}">Forgot password?</a>
-            </p>
+            <!-- Footer -->
+            <div class="login-footer">
+                <p class="footer-text">
+                    Protected by <a href="https://hookprobe.com">HookProbe</a> Security
+                </p>
+                <div class="status-bar">
+                    <span class="status-item">
+                        <span class="status-dot"></span>
+                        All Systems Operational
+                    </span>
+                </div>
+            </div>
         </div>
     </div>
-</div>
-
-<!-- jQuery -->
-<script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha384-vtXRMe3mGCbOeY7l30aIg8H9p3GdeSe4IFlP6G8JMa7o7lXvnz3GFKzPxzJdPfGK" crossorigin="anonymous"></script>
-<!-- Bootstrap 4 -->
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-Piv4xVNRyMGpqkS2by6br4gNJ7DXjqk09RmUpJ8jgGtD7zP9yug3goQfGII0yAns" crossorigin="anonymous"></script>
-<!-- AdminLTE App -->
-<script src="https://cdn.jsdelivr.net/npm/admin-lte@3.2/dist/js/adminlte.min.js" integrity="sha384-9Q2Jj+u1N3jLxDynQSVKvsMGzLm+KJ5TjLgWKSqOvblvwgLZVxHR/dwJ4L0SJFo7" crossorigin="anonymous"></script>
 </body>
 </html>

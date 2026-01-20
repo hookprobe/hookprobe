@@ -51,7 +51,7 @@ Should be:
 
 ### 2.1 Problem: Hardcoded Default Values
 
-**File**: `/home/andrei/hookprobe/products/fortress/web/modules/aiochi/real_data.py:436-444`
+**File**: `$HOOKPROBE_ROOT/products/fortress/web/modules/aiochi/real_data.py:436-444`
 
 ```python
 # Current (returns defaults on any failure)
@@ -546,7 +546,7 @@ alert smb $HOME_NET any -> $HOME_NET any (
 ### 5.3 Automated Response Playbooks
 
 ```python
-# /home/andrei/hookprobe/shared/aiochi/playbooks/auto_response.py
+# $HOOKPROBE_ROOT/shared/aiochi/playbooks/auto_response.py
 
 class AutoResponsePlaybook:
     """Automated threat response with human-in-the-loop for critical actions."""
