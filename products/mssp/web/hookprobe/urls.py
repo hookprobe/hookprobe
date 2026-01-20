@@ -1,6 +1,12 @@
 """
 HookProbe AIOCHI MSSP URL Configuration
 
+Authentication:
+All authentication is handled by Logto (centralized IAM).
+- Login redirects to Logto OIDC
+- Logout clears session and redirects to Logto
+- Password reset is handled in Logto admin console
+
 NOTE: Public website (CMS, blog, merchandise) has been moved to hookprobe.com repository.
 This MSSP platform (aiochi.hookprobe.com) handles only dashboard and API functionality.
 """
@@ -10,13 +16,62 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.views.generic import RedirectView
-from django.contrib.auth import views as auth_views
+from django.contrib.auth import logout as auth_logout
 from django.http import HttpResponse
+from django.shortcuts import redirect
+from apps.dashboard.oidc_views import LogtoCallbackView
 
 
 def health_check(request):
     """Health check endpoint for container orchestration."""
     return HttpResponse("mssp-healthy\n", content_type="text/plain")
+
+
+def logto_login(request):
+    """
+    Login view - redirects to Logto OIDC.
+
+    All authentication is handled by Logto (centralized IAM).
+    """
+    if request.user.is_authenticated:
+        return redirect('/mssp/')
+
+    # Build Logto authorization URL
+    logto_endpoint = getattr(settings, 'LOGTO_ENDPOINT', 'http://10.200.2.12:3001')
+    client_id = getattr(settings, 'LOGTO_APP_ID', '')
+    redirect_uri = request.build_absolute_uri('/oidc/callback/')
+
+    if not client_id:
+        # Logto not configured - show error
+        return HttpResponse(
+            "Logto IAM not configured. Please set LOGTO_APP_ID environment variable.",
+            status=503,
+            content_type="text/plain"
+        )
+
+    auth_url = (
+        f"{logto_endpoint}/oidc/auth?"
+        f"client_id={client_id}&"
+        f"redirect_uri={redirect_uri}&"
+        f"response_type=code&"
+        f"scope=openid%20profile%20email%20roles"
+    )
+    return redirect(auth_url)
+
+
+def logto_logout(request):
+    """
+    Logout view - clears Django session and redirects to Logto logout.
+    """
+    # Clear Django session
+    auth_logout(request)
+
+    # Redirect to Logto end session
+    logto_endpoint = getattr(settings, 'LOGTO_ENDPOINT', 'http://10.200.2.12:3001')
+    post_logout_uri = request.build_absolute_uri('/login/')
+    logout_url = f"{logto_endpoint}/oidc/session/end?post_logout_redirect_uri={post_logout_uri}"
+
+    return redirect(logout_url)
 
 
 urlpatterns = [
@@ -29,23 +84,17 @@ urlpatterns = [
     # Root redirects to MSSP dashboard
     path('', RedirectView.as_view(url='/mssp/', permanent=False), name='home'),
 
-    # Authentication URLs (using admin_dashboard templates)
-    path('login/', auth_views.LoginView.as_view(template_name='admin_dashboard/auth/login.html'), name='login'),
-    path('logout/', auth_views.LogoutView.as_view(next_page='/login/'), name='logout'),
-    path('password-reset/', auth_views.PasswordResetView.as_view(
-        template_name='admin_dashboard/auth/password_reset.html',
-        email_template_name='admin_dashboard/auth/password_reset_email.html',
-        subject_template_name='admin_dashboard/auth/password_reset_subject.txt',
+    # Authentication URLs - Logto OIDC
+    path('login/', logto_login, name='login'),
+    path('sign-in/', RedirectView.as_view(url='/login/', permanent=True), name='sign_in'),
+    path('signin/', RedirectView.as_view(url='/login/', permanent=True), name='signin'),
+    path('logout/', logto_logout, name='logout'),
+    path('oidc/callback/', LogtoCallbackView.as_view(), name='oidc_callback'),
+
+    # Password reset - handled by Logto (redirect to Logto)
+    path('password-reset/', lambda r: redirect(
+        getattr(settings, 'LOGTO_ENDPOINT', 'http://10.200.2.12:3001') + '/forgot-password'
     ), name='password_reset'),
-    path('password-reset/done/', auth_views.PasswordResetDoneView.as_view(
-        template_name='admin_dashboard/auth/password_reset_done.html'
-    ), name='password_reset_done'),
-    path('password-reset-confirm/<uidb64>/<token>/', auth_views.PasswordResetConfirmView.as_view(
-        template_name='admin_dashboard/auth/password_reset_confirm.html'
-    ), name='password_reset_confirm'),
-    path('password-reset-complete/', auth_views.PasswordResetCompleteView.as_view(
-        template_name='admin_dashboard/auth/password_reset_complete.html'
-    ), name='password_reset_complete'),
 
     # Admin Dashboard (AdminLTE) - Internal team management
     path('dashboard/', include('apps.dashboard.urls', namespace='dashboard')),
@@ -65,9 +114,13 @@ urlpatterns = [
     # Security & Qsecbit
     path('security/', include('apps.security.urls', namespace='security')),
 
+    # SDN - MAC-based VLAN assignment for IoT segmentation
+    path('sdn/', include('apps.sdn.urls', namespace='sdn')),
+
     # API endpoints
     path('api/v1/devices/', include('apps.devices.api.urls')),
     path('api/v1/security/', include('apps.security.api.urls')),
+    path('api/v1/vpn/', include('apps.vpn.api.urls')),
 ]
 
 # Serve static and media files in development

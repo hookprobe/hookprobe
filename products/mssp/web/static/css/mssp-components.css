@@ -1,0 +1,821 @@
+/**
+ * HookProbe MSSP Components CSS
+ * Unified Design System for MSSP Dashboard
+ * Based on AdminLTE 3.2 + Fortress-style enhancements
+ * Version: 1.0.0
+ */
+
+/* ==========================================================================
+   CSS Variables - HookProbe Brand Colors
+   ========================================================================== */
+
+:root {
+    /* Primary Brand Colors */
+    --hp-prussian-blue: #002742;
+    --hp-siren: #850033;
+    --hp-tangerine: #e69500;
+    --hp-ebb: #e6dbdb;
+    --hp-black-pearl: #02040d;
+
+    /* Extended Palette */
+    --hp-primary: #1e3a8a;
+    --hp-primary-light: #3b82f6;
+    --hp-primary-dark: #1d4ed8;
+    --hp-success: #16a34a;
+    --hp-success-light: #22c55e;
+    --hp-warning: #ca8a04;
+    --hp-warning-light: #eab308;
+    --hp-danger: #dc2626;
+    --hp-danger-light: #ef4444;
+    --hp-info: #0891b2;
+    --hp-info-light: #06b6d4;
+
+    /* Dark Mode Colors */
+    --hp-dark-bg: #1f2937;
+    --hp-dark-sidebar: #111827;
+    --hp-dark-card: #374151;
+    --hp-dark-border: #4b5563;
+    --hp-dark-text: #f9fafb;
+    --hp-dark-text-muted: #9ca3af;
+
+    /* RAG Status Colors */
+    --rag-green: #22c55e;
+    --rag-amber: #f59e0b;
+    --rag-red: #ef4444;
+
+    /* Transitions */
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.25s ease;
+    --transition-slow: 0.35s ease;
+}
+
+/* ==========================================================================
+   Dark Mode Base Styles
+   ========================================================================== */
+
+.dark-mode {
+    background-color: var(--hp-dark-bg);
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .content-wrapper {
+    background-color: var(--hp-dark-bg);
+}
+
+.dark-mode .card {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+}
+
+.dark-mode .card-header {
+    background-color: rgba(0, 0, 0, 0.1);
+    border-bottom-color: var(--hp-dark-border);
+}
+
+.dark-mode .table {
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .table thead th {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-color: var(--hp-dark-border);
+}
+
+.dark-mode .table td,
+.dark-mode .table th {
+    border-color: var(--hp-dark-border);
+}
+
+.dark-mode .table-hover tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.dark-mode .main-footer {
+    background-color: var(--hp-dark-sidebar);
+    border-top-color: var(--hp-dark-border);
+    color: var(--hp-dark-text-muted);
+}
+
+.dark-mode .breadcrumb {
+    background-color: transparent;
+}
+
+.dark-mode .breadcrumb-item a {
+    color: var(--hp-primary-light);
+}
+
+.dark-mode .breadcrumb-item.active {
+    color: var(--hp-dark-text-muted);
+}
+
+.dark-mode .dropdown-menu {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+}
+
+.dark-mode .dropdown-item {
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .dropdown-item:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .dropdown-divider {
+    border-color: var(--hp-dark-border);
+}
+
+/* ==========================================================================
+   Navbar Styling
+   ========================================================================== */
+
+.main-header.navbar {
+    background: linear-gradient(135deg, var(--hp-primary) 0%, var(--hp-primary-light) 100%);
+    border-bottom: 3px solid var(--hp-primary-light);
+}
+
+.main-header .navbar-nav .nav-link {
+    color: #ffffff !important;
+    transition: color var(--transition-fast);
+}
+
+.main-header .navbar-nav .nav-link:hover {
+    color: #dbeafe !important;
+}
+
+.main-header .brand-title {
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+/* ==========================================================================
+   Sidebar Styling
+   ========================================================================== */
+
+.main-sidebar {
+    background: var(--hp-dark-sidebar) !important;
+}
+
+.dark-mode .main-sidebar {
+    background: var(--hp-dark-sidebar) !important;
+}
+
+.sidebar-dark-primary .nav-sidebar > .nav-item > .nav-link.active {
+    background-color: var(--hp-primary-light) !important;
+    color: #ffffff !important;
+}
+
+.brand-link {
+    border-bottom: 1px solid var(--hp-dark-border);
+}
+
+.brand-link.bg-hookprobe-primary {
+    background-color: var(--hp-primary) !important;
+}
+
+.nav-sidebar .nav-link {
+    transition: all var(--transition-fast);
+}
+
+.nav-sidebar .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.nav-header {
+    color: var(--hp-dark-text-muted) !important;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* ==========================================================================
+   RAG Status Badges
+   ========================================================================== */
+
+.rag-green,
+.status-badge.rag-green,
+.sidebar-rag-badge.rag-green {
+    background-color: var(--rag-green) !important;
+    color: #ffffff !important;
+}
+
+.rag-amber,
+.status-badge.rag-amber,
+.sidebar-rag-badge.rag-amber {
+    background-color: var(--rag-amber) !important;
+    color: #000000 !important;
+}
+
+.rag-red,
+.status-badge.rag-red,
+.sidebar-rag-badge.rag-red {
+    background-color: var(--rag-red) !important;
+    color: #ffffff !important;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.sidebar-rag-badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.4rem;
+}
+
+/* ==========================================================================
+   Severity Badges
+   ========================================================================== */
+
+.severity-critical {
+    background-color: var(--hp-danger) !important;
+    color: white !important;
+    font-weight: bold;
+}
+
+.severity-high {
+    background-color: #f97316 !important;
+    color: white !important;
+}
+
+.severity-medium {
+    background-color: var(--hp-warning-light) !important;
+    color: #000 !important;
+}
+
+.severity-low {
+    background-color: var(--hp-primary-light) !important;
+    color: white !important;
+}
+
+.severity-info {
+    background-color: var(--hp-info) !important;
+    color: white !important;
+}
+
+/* ==========================================================================
+   Status Badges (Online/Offline/Degraded)
+   ========================================================================== */
+
+.status-online {
+    background-color: var(--hp-success) !important;
+    color: white !important;
+}
+
+.status-offline {
+    background-color: var(--hp-danger) !important;
+    color: white !important;
+}
+
+.status-degraded {
+    background-color: var(--hp-warning) !important;
+    color: white !important;
+}
+
+.status-unknown {
+    background-color: #6b7280 !important;
+    color: white !important;
+}
+
+/* ==========================================================================
+   Metric Cards (Small Boxes)
+   ========================================================================== */
+
+.metric-card {
+    transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.metric-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+}
+
+.small-box .icon {
+    transition: transform var(--transition-normal);
+}
+
+.small-box:hover .icon {
+    transform: scale(1.1);
+}
+
+/* Info Boxes */
+.info-box {
+    transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.info-box:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+/* ==========================================================================
+   Cards Enhancement
+   ========================================================================== */
+
+.card {
+    border-radius: 0.5rem;
+    transition: box-shadow var(--transition-normal);
+}
+
+.card:hover {
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.card-header {
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.card-title {
+    font-weight: 600;
+    margin-bottom: 0;
+}
+
+.card-title i {
+    opacity: 0.8;
+}
+
+/* ==========================================================================
+   Tab Navigation
+   ========================================================================== */
+
+.nav-tabs-custom {
+    margin-bottom: 20px;
+}
+
+.nav-tabs-custom .nav-link {
+    border-radius: 0;
+    color: #6b7280;
+    border: none;
+    border-bottom: 3px solid transparent;
+    transition: all var(--transition-fast);
+}
+
+.nav-tabs-custom .nav-link:hover {
+    color: var(--hp-primary);
+    border-bottom-color: rgba(59, 130, 246, 0.3);
+}
+
+.nav-tabs-custom .nav-link.active {
+    color: var(--hp-primary);
+    border-bottom: 3px solid var(--hp-primary-light);
+    background: transparent;
+}
+
+.dark-mode .nav-tabs-custom .nav-link {
+    color: var(--hp-dark-text-muted);
+}
+
+.dark-mode .nav-tabs-custom .nav-link.active {
+    color: var(--hp-primary-light);
+}
+
+/* ==========================================================================
+   Timeline Styling
+   ========================================================================== */
+
+.timeline {
+    position: relative;
+    margin: 0;
+    padding: 0;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 15px;
+    width: 2px;
+    background: var(--hp-dark-border);
+}
+
+.dark-mode .timeline::before {
+    background: var(--hp-dark-border);
+}
+
+.timeline .time-label {
+    margin-bottom: 10px;
+}
+
+.timeline .time-label > span {
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.timeline-item {
+    background: #ffffff;
+    border-radius: 0.5rem;
+    margin-bottom: 10px;
+    margin-left: 35px;
+    padding: 10px;
+    border: 1px solid #e5e7eb;
+}
+
+.dark-mode .timeline-item {
+    background: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+}
+
+.timeline-header {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.timeline-body {
+    font-size: 0.85rem;
+    color: #6b7280;
+}
+
+.dark-mode .timeline-body {
+    color: var(--hp-dark-text-muted);
+}
+
+/* ==========================================================================
+   Tables Enhancement
+   ========================================================================== */
+
+.table-striped tbody tr:nth-of-type(odd) {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.dark-mode .table-striped tbody tr:nth-of-type(odd) {
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* DataTables Integration */
+.dataTables_wrapper .dataTables_filter input {
+    border-radius: 0.375rem;
+    border: 1px solid #d1d5db;
+    padding: 0.375rem 0.75rem;
+}
+
+.dark-mode .dataTables_wrapper .dataTables_filter input {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .dataTables_wrapper .dataTables_length select {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .dataTables_wrapper .dataTables_info,
+.dark-mode .dataTables_wrapper .dataTables_paginate {
+    color: var(--hp-dark-text-muted);
+}
+
+/* ==========================================================================
+   Forms Enhancement
+   ========================================================================== */
+
+.form-control:focus {
+    border-color: var(--hp-primary-light);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.dark-mode .form-control {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+    color: var(--hp-dark-text);
+}
+
+.dark-mode .form-control:focus {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-primary-light);
+}
+
+.dark-mode .custom-select {
+    background-color: var(--hp-dark-card);
+    border-color: var(--hp-dark-border);
+    color: var(--hp-dark-text);
+}
+
+/* ==========================================================================
+   Buttons Enhancement
+   ========================================================================== */
+
+.btn {
+    border-radius: 0.375rem;
+    font-weight: 500;
+    transition: all var(--transition-fast);
+}
+
+.btn-primary {
+    background-color: var(--hp-primary);
+    border-color: var(--hp-primary);
+}
+
+.btn-primary:hover {
+    background-color: var(--hp-primary-dark);
+    border-color: var(--hp-primary-dark);
+    transform: translateY(-1px);
+}
+
+.btn-hookprobe {
+    background: linear-gradient(135deg, var(--hp-primary) 0%, var(--hp-primary-light) 100%);
+    border: none;
+    color: white;
+}
+
+.btn-hookprobe:hover {
+    background: linear-gradient(135deg, var(--hp-primary-dark) 0%, var(--hp-primary) 100%);
+    color: white;
+    transform: translateY(-1px);
+}
+
+/* ==========================================================================
+   Live Indicator
+   ========================================================================== */
+
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background-color: var(--rag-green);
+    border-radius: 50%;
+    margin-right: 5px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    }
+}
+
+#live-indicator {
+    display: flex;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+/* ==========================================================================
+   Alerts Enhancement
+   ========================================================================== */
+
+.alert {
+    border-radius: 0.5rem;
+    border: none;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+.alert-dismissible .close {
+    padding: 0.75rem 1rem;
+}
+
+/* ==========================================================================
+   Loading States
+   ========================================================================== */
+
+.loading-spinner {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        #f0f0f0 25%,
+        #e0e0e0 50%,
+        #f0f0f0 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+}
+
+.dark-mode .skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--hp-dark-card) 25%,
+        var(--hp-dark-border) 50%,
+        var(--hp-dark-card) 75%
+    );
+    background-size: 200% 100%;
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* ==========================================================================
+   Charts Container
+   ========================================================================== */
+
+.chart-container {
+    position: relative;
+    min-height: 200px;
+}
+
+/* ==========================================================================
+   Signal Strength Bar (for SDN)
+   ========================================================================== */
+
+.signal-bar {
+    display: inline-block;
+    width: 60px;
+    height: 8px;
+    background: var(--hp-dark-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.signal-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width var(--transition-normal);
+}
+
+.signal-bar-fill.excellent {
+    background: var(--hp-success);
+    width: 100%;
+}
+
+.signal-bar-fill.good {
+    background: var(--hp-success-light);
+    width: 75%;
+}
+
+.signal-bar-fill.fair {
+    background: var(--hp-warning);
+    width: 50%;
+}
+
+.signal-bar-fill.poor {
+    background: var(--hp-danger);
+    width: 25%;
+}
+
+/* ==========================================================================
+   SDN Device Cards
+   ========================================================================== */
+
+.device-card {
+    border-left: 4px solid var(--hp-primary);
+    transition: all var(--transition-normal);
+}
+
+.device-card:hover {
+    border-left-color: var(--hp-primary-light);
+    transform: translateX(5px);
+}
+
+.device-card.online {
+    border-left-color: var(--hp-success);
+}
+
+.device-card.offline {
+    border-left-color: var(--hp-danger);
+}
+
+.device-card.degraded {
+    border-left-color: var(--hp-warning);
+}
+
+/* ==========================================================================
+   VLAN Tags
+   ========================================================================== */
+
+.vlan-tag {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: white;
+}
+
+.vlan-tag.vlan-default {
+    background-color: #6b7280;
+}
+
+.vlan-tag.vlan-trusted {
+    background-color: var(--hp-success);
+}
+
+.vlan-tag.vlan-guest {
+    background-color: var(--hp-info);
+}
+
+.vlan-tag.vlan-iot {
+    background-color: var(--hp-warning);
+}
+
+.vlan-tag.vlan-quarantine {
+    background-color: var(--hp-danger);
+}
+
+/* ==========================================================================
+   Responsive Adjustments
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .content-header h1 {
+        font-size: 1.25rem;
+    }
+
+    .small-box h3 {
+        font-size: 1.5rem;
+    }
+
+    .info-box-number {
+        font-size: 1.25rem;
+    }
+
+    .card-title {
+        font-size: 0.9rem;
+    }
+
+    .table-responsive {
+        font-size: 0.85rem;
+    }
+}
+
+/* ==========================================================================
+   Utility Classes
+   ========================================================================== */
+
+.text-hookprobe-primary {
+    color: var(--hp-primary) !important;
+}
+
+.bg-hookprobe-primary {
+    background-color: var(--hp-primary) !important;
+}
+
+.border-hookprobe {
+    border-color: var(--hp-primary) !important;
+}
+
+.text-muted-light {
+    color: var(--hp-dark-text-muted) !important;
+}
+
+/* Spacing utilities */
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 1rem; }
+.gap-4 { gap: 1.5rem; }
+
+/* Flex utilities */
+.flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ==========================================================================
+   Print Styles
+   ========================================================================== */
+
+@media print {
+    .main-sidebar,
+    .main-header,
+    .main-footer,
+    .btn,
+    .no-print {
+        display: none !important;
+    }
+
+    .content-wrapper {
+        margin-left: 0 !important;
+        background: white !important;
+    }
+
+    .card {
+        border: 1px solid #ddd !important;
+        box-shadow: none !important;
+    }
+}

@@ -1,119 +1,170 @@
 {% extends 'sdn/base.html' %}
-{% block title %}Device Categories{% endblock %}
 
-{% block content %}
-<h1 style="margin-bottom: 1.5rem;">Device Categories</h1>
+{% block sdn_title %}Device Categories{% endblock %}
+{% block sdn_breadcrumb %}
+<li class="breadcrumb-item active">Categories</li>
+{% endblock %}
 
+{% block sdn_content %}
 <!-- Create Category -->
 <div class="card">
-    <h2>Create Category</h2>
-    <form method="post">
-        {% csrf_token %}
-        <div class="grid grid-3">
-            <div class="form-group">
-                <label>Name</label>
-                <input type="text" name="name" placeholder="Smart Lights" required>
+    <div class="card-header">
+        <h3 class="card-title">
+            <i class="fas fa-plus-circle mr-2"></i>
+            Create Category
+        </h3>
+    </div>
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="name">Name</label>
+                        <input type="text" class="form-control" id="name" name="name" placeholder="Smart Lights" required>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="default_vlan">Default VLAN ID</label>
+                        <input type="number" class="form-control" id="default_vlan" name="default_vlan" min="1" max="4094" placeholder="10" required>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="color">Color</label>
+                        <input type="color" class="form-control" id="color" name="color" value="#607D8B" style="height: 38px;">
+                    </div>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Default VLAN ID</label>
-                <input type="number" name="default_vlan" min="1" max="4094" placeholder="10" required>
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="allow_internet" name="allow_internet">
+                        <label class="custom-control-label" for="allow_internet">Allow Internet Access</label>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="allow_local_network" name="allow_local_network">
+                        <label class="custom-control-label" for="allow_local_network">Allow Local Network</label>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="isolate_clients" name="isolate_clients" checked>
+                        <label class="custom-control-label" for="isolate_clients">Isolate Clients</label>
+                    </div>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Color</label>
-                <input type="color" name="color" value="#607D8B">
-            </div>
-        </div>
-        <div class="grid grid-3" style="margin-bottom: 1rem;">
-            <label class="checkbox-label">
-                <input type="checkbox" name="allow_internet">
-                Allow Internet Access
-            </label>
-            <label class="checkbox-label">
-                <input type="checkbox" name="allow_local_network">
-                Allow Local Network
-            </label>
-            <label class="checkbox-label">
-                <input type="checkbox" name="isolate_clients" checked>
-                Isolate Clients
-            </label>
-        </div>
-        <button type="submit" class="btn btn-success">Create Category</button>
-    </form>
+            <button type="submit" class="btn btn-success">
+                <i class="fas fa-plus mr-1"></i> Create Category
+            </button>
+        </form>
+    </div>
 </div>
 
 <!-- Category List -->
 <div class="card">
-    <h2>All Categories</h2>
-    {% if categories %}
-    <table>
-        <thead>
-            <tr>
-                <th>Category</th>
-                <th>Default VLAN</th>
-                <th>Internet</th>
-                <th>Local Network</th>
-                <th>Isolation</th>
-                <th>Devices</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for cat in categories %}
-            <tr>
-                <td>
-                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ cat.color }}; margin-right: 0.5rem;"></span>
-                    <strong>{{ cat.name }}</strong>
-                    {% if cat.description %}<br><small style="color: var(--gray-600);">{{ cat.description }}</small>{% endif %}
-                </td>
-                <td><strong>{{ cat.default_vlan }}</strong></td>
-                <td>
-                    {% if cat.allow_internet %}
-                    <span class="badge badge-success">Allowed</span>
-                    {% else %}
-                    <span class="badge badge-danger">Blocked</span>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if cat.allow_local_network %}
-                    <span class="badge badge-success">Allowed</span>
-                    {% else %}
-                    <span class="badge badge-danger">Blocked</span>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if cat.isolate_clients %}
-                    <span class="badge badge-info">Isolated</span>
-                    {% else %}
-                    <span class="badge badge-warning">Shared</span>
-                    {% endif %}
-                </td>
-                <td>{{ cat.devices.count }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p style="color: var(--gray-600);">No categories created yet.</p>
-    {% endif %}
+    <div class="card-header">
+        <h3 class="card-title">
+            <i class="fas fa-tags mr-2"></i>
+            All Categories
+        </h3>
+    </div>
+    <div class="card-body p-0">
+        {% if categories %}
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Default VLAN</th>
+                        <th>Internet</th>
+                        <th>Local Network</th>
+                        <th>Isolation</th>
+                        <th>Devices</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cat in categories %}
+                    <tr>
+                        <td>
+                            <span class="category-color-dot" style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ cat.color }}; margin-right: 0.5rem;"></span>
+                            <strong>{{ cat.name }}</strong>
+                            {% if cat.description %}
+                            <br><small class="text-muted">{{ cat.description }}</small>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge badge-info">{{ cat.default_vlan }}</span></td>
+                        <td>
+                            {% if cat.allow_internet %}
+                            <span class="badge status-online">Allowed</span>
+                            {% else %}
+                            <span class="badge status-offline">Blocked</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cat.allow_local_network %}
+                            <span class="badge status-online">Allowed</span>
+                            {% else %}
+                            <span class="badge status-offline">Blocked</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cat.isolate_clients %}
+                            <span class="badge badge-info">Isolated</span>
+                            {% else %}
+                            <span class="badge badge-warning">Shared</span>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge badge-secondary">{{ cat.devices.count }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="fas fa-tags fa-4x text-muted mb-3"></i>
+            <h5 class="text-muted">No categories created yet</h5>
+            <p class="text-muted">Create your first category using the form above.</p>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 <!-- Pre-defined Categories -->
 <div class="card">
-    <h2>Suggested Categories</h2>
-    <p style="color: var(--gray-600); margin-bottom: 1rem;">Common IoT device categories for easy setup:</p>
-    <table>
-        <thead>
-            <tr><th>Category</th><th>Suggested VLAN</th><th>Use Case</th></tr>
-        </thead>
-        <tbody>
-            <tr><td>Smart Lights</td><td>10</td><td>Philips Hue, LIFX, smart bulbs</td></tr>
-            <tr><td>Thermostats</td><td>20</td><td>Nest, Ecobee, smart HVAC</td></tr>
-            <tr><td>Cameras</td><td>30</td><td>Security cameras, video doorbells</td></tr>
-            <tr><td>Voice Assistants</td><td>40</td><td>Alexa, Google Home, HomePod</td></tr>
-            <tr><td>Appliances</td><td>50</td><td>Smart fridges, washers, ovens</td></tr>
-            <tr><td>Entertainment</td><td>60</td><td>Smart TVs, streaming devices</td></tr>
-            <tr><td>Robots</td><td>70</td><td>Vacuum robots, lawn mowers</td></tr>
-            <tr><td>Sensors</td><td>80</td><td>Motion, door/window, water sensors</td></tr>
-        </tbody>
-    </table>
+    <div class="card-header">
+        <h3 class="card-title">
+            <i class="fas fa-lightbulb mr-2"></i>
+            Suggested Categories
+        </h3>
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-3">Common IoT device categories for easy setup:</p>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Suggested VLAN</th>
+                        <th>Use Case</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><i class="fas fa-lightbulb text-warning mr-2"></i>Smart Lights</td><td>10</td><td>Philips Hue, LIFX, smart bulbs</td></tr>
+                    <tr><td><i class="fas fa-temperature-half text-info mr-2"></i>Thermostats</td><td>20</td><td>Nest, Ecobee, smart HVAC</td></tr>
+                    <tr><td><i class="fas fa-video text-danger mr-2"></i>Cameras</td><td>30</td><td>Security cameras, video doorbells</td></tr>
+                    <tr><td><i class="fas fa-microphone text-primary mr-2"></i>Voice Assistants</td><td>40</td><td>Alexa, Google Home, HomePod</td></tr>
+                    <tr><td><i class="fas fa-blender text-secondary mr-2"></i>Appliances</td><td>50</td><td>Smart fridges, washers, ovens</td></tr>
+                    <tr><td><i class="fas fa-tv text-success mr-2"></i>Entertainment</td><td>60</td><td>Smart TVs, streaming devices</td></tr>
+                    <tr><td><i class="fas fa-robot text-purple mr-2"></i>Robots</td><td>70</td><td>Vacuum robots, lawn mowers</td></tr>
+                    <tr><td><i class="fas fa-wave-square text-cyan mr-2"></i>Sensors</td><td>80</td><td>Motion, door/window, water sensors</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 </div>
 {% endblock %}
