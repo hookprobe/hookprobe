@@ -1,5 +1,14 @@
 """
-Django settings for HookProbe project - Base Configuration
+Django settings for HookProbe MSSP project - Base Configuration
+
+Unified IAM Integration:
+This configuration integrates with Logto (POD-002) for centralized identity
+management. The unified role system supports: admin, editor, customer, soc_analyst.
+
+Authentication Flow:
+1. LogtoAuthenticationBackend authenticates via JWT tokens
+2. LogtoMiddleware extracts Bearer tokens from Authorization headers
+3. Django ModelBackend provides fallback for local accounts
 """
 
 import os
@@ -54,6 +63,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'apps.dashboard.authentication.LogtoMiddleware',  # Logto token authentication
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -113,6 +123,24 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Authentication backends - Logto first, then Django fallback
+AUTHENTICATION_BACKENDS = [
+    'apps.dashboard.authentication.LogtoAuthenticationBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# Authentication URLs
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/mssp/'
+LOGOUT_REDIRECT_URL = '/login/'
+
+# Logto IAM Configuration (POD-002)
+# Central identity provider for unified roles: admin, editor, customer, soc_analyst
+LOGTO_ENDPOINT = os.getenv('LOGTO_ENDPOINT', 'http://10.200.2.12:3001')
+LOGTO_APP_ID = os.getenv('LOGTO_APP_ID', '')
+LOGTO_APP_SECRET = os.getenv('LOGTO_APP_SECRET', '')
+LOGTO_ISSUER = os.getenv('LOGTO_ISSUER', f"{LOGTO_ENDPOINT}/oidc")
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
