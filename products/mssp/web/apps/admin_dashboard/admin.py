@@ -21,7 +21,7 @@ class AIContentDraftAdmin(admin.ModelAdmin):
     ]
     list_filter = ['status', 'ai_provider', 'created_at']
     search_fields = ['title', 'content', 'summary']
-    readonly_fields = ['created_at', 'updated_at', 'published_at']
+    readonly_fields = ['created_at', 'updated_at']
     filter_horizontal = []
 
     fieldsets = (
@@ -44,7 +44,7 @@ class AIContentDraftAdmin(admin.ModelAdmin):
             'fields': ('status', 'created_by', 'reviewed_by', 'scheduled_publish_date')
         }),
         ('Publishing', {
-            'fields': ('blog_post', 'created_at', 'updated_at', 'published_at'),
+            'fields': ('blog_post', 'created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )

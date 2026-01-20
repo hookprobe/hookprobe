@@ -2126,7 +2126,9 @@ install_qsecbit_agent() {
     mkdir -p /opt/hookprobe/guardian/data
 
     # Copy QSecBit modules from source (if available)
-    local QSECBIT_SRC="/home/xsoc/hookprobe/core/qsecbit"
+    # Dynamically detect hookprobe root from script location
+    local HOOKPROBE_ROOT="$(cd "$GUARDIAN_ROOT/../.." && pwd)"
+    local QSECBIT_SRC="$HOOKPROBE_ROOT/core/qsecbit"
     if [ -d "$QSECBIT_SRC" ]; then
         log_info "Copying QSecBit modules from source..."
         cp -r "$QSECBIT_SRC"/*.py /opt/hookprobe/guardian/qsecbit/ 2>/dev/null || true

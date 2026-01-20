@@ -170,13 +170,71 @@ detect_hookprobe_com() {
     fi
 }
 
+display_architecture_warning() {
+    log_section "Architecture Mode & Namespace Warning"
+
+    echo ""
+    echo -e "${YELLOW}┌─────────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${YELLOW}│              CRITICAL: ROOT vs ROOTLESS ARCHITECTURE                │${NC}"
+    echo -e "${YELLOW}└─────────────────────────────────────────────────────────────────────┘${NC}"
+    echo ""
+
+    if [ "$HOOKPROBE_COM_RUNNING" = true ]; then
+        echo -e "${CYAN}Mode: HYBRID (Root MSSP + Rootless Proxy)${NC}"
+        echo ""
+        echo "  This installation uses HYBRID architecture:"
+        echo "  • hookprobe-proxy (nginx) runs in ROOTLESS namespace"
+        echo "  • MSSP containers run in ROOT namespace"
+        echo ""
+        echo -e "${YELLOW}IMPORTANT: Cross-namespace communication requires host networking${NC}"
+        echo "  • mssp-django MUST run with --network=host"
+        echo "  • mssp-logto MUST run with --network=host"
+        echo "  • nginx proxies to host.containers.internal"
+        echo ""
+        echo -e "${RED}SECURITY RULES (Documented in ARCHITECTURE.md):${NC}"
+        echo "  • NEVER add 'localhost' to ALLOWED_HOSTS"
+        echo "  • NEVER add '127.0.0.1' to ALLOWED_HOSTS"
+        echo "  • NEVER add 'host.containers.internal' to ALLOWED_HOSTS"
+        echo "  • These open doors for Host Header Injection attacks"
+        echo ""
+        echo "  Correct ALLOWED_HOSTS example:"
+        echo "    DJANGO_ALLOWED_HOSTS=mssp.hookprobe.com,mssp.local,172.20.1.10"
+        echo ""
+        echo -e "${CYAN}For simpler management, consider migrating to fully rootless:${NC}"
+        echo "  See: products/mssp/MIGRATION-ROOTLESS.md"
+    else
+        echo -e "${GREEN}Mode: STANDALONE (All containers in ROOT namespace)${NC}"
+        echo ""
+        echo "  This is the simplest architecture:"
+        echo "  • All containers run with sudo (root namespace)"
+        echo "  • Direct container-name DNS resolution works"
+        echo "  • No cross-namespace issues"
+        echo ""
+        echo -e "${YELLOW}If you later add hookprobe-com website:${NC}"
+        echo "  • You'll need to switch to HYBRID mode"
+        echo "  • Run: ./setup.sh (it will auto-detect)"
+    fi
+
+    echo ""
+    echo -e "${BLUE}Run health check after installation: ./scripts/health-check.sh${NC}"
+    echo ""
+
+    # Give user time to read if not in quiet mode
+    if [ "${QUIET:-false}" != "true" ]; then
+        sleep 2
+    fi
+}
+
 # =============================================================================
-# HOOKPROBE-COM INTEGRATION MODE
+# HOOKPROBE-COM INTEGRATION MODE (HYBRID)
 # =============================================================================
 # When hookprobe-com is running, MSSP integrates with its infrastructure:
-# - Uses hookprobe-com's nginx proxy (subdomain routing)
-# - Uses hookprobe-com's podman network (172.30.0.0/24)
-# - Runs under the same user (rootless podman)
+# - hookprobe-com's nginx proxy handles subdomain routing (rootless)
+# - MSSP containers run with host networking for cross-namespace access (root)
+# - Django/Logto accessible via host.containers.internal from rootless proxy
+#
+# CRITICAL SECURITY: Do NOT add localhost/127.0.0.1/host.containers.internal
+# to Django's ALLOWED_HOSTS. This allows Host Header Injection attacks.
 # =============================================================================
 
 deploy_with_hookprobe_com() {
@@ -1212,9 +1270,13 @@ POSTGRES_DB=hookprobe
 POSTGRES_USER=hookprobe
 POSTGRES_PASSWORD=$postgres_password
 
-# Redis/Valkey
-REDIS_HOST=172.20.4.10
-REDIS_PORT=6379
+# Valkey (Redis-compatible) - Uses standard REDIS_* vars for Django compatibility
+# Valkey 7.2 is a drop-in replacement for Redis with same protocol
+VALKEY_HOST=172.20.4.10
+VALKEY_PORT=6379
+# Django expects REDIS_* env vars - Valkey uses same redis:// protocol
+REDIS_HOST=\$VALKEY_HOST
+REDIS_PORT=\$VALKEY_PORT
 
 # ClickHouse
 CLICKHOUSE_HOST=172.20.5.10
@@ -2682,10 +2744,14 @@ main() {
     # Detect hookprobe-com website for integration
     detect_hookprobe_com
 
+    # Display architecture warning (root vs rootless, security rules)
+    display_architecture_warning
+
     # Branch based on hookprobe-com integration
     if [ "$HOOKPROBE_COM_RUNNING" = true ]; then
-        log_info "Using HookProbe-COM integration mode"
-        log_info "MSSP containers will run alongside hookprobe-com"
+        log_info "Using HookProbe-COM integration mode (HYBRID)"
+        log_info "MSSP containers will run in ROOT namespace with host networking"
+        log_info "hookprobe-proxy (ROOTLESS) will route via host.containers.internal"
 
         # Simplified installation for integration mode
         deploy_with_hookprobe_com
@@ -2693,7 +2759,7 @@ main() {
     fi
 
     # Standalone installation (full MSSP stack)
-    log_info "Using standalone installation mode"
+    log_info "Using standalone installation mode (ROOT only)"
     log_info "MSSP will deploy its own infrastructure"
 
     # Installation steps

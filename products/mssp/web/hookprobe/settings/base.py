@@ -5,6 +5,13 @@ Unified IAM Integration:
 This configuration integrates with Logto (POD-002) for centralized identity
 management. The unified role system supports: admin, editor, customer, soc_analyst.
 
+IAM Module:
+Uses the shared IAM module at /home/ubuntu/hookprobe/shared/iam/ which provides:
+- UNIFIED_ROLES: Single source of truth for role definitions
+- LogtoAuthenticationBackend: JWT-based authentication
+- LogtoMiddleware: Bearer token extraction from Authorization headers
+- Helper functions: user_is_admin(), user_can_access_mssp(), etc.
+
 Authentication Flow:
 1. LogtoAuthenticationBackend authenticates via JWT tokens
 2. LogtoMiddleware extracts Bearer tokens from Authorization headers
@@ -63,7 +70,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'apps.dashboard.authentication.LogtoMiddleware',  # Logto token authentication
+    'shared.iam.middleware.LogtoMiddleware',  # Unified IAM - Logto token authentication
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -124,10 +131,11 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-# Authentication backends - Logto first, then Django fallback
+# Authentication backends - Logto ONLY (no local password auth)
+# All authentication is handled by Logto IAM (centralized identity provider)
+# Users are created as "shadow" records in Django for foreign key relationships
 AUTHENTICATION_BACKENDS = [
-    'apps.dashboard.authentication.LogtoAuthenticationBackend',
-    'django.contrib.auth.backends.ModelBackend',
+    'shared.iam.backends.LogtoAuthenticationBackend',  # Unified IAM backend
 ]
 
 # Authentication URLs

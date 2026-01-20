@@ -306,9 +306,13 @@ new Chart(alertsCtx, {
     }
 });
 
-// Auto-refresh every 30 seconds
-setInterval(function() {
-    location.reload();
-}, 30000);
+// Live polling handled by mssp-components.js
+// Page-specific data refresh via custom event
+$(document).on('hookprobe:status-updated', function(e, data) {
+    // Update page-specific elements if needed
+    if (data.alerts) {
+        // Could update alert counts here without page reload
+    }
+});
 </script>
 {% endblock %}
