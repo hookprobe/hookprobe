@@ -27,11 +27,11 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 # Import our components
 from .hybrid_kem import HybridKEM, HybridKEMPublicKey, HybridKEMCiphertext
-from ..network.nat_traversal import STUNClient, RendezvousClient, RelayClient, NATMapping
-from ..attestation.device_identity import DeviceIdentity, DeviceAttestation, AttestationVerifier
-from ..validation.validator_network import ValidatorNetwork, ValidationRequest, ValidationVote, ThresholdProof
-from ..audit.merkle_log import MerkleLog, EventType
-from ..neural.engine import WeightState
+from ...neuro.network.nat_traversal import STUNClient, RendezvousClient, RelayClient, NATMapping
+from ...neuro.attestation.device_identity import DeviceIdentity, DeviceAttestation, AttestationVerifier
+from ...neuro.validation.validator_network import ValidatorNetwork, ValidationRequest, ValidationVote, ThresholdProof
+from ...neuro.audit.merkle_log import MerkleLog, EventType
+from ...neuro.neural.engine import WeightState
 
 
 @dataclass
@@ -422,7 +422,7 @@ class EnhancedNeuroTransport:
 
     def _determine_connection_type(self, nat_mapping: NATMapping) -> str:
         """Determine connection type based on NAT."""
-        from ..network.nat_traversal import NATType
+        from ...neuro.network.nat_traversal import NATType
 
         if nat_mapping.nat_type == NATType.OPEN:
             return 'direct'
@@ -437,7 +437,7 @@ if __name__ == '__main__':
     print("=== Enhanced Neuro Transport V2 Test ===\n")
 
     async def test_enhanced_transport():
-        from ..neural.engine import create_initial_weights
+        from ...neuro.neural.engine import create_initial_weights
 
         # Create components
         W0 = create_initial_weights(seed=42)
@@ -445,7 +445,7 @@ if __name__ == '__main__':
         merkle_log = MerkleLog(log_id="test-validator")
 
         # Register validators
-        from ..validation.validator_network import ValidatorInfo, ValidatorStatus
+        from ...neuro.validation.validator_network import ValidatorInfo, ValidatorStatus
         from cryptography.hazmat.primitives.asymmetric import ed25519
         import secrets
 
