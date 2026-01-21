@@ -61,6 +61,8 @@ INSTALLED_APPS = [
     'apps.security',
     'apps.vpn',               # IKEv2 VPN profile generation and management
     'apps.sdn',               # MAC-based VLAN assignment for IoT segmentation
+    'apps.cortex',            # Cortex 3D globe visualization
+    'apps.adversarial',       # AI vs AI adversarial testing framework
 ]
 
 MIDDLEWARE = [
