@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from ..neural.engine import WeightState
+from ...neuro.neural.engine import WeightState
 
 
 @dataclass
@@ -373,7 +373,7 @@ class NeuroZServer:
 
 # Example usage
 if __name__ == '__main__':
-    from ..neural.engine import create_initial_weights
+    from ...neuro.neural.engine import create_initial_weights
 
     print("=== Testing Neuro-Z E2EE Transport ===\n")
 

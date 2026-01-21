@@ -117,6 +117,12 @@ urlpatterns = [
     # SDN - MAC-based VLAN assignment for IoT segmentation
     path('sdn/', include('apps.sdn.urls', namespace='sdn')),
 
+    # Cortex - 3D globe visualization
+    path('cortex/', include('apps.cortex.urls', namespace='cortex')),
+
+    # Adversarial - AI vs AI testing framework
+    path('adversarial/', include('apps.adversarial.urls', namespace='adversarial')),
+
     # API endpoints
     path('api/v1/devices/', include('apps.devices.api.urls')),
     path('api/v1/security/', include('apps.security.api.urls')),
