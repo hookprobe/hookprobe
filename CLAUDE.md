@@ -56,14 +56,12 @@
 | **On-Demand Probe** | 60s burst packet capture | `products/fortress/lib/autopilot/probe_service.py` |
 | **IPFIX Collector** | Sampled D2D flow analysis | `products/fortress/lib/autopilot/ipfix_collector.py` |
 | **Fingerbank API setup** | External enrichment | `products/fortress/docs/FINGERBANK-API-SETUP.md` |
-| **MSSP web portal** | Django app | `products/mssp/web/` |
 | **NAT traversal** | Mesh networking | `shared/mesh/nat_traversal.py` |
 | **Email infrastructure** | Infrastructure pod | `infrastructure/pod-009-email/` |
 | **Cortex (3D Globe)** | Shared visualization | `shared/cortex/` |
 | **Understand security fabric** | City-level visualization | `shared/cortex/README.md` (see "Understanding Your Security Fabric") |
 | **Cortex connectors** | Product connectors | `shared/cortex/backend/connectors/` |
 | **Add Cortex to Guardian** | Flask integration | `shared/cortex/backend/connectors/guardian.py` |
-| **Add Cortex to MSSP** | Django integration | `shared/cortex/backend/connectors/mssp.py` |
 | **Guardian UI styling** | Forty-inspired CSS | `products/guardian/web/static/css/main.css` |
 | **UI design reference** | HTML5UP Forty template | `assets/forty/` |
 | **E2E security flow** | Attack detection→response→propagation | See [E2E Security Flow](#end-to-end-e2e-security-flow) |
@@ -143,7 +141,7 @@ HookProbe is a **federated cybersecurity mesh** - a family of protectors buildin
 **Key Capabilities:**
 - **AI-Powered Threat Detection**: Qsecbit algorithm for L2-L7 security analysis
 - **Federated Defense**: Privacy-preserving collective intelligence
-- **Multi-Tier Products**: Sentinel, Guardian, Fortress, Nexus, MSSP
+- **Multi-Tier Products**: Sentinel, Guardian, Fortress, Nexus
 - **Zero Trust Mesh**: HTP protocol with post-quantum cryptography
 - **AI DNS Protection**: dnsXai for ML-based ad/tracker blocking
 - **Mesh Consciousness**: Collective threat intelligence sharing
@@ -151,7 +149,7 @@ HookProbe is a **federated cybersecurity mesh** - a family of protectors buildin
 
 **Project Type**: Federated Security Platform / Infrastructure-as-Code
 **Primary Languages**: Python (core logic), Bash (deployment)
-**Web Frameworks**: Flask (Guardian), Django (MSSP)
+**Web Frameworks**: Flask (Guardian, Fortress)
 **Deployment**: Podman containers with OVS networking
 **License**: Dual Licensed (AGPL v3.0 + Commercial) - see [Licensing](#licensing)
 
@@ -163,14 +161,12 @@ HookProbe is a **federated cybersecurity mesh** - a family of protectors buildin
 | **Guardian** | 1.5GB | Travel/Portable | `products/guardian/` |
 | **Fortress** | 4GB | Small Business | `products/fortress/` |
 | **Nexus** | 16GB+ | ML/AI Compute | `products/nexus/` |
-| **MSSP** | 16GB+ | Central Brain | `products/mssp/` |
 
 **Target Markets:**
 - **Sentinel**: IoT devices, validators, lightweight edge nodes
 - **Guardian**: Travelers, home users, portable protection
 - **Fortress**: Small businesses (flower shops, bakeries, retail, trades)
 - **Nexus**: AI/ML workloads, regional compute hubs
-- **MSSP**: Service providers, multi-tenant cloud platform
 
 ---
 
@@ -213,7 +209,6 @@ These directories contain proprietary innovations. Commercial license required f
 | **n8n Webhook Integration** | `products/fortress/lib/n8n_webhook.py` | Proprietary |
 | **Reinforcement Learning Feedback** | `products/fortress/lib/reinforcement_feedback.py` | Proprietary |
 | **AI Autopilot (Efficiency Engine)** | `products/fortress/lib/autopilot/` | Proprietary |
-| **MSSP Cloud Platform** | `products/mssp/` | Proprietary |
 
 ### Usage Guidelines
 
@@ -221,7 +216,7 @@ These directories contain proprietary innovations. Commercial license required f
 |----------|------------------|
 | Personal/Home use | Free (AGPL + personal use of proprietary) |
 | Internal business protection | Free (AGPL + internal use of proprietary) |
-| MSSP/SaaS offering | Commercial License Required |
+| SaaS offering | Commercial License Required |
 | OEM/Product embedding | Commercial License Required |
 
 **Full details**: See `LICENSING.md` in project root
@@ -376,8 +371,7 @@ hookprobe/
 │   │   │       ├── manager.py       # ConnectorManager aggregator
 │   │   │       ├── guardian.py      # Guardian Flask integration
 │   │   │       ├── fortress.py      # Fortress DSM integration
-│   │   │       ├── nexus.py         # Nexus ML/AI integration
-│   │   │       └── mssp.py          # MSSP Django integration
+│   │   │       └── nexus.py         # Nexus ML/AI integration
 │   │   ├── frontend/
 │   │   │   ├── index.html           # Cortex main page
 │   │   │   ├── css/globe.css        # Premium styling
@@ -530,35 +524,8 @@ hookprobe/
 │   │       ├── podman-compose.yml   # Container orchestration
 │   │       └── Containerfile.*      # Container definitions
 │   │
-│   ├── nexus/                        # ML/AI Compute (16GB+)
-│   │   └── (minimal - future expansion)
-│   │
-│   └── mssp/                         # Cloud MSSP Platform
-│       ├── README.md
-│       ├── device_registry.py       # Device management
-│       ├── geolocation.py           # Location services
-│       ├── setup.sh
-│       ├── uninstall.sh
-│       ├── lib/
-│       │   └── htp_validator.py     # HTP validation
-│       ├── scripts/
-│       │   └── health-check.sh
-│       └── web/                     # Django Web Portal
-│           ├── README.md
-│           ├── .env.example
-│           ├── Dockerfile.test
-│           └── apps/               # Django apps
-│               ├── admin_dashboard/ # Admin UI
-│               ├── cms/             # Content management
-│               ├── common/          # Shared utilities
-│               ├── dashboard/       # Main dashboard
-│               ├── devices/         # Device management
-│               ├── merchandise/     # Product catalog
-│               ├── monitoring/      # System monitoring
-│               ├── mssp_dashboard/  # MSSP-specific views
-│               ├── sdn/             # SDN management
-│               ├── security/        # Security features
-│               └── vpn/             # VPN services
+│   └── nexus/                        # ML/AI Compute (16GB+)
+│       └── (minimal - future expansion)
 │
 ├── deploy/                           # DEPLOYMENT SCRIPTS
 │   ├── README.md
@@ -667,10 +634,9 @@ hookprobe/
 │   │   └── README.md
 │   ├── dashboards/
 │   │   ├── README.md
-│   │   ├── admin-dashboard.md
-│   │   └── mssp-dashboard.md
+│   │   └── admin-dashboard.md
 │   ├── deployment/
-│   │   └── MSSP-PRODUCTION-DEPLOYMENT.md
+│   │   └── README.md
 │   ├── guides/
 │   │   ├── ai-business.md
 │   │   ├── clickhouse-integration.md
@@ -1995,39 +1961,6 @@ The workflow in `n8n-workflows/device-identification.json` automates:
 5. Save to ClickHouse
 6. Update SDN rules
 
-### MSSP - Cloud Federation Platform
-
-**Location**: `products/mssp/`
-
-Multi-tenant cloud platform at mssp.hookprobe.com.
-
-**Architecture**:
-- **Backend**: Django with multiple apps
-- **API**: REST APIs with DRF
-- **Services**: VPN, SDN, monitoring, CMS
-
-**Django Apps** (`web/apps/`):
-
-| App | Purpose |
-|-----|---------|
-| `admin_dashboard/` | Admin UI, AI content services |
-| `cms/` | Content management system |
-| `dashboard/` | Main user dashboard |
-| `devices/` | Device management API |
-| `monitoring/` | System monitoring |
-| `mssp_dashboard/` | MSSP-specific views |
-| `sdn/` | SDN management API |
-| `security/` | Security features API |
-| `vpn/` | VPN services (profiles, certs) |
-| `merchandise/` | Product catalog |
-
-**Management Commands**:
-```bash
-python manage.py seed_demo_data    # CMS demo content
-python manage.py seed_ai_content   # AI-generated content
-python manage.py seed_merchandise  # Product catalog
-```
-
 ---
 
 ## Cortex Visualization
@@ -2066,8 +1999,7 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 │  │       ▲                                                 ││
 │  │       ├── GuardianConnector (Flask integration)         ││
 │  │       ├── FortressConnector (DSM participation)         ││
-│  │       ├── NexusConnector (ML/AI metrics)                ││
-│  │       └── MSSPConnector (Django integration)            ││
+│  │       └── NexusConnector (ML/AI metrics)                ││
 │  │                                                         ││
 │  │  HTP Bridge → core/htp/ (mesh participant)              ││
 │  └─────────────────────────────────────────────────────────┘│
@@ -2087,7 +2019,6 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 | `backend/connectors/guardian.py` | Guardian Flask integration |
 | `backend/connectors/fortress.py` | Fortress DSM integration |
 | `backend/connectors/nexus.py` | Nexus ML/AI integration |
-| `backend/connectors/mssp.py` | MSSP Django integration |
 | `frontend/js/globe.js` | Globe.gl initialization with clustering |
 | `frontend/js/data-stream.js` | WebSocket client with mode switching |
 | `frontend/js/cluster-manager.js` | **Phase 1**: Supercluster spatial clustering |
@@ -2147,14 +2078,6 @@ connector = create_nexus_connector(
     lng=-122.0839,
     label="Mountain View Nexus"
 )
-```
-
-**MSSPConnector** (`connectors/mssp.py`):
-```python
-from visualization.globe.backend.connectors.mssp import create_django_connector
-
-# In products/mssp/web/settings.py
-GLOBE_CONNECTOR = create_django_connector()
 ```
 
 ### Demo/Live Mode Toggle
@@ -2234,8 +2157,8 @@ This section documents the complete E2E flow when an attack is detected, how it 
 │  │ (Consensus) │    │ (Transport) │    │   (Auth)    │    │   (Visual)  │      │
 │  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘      │
 │                                                                                  │
-│  Product Tiers:  SENTINEL ──▶ GUARDIAN ──▶ FORTRESS ──▶ NEXUS ──▶ MSSP        │
-│                  (Validate)   (Detect)     (Route)      (ML)      (Aggregate)   │
+│  Product Tiers:  SENTINEL ──▶ GUARDIAN ──▶ FORTRESS ──▶ NEXUS                 │
+│                  (Validate)   (Detect)     (Route)      (ML/Aggregate)          │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -2516,7 +2439,7 @@ Use this checklist to verify complete E2E flow:
 **Guardian (1.5GB - Travel Companion):**
 - Full L2-L7 detection pipeline
 - Local Qsecbit scoring
-- Dual-path: P2P mesh + MSSP uplink
+- Dual-path: P2P mesh + cloud uplink
 - Collective score aggregation
 - Autonomous defense (AUTONOMOUS state)
 
@@ -2531,12 +2454,8 @@ Use this checklist to verify complete E2E flow:
 - Pattern correlation across mesh
 - Predictive threat escalation
 - Advanced behavioral analysis
-
-**MSSP (16GB+ - Central Brain):**
 - Multi-tenant aggregation
-- Cross-tenant deduplication
 - Historical threat database
-- Dashboard and reporting
 
 ### Key Integration Files
 
@@ -2688,7 +2607,6 @@ make deploy-sentinel  # Deploy Sentinel tier
 make deploy-guardian  # Deploy Guardian tier
 make deploy-fortress  # Deploy Fortress tier
 make deploy-nexus     # Deploy Nexus tier
-make deploy-mssp      # Deploy MSSP tier
 
 # Status
 make status           # Show deployment status
@@ -2824,26 +2742,6 @@ python app.py  # Runs on https://localhost:8443
 # Default login: admin / hookprobe (change immediately!)
 ```
 
-### Adding MSSP Django App
-
-```bash
-# 1. Create Django app
-cd products/mssp/web
-python manage.py startapp new_app apps/new_app
-
-# 2. Add to INSTALLED_APPS
-nano settings.py
-
-# 3. Create models, views, urls
-nano apps/new_app/models.py
-nano apps/new_app/views.py
-nano apps/new_app/urls.py
-
-# 4. Run migrations
-python manage.py makemigrations
-python manage.py migrate
-```
-
 ### Working with Infrastructure
 
 ```bash
@@ -2932,7 +2830,6 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `security`
 | `*.py` | Logic only | YES |
 | `*.sh` | Logic only | YES |
 | `.env` files | Secrets | NO |
-| `products/mssp/web/.env.example` | Template | YES |
 
 ### Security Testing
 
@@ -2961,7 +2858,6 @@ make security
 | CI failure | Run locally first | `make check` |
 | Container issues | Check podman | `podman ps -a && podman logs <name>` |
 | Guardian web 404 | Check blueprints | Verify module registered in `app.py` |
-| MSSP Django errors | Check migrations | `python manage.py migrate` |
 
 ### Getting Help
 
@@ -2984,7 +2880,7 @@ shared/dnsXai/engine.py          # DNS protection
 shared/mesh/ARCHITECTURE.md      # Mesh architecture (MUST READ)
 shared/mesh/unified_transport.py # Mesh transport API
 products/guardian/web/app.py     # Guardian Flask app
-products/mssp/web/apps/          # MSSP Django apps
+products/fortress/web/app.py     # Fortress Flask app
 shared/cortex/                   # Cortex - Neural Command Center
 tests/                           # All tests
 .github/workflows/               # CI/CD
@@ -3002,8 +2898,8 @@ pytest tests/ -vv   # Verbose tests
 # Guardian web UI (Flask)
 cd products/guardian/web && python app.py
 
-# MSSP web portal (Django)
-cd products/mssp/web && python manage.py runserver
+# Fortress web UI (Flask)
+cd products/fortress/web && python app.py
 
 # Cortex visualization (demo mode)
 cd shared/cortex/backend && python server.py --demo

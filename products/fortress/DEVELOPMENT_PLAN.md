@@ -481,4 +481,4 @@ MVP is complete when:
 3. **Captive Portal** - Guest WiFi login page
 4. **Backup/Restore** - Configuration backup
 5. **Multi-site** - Manage multiple Fortress nodes
-6. **MSSP Integration** - Cloud dashboard sync
+6. **Mesh Integration** - Cloud dashboard sync

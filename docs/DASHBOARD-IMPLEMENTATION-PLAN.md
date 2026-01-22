@@ -8,7 +8,7 @@
 
 This document outlines the implementation plan for three major HookProbe components:
 1. **Admin Dashboard** - Content management and AI-powered blogging for HookProbe team
-2. **MSSP Dashboard** - SIEM-like security monitoring interface for customers
+2. **Security Dashboard** - SIEM-like security monitoring interface for customers
 3. **Email System** - Integrated email solution with DKIM and Cloudflare Tunnel support
 
 ---
@@ -205,7 +205,7 @@ class N8NWebhookView(APIView):
 
 ---
 
-## 2. MSSP Dashboard (Customer-Facing)
+## 2. Security Dashboard (Customer-Facing)
 
 ### 2.1 Overview
 
@@ -234,7 +234,7 @@ class N8NWebhookView(APIView):
 
 **Data Sources:**
 ```python
-# apps/mssp_dashboard/services/metrics.py
+# apps/security_dashboard/services/metrics.py
 class MetricsAggregator:
     def get_qsecbit_score(self, device_id):
         """Query ClickHouse for latest Qsecbit score."""
@@ -272,7 +272,7 @@ class MetricsAggregator:
 
 **MapBox Implementation:**
 ```html
-<!-- templates/mssp_dashboard/endpoints.html -->
+<!-- templates/security_dashboard/endpoints.html -->
 <div id="map" style="height: 600px;"></div>
 
 <script>
@@ -319,7 +319,7 @@ devices.forEach(device => {
 
 **AI Integration:**
 ```python
-# apps/mssp_dashboard/services/vulnerability_ai.py
+# apps/security_dashboard/services/vulnerability_ai.py
 class VulnerabilityAI:
     def get_mitigation_recommendations(self, cve_id):
         """Use AI to generate mitigation recommendations."""
@@ -352,7 +352,7 @@ class VulnerabilityAI:
 
 **Playbook Data Model:**
 ```python
-# apps/mssp_dashboard/models.py
+# apps/security_dashboard/models.py
 class SOARPlaybook(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField()
@@ -394,8 +394,8 @@ class SOARPlaybook(models.Model):
 
 - **n8n Automation Integration:**
   - **Workflow Triggers:**
-    - `/api/v1/mssp/xsoc/trigger-hunt/` - Trigger automated threat hunt
-    - `/api/v1/mssp/xsoc/incident-response/` - Automated incident response
+    - `/api/v1/security/xsoc/trigger-hunt/` - Trigger automated threat hunt
+    - `/api/v1/security/xsoc/incident-response/` - Automated incident response
   - **Example Workflows:**
     - **Automated Threat Hunt:** n8n → Query ClickHouse for IOCs → Analyze with AI → Create hunt report → Notify SOC
     - **Incident Escalation:** Critical alert → n8n → Assess severity → Notify on-call → Create incident ticket → Execute playbook
@@ -429,7 +429,7 @@ class SOARPlaybook(models.Model):
 ### 2.3 Real-Time Updates (WebSocket)
 
 ```python
-# apps/mssp_dashboard/consumers.py
+# apps/security_dashboard/consumers.py
 from channels.generic.websocket import AsyncWebsocketConsumer
 import json
 
@@ -683,7 +683,7 @@ HookProbe v5.0 implements a modular architecture with the following components:
 
 ### Dashboards
 - [Admin Dashboard](docs/dashboards/admin-dashboard.md) - Content & merchandise management
-- [MSSP Dashboard](docs/dashboards/mssp-dashboard.md) - Security monitoring for customers
+- [Security Dashboard](docs/dashboards/) - Security monitoring (see hookprobe-com repository)
 ```
 
 ### 4.3 Create Component README Files
@@ -730,7 +730,7 @@ Integrated SMTP server for sending notifications, alerts, and transactional emai
 - [ ] Integrate AI API (OpenAI/Anthropic)
 - [ ] Create n8n webhook endpoints
 
-### Week 5-7: MSSP Dashboard
+### Week 5-7: Security Dashboard
 - [ ] Build Home tab with real-time metrics
 - [ ] Implement Endpoints tab with MapBox
 - [ ] Create Vulnerabilities tab with AI recommendations
@@ -822,16 +822,16 @@ POST /api/v1/admin/merchandise/products/  - Create product
 POST /api/v1/admin/n8n/webhook/           - n8n webhook receiver
 ```
 
-### MSSP Dashboard APIs
+### Security Dashboard APIs
 ```
-GET  /api/v1/mssp/dashboard/metrics/      - Real-time metrics
-GET  /api/v1/mssp/endpoints/              - Device locations
-GET  /api/v1/mssp/vulnerabilities/        - Vulnerability list
-POST /api/v1/mssp/vulnerabilities/{id}/recommend/ - AI recommendations
-GET  /api/v1/mssp/soar/playbooks/         - List playbooks
-POST /api/v1/mssp/soar/playbooks/         - Create playbook
-POST /api/v1/mssp/xsoc/threat-hunt/       - Trigger threat hunt
-GET  /api/v1/mssp/xsoc/incidents/         - List incidents
+GET  /api/v1/security/dashboard/metrics/      - Real-time metrics
+GET  /api/v1/security/endpoints/              - Device locations
+GET  /api/v1/security/vulnerabilities/        - Vulnerability list
+POST /api/v1/security/vulnerabilities/{id}/recommend/ - AI recommendations
+GET  /api/v1/security/soar/playbooks/         - List playbooks
+POST /api/v1/security/soar/playbooks/         - Create playbook
+POST /api/v1/security/xsoc/threat-hunt/       - Trigger threat hunt
+GET  /api/v1/security/xsoc/incidents/         - List incidents
 ```
 
 ---
@@ -849,7 +849,7 @@ GET  /api/v1/mssp/xsoc/incidents/         - List incidents
 **Recommended starting point:**
 - Start with **Phase 4** (Documentation + Logo) - Quick wins
 - Then **Phase 1** (Admin Dashboard) - Foundation for content
-- Then **Phase 2** (MSSP Dashboard) - Customer-facing features
+- Then **Phase 2** (Security Dashboard) - Customer-facing features
 - Finally **Phase 3** (Email System) - Infrastructure support
 
 ---

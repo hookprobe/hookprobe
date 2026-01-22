@@ -11,7 +11,7 @@
 # ============================================================================
 # Options: edge, cloud, standalone
 # - edge: Full web server on edge device (recommended for home/SMB)
-# - cloud: Centralized MSSP web server (multi-tenant)
+# - cloud: Centralized Service Provider web server (multi-tenant)
 # - standalone: Development/testing
 DEPLOYMENT_TYPE="${DEPLOYMENT_TYPE:-edge}"
 
@@ -101,7 +101,7 @@ EMAIL_HOST_PASSWORD="${EMAIL_HOST_PASSWORD:-}"
 DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-noreply@hookprobe.local}"
 
 # ============================================================================
-# Multi-Tenant Configuration (MSSP Cloud only)
+# Multi-Tenant Configuration (Service Provider Cloud only)
 # ============================================================================
 MULTITENANT_ENABLED="${MULTITENANT_ENABLED:-false}"
 TENANT_ID="${TENANT_ID:-default}"

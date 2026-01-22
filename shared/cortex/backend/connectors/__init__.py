@@ -3,7 +3,7 @@
 Product Connectors for HookProbe Globe Visualization
 
 This package provides connectors that allow each HookProbe product tier
-(Sentinel, Guardian, Fortress, Nexus, MSSP) to report their state to
+(Sentinel, Guardian, Fortress, Nexus) to report their state to
 the globe digital twin visualization.
 
 Architecture:
@@ -16,9 +16,9 @@ Architecture:
         │                             │                             │
         ▼                             ▼                             ▼
 ┌───────────────┐           ┌───────────────┐           ┌───────────────┐
-│   Guardian    │           │   Fortress    │           │     MSSP      │
+│   Guardian    │           │   Fortress    │           │     Nexus     │
 │   Connector   │           │   Connector   │           │   Connector   │
-│  (Flask app)  │           │ (edge router) │           │ (Django app)  │
+│  (Flask app)  │           │ (edge router) │           │  (ML/AI hub)  │
 └───────────────┘           └───────────────┘           └───────────────┘
 
 Each connector:

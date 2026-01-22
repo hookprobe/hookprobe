@@ -17,7 +17,7 @@ A production-ready Django 5.0 application with:
 - **5 Core Applications:**
   - `cms` - Public-facing CMS (Forty HTML5 theme)
   - `dashboard` - Admin interface (AdminLTE theme)
-  - `devices` - MSSP device management (multi-tenant)
+  - `devices` - Service Provider device management (multi-tenant)
   - `security` - Qsecbit integration, security events
   - `monitoring` - Grafana/ClickHouse integration
 
@@ -79,8 +79,8 @@ Complete addon infrastructure with:
 |----------|-------------|----------|
 | **Edge with UI** | Full web interface on edge device | Home users, SMB (16GB+ RAM) |
 | **Edge Headless** | No web interface, APIs only | Constrained devices (8GB RAM) |
-| **Cloud Centralized** | Centralized web for multiple edges | MSSP with 10+ customers |
-| **Hybrid** | Mix of edge UI and cloud management | Large MSSP, flexible requirements |
+| **Cloud Centralized** | Centralized web for multiple edges | Service Provider with 10+ customers |
+| **Hybrid** | Mix of edge UI and cloud management | Large Service Provider, flexible requirements |
 | **Development** | Local testing setup | Development, CI/CD |
 
 ## 📋 Installation Options
@@ -178,7 +178,7 @@ unzip AdminLTE-3.2.0.zip
 
 ### 2. **Flexibility**
 - Edge users can choose: full UI, headless, or skip
-- MSSP can centralize web management
+- Service Provider can centralize web management
 - Mix and match based on customer needs
 
 ### 3. **Resource Efficiency**
@@ -250,7 +250,7 @@ sudo ./setup-webserver-podman.sh edge
 # Access: http://edge-ip/
 ```
 
-### MSSP (10+ Customers)
+### Service Provider (10+ Customers)
 
 ```bash
 # On each edge device: Install base only

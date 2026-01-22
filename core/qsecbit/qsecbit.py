@@ -180,7 +180,7 @@ class Qsecbit:
         # System metadata
         self.hostname = socket.gethostname()
         self.pod_name = os.getenv('POD_NAME', 'unknown')
-        self.tenant_id = os.getenv('TENANT_ID', 'default')  # For MSSP multi-tenancy
+        self.tenant_id = os.getenv('TENANT_ID', 'default')  # For multi-tenancy
         self.deployment_type = os.getenv('DEPLOYMENT_TYPE', 'edge')  # 'edge' or 'cloud-backend'
 
         # XDP/eBPF integration (for edge deployments)
@@ -259,7 +259,7 @@ class Qsecbit:
                 print(f"Warning: ClickHouse not available: {e}")
                 self.db_enabled = False
 
-        # Doris integration (for cloud backend MSSP deployments)
+        # Doris integration (for cloud backend deployments)
         elif self.deployment_type == 'cloud-backend' and DORIS_AVAILABLE and os.getenv('DORIS_ENABLED', 'true').lower() == 'true':
             try:
                 # SECURITY FIX: Require password, no empty default (CWE-798)
@@ -734,7 +734,7 @@ class Qsecbit:
         layers L2-L7, including ML-based classification and automated response.
 
         Args:
-            deployment_type: One of 'guardian', 'fortress', 'nexus', 'mssp'
+            deployment_type: One of 'guardian', 'fortress', 'nexus'
             enable_response: Enable automated threat response
             data_dir: Directory for detector state
 
@@ -755,7 +755,6 @@ class Qsecbit:
             'guardian': unified.DeploymentType.GUARDIAN,
             'fortress': unified.DeploymentType.FORTRESS,
             'nexus': unified.DeploymentType.NEXUS,
-            'mssp': unified.DeploymentType.MSSP,
         }
         deployment = deployment_map.get(deployment_type.lower(), unified.DeploymentType.GUARDIAN)
 
@@ -788,7 +787,7 @@ class Qsecbit:
         - Layer 7: SQL Injection, XSS, DNS Tunneling, HTTP Flood
 
         Args:
-            deployment_type: One of 'guardian', 'fortress', 'nexus', 'mssp'
+            deployment_type: One of 'guardian', 'fortress', 'nexus'
             enable_response: Enable automated threat response
 
         Returns:
@@ -832,7 +831,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Qsecbit Unified - Unified Threat Detection')
     parser.add_argument('--mode', choices=['legacy', 'unified', 'both'], default='both',
                         help='Detection mode: legacy (v5.0), unified (Unified), or both')
-    parser.add_argument('--deployment', choices=['guardian', 'fortress', 'nexus', 'mssp'],
+    parser.add_argument('--deployment', choices=['guardian', 'fortress', 'nexus'],
                         default='guardian', help='Deployment type for unified engine')
     args = parser.parse_args()
 

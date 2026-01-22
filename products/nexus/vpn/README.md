@@ -1,6 +1,6 @@
 # Nexus VPN Gateway Configuration
 
-This directory contains IKEv2/strongSwan configuration for the Nexus MSSP gateway.
+This directory contains IKEv2/strongSwan configuration for the Nexus mesh gateway.
 
 ## Architecture
 

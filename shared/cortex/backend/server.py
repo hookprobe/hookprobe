@@ -6,7 +6,7 @@ Phase 1C: Production Integration
 
 Digital twin visualization server that:
 1. Connects to the HookProbe mesh via HTP protocol (production mode)
-2. Integrates with product connectors (Guardian, Fortress, Nexus, MSSP)
+2. Integrates with product connectors (Guardian, Fortress, Nexus)
 3. Broadcasts real-time events to connected browsers
 4. Supports dynamic switching between demo and live data
 5. Provides REST API for configuration and statistics
@@ -16,7 +16,7 @@ Usage:
     python server.py --demo
 
     # Production mode (connect to mesh)
-    python server.py --bootstrap mssp.hookprobe.com:8144
+    python server.py --bootstrap mesh.hookprobe.com:8144
 
     # With product connector
     python server.py --connector guardian --node-id guardian-home-001
@@ -26,7 +26,7 @@ Options:
     --api-port      REST API port (default: 8766)
     --demo          Start in demo mode (can be toggled at runtime)
     --bootstrap     Bootstrap node for HTP mesh (host:port)
-    --connector     Product connector to use (guardian, fortress, nexus, mssp)
+    --connector     Product connector to use (guardian, fortress, nexus)
     --node-id       Node ID for this instance
     --lat           Latitude for geographic placement
     --lng           Longitude for geographic placement

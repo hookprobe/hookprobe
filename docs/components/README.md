@@ -52,7 +52,7 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 - Automatic rule updates from threat intelligence
 - Content delivery and caching
 - Admin dashboard (AdminLTE)
-- MSSP device management interface
+- Device management interface
 
 **Documentation**: [POD-001.md](POD-001.md) *(to be created)*
 
@@ -311,7 +311,7 @@ cd /home/user/hookprobe
 sudo ./install.sh
 
 # Select: 2) Select Deployment Mode
-# Then: 1) Edge Deployment (or 2) MSSP Cloud Backend)
+# Then: 1) Edge Deployment (or 2) Cloud Backend)
 ```
 
 ### Add Optional PODs

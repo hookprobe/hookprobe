@@ -43,8 +43,8 @@ After deployment, create two OIDC applications in Logto Admin Console:
    - Redirect URI: `https://hookprobe.com/oidc/callback/`
    - Scopes: `openid profile email roles`
 
-2. **mssp.hookprobe.com** (Traditional Web App)
-   - Redirect URI: `https://mssp.hookprobe.com/oidc/callback/`
+2. **mesh.hookprobe.com** (Traditional Web App)
+   - Redirect URI: `https://mesh.hookprobe.com/oidc/callback/`
    - Scopes: `openid profile email roles`
 
 ### Roles
@@ -54,7 +54,7 @@ Create the following roles in Logto:
 | Role | Description |
 |------|-------------|
 | `admin` | Full access to all services |
-| `soc_analyst` | MSSP dashboard access only |
+| `soc_analyst` | Security dashboard access only |
 | `editor` | CMS/blog editing access |
 | `customer` | Shop/merchandise access |
 

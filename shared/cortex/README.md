@@ -79,15 +79,15 @@ HookProbe Cortex is the **Neural Command Center** - a real-time 3D digital twin 
 - **Node popups** - detailed info on click
 
 ### Fleet Management (Phase 3)
-- **Multi-tenant access control** - MSSP Admin, Fleet Admin, End User
-- **MSSP Admin "God View"** - see ALL endpoints across ALL customers
+- **Multi-tenant access control** - Global Admin, Fleet Admin, End User
+- **Global Admin "God View"** - see ALL endpoints across ALL customers
 - **Fleet Admin view** - see only your organization's devices
 - **City-level clustering** - IP-based geolocation, city-level accuracy
 - **User-declared locations** - precise locations visible only to fleet admins
 - **Department breakdown** - organizational structure visualization
 - **Device search and filtering** - find devices by name, tier, status
 - **Bulk actions** - select and focus on multiple devices
-- **Customer selector** - filter by customer (MSSP admin only)
+- **Customer selector** - filter by customer (global admin only)
 
 ### Enhanced Heartbeat System (Phase 3)
 - **RAG-based pulse speed** - faster heartbeat = more critical status
@@ -229,7 +229,6 @@ This is the difference between *believing* you're protected and *seeing* your pr
 - **HTP Bridge**: Full connection to core/htp/ protocol
 - **Live Qsecbit**: Real-time score updates from mesh nodes
 - **Guardian Embedding**: Integrated into Guardian Flask web UI
-- **MSSP Embedding**: Integrated into MSSP Django portal
 - **Expanded Demo Data**: +30% more nodes, threats, and attack types
 
 ---
@@ -253,14 +252,14 @@ python -m http.server 8080
 ### Production Mode (Connected to Mesh)
 
 ```bash
-# Connect to MSSP mesh
-python server.py --bootstrap mssp.hookprobe.com:8144 --node-id cortex-prod-001
+# Connect to mesh network
+python server.py --bootstrap mesh.hookprobe.com:8144 --node-id cortex-prod-001
 
 # Or connect to local Guardian
 python server.py --bootstrap localhost:8144 --node-id cortex-local
 
 # With geographic location
-python server.py --bootstrap mssp.hookprobe.com:8144 \
+python server.py --bootstrap mesh.hookprobe.com:8144 \
     --node-id cortex-hq --lat 37.7749 --lng -122.4194 --label "HQ Cortex"
 ```
 
@@ -288,7 +287,7 @@ Options:
                               ┌─────────────────────────────────────┐
                               │         HookProbe Mesh              │
                               │  Sentinels, Guardians, Fortresses   │
-                              │  Nexuses, MSSP                      │
+                              │  Nexuses                            │
                               └──────────────┬──────────────────────┘
                                              │ HTP Protocol (native)
                                              ▼
@@ -313,7 +312,6 @@ Options:
 │  │  - GuardianConnector (Flask integration)                             │  │
 │  │  - FortressConnector (DSM participation)                             │  │
 │  │  - NexusConnector (ML/AI metrics)                                    │  │
-│  │  - MSSPConnector (Django integration)                                │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                    ↓                                        │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
@@ -385,33 +383,6 @@ app.register_blueprint(cortex_bp)
 - `/api/cortex/location` - Auto-detect location from WAN IP
 - `/api/cortex/events` - Recent security events
 - `/api/cortex/demo/data` - Demo mesh data
-
-### MSSP (Django)
-
-Add the Cortex app to MSSP:
-
-```python
-# In products/mssp/web/settings.py
-INSTALLED_APPS = [
-    ...
-    'apps.cortex',
-]
-
-# In products/mssp/web/urls.py
-urlpatterns = [
-    ...
-    path('cortex/', include('apps.cortex.urls')),
-]
-```
-
-**Routes:**
-- `/cortex/` - Full Cortex page
-- `/cortex/embedded/` - Embedded dashboard view
-- `/cortex/fullscreen/` - Fullscreen mode
-- `/cortex/api/status/` - Status API
-- `/cortex/api/nodes/` - All managed nodes
-- `/cortex/api/events/` - Security events
-- `/cortex/api/mode/` - Demo/Live mode toggle
 
 ---
 
@@ -529,8 +500,7 @@ shared/cortex/
 │       ├── manager.py        # ConnectorManager
 │       ├── guardian.py       # Guardian Flask
 │       ├── fortress.py       # Fortress DSM
-│       ├── nexus.py          # Nexus ML/AI
-│       └── mssp.py           # MSSP Django
+│       └── nexus.py          # Nexus ML/AI
 ├── frontend/
 │   ├── index.html            # Cortex main page
 │   ├── css/
@@ -590,7 +560,7 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [x] Demo data generator
 - [x] Node registry (digital twin state)
 - [x] HTP bridge skeleton
-- [x] Product connectors (Guardian, Fortress, Nexus, MSSP)
+- [x] Product connectors (Guardian, Fortress, Nexus)
 
 ### Phase 1B: Visual Quality ✅
 - [x] Premium CSS with Orbitron/Rajdhani fonts
@@ -608,7 +578,7 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [x] Connect to real `core/htp/`
 - [x] Live Qsecbit updates from `core/qsecbit/`
 - [x] Guardian dashboard embedding (Flask)
-- [x] MSSP dashboard embedding (Django)
+- [x] Dashboard embedding
 - [x] Expanded demo data (+30% nodes, threats, attack types)
 - [x] REST API for configuration
 - [x] Integration tests
@@ -625,9 +595,9 @@ pytest shared/cortex/tests/ --cov=shared/cortex --cov-report=html
 - [x] City-level UI (popups, mini-map, filters)
 
 ### Phase 3: Fleet Management & Premium Effects ✅
-- [x] Multi-tenant access control (MSSP Admin, Fleet Admin, End User)
+- [x] Multi-tenant access control (Global Admin, Fleet Admin, End User)
 - [x] Fleet management backend with customer/device models
-- [x] MSSP Admin "God View" - all endpoints, all customers
+- [x] Global Admin "God View" - all endpoints, all customers
 - [x] City-level clustering with IP-based geolocation
 - [x] User-declared locations (fleet-only visibility)
 - [x] Enhanced heartbeat system with RAG-based pulse

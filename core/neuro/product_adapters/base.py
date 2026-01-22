@@ -32,7 +32,6 @@ class ProductTier(Enum):
     GUARDIAN = "guardian"   # 1.5GB - Travel Companion
     FORTRESS = "fortress"   # 4GB - Edge Router
     NEXUS = "nexus"         # 16GB+ - ML/AI Compute
-    MSSP = "mssp"           # Cloud - Federation Platform
 
 
 @dataclass
@@ -99,18 +98,6 @@ TIER_CAPABILITIES = {
         can_aggregate_threat_intel=True,
         max_concurrent_sessions=1000,
         supports_offline_mode=True,
-    ),
-    ProductTier.MSSP: NSECapabilities(
-        tier=ProductTier.MSSP,
-        max_memory_mb=-1,  # Auto-scale
-        can_generate_keys=True,
-        can_validate_ter=True,
-        can_train_weights=True,
-        can_relay_nse=True,
-        can_run_adversarial=True,  # Full adversarial framework
-        can_aggregate_threat_intel=True,
-        max_concurrent_sessions=-1,  # Unlimited
-        supports_offline_mode=False,  # Cloud-native
     ),
 }
 
@@ -361,7 +348,6 @@ class BaseNSEAdapter(ABC):
             ProductTier.GUARDIAN: 1000,
             ProductTier.FORTRESS: 5000,
             ProductTier.NEXUS: 50000,
-            ProductTier.MSSP: 500000,
         }.get(self.tier, 1000)
 
         if len(self.threat_cache) > max_cache:

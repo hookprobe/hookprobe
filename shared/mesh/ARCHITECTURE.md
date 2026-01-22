@@ -275,10 +275,10 @@ The collective consciousness enables nodes to operate as a unified security orga
 │    - Threat pattern analysis                                    │
 │    - Nexus-to-Nexus weight synchronization                      │
 ├─────────────────────────────────────────────────────────────────┤
-│  MSSP (Cloud)      → Global Coordinator (Optional)              │
+│  COORDINATOR (Cloud) → Global Coordinator (Optional)            │
 │    - Long-term storage + analytics                              │
 │    - Cross-region coordination                                  │
-│    - Fallback: mesh operates autonomously without MSSP          │
+│    - Fallback: mesh operates autonomously without coordinator   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -290,7 +290,7 @@ The collective consciousness enables nodes to operate as a unified security orga
 | `AWAKENING` | Discovering peers |
 | `AWARE` | Connected, receiving intelligence |
 | `SYNCHRONIZED` | Full resonance with mesh |
-| `AUTONOMOUS` | Operating without MSSP |
+| `AUTONOMOUS` | Operating without cloud coordinator |
 
 ### Threat Intelligence Sharing
 
@@ -340,12 +340,12 @@ Where:
 
 ### Autonomous Operation
 
-When MSSP is unavailable, the mesh continues operating:
+When the cloud coordinator is unavailable, the mesh continues operating:
 
 1. **Peer-to-Peer Intelligence**: Nodes share threats directly
 2. **Local Consensus**: Regional coordinators (Fortress) build checkpoints
 3. **Cached Policies**: Last-known-good configurations cached locally
-4. **Automatic Recovery**: Reconnects to MSSP when available
+4. **Automatic Recovery**: Reconnects to coordinator when available
 
 ### Guardian Mesh Integration
 
@@ -379,7 +379,7 @@ def handle_threat(intel):
 ## NAT/CGNAT Traversal
 
 A critical challenge for decentralized mesh: most nodes are behind NAT/CGNAT
-and don't have public IPs. When MSSP is unavailable, nodes can't find each other.
+and don't have public IPs. When the cloud coordinator is unavailable, nodes can't find each other.
 
 ### The NAT Problem
 
@@ -400,11 +400,11 @@ and don't have public IPs. When MSSP is unavailable, nodes can't find each other
 │          └────────────────┬───────────────────────────┘                 │
 │                           │                                             │
 │                   ┌───────▼───────┐                                     │
-│                   │     MSSP      │ ◄── Single point of failure!        │
+│                   │ Coordinator   │ ◄── Single point of failure!        │
 │                   │  (Public IP)  │                                     │
 │                   └───────────────┘                                     │
 │                                                                         │
-│   Problem: If MSSP goes down, NAT nodes can't communicate P2P          │
+│   Problem: If coordinator goes down, NAT nodes can't communicate P2P   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -425,7 +425,7 @@ and don't have public IPs. When MSSP is unavailable, nodes can't find each other
 │   Layer 2: ICE Connectivity                                            │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │  • Gather candidates: host, server-reflexive, relay              │  │
-│   │  • Exchange candidates via signaling (MSSP or promoted node)     │  │
+│   │  • Exchange candidates via signaling (coordinator or promoted node)│  │
 │   │  • Connectivity checks to find working path                      │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                              ↓                                          │
@@ -488,7 +488,7 @@ if result:
 
 ## Mesh Promotion Protocol (Innovation)
 
-When MSSP is unavailable, the mesh doesn't die - it **promotes** nodes with
+When the cloud coordinator is unavailable, the mesh doesn't die - it **promotes** nodes with
 public IPs to become temporary coordinators.
 
 ```
@@ -498,7 +498,7 @@ public IPs to become temporary coordinators.
 │                                                                         │
 │  Normal Operation:                                                     │
 │  ┌────────┐     ┌────────┐     ┌────────┐                              │
-│  │Sentinel├────►│  MSSP  │◄────┤Guardian│     (Star topology)          │
+│  │Sentinel├────►│  Cloud │◄────┤Guardian│     (Star topology)          │
 │  └────────┘     └────┬───┘     └────────┘                              │
 │                      │                                                  │
 │                      ▼                                                  │
@@ -506,7 +506,7 @@ public IPs to become temporary coordinators.
 │                                                                         │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  MSSP Unavailable - Mesh Promotion:                                    │
+│  Coordinator Unavailable - Mesh Promotion:                                    │
 │                                                                         │
 │  ┌────────┐     ┌─────────┐     ┌────────┐                              │
 │  │Sentinel├────►│ Fortress│◄────┤Guardian│     (Promoted coordinator)  │
@@ -529,7 +529,7 @@ public IPs to become temporary coordinators.
 | `LEAF` | Regular node | Any | Consumes relay/coordination |
 | `BRIDGE` | Local relay | Public IP + Cone NAT | Relay for local network |
 | `COORDINATOR` | Peer discovery | Public IP + Full Cone | Rendezvous point |
-| `SUPER_NODE` | Mini-MSSP | Public IP + Fortress/Nexus | Full coordination |
+| `SUPER_NODE` | Mini-Coordinator | Public IP + Fortress/Nexus | Full coordination |
 
 ### Promotion Logic
 
@@ -605,13 +605,13 @@ network.register_node(RelayNodeInfo(
 best_relay = network.get_best_relay(prefer_region="us-west")
 ```
 
-## MSSP High Availability
+## Coordinator High Availability
 
-To ensure mesh continuity, MSSP should be designed for high availability:
+To ensure mesh continuity, the cloud coordinator should be designed for high availability:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                    MSSP HIGH AVAILABILITY ARCHITECTURE                  │
+│                 COORDINATOR HIGH AVAILABILITY ARCHITECTURE              │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
@@ -622,7 +622,7 @@ To ensure mesh continuity, MSSP should be designed for high availability:
 │     ┌────────────────────────┼────────────────────────┐                 │
 │     │                        │                        │                 │
 │   ┌─▼─────────┐        ┌─────▼─────┐        ┌────────▼──┐               │
-│   │ MSSP-US   │◄──────►│ MSSP-EU   │◄──────►│ MSSP-AP   │               │
+│   │ COORD-US  │◄──────►│ COORD-EU  │◄──────►│ COORD-AP  │               │
 │   │ (Primary) │        │ (Replica) │        │ (Replica) │               │
 │   └─────┬─────┘        └─────┬─────┘        └─────┬─────┘               │
 │         │                    │                    │                     │
@@ -641,7 +641,7 @@ To ensure mesh continuity, MSSP should be designed for high availability:
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Recommended MSSP Deployment
+### Recommended Coordinator Deployment
 
 1. **Multi-Region**: Deploy in at least 3 geographic regions
 2. **Anycast**: Use anycast IP for automatic failover
@@ -656,10 +656,10 @@ To ensure mesh continuity, MSSP should be designed for high availability:
 │                    MESH RESILIENCE HIERARCHY                            │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   Level 1: MSSP Available (Normal Operation)                           │
+│   Level 1: Coordinator Available (Normal Operation)                     │
 │   └── Central coordination, full capabilities                          │
 │                                                                         │
-│   Level 2: MSSP Unavailable, Promoted Coordinators Active              │
+│   Level 2: Coordinator Unavailable, Promoted Nodes Active              │
 │   └── Fortress/Nexus nodes with public IPs coordinate                  │
 │   └── Full mesh connectivity via ICE + hole punching                   │
 │                                                                         │
@@ -780,14 +780,14 @@ if tunnel.start():
     # Now this Fortress can be used as a relay by other mesh nodes
 ```
 
-### MSSP Tunnel Registry (Admin Managed)
+### Mesh Tunnel Registry (Admin Managed)
 
 Tunnel registrations require admin approval for security:
 
 ```python
 from shared.mesh import TunnelRegistry, TunnelEndpoint
 
-# MSSP side - manage tunnel registrations
+# Registry side - manage tunnel registrations
 registry = TunnelRegistry("/var/lib/hookprobe/tunnels.json")
 
 # Get pending approvals (admin dashboard)
@@ -810,9 +810,9 @@ for relay in relays:
 ```python
 from shared.mesh import TunnelRegistrationClient
 
-# Fortress node registers with MSSP
+# Fortress node registers with mesh registry
 client = TunnelRegistrationClient(
-    mssp_endpoint="https://mssp.hookprobe.com",
+    registry_endpoint="https://mesh.hookprobe.com",
     node_id="fortress-01"
 )
 
@@ -868,7 +868,7 @@ LOCAL_WEBSOCKET_PORT=8080
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐              │
-│   │   MSSP      │     │ MSSP Replica│     │ MSSP Replica│              │
+│   │ Coordinator │     │ Coord Repli │     │ Coord Repli │              │
 │   │ (US-WEST)   │◄───►│ (EU-WEST)   │◄───►│ (AP-EAST)   │              │
 │   └──────┬──────┘     └──────┬──────┘     └──────┬──────┘              │
 │          │                   │                   │                      │
@@ -902,7 +902,7 @@ LOCAL_WEBSOCKET_PORT=8080
 │   │   Connect via:                                       │              │
 │   │   1. ICE hole punching (if possible)                │              │
 │   │   2. Tunnel relay (via Cloudflare/ngrok/Tailscale)  │              │
-│   │   3. Direct to MSSP (if available)                  │              │
+│   │   3. Direct to coordinator (if available)           │              │
 │   └─────────────────────────────────────────────────────┘              │
 │                                                                         │
 └────────────────────────────────────────────────────────────────────────┘

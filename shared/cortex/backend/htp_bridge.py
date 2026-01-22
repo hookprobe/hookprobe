@@ -575,12 +575,12 @@ def create_bridge(
 
 
 def create_production_bridge(
-    mssp_host: str = "mssp.hookprobe.com",
-    mssp_port: int = 8144,
+    mesh_host: str = "mesh.hookprobe.com",
+    mesh_port: int = 8144,
 ) -> HTPBridge:
-    """Create an HTP bridge configured for production MSSP connection."""
+    """Create an HTP bridge configured for production mesh connection."""
     return create_bridge(
-        bootstrap_nodes=[(mssp_host, mssp_port)],
+        bootstrap_nodes=[(mesh_host, mesh_port)],
         node_id="cortex-production-001",
         label="Cortex Production Bridge",
     )

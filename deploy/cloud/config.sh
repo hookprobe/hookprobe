@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # backend-network-config.sh
-# HookProbe MSSP Cloud Backend Configuration
+# HookProbe MESH Cloud Backend Configuration
 # Version: 5.0
 # License: AGPL-3.0 - see LICENSE file
 #
-# This configuration is for the centralized MSSP backend that receives
+# This configuration is for the centralized MESH backend that receives
 # data from multiple edge HookProbe deployments.
 #
 
@@ -15,7 +15,7 @@ set -euo pipefail
 # DEPLOYMENT TYPE
 # ============================================================
 DEPLOYMENT_TYPE="cloud-backend"  # cloud-backend vs edge
-MSSP_MODE="true"                  # Enable multi-tenant features
+MESH_MODE="true"                  # Enable multi-tenant features
 
 # ============================================================
 # SYSTEM DETECTION (Cross-Compatible)
@@ -43,7 +43,7 @@ detect_os
 # ============================================================
 # Detected: $OS_NAME $OS_VERSION
 LOCAL_HOST_IP=$(ip route get 1.1.1.1 | awk '{print $7; exit}')
-EXTERNAL_DOMAIN="mssp.hookprobe.com"         # Your MSSP domain
+EXTERNAL_DOMAIN="mesh.hookprobe.com"         # Your MESH domain
 CLOUDFLARE_TUNNEL_TOKEN="CHANGE_ME"          # Cloudflare tunnel token
 
 # ============================================================
@@ -115,7 +115,7 @@ IMAGE_NGINX="docker.io/nginx:1.25-alpine"                          # BSD-2-Claus
 # ============================================================
 # DORIS CLUSTER CONFIGURATION
 # ============================================================
-DORIS_CLUSTER_NAME="hookprobe-mssp"
+DORIS_CLUSTER_NAME="hookprobe-mesh"
 DORIS_FE_COUNT=3                    # Number of Frontend nodes (HA: 3 or 5)
 DORIS_BE_COUNT=3                    # Number of Backend nodes (scale as needed)
 DORIS_REPLICATION=3                 # Data replication factor
@@ -154,7 +154,7 @@ DEFAULT_TENANT_QUOTA_MEMORY="10GB"  # Default memory quota per tenant
 # ============================================================
 # KAFKA CONFIGURATION (Edge Data Ingestion)
 # ============================================================
-KAFKA_CLUSTER_ID="hookprobe-mssp-kafka"
+KAFKA_CLUSTER_ID="hookprobe-mesh-kafka"
 KAFKA_TOPICS="security-events,qsecbit-scores,waf-events,network-flows,honeypot-attacks"
 KAFKA_PARTITIONS=32                 # Partitions per topic
 KAFKA_REPLICATION=3                 # Topic replication factor
@@ -174,7 +174,7 @@ GRAFANA_DISABLE_GRAVATAR="true"     # Privacy
 # ============================================================
 POSTGRES_MGMT_USER="hookprobe_mgmt"
 POSTGRES_MGMT_PASSWORD="CHANGE_ME_POSTGRES_MGMT_PASSWORD"
-POSTGRES_MGMT_DB="mssp_management"
+POSTGRES_MGMT_DB="mesh_management"
 
 # Tenant management tables
 POSTGRES_TENANT_TABLE="tenants"
@@ -262,7 +262,7 @@ FIREWALL_ALLOWED_SOURCES="0.0.0.0/0"  # Restrict to edge device IPs in productio
 # BACKUP CONFIGURATION
 # ============================================================
 BACKUP_ENABLED="true"
-BACKUP_S3_BUCKET="s3://hookprobe-mssp-backups"
+BACKUP_S3_BUCKET="s3://hookprobe-mesh-backups"
 BACKUP_RETENTION_DAYS=30
 BACKUP_SCHEDULE="0 2 * * *"         # Daily at 2 AM
 
@@ -270,13 +270,13 @@ BACKUP_SCHEDULE="0 2 * * *"         # Daily at 2 AM
 # MONITORING CONFIGURATION
 # ============================================================
 ENABLE_METRICS="true"
-PROMETHEUS_ENDPOINT="http://prometheus.mssp.hookprobe.com"
-ALERTMANAGER_ENDPOINT="http://alertmanager.mssp.hookprobe.com"
+PROMETHEUS_ENDPOINT="http://prometheus.mesh.hookprobe.com"
+ALERTMANAGER_ENDPOINT="http://alertmanager.mesh.hookprobe.com"
 
 # ============================================================
 # EXPORTS (for use in setup.sh)
 # ============================================================
-export DEPLOYMENT_TYPE MSSP_MODE OS_NAME OS_VERSION
+export DEPLOYMENT_TYPE MESH_MODE OS_NAME OS_VERSION
 export LOCAL_HOST_IP EXTERNAL_DOMAIN
 export POD_DORIS_FE POD_DORIS_BE POD_INGESTION POD_MANAGEMENT
 export NETWORK_DORIS_FE NETWORK_DORIS_BE NETWORK_INGESTION NETWORK_MANAGEMENT
@@ -297,7 +297,7 @@ export TLS_ENABLED BACKUP_ENABLED ENABLE_GPU_INTEGRATION
 # CONFIGURATION SUMMARY
 # ============================================================
 echo "============================================================"
-echo "HookProbe MSSP Cloud Backend Configuration Loaded"
+echo "HookProbe MESH Cloud Backend Configuration Loaded"
 echo "============================================================"
 echo "OS: $OS_NAME $OS_VERSION"
 echo "Host IP: $LOCAL_HOST_IP"
@@ -309,7 +309,7 @@ echo "  Backend Nodes: $DORIS_BE_COUNT"
 echo "  Replication Factor: $DORIS_REPLICATION"
 echo ""
 echo "Features:"
-echo "  Multi-Tenant: $MSSP_MODE"
+echo "  Multi-Tenant: $MESH_MODE"
 echo "  GPU Integration: $ENABLE_GPU_INTEGRATION"
 echo "  Threat Intel: $ENABLE_THREAT_INTEL"
 echo "  TLS: $TLS_ENABLED"

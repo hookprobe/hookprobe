@@ -332,7 +332,7 @@ curl -X POST http://localhost:5000/api/dnsxai/classify \
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      HookProbe Mesh                              │
-│         Guardian ←→ Guardian ←→ Fortress ←→ MSSP                │
+│         Guardian ←→ Guardian ←→ Fortress ←→ Nexus               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

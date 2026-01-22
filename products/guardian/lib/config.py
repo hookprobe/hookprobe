@@ -94,11 +94,11 @@ class HTPConfig:
     """HookProbe Transport Protocol configuration"""
     enabled: bool = True
 
-    # MSSP connection
-    mssp_host: str = "mssp.hookprobe.com"
-    mssp_port: int = 4719
-    mssp_websocket_port: int = 443
-    mssp_websocket_path: str = "/ws/guardian"
+    # Mesh connection
+    mesh_host: str = "mesh.hookprobe.com"
+    mesh_port: int = 4719
+    mesh_websocket_port: int = 443
+    mesh_websocket_path: str = "/ws/guardian"
 
     # Guardian identity
     guardian_id: str = ""  # Auto-generated if empty
@@ -107,7 +107,7 @@ class HTPConfig:
     # Encryption
     private_key_path: str = "/etc/guardian/keys/guardian.key"
     public_key_path: str = "/etc/guardian/keys/guardian.pub"
-    mssp_public_key: str = ""  # MSSP's public key for verification
+    mesh_public_key: str = ""  # Mesh's public key for verification
 
     # Connection settings
     heartbeat_interval: int = 30
@@ -295,8 +295,8 @@ class GuardianConfig:
 
         # Validate HTP
         if self.htp.enabled:
-            if not self.htp.mssp_host:
-                errors.append("HTP enabled but no MSSP host specified")
+            if not self.htp.mesh_host:
+                errors.append("HTP enabled but no mesh host specified")
 
         # HTP File Transfer validation (replaces WebSocket VPN)
         if self.htp_file.enabled and not self.htp.enabled:
@@ -424,8 +424,8 @@ class ConfigManager:
             return
 
         env_mappings = {
-            'GUARDIAN_MSSP_HOST': ('htp', 'mssp_host'),
-            'GUARDIAN_MSSP_PORT': ('htp', 'mssp_port'),
+            'GUARDIAN_MESH_HOST': ('htp', 'mesh_host'),
+            'GUARDIAN_MESH_PORT': ('htp', 'mesh_port'),
             'GUARDIAN_RADIUS_SECRET': ('radius', 'secret'),
             'GUARDIAN_RADIUS_PORT': ('radius', 'auth_port'),
             'GUARDIAN_ADMIN_PASSWORD': ('webui', 'admin_password_hash'),
@@ -590,10 +590,10 @@ openflow:
 # ============================================================================
 htp:
   enabled: true
-  mssp_host: "mssp.hookprobe.com"
-  mssp_port: 4719
-  mssp_websocket_port: 443
-  mssp_websocket_path: "/ws/guardian"
+  mesh_host: "mesh.hookprobe.com"
+  mesh_port: 4719
+  mesh_websocket_port: 443
+  mesh_websocket_path: "/ws/guardian"
 
   guardian_id: ""  # Auto-generated from hostname
   guardian_name: "guardian"

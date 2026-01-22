@@ -393,7 +393,7 @@ validate_version_consistency() {
 validate_python_requirements() {
     log_section "Python Requirements Validation"
 
-    local requirements_file="$REPO_ROOT/products/mssp/web/requirements.txt"
+    local requirements_file="$REPO_ROOT/products/fortress/web/requirements.txt"
 
     if [ ! -f "$requirements_file" ]; then
         log_warning "requirements.txt not found: $requirements_file"

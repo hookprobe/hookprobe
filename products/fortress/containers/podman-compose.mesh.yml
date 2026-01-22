@@ -24,7 +24,7 @@ services:
   # ============================================================
 
   # Mesh Orchestrator - HTP/Neuro/DSM Communication Hub
-  # Enables secure mesh communication with Guardian, Sentinel, Nexus, MSSP
+  # Enables secure mesh communication with Guardian, Sentinel, Nexus
   # Port Selection (from shared/mesh/ARCHITECTURE.md):
   #   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
   #   FALLBACK:  8543/UDP + 8543/TCP (TLS-wrapped, avoids web UI 8443 conflict)
@@ -57,9 +57,9 @@ services:
       DSM_CHECKPOINT_INTERVAL: 300
       # Peer discovery (comma-separated list of known peers)
       MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-}"
-      # MSSP uplink (optional)
-      MSSP_ENDPOINT: "${MSSP_ENDPOINT:-}"
-      MSSP_API_KEY: "${MSSP_API_KEY:-}"
+      # Mesh uplink (optional)
+      MESH_ENDPOINT: "${MESH_ENDPOINT:-}"
+      MESH_API_KEY: "${MESH_API_KEY:-}"
       # Integration with local services
       # QSecBit runs on host network, access via gateway IP (172.20.200.1)
       QSECBIT_API_URL: http://172.20.200.1:9090

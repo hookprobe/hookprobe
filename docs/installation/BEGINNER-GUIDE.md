@@ -129,7 +129,7 @@ HookProbe runs on a **wide variety of hardware** - from budget SBCs to enterpris
   - M.2 NVMe
 
 #### Enterprise ($700+)
-**Perfect for: MSSP, large deployments, production**
+**Perfect for: Large deployments, production**
 
 **x86_64 Options:**
 - Dell PowerEdge (R340, R440, R640)

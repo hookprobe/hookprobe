@@ -1,3 +1,0 @@
-"""
-Adversarial management commands
-"""

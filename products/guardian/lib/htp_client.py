@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Guardian HTP Client - HookProbe Transport Protocol for MSSP Communication
+Guardian HTP Client - HookProbe Transport Protocol for Mesh Communication
 
-Provides secure, reliable UDP communication between Guardian and mssp.hookprobe.com
+Provides secure, reliable UDP communication between Guardian and the HookProbe mesh
 using the HookProbe Transport Protocol (HTP) with neural resonance authentication.
 
 Features:
@@ -68,7 +68,7 @@ except ImportError:
 
 HTP_PORT = 4719
 HTP_VERSION = 0x0001
-MSSP_HOST = "mssp.hookprobe.com"
+DEFAULT_MESH_HOST = "mesh.hookprobe.com"
 
 # Packet types
 class HTPPacketType(Enum):
@@ -107,8 +107,8 @@ class ConnectionState(Enum):
 @dataclass
 class HTPConfig:
     """HTP Client Configuration"""
-    mssp_host: str = MSSP_HOST
-    mssp_port: int = HTP_PORT
+    mesh_host: str = DEFAULT_MESH_HOST
+    mesh_port: int = HTP_PORT
     node_id: str = ""
     device_fingerprint: str = ""
     heartbeat_interval: int = 30
@@ -121,8 +121,8 @@ class HTPConfig:
 
     def to_dict(self) -> dict:
         return {
-            'mssp_host': self.mssp_host,
-            'mssp_port': self.mssp_port,
+            'mesh_host': self.mesh_host,
+            'mesh_port': self.mesh_port,
             'node_id': self.node_id,
             'heartbeat_interval': self.heartbeat_interval,
             'enable_encryption': self.enable_encryption
@@ -219,9 +219,9 @@ class ConnectionStats:
 
 class GuardianHTPClient:
     """
-    Guardian HTP Client for MSSP Communication
+    Guardian HTP Client for Mesh Communication
 
-    Provides secure, reliable communication with mssp.hookprobe.com
+    Provides secure, reliable communication with the HookProbe mesh
     using the HookProbe Transport Protocol.
     """
 
@@ -427,22 +427,22 @@ class GuardianHTPClient:
     # =========================================================================
 
     def connect(self) -> bool:
-        """Establish connection to MSSP"""
-        self.logger.info(f"Connecting to {self.config.mssp_host}:{self.config.mssp_port}")
+        """Establish connection to mesh"""
+        self.logger.info(f"Connecting to {self.config.mesh_host}:{self.config.mesh_port}")
 
         try:
             # Create UDP socket
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.socket.settimeout(self.config.socket_timeout)
 
-            # Resolve MSSP host
+            # Resolve mesh host
             try:
-                mssp_ip = socket.gethostbyname(self.config.mssp_host)
+                mesh_ip = socket.gethostbyname(self.config.mesh_host)
             except socket.gaierror:
-                self.logger.error(f"Could not resolve {self.config.mssp_host}")
+                self.logger.error(f"Could not resolve {self.config.mesh_host}")
                 return False
 
-            self.socket.connect((mssp_ip, self.config.mssp_port))
+            self.socket.connect((mesh_ip, self.config.mesh_port))
 
             self.state = ConnectionState.CONNECTING
             self.flow_token = secrets.randbelow(2**64)
@@ -459,7 +459,7 @@ class GuardianHTPClient:
             self.running = True
             self._start_threads()
 
-            self.logger.info("Successfully connected to MSSP")
+            self.logger.info("Successfully connected to mesh")
 
             if self.on_connected:
                 self.on_connected()
@@ -477,8 +477,8 @@ class GuardianHTPClient:
             return False
 
     def disconnect(self):
-        """Disconnect from MSSP"""
-        self.logger.info("Disconnecting from MSSP")
+        """Disconnect from mesh"""
+        self.logger.info("Disconnecting from mesh")
 
         self.running = False
 
@@ -507,7 +507,7 @@ class GuardianHTPClient:
             self.on_disconnected()
 
     def _perform_handshake(self) -> bool:
-        """Perform HTP handshake with MSSP"""
+        """Perform HTP handshake with mesh"""
         self.logger.info("Starting HTP handshake")
         self.state = ConnectionState.RESONATING
 
@@ -874,7 +874,7 @@ class GuardianHTPClient:
 
     def _handle_close(self, packet: HTPPacket):
         """Handle close packet"""
-        self.logger.info("Received CLOSE from MSSP")
+        self.logger.info("Received CLOSE from mesh")
         self.disconnect()
 
     # =========================================================================
@@ -882,7 +882,7 @@ class GuardianHTPClient:
     # =========================================================================
 
     def send_telemetry(self, telemetry: dict) -> bool:
-        """Send telemetry data to MSSP"""
+        """Send telemetry data to mesh"""
         if self.state != ConnectionState.AUTHENTICATED:
             return False
 
@@ -890,7 +890,7 @@ class GuardianHTPClient:
         return self._send_packet(HTPPacketType.TELEMETRY, payload)
 
     def send_threat_report(self, report: dict) -> bool:
-        """Send threat report to MSSP"""
+        """Send threat report to mesh"""
         if self.state != ConnectionState.AUTHENTICATED:
             return False
 
@@ -898,7 +898,7 @@ class GuardianHTPClient:
         return self._send_packet(HTPPacketType.THREAT_REPORT, payload)
 
     def send_layer_stats(self, stats: dict) -> bool:
-        """Send L2-L7 layer statistics to MSSP"""
+        """Send L2-L7 layer statistics to mesh"""
         if self.state != ConnectionState.AUTHENTICATED:
             return False
 
@@ -906,7 +906,7 @@ class GuardianHTPClient:
         return self._send_packet(HTPPacketType.LAYER_STATS, payload)
 
     def send_mobile_protection_status(self, status: dict) -> bool:
-        """Send mobile protection status to MSSP"""
+        """Send mobile protection status to mesh"""
         if self.state != ConnectionState.AUTHENTICATED:
             return False
 
@@ -914,7 +914,7 @@ class GuardianHTPClient:
         return self._send_packet(HTPPacketType.MOBILE_PROTECTION, payload)
 
     def request_config(self) -> bool:
-        """Request configuration from MSSP"""
+        """Request configuration from mesh"""
         if self.state != ConnectionState.AUTHENTICATED:
             return False
 
@@ -926,7 +926,7 @@ class GuardianHTPClient:
         return {
             'state': self.state.value,
             'node_id': self.config.node_id,
-            'mssp_host': self.config.mssp_host,
+            'mesh_host': self.config.mesh_host,
             'packets_sent': self.stats.packets_sent,
             'packets_received': self.stats.packets_received,
             'bytes_sent': self.stats.bytes_sent,
@@ -938,7 +938,7 @@ class GuardianHTPClient:
         }
 
     def is_connected(self) -> bool:
-        """Check if connected to MSSP"""
+        """Check if connected to mesh"""
         return self.state == ConnectionState.AUTHENTICATED
 
 
@@ -950,7 +950,7 @@ class GuardianHTPService:
     """
     Guardian HTP Service - Manages HTP connection and data reporting
 
-    Runs as a background service, collecting and sending data to MSSP.
+    Runs as a background service, collecting and sending data to the mesh.
     """
 
     def __init__(
@@ -990,8 +990,8 @@ class GuardianHTPService:
             try:
                 with open(self.config_file) as f:
                     data = json.load(f)
-                    config.mssp_host = data.get('mssp_host', MSSP_HOST)
-                    config.mssp_port = data.get('mssp_port', HTP_PORT)
+                    config.mesh_host = data.get('mesh_host', DEFAULT_MESH_HOST)
+                    config.mesh_port = data.get('mesh_port', HTP_PORT)
                     config.node_id = data.get('node_id', '')
                     config.heartbeat_interval = data.get('heartbeat_interval', 30)
                     config.enable_encryption = data.get('enable_encryption', True)
@@ -1011,17 +1011,17 @@ class GuardianHTPService:
 
     def _on_connected(self):
         """Handle connection established"""
-        logging.info("Connected to MSSP - starting data reporting")
+        logging.info("Connected to mesh - starting data reporting")
         # Request configuration
         self.client.request_config()
 
     def _on_disconnected(self):
         """Handle disconnection"""
-        logging.warning("Disconnected from MSSP")
+        logging.warning("Disconnected from mesh")
 
     def _on_config_received(self, config: dict):
-        """Handle config received from MSSP"""
-        logging.info(f"Received config from MSSP: {config}")
+        """Handle config received from mesh"""
+        logging.info(f"Received config from mesh: {config}")
 
         # Update reporting intervals
         if 'telemetry_interval' in config:
@@ -1035,9 +1035,9 @@ class GuardianHTPService:
 
         self.running = True
 
-        # Connect to MSSP
+        # Connect to mesh
         if not self.client.connect():
-            logging.error("Failed to connect to MSSP")
+            logging.error("Failed to connect to mesh")
             # Will retry in report loop
 
         # Start reporting thread
@@ -1101,7 +1101,7 @@ class GuardianHTPService:
                 time.sleep(5)
 
     def _send_telemetry(self):
-        """Send current telemetry to MSSP"""
+        """Send current telemetry to mesh"""
         try:
             # Read stats file
             stats_file = self.data_dir / 'stats.json'
@@ -1122,7 +1122,7 @@ class GuardianHTPService:
             logging.error(f"Telemetry send error: {e}")
 
     def _send_threat_report(self):
-        """Send threat report to MSSP"""
+        """Send threat report to mesh"""
         try:
             threats_file = self.data_dir / 'threats.json'
             if threats_file.exists():
@@ -1147,7 +1147,7 @@ class GuardianHTPService:
             logging.error(f"Threat report send error: {e}")
 
     def _send_layer_stats(self):
-        """Send L2-L7 layer statistics to MSSP"""
+        """Send L2-L7 layer statistics to mesh"""
         try:
             layer_file = self.data_dir / 'layer_stats.json'
             if layer_file.exists():

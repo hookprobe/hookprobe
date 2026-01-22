@@ -32,37 +32,15 @@ fi
 echo -e "${YELLOW}Using:${NC} $CONTAINER_CMD"
 echo ""
 
-# Build test image
-echo -e "${BLUE}📦 Building test image...${NC}"
-$CONTAINER_CMD build \
-  --arch arm64 \
-  -t hookprobe-web-test:latest \
-  -f products/mssp/web/Dockerfile.test \
-  products/mssp/web || {
-    echo -e "${RED}❌ Build failed${NC}"
-    exit 1
-  }
-
-echo -e "${GREEN}✓ Build successful${NC}"
-echo ""
-
-# Run unit tests
+# Run unit tests using pytest directly (no container build required)
 echo -e "${BLUE}🧪 Running unit tests...${NC}"
 echo ""
 
 # Pass any additional pytest arguments
 PYTEST_ARGS="${@:-tests/}"
 
-$CONTAINER_CMD run --rm \
-  -e DJANGO_ENV=test \
-  -e DJANGO_SETTINGS_MODULE=hookprobe.settings.test \
-  -e POSTGRES_DB=hookprobe_test \
-  -e POSTGRES_USER=hookprobe \
-  -e POSTGRES_PASSWORD=test_password \
-  -e POSTGRES_HOST=localhost \
-  -e REDIS_HOST=localhost \
-  hookprobe-web-test:latest \
-  pytest --cov=apps --cov-report=term-missing --cov-report=html -v $PYTEST_ARGS
+# Run pytest directly on the codebase
+pytest --cov=core --cov=shared --cov-report=term-missing --cov-report=html -v $PYTEST_ARGS
 
 EXIT_CODE=$?
 

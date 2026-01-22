@@ -1,7 +1,7 @@
-# HookProbe MSSP Cloud Backend Deployment Guide
+# HookProbe Cloud Backend Deployment Guide
 
 **Version**: 5.0
-**Purpose**: Deploy Apache Doris cluster for multi-tenant MSSP operations
+**Purpose**: Deploy Apache Doris cluster for multi-tenant cloud operations
 **License**: MIT
 
 ---
@@ -25,7 +25,7 @@ The HookProbe backend is a centralized cloud infrastructure for managing securit
 ## 🏗️ Architecture
 
 ```
-Edge Devices (Customers)          Cloud Backend (MSSP)
+Edge Devices (Customers)          Cloud Backend
 ┌──────────────────┐              ┌──────────────────────┐
 │ HookProbe SBC    │──TLS────────▶│ Apache Doris Cluster │
 │ - ClickHouse     │              │ - 3 Frontend Nodes   │
@@ -272,7 +272,7 @@ Configure edge HookProbe devices to stream data to backend:
 export DEPLOYMENT_TYPE="edge"
 export DORIS_ENABLED="false"            # Don't connect to Doris from edge
 export CLICKHOUSE_ENABLED="true"        # Use local ClickHouse
-export KAFKA_BOOTSTRAP_SERVERS="mssp.hookprobe.com:9092"
+export KAFKA_BOOTSTRAP_SERVERS="mesh.hookprobe.com:9092"
 export TENANT_ID="customer_acme"
 ```
 

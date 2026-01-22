@@ -100,10 +100,6 @@ deploy-nexus: ## Deploy Nexus tier
 	@echo "$(CYAN)Deploying Nexus...$(NC)"
 	sudo ./install.sh --tier nexus
 
-deploy-mssp: ## Deploy MSSP tier
-	@echo "$(CYAN)Deploying MSSP...$(NC)"
-	sudo ./install.sh --tier mssp
-
 # ============================================================
 # STATUS AND MONITORING
 # ============================================================

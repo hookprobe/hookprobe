@@ -133,7 +133,7 @@ Layer 1: MAC-based VLAN assignment (prevent lateral movement)
 Layer 2: Inter-VLAN firewall (nftables/iptables)
 Layer 3: Per-VLAN internet policy (allow/deny/restrict)
 Layer 4: Qsecbit anomaly detection (AI-powered threat detection)
-Layer 5: HTP tunnel to MSSP (professional monitoring)
+Layer 5: HTP tunnel to mesh (professional monitoring)
 ```
 
 ---
@@ -340,12 +340,12 @@ Fortress auto-detects many IoT devices and applies appropriate policies.
 
 ## Integration with HookProbe Ecosystem
 
-### MSSP Monitoring
+### Mesh Monitoring
 
-Fortress connects to MSSP backend via HTP tunnel:
+Fortress connects to mesh backend via HTP tunnel:
 
 ```
-Fortress (Edge) ──HTP──→ MSSP (Cloud)
+Fortress (Edge) ──HTP──→ Mesh (Cloud)
                               │
                     ┌─────────┴─────────┐
                     │                   │
@@ -369,7 +369,7 @@ Device behavior anomaly detected:
   Anomaly: Unusual outbound traffic to 91.134.x.x (Russia)
   Qsecbit Score: 0.82 (RED)
   Action: Device moved to Quarantine VLAN
-  Alert: Sent to MSSP dashboard
+  Alert: Sent to mesh dashboard
 ```
 
 ---

@@ -9,7 +9,7 @@ Modules:
 - layer_threat_detector: OSI layer-based threat detection engine (from core)
 - mobile_network_protection: Hotel/public WiFi security (from shared)
 - guardian_agent: QSecBit integration and unified reporting
-- htp_client: HookProbe Transport Protocol client for MSSP communication
+- htp_client: HookProbe Transport Protocol client for mesh communication
 - htp_file: HTP-based secure file transfer (replaces WebSocket VPN)
 - openflow_controller: OpenFlow 1.3 SDN controller with OVS integration (from shared)
 - network_segmentation: nftables-based network segmentation and firewall (from shared)

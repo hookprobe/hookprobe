@@ -140,7 +140,7 @@ task = evaluator.route_task(task)
 | `FORTRESS_STANDARD` | ≤2GB | No | 60s | Full LSTM inference |
 | `NEXUS_STANDARD` | ≤8GB | Yes | 5min | Deep analysis |
 | `NEXUS_ADVANCED` | ≤32GB | Yes | 1hr | Model training |
-| `MSSP_CLOUD` | Unlimited | Yes | Unlimited | Heavy workloads |
+| `MESH_CLOUD` | Unlimited | Yes | Unlimited | Heavy workloads |
 
 ## Integration with Products
 

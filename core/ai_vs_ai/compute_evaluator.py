@@ -48,7 +48,7 @@ TIER_THRESHOLDS = {
         "max_duration_sec": 3600,
         "gpu_support": True,
     },
-    ComputeTier.MSSP_CLOUD: {
+    ComputeTier.MESH_CLOUD: {
         "max_memory_mb": float('inf'),
         "max_cpu_cores": float('inf'),
         "max_duration_sec": float('inf'),
@@ -204,7 +204,7 @@ class ComputeEvaluator:
         tier_priority = {
             ComputeTier.NEXUS_STANDARD: 1,
             ComputeTier.NEXUS_ADVANCED: 2,
-            ComputeTier.MSSP_CLOUD: 3,
+            ComputeTier.MESH_CLOUD: 3,
         }
 
         available_nodes.sort(

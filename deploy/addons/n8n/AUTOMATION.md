@@ -115,7 +115,7 @@ Use Cases:
   - Branch offices
 ```
 
-### 2️⃣ Cloud Deployment (MSSP Multi-Tenant)
+### 2️⃣ Cloud Deployment (Service Provider Multi-Tenant)
 ```yaml
 Components:
   - n8n Cluster (3+ nodes)
@@ -125,7 +125,7 @@ Components:
   - Apache Doris Lakehouse
 
 Use Cases:
-  - MSSP providers
+  - Service providers
   - Enterprise SOC
   - Multi-customer management
 ```
