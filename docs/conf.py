@@ -77,7 +77,7 @@ html_sidebars = {
 linkcheck_ignore = [
     r'http://localhost.*',
     r'http://127\.0\.0\.1.*',
-    r'https://mssp\.hookprobe\.com.*',
+    r'https://mesh\.hookprobe\.com.*',
 ]
 
 # Suppress warnings for missing references in markdown

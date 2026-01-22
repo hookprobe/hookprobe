@@ -6,7 +6,7 @@
 
 ## Choose Your Deployment
 
-HookProbe has 5 tiers. Choose based on your hardware:
+HookProbe has 4 tiers. Choose based on your hardware:
 
 | Tier | Hardware | Purpose | Install Time |
 |------|----------|---------|--------------|
@@ -14,7 +14,6 @@ HookProbe has 5 tiers. Choose based on your hardware:
 | **Guardian** | Raspberry Pi 4/5 | Portable travel hotspot | 10 min |
 | **Fortress** | Mini PC (N100) | Full SDN with VLANs | 15 min |
 | **Nexus** | Server (16GB+ RAM) | ML/AI compute hub | 30 min |
-| **MSSP** | Cloud/Datacenter | Federation & VPN gateway | 45 min |
 
 ---
 
@@ -23,7 +22,7 @@ HookProbe has 5 tiers. Choose based on your hardware:
 **For**: IoT gateways, LXC containers, low-power devices (256MB RAM)
 
 ### What it does
-- Validates your edge node with MSSP
+- Validates your edge node with the mesh
 - Health monitoring endpoint (port 9090)
 - Minimal footprint (~50MB)
 
@@ -47,15 +46,15 @@ cd hookprobe
 sudo ./install.sh --tier sentinel
 ```
 
-### Configure MSSP Connection
+### Configure Mesh Connection
 
 ```bash
 # Edit configuration
 sudo nano /etc/hookprobe/sentinel.conf
 
-# Set your MSSP details:
-MSSP_URL=https://your-mssp.example.com
-MSSP_ID=your-tenant-id
+# Set your mesh details:
+MESH_URL=https://mesh.hookprobe.com
+NODE_ID=your-node-id
 
 # Restart service
 sudo systemctl restart hookprobe-sentinel
@@ -78,7 +77,7 @@ curl http://localhost:9090/health
 - Secure WiFi hotspot for travel
 - DNS filtering and ad blocking
 - IDS/IPS protection
-- Connects to MSSP for validation
+- Connects to mesh for validation
 
 ### Hardware Needed
 - Raspberry Pi 4 or 5 (4GB RAM minimum)
@@ -100,22 +99,17 @@ cd hookprobe
 sudo ./install.sh --tier guardian
 ```
 
-### Register with MSSP
+### Register with Mesh
 
 ```bash
 # Get your device ID
 cat /etc/hookprobe/device-id
 
-# Register at your MSSP dashboard
-# Your MSSP admin will provide:
-# - MSSP_URL
-# - MSSP_ID (your tenant ID)
-# - VPN credentials (optional)
-
-# Configure
+# Configure mesh connection
 sudo nano /etc/hookprobe/guardian.conf
-# Add: MSSP_URL=https://your-mssp.example.com
-# Add: MSSP_ID=your-tenant-id
+# Add: MESH_URL=https://mesh.hookprobe.com
+# Add: NODE_ID=your-node-id
+# Add: VPN credentials (optional)
 
 sudo systemctl restart hookprobe-guardian
 ```
@@ -208,54 +202,14 @@ sudo ./install.sh --enable-gpu
 
 ---
 
-## MSSP: Cloud Federation
-
-**For**: Cloud/datacenter - manages all edge devices
-
-### What it does
-- VPN gateway for remote access
-- Multi-tenant management
-- Central policy distribution
-- Federation hub for all tiers
-
-### Install
-
-```bash
-# 1. On your cloud server (16GB+ RAM recommended)
-git clone https://github.com/hookprobe/hookprobe.git
-cd hookprobe
-sudo ./install.sh --tier mssp
-
-# 2. Configure domain and certificates
-sudo ./install.sh --configure-tls
-```
-
-### Generate Tenant IDs
-
-```bash
-# Create tenant for your devices
-hookprobe-ctl tenant create \
-  --name "My Home" \
-  --id home-001
-
-# This generates:
-# - MSSP_ID: home-001
-# - MSSP_URL: https://your-mssp-domain.com
-# - VPN credentials
-```
-
----
-
 ## How Tiers Connect
 
 ```
-                    ┌─────────────────────┐
-                    │       MSSP          │
-                    │  (Cloud Federation) │
-                    │  - VPN Gateway      │
-                    │  - Tenant Mgmt      │
-                    └─────────┬───────────┘
-                              │ HTP Tunnel
+        ┌─────────────────────────────────────────────┐
+        │              HTP Mesh Protocol              │
+        │           (Trust Fabric + Qsecbit)          │
+        └─────────────────────┬───────────────────────┘
+                              │
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
         ▼                     ▼                     ▼
@@ -275,9 +229,9 @@ hookprobe-ctl tenant create \
 
 ## Validation Flow
 
-1. **Sentinel** connects to MSSP with `MSSP_ID`
-2. **Guardian/Fortress** register their `device-id` with MSSP
-3. **MSSP** validates devices and issues certificates
+1. **Sentinel** connects to mesh with `NODE_ID`
+2. **Guardian/Fortress** register their `device-id` with mesh
+3. **Mesh** validates devices and issues certificates
 4. **VPN** access enabled after validation
 
 ### Check Validation Status
@@ -288,7 +242,7 @@ hookprobe-ctl status
 
 # Expected output:
 # Status: VALIDATED
-# MSSP: connected
+# Mesh: connected
 # Last sync: 2025-12-07 10:30:00
 ```
 
@@ -306,8 +260,8 @@ sudo journalctl -u hookprobe-guardian -f
 # Restart services
 sudo systemctl restart hookprobe-guardian
 
-# Check MSSP connection
-hookprobe-ctl mssp status
+# Check mesh connection
+hookprobe-ctl mesh status
 
 # Update to latest version
 cd hookprobe && git pull && sudo ./install.sh --upgrade
@@ -319,8 +273,8 @@ cd hookprobe && git pull && sudo ./install.sh --upgrade
 
 | Issue | Solution |
 |-------|----------|
-| Can't reach MSSP | Check firewall, ensure UDP 4719 (HTP) is open |
-| Validation failed | Verify MSSP_ID and MSSP_URL in config |
+| Can't reach mesh | Check firewall, ensure UDP 4719 (HTP) is open |
+| Validation failed | Verify NODE_ID and MESH_URL in config |
 | Service won't start | Check logs: `journalctl -u hookprobe-* -n 50` |
 | No internet on hotspot | Check upstream connection on Guardian |
 

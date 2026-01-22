@@ -3,7 +3,7 @@
 HookProbe Cortex - Fleet Management & Multi-Tenant Access Control
 
 Provides hierarchical access control for the Cortex visualization:
-- MSSP Admin: God view - sees ALL endpoints across ALL customers
+- Global Admin: God view - sees ALL endpoints across ALL customers
 - Fleet Admin: Sees only their organization's endpoints
 - End User: Sees only their own device
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 class AccessLevel(Enum):
     """User access levels for Cortex visualization."""
-    MSSP_ADMIN = "mssp_admin"      # God view - all endpoints, all customers
+    GLOBAL_ADMIN = "global_admin"  # God view - all endpoints, all customers
     FLEET_ADMIN = "fleet_admin"    # Organization admin - all org endpoints
     END_USER = "end_user"          # Individual user - own devices only
 
@@ -114,11 +114,11 @@ class Device:
         """
         Get device location based on viewer's access level.
 
-        MSSP Admin and same-fleet admins see declared location if available.
+        Global Admin and same-fleet admins see declared location if available.
         Everyone else sees IP-based city location.
         """
-        # MSSP Admin sees everything
-        if viewer_access == AccessLevel.MSSP_ADMIN:
+        # Global Admin sees everything
+        if viewer_access == AccessLevel.GLOBAL_ADMIN:
             if self.declared_location and self.location_privacy == LocationPrivacy.DECLARED:
                 return {
                     "lat": self.declared_location.lat,
@@ -171,8 +171,8 @@ class Device:
             "location_precision": location["precision"],
         }
 
-        # Fleet admin and MSSP admin see additional details
-        if viewer_access in [AccessLevel.MSSP_ADMIN, AccessLevel.FLEET_ADMIN]:
+        # Fleet admin and Global admin see additional details
+        if viewer_access in [AccessLevel.GLOBAL_ADMIN, AccessLevel.FLEET_ADMIN]:
             base.update({
                 "customer_id": self.customer_id,
                 "hostname": self.hostname,
@@ -182,8 +182,8 @@ class Device:
                 "resonance": round(self.neural_resonance, 4),
             })
 
-        # MSSP admin sees everything
-        if viewer_access == AccessLevel.MSSP_ADMIN:
+        # Global admin sees everything
+        if viewer_access == AccessLevel.GLOBAL_ADMIN:
             base.update({
                 "os_type": self.os_type,
                 "mesh_connections": self.mesh_connections,
@@ -196,7 +196,7 @@ class Device:
 @dataclass
 class Customer:
     """
-    Customer/Organization in the MSSP platform.
+    Customer/Organization in the fleet management platform.
 
     Represents a fleet owner - a company using HookProbe.
     """
@@ -311,7 +311,7 @@ class FleetManager:
         return self.customers.get(customer_id)
 
     def get_all_customers(self) -> List[Customer]:
-        """Get all customers (MSSP admin only)."""
+        """Get all customers (Global admin only)."""
         return list(self.customers.values())
 
     # =========================================================================
@@ -514,7 +514,7 @@ class FleetManager:
         """
         Get nodes visible to a user based on their access level.
 
-        MSSP Admin: All nodes from all customers
+        Global Admin: All nodes from all customers
         Fleet Admin: All nodes from their organization
         End User: Only their assigned devices
         """
@@ -523,13 +523,13 @@ class FleetManager:
             logger.warning(f"User not found: {user_id}")
             return []
 
-        if user.access_level == AccessLevel.MSSP_ADMIN:
+        if user.access_level == AccessLevel.GLOBAL_ADMIN:
             # God view - all devices
             devices = list(self.devices.values())
             if customer_filter:
                 devices = [d for d in devices if d.customer_id == customer_filter]
             return [
-                d.to_dict(AccessLevel.MSSP_ADMIN, user.customer_id)
+                d.to_dict(AccessLevel.GLOBAL_ADMIN, user.customer_id)
                 for d in devices
             ]
 
@@ -559,7 +559,7 @@ class FleetManager:
         """
         Get customers visible to a user.
 
-        MSSP Admin: All customers
+        Global Admin: All customers
         Fleet Admin: Only their own customer
         End User: None
         """
@@ -567,7 +567,7 @@ class FleetManager:
         if not user:
             return []
 
-        if user.access_level == AccessLevel.MSSP_ADMIN:
+        if user.access_level == AccessLevel.GLOBAL_ADMIN:
             return [c.to_dict() for c in self.customers.values()]
 
         elif user.access_level == AccessLevel.FLEET_ADMIN:
@@ -679,7 +679,7 @@ class FleetManager:
         if not user:
             return {}
 
-        if user.access_level == AccessLevel.MSSP_ADMIN:
+        if user.access_level == AccessLevel.GLOBAL_ADMIN:
             # Global stats
             all_devices = list(self.devices.values())
             return {

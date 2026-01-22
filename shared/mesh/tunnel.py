@@ -11,7 +11,7 @@ by using tunnel services (Cloudflare Tunnel, ngrok, Tailscale Funnel).
 Architecture:
 1. Fortress/Nexus runs tunnel client (cloudflared, ngrok, etc.)
 2. Gets stable FQDN (e.g., fortress-01.hookprobe.com)
-3. Registers FQDN with MSSP as trusted relay endpoint
+3. Registers FQDN with mesh registry as trusted relay endpoint
 4. Admin approves the tunnel registration
 5. Other nodes use the FQDN for relay/signaling
 
@@ -67,7 +67,7 @@ class TunnelStatus(Enum):
 
 
 class RegistrationStatus(Enum):
-    """MSSP registration status"""
+    """Mesh registry registration status"""
     UNREGISTERED = auto()
     PENDING = auto()
     APPROVED = auto()
@@ -595,11 +595,11 @@ class TailscaleFunnelProvider(TunnelProviderBase):
 
 class TunnelManager:
     """
-    Manages tunnel lifecycle and registration with MSSP.
+    Manages tunnel lifecycle and registration with mesh registry.
 
     Responsibilities:
     1. Start/stop tunnel based on configuration
-    2. Register tunnel endpoint with MSSP
+    2. Register tunnel endpoint with mesh registry
     3. Monitor tunnel health
     4. Handle reconnection on failure
     5. Manage approval workflow
@@ -628,7 +628,7 @@ class TunnelManager:
         self.on_approved: Optional[Callable[[TunnelEndpoint], None]] = None
 
     def start(self) -> bool:
-        """Start tunnel and register with MSSP"""
+        """Start tunnel and register with mesh registry"""
         if self.running:
             return True
 
@@ -721,12 +721,12 @@ class TunnelManager:
 
 
 # ============================================================
-# TUNNEL REGISTRY (MSSP Side)
+# TUNNEL REGISTRY (Coordinator Side)
 # ============================================================
 
 class TunnelRegistry:
     """
-    Registry of trusted tunnel endpoints (managed by MSSP).
+    Registry of trusted tunnel endpoints (managed by coordinator).
 
     Features:
     - Stores registered tunnel endpoints
@@ -907,7 +907,7 @@ class TunnelRegistry:
 
 class TunnelRegistrationClient:
     """
-    Client for registering tunnel with MSSP.
+    Client for registering tunnel with mesh registry.
 
     Used by Fortress/Nexus nodes to:
     1. Register their tunnel endpoint
@@ -915,19 +915,19 @@ class TunnelRegistrationClient:
     3. Check approval status
     """
 
-    def __init__(self, mssp_endpoint: str, node_id: str):
-        self.mssp_endpoint = mssp_endpoint
+    def __init__(self, registry_endpoint: str, node_id: str):
+        self.registry_endpoint = registry_endpoint
         self.node_id = node_id
 
     def register(self, endpoint: TunnelEndpoint) -> Tuple[bool, RegistrationStatus]:
         """
-        Register tunnel endpoint with MSSP.
+        Register tunnel endpoint with mesh registry.
 
         Returns:
             (success, status)
         """
         try:
-            url = f"{self.mssp_endpoint}/api/v1/tunnels/register"
+            url = f"{self.registry_endpoint}/api/v1/tunnels/register"
             data = json.dumps(endpoint.to_dict()).encode()
 
             req = urllib.request.Request(
@@ -950,9 +950,9 @@ class TunnelRegistrationClient:
             return False, RegistrationStatus.UNREGISTERED
 
     def heartbeat(self) -> bool:
-        """Send heartbeat to MSSP"""
+        """Send heartbeat to mesh registry"""
         try:
-            url = f"{self.mssp_endpoint}/api/v1/tunnels/{self.node_id}/heartbeat"
+            url = f"{self.registry_endpoint}/api/v1/tunnels/{self.node_id}/heartbeat"
             req = urllib.request.Request(url, method="POST")
 
             with urllib.request.urlopen(req, timeout=5) as response:
@@ -965,7 +965,7 @@ class TunnelRegistrationClient:
     def check_status(self) -> RegistrationStatus:
         """Check registration status"""
         try:
-            url = f"{self.mssp_endpoint}/api/v1/tunnels/{self.node_id}/status"
+            url = f"{self.registry_endpoint}/api/v1/tunnels/{self.node_id}/status"
             req = urllib.request.Request(url)
 
             with urllib.request.urlopen(req, timeout=5) as response:
@@ -976,9 +976,9 @@ class TunnelRegistrationClient:
             return RegistrationStatus.UNREGISTERED
 
     def get_approved_relays(self, region: str = None) -> List[TunnelEndpoint]:
-        """Get list of approved relay endpoints from MSSP"""
+        """Get list of approved relay endpoints from mesh registry"""
         try:
-            url = f"{self.mssp_endpoint}/api/v1/tunnels/approved"
+            url = f"{self.registry_endpoint}/api/v1/tunnels/approved"
             if region:
                 url += f"?region={region}"
 

@@ -3,7 +3,7 @@
 Connector Manager - Aggregates all product connectors for Globe Visualization
 
 The ConnectorManager:
-1. Manages multiple product connectors (Guardian, Fortress, Nexus, MSSP)
+1. Manages multiple product connectors (Guardian, Fortress, Nexus)
 2. Aggregates events from all products
 3. Forwards events to the globe HTP bridge
 4. Provides unified API for the globe backend

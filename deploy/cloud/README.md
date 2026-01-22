@@ -1,4 +1,4 @@
-# Cloud Backend Deployment (MSSP Multi-Tenant)
+# Cloud Backend Deployment (Service Provider Multi-Tenant)
 
 **Centralized security analytics for managed service providers**
 
@@ -8,7 +8,7 @@ Deploy a scalable, multi-tenant HookProbe backend for managing 100-1000+ edge de
 
 ## 🎯 Overview
 
-The **MSSP Cloud Backend** provides centralized security operations for multiple customer sites using Apache Doris for high-performance analytics at scale.
+The **Service Provider Cloud Backend** provides centralized security operations for multiple customer sites using Apache Doris for high-performance analytics at scale.
 
 ### Architecture
 
@@ -42,7 +42,7 @@ The **MSSP Cloud Backend** provides centralized security operations for multiple
 
 ### Use Cases
 
-- ✅ **MSSP Providers**: Manage security for multiple customers
+- ✅ **Service Provider Providers**: Manage security for multiple customers
 - ✅ **Enterprise Multi-Site**: Centralize security across branch offices
 - ✅ **Security Research**: Aggregate threat intelligence
 - ✅ **SOC Operations**: 24/7 monitoring and incident response
@@ -93,7 +93,7 @@ cd /home/user/hookprobe
 sudo ./install.sh
 
 # Select: 2) Select Deployment Mode
-# Then: 2) MSSP Cloud Backend [Multi-Tenant]
+# Then: 2) Service Provider Cloud Backend [Multi-Tenant]
 ```
 
 Or manually:
@@ -187,7 +187,7 @@ nano /opt/hookprobe/config/qsecbit.conf
 # Add cloud backend
 [cloud]
 enabled = true
-backend_url = https://mssp.yourcompany.com
+backend_url = https://mesh.yourcompany.com
 tenant_id = customer_acme
 api_key = your-api-key
 stream_events = true
@@ -291,6 +291,6 @@ mysql -h 10.100.1.10 -P 9030 -uroot -e "ALTER SYSTEM ADD BACKEND '10.100.1.20:90
 
 ---
 
-**MSSP Cloud Backend** - *Centralized Security at Scale*
+**Service Provider Cloud Backend** - *Centralized Security at Scale*
 
 Built with ❤️ for managed security service providers

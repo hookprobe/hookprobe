@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # backend-uninstall.sh
-# HookProbe MSSP Cloud Backend Removal
+# HookProbe Mesh Cloud Backend Removal
 # Version: 5.0
 # License: AGPL-3.0 - see LICENSE file
 #
@@ -26,7 +26,7 @@ log() {
 }
 
 log "============================================================"
-log "HookProbe MSSP Cloud Backend Uninstallation"
+log "HookProbe Mesh Cloud Backend Uninstallation"
 log "============================================================"
 
 # Stop and remove containers

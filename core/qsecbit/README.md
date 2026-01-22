@@ -65,7 +65,7 @@ Traditional security asks: *"Are we under attack?"* (binary yes/no)
 - **Attack Chain Correlation**: Detect multi-stage attacks (reconnaissance → exploitation → pivot)
 - **Energy-Based Anomaly Detection**: Power consumption spikes trigger automated response
 - **MITRE ATT&CK Mapping**: Industry-standard threat intelligence integration
-- **Deployment-Adaptive Weights**: Optimized for Guardian, Fortress, Nexus, MSSP
+- **Deployment-Adaptive Weights**: Optimized for Guardian, Fortress, Nexus
 
 ### Supported Attack Types
 
@@ -99,7 +99,6 @@ Where:
 | **Guardian** | 0.25 | 0.20 | 0.15 | 0.15 | 0.15 | 0.05 | 0.03 | 0.02 |
 | **Fortress** | 0.15 | 0.25 | 0.25 | 0.10 | 0.15 | 0.05 | 0.03 | 0.02 |
 | **Nexus** | 0.10 | 0.15 | 0.15 | 0.15 | 0.30 | 0.05 | 0.05 | 0.05 |
-| **MSSP** | 0.15 | 0.20 | 0.20 | 0.15 | 0.20 | 0.05 | 0.03 | 0.02 |
 
 **RAG Classification**:
 - **GREEN** (< 0.45): Normal operation - monitoring mode
@@ -285,7 +284,7 @@ qsecbit/
 └─────────────────────────────────────────────┘
 ```
 
-**Cloud Backend** (Multi-Tenant MSSP):
+**Cloud Backend** (Multi-Tenant):
 ```
 ┌──────────────────────────────────────────────┐
 │  Proxmox / Ubuntu Server / Debian            │
@@ -1388,7 +1387,7 @@ For 99% of deployments, **XDP-drv** is the fastest practical mode.
 - NIC: Intel I226-V (2.5Gbps) or I211 (1Gbps)
 - Storage: 50GB SSD
 
-**Cloud Backend (MSSP)**:
+**Cloud Backend**:
 - CPU: 16+ cores
 - RAM: 64GB minimum (256GB for 1000+ tenants)
 - Storage: 2TB+ NVMe SSD
@@ -1535,7 +1534,7 @@ sample = qsecbit.calculate(
 # Data automatically saved to ClickHouse with XDP metrics
 ```
 
-### Cloud Backend (MSSP Multi-Tenant)
+### Cloud Backend (Multi-Tenant)
 
 ```python
 #!/usr/bin/env python3

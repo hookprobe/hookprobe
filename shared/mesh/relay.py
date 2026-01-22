@@ -12,7 +12,7 @@ Implements relay capabilities for mesh nodes when direct P2P is impossible:
 - Relay cascading for multi-hop scenarios
 
 Innovation: "Emergent Relay Network"
-When MSSP is unavailable, Fortress/Nexus nodes with public IPs
+When the cloud coordinator is unavailable, Fortress/Nexus nodes with public IPs
 automatically form an emergent relay network, distributing load
 and providing redundancy.
 """

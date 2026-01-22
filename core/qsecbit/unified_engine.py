@@ -41,7 +41,6 @@ class DeploymentType(Enum):
     GUARDIAN = "guardian"     # Travel/portable (WiFi focus)
     FORTRESS = "fortress"     # Edge router (network focus)
     NEXUS = "nexus"           # ML/AI compute
-    MSSP = "mssp"             # Cloud backend
 
 
 @dataclass
@@ -101,11 +100,6 @@ class UnifiedEngineConfig:
                 'l2': 0.10, 'l3': 0.15, 'l4': 0.15,
                 'l5': 0.15, 'l7': 0.20, 'energy': 0.10,
                 'behavioral': 0.10, 'correlation': 0.05
-            },
-            DeploymentType.MSSP: {
-                'l2': 0.05, 'l3': 0.15, 'l4': 0.20,
-                'l5': 0.15, 'l7': 0.30, 'energy': 0.05,
-                'behavioral': 0.05, 'correlation': 0.05
             },
         }
 
@@ -520,7 +514,7 @@ def create_unified_engine(
     Create a Unified Threat Engine with the specified deployment type.
 
     Args:
-        deployment_type: One of "guardian", "fortress", "nexus", "mssp"
+        deployment_type: One of "guardian", "fortress", "nexus"
         **kwargs: Additional config options
 
     Returns:

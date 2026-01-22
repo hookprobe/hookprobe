@@ -16,7 +16,7 @@ Features:
 - BLS signature contribution (partial signatures only)
 - Lightweight gossip (receive-only mode optional)
 - Collective threat intelligence (compact cache)
-- Autonomous operation when MSSP unavailable
+- Autonomous operation mode
 """
 
 import os
@@ -399,7 +399,7 @@ class SentinelMeshAgent:
         self.state = "dormant"
         self.last_gossip = 0.0
         self.last_heartbeat = 0.0
-        self.mssp_available = True
+        self.mesh_available = True
 
         # Stats
         self.stats = {
@@ -746,7 +746,7 @@ class SentinelMeshAgent:
             "mesh_enabled": self.config.enable_mesh,
             "peers": len(self.peers),
             "max_peers": self.config.max_peers,
-            "mssp_available": self.mssp_available,
+            "mesh_available": self.mesh_available,
             "stats": {
                 **self.stats,
                 "validator": self.validator.get_stats(),

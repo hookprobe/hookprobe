@@ -1,7 +1,7 @@
 /**
  * HookProbe Cortex - Fleet Management Panel
  *
- * MSSP Admin and Fleet Admin view for managing endpoints.
+ * Global Admin and Fleet Admin view for managing endpoints.
  * Provides:
  * - Customer/organization filtering
  * - Fleet overview statistics
@@ -12,7 +12,7 @@
 
 // Fleet panel state
 const fleetState = {
-    accessLevel: 'end_user', // mssp_admin, fleet_admin, end_user
+    accessLevel: 'end_user', // global_admin, fleet_admin, end_user
     currentCustomer: null,
     customers: [],
     devices: [],
@@ -35,8 +35,8 @@ function initFleetPanel(accessLevel = 'end_user') {
     fleetState.accessLevel = accessLevel;
 
     // Create panel UI based on access level
-    if (accessLevel === 'mssp_admin') {
-        createMSSPAdminPanel();
+    if (accessLevel === 'global_admin') {
+        createGlobalAdminPanel();
     } else if (accessLevel === 'fleet_admin') {
         createFleetAdminPanel();
     }
@@ -45,18 +45,18 @@ function initFleetPanel(accessLevel = 'end_user') {
 }
 
 /**
- * Create MSSP Admin panel (God view)
+ * Create Global Admin panel (God view)
  */
-function createMSSPAdminPanel() {
+function createGlobalAdminPanel() {
     const panel = document.createElement('div');
-    panel.id = 'mssp-admin-panel';
-    panel.className = 'cortex-fleet-panel mssp-admin';
+    panel.id = 'global-admin-panel';
+    panel.className = 'cortex-fleet-panel global-admin';
     panel.innerHTML = `
         <div class="fleet-panel-header">
             <div class="panel-title">
                 <span class="panel-icon">🛡️</span>
                 <div class="panel-title-text">
-                    <h3>MSSP Command Center</h3>
+                    <h3>Global Command Center</h3>
                     <span class="panel-subtitle">All Endpoints • All Customers</span>
                 </div>
             </div>
@@ -229,8 +229,8 @@ function createFleetAdminPanel() {
 function updateFleetPanel(data) {
     if (!data) return;
 
-    // Update customers (MSSP admin only)
-    if (data.customers && fleetState.accessLevel === 'mssp_admin') {
+    // Update customers (global admin only)
+    if (data.customers && fleetState.accessLevel === 'global_admin') {
         updateCustomerSelector(data.customers);
     }
 

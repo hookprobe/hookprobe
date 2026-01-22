@@ -1,3 +1,0 @@
-"""
-HookProbe Django Applications
-"""

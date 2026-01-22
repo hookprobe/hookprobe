@@ -5434,7 +5434,7 @@ uninstall() {
     done
 
     # Remove VXLAN tunnels
-    for tunnel in vxlan-mesh-core vxlan-mesh-threat vxlan-mssp-uplink; do
+    for tunnel in vxlan-mesh-core vxlan-mesh-threat vxlan-mesh-uplink; do
         ovs-vsctl del-port "$OVS_BRIDGE" "$tunnel" 2>/dev/null || true
     done
 

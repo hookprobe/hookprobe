@@ -12,7 +12,7 @@
 3. [Chapter 2: Guardian (Travel Companion)](#chapter-2-guardian-travel-companion)
 4. [Chapter 3: Fortress (Edge Router)](#chapter-3-fortress-edge-router)
 5. [Chapter 4: Nexus (ML/AI Server)](#chapter-4-nexus-mlai-server)
-6. [Chapter 5: MSSP (Cloud Federation)](#chapter-5-mssp-cloud-federation)
+6. [Chapter 5: Cloud Federation](#chapter-5-cloud-federation)
 7. [Cross-Tier Comparison](#cross-tier-comparison)
 
 ---
@@ -32,7 +32,7 @@ This document maps security controls to their network interfaces for each HookPr
 | **Guardian** | 1.5GB | L2-L7 detection, WiFi AP | eth0/wlan0 (WAN), wlan1/br0 (LAN) |
 | **Fortress** | 4GB | VLAN segmentation, SDN | eth0 (WAN), br-vlan-* (VLANs) |
 | **Nexus** | 16GB+ | ML training, regional coordination | eth0 (WAN), internal mesh |
-| **MSSP** | Auto | Multi-tenant aggregation | Cloud networking |
+| **Cloud** | Auto | Multi-tenant aggregation | Cloud networking |
 
 ---
 
@@ -422,20 +422,20 @@ Same as Fortress (full stack), but Nexus also:
 
 ---
 
-## Chapter 5: MSSP (Cloud Federation)
+## Chapter 5: Cloud Federation
 
 > **Auto-scale · SaaS pricing · Global coordination**
 
-### What MSSP Does
+### What Cloud Federation Does
 
-MSSP is the cloud platform for Managed Security Service Providers. It aggregates intelligence from thousands of nodes without seeing raw customer data.
+The cloud platform aggregates intelligence from thousands of nodes without seeing raw customer data.
 
 ### Network Architecture
 
 ```
                     ┌─────────────────────────────────┐
-                    │         MSSP CLOUD              │
-                    │    (mssp.hookprobe.com)         │
+                    │         CLOUD FEDERATION        │
+                    │    (mesh.hookprobe.com)         │
                     │                                 │
                     │  ┌───────────────────────────┐  │
                     │  │    Django Web Portal      │  │
@@ -472,7 +472,7 @@ MSSP is the cloud platform for Managed Security Service Providers. It aggregates
 
 ### Interface Model
 
-MSSP uses **cloud networking** rather than physical interfaces:
+Cloud Federation uses **cloud networking** rather than physical interfaces:
 
 | Component | Network | Description |
 |-----------|---------|-------------|
@@ -508,13 +508,13 @@ MSSP uses **cloud networking** rather than physical interfaces:
 | **Model Updates** | Pushes updated ML weights |
 | **Alert Dispatch** | Webhooks to customer SOCs |
 
-### What MSSP Does NOT Do
+### What Cloud Federation Does NOT Do
 
 - ❌ Inspect customer traffic (privacy-preserving)
 - ❌ Store raw packets
 - ❌ Access customer networks directly
 
-MSSP only sees:
+Cloud Federation only sees:
 - Anonymized threat hashes (IOCs)
 - Aggregated statistics
 - Model weights (not training data)
@@ -536,17 +536,17 @@ MSSP only sees:
 
 ### Security Controls by Tier
 
-| Control | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|---------|:--------:|:--------:|:--------:|:-----:|:----:|
-| **XDP/eBPF** | ❌ | ✅ | ✅ | ✅ | N/A |
-| **Suricata** | ❌ | ✅ | ✅ | ✅ | N/A |
-| **Zeek** | ❌ | ✅ | ✅ | ✅ | N/A |
-| **Qsecbit** | Lite | ✅ | ✅ | ✅ | Aggregation |
-| **dnsXai** | ❌ | ✅ | ✅ | ✅ | ✅ |
-| **DSM** | Validate | Participate | Coordinate | Aggregate | Global |
-| **VLAN/SDN** | ❌ | ❌ | ✅ | ❌ | N/A |
-| **ML Training** | ❌ | ❌ | Inference | ✅ | Serving |
-| **WiFi AP** | ❌ | ✅ | ✅ | ❌ | N/A |
+| Control | Sentinel | Guardian | Fortress | Nexus |
+|---------|:--------:|:--------:|:--------:|:-----:|
+| **XDP/eBPF** | ❌ | ✅ | ✅ | ✅ |
+| **Suricata** | ❌ | ✅ | ✅ | ✅ |
+| **Zeek** | ❌ | ✅ | ✅ | ✅ |
+| **Qsecbit** | Lite | ✅ | ✅ | ✅ |
+| **dnsXai** | ❌ | ✅ | ✅ | ✅ |
+| **DSM** | Validate | Participate | Coordinate | Aggregate |
+| **VLAN/SDN** | ❌ | ❌ | ✅ | ❌ |
+| **ML Training** | ❌ | ❌ | Inference | ✅ |
+| **WiFi AP** | ❌ | ✅ | ✅ | ❌ |
 
 ### Interface Types by Tier
 
@@ -556,7 +556,6 @@ MSSP only sees:
 | **Guardian** | eth0, wlan0 | wlan1, br0 | WiFi AP |
 | **Fortress** | eth0 | VLAN 10/20/30 | OVS, SDN |
 | **Nexus** | eth0 | Management | GPU, Mesh |
-| **MSSP** | Cloud LB | Private VPC | Multi-tenant |
 
 ### Key Takeaways
 

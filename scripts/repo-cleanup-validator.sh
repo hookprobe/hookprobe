@@ -286,8 +286,7 @@ check_orphaned_files() {
         "Makefile"
         # Product entry points
         "products/guardian/web/app.py"
-        "products/mssp/setup.sh"
-        "products/mssp/uninstall.sh"
+products/nexus/setup.sh
         "products/sentinel/sentinel.py"
         "products/sentinel/sentinel_security.py"
         # Deploy scripts

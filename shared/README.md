@@ -2,7 +2,7 @@
 
 > **The Transparent Foundation That Powers Everything**
 
-Every HookProbe product tier - from Sentinel to MSSP - shares the same transparent infrastructure. Same algorithms. Same visibility. Same data ownership.
+Every HookProbe product tier - from Sentinel to Nexus - shares the same transparent infrastructure. Same algorithms. Same visibility. Same data ownership.
 
 ```
 shared/
@@ -260,7 +260,6 @@ See `shared/cortex/README.md` for complete documentation.
 | **Guardian** | Full | Participate | Participate | Auto | Full |
 | **Fortress** | Advanced | Coordinate | Participate | Auto+Custom | Full |
 | **Nexus** | Train | Super-node | Coordinate | Regional | Full |
-| **MSSP** | Global | Coordinate | Aggregate | Global | Multi-tenant |
 
 **Every tier, same transparency, same data ownership.**
 

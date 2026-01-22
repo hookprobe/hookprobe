@@ -44,7 +44,7 @@ sudo ./install.sh --tier nexus
 ```bash
 --tier <tier>        # sentinel, guardian, fortress, nexus
 --node-id <id>       # Custom node identifier
---mssp-url <url>     # MSSP backend URL
+--mesh-url <url>     # Mesh backend URL
 --migrate            # Migrate from previous tier
 ```
 
@@ -157,9 +157,9 @@ sudo journalctl -u hookprobe-guardian -f
 
 **Location:** `deploy/cloud/`
 
-For MSSP and large-scale Nexus deployments.
+For large-scale Nexus and service provider deployments.
 
-See also: `docs/deployment/MSSP-PRODUCTION-DEPLOYMENT.md`
+See also: `docs/deployment/` for production deployment guides.
 
 ---
 

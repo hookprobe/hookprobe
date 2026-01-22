@@ -77,7 +77,7 @@ class E2EConfig:
     """Configuration for E2E coordinator."""
     # Node identification
     node_id: str = ""
-    tier: str = "guardian"  # sentinel, guardian, fortress, nexus, mssp
+    tier: str = "guardian"  # sentinel, guardian, fortress, nexus
 
     # Component enablement
     enable_response: bool = True
@@ -639,7 +639,7 @@ def create_e2e_coordinator(
 
     Args:
         node_id: Unique node identifier
-        tier: Product tier (sentinel, guardian, fortress, nexus, mssp)
+        tier: Product tier (sentinel, guardian, fortress, nexus)
         data_dir: Directory for persistent data
         enable_all: Enable all components
 
