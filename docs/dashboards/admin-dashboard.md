@@ -193,7 +193,6 @@ Pre-configured categories:
 |------|------------|----------|
 | **Superuser** | Full system access | System administrator |
 | **Staff** | Content management | Blog editor, content creator |
-| **MSSP Admin** | All tenants, full access | MSSP provider admin |
 | **Tenant Admin** | Single tenant, full access | Customer administrator |
 | **Viewer** | Read-only access | Security analyst, viewer |
 
@@ -484,7 +483,6 @@ podman restart hookprobe-pod-005-monitoring-victoria
 
 - **Main README**: [../../README.md](../../README.md)
 - **Dashboard Overview**: [README.md](README.md)
-- **MSSP Dashboard**: [mssp-dashboard.md](mssp-dashboard.md)
 - **Web Server Setup**: [../../deploy/addons/webserver/README.md](../../deploy/addons/webserver/README.md)
 - **IAM Integration**: [../IAM-INTEGRATION-GUIDE.md](../IAM-INTEGRATION-GUIDE.md)
 

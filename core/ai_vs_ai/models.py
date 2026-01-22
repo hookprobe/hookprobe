@@ -47,7 +47,7 @@ class ComputeTier(Enum):
     FORTRESS_STANDARD = "fortress_std"   # 4GB RAM, standard analysis
     NEXUS_STANDARD = "nexus_std"         # 16GB RAM, advanced analysis
     NEXUS_ADVANCED = "nexus_adv"         # 16GB+ RAM, deep learning
-    MSSP_CLOUD = "mssp_cloud"            # Cloud, unlimited resources
+    MESH_CLOUD = "mesh_cloud"            # Cloud, unlimited resources
 
 
 class DefenseAction(Enum):

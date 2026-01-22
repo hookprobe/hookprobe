@@ -82,12 +82,12 @@ ENABLE_N8N=false
 ENABLE_CLICKHOUSE=false
 ENABLE_LTE=false
 
-# MSSP/HTP Configuration
-MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
-MSSP_PORT="${MSSP_PORT:-8443}"
+# Mesh/HTP Configuration
+MESH_ENDPOINT="${MESH_ENDPOINT:-mesh.hookprobe.com}"
+MESH_PORT="${MESH_PORT:-8443}"
 HTP_NODE_ID=""
 HTP_SENTINEL_MODE="${HTP_SENTINEL_MODE:-false}"
-EDGE_MODE="${EDGE_MODE:-standalone}"  # standalone, validator, mssp-connected
+EDGE_MODE="${EDGE_MODE:-standalone}"  # standalone, validator, mesh-connected
 
 # Colors - use $'...' syntax for ANSI escape sequences
 RED=$'\033[0;31m'
@@ -228,12 +228,12 @@ parse_arguments() {
                 ENABLE_LTE=true
                 shift
                 ;;
-            --mssp-endpoint)
-                MSSP_ENDPOINT="$2"
+            --mesh-endpoint)
+                MESH_ENDPOINT="$2"
                 shift 2
                 ;;
-            --mssp-port)
-                MSSP_PORT="$2"
+            --mesh-port)
+                MESH_PORT="$2"
                 shift 2
                 ;;
             --node-id)
@@ -273,7 +273,7 @@ Usage:
   Run without options to launch the interactive menu.
 
 Options:
-  --sentinel           Deploy Sentinel only (MSSP validator, ~512MB RAM)
+  --sentinel           Deploy Sentinel only (mesh validator, ~512MB RAM)
   --edge               Deploy Edge only (standalone mode)
   --edge-sentinel      Deploy Edge + Sentinel (recommended)
   --enable-ai          Enable AI detection (requires 8GB+ RAM)
@@ -288,15 +288,15 @@ Options:
   --enable-n8n         Enable n8n workflow automation
   --enable-clickhouse  Enable ClickHouse analytics database
   --enable-lte         Enable LTE/5G failover support
-  --mssp-endpoint HOST MSSP endpoint for Sentinel/Edge connection
-  --mssp-port PORT     MSSP port (default: 8443)
-  --node-id ID         Node identifier for MSSP registration
+  --mesh-endpoint HOST Mesh endpoint for Sentinel/Edge connection
+  --mesh-port PORT     Mesh port (default: 8443)
+  --node-id ID         Node identifier for mesh registration
   --uninstall          Launch uninstall menu
   --status             Show current installation status
   --help, -h           Show this help message
 
 Interactive Menu Options:
-  1. Sentinel          - MSSP Validator (~512MB RAM)
+  1. Sentinel          - Mesh Validator (~512MB RAM)
   2. Edge + Sentinel   - Full Edge with validation (~2GB RAM) [Recommended]
   3. Edge Only         - Standard Edge (~1.5GB RAM)
   4. Edge + Dashboard  - Edge with Web UI (~2.5GB RAM)
@@ -306,9 +306,9 @@ Interactive Menu Options:
   8. Status            - Show installation status
 
 Sentinel:
-  Lightweight 3rd party security validator for MSSP integration:
+  Lightweight 3rd party security validator for mesh integration:
   • Validates edge device authenticity & protocol compliance
-  • Reports validation results to MSSP
+  • Reports validation results to mesh
   • Assesses genuine vs compromised edge devices
   • Ideal for LXC containers, cloud VPS, distributed validation
   • Requires only 512MB RAM
@@ -324,10 +324,10 @@ Examples:
   sudo bash scripts/install-edge.sh
 
   # Deploy Sentinel only
-  sudo bash scripts/install-edge.sh --sentinel --mssp-endpoint mssp.example.com
+  sudo bash scripts/install-edge.sh --sentinel --mesh-endpoint mesh.example.com
 
   # Deploy Edge + Sentinel
-  sudo bash scripts/install-edge.sh --edge-sentinel --mssp-endpoint mssp.example.com
+  sudo bash scripts/install-edge.sh --edge-sentinel --mesh-endpoint mesh.example.com
 
   # Full stack with AI (non-interactive)
   sudo bash scripts/install-edge.sh --edge-sentinel --enable-webserver --enable-ai --non-interactive
@@ -377,9 +377,9 @@ show_main_menu() {
     echo -e "${CYAN}│  INSTALLATION OPTIONS                                        │${NC}"
     echo -e "${CYAN}├──────────────────────────────────────────────────────────────┤${NC}"
     echo ""
-    echo -e "  ${YELLOW}1${NC})  ${GREEN}Sentinel${NC} - MSSP Sentinel"
+    echo -e "  ${YELLOW}1${NC})  ${GREEN}Sentinel${NC} - Mesh Sentinel"
     echo "      └─ Lightweight 3rd party security validator (~512MB RAM)"
-    echo "      └─ Validates edge authenticity, reports to MSSP"
+    echo "      └─ Validates edge authenticity, reports to mesh"
     echo "      └─ Ideal for: LXC containers, cloud VPS, distributed validation"
     echo ""
     echo -e "  ${YELLOW}2${NC})  ${GREEN}Edge + Sentinel${NC} - Full Edge with Validation ${CYAN}[Recommended]${NC}"
@@ -389,7 +389,7 @@ show_main_menu() {
     echo ""
     echo -e "  ${YELLOW}3${NC})  ${GREEN}Edge Only${NC} - Standard Edge Deployment"
     echo "      └─ Neuro Protocol + Database + Cache (~1.5GB RAM)"
-    echo "      └─ No MSSP validation (standalone mode)"
+    echo "      └─ No mesh validation (standalone mode)"
     echo ""
     echo -e "  ${YELLOW}4${NC})  ${GREEN}Edge + Dashboard${NC} - Edge with Web UI"
     echo "      └─ Adds Django dashboard + Nginx + IAM (~2.5GB RAM)"
@@ -456,7 +456,7 @@ show_status() {
             source /etc/hookprobe/sentinel.conf 2>/dev/null
             echo "      Node ID: ${HTP_NODE_ID:-unknown}"
             echo "      Region:  ${SENTINEL_REGION:-unknown}"
-            echo "      MSSP:    ${MSSP_ENDPOINT:-not configured}"
+            echo "      Mesh:    ${MESH_ENDPOINT:-not configured}"
         fi
     else
         echo -e "  ${YELLOW}[-]${NC} Not installed"
@@ -539,7 +539,7 @@ select_from_main_menu() {
                 ENABLE_CACHE=false
                 EDGE_MODE="sentinel"
                 HTP_SENTINEL_MODE="true"
-                echo -e "${GREEN}[✓]${NC} Selected: Sentinel (MSSP Validator)"
+                echo -e "${GREEN}[✓]${NC} Selected: Sentinel (Mesh Validator)"
                 configure_sentinel_node
                 return 0
                 ;;
@@ -763,7 +763,7 @@ custom_component_selection() {
     echo ""
 
     # Sentinel
-    read -p "Enable Sentinel (MSSP Validator) [+0.5GB RAM]? [Y/n]: " -n 1 -r
+    read -p "Enable Sentinel (Mesh Validator) [+0.5GB RAM]? [Y/n]: " -n 1 -r
     echo ""
     [[ ! $REPLY =~ ^[Nn]$ ]] && ENABLE_SENTINEL=true || ENABLE_SENTINEL=false
 
@@ -902,20 +902,20 @@ LOGTOEOF
     echo -e "${GREEN}Secrets saved to /etc/hookprobe/secrets/${NC}"
 }
 
-configure_mssp_secrets() {
-    # Configure MSSP/HTP tunnel secrets
+configure_mesh_secrets() {
+    # Configure mesh/HTP tunnel secrets
     echo ""
-    echo -e "${CYAN}MSSP/HTP Tunnel Configuration${NC}"
+    echo -e "${CYAN}Mesh/HTP Tunnel Configuration${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "Configure connection to MSSP (Managed Security Service Provider)"
+    echo "Configure connection to mesh (HookProbe Security Mesh)"
     echo ""
 
     # Edge mode selection
     echo -e "${YELLOW}Select Edge Mode:${NC}"
-    echo "  1) Standalone  - Edge runs independently (no MSSP connection)"
-    echo "  2) Validator   - Edge validates traffic and reports to MSSP"
-    echo "  3) MSSP-Connected - Full integration with MSSP dashboard"
+    echo "  1) Standalone  - Edge runs independently (no mesh connection)"
+    echo "  2) Validator   - Edge validates traffic and reports to mesh"
+    echo "  3) Mesh-Connected - Full integration with mesh dashboard"
     echo ""
     read -p "Select mode [1-3, default: 1]: " edge_mode_choice
 
@@ -926,9 +926,9 @@ configure_mssp_secrets() {
             echo -e "  ${GREEN}[x]${NC} Validator mode selected"
             ;;
         3)
-            EDGE_MODE="mssp-connected"
+            EDGE_MODE="mesh-connected"
             HTP_SENTINEL_MODE="false"
-            echo -e "  ${GREEN}[x]${NC} MSSP-Connected mode selected"
+            echo -e "  ${GREEN}[x]${NC} Mesh-Connected mode selected"
             ;;
         *)
             EDGE_MODE="standalone"
@@ -940,13 +940,13 @@ configure_mssp_secrets() {
 
     echo ""
 
-    # MSSP endpoint configuration
+    # Mesh endpoint configuration
     if [ "$EDGE_MODE" != "standalone" ]; then
-        read -p "MSSP Endpoint [default: $MSSP_ENDPOINT]: " mssp_endpoint
-        MSSP_ENDPOINT="${mssp_endpoint:-$MSSP_ENDPOINT}"
+        read -p "Mesh Endpoint [default: $MESH_ENDPOINT]: " mesh_endpoint
+        MESH_ENDPOINT="${mesh_endpoint:-$MESH_ENDPOINT}"
 
-        read -p "MSSP Port [default: $MSSP_PORT]: " mssp_port
-        MSSP_PORT="${mssp_port:-$MSSP_PORT}"
+        read -p "Mesh Port [default: $MESH_PORT]: " mesh_port
+        MESH_PORT="${mesh_port:-$MESH_PORT}"
 
         # Generate node ID if not set
         if [ -z "$HTP_NODE_ID" ]; then
@@ -956,22 +956,22 @@ configure_mssp_secrets() {
         HTP_NODE_ID="${node_id:-$HTP_NODE_ID}"
 
         echo ""
-        echo -e "${YELLOW}Saving MSSP/HTP configuration...${NC}"
+        echo -e "${YELLOW}Saving mesh/HTP configuration...${NC}"
 
         # Ensure secrets directory exists
         mkdir -p /etc/hookprobe/secrets
         chmod 700 /etc/hookprobe/secrets
 
-        # Save MSSP configuration
-        cat > /etc/hookprobe/secrets/mssp.env << MSSPEOF
-MSSP_ENDPOINT=$MSSP_ENDPOINT
-MSSP_PORT=$MSSP_PORT
+        # Save mesh configuration
+        cat > /etc/hookprobe/secrets/mesh.env << MESHEOF
+MESH_ENDPOINT=$MESH_ENDPOINT
+MESH_PORT=$MESH_PORT
 HTP_NODE_ID=$HTP_NODE_ID
 EDGE_MODE=$EDGE_MODE
 HTP_SENTINEL_MODE=$HTP_SENTINEL_MODE
-MSSPEOF
-        chmod 600 /etc/hookprobe/secrets/mssp.env
-        echo -e "  ${GREEN}[x]${NC} MSSP configuration saved"
+MESHEOF
+        chmod 600 /etc/hookprobe/secrets/mesh.env
+        echo -e "  ${GREEN}[x]${NC} Mesh configuration saved"
 
         # Generate HTP identity keys (keyless design uses qsecbit, but we store node identity)
         echo "$HTP_NODE_ID" > /etc/hookprobe/secrets/htp-node-id
@@ -979,24 +979,24 @@ MSSPEOF
         echo -e "  ${GREEN}[x]${NC} HTP node identity saved"
 
         echo ""
-        echo -e "${GREEN}MSSP configuration complete${NC}"
+        echo -e "${GREEN}Mesh configuration complete${NC}"
     fi
 }
 
 configure_sentinel_node() {
-    # Configure validator node for MSSP integration
+    # Configure validator node for mesh integration
     # Validators are lightweight nodes that validate edge device authenticity
     echo ""
     echo -e "${CYAN}Sentinel Setup${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    # MSSP endpoint configuration (required for validators)
-    read -p "MSSP Endpoint [default: $MSSP_ENDPOINT]: " mssp_endpoint
-    MSSP_ENDPOINT="${mssp_endpoint:-$MSSP_ENDPOINT}"
+    # Mesh endpoint configuration (required for validators)
+    read -p "Mesh Endpoint [default: $MESH_ENDPOINT]: " mesh_endpoint
+    MESH_ENDPOINT="${mesh_endpoint:-$MESH_ENDPOINT}"
 
-    read -p "MSSP Port [default: $MSSP_PORT]: " mssp_port
-    MSSP_PORT="${mssp_port:-$MSSP_PORT}"
+    read -p "Mesh Port [default: $MESH_PORT]: " mesh_port
+    MESH_PORT="${mesh_port:-$MESH_PORT}"
 
     # Validator-specific configuration
     read -p "Validator Listen Port [default: $SENTINEL_LISTEN_PORT]: " listen_port
@@ -1071,9 +1071,9 @@ HTP_NODE_ID=$HTP_NODE_ID
 SENTINEL_REGION=$SENTINEL_REGION
 SENTINEL_TIER=$SENTINEL_TIER
 
-# MSSP Connection
-MSSP_ENDPOINT=$MSSP_ENDPOINT
-MSSP_PORT=$MSSP_PORT
+# Mesh Connection
+MESH_ENDPOINT=$MESH_ENDPOINT
+MESH_PORT=$MESH_PORT
 EDGE_MODE=validator
 HTP_SENTINEL_MODE=true
 
@@ -1099,12 +1099,12 @@ VALIDATOREOF
     echo -e "  ${GREEN}[x]${NC} Validator configuration saved"
     echo ""
 
-    # Test MSSP connection
-    echo "Testing MSSP connection..."
-    if timeout 5 bash -c "echo >/dev/tcp/$MSSP_ENDPOINT/$MSSP_PORT" 2>/dev/null; then
-        echo -e "  ${GREEN}[x]${NC} MSSP endpoint reachable"
+    # Test mesh connection
+    echo "Testing mesh connection..."
+    if timeout 5 bash -c "echo >/dev/tcp/$MESH_ENDPOINT/$MESH_PORT" 2>/dev/null; then
+        echo -e "  ${GREEN}[x]${NC} Mesh endpoint reachable"
     else
-        echo -e "  ${YELLOW}[!]${NC} MSSP endpoint not reachable (will retry at runtime)"
+        echo -e "  ${YELLOW}[!]${NC} Mesh endpoint not reachable (will retry at runtime)"
     fi
 
     echo ""
@@ -1112,35 +1112,35 @@ VALIDATOREOF
     echo ""
     echo "Validator will:"
     echo "  • Listen on port $SENTINEL_LISTEN_PORT for edge device validation"
-    echo "  • Report to MSSP at $MSSP_ENDPOINT:$MSSP_PORT"
+    echo "  • Report to mesh at $MESH_ENDPOINT:$MESH_PORT"
     echo "  • Expose metrics on port $SENTINEL_METRICS_PORT"
     echo ""
 }
 
 validate_htp_connection() {
-    # Test HTP connection to MSSP
+    # Test HTP connection to mesh
     echo ""
-    echo -e "${CYAN}Validating HTP Connection to MSSP...${NC}"
+    echo -e "${CYAN}Validating HTP Connection to Mesh...${NC}"
 
     if [ "$EDGE_MODE" = "standalone" ]; then
-        echo -e "  ${YELLOW}[-]${NC} Standalone mode - skipping MSSP validation"
+        echo -e "  ${YELLOW}[-]${NC} Standalone mode - skipping mesh validation"
         return 0
     fi
 
-    # Check if MSSP endpoint is reachable
-    echo -e "  Testing connectivity to $MSSP_ENDPOINT:$MSSP_PORT..."
+    # Check if mesh endpoint is reachable
+    echo -e "  Testing connectivity to $MESH_ENDPOINT:$MESH_PORT..."
 
     # Try TCP connection first
-    if timeout 5 bash -c "echo >/dev/tcp/$MSSP_ENDPOINT/$MSSP_PORT" 2>/dev/null; then
-        echo -e "  ${GREEN}[x]${NC} MSSP endpoint reachable (TCP)"
+    if timeout 5 bash -c "echo >/dev/tcp/$MESH_ENDPOINT/$MESH_PORT" 2>/dev/null; then
+        echo -e "  ${GREEN}[x]${NC} Mesh endpoint reachable (TCP)"
     else
         # Try UDP (HTP uses UDP)
         if command -v nc &> /dev/null; then
-            if timeout 5 nc -zu "$MSSP_ENDPOINT" "$MSSP_PORT" 2>/dev/null; then
-                echo -e "  ${GREEN}[x]${NC} MSSP endpoint reachable (UDP)"
+            if timeout 5 nc -zu "$MESH_ENDPOINT" "$MESH_PORT" 2>/dev/null; then
+                echo -e "  ${GREEN}[x]${NC} Mesh endpoint reachable (UDP)"
             else
-                echo -e "  ${YELLOW}[!]${NC} MSSP endpoint not reachable"
-                echo "      This may be normal if MSSP uses NAT traversal"
+                echo -e "  ${YELLOW}[!]${NC} Mesh endpoint not reachable"
+                echo "      This may be normal if mesh uses NAT traversal"
             fi
         else
             echo -e "  ${YELLOW}[!]${NC} Cannot test UDP connectivity (nc not installed)"
@@ -1148,9 +1148,9 @@ validate_htp_connection() {
     fi
 
     # DNS resolution check
-    if host "$MSSP_ENDPOINT" &>/dev/null || dig +short "$MSSP_ENDPOINT" &>/dev/null; then
-        local mssp_ip=$(dig +short "$MSSP_ENDPOINT" 2>/dev/null | head -1)
-        echo -e "  ${GREEN}[x]${NC} DNS resolves: $MSSP_ENDPOINT -> ${mssp_ip:-resolved}"
+    if host "$MESH_ENDPOINT" &>/dev/null || dig +short "$MESH_ENDPOINT" &>/dev/null; then
+        local mesh_ip=$(dig +short "$MESH_ENDPOINT" 2>/dev/null | head -1)
+        echo -e "  ${GREEN}[x]${NC} DNS resolves: $MESH_ENDPOINT -> ${mesh_ip:-resolved}"
     else
         echo -e "  ${YELLOW}[!]${NC} DNS resolution pending (will retry on startup)"
     fi
@@ -1191,10 +1191,10 @@ load_hookprobe_configs() {
         source /etc/hookprobe/network/bridge.conf
     fi
 
-    # Load MSSP secrets if available
-    if [ -f /etc/hookprobe/secrets/mssp-id ]; then
-        MSSP_ID=$(cat /etc/hookprobe/secrets/mssp-id 2>/dev/null)
-        echo -e "${GREEN}[✓]${NC} MSSP ID loaded"
+    # Load mesh secrets if available
+    if [ -f /etc/hookprobe/secrets/mesh-id ]; then
+        MESH_ID=$(cat /etc/hookprobe/secrets/mesh-id 2>/dev/null)
+        echo -e "${GREEN}[✓]${NC} Mesh ID loaded"
     fi
 }
 
@@ -3017,11 +3017,11 @@ deploy_neuro_pod() {
 
     local network_arg=$(get_network_arg "neuro")
 
-    # Load MSSP configuration if available
-    local mssp_env=""
-    if [ -f /etc/hookprobe/secrets/mssp.env ]; then
-        source /etc/hookprobe/secrets/mssp.env
-        mssp_env="-e MSSP_ENDPOINT=$MSSP_ENDPOINT -e MSSP_PORT=$MSSP_PORT -e HTP_NODE_ID=$HTP_NODE_ID -e EDGE_MODE=$EDGE_MODE -e HTP_SENTINEL_MODE=$HTP_SENTINEL_MODE"
+    # Load mesh configuration if available
+    local mesh_env=""
+    if [ -f /etc/hookprobe/secrets/mesh.env ]; then
+        source /etc/hookprobe/secrets/mesh.env
+        mesh_env="-e MESH_ENDPOINT=$MESH_ENDPOINT -e MESH_PORT=$MESH_PORT -e HTP_NODE_ID=$HTP_NODE_ID -e EDGE_MODE=$EDGE_MODE -e HTP_SENTINEL_MODE=$HTP_SENTINEL_MODE"
     fi
 
     # With host network for HTP UDP connectivity
@@ -3063,14 +3063,14 @@ deploy_neuro_pod() {
         -e QSECBIT_MODE="quantum-resistant" \
         -e HTP_ENABLED="true" \
         -e PYTHONPATH="/app" \
-        $mssp_env \
+        $mesh_env \
         docker.io/library/python:3.11-slim \
         bash -c '
             pip install --quiet numpy cryptography blake3 2>/dev/null || pip install --quiet numpy
             cd /app
             echo "HookProbe Neuro Protocol starting..."
             echo "  Mode: ${EDGE_MODE:-standalone}"
-            echo "  MSSP: ${MSSP_ENDPOINT:-not configured}"
+            echo "  Mesh: ${MESH_ENDPOINT:-not configured}"
             echo "  Node ID: ${HTP_NODE_ID:-auto-generated}"
 
             # Test HTP module import
@@ -3082,16 +3082,16 @@ from neuro.transport.htp import HookProbeTransport
 import os, time
 
 node_id = os.environ.get(\"HTP_NODE_ID\", \"edge-node\")
-mssp_endpoint = os.environ.get(\"MSSP_ENDPOINT\", \"\")
-mssp_port = int(os.environ.get(\"MSSP_PORT\", \"8443\"))
+mesh_endpoint = os.environ.get(\"MESH_ENDPOINT\", \"\")
+mesh_port = int(os.environ.get(\"MESH_PORT\", \"8443\"))
 edge_mode = os.environ.get(\"EDGE_MODE\", \"standalone\")
 
 print(f\"Starting HTP Transport: {node_id}\")
 transport = HookProbeTransport(node_id=node_id, listen_port=8443)
 transport.start()
 
-if edge_mode != \"standalone\" and mssp_endpoint:
-    print(f\"Connecting to MSSP: {mssp_endpoint}:{mssp_port}\")
+if edge_mode != \"standalone\" and mesh_endpoint:
+    print(f\"Connecting to mesh: {mesh_endpoint}:{mesh_port}\")
     # HTP uses UDP hole punching, connection is established on first packet
 
 print(\"Neuro Protocol running...\")
@@ -3113,7 +3113,7 @@ while True:
 }
 
 deploy_sentinel_pod() {
-    # Deploy lightweight validator pod for MSSP integration
+    # Deploy lightweight validator pod for mesh integration
     # This is a minimal deployment that only validates edge device authenticity
     echo "Deploying Sentinel..."
 
@@ -3145,7 +3145,7 @@ deploy_sentinel_pod() {
 #!/usr/bin/env python3
 """
 HookProbe Sentinel
-Validates edge device authenticity and reports to MSSP
+Validates edge device authenticity and reports to mesh
 """
 import os
 import sys
@@ -3159,8 +3159,8 @@ from collections import defaultdict
 
 # Configuration from environment
 NODE_ID = os.environ.get("HTP_NODE_ID", "validator-unknown")
-MSSP_ENDPOINT = os.environ.get("MSSP_ENDPOINT", "mssp.hookprobe.com")
-MSSP_PORT = int(os.environ.get("MSSP_PORT", "8443"))
+MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mesh.hookprobe.com")
+MESH_PORT = int(os.environ.get("MESH_PORT", "8443"))
 LISTEN_PORT = int(os.environ.get("SENTINEL_LISTEN_PORT", "8443"))
 METRICS_PORT = int(os.environ.get("SENTINEL_METRICS_PORT", "9090"))
 REGION = os.environ.get("SENTINEL_REGION", "unknown")
@@ -3250,12 +3250,12 @@ class EdgeValidator:
         except:
             return {"valid": False, "reason": "invalid_timestamp"}
 
-        # Check 3: Basic signature verification (full verification at MSSP)
-        # This is a lightweight check - MSSP does full qsecbit verification
+        # Check 3: Basic signature verification (full verification at mesh)
+        # This is a lightweight check - mesh does full qsecbit verification
         expected_hint = hashlib.sha256(f"{edge_id}:{ts}".encode()).hexdigest()[:16]
         if sig_hint != expected_hint:
             # Note: This is simplified - real implementation uses qsecbit
-            pass  # Allow for now, MSSP will do full validation
+            pass  # Allow for now, mesh will do full validation
 
         # Check 4: Rate limiting
         rate_key = f"{edge_id}:{int(time.time() / 60)}"
@@ -3331,8 +3331,8 @@ hookprobe_sentinel_info{{node_id="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
     with socketserver.TCPServer(("", port), MetricsHandler) as httpd:
         httpd.serve_forever()
 
-def report_to_mssp(validator: EdgeValidator):
-    """Periodically report validation results to MSSP"""
+def report_to_mesh(validator: EdgeValidator):
+    """Periodically report validation results to mesh"""
     while True:
         try:
             time.sleep(60)  # Report every minute
@@ -3351,7 +3351,7 @@ def report_to_mssp(validator: EdgeValidator):
                 "known_edges": list(validator.known_edges.keys())[-100]  # Last 100
             }
 
-            # Send report via UDP to MSSP
+            # Send report via UDP to mesh
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(5)
 
@@ -3362,9 +3362,9 @@ def report_to_mssp(validator: EdgeValidator):
             header = bytes.fromhex(NODE_ID.replace("validator-", "").ljust(32, "0")[:32])
             message = header + report_data
 
-            sock.sendto(message, (MSSP_ENDPOINT, MSSP_PORT))
+            sock.sendto(message, (MESH_ENDPOINT, MESH_PORT))
             validation_stats["last_report"] = time.time()
-            print(f"[{datetime.now().isoformat()}] Report sent to MSSP: {len(validator.known_edges)} edges")
+            print(f"[{datetime.now().isoformat()}] Report sent to mesh: {len(validator.known_edges)} edges")
 
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Report error: {e}")
@@ -3382,7 +3382,7 @@ def main():
 ║  Tier:        {TIER:<45} ║
 ║  Listen:      :{LISTEN_PORT:<44} ║
 ║  Metrics:     :{METRICS_PORT:<44} ║
-║  MSSP:        {MSSP_ENDPOINT}:{MSSP_PORT:<29} ║
+║  Mesh:        {MESH_ENDPOINT}:{MESH_PORT:<29} ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
 
@@ -3393,10 +3393,10 @@ def main():
     metrics_thread.start()
     print(f"Metrics server started on port {METRICS_PORT}")
 
-    # Start MSSP reporting in background
-    report_thread = threading.Thread(target=report_to_mssp, args=(validator,), daemon=True)
+    # Start mesh reporting in background
+    report_thread = threading.Thread(target=report_to_mesh, args=(validator,), daemon=True)
     report_thread.start()
-    print(f"MSSP reporting started (endpoint: {MSSP_ENDPOINT}:{MSSP_PORT})")
+    print(f"Mesh reporting started (endpoint: {MESH_ENDPOINT}:{MESH_PORT})")
 
     # Create UDP socket for receiving edge validation requests
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3445,8 +3445,8 @@ VALIDATORPY
         -v /opt/hookprobe/validator:/app:ro \
         -v /etc/hookprobe:/etc/hookprobe:ro \
         -e HTP_NODE_ID="$HTP_NODE_ID" \
-        -e MSSP_ENDPOINT="$MSSP_ENDPOINT" \
-        -e MSSP_PORT="$MSSP_PORT" \
+        -e MESH_ENDPOINT="$MESH_ENDPOINT" \
+        -e MESH_PORT="$MESH_PORT" \
         -e SENTINEL_LISTEN_PORT="$SENTINEL_LISTEN_PORT" \
         -e SENTINEL_METRICS_PORT="$SENTINEL_METRICS_PORT" \
         -e SENTINEL_REGION="$SENTINEL_REGION" \

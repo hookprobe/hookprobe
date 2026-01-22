@@ -19,7 +19,7 @@ def api_status():
         state = load_json_file(HTP_STATE_FILE, {
             'connected': False,
             'server': None,
-            'mssp_node': None,
+            'mesh_node': None,
             'public_ip': None,
             'uptime': '0:00',
             'protocol': 'HTP',
@@ -32,11 +32,11 @@ def api_status():
         if htp_success and htp_output:
             state['connected'] = True
 
-            # Get MSSP connection details
-            mssp_state = load_json_file('/opt/hookprobe/guardian/mssp/connection.json', {})
-            state['server'] = mssp_state.get('endpoint', 'mssp.hookprobe.com')
-            state['mssp_node'] = mssp_state.get('node_id', 'Unknown')
-            state['posf_verified'] = mssp_state.get('posf_verified', False)
+            # Get mesh connection details
+            mesh_state = load_json_file('/opt/hookprobe/guardian/mesh/connection.json', {})
+            state['server'] = mesh_state.get('endpoint', 'mesh.hookprobe.com')
+            state['mesh_node'] = mesh_state.get('node_id', 'Unknown')
+            state['posf_verified'] = mesh_state.get('posf_verified', False)
 
         # Get public IP if connected
         if state['connected']:
@@ -51,14 +51,14 @@ def api_status():
 
 @vpn_bp.route('/connect', methods=['POST'])
 def api_connect():
-    """Connect to MSSP via HTP tunnel."""
+    """Connect to mesh via HTP tunnel."""
     data = request.get_json() or {}
-    mssp_endpoint = data.get('endpoint', 'mssp.hookprobe.com')
+    mesh_endpoint = data.get('endpoint', 'mesh.hookprobe.com')
     device_token = data.get('device_token', '')
 
     try:
-        # Start HTP tunnel with MSSP
-        cmd = f'/opt/hookprobe/core/htp/transport/htp-tunnel.py connect --mssp {mssp_endpoint}'
+        # Start HTP tunnel with mesh
+        cmd = f'/opt/hookprobe/core/htp/transport/htp-tunnel.py connect --mesh {mesh_endpoint}'
         if device_token:
             cmd += f' --token {device_token}'
 
@@ -68,13 +68,13 @@ def api_connect():
             # Update state
             state = {
                 'connected': True,
-                'server': mssp_endpoint,
+                'server': mesh_endpoint,
                 'protocol': 'HTP',
                 'encryption': 'Kyber-1024 + ChaCha20-Poly1305',
                 'posf_verified': True
             }
             save_json_file(HTP_STATE_FILE, state)
-            return jsonify({'success': True, 'protocol': 'HTP', 'mssp': mssp_endpoint})
+            return jsonify({'success': True, 'protocol': 'HTP', 'mesh': mesh_endpoint})
 
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
@@ -96,25 +96,25 @@ def api_disconnect():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@vpn_bp.route('/mssp/register', methods=['POST'])
-def api_mssp_register():
-    """Register this Guardian node with MSSP."""
+@vpn_bp.route('/mesh/register', methods=['POST'])
+def api_mesh_register():
+    """Register this Guardian node with mesh."""
     data = request.get_json()
-    mssp_endpoint = data.get('endpoint', 'mssp.hookprobe.com')
+    mesh_endpoint = data.get('endpoint', 'mesh.hookprobe.com')
     registration_code = data.get('registration_code', '')
 
     if not registration_code:
         return jsonify({'success': False, 'error': 'Registration code required'}), 400
 
     try:
-        # Register with MSSP using HTP
-        cmd = f'/opt/hookprobe/core/htp/transport/htp-client.py register --mssp {mssp_endpoint} --code {registration_code}'
+        # Register with mesh using HTP
+        cmd = f'/opt/hookprobe/core/htp/transport/htp-client.py register --mesh {mesh_endpoint} --code {registration_code}'
         output, success = run_command(cmd, timeout=60)
 
         if success:
             return jsonify({
                 'success': True,
-                'message': 'Successfully registered with MSSP',
+                'message': 'Successfully registered with mesh',
                 'device_id': output.strip() if output else 'unknown'
             })
         return jsonify({'success': False, 'error': output}), 500

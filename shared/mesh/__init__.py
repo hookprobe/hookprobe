@@ -13,7 +13,7 @@ Key Features:
 - Automatic channel switching on blocking detection
 - NAT/CGNAT traversal with STUN/ICE/TURN
 - Emergent relay network for mesh continuity
-- Mesh promotion protocol when MSSP unavailable
+- Mesh promotion protocol when cloud coordinator unavailable
 - Tunnel integration (Cloudflare, ngrok, Tailscale) for public FQDN without public IP
 """
 

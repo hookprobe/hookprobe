@@ -12,7 +12,7 @@ The web server is optional and installed **after** the main HookProbe deployment
 
 1. **Reduce installation complexity** - Core security functions work without web UI
 2. **Support edge deployments** - Not all edge devices need full web interface
-3. **Enable cloud centralization** - MSSP can run centralized web server for multiple edges
+3. **Enable cloud centralization** - Service Provider can run centralized web server for multiple edges
 4. **Staged deployment** - Install web components when ready
 5. **Resource efficiency** - Save RAM/CPU on constrained edge devices
 
@@ -22,8 +22,8 @@ The web server is optional and installed **after** the main HookProbe deployment
 |----------|-------------|---------------------|----------|
 | **Edge with UI** | Full web interface on edge device | Local (edge SBC) | Home users, SMB with dedicated hardware |
 | **Edge headless** | No web interface, only APIs | None (metrics via API) | Constrained SBCs, remote sites |
-| **Cloud centralized** | Centralized web for multiple edges | Cloud backend | MSSP managing 10+ customer sites |
-| **Hybrid** | Cloud web + edge APIs | Cloud + selective edge | Large MSSP with mix of deployments |
+| **Cloud centralized** | Centralized web for multiple edges | Cloud backend | Service Provider managing 10+ customer sites |
+| **Hybrid** | Cloud web + edge APIs | Cloud + selective edge | Large Service Provider with mix of deployments |
 
 ## 📋 Prerequisites
 
@@ -87,7 +87,7 @@ sudo ./setup-webserver.sh edge
 - Admin Dashboard: `http://<edge-ip>/admin/`
 - Device Management: `http://<edge-ip>/devices/`
 
-### Option 2: Cloud Centralized (MSSP Multi-Tenant)
+### Option 2: Cloud Centralized (Service Provider Multi-Tenant)
 
 Install web server on a separate cloud server/VM:
 
@@ -342,11 +342,11 @@ systemctl enable --now fail2ban
 
 - **System Overview** - POD status, metrics
 - **Qsecbit Monitoring** - Real-time threat scores
-- **Device Management** - MSSP edge device tracking
+- **Device Management** - Service Provider edge device tracking
 - **Security Events** - IDS/IPS/WAF aggregation
 - **User Management** - Role-based access control
 
-### Device Management (MSSP)
+### Device Management (Service Provider)
 
 - **Multi-Tenant** - Customer/tenant isolation
 - **Device Tracking** - Hardware specs, status

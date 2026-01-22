@@ -1,5 +1,5 @@
 /* HookProbe Cortex - Fleet Panel Premium Styles */
-/* MSSP Admin and Fleet Admin visualization components */
+/* Global Admin and Fleet Admin visualization components */
 
 /* =========================================
    FLEET PANEL BASE
@@ -36,13 +36,13 @@
     display: none;
 }
 
-/* MSSP Admin special styling */
-.cortex-fleet-panel.mssp-admin {
+/* Global Admin special styling */
+.cortex-fleet-panel.global-admin {
     border-color: rgba(168, 85, 247, 0.3);
     box-shadow: 0 8px 32px rgba(168, 85, 247, 0.15);
 }
 
-.cortex-fleet-panel.mssp-admin .panel-icon {
+.cortex-fleet-panel.global-admin .panel-icon {
     filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.6));
 }
 

@@ -30,25 +30,15 @@ This is a **major architectural transformation** moving from GPL-licensed compon
 - **ModSecurity** (Apache 2.0) - Replaced NAXSI for web application firewall
 - **Custom MIT Scripts** - Replaced Kali tools for automated response
 
-#### MSSP Cloud Backend (Multi-Tenant Platform)
-- **Apache Doris Cluster** (Apache 2.0) - Centralized OLAP for 1000+ customers
-  - 3 Frontend nodes + 3+ Backend nodes (horizontally scalable)
-  - Row-level security with automatic tenant isolation
-  - MySQL protocol (port 9030) for easy integration
-  - Per-tenant resource quotas (CPU, memory, storage)
-  - Cross-customer threat intelligence aggregation
-  - GPU integration for ML model training
-  - 365+ day data retention per tenant
+#### Mesh Backend
 - **Dual-Database Architecture**:
   - **Edge**: ClickHouse for local fast analytics (0-90 days)
-  - **Cloud**: Apache Doris for multi-tenant aggregation (365+ days)
+  - **Mesh**: Federated aggregation for collective defense
   - Qsecbit auto-detects deployment type (DEPLOYMENT_TYPE env var)
-- **Kafka** (Apache 2.0) - High-throughput edge data ingestion
 - **Backend Deployment Scripts**:
   - `backend-setup.sh` - Cross-platform (Ubuntu/Debian/Proxmox)
-  - `backend-network-config.sh` - Multi-tenant configuration
+  - `backend-network-config.sh` - Network configuration
   - `backend-uninstall.sh` - Clean removal
-  - Complete documentation in `docs/installation/cloud-deployment.md`
 
 #### Attack Mitigation System
 - `attack-mitigation-orchestrator.sh` - Main attack detection and response engine
@@ -105,10 +95,9 @@ This is a **major architectural transformation** moving from GPL-licensed compon
   - Supports Broadcom (RPi - SKB only), Realtek (SKB only), Intel (igb/igc - DRV, i40e/ice - DRV), Mellanox (mlx4/mlx5 - DRV) drivers
   - Qsecbit module reorganized: `Scripts/autonomous/qsecbit/` with comprehensive documentation
 - **Dual-Database Support in Qsecbit**:
-  - Auto-detects edge vs cloud deployment via DEPLOYMENT_TYPE environment variable
-  - Edge: ClickHouse integration for single-tenant fast analytics
-  - Cloud: Apache Doris integration for multi-tenant MSSP aggregation
-  - Automatic tenant_id injection for multi-tenancy
+  - Auto-detects edge vs mesh deployment via DEPLOYMENT_TYPE environment variable
+  - Edge: ClickHouse integration for local fast analytics
+  - Mesh: Federated aggregation for collective defense
 - Anti-XSS automated response
 - Anti-SQL injection automated response
 - Memory overflow protection

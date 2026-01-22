@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # backend-setup.sh
-# HookProbe MSSP Cloud Backend Deployment
+# HookProbe Mesh Cloud Backend Deployment
 # Version: 5.0
 # License: AGPL-3.0 - see LICENSE file
 #
-# Deploys Apache Doris cluster for multi-tenant MSSP backend
+# Deploys Apache Doris cluster for multi-tenant Mesh backend
 # Cross-compatible: RHEL, Ubuntu, Fedora, CentOS Stream
 #
 
@@ -516,7 +516,7 @@ deploy_grafana() {
 # ============================================================
 main() {
     log "============================================================"
-    log "HookProbe MSSP Cloud Backend Deployment"
+    log "HookProbe Mesh Cloud Backend Deployment"
     log "Version: 5.0 | License: AGPL-3.0"
     log "============================================================"
     log "OS: $OS_NAME $OS_VERSION"

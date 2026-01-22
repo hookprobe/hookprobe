@@ -186,7 +186,7 @@ For a side project in 2026, we should start with Option 1 but design it properly
 
 ```
                                    ┌─────────────────────────────────────┐
-                                   │         MSSP/Nexus Cloud            │
+                                   │           Nexus Cloud               │
                                    │  ┌───────────────────────────────┐  │
                                    │  │   Globe Bridge Service        │  │
                                    │  │   - HTP Full Stack            │  │
@@ -480,7 +480,7 @@ shared/cortex/
 2. **Privacy**: Should all node locations be public?
    - Consider: Approximate locations only
    - Consider: Opt-in visibility per node
-   - Consider: MSSP customers only see their nodes
+   - Consider: Fleet customers only see their nodes
 
 3. **Scale**: How many nodes can the globe handle?
    - Globe.gl tested to ~10K points

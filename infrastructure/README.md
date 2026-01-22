@@ -206,7 +206,7 @@ podman logs -f hookprobe-internal-mail
 - Hardware: Intel NUC or Mini PC
 ```
 
-### MSSP Deployment
+### Service Provider Deployment
 
 **Multi-Tenant Email (Advanced):**
 ```

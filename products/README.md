@@ -16,8 +16,7 @@ products/
 ├── sentinel/   # DSM Validator (IoT, 256MB RAM)
 ├── guardian/   # Travel Companion (RPi, 1.5GB RAM)
 ├── fortress/   # Edge Router (Mini PC, 4GB RAM)
-├── nexus/      # ML/AI Compute (Server, 16GB+ RAM)
-└── mssp/       # Cloud Federation (mssp.hookprobe.com)
+└── nexus/      # ML/AI Compute (Server, 16GB+ RAM)
 ```
 
 ---
@@ -26,13 +25,13 @@ products/
 
 Every HookProbe product tier runs the same transparent algorithms. The difference is scale, not quality.
 
-| What You Get | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|--------------|----------|----------|----------|-------|------|
-| **Transparent threat scoring** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Auditable decisions** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Privacy-preserving mesh** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Your data stays yours** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Open source foundation** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| What You Get | Sentinel | Guardian | Fortress | Nexus |
+|--------------|----------|----------|----------|-------|
+| **Transparent threat scoring** | ✓ | ✓ | ✓ | ✓ |
+| **Auditable decisions** | ✓ | ✓ | ✓ | ✓ |
+| **Privacy-preserving mesh** | ✓ | ✓ | ✓ | ✓ |
+| **Your data stays yours** | ✓ | ✓ | ✓ | ✓ |
+| **Open source foundation** | ✓ | ✓ | ✓ | ✓ |
 
 **The only differences:** RAM requirements, hardware capabilities, and advanced features that need more resources.
 
@@ -47,13 +46,6 @@ Every HookProbe product tier runs the same transparent algorithms. The differenc
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │   ┌──────────────────────────────────────────────────────────────────────────┐ │
-│   │                              MSSP                                         │ │
-│   │                    Cloud Federation Platform                              │ │
-│   │        Manage thousands of nodes · Same transparency at scale            │ │
-│   └──────────────────────────────────────────────────────────────────────────┘ │
-│                                      ▲                                          │
-│                                      │ HTP                                      │
-│   ┌──────────────────────────────────┴───────────────────────────────────────┐ │
 │   │                              NEXUS                                        │ │
 │   │               ML/AI Heavy Computation · 16GB+ RAM                         │ │
 │   │        Train models locally · Full visibility into ML decisions          │ │
@@ -101,7 +93,6 @@ Do you need to train ML models locally?
 | **Guardian** | ~$75 | $0 | ~$75 |
 | **Fortress** | ~$200 | $0 | ~$200 |
 | **Nexus** | ~$2000+ | $0 | ~$2000+ |
-| **MSSP** | Cloud | Contact us | SaaS pricing |
 
 **Enterprise-grade security for the cost of a nice dinner.**
 
@@ -203,45 +194,22 @@ Do you need to train ML models locally?
 
 ---
 
-## MSSP — Cloud Federation
-
-> **Auto-scale · SaaS pricing · Global coordination**
-
-**What it enables:** Manage thousands of nodes with the same transparency principles.
-
-**Transparency features:**
-- Multi-tenant with per-tenant visibility
-- Every customer sees their own complete picture
-- Aggregated threat intelligence without exposing individual data
-- Full audit trail for compliance
-
-**Best for:** Managed Security Service Providers, large enterprises
-
-**Contact:** qsecbit@hookprobe.com
-
-**What you achieve:**
-- Offer transparent security as a service
-- Show clients exactly how they're protected
-- Scale without sacrificing visibility
-
----
-
 ## Feature Comparison
 
-| Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|---------|----------|----------|----------|-------|------|
-| **RAM Required** | 256MB | 1.5GB | 4GB | 16GB+ | Auto |
-| **Typical Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server | Cloud |
-| **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
-| **dnsXai Protection** | - | ✓ | ✓ | ✓ | ✓ |
-| **Explainable Decisions** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **WiFi Hotspot** | - | ✓ | ✓ | - | - |
-| **VLAN Segmentation** | - | - | ✓ | - | - |
-| **OpenFlow SDN** | - | - | ✓ | - | - |
-| **Local ML Training** | - | - | ✓ | ✓ | ✓ |
-| **Federated Learning** | Participate | Participate | Coordinate | Train | Global |
-| **Web Dashboard** | Health | Full | Full | Full | Multi-tenant |
-| **Data Export** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Feature | Sentinel | Guardian | Fortress | Nexus |
+|---------|----------|----------|----------|-------|
+| **RAM Required** | 256MB | 1.5GB | 4GB | 16GB+ |
+| **Typical Hardware** | IoT gateway | RPi 4/5 | Mini PC | Server |
+| **L2-L7 Detection** | - | ✓ | ✓ | ✓ |
+| **dnsXai Protection** | - | ✓ | ✓ | ✓ |
+| **Explainable Decisions** | ✓ | ✓ | ✓ | ✓ |
+| **WiFi Hotspot** | - | ✓ | ✓ | - |
+| **VLAN Segmentation** | - | - | ✓ | - |
+| **OpenFlow SDN** | - | - | ✓ | - |
+| **Local ML Training** | - | - | ✓ | ✓ |
+| **Federated Learning** | Participate | Participate | Coordinate | Train |
+| **Web Dashboard** | Health | Full | Full | Full |
+| **Data Export** | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
@@ -276,14 +244,14 @@ All products use the same transparent infrastructure from `shared/`:
 
 ### dnsXai Transparency by Tier
 
-| Feature | Guardian | Fortress | Nexus | MSSP |
-|---------|----------|----------|-------|------|
-| Classification explanations | ✓ | ✓ | ✓ | ✓ |
-| Block reason visibility | ✓ | ✓ | ✓ | ✓ |
-| ML confidence scores | ✓ | ✓ | ✓ | ✓ |
-| CNAME chain visibility | ✓ | ✓ | ✓ | ✓ |
-| Federated learning stats | ✓ | ✓ | Full | Global |
-| Custom model training | - | - | ✓ | ✓ |
+| Feature | Guardian | Fortress | Nexus |
+|---------|----------|----------|-------|
+| Classification explanations | ✓ | ✓ | ✓ |
+| Block reason visibility | ✓ | ✓ | ✓ |
+| ML confidence scores | ✓ | ✓ | ✓ |
+| CNAME chain visibility | ✓ | ✓ | ✓ |
+| Federated learning stats | ✓ | ✓ | Full |
+| Custom model training | - | - | ✓ |
 
 ---
 
@@ -311,7 +279,6 @@ All products use the same transparent infrastructure from `shared/`:
 | **Guardian** | Full NSE client | 1.5GB | Personal protection |
 | **Fortress** | NSE relay + routing | 4GB | Business networks |
 | **Nexus** | ML training + adversarial | 16GB+ | Security research |
-| **MSSP** | Full orchestration | Auto-scale | Multi-tenant cloud |
 
 ---
 

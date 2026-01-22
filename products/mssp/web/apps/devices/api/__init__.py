@@ -1,3 +1,0 @@
-"""
-Device Management API
-"""

@@ -23,7 +23,7 @@ Do you need a web interface?
          │  │
          │  └─ Single site or multiple sites?
          │     ├─ Single → Edge Deployment
-         │     └─ Multiple (MSSP) → Cloud Centralized
+         │     └─ Multiple (Service Provider) → Cloud Centralized
          │
          └─ On a separate server/cloud
             └─ Cloud Centralized (Multi-Tenant)
@@ -35,8 +35,8 @@ Do you need a web interface?
 |----------|----------|----------|------|------|
 | **Edge with UI** | 16GB+ RAM edge device | Home users, SMB | Full local control, no cloud dependency | Higher resource usage |
 | **Edge Headless** | 8GB RAM edge device | Constrained hardware | Lower resource usage | No local web UI |
-| **Cloud Centralized** | Dedicated cloud server | MSSP managing 10+ sites | Centralized management, multi-tenant | Requires internet for management |
-| **Hybrid** | Mix of both | Large MSSP | Flexibility, redundancy | More complex setup |
+| **Cloud Centralized** | Dedicated cloud server | Service Provider managing 10+ sites | Centralized management, multi-tenant | Requires internet for management |
+| **Hybrid** | Mix of both | Large Service Provider | Flexibility, redundancy | More complex setup |
 | **Development** | Local workstation | Testing, development | Easy testing | Not for production |
 
 ## 🏠 Scenario 1: Edge Deployment (Full UI on Edge)
@@ -100,11 +100,11 @@ sudo ./setup-webserver-podman.sh edge
 - ⚠️ Management per device
 - ⚠️ No centralized view for multiple sites
 
-## ☁️ Scenario 2: Cloud Centralized (MSSP Multi-Tenant)
+## ☁️ Scenario 2: Cloud Centralized (Service Provider Multi-Tenant)
 
 ### When to Use
 
-- **MSSP providers** managing multiple customer sites
+- **Service Provider providers** managing multiple customer sites
 - **Enterprise** with many branch offices
 - **Service providers** offering managed security
 - **Centralized management** of 10+ edge devices
@@ -192,7 +192,7 @@ sudo ./install.sh
 
 ### When to Use
 
-- **Large MSSP** with mix of customer requirements
+- **Large Service Provider** with mix of customer requirements
 - **High-value customers** who want local UI + cloud management
 - **Redundancy** requirements
 - **Flexible deployment** options
@@ -315,7 +315,7 @@ sudo ./install.sh
 - ⚠️ No web-based management
 - ⚠️ Grafana only for visualization
 - ⚠️ No blog/CMS features
-- ⚠️ No MSSP device management UI
+- ⚠️ No Service Provider device management UI
 
 ## 💻 Scenario 5: Development/Testing
 
@@ -383,7 +383,7 @@ sudo ./setup-webserver-podman.sh edge
 
 ---
 
-### MSSP (10+ Customer Sites)
+### Service Provider (10+ Customer Sites)
 
 **Recommended:** Cloud Centralized
 

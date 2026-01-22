@@ -45,14 +45,12 @@ Getting Started
 
    dashboards/README
    dashboards/admin-dashboard
-   dashboards/mssp-dashboard
    DASHBOARD-IMPLEMENTATION-PLAN
 
 .. toctree::
    :maxdepth: 2
    :caption: Deployment
 
-   deployment/MSSP-PRODUCTION-DEPLOYMENT
 
 .. toctree::
    :maxdepth: 2

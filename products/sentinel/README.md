@@ -27,7 +27,7 @@ Sentinel is a lightweight validator service designed for constrained devices wit
 
 - Edge node validation
 - Health monitoring endpoint (port 9090)
-- MSSP connectivity
+- Mesh connectivity
 - Minimal footprint (~50MB)
 - No container overhead
 - Native Python service
@@ -58,9 +58,9 @@ sudo ./scripts/setup.sh
 Configuration is stored in `/etc/hookprobe/sentinel.conf`:
 
 ```bash
-# MSSP Backend
-MSSP_URL=https://your-mssp.example.com
-MSSP_ID=your-mssp-id
+# Mesh Backend
+MESH_URL=https://your-mesh.example.com
+MESH_ID=your-mesh-id
 
 # Health endpoint
 HEALTH_PORT=9090
@@ -105,7 +105,7 @@ Response:
 
 ## Network Requirements
 
-- **Outbound HTTPS (443)**: Required for MSSP connectivity
+- **Outbound HTTPS (443)**: Required for mesh connectivity
 - **No offline mode**: Internet connectivity is mandatory
 
 ## Uninstall

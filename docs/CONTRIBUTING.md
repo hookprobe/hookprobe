@@ -577,7 +577,7 @@ Maintainers may:
 HookProbe uses a **dual licensing model**:
 
 - **AGPL v3.0**: Open source components (deployment, Guardian, response, mesh, docs)
-- **Proprietary**: Core AI/ML innovations (Qsecbit, Neural Resonance, dnsXai ML, DSM, MSSP)
+- **Proprietary**: Core AI/ML innovations (Qsecbit, Neural Resonance, dnsXai ML, DSM)
 
 By contributing to HookProbe, you agree that:
 

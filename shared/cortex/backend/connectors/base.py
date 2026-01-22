@@ -3,7 +3,7 @@
 Base Product Connector for Globe Visualization
 
 This module defines the base class that all product connectors must implement.
-Each HookProbe product (Guardian, Fortress, Nexus, MSSP) has its own connector
+Each HookProbe product (Guardian, Fortress, Nexus) has its own connector
 that inherits from this base class.
 
 The connector is responsible for:
@@ -30,7 +30,6 @@ class ProductTier(Enum):
     GUARDIAN = "guardian"
     FORTRESS = "fortress"
     NEXUS = "nexus"
-    MSSP = "mssp"
 
 
 class QsecbitStatus(Enum):

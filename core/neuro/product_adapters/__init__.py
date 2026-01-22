@@ -12,19 +12,16 @@ Product Tiers:
 - Guardian (1.5GB): Full NSE client with neural key derivation
 - Fortress (4GB): NSE routing and relay capabilities
 - Nexus (16GB+): ML training and weight evolution
-- MSSP (Cloud): Orchestration and adversarial analysis
 """
 
 from .sentinel import SentinelNSEAdapter
 from .guardian import GuardianNSEAdapter
 from .fortress import FortressNSEAdapter
 from .nexus import NexusNSEAdapter
-from .mssp import MSSPNSEAdapter
 
 __all__ = [
     'SentinelNSEAdapter',
     'GuardianNSEAdapter',
     'FortressNSEAdapter',
     'NexusNSEAdapter',
-    'MSSPNSEAdapter',
 ]

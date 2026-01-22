@@ -7,7 +7,7 @@ security mesh. It enables nodes to:
 1. Share threat intelligence in real-time
 2. Achieve consensus on security state without central authority
 3. Evolve collective neural weights for better detection
-4. Operate autonomously when disconnected from MSSP
+4. Operate autonomously when disconnected from cloud coordinator
 5. Coordinate defense responses across the mesh
 
 Philosophy:
@@ -44,10 +44,10 @@ Tier Roles in the Consciousness:
 │    - Threat pattern analysis                                    │
 │    - Nexus-to-Nexus weight synchronization                      │
 ├─────────────────────────────────────────────────────────────────┤
-│  MSSP (Cloud)      → Global Coordinator (Optional)              │
+│  COORDINATOR       → Global Coordinator (Optional Cloud)        │
 │    - Long-term storage + analytics                              │
 │    - Cross-region coordination                                  │
-│    - Fallback: mesh operates autonomously without MSSP          │
+│    - Fallback: mesh operates autonomously without coordinator   │
 └─────────────────────────────────────────────────────────────────┘
 """
 
@@ -89,11 +89,11 @@ except ImportError:
 
 class TierRole(Enum):
     """Role of a node in the mesh consciousness."""
-    SENTINEL = auto()   # Lightweight validator (512MB)
-    GUARDIAN = auto()   # Intelligence node (3GB)
-    FORTRESS = auto()   # Regional coordinator (8GB)
-    NEXUS = auto()      # ML/AI compute brain (64GB+)
-    MSSP = auto()       # Cloud coordinator
+    SENTINEL = auto()    # Lightweight validator (512MB)
+    GUARDIAN = auto()    # Intelligence node (3GB)
+    FORTRESS = auto()    # Regional coordinator (8GB)
+    NEXUS = auto()       # ML/AI compute brain (64GB+)
+    COORDINATOR = auto() # Global cloud coordinator
 
 
 class ConsciousnessState(Enum):
@@ -102,7 +102,7 @@ class ConsciousnessState(Enum):
     AWAKENING = auto()     # Discovering peers
     AWARE = auto()         # Connected, receiving intelligence
     SYNCHRONIZED = auto()  # Full resonance with mesh
-    AUTONOMOUS = auto()    # Operating without MSSP
+    AUTONOMOUS = auto()    # Operating without cloud coordinator
 
 
 @dataclass
@@ -709,7 +709,7 @@ class MeshConsciousness:
         if self.tier == TierRole.NEXUS:
             return base + ['ml_compute', 'training', 'consensus']
 
-        if self.tier == TierRole.MSSP:
+        if self.tier == TierRole.COORDINATOR:
             return base + ['global_coord', 'storage', 'analytics']
 
         return base
@@ -1021,7 +1021,7 @@ def create_consciousness(
     Factory function to create mesh consciousness for a tier.
 
     Args:
-        tier_name: "sentinel", "guardian", "fortress", "nexus", or "mssp"
+        tier_name: "sentinel", "guardian", "fortress", "nexus", or "coordinator"
         neuro_seed: Shared neural seed (generated if None)
         bootstrap_peers: Bootstrap peer endpoints
         data_dir: Data directory
@@ -1035,7 +1035,7 @@ def create_consciousness(
         'guardian': TierRole.GUARDIAN,
         'fortress': TierRole.FORTRESS,
         'nexus': TierRole.NEXUS,
-        'mssp': TierRole.MSSP,
+        'coordinator': TierRole.COORDINATOR,
     }
 
     tier = tier_map.get(tier_name.lower())

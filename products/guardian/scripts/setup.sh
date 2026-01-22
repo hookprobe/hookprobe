@@ -140,20 +140,20 @@ detect_interfaces() {
     log_info "WiFi AP mode: $WIFI_AP_SUPPORT"
 }
 
-check_mssp_connectivity() {
-    local mssp_url="${HOOKPROBE_MSSP_URL:-https://nexus.hookprobe.com}"
+check_mesh_connectivity() {
+    local mesh_url="${HOOKPROBE_MESH_URL:-https://nexus.hookprobe.com}"
     local timeout=10
 
-    log_step "Checking MSSP connectivity..."
+    log_step "Checking mesh connectivity..."
 
     if command -v curl &>/dev/null; then
-        if curl -s --max-time $timeout "$mssp_url/api/health" &>/dev/null; then
-            log_info "MSSP server is reachable"
+        if curl -s --max-time $timeout "$mesh_url/api/health" &>/dev/null; then
+            log_info "Mesh server is reachable"
             return 0
         fi
     fi
 
-    log_warn "MSSP server not reachable (SDN features may be limited)"
+    log_warn "Mesh server not reachable (SDN features may be limited)"
     return 1
 }
 
@@ -672,9 +672,9 @@ setup_ovs_bridge() {
         log_info "VXLAN master PSK generated"
     fi
 
-    # Setup VXLAN tunnel for MSSP connection
+    # Setup VXLAN tunnel for mesh connection
     local vxlan_vni="${HOOKPROBE_VXLAN_VNI:-1000}"
-    local vxlan_port="vxlan_mssp"
+    local vxlan_port="vxlan_mesh"
 
     # Add VXLAN port to OVS bridge
     ovs-vsctl --may-exist add-port "$OVS_BRIDGE_NAME" "$vxlan_port" \
@@ -4123,8 +4123,8 @@ network:
 # HTP (HookProbe Transport Protocol) Configuration
 htp:
   enabled: true
-  mssp_host: "mssp.hookprobe.com"
-  mssp_port: 8443
+  mesh_host: "mesh.hookprobe.com"
+  mesh_port: 8443
   use_tls: true
   reconnect_interval: 30
   heartbeat_interval: 60
@@ -4533,11 +4533,11 @@ confirm_installation() {
     echo -e "${YELLOW}This will install Guardian with all security features.${NC}"
     echo ""
 
-    # Check MSSP connectivity
-    if check_mssp_connectivity; then
-        echo -e "  ${GREEN}✓${NC} MSSP connectivity: ${GREEN}Available${NC}"
+    # Check mesh connectivity
+    if check_mesh_connectivity; then
+        echo -e "  ${GREEN}✓${NC} Mesh connectivity: ${GREEN}Available${NC}"
     else
-        echo -e "  ${YELLOW}!${NC} MSSP connectivity: ${YELLOW}Offline${NC} (HTP Mesh features disabled until connected)"
+        echo -e "  ${YELLOW}!${NC} Mesh connectivity: ${YELLOW}Offline${NC} (HTP Mesh features disabled until connected)"
     fi
     echo ""
 

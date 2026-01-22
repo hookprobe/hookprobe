@@ -459,7 +459,7 @@ The QSecBit agent runs with `network_mode: host` to:
 │                          │                                       │
 │  ┌───────────────────────▼───────────────────────────────────┐  │
 │  │              OTHER HOOKPROBE NODES                         │  │
-│  │  Guardian ←→ Fortress ←→ Nexus ←→ MSSP                    │  │
+│  │  Guardian ←→ Fortress ←→ Nexus                            │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘

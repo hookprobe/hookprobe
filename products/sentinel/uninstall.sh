@@ -192,9 +192,9 @@ remove_configuration() {
     fi
 
     # Remove secrets
-    if [ -f "$SECRETS_DIR/mssp-token" ]; then
-        log_info "Removing MSSP token..."
-        rm -f "$SECRETS_DIR/mssp-token"
+    if [ -f "$SECRETS_DIR/mesh-token" ]; then
+        log_info "Removing mesh token..."
+        rm -f "$SECRETS_DIR/mesh-token"
     fi
 
     # Clean up empty directories

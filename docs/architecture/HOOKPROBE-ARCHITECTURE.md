@@ -348,7 +348,7 @@ class MessageType(Enum):
 Edge (behind NAT/CGNAT)               Validator (Cloud)
   │                                        │
   │─── (1) HELLO ─────────────────────────►│
-  │   [node_id, W_fingerprint]             │ Check MSSP registry
+  │   [node_id, W_fingerprint]             │ Check device registry
   │                                        │ Validate device exists
   │                                        │
   │◄── (2) CHALLENGE ──────────────────────│
@@ -482,14 +482,14 @@ async with HTPFileTransfer(htp_session) as ft:
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │   ┌─────────┐     Raw        ┌─────────┐    Qsecbit    ┌─────────┐             │
-│   │Guardian │ ──telemetry──► │ Nexus   │ ───scores───► │  MSSP   │             │
+│   │Guardian │ ──telemetry──► │ Nexus   │ ───scores───► │  Mesh   │             │
 │   │Fortress │    (local)     │         │   (derived)   │         │             │
 │   │Sentinel │                │         │               │         │             │
 │   └─────────┘                └─────────┘               └─────────┘             │
 │                                                              │                  │
 │                                                              │                  │
 │   ┌─────────┐    Hardened    ┌─────────┐    Global     ┌────┴────┐             │
-│   │Guardian │ ◄───model────  │ Nexus   │ ◄──updates──  │  MSSP   │             │
+│   │Guardian │ ◄───model────  │ Nexus   │ ◄──updates──  │  Mesh   │             │
 │   │Fortress │    (updates)   │         │   (insights)  │         │             │
 │   │Sentinel │                │         │               │         │             │
 │   └─────────┘                └─────────┘               └─────────┘             │
@@ -524,10 +524,10 @@ Every decision traces back to Qsecbit: **Auditable, explainable AI**.
 ### Coordinated Attack Response (Herd Immunity)
 
 ```
-T+00s: MSSP detects pattern hitting Nexus A, B, C
+T+00s: Mesh detects pattern hitting Nexus A, B, C
        │
        ▼
-T+05s: MSSP broadcasts: "Attack signature X detected"
+T+05s: Mesh broadcasts: "Attack signature X detected"
        │
        ├─────────────────────────────────────────────────┐
        ▼                   ▼                   ▼         ▼
@@ -576,24 +576,23 @@ Attacker's campaign fails before reaching 80% of targets
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │ TIER 4: CENTRAL BRAIN                                                            │
 ├─────────────────────────────────────────────────────────────────────────────────┤
-│   MSSP - Cloud Federation Platform (mssp.hookprobe.com)                          │
-│   Location: /products/mssp/                                                      │
+│   Mesh - Cloud Federation Platform (mesh.hookprobe.com)                          │
+│   Location: /shared/mesh/                                                        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Product Comparison
 
-| Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|---------|----------|----------|----------|-------|------|
-| **RAM** | 256MB | 1.5GB | 4GB | 16GB+ | Scales |
-| **Role** | Validator | Edge | Edge+ | Compute | Brain |
-| **L2-L7 Detection** | - | Yes | Yes | Yes | - |
-| **WiFi Hotspot** | - | Yes | Yes | - | - |
-| **VLAN Segmentation** | - | - | Yes | - | - |
-| **Local AI** | - | - | Yes | Yes | - |
-| **ML Training** | - | - | - | Yes | Yes |
-| **Fleet Management** | - | - | - | Regional | Global |
-| **Multi-Tenant** | - | - | - | - | Yes |
+| Feature | Sentinel | Guardian | Fortress | Nexus |
+|---------|----------|----------|----------|-------|
+| **RAM** | 256MB | 1.5GB | 4GB | 16GB+ |
+| **Role** | Validator | Edge | Edge+ | Compute |
+| **L2-L7 Detection** | - | Yes | Yes | Yes |
+| **WiFi Hotspot** | - | Yes | Yes | - |
+| **VLAN Segmentation** | - | - | Yes | - |
+| **Local AI** | - | - | Yes | Yes |
+| **ML Training** | - | - | - | Yes |
+| **Fleet Management** | - | - | - | Regional |
 
 ---
 
@@ -652,7 +651,7 @@ Attacker's campaign fails before reaching 80% of targets
 | **009** | Email System, Cloudflare Tunnel, Notification Mesh |
 | **010** | DSM Ledger & Consensus Engine |
 
-### MSSP Device Registry
+### Device Registry
 
 ```sql
 -- Main devices table
@@ -738,8 +737,8 @@ sudo ./install.sh --tier fortress
 # Datacenter/Cloud (16GB+ RAM)
 sudo ./install.sh --tier nexus
 
-# MSSP Cloud deployment
-# See docs/deployment/MSSP-PRODUCTION-DEPLOYMENT.md
+# Cloud deployment
+# See docs/deployment/cloud-deployment.md
 ```
 
 ---
@@ -759,7 +758,7 @@ sudo ./install.sh --tier nexus
 | **HTP Client** | Complete | `products/guardian/lib/htp_client.py` |
 | **HTP File Transfer** | Complete | `products/guardian/lib/htp_file.py` |
 | **Hardware Fingerprinting** | Complete | `core/neuro/identity/hardware_fingerprint.py` |
-| **MSSP Device Registry** | Complete | `core/mssp/device_registry.py` |
+| **Device Registry** | Complete | `shared/mesh/device_registry.py` |
 | **DSM Node** | Complete | `shared/dsm/node.py` |
 | **DSM Validator** | Complete | `shared/dsm/validator.py` |
 | **Consensus Engine** | Complete | `shared/dsm/consensus.py` |
@@ -771,7 +770,7 @@ sudo ./install.sh --tier nexus
 | **Phase 1**: Core Protocol | Q1 2025 | Complete |
 | **Phase 2**: POD Integration | Q2 2025 | Complete |
 | **Phase 3**: Cortex Integration | Q3 2025 | Complete |
-| **Phase 4**: Production MSSP | Q4 2025 | In Progress |
+| **Phase 4**: Production Mesh | Q4 2025 | In Progress |
 | **Phase 5**: HTP Enhancements | Q1 2026 | Planned |
 | **Phase 6**: Beta Testing | Q2-Q3 2026 | Planned |
 | **Phase 7**: Production Launch | Q4 2026 | Planned |
@@ -791,8 +790,7 @@ hookprobe/
 │   ├── sentinel/                  # DSM Validator (IoT, 256MB)
 │   ├── guardian/                  # Travel Companion (RPi, 1.5GB)
 │   ├── fortress/                  # Edge Router (Mini PC, 4GB)
-│   ├── nexus/                     # ML/AI Compute (Server, 16GB+)
-│   └── mssp/                      # Cloud Federation
+│   └── nexus/                     # ML/AI Compute (Server, 16GB+)
 │
 ├── shared/                         # Shared Infrastructure
 │   ├── dsm/                       # Decentralized Security Mesh

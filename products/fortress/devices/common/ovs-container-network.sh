@@ -91,7 +91,7 @@ declare -A CONTAINER_IPS=(
 declare -A VXLAN_CONFIG=(
     ["mesh-core"]="1000:4789"
     ["mesh-threat"]="1001:4790"
-    ["mssp-uplink"]="2000:4800"
+    ["mesh-uplink"]="2000:4800"
 )
 
 # OpenFlow table assignments
@@ -1198,7 +1198,7 @@ Examples:
   $0 nat eth0                       # Setup NAT
   $0 dhcp                           # Configure DHCP
   $0 block 10.200.0.50              # Block IP
-  $0 vxlan-peer mssp 203.0.113.1 2000
+  $0 vxlan-peer mesh 203.0.113.1 2000
 
 Network Architecture:
   containers  172.20.200.0/24      All fortress containers (fts-internal podman network)

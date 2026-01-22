@@ -6,7 +6,7 @@
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | sudo bash
 #   # OR with options:
-#   curl -sSL ... | sudo bash -s -- --mssp-endpoint my-mssp.example.com
+#   curl -sSL ... | sudo bash -s -- --mesh-endpoint my-mesh.example.com
 #
 # Requirements:
 #   - Linux (Debian/Ubuntu/Raspbian, RHEL/Fedora, Alpine)
@@ -16,7 +16,7 @@
 #   - Internet connectivity
 #
 # Security Features:
-#   - HTP (HookProbe Transport Protocol) for MSSP communication
+#   - HTP (HookProbe Transport Protocol) for mesh communication
 #   - Rate limiting / DDoS protection
 #   - Process sandboxing (seccomp, capabilities)
 #   - Automatic firewall rules
@@ -47,8 +47,8 @@ LOG_DIR="/var/log/hookprobe"
 RUN_DIR="/run/hookprobe"
 
 # Defaults
-MSSP_ENDPOINT="${MSSP_ENDPOINT:-mssp.hookprobe.com}"
-MSSP_PORT="${MSSP_PORT:-8443}"
+MESH_ENDPOINT="${MESH_ENDPOINT:-mesh.hookprobe.com}"
+MESH_PORT="${MESH_PORT:-8443}"
 HEALTH_PORT="${HEALTH_PORT:-9090}"
 SENTINEL_REGION="${SENTINEL_REGION:-auto}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
@@ -653,11 +653,11 @@ SENTINEL_NODE_ID=${NODE_ID}
 SENTINEL_REGION=${SENTINEL_REGION}
 SENTINEL_VERSION=${VERSION}
 
-# MSSP Backend (HTP - HookProbe Transport Protocol)
-MSSP_ENDPOINT=${MSSP_ENDPOINT}
-MSSP_PORT=${MSSP_PORT}
-MSSP_PROTOCOL=htp
-MSSP_HTP_VERSION=1.0
+# Mesh Backend (HTP - HookProbe Transport Protocol)
+MESH_ENDPOINT=${MESH_ENDPOINT}
+MESH_PORT=${MESH_PORT}
+MESH_PROTOCOL=htp
+MESH_HTP_VERSION=1.0
 
 # Health Endpoint
 HEALTH_PORT=${HEALTH_PORT}
@@ -693,10 +693,10 @@ SIGNATURES_DIR=${DATA_DIR}/signatures
 ENV
     chmod 640 "$CONFIG_DIR/sentinel.env"
 
-    # Create secrets file for MSSP token (if provided)
-    if [ -n "$MSSP_TOKEN" ]; then
-        echo "$MSSP_TOKEN" > "$SECRETS_DIR/mssp-token"
-        chmod 600 "$SECRETS_DIR/mssp-token"
+    # Create secrets file for mesh token (if provided)
+    if [ -n "$MESH_TOKEN" ]; then
+        echo "$MESH_TOKEN" > "$SECRETS_DIR/mesh-token"
+        chmod 600 "$SECRETS_DIR/mesh-token"
     fi
 
     log_info "Node ID: ${NODE_ID}"
@@ -989,8 +989,8 @@ show_complete() {
     echo "  Health Port:  ${HEALTH_PORT}"
     echo ""
 
-    echo -e "${CYAN}MSSP Backend:${NC}"
-    echo "  Endpoint:     ${MSSP_ENDPOINT}:${MSSP_PORT}"
+    echo -e "${CYAN}Mesh Backend:${NC}"
+    echo "  Endpoint:     ${MESH_ENDPOINT}:${MESH_PORT}"
     echo "  Protocol:     HTP (HookProbe Transport Protocol)"
     echo ""
 
@@ -1067,9 +1067,9 @@ Usage:
   curl -sSL ... | sudo bash -s -- [OPTIONS]
 
 Options:
-  --mssp-endpoint URL   MSSP backend server (default: mssp.hookprobe.com)
-  --mssp-port PORT      MSSP port (default: 8443)
-  --mssp-token TOKEN    MSSP authentication token
+  --mesh-endpoint URL   Mesh backend server (default: mesh.hookprobe.com)
+  --mesh-port PORT      Mesh port (default: 8443)
+  --mesh-token TOKEN    Mesh authentication token
   --health-port PORT    Health endpoint port (default: 9090)
   --region REGION       Region code (default: auto-detect)
   --no-firewall         Skip firewall configuration
@@ -1078,7 +1078,7 @@ Options:
   --help                Show this help
 
 Security Features:
-  • HTP (HookProbe Transport Protocol) for MSSP
+  • HTP (HookProbe Transport Protocol) for mesh
   • Rate limiting / DDoS protection
   • Threat pattern detection
   • File integrity monitoring
@@ -1090,8 +1090,8 @@ Examples:
   # Basic install
   curl -sSL ... | sudo bash
 
-  # Custom MSSP endpoint
-  curl -sSL ... | sudo bash -s -- --mssp-endpoint security.mycompany.com
+  # Custom mesh endpoint
+  curl -sSL ... | sudo bash -s -- --mesh-endpoint security.mycompany.com
 
   # Minimal install (no firewall/fail2ban)
   curl -sSL ... | sudo bash -s -- --no-firewall --no-fail2ban
@@ -1108,9 +1108,9 @@ main() {
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --mssp-endpoint) MSSP_ENDPOINT="$2"; shift 2 ;;
-            --mssp-port) MSSP_PORT="$2"; shift 2 ;;
-            --mssp-token) MSSP_TOKEN="$2"; shift 2 ;;
+            --mesh-endpoint) MESH_ENDPOINT="$2"; shift 2 ;;
+            --mesh-port) MESH_PORT="$2"; shift 2 ;;
+            --mesh-token) MESH_TOKEN="$2"; shift 2 ;;
             --health-port) HEALTH_PORT="$2"; shift 2 ;;
             --region) SENTINEL_REGION="$2"; shift 2 ;;
             --no-firewall) ENABLE_FIREWALL="no"; shift ;;

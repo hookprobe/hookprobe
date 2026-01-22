@@ -70,7 +70,7 @@ class MeshBridgeConfig:
     """Configuration for the mesh bridge."""
     # Node identification
     node_id: bytes = field(default_factory=lambda: secrets.token_bytes(16))
-    tier: str = 'guardian'  # sentinel, guardian, fortress, nexus, mssp
+    tier: str = 'guardian'  # sentinel, guardian, fortress, nexus
 
     # Mesh settings
     enable_mesh_reporting: bool = True
@@ -570,7 +570,7 @@ def create_mesh_bridge(
     Create a QsecbitMeshBridge with common configuration.
 
     Args:
-        tier: Product tier (sentinel, guardian, fortress, nexus, mssp)
+        tier: Product tier (sentinel, guardian, fortress, nexus)
         enable_mesh: Enable mesh consciousness reporting
         enable_cortex: Enable Cortex visualization events
         min_severity: Minimum severity to report (CRITICAL, HIGH, MEDIUM, LOW, INFO)

@@ -24,47 +24,7 @@ This directory contains documentation for HookProbe's web-based dashboards and u
 
 ---
 
-### 2. MSSP Dashboard (Security Operations)
-**Purpose**: Multi-tenant security monitoring and device management
-
-**Features**:
-- 🔒 **Security Monitoring** (SIEM capabilities)
-  - Real-time threat detection and alerts
-  - Qsecbit RAG status across all devices
-  - IDS/IPS event correlation
-  - Attack pattern visualization
-
-- 📱 **Multi-Device Management**
-  - Customer edge device inventory
-  - Device health and connectivity status
-  - Per-tenant security posture
-  - Remote configuration
-
-- 📈 **Analytics & Reporting**
-  - Security metrics and KPIs
-  - Threat intelligence trends
-  - Compliance reporting
-  - Custom dashboards per tenant
-
-- 🎯 **Threat Hunting Interface**
-  - Advanced query builder (ClickHouse/Doris)
-  - Historical event analysis
-  - IOC (Indicators of Compromise) tracking
-  - Investigation workflows
-
-- 🚨 **Incident Response**
-  - Alert management and triage
-  - Automated response tracking
-  - Playbook execution
-  - Remediation verification
-
-**Access**: http://YOUR_IP/dashboard/
-
-**Documentation**: [mssp-dashboard.md](mssp-dashboard.md) *(to be created)*
-
----
-
-### 3. Grafana Dashboards
+### 2. Grafana Dashboards
 **Purpose**: Real-time metrics and observability
 
 **Built-in Dashboards**:
@@ -125,7 +85,6 @@ sudo ./setup-webserver.sh edge
 
 # 3. Access dashboards
 # Admin: http://YOUR_IP/admin/
-# MSSP:  http://YOUR_IP/dashboard/
 # Grafana: http://YOUR_IP:3000
 ```
 
@@ -197,12 +156,6 @@ curl -X POST -H "Authorization: Bearer YOUR_API_KEY" \
 - **Staff**: Content management only
 - **Viewer**: Read-only access
 
-**MSSP Dashboard Roles**:
-- **MSSP Admin**: All tenants, full access
-- **MSSP Analyst**: Read-only, all tenants
-- **Tenant Admin**: Single tenant, full access
-- **Tenant Viewer**: Single tenant, read-only
-
 **Grafana Roles**:
 - **Admin**: Dashboard management, user management
 - **Editor**: Create and edit dashboards
@@ -253,42 +206,6 @@ http://YOUR_IP:3000/org/users
 - Recent security events
 - Quick links to Grafana dashboards
 
-### MSSP Dashboard
-
-#### Security Monitoring Tabs
-
-1. **Home**: Overview and summaries
-   - Active devices and connectivity
-   - Recent alerts and incidents
-   - Qsecbit score trends
-   - Top threats and attackers
-
-2. **Endpoints**: Device management
-   - Device inventory and status
-   - Per-device Qsecbit scores
-   - Configuration management
-   - Remote access (SSH/Cloudflare Tunnel)
-
-3. **Vulnerabilities**: Risk assessment
-   - CVE tracking and remediation
-   - Vulnerability scanner integration
-   - Patch management
-   - Risk scoring
-
-4. **SOAR**: Automated response
-   - Playbook management
-   - Incident workflows
-   - Response action history
-   - Integration with POD-007 (Kali)
-
-5. **xSOC**: Extended SOC capabilities
-   - Threat intelligence feeds
-   - Cross-tenant correlation
-   - Advanced analytics
-   - Custom queries (ClickHouse/Doris)
-
----
-
 ## 🔔 Alerting
 
 ### Grafana Alerts
@@ -317,7 +234,6 @@ Configure alerts for critical events:
 All dashboards are mobile-responsive:
 
 - **Admin Dashboard**: Full mobile UI
-- **MSSP Dashboard**: Optimized for tablets
 - **Grafana**: Mobile app available (iOS/Android)
 
 ---
