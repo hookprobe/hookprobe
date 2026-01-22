@@ -58,7 +58,7 @@ declare -A VLAN_CONFIG=(
     ["storage"]="12:10.250.12.0/24"
     ["trusted"]="20:10.250.20.0/24"
     ["edge-uplink"]="50:10.250.50.0/24"
-    ["mssp-uplink"]="60:10.250.60.0/24"
+    ["mesh-uplink"]="60:10.250.60.0/24"
     ["quarantine"]="99:10.250.99.0/24"
 )
 
@@ -70,7 +70,7 @@ declare -A VXLAN_CONFIG=(
     ["nexus-analytics"]="3003:4803"
     ["nexus-ml"]="3004:4804"
     ["edge-mesh"]="4000:4900"
-    ["mssp-federation"]="5000:4950"
+    ["mesh-federation"]="5000:4950"
 )
 
 # Optional features
@@ -461,7 +461,7 @@ VXLANHEADER
             nexus-analytics) subnet="10.250.103.0/24" ;;
             nexus-ml) subnet="10.250.104.0/24" ;;
             edge-mesh) subnet="10.250.200.0/24" ;;
-            mssp-federation) subnet="10.250.250.0/24" ;;
+            mesh-federation) subnet="10.250.250.0/24" ;;
         esac
 
         echo "${network}|${vni}|${port}|${subnet}|${psk_file}" >> /etc/hookprobe/vxlan-networks.conf
@@ -797,7 +797,7 @@ class QSecBitNexusAgent:
             # Check VXLAN tunnel status
             result = subprocess.run(['ovs-vsctl', 'show'],
                                   capture_output=True, text=True, timeout=5)
-            if 'mssp-federation' in result.stdout or 'edge-mesh' in result.stdout:
+            if 'mesh-federation' in result.stdout or 'edge-mesh' in result.stdout:
                 return 'connected'
             return 'standalone'
         except Exception:
@@ -1195,7 +1195,7 @@ models_dir = /opt/hookprobe/nexus/models
 
 [federation]
 enabled = true
-mssp_vni = 5000
+mesh_vni = 5000
 edge_mesh_vni = 4000
 
 [analytics]
@@ -1274,7 +1274,7 @@ main() {
             --enable-n8n) ENABLE_N8N=true; shift ;;
             --disable-macsec) MACSEC_ENABLED=false; shift ;;
             --node-id) HOOKPROBE_NODE_ID="$2"; shift 2 ;;
-            --mssp-url) HOOKPROBE_MSSP_URL="$2"; shift 2 ;;
+            --mesh-url) HOOKPROBE_MESH_URL="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

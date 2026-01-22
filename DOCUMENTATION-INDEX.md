@@ -20,7 +20,6 @@ For complete documentation, see: **[docs/DOCUMENTATION-INDEX.md](docs/DOCUMENTAT
 | **Fortress** | Full SDN with VLAN segmentation | [products/fortress/README.md](products/fortress/README.md) |
 | **Nexus** | ML/AI compute hub | [products/nexus/README.md](products/nexus/README.md) |
 | **Sentinel** | Lightweight edge validator | [products/sentinel/README.md](products/sentinel/README.md) |
-| **MSSP** | Cloud federation & VPN | [products/mssp/web/README.md](products/mssp/web/README.md) |
 
 ## Full Documentation
 

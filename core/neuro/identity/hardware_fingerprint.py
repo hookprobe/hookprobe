@@ -42,7 +42,7 @@ class HardwareFingerprintGenerator:
     Simple, effective approach:
     1. Collect stable hardware IDs
     2. Hash together for unique fingerprint
-    3. Bind with timestamp for MSSP tracking
+    3. Bind with timestamp for mesh tracking
     """
 
     def __init__(self):

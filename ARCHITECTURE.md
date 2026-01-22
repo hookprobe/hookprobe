@@ -9,15 +9,10 @@
 │                          HOOKPROBE FEDERATED MESH                               │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│                              ┌──────────────┐                                   │
-│                              │     MSSP     │  ← Central Brain                  │
-│                              │   (Cloud)    │    Analytics, Training, Portal    │
-│                              └──────┬───────┘                                   │
-│                                     │                                           │
-│                    ┌────────────────┼────────────────┐                          │
+│                    ┌────────────────────────────────┐                          │
 │                    │      HTP Mesh Protocol          │                          │
 │                    │    (Trust Fabric + Qsecbit)     │                          │
-│                    └────────────────┼────────────────┘                          │
+│                    └────────────────┬────────────────┘                          │
 │                                     │                                           │
 │          ┌──────────────────────────┼──────────────────────────┐               │
 │          │                          │                          │               │
@@ -111,36 +106,14 @@ We flip the SOC model inside-out with a federated architecture where:
 │   • Lightweight inference locally                                               │
 │   • Aggregates edge Qsecbit scores                                              │
 │   • Adversarial AI (red-teams itself)                                           │
-│   • Reports weakness vectors to MSSP                                            │
-│   • Receives hardened models from MSSP                                          │
+│   • Reports weakness vectors to mesh                                            │
+│   • Receives hardened models from mesh                                          │
 │   • Nexus-to-Nexus mesh communication                                           │
 │                                                                                 │
 │   Location: /products/nexus/                                                    │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ TIER 4: CENTRAL BRAIN (The Coordinator)                                         │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   ┌─────────────────────────────────────────────────────────────────────────┐  │
-│   │                              MSSP                                        │  │
-│   │                     Cloud Federation Platform                            │  │
-│   └─────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                 │
-│   • mssp.hookprobe.com                                                          │
-│   • Runs cheap, scales horizontally                                             │
-│   • Never stores raw customer data                                              │
-│                                                                                 │
-│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │
-│   │   Portal    │  │   Fleet     │  │  Training   │  │   Global    │          │
-│   │  Customer   │  │ Management  │  │  Pipeline   │  │   Threat    │          │
-│   │    UI       │  │   (All)     │  │   (AI/ML)   │  │   Model     │          │
-│   └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘          │
-│                                                                                 │
-│   Location: /products/mssp/                                                     │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -154,7 +127,7 @@ Traditional: Ship logs to SOC (expensive, privacy risk)
 HookProbe:   Share only derived intelligence
 
 ┌─────────────┐                              ┌─────────────┐
-│   Nexus A   │                              │    MSSP     │
+│   Nexus A   │                              │    Mesh     │
 │             │   ─── Qsecbit scores ───►    │             │
 │  Raw logs   │   ─── Attack signatures ──►  │   Global    │
 │  stay here  │   ─── Neural fingerprints ─► │   Threat    │
@@ -162,8 +135,8 @@ HookProbe:   Share only derived intelligence
 │             │   ◄── Hardened model ─────   │             │
 └─────────────┘                              └─────────────┘
 
-Customer A's attack → Customer B's immunity
-Without exposing Customer A's data
+Node A's attack → Node B's immunity
+Without exposing Node A's data
 ```
 
 **What gets shared (not raw data):**
@@ -189,7 +162,7 @@ Without exposing Customer A's data
 │                                        "Weakness Vector"        │
 │                                                 │               │
 │   ┌────────────────────────────────────────────┴──────────┐    │
-│   │                        MSSP                            │    │
+│   │                        Mesh                            │    │
 │   │    Aggregates weakness vectors from all Nexuses        │    │
 │   │    Trains hardened model                               │    │
 │   │    Pushes update to all Nexuses                        │    │
@@ -218,7 +191,7 @@ HTP isn't just transport—it's the identity and trust layer:
 │     - Uptime                                                     │
 │     - False positive rate                                        │
 │     - Contribution to collective intelligence                    │
-│     - Response time to MSSP directives                           │
+│     - Response time to mesh directives                           │
 │                                                                  │
 │   Bad actors can't join the mesh                                 │
 │   Compromised Nexuses get isolated automatically                 │
@@ -234,8 +207,7 @@ Single metric that works at every scale:
 |-----------|----------|----------|
 | **Guardian** | Local Qsecbit | Mitigation commands |
 | **Fortress** | Local + network Qsecbit | WAF rules, IDS updates |
-| **Nexus** | Aggregated Qsecbit | MSSP insights |
-| **MSSP** | Global Qsecbit trends | Nothing (top of chain) |
+| **Nexus** | Aggregated Qsecbit | Global insights |
 
 ```python
 # The Formula
@@ -256,10 +228,10 @@ Every decision traces back to Qsecbit: **Auditable, explainable AI**.
 │                    COORDINATED ATTACK RESPONSE                   │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   T+00s: MSSP detects pattern hitting Nexus A, B, C              │
+│   T+00s: Mesh detects pattern hitting Nexus A, B, C              │
 │          │                                                       │
 │          ▼                                                       │
-│   T+05s: MSSP broadcasts: "Attack signature X detected"          │
+│   T+05s: Mesh broadcasts: "Attack signature X detected"          │
 │          │                                                       │
 │          ├─────────────────────────────────────────────────┐     │
 │          ▼                   ▼                   ▼         ▼     │
@@ -283,13 +255,13 @@ Anyone can run a Nexus and contribute to the mesh:
 
 | Operator | Use Case | Benefits |
 |----------|----------|----------|
-| MSSPs | Deploy for customers | Revenue, fleet control |
+| Service Providers | Deploy for customers | Revenue, fleet control |
 | Enterprises | Run their own | Data sovereignty, custom models |
 | Researchers | Contribute capacity | Early threat intel, reputation |
 | Home users | Spare hardware | Community protection |
 
 Contributors earn:
-- **Reputation**: Priority MSSP access
+- **Reputation**: Priority mesh access
 - **Threat Intel**: See patterns before public disclosure
 - **Revenue Share**: If running commercial
 
@@ -303,14 +275,14 @@ Contributors earn:
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │   ┌─────────┐     Raw        ┌─────────┐    Qsecbit    ┌─────────┐             │
-│   │Guardian │ ──telemetry──► │ Nexus   │ ───scores───► │  MSSP   │             │
+│   │Guardian │ ──telemetry──► │ Nexus   │ ───scores───► │  Mesh   │             │
 │   │Fortress │    (local)     │         │   (derived)   │         │             │
 │   │Sentinel │                │         │               │         │             │
 │   └─────────┘                └─────────┘               └─────────┘             │
 │                                                              │                  │
 │                                                              │                  │
 │   ┌─────────┐    Hardened    ┌─────────┐    Global     ┌────┴────┐             │
-│   │Guardian │ ◄───model────  │ Nexus   │ ◄──updates──  │  MSSP   │             │
+│   │Guardian │ ◄───model────  │ Nexus   │ ◄──updates──  │  Mesh   │             │
 │   │Fortress │    (updates)   │         │   (insights)  │         │             │
 │   │Sentinel │                │         │               │         │             │
 │   └─────────┘                └─────────┘               └─────────┘             │
@@ -333,7 +305,7 @@ Contributors earn:
 │                                                                                 │
 │   Layer 6: Application                                                          │
 │   ┌─────────────────────────────────────────────────────────────────────────┐  │
-│   │  MSSP Portal  │  Fleet Mgmt  │  Customer Portal  │  Threat Dashboard   │  │
+│   │  Mesh Portal  │  Fleet Mgmt  │  Node Portal  │  Threat Dashboard       │  │
 │   └─────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
 │   Layer 5: Intelligence                                                         │
@@ -389,8 +361,7 @@ hookprobe/
 │   ├── sentinel/                  # DSM Validator (IoT, 512MB)
 │   ├── guardian/                  # Travel Companion (RPi, 3GB)
 │   ├── fortress/                  # Edge Router (Mini PC, 8GB)
-│   ├── nexus/                     # ML/AI Compute (Server, 64GB+)
-│   └── mssp/                      # Cloud Federation (mssp.hookprobe.com)
+│   └── nexus/                     # ML/AI Compute (Server, 64GB+)
 │
 ├── shared/                         # 🔧 Shared Infrastructure
 │   ├── dsm/                       # Decentralized Security Mesh
@@ -424,18 +395,17 @@ hookprobe/
 
 ## Product Comparison
 
-| Feature | Sentinel | Guardian | Fortress | Nexus | MSSP |
-|---------|----------|----------|----------|-------|------|
-| **RAM** | 512MB | 3GB | 8GB | 64GB+ | Scales |
-| **Role** | Validator | Edge | Edge+ | Compute | Brain |
-| **L2-L7 Detection** | - | ✓ | ✓ | ✓ | - |
-| **WiFi Hotspot** | - | ✓ | ✓ | - | - |
-| **VLAN Segmentation** | - | - | ✓ | - | - |
-| **Local AI** | - | - | ✓ | ✓ | - |
-| **ML Training** | - | - | - | ✓ | ✓ |
-| **Fleet Management** | - | - | - | Regional | Global |
-| **Multi-Tenant** | - | - | - | - | ✓ |
-| **Location** | IoT | Travel | Home/Office | Datacenter | Cloud |
+| Feature | Sentinel | Guardian | Fortress | Nexus |
+|---------|----------|----------|----------|-------|
+| **RAM** | 512MB | 3GB | 8GB | 64GB+ |
+| **Role** | Validator | Edge | Edge+ | Compute |
+| **L2-L7 Detection** | - | ✓ | ✓ | ✓ |
+| **WiFi Hotspot** | - | ✓ | ✓ | - |
+| **VLAN Segmentation** | - | - | ✓ | - |
+| **Local AI** | - | - | ✓ | ✓ |
+| **ML Training** | - | - | - | ✓ |
+| **Fleet Management** | - | - | - | Regional |
+| **Location** | IoT | Travel | Home/Office | Datacenter |
 
 ---
 
@@ -455,9 +425,6 @@ sudo ./install.sh --tier fortress
 
 # Datacenter/Cloud (64GB+ RAM)
 sudo ./install.sh --tier nexus
-
-# Cloud deployment
-# See docs/deployment/mssp-production.md
 ```
 
 ---

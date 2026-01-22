@@ -428,7 +428,7 @@ EOF
     log_success "HookProbe Sentinel installation completed!"
     echo
     log_info "Next steps:"
-    echo "  1. Configure MSSP connection: /etc/hookprobe/sentinel.conf"
+    echo "  1. Configure mesh connection: /etc/hookprobe/sentinel.conf"
     echo "  2. Start sentinel: systemctl start hookprobe-sentinel.service"
     echo "  3. View logs: journalctl -u hookprobe-sentinel.service -f"
     echo

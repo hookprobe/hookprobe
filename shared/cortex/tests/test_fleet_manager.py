@@ -81,10 +81,10 @@ class TestFleetManager:
 
         # Register users
         fleet_manager.register_user(
-            "mssp-admin-001",
+            "global-admin-001",
             "admin@hookprobe.com",
-            name="MSSP Admin",
-            access_level=AccessLevel.MSSP_ADMIN
+            name="Global Admin",
+            access_level=AccessLevel.GLOBAL_ADMIN
         )
         fleet_manager.register_user(
             "fleet-admin-acme",
@@ -223,9 +223,9 @@ class TestDeviceManagement(TestFleetManager):
 class TestAccessControl(TestFleetManager):
     """Test multi-tenant access control."""
 
-    def test_mssp_admin_sees_all_devices(self, populated_fleet_manager):
-        """MSSP admin should see all devices from all customers."""
-        nodes = populated_fleet_manager.get_visible_nodes("mssp-admin-001")
+    def test_global_admin_sees_all_devices(self, populated_fleet_manager):
+        """Global admin should see all devices from all customers."""
+        nodes = populated_fleet_manager.get_visible_nodes("global-admin-001")
 
         assert len(nodes) == 3  # 2 ACME + 1 Startup
         device_ids = [n["id"] for n in nodes]
@@ -250,10 +250,10 @@ class TestAccessControl(TestFleetManager):
         assert len(nodes) == 1
         assert nodes[0]["id"] == "device-acme-001"
 
-    def test_mssp_admin_customer_filter(self, populated_fleet_manager):
-        """MSSP admin can filter by customer."""
+    def test_global_admin_customer_filter(self, populated_fleet_manager):
+        """Global admin can filter by customer."""
         nodes = populated_fleet_manager.get_visible_nodes(
-            "mssp-admin-001",
+            "global-admin-001",
             customer_filter="startup-inc"
         )
 
@@ -269,9 +269,9 @@ class TestAccessControl(TestFleetManager):
 class TestLocationPrivacy(TestFleetManager):
     """Test location privacy model."""
 
-    def test_mssp_admin_sees_declared_location(self, populated_fleet_manager):
-        """MSSP admin sees declared location when available."""
-        nodes = populated_fleet_manager.get_visible_nodes("mssp-admin-001")
+    def test_global_admin_sees_declared_location(self, populated_fleet_manager):
+        """Global admin sees declared location when available."""
+        nodes = populated_fleet_manager.get_visible_nodes("global-admin-001")
 
         # Find device with declared location
         acme_device = next(n for n in nodes if n["id"] == "device-acme-001")
@@ -315,7 +315,7 @@ class TestCityClustering(TestFleetManager):
 
     def test_city_clusters(self, populated_fleet_manager):
         """Test city-level clustering aggregation."""
-        clusters = populated_fleet_manager.get_city_clusters("mssp-admin-001")
+        clusters = populated_fleet_manager.get_city_clusters("global-admin-001")
 
         # Should have 3 clusters (NYC, DC, SF)
         assert len(clusters) == 3
@@ -334,7 +334,7 @@ class TestCityClustering(TestFleetManager):
             ip_location={"lat": 40.72, "lng": -74.01, "city": "New York"}
         )
 
-        clusters = populated_fleet_manager.get_city_clusters("mssp-admin-001")
+        clusters = populated_fleet_manager.get_city_clusters("global-admin-001")
 
         # Find NYC cluster
         nyc_cluster = next(
@@ -350,9 +350,9 @@ class TestCityClustering(TestFleetManager):
 class TestFleetStats(TestFleetManager):
     """Test fleet statistics generation."""
 
-    def test_mssp_admin_stats(self, populated_fleet_manager):
-        """MSSP admin gets global stats."""
-        stats = populated_fleet_manager.get_fleet_stats("mssp-admin-001")
+    def test_global_admin_stats(self, populated_fleet_manager):
+        """Global admin gets global stats."""
+        stats = populated_fleet_manager.get_fleet_stats("global-admin-001")
 
         assert stats["total_customers"] == 2
         assert stats["total_devices"] == 3

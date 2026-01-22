@@ -17,7 +17,7 @@ This guide explains how HookProbe's Django applications integrate with Logto for
             ┌───────────────┴───────────────┐
             │                               │
      ┌──────▼──────┐               ┌───────▼───────┐
-     │    MSSP     │               │ hookprobe.com │
+     │    Mesh     │               │ hookprobe.com │
      │  Dashboard  │               │   Website     │
      │  (JWT auth) │               │  (OIDC auth)  │
      └──────┬──────┘               └───────┬───────┘

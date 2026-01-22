@@ -42,7 +42,7 @@ Your Guardian or Fortress device protects your home or business network, but:
 │                     │ Encrypted Tunnel                         │
 │                     ▼                                          │
 │         ┌───────────────────┐                                  │
-│         │      MSSP         │  ← MSSP Cloud (Public IP)        │
+│         │      Mesh         │  ← Mesh Cloud (Public IP)        │
 │         │   VPN Gateway     │                                  │
 │         └─────────┬─────────┘                                  │
 │                   │ HTP Tunnel                                 │
@@ -98,8 +98,8 @@ Your Guardian or Fortress device protects your home or business network, but:
 HookProbe VPN uses a **two-segment architecture** for maximum compatibility:
 
 ```
-Segment 1: Phone ←──IKEv2──→ MSSP (Standard VPN Protocol)
-Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transport Protocol)
+Segment 1: Phone ←──IKEv2──→ Mesh (Standard VPN Protocol)
+Segment 2: Mesh ←──HTP────→ Guardian/Fortress (HookProbe Transport Protocol)
 ```
 
 **Why this design?**
@@ -111,7 +111,7 @@ Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transpo
 
 ### Protocol Stack
 
-| Layer | Segment 1 (Phone→MSSP) | Segment 2 (MSSP→Edge) |
+| Layer | Segment 1 (Phone→Mesh) | Segment 2 (Mesh→Edge) |
 |-------|-------------------------|----------------------------|
 | Encryption | AES-256-GCM | ChaCha20-Poly1305 |
 | Auth | EAP-TLS (X.509 certs) | Neural Resonance |
@@ -124,7 +124,7 @@ Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transpo
 
 ### For Users (Mobile App)
 
-1. **Log into MSSP Dashboard** at `https://dashboard.hookprobe.com`
+1. **Log into Mesh Dashboard** at `https://dashboard.hookprobe.com`
 2. **Navigate to VPN** → **Generate Profile**
 3. **Select your device** (iPhone, Android, Windows, macOS)
 4. **Download profile** and import:
@@ -133,11 +133,11 @@ Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transpo
    - **Windows**: Run PowerShell script as Administrator
    - **macOS**: Open .mobileconfig → System Preferences → VPN
 
-### For Administrators (MSSP)
+### For Administrators
 
-1. **Deploy VPN Gateway** on MSSP:
+1. **Deploy VPN Gateway**:
    ```bash
-   cd /opt/hookprobe/products/mssp/vpn
+   cd /opt/hookprobe/vpn
    sudo ./setup-vpn-gateway.sh
    ```
 
@@ -179,7 +179,7 @@ Segment 2: MSSP ←──HTP────→ Guardian/Fortress (HookProbe Transpo
 | **Field technicians** | Access customer systems securely |
 | **Compliance** | Audit trail of all remote access |
 
-### MSSP Providers
+### Service Providers
 
 | Scenario | How VPN Helps |
 |----------|---------------|
@@ -257,14 +257,14 @@ VPNProfile.objects.create(
 | Symptom | Likely Cause | Solution |
 |---------|--------------|----------|
 | "Authentication failed" | Certificate expired | Regenerate VPN profile |
-| "Server unreachable" | MSSP firewall | Open UDP 500, 4500 |
+| "Server unreachable" | Mesh firewall | Open UDP 500, 4500 |
 | "Connection timeout" | NAT issues | Check HTP tunnel status |
 | Slow speeds | Bandwidth limit | Check user quota |
 
 ### Checking VPN Status
 
 ```bash
-# On MSSP (VPN Gateway)
+# On VPN Gateway
 sudo swanctl --list-sas      # Active VPN sessions
 sudo swanctl --list-conns    # Configured connections
 

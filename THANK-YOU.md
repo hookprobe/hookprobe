@@ -10,7 +10,7 @@
 
 **Welcome to the HookProbe Community**
 
-Thank you for choosing HookProbe to protect your network and democratize cybersecurity. Whether you're a first-time Linux user, a seasoned system administrator, or an MSSP provider managing hundreds of sites, we're grateful to have you here.
+Thank you for choosing HookProbe to protect your network and democratize cybersecurity. Whether you're a first-time Linux user, a seasoned system administrator, or a service provider managing hundreds of sites, we're grateful to have you here.
 
 ---
 
@@ -56,11 +56,10 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 3. 📊 **Access Grafana**: http://YOUR_IP:3000
 4. 🎯 **Monitor Security**: Watch Qsecbit scores in real-time
 
-### MSSP Providers:
+### Service Providers:
 1. 📖 **[Cloud Backend Deployment Guide](docs/installation/cloud-deployment.md)**
-2. 🏢 **[MSSP Dashboard Documentation](docs/dashboards/mssp-dashboard.md)**
-3. 🌐 **Deploy centralized multi-tenant backend**
-4. 📱 **Manage 100-1000+ customer edge devices**
+2. 🌐 **Deploy mesh infrastructure**
+3. 📱 **Manage edge devices across the mesh**
 
 ---
 
@@ -105,7 +104,7 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 ### Community Examples
 - **Home Lab Setup**: Raspberry Pi 5 + HookProbe
 - **Small Business**: Intel N100 edge deployment
-- **Enterprise**: Multi-site MSSP with centralized SOC
+- **Enterprise**: Multi-site deployment with centralized management
 - **Research Lab**: Threat intelligence aggregation
 
 ---
@@ -123,7 +122,7 @@ HookProbe isn't just software—it's a movement to make enterprise-grade cyberse
 - "How do I install HookProbe?" → **[Quick Start](QUICK-START.md)**
 - "Is this GDPR compliant?" → **[GDPR Documentation](docs/GDPR.md)** ✅
 - "What hardware do I need?" → **[Hardware Guide](README.md#hardware-compatibility)**
-- "How do I monitor security?" → **[MSSP Dashboard](docs/dashboards/mssp-dashboard.md)**
+- "How do I monitor security?" → **[Grafana Dashboards](docs/guides/clickhouse-quick-start.md)**
 
 ---
 
@@ -134,7 +133,7 @@ HookProbe users around the world are protecting their networks with:
 - **Small Businesses**: Protecting customer data and operations
 - **Schools & Universities**: Teaching cybersecurity concepts
 - **Research Labs**: Analyzing threat patterns
-- **MSSP Providers**: Managing security for 100+ customers
+- **Service Providers**: Managing security across the mesh
 - **Enterprises**: Multi-site branch office protection
 
 **Your deployment matters!** Every HookProbe installation:

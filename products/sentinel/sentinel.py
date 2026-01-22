@@ -68,8 +68,8 @@ def sanitize_node_id(node_id: str) -> str:
 
 
 NODE_ID = sanitize_node_id(os.environ.get("SENTINEL_NODE_ID", f"sentinel-{socket.gethostname()}"))
-MSSP_ENDPOINT = os.environ.get("MSSP_ENDPOINT", "mssp.hookprobe.com")
-MSSP_PORT = safe_int_env("MSSP_PORT", 8443, 1, 65535)
+MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mesh.hookprobe.com")
+MESH_PORT = safe_int_env("MESH_PORT", 8443, 1, 65535)
 LISTEN_PORT = safe_int_env("SENTINEL_PORT", 8443, 1, 65535)
 METRICS_PORT = safe_int_env("METRICS_PORT", 9090, 1, 65535)
 REGION = sanitize_node_id(os.environ.get("SENTINEL_REGION", "unknown"))
@@ -563,8 +563,8 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
 # BACKGROUND TASKS
 # ============================================================
 
-def mssp_reporter():
-    """Report to MSSP every minute"""
+def mesh_reporter():
+    """Report to mesh every minute"""
     while True:
         try:
             time.sleep(60)
@@ -580,11 +580,11 @@ def mssp_reporter():
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(5)
             header = NODE_ID.encode()[:16].ljust(16, b'\x00')
-            sock.sendto(header + json.dumps(report).encode(), (MSSP_ENDPOINT, MSSP_PORT))
+            sock.sendto(header + json.dumps(report).encode(), (MESH_ENDPOINT, MESH_PORT))
             sock.close()
             log.debug(f"Report sent: {len(sentinel.edges)} edges")
         except Exception as e:
-            log.warning(f"MSSP report failed: {e}")
+            log.warning(f"Mesh report failed: {e}")
 
 def memory_monitor():
     """Periodic cleanup"""
@@ -608,7 +608,7 @@ def main():
     log.info(f"Tier:     {TIER}")
     log.info(f"Listen:   UDP:{LISTEN_PORT}")
     log.info(f"Metrics:  HTTP:{METRICS_PORT}")
-    log.info(f"MSSP:     {MSSP_ENDPOINT}:{MSSP_PORT}")
+    log.info(f"Mesh:     {MESH_ENDPOINT}:{MESH_PORT}")
     log.info(f"Memory:   {MEMORY_LIMIT}MB limit")
     log.info("-" * 50)
     log.info(f"Security: {'ENABLED' if security_manager else 'DISABLED'}")
@@ -634,7 +634,7 @@ def main():
     log.info(f"Metrics: http://localhost:{METRICS_PORT}/health")
 
     # Start background tasks
-    Thread(target=mssp_reporter, daemon=True).start()
+    Thread(target=mesh_reporter, daemon=True).start()
     Thread(target=memory_monitor, daemon=True).start()
 
     # UDP validation socket

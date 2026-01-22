@@ -130,11 +130,11 @@ copy_web_application() {
     log_info "Copying web application files..."
 
     # Copy web application from repo to install directory
-    if [ -d "${REPO_ROOT}/products/mssp/web" ]; then
-        cp -r "${REPO_ROOT}/products/mssp/web/"* "${WEB_DIR}/"
+    if [ -d "${REPO_ROOT}/products/fortress/web" ]; then
+        cp -r "${REPO_ROOT}/products/fortress/web/"* "${WEB_DIR}/"
         log_success "Web application files copied"
     else
-        log_error "Web application source not found at ${REPO_ROOT}/products/mssp/web"
+        log_error "Web application source not found at ${REPO_ROOT}/products/fortress/web"
         exit 1
     fi
 }

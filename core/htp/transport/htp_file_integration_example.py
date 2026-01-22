@@ -6,7 +6,7 @@ Shows how htp_file.py integrates with your existing HookProbe Transport Protocol
 
 This demonstrates:
 1. Client-side file operations (Guardian/Nexus edge devices)
-2. Server-side file handling (MSSP backend)
+2. Server-side file handling (mesh backend)
 3. Security properties maintained from Neuro Protocol
 """
 
@@ -91,7 +91,7 @@ class MockHTPSession:
 
 async def edge_client_example():
     """
-    Example: Guardian edge device uploading logs to MSSP backend.
+    Example: Guardian edge device uploading logs to mesh backend backend.
     
     This shows how an edge device uses HTP file transfer to:
     1. Upload security logs
@@ -227,25 +227,25 @@ async def edge_client_example():
 
 
 # =============================================================================
-# MSSP BACKEND SERVER EXAMPLE
+# MESH BACKEND SERVER EXAMPLE
 # =============================================================================
 
-async def mssp_server_example():
+async def mesh_server_example():
     """
-    Example: MSSP backend handling file requests from edge devices.
-    
+    Example: Mesh backend handling file requests from edge devices.
+
     This shows how the server:
     1. Validates paths (prevents traversal attacks)
     2. Handles CRUD operations
     3. Maintains security properties
     """
     print("\n" + "=" * 70)
-    print("MSSP BACKEND SERVER EXAMPLE")
+    print("MESH BACKEND SERVER EXAMPLE")
     print("=" * 70)
     
     # Create HTP session (in production, from accepted connection)
     htp_session = MockHTPSession(
-        node_id="mssp-backend",
+        node_id="mesh-backend",
         weight_fingerprint=hashlib.sha512(b"server_weights").digest(),
         session_key=hashlib.sha256(b"server_session").digest()
     )
@@ -304,9 +304,9 @@ async def mssp_server_example():
 async def full_integration_example():
     """
     Complete integration showing HTP file transfer flow.
-    
-    Guardian (Edge) ←→ HTP ←→ MSSP (Cloud)
-    
+
+    Guardian (Edge) ←→ HTP ←→ Mesh (Cloud)
+
     Security properties:
     - All traffic encrypted with weight-bound session key
     - PoSF signatures on each packet
@@ -316,14 +316,14 @@ async def full_integration_example():
     print("\n" + "=" * 70)
     print("FULL INTEGRATION: EDGE TO CLOUD FILE TRANSFER")
     print("=" * 70)
-    
+
     print("""
     ┌─────────────────────────────────────────────────────────────────┐
     │                    HTP FILE TRANSFER FLOW                       │
     ├─────────────────────────────────────────────────────────────────┤
     │                                                                 │
     │  ┌──────────────┐          HTP (UDP)         ┌──────────────┐  │
-    │  │   Guardian   │ ◄───────────────────────► │    MSSP      │  │
+    │  │   Guardian   │ ◄───────────────────────► │    Mesh      │  │
     │  │   (Edge)     │    ChaCha20-Poly1305      │   (Cloud)    │  │
     │  │              │    PoSF Signatures        │              │  │
     │  │  HTPFile     │    Weight-Bound Keys      │  HTPFile     │  │
@@ -343,15 +343,15 @@ async def full_integration_example():
     # Simulate complete flow
     print("[Flow] 1. Guardian generates TER and evolves weights")
     print("[Flow] 2. Guardian initiates HTP connection (HELLO)")
-    print("[Flow] 3. MSSP sends CHALLENGE")
+    print("[Flow] 3. mesh backend sends CHALLENGE")
     print("[Flow] 4. Guardian signs with PoSF and sends ATTEST")
-    print("[Flow] 5. MSSP verifies via deterministic replay")
+    print("[Flow] 5. mesh backend verifies via deterministic replay")
     print("[Flow] 6. Session established (ACCEPT)")
     print("[Flow] 7. Guardian sends FILE_CREATE request")
-    print("[Flow] 8. MSSP validates path, sends ACK")
+    print("[Flow] 8. Mesh validates path, sends ACK")
     print("[Flow] 9. Guardian sends FILE_CHUNKs (encrypted)")
     print("[Flow] 10. Guardian sends FILE_COMPLETE with hash")
-    print("[Flow] 11. MSSP verifies hash, writes file, sends ACK")
+    print("[Flow] 11. Mesh verifies hash, writes file, sends ACK")
     print()
     print("[Result] File transferred securely with neural resonance verification")
 
@@ -363,9 +363,9 @@ async def full_integration_example():
 async def qsecbit_integration_example():
     """
     Shows how HTP file transfer integrates with Qsecbit threat analysis.
-    
+
     When Qsecbit detects elevated threat levels, the system can:
-    1. Upload detailed logs to MSSP for analysis
+    1. Upload detailed logs to mesh backend for analysis
     2. Download updated mitigation rules
     3. Sync Kali response reports
     """
@@ -401,7 +401,7 @@ async def qsecbit_integration_example():
         print("  2. READ /response/kali-playbook-latest.sh")
         print("     - Download latest response script")
         print("  3. UPDATE /status/guardian-001.json")
-        print("     - Report current threat status to MSSP")
+        print("     - Report current threat status to mesh backend")
 
 
 # =============================================================================
@@ -411,7 +411,7 @@ async def qsecbit_integration_example():
 async def main():
     """Run all examples."""
     await edge_client_example()
-    await mssp_server_example()
+    await mesh_server_example()
     await full_integration_example()
     await qsecbit_integration_example()
     
@@ -433,10 +433,10 @@ async def main():
     
     Files to add to your repository:
       src/neuro/transport/htp_file.py  (main implementation)
-    
+
     Integration points:
       - Guardian/Nexus edge devices use HTPFileTransfer client
-      - MSSP backend uses HTPFileServer
+      - Mesh backend uses HTPFileServer
       - Qsecbit can trigger file transfers based on threat level
     """)
 

@@ -6,7 +6,7 @@
 
 Nexus is an ML/AI compute hub for advanced threat detection, analytics, and intelligence processing. It provides GPU-accelerated machine learning, long-term data retention, and advanced analytics for security operations.
 
-> **Note**: For VPN gateway and federation services, use **MSSP**. Nexus focuses on compute-intensive AI/ML workloads.
+> **Note**: Nexus focuses on compute-intensive AI/ML workloads and provides mesh federation services.
 
 ## Requirements
 

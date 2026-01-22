@@ -9,7 +9,6 @@
 # - Guardian (Travel Companion)
 # - Fortress (Edge Router)
 # - Nexus (ML/AI Compute)
-# - MSSP (Cloud Platform)
 # - Edge Deployment (PODs 001-007)
 # - Cloud Backend (Doris, Kafka, etc.)
 # - n8n Automation (POD 008)
@@ -50,7 +49,6 @@ show_menu() {
     echo -e "${YELLOW}Coming Soon (Not Yet Installable):${NC}"
     echo -e "  ${DIM}─) Fortress              (Edge Router) [COMING SOON]${NC}"
     echo -e "  ${DIM}─) Nexus                 (ML/AI Compute) [COMING SOON]${NC}"
-    echo -e "  ${DIM}─) MSSP                  (Cloud Platform) [COMING SOON]${NC}"
     echo ""
     echo -e "${YELLOW}Infrastructure:${NC}"
     echo -e "  ${BOLD}3${NC}) Uninstall Edge Deployment (PODs 001-007)"
@@ -104,15 +102,6 @@ uninstall_nexus() {
     fi
 }
 
-uninstall_mssp() {
-    if [ -f "$SCRIPT_DIR/products/mssp/uninstall.sh" ]; then
-        echo -e "${YELLOW}Uninstalling MSSP...${NC}"
-        bash "$SCRIPT_DIR/products/mssp/uninstall.sh"
-    else
-        echo -e "${RED}MSSP uninstall script not found${NC}"
-        return 1
-    fi
-}
 
 uninstall_edge() {
     if [ -f "$SCRIPT_DIR/deploy/edge/uninstall.sh" ]; then
@@ -151,7 +140,6 @@ uninstall_everything() {
     echo -e "${RED}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${RED}║  This will REMOVE ALL HookProbe components:                ║${NC}"
     echo -e "${RED}║  • All product tiers (Sentinel, Guardian, Fortress, Nexus) ║${NC}"
-    echo -e "${RED}║  • MSSP Cloud Platform                                     ║${NC}"
     echo -e "${RED}║  • Edge Deployment (PODs 001-007)                          ║${NC}"
     echo -e "${RED}║  • Cloud Backend                                           ║${NC}"
     echo -e "${RED}║  • n8n Automation (POD 008)                                ║${NC}"
@@ -175,7 +163,6 @@ uninstall_everything() {
     bash "$SCRIPT_DIR/products/guardian/scripts/uninstall.sh" --force 2>/dev/null || true
     bash "$SCRIPT_DIR/products/fortress/uninstall.sh" --purge --force 2>/dev/null || true
     bash "$SCRIPT_DIR/products/nexus/uninstall.sh" --force 2>/dev/null || true
-    bash "$SCRIPT_DIR/products/mssp/uninstall.sh" --complete --force 2>/dev/null || true
 
     # Uninstall infrastructure (pass --force if supported)
     bash "$SCRIPT_DIR/deploy/addons/n8n/uninstall.sh" --force 2>/dev/null || true
@@ -192,7 +179,6 @@ uninstall_everything() {
     echo -e "  • Guardian (Travel Companion)"
     echo -e "  • Fortress (Edge Router)"
     echo -e "  • Nexus (ML/AI Compute)"
-    echo -e "  • MSSP (Cloud Platform)"
     echo -e "  • Edge Deployment (PODs 001-007)"
     echo -e "  • Cloud Backend"
     echo -e "  • n8n Automation (POD 008)"

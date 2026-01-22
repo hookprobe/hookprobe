@@ -9,7 +9,7 @@ Features:
 - Automatic peer discovery on local network
 - Real-time threat intelligence sharing
 - Collective QSecBit scoring
-- Autonomous operation when MSSP unavailable
+- Autonomous operation mode
 - Coordinated defense response
 
 Usage:
@@ -90,7 +90,7 @@ class MeshConfig:
     # Enable mesh mode
     enabled: bool = True
 
-    # Autonomous mode (operate without MSSP)
+    # Autonomous mode (operate independently)
     autonomous_enabled: bool = True
 
     # Threat sharing enabled
@@ -117,7 +117,7 @@ class GuardianMeshAgent:
     1. Local threats to be shared with the mesh
     2. Mesh intelligence to inform local detection
     3. Collective QSecBit scoring
-    4. Autonomous operation without MSSP
+    4. Autonomous operation capability
     """
 
     def __init__(
@@ -154,7 +154,7 @@ class GuardianMeshAgent:
             'threats_reported': 0,
             'threats_received': 0,
             'collective_score_updates': 0,
-            'mssp_fallbacks': 0,
+            'mesh_fallbacks': 0,
             'autonomous_operations': 0,
         }
 

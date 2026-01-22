@@ -2,16 +2,16 @@
 #
 # install-validator.sh - HookProbe Cortex Validator Installation
 #
-# CRITICAL: This script can ONLY be run AFTER MSSP Cloud is deployed.
-# Validators require KYC verification and MSSP cloud infrastructure.
+# CRITICAL: This script can ONLY be run AFTER mesh Cloud is deployed.
+# Validators require KYC verification and mesh cloud infrastructure.
 #
 # Prerequisites:
-# 1. MSSP Cloud must be deployed and operational
+# 1. mesh Cloud must be deployed and operational
 # 2. KYC documentation prepared
 # 3. Hardware meets minimum requirements
 #
 # Usage:
-#   sudo ./install-validator.sh --mssp-url https://mssp.hookprobe.com
+#   sudo ./install-validator.sh --mesh-url https://mesh.hookprobe.com
 #
 
 set -e
@@ -24,7 +24,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-MSSP_URL=""
+mesh_URL=""
 VALIDATOR_ID=""
 KYC_EMAIL=""
 INSTALL_DIR="/opt/hookprobe"
@@ -60,36 +60,36 @@ check_root() {
     fi
 }
 
-check_mssp_url() {
-    if [ -z "$MSSP_URL" ]; then
-        echo -e "${RED}ERROR: MSSP URL not provided${NC}"
-        echo "Usage: $0 --mssp-url https://mssp.hookprobe.com"
+check_mesh_url() {
+    if [ -z "$mesh_URL" ]; then
+        echo -e "${RED}ERROR: mesh URL not provided${NC}"
+        echo "Usage: $0 --mesh-url https://mesh.hookprobe.com"
         exit 1
     fi
 }
 
-check_mssp_cloud_deployed() {
-    echo -e "${YELLOW}Checking MSSP Cloud deployment...${NC}"
+check_mesh_cloud_deployed() {
+    echo -e "${YELLOW}Checking mesh Cloud deployment...${NC}"
 
-    # Try to connect to MSSP API
-    if ! curl -f -s -o /dev/null --connect-timeout 10 "${MSSP_URL}/api/v1/health"; then
-        echo -e "${RED}✗ CRITICAL ERROR: MSSP Cloud is NOT deployed or unreachable${NC}"
+    # Try to connect to mesh API
+    if ! curl -f -s -o /dev/null --connect-timeout 10 "${mesh_URL}/api/v1/health"; then
+        echo -e "${RED}✗ CRITICAL ERROR: mesh Cloud is NOT deployed or unreachable${NC}"
         echo ""
-        echo "Validators CANNOT be installed without MSSP Cloud infrastructure."
+        echo "Validators CANNOT be installed without mesh Cloud infrastructure."
         echo ""
         echo "Required steps:"
-        echo "  1. Deploy MSSP Cloud first: sudo ./install.sh --role cloud"
-        echo "  2. Verify MSSP is running: ${MSSP_URL}/api/v1/health"
+        echo "  1. Deploy mesh Cloud first: sudo ./install.sh --role cloud"
+        echo "  2. Verify mesh is running: ${mesh_URL}/api/v1/health"
         echo "  3. Then retry validator installation"
         echo ""
         exit 1
     fi
 
-    echo -e "${GREEN}✓ MSSP Cloud is operational${NC}"
+    echo -e "${GREEN}✓ mesh Cloud is operational${NC}"
 
-    # Get MSSP version
-    MSSP_VERSION=$(curl -s "${MSSP_URL}/api/v1/version" | jq -r '.version' 2>/dev/null || echo "unknown")
-    echo "  MSSP Version: ${MSSP_VERSION}"
+    # Get mesh version
+    mesh_VERSION=$(curl -s "${mesh_URL}/api/v1/version" | jq -r '.version' 2>/dev/null || echo "unknown")
+    echo "  mesh Version: ${mesh_VERSION}"
 }
 
 check_hardware_requirements() {
@@ -191,11 +191,11 @@ HWFP_SCRIPT
 }
 
 # ============================================================
-# REGISTRATION WITH MSSP
+# REGISTRATION WITH mesh
 # ============================================================
 
-register_with_mssp() {
-    echo -e "${YELLOW}Registering validator with MSSP...${NC}"
+register_with_mesh() {
+    echo -e "${YELLOW}Registering validator with mesh...${NC}"
 
     # Generate validator ID
     VALIDATOR_ID="validator-$(uuidgen | cut -d'-' -f1)"
@@ -231,7 +231,7 @@ KEYGEN
     # Get IP address
     IP_ADDRESS=$(curl -s ifconfig.me)
 
-    # Register with MSSP
+    # Register with mesh
     REGISTRATION_DATA=$(cat <<EOF
 {
   "device_id": "${VALIDATOR_ID}",
@@ -261,7 +261,7 @@ EOF
     RESPONSE=$(curl -s -X POST \
         -H "Content-Type: application/json" \
         -d "$REGISTRATION_DATA" \
-        "${MSSP_URL}/api/v1/devices/register")
+        "${mesh_URL}/api/v1/devices/register")
 
     STATUS=$(echo "$RESPONSE" | jq -r '.status' 2>/dev/null || echo "error")
 
@@ -275,7 +275,7 @@ EOF
     echo "  Validator ID: ${VALIDATOR_ID}"
     echo ""
     echo -e "${YELLOW}IMPORTANT: Your validator is pending KYC approval${NC}"
-    echo "  1. MSSP admin will review your KYC documentation"
+    echo "  1. mesh admin will review your KYC documentation"
     echo "  2. You will receive email confirmation at: ${KYC_EMAIL}"
     echo "  3. Once approved, your validator will become ACTIVE"
     echo ""
@@ -333,7 +333,7 @@ install_hookprobe_validator() {
     cat > $CONFIG_DIR/validator.conf << CONF
 [validator]
 validator_id = ${VALIDATOR_ID}
-mssp_url = ${MSSP_URL}
+mesh_url = ${mesh_URL}
 listen_port = 4478
 
 [hardware]
@@ -407,7 +407,7 @@ show_post_install_instructions() {
     echo "  3. Monitor logs:"
     echo "     ${GREEN}sudo journalctl -u hookprobe-validator -f${NC}"
     echo "  4. Check status:"
-    echo "     ${GREEN}curl ${MSSP_URL}/api/v1/validators/${VALIDATOR_ID}${NC}"
+    echo "     ${GREEN}curl ${mesh_URL}/api/v1/validators/${VALIDATOR_ID}${NC}"
     echo ""
     echo -e "${YELLOW}Configuration:${NC}"
     echo "  Config: ${CONFIG_DIR}/validator.conf"
@@ -428,8 +428,8 @@ main() {
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --mssp-url)
-                MSSP_URL="$2"
+            --mesh-url)
+                mesh_URL="$2"
                 shift 2
                 ;;
             *)
@@ -441,14 +441,14 @@ main() {
 
     # Run checks and installation
     check_root
-    check_mssp_url
-    check_mssp_cloud_deployed
+    check_mesh_url
+    check_mesh_cloud_deployed
     check_hardware_requirements
     collect_kyc_information
     install_dependencies
     generate_hardware_fingerprint
     install_hookprobe_validator
-    register_with_mssp
+    register_with_mesh
     create_systemd_service
     show_post_install_instructions
 }

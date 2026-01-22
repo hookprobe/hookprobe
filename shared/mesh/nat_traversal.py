@@ -12,8 +12,8 @@ Implements NAT/CGNAT traversal for mesh connectivity:
 - TURN Relay: Fallback when direct connection impossible
 
 The Innovation: "Mesh Promotion Protocol"
-When MSSP is unavailable, nodes with public IPs automatically
-become temporary coordinators (mini-MSSPs) to maintain mesh coherence.
+When the cloud coordinator is unavailable, nodes with public IPs automatically
+become temporary coordinators to maintain mesh coherence.
 """
 
 import os
@@ -662,11 +662,11 @@ class UDPHolePuncher:
 # ============================================================
 
 class MeshPromotion(IntEnum):
-    """Node promotion levels when MSSP unavailable"""
+    """Node promotion levels when cloud coordinator unavailable"""
     LEAF = 0          # Regular node, no promotion
     BRIDGE = 1        # Can relay between local networks
     COORDINATOR = 2   # Can coordinate peer discovery
-    SUPER_NODE = 3    # Full MSSP-lite capabilities
+    SUPER_NODE = 3    # Full coordinator-lite capabilities
 
 
 @dataclass
@@ -685,7 +685,7 @@ class PromotedNode:
 
 class MeshPromotionManager:
     """
-    Manages mesh node promotion when MSSP is unavailable.
+    Manages mesh node promotion when cloud coordinator is unavailable.
 
     The Innovation: Automatic coordinator election based on:
     1. Public IP availability (required)
@@ -741,7 +741,7 @@ class MeshPromotionManager:
         self.public_endpoint = (result.public_ip, result.public_port)
 
         # Determine promotion level based on tier
-        if self.tier in ("nexus", "mssp"):
+        if self.tier == "nexus":
             return True, MeshPromotion.SUPER_NODE
         elif self.tier == "fortress":
             return True, MeshPromotion.COORDINATOR
@@ -836,7 +836,7 @@ class RendezvousPoint:
     """
     Decentralized rendezvous point for peer discovery.
 
-    When MSSP is unavailable, nodes can discover each other
+    When cloud coordinator is unavailable, nodes can discover each other
     through promoted coordinators acting as rendezvous points.
     """
 

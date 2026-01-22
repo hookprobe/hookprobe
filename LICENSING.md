@@ -72,10 +72,6 @@ The following **core innovations** are **NOT** open source and require a commerc
 | **Energy-Based Detection** | `core/qsecbit/energy_monitor.py` | RAPL power anomaly detection |
 | **XDP/eBPF DDoS Mitigation** | `core/qsecbit/xdp_manager.py` | Kernel-level attack mitigation |
 | **Premium Threat Intelligence** | N/A | Cloud-sourced threat feeds |
-| **MSSP Cloud Platform** | `products/mssp/` | Complete MSSP cloud federation |
-| **Multi-tenant Dashboard** | `products/mssp/web/` | Commercial MSSP Django portal |
-| **Device Registry** | `products/mssp/device_registry.py` | Fleet device management |
-| **MSSP API Layer** | `products/mssp/web/apps/` | All Django apps and APIs |
 | **Compliance Automation** | Various | NIS2, GDPR automation tools |
 | **Cloud Management Plane** | Cloud Services | Fleet management, analytics |
 | **White-label Capabilities** | N/A | Rebranding features |
@@ -145,23 +141,6 @@ The following **core innovations** are **NOT** open source and require a commerc
 
 **Files**: `core/htp/transport/htp.py` (keyless portions)
 
-### 6. MSSP Cloud Platform (Proprietary)
-
-**What it is**: Complete cloud federation platform for Managed Security Service Providers:
-- Multi-tenant Django portal
-- Device registry and fleet management
-- Customer onboarding and management
-- VPN service provisioning
-- SDN management APIs
-- Security dashboard and monitoring
-- AI-generated content services
-- Merchandise/product catalog
-- Geolocation services
-
-**Protection**: The entire MSSP platform is proprietary, including all Django apps, APIs, database schemas, and business logic. This is the commercial heart of HookProbe's SaaS offering.
-
-**Files**: `products/mssp/` (entire directory)
-
 ---
 
 ## Usage Scenarios
@@ -182,7 +161,7 @@ Deploy HookProbe on your own infrastructure to protect your business.
 **Cost**: $0
 **Requirements**: Internal use only, no offering as a service to third parties
 
-### Scenario 3: MSSP / SaaS Provider (Commercial License Required)
+### Scenario 3: SaaS Provider (Commercial License Required)
 
 Offer HookProbe-based security services to customers.
 
@@ -221,7 +200,7 @@ Submit improvements back to the project.
 - **Pricing**: Annual subscription based on deployment size
 
 ### Enterprise License
-- **For**: Large organizations and MSSPs
+- **For**: Large organizations and service providers
 - **Includes**: Unlimited deployment, white-label, SLA, dedicated support
 - **Pricing**: Custom enterprise agreement
 

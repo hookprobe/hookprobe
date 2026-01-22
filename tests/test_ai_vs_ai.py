@@ -464,7 +464,7 @@ class TestComputeEvaluator:
     def test_tier_thresholds(self):
         """Test tier threshold definitions"""
         for tier in ComputeTier:
-            assert tier in TIER_THRESHOLDS or tier == ComputeTier.MSSP_CLOUD
+            assert tier in TIER_THRESHOLDS or tier == ComputeTier.MESH_CLOUD
 
     def test_evaluate_small_task(self, evaluator):
         """Test evaluation of small task"""

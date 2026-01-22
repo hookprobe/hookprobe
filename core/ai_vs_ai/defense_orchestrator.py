@@ -584,7 +584,7 @@ def create_orchestrator_for_tier(
     config["local"]["enabled"] = enable_local_ai
 
     # Enable cloud AI only for higher tiers
-    if tier in [ComputeTier.NEXUS_ADVANCED, ComputeTier.MSSP_CLOUD]:
+    if tier in [ComputeTier.NEXUS_ADVANCED, ComputeTier.MESH_CLOUD]:
         config["openai"]["enabled"] = True
         config["anthropic"]["enabled"] = True
 

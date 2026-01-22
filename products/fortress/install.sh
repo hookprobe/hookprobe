@@ -804,7 +804,6 @@ show_interactive_menu() {
         echo "    2) Guardian   - Travel Companion (1.5GB RAM)"
         echo "    3) Fortress   - Small Business Gateway (4GB RAM)"
         echo "    4) Nexus      - ML/AI Compute Node (16GB+ RAM)"
-        echo "    5) MSSP       - Cloud Platform (16GB+ RAM)"
         echo ""
         echo -e "${BOLD}  MANAGE${NC}"
         echo "    6) Upgrade    - Upgrade existing installation"
@@ -840,11 +839,7 @@ show_interactive_menu() {
                 log_info "Nexus installation not yet available in this installer"
                 log_info "Use: cd ../nexus && ./install.sh"
                 ;;
-            5)
-                log_info "MSSP installation not yet available in this installer"
-                log_info "Use: cd ../mssp && ./setup.sh"
-                ;;
-            6)
+            5|6)
                 if [ "$INSTALLED" = true ]; then
                     show_upgrade_guidance
                 else

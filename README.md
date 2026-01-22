@@ -113,7 +113,6 @@ From a single Raspberry Pi to a global mesh of thousands of nodes - same technol
 | Home network | Guardian | $75 hardware, $0 software |
 | Small business | Fortress | $200 hardware, $0 software |
 | Growing company | Nexus | $2000 hardware, $0 software |
-| Enterprise/MSSP | Custom | Contact us |
 
 ### 4. Own Your Security Data
 
@@ -442,8 +441,7 @@ hookprobe/
 ├── products/                # Deployment Tiers (mostly open source)
 │   ├── guardian/            # Home/Prosumer
 │   ├── fortress/            # Business
-│   ├── nexus/               # Enterprise
-│   └── mssp/                # Service Provider (proprietary)
+│   └── nexus/               # Enterprise
 │
 └── deploy/                  # Deployment Scripts (open source)
 ```

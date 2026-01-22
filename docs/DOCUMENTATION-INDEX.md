@@ -22,7 +22,7 @@ HookProbe is advanced network security software that operates without the comple
 
 ### Installation Guides
 - **[Edge Deployment](installation/INSTALLATION.md)** - Single-tenant setup (Raspberry Pi, Mini PC)
-- **[Cloud Deployment](installation/cloud-deployment.md)** - Multi-tenant MSSP backend
+- **[Cloud Deployment](installation/cloud-deployment.md)** - Cloud backend setup
 - **[Edge Deployment Checklist](../deploy/edge/checklist.md)** - Pre/post deployment tasks
 
 ---
@@ -59,7 +59,7 @@ HookProbe is advanced network security software that operates without the comple
 
 | Product | Use Case | Documentation |
 |---------|----------|---------------|
-| **MSSP** | Managed security provider platform | [Setup Guide](../products/mssp/README.md) |
+| **MSSP** | Managed security provider platform | See [hookprobe-com](https://github.com/hookprobe/hookprobe-com) repository |
 
 ---
 
@@ -167,7 +167,7 @@ HookProbe uses a **dual licensing model**:
 | DSM Consensus | `shared/dsm/` |
 | AIOCHI Cognitive Layer | `shared/aiochi/` |
 | SLA AI Business Continuity | `shared/slaai/` |
-| MSSP Cloud Platform | `products/mssp/` |
+| MSSP Cloud Platform | See [hookprobe-com](https://github.com/hookprobe/hookprobe-com) repository |
 
 **Free for:** Personal use, internal business protection
 **Commercial license for:** MSSPs, SaaS providers, OEM integrations
@@ -197,8 +197,8 @@ HookProbe uses a **dual licensing model**:
 4. [CI/CD](CI-CD.md) - Build system
 
 ### For MSSPs
-1. [MSSP Setup](../products/mssp/README.md) - Platform deployment
-2. [Cloud Deployment](installation/cloud-deployment.md) - Multi-tenant
+1. [MSSP Platform](https://github.com/hookprobe/hookprobe-com) - See separate repository
+2. [Cloud Deployment](installation/cloud-deployment.md) - Cloud backend setup
 3. [Licensing](../LICENSING.md) - Commercial terms
 
 ---
