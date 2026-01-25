@@ -40,9 +40,11 @@ NC='\033[0m'
 
 # Installation paths
 INSTALL_DIR="/opt/hookprobe/sentinel"
+HOOKPROBE_DIR="/opt/hookprobe"
 CONFIG_DIR="/etc/hookprobe"
 SECRETS_DIR="/etc/hookprobe/secrets"
 DATA_DIR="/var/lib/hookprobe/sentinel"
+KEYS_DIR="/var/lib/hookprobe/keys"
 LOG_DIR="/var/log/hookprobe"
 RUN_DIR="/run/hookprobe"
 
@@ -53,6 +55,8 @@ HEALTH_PORT="${HEALTH_PORT:-9090}"
 SENTINEL_REGION="${SENTINEL_REGION:-auto}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
 ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
+ENABLE_MESH="${ENABLE_MESH:-yes}"
+MSSP_URL="${MSSP_URL:-https://mssp.hookprobe.com}"
 
 # Security: Validate port number (CWE-78 prevention)
 validate_port() {
@@ -280,6 +284,145 @@ download_sentinel() {
     fi
 
     log_info "Downloaded sentinel.py (${size} bytes)"
+}
+
+# ============================================================
+# HOOKPROBE CORE MODULES (for Mesh/DSM/NEURO support)
+# ============================================================
+
+download_core_modules() {
+    if [ "$ENABLE_MESH" != "yes" ]; then
+        log_warn "Mesh support disabled, skipping core modules"
+        return
+    fi
+
+    log_info "Downloading HookProbe core modules for mesh support..."
+
+    # Create core directory structure
+    mkdir -p "$HOOKPROBE_DIR/shared/mesh"
+    mkdir -p "$HOOKPROBE_DIR/shared/dsm"
+    mkdir -p "$HOOKPROBE_DIR/core/htp/transport"
+    mkdir -p "$HOOKPROBE_DIR/core/htp/crypto"
+    mkdir -p "$HOOKPROBE_DIR/core/neuro/core"
+    mkdir -p "$HOOKPROBE_DIR/core/neuro/identity"
+    mkdir -p "$HOOKPROBE_DIR/core/neuro/network"
+
+    # Base URL for core modules
+    local CORE_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main"
+
+    # Download shared mesh modules
+    log_info "Downloading mesh modules..."
+    local MESH_FILES=(
+        "shared/mesh/__init__.py"
+        "shared/mesh/tunnel.py"
+        "shared/mesh/resilient_channel.py"
+        "shared/mesh/consciousness.py"
+        "shared/mesh/nat_traversal.py"
+        "shared/mesh/unified_transport.py"
+        "shared/mesh/port_manager.py"
+        "shared/mesh/relay.py"
+        "shared/mesh/channel_selector.py"
+    )
+    for f in "${MESH_FILES[@]}"; do
+        curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
+            log_warn "Failed to download $f"
+    done
+
+    # Download DSM modules
+    log_info "Downloading DSM modules..."
+    local DSM_FILES=(
+        "shared/dsm/__init__.py"
+        "shared/dsm/gossip.py"
+        "shared/dsm/merkle.py"
+        "shared/dsm/microblock.py"
+    )
+    for f in "${DSM_FILES[@]}"; do
+        curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
+            log_warn "Failed to download $f"
+    done
+
+    # Download HTP transport modules
+    log_info "Downloading HTP modules..."
+    local HTP_FILES=(
+        "core/htp/__init__.py"
+        "core/htp/transport/__init__.py"
+        "core/htp/transport/htp.py"
+        "core/htp/crypto/__init__.py"
+        "core/htp/crypto/transport.py"
+        "core/htp/crypto/transport_v2.py"
+    )
+    for f in "${HTP_FILES[@]}"; do
+        curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
+            log_warn "Failed to download $f"
+    done
+
+    # Download NEURO modules
+    log_info "Downloading NEURO modules..."
+    local NEURO_FILES=(
+        "core/neuro/__init__.py"
+        "core/neuro/core/__init__.py"
+        "core/neuro/core/posf.py"
+        "core/neuro/identity/__init__.py"
+        "core/neuro/identity/hardware_fingerprint.py"
+        "core/neuro/network/__init__.py"
+        "core/neuro/network/nat_traversal.py"
+    )
+    for f in "${NEURO_FILES[@]}"; do
+        curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
+            log_warn "Failed to download $f"
+    done
+
+    # Create __init__.py files for package structure
+    touch "$HOOKPROBE_DIR/shared/__init__.py"
+    touch "$HOOKPROBE_DIR/core/__init__.py"
+
+    # Set permissions
+    chmod -R 755 "$HOOKPROBE_DIR/shared" "$HOOKPROBE_DIR/core" 2>/dev/null || true
+    find "$HOOKPROBE_DIR" -name "*.py" -exec chmod 644 {} \; 2>/dev/null || true
+
+    log_info "Core modules downloaded for mesh support"
+}
+
+# ============================================================
+# KEYS DIRECTORY (for hardware fingerprint and identity)
+# ============================================================
+
+create_keys_directory() {
+    log_info "Creating keys directory for device identity..."
+
+    # Create keys directory with strict permissions
+    mkdir -p "$KEYS_DIR"
+    chmod 700 "$KEYS_DIR"
+
+    # Generate hardware fingerprint on first install
+    if [ ! -f "$KEYS_DIR/hardware_fingerprint" ]; then
+        log_security "Generating hardware fingerprint..."
+
+        # Collect hardware identifiers
+        local cpu_info=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo "unknown")
+        local machine_id=$(cat /etc/machine-id 2>/dev/null || echo "unknown")
+        local mac_addr=$(ip link show 2>/dev/null | grep -m1 "link/ether" | awk '{print $2}' || echo "00:00:00:00:00:00")
+        local hostname=$(hostname -f 2>/dev/null || hostname || echo "unknown")
+
+        # Create fingerprint hash
+        local fingerprint_data="${cpu_info}:${machine_id}:${mac_addr}:${hostname}"
+        local fingerprint=$(echo -n "$fingerprint_data" | sha256sum | cut -d' ' -f1)
+
+        # Store fingerprint
+        echo "$fingerprint" > "$KEYS_DIR/hardware_fingerprint"
+        chmod 600 "$KEYS_DIR/hardware_fingerprint"
+
+        log_security "Hardware fingerprint: ${fingerprint:0:16}..."
+    fi
+
+    # Generate HMAC signing key if not exists
+    if [ ! -f "$KEYS_DIR/signing_key" ]; then
+        log_security "Generating HMAC signing key..."
+        head -c 32 /dev/urandom | xxd -p > "$KEYS_DIR/signing_key"
+        chmod 600 "$KEYS_DIR/signing_key"
+    fi
+
+    log_info "Keys directory initialized"
 }
 
 create_security_module() {
@@ -658,10 +801,19 @@ MESH_ENDPOINT=${MESH_ENDPOINT}
 MESH_PORT=${MESH_PORT}
 MESH_PROTOCOL=htp
 MESH_HTP_VERSION=1.0
+ENABLE_MESH=${ENABLE_MESH}
+
+# MSSP Integration
+MSSP_URL=${MSSP_URL}
+MSSP_ENABLED=true
 
 # Health Endpoint
 HEALTH_PORT=${HEALTH_PORT}
 HEALTH_BIND=0.0.0.0
+
+# HookProbe Core Paths (for mesh/dsm/htp/neuro)
+HOOKPROBE_DIR=${HOOKPROBE_DIR}
+HOOKPROBE_KEYS_DIR=${KEYS_DIR}
 
 # Security Settings
 ENABLE_RATE_LIMITING=true
@@ -820,6 +972,10 @@ WorkingDirectory=/opt/hookprobe/sentinel
 
 # Environment
 EnvironmentFile=/etc/hookprobe/sentinel.env
+
+# PYTHONPATH for HookProbe core modules (mesh, dsm, htp, neuro)
+Environment="PYTHONPATH=/opt/hookprobe"
+Environment="HOOKPROBE_KEYS_DIR=/var/lib/hookprobe/keys"
 
 # Resource limits
 MemoryMax=384M
@@ -992,6 +1148,18 @@ show_complete() {
     echo -e "${CYAN}Mesh Backend:${NC}"
     echo "  Endpoint:     ${MESH_ENDPOINT}:${MESH_PORT}"
     echo "  Protocol:     HTP (HookProbe Transport Protocol)"
+    if [ "$ENABLE_MESH" = "yes" ]; then
+        echo "  Mesh Modules: Installed (DSM, HTP, NEURO)"
+        echo "  PYTHONPATH:   /opt/hookprobe"
+    else
+        echo "  Mesh Modules: Disabled"
+    fi
+    echo ""
+
+    echo -e "${CYAN}MSSP Integration:${NC}"
+    echo "  Dashboard:    ${MSSP_URL}"
+    echo "  Heartbeat:    Enabled"
+    echo "  Fingerprint:  $(cat $KEYS_DIR/hardware_fingerprint 2>/dev/null | head -c 16)..."
     echo ""
 
     echo -e "${CYAN}Security Features:${NC}"
@@ -999,6 +1167,7 @@ show_complete() {
     echo "  Threat Detection:  Enabled"
     echo "  Integrity Check:   Enabled"
     echo "  QSecBit:           Enabled (SHA3-256, 24h key rotation)"
+    echo "  Device Identity:   Hardware fingerprint bound"
     [ "$ENABLE_FIREWALL" = "yes" ] && echo "  Firewall Rules:    Configured"
     [ "$ENABLE_FAIL2BAN" = "yes" ] && echo "  Fail2ban:          Configured"
     echo ""
@@ -1014,6 +1183,7 @@ show_complete() {
     echo -e "${CYAN}Files:${NC}"
     echo "  Install:   $INSTALL_DIR"
     echo "  Config:    $CONFIG_DIR/sentinel.env"
+    echo "  Keys:      $KEYS_DIR"
     echo "  Logs:      $LOG_DIR/sentinel.log"
     echo "  Data:      $DATA_DIR"
     echo ""
@@ -1046,8 +1216,10 @@ uninstall() {
 
     # Remove files
     rm -rf "$INSTALL_DIR"
+    rm -rf "$HOOKPROBE_DIR/shared" "$HOOKPROBE_DIR/core"
     rm -f "$CONFIG_DIR/sentinel.env"
     rm -rf "$DATA_DIR"
+    rm -rf "$KEYS_DIR"
 
     log_info "Uninstalled successfully"
     exit 0
@@ -1070,10 +1242,12 @@ Options:
   --mesh-endpoint URL   Mesh backend server (default: mesh.hookprobe.com)
   --mesh-port PORT      Mesh port (default: 8443)
   --mesh-token TOKEN    Mesh authentication token
+  --mssp-url URL        MSSP dashboard URL (default: https://mssp.hookprobe.com)
   --health-port PORT    Health endpoint port (default: 9090)
   --region REGION       Region code (default: auto-detect)
   --no-firewall         Skip firewall configuration
   --no-fail2ban         Skip fail2ban configuration
+  --no-mesh             Skip mesh/DSM/HTP module installation
   --uninstall           Remove Sentinel completely
   --help                Show this help
 
@@ -1111,10 +1285,12 @@ main() {
             --mesh-endpoint) MESH_ENDPOINT="$2"; shift 2 ;;
             --mesh-port) MESH_PORT="$2"; shift 2 ;;
             --mesh-token) MESH_TOKEN="$2"; shift 2 ;;
+            --mssp-url) MSSP_URL="$2"; shift 2 ;;
             --health-port) HEALTH_PORT="$2"; shift 2 ;;
             --region) SENTINEL_REGION="$2"; shift 2 ;;
             --no-firewall) ENABLE_FIREWALL="no"; shift ;;
             --no-fail2ban) ENABLE_FAIL2BAN="no"; shift ;;
+            --no-mesh) ENABLE_MESH="no"; shift ;;
             --uninstall) uninstall ;;
             --help|-h) show_help ;;
             *) log_error "Unknown option: $1"; show_help ;;
@@ -1127,6 +1303,8 @@ main() {
     detect_platform
     install_deps
     download_sentinel
+    download_core_modules
+    create_keys_directory
     create_config
     setup_firewall
     setup_fail2ban
