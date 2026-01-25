@@ -224,6 +224,173 @@ if MESH_ENABLED:
         log.warning(f"Failed to load mesh module: {e}")
 
 # ============================================================
+# MSSP MODULE (optional - export metrics to MSSP dashboard)
+# ============================================================
+
+MSSP_ENABLED = os.environ.get("ENABLE_MSSP", "true").lower() == "true"
+MSSP_URL = os.environ.get("MSSP_URL", "https://mssp.hookprobe.com")
+MSSP_DEVICE_ID = os.environ.get("MSSP_DEVICE_ID", f"sentinel-{NODE_ID}")
+MSSP_AUTH_TOKEN = os.environ.get("MSSP_AUTH_TOKEN", "")
+MSSP_HEARTBEAT_INTERVAL = safe_int_env("MSSP_HEARTBEAT_INTERVAL", 60, min_val=30, max_val=600)
+
+
+# ============================================================
+# MSSP CLIENT (lightweight, stdlib-only)
+# ============================================================
+
+class SentinelMSSPClient:
+    """
+    Lightweight MSSP client for Sentinel edge devices.
+
+    Uses only stdlib to minimize memory footprint.
+    Exports metrics to MSSP dashboard for central monitoring.
+    """
+
+    def __init__(self, mssp_url: str, device_id: str, auth_token: str = '', timeout: int = 10):
+        self.mssp_url = mssp_url.rstrip('/')
+        self.device_id = device_id
+        self.auth_token = auth_token
+        self.timeout = timeout
+        self._stats = {'heartbeats_sent': 0, 'heartbeats_failed': 0, 'threats_reported': 0}
+        self._last_heartbeat = None
+
+    def send_heartbeat(self, metrics: dict) -> bool:
+        """
+        Send heartbeat with metrics to MSSP.
+
+        Args:
+            metrics: Dict with cpu_usage, ram_usage, qsecbit_score, etc.
+
+        Returns:
+            True if successful
+        """
+        url = f"{self.mssp_url}/api/v1/devices/{self.device_id}/heartbeat/"
+
+        payload = {
+            'status': metrics.get('status', 'online'),
+            'cpu_usage': metrics.get('cpu_usage', 0),
+            'ram_usage': metrics.get('ram_usage', 0),
+            'disk_usage': metrics.get('disk_usage', 0),
+            'uptime_seconds': metrics.get('uptime_seconds', 0),
+            'qsecbit_score': metrics.get('qsecbit_score'),
+            'threat_events_count': metrics.get('threat_events_count', 0),
+        }
+
+        try:
+            import urllib.request
+            import urllib.error
+
+            data = json.dumps(payload).encode('utf-8')
+            headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Sentinel-MSSP-Client/1.0',
+            }
+            if self.auth_token:
+                headers['Authorization'] = f'Token {self.auth_token}'
+
+            req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if resp.status in (200, 201):
+                    self._stats['heartbeats_sent'] += 1
+                    self._last_heartbeat = datetime.now(timezone.utc)
+                    log.debug(f"[MSSP] Heartbeat sent: CPU={payload['cpu_usage']:.1f}%")
+                    return True
+
+        except urllib.error.HTTPError as e:
+            log.warning(f"[MSSP] HTTP error: {e.code}")
+        except urllib.error.URLError as e:
+            log.debug(f"[MSSP] Connection error: {e.reason}")
+        except Exception as e:
+            log.debug(f"[MSSP] Request error: {e}")
+
+        self._stats['heartbeats_failed'] += 1
+        return False
+
+    def report_threat(self, threat_type: str, severity: str, source_ip: str, detection_method: str, details: dict = None) -> bool:
+        """
+        Report a threat event to MSSP.
+
+        Args:
+            threat_type: Type of threat (e.g., 'invalid_signature', 'rate_abuse')
+            severity: 'critical', 'high', 'medium', 'low', 'info'
+            source_ip: Source IP of the threat
+            detection_method: How it was detected
+            details: Additional context
+
+        Returns:
+            True if successful
+        """
+        url = f"{self.mssp_url}/api/v1/security/threats/ingest/"
+
+        payload = {
+            'source': 'sentinel',
+            'device_id': self.device_id,
+            'threats': [{
+                'event_id': f"SENTINEL-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[:17]}",
+                'threat_type': threat_type,
+                'severity': severity,
+                'source_ip': source_ip,
+                'description': f"Sentinel detected: {threat_type}",
+                'detection_method': detection_method,
+                'confidence': details.get('confidence', 0.8) if details else 0.8,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'raw_data': {
+                    'node_id': NODE_ID,
+                    'region': REGION,
+                    **(details or {}),
+                },
+            }],
+        }
+
+        try:
+            import urllib.request
+            import urllib.error
+
+            data = json.dumps(payload).encode('utf-8')
+            headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Sentinel-MSSP-Client/1.0',
+            }
+            if self.auth_token:
+                headers['Authorization'] = f'Token {self.auth_token}'
+
+            req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if resp.status in (200, 201, 207):
+                    self._stats['threats_reported'] += 1
+                    log.info(f"[MSSP] Threat reported: {threat_type} from {source_ip}")
+                    return True
+
+        except Exception as e:
+            log.debug(f"[MSSP] Threat report error: {e}")
+
+        return False
+
+    def get_stats(self) -> dict:
+        """Get MSSP client statistics."""
+        return {
+            **self._stats,
+            'last_heartbeat': self._last_heartbeat.isoformat() if self._last_heartbeat else None,
+        }
+
+
+# Initialize MSSP client if enabled
+mssp_client = None
+if MSSP_ENABLED:
+    try:
+        mssp_client = SentinelMSSPClient(
+            mssp_url=MSSP_URL,
+            device_id=MSSP_DEVICE_ID,
+            auth_token=MSSP_AUTH_TOKEN,
+        )
+        log.info(f"MSSP client initialized: {MSSP_URL}")
+    except Exception as e:
+        log.warning(f"Failed to initialize MSSP client: {e}")
+
+
+# ============================================================
 # SENTINEL VALIDATOR
 # ============================================================
 
@@ -238,6 +405,7 @@ class Sentinel:
         self.edges = []
         self.security = security_manager
         self.mesh = mesh_agent
+        self.mssp = mssp_client
 
         # Start mesh agent if available
         if self.mesh:
@@ -256,9 +424,21 @@ class Sentinel:
         safe_ioc = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', safe_ioc)
 
         log.info(f"[MESH] Threat received: {safe_type} - {safe_ioc}... (severity: {intel.severity})")
+
         # Could trigger local blocking if severity is critical
         if intel.severity <= 1 and self.security:
             self.security.threat_detector._block_ip(intel.ioc_value, f"mesh:{safe_type}")
+
+        # Report to MSSP for central tracking
+        if self.mssp:
+            severity_map = {1: 'critical', 2: 'high', 3: 'medium', 4: 'low', 5: 'info'}
+            self.report_threat_to_mssp(
+                threat_type=safe_type,
+                severity=severity_map.get(intel.severity, 'medium'),
+                source_ip=safe_ioc,
+                detection_method='mesh_intelligence',
+                details={'original_severity': intel.severity},
+            )
 
     # ================================================================
     # SECURITY FIX: HMAC Signature Verification (CWE-326, CWE-285)
@@ -457,6 +637,96 @@ class Sentinel:
             self.security.periodic_cleanup()
         gc.collect()
 
+    def export_metrics_to_mssp(self) -> bool:
+        """
+        Export current metrics to MSSP dashboard.
+
+        Called periodically by background task.
+        """
+        if not self.mssp:
+            return False
+
+        # Collect metrics
+        metrics = self._collect_metrics()
+
+        # Send heartbeat
+        return self.mssp.send_heartbeat(metrics)
+
+    def _collect_metrics(self) -> dict:
+        """Collect current system and validation metrics."""
+        metrics = {
+            'status': 'online',
+            'cpu_usage': 0.0,
+            'ram_usage': 0.0,
+            'disk_usage': 0.0,
+            'uptime_seconds': int(time.time() - self.stats['start']),
+            'qsecbit_score': None,
+            'threat_events_count': self.stats.get('blocked', 0),
+        }
+
+        # CPU usage (simplified)
+        try:
+            with open('/proc/stat', 'r') as f:
+                cpu_line = f.readline()
+                cpu_times = list(map(int, cpu_line.split()[1:5]))
+                idle = cpu_times[3]
+                total = sum(cpu_times)
+                metrics['cpu_usage'] = min(100, max(0, (1 - idle / max(total, 1)) * 100))
+        except Exception:
+            pass
+
+        # Memory usage
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                meminfo = {}
+                for line in f:
+                    parts = line.split(':')
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = int(parts[1].strip().split()[0])
+                        meminfo[key] = value
+
+                total = meminfo.get('MemTotal', 1)
+                available = meminfo.get('MemAvailable', 0)
+                metrics['ram_usage'] = min(100, max(0, (1 - available / total) * 100))
+        except Exception:
+            pass
+
+        # Calculate QSecBit score based on validation success rate
+        total_validations = self.stats['ok'] + self.stats['fail']
+        if total_validations > 0:
+            success_rate = self.stats['ok'] / total_validations
+            # QSecBit = base score adjusted by validation health
+            metrics['qsecbit_score'] = round(0.5 + (success_rate * 0.5), 2)
+
+        return metrics
+
+    def report_threat_to_mssp(self, threat_type: str, severity: str, source_ip: str,
+                               detection_method: str, details: dict = None) -> bool:
+        """
+        Report a detected threat to MSSP dashboard.
+
+        Args:
+            threat_type: Type of threat
+            severity: 'critical', 'high', 'medium', 'low', 'info'
+            source_ip: Source of the threat
+            detection_method: How it was detected
+            details: Additional context
+
+        Returns:
+            True if reported successfully
+        """
+        if not self.mssp:
+            return False
+
+        return self.mssp.report_threat(
+            threat_type=threat_type,
+            severity=severity,
+            source_ip=source_ip,
+            detection_method=detection_method,
+            details=details,
+        )
+
 # ============================================================
 # METRICS HTTP SERVER
 # ============================================================
@@ -527,6 +797,7 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
         s = sentinel.stats
         sec_stats = sentinel.security.get_stats() if sentinel.security else {}
         mesh_status = sentinel.mesh.get_status() if sentinel.mesh else {}
+        mssp_stats = sentinel.mssp.get_stats() if sentinel.mssp else {}
 
         h = {
             'status': 'healthy',
@@ -552,6 +823,13 @@ sentinel_info{{node="{NODE_ID}",region="{REGION}",tier="{TIER}"}} 1
                 'peers': mesh_status.get('peers', 0),
                 'threats_received': mesh_status.get('stats', {}).get('threats_received', 0),
                 'threats_shared': mesh_status.get('stats', {}).get('threats_shared', 0),
+            },
+            'mssp': {
+                'enabled': sentinel.mssp is not None,
+                'heartbeats_sent': mssp_stats.get('heartbeats_sent', 0),
+                'heartbeats_failed': mssp_stats.get('heartbeats_failed', 0),
+                'threats_reported': mssp_stats.get('threats_reported', 0),
+                'last_heartbeat': mssp_stats.get('last_heartbeat'),
             }
         }
         self.send_response(200)
@@ -592,6 +870,17 @@ def memory_monitor():
         time.sleep(GC_INTERVAL)
         sentinel.cleanup()
 
+
+def mssp_heartbeat():
+    """Periodic MSSP heartbeat export"""
+    while True:
+        try:
+            time.sleep(MSSP_HEARTBEAT_INTERVAL)
+            if sentinel and sentinel.mssp:
+                sentinel.export_metrics_to_mssp()
+        except Exception as e:
+            log.warning(f"MSSP heartbeat failed: {e}")
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -624,6 +913,11 @@ def main():
     if mesh_agent:
         log.info(f"  Role: SENTINEL (Validator)")
         log.info(f"  Max Peers: {mesh_agent.config.max_peers}")
+    log.info(f"MSSP:     {'ENABLED' if mssp_client else 'DISABLED'}")
+    if mssp_client:
+        log.info(f"  URL: {MSSP_URL}")
+        log.info(f"  Device ID: {MSSP_DEVICE_ID}")
+        log.info(f"  Heartbeat: {MSSP_HEARTBEAT_INTERVAL}s")
     log.info("=" * 50)
 
     sentinel = Sentinel()
@@ -636,6 +930,9 @@ def main():
     # Start background tasks
     Thread(target=mesh_reporter, daemon=True).start()
     Thread(target=memory_monitor, daemon=True).start()
+    if mssp_client:
+        Thread(target=mssp_heartbeat, daemon=True).start()
+        log.info(f"MSSP heartbeat: every {MSSP_HEARTBEAT_INTERVAL}s")
 
     # UDP validation socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
