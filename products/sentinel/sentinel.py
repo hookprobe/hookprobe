@@ -253,7 +253,8 @@ class SentinelMSSPClient:
     - HMAC-based message signing for integrity
     """
 
-    KEYS_DIR = os.path.expanduser("~/.hookprobe/keys")
+    # Use /var/lib/hookprobe for service context, fallback to ~/.hookprobe for user context
+    KEYS_DIR = os.environ.get('HOOKPROBE_KEYS_DIR', '/var/lib/hookprobe/keys')
     PRIVATE_KEY_FILE = "sentinel_ed25519.key"
     PUBLIC_KEY_FILE = "sentinel_ed25519.pub"
     FINGERPRINT_FILE = "hardware_fingerprint.json"
@@ -270,14 +271,41 @@ class SentinelMSSPClient:
         self._hardware_fingerprint = None
         self._signing_key = None
         self._public_key_hex = None
-        self._init_identity()
+        try:
+            self._init_identity()
+        except Exception as e:
+            log.warning(f"[MSSP] Identity initialization failed: {e} - continuing without fingerprint")
+            # Generate in-memory fingerprint as fallback
+            self._hardware_fingerprint = self._generate_hardware_fingerprint()
+            self._public_key_hex = ''
 
     def _init_identity(self) -> None:
         """Initialize device identity with hardware fingerprint and Ed25519 keypair."""
-        os.makedirs(self.KEYS_DIR, mode=0o700, exist_ok=True)
+        # Try multiple directory options
+        keys_dirs = [
+            self.KEYS_DIR,
+            '/var/lib/hookprobe/keys',
+            os.path.expanduser('~/.hookprobe/keys'),
+            '/tmp/hookprobe/keys',
+        ]
+
+        keys_dir = None
+        for d in keys_dirs:
+            try:
+                os.makedirs(d, mode=0o700, exist_ok=True)
+                keys_dir = d
+                break
+            except (PermissionError, OSError) as e:
+                log.debug(f"[MSSP] Cannot use keys directory {d}: {e}")
+                continue
+
+        if not keys_dir:
+            raise RuntimeError("No writable keys directory found")
+
+        log.debug(f"[MSSP] Using keys directory: {keys_dir}")
 
         # Generate or load hardware fingerprint
-        fp_path = os.path.join(self.KEYS_DIR, self.FINGERPRINT_FILE)
+        fp_path = os.path.join(keys_dir, self.FINGERPRINT_FILE)
         if os.path.exists(fp_path):
             try:
                 with open(fp_path, 'r') as f:
@@ -298,7 +326,7 @@ class SentinelMSSPClient:
                 log.warning(f"[MSSP] Failed to save fingerprint: {e}")
 
         # Generate or load Ed25519 keypair (using HMAC-based signing as fallback)
-        key_path = os.path.join(self.KEYS_DIR, self.PRIVATE_KEY_FILE)
+        key_path = os.path.join(keys_dir, self.PRIVATE_KEY_FILE)
         if os.path.exists(key_path):
             try:
                 with open(key_path, 'rb') as f:
