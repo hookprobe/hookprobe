@@ -55,7 +55,7 @@ HEALTH_PORT="${HEALTH_PORT:-9090}"
 SENTINEL_REGION="${SENTINEL_REGION:-auto}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
 ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
-ENABLE_MESH="${ENABLE_MESH:-yes}"
+ENABLE_MESH="${ENABLE_MESH:-true}"
 MSSP_URL="${MSSP_URL:-https://mssp.hookprobe.com}"
 
 # Security: Validate port number (CWE-78 prevention)
@@ -1299,7 +1299,7 @@ main() {
             --region) SENTINEL_REGION="$2"; shift 2 ;;
             --no-firewall) ENABLE_FIREWALL="no"; shift ;;
             --no-fail2ban) ENABLE_FAIL2BAN="no"; shift ;;
-            --no-mesh) ENABLE_MESH="no"; shift ;;
+            --no-mesh) ENABLE_MESH="false"; shift ;;
             --uninstall) uninstall ;;
             --help|-h) show_help ;;
             *) log_error "Unknown option: $1"; show_help ;;
