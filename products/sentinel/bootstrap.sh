@@ -322,6 +322,7 @@ download_core_modules() {
         "shared/mesh/port_manager.py"
         "shared/mesh/relay.py"
         "shared/mesh/channel_selector.py"
+        "shared/mesh/neuro_encoder.py"
     )
     for f in "${MESH_FILES[@]}"; do
         curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
