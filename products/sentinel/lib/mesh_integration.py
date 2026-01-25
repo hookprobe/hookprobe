@@ -431,12 +431,12 @@ class SentinelMeshAgent:
 
         try:
             # Initialize mesh consciousness with SENTINEL role
+            # Convert node_id to bytes if string
+            node_id_bytes = self.config.node_id.encode()[:16].ljust(16, b'\x00') if isinstance(self.config.node_id, str) else self.config.node_id[:16]
             self.consciousness = MeshConsciousness(
-                tier_role=TierRole.SENTINEL,
+                node_id=node_id_bytes,
+                tier=TierRole.SENTINEL,
                 neuro_seed=self.config.neuro_seed,
-                node_id=self.config.node_id,
-                bootstrap_peers=self.config.bootstrap_peers,
-                max_peers=self.config.max_peers,
             )
 
             # Initialize port manager for resilient connectivity
