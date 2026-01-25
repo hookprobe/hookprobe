@@ -33,10 +33,14 @@ from .node import DSMNode
 from .validator import DSMValidator
 from .consensus import ConsensusEngine
 from .identity import NodeIdentity
+from .microblock import Microblock, MicroblockType, MicroblockChain
 
 __all__ = [
     'DSMNode',
     'DSMValidator',
     'ConsensusEngine',
     'NodeIdentity',
+    'Microblock',
+    'MicroblockType',
+    'MicroblockChain',
 ]

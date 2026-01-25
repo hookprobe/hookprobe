@@ -418,7 +418,8 @@ create_keys_directory() {
     # Generate HMAC signing key if not exists
     if [ ! -f "$KEYS_DIR/signing_key" ]; then
         log_security "Generating HMAC signing key..."
-        head -c 32 /dev/urandom | xxd -p > "$KEYS_DIR/signing_key"
+        # Use od (POSIX standard) instead of xxd for portability
+        head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n' > "$KEYS_DIR/signing_key"
         chmod 600 "$KEYS_DIR/signing_key"
     fi
 
@@ -772,8 +773,8 @@ SIGS
 create_config() {
     log_info "Creating configuration..."
 
-    # Generate secure node ID
-    local NODE_ID="sentinel-$(hostname -s 2>/dev/null || echo 'node')-$(head -c 8 /dev/urandom | xxd -p)"
+    # Generate secure node ID (use od for portability instead of xxd)
+    local NODE_ID="sentinel-$(hostname -s 2>/dev/null || echo 'node')-$(head -c 8 /dev/urandom | od -A n -t x1 | tr -d ' \n')"
 
     # Auto-detect region (CWE-319: Use HTTPS instead of HTTP)
     if [ "$SENTINEL_REGION" = "auto" ]; then
