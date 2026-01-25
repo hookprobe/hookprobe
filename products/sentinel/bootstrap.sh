@@ -266,6 +266,13 @@ download_sentinel() {
         create_security_module
     fi
 
+    # Download lib directory (mesh integration)
+    log_info "Downloading mesh integration module..."
+    mkdir -p "$INSTALL_DIR/lib"
+    touch "$INSTALL_DIR/lib/__init__.py"
+    curl -sSfL "$GITHUB_RAW/lib/mesh_integration.py" -o "$INSTALL_DIR/lib/mesh_integration.py" 2>/dev/null || \
+        log_warn "Mesh integration module not available"
+
     # Download signatures (lightweight ruleset)
     log_info "Downloading threat signatures..."
     mkdir -p "$DATA_DIR/signatures"
