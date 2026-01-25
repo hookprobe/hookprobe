@@ -430,11 +430,11 @@ class MeshConsciousness:
         self._on_peer_joined: List[Callable[[PeerNode], None]] = []
         self._on_peer_left: List[Callable[[PeerNode], None]] = []
 
+        # Logger (must be set before _init_dsm which uses it)
+        self.logger = logging.getLogger(f"MeshConsciousness.{tier.name}")
+
         # Initialize DSM if available
         self._init_dsm()
-
-        # Logger
-        self.logger = logging.getLogger(f"MeshConsciousness.{tier.name}")
 
     @property
     def state(self) -> ConsciousnessState:
