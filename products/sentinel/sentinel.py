@@ -410,7 +410,10 @@ class SentinelMSSPClient:
 
     def send_heartbeat(self, metrics: dict) -> bool:
         """
-        Send signed heartbeat with metrics to MSSP.
+        Send heartbeat with metrics to MSSP.
+
+        Uses the new /api/nodes/heartbeat endpoint with API key auth.
+        Falls back to legacy endpoint if API key not available.
 
         Args:
             metrics: Dict with cpu_usage, ram_usage, qsecbit_score, etc.
@@ -418,6 +421,84 @@ class SentinelMSSPClient:
         Returns:
             True if successful
         """
+        # Try new API key-based endpoint first
+        api_key = self._load_api_key()
+        if api_key:
+            return self._send_heartbeat_v2(metrics, api_key)
+
+        # Fall back to legacy endpoint
+        return self._send_heartbeat_legacy(metrics)
+
+    def _load_api_key(self) -> str:
+        """Load API key from secrets directory if available."""
+        try:
+            api_key_path = '/etc/hookprobe/secrets/api-key'
+            if os.path.exists(api_key_path):
+                with open(api_key_path, 'r') as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+        return ''
+
+    def _send_heartbeat_v2(self, metrics: dict, api_key: str) -> bool:
+        """Send heartbeat using new /api/nodes/heartbeat endpoint with API key."""
+        url = f"{self.mssp_url}/api/nodes/heartbeat"
+
+        # Determine status based on metrics
+        cpu = metrics.get('cpu_usage', 0)
+        ram = metrics.get('ram_usage', 0)
+        if cpu > 90 or ram > 90:
+            status = 'warning'
+        elif cpu > 95 or ram > 95:
+            status = 'degraded'
+        else:
+            status = 'online'
+
+        payload = {
+            'status': status,
+            'qsecbit': metrics.get('qsecbit_score', 0),
+            'metrics': {
+                'cpu': round(metrics.get('cpu_usage', 0), 1),
+                'memory': round(metrics.get('ram_usage', 0), 1),
+                'disk': round(metrics.get('disk_usage', 0), 1),
+                'uptime': metrics.get('uptime_seconds', 0),
+                'connections': metrics.get('threat_events_count', 0)
+            },
+            'version': '5.0.0'
+        }
+
+        try:
+            import urllib.request
+            import urllib.error
+
+            data = json.dumps(payload).encode('utf-8')
+            headers = {
+                'Content-Type': 'application/json',
+                'X-API-Key': api_key,
+                'User-Agent': 'HookProbe-Sentinel/5.0',
+            }
+
+            req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if resp.status in (200, 201):
+                    self._stats['heartbeats_sent'] += 1
+                    self._last_heartbeat = datetime.now(timezone.utc)
+                    log.debug(f"[MSSP] Heartbeat v2 sent: status={status}, CPU={cpu:.1f}%")
+                    return True
+
+        except urllib.error.HTTPError as e:
+            log.warning(f"[MSSP] Heartbeat v2 HTTP error {e.code}: {url}")
+        except urllib.error.URLError as e:
+            log.warning(f"[MSSP] Heartbeat v2 connection error: {e.reason}")
+        except Exception as e:
+            log.warning(f"[MSSP] Heartbeat v2 error: {e}")
+
+        self._stats['heartbeats_failed'] += 1
+        return False
+
+    def _send_heartbeat_legacy(self, metrics: dict) -> bool:
+        """Send heartbeat using legacy /api/v1/devices endpoint."""
         url = f"{self.mssp_url}/api/v1/devices/{self.device_id}/heartbeat/"
 
         # Build payload with identity info
@@ -463,15 +544,15 @@ class SentinelMSSPClient:
                 if resp.status in (200, 201):
                     self._stats['heartbeats_sent'] += 1
                     self._last_heartbeat = datetime.now(timezone.utc)
-                    log.debug(f"[MSSP] Heartbeat sent: CPU={payload['cpu_usage']:.1f}%")
+                    log.debug(f"[MSSP] Heartbeat legacy sent: CPU={payload['cpu_usage']:.1f}%")
                     return True
 
         except urllib.error.HTTPError as e:
-            log.warning(f"[MSSP] HTTP error: {e.code}")
+            log.warning(f"[MSSP] Legacy HTTP error {e.code}: {url}")
         except urllib.error.URLError as e:
-            log.debug(f"[MSSP] Connection error: {e.reason}")
+            log.warning(f"[MSSP] Legacy connection error: {e.reason}")
         except Exception as e:
-            log.debug(f"[MSSP] Request error: {e}")
+            log.warning(f"[MSSP] Legacy request error: {e}")
 
         self._stats['heartbeats_failed'] += 1
         return False
@@ -1046,9 +1127,11 @@ def mssp_heartbeat():
         try:
             time.sleep(MSSP_HEARTBEAT_INTERVAL)
             if sentinel and sentinel.mssp:
-                sentinel.export_metrics_to_mssp()
+                success = sentinel.export_metrics_to_mssp()
+                if not success:
+                    log.warning("[MSSP] Heartbeat failed - check network/URL")
         except Exception as e:
-            log.warning(f"MSSP heartbeat failed: {e}")
+            log.warning(f"MSSP heartbeat error: {e}")
 
 # ============================================================
 # MAIN
