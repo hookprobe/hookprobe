@@ -57,6 +57,8 @@ ENABLE_FIREWALL="${ENABLE_FIREWALL:-yes}"
 ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
 ENABLE_MESH="${ENABLE_MESH:-true}"
 MSSP_URL="${MSSP_URL:-https://mssp.hookprobe.com}"
+REGISTRATION_TOKEN="${REGISTRATION_TOKEN:-}"
+ENABLE_MSSP="${ENABLE_MSSP:-yes}"
 
 # Security: Validate port number (CWE-78 prevention)
 validate_port() {
@@ -432,6 +434,162 @@ create_keys_directory() {
     fi
 
     log_info "Keys directory initialized"
+}
+
+# ============================================================
+# MSSP REGISTRATION
+# ============================================================
+
+register_with_mssp() {
+    if [ "$ENABLE_MSSP" != "yes" ]; then
+        log_warn "MSSP registration disabled"
+        return
+    fi
+
+    log_info "Registering with MSSP dashboard..."
+
+    # Read hardware fingerprint
+    local fingerprint=$(cat "$KEYS_DIR/hardware_fingerprint" 2>/dev/null)
+    local mac_addr=$(ip link show 2>/dev/null | grep -m1 "link/ether" | awk '{print $2}')
+    local machine_id=$(cat /etc/machine-id 2>/dev/null)
+    local hostname_full=$(hostname -f 2>/dev/null || hostname)
+    local public_ip=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
+
+    # Build fingerprint JSON (escape special chars)
+    local fp_json=$(cat <<FPEOF
+{
+  "machineId": "${machine_id}",
+  "hostname": "${hostname_full}",
+  "macAddresses": ["${mac_addr}"]
+}
+FPEOF
+)
+
+    # If registration token provided, use direct registration
+    if [ -n "$REGISTRATION_TOKEN" ]; then
+        log_info "Using registration token for direct registration..."
+
+        local response=$(curl -sS --max-time 30 \
+            -X POST "${MSSP_URL}/api/nodes/register" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"token\": \"${REGISTRATION_TOKEN}\",
+                \"hostname\": \"${hostname_full}\",
+                \"fingerprint\": ${fp_json},
+                \"ipAddress\": \"${public_ip}\",
+                \"nodeType\": \"sentinel\"
+            }" 2>/dev/null)
+
+        if echo "$response" | grep -q '"success":true'; then
+            # Extract API key
+            local api_key=$(echo "$response" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
+            if [ -n "$api_key" ]; then
+                echo "$api_key" > "$SECRETS_DIR/api-key"
+                chmod 600 "$SECRETS_DIR/api-key"
+                log_info "Node registered successfully via token!"
+                log_security "API key stored in $SECRETS_DIR/api-key"
+                return 0
+            fi
+        else
+            log_warn "Token registration failed, falling back to claim code"
+        fi
+    fi
+
+    # Call provision endpoint
+    log_info "Requesting claim code from MSSP..."
+    local response=$(curl -sS --max-time 30 \
+        -X POST "${MSSP_URL}/api/nodes/provision" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"fingerprint\": ${fp_json},
+            \"hostname\": \"${hostname_full}\",
+            \"ipAddress\": \"${public_ip}\",
+            \"nodeType\": \"sentinel\"
+        }" 2>/dev/null)
+
+    # Check for already registered
+    if echo "$response" | grep -q '"status":"already_registered"'; then
+        log_info "This device is already registered with MSSP"
+        return 0
+    fi
+
+    # Parse provision response
+    local claim_code=$(echo "$response" | grep -o '"claimCode":"[^"]*"' | cut -d'"' -f4)
+    local sse_endpoint=$(echo "$response" | grep -o '"sseEndpoint":"[^"]*"' | cut -d'"' -f4)
+    local provision_id=$(echo "$response" | grep -o '"provisionId":"[^"]*"' | cut -d'"' -f4)
+
+    if [ -n "$claim_code" ] && [ "$claim_code" != "" ]; then
+        # Store for display and later use
+        echo "$claim_code" > "$DATA_DIR/claim_code"
+        echo "$provision_id" > "$DATA_DIR/provision_id"
+        chmod 600 "$DATA_DIR/claim_code" "$DATA_DIR/provision_id" 2>/dev/null
+
+        echo ""
+        log_info "${CYAN}═══════════════════════════════════════════════════════${NC}"
+        log_info ""
+        log_info "  ${GREEN}CLAIM CODE: ${YELLOW}${claim_code}${NC}"
+        log_info ""
+        log_info "${CYAN}═══════════════════════════════════════════════════════${NC}"
+        echo ""
+        log_info "Go to ${CYAN}${MSSP_URL}${NC} and enter this code to claim your node."
+        log_info "The code expires in 15 minutes."
+        echo ""
+
+        # Start background listener for claim notification
+        if [ -n "$sse_endpoint" ]; then
+            start_claim_listener "$sse_endpoint" "$provision_id" &
+            CLAIM_LISTENER_PID=$!
+            log_info "Waiting for claim confirmation (PID: $CLAIM_LISTENER_PID)..."
+        fi
+    else
+        log_warn "Could not get claim code from MSSP. Response: $response"
+        log_warn "Node will run in standalone mode without dashboard integration."
+    fi
+}
+
+start_claim_listener() {
+    local sse_endpoint="$1"
+    local provision_id="$2"
+    local max_wait=900  # 15 minutes
+    local start_time=$(date +%s)
+    local check_interval=5
+
+    while true; do
+        local elapsed=$(($(date +%s) - start_time))
+        if [ $elapsed -ge $max_wait ]; then
+            log_warn "Claim timeout reached. You can still claim from the dashboard."
+            break
+        fi
+
+        # Poll for claim notification (SSE not well supported in bash, use polling)
+        local status_response=$(curl -sS --max-time 10 \
+            "${MSSP_URL}/api/nodes/provision/status?id=${provision_id}" 2>/dev/null)
+
+        if echo "$status_response" | grep -q '"claimed":true'; then
+            # Extract API key
+            local api_key=$(echo "$status_response" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
+            if [ -n "$api_key" ]; then
+                echo "$api_key" > "$SECRETS_DIR/api-key"
+                chmod 600 "$SECRETS_DIR/api-key"
+                rm -f "$DATA_DIR/claim_code" "$DATA_DIR/provision_id"
+
+                echo ""
+                log_info "${GREEN}═══════════════════════════════════════════════════════${NC}"
+                log_info "  ${GREEN}NODE CLAIMED SUCCESSFULLY!${NC}"
+                log_info "${GREEN}═══════════════════════════════════════════════════════${NC}"
+                echo ""
+                log_security "API key stored in $SECRETS_DIR/api-key"
+
+                # Restart sentinel service to enable heartbeat
+                if systemctl is-active --quiet hookprobe-sentinel.service 2>/dev/null; then
+                    systemctl restart hookprobe-sentinel.service 2>/dev/null || true
+                fi
+                exit 0
+            fi
+        fi
+
+        sleep $check_interval
+    done
 }
 
 create_security_module() {
@@ -1252,11 +1410,13 @@ Options:
   --mesh-port PORT      Mesh port (default: 8443)
   --mesh-token TOKEN    Mesh authentication token
   --mssp-url URL        MSSP dashboard URL (default: https://mssp.hookprobe.com)
+  --token TOKEN         Pre-generated registration token for instant claim
   --health-port PORT    Health endpoint port (default: 9090)
   --region REGION       Region code (default: auto-detect)
   --no-firewall         Skip firewall configuration
   --no-fail2ban         Skip fail2ban configuration
   --no-mesh             Skip mesh/DSM/HTP module installation
+  --no-mssp             Skip MSSP dashboard registration
   --uninstall           Remove Sentinel completely
   --help                Show this help
 
@@ -1295,6 +1455,8 @@ main() {
             --mesh-port) MESH_PORT="$2"; shift 2 ;;
             --mesh-token) MESH_TOKEN="$2"; shift 2 ;;
             --mssp-url) MSSP_URL="$2"; shift 2 ;;
+            --token) REGISTRATION_TOKEN="$2"; shift 2 ;;
+            --no-mssp) ENABLE_MSSP="no"; shift ;;
             --health-port) HEALTH_PORT="$2"; shift 2 ;;
             --region) SENTINEL_REGION="$2"; shift 2 ;;
             --no-firewall) ENABLE_FIREWALL="no"; shift ;;
@@ -1320,6 +1482,7 @@ main() {
     create_service
     create_uninstall_command
     verify_installation
+    register_with_mssp
     show_complete
 
     # Auto-start prompt
