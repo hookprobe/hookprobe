@@ -425,12 +425,27 @@ create_keys_directory() {
         log_security "Hardware fingerprint: ${fingerprint:0:16}..."
     fi
 
-    # Generate HMAC signing key if not exists
-    if [ ! -f "$KEYS_DIR/signing_key" ]; then
+    # Generate HMAC signing key if not exists or is empty
+    if [ ! -s "$KEYS_DIR/signing_key" ]; then
         log_security "Generating HMAC signing key..."
-        # Use od (POSIX standard) instead of xxd for portability
-        head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n' > "$KEYS_DIR/signing_key"
+        # Multiple fallback methods for portability
+        if command -v xxd >/dev/null 2>&1; then
+            head -c 32 /dev/urandom | xxd -p | tr -d '\n' > "$KEYS_DIR/signing_key"
+        elif command -v hexdump >/dev/null 2>&1; then
+            head -c 32 /dev/urandom | hexdump -v -e '/1 "%02x"' > "$KEYS_DIR/signing_key"
+        else
+            # POSIX fallback using od
+            head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n\t' > "$KEYS_DIR/signing_key"
+        fi
         chmod 600 "$KEYS_DIR/signing_key"
+
+        # Verify key was generated
+        if [ ! -s "$KEYS_DIR/signing_key" ]; then
+            log_warn "Failed to generate signing key, using openssl fallback"
+            openssl rand -hex 32 > "$KEYS_DIR/signing_key" 2>/dev/null || \
+                cat /proc/sys/kernel/random/uuid | tr -d '-' > "$KEYS_DIR/signing_key"
+            chmod 600 "$KEYS_DIR/signing_key"
+        fi
     fi
 
     log_info "Keys directory initialized"
@@ -542,8 +557,17 @@ FPEOF
             log_info "Waiting for claim confirmation (PID: $CLAIM_LISTENER_PID)..."
         fi
     else
-        log_warn "Could not get claim code from MSSP. Response: $response"
+        # Debug: show what we got back
+        if [ -z "$response" ]; then
+            log_warn "No response from MSSP. Check network connectivity to ${MSSP_URL}"
+        elif echo "$response" | grep -q '"error"'; then
+            local error_msg=$(echo "$response" | grep -o '"error":"[^"]*"' | cut -d'"' -f4)
+            log_warn "MSSP returned error: $error_msg"
+        else
+            log_warn "Unexpected response from MSSP: ${response:0:200}"
+        fi
         log_warn "Node will run in standalone mode without dashboard integration."
+        log_info "You can manually register later by running: sentinel --register"
     fi
 }
 
