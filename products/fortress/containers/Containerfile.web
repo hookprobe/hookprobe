@@ -65,6 +65,12 @@ WORKDIR /app
 COPY products/fortress/web/ /app/web/
 COPY products/fortress/lib/ /app/lib/
 
+# Copy core AEGIS module (promoted from lib/aegis to core/aegis)
+RUN mkdir -p /app/core
+COPY core/__init__.py /app/core/__init__.py
+COPY core/aegis/ /app/core/aegis/
+ENV PYTHONPATH="/app:${PYTHONPATH:-}"
+
 # Copy shared AIOCHI backend modules for Active Defenses
 # Structure: /app/shared/aiochi/backend/*.py
 # These provide: DynamicFrictionEngine, NSEGhostProbe, AttackChainPredictor,
