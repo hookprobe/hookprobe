@@ -2,10 +2,13 @@
 AEGIS Type Definitions
 
 Pydantic models for structured LLM output and API contracts.
+Dataclasses for internal types that don't need Pydantic validation.
 """
 
+from dataclasses import dataclass, field as dc_field
 from datetime import datetime
-from typing import List, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -69,3 +72,84 @@ class DeviceInfo(BaseModel):
     bubble: Optional[str] = Field(default=None, description="Ecosystem bubble name")
     first_seen: Optional[str] = Field(default=None, description="First seen timestamp")
     last_seen: Optional[str] = Field(default=None, description="Last seen timestamp")
+
+
+# ------------------------------------------------------------------
+# Signal Types (used by bridges and orchestrator)
+# ------------------------------------------------------------------
+
+class SignalSeverity(str, Enum):
+    """Signal severity levels."""
+    INFO = "INFO"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+@dataclass
+class StandardSignal:
+    """Normalized signal from any bridge.
+
+    All signal bridges normalize their events to this format
+    before feeding them to the orchestrator.
+    """
+    source: str          # "qsecbit", "dnsxai", "dhcp", etc.
+    event_type: str      # "threat", "dns_block", "new_device", etc.
+    severity: str = "INFO"  # INFO, LOW, MEDIUM, HIGH, CRITICAL
+    timestamp: datetime = dc_field(default_factory=datetime.utcnow)
+    data: Dict[str, Any] = dc_field(default_factory=dict)
+
+    @property
+    def is_threat(self) -> bool:
+        return self.severity in ("HIGH", "CRITICAL") or "threat" in self.event_type
+
+
+# ------------------------------------------------------------------
+# Agent Types (used by agents and orchestrator)
+# ------------------------------------------------------------------
+
+@dataclass
+class AgentInvocation:
+    """Record of an agent being invoked for a signal."""
+    agent_name: str
+    signal: Optional[StandardSignal] = None
+    timestamp: datetime = dc_field(default_factory=datetime.utcnow)
+    user_query: str = ""
+
+
+@dataclass
+class AgentResponse:
+    """Response from an agent after processing a signal or query."""
+    agent: str
+    action: str = ""           # Tool/action name, empty if advisory only
+    confidence: float = 0.0
+    reasoning: str = ""        # Why this action was chosen
+    user_message: str = ""     # Human-readable response
+    tool_calls: List[Dict[str, Any]] = dc_field(default_factory=list)
+    sources: List[str] = dc_field(default_factory=list)
+    escalate_to: Optional[str] = None  # Agent name to escalate to
+
+
+# ------------------------------------------------------------------
+# Tool Types (used by tool_executor)
+# ------------------------------------------------------------------
+
+@dataclass
+class ToolDefinition:
+    """Definition of a tool available to agents."""
+    name: str
+    description: str
+    parameters: Dict[str, Any] = dc_field(default_factory=dict)  # JSON Schema
+    agents: List[str] = dc_field(default_factory=list)  # Which agents can use this
+    requires_confirmation: bool = False
+
+
+@dataclass
+class ToolResult:
+    """Result of executing a tool."""
+    success: bool
+    result: str = ""
+    reasoning: str = ""
+    logged: bool = False
+    decision_id: str = ""
