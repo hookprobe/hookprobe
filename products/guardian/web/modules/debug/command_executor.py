@@ -74,7 +74,7 @@ COMMAND_WHITELIST: Dict[str, CommandSpec] = {
         category=CommandCategory.NETWORK,
         description='Transfer data from URL (headers only)',
         timeout=30,
-        allowed_args=['-I', '-s', '-o', '/dev/null', '-w', '--head', '--silent'],
+        allowed_args=['-I', '-s', '-w', '--head', '--silent'],
         max_args=4,
         requires_arg=True
     ),
@@ -450,6 +450,13 @@ def validate_command(command_line: str) -> Tuple[bool, str, Optional[List[str]]]
             allowed = ', '.join(spec.allowed_subcommands)
             return False, f"Subcommand '{subcommand}' not allowed. Allowed: {allowed}", None
 
+    # Enforce allowed_args whitelist (flags/options)
+    if spec.allowed_args is not None and cmd_args:
+        for arg in cmd_args:
+            if arg.startswith('-') and arg not in spec.allowed_args:
+                allowed = ', '.join(spec.allowed_args)
+                return False, f"Argument '{arg}' not allowed. Allowed: {allowed}", None
+
     # Check file paths for cat/tail/head
     if cmd_name in ('cat', 'tail', 'head'):
         # Find the file argument (skip flags)
@@ -460,9 +467,13 @@ def validate_command(command_line: str) -> Tuple[bool, str, Optional[List[str]]]
                 break
 
         if file_arg:
-            # Resolve path
-            file_path = os.path.abspath(file_arg)
-            is_allowed = any(file_path.startswith(allowed) for allowed in ALLOWED_FILE_PATHS)
+            # Resolve path (realpath resolves symlinks to prevent symlink-based bypass)
+            file_path = os.path.realpath(file_arg)
+            is_allowed = any(
+                file_path == allowed.rstrip('/') or file_path.startswith(allowed if allowed.endswith('/') else allowed + '/')
+                for allowed in ALLOWED_FILE_PATHS
+                if '/' in allowed
+            ) or file_path in ALLOWED_FILE_PATHS
             if not is_allowed:
                 return False, f"Access to '{file_arg}' is not allowed", None
 

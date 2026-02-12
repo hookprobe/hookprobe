@@ -1162,6 +1162,7 @@ except ImportError:
 
 
 @api_bp.route('/v1/alerts', methods=['POST'])
+@login_required
 def receive_nexus_alert():
     """
     Receive security alerts from Nexus Purple Team.
@@ -1198,18 +1199,22 @@ def receive_nexus_alert():
         **data
     }
 
-    # Persist to file for dashboard
+    # Persist to file for dashboard (with file locking to prevent race conditions)
     try:
+        import fcntl
         alert_file = Path('/opt/hookprobe/fortress/data/purple_team_alerts.json')
         alert_file.parent.mkdir(parents=True, exist_ok=True)
 
-        existing = []
-        if alert_file.exists():
-            existing = json.loads(alert_file.read_text())
-
-        existing.insert(0, alert)
-        existing = existing[:100]  # Keep last 100 alerts
-        alert_file.write_text(json.dumps(existing, indent=2))
+        with open(alert_file, 'a+') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            content = f.read()
+            existing = json.loads(content) if content.strip() else []
+            existing.insert(0, alert)
+            existing = existing[:100]  # Keep last 100 alerts
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(existing, indent=2))
     except Exception as e:
         pass
 
@@ -1274,6 +1279,8 @@ def acknowledge_alert(alert_id):
 
 
 @api_bp.route('/v1/autopilot/optimize', methods=['POST'])
+@login_required
+@admin_required
 def apply_nexus_optimization():
     """
     Apply optimization recommendations from Nexus Purple Team.
@@ -1434,6 +1441,7 @@ def autopilot_status():
 
 
 @api_bp.route('/v1/defense/outcome', methods=['POST'])
+@login_required
 def report_defense_outcome():
     """
     Report actual defense outcome from SDN Autopilot.
@@ -1463,18 +1471,22 @@ def report_defense_outcome():
         **data
     }
 
-    # Persist for Nexus to fetch
+    # Persist for Nexus to fetch (with file locking to prevent race conditions)
     try:
+        import fcntl
         outcome_file = Path('/opt/hookprobe/fortress/data/defense_outcomes.json')
         outcome_file.parent.mkdir(parents=True, exist_ok=True)
 
-        existing = []
-        if outcome_file.exists():
-            existing = json.loads(outcome_file.read_text())
-
-        existing.insert(0, outcome)
-        existing = existing[:500]  # Keep more outcomes for analysis
-        outcome_file.write_text(json.dumps(existing, indent=2))
+        with open(outcome_file, 'a+') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            content = f.read()
+            existing = json.loads(content) if content.strip() else []
+            existing.insert(0, outcome)
+            existing = existing[:500]  # Keep more outcomes for analysis
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(existing, indent=2))
     except Exception:
         pass
 
@@ -1536,6 +1548,15 @@ def _apply_autopilot_optimization(
     if parameter not in ALLOWED_PARAMS:
         return {'success': False, 'error': f'Parameter not allowed: {parameter}'}
 
+    # Sanitize value and reason to prevent config injection
+    safe_value = str(new_value).replace('\n', '').replace('\r', '').strip()
+    safe_reason = str(reason).replace('\n', ' ').replace('\r', '').replace('#', '').strip()[:200]
+
+    # Validate value is a reasonable config value (numbers, booleans, simple strings)
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9._\-]+$', safe_value):
+        return {'success': False, 'error': 'Invalid value format'}
+
     try:
         # Read current config
         lines = []
@@ -1547,12 +1568,12 @@ def _apply_autopilot_optimization(
         found = False
         for i, line in enumerate(lines):
             if line.strip().startswith(f'{parameter}='):
-                lines[i] = f'{parameter}={new_value}  # Updated by purple_team: {reason}\n'
+                lines[i] = f'{parameter}={safe_value}  # Updated by purple_team: {safe_reason}\n'
                 found = True
                 break
 
         if not found:
-            lines.append(f'{parameter}={new_value}  # Added by purple_team: {reason}\n')
+            lines.append(f'{parameter}={safe_value}  # Added by purple_team: {safe_reason}\n')
 
         # Write updated config
         config_file.parent.mkdir(parents=True, exist_ok=True)
