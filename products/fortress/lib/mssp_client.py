@@ -117,7 +117,8 @@ class FortressMSSPClient:
             auth_token: API authentication token (defaults to config/env)
             timeout: Request timeout in seconds
         """
-        self.mssp_url = mssp_url or self._load_config('MSSP_URL', DEFAULT_MSSP_URL)
+        raw_url = mssp_url or self._load_config('MSSP_URL', DEFAULT_MSSP_URL)
+        self.mssp_url = self._validate_url(raw_url)
         self.device_id = device_id or self._load_config('DEVICE_ID', self._generate_device_id())
         self.auth_token = auth_token or self._load_config('MSSP_AUTH_TOKEN', '')
         self.timeout = timeout
@@ -158,6 +159,42 @@ class FortressMSSPClient:
             logger.debug(f"Could not load config {key}: {e}")
 
         return default
+
+    @staticmethod
+    def _validate_url(url: str) -> str:
+        """Validate MSSP URL to prevent SSRF against internal services."""
+        from urllib.parse import urlparse
+        import ipaddress
+
+        parsed = urlparse(url)
+
+        # Must be HTTPS
+        if parsed.scheme != 'https':
+            logger.warning(f"MSSP URL must use HTTPS, got: {parsed.scheme}. Falling back to default.")
+            return DEFAULT_MSSP_URL
+
+        hostname = parsed.hostname or ''
+
+        # Block private/internal IPs
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                logger.warning(f"MSSP URL points to private/reserved IP. Falling back to default.")
+                return DEFAULT_MSSP_URL
+        except ValueError:
+            pass  # Not an IP, it's a hostname — that's fine
+
+        # Block localhost variants
+        if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+            logger.warning(f"MSSP URL points to localhost. Falling back to default.")
+            return DEFAULT_MSSP_URL
+
+        # Block metadata endpoints (cloud SSRF)
+        if hostname in ('169.254.169.254', 'metadata.google.internal'):
+            logger.warning(f"MSSP URL points to cloud metadata endpoint. Falling back to default.")
+            return DEFAULT_MSSP_URL
+
+        return url
 
     def _generate_device_id(self) -> str:
         """Generate a unique device ID from hostname and MAC."""

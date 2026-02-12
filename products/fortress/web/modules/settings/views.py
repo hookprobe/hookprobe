@@ -71,7 +71,7 @@ def get_system_info():
 
     # Hostname
     try:
-        result = subprocess.run(['hostname'], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(['/usr/bin/hostname'], capture_output=True, text=True, timeout=5)
         info['hostname'] = result.stdout.strip()
     except Exception:
         pass
@@ -89,7 +89,7 @@ def get_system_info():
     # CPU usage
     try:
         result = subprocess.run(
-            ['grep', 'cpu ', '/proc/stat'],
+            ['/usr/bin/grep', 'cpu ', '/proc/stat'],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
