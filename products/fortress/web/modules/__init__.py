@@ -59,3 +59,7 @@ def register_blueprints(app: Flask):
     # Bubbles module - Device bubble management (same-user grouping)
     from .bubbles import bubbles_bp
     app.register_blueprint(bubbles_bp)
+
+    # AEGIS module - AI Security Assistant (ORACLE chat)
+    from .aegis import aegis_bp
+    app.register_blueprint(aegis_bp)
