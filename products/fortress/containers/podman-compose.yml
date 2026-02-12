@@ -158,6 +158,10 @@ services:
       DNSXAI_API_URL: http://fts-dnsxai:8080
       DFS_API_URL: http://fts-dfs:8050
       AIOCHI_BUBBLE_URL: http://172.20.200.1:8070
+      # AEGIS - AI Security Assistant (OpenRouter API)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      AEGIS_MODEL: "${AEGIS_MODEL:-auto}"
+      AEGIS_ENABLED: "${AEGIS_ENABLED:-true}"
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
