@@ -31,7 +31,7 @@ mypy>=1.4.0
 pylint>=2.17.0
 
 # Security
-cryptography>=44.0.1  # CVE-2024-12797 fix
+cryptography>=46.0.5  # CVE-2026-26007 fix
 pyjwt>=2.8.0
 
 # Logging

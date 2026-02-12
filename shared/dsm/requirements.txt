@@ -1,7 +1,7 @@
 # HookProbe DSM Phase 1 - Requirements
 
 # Core dependencies (always required)
-cryptography>=44.0.1      # RSA operations, software fallback (CVE-2024-12797 fix)
+cryptography>=46.0.5      # RSA operations, software fallback (CVE-2026-26007 fix)
 
 # Optional: TPM support
 # tpm2-pytss>=2.0.0       # Uncomment if TPM 2.0 hardware available
