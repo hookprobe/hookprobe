@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 from .inference import NativeInferenceEngine, get_inference_engine
 from .oracle import OracleAgent
-from .signal_fabric import SignalFabric, get_signal_fabric
+from .signal_fabric import SignalFabric, SignalFabricConfig, get_signal_fabric
 from .types import AegisStatus, ChatMessage, ChatResponse
 
 logger = logging.getLogger(__name__)
@@ -24,8 +24,8 @@ MAX_SESSIONS = 100  # Limit total sessions in memory
 class AegisClient:
     """Top-level AEGIS client managing agents and sessions."""
 
-    def __init__(self):
-        self.fabric = get_signal_fabric()
+    def __init__(self, config: Optional[SignalFabricConfig] = None):
+        self.fabric = get_signal_fabric(config)
         self.engine = get_inference_engine()
         self.oracle = OracleAgent(self.engine, self.fabric)
         self._sessions: Dict[str, List[ChatMessage]] = {}
@@ -88,9 +88,14 @@ class AegisClient:
 _client: Optional[AegisClient] = None
 
 
-def get_aegis_client() -> AegisClient:
-    """Get or create the global AegisClient instance."""
+def get_aegis_client(config: Optional[SignalFabricConfig] = None) -> AegisClient:
+    """Get or create the global AegisClient instance.
+
+    Args:
+        config: Optional SignalFabricConfig. Only used when creating
+                the instance for the first time.
+    """
     global _client
     if _client is None:
-        _client = AegisClient()
+        _client = AegisClient(config)
     return _client

@@ -3,6 +3,8 @@ AEGIS Model Manager
 
 OpenRouter model registry and API key management.
 Handles model selection, API key discovery, and availability checks.
+
+Supports multi-product config discovery (not Fortress-specific).
 """
 
 import logging
@@ -51,26 +53,28 @@ def get_api_key() -> str:
 
     Priority:
       1. OPENROUTER_API_KEY environment variable
-      2. /etc/hookprobe/fortress.conf key=value
-      3. /etc/hookprobe/secrets/openrouter_api_key file
+      2. AEGIS_CONF_PATH env var (product-agnostic config file)
+      3. /etc/hookprobe/fortress.conf (backward compat)
+      4. /etc/hookprobe/secrets/openrouter_api_key file
     """
     # 1. Environment variable
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if key:
         return key
 
-    # 2. Fortress config file
-    try:
-        conf_path = Path("/etc/hookprobe/fortress.conf")
-        if conf_path.exists():
-            for line in conf_path.read_text().split("\n"):
-                line = line.strip()
-                if line.startswith("OPENROUTER_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
-    except Exception:
-        pass
+    # 2. Product-agnostic config path
+    conf_env = os.environ.get("AEGIS_CONF_PATH", "")
+    if conf_env:
+        key = _read_key_from_conf(conf_env)
+        if key:
+            return key
 
-    # 3. Dedicated secrets file
+    # 3. Fortress config file (backward compat)
+    key = _read_key_from_conf("/etc/hookprobe/fortress.conf")
+    if key:
+        return key
+
+    # 4. Dedicated secrets file
     try:
         key_path = Path("/etc/hookprobe/secrets/openrouter_api_key")
         if key_path.exists():
@@ -78,6 +82,20 @@ def get_api_key() -> str:
     except Exception:
         pass
 
+    return ""
+
+
+def _read_key_from_conf(conf_path: str) -> str:
+    """Read OPENROUTER_API_KEY from a key=value config file."""
+    try:
+        path = Path(conf_path)
+        if path.exists():
+            for line in path.read_text().split("\n"):
+                line = line.strip()
+                if line.startswith("OPENROUTER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+    except Exception:
+        pass
     return ""
 
 
