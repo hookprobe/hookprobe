@@ -182,7 +182,15 @@
                         </a>
                     </li>
 
-                    <!-- 7. SETTINGS (Admin only) -->
+                    <!-- 7. AEGIS (AI Security Assistant) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('aegis.index') }}" class="nav-link {% if request.endpoint and 'aegis' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-robot"></i>
+                            <p>AEGIS</p>
+                        </a>
+                    </li>
+
+                    <!-- 8. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
                     <li class="nav-item {% if 'settings' in request.endpoint %}menu-open{% endif %}">
