@@ -22,14 +22,11 @@ def _get_client():
     global _aegis_client
     if _aegis_client is None:
         try:
-            from lib.aegis.client import get_aegis_client
+            from core.aegis.client import get_aegis_client
             _aegis_client = get_aegis_client()
         except ImportError:
             try:
-                import sys
-                from pathlib import Path
-                sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
-                from aegis.client import get_aegis_client
+                from lib.aegis.client import get_aegis_client
                 _aegis_client = get_aegis_client()
             except ImportError as e:
                 logger.error(f"AEGIS client not available: {e}")

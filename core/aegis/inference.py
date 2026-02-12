@@ -224,7 +224,7 @@ class NativeInferenceEngine:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://hookprobe.com",
-            "X-Title": "HookProbe Fortress AEGIS",
+            "X-Title": "HookProbe AEGIS",
         }
 
         body = json.dumps(payload).encode("utf-8")

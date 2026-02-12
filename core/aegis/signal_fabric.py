@@ -4,11 +4,15 @@ AEGIS Signal Fabric
 Unified data access layer with caching.
 Aggregates QSecBit, dnsXai, SLA AI, and device data into
 structured summaries for the ORACLE agent.
+
+Paths are configurable via SignalFabricConfig for multi-product use.
+Defaults match Fortress layout for backward compatibility.
 """
 
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import URLError
@@ -21,6 +25,22 @@ logger = logging.getLogger(__name__)
 CACHE_TTL = 15.0  # seconds
 
 
+@dataclass
+class SignalFabricConfig:
+    """Configurable paths and URLs for signal data sources.
+
+    Defaults match the Fortress product layout.
+    Other products (Guardian, Nexus) can override these.
+    """
+    qsecbit_stats_path: str = "/opt/hookprobe/fortress/data/qsecbit_stats.json"
+    devices_path: str = "/opt/hookprobe/fortress/data/devices.json"
+    arp_status_path: str = "/var/lib/hookprobe/arp-status.json"
+    dnsxai_api_url: str = "http://fts-dnsxai:8080/api/stats"
+    dnsxai_stats_path: str = "/opt/hookprobe/fortress/data/dnsxai_stats.json"
+    slaai_path: str = "/run/fortress/slaai-recommendation.json"
+    threats_path: str = "/opt/hookprobe/fortress/data/recent_threats.json"
+
+
 class _CacheEntry:
     __slots__ = ("value", "expires")
 
@@ -30,9 +50,10 @@ class _CacheEntry:
 
 
 class SignalFabric:
-    """Unified data access layer for all Fortress signals."""
+    """Unified data access layer for HookProbe signals."""
 
-    def __init__(self):
+    def __init__(self, config: Optional[SignalFabricConfig] = None):
+        self._config = config or SignalFabricConfig()
         self._cache: Dict[str, _CacheEntry] = {}
 
     def _get_cached(self, key: str) -> Any:
@@ -61,7 +82,7 @@ class SignalFabric:
 
         # Read from agent data file
         try:
-            stats_file = Path("/opt/hookprobe/fortress/data/qsecbit_stats.json")
+            stats_file = Path(self._config.qsecbit_stats_path)
             if stats_file.exists():
                 qs = json.loads(stats_file.read_text())
                 result = {
@@ -93,7 +114,7 @@ class SignalFabric:
 
         # Priority 1: Agent data file
         try:
-            data_file = Path("/opt/hookprobe/fortress/data/devices.json")
+            data_file = Path(self._config.devices_path)
             if data_file.exists():
                 data = json.loads(data_file.read_text())
                 if isinstance(data, dict) and "devices" in data:
@@ -106,7 +127,7 @@ class SignalFabric:
         # Priority 2: ARP status file
         if not devices:
             try:
-                arp_file = Path("/var/lib/hookprobe/arp-status.json")
+                arp_file = Path(self._config.arp_status_path)
                 if arp_file.exists():
                     arp_data = json.loads(arp_file.read_text())
                     for ip, info in arp_data.items():
@@ -159,8 +180,7 @@ class SignalFabric:
 
         # Try dnsXai API (container network)
         try:
-            dnsxai_url = "http://fts-dnsxai:8080/api/stats"
-            req = Request(dnsxai_url, method="GET")
+            req = Request(self._config.dnsxai_api_url, method="GET")
             with urlopen(req, timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 result = {
@@ -172,7 +192,7 @@ class SignalFabric:
         except (URLError, Exception):
             # Fallback to file
             try:
-                dns_file = Path("/opt/hookprobe/fortress/data/dnsxai_stats.json")
+                dns_file = Path(self._config.dnsxai_stats_path)
                 if dns_file.exists():
                     data = json.loads(dns_file.read_text())
                     result["blocked_today"] = data.get("blocked_today", 0)
@@ -199,7 +219,7 @@ class SignalFabric:
         result = {"status": "online", "primary_health": 95, "backup_health": 72}
 
         try:
-            state_file = Path("/run/fortress/slaai-recommendation.json")
+            state_file = Path(self._config.slaai_path)
             if state_file.exists():
                 sla = json.loads(state_file.read_text())
                 primary = sla.get("primary_health", 0.95)
@@ -238,7 +258,7 @@ class SignalFabric:
         threats: List[ThreatSummary] = []
 
         try:
-            threats_file = Path("/opt/hookprobe/fortress/data/recent_threats.json")
+            threats_file = Path(self._config.threats_path)
             if threats_file.exists():
                 raw = json.loads(threats_file.read_text())
                 for t in raw[:50]:  # Limit to 50 for LLM context
@@ -290,9 +310,14 @@ class SignalFabric:
 _fabric: Optional[SignalFabric] = None
 
 
-def get_signal_fabric() -> SignalFabric:
-    """Get or create the global SignalFabric instance."""
+def get_signal_fabric(config: Optional[SignalFabricConfig] = None) -> SignalFabric:
+    """Get or create the global SignalFabric instance.
+
+    Args:
+        config: Optional configuration. Only used when creating
+                the instance for the first time.
+    """
     global _fabric
     if _fabric is None:
-        _fabric = SignalFabric()
+        _fabric = SignalFabric(config)
     return _fabric

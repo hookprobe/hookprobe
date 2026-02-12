@@ -4,6 +4,7 @@ HookProbe Core Intelligence
 The foundation of the HookProbe federated security mesh.
 
 Submodules:
+- aegis: AI-Enhanced Guardian Intelligence System (ORACLE agent)
 - htp: HookProbe Transport Protocol (trust fabric)
 - neuro: Neural Resonance Protocol (living cryptography)
 - qsecbit: Quantified Security Metric (universal resilience)
