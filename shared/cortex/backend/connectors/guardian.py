@@ -128,7 +128,7 @@ class GuardianConnectorConfig(ConnectorConfig):
 
     # Legacy feature flags
     mobile_protection_enabled: bool = True
-    ids_enabled: bool = True          # Suricata/Zeek
+    ids_enabled: bool = True          # NAPSE IDS
     xdp_enabled: bool = True          # XDP/eBPF
 
     # Heartbeat (Guardian is portable, more frequent updates)

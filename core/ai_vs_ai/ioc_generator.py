@@ -1,9 +1,8 @@
 """
 IoC Generator
 
-Generates Indicators of Compromise from LSTM threat predictions,
-Suricata alerts, and Zeek analysis. Creates structured attack
-descriptions for AI consultation.
+Generates Indicators of Compromise from LSTM threat predictions
+and NAPSE alerts. Creates structured attack descriptions for AI consultation.
 
 Author: HookProbe Team
 Version: 1.0.0
@@ -71,30 +70,17 @@ class IoCGenerator:
     """
     Generate IoCs from threat predictions and security events.
 
-    Combines LSTM predictions with Suricata/Zeek analysis to create
+    Combines LSTM predictions with NAPSE alert analysis to create
     comprehensive IoCs for AI consultation and automated response.
     """
 
     def __init__(
         self,
-        suricata_log: Optional[Path] = None,
-        zeek_log_dir: Optional[Path] = None,
         output_dir: Optional[Path] = None
     ):
-        # Convert strings to Path if needed
-        if suricata_log and not isinstance(suricata_log, Path):
-            suricata_log = Path(suricata_log)
-        if zeek_log_dir and not isinstance(zeek_log_dir, Path):
-            zeek_log_dir = Path(zeek_log_dir)
         if output_dir and not isinstance(output_dir, Path):
             output_dir = Path(output_dir)
 
-        self.suricata_log = suricata_log or Path(
-            "/opt/hookprobe/fortress/data/suricata-logs/eve.json"
-        )
-        self.zeek_log_dir = zeek_log_dir or Path(
-            "/opt/hookprobe/fortress/data/zeek-logs/current"
-        )
         self.output_dir = output_dir or Path(
             "/opt/hookprobe/fortress/data/ioc"
         )
@@ -163,12 +149,12 @@ class IoCGenerator:
         self._add_to_cache(ioc)
         return ioc
 
-    def from_suricata_alert(self, alert: Dict[str, Any]) -> Optional[IoC]:
+    def from_ids_alert(self, alert: Dict[str, Any]) -> Optional[IoC]:
         """
-        Generate IoC from Suricata alert.
+        Generate IoC from NAPSE IDS alert.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert (EVE JSON compatible format)
 
         Returns:
             IoC or None if alert is not significant
@@ -179,7 +165,7 @@ class IoCGenerator:
         alert_data = alert.get("alert", {})
         severity_num = alert_data.get("severity", 3)
 
-        # Map Suricata severity (1=high, 2=medium, 3=low)
+        # Map alert severity (1=high, 2=medium, 3=low)
         severity_map = {
             1: ThreatSeverity.HIGH,
             2: ThreatSeverity.MEDIUM,
@@ -192,21 +178,21 @@ class IoCGenerator:
         category = alert_data.get("category", "unknown").lower().replace(" ", "_")
 
         # Map to our attack categories
-        attack_category = self._map_suricata_category(category)
+        attack_category = self._map_alert_category(category)
         mitre = get_mitre_mapping(attack_category)
 
         ioc = IoC(
             ioc_id="",
             ioc_type=IoCType.ATTACK_SIGNATURE,
             value=f"sid:{alert_data.get('signature_id', 0)}",
-            confidence=0.8,  # Suricata signatures are high confidence
+            confidence=0.8,  # IDS signatures are high confidence
             severity=severity,
             attack_category=attack_category,
             attack_description=alert_data.get("signature", "Unknown signature"),
             attack_sequence=[category],
             mitre_tactics=mitre["tactics"],
             mitre_techniques=mitre["techniques"],
-            source_system="suricata",
+            source_system="napse",
             tags=[category, f"sid_{alert_data.get('signature_id')}"],
             raw_evidence={
                 "signature_id": alert_data.get("signature_id"),
@@ -220,12 +206,12 @@ class IoCGenerator:
         self._add_to_cache(ioc)
         return ioc
 
-    def from_zeek_notice(self, notice: Dict[str, Any]) -> Optional[IoC]:
+    def from_notice(self, notice: Dict[str, Any]) -> Optional[IoC]:
         """
-        Generate IoC from Zeek notice.
+        Generate IoC from NAPSE notice.
 
         Args:
-            notice: Zeek notice log entry
+            notice: NAPSE notice event
 
         Returns:
             IoC or None if notice is not significant
@@ -234,7 +220,7 @@ class IoCGenerator:
         if not note_type:
             return None
 
-        # Map Zeek notice types to our categories
+        # Map notice types to our categories
         category_map = {
             "Scan::Port_Scan": "port_scan",
             "Scan::Address_Scan": "address_scan",
@@ -259,7 +245,7 @@ class IoCGenerator:
             attack_sequence=[attack_category],
             mitre_tactics=mitre["tactics"],
             mitre_techniques=mitre["techniques"],
-            source_system="zeek",
+            source_system="napse",
             tags=[note_type.replace("::", "_").lower()],
             raw_evidence={
                 "note": note_type,
@@ -481,8 +467,8 @@ class IoCGenerator:
             return f"{parts[0]}.{parts[1]}.0.0"
         return "0.0.0.0"
 
-    def _map_suricata_category(self, category: str) -> str:
-        """Map Suricata category to our attack categories"""
+    def _map_alert_category(self, category: str) -> str:
+        """Map IDS alert category to our attack categories."""
         category_map = {
             "attempted-recon": "reconnaissance",
             "misc-attack": "dos_attack",

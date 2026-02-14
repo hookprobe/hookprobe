@@ -1,6 +1,6 @@
 """
 AIOCHI MITRE ATT&CK Mapping Table
-Maps Suricata SIDs to MITRE techniques, playbooks, and human-friendly narratives.
+Maps IDS alert SIDs to MITRE techniques, playbooks, and human-friendly narratives.
 
 Philosophy: Small businesses need to understand threats without a security degree.
 A flower shop owner shouldn't need to know what T1486 means.
@@ -13,7 +13,7 @@ Usage:
     info = mapper.get_technique("T1486")
     print(info["owner_friendly"])  # "Someone is trying to lock your files for ransom"
 
-    # Get from Suricata SID
+    # Get from alert SID
     info = mapper.get_by_sid(9000011)
     print(info["playbook_id"])  # "ransomware_airgap"
 """
@@ -37,12 +37,12 @@ class MitreTechnique:
     icon: str  # Emoji for UI
     severity: str  # low, medium, high, critical
     playbook_id: Optional[str] = None
-    suricata_sids: List[int] = None
+    alert_sids: List[int] = None
     indicators: List[str] = None
 
     def __post_init__(self):
-        if self.suricata_sids is None:
-            self.suricata_sids = []
+        if self.alert_sids is None:
+            self.alert_sids = []
         if self.indicators is None:
             self.indicators = []
 
@@ -70,7 +70,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🎣",
         severity="high",
         playbook_id="phish_hook",
-        suricata_sids=[9000051, 9000052, 9000053],
+        alert_sids=[9000051, 9000052, 9000053],
         indicators=["suspicious_email", "fake_login_page", "typosquatting"],
     ),
 
@@ -83,7 +83,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📎",
         severity="high",
         playbook_id="phish_hook",
-        suricata_sids=[9000051],
+        alert_sids=[9000051],
     ),
 
     "T1204": MitreTechnique(
@@ -95,7 +95,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="▶️",
         severity="high",
         playbook_id="phish_hook",
-        suricata_sids=[9000053],
+        alert_sids=[9000053],
     ),
 
     "T1204.002": MitreTechnique(
@@ -107,7 +107,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📁",
         severity="high",
         playbook_id="phish_hook",
-        suricata_sids=[9000053],
+        alert_sids=[9000053],
     ),
 
     # =========================================================================
@@ -123,7 +123,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="💻",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000052],
+        alert_sids=[9000052],
     ),
 
     "T1059.001": MitreTechnique(
@@ -135,7 +135,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="⚡",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000052],
+        alert_sids=[9000052],
     ),
 
     # =========================================================================
@@ -151,7 +151,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔐",
         severity="high",
         playbook_id="brute_force_shield",
-        suricata_sids=[9000044, 9000045, 1000001],  # 1000001 = SSH Brute Force
+        alert_sids=[9000044, 9000045, 1000001],  # 1000001 = SSH Brute Force
     ),
 
     "T1110.001": MitreTechnique(
@@ -163,7 +163,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔑",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000044, 9000045],
+        alert_sids=[9000044, 9000045],
     ),
 
     "T1110.003": MitreTechnique(
@@ -175,7 +175,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🌧️",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000043],
+        alert_sids=[9000043],
     ),
 
     "T1187": MitreTechnique(
@@ -187,7 +187,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🎭",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000041],
+        alert_sids=[9000041],
     ),
 
     "T1558.003": MitreTechnique(
@@ -199,7 +199,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔓",
         severity="critical",
         playbook_id=None,
-        suricata_sids=[9000042],
+        alert_sids=[9000042],
     ),
 
     # =========================================================================
@@ -215,7 +215,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔀",
         severity="high",
         playbook_id="guest_wall",
-        suricata_sids=[9000062, 9000063],
+        alert_sids=[9000062, 9000063],
     ),
 
     "T1021.002": MitreTechnique(
@@ -227,7 +227,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📂",
         severity="high",
         playbook_id="guest_wall",
-        suricata_sids=[9000062],
+        alert_sids=[9000062],
     ),
 
     "T1046": MitreTechnique(
@@ -239,7 +239,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔍",
         severity="medium",
         playbook_id="guest_wall",
-        suricata_sids=[9000061, 9000092, 1000003],  # 1000003 = Internal Port Scan
+        alert_sids=[9000061, 9000092, 1000003],  # 1000003 = Internal Port Scan
     ),
 
     "T1047": MitreTechnique(
@@ -251,7 +251,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🎛️",
         severity="high",
         playbook_id="guest_wall",
-        suricata_sids=[9000063],
+        alert_sids=[9000063],
     ),
 
     "T1016.001": MitreTechnique(
@@ -263,7 +263,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🗺️",
         severity="medium",
         playbook_id="guest_wall",
-        suricata_sids=[9000091],
+        alert_sids=[9000091],
     ),
 
     # =========================================================================
@@ -279,7 +279,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📤",
         severity="critical",
         playbook_id="data_sieve",
-        suricata_sids=[9000004],
+        alert_sids=[9000004],
     ),
 
     "T1048": MitreTechnique(
@@ -291,7 +291,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🕵️",
         severity="critical",
         playbook_id="data_sieve",
-        suricata_sids=[9000031, 9000033, 9000034],
+        alert_sids=[9000031, 9000033, 9000034],
     ),
 
     "T1048.001": MitreTechnique(
@@ -303,7 +303,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🌐",
         severity="critical",
         playbook_id="data_sieve",
-        suricata_sids=[9000033],
+        alert_sids=[9000033],
     ),
 
     "T1048.003": MitreTechnique(
@@ -315,7 +315,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📡",
         severity="critical",
         playbook_id="data_sieve",
-        suricata_sids=[9000031],
+        alert_sids=[9000031],
     ),
 
     "T1567": MitreTechnique(
@@ -327,7 +327,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="☁️",
         severity="high",
         playbook_id="data_sieve",
-        suricata_sids=[9000035, 9000036],
+        alert_sids=[9000035, 9000036],
     ),
 
     "T1567.002": MitreTechnique(
@@ -339,7 +339,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📦",
         severity="high",
         playbook_id="data_sieve",
-        suricata_sids=[9000035, 9000036],
+        alert_sids=[9000035, 9000036],
     ),
 
     "T1132.001": MitreTechnique(
@@ -351,7 +351,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔢",
         severity="high",
         playbook_id="data_sieve",
-        suricata_sids=[9000034],
+        alert_sids=[9000034],
     ),
 
     "T1568.002": MitreTechnique(
@@ -363,7 +363,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🎲",
         severity="critical",
         playbook_id="data_sieve",
-        suricata_sids=[9000032],
+        alert_sids=[9000032],
     ),
 
     # =========================================================================
@@ -379,7 +379,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📞",
         severity="critical",
         playbook_id="ransomware_airgap",
-        suricata_sids=[9000021, 9000022, 9000023, 9000024],
+        alert_sids=[9000021, 9000022, 9000023, 9000024],
     ),
 
     "T1071.001": MitreTechnique(
@@ -391,7 +391,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🌍",
         severity="critical",
         playbook_id="ransomware_airgap",
-        suricata_sids=[9000021, 9000022, 9000023, 9000024, 9000026, 1000005, 1000007],  # 1000005=IoT Beaconing, 1000007=C2 Beaconing
+        alert_sids=[9000021, 9000022, 9000023, 9000024, 9000026, 1000005, 1000007],  # 1000005=IoT Beaconing, 1000007=C2 Beaconing
     ),
 
     "T1071.004": MitreTechnique(
@@ -403,7 +403,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔤",
         severity="critical",
         playbook_id="ransomware_airgap",
-        suricata_sids=[9000025, 1000002, 1000004],  # 1000002=DNS Tunneling, 1000004=DNS Non-Std Port
+        alert_sids=[9000025, 1000002, 1000004],  # 1000002=DNS Tunneling, 1000004=DNS Non-Std Port
     ),
 
     # =========================================================================
@@ -419,7 +419,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🔒",
         severity="critical",
         playbook_id="ransomware_airgap",
-        suricata_sids=[9000011, 9000012, 9000013, 9000014, 9000015, 9000016, 9000017],
+        alert_sids=[9000011, 9000012, 9000013, 9000014, 9000015, 9000016, 9000017],
         indicators=["locked_files", "ransom_note", "bitcoin_demand"],
     ),
 
@@ -432,7 +432,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="⛏️",
         severity="medium",
         playbook_id=None,
-        suricata_sids=[9000081, 9000082, 9000083, 1000006],  # 1000006 = Cryptomining
+        alert_sids=[9000081, 9000082, 9000083, 1000006],  # 1000006 = Cryptomining
     ),
 
     # =========================================================================
@@ -448,7 +448,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="💳",
         severity="critical",
         playbook_id="cashier_guard",
-        suricata_sids=[9000001, 9000002],
+        alert_sids=[9000001, 9000002],
     ),
 
     "T1005": MitreTechnique(
@@ -460,7 +460,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="💾",
         severity="critical",
         playbook_id="cashier_guard",
-        suricata_sids=[9000002],
+        alert_sids=[9000002],
     ),
 
     "T1557.001": MitreTechnique(
@@ -472,7 +472,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="💳",
         severity="critical",
         playbook_id="cashier_guard",
-        suricata_sids=[9000001, 9000003],
+        alert_sids=[9000001, 9000003],
     ),
 
     # =========================================================================
@@ -488,7 +488,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🧹",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000071],
+        alert_sids=[9000071],
     ),
 
     "T1070.001": MitreTechnique(
@@ -500,7 +500,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="📋",
         severity="high",
         playbook_id=None,
-        suricata_sids=[9000071],
+        alert_sids=[9000071],
     ),
 
     "T1562": MitreTechnique(
@@ -512,7 +512,7 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🛡️",
         severity="critical",
         playbook_id=None,
-        suricata_sids=[9000072],
+        alert_sids=[9000072],
     ),
 
     "T1562.001": MitreTechnique(
@@ -524,20 +524,20 @@ MITRE_TECHNIQUES: Dict[str, MitreTechnique] = {
         icon="🚫",
         severity="critical",
         playbook_id=None,
-        suricata_sids=[9000072],
+        alert_sids=[9000072],
     ),
 }
 
 
 # =============================================================================
-# SID TO MITRE MAPPING (Reverse lookup for Suricata alerts)
+# SID TO MITRE MAPPING (Reverse lookup for IDS alerts)
 # =============================================================================
 
 SID_TO_MITRE: Dict[int, str] = {}
 
 # Build reverse mapping
 for mitre_id, technique in MITRE_TECHNIQUES.items():
-    for sid in technique.suricata_sids:
+    for sid in technique.alert_sids:
         SID_TO_MITRE[sid] = mitre_id
 
 
@@ -560,7 +560,7 @@ PLAYBOOK_TO_MITRE: Dict[str, List[str]] = {
 
 class MitreMapper:
     """
-    Maps between Suricata SIDs, MITRE ATT&CK techniques, and playbooks.
+    Maps between IDS alert SIDs, MITRE ATT&CK techniques, and playbooks.
 
     Provides human-friendly descriptions for non-technical users.
     """
@@ -589,10 +589,10 @@ class MitreMapper:
 
     def get_by_sid(self, sid: int) -> Optional[Dict[str, Any]]:
         """
-        Get technique information by Suricata SID.
+        Get technique information by alert SID.
 
         Args:
-            sid: Suricata rule SID
+            sid: IDS rule SID
 
         Returns:
             Technique dictionary or None
@@ -774,7 +774,7 @@ if __name__ == "__main__":
     print(f"\nStatistics:")
     print(f"  Total techniques: {stats['total_techniques']}")
     print(f"  With playbooks: {stats['techniques_with_playbook']}")
-    print(f"  Suricata SIDs mapped: {stats['total_sids_mapped']}")
+    print(f"  Alert SIDs mapped: {stats['total_sids_mapped']}")
     print(f"  Tactics covered: {stats['tactics_covered']}")
     print(f"  Severity distribution: {stats['severity_distribution']}")
 

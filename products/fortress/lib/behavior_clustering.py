@@ -116,7 +116,7 @@ class DeviceBehavior:
     mdns_device_id: Optional[str] = None
     hostname_pattern: Optional[str] = None
 
-    # D2D Affinity features (from Zeek connection graph)
+    # D2D Affinity features (from NAPSE connection graph)
     d2d_affinity_score: float = 0.0    # Overall D2D affinity with peers
     d2d_peer_count: int = 0            # Number of D2D communication peers
     d2d_frequency: float = 0.0         # Normalized connection frequency
@@ -208,7 +208,7 @@ class BehavioralClusteringEngine:
     Uses unsupervised learning to group devices that "breathe together"
     into the same user bubble.
 
-    Enhanced with D2D affinity scoring from Zeek connection graph.
+    Enhanced with D2D affinity scoring from NAPSE connection graph.
     """
 
     # DBSCAN parameters (tuned for device clustering)
@@ -317,7 +317,7 @@ class BehavioralClusteringEngine:
         Enrich device behaviors with D2D affinity data from connection graph.
 
         This is the key integration point between behavioral clustering
-        and D2D network analysis (Zeek conn.log).
+        and D2D network analysis (NAPSE connections).
         """
         if not HAS_D2D:
             logger.debug("D2D module not available, skipping enrichment")

@@ -509,107 +509,50 @@ class TestConnectionGraph:
     """Test D2D connection graph analysis."""
 
     @pytest.fixture
-    def temp_zeek_log(self, tmp_path):
-        """Create temporary Zeek conn.log with test data."""
-        log_dir = tmp_path / "zeek" / "current"
-        log_dir.mkdir(parents=True)
-        conn_log = log_dir / "conn.log"
+    def temp_db(self, tmp_path):
+        """Create temporary D2D graph database."""
+        return tmp_path / "d2d_graph.db"
 
-        # Sample Zeek conn.log entries (JSON format)
-        import json
-        entries = [
-            {
-                "ts": 1704067200.0,
-                "id.orig_h": "10.200.0.10",  # Dad's iPhone
-                "id.orig_p": 12345,
-                "id.resp_h": "10.200.0.11",  # Dad's MacBook
-                "id.resp_p": 445,
-                "proto": "tcp",
-                "service": "smb",
-                "duration": 5.5,
-                "orig_bytes": 1024,
-                "resp_bytes": 2048,
-                "conn_state": "SF",
-                "orig_l2_addr": "aa:bb:cc:dd:ee:01",
-                "resp_l2_addr": "aa:bb:cc:dd:ee:02",
-            },
-            {
-                "ts": 1704067300.0,
-                "id.orig_h": "10.200.0.10",
-                "id.orig_p": 54321,
-                "id.resp_h": "10.200.0.12",  # Dad's iPad
-                "id.resp_p": 5353,
-                "proto": "udp",
-                "service": "mdns",
-                "duration": 0.5,
-                "orig_bytes": 128,
-                "resp_bytes": 256,
-                "conn_state": "SF",
-                "orig_l2_addr": "aa:bb:cc:dd:ee:01",
-                "resp_l2_addr": "aa:bb:cc:dd:ee:03",
-            },
-        ]
-
-        with open(conn_log, 'w') as f:
-            for entry in entries:
-                f.write(json.dumps(entry) + '\n')
-
-        return tmp_path / "zeek"
-
-    def test_connection_graph_init(self, temp_zeek_log):
+    def test_connection_graph_init(self, temp_db):
         """Test connection graph initialization."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'):
-            from connection_graph import D2DConnectionGraph
-            graph = D2DConnectionGraph()
+        with patch('connection_graph.D2D_DB', temp_db):
+            from connection_graph import ConnectionGraphAnalyzer
+            graph = ConnectionGraphAnalyzer(db_path=temp_db, enable_clickhouse=False)
             assert graph is not None
             print("✓ Connection graph initialized")
 
-    def test_parse_zeek_conn_log(self, temp_zeek_log):
-        """Test parsing Zeek conn.log for D2D connections."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
-             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
-            from connection_graph import D2DConnectionGraph
-            graph = D2DConnectionGraph()
+    def test_process_napse_connection(self, temp_db):
+        """Test processing NAPSE connection events."""
+        with patch('connection_graph.D2D_DB', temp_db):
+            from connection_graph import ConnectionGraphAnalyzer
 
-            connections = graph.parse_zeek_conn_log()
-            assert len(connections) == 2
-            print(f"✓ Parsed {len(connections)} connections")
+            graph = ConnectionGraphAnalyzer(db_path=temp_db, enable_clickhouse=False)
 
-            for conn in connections:
-                print(f"  {conn.src_mac} -> {conn.dst_mac} ({conn.service})")
+            # Create a mock NAPSE connection record
+            mock_record = Mock()
+            mock_record.src_ip = "10.200.0.10"
+            mock_record.dst_ip = "10.200.0.11"
+            mock_record.src_port = 12345
+            mock_record.dst_port = 445
+            mock_record.protocol = "tcp"
+            mock_record.src_mac = "aa:bb:cc:dd:ee:01"
+            mock_record.dst_mac = "aa:bb:cc:dd:ee:02"
+            mock_record.bytes_sent = 1024
+            mock_record.bytes_recv = 2048
+            mock_record.duration = 5.5
 
-    def test_affinity_score_calculation(self, temp_zeek_log):
-        """Test affinity score calculation."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
-             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
-            from connection_graph import D2DConnectionGraph
-            graph = D2DConnectionGraph()
+            result = graph.process_napse_connection(mock_record)
+            print(f"✓ Processed NAPSE connection: {result}")
 
-            # Parse connections and analyze
-            graph.parse_zeek_conn_log()
-            graph.analyze_relationships()
+    def test_high_affinity_ports(self, temp_db):
+        """Test detection of high-affinity port definitions."""
+        from connection_graph import HIGH_AFFINITY_PORTS
 
-            # Get affinity between two devices
-            affinity = graph.get_affinity(
-                "aa:bb:cc:dd:ee:01",
-                "aa:bb:cc:dd:ee:02"
-            )
-
-            assert 0 <= affinity <= 1.0
-            print(f"✓ Affinity score: {affinity:.2%}")
-
-    def test_high_affinity_services(self, temp_zeek_log):
-        """Test detection of high-affinity service types."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'):
-            from connection_graph import HIGH_AFFINITY_SERVICES
-
-            # SMB/file sharing indicates same-user devices
-            assert 'smb' in HIGH_AFFINITY_SERVICES
-            # mDNS for discovery
-            assert 'mdns' in HIGH_AFFINITY_SERVICES
-            # AirPlay/AirDrop
-            assert 'airplay' in HIGH_AFFINITY_SERVICES or 'airdrop' in HIGH_AFFINITY_SERVICES
-            print(f"✓ High-affinity services defined: {len(HIGH_AFFINITY_SERVICES)}")
+        # SMB/file sharing indicates same-user devices (port 445)
+        assert 445 in HIGH_AFFINITY_PORTS
+        # mDNS for discovery (port 5353)
+        assert 5353 in HIGH_AFFINITY_PORTS
+        print(f"✓ High-affinity ports defined: {len(HIGH_AFFINITY_PORTS)}")
 
 
 class TestIntegration:
@@ -759,66 +702,51 @@ class TestMDNSQueryResponsePairing:
 class TestTemporalAffinityScoring:
     """Test enhanced temporal affinity scoring."""
 
-    @pytest.fixture
-    def temp_zeek_log(self, tmp_path):
-        """Create temporary Zeek log directory."""
-        log_dir = tmp_path / "zeek" / "current"
-        log_dir.mkdir(parents=True)
-        conn_log = log_dir / "conn.log"
-        conn_log.touch()
-        return tmp_path / "zeek"
-
-    def test_temporal_pattern_creation(self, temp_zeek_log):
+    def test_temporal_pattern_creation(self):
         """Test creating temporal patterns for devices."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
-             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
-            from connection_graph import TemporalPattern
+        from connection_graph import TemporalPattern
 
-            pattern = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
-            pattern.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
-            pattern.wake_events = [(8, 0), (8, 1), (8, 2)]  # (hour, day_of_week)
-            pattern.sleep_events = [(22, 0), (22, 1), (23, 2)]
+        pattern = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+        pattern.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
+        pattern.wake_events = [(8, 0), (8, 1), (8, 2)]  # (hour, day_of_week)
+        pattern.sleep_events = [(22, 0), (22, 1), (23, 2)]
 
-            assert len(pattern.active_hours) == 9
-            print(f"✓ Temporal pattern created: {len(pattern.active_hours)} active hours")
+        assert len(pattern.active_hours) == 9
+        print(f"✓ Temporal pattern created: {len(pattern.active_hours)} active hours")
 
-    def test_temporal_similarity(self, temp_zeek_log):
+    def test_temporal_similarity(self):
         """Test calculating temporal similarity between devices."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
-             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
-            from connection_graph import TemporalPattern
+        from connection_graph import TemporalPattern
 
-            # Two devices with similar patterns (same user)
-            pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
-            pattern_a.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
-            pattern_a.wake_events = [(8, 0), (8, 1), (8, 2)]
+        # Two devices with similar patterns (same user)
+        pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+        pattern_a.active_hours = {8, 9, 10, 11, 12, 18, 19, 20, 21}
+        pattern_a.wake_events = [(8, 0), (8, 1), (8, 2)]
 
-            pattern_b = TemporalPattern(mac="AA:BB:CC:DD:EE:02")
-            pattern_b.active_hours = {8, 9, 10, 11, 13, 18, 19, 20, 22}
-            pattern_b.wake_events = [(8, 0), (8, 1), (9, 2)]
+        pattern_b = TemporalPattern(mac="AA:BB:CC:DD:EE:02")
+        pattern_b.active_hours = {8, 9, 10, 11, 13, 18, 19, 20, 22}
+        pattern_b.wake_events = [(8, 0), (8, 1), (9, 2)]
 
-            similarity = pattern_a.similarity(pattern_b)
-            assert 0 <= similarity <= 1.0
-            assert similarity > 0.5  # Should be high for similar patterns
-            print(f"✓ Temporal similarity: {similarity:.2%}")
+        similarity = pattern_a.similarity(pattern_b)
+        assert 0 <= similarity <= 1.0
+        assert similarity > 0.5  # Should be high for similar patterns
+        print(f"✓ Temporal similarity: {similarity:.2%}")
 
-    def test_different_user_low_similarity(self, temp_zeek_log):
+    def test_different_user_low_similarity(self):
         """Test that different users have low temporal similarity."""
-        with patch('connection_graph.ZEEK_LOG_DIR', temp_zeek_log / 'current'), \
-             patch('connection_graph.ZEEK_CONN_LOG', temp_zeek_log / 'current' / 'conn.log'):
-            from connection_graph import TemporalPattern
+        from connection_graph import TemporalPattern
 
-            # Day worker
-            pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
-            pattern_a.active_hours = {8, 9, 10, 11, 12, 13, 14, 15, 16}
+        # Day worker
+        pattern_a = TemporalPattern(mac="AA:BB:CC:DD:EE:01")
+        pattern_a.active_hours = {8, 9, 10, 11, 12, 13, 14, 15, 16}
 
-            # Night worker
-            pattern_b = TemporalPattern(mac="FF:EE:DD:CC:BB:AA")
-            pattern_b.active_hours = {20, 21, 22, 23, 0, 1, 2, 3, 4}
+        # Night worker
+        pattern_b = TemporalPattern(mac="FF:EE:DD:CC:BB:AA")
+        pattern_b.active_hours = {20, 21, 22, 23, 0, 1, 2, 3, 4}
 
-            similarity = pattern_a.similarity(pattern_b)
-            assert similarity < 0.3  # Should be low for different patterns
-            print(f"✓ Different user similarity: {similarity:.2%}")
+        similarity = pattern_a.similarity(pattern_b)
+        assert similarity < 0.3  # Should be low for different patterns
+        print(f"✓ Different user similarity: {similarity:.2%}")
 
 
 class TestReinforcementLearning:

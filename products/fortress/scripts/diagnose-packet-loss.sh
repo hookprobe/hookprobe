@@ -204,8 +204,8 @@ echo -e "${CYAN}QSecBit Container Logs (last errors):${NC}"
 podman logs fts-qsecbit 2>&1 | grep -i -E "error|warn|drop" | tail -10 || echo "No QSecBit errors"
 
 echo ""
-echo -e "${CYAN}Suricata Container (if running):${NC}"
-podman logs fts-suricata 2>&1 | grep -i -E "error|drop|overflow" | tail -5 || echo "Suricata not running or no errors"
+echo -e "${CYAN}NAPSE IDS (if running):${NC}"
+ls -la /var/log/napse/*.json 2>/dev/null | tail -5 || echo "NAPSE not running or no logs"
 
 echo ""
 echo -e "${CYAN}dnsXai Container:${NC}"

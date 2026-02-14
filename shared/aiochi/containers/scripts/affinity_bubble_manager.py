@@ -11,7 +11,7 @@ This runs inside the aiochi-bubble container and exposes bubbles via REST API
 for consumption by fts-web (device coloring).
 
 Architecture:
-    Zeek logs -> Event Detection -> Affinity Scoring -> Bubble Formation -> REST API
+    NAPSE events -> Event Detection -> Affinity Scoring -> Bubble Formation -> REST API
 """
 
 import json

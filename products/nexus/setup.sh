@@ -848,7 +848,7 @@ class QSecBitNexusAgent:
 
         # Threat detection
         try:
-            alert_file = Path("/var/log/suricata/fast.log")
+            alert_file = Path("/var/log/napse/alerts.log")
             if alert_file.exists():
                 with open(alert_file, 'r') as f:
                     alerts = len(f.readlines())

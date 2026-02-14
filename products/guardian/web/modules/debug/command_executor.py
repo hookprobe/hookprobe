@@ -330,7 +330,7 @@ COMMAND_WHITELIST: Dict[str, CommandSpec] = {
 ALLOWED_FILE_PATHS = [
     '/var/log/',
     '/var/log/hookprobe/',
-    '/var/log/suricata/',
+    '/var/log/napse/',
     '/var/log/nginx/',
     '/opt/hookprobe/logs/',
     '/tmp/guardian-',

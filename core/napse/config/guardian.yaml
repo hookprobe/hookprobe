@@ -1,0 +1,60 @@
+# NAPSE Guardian Tier Configuration (1.5GB RAM)
+# Core parsers + basic ML
+
+napse:
+  tier: "guardian"
+
+  kernel:
+    xdp_mode: "auto"
+    rate_limit_pps: 1000
+    blocked_ips_max: 16384
+    flow_table_size: 16384
+    ringbuf_size_mb: 1
+    af_xdp:
+      enabled: true
+      umem_frames: 4096
+
+  engine:
+    connection_table_size: 16384
+    connection_timeout_s: 120
+    max_concurrent_flows: 50000
+
+    parsers:
+      tcp: true
+      dns: true
+      http: true
+      tls: true
+      dhcp: true
+      ssh: true
+      mdns: true
+      ssdp: true
+      smtp: false
+      smb: false
+      mqtt: false
+      modbus: false
+      dnp3: false
+      quic: true
+      rdp: false
+      ftp: false
+
+    matcher:
+      enabled: true
+      bloom_filter_size: 524288
+
+    ml:
+      enabled: true
+      inference_budget_us: 50
+
+  synthesis:
+    qsecbit_feed:
+      enabled: true
+    aegis_bridge:
+      enabled: true
+    bubble_feed:
+      enabled: false
+    clickhouse:
+      enabled: false
+    metrics:
+      enabled: true
+    notices:
+      enabled: true

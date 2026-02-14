@@ -656,7 +656,7 @@ cleanup_legacy_wifi_bridge() {
 # Creates an OVS mirror port that receives a copy of ALL traffic.
 # This is the PROPER way to capture traffic on an OVS bridge.
 #
-# IMPORTANT: IDS/NSM tools (Suricata, Zeek) should capture from
+# IMPORTANT: IDS/NSM tools (NAPSE) should capture from
 # FTS-mirror, NOT directly from FTS. Direct AF_PACKET capture on
 # an OVS bridge causes:
 #   1. Packet loss (competes with OVS datapath)
@@ -738,7 +738,7 @@ setup_traffic_mirror() {
 # ============================================================
 #
 # Creates a separate capture interface for WAN traffic using Linux TC.
-# This enables AIOCHI (Suricata/Zeek) to monitor:
+# This enables AIOCHI (NAPSE) to monitor:
 #   - Pre-NAT incoming traffic (original source IPs)
 #   - Attacks targeting the router itself
 #   - WAN failover traffic and health checks
@@ -968,7 +968,7 @@ setup_wan_mirror() {
         state=$(ip link show "$wan_mirror_iface" 2>/dev/null | grep -oE "state \w+" | awk '{print $2}')
         if [ "$state" = "UNKNOWN" ] || [ "$state" = "UP" ]; then
             log_success "WAN mirror interface ready: $wan_mirror_iface"
-            log_info "  AIOCHI Suricata/Zeek can capture from: $wan_mirror_iface"
+            log_info "  AIOCHI NAPSE can capture from: $wan_mirror_iface"
             log_info "  Mirrored interfaces:$mirrored_interfaces"
             if [ "$dual_path_available" = true ]; then
                 log_info "  Path types: WAN=${wan_path_type:-n/a}, WWAN=${wwan_path_type:-n/a}"
@@ -1151,7 +1151,7 @@ show_status() {
         # Check if mirroring is active
         if ovs-vsctl list mirror 2>/dev/null | grep -q "ids-capture"; then
             echo "  OVS Mirror: ACTIVE (ids-capture)"
-            echo "  Suricata/Zeek should use: CAPTURE_INTERFACE=FTS-mirror"
+            echo "  NAPSE should use: CAPTURE_INTERFACE=FTS-mirror"
         else
             echo -e "  ${YELLOW}OVS Mirror: NOT CONFIGURED${NC}"
             echo "  Run: ./ovs-post-setup.sh setup"
@@ -1346,7 +1346,7 @@ main() {
             # Allows full OVS control over WiFi traffic including device-to-device
             cleanup_legacy_wifi_bridge || log_warn "WiFi cleanup had issues (non-fatal)"
 
-            # Traffic mirror for IDS/NSM capture (AIOCHI Suricata/Zeek)
+            # Traffic mirror for IDS/NSM capture (AIOCHI NAPSE)
             # Creates FTS-mirror port - proper way to capture without packet loss
             setup_traffic_mirror || log_warn "Traffic mirror setup had issues (non-fatal)"
 

@@ -196,7 +196,7 @@ class PlaybookEngine:
         Match an alert to a playbook.
 
         Args:
-            alert: Suricata EVE JSON alert or similar
+            alert: IDS alert or similar
 
         Returns:
             PlaybookMatch if a playbook matches, None otherwise
@@ -260,7 +260,7 @@ class PlaybookEngine:
             confidence = 0.0
             details: Dict[str, Any] = {}
 
-            if trigger_type == "suricata_signature":
+            if trigger_type == "ids_signature":
                 patterns = trigger.get("patterns", [])
                 for pattern in patterns:
                     if pattern.lower() in signature.lower():

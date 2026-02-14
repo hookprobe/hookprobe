@@ -3,11 +3,11 @@
 AIOCHI Bubble Manager Entrypoint
 
 This is the main entry point for the aiochi-bubble container.
-It runs the D2D communication tracking using Zeek logs.
+It runs the D2D communication tracking using the NAPSE event bus.
 
 Key features:
-- Reads mDNS from Zeek dns.log (ecosystem detection)
-- Reads conn.log for D2D communication patterns
+- Reads mDNS from NAPSE event bus (ecosystem detection)
+- Reads connection events from NAPSE for D2D communication patterns
 - Exposes REST API for fts-web to get device communication colors
 - Bubbles are MANUAL (created by users in fts-web)
 - D2D data helps users see which devices communicate (for bubble decisions)
@@ -16,7 +16,6 @@ Usage:
     python3 bubble_entrypoint.py
 """
 
-import asyncio
 import logging
 import os
 import signal
@@ -25,7 +24,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 
 # Flask for health endpoint
 from flask import Flask, jsonify, request
@@ -44,6 +42,7 @@ app = Flask(__name__)
 _health_status = {
     "status": "starting",
     "started_at": datetime.now().isoformat(),
+    "ids_engine": "napse",
     "mdns_events": 0,
     "d2d_connections": 0,
     "last_event": None,
@@ -61,8 +60,7 @@ def status():
     """Detailed status endpoint."""
     return jsonify({
         **_health_status,
-        "zeek_dns_log": os.environ.get("ZEEK_DNS_LOG", "/opt/zeek/logs/dns.log"),
-        "zeek_conn_log": os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/conn.log"),
+        "engine": "napse",
     })
 
 
@@ -196,78 +194,51 @@ def run_health_server():
     app.run(host="0.0.0.0", port=8070, threaded=True, use_reloader=False)
 
 
-def watch_zeek_logs():
-    """Watch Zeek logs for mDNS events (ecosystem detection)."""
-    # Import parser
-    try:
-        from shared.aiochi.bubble.zeek_mdns_parser import ZeekMDNSParser
-    except ImportError:
-        # Fallback to direct import
-        sys.path.insert(0, "/opt/hookprobe/shared/aiochi/bubble")
-        from zeek_mdns_parser import ZeekMDNSParser
+def watch_napse_mdns():
+    """Watch NAPSE event bus for mDNS events (ecosystem detection)."""
+    from core.napse.synthesis.bubble_feed import BubbleFeed
+    from shared.aiochi.bubble.mdns_parser import MDNSParser
 
-    dns_log = os.environ.get("ZEEK_DNS_LOG", "/opt/zeek/logs/current/dns.log")
-    logger.info(f"Starting mDNS watcher on: {dns_log}")
+    logger.info("Starting mDNS watcher via NAPSE event bus")
 
-    parser = ZeekMDNSParser(dns_log)
+    parser = MDNSParser()
+    tracker = get_d2d_tracker()
     _health_status["status"] = "running"
 
-    # Get D2D tracker
-    tracker = get_d2d_tracker()
+    def handle_mdns(record):
+        """Callback for NAPSE MDNSRecord events."""
+        event = parser.process_napse_mdns(record)
+        if not event:
+            return
 
-    # Check if Zeek logs exist
-    if not Path(dns_log).exists():
-        logger.warning(f"Zeek dns.log not found at {dns_log} - waiting for Zeek to start")
-        _health_status["status"] = "waiting_for_zeek"
+        _health_status["mdns_events"] += 1
+        _health_status["last_event"] = event.to_dict()
 
-    try:
-        for event in parser.watch(poll_interval=2.0):
-            _health_status["mdns_events"] += 1
-            _health_status["last_event"] = event.to_dict()
-            _health_status["status"] = "running"
+        logger.debug(
+            f"mDNS: [{event.ecosystem}] {event.source_ip} -> {event.query}"
+        )
 
-            logger.debug(
-                f"mDNS: [{event.ecosystem}] {event.source_ip} -> {event.query}"
-            )
+        # Feed to D2D tracker for ecosystem detection
+        if tracker:
+            try:
+                tracker.record_mdns_event(
+                    source_mac=event.source_mac,
+                    source_ip=event.source_ip,
+                    query=event.query,
+                    ecosystem=event.ecosystem,
+                    hostname=getattr(event, 'hostname', ''),
+                )
+            except Exception as e:
+                logger.debug(f"Could not record mDNS event: {e}")
 
-            # Feed to D2D tracker for ecosystem detection
-            if tracker:
-                try:
-                    tracker.record_mdns_event(
-                        source_mac=event.source_mac,
-                        source_ip=event.source_ip,
-                        query=event.query,
-                        ecosystem=event.ecosystem,
-                        hostname=getattr(event, 'hostname', ''),
-                    )
-                except Exception as e:
-                    logger.debug(f"Could not record mDNS event: {e}")
-
-    except Exception as e:
-        logger.error(f"Error in mDNS watcher: {e}")
-        _health_status["status"] = f"error: {e}"
+    return handle_mdns
 
 
-def watch_connections():
-    """Watch Zeek conn.log for device-to-device connections."""
-    import json
+def watch_napse_connections():
+    """Watch NAPSE event bus for D2D connection events."""
+    from shared.aiochi.bubble.connection_graph import ConnectionGraphAnalyzer
 
-    conn_log = Path(os.environ.get("ZEEK_CONN_LOG", "/opt/zeek/logs/current/conn.log"))
-    logger.info(f"Starting connection watcher on: {conn_log}")
-
-    # Get D2D tracker
-    tracker = get_d2d_tracker()
-    if tracker:
-        logger.info("D2D tracker ready for connection tracking")
-    else:
-        logger.warning("D2D tracker not available - connection counts only")
-
-    # Track file position and inode for rotation handling
-    position = 0
-    last_inode = None
-    conn_fields = None  # TSV field names
-    save_interval = 60  # Save state every 60 seconds
-    last_save = time.time()
+    logger.info("Starting connection watcher via NAPSE event bus")
 
     # Local network prefixes for D2D detection
     LOCAL_PREFIXES = ('10.', '172.16.', '172.17.', '172.18.', '172.19.',
@@ -275,98 +246,78 @@ def watch_connections():
                       '172.25.', '172.26.', '172.27.', '172.28.', '172.29.',
                       '172.30.', '172.31.', '192.168.')
 
-    def is_local_ip(ip: str) -> bool:
-        """Check if IP is in local network range."""
-        return ip and any(ip.startswith(p) for p in LOCAL_PREFIXES)
+    tracker = get_d2d_tracker()
 
-    def parse_conn_line(line: str, fields: list) -> dict:
-        """Parse TSV conn.log line into dict."""
-        if not fields:
-            return {}
-        values = line.split('\t')
-        if len(values) != len(fields):
-            return {}
-        return {fields[i]: values[i] for i in range(len(fields))}
+    def handle_connection(record):
+        """Callback for NAPSE ConnectionRecord events."""
+        src_ip = getattr(record, 'id_orig_h', '')
+        dst_ip = getattr(record, 'id_resp_h', '')
 
+        # Only track D2D connections (both IPs are local)
+        if not (src_ip and any(src_ip.startswith(p) for p in LOCAL_PREFIXES)):
+            return
+        if not (dst_ip and any(dst_ip.startswith(p) for p in LOCAL_PREFIXES)):
+            return
+
+        _health_status['d2d_connections'] += 1
+
+        service = getattr(record, 'service', '') or ''
+        proto = getattr(record, 'proto', '') or ''
+        logger.debug(f"D2D: {src_ip} -> {dst_ip} ({service or proto})")
+
+        # Feed to D2D tracker
+        if tracker:
+            try:
+                tracker.record_d2d_connection(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    service=service or proto,
+                )
+            except Exception as e:
+                logger.debug(f"Could not record D2D: {e}")
+
+    return handle_connection
+
+
+def run_napse_event_loop():
+    """
+    Connect to NAPSE event bus and run the event loop.
+
+    Registers BubbleFeed with callbacks for mDNS and connection events.
+    """
+    from core.napse.synthesis.event_bus import NapseEventBus
+    from core.napse.synthesis.bubble_feed import BubbleFeed
+
+    logger.info("Connecting to NAPSE event bus...")
+
+    # Create callbacks
+    mdns_handler = watch_napse_mdns()
+    conn_handler = watch_napse_connections()
+
+    # Create BubbleFeed and register with event bus
+    feed = BubbleFeed(
+        connection_callback=conn_handler,
+        mdns_callback=mdns_handler,
+    )
+
+    # Get or create event bus instance
+    event_bus = NapseEventBus.get_instance()
+    feed.register(event_bus)
+
+    logger.info("BubbleFeed registered with NAPSE event bus")
+    _health_status["status"] = "running"
+
+    # Keep the thread alive — events arrive via callbacks
     while True:
-        try:
-            if not conn_log.exists():
-                time.sleep(5)
-                continue
+        time.sleep(60)
 
-            # Check for log rotation (inode change)
-            current_inode = conn_log.stat().st_ino
-            if last_inode is not None and current_inode != last_inode:
-                logger.info("conn.log rotated, resetting position")
-                position = 0
-                conn_fields = None
-            last_inode = current_inode
-
-            with open(conn_log) as f:
-                f.seek(position)
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    # Parse TSV header
-                    if line.startswith('#fields'):
-                        conn_fields = line.split('\t')[1:]  # Skip '#fields'
-                        logger.info(f"conn.log fields: {len(conn_fields)} columns")
-                        continue
-                    elif line.startswith('#'):
-                        continue
-
-                    # Parse record (JSON or TSV)
-                    conn = {}
-                    if line.startswith('{'):
-                        try:
-                            conn = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                    else:
-                        conn = parse_conn_line(line, conn_fields)
-                        if not conn:
-                            continue
-
-                    # Handle both field name formats
-                    src_ip = conn.get('id.orig_h', '')
-                    dst_ip = conn.get('id.resp_h', '')
-                    proto = conn.get('proto', '')
-                    service = conn.get('service', '')
-
-                    # Handle Zeek unset values
-                    if service == '-':
-                        service = ''
-
-                    # Detect D2D connections (both IPs are local)
-                    if is_local_ip(src_ip) and is_local_ip(dst_ip):
-                        _health_status['d2d_connections'] += 1
-
-                        logger.debug(f"D2D: {src_ip} -> {dst_ip} ({service or proto})")
-
-                        # Feed to D2D tracker
-                        if tracker:
-                            try:
-                                tracker.record_d2d_connection(
-                                    src_ip=src_ip,
-                                    dst_ip=dst_ip,
-                                    service=service or proto,
-                                )
-                            except Exception as e:
-                                logger.debug(f"Could not record D2D: {e}")
-
-                position = f.tell()
-
-            # Periodically save state
-            if tracker and time.time() - last_save > save_interval:
+        # Periodic state save
+        tracker = get_d2d_tracker()
+        if tracker:
+            try:
                 tracker.save_state()
-                last_save = time.time()
-
-        except Exception as e:
-            logger.error(f"Error in connection watcher: {e}")
-
-        time.sleep(2)
+            except Exception as e:
+                logger.debug(f"Could not save state: {e}")
 
 
 def main():
@@ -374,9 +325,7 @@ def main():
     logger.info("=" * 60)
     logger.info("AIOCHI Bubble Manager Starting")
     logger.info("=" * 60)
-    logger.info(f"Zeek DNS log: {os.environ.get('ZEEK_DNS_LOG')}")
-    logger.info(f"Zeek Conn log: {os.environ.get('ZEEK_CONN_LOG')}")
-    logger.info("Using Zeek logs (no host network required)")
+    logger.info("IDS Engine: NAPSE (event bus)")
     logger.info("=" * 60)
 
     # Handle shutdown
@@ -394,21 +343,21 @@ def main():
     health_thread.start()
     logger.info("Health endpoint available at http://0.0.0.0:8070/health")
 
-    # Start watchers
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        mdns_future = executor.submit(watch_zeek_logs)
-        conn_future = executor.submit(watch_connections)
+    # Start NAPSE event loop
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        napse_future = executor.submit(run_napse_event_loop)
 
         # Wait for shutdown
         while not shutdown_event.is_set():
             time.sleep(1)
 
-            # Check if watchers died
-            if mdns_future.done():
-                exc = mdns_future.exception()
+            # Check if event loop died
+            if napse_future.done():
+                exc = napse_future.exception()
                 if exc:
-                    logger.error(f"mDNS watcher died: {exc}")
-                    mdns_future = executor.submit(watch_zeek_logs)
+                    logger.error(f"NAPSE event loop died: {exc}")
+                    _health_status["status"] = f"error: {exc}"
+                    napse_future = executor.submit(run_napse_event_loop)
 
     logger.info("AIOCHI Bubble Manager stopped")
 

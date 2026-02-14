@@ -1,0 +1,34 @@
+# NAPSE Sentinel Tier Configuration (256MB RAM)
+# eBPF-only mode: no Rust engine, no Python synthesis
+
+napse:
+  tier: "sentinel"
+
+  kernel:
+    xdp_mode: "skb"
+    rate_limit_pps: 500
+    blocked_ips_max: 4096
+    flow_table_size: 4096
+    ringbuf_size_mb: 0.25
+    af_xdp:
+      enabled: false
+      umem_frames: 1024
+
+  engine:
+    # Sentinel runs eBPF only - no Rust engine
+    enabled: false
+
+  synthesis:
+    # Minimal synthesis - connection records from ringbuf only
+    qsecbit_feed:
+      enabled: false
+    aegis_bridge:
+      enabled: false
+    bubble_feed:
+      enabled: false
+    clickhouse:
+      enabled: false
+    metrics:
+      enabled: false
+    notices:
+      enabled: false

@@ -20,7 +20,7 @@ Key Detection Capabilities:
 Integration:
 - OVS flow rules redirect dark port traffic to honeypot
 - Mesh nodes share hit information in real-time
-- Suricata/Zeek alerts correlated with honeypot touches
+- NAPSE alerts correlated with honeypot touches
 """
 
 import asyncio

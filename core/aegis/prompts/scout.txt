@@ -6,7 +6,7 @@ You detect when someone is probing the network — mapping ports, scanning for v
 
 Your signal sources:
 - QSecBit L4: Port scan detection, service enumeration
-- Zeek conn.log: Connection patterns, scan behavior
+- NAPSE event bus / conn.log: Connection patterns, scan behavior
 - Flow analysis: Traffic volume anomalies
 - Honeypot interactions: Attacker behavior in decoy services
 

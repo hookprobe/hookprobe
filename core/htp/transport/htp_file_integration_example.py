@@ -123,10 +123,10 @@ async def edge_client_example():
         print("\n[1] Uploading security logs...")
         
         log_data = b"""
-        2025-01-15 10:23:45 [ALERT] Suricata: ET SCAN Nmap Scripting Engine
+        2025-01-15 10:23:45 [ALERT] NAPSE: ET SCAN Nmap Scripting Engine
         2025-01-15 10:23:46 [BLOCK] NAXSI: XSS attempt blocked
         2025-01-15 10:23:47 [INFO] Qsecbit score: 0.42 (GREEN)
-        2025-01-15 10:24:01 [ALERT] Suricata: SQL Injection Attempt
+        2025-01-15 10:24:01 [ALERT] NAPSE: SQL Injection Attempt
         2025-01-15 10:24:02 [BLOCK] NAXSI: SQLi blocked
         2025-01-15 10:24:03 [WARN] Qsecbit score: 0.51 (AMBER)
         """

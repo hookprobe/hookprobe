@@ -5,7 +5,7 @@ Deep Packet Inspection (DPI) Analyzer for dnsXai
 Extends dnsXai with TLS intelligence:
 - TLS SNI (Server Name Indication) extraction
 - JA3/JA3S fingerprinting for client/server identification
-- Zeek integration for TLS metadata
+- NAPSE integration for TLS metadata
 - Malicious TLS pattern detection
 
 Author: HookProbe Team
@@ -287,28 +287,28 @@ class TLSParser:
 
 
 # =============================================================================
-# Zeek Log Integration
+# TLS Log Integration
 # =============================================================================
 
-class ZeekTLSAnalyzer:
+class TLSLogAnalyzer:
     """
-    Analyze Zeek TLS logs for SNI and JA3 data.
+    Analyze TLS logs for SNI and JA3 data.
 
-    Zeek logs TLS connections with:
+    Parses TLS connection logs with:
     - ssl.log: SNI, certificate info, validation status
     - conn.log: Connection metadata
-    - ja3.log: JA3 fingerprints (if zeek-ja3 package installed)
+    - ja3.log: JA3 fingerprints
     """
 
-    def __init__(self, zeek_log_dir: str = "/var/log/zeek/current"):
-        self.log_dir = Path(zeek_log_dir)
+    def __init__(self, log_dir: str = "/var/log/napse/tls"):
+        self.log_dir = Path(log_dir)
         self.tls_cache: Dict[str, TLSConnectionInfo] = {}
         self.ja3_stats: Dict[str, int] = defaultdict(int)  # JA3 -> count
         self.sni_stats: Dict[str, int] = defaultdict(int)  # SNI -> count
 
     def parse_ssl_log(self, limit: int = 500) -> List[TLSConnectionInfo]:
         """
-        Parse Zeek ssl.log for TLS connection info.
+        Parse ssl.log for TLS connection info.
 
         Returns list of TLSConnectionInfo objects.
         """
@@ -370,9 +370,7 @@ class ZeekTLSAnalyzer:
 
     def parse_ja3_log(self, limit: int = 500) -> List[Dict]:
         """
-        Parse Zeek ja3.log for JA3 fingerprints.
-
-        Requires zeek-ja3 package: zeek-package install ja3
+        Parse ja3.log for JA3 fingerprints.
         """
         ja3_log = self.log_dir / "ja3.log"
         if not ja3_log.exists():
@@ -499,17 +497,17 @@ class DPIAnalyzer:
 
     Integrates:
     - TLS packet parsing for SNI/JA3
-    - Zeek log analysis
+    - TLS log analysis
     - Malicious pattern detection
     - Integration with dnsXai for domain correlation
     """
 
     def __init__(
         self,
-        zeek_log_dir: str = "/var/log/zeek/current",
+        tls_log_dir: str = "/var/log/napse/tls",
         data_dir: str = "/opt/hookprobe/shared/dnsXai/data"
     ):
-        self.zeek_analyzer = ZeekTLSAnalyzer(zeek_log_dir)
+        self.tls_analyzer = TLSLogAnalyzer(tls_log_dir)
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -572,15 +570,15 @@ class DPIAnalyzer:
 
         return conn
 
-    def analyze_zeek_logs(self) -> Dict[str, Any]:
+    def analyze_tls_logs(self) -> Dict[str, Any]:
         """
-        Analyze Zeek logs for TLS intelligence.
+        Analyze TLS logs for intelligence.
 
         Returns:
             Dictionary with analysis results
         """
-        connections = self.zeek_analyzer.parse_ssl_log()
-        ja3_data = self.zeek_analyzer.parse_ja3_log()
+        connections = self.tls_analyzer.parse_ssl_log()
+        ja3_data = self.tls_analyzer.parse_ja3_log()
 
         # Count threats
         threats = [c for c in connections if c.threat_category != ThreatCategory.LEGITIMATE]
@@ -594,7 +592,7 @@ class DPIAnalyzer:
             },
             'ja3_fingerprints': len(ja3_data),
             'malicious_ja3': sum(1 for j in ja3_data if j.get('malicious')),
-            'statistics': self.zeek_analyzer.get_statistics(),
+            'statistics': self.tls_analyzer.get_statistics(),
         }
 
     def get_sni_for_domain(self, domain: str) -> List[str]:
@@ -617,7 +615,7 @@ class DPIAnalyzer:
             **self.stats,
             'unique_snis': len(self.sni_cache),
             'unique_ja3': len(self.ja3_cache),
-            'zeek_stats': self.zeek_analyzer.get_statistics(),
+            'tls_stats': self.tls_analyzer.get_statistics(),
         }
 
     def save_state(self):
@@ -648,10 +646,10 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='DPI Analyzer for TLS Intelligence')
-    parser.add_argument('--zeek-dir', default='/var/log/zeek/current',
-                       help='Zeek log directory')
+    parser.add_argument('--tls-dir', default='/var/log/napse/tls',
+                       help='TLS log directory')
     parser.add_argument('--analyze', action='store_true',
-                       help='Analyze Zeek logs')
+                       help='Analyze TLS logs')
     parser.add_argument('--check-ja3', metavar='HASH',
                        help='Check if JA3 hash is malicious')
     parser.add_argument('--stats', action='store_true',
@@ -659,7 +657,7 @@ def main():
 
     args = parser.parse_args()
 
-    analyzer = DPIAnalyzer(zeek_log_dir=args.zeek_dir)
+    analyzer = DPIAnalyzer(tls_log_dir=args.tls_dir)
 
     if args.check_ja3:
         is_mal, name = analyzer.is_ja3_malicious(args.check_ja3)
@@ -669,7 +667,7 @@ def main():
             print(f"Unknown: {args.check_ja3}")
 
     elif args.analyze:
-        results = analyzer.analyze_zeek_logs()
+        results = analyzer.analyze_tls_logs()
         print(json.dumps(results, indent=2))
 
     elif args.stats:

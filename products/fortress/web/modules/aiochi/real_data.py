@@ -1,8 +1,10 @@
 """
 AIOCHI Real Data Sources
-Provides access to real data from dnsXai, Zeek, Suricata, and system metrics.
+Provides access to real data from dnsXai, NAPSE IDS engine, and system metrics.
 
-This module replaces demo data with live data integration.
+NAPSE writes directly to ClickHouse for analytics and uses an event bus
+for real-time processing. Legacy log file parsing is removed in favor of
+the ClickHouse path.
 """
 
 import json
@@ -30,10 +32,6 @@ CLICKHOUSE_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
 CLICKHOUSE_USER = os.environ.get('CLICKHOUSE_USER', 'aiochi')
 CLICKHOUSE_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', 'aiochi_secure_password')
 CLICKHOUSE_DB = os.environ.get('CLICKHOUSE_DB', 'aiochi')
-
-# Log paths (fallback - only accessible if volumes mounted)
-ZEEK_LOG_DIR = Path('/opt/zeek/logs/current')
-SURICATA_EVE_LOG = Path('/var/log/suricata/eve.json')
 
 # System paths
 DEVICES_JSON = Path('/opt/hookprobe/fortress/data/devices.json')
@@ -169,21 +167,20 @@ def _query_clickhouse(query: str) -> List[Dict]:
 
 
 # ============================================================================
-# ZEEK DATA FROM CLICKHOUSE
+# CONNECTION & DNS DATA FROM CLICKHOUSE
 # ============================================================================
 
-def get_zeek_conn_events(limit: int = 50) -> List[Dict]:
+def get_connection_events(limit: int = 50) -> List[Dict]:
     """
-    Get recent connection events from ClickHouse (zeek_connections table).
+    Get recent connection events from ClickHouse (napse_connections table).
 
     Returns:
         List of connection event dicts.
     """
-    cached = _get_cached('zeek_conn', EVENT_CACHE_TTL)
+    cached = _get_cached('connections', EVENT_CACHE_TTL)
     if cached:
         return cached[:limit]
 
-    # Try ClickHouse first
     query = f"""
         SELECT
             ts as timestamp,
@@ -201,62 +198,21 @@ def get_zeek_conn_events(limit: int = 50) -> List[Dict]:
     """
     results = _query_clickhouse(query)
     if results:
-        _set_cached('zeek_conn', results)
-        return results
-
-    # Fallback to log file if accessible
-    conn_log = ZEEK_LOG_DIR / 'conn.log'
-    if not conn_log.exists():
-        return []
-
-    try:
-        result = subprocess.run(
-            ['tail', '-n', str(limit * 2), str(conn_log)],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return []
-
-        events = []
-        for line in result.stdout.strip().split('\n'):
-            if line.startswith('#') or not line.strip():
-                continue
-            try:
-                fields = line.split('\t')
-                if len(fields) >= 10:
-                    events.append({
-                        'timestamp': fields[0],
-                        'src_ip': fields[2],
-                        'src_port': fields[3],
-                        'dst_ip': fields[4],
-                        'dst_port': fields[5],
-                        'proto': fields[6],
-                        'service': fields[7] if len(fields) > 7 else '',
-                        'duration': fields[8] if len(fields) > 8 else '',
-                        'bytes': fields[9] if len(fields) > 9 else '',
-                    })
-            except (IndexError, ValueError):
-                continue
-
-        _set_cached('zeek_conn', events[:limit])
-        return events[:limit]
-    except Exception as e:
-        logger.debug(f"Could not parse Zeek conn.log: {e}")
-        return []
+        _set_cached('connections', results)
+    return results or []
 
 
-def get_zeek_dns_events(limit: int = 50) -> List[Dict]:
+def get_dns_events(limit: int = 50) -> List[Dict]:
     """
-    Get recent DNS queries from ClickHouse (zeek_dns table).
+    Get recent DNS queries from ClickHouse (napse_dns table).
 
     Returns:
         List of DNS event dicts.
     """
-    cached = _get_cached('zeek_dns', EVENT_CACHE_TTL)
+    cached = _get_cached('dns_events', EVENT_CACHE_TTL)
     if cached:
         return cached[:limit]
 
-    # Try ClickHouse first
     query = f"""
         SELECT
             ts as timestamp,
@@ -270,62 +226,28 @@ def get_zeek_dns_events(limit: int = 50) -> List[Dict]:
     """
     results = _query_clickhouse(query)
     if results:
-        _set_cached('zeek_dns', results)
-        return results
-
-    # Fallback to log file if accessible
-    dns_log = ZEEK_LOG_DIR / 'dns.log'
-    if not dns_log.exists():
-        return []
-
-    try:
-        result = subprocess.run(
-            ['tail', '-n', str(limit * 2), str(dns_log)],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return []
-
-        events = []
-        for line in result.stdout.strip().split('\n'):
-            if line.startswith('#') or not line.strip():
-                continue
-            try:
-                fields = line.split('\t')
-                if len(fields) >= 9:
-                    events.append({
-                        'timestamp': fields[0],
-                        'src_ip': fields[2],
-                        'query': fields[9] if len(fields) > 9 else '',
-                        'qtype': fields[13] if len(fields) > 13 else '',
-                        'rcode': fields[15] if len(fields) > 15 else '',
-                    })
-            except (IndexError, ValueError):
-                continue
-
-        _set_cached('zeek_dns', events[:limit])
-        return events[:limit]
-    except Exception as e:
-        logger.debug(f"Could not parse Zeek dns.log: {e}")
-        return []
+        _set_cached('dns_events', results)
+    return results or []
 
 
 # ============================================================================
-# SURICATA DATA FROM CLICKHOUSE
+# NAPSE ALERT DATA FROM CLICKHOUSE
 # ============================================================================
 
-def get_suricata_alerts(limit: int = 50) -> List[Dict]:
+def get_napse_alerts(limit: int = 50) -> List[Dict]:
     """
-    Get recent IDS alerts from ClickHouse (suricata_alerts table).
+    Get recent NAPSE IDS alerts from ClickHouse (suricata_alerts table).
+
+    Note: Table name is still 'suricata_alerts' for ClickHouse schema compatibility.
 
     Returns:
         List of alert dicts with severity, message, etc.
     """
-    cached = _get_cached('suricata_alerts', EVENT_CACHE_TTL)
+    cached = _get_cached('napse_alerts', EVENT_CACHE_TTL)
     if cached:
         return cached[:limit]
 
-    # Try ClickHouse first
+    # Query ClickHouse (NAPSE writes directly to this table)
     query = f"""
         SELECT
             timestamp,
@@ -341,46 +263,11 @@ def get_suricata_alerts(limit: int = 50) -> List[Dict]:
     """
     results = _query_clickhouse(query)
     if results:
-        _set_cached('suricata_alerts', results)
+        _set_cached('napse_alerts', results)
         return results
 
-    # Fallback to log file if accessible
-    if not SURICATA_EVE_LOG.exists():
-        return []
-
-    try:
-        result = subprocess.run(
-            ['tail', '-n', str(limit * 2), str(SURICATA_EVE_LOG)],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return []
-
-        alerts = []
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-                if event.get('event_type') == 'alert':
-                    alert_info = event.get('alert', {})
-                    alerts.append({
-                        'timestamp': event.get('timestamp', ''),
-                        'src_ip': event.get('src_ip', ''),
-                        'dst_ip': event.get('dest_ip', ''),
-                        'signature': alert_info.get('signature', ''),
-                        'severity': alert_info.get('severity', 3),
-                        'category': alert_info.get('category', ''),
-                        'action': alert_info.get('action', ''),
-                    })
-            except json.JSONDecodeError:
-                continue
-
-        _set_cached('suricata_alerts', alerts[:limit])
-        return alerts[:limit]
-    except Exception as e:
-        logger.debug(f"Could not parse Suricata eve.json: {e}")
-        return []
+    # No fallback - NAPSE only writes to ClickHouse
+    return []
 
 
 # ============================================================================
@@ -941,11 +828,11 @@ def get_ambient_state() -> Dict[str, Any]:
     """
     # Get recent data
     dns_stats = get_dnsxai_stats()
-    suricata_alerts = get_suricata_alerts(limit=10)
+    napse_alerts = get_napse_alerts(limit=10)
     system_perf = get_system_performance()
 
     # Count recent high-severity alerts
-    high_severity_alerts = [a for a in suricata_alerts if a.get('severity', 3) <= 2]
+    high_severity_alerts = [a for a in napse_alerts if a.get('severity', 3) <= 2]
     malware_blocked = dns_stats.get('malware_blocked', 0)
 
     # Determine state
@@ -1020,7 +907,7 @@ def generate_privacy_feed(limit: int = 10) -> Dict[str, Any]:
 
     Combines:
     - dnsXai blocked domains
-    - Suricata alerts
+    - NAPSE alerts
     - Device events
     - System status
 
@@ -1066,9 +953,9 @@ def generate_privacy_feed(limit: int = 10) -> Dict[str, Any]:
             'category': 'privacy'
         })
 
-    # Get Suricata alerts
-    suricata_alerts = get_suricata_alerts(limit=5)
-    for alert in suricata_alerts[:2]:
+    # Get NAPSE alerts
+    napse_alerts = get_napse_alerts(limit=5)
+    for alert in napse_alerts[:2]:
         event_id += 1
         severity = alert.get('severity', 3)
         color = 'danger' if severity <= 1 else 'warning' if severity <= 2 else 'info'

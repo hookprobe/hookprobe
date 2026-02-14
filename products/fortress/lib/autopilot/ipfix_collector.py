@@ -2,7 +2,7 @@
 """
 IPFIX Collector - Resource-efficient D2D detection via flow sampling.
 
-Instead of analyzing 100% of packets with Zeek, this module uses OVS IPFIX
+Instead of analyzing 100% of packets, this module uses OVS IPFIX
 sampling to capture flow metadata. We configure OVS to only export discovery
 protocol traffic (mDNS, SSDP) which represents device-to-device "handshakes".
 

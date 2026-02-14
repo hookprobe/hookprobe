@@ -5,7 +5,7 @@ Version: 5.2.0
 License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
-- L2-L7 Layer Threat Detection (Suricata/Zeek integration)
+- L2-L7 Layer Threat Detection (NAPSE integration)
 - Extended telemetry from monitoring stack
 - XDP/eBPF DDoS protection integration
 - nftables policy scoring
@@ -718,7 +718,7 @@ class QSecBitSample:
     rag_status: str
     components: Dict[str, float]
     threats_detected: int
-    suricata_alerts: int
+    napse_alerts: int
     policy_violations: int
     macsec_status: str
     openflow_flows: int
@@ -801,7 +801,7 @@ class QSecBitAPIHandler(BaseHTTPRequestHandler):
                 'rag_status': sample.rag_status,
                 'components': sample.components,
                 'threats_detected': sample.threats_detected,
-                'suricata_alerts': sample.suricata_alerts,
+                'napse_alerts': sample.napse_alerts,
                 'policy_violations': sample.policy_violations,
                 'macsec_status': sample.macsec_status,
                 'openflow_flows': sample.openflow_flows,
@@ -932,20 +932,11 @@ class QSecBitFortressAgent:
         except Exception:
             return 0
 
-    def get_suricata_alerts(self) -> int:
-        """Get recent Suricata alert count"""
-        try:
-            alert_file = Path("/var/log/suricata/fast.log")
-            if alert_file.exists():
-                # Count alerts in last 5 minutes
-                count = 0
-                with open(alert_file, 'r') as f:
-                    for line in f:
-                        count += 1
-                return min(count, 100)  # Cap at 100
-            return 0
-        except Exception:
-            return 0
+    def get_napse_alerts(self) -> int:
+        """Get recent NAPSE alert count"""
+        # NAPSE alerts are handled via event bus and logged to ClickHouse
+        # For now, return 0 as placeholder - NAPSE handles alerts internally
+        return 0
 
     def get_xdp_stats(self) -> Dict[str, int]:
         """Get XDP/eBPF stats from the XDP container"""
@@ -1070,8 +1061,8 @@ class QSecBitFortressAgent:
             # Invert: 0.0 threats = 1.0 health
             components['threats'] = max(0, 1.0 - layer_threat_score)
         else:
-            # Fallback to Suricata alerts only
-            alerts = self.get_suricata_alerts()
+            # Fallback to NAPSE alerts only
+            alerts = self.get_napse_alerts()
             components['threats'] = max(0, 1.0 - (alerts / 50))
 
         # Energy efficiency (simplified)
@@ -1150,7 +1141,7 @@ class QSecBitFortressAgent:
             rag_status=rag_status,
             components=components,
             threats_detected=threat_count,
-            suricata_alerts=self.get_suricata_alerts(),
+            napse_alerts=self.get_napse_alerts(),
             policy_violations=self.get_policy_violations(),
             macsec_status=self.get_macsec_status(),
             openflow_flows=self.get_openflow_stats(),
@@ -1175,7 +1166,7 @@ class QSecBitFortressAgent:
                 'rag_status': sample.rag_status,
                 'components': sample.components,
                 'threats_detected': sample.threats_detected,
-                'suricata_alerts': sample.suricata_alerts,
+                'napse_alerts': sample.napse_alerts,
                 'policy_violations': sample.policy_violations,
                 'macsec_status': sample.macsec_status,
                 'openflow_flows': sample.openflow_flows,

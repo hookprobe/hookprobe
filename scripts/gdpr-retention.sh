@@ -38,45 +38,24 @@ log_error() {
 # DATA DELETION FUNCTIONS
 # ============================================================
 
-delete_old_zeek_logs() {
+delete_old_napse_logs() {
     local retention_days="$RETENTION_SECURITY_LOGS_DAYS"
     local deletion_date=$(get_deletion_date "$retention_days")
 
-    log_info "Deleting Zeek logs older than $retention_days days (before $deletion_date)"
+    log_info "Deleting NAPSE logs older than $retention_days days (before $deletion_date)"
 
-    # Zeek logs are typically in /opt/zeek/logs/
-    # Delete old log files
-    find /opt/zeek/logs/ -type f -name "*.log*" -mtime +${retention_days} -delete 2>/dev/null || true
+    # NAPSE logs are in /var/log/napse/
+    find /var/log/napse/ -type f -name "*.log*" -mtime +${retention_days} -delete 2>/dev/null || true
 
-    # If using ClickHouse for Zeek data
+    # ClickHouse NAPSE event data (napse_events table)
     if [[ "$CLICKHOUSE_AVAILABLE" == "true" ]]; then
         podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
-            ALTER TABLE security.zeek_conn
+            ALTER TABLE security.napse_events
             DELETE WHERE timestamp < toDateTime('$deletion_date 00:00:00')
-        " 2>/dev/null || log_warn "ClickHouse zeek_conn deletion failed"
+        " 2>/dev/null || log_warn "ClickHouse napse_events deletion failed"
     fi
 
-    log_info "Zeek log cleanup completed"
-}
-
-delete_old_snort_logs() {
-    local retention_days="$RETENTION_SECURITY_LOGS_DAYS"
-    local deletion_date=$(get_deletion_date "$retention_days")
-
-    log_info "Deleting Snort logs older than $retention_days days (before $deletion_date)"
-
-    # Snort logs
-    find /var/log/snort/ -type f -mtime +${retention_days} -delete 2>/dev/null || true
-
-    # ClickHouse deletion
-    if [[ "$CLICKHOUSE_AVAILABLE" == "true" ]]; then
-        podman exec hookprobe-monitoring-clickhouse clickhouse-client --query "
-            ALTER TABLE security.snort_alerts
-            DELETE WHERE timestamp < toDateTime('$deletion_date 00:00:00')
-        " 2>/dev/null || log_warn "ClickHouse snort_alerts deletion failed"
-    fi
-
-    log_info "Snort log cleanup completed"
+    log_info "NAPSE log cleanup completed"
 }
 
 delete_old_waf_logs() {
@@ -393,8 +372,7 @@ DATA INVENTORY
 ============================================================
 
 Security Logs:
-- Zeek logs: $(find /opt/zeek/logs/ -type f 2>/dev/null | wc -l) files
-- Snort logs: $(find /var/log/snort/ -type f 2>/dev/null | wc -l) files
+- NAPSE logs: $(find /var/log/napse/ -type f 2>/dev/null | wc -l) files
 - WAF logs: $(find /var/log/modsecurity/ -type f 2>/dev/null | wc -l) files
 
 User Accounts:
@@ -503,8 +481,7 @@ main() {
     mkdir -p /var/log/hookprobe/
 
     # Run deletion tasks
-    delete_old_zeek_logs
-    delete_old_snort_logs
+    delete_old_napse_logs
     delete_old_waf_logs
     delete_old_network_flows
     delete_old_qsecbit_scores

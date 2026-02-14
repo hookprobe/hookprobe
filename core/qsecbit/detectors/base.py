@@ -4,9 +4,11 @@ Qsecbit Unified - Base Detector Class
 Abstract base class for all layer-specific threat detectors.
 Provides common utilities for threat detection, logging, and event creation.
 
+Consumes events from the NAPSE event bus (no legacy Zeek/Suricata file reading).
+
 Author: HookProbe Team
 License: Proprietary
-Version: 5.0.0
+Version: 6.0.0
 """
 
 import os
@@ -14,6 +16,7 @@ import re
 import json
 import shlex
 import subprocess
+import time
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -73,9 +76,10 @@ class BaseDetector(ABC):
         self.blocked_count = 0
         self.last_detection_time: Optional[datetime] = None
 
-        # Log paths
-        self.suricata_log = Path("/var/log/suricata/eve.json")
-        self.zeek_log_dir = Path("/var/log/zeek/current")
+        # NAPSE event buffers (populated via register_napse)
+        self._napse_events: Dict[str, deque] = {}
+        self._napse_alerts: deque = deque(maxlen=500)
+        self._napse_registered = False
 
     def _run_command(
         self,
@@ -230,89 +234,88 @@ class BaseDetector(ABC):
         match = re.search(r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}', line)
         return match.group(0).lower() if match else None
 
-    def _read_suricata_alerts(
-        self,
-        patterns: List[str],
-        limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    def register_napse(self, event_bus) -> None:
         """
-        Read and filter Suricata EVE JSON alerts.
+        Register this detector with the NAPSE event bus.
+
+        Subscribes to all relevant event types and buffers events
+        for detection queries.
 
         Args:
-            patterns: List of regex patterns to match against signatures
+            event_bus: NapseEventBus instance
+        """
+        from core.napse.synthesis.event_bus import EventType
+
+        event_types = [
+            EventType.CONNECTION, EventType.DNS, EventType.HTTP,
+            EventType.TLS, EventType.DHCP, EventType.SSH,
+            EventType.ALERT, EventType.NOTICE,
+        ]
+        for et in event_types:
+            self._napse_events[et.name] = deque(maxlen=1000)
+            event_bus.subscribe(et, self._buffer_napse_event)
+
+        event_bus.subscribe(EventType.ALERT, self._buffer_napse_alert)
+        self._napse_registered = True
+
+    def _buffer_napse_event(self, event_type, event) -> None:
+        """Buffer an incoming NAPSE event with timestamp."""
+        buf = self._napse_events.get(event_type.name)
+        if buf is not None:
+            buf.append((time.time(), event))
+
+    def _buffer_napse_alert(self, _event_type, alert) -> None:
+        """Buffer an incoming NAPSE alert."""
+        self._napse_alerts.append((time.time(), alert))
+
+    def _get_napse_events(self, event_type_name: str, max_age_s: float = 300) -> List[Any]:
+        """
+        Get buffered NAPSE events of a specific type.
+
+        Replaces _read_zeek_log() — returns typed dataclass objects
+        (ConnectionRecord, DNSRecord, HTTPRecord, TLSRecord, DHCPRecord, etc.)
+        instead of raw tab-separated string arrays.
+
+        Args:
+            event_type_name: EventType name (e.g., "CONNECTION", "DNS")
+            max_age_s: Maximum event age in seconds
+
+        Returns:
+            List of typed event records
+        """
+        buf = self._napse_events.get(event_type_name, deque())
+        cutoff = time.time() - max_age_s
+        return [event for ts, event in buf if ts > cutoff]
+
+    def _get_napse_alerts(self, patterns: List[str], limit: int = 50) -> List[Any]:
+        """
+        Get buffered NAPSE alerts matching signature patterns.
+
+        Replaces _read_suricata_alerts() — returns NapseAlert objects
+        instead of raw EVE JSON dicts.
+
+        Args:
+            patterns: List of regex patterns to match against alert signatures
             limit: Maximum alerts to return
 
         Returns:
-            List of matching alert events
+            List of matching NapseAlert objects
         """
-        if not self.suricata_log.exists():
-            return []
-
-        alerts = []
-        try:
-            # Use tail to get recent entries
-            output, success = self._run_command(
-                f'tail -500 {self.suricata_log}'
-            )
-            if not success:
-                return []
-
-            for line in output.split('\n'):
-                if not line.strip():
-                    continue
-                try:
-                    event = json.loads(line)
-                    if event.get('event_type') != 'alert':
-                        continue
-
-                    signature = event.get('alert', {}).get('signature', '').lower()
-                    for pattern in patterns:
-                        if re.search(pattern, signature, re.IGNORECASE):
-                            alerts.append(event)
-                            break
-
-                    if len(alerts) >= limit:
-                        break
-                except json.JSONDecodeError:
-                    continue
-        except Exception:
-            pass
-
-        return alerts
-
-    def _read_zeek_log(
-        self,
-        log_name: str,
-        limit: int = 200
-    ) -> List[List[str]]:
-        """
-        Read and parse a Zeek log file.
-
-        Args:
-            log_name: Log file name (e.g., "conn.log", "dns.log")
-            limit: Maximum lines to read
-
-        Returns:
-            List of parsed log entries (tab-separated fields)
-        """
-        log_path = self.zeek_log_dir / log_name
-        if not log_path.exists():
-            return []
-
-        entries = []
-        try:
-            output, success = self._run_command(f'tail -{limit} {log_path}')
-            if not success:
-                return []
-
-            for line in output.split('\n'):
-                if line.startswith('#') or not line.strip():
-                    continue
-                entries.append(line.split('\t'))
-        except Exception:
-            pass
-
-        return entries
+        cutoff = time.time() - 300  # Last 5 minutes
+        results = []
+        for ts, alert in self._napse_alerts:
+            if ts < cutoff:
+                continue
+            sig = getattr(alert, 'alert_signature', '').lower()
+            cat = getattr(alert, 'alert_category', '').lower()
+            match_str = f"{sig} {cat}"
+            for pattern in patterns:
+                if re.search(pattern, match_str, re.IGNORECASE):
+                    results.append(alert)
+                    break
+            if len(results) >= limit:
+                break
+        return results
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get detector statistics."""

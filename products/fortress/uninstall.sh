@@ -726,10 +726,6 @@ remove_containers() {
         "docker.io/library/redis:7-alpine"
         "docker.io/library/python:3.11-slim-bookworm"
         "docker.io/library/debian:bookworm-slim"
-        "docker.io/jasonish/suricata:latest"
-        "docker.io/jasonish/suricata:7.0.8"
-        "docker.io/zeek/zeek:latest"
-        "docker.io/zeek/zeek:7.0.3"
         "docker.io/clickhouse/clickhouse-server:24.8"
         "docker.io/n8nio/n8n:1.70.3"
     )
@@ -1498,12 +1494,9 @@ remove_installation() {
     if [ "$KEEP_DATA" = false ]; then
         rm -rf /opt/hookprobe/fortress/monitoring 2>/dev/null || true
         # Remove security monitoring data
-        rm -rf /opt/hookprobe/fortress/data/suricata-logs 2>/dev/null || true
-        rm -rf /opt/hookprobe/fortress/data/zeek-logs 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/data/ml-models 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/data/threat-intel 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/ml 2>/dev/null || true
-        rm -rf /opt/hookprobe/fortress/zeek 2>/dev/null || true
         rm -rf /opt/hookprobe/fortress/lib 2>/dev/null || true
         # Remove ML training logs
         rm -f /var/log/hookprobe/ml-aggregator.log 2>/dev/null || true
@@ -1802,7 +1795,7 @@ verify_uninstall() {
 
     # Check containers (core + IDS)
     if command -v podman &>/dev/null; then
-        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-suricata fts-zeek fts-xdp fts-lstm-trainer; do
+        for container in fts-web fts-postgres fts-redis fts-qsecbit fts-dnsxai fts-dfs fts-xdp fts-lstm-trainer; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "Container still exists: $container"
                 issues=$((issues + 1))
@@ -1810,7 +1803,7 @@ verify_uninstall() {
         done
 
         # Check AIOCHI containers
-        for container in aiochi-clickhouse aiochi-narrative aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper aiochi-bubble aiochi-ollama; do
+        for container in aiochi-clickhouse aiochi-narrative aiochi-napse aiochi-identity aiochi-logshipper aiochi-bubble aiochi-ollama; do
             if podman ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
                 log_warn "AIOCHI container still exists: $container"
                 issues=$((issues + 1))
@@ -1920,7 +1913,7 @@ main() {
         echo -e "    • WiFi AP (hostapd), DHCP (dnsmasq)"
         echo ""
         echo -e "  ${BOLD}Containers:${NC}"
-        echo -e "    • QSecBit, dnsXai, Suricata, Zeek"
+        echo -e "    • QSecBit, dnsXai, NAPSE"
         echo ""
         echo -e "  ${BOLD}Network:${NC}"
         echo -e "    • OVS bridge and VLAN/VXLAN configuration"
@@ -2019,7 +2012,7 @@ main() {
     echo -e "  • fts-lte-failover service"
     echo -e "  • fts-dnsmasq (DHCP server)"
     echo -e "  • fts-hostapd (WiFi AP)"
-    echo -e "  • Security monitoring (Suricata, Zeek)"
+    echo -e "  • Security monitoring (NAPSE IDS)"
     echo -e "  • ML/LSTM threat detection"
     echo -e "  • dnsXai privacy controls"
     echo -e "  • OVS bridge: $OVS_BRIDGE"
@@ -2041,7 +2034,7 @@ main() {
         echo -e "  • ClickHouse analytics database"
         echo -e "  • n8n narrative engine (optional)"
         echo -e "  • Ollama LLM (optional)"
-        echo -e "  • Suricata + Zeek network capture"
+        echo -e "  • NAPSE IDS network capture"
         echo -e "  • Identity engine + Bubble manager"
         echo -e "  • Log shipper pipeline"
         [ "$KEEP_DATA" = true ] && echo -e "  ${DIM}(AIOCHI data volumes preserved)${NC}"

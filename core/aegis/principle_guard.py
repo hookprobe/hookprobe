@@ -25,10 +25,10 @@ IMMUTABLE_PRINCIPLES = {
         "description": "Never disable firewall, IDS, DNS protection, or any security service",
         "blocked_actions": [
             "disable_firewall", "stop_qsecbit", "stop_dnsxai", "disable_ids",
-            "stop_suricata", "stop_zeek", "disable_protection",
+            "stop_napse", "disable_protection",
         ],
         "blocked_patterns": [
-            r"(?:disable|stop|kill|remove|shutdown)\s+(?:firewall|protection|security|qsecbit|dnsxai|suricata|zeek|ids)",
+            r"(?:disable|stop|kill|remove|shutdown)\s+(?:firewall|protection|security|qsecbit|dnsxai|napse|ids)",
         ],
     },
     "never_expose_credentials": {
