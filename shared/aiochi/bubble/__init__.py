@@ -7,7 +7,7 @@ This module provides:
 - PolicyResolver: Maps bubbles to OpenFlow network policies
 - PresenceSensor: mDNS/BLE presence detection
 - BehaviorClustering: DBSCAN device clustering
-- ConnectionGraph: D2D affinity analysis via Zeek
+- ConnectionGraph: D2D affinity analysis via NAPSE events
 
 The bubble system groups devices by owner (Dad, Mom, Kids) using
 behavioral signals and provides per-device policy overrides.

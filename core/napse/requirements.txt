@@ -1,0 +1,14 @@
+# NAPSE Python Dependencies
+# Minimal footprint - most work happens in Rust engine
+
+# YAML config loading
+pyyaml>=6.0
+
+# ClickHouse HTTP client
+httpx>=0.27
+
+# Prometheus metrics (optional lightweight server)
+# prometheus-client>=0.21  # Only needed if using prometheus_client library
+
+# BCC/eBPF bindings (system package, not pip)
+# python3-bpfcc  # Installed via apt

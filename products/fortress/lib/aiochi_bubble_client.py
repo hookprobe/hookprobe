@@ -113,7 +113,7 @@ def is_aiochi_available() -> bool:
     """Check if AIOCHI bubble container is available."""
     client = get_aiochi_bubble_client()
     health = client.get_health()
-    return health is not None and health.get("status") in ("running", "starting", "waiting_for_zeek")
+    return health is not None and health.get("status") in ("running", "starting", "waiting_for_ids")
 
 
 # ==============================================================================
@@ -153,7 +153,7 @@ class D2DCommunicationClient:
         """
         Check if aiochi-bubble container is fully ready.
 
-        Only returns True when status is 'running' (not 'starting' or 'waiting_for_zeek').
+        Only returns True when status is 'running' (not 'starting' or 'waiting_for_ids').
         Caches result for 10 seconds to avoid excessive health checks.
         """
         now = time.time()

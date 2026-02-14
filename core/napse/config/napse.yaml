@@ -1,0 +1,105 @@
+# NAPSE - Neural Adaptive Packet Synthesis Engine
+# Default Configuration (Fortress tier)
+#
+# Override per-tier settings by loading the tier-specific YAML file.
+
+napse:
+  version: "1.0.0"
+  tier: "fortress"
+
+  # Network interface to monitor
+  interface: "${WAN_INTERFACE:-eth0}"
+  bridge: "FTS"
+
+  # Layer 0: eBPF/XDP Kernel
+  kernel:
+    xdp_mode: "auto"               # auto/native/driver/skb
+    rate_limit_pps: 1000
+    blocked_ips_max: 65536
+    flow_table_size: 65536
+    ringbuf_size_mb: 4
+    af_xdp:
+      enabled: true
+      umem_frames: 16384
+      frame_size: 2048
+      busy_poll: false
+      busy_poll_timeout_us: 20
+
+  # Layer 1: Rust Protocol Engine
+  engine:
+    connection_table_size: 65536
+    connection_timeout_s: 120
+    max_concurrent_flows: 100000
+
+    # Protocol parsers to enable
+    parsers:
+      tcp: true
+      dns: true
+      http: true
+      tls: true
+      dhcp: true
+      ssh: true
+      mdns: true
+      ssdp: true
+      smtp: true
+      smb: true
+      mqtt: true
+      modbus: true
+      dnp3: true
+      quic: true
+      rdp: true
+      ftp: true
+
+    # Signature matching
+    matcher:
+      enabled: true
+      bloom_filter_size: 1048576    # 1M bits
+      bloom_filter_hashes: 7
+      signatures_path: "signatures/napse_rules.yaml"
+
+    # ML inference
+    ml:
+      enabled: true
+      dga_model_path: "models/dga_classifier.onnx"
+      anomaly_model_path: "models/anomaly_detector.onnx"
+      inference_budget_us: 200      # Max microseconds per packet
+
+  # Layer 2: Python Event Synthesis
+  synthesis:
+    event_bus_queue_size: 10000
+
+    # QSecBit direct feed
+    qsecbit_feed:
+      enabled: true
+      direct_mode: true
+
+    # AEGIS bridge
+    aegis_bridge:
+      enabled: true
+
+    # D2D Bubble feed
+    bubble_feed:
+      enabled: true
+
+    # ClickHouse shipper
+    clickhouse:
+      enabled: true
+      host: "localhost"
+      port: 8123
+      database: "aiochi"
+      batch_size: 100
+      flush_interval_s: 5.0
+
+    # Prometheus metrics
+    metrics:
+      enabled: true
+      port: 9092
+      path: "/metrics"
+
+    # Notice emitter
+    notices:
+      enabled: true
+      port_scan_threshold: 50
+      port_scan_window_s: 300
+      ssh_bruteforce_threshold: 5
+      dns_tunnel_query_length: 60

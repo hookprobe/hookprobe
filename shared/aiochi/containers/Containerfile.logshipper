@@ -1,11 +1,9 @@
-# AIOCHI Log Shipper Container
-# Ships Suricata and Zeek logs to ClickHouse
+# AIOCHI Supplementary Log Shipper Container
+# Ships supplementary log data to ClickHouse
 #
-# Features:
-#   - Watches Suricata eve.json (alerts, flows, DNS, HTTP, TLS)
-#   - Watches Zeek logs (conn.log, dns.log, http.log)
-#   - Transforms logs to ClickHouse schema
-#   - Batches inserts for efficiency
+# NAPSE handles primary IDS event shipping via clickhouse_shipper.py.
+# This service monitors ClickHouse health and ships any supplementary
+# log data not covered by the NAPSE event bus pipeline.
 #
 # Usage: podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper ..
 #
@@ -16,7 +14,7 @@ FROM docker.io/library/python:3.11-slim-bookworm
 
 LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
 LABEL version="1.0.0"
-LABEL description="AIOCHI Log Shipper - Suricata/Zeek to ClickHouse pipeline"
+LABEL description="AIOCHI Supplementary Log Shipper - ClickHouse health and supplementary data"
 
 # Create app user
 RUN groupadd -r aiochi && useradd -r -g aiochi aiochi

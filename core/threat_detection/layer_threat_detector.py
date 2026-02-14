@@ -22,6 +22,7 @@ import struct
 import hashlib
 import subprocess
 import shlex
+from collections import deque
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Tuple, Any, Union
@@ -131,16 +132,17 @@ class LayerThreatDetector:
     def __init__(
         self,
         data_dir: str = "/opt/hookprobe/data",
-        suricata_log: str = "/var/log/suricata/eve.json",
-        zeek_log_dir: str = "/var/log/zeek/current",
         max_history: int = 10000
     ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
-        self.suricata_log = Path(suricata_log)
-        self.zeek_log_dir = Path(zeek_log_dir)
         self.max_history = max_history
+
+        # NAPSE event buffers (populated via register_napse)
+        self._napse_events: Dict[str, Any] = {}
+        self._napse_alerts: Any = None
+        self._napse_registered = False
 
         # Threat tracking
         self.threats: List[ThreatEvent] = []
@@ -267,6 +269,60 @@ class LayerThreatDetector:
                 f.write(json.dumps(threat.to_dict()) + '\n')
         except Exception:
             pass
+
+    def register_napse(self, event_bus) -> None:
+        """Register with NAPSE event bus for event-driven detection."""
+        from core.napse.synthesis.event_bus import EventType
+
+        event_types = [
+            EventType.CONNECTION, EventType.DNS, EventType.HTTP,
+            EventType.TLS, EventType.DHCP, EventType.SSH,
+            EventType.ALERT, EventType.NOTICE,
+        ]
+        for et in event_types:
+            self._napse_events[et.name] = deque(maxlen=1000)
+            event_bus.subscribe(et, self._buffer_napse_event)
+
+        self._napse_alerts = deque(maxlen=500)
+        event_bus.subscribe(EventType.ALERT, self._buffer_napse_alert)
+        self._napse_registered = True
+
+    def _buffer_napse_event(self, event_type, event) -> None:
+        """Buffer incoming NAPSE event."""
+        buf = self._napse_events.get(event_type.name)
+        if buf is not None:
+            buf.append((time.time(), event))
+
+    def _buffer_napse_alert(self, _event_type, alert) -> None:
+        """Buffer incoming NAPSE alert."""
+        if self._napse_alerts is not None:
+            self._napse_alerts.append((time.time(), alert))
+
+    def _get_napse_events(self, event_type_name: str, max_age_s: float = 300) -> list:
+        """Get buffered NAPSE events of a specific type."""
+        buf = self._napse_events.get(event_type_name, deque())
+        cutoff = time.time() - max_age_s
+        return [event for ts, event in buf if ts > cutoff]
+
+    def _get_napse_alerts(self, patterns: List[str], limit: int = 50) -> list:
+        """Get buffered NAPSE alerts matching signature patterns."""
+        if not self._napse_alerts:
+            return []
+        cutoff = time.time() - 300
+        results = []
+        for ts, alert in self._napse_alerts:
+            if ts < cutoff:
+                continue
+            sig = getattr(alert, 'alert_signature', '').lower()
+            cat = getattr(alert, 'alert_category', '').lower()
+            match_str = f"{sig} {cat}"
+            for pattern in patterns:
+                if re.search(pattern, match_str, re.IGNORECASE):
+                    results.append(alert)
+                    break
+            if len(results) >= limit:
+                break
+        return results
 
     # =========================================================================
     # L2 - DATA LINK LAYER DETECTION
@@ -521,34 +577,25 @@ class LayerThreatDetector:
         """Detect VLAN hopping attempts"""
         threats = []
 
-        # Check for double-tagged frames (802.1Q-in-Q)
-        # This would typically be detected via Suricata or tcpdump
-        output, success = self._run_command(
-            'grep -i "vlan" /var/log/suricata/eve.json 2>/dev/null | tail -10'
-        )
-        if success and output:
-            for line in output.split('\n'):
-                try:
-                    event = json.loads(line)
-                    if 'vlan' in str(event).lower() and event.get('event_type') == 'alert':
-                        threat = ThreatEvent(
-                            timestamp=datetime.now(),
-                            layer=OSILayer.L2_DATA_LINK,
-                            severity=ThreatSeverity.HIGH,
-                            threat_type="VLAN Hopping",
-                            source_ip=event.get('src_ip'),
-                            source_mac=None,
-                            destination_ip=event.get('dest_ip'),
-                            destination_port=event.get('dest_port'),
-                            description="Potential VLAN hopping attack detected",
-                            evidence={'suricata_event': event},
-                            mitre_attack_id=self.mitre_mappings['vlan_hopping'],
-                            recommended_action="Disable DTP, configure static VLAN access"
-                        )
-                        threats.append(threat)
-                        self._add_threat(threat)
-                except json.JSONDecodeError:
-                    pass
+        # Check NAPSE alerts for VLAN anomalies
+        alerts = self._get_napse_alerts(['vlan', 'double.?tag', '802\\.1q'])
+        for alert in alerts:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L2_DATA_LINK,
+                severity=ThreatSeverity.HIGH,
+                threat_type="VLAN Hopping",
+                source_ip=alert.src_ip or None,
+                source_mac=None,
+                destination_ip=alert.dest_ip or None,
+                destination_port=alert.dest_port or None,
+                description=f"Potential VLAN hopping: {alert.alert_signature or 'VLAN anomaly'}",
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                mitre_attack_id=self.mitre_mappings['vlan_hopping'],
+                recommended_action="Disable DTP, configure static VLAN access"
+            )
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -556,43 +603,33 @@ class LayerThreatDetector:
         """Detect rogue DHCP servers"""
         threats = []
 
-        # Check Zeek DHCP logs for multiple DHCP servers
-        dhcp_log = self.zeek_log_dir / "dhcp.log"
-        if dhcp_log.exists():
-            try:
-                output, _ = self._run_command(f'tail -100 {dhcp_log}')
-                if output:
-                    dhcp_servers = set()
-                    for line in output.split('\n'):
-                        if line.startswith('#'):
-                            continue
-                        parts = line.split('\t')
-                        if len(parts) > 5:
-                            # server_addr is typically field 5
-                            server_ip = parts[4] if len(parts) > 4 else None
-                            if server_ip and server_ip != '-':
-                                dhcp_servers.add(server_ip)
+        # Check NAPSE DHCP events for multiple servers
+        dhcp_events = self._get_napse_events("DHCP")
+        dhcp_servers = set()
 
-                    # Multiple DHCP servers = potential rogue
-                    if len(dhcp_servers) > 1:
-                        threat = ThreatEvent(
-                            timestamp=datetime.now(),
-                            layer=OSILayer.L2_DATA_LINK,
-                            severity=ThreatSeverity.CRITICAL,
-                            threat_type="Rogue DHCP Server",
-                            source_ip=None,
-                            source_mac=None,
-                            destination_ip=None,
-                            destination_port=None,
-                            description=f"Multiple DHCP servers detected: {', '.join(dhcp_servers)}",
-                            evidence={'dhcp_servers': list(dhcp_servers)},
-                            mitre_attack_id='T1557.003',
-                            recommended_action="Identify legitimate DHCP server, block rogues"
-                        )
-                        threats.append(threat)
-                        self._add_threat(threat)
-            except Exception:
-                pass
+        for record in dhcp_events:
+            server_ip = getattr(record, 'server_addr', '') or ''
+            if server_ip and server_ip != '-':
+                dhcp_servers.add(server_ip)
+
+        # Multiple DHCP servers = potential rogue
+        if len(dhcp_servers) > 1:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L2_DATA_LINK,
+                severity=ThreatSeverity.CRITICAL,
+                threat_type="Rogue DHCP Server",
+                source_ip=None,
+                source_mac=None,
+                destination_ip=None,
+                destination_port=None,
+                description=f"Multiple DHCP servers detected: {', '.join(dhcp_servers)}",
+                evidence={'dhcp_servers': list(dhcp_servers)},
+                mitre_attack_id='T1557.003',
+                recommended_action="Identify legitimate DHCP server, block rogues"
+            )
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -737,34 +774,25 @@ class LayerThreatDetector:
         """Detect IP fragmentation attacks"""
         threats = []
 
-        # Check Suricata for fragmentation alerts
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -i "frag" {self.suricata_log} 2>/dev/null | tail -10'
+        # Check NAPSE alerts for fragmentation attacks
+        alerts = self._get_napse_alerts(['frag', 'teardrop', 'overlap', 'reassembly'])
+        for alert in alerts:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L3_NETWORK,
+                severity=ThreatSeverity.MEDIUM,
+                threat_type="Fragmentation Attack",
+                source_ip=alert.src_ip or None,
+                source_mac=None,
+                destination_ip=alert.dest_ip or None,
+                destination_port=alert.dest_port or None,
+                description=f"IP fragmentation attack: {alert.alert_signature or 'Malformed fragments'}",
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                mitre_attack_id='T1499.001',
+                recommended_action="Block malformed fragments"
             )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            threat = ThreatEvent(
-                                timestamp=datetime.now(),
-                                layer=OSILayer.L3_NETWORK,
-                                severity=ThreatSeverity.MEDIUM,
-                                threat_type="Fragmentation Attack",
-                                source_ip=event.get('src_ip'),
-                                source_mac=None,
-                                destination_ip=event.get('dest_ip'),
-                                destination_port=event.get('dest_port'),
-                                description=f"IP fragmentation attack: {event.get('alert', {}).get('signature', 'Unknown')}",
-                                evidence={'suricata_alert': event.get('alert', {})},
-                                mitre_attack_id='T1499.001',
-                                recommended_action="Block malformed fragments"
-                            )
-                            threats.append(threat)
-                            self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -794,46 +822,38 @@ class LayerThreatDetector:
         """Detect port scanning activity"""
         threats = []
 
-        # Check Zeek conn.log for port scan patterns
-        conn_log = self.zeek_log_dir / "conn.log"
-        if conn_log.exists():
-            output, success = self._run_command(f'tail -1000 {conn_log}')
-            if success and output:
-                # Track connections by source IP
-                source_connections: Dict[str, set] = {}
+        # Check NAPSE connection events for port scan patterns
+        conn_events = self._get_napse_events("CONNECTION")
+        source_connections: Dict[str, set] = {}
 
-                for line in output.split('\n'):
-                    if line.startswith('#'):
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) > 5:
-                        src_ip = parts[2] if len(parts) > 2 else None
-                        dst_port = parts[5] if len(parts) > 5 else None
+        for record in conn_events:
+            src_ip = getattr(record, 'id_orig_h', None)
+            dst_port = getattr(record, 'id_resp_p', None)
 
-                        if src_ip and dst_port and dst_port != '-':
-                            if src_ip not in source_connections:
-                                source_connections[src_ip] = set()
-                            source_connections[src_ip].add(dst_port)
+            if src_ip and dst_port:
+                if src_ip not in source_connections:
+                    source_connections[src_ip] = set()
+                source_connections[src_ip].add(str(dst_port))
 
-                # Detect port scans (many ports from single source)
-                for src_ip, ports in source_connections.items():
-                    if len(ports) > 50:  # Threshold for port scan
-                        threat = ThreatEvent(
-                            timestamp=datetime.now(),
-                            layer=OSILayer.L4_TRANSPORT,
-                            severity=ThreatSeverity.HIGH,
-                            threat_type="Port Scan",
-                            source_ip=src_ip,
-                            source_mac=None,
-                            destination_ip=None,
-                            destination_port=None,
-                            description=f"Port scan detected from {src_ip}: {len(ports)} unique ports",
-                            evidence={'port_count': len(ports), 'sample_ports': list(ports)[:20]},
-                            mitre_attack_id=self.mitre_mappings['port_scan'],
-                            recommended_action="Block source IP, investigate"
-                        )
-                        threats.append(threat)
-                        self._add_threat(threat)
+        # Detect port scans (many ports from single source)
+        for src_ip, ports in source_connections.items():
+            if len(ports) > 50:  # Threshold for port scan
+                threat = ThreatEvent(
+                    timestamp=datetime.now(),
+                    layer=OSILayer.L4_TRANSPORT,
+                    severity=ThreatSeverity.HIGH,
+                    threat_type="Port Scan",
+                    source_ip=src_ip,
+                    source_mac=None,
+                    destination_ip=None,
+                    destination_port=None,
+                    description=f"Port scan detected from {src_ip}: {len(ports)} unique ports",
+                    evidence={'port_count': len(ports), 'sample_ports': list(ports)[:20]},
+                    mitre_attack_id=self.mitre_mappings['port_scan'],
+                    recommended_action="Block source IP, investigate"
+                )
+                threats.append(threat)
+                self._add_threat(threat)
 
         return threats
 
@@ -971,68 +991,53 @@ class LayerThreatDetector:
         """Detect SSL/TLS attacks"""
         threats = []
 
-        # Check Zeek SSL logs for downgrade attacks
-        ssl_log = self.zeek_log_dir / "ssl.log"
-        if ssl_log.exists():
-            output, success = self._run_command(f'tail -100 {ssl_log}')
-            if success and output:
-                for line in output.split('\n'):
-                    if line.startswith('#'):
-                        continue
-                    parts = line.split('\t')
+        # Check NAPSE TLS events for downgrade attacks
+        tls_events = self._get_napse_events("TLS")
+        for record in tls_events:
+            ssl_version = getattr(record, 'version', '')
 
-                    # Check for weak SSL versions
-                    if len(parts) > 6:
-                        ssl_version = parts[6] if len(parts) > 6 else ''
+            if ssl_version in ['SSLv2', 'SSLv3', 'TLSv1.0', 'TLSv1']:
+                threat = ThreatEvent(
+                    timestamp=datetime.now(),
+                    layer=OSILayer.L5_SESSION,
+                    severity=ThreatSeverity.HIGH,
+                    threat_type="SSL Downgrade",
+                    source_ip=getattr(record, 'id_orig_h', None),
+                    source_mac=None,
+                    destination_ip=getattr(record, 'id_resp_h', None),
+                    destination_port=getattr(record, 'id_resp_p', None),
+                    description=f"Weak SSL/TLS version detected: {ssl_version}",
+                    evidence={'ssl_version': ssl_version},
+                    mitre_attack_id='T1557.002',
+                    recommended_action="Upgrade to TLS 1.2 or higher"
+                )
+                threats.append(threat)
+                self._add_threat(threat)
 
-                        if ssl_version in ['SSLv2', 'SSLv3', 'TLSv1.0']:
-                            threat = ThreatEvent(
-                                timestamp=datetime.now(),
-                                layer=OSILayer.L5_SESSION,
-                                severity=ThreatSeverity.HIGH,
-                                threat_type="SSL Downgrade",
-                                source_ip=parts[2] if len(parts) > 2 else None,
-                                source_mac=None,
-                                destination_ip=parts[4] if len(parts) > 4 else None,
-                                destination_port=int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else None,
-                                description=f"Weak SSL/TLS version detected: {ssl_version}",
-                                evidence={'ssl_version': ssl_version},
-                                mitre_attack_id='T1557.002',
-                                recommended_action="Upgrade to TLS 1.2 or higher"
-                            )
-                            threats.append(threat)
-                            self._add_threat(threat)
-
-        # Check Suricata for SSL stripping
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -i "ssl\\|tls\\|certificate" {self.suricata_log} 2>/dev/null | tail -20'
-            )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            sig = event.get('alert', {}).get('signature', '').lower()
-                            if 'invalid' in sig or 'expired' in sig or 'self-signed' in sig:
-                                threat = ThreatEvent(
-                                    timestamp=datetime.now(),
-                                    layer=OSILayer.L5_SESSION,
-                                    severity=ThreatSeverity.HIGH,
-                                    threat_type="Certificate Anomaly",
-                                    source_ip=event.get('src_ip'),
-                                    source_mac=None,
-                                    destination_ip=event.get('dest_ip'),
-                                    destination_port=event.get('dest_port'),
-                                    description=f"SSL/TLS certificate issue: {event.get('alert', {}).get('signature', 'Unknown')}",
-                                    evidence={'suricata_alert': event.get('alert', {})},
-                                    mitre_attack_id=self.mitre_mappings['ssl_strip'],
-                                    recommended_action="Verify certificate validity"
-                                )
-                                threats.append(threat)
-                                self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+        # Check NAPSE alerts for SSL/certificate issues
+        alerts = self._get_napse_alerts([
+            'ssl', 'tls', 'certificate', 'cert.?invalid',
+            'self.?signed', 'expired'
+        ])
+        for alert in alerts:
+            sig = (alert.alert_signature or '').lower()
+            if 'invalid' in sig or 'expired' in sig or 'self-signed' in sig:
+                threat = ThreatEvent(
+                    timestamp=datetime.now(),
+                    layer=OSILayer.L5_SESSION,
+                    severity=ThreatSeverity.HIGH,
+                    threat_type="Certificate Anomaly",
+                    source_ip=alert.src_ip or None,
+                    source_mac=None,
+                    destination_ip=alert.dest_ip or None,
+                    destination_port=alert.dest_port or None,
+                    description=f"SSL/TLS certificate issue: {alert.alert_signature or 'Unknown'}",
+                    evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                    mitre_attack_id=self.mitre_mappings['ssl_strip'],
+                    recommended_action="Verify certificate validity"
+                )
+                threats.append(threat)
+                self._add_threat(threat)
 
         return threats
 
@@ -1134,36 +1139,27 @@ class LayerThreatDetector:
         """Detect encoding-based attacks (double encoding, unicode attacks)"""
         threats = []
 
-        # Check ModSecurity/Suricata for encoding attacks
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -iE "encod|unicode|utf|%[0-9a-f]{{2}}" {self.suricata_log} 2>/dev/null | tail -10'
-            )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            sig = event.get('alert', {}).get('signature', '')
-                            if 'encod' in sig.lower() or 'unicode' in sig.lower():
-                                threat = ThreatEvent(
-                                    timestamp=datetime.now(),
-                                    layer=OSILayer.L6_PRESENTATION,
-                                    severity=ThreatSeverity.MEDIUM,
-                                    threat_type="Encoding Attack",
-                                    source_ip=event.get('src_ip'),
-                                    source_mac=None,
-                                    destination_ip=event.get('dest_ip'),
-                                    destination_port=event.get('dest_port'),
-                                    description=f"Encoding-based attack detected: {sig}",
-                                    evidence={'suricata_alert': event.get('alert', {})},
-                                    mitre_attack_id='T1027',
-                                    recommended_action="Normalize and validate input"
-                                )
-                                threats.append(threat)
-                                self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+        # Check NAPSE alerts for encoding attacks
+        alerts = self._get_napse_alerts(['encod', 'unicode', 'utf', 'double.?encod'])
+        for alert in alerts:
+            sig = alert.alert_signature or ''
+            if 'encod' in sig.lower() or 'unicode' in sig.lower():
+                threat = ThreatEvent(
+                    timestamp=datetime.now(),
+                    layer=OSILayer.L6_PRESENTATION,
+                    severity=ThreatSeverity.MEDIUM,
+                    threat_type="Encoding Attack",
+                    source_ip=alert.src_ip or None,
+                    source_mac=None,
+                    destination_ip=alert.dest_ip or None,
+                    destination_port=alert.dest_port or None,
+                    description=f"Encoding-based attack detected: {sig}",
+                    evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                    mitre_attack_id='T1027',
+                    recommended_action="Normalize and validate input"
+                )
+                threats.append(threat)
+                self._add_threat(threat)
 
         return threats
 
@@ -1171,34 +1167,25 @@ class LayerThreatDetector:
         """Detect data format exploits (XML bombs, JSON injection)"""
         threats = []
 
-        # Check for XML-related attacks
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -iE "xml|xxe|entity|dtd" {self.suricata_log} 2>/dev/null | tail -10'
+        # Check NAPSE alerts for XML/format attacks
+        alerts = self._get_napse_alerts(['xml', 'xxe', 'entity', 'dtd'])
+        for alert in alerts:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L6_PRESENTATION,
+                severity=ThreatSeverity.HIGH,
+                threat_type="XML Injection",
+                source_ip=alert.src_ip or None,
+                source_mac=None,
+                destination_ip=alert.dest_ip or None,
+                destination_port=alert.dest_port or None,
+                description=f"XML-based attack: {alert.alert_signature or 'Unknown'}",
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                mitre_attack_id='T1059.009',
+                recommended_action="Disable external entities, validate XML"
             )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            threat = ThreatEvent(
-                                timestamp=datetime.now(),
-                                layer=OSILayer.L6_PRESENTATION,
-                                severity=ThreatSeverity.HIGH,
-                                threat_type="XML Injection",
-                                source_ip=event.get('src_ip'),
-                                source_mac=None,
-                                destination_ip=event.get('dest_ip'),
-                                destination_port=event.get('dest_port'),
-                                description=f"XML-based attack: {event.get('alert', {}).get('signature', 'Unknown')}",
-                                evidence={'suricata_alert': event.get('alert', {})},
-                                mitre_attack_id='T1059.009',
-                                recommended_action="Disable external entities, validate XML"
-                            )
-                            threats.append(threat)
-                            self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -1256,50 +1243,43 @@ class LayerThreatDetector:
         """Detect web application attacks (SQLi, XSS, etc.)"""
         threats = []
 
-        # Check Suricata for web attacks
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -iE "sql|xss|injection|traversal|rfi|lfi" {self.suricata_log} 2>/dev/null | tail -20'
+        # Check NAPSE alerts for web attacks
+        alerts = self._get_napse_alerts([
+            'sql', 'xss', 'injection', 'traversal', 'rfi', 'lfi'
+        ])
+        for alert in alerts:
+            sig = (alert.alert_signature or '').lower()
+
+            # Determine attack type
+            if 'sql' in sig:
+                attack_type = "SQL Injection"
+                mitre_id = self.mitre_mappings['sql_injection']
+            elif 'xss' in sig:
+                attack_type = "Cross-Site Scripting (XSS)"
+                mitre_id = self.mitre_mappings['xss']
+            elif 'traversal' in sig or 'lfi' in sig or 'rfi' in sig:
+                attack_type = "Path Traversal"
+                mitre_id = 'T1083'
+            else:
+                attack_type = "Web Attack"
+                mitre_id = 'T1190'
+
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L7_APPLICATION,
+                severity=ThreatSeverity.CRITICAL,
+                threat_type=attack_type,
+                source_ip=alert.src_ip or None,
+                source_mac=None,
+                destination_ip=alert.dest_ip or None,
+                destination_port=alert.dest_port or None,
+                description=f"{attack_type} detected: {alert.alert_signature or 'Unknown'}",
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                mitre_attack_id=mitre_id,
+                recommended_action="Block source, review WAF rules"
             )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            sig = event.get('alert', {}).get('signature', '').lower()
-
-                            # Determine attack type
-                            if 'sql' in sig:
-                                attack_type = "SQL Injection"
-                                mitre_id = self.mitre_mappings['sql_injection']
-                            elif 'xss' in sig:
-                                attack_type = "Cross-Site Scripting (XSS)"
-                                mitre_id = self.mitre_mappings['xss']
-                            elif 'traversal' in sig or 'lfi' in sig or 'rfi' in sig:
-                                attack_type = "Path Traversal"
-                                mitre_id = 'T1083'
-                            else:
-                                attack_type = "Web Attack"
-                                mitre_id = 'T1190'
-
-                            threat = ThreatEvent(
-                                timestamp=datetime.now(),
-                                layer=OSILayer.L7_APPLICATION,
-                                severity=ThreatSeverity.CRITICAL,
-                                threat_type=attack_type,
-                                source_ip=event.get('src_ip'),
-                                source_mac=None,
-                                destination_ip=event.get('dest_ip'),
-                                destination_port=event.get('dest_port'),
-                                description=f"{attack_type} detected: {event.get('alert', {}).get('signature', 'Unknown')}",
-                                evidence={'suricata_alert': event.get('alert', {})},
-                                mitre_attack_id=mitre_id,
-                                recommended_action="Block source, review WAF rules"
-                            )
-                            threats.append(threat)
-                            self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -1307,40 +1287,33 @@ class LayerThreatDetector:
         """Detect DNS-based threats (tunneling, spoofing)"""
         threats = []
 
-        # Check Zeek DNS logs for anomalies
-        dns_log = self.zeek_log_dir / "dns.log"
-        if dns_log.exists():
-            output, success = self._run_command(f'tail -200 {dns_log}')
-            if success and output:
-                # Look for DNS tunneling indicators
-                long_queries = []
-                for line in output.split('\n'):
-                    if line.startswith('#'):
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) > 9:
-                        query = parts[9] if len(parts) > 9 else ''
-                        # Long query names could indicate DNS tunneling
-                        if len(query) > 50:
-                            long_queries.append(query)
+        # Check NAPSE DNS events for anomalies
+        dns_events = self._get_napse_events("DNS")
+        long_queries = []
 
-                if len(long_queries) > 10:
-                    threat = ThreatEvent(
-                        timestamp=datetime.now(),
-                        layer=OSILayer.L7_APPLICATION,
-                        severity=ThreatSeverity.HIGH,
-                        threat_type="DNS Tunneling",
-                        source_ip=None,
-                        source_mac=None,
-                        destination_ip=None,
-                        destination_port=53,
-                        description=f"Potential DNS tunneling: {len(long_queries)} long DNS queries detected",
-                        evidence={'long_query_count': len(long_queries), 'sample_queries': long_queries[:5]},
-                        mitre_attack_id=self.mitre_mappings['dns_tunneling'],
-                        recommended_action="Block suspicious domains, investigate"
-                    )
-                    threats.append(threat)
-                    self._add_threat(threat)
+        for record in dns_events:
+            query = getattr(record, 'query', '')
+            # Long query names could indicate DNS tunneling
+            if len(query) > 50:
+                long_queries.append(query)
+
+        if len(long_queries) > 10:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L7_APPLICATION,
+                severity=ThreatSeverity.HIGH,
+                threat_type="DNS Tunneling",
+                source_ip=None,
+                source_mac=None,
+                destination_ip=None,
+                destination_port=53,
+                description=f"Potential DNS tunneling: {len(long_queries)} long DNS queries detected",
+                evidence={'long_query_count': len(long_queries), 'sample_queries': long_queries[:5]},
+                mitre_attack_id=self.mitre_mappings['dns_tunneling'],
+                recommended_action="Block suspicious domains, investigate"
+            )
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -1348,34 +1321,28 @@ class LayerThreatDetector:
         """Detect malware command and control communication"""
         threats = []
 
-        # Check Suricata for C2 indicators
-        if self.suricata_log.exists():
-            output, success = self._run_command(
-                f'grep -iE "command|control|c2|beacon|rat|trojan|botnet" {self.suricata_log} 2>/dev/null | tail -20'
+        # Check NAPSE alerts for C2 indicators
+        alerts = self._get_napse_alerts([
+            'command.?control', 'c2', 'beacon', 'rat',
+            'trojan', 'botnet', 'backdoor', 'malware'
+        ])
+        for alert in alerts:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L7_APPLICATION,
+                severity=ThreatSeverity.CRITICAL,
+                threat_type="Malware C2",
+                source_ip=alert.src_ip or None,
+                source_mac=None,
+                destination_ip=alert.dest_ip or None,
+                destination_port=alert.dest_port or None,
+                description=f"Malware C2 communication detected: {alert.alert_signature or 'Unknown'}",
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category},
+                mitre_attack_id=self.mitre_mappings['malware_c2'],
+                recommended_action="Quarantine device, block destination"
             )
-            if success and output:
-                for line in output.split('\n'):
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            threat = ThreatEvent(
-                                timestamp=datetime.now(),
-                                layer=OSILayer.L7_APPLICATION,
-                                severity=ThreatSeverity.CRITICAL,
-                                threat_type="Malware C2",
-                                source_ip=event.get('src_ip'),
-                                source_mac=None,
-                                destination_ip=event.get('dest_ip'),
-                                destination_port=event.get('dest_port'),
-                                description=f"Malware C2 communication detected: {event.get('alert', {}).get('signature', 'Unknown')}",
-                                evidence={'suricata_alert': event.get('alert', {})},
-                                mitre_attack_id=self.mitre_mappings['malware_c2'],
-                                recommended_action="Quarantine device, block destination"
-                            )
-                            threats.append(threat)
-                            self._add_threat(threat)
-                    except json.JSONDecodeError:
-                        pass
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 
@@ -1383,43 +1350,35 @@ class LayerThreatDetector:
         """Detect application protocol abuse"""
         threats = []
 
-        # Check for unusual protocol usage (e.g., HTTP over non-standard ports)
-        conn_log = self.zeek_log_dir / "conn.log"
-        if conn_log.exists():
-            output, success = self._run_command(f'tail -500 {conn_log}')
-            if success and output:
-                # Track unusual protocol/port combinations
-                unusual = []
-                for line in output.split('\n'):
-                    if line.startswith('#'):
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) > 7:
-                        proto = parts[6] if len(parts) > 6 else ''
-                        dst_port = parts[5] if len(parts) > 5 else ''
-                        service = parts[7] if len(parts) > 7 else ''
+        # Check NAPSE connection events for unusual protocol/port combinations
+        conn_events = self._get_napse_events("CONNECTION")
+        unusual = []
 
-                        # HTTP on non-standard port
-                        if service == 'http' and dst_port not in ['80', '8080', '8000', '8888']:
-                            unusual.append(f"HTTP on port {dst_port}")
+        for record in conn_events:
+            service = getattr(record, 'service', '')
+            dst_port = str(getattr(record, 'id_resp_p', ''))
 
-                if len(unusual) > 5:
-                    threat = ThreatEvent(
-                        timestamp=datetime.now(),
-                        layer=OSILayer.L7_APPLICATION,
-                        severity=ThreatSeverity.MEDIUM,
-                        threat_type="Protocol Abuse",
-                        source_ip=None,
-                        source_mac=None,
-                        destination_ip=None,
-                        destination_port=None,
-                        description=f"Unusual protocol usage detected: {len(unusual)} instances",
-                        evidence={'unusual_patterns': unusual[:10]},
-                        mitre_attack_id='T1071',
-                        recommended_action="Investigate unusual traffic patterns"
-                    )
-                    threats.append(threat)
-                    self._add_threat(threat)
+            # HTTP on non-standard port
+            if service == 'http' and dst_port not in ['80', '8080', '8000', '8888']:
+                unusual.append(f"HTTP on port {dst_port}")
+
+        if len(unusual) > 5:
+            threat = ThreatEvent(
+                timestamp=datetime.now(),
+                layer=OSILayer.L7_APPLICATION,
+                severity=ThreatSeverity.MEDIUM,
+                threat_type="Protocol Abuse",
+                source_ip=None,
+                source_mac=None,
+                destination_ip=None,
+                destination_port=None,
+                description=f"Unusual protocol usage detected: {len(unusual)} instances",
+                evidence={'unusual_patterns': unusual[:10]},
+                mitre_attack_id='T1071',
+                recommended_action="Investigate unusual traffic patterns"
+            )
+            threats.append(threat)
+            self._add_threat(threat)
 
         return threats
 

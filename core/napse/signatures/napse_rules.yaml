@@ -1,0 +1,294 @@
+# NAPSE Detection Rules
+#
+# Originally converted from legacy Suricata rules and Zeek scripts
+#
+# Format: Each rule has content patterns compiled to Aho-Corasick automata
+# for SIMD-accelerated multi-pattern matching.
+
+version: "1.0.0"
+
+rules:
+  # SSH Brute Force (replaces local.rules + local.zeek SSH_Bruteforce)
+  - id: 1000001
+    msg: "NAPSE SSH Brute Force Attempt"
+    category: "brute_force"
+    severity: 2  # HIGH
+    layer: 7
+    proto: tcp
+    dst_port: 22
+    detection:
+      type: "threshold"
+      count: 5
+      window_s: 300
+      track_by: "src_ip"
+    mitre: "T1110"
+
+  # DNS Tunneling (replaces local.rules DNS tunneling + L7 detector)
+  - id: 1000002
+    msg: "NAPSE DNS Tunneling Detected"
+    category: "dns_tunneling"
+    severity: 2  # HIGH
+    layer: 7
+    proto: udp
+    dst_port: 53
+    detection:
+      type: "dns_entropy"
+      query_length_threshold: 60
+      entropy_threshold: 3.5
+      volume_threshold: 100
+    mitre: "T1071.004"
+
+  # Port Scan (replaces local.zeek Port_Scan_Detected)
+  - id: 1000003
+    msg: "NAPSE Port Scan Detected"
+    category: "port_scan"
+    severity: 3  # MEDIUM
+    layer: 4
+    proto: tcp
+    detection:
+      type: "threshold"
+      count: 50
+      window_s: 300
+      track_by: "src_ip"
+      count_field: "unique_dst_ports"
+    mitre: "T1046"
+
+  # Malware C2 Beacon (replaces local.rules C2 detection)
+  - id: 1000004
+    msg: "NAPSE Potential C2 Communication"
+    category: "malware_c2"
+    severity: 1  # CRITICAL
+    layer: 7
+    detection:
+      type: "pattern"
+      content:
+        - "cobalt"
+        - "beacon"
+        - "meterpreter"
+        - "empire"
+      match_mode: "any"
+    ja3_hashes:
+      - "72a589da586844d7f0818ce684948eea"   # CobaltStrike
+      - "a0e9f5d64349fb13191bc781f81f42e1"   # CobaltStrike 4.x
+      - "3b5074b1b5d032e5620f69f9f700ff0e"   # Metasploit
+      - "fc54e0d16d9764783542f0146a98b300"   # Metasploit HTTPS
+      - "315b27e8b4d08f3ba6534dc84f0d9c2c"   # Empire
+    mitre: "T1071.001"
+
+  # Crypto Mining (replaces local.rules crypto detection)
+  - id: 1000005
+    msg: "NAPSE Cryptocurrency Mining Detected"
+    category: "crypto_mining"
+    severity: 3  # MEDIUM
+    layer: 7
+    detection:
+      type: "pattern"
+      content:
+        - "stratum+tcp"
+        - "mining.subscribe"
+        - "mining.authorize"
+        - "eth_submitWork"
+      match_mode: "any"
+    mitre: "T1496"
+
+  # Rogue DHCP Server (replaces local.rules + L2 detector)
+  - id: 1000006
+    msg: "NAPSE Rogue DHCP Server Detected"
+    category: "rogue_dhcp"
+    severity: 1  # CRITICAL
+    layer: 2
+    proto: udp
+    src_port: 67
+    detection:
+      type: "dhcp_server_validation"
+      authorized_servers: []  # Populated from config
+    mitre: "T1557.003"
+
+  # SQL Injection (replaces Suricata SQLI rules + L7 detector)
+  - id: 1000007
+    msg: "NAPSE SQL Injection Attempt"
+    category: "sql_injection"
+    severity: 1  # CRITICAL
+    layer: 7
+    proto: tcp
+    dst_port: [80, 443, 8080, 8443]
+    detection:
+      type: "pattern"
+      content:
+        - "union select"
+        - "' or '1'='1"
+        - "; drop "
+        - "benchmark("
+        - "sleep("
+        - "waitfor delay"
+        - "information_schema"
+      match_mode: "any"
+      case_insensitive: true
+    mitre: "T1190"
+
+  # XSS Attack (replaces Suricata XSS rules + L7 detector)
+  - id: 1000008
+    msg: "NAPSE Cross-Site Scripting Attempt"
+    category: "xss"
+    severity: 2  # HIGH
+    layer: 7
+    proto: tcp
+    dst_port: [80, 443, 8080, 8443]
+    detection:
+      type: "pattern"
+      content:
+        - "<script"
+        - "javascript:"
+        - "onerror="
+        - "onload="
+        - "document.cookie"
+        - "eval("
+      match_mode: "any"
+      case_insensitive: true
+    mitre: "T1059.007"
+
+  # TLS Downgrade (replaces L5 detector)
+  - id: 1000009
+    msg: "NAPSE TLS Downgrade Attack"
+    category: "tls_downgrade"
+    severity: 2  # HIGH
+    layer: 5
+    proto: tcp
+    dst_port: 443
+    detection:
+      type: "tls_version"
+      blocked_versions: ["SSLv2", "SSLv3", "TLSv1.0"]
+    mitre: "T1557.002"
+
+  # Path Traversal (replaces Suricata + L7 detector)
+  - id: 1000010
+    msg: "NAPSE Path Traversal Attempt"
+    category: "path_traversal"
+    severity: 2  # HIGH
+    layer: 7
+    proto: tcp
+    dst_port: [80, 443, 8080, 8443]
+    detection:
+      type: "pattern"
+      content:
+        - "../.."
+        - "..\\.\\"
+        - "/etc/passwd"
+        - "/etc/shadow"
+        - "c:\\windows"
+        - "%2e%2e"
+      match_mode: "any"
+      case_insensitive: true
+    mitre: "T1083"
+
+  # ============================================================================
+  # AIOCHI Migration Rules (from local.rules SIDs not already covered above)
+  # ============================================================================
+
+  # DNS to Non-Standard Port (replaces local.rules SID 1000004)
+  - id: 1000011
+    msg: "NAPSE DNS Query to Non-Standard Port"
+    category: "policy_violation"
+    severity: 3  # MEDIUM
+    layer: 7
+    proto: udp
+    detection:
+      type: "dns_nonstandard_port"
+      standard_ports: [53, 853, 5353]
+    mitre: "T1071.004"
+
+  # IoT Beaconing Pattern (replaces local.rules SID 1000005)
+  - id: 1000012
+    msg: "NAPSE IoT Device Beaconing"
+    category: "trojan_activity"
+    severity: 3  # MEDIUM
+    layer: 4
+    proto: udp
+    detection:
+      type: "threshold"
+      count: 100
+      window_s: 300
+      track_by: "src_ip"
+      payload_size_min: 10
+      payload_size_max: 50
+      direction: "outbound"
+    mitre: "T1071"
+
+  # Self-Signed Certificate (replaces local.rules SID 1000010)
+  - id: 1000013
+    msg: "NAPSE Self-Signed TLS Certificate"
+    category: "policy_violation"
+    severity: 4  # LOW
+    layer: 5
+    proto: tcp
+    dst_port: 443
+    detection:
+      type: "tls_cert_validation"
+      check: "self_signed"
+    mitre: "T1556"
+
+  # ============================================================================
+  # AIOCHI Notice Types (ported from local.zeek)
+  # ============================================================================
+
+  # New Device on Network (notice type: AIOCHI::New_Device)
+  - id: 1000020
+    msg: "NAPSE New Device Joined Network"
+    category: "new_device"
+    severity: 5  # INFO
+    layer: 2
+    proto: udp
+    src_port: 68
+    detection:
+      type: "dhcp_new_device"
+      notice: true
+
+  # Suspicious DNS Query (notice type: AIOCHI::Suspicious_DNS)
+  - id: 1000021
+    msg: "NAPSE Suspicious DNS Query"
+    category: "suspicious_dns"
+    severity: 3  # MEDIUM
+    layer: 7
+    proto: udp
+    dst_port: 53
+    detection:
+      type: "dns_suspicious"
+      check_tld: true
+      check_length: true
+      length_threshold: 50
+      suspicious_tlds: [".tk", ".ml", ".ga", ".cf", ".gq", ".top", ".xyz"]
+    notice: true
+
+  # Device Left Network (notice type: AIOCHI::Device_Left)
+  - id: 1000022
+    msg: "NAPSE Device Left Network"
+    category: "device_left"
+    severity: 5  # INFO
+    layer: 3
+    detection:
+      type: "conntrack_timeout"
+      idle_threshold_s: 300
+      notice: true
+
+  # TLS Anomaly (notice type: AIOCHI::TLS_Anomaly)
+  - id: 1000023
+    msg: "NAPSE TLS Certificate Anomaly"
+    category: "tls_anomaly"
+    severity: 3  # MEDIUM
+    layer: 5
+    proto: tcp
+    detection:
+      type: "tls_anomaly"
+      checks: ["expired", "self_signed", "wrong_host", "weak_cipher"]
+    notice: true
+
+  # Policy Violation (notice type: AIOCHI::Policy_Violation)
+  - id: 1000024
+    msg: "NAPSE Network Policy Violation"
+    category: "policy_violation"
+    severity: 3  # MEDIUM
+    layer: 7
+    detection:
+      type: "policy"
+      checks: ["unauthorized_service", "blocked_protocol", "data_exfiltration"]
+    notice: true

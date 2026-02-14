@@ -266,7 +266,7 @@ stop_all_services() {
     systemctl stop fortress-hostapd-2ghz fortress-hostapd-5ghz 2>/dev/null || true
     systemctl stop fortress-dnsmasq 2>/dev/null || true
     systemctl stop fts-web fts-agent fts-qsecbit 2>/dev/null || true
-    systemctl stop fts-suricata fts-zeek fts-xdp 2>/dev/null || true
+    systemctl stop fts-xdp 2>/dev/null || true
 
     # 2. Stop podman-compose (graceful)
     log_substep "Stopping podman containers..."

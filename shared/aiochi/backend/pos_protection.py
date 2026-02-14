@@ -572,7 +572,7 @@ class POSProtectionManager:
             except Exception as e:
                 logger.error(f"Failed to apply VLAN for {asset.name}: {e}")
 
-        # Add traffic monitoring rule (mirror to Suricata)
+        # Add traffic monitoring rule (mirror to NAPSE)
         try:
             cmd = [
                 "ovs-ofctl", "add-flow", self.OVS_BRIDGE,

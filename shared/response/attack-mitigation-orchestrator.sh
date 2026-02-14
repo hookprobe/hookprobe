@@ -3,7 +3,7 @@
 # attack-mitigation-orchestrator.sh
 # HookProbe Attack Detection & Mitigation Orchestrator
 #
-# Integrates: Qsecbit, VictoriaMetrics, ClickHouse, Snort3, Zeek, ModSecurity
+# Integrates: Qsecbit, VictoriaMetrics, ClickHouse, NAPSE, ModSecurity
 # Actions: Honeypot redirection, SNAT rules, Email alerts
 #
 # Author: HookProbe Team
@@ -100,26 +100,6 @@ query_victoriametrics() {
         -d "query=$query" | jq -r '.data.result[]' || echo ""
 }
 
-get_snort3_alerts() {
-    # Parse Snort3 unified2 logs or fast alert file
-    if [ -f "$SNORT3_ALERT_FILE" ]; then
-        tail -n 100 "$SNORT3_ALERT_FILE" | grep -E "Priority: [0-2]" || echo ""
-    else
-        log_warning "Snort3 alert file not found: $SNORT3_ALERT_FILE"
-        echo ""
-    fi
-}
-
-get_zeek_logs() {
-    # Query Zeek notice.log for security events
-    if [ -f "$ZEEK_NOTICE_LOG" ]; then
-        tail -n 100 "$ZEEK_NOTICE_LOG" | jq -c 'select(.note | test("Scan|Attack|Exploit"))' || echo ""
-    else
-        log_warning "Zeek notice log not found: $ZEEK_NOTICE_LOG"
-        echo ""
-    fi
-}
-
 get_modsecurity_alerts() {
     # Parse ModSecurity audit logs
     local modsec_query='_exists_:modsecurity AND (severity:CRITICAL OR severity:ERROR)'
@@ -140,37 +120,10 @@ detect_attacks() {
     echo "  \"qsecbit_status\": \"$(get_qsecbit_status)\"," >> "$attack_report"
     echo "  \"attacks\": [" >> "$attack_report"
     
-    # 1. Check Snort3 for network-based attacks
-    log "Checking Snort3 alerts..."
-    local snort_alerts=$(get_snort3_alerts)
-    if [ -n "$snort_alerts" ]; then
-        while IFS= read -r alert; do
-            local src_ip=$(echo "$alert" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
-            if [ -n "$src_ip" ]; then
-                echo "    {\"source\": \"snort3\", \"ip\": \"$src_ip\", \"alert\": \"$alert\"}," >> "$attack_report"
-                log "Snort3 alert from IP: $src_ip"
-                attacks_detected=$((attacks_detected + 1))
-                echo "$src_ip" >> "${STATE_DIR}/temp_ips.txt"
-            fi
-        done <<< "$snort_alerts"
-    fi
-    
-    # 2. Check Zeek for behavioral anomalies
-    log "Checking Zeek notices..."
-    local zeek_notices=$(get_zeek_logs)
-    if [ -n "$zeek_notices" ]; then
-        while IFS= read -r notice; do
-            local src_ip=$(echo "$notice" | jq -r '.src // empty')
-            if [ -n "$src_ip" ]; then
-                echo "    {\"source\": \"zeek\", \"ip\": \"$src_ip\", \"notice\": $notice}," >> "$attack_report"
-                log "Zeek notice from IP: $src_ip"
-                attacks_detected=$((attacks_detected + 1))
-                echo "$src_ip" >> "${STATE_DIR}/temp_ips.txt"
-            fi
-        done <<< "$zeek_notices"
-    fi
-    
-    # 3. Check ModSecurity for web attacks
+    # 1. NAPSE handles network-based attack detection via its own event bus
+    # Alerts are consumed through ClickHouse (see check #3 below)
+
+    # 2. Check ModSecurity for web attacks
     log "Checking ModSecurity alerts..."
     local modsec_alerts=$(get_modsecurity_alerts)
     if [ -n "$modsec_alerts" ]; then

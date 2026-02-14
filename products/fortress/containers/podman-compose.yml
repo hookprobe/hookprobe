@@ -28,7 +28,7 @@
 #
 # Network (simplified for podman-compose 1.0.6 compatibility):
 #   - fts-internal: 172.20.200.0/24 (all app containers share this network)
-#   - IDS containers (suricata, zeek, xdp, qsecbit) use host network
+#   - IDS containers (napse, xdp, qsecbit) use host network
 #   - fts-lan: 10.200.0.0/23-29 (WiFi/LAN clients) - NAT to internet
 #
 # Network isolation is achieved via nftables rules on the host.
@@ -346,11 +346,12 @@ services:
   # Ecosystem Bubble Manager has been moved to AIOCHI stack (aiochi-bubble)
   # to eliminate host network dependency that was blocking port forwarding.
   #
-  # Benefits of AIOCHI-based bubble detection:
-  # - Uses Zeek logs (dns.log, conn.log) instead of live mDNS binding
+  # Benefits of AIOCHI-based detection:
+  # - NAPSE is the IDS engine (~200MB RAM)
+  # - Uses event bus for real-time D2D analysis
   # - No port 5353 conflict with avahi-daemon
   # - Proper container isolation (bridge network)
-  # - Reads from FTS-mirror via Zeek (non-interfering)
+  # - Captures from FTS-mirror via NAPSE (non-interfering)
   #
   # To enable bubble detection, install with: --enable-aiochi
   # See: shared/aiochi/containers/podman-compose.aiochi.yml
@@ -406,11 +407,6 @@ volumes:
     driver: local
     name: fts-dfs-data
 
-  # Zeek logs - used by bubble-manager even without zeek service
-  # bubble-manager reads zeek conn.log for D2D connection analysis
-  zeek_logs:
-    driver: local
-    name: fts-zeek-logs
 
 # ============================================================
 # NETWORKS - OVS-Integrated 4-Tier Security Architecture
@@ -452,7 +448,7 @@ networks:
   # - OVS OpenFlow rules (if using OVS mode)
   #
   # All application containers share this network and can reach each other via DNS names.
-  # IDS containers (suricata, zeek, xdp, qsecbit) use host network for traffic capture.
+  # IDS containers (napse, xdp, qsecbit) use host network for traffic capture.
   fts-internal:
     driver: bridge
     ipam:

@@ -9,7 +9,7 @@
 # Guardian Mode (This Script):
 #   - Simple WiFi hotspot (all devices on same network)
 #   - Client tracking via hostapd (see connected devices in UI)
-#   - Full security stack (IDS, WAF, XDP DDoS protection)
+#   - Full security stack (NAPSE IDS via AIOCHI, WAF, XDP DDoS protection)
 #   - Works with any USB WiFi adapter that supports AP mode
 #
 # For VLAN Segmentation (Fortress Mode):
@@ -865,30 +865,21 @@ install_security_containers() {
 
     # NOTE: All security containers use --network host mode
     # This is required for:
-    # - Suricata IDS: sniff traffic on eth0/br0
     # - WAF: intercept HTTP traffic on host ports
-    # - Zeek: analyze raw network packets
     # - Neuro: access host network for neural resonance protocol
+    # - IDS (NAPSE): deployed via AIOCHI containers, not Guardian
 
     # Create volumes
-    podman volume create guardian-suricata-logs 2>/dev/null || true
-    podman volume create guardian-suricata-rules 2>/dev/null || true
     podman volume create guardian-waf-logs 2>/dev/null || true
 
     # Pull container images first
     log_info "Pulling container images (this may take a few minutes)..."
-    podman pull docker.io/jasonish/suricata:latest 2>/dev/null || log_warn "Failed to pull Suricata image"
     podman pull docker.io/owasp/modsecurity-crs:nginx-alpine 2>/dev/null || log_warn "Failed to pull WAF image"
     podman pull docker.io/library/python:3.11-slim 2>/dev/null || log_warn "Failed to pull Python image"
-    podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
 
     # Install core security containers
-    install_suricata_container
     install_waf_container
     install_neuro_container
-
-    # Install Zeek network analyzer
-    install_zeek_container
 
     # Install XDP/eBPF DDoS protection
     install_xdp_ddos_protection
@@ -905,72 +896,6 @@ install_security_containers() {
     fi
 
     log_info "Security containers and services installed"
-}
-
-install_suricata_container() {
-    log_step "Installing Suricata IDS/IPS container..."
-
-    # Check if already running
-    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-suricata$"; then
-        log_info "Suricata container already exists"
-        return 0
-    fi
-
-    # Determine interface to monitor for IDS
-    # IMPORTANT: Never use wlan* interfaces directly - promiscuous mode interferes with hostapd
-    # Priority: eth0 (ethernet), br0 (bridge), then skip if only WiFi
-    local MONITOR_IFACE=""
-    if ip link show eth0 &>/dev/null && [ -d /sys/class/net/eth0 ]; then
-        MONITOR_IFACE="eth0"
-    elif ip link show br0 &>/dev/null && [ -d /sys/class/net/br0 ]; then
-        MONITOR_IFACE="br0"
-    else
-        log_warn "No suitable interface for Suricata (eth0/br0 not found)"
-        log_warn "WiFi interfaces cannot be used for IDS monitoring"
-        MONITOR_IFACE="eth0"  # Default, may not work but won't break WiFi
-    fi
-    log_info "Suricata will monitor interface: $MONITOR_IFACE"
-
-    # Create systemd service for Suricata container (creates container on start)
-    cat > /etc/systemd/system/guardian-suricata.service << EOF
-[Unit]
-Description=HookProbe Guardian Suricata IDS
-After=network-online.target podman.socket
-Wants=network-online.target
-Requires=podman.socket
-# Only start if we have an interface to monitor
-ConditionPathExists=/sys/class/net/${MONITOR_IFACE}
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=3
-# Wait for interface to be fully up
-ExecStartPre=/bin/sleep 10
-ExecStartPre=-/usr/bin/podman stop guardian-suricata
-ExecStartPre=-/usr/bin/podman rm guardian-suricata
-# Pull image if not present
-ExecStartPre=-/usr/bin/podman pull docker.io/jasonish/suricata:latest
-ExecStart=/usr/bin/podman run --name guardian-suricata \\
-    --network host \\
-    --cap-add NET_ADMIN \\
-    --cap-add NET_RAW \\
-    --cap-add SYS_NICE \\
-    -v guardian-suricata-logs:/var/log/suricata:Z \\
-    -v guardian-suricata-rules:/var/lib/suricata:Z \\
-    docker.io/jasonish/suricata:latest -i $MONITOR_IFACE
-ExecStop=/usr/bin/podman stop -t 10 guardian-suricata
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable guardian-suricata 2>/dev/null || true
-
-    log_info "Suricata IDS container installed"
 }
 
 install_dns_shield() {
@@ -1212,7 +1137,7 @@ PYEOF
     cat > /etc/systemd/system/guardian-neuro.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Neuro Protocol (QSecBit + HTP)
-After=network.target podman.socket guardian-suricata.service
+After=network.target podman.socket
 Requires=podman.socket
 
 [Service]
@@ -1240,111 +1165,6 @@ EOF
     systemctl enable guardian-neuro 2>/dev/null || true
 
     log_info "Neuro Protocol container installed"
-}
-
-install_zeek_container() {
-    log_step "Installing Zeek Network Analysis container..."
-
-    # Check if already running
-    if podman ps -a --format "{{.Names}}" | grep -q "^guardian-zeek$"; then
-        log_info "Zeek container already exists"
-        return 0
-    fi
-
-    # Create volumes for Zeek logs
-    podman volume create guardian-zeek-logs 2>/dev/null || true
-    podman volume create guardian-zeek-spool 2>/dev/null || true
-
-    # Pull Zeek image
-    log_info "Pulling Zeek image..."
-    podman pull docker.io/zeek/zeek:latest 2>/dev/null || log_warn "Failed to pull Zeek image"
-
-    # Determine interface to monitor for network analysis
-    # IMPORTANT: Never use wlan* interfaces directly - promiscuous mode interferes with hostapd
-    # Priority: eth0 (ethernet), br0 (bridge), then skip if only WiFi
-    local MONITOR_IFACE=""
-    if ip link show eth0 &>/dev/null && [ -d /sys/class/net/eth0 ]; then
-        MONITOR_IFACE="eth0"
-    elif ip link show br0 &>/dev/null && [ -d /sys/class/net/br0 ]; then
-        MONITOR_IFACE="br0"
-    else
-        log_warn "No suitable interface for Zeek (eth0/br0 not found)"
-        log_warn "WiFi interfaces cannot be used for network monitoring"
-        MONITOR_IFACE="eth0"  # Default, may not work but won't break WiFi
-    fi
-    log_info "Zeek will monitor interface: $MONITOR_IFACE"
-
-    # Create Zeek local.zeek configuration
-    mkdir -p /opt/hookprobe/guardian/zeek
-    cat > /opt/hookprobe/guardian/zeek/local.zeek << 'ZEEKEOF'
-# Guardian Zeek Configuration
-@load base/frameworks/notice
-@load base/protocols/conn
-@load base/protocols/dns
-@load base/protocols/http
-@load base/protocols/ssl
-@load policy/frameworks/notice/extend-email/hostnames
-@load policy/protocols/conn/known-hosts
-@load policy/protocols/conn/known-services
-@load policy/protocols/dns/detect-external-names
-@load policy/protocols/http/detect-sqli
-@load policy/protocols/ssl/validate-certs
-@load policy/misc/detect-traceroute
-@load policy/misc/scan
-
-# Enable JSON logging for easier parsing
-redef LogAscii::use_json = T;
-
-# Detect port scans
-redef Scan::scan_threshold = 25;
-
-# Notice types to log
-redef Notice::policy += {
-    [$action = Notice::LOG,
-     $pred(n: Notice::Info) = { return T; }]
-};
-ZEEKEOF
-
-    # Create systemd service for Zeek container
-    # Dynamically detects interface at start time for resilience
-    cat > /etc/systemd/system/guardian-zeek.service << 'EOF'
-[Unit]
-Description=HookProbe Guardian Zeek Network Analyzer
-After=network-online.target podman.socket
-Wants=network-online.target
-Requires=podman.socket
-# Allow start if either eth0 OR br0 exists (| prefix makes condition non-fatal)
-ConditionPathExists=|/sys/class/net/eth0
-ConditionPathExists=|/sys/class/net/br0
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=30
-StartLimitIntervalSec=600
-StartLimitBurst=5
-# Memory limit to prevent OOM
-MemoryMax=512M
-MemoryHigh=384M
-# Wait for interface to be fully up
-ExecStartPre=/bin/sleep 15
-ExecStartPre=-/usr/bin/podman stop guardian-zeek
-ExecStartPre=-/usr/bin/podman rm guardian-zeek
-# Detect interface dynamically at start time (prefer eth0, fallback to br0)
-ExecStartPre=/bin/bash -c 'if [ -e /sys/class/net/eth0 ]; then echo eth0 > /run/guardian-zeek-iface; elif [ -e /sys/class/net/br0 ]; then echo br0 > /run/guardian-zeek-iface; else echo none > /run/guardian-zeek-iface; fi'
-# Pull image if not present
-ExecStartPre=-/usr/bin/podman pull docker.io/zeek/zeek:latest
-ExecStart=/bin/bash -c 'IFACE=$(cat /run/guardian-zeek-iface); if [ "$IFACE" = "none" ]; then echo "No interface available for Zeek"; exit 1; fi; exec /usr/bin/podman run --name guardian-zeek --network host --cap-add NET_ADMIN --cap-add NET_RAW --memory 512m -v guardian-zeek-logs:/usr/local/zeek/logs:Z -v guardian-zeek-spool:/usr/local/zeek/spool:Z -v /opt/hookprobe/guardian/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro docker.io/zeek/zeek:latest zeek -i $IFACE local'
-ExecStop=/usr/bin/podman stop -t 10 guardian-zeek
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable guardian-zeek 2>/dev/null || true
-
-    log_info "Zeek Network Analyzer container installed"
 }
 
 install_xdp_ddos_protection() {
@@ -1686,8 +1506,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
 
-SURICATA_LOG = "/var/lib/containers/storage/volumes/guardian-suricata-logs/_data/eve.json"
-ZEEK_LOG_DIR = "/var/lib/containers/storage/volumes/guardian-zeek-logs/_data/current"
+NAPSE_ALERT_FILE = "/var/log/hookprobe/napse/alerts.json"
 OUTPUT_FILE = "/var/log/hookprobe/threats/aggregated.json"
 ALERT_FILE = "/var/log/hookprobe/threats/active_alerts.json"
 
@@ -1695,8 +1514,7 @@ class ThreatAggregator:
     def __init__(self):
         self.threats = []
         self.stats = {
-            "suricata_alerts": 0,
-            "zeek_notices": 0,
+            "napse_alerts": 0,
             "xdp_drops": 0,
             "blocked_ips": [],
             "active_attacks": [],
@@ -1704,16 +1522,16 @@ class ThreatAggregator:
             "last_update": None
         }
 
-    def parse_suricata_eve(self, limit=100):
-        """Parse Suricata EVE JSON log"""
+    def parse_napse_alerts(self, limit=100):
+        """Parse NAPSE IDS alert log"""
         alerts = []
         try:
-            if not os.path.exists(SURICATA_LOG):
+            if not os.path.exists(NAPSE_ALERT_FILE):
                 return alerts
 
             # Read last N lines
             result = subprocess.run(
-                ["tail", "-n", str(limit), SURICATA_LOG],
+                ["tail", "-n", str(limit), NAPSE_ALERT_FILE],
                 capture_output=True, text=True
             )
 
@@ -1724,7 +1542,7 @@ class ThreatAggregator:
                     event = json.loads(line)
                     if event.get("event_type") == "alert":
                         alert = {
-                            "source": "suricata",
+                            "source": "napse",
                             "timestamp": event.get("timestamp"),
                             "src_ip": event.get("src_ip"),
                             "dest_ip": event.get("dest_ip"),
@@ -1737,50 +1555,13 @@ class ThreatAggregator:
                             "protocol": event.get("proto")
                         }
                         alerts.append(alert)
-                        self.stats["suricata_alerts"] += 1
+                        self.stats["napse_alerts"] += 1
                 except json.JSONDecodeError:
                     continue
         except Exception as e:
-            print(f"Error parsing Suricata logs: {e}")
+            print(f"Error parsing NAPSE logs: {e}")
 
         return alerts
-
-    def parse_zeek_notices(self, limit=100):
-        """Parse Zeek notice.log"""
-        notices = []
-        try:
-            notice_log = Path(ZEEK_LOG_DIR) / "notice.log"
-            if not notice_log.exists():
-                return notices
-
-            result = subprocess.run(
-                ["tail", "-n", str(limit), str(notice_log)],
-                capture_output=True, text=True
-            )
-
-            for line in result.stdout.strip().split('\n'):
-                if not line or line.startswith('#'):
-                    continue
-                try:
-                    # Zeek JSON format
-                    event = json.loads(line)
-                    notice = {
-                        "source": "zeek",
-                        "timestamp": event.get("ts"),
-                        "src_ip": event.get("src"),
-                        "dest_ip": event.get("dst"),
-                        "note": event.get("note"),
-                        "msg": event.get("msg"),
-                        "severity": 2 if "Scan" in event.get("note", "") else 3
-                    }
-                    notices.append(notice)
-                    self.stats["zeek_notices"] += 1
-                except json.JSONDecodeError:
-                    continue
-        except Exception as e:
-            print(f"Error parsing Zeek logs: {e}")
-
-        return notices
 
     def get_xdp_stats(self):
         """Get XDP statistics"""
@@ -1847,8 +1628,7 @@ class ThreatAggregator:
         all_alerts = []
 
         # Collect from all sources
-        all_alerts.extend(self.parse_suricata_eve())
-        all_alerts.extend(self.parse_zeek_notices())
+        all_alerts.extend(self.parse_napse_alerts())
 
         # Get XDP stats
         xdp_stats = self.get_xdp_stats()
@@ -1900,8 +1680,7 @@ def main():
         try:
             result = aggregator.aggregate()
             print(f"[{datetime.now()}] Aggregated: "
-                  f"Suricata={result['stats']['suricata_alerts']}, "
-                  f"Zeek={result['stats']['zeek_notices']}, "
+                  f"NAPSE={result['stats']['napse_alerts']}, "
                   f"XDP drops={result['stats']['xdp_drops']}, "
                   f"Active attacks={len(result['attacks'])}")
         except Exception as e:
@@ -1919,7 +1698,7 @@ PYEOF
     cat > /etc/systemd/system/guardian-aggregator.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Threat Aggregator
-After=network.target guardian-suricata.service guardian-zeek.service
+After=network.target
 
 [Service]
 Type=simple
@@ -1994,16 +1773,16 @@ test_result() {
 }
 
 echo ""
-echo "1. Testing Suricata IDS..."
+echo "1. Testing NAPSE IDS..."
 echo "   Running TCP SYN scan (should trigger alerts)..."
 nmap -sS -p 22,80,443,8080 $TARGET -T4 --max-retries 1 2>/dev/null || true
 sleep 2
 
-# Check Suricata logs
-if podman logs guardian-suricata 2>&1 | tail -20 | grep -q -i "alert\|signature"; then
-    test_result "Suricata_Detection" "PASS" "Alerts generated for port scan"
+# Check NAPSE alert log
+if [ -f "/var/log/hookprobe/napse/alerts.json" ] && tail -20 /var/log/hookprobe/napse/alerts.json 2>/dev/null | grep -q -i "alert"; then
+    test_result "NAPSE_Detection" "PASS" "Alerts generated for port scan"
 else
-    test_result "Suricata_Detection" "FAIL" "No alerts detected"
+    test_result "NAPSE_Detection" "FAIL" "No alerts detected (NAPSE deployed via AIOCHI)"
 fi
 
 echo ""
@@ -2022,16 +1801,15 @@ nmap --script vuln -p 80,443,8080 $TARGET --max-retries 1 2>/dev/null || true
 sleep 2
 
 echo ""
-echo "5. Checking Zeek network analysis..."
-if podman ps | grep -q guardian-zeek; then
-    # Check if Zeek is logging
-    if podman exec guardian-zeek ls /usr/local/zeek/logs/current/ 2>/dev/null | grep -q "conn.log"; then
-        test_result "Zeek_Logging" "PASS" "Connection logging active"
+echo "5. Checking NAPSE network analysis..."
+if [ -d "/var/log/hookprobe/napse" ]; then
+    if ls /var/log/hookprobe/napse/*.json 2>/dev/null | grep -q .; then
+        test_result "NAPSE_Logging" "PASS" "NAPSE logging active"
     else
-        test_result "Zeek_Logging" "FAIL" "No logs found"
+        test_result "NAPSE_Logging" "FAIL" "No NAPSE logs found"
     fi
 else
-    test_result "Zeek_Logging" "FAIL" "Zeek container not running"
+    test_result "NAPSE_Logging" "FAIL" "NAPSE not running (deployed via AIOCHI)"
 fi
 
 echo ""
@@ -2045,7 +1823,7 @@ fi
 echo ""
 echo "7. Checking threat aggregator..."
 if [ -f "/var/log/hookprobe/threats/aggregated.json" ]; then
-    ALERT_COUNT=$(cat /var/log/hookprobe/threats/aggregated.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['stats']['suricata_alerts'])" 2>/dev/null || echo "0")
+    ALERT_COUNT=$(cat /var/log/hookprobe/threats/aggregated.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['stats']['napse_alerts'])" 2>/dev/null || echo "0")
     if [ "$ALERT_COUNT" -gt 0 ]; then
         test_result "Threat_Aggregation" "PASS" "$ALERT_COUNT alerts aggregated"
     else
@@ -2107,8 +1885,7 @@ EOF
 echo "Report saved to: $REPORT_FILE"
 echo ""
 echo "To view live threats, check:"
-echo "  - Suricata: podman logs -f guardian-suricata"
-echo "  - Zeek: podman exec guardian-zeek cat /usr/local/zeek/logs/current/notice.log"
+echo "  - NAPSE: cat /var/log/hookprobe/napse/alerts.json"
 echo "  - Aggregated: cat /var/log/hookprobe/threats/aggregated.json"
 BASHEOF
 
@@ -2216,9 +1993,9 @@ class QSecBitSample:
     energy_stats: Dict[str, float]
     network_stats: Dict[str, any]
     threats_detected: int
-    suricata_alerts: int
+    napse_alerts: int
     dnsxai_stats: Dict[str, any] = None  # DNS protection stats
-    bridge_stats: Dict[str, any] = None  # Suricata-dnsXai bridge stats
+    bridge_stats: Dict[str, any] = None  # NAPSE-dnsXai bridge stats
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -2392,25 +2169,25 @@ class QSecBitGuardianAgent:
 
         return stats
 
-    def check_suricata_alerts(self) -> int:
-        """Check Suricata for new alerts"""
+    def check_napse_alerts(self) -> int:
+        """Check NAPSE IDS for new alerts"""
         count = 0
-        eve_log = Path('/var/log/suricata/eve.json')
+        napse_log = Path('/var/log/hookprobe/napse/alerts.json')
 
-        # Also check container logs
         try:
-            result = subprocess.run(
-                ['podman', 'exec', 'guardian-suricata', 'tail', '-100', '/var/log/suricata/eve.json'],
-                capture_output=True, text=True, timeout=10
-            )
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    try:
-                        event = json.loads(line)
-                        if event.get('event_type') == 'alert':
-                            count += 1
-                    except json.JSONDecodeError:
-                        pass
+            if napse_log.exists():
+                result = subprocess.run(
+                    ['tail', '-100', str(napse_log)],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        try:
+                            event = json.loads(line)
+                            if event.get('event_type') == 'alert':
+                                count += 1
+                        except json.JSONDecodeError:
+                            pass
         except Exception:
             pass
 
@@ -2468,8 +2245,8 @@ class QSecBitGuardianAgent:
 
         return stats
 
-    def get_suricata_bridge_stats(self) -> Dict:
-        """Get Suricata-dnsXai bridge deep packet inspection stats"""
+    def get_napse_bridge_stats(self) -> Dict:
+        """Get NAPSE-dnsXai bridge deep packet inspection stats"""
         stats = {
             'enabled': False,
             'detections': 0,
@@ -2479,7 +2256,7 @@ class QSecBitGuardianAgent:
             'threat_score': 0.0,
         }
 
-        bridge_log = Path('/var/log/hookprobe/suricata-dnsxai-bridge.log')
+        bridge_log = Path('/var/log/hookprobe/napse-dnsxai-bridge.log')
         if bridge_log.exists():
             stats['enabled'] = True
             try:
@@ -2508,7 +2285,7 @@ class QSecBitGuardianAgent:
         return stats
 
     def calculate_score(self, xdp_stats: Dict, energy_stats: Dict, network_stats: Dict,
-                        threats: int, suricata_alerts: int, dnsxai_stats: Dict = None,
+                        threats: int, napse_alerts: int, dnsxai_stats: Dict = None,
                         bridge_stats: Dict = None) -> tuple:
         """Calculate QSecBit score using full algorithm"""
         components = {
@@ -2524,8 +2301,8 @@ class QSecBitGuardianAgent:
         # Normalize: assume 1GB is high
         components['drift'] = min(1.0, total_bytes / (1024 * 1024 * 1024))
 
-        # Component 2: Attack probability (based on Suricata alerts and XDP drops)
-        alert_factor = min(1.0, suricata_alerts / 50.0)  # Normalize by 50 alerts
+        # Component 2: Attack probability (based on NAPSE alerts and XDP drops)
+        alert_factor = min(1.0, napse_alerts / 50.0)  # Normalize by 50 alerts
         drop_factor = min(1.0, xdp_stats.get('dropped_blocked', 0) / 1000.0)
         components['attack_probability'] = max(alert_factor, drop_factor)
 
@@ -2555,7 +2332,7 @@ class QSecBitGuardianAgent:
             dnsxai_score = max(dnsxai_score, ml_factor, cname_factor)
         components['dnsxai_threat'] = dnsxai_score
 
-        # Component 7: Deep Packet Inspection (Suricata bridge)
+        # Component 7: Deep Packet Inspection (NAPSE bridge)
         dpi_score = 0.0
         if bridge_stats and bridge_stats.get('enabled'):
             dpi_score = bridge_stats.get('threat_score', 0.0)
@@ -2595,13 +2372,13 @@ class QSecBitGuardianAgent:
         energy_stats = self.get_energy_stats()
         network_stats = self.get_network_stats()
         threats = self.check_threats()
-        suricata_alerts = self.check_suricata_alerts()
+        napse_alerts = self.check_napse_alerts()
         dnsxai_stats = self.get_dnsxai_stats()
-        bridge_stats = self.get_suricata_bridge_stats()
+        bridge_stats = self.get_napse_bridge_stats()
 
         # Calculate unified score including all components
         score, rag_status, components = self.calculate_score(
-            xdp_stats, energy_stats, network_stats, threats, suricata_alerts,
+            xdp_stats, energy_stats, network_stats, threats, napse_alerts,
             dnsxai_stats, bridge_stats
         )
 
@@ -2614,7 +2391,7 @@ class QSecBitGuardianAgent:
             energy_stats=energy_stats,
             network_stats=network_stats,
             threats_detected=threats,
-            suricata_alerts=suricata_alerts,
+            napse_alerts=napse_alerts,
             dnsxai_stats=dnsxai_stats,
             bridge_stats=bridge_stats
         )
@@ -2675,16 +2452,16 @@ class QSecBitGuardianAgent:
                         'status': 'GREEN' if bridge.get('tls_sni_blocks', 0) < 3 else 'AMBER'
                     },
                     'L7': {
-                        'score': max(l7_dns_score, l7_dpi_score, min(1.0, sample.suricata_alerts / 10)),
-                        'threats': sample.suricata_alerts + dnsxai.get('blocked', 0),
-                        'status': 'GREEN' if sample.suricata_alerts < 5 else 'AMBER'
+                        'score': max(l7_dns_score, l7_dpi_score, min(1.0, sample.napse_alerts / 10)),
+                        'threats': sample.napse_alerts + dnsxai.get('blocked', 0),
+                        'status': 'GREEN' if sample.napse_alerts < 5 else 'AMBER'
                     },
                 },
                 'xdp': sample.xdp_stats,
                 'energy': sample.energy_stats,
                 'network': sample.network_stats,
                 'threats': sample.threats_detected,
-                'suricata_alerts': sample.suricata_alerts,
+                'napse_alerts': sample.napse_alerts,
                 # dnsXai integration
                 'dnsxai': {
                     'total_queries': dnsxai.get('total_queries', 0),
@@ -2694,7 +2471,7 @@ class QSecBitGuardianAgent:
                     'cname_uncloaked': dnsxai.get('cname_uncloaked', 0),
                     'threat_score': round(dnsxai.get('threat_score', 0.0), 4),
                 },
-                # Suricata-dnsXai bridge (DPI)
+                # NAPSE-dnsXai bridge (DPI)
                 'dpi': {
                     'enabled': bridge.get('enabled', False),
                     'detections': bridge.get('detections', 0),
@@ -2732,7 +2509,7 @@ class QSecBitGuardianAgent:
                 # Log status
                 logger.info(
                     f"QSecBit: {sample.rag_status} score={sample.score:.3f} "
-                    f"threats={sample.threats_detected} alerts={sample.suricata_alerts}"
+                    f"threats={sample.threats_detected} alerts={sample.napse_alerts}"
                 )
 
                 # Alert on RED status
@@ -2796,8 +2573,7 @@ PYEOF
     cat > /etc/systemd/system/guardian-qsecbit.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian QSecBit Agent v5.0
-After=network.target guardian-suricata.service
-Wants=guardian-suricata.service
+After=network.target
 
 [Service]
 Type=simple
@@ -4161,9 +3937,9 @@ security:
     enabled: true
     amber_threshold: 0.45
     red_threshold: 0.70
-  suricata:
+  napse:
     enabled: true
-    eve_log: "/var/log/suricata/eve.json"
+    alert_log: "/var/log/hookprobe/napse/alerts.json"
   waf:
     enabled: true
     modsecurity_rules: "/etc/modsecurity/crs"
@@ -4322,10 +4098,9 @@ enable_services() {
     systemctl enable guardian-ap 2>/dev/null || true
 
     # Enable all Guardian security services
+    # Note: IDS (NAPSE) is deployed via AIOCHI containers, not Guardian
     log_info "Enabling Guardian security stack..."
     systemctl enable guardian-offline 2>/dev/null || true
-    systemctl enable guardian-suricata 2>/dev/null || true
-    systemctl enable guardian-zeek 2>/dev/null || true
     systemctl enable guardian-waf 2>/dev/null || true
     systemctl enable guardian-xdp 2>/dev/null || true
     systemctl enable guardian-aggregator 2>/dev/null || true
@@ -4442,13 +4217,7 @@ fi  # end of "if hostapd not already running"
     # Start security containers and services
     log_info "Starting security stack..."
 
-    # Core IDS/IPS
-    log_info "  - Starting Suricata IDS/IPS..."
-    systemctl start guardian-suricata 2>/dev/null || true
-
-    # Network analysis
-    log_info "  - Starting Zeek Network Analysis..."
-    systemctl start guardian-zeek 2>/dev/null || true
+    # Note: IDS (NAPSE) is deployed via AIOCHI containers, not Guardian
 
     # Web Application Firewall
     log_info "  - Starting ModSecurity WAF..."
@@ -4480,7 +4249,7 @@ fi  # end of "if hostapd not already running"
     log_info "Verifying security stack status..."
     local failed_services=""
 
-    for svc in guardian-suricata guardian-zeek guardian-waf guardian-xdp guardian-aggregator; do
+    for svc in guardian-waf guardian-xdp guardian-aggregator; do
         if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
             failed_services="$failed_services $svc"
         fi
@@ -4510,7 +4279,7 @@ show_guardian_banner() {
     echo ""
     echo -e "  ${GREEN}✓${NC} L1-L7 OSI Layer Threat Detection"
     echo -e "  ${GREEN}✓${NC} QSecBit AI-Powered Security Scoring"
-    echo -e "  ${GREEN}✓${NC} Suricata IDS/IPS (Intrusion Detection/Prevention)"
+    echo -e "  ${GREEN}✓${NC} NAPSE IDS/IPS (via AIOCHI containers)"
     echo -e "  ${GREEN}✓${NC} ModSecurity WAF (Web Application Firewall)"
     echo -e "  ${GREEN}✓${NC} XDP/eBPF High-Performance Packet Processing"
     echo -e "  ${GREEN}✓${NC} dnsXai Ad Block (beta) - ML DNS Protection"
@@ -5119,7 +4888,7 @@ main() {
     # VM support prompt (only on 6GB+ RAM systems)
     prompt_vm_support
 
-    # Install security containers (Suricata IDS, WAF, Neuro, AdGuard)
+    # Install security containers (WAF, Neuro) and services (IDS via NAPSE/AIOCHI)
     log_step "Installing security containers..."
     install_security_containers
 
@@ -5185,7 +4954,7 @@ main() {
     echo -e "  ${BOLD}Security Features:${NC}"
     echo -e "  • L1-L7 OSI Layer Threat Detection"
     echo -e "  • QSecBit AI Security Scoring"
-    echo -e "  • Suricata IDS/IPS"
+    echo -e "  • NAPSE IDS/IPS (via AIOCHI)"
     echo -e "  • ModSecurity WAF"
     echo -e "  • XDP/eBPF Acceleration"
     echo ""
@@ -5219,7 +4988,7 @@ main() {
     echo -e "  $(systemctl is-active hostapd 2>/dev/null || echo 'inactive') hostapd (WiFi AP)"
     echo -e "  $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive') dnsmasq (DHCP/DNS)"
     echo -e "  $(systemctl is-active guardian-webui 2>/dev/null || echo 'inactive') guardian-webui"
-    echo -e "  $(systemctl is-active guardian-suricata 2>/dev/null || echo 'inactive') guardian-suricata (IDS)"
+    echo -e "  NAPSE IDS: deployed via AIOCHI containers"
     echo -e "  $(systemctl is-active guardian-waf 2>/dev/null || echo 'inactive') guardian-waf (WAF)"
     echo -e "  $(systemctl is-active guardian-qsecbit 2>/dev/null || echo 'inactive') guardian-qsecbit"
     if [ "${HOOKPROBE_VM_SUPPORT:-no}" = "yes" ]; then
@@ -5234,7 +5003,7 @@ main() {
     echo -e "  3. View connected devices in the Web UI"
     echo -e "  4. Configure upstream WiFi connection for internet access"
     echo ""
-    echo -e "  ${DIM}Logs: journalctl -u guardian-suricata -u guardian-qsecbit -f${NC}"
+    echo -e "  ${DIM}Logs: journalctl -u guardian-qsecbit -f${NC}"
     echo ""
 }
 

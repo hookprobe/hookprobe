@@ -95,34 +95,34 @@ class L7ApplicationDetector(BaseDetector):
         Detect SQL injection attacks.
 
         Checks for:
-        - Suricata SQLI signatures
+        - NAPSE SQLI signatures
         - Common SQLI patterns in HTTP traffic
         """
         threats = []
 
-        # Check Suricata for SQL injection alerts
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE alerts for SQL injection
+        alerts = self._get_napse_alerts([
             'sql.?inject', 'sqli', 'select.*from', 'union.*select',
             'drop.*table', 'or.1.?=.?1', 'and.1.?=.?1', '--',
             'information_schema', 'benchmark\\(', 'sleep\\('
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.SQL_INJECTION,
-                description=f"SQL Injection: {event.get('alert', {}).get('signature', 'SQLI pattern')}",
+                description=f"SQL Injection: {alert.alert_signature or 'SQLI pattern'}",
                 confidence=0.9,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
                 threats.append(threat)
 
-        # Check Zeek HTTP logs for SQLI patterns
-        http_entries = self._read_zeek_log("http.log", limit=300)
+        # Check NAPSE HTTP events for SQLI patterns
+        http_events = self._get_napse_events("HTTP")
         sqli_patterns = [
             r"'.*or.*'.*=.*'",
             r"union\s+select",
@@ -134,29 +134,26 @@ class L7ApplicationDetector(BaseDetector):
             r"waitfor\s+delay",
         ]
 
-        for parts in http_entries:
-            if len(parts) > 9:
-                uri = parts[9] if len(parts) > 9 else ''
-                post_body = parts[12] if len(parts) > 12 else ''
+        for record in http_events:
+            uri = getattr(record, 'uri', '')
 
-                combined = (uri + post_body).lower()
-                for pattern in sqli_patterns:
-                    if re.search(pattern, combined, re.IGNORECASE):
-                        threat = self._create_threat_event(
-                            attack_type=AttackType.SQL_INJECTION,
-                            description=f"SQL Injection pattern in HTTP request",
-                            confidence=0.85,
-                            source_ip=parts[2] if len(parts) > 2 else None,
-                            dest_ip=parts[4] if len(parts) > 4 else None,
-                            evidence={
-                                'uri': uri[:200],
-                                'pattern_matched': pattern
-                            }
-                        )
+            for pattern in sqli_patterns:
+                if re.search(pattern, uri.lower(), re.IGNORECASE):
+                    threat = self._create_threat_event(
+                        attack_type=AttackType.SQL_INJECTION,
+                        description=f"SQL Injection pattern in HTTP request",
+                        confidence=0.85,
+                        source_ip=getattr(record, 'id_orig_h', None),
+                        dest_ip=getattr(record, 'id_resp_h', None),
+                        evidence={
+                            'uri': uri[:200],
+                            'pattern_matched': pattern
+                        }
+                    )
 
-                        if self._add_threat(threat):
-                            threats.append(threat)
-                        break
+                    if self._add_threat(threat):
+                        threats.append(threat)
+                    break
 
         return threats
 
@@ -166,28 +163,28 @@ class L7ApplicationDetector(BaseDetector):
         """
         threats = []
 
-        # Check Suricata for XSS alerts
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE alerts for XSS
+        alerts = self._get_napse_alerts([
             'xss', 'cross.?site', '<script', 'javascript:',
             'onerror', 'onload', 'onclick', 'document\\.cookie',
             'alert\\(', 'eval\\('
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.XSS,
-                description=f"XSS Attack: {event.get('alert', {}).get('signature', 'XSS pattern')}",
+                description=f"XSS Attack: {alert.alert_signature or 'XSS pattern'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
                 threats.append(threat)
 
-        # Check Zeek HTTP for XSS patterns
+        # Check NAPSE HTTP events for XSS patterns
         xss_patterns = [
             r'<script[^>]*>',
             r'javascript:',
@@ -197,28 +194,27 @@ class L7ApplicationDetector(BaseDetector):
             r'alert\s*\(',
         ]
 
-        http_entries = self._read_zeek_log("http.log", limit=300)
-        for parts in http_entries:
-            if len(parts) > 9:
-                uri = parts[9] if len(parts) > 9 else ''
+        http_events = self._get_napse_events("HTTP")
+        for record in http_events:
+            uri = getattr(record, 'uri', '')
 
-                for pattern in xss_patterns:
-                    if re.search(pattern, uri, re.IGNORECASE):
-                        threat = self._create_threat_event(
-                            attack_type=AttackType.XSS,
-                            description=f"XSS pattern in HTTP request",
-                            confidence=0.8,
-                            source_ip=parts[2] if len(parts) > 2 else None,
-                            dest_ip=parts[4] if len(parts) > 4 else None,
-                            evidence={
-                                'uri': uri[:200],
-                                'pattern_matched': pattern
-                            }
-                        )
+            for pattern in xss_patterns:
+                if re.search(pattern, uri, re.IGNORECASE):
+                    threat = self._create_threat_event(
+                        attack_type=AttackType.XSS,
+                        description=f"XSS pattern in HTTP request",
+                        confidence=0.8,
+                        source_ip=getattr(record, 'id_orig_h', None),
+                        dest_ip=getattr(record, 'id_resp_h', None),
+                        evidence={
+                            'uri': uri[:200],
+                            'pattern_matched': pattern
+                        }
+                    )
 
-                        if self._add_threat(threat):
-                            threats.append(threat)
-                        break
+                    if self._add_threat(threat):
+                        threats.append(threat)
+                    break
 
         return threats
 
@@ -234,38 +230,37 @@ class L7ApplicationDetector(BaseDetector):
         """
         threats = []
 
-        # Check Zeek DNS logs
-        dns_entries = self._read_zeek_log("dns.log", limit=500)
+        # Check NAPSE DNS events
+        dns_events = self._get_napse_events("DNS")
 
         long_queries = []
         high_entropy_queries = []
         txt_queries = []
         domain_query_count: Dict[str, int] = defaultdict(int)
 
-        for parts in dns_entries:
-            if len(parts) > 9:
-                query = parts[9] if len(parts) > 9 else ''
-                qtype = parts[13] if len(parts) > 13 else ''
+        for record in dns_events:
+            query = getattr(record, 'query', '')
+            qtype = getattr(record, 'qtype_name', '')
 
-                if not query:
-                    continue
+            if not query:
+                continue
 
-                # Track query length
-                if len(query) > self.dns_tunnel_query_length:
-                    long_queries.append(query)
+            # Track query length
+            if len(query) > self.dns_tunnel_query_length:
+                long_queries.append(query)
 
-                # Calculate entropy
-                entropy = self._calculate_entropy(query.split('.')[0])
-                if entropy > self.dns_tunnel_entropy_threshold:
-                    high_entropy_queries.append((query, entropy))
+            # Calculate entropy
+            entropy = self._calculate_entropy(query.split('.')[0])
+            if entropy > self.dns_tunnel_entropy_threshold:
+                high_entropy_queries.append((query, entropy))
 
-                # Track TXT queries (often used for tunneling)
-                if qtype == 'TXT':
-                    txt_queries.append(query)
+            # Track TXT queries (often used for tunneling)
+            if qtype == 'TXT':
+                txt_queries.append(query)
 
-                # Track domain frequency
-                domain = '.'.join(query.split('.')[-2:]) if '.' in query else query
-                domain_query_count[domain] += 1
+            # Track domain frequency
+            domain = '.'.join(query.split('.')[-2:]) if '.' in query else query
+            domain_query_count[domain] += 1
 
         # Generate threats based on findings
         if len(long_queries) > 10:
@@ -335,14 +330,13 @@ class L7ApplicationDetector(BaseDetector):
             if not self.http_requests[ip]:
                 del self.http_requests[ip]
 
-        # Parse Zeek HTTP logs
-        http_entries = self._read_zeek_log("http.log", limit=500)
+        # Parse NAPSE HTTP events
+        http_events = self._get_napse_events("HTTP")
 
-        for parts in http_entries:
-            if len(parts) > 2:
-                src_ip = parts[2] if len(parts) > 2 else None
-                if src_ip:
-                    self.http_requests[src_ip].append(now)
+        for record in http_events:
+            src_ip = getattr(record, 'id_orig_h', None)
+            if src_ip:
+                self.http_requests[src_ip].append(now)
 
         # Check for flood
         for ip, timestamps in self.http_requests.items():
@@ -374,21 +368,21 @@ class L7ApplicationDetector(BaseDetector):
         """
         threats = []
 
-        alerts = self._read_suricata_alerts([
+        alerts = self._get_napse_alerts([
             'command.?control', 'c2', 'beacon', 'rat',
             'trojan', 'botnet', 'backdoor', 'malware',
             'cobalt.?strike', 'metasploit', 'meterpreter'
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.MALWARE_C2,
-                description=f"Malware C2: {event.get('alert', {}).get('signature', 'C2 communication')}",
+                description=f"Malware C2: {alert.alert_signature or 'C2 communication'}",
                 confidence=0.9,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
@@ -402,21 +396,21 @@ class L7ApplicationDetector(BaseDetector):
         """
         threats = []
 
-        alerts = self._read_suricata_alerts([
+        alerts = self._get_napse_alerts([
             'command.?inject', 'cmd.?inject', 'rce',
             'remote.?code', 'os.?command', '\\|.*id',
             '\\;.*cat', '\\`.*\\`'
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.COMMAND_INJECTION,
-                description=f"Command Injection: {event.get('alert', {}).get('signature', 'RCE attempt')}",
+                description=f"Command Injection: {alert.alert_signature or 'RCE attempt'}",
                 confidence=0.9,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
@@ -430,28 +424,28 @@ class L7ApplicationDetector(BaseDetector):
         """
         threats = []
 
-        alerts = self._read_suricata_alerts([
+        alerts = self._get_napse_alerts([
             'path.?traversal', 'directory.?traversal',
             'lfi', 'rfi', '\\.\\./\\.\\.',
             '/etc/passwd', '/etc/shadow', 'file.?inclusion'
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.PATH_TRAVERSAL,
-                description=f"Path Traversal: {event.get('alert', {}).get('signature', 'Directory traversal')}",
+                description=f"Path Traversal: {alert.alert_signature or 'Directory traversal'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
                 threats.append(threat)
 
-        # Check HTTP logs for traversal patterns
-        http_entries = self._read_zeek_log("http.log", limit=300)
+        # Check NAPSE HTTP events for traversal patterns
+        http_events = self._get_napse_events("HTTP")
         traversal_patterns = [
             r'\.\./\.\.',
             r'\.\.\\\.\\',
@@ -461,26 +455,25 @@ class L7ApplicationDetector(BaseDetector):
             r'%2e%2e',
         ]
 
-        for parts in http_entries:
-            if len(parts) > 9:
-                uri = parts[9] if len(parts) > 9 else ''
+        for record in http_events:
+            uri = getattr(record, 'uri', '')
 
-                for pattern in traversal_patterns:
-                    if re.search(pattern, uri, re.IGNORECASE):
-                        threat = self._create_threat_event(
-                            attack_type=AttackType.PATH_TRAVERSAL,
-                            description=f"Path traversal pattern in HTTP request",
-                            confidence=0.85,
-                            source_ip=parts[2] if len(parts) > 2 else None,
-                            dest_ip=parts[4] if len(parts) > 4 else None,
-                            evidence={
-                                'uri': uri[:200],
-                                'pattern_matched': pattern
-                            }
-                        )
+            for pattern in traversal_patterns:
+                if re.search(pattern, uri, re.IGNORECASE):
+                    threat = self._create_threat_event(
+                        attack_type=AttackType.PATH_TRAVERSAL,
+                        description=f"Path traversal pattern in HTTP request",
+                        confidence=0.85,
+                        source_ip=getattr(record, 'id_orig_h', None),
+                        dest_ip=getattr(record, 'id_resp_h', None),
+                        evidence={
+                            'uri': uri[:200],
+                            'pattern_matched': pattern
+                        }
+                    )
 
-                        if self._add_threat(threat):
-                            threats.append(threat)
-                        break
+                    if self._add_threat(threat):
+                        threats.append(threat)
+                    break
 
         return threats

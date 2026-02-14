@@ -140,7 +140,7 @@ class OpenRouterClient:
         Generate a dynamic playbook for an unknown alert.
 
         Args:
-            alert_name: Suricata alert signature or name
+            alert_name: IDS alert signature or name
             device_type: Type of device (e.g., "POS terminal", "Employee laptop")
             src_ip: Source IP address
             dst_ip: Destination IP address
@@ -241,7 +241,7 @@ class OpenRouterClient:
         """Build the user prompt for playbook generation."""
         prompt_parts = [
             f"I am a security engine for a small business (flower shop).",
-            f"I just received a Suricata alert: \"{alert_name}\"",
+            f"I just received an IDS alert: \"{alert_name}\"",
             f"The affected device is a: {device_type}",
         ]
 

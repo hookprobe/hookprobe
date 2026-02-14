@@ -2,7 +2,7 @@
 GUARDIAN Agent — Network Defense
 
 Handles L3/L4 threats: IP blocking, rate limiting, subnet quarantine.
-Monitors QSecBit scores, Suricata alerts, and XDP telemetry.
+Monitors QSecBit scores, NAPSE alerts, and XDP telemetry.
 """
 
 import logging
@@ -25,7 +25,7 @@ class GuardianAgent(BaseAgent):
         r"port\s*scan",
         r"ip\s*spoof",
         r"qsecbit.*(?:l3|l4|network|transport)",
-        r"suricata.*alert",
+        r"napse.*alert",
         r"xdp.*(?:block|drop)",
         r"threat\.severity\s*>=?\s*(?:HIGH|CRITICAL)",
         r"block.*ip|rate.*limit|quarantine",
@@ -58,7 +58,7 @@ class GuardianAgent(BaseAgent):
                     "name": "block_ip",
                     "params": {"ip": source_ip, "duration": 3600, "reason": attack_type},
                 }],
-                sources=["QSecBit", "Suricata"],
+                sources=["QSecBit", "NAPSE"],
             )
         elif severity == "HIGH":
             return AgentResponse(
@@ -113,7 +113,7 @@ class GuardianAgent(BaseAgent):
         if content:
             return ChatResponse(
                 message=content, agent=self.name, confidence=0.85,
-                sources=["QSecBit", "Suricata", "XDP"],
+                sources=["QSecBit", "NAPSE", "XDP"],
             )
 
         return ChatResponse(

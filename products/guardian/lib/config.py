@@ -193,15 +193,6 @@ class NetworkConfig:
 @dataclass
 class SecurityConfig:
     """Security and threat detection configuration"""
-    # Suricata IDS/IPS
-    suricata_enabled: bool = True
-    suricata_mode: str = "ips"  # ids or ips
-    suricata_rules_update: bool = True
-    suricata_rules_url: str = "https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz"
-
-    # Zeek network analysis
-    zeek_enabled: bool = True
-    zeek_log_dir: str = "/var/log/zeek"
 
     # ModSecurity WAF
     modsecurity_enabled: bool = True
@@ -642,13 +633,6 @@ network:
 # Security & Threat Detection
 # ============================================================================
 security:
-  # Suricata IDS/IPS
-  suricata_enabled: true
-  suricata_mode: "ips"  # ids or ips
-
-  # Zeek network analysis
-  zeek_enabled: true
-
   # ModSecurity WAF
   modsecurity_enabled: true
   modsecurity_mode: "DetectionOnly"

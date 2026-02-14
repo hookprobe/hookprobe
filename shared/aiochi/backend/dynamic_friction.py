@@ -649,12 +649,12 @@ class DynamicFrictionEngine:
     # Integration with Playbook Engine
     # =========================================================================
 
-    def handle_suricata_alert(self, alert: Dict[str, Any]) -> Optional[FrictionRecord]:
+    def handle_alert(self, alert: Dict[str, Any]) -> Optional[FrictionRecord]:
         """
-        Handle a Suricata alert and apply appropriate friction.
+        Handle an IDS alert and apply appropriate friction.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert
 
         Returns:
             FrictionRecord if friction was applied
@@ -683,7 +683,7 @@ class DynamicFrictionEngine:
         return self.apply_friction(
             device_ip=src_ip,
             qsecbit_score=base_score,
-            reason=f"Suricata: {signature}",
+            reason=f"IDS: {signature}",
             mitre_ids=mitre_ids,
         )
 

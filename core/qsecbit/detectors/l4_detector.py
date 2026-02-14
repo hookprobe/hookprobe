@@ -107,16 +107,16 @@ class L4TransportDetector(BaseDetector):
                     threats.append(threat)
 
         # Also check XDP stats if available (will be populated by XDP manager)
-        alerts = self._read_suricata_alerts(['syn.?flood', 'syn.?attack', 'tcp.?syn'])
-        for event in alerts:
+        alerts = self._get_napse_alerts(['syn.?flood', 'syn.?attack', 'tcp.?syn'])
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.SYN_FLOOD,
-                description=f"SYN flood: {event.get('alert', {}).get('signature', 'SYN attack')}",
+                description=f"SYN flood: {alert.alert_signature or 'SYN attack'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
@@ -136,16 +136,15 @@ class L4TransportDetector(BaseDetector):
         # Reset tracker periodically (every detection run acts as a window)
         self.port_scan_tracker.clear()
 
-        # Analyze Zeek conn.log for connection patterns
-        entries = self._read_zeek_log("conn.log", limit=1000)
+        # Analyze NAPSE connection events for port scan patterns
+        conn_events = self._get_napse_events("CONNECTION")
 
-        for parts in entries:
-            if len(parts) > 5:
-                src_ip = parts[2] if len(parts) > 2 else None
-                dst_port = parts[5] if len(parts) > 5 else None
+        for record in conn_events:
+            src_ip = getattr(record, 'id_orig_h', None)
+            dst_port = getattr(record, 'id_resp_p', None)
 
-                if src_ip and dst_port and dst_port != '-':
-                    self.port_scan_tracker[src_ip].add(dst_port)
+            if src_ip and dst_port:
+                self.port_scan_tracker[src_ip].add(str(dst_port))
 
         # Check for scanners
         for src_ip, ports in self.port_scan_tracker.items():
@@ -243,29 +242,29 @@ class L4TransportDetector(BaseDetector):
         - ACK storms
         - Connection state inconsistencies
 
-        Relies on Suricata/Zeek for deep inspection.
+        Relies on NAPSE for deep inspection.
         """
         threats = []
 
-        # Check Suricata for session-related alerts
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE for session-related alerts
+        alerts = self._get_napse_alerts([
             'session.?hijack', 'seq.?num', 'ack.?storm',
             'tcp.?state', 'connection.?reset'
         ])
 
-        for event in alerts:
-            signature = event.get('alert', {}).get('signature', '').lower()
+        for alert in alerts:
+            signature = (alert.alert_signature or '').lower()
 
             # Distinguish between hijacking and reset attacks
             if 'hijack' in signature or 'seq' in signature:
                 threat = self._create_threat_event(
                     attack_type=AttackType.SESSION_HIJACK,
-                    description=f"Session hijacking: {event.get('alert', {}).get('signature', 'TCP anomaly')}",
+                    description=f"Session hijacking: {alert.alert_signature or 'TCP anomaly'}",
                     confidence=0.8,
-                    source_ip=event.get('src_ip'),
-                    dest_ip=event.get('dest_ip'),
-                    dest_port=event.get('dest_port'),
-                    evidence={'suricata_alert': event.get('alert', {})}
+                    source_ip=alert.src_ip or None,
+                    dest_ip=alert.dest_ip or None,
+                    dest_port=alert.dest_port or None,
+                    evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
                 )
 
                 if self._add_threat(threat):

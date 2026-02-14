@@ -63,7 +63,7 @@ class MedicAgent(BaseAgent):
                     "name": "full_quarantine",
                     "params": {"source_ip": source_ip, "reason": "coordinated attack"},
                 }],
-                sources=["QSecBit", "Suricata", "dnsXai"],
+                sources=["QSecBit", "NAPSE", "dnsXai"],
             )
         else:
             return AgentResponse(
