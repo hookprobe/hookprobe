@@ -69,7 +69,7 @@ class GuardianMetrics:
     # Network stats
     network_stats: Dict[str, Any]
 
-    # Suricata/Zeek integration
+    # IDS engine stats (NAPSE)
     ids_stats: Dict[str, int]
 
     # Recent threat summary
@@ -98,7 +98,7 @@ class GuardianAgent:
     - LayerThreatDetector for L2-L7 threat detection
     - MobileNetworkProtection for hotel/public WiFi security
     - QSecBit for unified threat scoring
-    - Suricata/Zeek for IDS/IPS integration
+    - NAPSE IDS engine
     """
 
     def __init__(
@@ -252,123 +252,32 @@ class GuardianAgent:
         return stats
 
     # =========================================================================
-    # IDS/IPS INTEGRATION
+    # IDS/IPS INTEGRATION (NAPSE)
     # =========================================================================
 
-    def get_suricata_stats(self) -> Dict[str, Any]:
-        """Get Suricata IDS/IPS statistics"""
+    def get_ids_stats(self) -> Dict[str, Any]:
+        """Get NAPSE IDS engine statistics."""
         stats = {
             'running': False,
+            'engine': 'napse',
             'alerts_total': 0,
-            'alerts_critical': 0,
-            'alerts_high': 0,
-            'alerts_medium': 0,
-            'alerts_low': 0,
-            'recent_alerts': []
-        }
-
-        # Check if Suricata is running
-        output, success = self._run_command('podman ps | grep guardian-suricata')
-        stats['running'] = bool(success and 'guardian-suricata' in output)
-
-        # Get recent alerts
-        output, success = self._run_command(
-            'podman exec guardian-suricata tail -100 /var/log/suricata/eve.json 2>/dev/null'
-        )
-
-        if success and output:
-            for line in output.split('\n'):
-                try:
-                    event = json.loads(line)
-                    if event.get('event_type') == 'alert':
-                        severity = event.get('alert', {}).get('severity', 3)
-                        stats['alerts_total'] += 1
-
-                        if severity <= 1:
-                            stats['alerts_critical'] += 1
-                        elif severity == 2:
-                            stats['alerts_high'] += 1
-                        elif severity == 3:
-                            stats['alerts_medium'] += 1
-                        else:
-                            stats['alerts_low'] += 1
-
-                        # Keep last 10 alerts
-                        if len(stats['recent_alerts']) < 10:
-                            stats['recent_alerts'].append({
-                                'timestamp': event.get('timestamp', ''),
-                                'signature': event.get('alert', {}).get('signature', ''),
-                                'severity': severity,
-                                'src_ip': event.get('src_ip', ''),
-                                'dest_ip': event.get('dest_ip', ''),
-                                'category': event.get('alert', {}).get('category', '')
-                            })
-                except json.JSONDecodeError:
-                    continue
-
-        return stats
-
-    def get_zeek_stats(self) -> Dict[str, Any]:
-        """Get Zeek network analysis statistics"""
-        stats = {
-            'running': False,
             'connections_total': 0,
             'dns_queries': 0,
-            'http_requests': 0,
             'ssl_connections': 0,
-            'notices': 0
         }
 
-        # Check if Zeek is running
-        output, success = self._run_command('podman ps | grep guardian-zeek')
-        stats['running'] = bool(success and 'guardian-zeek' in output)
+        # Check if NAPSE container is running
+        output, success = self._run_command('podman ps --format "{{.Names}}" | grep -i napse')
+        stats['running'] = bool(success and output.strip())
 
-        zeek_log_dir = Path('/var/log/zeek/current')
+        if not stats['running']:
+            return stats
 
-        # Count connections
-        conn_log = zeek_log_dir / 'conn.log'
-        if conn_log.exists():
-            output, _ = self._run_command(f'wc -l {conn_log}')
-            try:
-                stats['connections_total'] = int(output.split()[0]) - 8  # Subtract header lines
-            except (ValueError, IndexError):
-                pass
-
-        # Count DNS queries
-        dns_log = zeek_log_dir / 'dns.log'
-        if dns_log.exists():
-            output, _ = self._run_command(f'wc -l {dns_log}')
-            try:
-                stats['dns_queries'] = int(output.split()[0]) - 8
-            except (ValueError, IndexError):
-                pass
-
-        # Count HTTP requests
-        http_log = zeek_log_dir / 'http.log'
-        if http_log.exists():
-            output, _ = self._run_command(f'wc -l {http_log}')
-            try:
-                stats['http_requests'] = int(output.split()[0]) - 8
-            except (ValueError, IndexError):
-                pass
-
-        # Count SSL connections
-        ssl_log = zeek_log_dir / 'ssl.log'
-        if ssl_log.exists():
-            output, _ = self._run_command(f'wc -l {ssl_log}')
-            try:
-                stats['ssl_connections'] = int(output.split()[0]) - 8
-            except (ValueError, IndexError):
-                pass
-
-        # Count notices (anomalies)
-        notice_log = zeek_log_dir / 'notice.log'
-        if notice_log.exists():
-            output, _ = self._run_command(f'wc -l {notice_log}')
-            try:
-                stats['notices'] = int(output.split()[0]) - 8
-            except (ValueError, IndexError):
-                pass
+        # Query NAPSE stats via its health/stats endpoint or PID file
+        output, success = self._run_command(
+            'test -f /run/napse/napse.pid && kill -0 $(cat /run/napse/napse.pid) 2>/dev/null'
+        )
+        stats['running'] = success
 
         return stats
 
@@ -438,7 +347,7 @@ class GuardianAgent:
         self,
         threat_report: Dict[str, Any],
         mobile_report: Dict[str, Any],
-        suricata_stats: Dict[str, Any],
+        ids_stats: Dict[str, Any],
         xdp_stats: Dict[str, Any]
     ) -> tuple:
         """Calculate unified QSecBit score from all components"""
@@ -464,10 +373,8 @@ class GuardianAgent:
         mobile_score = 1.0 - mobile_report.get('protection_score', 0.5)
 
         # 3. IDS alert score (0-1)
-        ids_total = suricata_stats.get('alerts_total', 0)
-        ids_critical = suricata_stats.get('alerts_critical', 0)
-        ids_high = suricata_stats.get('alerts_high', 0)
-        ids_score = min(1.0, (ids_critical * 1.0 + ids_high * 0.5 + ids_total * 0.1) / 20.0)
+        ids_total = ids_stats.get('alerts_total', 0)
+        ids_score = min(1.0, ids_total * 0.1 / 20.0)
 
         # 4. XDP blocking effectiveness (0-1, more blocks = potential attack = higher score)
         xdp_dropped = xdp_stats.get('packets_dropped', 0)
@@ -522,14 +429,13 @@ class GuardianAgent:
         # Run all detections
         threat_report = self.run_threat_detection()
         mobile_report = self.run_mobile_protection_check()
-        suricata_stats = self.get_suricata_stats()
-        zeek_stats = self.get_zeek_stats()
+        ids_stats = self.get_ids_stats()
         xdp_stats = self.get_xdp_stats()
         network_stats = self.get_network_stats()
 
         # Calculate QSecBit score
         qsecbit_score, rag_status, components = self.calculate_qsecbit_score(
-            threat_report, mobile_report, suricata_stats, xdp_stats
+            threat_report, mobile_report, ids_stats, xdp_stats
         )
 
         # Build layer threats summary
@@ -561,10 +467,8 @@ class GuardianAgent:
             xdp_stats=xdp_stats,
             network_stats=network_stats,
             ids_stats={
-                'suricata_running': suricata_stats.get('running', False),
-                'suricata_alerts': suricata_stats.get('alerts_total', 0),
-                'zeek_running': zeek_stats.get('running', False),
-                'zeek_connections': zeek_stats.get('connections_total', 0)
+                'napse_running': ids_stats.get('running', False),
+                'alerts_total': ids_stats.get('alerts_total', 0),
             },
             recent_threats=threat_report.get('recent_threats', [])[-10:]
         )
@@ -606,7 +510,7 @@ class GuardianAgent:
                 'interfaces': metrics.network_stats.get('interfaces', {})
             },
             'threats': threat_report.get('summary', {}).get('total_threats', 0),
-            'suricata_alerts': metrics.ids_stats.get('suricata_alerts', 0),
+            'ids_alerts': metrics.ids_stats.get('alerts_total', 0),
             'layer_breakdown': metrics.layer_threats,
             'mobile_protection': metrics.mobile_protection
         }
@@ -752,10 +656,8 @@ def main():
 
         print(f"\n--- IDS/IPS STATUS ---")
         ids = result.get('ids', {})
-        print(f"  Suricata: {'Running' if ids.get('suricata_running') else 'Stopped'}")
-        print(f"  Suricata Alerts: {ids.get('suricata_alerts', 0)}")
-        print(f"  Zeek: {'Running' if ids.get('zeek_running') else 'Stopped'}")
-        print(f"  Zeek Connections: {ids.get('zeek_connections', 0)}")
+        print(f"  NAPSE: {'Running' if ids.get('napse_running') else 'Stopped'}")
+        print(f"  IDS Alerts: {ids.get('alerts_total', 0)}")
 
         print(f"\n--- XDP STATS ---")
         xdp = result.get('xdp', {})

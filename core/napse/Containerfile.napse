@@ -1,0 +1,72 @@
+# NAPSE - Neural Adaptive Packet Synthesis Engine
+# Container build for HookProbe Fortress/Guardian/Nexus tiers
+#
+# Single ~100MB container replacing legacy IDS stack.
+#
+# Build: podman build -f Containerfile.napse -t hookprobe/napse:latest .
+# Run:   Requires host network + SYS_BPF + NET_ADMIN + NET_RAW
+
+FROM python:3.12-slim AS builder
+
+# Install Rust toolchain for engine compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gcc g++ make pkg-config \
+    libelf-dev libbpf-dev \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install maturin for Rust-Python bridge
+RUN pip install --no-cache-dir maturin
+
+# Build NAPSE Rust engine
+WORKDIR /build/engine
+COPY engine/Cargo.toml engine/pyproject.toml ./
+COPY engine/src/ ./src/
+RUN maturin build --release --strip \
+    && pip install --no-cache-dir target/wheels/napse_engine-*.whl
+
+# ---- Runtime stage ----
+FROM python:3.12-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libelf1 \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python BCC bindings (for eBPF)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-bpfcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built engine wheel
+COPY --from=builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+
+# Install Python dependencies
+COPY requirements.txt /opt/napse/requirements.txt
+RUN pip install --no-cache-dir -r /opt/napse/requirements.txt
+
+# Copy NAPSE source
+COPY . /opt/napse/
+WORKDIR /opt/napse
+
+# Create log directories
+RUN mkdir -p /var/log/napse/current \
+    /var/lib/napse
+
+# Default tier config
+ENV NAPSE_TIER=fortress
+ENV NAPSE_INTERFACE=eth0
+ENV NAPSE_BRIDGE=FTS
+
+# Prometheus metrics port
+EXPOSE 9092
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD python -c "import httpx; r=httpx.get('http://localhost:9092/health'); assert r.status_code==200" || exit 1
+
+ENTRYPOINT ["python", "-m", "core.napse.main"]
+CMD ["--config", "/opt/napse/config/napse.yaml"]

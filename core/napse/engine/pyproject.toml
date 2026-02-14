@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "napse-engine"
+version = "1.0.0"
+description = "NAPSE Protocol Engine for HookProbe"
+requires-python = ">=3.10"
+license = {text = "Proprietary"}
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "napse_engine"

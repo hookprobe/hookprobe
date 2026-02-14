@@ -5,7 +5,7 @@
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Guardian components:
-# - Podman containers (Suricata, WAF, Zeek)
+# - Podman containers (WAF, Neuro)
 # - DNS Shield blocklists
 # - dnsXai ML models, training data, and Python packages (scikit-learn, joblib)
 # - Systemd services (including AP services: guardian-wlan, guardian-ap)
@@ -76,7 +76,6 @@ stop_services() {
     local services=(
         # Core services
         "guardian-webui"
-        "guardian-suricata"
         "dns-shield-update"
         "guardian-qsecbit"
         # Unified services
@@ -87,7 +86,6 @@ stop_services() {
         "guardian-aggregator"
         "guardian-xdp"
         "guardian-waf"
-        "guardian-zeek"
         "guardian-neuro"
         # AP services (WAN-independent startup)
         "guardian-ap"
@@ -138,7 +136,6 @@ remove_systemd_services() {
     local services=(
         # Core services
         "guardian-webui"
-        "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
         "dns-shield-update"
@@ -150,7 +147,6 @@ remove_systemd_services() {
         "guardian-mobile-protection"
         "guardian-aggregator"
         "guardian-xdp"
-        "guardian-zeek"
         # AP services (WAN-independent startup)
         "guardian-ap"
         "guardian-wlan"
@@ -278,10 +274,8 @@ remove_containers() {
     fi
 
     local containers=(
-        "guardian-suricata"
         "guardian-waf"
         "guardian-neuro"
-        "guardian-zeek"
     )
 
     for container in "${containers[@]}"; do
@@ -295,11 +289,7 @@ remove_containers() {
     # Remove volumes
     log_info "Removing Podman volumes..."
     local volumes=(
-        "guardian-suricata-logs"
-        "guardian-suricata-rules"
         "guardian-waf-logs"
-        "guardian-zeek-logs"
-        "guardian-zeek-spool"
     )
 
     for volume in "${volumes[@]}"; do
@@ -691,7 +681,6 @@ remove_guardian_directories() {
 
     # Remove runtime interface detection files
     rm -f /run/guardian-xdp-iface 2>/dev/null || true
-    rm -f /run/guardian-zeek-iface 2>/dev/null || true
     rm -f /run/guardian-*.pid 2>/dev/null || true
     log_info "Removed runtime state files"
 
@@ -1026,9 +1015,9 @@ main() {
     check_root
 
     echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
-    echo -e "  - Guardian systemd services (webui, suricata, htp, xdp, wlan, ap, etc.)"
+    echo -e "  - Guardian systemd services (webui, htp, xdp, wlan, ap, etc.)"
     echo -e "  - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
-    echo -e "  - Podman containers (Suricata IDS, WAF, Zeek, Neuro)"
+    echo -e "  - Podman containers (WAF, Neuro)"
     echo -e "  - DNS Shield blocklists and configuration"
     echo -e "  - dnsXai ML models and training data"
     echo -e "  - ML Python packages (scikit-learn, joblib)"
@@ -1097,9 +1086,9 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Removed:${NC}"
-    echo -e "  • Guardian systemd services (webui, htp, xdp, ids, wlan, ap, offline, routing, etc.)"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, wlan, ap, offline, routing, etc.)"
     echo -e "  • Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
-    echo -e "  • Podman containers and volumes (Suricata, WAF, Zeek, Neuro)"
+    echo -e "  • Podman containers and volumes (WAF, Neuro)"
     echo -e "  • DNS Shield blocklists and configuration"
     echo -e "  • dnsXai ML models, training data, and Python packages"
     echo -e "  • Network bridges (br0, VLAN bridges)"

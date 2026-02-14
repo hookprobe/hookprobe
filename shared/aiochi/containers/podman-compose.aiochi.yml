@@ -11,11 +11,10 @@
 # Note: This stack is OPTIONAL. Core security (QSecBit, dnsXai) runs without it.
 #       AIOCHI adds the "Eyes" - visual dashboards and human narratives.
 #
-# Minimal Stack (~2GB RAM):
+# Minimal Stack (~1.5GB RAM):
 #   - clickhouse: Event analytics database
-#   - suricata: IDS threat detection
-#   - zeek: Connection/protocol logging
-#   - log-shipper: Data pipeline
+#   - napse: NAPSE IDS engine
+#   - log-shipper: Supplementary data pipeline
 #   - identity-engine: Device fingerprinting (AIOCHI core)
 #   - bubble-manager: Ecosystem detection (AIOCHI core)
 #
@@ -42,9 +41,6 @@ volumes:
   clickhouse_data:
   clickhouse_logs:
   n8n_data:
-  suricata_logs:
-  zeek_logs:
-  zeek_spool:
   identity_data:
   bubble_data:
 
@@ -105,10 +101,20 @@ services:
   # Default: CAPTURE_INTERFACE=FTS-mirror (OVS mirror port)
   # ============================================================================
 
-  suricata:
-    image: docker.io/jasonish/suricata:7.0.8
-    container_name: aiochi-suricata
-    hostname: aiochi-suricata
+  # ============================================================================
+  # NAPSE - Neural Adaptive Packet Synthesis Engine (IDS)
+  # ============================================================================
+  # Single high-performance engine for packet analysis, alerting, and event bus.
+  # All consumers (QSecBit, bubble-manager) use the NAPSE event bus directly.
+  # ============================================================================
+
+  napse:
+    build:
+      context: ../../..
+      dockerfile: core/napse/Containerfile.napse
+    image: localhost/aiochi-napse:latest
+    container_name: aiochi-napse
+    hostname: aiochi-napse
     restart: unless-stopped
     network_mode: host
     cap_add:
@@ -116,77 +122,26 @@ services:
       - NET_RAW
       - SYS_NICE
     volumes:
-      - suricata_logs:/var/log/suricata
-      - ./configs/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
-      - ./configs/suricata/rules:/etc/suricata/rules:ro
-      # Required config files for Suricata to start properly
-      - ./configs/suricata/classification.config:/etc/suricata/classification.config:ro
-      - ./configs/suricata/reference.config:/etc/suricata/reference.config:ro
-      # Dual-path state for WAN path type detection
       - /run/fortress:/run/fortress:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
     environment:
+      NAPSE_CONFIG: "${NAPSE_CONFIG:-/etc/hookprobe/napse.yaml}"
       CAPTURE_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
-      WAN_CAPTURE_INTERFACE: "${WAN_CAPTURE_INTERFACE:-}"
-    # Use shell wrapper to conditionally add WAN interface if it exists
-    # This enables dual-capture: LAN (FTS-mirror) + WAN (wan-mirror) for complete visibility
-    # Dual-Path Architecture: Suricata captures from wan-mirror which receives traffic
-    # from both wired (AF_XDP/TC-BPF optimized) and mobile (TC-BPF with sampling) WANs
-    # Simple entrypoint - use LAN interface only (WAN monitoring via wan-mirror if configured)
-    command: ["suricata", "-c", "/etc/suricata/suricata.yaml", "-i", "FTS-mirror", "--af-packet"]
+      CLICKHOUSE_HOST: "172.20.210.10"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: "aiochi"
+      CLICKHOUSE_USER: "aiochi"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     healthcheck:
-      # Check Suricata process is running (uses -f for flexible match, handles Suricata-Main)
-      test: ["CMD-SHELL", "pgrep -f Suricata || pgrep -f suricata || exit 1"]
+      test: ["CMD-SHELL", "test -f /run/napse/napse.pid && kill -0 $(cat /run/napse/napse.pid) || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 45s
-
-  zeek:
-    image: docker.io/zeek/zeek:7.0.3
-    container_name: aiochi-zeek
-    hostname: aiochi-zeek
-    restart: unless-stopped
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    volumes:
-      - zeek_logs:/opt/zeek/logs
-      # Mount custom site scripts (optional)
-      - ./configs/zeek/local.zeek:/opt/zeek/share/zeek/site/local.zeek:ro
-    environment:
-      CAPTURE_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
-      WAN_CAPTURE_INTERFACE: "${WAN_CAPTURE_INTERFACE:-}"
-    # Zeek captures from LAN (FTS-mirror) for device fingerprinting and connection graphs.
-    # WAN capture is optional - Suricata handles WAN threat detection.
-    # Zeek multi-interface requires cluster mode; for small business use cases,
-    # single-interface is sufficient as Zeek's value is LAN protocol analysis.
-    # -C: ignore checksum errors (common with NIC offloading)
-    working_dir: /opt/zeek/logs
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        IFACE="${CAPTURE_INTERFACE:-FTS-mirror}"
-        # Check if WAN capture is specifically requested for Zeek (not recommended - uses more CPU)
-        if [ "${ZEEK_WAN_CAPTURE:-false}" = "true" ] && [ -n "${WAN_CAPTURE_INTERFACE}" ]; then
-          if ip link show "${WAN_CAPTURE_INTERFACE}" >/dev/null 2>&1; then
-            echo "AIOCHI: Zeek WAN capture enabled (note: high CPU usage)"
-            # For multi-interface, create a combined capture using cluster mode or second instance
-            # For now, just use primary interface - WAN threat detection handled by Suricata
-          fi
-        fi
-        echo "AIOCHI: Starting Zeek on interface: $$IFACE"
-        exec zeek -C -i "$$IFACE" local
-    healthcheck:
-      # Check Zeek process is running (use pidof since pgrep not available in zeek image)
-      test: ["CMD-SHELL", "pidof zeek || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      start_period: 15s
 
   # ============================================================================
-  # LOG SHIPPER - Data Pipeline (CORE)
+  # LOG SHIPPER - Supplementary Data Pipeline
   # ============================================================================
 
   log-shipper:
@@ -199,28 +154,19 @@ services:
     networks:
       aiochi-internal:
         ipv4_address: 172.20.210.40
-    volumes:
-      - suricata_logs:/var/log/suricata:ro
-      - zeek_logs:/opt/zeek/logs:ro
     environment:
-      # Use container DNS name instead of hardcoded IP
       CLICKHOUSE_HOST: aiochi-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_DB: aiochi
       CLICKHOUSE_USER: aiochi
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      SURICATA_LOG_PATH: /var/log/suricata/eve.json
-      ZEEK_LOG_PATH: /opt/zeek/logs
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       clickhouse:
         condition: service_healthy
-      suricata:
-        condition: service_started
-      zeek:
+      napse:
         condition: service_started
     healthcheck:
-      # Check Python process is running and can connect to ClickHouse
       test: ["CMD-SHELL", "pgrep -f 'log_shipper' > /dev/null || pgrep -x python"]
       interval: 30s
       timeout: 10s
@@ -231,7 +177,7 @@ services:
   # INTELLIGENCE TIER - Device Identity & Bubble Detection (CORE)
   # ============================================================================
   # These are the AIOCHI-specific components that provide the "cognitive" layer.
-  # They read from Zeek logs (not live capture) to avoid network conflicts.
+  # They consume events from the NAPSE event bus for real-time analysis.
   # ============================================================================
 
   identity-engine:
@@ -279,45 +225,31 @@ services:
       aiochi-internal:
         ipv4_address: 172.20.210.25
     ports:
-      # Bind to all interfaces so fts-web can reach via host gateway
       - "8070:8070"
     volumes:
-      # Zeek logs for mDNS and D2D connection analysis
-      - zeek_logs:/opt/zeek/logs:ro
-      # Persistent bubble state
       - bubble_data:/var/lib/aiochi
-      # OVS socket for OpenFlow rules (bubble policies)
       - /run/openvswitch:/run/openvswitch
-      # Fortress configuration
       - /etc/hookprobe:/etc/hookprobe:ro
-      # Mount scripts for development (override built-in)
       - ../containers/scripts/bubble_entrypoint.py:/opt/hookprobe/bubble_entrypoint.py:ro
       - ../containers/scripts/d2d_tracker.py:/opt/hookprobe/d2d_tracker.py:ro
       - ../bubble:/opt/hookprobe/shared/aiochi/bubble:ro
-      # dnsmasq leases for IP→MAC resolution in D2D tracking
       - /var/lib/misc:/var/lib/misc:ro
+      # NAPSE core library (event bus, bubble_feed)
+      - ../../../core/napse:/opt/hookprobe/core/napse:ro
     environment:
-      # ClickHouse for analytics
       CLICKHOUSE_HOST: aiochi-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_DB: aiochi
       CLICKHOUSE_USER: aiochi
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
-      # Zeek log paths
-      ZEEK_LOG_PATH: /opt/zeek/logs
-      ZEEK_DNS_LOG: /opt/zeek/logs/dns.log
-      ZEEK_CONN_LOG: /opt/zeek/logs/conn.log
-      # Narrative engine (optional - uses templates if not available)
       NARRATIVE_ENGINE_URL: "http://aiochi-narrative:5678"
-      # OpenRouter API for LLM access (configure via fortress-ctl openrouter add-api-key)
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       OPENROUTER_MODEL: "${OPENROUTER_MODEL:-google/gemma-3-27b-it:free}"
-      # Logging
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     cap_add:
-      - NET_ADMIN  # Required for OVS OpenFlow commands
+      - NET_ADMIN
     depends_on:
-      zeek:
+      napse:
         condition: service_started
       clickhouse:
         condition: service_healthy

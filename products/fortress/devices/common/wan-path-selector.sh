@@ -507,7 +507,7 @@ ANOMALY_STATE_DIR="/run/fortress/anomaly"
 FULL_CAPTURE_DURATION=60  # Seconds to run full capture after anomaly
 
 # Trigger full capture on anomaly detection
-# Called by external anomaly detector (Suricata, Zeek, or QSecBit)
+# Called by external anomaly detector (NAPSE or QSecBit)
 trigger_full_capture() {
     local iface="$1"
     local reason="${2:-anomaly_detected}"
@@ -629,7 +629,7 @@ get_capture_mode() {
     fi
 }
 
-# Hook for Suricata/Zeek to trigger full capture
+# Hook for NAPSE to trigger full capture
 # Usage: wan-path-selector.sh anomaly <interface> <reason>
 handle_anomaly_trigger() {
     local iface="$1"

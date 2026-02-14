@@ -2,7 +2,7 @@
 SCOUT Agent — Reconnaissance Detection
 
 Detects port scanning, attacker profiling, honeypot management.
-Monitors Zeek conn.log and QSecBit L4 for scan behavior.
+Monitors NAPSE connections and QSecBit L4 for scan behavior.
 """
 
 import logging
@@ -25,7 +25,7 @@ class ScoutAgent(BaseAgent):
         r"nmap|masscan|shodan",
         r"honeypot|decoy",
         r"enumerat|probe|sweep",
-        r"zeek.*conn|connection.*flood",
+        r"napse.*conn|connection.*flood",
     ]
     allowed_tools = ["honeypot_redirect", "scan_fingerprint", "profile_attacker"]
     confidence_threshold = 0.6
@@ -60,7 +60,7 @@ class ScoutAgent(BaseAgent):
                     "name": "honeypot_redirect",
                     "params": {"source_ip": source_ip},
                 }],
-                sources=["QSecBit", "Zeek"],
+                sources=["QSecBit", "NAPSE"],
             )
         else:
             return AgentResponse(
@@ -77,7 +77,7 @@ class ScoutAgent(BaseAgent):
                     "name": "scan_fingerprint",
                     "params": {"source_ip": source_ip},
                 }],
-                sources=["QSecBit", "Zeek"],
+                sources=["QSecBit", "NAPSE"],
             )
 
     def respond_to_query(
@@ -104,7 +104,7 @@ class ScoutAgent(BaseAgent):
         if content:
             return ChatResponse(
                 message=content, agent=self.name, confidence=0.85,
-                sources=["QSecBit", "Zeek"],
+                sources=["QSecBit", "NAPSE"],
             )
 
         return ChatResponse(

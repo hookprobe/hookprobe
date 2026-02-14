@@ -61,12 +61,12 @@ ANONYMIZE_HTTP_QUERY_PARAMS=true       # Strip query parameters (may contain PII
 # Storage Limitation Principle - data must not be kept longer than necessary
 
 # Security Logs
-RETENTION_SECURITY_LOGS_DAYS=90        # Zeek, Snort, ModSecurity logs (3 months default)
+RETENTION_SECURITY_LOGS_DAYS=90        # NAPSE, ModSecurity logs (3 months default)
 RETENTION_WAF_LOGS_DAYS=90             # WAF block logs
 RETENTION_IDS_ALERTS_DAYS=365          # Critical security alerts (1 year for forensics)
 
 # Network Flow Data
-RETENTION_NETWORK_FLOWS_DAYS=30        # Zeek connection logs (1 month)
+RETENTION_NETWORK_FLOWS_DAYS=30        # NAPSE connection logs (1 month)
 RETENTION_DNS_LOGS_DAYS=30             # DNS query logs
 RETENTION_HTTP_LOGS_DAYS=30            # HTTP metadata logs
 

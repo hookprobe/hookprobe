@@ -1,12 +1,12 @@
 """
 AIOCHI Autonomous Quarantine System
-Automated threat response: Suricata detection → OVS isolation.
+Automated threat response: NAPSE detection → OVS isolation.
 
 Philosophy: When a threat is detected, isolate first, investigate second.
 A flower shop can't afford a 30-minute response time to ransomware.
 
 Architecture:
-1. Monitor Suricata EVE JSON alerts (tail -F)
+1. Monitor NAPSE alerts (tail -F)
 2. Score alerts using severity + confidence
 3. Apply OVS drop rules for high-severity threats
 4. Notify user via dashboard/webhook
@@ -116,8 +116,8 @@ class QuarantineAction:
         }
 
 
-# Suricata alert severity mapping
-SURICATA_SEVERITY = {
+# IDS alert severity mapping
+ALERT_SEVERITY = {
     1: "critical",   # Most severe
     2: "high",
     3: "medium",
@@ -182,11 +182,11 @@ class AutonomousQuarantineEngine:
     """
     Autonomous Quarantine Engine.
 
-    Monitors Suricata alerts and automatically quarantines
+    Monitors NAPSE alerts and automatically quarantines
     devices showing malicious behavior.
 
     Features:
-    - Real-time Suricata EVE JSON monitoring
+    - Real-time NAPSE alert monitoring
     - Signature-based auto-quarantine rules
     - OVS flow rule enforcement
     - Auto-release after investigation window
@@ -200,7 +200,7 @@ class AutonomousQuarantineEngine:
 
     def __init__(
         self,
-        eve_log_path: str = "/var/log/suricata/eve.json",
+        alert_source: str = "/var/log/napse/eve.json",
         state_path: str = "/run/fortress/quarantine-state.json",
         use_ovs: bool = True,
         webhook_url: Optional[str] = None,
@@ -210,13 +210,13 @@ class AutonomousQuarantineEngine:
         Initialize the Autonomous Quarantine Engine.
 
         Args:
-            eve_log_path: Path to Suricata EVE JSON log
+            alert_source: Path to NAPSE alert log
             state_path: Path to save quarantine state
             use_ovs: Enable OVS rule enforcement
             webhook_url: URL for notifications
             auto_release: Enable automatic release after timeout
         """
-        self.eve_log_path = eve_log_path
+        self.alert_source = alert_source
         self.state_path = state_path
         self.use_ovs = use_ovs
         self.webhook_url = webhook_url
@@ -250,7 +250,7 @@ class AutonomousQuarantineEngine:
         self._load_state()
 
     def start_monitoring(self) -> None:
-        """Start monitoring Suricata EVE log."""
+        """Start monitoring NAPSE alert log."""
         if self._monitor_running:
             return
 
@@ -505,10 +505,10 @@ class AutonomousQuarantineEngine:
 
     def process_alert(self, alert: Dict[str, Any]) -> Optional[QuarantineAction]:
         """
-        Process a Suricata alert and determine if quarantine is needed.
+        Process a NAPSE alert and determine if quarantine is needed.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert
 
         Returns:
             QuarantineAction if action was taken, None otherwise
@@ -706,7 +706,7 @@ class AutonomousQuarantineEngine:
     # =========================================================================
 
     def _monitor_eve_log(self) -> None:
-        """Monitor Suricata EVE log for alerts."""
+        """Monitor NAPSE alert log."""
         if not os.path.exists(self.eve_log_path):
             logger.warning(f"EVE log not found: {self.eve_log_path}")
             return

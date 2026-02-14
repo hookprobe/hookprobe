@@ -598,7 +598,7 @@ collect_configuration() {
             echo "    ✓ VictoriaMetrics time-series"
             echo "    ✓ Grafana dashboards"
             echo "    ✓ n8n AI agent workflows"
-            echo "    ✓ Suricata + Zeek network capture"
+            echo "    ✓ NAPSE IDS network capture"
             echo "    ✓ Ollama local LLM"
             echo ""
         fi
@@ -847,7 +847,7 @@ collect_configuration() {
     echo "  • Performance health score with insights"
     echo "  • AI-powered security analysis via local Ollama LLM"
     echo ""
-    echo -e "${DIM}Includes: ClickHouse, Suricata, Zeek, n8n (visualization via AdminLTE web UI)${NC}"
+    echo -e "${DIM}Includes: ClickHouse, NAPSE, n8n (visualization via AdminLTE web UI)${NC}"
     echo -e "${DIM}Adds ~2GB RAM usage${NC}"
     echo ""
 
@@ -895,7 +895,7 @@ collect_configuration() {
         echo "  ✓ VictoriaMetrics time-series"
         echo "  ✓ Grafana monitoring dashboards"
         echo "  ✓ n8n AI Agent workflows + Ollama LLM"
-        echo "  ✓ Suricata + Zeek network capture"
+        echo "  ✓ NAPSE IDS network capture"
         echo "  ✓ Identity Engine + Log Shipper"
         echo ""
     fi
@@ -1191,8 +1191,6 @@ copy_application_files() {
             find "$aiochi_dst" -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
 
             # Create configs directory if it doesn't exist
-            mkdir -p "$aiochi_dst/containers/configs/suricata/rules"
-            mkdir -p "$aiochi_dst/containers/configs/zeek"
             mkdir -p "$aiochi_dst/containers/n8n-workflows"
             # Note: No Grafana - visualization handled by Fortress AdminLTE web UI
 
@@ -1304,8 +1302,6 @@ GRAFANA_PASSWORD=${grafana_pass}
 WEB_PORT=${WEB_PORT:-8443}
 
 # Network interfaces (set during install)
-SURICATA_INTERFACE=${SURICATA_INTERFACE:-FTS}
-ZEEK_INTERFACE=${ZEEK_INTERFACE:-FTS}
 XDP_INTERFACE=${XDP_INTERFACE:-FTS}
 EOF
 
@@ -3254,8 +3250,6 @@ stop_all_services() {
     systemctl stop fts-web 2>/dev/null || true
     systemctl stop fts-agent 2>/dev/null || true
     systemctl stop fts-qsecbit 2>/dev/null || true
-    systemctl stop fts-suricata 2>/dev/null || true
-    systemctl stop fts-zeek 2>/dev/null || true
     systemctl stop fts-xdp 2>/dev/null || true
 
     # 2. Stop podman-compose (graceful container shutdown)
@@ -3427,14 +3421,14 @@ MDNSCONF
     # OPTIONAL services (NOT started by default - use profiles manually):
     #   - n8n (automation) - use: --profile automation
     #   - clickhouse (analytics) - use: --profile analytics
-    #   - suricata, zeek, xdp-protection (IDS) - use: --profile ids
+    #   - napse, xdp-protection (IDS) - use: --profile ids
     #   - lstm-trainer (ML training) - use: --profile training
     #
     # IMPORTANT: We ALWAYS specify explicit service names because podman-compose
     # 1.x ignores profiles and would start ALL services otherwise.
 
     # Service names must match podman-compose.yml (no fts- prefix in compose file)
-    # NOTE: bubble-manager is NOW part of AIOCHI stack (requires Zeek for mDNS detection)
+    # NOTE: bubble-manager is NOW part of AIOCHI stack (requires NAPSE for mDNS detection)
     # This removes host network dependency that was blocking port forwarding
     local core_services="postgres redis web qsecbit-agent dnsxai dfs-intelligence"
 
@@ -3585,35 +3579,8 @@ start_optional_services() {
         log_info "ClickHouse started (HTTP: localhost:8123, Native: localhost:9000)"
     fi
 
-    # IDS/IPS (Suricata + Zeek + XDP) - ONLY if NOT using AIOCHI
-    if [ "${INSTALL_IDS:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
-        log_info "Starting IDS/IPS services..."
-
-        # Suricata
-        podman run -d --name fts-suricata \
-            --restart unless-stopped \
-            --network host \
-            --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
-            -v fts-suricata-logs:/var/log/suricata \
-            -v fts-suricata-rules:/var/lib/suricata \
-            -v fts-suricata-config:/etc/suricata \
-            -e SURICATA_INTERFACE="${SURICATA_INTERFACE:-FTS}" \
-            docker.io/jasonish/suricata:latest \
-            2>/dev/null || log_warn "Suricata may already be running"
-
-        # Zeek
-        podman run -d --name fts-zeek \
-            --restart unless-stopped \
-            --network host \
-            --cap-add NET_ADMIN --cap-add NET_RAW \
-            -v fts-zeek-logs:/usr/local/zeek/logs \
-            -v fts-zeek-spool:/usr/local/zeek/spool \
-            docker.io/zeek/zeek:latest \
-            zeek -i "${ZEEK_INTERFACE:-FTS}" local LogAscii::use_json=T \
-            2>/dev/null || log_warn "Zeek may already be running"
-
-        log_info "IDS/IPS services started (Suricata + Zeek)"
-    fi
+    # IDS/IPS (NAPSE + XDP) - NAPSE is deployed via AIOCHI compose stack
+    # No standalone IDS containers needed; NAPSE handles all IDS functionality
 
     # Cloudflare Tunnel
     if [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
@@ -3640,7 +3607,7 @@ start_optional_services() {
     # AIOCHI provides:
     #   - ClickHouse: Event storage and analytics
     #   - VictoriaMetrics: Time-series metrics
-    #   - Suricata + Zeek: Network traffic capture
+    #   - NAPSE: Network traffic capture and IDS
     #   - Identity Engine: Device fingerprinting and labeling
     #   - Narrative Engine (n8n): Human-readable event stories
     #   - Grafana: Visual dashboards
@@ -3792,8 +3759,6 @@ AIOCHIENV
             # Pull images with size estimates
             # Core AIOCHI images (always pulled)
             pull_with_progress "docker.io/clickhouse/clickhouse-server:24.8" "ClickHouse" "~500MB"
-            pull_with_progress "docker.io/jasonish/suricata:7.0.8" "Suricata IDS" "~300MB"
-            pull_with_progress "docker.io/zeek/zeek:7.0.3" "Zeek NSM" "~400MB"
             # Optional AIOCHI images (n8n for --aiochi-workflows or --aiochi-full)
             pull_with_progress "docker.io/n8nio/n8n:1.70.3" "n8n Workflows" "~400MB"
             # Note: No Grafana/VictoriaMetrics - visualization via Fortress AdminLTE web UI
@@ -3892,41 +3857,9 @@ AIOCHIENV
 
             # NOTE: VictoriaMetrics removed - ClickHouse handles time-series analytics
 
-            # 2. Capture Tier
-            # IMPORTANT: Capture from FTS-mirror (OVS mirror port), NOT FTS directly!
-            # Direct AF_PACKET capture on OVS bridge causes packet loss and CPU starvation.
-            # See: devices/common/ovs-post-setup.sh (setup_traffic_mirror function)
-            #
-            # Dual-interface capture: FTS-mirror (LAN) + wan-mirror (WAN) for complete visibility
-            local suricata_interfaces="-i FTS-mirror"
-            local zeek_interface="FTS-mirror"
-            if ip link show wan-mirror &>/dev/null; then
-                suricata_interfaces="-i FTS-mirror -i wan-mirror"
-                log_info "    ✓ Suricata will capture from both FTS-mirror and wan-mirror"
-            else
-                log_info "    ℹ Suricata will capture from FTS-mirror only (wan-mirror not available)"
-            fi
-
-            start_aiochi_container "aiochi-suricata" "Suricata IDS (host network)" \
-                --name aiochi-suricata \
-                --restart unless-stopped \
-                --network host \
-                --cap-add NET_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
-                -v aiochi-suricata-logs:/var/log/suricata \
-                -v /run/fortress:/run/fortress:ro \
-                docker.io/jasonish/suricata:7.0.8 \
-                $suricata_interfaces --af-packet
-
-            # Zeek captures LAN only (device fingerprinting focus)
-            # WAN threat detection handled by Suricata
-            start_aiochi_container "aiochi-zeek" "Zeek NSM (host network)" \
-                --name aiochi-zeek \
-                --restart unless-stopped \
-                --network host \
-                --cap-add NET_ADMIN --cap-add NET_RAW \
-                -v aiochi-zeek-logs:/opt/zeek/logs \
-                docker.io/zeek/zeek:7.0.3 \
-                zeek -i "$zeek_interface" local LogAscii::use_json=T
+            # 2. Capture Tier - NAPSE IDS
+            # NAPSE is deployed via AIOCHI compose stack (podman-compose.aiochi.yml)
+            # No legacy Suricata/Zeek containers needed
 
             # Note: No Grafana container - visualization handled by Fortress AdminLTE web UI
             # This saves ~200MB RAM and avoids redundant dashboarding
@@ -3974,7 +3907,7 @@ AIOCHIENV
                 AIOCHI_FAILED_CONTAINERS="${AIOCHI_FAILED_CONTAINERS} aiochi-identity(build-failed)"
             fi
 
-            # 6. Log Shipper (ships Suricata/Zeek logs to ClickHouse)
+            # 6. Log Shipper (ships NAPSE logs to ClickHouse)
             # Only start if the image was built successfully
             if [ "${AIOCHI_LOGSHIPPER_BUILT:-false}" = "true" ]; then
                 start_aiochi_container "aiochi-logshipper" "Log Shipper" \
@@ -3982,15 +3915,11 @@ AIOCHIENV
                     --restart unless-stopped \
                     --network aiochi-internal \
                     --ip 172.20.210.40 \
-                    -v aiochi-suricata-logs:/var/log/suricata:ro \
-                    -v aiochi-zeek-logs:/opt/zeek/logs:ro \
                     -e CLICKHOUSE_HOST=172.20.210.10 \
                     -e CLICKHOUSE_PORT=8123 \
                     -e CLICKHOUSE_DB=aiochi \
                     -e CLICKHOUSE_USER=aiochi \
                     -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
-                    -e SURICATA_LOG_PATH=/var/log/suricata/eve.json \
-                    -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
                     -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
                     localhost/aiochi-logshipper:latest
             else
@@ -4008,7 +3937,6 @@ AIOCHIENV
                     --ip 172.20.210.25 \
                     -p 127.0.0.1:8070:8070 \
                     --cap-add NET_ADMIN \
-                    -v aiochi-zeek-logs:/opt/zeek/logs:ro \
                     -v aiochi-bubble-data:/var/lib/aiochi \
                     -v /run/openvswitch:/run/openvswitch \
                     -v /etc/hookprobe:/etc/hookprobe:ro \
@@ -4017,9 +3945,6 @@ AIOCHIENV
                     -e CLICKHOUSE_DB=aiochi \
                     -e CLICKHOUSE_USER=aiochi \
                     -e CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-aiochi_secure_password}" \
-                    -e ZEEK_LOG_PATH=/opt/zeek/logs/current \
-                    -e ZEEK_DNS_LOG=/opt/zeek/logs/current/dns.log \
-                    -e ZEEK_CONN_LOG=/opt/zeek/logs/current/conn.log \
                     -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
                     localhost/aiochi-bubble:latest
             else
@@ -4087,8 +4012,7 @@ AIOCHIENV
             log_info "    • ClickHouse:      http://localhost:8123  (analytics)"
             log_info "    • Grafana:         http://localhost:3000  (dashboards)"
             log_info "    • Identity Engine: http://localhost:8060  (device fingerprinting)"
-            log_info "    • Suricata:        IDS on FTS-mirror"
-            log_info "    • Zeek:            NSM on FTS-mirror"
+            log_info "    • NAPSE:           IDS via AIOCHI compose"
             if [ "${AIOCHI_WORKFLOWS:-false}" = "true" ] || [ "${AIOCHI_FULL:-false}" = "true" ]; then
                 log_info ""
                 log_info "  Optional - Workflows:"
@@ -4132,11 +4056,11 @@ ConditionPathExists=/opt/hookprobe/shared/aiochi/containers/podman-compose.aioch
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/bin/bash -c 'podman network exists aiochi-internal || podman network create --subnet 172.20.210.0/24 --gateway 172.20.210.1 aiochi-internal'
-# Core: clickhouse, suricata, zeek, identity, bubble, logshipper
+# Core: clickhouse, napse, identity, bubble, logshipper
 # Optional (started if installed): narrative (n8n), ollama
 # Note: No Grafana - visualization via Fortress AdminLTE web UI
-ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
-ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-zeek aiochi-suricata aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
+ExecStart=/bin/bash -c 'for c in aiochi-clickhouse aiochi-napse aiochi-identity aiochi-bubble aiochi-logshipper aiochi-narrative aiochi-ollama; do podman container exists $c 2>/dev/null && podman start $c 2>/dev/null || true; done'
+ExecStop=/bin/bash -c 'for c in aiochi-logshipper aiochi-bubble aiochi-identity aiochi-ollama aiochi-narrative aiochi-napse aiochi-clickhouse; do podman container exists $c 2>/dev/null && podman stop -t 10 $c 2>/dev/null || true; done'
 Restart=no
 
 [Install]
@@ -4180,7 +4104,7 @@ save_optional_services_config() {
 # When true, includes ALL analytics components:
 #   - ClickHouse analytics database
 #   - n8n AI Agent workflows + Ollama LLM
-#   - Suricata + Zeek network capture
+#   - NAPSE IDS network capture
 #   - Identity Engine + Log Shipper + Bubble Manager
 #   - Visualization via Fortress AdminLTE web UI
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
@@ -4888,7 +4812,7 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
 # OPTIONAL (NOT started by default):
 #   - grafana, victoria (monitoring)
 #   - n8n, clickhouse (automation/analytics)
-#   - suricata, zeek, xdp-protection (IDS)
+#   - napse, xdp-protection (IDS)
 #   - lstm-trainer (ML training)
 ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
   CORE="postgres redis web qsecbit-agent dnsxai dfs-intelligence" && \\
@@ -5239,7 +5163,7 @@ save_installation_state() {
     # All security core containers are always installed
     local containers='["fts-web", "fts-postgres", "fts-redis", "fts-qsecbit", "fts-dnsxai", "fts-dfs"]'
     # Volumes defined in podman-compose.yml (core tier only, optional profiles auto-create theirs)
-    local volumes='["fts-postgres-data", "fts-postgres-certs", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dnsxai-certs", "fts-dfs-data", "fts-zeek-logs"]'
+    local volumes='["fts-postgres-data", "fts-postgres-certs", "fts-redis-data", "fts-web-data", "fts-web-logs", "fts-dnsxai-data", "fts-dnsxai-blocklists", "fts-dnsxai-certs", "fts-dfs-data"]'
 
     # Network configuration for Python config.py to load
     local lan_subnet="10.200.0.0/${LAN_SUBNET_MASK:-24}"
@@ -5318,8 +5242,6 @@ uninstall() {
     echo "    - fts-lstm-trainer (ML training)"
     echo "    - fts-n8n (workflow automation, if installed)"
     echo "    - fts-clickhouse (analytics database, if installed)"
-    echo "    - fts-suricata (IDS, if installed)"
-    echo "    - fts-zeek (network analyzer, if installed)"
     echo "    - fts-cloudflared (tunnel, if installed)"
     echo ""
     echo "  OVS Network:"
@@ -5363,7 +5285,7 @@ uninstall() {
     podman rm -f fts-web fts-qsecbit fts-dnsxai fts-dfs fts-lstm-trainer 2>/dev/null || true
     # Optional services
     podman rm -f fts-n8n fts-clickhouse fts-cloudflared 2>/dev/null || true
-    podman rm -f fts-suricata fts-zeek fts-xdp 2>/dev/null || true
+    podman rm -f fts-xdp 2>/dev/null || true
 
     # Stage 2b: Remove container images
     log_info "Stage 2b: Removing container images..."
@@ -5392,12 +5314,6 @@ uninstall() {
             fts-n8n-data \
             fts-clickhouse-data \
             fts-clickhouse-logs \
-            fts-suricata-logs \
-            fts-suricata-rules \
-            fts-suricata-config \
-            fts-zeek-logs \
-            fts-zeek-spool \
-            fts-zeek-config \
             fts-xdp-data \
             fortress-config \
             2>/dev/null || true
@@ -5611,7 +5527,7 @@ main() {
                 ;;
             --enable-aiochi)
                 # AIOCHI (AI Eyes) - minimal core installation (~2GB RAM)
-                # Includes: ClickHouse, Suricata, Zeek, Identity, Bubble, LogShipper
+                # Includes: ClickHouse, NAPSE, Identity, Bubble, LogShipper
                 export INSTALL_AIOCHI=true
                 export INSTALL_CLICKHOUSE=true
                 export INSTALL_IDS=true
@@ -5681,7 +5597,7 @@ main() {
                 echo ""
                 echo "AIOCHI (AI Eyes) - Cognitive Network Layer:"
                 echo "  --enable-aiochi           Install AIOCHI minimal (~2GB RAM)"
-                echo "                            Core: ClickHouse, Grafana, Suricata, Zeek,"
+                echo "                            Core: ClickHouse, Grafana, NAPSE,"
                 echo "                            Identity Engine, Bubble Manager, Log Shipper"
                 echo "  --aiochi-workflows        Add n8n workflow automation (~500MB more)"
                 echo "  --aiochi-ai               Add Ollama LLM for AI narratives (~4GB more)"

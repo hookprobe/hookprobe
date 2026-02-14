@@ -526,12 +526,12 @@ class AttackChainPredictor:
     # Integration
     # =========================================================================
 
-    def handle_suricata_alert(self, alert: Dict[str, Any]) -> Optional[ChainPrediction]:
+    def handle_alert(self, alert: Dict[str, Any]) -> Optional[ChainPrediction]:
         """
-        Handle Suricata alert and update chain.
+        Handle IDS alert and update chain.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert
 
         Returns:
             ChainPrediction if threshold met

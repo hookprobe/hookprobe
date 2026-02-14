@@ -144,7 +144,7 @@ def get_policy_resolver():
 def get_d2d_connection_graph():
     """Get the D2D connection graph analyzer.
 
-    Parses Zeek conn.log to detect device-to-device communication
+    Analyzes NAPSE connection events to detect device-to-device communication
     patterns and calculate affinity scores for bubble detection.
 
     Affinity Score Formula:

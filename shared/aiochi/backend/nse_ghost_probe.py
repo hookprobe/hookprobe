@@ -3,7 +3,7 @@ AIOCHI NSE Ghost Probe Service
 Active interrogation using Nmap Scripting Engine to verify suspicious devices.
 
 Philosophy: Most systems are passive until an alert fires. Ghost Probe uses
-NSE as a proactive verification tool - when Suricata triggers, we instantly
+NSE as a proactive verification tool - when NAPSE triggers, we instantly
 fingerprint the source to catch masquerading (T1036).
 
 MITRE Coverage:
@@ -552,16 +552,16 @@ class NSEGhostProbe:
     # Integration with Playbook Engine
     # =========================================================================
 
-    def handle_suricata_alert(
+    def handle_alert(
         self,
         alert: Dict[str, Any],
         expected_device_type: Optional[str] = None,
     ) -> Optional[ProbeResult]:
         """
-        Handle Suricata alert by probing the source.
+        Handle IDS alert by probing the source.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert
             expected_device_type: Expected device type for the source IP
 
         Returns:
