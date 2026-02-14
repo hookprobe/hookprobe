@@ -788,7 +788,7 @@ custom_component_selection() {
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_MONITORING=true || ENABLE_MONITORING=false
 
     # AI Detection
-    read -p "Enable AI Detection (Suricata + ML) [+4GB RAM]? [y/N]: " -n 1 -r
+    read -p "Enable AI Detection (NAPSE + ML) [+4GB RAM]? [y/N]: " -n 1 -r
     echo ""
     [[ $REPLY =~ ^[Yy]$ ]] && ENABLE_AI=true || ENABLE_AI=false
 
@@ -1311,7 +1311,7 @@ main() {
     echo -e "  ${GREEN}[x]${NC} POD-005: Cache (Redis 7)"
     echo -e "  ${GREEN}[x]${NC} POD-010: Neuro Protocol (Qsecbit + HTP)"
     echo -e "  $([ "$ENABLE_MONITORING" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-004: Monitoring (Grafana + VictoriaMetrics)"
-    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-006: Detection (Suricata, Zeek, Snort)"
+    echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-006: Detection (NAPSE)"
     echo -e "  $([ "$ENABLE_AI" = true ] && echo "${GREEN}[x]${NC}" || echo "${YELLOW}[-]${NC}") POD-007: AI Analysis (Machine Learning)"
 
     echo ""
@@ -3511,7 +3511,7 @@ deploy_monitoring_pod() {
 }
 
 deploy_detection_pod() {
-    echo "Deploying POD-006: Detection (Suricata, Zeek, Snort)..."
+    echo "Deploying POD-006: Detection (NAPSE)..."
 
     local network_arg=$(get_network_arg "detection")
 
@@ -3521,16 +3521,16 @@ deploy_detection_pod() {
 
     podman run -d \
         --pod hookprobe-detection \
-        --name hookprobe-detection-suricata \
+        --name hookprobe-detection-napse \
         --memory 2048M \
         --restart unless-stopped \
-        --health-cmd "pgrep suricata || exit 1" \
+        --health-cmd "pgrep napse || exit 1" \
         --health-interval 30s \
         --health-timeout 5s \
         --health-retries 3 \
         --health-start-period 120s \
         --cap-add NET_ADMIN \
-        docker.io/jasonish/suricata:latest
+        localhost/hookprobe-napse:latest
 
     echo -e "${GREEN}✓${NC} POD-006 deployed"
 }

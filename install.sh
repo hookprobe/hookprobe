@@ -1100,7 +1100,7 @@ show_capability_summary() {
         echo -e "  ${BOLD}${tier_num}${NC}) ${GREEN}██${NC}░░ ${BOLD}${WHITE}GUARDIAN${NC} ${GREEN}[AVAILABLE]${NC}"
         echo -e "       ${ITALIC}\"Protection on the Move\"${NC}"
         echo -e "       ${DIM}Travel-secure router / Home gateway${NC}"
-        echo -e "       ${DIM}Installs: WiFi AP, IDS/IPS (Suricata), WAF, dnsXai, Web UI${NC}"
+        echo -e "       ${DIM}Installs: WiFi AP, IDS/IPS (NAPSE), WAF, dnsXai, Web UI${NC}"
         tier_num=$((tier_num + 1))
     else
         echo -e "  ${DIM}░░░░ GUARDIAN [NOT AVAILABLE]${NC}"
@@ -1209,7 +1209,7 @@ show_install_menu() {
         echo -e "        ${DIM}RAM: 1.5GB+ | Storage: 8GB+ | Network: 2+ interfaces${NC}"
         echo -e "        ${CYAN}Installs:${NC}"
         echo -e "          • WiFi Access Point (hostapd, dnsmasq)"
-        echo -e "          • IDS/IPS (Suricata container)"
+        echo -e "          • IDS/IPS (NAPSE via AIOCHI)"
         echo -e "          • Web Application Firewall"
         echo -e "          • dnsXai DNS Protection (ML-based ad/tracker blocking)"
         echo -e "          • Guardian Web UI (Flask)"
@@ -1330,7 +1330,7 @@ install_guardian() {
     echo "  • MAC-based device categorization via RADIUS"
     echo "  • WebSocket VPN with Noise Protocol"
     echo "  • Web Application Firewall (WAF)"
-    echo "  • IDS/IPS (Suricata/Zeek)"
+    echo "  • IDS/IPS (NAPSE)"
     echo "  • Lite AI threat detection"
     echo "  • Ad blocking (optional)"
     echo "  • Container runtime (Podman)"
@@ -1615,7 +1615,7 @@ install_fortress() {
     echo ""
     echo -e "  ${GREEN}1) Skip${NC}        - No AIOCHI (core security only)"
     echo -e "  ${GREEN}2) Core${NC}        - Analytics + IDS (~2GB RAM)"
-    echo "                   ClickHouse, Suricata, Zeek, Identity Engine"
+    echo "                   ClickHouse, NAPSE, Identity Engine"
     echo -e "  ${GREEN}3) Standard${NC}    - Core + Workflows (~3GB RAM)"
     echo "                   Adds n8n workflow automation"
     echo -e "  ${GREEN}4) Full${NC}        - Standard + Local AI (~8GB RAM)"
@@ -1662,7 +1662,7 @@ install_fortress() {
         esac
         echo -e "${BOLD}AIOCHI - AI Eyes ($aiochi_label):${NC}"
         echo "  ✓ ClickHouse analytics database"
-        echo "  ✓ Suricata + Zeek network capture"
+        echo "  ✓ NAPSE network capture"
         echo "  ✓ Identity Engine + Bubble Manager"
         echo "  ✓ Log Shipper data pipeline"
         [ "$aiochi_level" -ge 3 ] && echo "  ✓ n8n workflow automation"
@@ -1933,7 +1933,7 @@ uninstall_stop_services() {
     echo -e "${CYAN}Stopping systemd services...${NC}"
     for service in hookprobe-sentinel hookprobe-guardian hookprobe-fortress hookprobe-nexus hookprobe-edge hookprobe-neuro \
                    fortress fortress-hostapd-2ghz fortress-hostapd-5ghz fortress-dnsmasq \
-                   fts-web fts-agent fts-qsecbit fts-suricata fts-zeek fts-xdp; do
+                   fts-web fts-agent fts-qsecbit fts-xdp; do
         if systemctl is-active --quiet "$service" 2>/dev/null; then
             echo "  Stopping $service..."
             systemctl stop "$service" 2>/dev/null || true
@@ -2020,7 +2020,7 @@ uninstall_images() {
         local images=$(podman images -q --filter "reference=*hookprobe*" 2>/dev/null)
         [ -n "$images" ] && podman rmi -f $images 2>/dev/null || true
 
-        for img in postgres redis valkey grafana victoria-metrics n8n suricata zeek clickhouse; do
+        for img in postgres redis valkey grafana victoria-metrics n8n clickhouse; do
             podman rmi -f "$img" 2>/dev/null || true
         done
     fi
@@ -2166,8 +2166,6 @@ uninstall_guardian() {
         echo "Stopping Guardian services..."
         local guardian_services=(
             guardian-webui
-            guardian-suricata
-            guardian-zeek
             guardian-waf
             guardian-xdp
             guardian-aggregator
@@ -2216,14 +2214,9 @@ uninstall_guardian() {
             echo "Removing container images..."
             local images_to_remove=(
                 "docker.io/owasp/modsecurity-crs"
-                "docker.io/jasonish/suricata"
-                "docker.io/zeek/zeek"
                 "docker.io/adguard/adguardhome"
                 "modsecurity"
-                "suricata"
-                "zeek"
                 "adguard"
-                "snort"
             )
             for img_pattern in "${images_to_remove[@]}"; do
                 for img in $(podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -i "$img_pattern" || true); do
@@ -2282,10 +2275,6 @@ uninstall_guardian() {
         echo "Removing Attack Simulator..."
         rm -rf /opt/hookprobe/guardian/simulator
 
-        # Remove Zeek configuration
-        echo "Removing Zeek configuration..."
-        rm -rf /opt/hookprobe/guardian/zeek
-
         # Remove network interfaces
         echo "Removing network interfaces..."
         for vlan in 10 20 30 40 50 60 70 80 999; do
@@ -2319,8 +2308,7 @@ uninstall_guardian() {
         # Remove log directories
         echo "Removing log directories..."
         rm -rf /var/log/hookprobe/threats
-        rm -rf /var/log/zeek
-        rm -rf /var/log/suricata
+        rm -rf /var/log/napse
 
         # Remove container storage
         echo "Removing container storage..."

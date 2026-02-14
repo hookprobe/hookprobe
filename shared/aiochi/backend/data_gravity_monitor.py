@@ -2,7 +2,7 @@
 Data Gravity Monitor - Sensitive File Exfiltration Detection
 ============================================================
 
-Connects DSM (Data Security Management) directly to Zeek's file-extraction
+Connects DSM (Data Security Management) directly to NAPSE's file-extraction
 logs to track sensitive data movement and prevent exfiltration.
 
 Data Gravity Concept:
@@ -12,7 +12,7 @@ Data Gravity Concept:
 - Low QSecBit + high file mass + internet direction = BLOCK
 
 Integration Points:
-- Zeek files.log: Real-time file transfer detection
+- NAPSE files.log: Real-time file transfer detection
 - QSecBit scores: Device trustworthiness
 - OVS flows: Instant exfil blocking
 - DSM policies: Sensitivity classification rules
@@ -83,14 +83,14 @@ class ActionTaken(Enum):
 
 @dataclass
 class FileTransfer:
-    """Record of a file transfer event from Zeek."""
+    """Record of a file transfer event from NAPSE."""
     timestamp: datetime
-    uid: str                  # Zeek connection UID
+    uid: str                  # Connection UID
     source_ip: str
     source_port: int
     dest_ip: str
     dest_port: int
-    fuid: str                # Zeek file UID
+    fuid: str                # File UID
     filename: Optional[str]
     mime_type: Optional[str]
     file_size: int
@@ -303,12 +303,12 @@ class DataGravityMonitor:
     def __init__(
         self,
         ovs_bridge: str = "br-mesh",
-        zeek_files_log: str = "/var/log/zeek/current/files.log",
+        files_log: str = "/var/log/napse/files.log",
         state_file: str = "/var/lib/aiochi/data_gravity.json",
         qsecbit_callback: Optional[Callable[[str], float]] = None,
     ):
         self.ovs_bridge = ovs_bridge
-        self.zeek_files_log = Path(zeek_files_log)
+        self.files_log = Path(files_log)
         self.state_file = Path(state_file)
         self.qsecbit_callback = qsecbit_callback
 
@@ -330,7 +330,7 @@ class DataGravityMonitor:
         self._pattern_cache: List[Tuple[re.Pattern, SensitiveFile]] = []
         self._compile_patterns()
 
-        logger.info(f"DataGravityMonitor initialized: zeek_log={zeek_files_log}")
+        logger.info(f"DataGravityMonitor initialized: files_log={files_log}")
 
     def _compile_patterns(self):
         """Compile sensitive file patterns for faster matching."""
@@ -549,7 +549,7 @@ class DataGravityMonitor:
         Analyze a file transfer for potential exfiltration.
 
         Args:
-            transfer: File transfer record from Zeek
+            transfer: File transfer record from NAPSE
 
         Returns:
             ExfilEvent if sensitive, None if public/allowed
@@ -655,11 +655,11 @@ class DataGravityMonitor:
             logger.error(f"Error blocking transfer: {e}")
             return False
 
-    async def process_zeek_log_line(self, line: str) -> Optional[ExfilEvent]:
+    async def process_log_line(self, line: str) -> Optional[ExfilEvent]:
         """
-        Process a single line from Zeek files.log.
+        Process a single line from NAPSE files.log.
 
-        Zeek files.log format (tab-separated):
+        NAPSE files.log format (tab-separated):
         ts, fuid, tx_hosts, rx_hosts, conn_uids, source, depth, analyzers,
         mime_type, filename, duration, local_orig, is_orig, seen_bytes,
         total_bytes, missing_bytes, overflow_bytes, timedout, parent_fuid,
@@ -710,38 +710,38 @@ class DataGravityMonitor:
             return await self.analyze_transfer(transfer)
 
         except Exception as e:
-            logger.debug(f"Error parsing Zeek log line: {e}")
+            logger.debug(f"Error parsing log line: {e}")
             return None
 
-    async def watch_zeek_log(self):
+    async def watch_files_log(self):
         """
-        Watch Zeek files.log for new entries and analyze in real-time.
+        Watch NAPSE files.log for new entries and analyze in real-time.
 
         Uses tail -f approach for streaming.
         """
-        logger.info(f"Starting Zeek log watcher: {self.zeek_files_log}")
+        logger.info(f"Starting file log watcher: {self.files_log}")
 
         while True:
             try:
-                if not self.zeek_files_log.exists():
-                    logger.warning(f"Zeek log not found: {self.zeek_files_log}")
+                if not self.files_log.exists():
+                    logger.warning(f"Files log not found: {self.files_log}")
                     await asyncio.sleep(5)
                     continue
 
                 proc = await asyncio.create_subprocess_exec(
-                    "tail", "-F", str(self.zeek_files_log),
+                    "tail", "-F", str(self.files_log),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
 
                 async for line in proc.stdout:
                     try:
-                        await self.process_zeek_log_line(line.decode("utf-8", errors="ignore"))
+                        await self.process_log_line(line.decode("utf-8", errors="ignore"))
                     except Exception as e:
                         logger.debug(f"Line processing error: {e}")
 
             except Exception as e:
-                logger.error(f"Zeek watcher error: {e}")
+                logger.error(f"File log watcher error: {e}")
                 await asyncio.sleep(5)
 
     async def get_recent_events(
@@ -833,7 +833,7 @@ class DataGravityMonitor:
 # Convenience function for integration
 async def create_data_gravity_monitor(
     ovs_bridge: str = "br-mesh",
-    zeek_log: str = "/var/log/zeek/current/files.log",
+    files_log: str = "/var/log/napse/files.log",
     internal_networks: List[str] = None,
     qsecbit_callback: Callable[[str], float] = None,
 ) -> DataGravityMonitor:
@@ -845,11 +845,11 @@ async def create_data_gravity_monitor(
             internal_networks=["10.0.0.0/8", "192.168.0.0/16"],
             qsecbit_callback=lambda ip: device_scores.get(ip, 0.5),
         )
-        asyncio.create_task(monitor.watch_zeek_log())
+        asyncio.create_task(monitor.watch_files_log())
     """
     monitor = DataGravityMonitor(
         ovs_bridge=ovs_bridge,
-        zeek_files_log=zeek_log,
+        files_log=files_log,
         qsecbit_callback=qsecbit_callback,
     )
 

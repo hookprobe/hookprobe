@@ -71,7 +71,7 @@ class IoC:
     """
     Indicator of Compromise
 
-    Generated from LSTM predictions and Suricata/Zeek analysis.
+    Generated from LSTM predictions and NAPSE analysis.
     Contains structured attack information for defense AI consultation.
     """
     ioc_id: str                          # Unique identifier
@@ -95,7 +95,7 @@ class IoC:
     occurrence_count: int = 1
 
     # Source data
-    source_system: str = "lstm"          # lstm, suricata, zeek, dnsxai
+    source_system: str = "lstm"          # lstm, napse, dnsxai
     source_node: str = ""                # Node that detected this
 
     # Metadata

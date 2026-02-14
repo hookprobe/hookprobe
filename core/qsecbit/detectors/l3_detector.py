@@ -97,16 +97,16 @@ class L3NetworkDetector(BaseDetector):
                     if self._add_threat(threat):
                         threats.append(threat)
 
-        # Check Suricata for spoofing alerts
-        alerts = self._read_suricata_alerts(['spoof', 'bogon', 'martian', 'impossible.source'])
-        for event in alerts:
+        # Check NAPSE for spoofing alerts
+        alerts = self._get_napse_alerts(['spoof', 'bogon', 'martian', 'impossible.source'])
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.IP_SPOOFING,
-                description=f"IP spoofing: {event.get('alert', {}).get('signature', 'Spoofed packet')}",
+                description=f"IP spoofing: {alert.alert_signature or 'Spoofed packet'}",
                 confidence=0.8,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
@@ -188,50 +188,48 @@ class L3NetworkDetector(BaseDetector):
         """
         threats = []
 
-        # Check Suricata for Smurf indicators
-        alerts = self._read_suricata_alerts(['smurf', 'icmp.*.broadcast', 'amplification'])
-        for event in alerts:
+        # Check NAPSE for Smurf indicators
+        alerts = self._get_napse_alerts(['smurf', 'icmp.*.broadcast', 'amplification'])
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.SMURF_ATTACK,
-                description=f"Smurf attack: {event.get('alert', {}).get('signature', 'ICMP amplification')}",
+                description=f"Smurf attack: {alert.alert_signature or 'ICMP amplification'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
                 threats.append(threat)
 
-        # Check for broadcast ICMP patterns in Zeek
-        conn_entries = self._read_zeek_log("conn.log", limit=500)
-        for parts in conn_entries:
-            if len(parts) > 7:
-                proto = parts[6] if len(parts) > 6 else ''
-                dest_ip = parts[4] if len(parts) > 4 else ''
-                src_ip = parts[2] if len(parts) > 2 else ''
+        # Check NAPSE connection events for broadcast ICMP patterns
+        conn_events = self._get_napse_events("CONNECTION")
+        for record in conn_events:
+            proto = getattr(record, 'proto', '')
+            dest_ip = getattr(record, 'id_resp_h', '')
+            src_ip = getattr(record, 'id_orig_h', '')
 
-                # Check for broadcast destinations with ICMP
-                if proto == 'icmp' and dest_ip:
-                    if dest_ip.endswith('.255') or dest_ip == '255.255.255.255':
-                        # Track source IPs sending to broadcast
-                        self.broadcast_icmp_sources[src_ip] = self.broadcast_icmp_sources.get(src_ip, 0) + 1
+            # Check for broadcast destinations with ICMP
+            if proto == 'icmp' and dest_ip:
+                if dest_ip.endswith('.255') or dest_ip == '255.255.255.255':
+                    self.broadcast_icmp_sources[src_ip] = self.broadcast_icmp_sources.get(src_ip, 0) + 1
 
-                        if self.broadcast_icmp_sources[src_ip] > self.smurf_threshold:
-                            threat = self._create_threat_event(
-                                attack_type=AttackType.SMURF_ATTACK,
-                                description=f"Smurf attack pattern: {src_ip} sending ICMP to broadcast {dest_ip}",
-                                confidence=0.8,
-                                source_ip=src_ip,
-                                dest_ip=dest_ip,
-                                evidence={
-                                    'broadcast_icmp_count': self.broadcast_icmp_sources[src_ip],
-                                    'threshold': self.smurf_threshold
-                                }
-                            )
+                    if self.broadcast_icmp_sources[src_ip] > self.smurf_threshold:
+                        threat = self._create_threat_event(
+                            attack_type=AttackType.SMURF_ATTACK,
+                            description=f"Smurf attack pattern: {src_ip} sending ICMP to broadcast {dest_ip}",
+                            confidence=0.8,
+                            source_ip=src_ip,
+                            dest_ip=dest_ip,
+                            evidence={
+                                'broadcast_icmp_count': self.broadcast_icmp_sources[src_ip],
+                                'threshold': self.smurf_threshold
+                            }
+                        )
 
-                            if self._add_threat(threat):
-                                threats.append(threat)
+                        if self._add_threat(threat):
+                            threats.append(threat)
 
         return threats
 
@@ -298,19 +296,19 @@ class L3NetworkDetector(BaseDetector):
         """
         Detect IP fragmentation attacks (teardrop, overlapping fragments).
 
-        Checks Suricata for fragmentation-related alerts.
+        Checks NAPSE for fragmentation-related alerts.
         """
         threats = []
 
-        alerts = self._read_suricata_alerts(['frag', 'teardrop', 'overlap', 'reassembly'])
-        for event in alerts:
+        alerts = self._get_napse_alerts(['frag', 'teardrop', 'overlap', 'reassembly'])
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.FRAGMENTATION_ATTACK,
-                description=f"Fragmentation attack: {event.get('alert', {}).get('signature', 'Malformed fragments')}",
+                description=f"Fragmentation attack: {alert.alert_signature or 'Malformed fragments'}",
                 confidence=0.8,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):

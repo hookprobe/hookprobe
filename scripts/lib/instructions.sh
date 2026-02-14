@@ -140,7 +140,7 @@ show_low_ram_warning() {
     echo "  • Monitoring (Grafana + Victoria): ~2GB    [selected]"
 
     [ "${ENABLE_AI:-false}" = true ] && \
-    echo "  • AI Detection (Suricata + ML):    ~4GB    [selected]"
+    echo "  • AI Detection (NAPSE + ML):       ~4GB    [selected]"
 
     echo "  • OS/kernel overhead:              ~1GB"
     echo ""
@@ -279,7 +279,7 @@ show_success_message() {
     fi
 
     if [ "$enable_ai" = true ]; then
-        echo "  ${GREEN}[x]${NC} POD-006: Detection (Suricata, Zeek, Snort)"
+        echo "  ${GREEN}[x]${NC} POD-006: Detection (NAPSE IDS/IPS)"
         echo "  ${GREEN}[x]${NC} POD-007: AI Analysis (Machine Learning)"
     fi
 

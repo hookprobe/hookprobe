@@ -58,7 +58,7 @@ try:
     from .real_data import (
         get_dnsxai_stats,
         get_recent_blocked_domains,
-        get_suricata_alerts,
+        get_napse_alerts,
         get_device_events,
         get_system_performance,
         get_ambient_state,
@@ -4050,7 +4050,7 @@ def api_bubble_suggestions():
     """
     Get D2D-based bubble suggestions for the dashboard.
 
-    Uses Zeek conn.log analysis to identify devices that communicate
+    Uses NAPSE connection analysis to identify devices that communicate
     and should be grouped into the same user bubble.
 
     Enhanced with Trio+ recommended algorithm:
@@ -4114,7 +4114,7 @@ def api_bubble_suggestions():
                 'iot_device_pairs': 0,
                 'high_confidence': 0,
             },
-            'note': 'D2D analysis modules not available - Zeek data collection in progress'
+            'note': 'D2D analysis modules not available - NAPSE data collection in progress'
         })
 
     except Exception as e:
@@ -4452,7 +4452,7 @@ def api_events_stream():
     """Server-Sent Events endpoint for real-time dashboard updates.
 
     Streams:
-    - Security events (Suricata alerts)
+    - Security events (NAPSE alerts)
     - DNS blocking events
     - Device events (join/leave)
     - Bubble changes
@@ -4472,9 +4472,9 @@ def api_events_stream():
 
                 events_to_send = []
 
-                # Get recent Suricata alerts
+                # Get recent NAPSE alerts
                 if REAL_DATA_AVAILABLE:
-                    alerts = get_suricata_alerts(limit=5)
+                    alerts = get_napse_alerts(limit=5)
                     for alert in alerts:
                         try:
                             alert_time = datetime.fromisoformat(alert.get('timestamp', '').replace('Z', '+00:00'))
@@ -5452,7 +5452,7 @@ def api_d2d_stats():
 def api_d2d_analyze():
     """Trigger D2D connection analysis.
 
-    Parses Zeek logs and updates device relationships.
+    Analyzes NAPSE connection events and updates device relationships.
     Admin only as this can be resource-intensive.
     """
     if not D2D_CONNECTION_AVAILABLE:

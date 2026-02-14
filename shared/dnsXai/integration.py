@@ -397,11 +397,11 @@ def patch_guardian_agent_with_adblock(
     )
 
     def patched_calculate_qsecbit_score(
-        threat_report, mobile_report, suricata_stats, xdp_stats
+        threat_report, mobile_report, ids_stats, xdp_stats
     ):
         # Call original
         base_score, rag_status, components = original_calculate_score(
-            threat_report, mobile_report, suricata_stats, xdp_stats
+            threat_report, mobile_report, ids_stats, xdp_stats
         )
 
         # Add ad blocking component

@@ -68,58 +68,57 @@ class L5SessionDetector(BaseDetector):
         SSL strip: MITM downgrades HTTPS to HTTP, intercepts traffic.
 
         Detection methods:
-        - Suricata alerts for SSL strip signatures
+        - NAPSE alerts for SSL strip signatures
         - HSTS header absence on known HTTPS sites
         - HTTP traffic to typically HTTPS-only ports/domains
         """
         threats = []
 
-        # Check Suricata for SSL strip indicators
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE alerts for SSL strip indicators
+        alerts = self._get_napse_alerts([
             'ssl.?strip', 'https.?downgrade', 'hsts.?bypass',
             'secure.?cookie', 'mitm'
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.SSL_STRIP,
-                description=f"SSL stripping: {event.get('alert', {}).get('signature', 'HTTPS downgrade')}",
+                description=f"SSL stripping: {alert.alert_signature or 'HTTPS downgrade'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                dest_port=event.get('dest_port'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                dest_port=alert.dest_port or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
                 threats.append(threat)
 
-        # Check Zeek HTTP logs for suspicious patterns
-        http_entries = self._read_zeek_log("http.log", limit=200)
-        for parts in http_entries:
-            if len(parts) > 10:
-                host = parts[8] if len(parts) > 8 else ''
-                uri = parts[9] if len(parts) > 9 else ''
+        # Check NAPSE HTTP events for suspicious patterns
+        http_events = self._get_napse_events("HTTP")
+        for record in http_events:
+            host = getattr(record, 'host', '')
+            uri = getattr(record, 'uri', '')
 
-                # Check for known HTTPS-only domains served over HTTP
-                https_only_domains = ['bank', 'secure', 'login', 'account', 'payment']
-                if any(d in host.lower() for d in https_only_domains):
-                    # This is HTTP traffic to a typically secure domain
-                    threat = self._create_threat_event(
-                        attack_type=AttackType.SSL_STRIP,
-                        description=f"Potential SSL strip: HTTP traffic to secure domain {host}",
-                        confidence=0.7,
-                        dest_ip=parts[4] if len(parts) > 4 else None,
-                        dest_port=int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else None,
-                        evidence={
-                            'host': host,
-                            'uri': uri[:100],
-                            'detection': 'http_to_secure_domain'
-                        }
-                    )
+            # Check for known HTTPS-only domains served over HTTP
+            https_only_domains = ['bank', 'secure', 'login', 'account', 'payment']
+            if any(d in host.lower() for d in https_only_domains):
+                # This is HTTP traffic to a typically secure domain
+                threat = self._create_threat_event(
+                    attack_type=AttackType.SSL_STRIP,
+                    description=f"Potential SSL strip: HTTP traffic to secure domain {host}",
+                    confidence=0.7,
+                    dest_ip=getattr(record, 'id_resp_h', None),
+                    dest_port=getattr(record, 'id_resp_p', None),
+                    evidence={
+                        'host': host,
+                        'uri': uri[:100],
+                        'detection': 'http_to_secure_domain'
+                    }
+                )
 
-                    if self._add_threat(threat):
-                        threats.append(threat)
+                if self._add_threat(threat):
+                    threats.append(threat)
 
         return threats
 
@@ -131,47 +130,43 @@ class L5SessionDetector(BaseDetector):
         """
         threats = []
 
-        # Check Zeek SSL logs
-        ssl_entries = self._read_zeek_log("ssl.log", limit=200)
+        # Check NAPSE TLS events
+        tls_events = self._get_napse_events("TLS")
 
-        for parts in ssl_entries:
-            if len(parts) > 6:
-                src_ip = parts[2] if len(parts) > 2 else None
-                dest_ip = parts[4] if len(parts) > 4 else None
-                dest_port = parts[5] if len(parts) > 5 else None
-                ssl_version = parts[6] if len(parts) > 6 else ''
+        for record in tls_events:
+            ssl_version = getattr(record, 'version', '')
 
-                if ssl_version in self.weak_tls_versions:
-                    threat = self._create_threat_event(
-                        attack_type=AttackType.TLS_DOWNGRADE,
-                        description=f"Weak TLS version: {ssl_version} (should use TLS 1.2+)",
-                        confidence=0.9,
-                        source_ip=src_ip,
-                        dest_ip=dest_ip,
-                        dest_port=int(dest_port) if dest_port and dest_port.isdigit() else None,
-                        evidence={
-                            'ssl_version': ssl_version,
-                            'weak_versions': self.weak_tls_versions
-                        }
-                    )
+            if ssl_version in self.weak_tls_versions:
+                threat = self._create_threat_event(
+                    attack_type=AttackType.TLS_DOWNGRADE,
+                    description=f"Weak TLS version: {ssl_version} (should use TLS 1.2+)",
+                    confidence=0.9,
+                    source_ip=getattr(record, 'id_orig_h', None),
+                    dest_ip=getattr(record, 'id_resp_h', None),
+                    dest_port=getattr(record, 'id_resp_p', None),
+                    evidence={
+                        'ssl_version': ssl_version,
+                        'weak_versions': self.weak_tls_versions
+                    }
+                )
 
-                    if self._add_threat(threat):
-                        threats.append(threat)
+                if self._add_threat(threat):
+                    threats.append(threat)
 
-        # Check Suricata for downgrade attacks
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE alerts for downgrade attacks
+        alerts = self._get_napse_alerts([
             'tls.?downgrade', 'ssl.?version', 'poodle',
             'drown', 'beast', 'crime', 'breach'
         ])
 
-        for event in alerts:
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.TLS_DOWNGRADE,
-                description=f"TLS downgrade attack: {event.get('alert', {}).get('signature', 'Protocol downgrade')}",
+                description=f"TLS downgrade attack: {alert.alert_signature or 'Protocol downgrade'}",
                 confidence=0.85,
-                source_ip=event.get('src_ip'),
-                dest_ip=event.get('dest_ip'),
-                evidence={'suricata_alert': event.get('alert', {})}
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
+                evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
             )
 
             if self._add_threat(threat):
@@ -191,53 +186,52 @@ class L5SessionDetector(BaseDetector):
         """
         threats = []
 
-        # Check Suricata for certificate alerts
-        alerts = self._read_suricata_alerts([
+        # Check NAPSE alerts for certificate alerts
+        alerts = self._get_napse_alerts([
             'certificate', 'cert.?invalid', 'self.?signed',
             'expired', 'untrusted', 'ca.?invalid'
         ])
 
-        for event in alerts:
-            signature = event.get('alert', {}).get('signature', '').lower()
+        for alert in alerts:
+            signature = (alert.alert_signature or '').lower()
 
             # Determine if this is a pinning bypass vs just a bad cert
             if any(x in signature for x in ['self-signed', 'untrusted', 'invalid']):
                 threat = self._create_threat_event(
                     attack_type=AttackType.CERT_PINNING_BYPASS,
-                    description=f"Certificate anomaly: {event.get('alert', {}).get('signature', 'Invalid certificate')}",
+                    description=f"Certificate anomaly: {alert.alert_signature or 'Invalid certificate'}",
                     confidence=0.8,
-                    source_ip=event.get('src_ip'),
-                    dest_ip=event.get('dest_ip'),
-                    dest_port=event.get('dest_port'),
-                    evidence={'suricata_alert': event.get('alert', {})}
+                    source_ip=alert.src_ip or None,
+                    dest_ip=alert.dest_ip or None,
+                    dest_port=alert.dest_port or None,
+                    evidence={'napse_sig_id': alert.alert_signature_id, 'category': alert.alert_category}
                 )
 
                 if self._add_threat(threat):
                     threats.append(threat)
 
-        # Check Zeek SSL logs for certificate issues
-        ssl_entries = self._read_zeek_log("ssl.log", limit=200)
+        # Check NAPSE TLS events for certificate issues
+        tls_events = self._get_napse_events("TLS")
 
-        for parts in ssl_entries:
-            if len(parts) > 15:
-                validation_status = parts[14] if len(parts) > 14 else ''
-                server_name = parts[9] if len(parts) > 9 else ''
+        for record in tls_events:
+            validation_status = getattr(record, 'validation_status', '')
+            server_name = getattr(record, 'server_name', '')
 
-                # Check for validation failures
-                if validation_status and validation_status not in ['ok', '-', '']:
-                    threat = self._create_threat_event(
-                        attack_type=AttackType.CERT_PINNING_BYPASS,
-                        description=f"Certificate validation failed for {server_name}: {validation_status}",
-                        confidence=0.85,
-                        dest_ip=parts[4] if len(parts) > 4 else None,
-                        evidence={
-                            'server_name': server_name,
-                            'validation_status': validation_status
-                        }
-                    )
+            # Check for validation failures
+            if validation_status and validation_status not in ['ok', '-', '']:
+                threat = self._create_threat_event(
+                    attack_type=AttackType.CERT_PINNING_BYPASS,
+                    description=f"Certificate validation failed for {server_name}: {validation_status}",
+                    confidence=0.85,
+                    dest_ip=getattr(record, 'id_resp_h', None),
+                    evidence={
+                        'server_name': server_name,
+                        'validation_status': validation_status
+                    }
+                )
 
-                    if self._add_threat(threat):
-                        threats.append(threat)
+                if self._add_threat(threat):
+                    threats.append(threat)
 
         return threats
 

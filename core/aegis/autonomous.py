@@ -284,10 +284,7 @@ class SystemIntrospector:
                       os.path.exists("/opt/hookprobe/dnsxai"),
             "slaai": os.path.exists("/run/fortress/slaai-recommendation.json"),
             "aiochi": os.path.exists("/opt/hookprobe/aiochi"),
-            "suricata": self._check_service("fts-suricata") or
-                        self._check_service("aiochi-suricata"),
-            "zeek": self._check_service("fts-zeek") or
-                    self._check_service("aiochi-zeek"),
+            "napse": self._check_service("aiochi-napse"),
             "ollama": self._check_service("aiochi-ollama") or
                       self._check_port(11434),
             "clickhouse": self._check_service("fts-clickhouse") or

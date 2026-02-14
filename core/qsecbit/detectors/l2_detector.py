@@ -228,27 +228,23 @@ class L2DataLinkDetector(BaseDetector):
         """
         Detect VLAN hopping attacks (802.1Q-in-Q double tagging).
 
-        Checks Suricata alerts for VLAN-related anomalies.
+        Checks NAPSE alerts for VLAN-related anomalies.
         """
         threats = []
 
-        alerts = self._read_suricata_alerts(['vlan', 'double.?tag', '802\\.1q'])
+        alerts = self._get_napse_alerts(['vlan', 'double.?tag', '802\\.1q'])
 
-        for event in alerts:
-            src_ip = event.get('src_ip')
-            dest_ip = event.get('dest_ip')
-            signature = event.get('alert', {}).get('signature', 'VLAN anomaly')
-
+        for alert in alerts:
             threat = self._create_threat_event(
                 attack_type=AttackType.VLAN_HOPPING,
-                description=f"VLAN hopping attempt: {signature}",
+                description=f"VLAN hopping attempt: {alert.alert_signature or 'VLAN anomaly'}",
                 confidence=0.75,
-                source_ip=src_ip,
-                dest_ip=dest_ip,
+                source_ip=alert.src_ip or None,
+                dest_ip=alert.dest_ip or None,
                 evidence={
-                    'suricata_alert': event.get('alert', {}),
-                    'flow_id': event.get('flow_id'),
-                    'timestamp': event.get('timestamp')
+                    'napse_sig_id': alert.alert_signature_id,
+                    'category': alert.alert_category,
+                    'community_id': alert.community_id,
                 }
             )
 
@@ -390,17 +386,14 @@ class L2DataLinkDetector(BaseDetector):
         """
         threats = []
 
-        # Check Zeek DHCP logs
-        dhcp_log = self.zeek_log_dir / "dhcp.log"
-        if dhcp_log.exists():
-            entries = self._read_zeek_log("dhcp.log", limit=100)
-            dhcp_servers = set()
+        # Check NAPSE DHCP events
+        dhcp_events = self._get_napse_events("DHCP")
+        dhcp_servers = set()
 
-            for parts in entries:
-                if len(parts) > 4:
-                    server_ip = parts[4] if parts[4] != '-' else None
-                    if server_ip:
-                        dhcp_servers.add(server_ip)
+        for record in dhcp_events:
+            server_ip = getattr(record, 'server_addr', '') or ''
+            if server_ip and server_ip != '-':
+                dhcp_servers.add(server_ip)
 
             # Multiple servers = potential rogue
             if len(dhcp_servers) > 1:

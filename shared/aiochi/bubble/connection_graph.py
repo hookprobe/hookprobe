@@ -13,7 +13,7 @@ Licensed under Commercial License - See LICENSING.md
 ║  of Device Groups:                                                             ║
 ║                                                                                 ║
 ║  • D2D Bubbles (this module): Automatic background algorithm that detects     ║
-║    device relationships through network traffic patterns (Zeek conn.log).     ║
+║    device relationships through network traffic patterns (NAPSE events).      ║
 ║    Devices that communicate frequently are colored similarly in the UI.       ║
 ║    This is PASSIVE and AUTOMATIC - users don't manage these.                  ║
 ║                                                                                 ║
@@ -28,7 +28,7 @@ Licensed under Commercial License - See LICENSING.md
 ║      if they communicate frequently via D2D                                    ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 
-This module parses Zeek connection logs to detect device-to-device
+This module analyzes NAPSE connection events to detect device-to-device
 communication patterns, enabling cross-ecosystem bubble detection.
 
 The Innovation:
@@ -37,22 +37,21 @@ or when Kids' Samsung phone syncs with their Xiaomi band, these
 communication patterns reveal same-user ownership REGARDLESS of ecosystem.
 
 Detection Methods:
-1. Zeek conn.log - TCP/UDP connection records between LAN devices
+1. NAPSE ConnectionRecord events - TCP/UDP connections between LAN devices
 2. Local service traffic - mDNS, AirPlay, Spotify Connect, casting
 3. High-frequency short connections - File transfers, screen mirrors
 4. Bidirectional traffic patterns - Not just client→server
 
 Data Flow:
 ┌─────────────────────────────────────────────────────────────────┐
-│  Zeek Network Monitor (fts-zeek container)                       │
+│  NAPSE IDS Engine (core/napse/)                                  │
 │       │                                                          │
 │       ▼                                                          │
-│  /var/log/zeek/current/conn.log                                  │
+│  NapseEventBus → BubbleFeed                                      │
 │       │                                                          │
 │       ▼                                                          │
-│  ConnectionGraphAnalyzer                                          │
+│  ConnectionGraphAnalyzer.process_napse_connection()               │
 │       │                                                          │
-│       ├──▶ Parse connection records                              │
 │       ├──▶ Filter LAN-only traffic (exclude internet)            │
 │       ├──▶ Build device relationship graph                       │
 │       ├──▶ Calculate D2D affinity scores                         │
@@ -528,10 +527,6 @@ try:
 except ImportError:
     HAS_CLICKHOUSE = False
     ClickHouseGraphStore = None
-
-# Zeek log locations
-ZEEK_LOG_DIR = Path('/var/log/zeek/current')
-ZEEK_CONN_LOG = ZEEK_LOG_DIR / 'conn.log'
 
 # dnsmasq leases file for IP→MAC mapping (container-friendly)
 DNSMASQ_LEASES = Path('/var/lib/misc/dnsmasq.leases')
@@ -1039,7 +1034,7 @@ class TemporalPattern:
 
 class ConnectionGraphAnalyzer:
     """
-    Analyzes Zeek connection logs to build device relationship graph.
+    Analyzes NAPSE connection events to build device relationship graph.
 
     Device-to-device communication patterns reveal same-user ownership:
     - AirDrop/WiFi Direct between iPhone ↔ Samsung (sharing photos)
@@ -1241,64 +1236,21 @@ class ConnectionGraphAnalyzer:
         """Normalize MAC pair for consistent key ordering."""
         return tuple(sorted([mac_a.upper(), mac_b.upper()]))
 
-    def parse_zeek_conn_log(self, log_path: Path = None) -> List[D2DConnection]:
+    def process_napse_connection(self, record) -> Optional[D2DConnection]:
         """
-        Parse Zeek conn.log for device-to-device connections.
+        Process a NAPSE ConnectionRecord into a D2DConnection.
 
-        Zeek conn.log format (tab-separated):
-        ts, uid, id.orig_h, id.orig_p, id.resp_h, id.resp_p, proto, service,
-        duration, orig_bytes, resp_bytes, conn_state, ...
+        This replaces the old file-based log parsing
+        with direct event-bus consumption from NAPSE.
+
+        Args:
+            record: ConnectionRecord from NAPSE event bus
 
         Returns:
-            List of D2DConnection objects for LAN traffic only
+            D2DConnection if LAN-to-LAN traffic, None otherwise
         """
-        log_path = log_path or ZEEK_CONN_LOG
-
-        if not log_path.exists():
-            logger.warning(f"Zeek conn.log not found: {log_path}")
-            return []
-
-        connections = []
-        cutoff = datetime.now() - timedelta(hours=self.LOOKBACK_HOURS)
-
-        try:
-            with open(log_path, 'r') as f:
-                for line in f:
-                    # Skip comments and headers
-                    if line.startswith('#'):
-                        continue
-
-                    try:
-                        conn = self._parse_conn_line(line, cutoff)
-                        if conn:
-                            connections.append(conn)
-                    except Exception as e:
-                        logger.debug(f"Failed to parse line: {e}")
-                        continue
-        except Exception as e:
-            logger.error(f"Failed to read Zeek conn.log: {e}")
-
-        logger.info(f"Parsed {len(connections)} D2D connections from Zeek")
-        return connections
-
-    def _parse_conn_line(self, line: str, cutoff: datetime) -> Optional[D2DConnection]:
-        """Parse a single conn.log line."""
-        parts = line.strip().split('\t')
-        if len(parts) < 12:
-            return None
-
-        # Parse timestamp
-        try:
-            ts = float(parts[0])
-            timestamp = datetime.fromtimestamp(ts)
-            if timestamp < cutoff:
-                return None
-        except (ValueError, IndexError):
-            return None
-
-        # Extract IPs
-        src_ip = parts[2]
-        dst_ip = parts[4]
+        src_ip = getattr(record, 'id_orig_h', '')
+        dst_ip = getattr(record, 'id_resp_h', '')
 
         # Only keep LAN-to-LAN traffic
         if not (self._is_lan_ip(src_ip) and self._is_lan_ip(dst_ip)):
@@ -1320,41 +1272,34 @@ class ConnectionGraphAnalyzer:
             return None
 
         # Parse port and service
-        try:
-            dst_port = int(parts[5])
-        except (ValueError, IndexError):
-            dst_port = 0
-
-        service = parts[7] if len(parts) > 7 and parts[7] != '-' else ''
+        dst_port = getattr(record, 'id_resp_p', 0) or 0
+        service = getattr(record, 'service', '') or ''
 
         # Check if this is a D2D service port
         service_name = D2D_SERVICE_PORTS.get(dst_port, service)
         if not service_name and dst_port > 1024:
             service_name = 'ephemeral'
 
-        # Parse traffic stats
-        try:
-            duration = float(parts[8]) if parts[8] != '-' else 0.0
-            bytes_sent = int(parts[9]) if parts[9] != '-' else 0
-            bytes_recv = int(parts[10]) if parts[10] != '-' else 0
-        except (ValueError, IndexError):
-            duration = 0.0
-            bytes_sent = 0
-            bytes_recv = 0
+        # Traffic stats
+        duration = getattr(record, 'duration', 0.0) or 0.0
+        bytes_sent = getattr(record, 'orig_bytes', 0) or 0
+        bytes_recv = getattr(record, 'resp_bytes', 0) or 0
+        packets = (getattr(record, 'orig_pkts', 0) or 0) + (getattr(record, 'resp_pkts', 0) or 0) or 1
 
-        # Parse packet count (if available)
+        # Parse timestamp
+        ts = getattr(record, 'ts', 0)
         try:
-            packets = int(parts[16]) if len(parts) > 16 and parts[16] != '-' else 1
-        except (ValueError, IndexError):
-            packets = 1
+            timestamp = datetime.fromtimestamp(ts) if ts else datetime.now()
+        except (ValueError, OSError):
+            timestamp = datetime.now()
 
-        return D2DConnection(
+        conn = D2DConnection(
             src_ip=src_ip,
             src_mac=src_mac,
             dst_ip=dst_ip,
             dst_mac=dst_mac,
             port=dst_port,
-            protocol=parts[6] if len(parts) > 6 else 'tcp',
+            protocol=getattr(record, 'proto', 'tcp') or 'tcp',
             service=service_name,
             bytes_sent=bytes_sent,
             bytes_recv=bytes_recv,
@@ -1363,18 +1308,21 @@ class ConnectionGraphAnalyzer:
             timestamp=timestamp,
         )
 
+        logger.debug(f"D2D connection: {src_mac} -> {dst_mac} ({service_name})")
+        return conn
+
     def update_relationships(self, connections: List[D2DConnection] = None):
         """
         Update device relationships from connection data.
 
         This method:
-        1. Parses Zeek conn.log (if connections not provided)
+        1. Accepts D2DConnection list (from NAPSE event bus via process_napse_connection)
         2. Updates relationship statistics
         3. Calculates affinity scores
         4. Persists to database
         """
         if connections is None:
-            connections = self.parse_zeek_conn_log()
+            connections = []
 
         if not connections:
             logger.debug("No D2D connections to process")
@@ -1443,123 +1391,10 @@ class ConnectionGraphAnalyzer:
         - When Dad opens Remote app, iPhone queries _touch-remote._tcp
         - Apple TV responds, revealing same-ecosystem relationship
 
-        Uses tshark for lightweight capture or parses Zeek dns.log.
+        Uses tshark for lightweight capture (NAPSE event bus handles this
+        in the container via bubble_feed.py).
         """
-        # First try Zeek dns.log (if available)
-        dns_log = ZEEK_LOG_DIR / 'dns.log'
-        if dns_log.exists():
-            self._parse_zeek_dns_log(dns_log)
-            return
-
-        # Fallback: Quick tshark capture for mDNS
         self._capture_mdns_traffic()
-
-    def _parse_zeek_dns_log(self, log_path: Path):
-        """
-        Parse Zeek dns.log for mDNS query/response pairs.
-
-        TRIO+ FIX (2026-01-14):
-        The old algorithm created false relationships when two devices
-        simply queried the same service (e.g., both looking for AirPlay).
-        This is WRONG - just because two devices search for the same thing
-        doesn't mean they're communicating.
-
-        Correct behavior:
-        - Device A QUERIES for a service (e.g., "_airplay._tcp.local")
-        - Device B RESPONDS with that service (advertising itself)
-        - THEN they get a discovery_hit (A discovered B)
-
-        This prevents false groupings like Android + iPhone that both
-        happen to query for similar services.
-        """
-        try:
-            cutoff = datetime.now() - timedelta(hours=self.LOOKBACK_HOURS)
-
-            # TRIO+ FIX: Track queries and responses SEPARATELY
-            queries: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # service → [(querier_mac, time)]
-            responses: Dict[str, List[Tuple[str, datetime]]] = defaultdict(list)  # service → [(responder_mac, time)]
-
-            with open(log_path, 'r') as f:
-                for line in f:
-                    if line.startswith('#'):
-                        continue
-
-                    parts = line.strip().split('\t')
-                    if len(parts) < 14:  # Need at least 14 fields for QR flag
-                        continue
-
-                    try:
-                        ts = datetime.fromtimestamp(float(parts[0]))
-                        if ts < cutoff:
-                            continue
-                    except (ValueError, IndexError):
-                        continue
-
-                    src_ip = parts[2]
-                    query = parts[9] if len(parts) > 9 else ''
-
-                    # Only interested in mDNS (multicast DNS)
-                    if not query or '.local' not in query:
-                        continue
-
-                    # Get MAC from IP
-                    src_mac = self.ip_to_mac.get(src_ip, '').upper()
-                    if not src_mac:
-                        continue
-
-                    # TRIO+ FIX: Properly distinguish queries from responses
-                    # Zeek dns.log field layout: ts, uid, src_ip, src_port, dst_ip, dst_port, proto, trans_id, rtt, query, qclass, qtype, rcode, answers
-                    # QR (Query/Response) is determined by presence of answers (field 13+)
-                    is_response = len(parts) > 13 and parts[13] != '-' and parts[13] != ''
-
-                    if is_response:
-                        # This is a response - device is ADVERTISING a service
-                        responses[query].append((src_mac, ts))
-                    else:
-                        # This is a query - device is SEARCHING for a service
-                        queries[query].append((src_mac, ts))
-
-            # TRIO+ FIX: Only create discovery hits for query→response pairs
-            # Device A queries for service, Device B responds = A discovered B
-            discovery_pairs = 0
-            for service, query_list in queries.items():
-                # Get responders for this service
-                responders = responses.get(service, [])
-                if not responders:
-                    continue
-
-                for querier_mac, query_time in query_list:
-                    for responder_mac, response_time in responders:
-                        # Skip self-discovery
-                        if querier_mac == responder_mac:
-                            continue
-
-                        # Response must be within 60 seconds of query
-                        time_diff = abs((response_time - query_time).total_seconds())
-                        if time_diff > 60:
-                            continue
-
-                        # Valid discovery: querier found responder
-                        key = self._normalize_mac_pair(querier_mac, responder_mac)
-                        if key in self.relationships:
-                            self.relationships[key].discovery_hits += 1
-                        else:
-                            self.relationships[key] = DeviceRelationship(
-                                mac_a=key[0],
-                                mac_b=key[1],
-                                discovery_hits=1,
-                                first_seen=datetime.now(),
-                                last_seen=datetime.now(),
-                                # TRIO+ FIX: Detect ecosystems at relationship creation
-                                ecosystem_a=detect_ecosystem(key[0]),
-                                ecosystem_b=detect_ecosystem(key[1]),
-                            )
-                        discovery_pairs += 1
-
-            logger.info(f"Analyzed mDNS browsing patterns: {discovery_pairs} valid discovery pairs")
-
-        except Exception as e:
-            logger.warning(f"Failed to parse Zeek dns.log: {e}")
 
     def _capture_mdns_traffic(self, duration: int = 10):
         """

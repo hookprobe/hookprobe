@@ -622,7 +622,7 @@ class NarrativeEngine:
     Translates network events into human-readable narratives.
 
     This engine:
-    1. Receives events from ClickHouse, Suricata, Zeek, QSecBit, etc.
+    1. Receives events from ClickHouse, NAPSE, QSecBit, etc.
     2. Looks up device identity (human labels)
     3. Selects appropriate template based on event type and persona
     4. Fills in template with event details
@@ -831,18 +831,18 @@ Response:"""
         # In production, this would query ClickHouse
         return []
 
-    def translate_suricata_alert(
+    def translate_alert(
         self,
         alert: Dict[str, Any],
         device_label: Optional[str] = None,
     ) -> Narrative:
         """
-        Translate a Suricata EVE JSON alert into a human-readable narrative.
+        Translate an IDS alert into a human-readable narrative.
 
         Uses MITRE ATT&CK mapping for context-aware narratives.
 
         Args:
-            alert: Suricata EVE JSON alert
+            alert: NAPSE alert
             device_label: Optional device label override
 
         Returns:
@@ -878,7 +878,7 @@ Response:"""
             source_ip=src_ip,
             destination_ip=dest_ip,
             threat_type=mitre_info["name"] if mitre_info else signature,
-            blocked=True,  # Suricata alerts are often blocked
+            blocked=True,  # IDS alerts are often blocked
             technical_details={
                 "signature": signature,
                 "sid": sid,

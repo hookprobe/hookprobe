@@ -289,20 +289,20 @@ class SecurityEventHandler:
 
     Usage:
         >>> handler = SecurityEventHandler(dsm_node)
-        >>> handler.on_suricata_alert(alert)
+        >>> handler.on_ids_alert(alert)
     """
 
     def __init__(self, dsm_node: DSMNode):
         self.dsm_node = dsm_node
 
-    def on_suricata_alert(self, alert: Dict[str, Any]) -> str:
+    def on_ids_alert(self, alert: Dict[str, Any]) -> str:
         """
-        Called when POD-006 (Suricata/Zeek/Snort3) generates alert.
+        Called when NAPSE generates alert.
 
         Creates cryptographically signed microblock for DSM.
 
         Args:
-            alert: Suricata alert dictionary
+            alert: IDS alert dictionary
 
         Returns:
             Microblock ID for correlation

@@ -462,14 +462,14 @@ class FortressMSSPClient:
         log_type: str = 'alert',
     ) -> bool:
         """
-        Forward IDS alerts to MSSP (Suricata/Zeek format).
+        Forward IDS alerts to MSSP (NAPSE EVE JSON format).
 
         POST /api/v1/security/alerts/ingest/
 
         Args:
-            source: 'suricata' or 'zeek'
+            source: 'napse' (only NAPSE is supported)
             events: Raw alert events
-            log_type: Log type for Zeek ('conn', 'http', 'dns', etc.)
+            log_type: Log type ('conn', 'http', 'dns', etc.)
 
         Returns:
             True if successful

@@ -390,7 +390,7 @@ if [ "$remove_images" == "yes" ]; then
     echo "[STEP 9] Removing images..."
 
     # Get list of HookProbe-related images
-    IMAGES=$(podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|modsecurity|zeek|victoriametrics|victorialogs" 2>/dev/null || true)
+    IMAGES=$(podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "hookprobe|modsecurity|napse|victoriametrics|victorialogs" 2>/dev/null || true)
 
     if [ -n "$IMAGES" ]; then
         echo "$IMAGES" | while read -r image; do

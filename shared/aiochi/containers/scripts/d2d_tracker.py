@@ -12,7 +12,7 @@ Purpose:
 - Colors indicate communication clusters
 
 Architecture:
-    Zeek conn.log -> D2D Detection -> Communication Graph -> REST API -> fts-web coloring
+    NAPSE connections -> D2D Detection -> Communication Graph -> REST API -> fts-web coloring
 """
 
 import hashlib
