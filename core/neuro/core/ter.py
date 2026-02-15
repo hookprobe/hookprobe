@@ -87,12 +87,14 @@ class TERGenerator:
     Generate TER from Qsecbit sensor data.
     """
 
-    def __init__(self, qsecbit_interface=None):
+    def __init__(self, qsecbit_interface=None, puf_binding=None):
         """
         Args:
             qsecbit_interface: Optional Qsecbit instance for sensor data
+            puf_binding: Optional PufTerBinding for hardware-anchored entropy
         """
         self.qsecbit = qsecbit_interface
+        self.puf_binding = puf_binding
         self.sequence = 0
         self.prev_ter_hash: Optional[int] = None
 
@@ -124,6 +126,11 @@ class TERGenerator:
 
         # 3. Derive H_Integrity
         h_integrity = self._calculate_h_integrity(force=force_integrity_check)
+
+        # 3b. Enhance with PUF binding (if available)
+        if self.puf_binding is not None:
+            h_entropy = self.puf_binding.enhance_entropy(h_entropy)
+            h_integrity = self.puf_binding.enhance_integrity(h_integrity)
 
         # 4. Build TER
         ter = TER(

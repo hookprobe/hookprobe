@@ -231,6 +231,7 @@ class HardwareFingerprint:
     created_timestamp: int  # Unix microseconds
     raw_data: Dict[str, any]  # Original hardware data
     fingerprint: Optional[bytes] = None  # Raw 32-byte fingerprint
+    puf_hash: Optional[str] = None  # SHA256 hex of PUF composite response (if available)
 
     def __post_init__(self):
         """Compute raw fingerprint bytes."""
@@ -280,6 +281,11 @@ class HardwareFingerprintGenerator:
             'architecture': platform.machine(),
         }
 
+        # Collect PUF hash if available
+        puf_hash = self._get_puf_hash()
+        if puf_hash:
+            raw_data['puf_hash'] = puf_hash
+
         # Generate fingerprint hash
         fingerprint_id = self._hash_hardware_data(raw_data, timestamp)
 
@@ -291,7 +297,8 @@ class HardwareFingerprintGenerator:
             dmi_uuid=dmi_uuid,
             hostname=hostname,
             created_timestamp=timestamp,
-            raw_data=raw_data
+            raw_data=raw_data,
+            puf_hash=puf_hash,
         )
 
     def verify(self, stored_fingerprint: HardwareFingerprint, tolerance: int = 2) -> Dict[str, any]:
@@ -480,6 +487,23 @@ class HardwareFingerprintGenerator:
         except Exception:
             return str(uuid.uuid4())
 
+    def _get_puf_hash(self) -> Optional[str]:
+        """Get PUF composite response hash if PUF hardware is available."""
+        try:
+            from core.neuro.puf.composite_identity import CompositeIdentity, PufSource
+            from core.neuro.puf.clock_drift_puf import ClockDriftPuf
+            from core.neuro.puf.cache_timing_puf import CacheTimingPuf
+
+            identity = CompositeIdentity()
+            identity.add_source(PufSource.CLOCK_DRIFT, ClockDriftPuf(num_measurements=16))
+            identity.add_source(PufSource.CACHE_TIMING, CacheTimingPuf(iterations=32))
+
+            response = identity.generate()
+            return hashlib.sha256(response.composite).hexdigest()
+        except Exception as e:
+            logger.debug("PUF not available for fingerprinting: %s", e)
+            return None
+
     def _hash_hardware_data(self, raw_data: Dict, timestamp: int) -> str:
         """
         Create deterministic hash of hardware data.
@@ -499,6 +523,7 @@ class HardwareFingerprintGenerator:
         parts.extend(sorted(raw_data.get('disk_serials', [])))
         parts.append(raw_data.get('dmi_uuid', ''))
         parts.append(raw_data.get('hostname', ''))
+        parts.append(raw_data.get('puf_hash', ''))
         parts.append(str(timestamp))
 
         # Hash

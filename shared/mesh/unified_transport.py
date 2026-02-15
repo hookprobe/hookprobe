@@ -102,6 +102,9 @@ class PacketType(IntEnum):
     SECURITY_EVENT = 0x42
     CONTROL_CMD = 0x43
 
+    # Federated Learning
+    MODEL_UPDATE = 0x50
+
     # Emergency
     EMERGENCY_CHANNEL_SWITCH = 0xE0
     EMERGENCY_RESYNC = 0xE1

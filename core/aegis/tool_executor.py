@@ -249,6 +249,132 @@ TOOL_REGISTRY: Dict[str, ToolDefinition] = {
         },
         agents=["SCOUT"],
     ),
+    "deploy_honeypot": ToolDefinition(
+        name="deploy_honeypot",
+        description="Deploy an adaptive honeypot targeting a specific attacker IP",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string", "description": "Attacker IP to engage"},
+                "ports": {"type": "array", "items": {"type": "integer"}, "description": "Ports to deploy honeypots on"},
+            },
+            "required": ["source_ip"],
+        },
+        agents=["SCOUT"],
+    ),
+    "engage_attacker": ToolDefinition(
+        name="engage_attacker",
+        description="Actively engage an attacker through adaptive honeypot interaction",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string"},
+                "interaction_level": {"type": "integer", "minimum": 1, "maximum": 3, "description": "1=banner, 2=auth, 3=shell"},
+            },
+            "required": ["source_ip"],
+        },
+        agents=["SCOUT"],
+    ),
+    "profile_attacker_ttps": ToolDefinition(
+        name="profile_attacker_ttps",
+        description="Get detailed TTP profile from Mirage deception intelligence",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string"},
+            },
+            "required": ["source_ip"],
+        },
+        agents=["SCOUT", "GUARDIAN"],
+    ),
+
+    # SIA tools
+    "sandbox_entity": ToolDefinition(
+        name="sandbox_entity",
+        description="Redirect suspect entity traffic to the virtual sandbox shadow network",
+        parameters={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "IP address of entity to sandbox"},
+                "risk_score": {"type": "number", "description": "SIA risk score (0.0-1.0)"},
+                "intent_phase": {"type": "string", "description": "Current attack phase"},
+                "duration": {"type": "integer", "description": "Sandbox duration in seconds", "default": 600},
+            },
+            "required": ["entity_id"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+        requires_confirmation=True,
+    ),
+    "release_sandbox": ToolDefinition(
+        name="release_sandbox",
+        description="Release an entity from the virtual sandbox",
+        parameters={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "IP address of entity to release"},
+                "reason": {"type": "string", "description": "Reason for release"},
+            },
+            "required": ["entity_id"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+    ),
+    "get_entity_intent": ToolDefinition(
+        name="get_entity_intent",
+        description="Get the current SIA intent analysis for a network entity",
+        parameters={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "IP address to query"},
+            },
+            "required": ["entity_id"],
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE"],
+    ),
+
+    # Healing tools (eBPF process enforcement)
+    "kill_process": ToolDefinition(
+        name="kill_process",
+        description="Kill a malicious process identified by the eBPF healing engine",
+        parameters={
+            "type": "object",
+            "properties": {
+                "pid": {"type": "integer", "description": "Process ID to kill"},
+                "reason": {"type": "string", "description": "Reason for killing"},
+            },
+            "required": ["pid"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+        requires_confirmation=True,
+    ),
+    "quarantine_process": ToolDefinition(
+        name="quarantine_process",
+        description="Isolate a suspicious process via cgroup resource limits",
+        parameters={
+            "type": "object",
+            "properties": {
+                "pid": {"type": "integer", "description": "Process ID to quarantine"},
+                "reason": {"type": "string", "description": "Reason for quarantine"},
+            },
+            "required": ["pid"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+        requires_confirmation=True,
+    ),
+    "apply_hotpatch": ToolDefinition(
+        name="apply_hotpatch",
+        description="Apply an eBPF hotpatch to block a vulnerable syscall pattern",
+        parameters={
+            "type": "object",
+            "properties": {
+                "syscall_nr": {"type": "integer", "description": "Syscall number"},
+                "target_comm": {"type": "string", "description": "Target process name (empty for all)"},
+                "patch_type": {"type": "integer", "description": "1=block, 2=block_arg, 3=log_only"},
+            },
+            "required": ["syscall_nr"],
+        },
+        agents=["FORGE"],
+        requires_confirmation=True,
+    ),
 
     # FORGE tools
     "generate_password": ToolDefinition(
