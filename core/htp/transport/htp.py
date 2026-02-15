@@ -499,6 +499,9 @@ class HTPSession:
     # Current Qsecbit score for key derivation
     current_qsecbit: float = 0.0
 
+    # Steganographic transport profile (None = disabled)
+    steganography_profile: Optional[str] = None  # ProfileType name: "NETFLIX", "ZOOM_VIDEO", etc.
+
 
 # ============================================================================
 # 6. HOOKPROBE TRANSPORT (KEYLESS)

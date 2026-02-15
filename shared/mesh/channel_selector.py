@@ -102,6 +102,14 @@ class ChannelSelector:
         # Fallback modes
         TransportMode.WEBSOCKET: 0.7,       # Common but can be fingerprinted
         TransportMode.ICMP_TUNNEL: 0.3,     # Unusual, often blocked
+
+        # Steganographic modes - statistical traffic mimicry
+        TransportMode.STEGO_NETFLIX: 0.98,  # Indistinguishable from Netflix
+        TransportMode.STEGO_ZOOM: 0.95,     # Indistinguishable from Zoom
+        TransportMode.STEGO_HTTPS: 0.90,    # Blends with web browsing
+
+        # Domain fronting - CDN edge tunneling
+        TransportMode.DOMAIN_FRONT: 0.99,   # Hidden inside CDN traffic
     }
 
     def __init__(
@@ -603,3 +611,74 @@ class ChannelHopper:
     def on_hop(self, callback) -> None:
         """Register channel hop callback."""
         self._on_hop.append(callback)
+
+    # ------------------------------------------------------------------
+    # Censorship Detection & Steganographic Mode Selection
+    # ------------------------------------------------------------------
+
+    def detect_censorship(self) -> bool:
+        """Detect if the network is likely censored.
+
+        Indicators:
+        - High connection reset rate (RST flood)
+        - Multiple transport modes blocked simultaneously
+        - Repeated failures on standard stealth ports (443, 853)
+
+        Returns True if censorship is detected.
+        """
+        blocked_count = 0
+        reset_count = 0
+        total_channels = len(self.channels)
+
+        for ch in self.channels:
+            score = self._scores.get(ch.port)
+            if not score:
+                continue
+            # A channel with very low success rate suggests blocking
+            total = score.selection_count
+            if total > 5 and score.success_score < 0.2:
+                blocked_count += 1
+            if total > 5 and score.success_score < 0.1:
+                reset_count += 1
+
+        # Censorship heuristic: >50% of channels failing
+        if total_channels > 0 and blocked_count / total_channels > 0.5:
+            return True
+
+        # All stealth modes failing
+        if reset_count >= 3:
+            return True
+
+        return False
+
+    def select_stego_mode(self) -> TransportMode:
+        """Select the best steganographic transport mode.
+
+        Auto-selects based on network conditions:
+        - High bandwidth available → STEGO_NETFLIX (15 Mbps profile)
+        - Medium bandwidth → STEGO_ZOOM (3.5 Mbps profile)
+        - Low bandwidth → STEGO_HTTPS (2 Mbps profile)
+        - All else fails → DOMAIN_FRONT
+
+        Returns the recommended TransportMode.
+        """
+        if self.detect_censorship():
+            # Under active censorship, domain fronting is safest
+            return TransportMode.DOMAIN_FRONT
+
+        # Check available bandwidth from channel scores
+        best_latency = float("inf")
+        for score in self._scores.values():
+            if score.latency_score > 0:
+                best_latency = min(best_latency, 1.0 - score.latency_score)
+
+        # Estimate bandwidth class from latency
+        if best_latency < 0.3:
+            # Low latency = good connection → Netflix profile
+            return TransportMode.STEGO_NETFLIX
+        elif best_latency < 0.6:
+            # Medium → Zoom profile
+            return TransportMode.STEGO_ZOOM
+        else:
+            # High latency → lightweight HTTPS profile
+            return TransportMode.STEGO_HTTPS

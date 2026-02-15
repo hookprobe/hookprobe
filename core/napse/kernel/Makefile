@@ -14,7 +14,8 @@ BPF_CFLAGS := -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
     -Wall -Werror \
     -I/usr/include/$(shell uname -m)-linux-gnu
 
-SRCS := xdp_gate.c conntrack_lite.c ringbuf_events.c
+SRCS := xdp_gate.c conntrack_lite.c ringbuf_events.c \
+       process_tracer.c syscall_monitor.c hotpatch.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all clean check

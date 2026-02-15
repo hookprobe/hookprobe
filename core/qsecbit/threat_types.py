@@ -89,6 +89,8 @@ class ResponseAction(Enum):
     TERMINATE_SESSION = auto()  # Kill active session
     QUARANTINE = auto()     # Isolate device
     CAPTIVE_PORTAL = auto() # Redirect to captive portal
+    KILL_PROCESS = auto()   # Kill malicious process (eBPF healing)
+    QUARANTINE_PROCESS = auto()  # Isolate process via cgroup
 
 
 # Attack type to OSI layer mapping

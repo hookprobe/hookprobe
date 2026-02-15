@@ -30,7 +30,11 @@ class GuardianAgent(BaseAgent):
         r"threat\.severity\s*>=?\s*(?:HIGH|CRITICAL)",
         r"block.*ip|rate.*limit|quarantine",
     ]
-    allowed_tools = ["block_ip", "rate_limit", "quarantine_subnet", "unblock_ip"]
+    allowed_tools = [
+        "block_ip", "rate_limit", "quarantine_subnet", "unblock_ip",
+        "sandbox_entity", "release_sandbox", "get_entity_intent",
+        "profile_attacker_ttps",
+    ]
     confidence_threshold = 0.7
 
     def respond_to_signal(
@@ -38,7 +42,11 @@ class GuardianAgent(BaseAgent):
         signal: StandardSignal,
         context: Optional[Dict[str, Any]] = None,
     ) -> AgentResponse:
-        """Handle network-level threats."""
+        """Handle network-level threats, including SIA intent signals."""
+        # SIA intent-aware handling
+        if signal.source == "sia":
+            return self._handle_sia_signal(signal)
+
         severity = signal.severity
         source_ip = signal.data.get("source_ip", "unknown")
         attack_type = signal.data.get("attack_type", signal.event_type)
@@ -88,6 +96,111 @@ class GuardianAgent(BaseAgent):
                 ),
                 sources=["QSecBit"],
             )
+
+    def _handle_sia_signal(self, signal: StandardSignal) -> AgentResponse:
+        """Handle SIA intent detection signals with phase-aware response."""
+        entity_id = signal.data.get("entity_id", "unknown")
+        phase = signal.data.get("phase", "")
+        risk_score = signal.data.get("risk_score", 0.0)
+        confidence = signal.data.get("confidence", 0.0)
+
+        # Phases requiring immediate blocking
+        blocking_phases = {
+            "LATERAL_MOVEMENT", "EXFILTRATION", "IMPACT",
+        }
+        # Phases requiring sandbox
+        sandbox_phases = {
+            "EXECUTION", "PERSISTENCE", "COLLECTION",
+        }
+
+        if signal.event_type == "sia.sandbox_triggered":
+            return AgentResponse(
+                agent=self.name,
+                action="sandbox_entity",
+                confidence=0.95,
+                reasoning=(
+                    f"SIA sandbox triggered for {entity_id} "
+                    f"(risk={risk_score:.3f}) — isolating to shadow network"
+                ),
+                user_message=(
+                    f"Entity {entity_id} isolated to sandbox — SIA detected "
+                    f"high-confidence attack intent (risk={risk_score:.3f})."
+                ),
+                tool_calls=[{
+                    "name": "sandbox_entity",
+                    "params": {
+                        "entity_id": entity_id,
+                        "risk_score": risk_score,
+                        "intent_phase": phase,
+                    },
+                }],
+                sources=["SIA", "NAPSE"],
+                escalate_to="MEDIC",
+            )
+
+        if phase in blocking_phases:
+            return AgentResponse(
+                agent=self.name,
+                action="block_ip",
+                confidence=0.90,
+                reasoning=(
+                    f"SIA intent phase {phase} for {entity_id} "
+                    f"(risk={risk_score:.3f}) — blocking"
+                ),
+                user_message=(
+                    f"Blocked {entity_id} — SIA detected {phase} intent "
+                    f"(risk={risk_score:.3f}). Active attack progression stopped."
+                ),
+                tool_calls=[{
+                    "name": "block_ip",
+                    "params": {
+                        "ip": entity_id,
+                        "duration": 3600,
+                        "reason": f"SIA {phase} intent (risk={risk_score:.3f})",
+                    },
+                }],
+                sources=["SIA", "NAPSE"],
+            )
+
+        if phase in sandbox_phases and risk_score >= 0.7:
+            return AgentResponse(
+                agent=self.name,
+                action="sandbox_entity",
+                confidence=0.85,
+                reasoning=(
+                    f"SIA intent phase {phase} for {entity_id} "
+                    f"(risk={risk_score:.3f}) — sandboxing for observation"
+                ),
+                user_message=(
+                    f"Sandboxing {entity_id} — SIA detected {phase} intent "
+                    f"(risk={risk_score:.3f}). Observing in shadow network."
+                ),
+                tool_calls=[{
+                    "name": "sandbox_entity",
+                    "params": {
+                        "entity_id": entity_id,
+                        "risk_score": risk_score,
+                        "intent_phase": phase,
+                    },
+                }],
+                sources=["SIA", "NAPSE"],
+            )
+
+        # Lower phases — monitor
+        return AgentResponse(
+            agent=self.name,
+            action="",
+            confidence=0.6,
+            reasoning=(
+                f"SIA intent phase {phase} for {entity_id} "
+                f"(risk={risk_score:.3f}) — monitoring"
+            ),
+            user_message=(
+                f"Monitoring {entity_id} — SIA detected {phase} intent "
+                f"(risk={risk_score:.3f}). Tracking progression."
+            ),
+            sources=["SIA"],
+        )
 
     def respond_to_query(
         self,
