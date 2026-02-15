@@ -11,7 +11,7 @@ name = "napse_engine"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module"] }
 aho-corasick = "1.1"
 dashmap = "6"
 md-5 = "0.10"
