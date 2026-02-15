@@ -23,6 +23,8 @@
 </p>
 
 <p align="center">
+  <a href="https://mssp.hookprobe.com/?site=demo-site"><strong>🎯 Live Demo</strong></a> •
+  <a href="https://hookprobe.com">🌐 Website</a> •
   <a href="#-quick-start">⚡ Quick Start</a> •
   <a href="MANIFESTO.md">📜 Our Manifesto</a> •
   <a href="#-join-the-family">🤝 Join The Family</a> •
@@ -322,6 +324,8 @@ DDoS mitigation at the kernel level, but you can see exactly what rules are appl
 **Transparency benefit:** Show clients exactly how they're protected
 **Time saved:** Centralized management, automated operations
 
+Explore the [MSSP platform](https://mssp.hookprobe.com) for multi-tenant management, or [try the demo](https://mssp.hookprobe.com/?site=demo-site) instantly.
+
 ---
 
 ## HookProbe Cortex - See Your Mesh
@@ -349,7 +353,7 @@ Cortex is a real-time 3D visualization of your entire defense network. Watch thr
 
 **Not a dashboard about your security. A window into your security.**
 
-[Cortex Documentation](shared/cortex/README.md)
+[Cortex Documentation](shared/cortex/README.md) | [See the live dashboard demo](https://mssp.hookprobe.com/?site=demo-site)
 
 ---
 
@@ -382,6 +386,32 @@ sudo ./install.sh --tier guardian   # 🏠 Home/Prosumer ($75 RPi, 1.5GB RAM)
 **💰 Software cost:** $0
 
 [📚 Full Installation Guide](docs/installation/INSTALLATION.md)
+
+---
+
+## 🎯 See It Live
+
+**Not ready to install?** Explore HookProbe's capabilities instantly — no account required.
+
+### [Try the Interactive Demo →](https://mssp.hookprobe.com/?site=demo-site)
+
+The demo dashboard gives you hands-on access to:
+
+- **Real-time Qsecbit scoring** — Watch the resilience gauge respond to simulated threats
+- **Node management** — See how Guardian, Fortress, and Nexus nodes are monitored
+- **Threat intelligence feed** — Global attack patterns with 1-minute delay
+- **Alert management** — Severity-based triage with investigation workflows
+- **Combat Mode** — Emergency isolation controls for active incidents
+
+### Platform Links
+
+| Platform | What You'll See | Access |
+|----------|-----------------|--------|
+| [**hookprobe.com**](https://hookprobe.com) | Architecture, product tiers, pricing, FAQ | Public |
+| [**Live Demo Dashboard**](https://mssp.hookprobe.com/?site=demo-site) | Interactive MSSP dashboard with simulated data | Public (no login) |
+| [**MSSP Platform**](https://mssp.hookprobe.com) | Multi-tenant management for service providers | [Create account](https://mssp.hookprobe.com/auth/login) |
+
+> Currently showing **QSECBIT: 94% 🟢** across active mesh nodes — [see it live](https://hookprobe.com)
 
 ---
 
@@ -454,6 +484,9 @@ Every directory has documentation. Every module has a README.
 
 | Resource | Description |
 |----------|-------------|
+| [**Live Demo**](https://mssp.hookprobe.com/?site=demo-site) | Try the dashboard instantly — no login required |
+| [**hookprobe.com**](https://hookprobe.com) | Product overview, pricing, and FAQ |
+| [MSSP Platform](https://mssp.hookprobe.com) | Multi-tenant management for service providers |
 | [Installation Guide](docs/installation/INSTALLATION.md) | Get started in 5 minutes |
 | [Architecture Overview](docs/architecture/HOOKPROBE-ARCHITECTURE.md) | Understand the system |
 | [Qsecbit Documentation](core/qsecbit/README.md) | How threat scoring works |
@@ -537,6 +570,8 @@ HookProbe isn't a product. It's a **movement**. A family of people who believe t
 </p>
 
 <p align="center">
+  <a href="https://mssp.hookprobe.com/?site=demo-site">🎯 Live Demo</a> ·
+  <a href="https://hookprobe.com">🌐 Website</a> ·
   <a href="docs/installation/INSTALLATION.md">⚡ Get Started</a> ·
   <a href="MANIFESTO.md">📜 Read The Manifesto</a> ·
   <a href="docs/CONTRIBUTING.md">🛠️ Contribute</a> ·
