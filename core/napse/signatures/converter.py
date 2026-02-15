@@ -1,11 +1,12 @@
 """
 NAPSE Signature Converter
 
-Converts Suricata rules to NAPSE YAML format for migration.
+Converts legacy Suricata-format rules to NAPSE YAML format.
+Used as a one-time migration utility for importing existing rule sets.
 
 Usage:
     python -m core.napse.signatures.converter \
-        --input shared/aiochi/containers/configs/suricata/rules/local.rules \
+        --input /path/to/legacy_rules.rules \
         --output core/napse/signatures/converted_rules.yaml
 
 Author: HookProbe Team

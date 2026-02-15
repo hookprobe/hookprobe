@@ -22,7 +22,7 @@
 This document maps security controls to their network interfaces for each HookProbe product tier.
 
 **Key Principle**: All tiers follow the same pattern:
-- **WAN Interface**: Packet inspection, threat detection (Suricata, Zeek, XDP, Qsecbit)
+- **WAN Interface**: Packet inspection, threat detection (NAPSE, XDP, Qsecbit)
 - **LAN Interface**: DNS filtering (dnsXai), client services
 - **Internal/Localhost**: Scoring engines, ML processing
 
@@ -86,7 +86,7 @@ Sentinel is the lightest HookProbe tier, designed for IoT gateways and constrain
 
 ### What Sentinel Does NOT Have
 
-- ❌ Suricata/Zeek (too heavy for 256MB)
+- ❌ NAPSE (too heavy for 256MB)
 - ❌ XDP/eBPF (simplified network stack)
 - ❌ WiFi AP mode
 - ❌ dnsXai (no DNS filtering)
@@ -125,8 +125,7 @@ Guardian is the portable security gateway for travelers. It creates a protected 
     │           SECURITY CONTROLS               │
     │  ┌─────────────────────────────────────┐  │
     │  │  XDP/eBPF (kernel-level filtering)  │  │
-    │  │  Suricata IDS/IPS (packet capture)  │  │
-    │  │  Zeek (network analysis)            │  │
+    │  │  NAPSE IDS/IPS (packet analysis)     │  │
     │  │  Qsecbit (threat scoring)           │  │
     │  └─────────────────────────────────────┘  │
     └───────────────────┬───────────────────────┘
@@ -173,9 +172,8 @@ Guardian is the portable security gateway for travelers. It creates a protected 
 | Control | What It Does | Layer |
 |---------|--------------|-------|
 | **XDP/eBPF** | Kernel-level DDoS mitigation, drops bad packets before they hit userspace | Kernel |
-| **Suricata** | IDS/IPS, deep packet inspection, signature matching | L3-L7 |
-| **Zeek** | Network analysis, connection logs, TLS inspection | L3-L7 |
-| **Qsecbit** | Threat scoring from Suricata/Zeek logs, RAG status | Meta |
+| **NAPSE** | AI-native IDS/IPS/NSM, deep packet inspection, connection analysis | L3-L7 |
+| **Qsecbit** | Threat scoring from NAPSE detection data, RAG status | Meta |
 
 #### LAN Interface (br0) - Client Services
 
@@ -212,10 +210,10 @@ dnsXai receives domain STRING only
 
 | Feature | Where It Lives | Interface |
 |---------|----------------|-----------|
-| TLS SNI Inspection | Zeek ssl.log → L5 Detector | WAN |
-| JA3 Fingerprinting | Zeek (if enabled) | WAN |
-| IP Reputation | Suricata feeds | WAN |
-| Deep Packet Inspection | Suricata IPS | WAN |
+| TLS SNI Inspection | NAPSE TLS analysis → L5 Detector | WAN |
+| JA3 Fingerprinting | NAPSE JA3 module | WAN |
+| IP Reputation | NAPSE threat feeds | WAN |
+| Deep Packet Inspection | NAPSE IPS | WAN |
 | DNS ML Classification | dnsXai | Localhost (strings only) |
 
 ### Summary Matrix
@@ -223,9 +221,9 @@ dnsXai receives domain STRING only
 | Control | eth0 (WAN) | wlan0 (WAN) | wlan1 (AP) | br0 (LAN) | localhost |
 |---------|:----------:|:-----------:|:----------:|:---------:|:---------:|
 | XDP/eBPF | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Suricata | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Zeek | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Qsecbit | ✅ (via logs) | ✅ (via logs) | ❌ | ❌ | ✅ |
+| NAPSE IDS/IPS | ✅ | ✅ | ❌ | ❌ | ❌ |
+| NAPSE NSM | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Qsecbit | ✅ (via events) | ✅ (via events) | ❌ | ❌ | ✅ |
 | dnsXai | ❌ | ❌ | ❌ | ✅ | ✅ |
 | dnsmasq | ❌ | ❌ | ❌ | ✅ | ❌ |
 | hostapd | ❌ | ❌ | ✅ | ✅ | ❌ |
@@ -254,8 +252,8 @@ Fortress is a permanent security appliance for home offices and small businesses
     │           SECURITY CONTROLS               │
     │  ┌─────────────────────────────────────┐  │
     │  │  XDP/eBPF (enhanced DDoS)           │  │
-    │  │  Suricata IDS/IPS (full ruleset)    │  │
-    │  │  Zeek (full logging)                │  │
+    │  │  NAPSE IDS/IPS (full ruleset)       │  │
+    │  │  NAPSE NSM (full logging)           │  │
     │  │  Qsecbit (local ML inference)       │  │
     │  │  OpenFlow SDN Controller            │  │
     │  └─────────────────────────────────────┘  │
@@ -297,8 +295,8 @@ Fortress is a permanent security appliance for home offices and small businesses
 | Control | Enhancement over Guardian |
 |---------|---------------------------|
 | **XDP/eBPF** | Full ruleset, hardware offload if supported |
-| **Suricata** | Complete ruleset (not trimmed for Pi) |
-| **Zeek** | Full logging, JA3 enabled by default |
+| **NAPSE IDS/IPS** | Complete ruleset (not trimmed for Pi) |
+| **NAPSE NSM** | Full logging, JA3 enabled by default |
 | **Qsecbit** | Local ML inference for faster scoring |
 
 #### VLAN Interfaces - Zone Isolation
@@ -332,8 +330,8 @@ Device quarantined without affecting other VLANs
 | Control | eth0 (WAN) | VLANs | OVS Bridge | localhost |
 |---------|:----------:|:-----:|:----------:|:---------:|
 | XDP/eBPF | ✅ | ❌ | ❌ | ❌ |
-| Suricata | ✅ | ✅ (mirror) | ❌ | ❌ |
-| Zeek | ✅ | ✅ (mirror) | ❌ | ❌ |
+| NAPSE IDS/IPS | ✅ | ✅ (mirror) | ❌ | ❌ |
+| NAPSE NSM | ✅ | ✅ (mirror) | ❌ | ❌ |
 | Qsecbit | ✅ | ✅ | ❌ | ✅ |
 | dnsXai | ❌ | ✅ | ❌ | ✅ |
 | OpenFlow | ❌ | ❌ | ✅ | ❌ |
@@ -413,8 +411,8 @@ Same as Fortress (full stack), but Nexus also:
 | Control | eth0 (WAN) | Mesh Network | localhost |
 |---------|:----------:|:------------:|:---------:|
 | XDP/eBPF | ✅ | ❌ | ❌ |
-| Suricata | ✅ | ❌ | ❌ |
-| Zeek | ✅ | ❌ | ❌ |
+| NAPSE IDS/IPS | ✅ | ❌ | ❌ |
+| NAPSE NSM | ✅ | ❌ | ❌ |
 | Qsecbit | ✅ | ✅ (aggregation) | ✅ |
 | dnsXai | ✅ | ✅ (federated) | ✅ |
 | ML Training | ❌ | ❌ | ✅ (GPU) |
@@ -539,8 +537,8 @@ Cloud Federation only sees:
 | Control | Sentinel | Guardian | Fortress | Nexus |
 |---------|:--------:|:--------:|:--------:|:-----:|
 | **XDP/eBPF** | ❌ | ✅ | ✅ | ✅ |
-| **Suricata** | ❌ | ✅ | ✅ | ✅ |
-| **Zeek** | ❌ | ✅ | ✅ | ✅ |
+| **NAPSE IDS/IPS** | ❌ | ✅ | ✅ | ✅ |
+| **NAPSE NSM** | ❌ | ✅ | ✅ | ✅ |
 | **Qsecbit** | Lite | ✅ | ✅ | ✅ |
 | **dnsXai** | ❌ | ✅ | ✅ | ✅ |
 | **DSM** | Validate | Participate | Coordinate | Aggregate |
@@ -562,9 +560,9 @@ Cloud Federation only sees:
 1. **All tiers inspect WAN traffic** (except Sentinel which validates only)
 2. **DNS filtering happens on LAN** (dnsXai receives strings, not packets)
 3. **dnsXai ML analyzes text** (domain names), not network traffic
-4. **Advanced detection (TLS, JA3) is on WAN** via Suricata/Zeek
+4. **Advanced detection (TLS, JA3) is on WAN** via NAPSE
 5. **Higher tiers add capabilities** but don't change the basic pattern
 
 ---
 
-*Report generated from codebase analysis v5.2. For system-level configs, check `/etc/suricata/suricata.yaml` and `/etc/zeek/node.cfg`.*
+*Report generated from codebase analysis v5.2. For system-level configs, check `/etc/napse/napse.yaml`.*

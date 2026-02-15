@@ -92,7 +92,7 @@ from hookprobe.dsm import DSMNode
 # Initialize
 dsm = DSMNode(node_id=os.getenv('HOOKPROBE_NODE_ID'))
 
-# On Suricata alert
+# On NAPSE IDS alert
 microblock = dsm.create_microblock(
     payload={'alert_id': alert.id, 'severity': alert.severity},
     event_type='ids_alert'

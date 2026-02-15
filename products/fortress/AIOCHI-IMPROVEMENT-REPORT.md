@@ -20,7 +20,7 @@ This report provides a comprehensive analysis of the AIOCHI dashboard and recomm
 
 ### 1.1 What Works Well
 - **Architecture**: Clean separation between `real_data.py`, `performance_scorer.py`, and UI
-- **Data Sources**: Integration ready for dnsXai, Suricata, Zeek, ClickHouse
+- **Data Sources**: Integration ready for dnsXai, NAPSE, ClickHouse
 - **UI Design**: Beautiful three-pillar layout (Presence, Privacy, Performance)
 - **Quick Actions**: Well-defined action types with toggle support
 
@@ -42,7 +42,7 @@ Current:
 
 Should be:
   SLA AI Collector → ClickHouse → real_data.py → Actual metrics
-  Zeek/Suricata → ClickHouse → Traffic classification → Device profiles
+  NAPSE → ClickHouse → Traffic classification → Device profiles
 ```
 
 ---
@@ -112,7 +112,7 @@ def get_system_performance() -> Dict[str, Any]:
 | **Bandwidth** | Interface stats | `/proc/net/dev` delta over time |
 | **Uptime** | System | `/proc/uptime` first field |
 | **Blocked (24h)** | dnsXai API | `GET /api/stats` → `blocked_queries` |
-| **Threats** | Suricata | ClickHouse `suricata_alerts` count |
+| **Threats** | NAPSE | ClickHouse `napse_alerts` count |
 | **Jitter** | SLA AI | Variance in RTT samples |
 
 ---
@@ -493,16 +493,16 @@ Based on Trio+ Nemotron analysis:
 | Threat | MITRE ID | Risk Level | Detection Method |
 |--------|----------|------------|------------------|
 | **Phishing emails** | T1566 | HIGH | DNS for suspicious domains |
-| **Ransomware** | T1486 | CRITICAL | Suricata signatures |
+| **Ransomware** | T1486 | CRITICAL | NAPSE signatures |
 | **POS malware** | T1059 | HIGH | Behavioral analysis |
 | **Rogue WiFi AP** | T1195 | MEDIUM | Wireless scanning |
 | **DNS tunneling** | T1048 | MEDIUM | dnsXai entropy detection |
 | **Credential theft** | T1078 | HIGH | Failed login monitoring |
 
-### 5.2 Suricata Rules for Small Business
+### 5.2 NAPSE Rules for Small Business
 
 ```yaml
-# /etc/suricata/rules/smallbiz-local.rules
+# /etc/napse/rules/smallbiz-local.yaml
 
 # Phishing URL detection
 alert http $HOME_NET any -> $EXTERNAL_NET any (
@@ -665,7 +665,7 @@ Internet
 
 ### Phase 4: MITRE ATT&CK (5-7 days)
 
-- [ ] Deploy Suricata small business rules
+- [ ] Deploy NAPSE small business rules
 - [ ] Implement automated response playbook
 - [ ] Set up VLAN segmentation (if not exists)
 - [ ] Configure rate limiting thresholds
@@ -699,7 +699,7 @@ Internet
 | **P0** | Fix performance metrics | 1-2 days | Users see real data |
 | **P0** | Implement pause kids | 1 day | Core parental feature |
 | **P1** | Implement game mode | 1 day | Core performance feature |
-| **P1** | Add Suricata rules | 2 days | Basic threat protection |
+| **P1** | Add NAPSE rules | 2 days | Basic threat protection |
 | **P2** | Behavioral analytics | 3-5 days | Auto-detection |
 | **P2** | VLAN segmentation | 2-3 days | Defense in depth |
 | **P3** | Attack visualization | 2 days | User awareness |
@@ -707,7 +707,7 @@ Internet
 ### Trio+ Synthesis
 
 **Devstral** provided: Domain lists, port mappings, detection patterns, OVS/tc commands
-**Nemotron** provided: MITRE ATT&CK mapping, Suricata rules, playbook logic, segmentation design
+**Nemotron** provided: MITRE ATT&CK mapping, NAPSE rules, playbook logic, segmentation design
 **Nemotron Nano** provided: Algorithm edge case analysis, temporal smoothing recommendations
 
 ---
@@ -762,7 +762,7 @@ The original WAN mirroring assumed all WAN interfaces support XDP (AF_XDP), but:
                                       ▼
                         ┌─────────────────────────────────────┐
                         │        wan-mirror (dummy)           │
-                        │   TC mirred → Suricata/Zeek        │
+                        │   TC mirred → NAPSE                │
                         └─────────────────────────────────────┘
 ```
 
@@ -773,7 +773,7 @@ The original WAN mirroring assumed all WAN interfaces support XDP (AF_XDP), but:
 | `devices/common/wan-path-selector.sh` | Path detection and setup logic |
 | `devices/common/ovs-post-setup.sh` | Sources wan-path-selector, integrates dual-path |
 | `devices/common/wan-failover-pbr.sh` | Triggers path refresh on failover |
-| `shared/aiochi/containers/podman-compose.aiochi.yml` | Suricata dual-interface capture |
+| `shared/aiochi/containers/podman-compose.aiochi.yml` | NAPSE dual-interface capture |
 
 ### 8.4 Path Type Detection
 
@@ -792,7 +792,7 @@ detect_wan_path() {
 
 ### 8.5 Anomaly-Triggered Full Capture
 
-When Suricata/Zeek detects an anomaly, sampling automatically increases to 100%:
+When NAPSE detects an anomaly, sampling automatically increases to 100%:
 
 ```bash
 # Trigger full capture (60 seconds by default)
@@ -805,8 +805,8 @@ When Suricata/Zeek detects an anomaly, sampling automatically increases to 100%:
 ./wan-path-selector.sh restore wwan0
 ```
 
-**Integration with Suricata**:
-- Suricata rules can call `wan-path-selector.sh anomaly <iface> <reason>`
+**Integration with NAPSE**:
+- NAPSE alerts can call `wan-path-selector.sh anomaly <iface> <reason>`
 - Full capture enables detailed forensic analysis during incidents
 - Auto-restores to sampled mode after anomaly period
 
@@ -816,7 +816,7 @@ When Suricata/Zeek detects an anomaly, sampling automatically increases to 100%:
 |-----|-------------|----------|--------|
 | **AF_XDP Program** | Actual AF_XDP eBPF program not compiled yet | P2 | Planned |
 | **DPDK Integration** | High-performance capture for 10G+ interfaces | P3 | Research |
-| **Suricata Rule Hook** | Auto-trigger anomaly from Suricata alerts | P1 | Not started |
+| **NAPSE Alert Hook** | Auto-trigger anomaly from NAPSE alerts | P1 | Not started |
 | **ClickHouse Integration** | Store path type in event metadata | P2 | Not started |
 | **Dashboard Widget** | Show WAN path type and sampling rate | P2 | Not started |
 | **PF_RING** | Alternative kernel-bypass (security concerns) | P4 | Not recommended |
@@ -849,8 +849,8 @@ From Trio+ security review (Nemotron):
 # Show status of all WAN interfaces
 ./wan-path-selector.sh status
 
-# Trigger anomaly (manual or from Suricata)
-./wan-path-selector.sh anomaly wwan0 suricata_alert
+# Trigger anomaly (manual or from NAPSE)
+./wan-path-selector.sh anomaly wwan0 napse_alert
 ```
 
 ---

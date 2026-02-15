@@ -2,9 +2,8 @@
  * NAPSE Ring Buffer Events
  *
  * Exports lightweight flow metadata to userspace via eBPF ring buffer.
- * This produces the equivalent of Zeek's conn.log at near-zero cost
- * by exporting only metadata (32 bytes per event) without copying
- * actual packet data.
+ * Produces connection records at near-zero cost by exporting only
+ * metadata (32 bytes per event) without copying actual packet data.
  *
  * Used when AF_XDP is not available or for flows that don't need
  * deep packet inspection.

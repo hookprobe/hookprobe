@@ -1,8 +1,8 @@
 """
 NAPSE - Neural Adaptive Packet Synthesis Engine
 
-HookProbe's proprietary IDS/NSM/IPS engine replacing Zeek, Suricata, and Snort
-with a unified 3-layer architecture optimized for resource-constrained edge devices.
+HookProbe's proprietary IDS/NSM/IPS engine with a unified 3-layer
+architecture optimized for resource-constrained edge devices.
 
 Architecture:
     Layer 0: Kernel Fast Path (eBPF/XDP) - C

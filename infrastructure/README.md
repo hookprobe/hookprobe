@@ -27,7 +27,7 @@ POD-009 provides a complete email solution with:
 - ✅ **Postfix** - SMTP relay (DMZ) + mail server (internal zone)
 - ✅ **DKIM/SPF/DMARC** - Email authentication and anti-spoofing
 - ✅ **Dovecot** - IMAP/POP3 server for mail retrieval
-- ✅ **Suricata IDS** - Real-time email threat monitoring
+- ✅ **SMTP IDS** - Real-time email traffic monitoring
 - ✅ **Cloudflare Tunnel** - Zero-trust remote access
 - ✅ **Podman Deployment** - Rootless containers for enhanced security
 
@@ -63,7 +63,7 @@ POD-009 provides a complete email solution with:
               │  Components:   │
               │  - Postfix     │  ← SMTP relay
               │    Relay       │
-              │  - Suricata    │  ← Email IDS
+              │  - SMTP IDS    │  ← Mail traffic monitor
               │    IDS         │
               └────────┬───────┘
                        │
@@ -87,8 +87,8 @@ POD-009 provides a complete email solution with:
 ### Network Topology
 
 **VNI 209** (10.200.9.0/24):
-- `10.200.9.10` - DMZ Mail Gateway (Postfix relay + Suricata)
-- `10.200.9.11` - DMZ IDS Monitor (Suricata logs)
+- `10.200.9.10` - DMZ Mail Gateway (Postfix relay + SMTP IDS)
+- `10.200.9.11` - DMZ IDS Monitor (SMTP traffic analysis logs)
 - `10.200.9.20` - Internal Mail Server (Postfix + Dovecot)
 - `10.200.9.21` - Cloudflare Tunnel Client
 
@@ -105,7 +105,7 @@ POD-009 provides a complete email solution with:
    - **DMARC**: Policy enforcement and reporting
 
 3. **Threat Detection**:
-   - Suricata IDS monitoring all email traffic
+   - SMTP IDS monitoring all email traffic
    - Integration with Qsecbit AI for threat scoring
    - Automated response to email-based attacks
 
@@ -319,7 +319,7 @@ POD-009 integrates with HookProbe monitoring:
 
 - **Email Traffic**: Inbound/outbound message counts
 - **Queue Size**: Mail queue depth and delays
-- **Threat Detection**: Suricata IDS alerts
+- **Threat Detection**: SMTP IDS alerts
 - **Performance**: SMTP response times, CPU/RAM usage
 
 Access: http://YOUR_IP:3000 → POD-009 Email Dashboard
@@ -333,7 +333,7 @@ podman exec hookprobe-dmz-mail-gateway tail -f /var/log/mail.log
 # Postfix logs (internal server)
 podman exec hookprobe-internal-mail tail -f /var/log/mail.log
 
-# Suricata IDS alerts
+# SMTP IDS alerts
 podman exec hookprobe-dmz-mail-ids tail -f /var/log/suricata/fast.log
 
 # Dovecot logs
@@ -348,7 +348,7 @@ podman exec hookprobe-internal-mail tail -f /var/log/dovecot.log
 
 **Daily**:
 - Monitor mail queue: `mailq`
-- Check IDS alerts: `suricata.log`
+- Check SMTP IDS alerts
 - Review authentication failures
 
 **Weekly**:

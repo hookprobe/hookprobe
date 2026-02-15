@@ -233,7 +233,7 @@ user.groups.add(editor_group)
 ### Features
 
 - **Qsecbit Score Dashboard**: Real-time threat analysis
-- **IDS/IPS Alerts**: Zeek, Snort, Suricata events
+- **IDS/IPS Alerts**: NAPSE detection events
 - **WAF Activity**: NAXSI/ModSecurity blocks
 - **Attack Correlation**: Multi-source threat intelligence
 - **Incident Response**: Quick actions for threats
@@ -306,7 +306,7 @@ View and manage all PODs:
 
 Manage HookProbe services:
 - **Qsecbit**: Enable/disable, adjust thresholds
-- **IDS/IPS**: Snort, Suricata, Zeek rules
+- **IDS/IPS**: NAPSE detection rules
 - **WAF**: NAXSI/ModSecurity rulesets
 - **Monitoring**: Grafana, VictoriaMetrics settings
 - **Backups**: Scheduled backups, retention

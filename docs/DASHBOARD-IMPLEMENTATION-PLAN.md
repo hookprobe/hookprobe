@@ -224,7 +224,7 @@ class N8NWebhookView(APIView):
 #### Tab 1: Home (Dashboard Overview)
 **Metrics displayed:**
 - **Qsecbit Score:** Real-time RAG status (Red/Amber/Green)
-- **IDS/IPS Alerts:** Suricata, Zeek, Snort events (last 24h)
+- **IDS/IPS Alerts:** NAPSE detection events (last 24h)
 - **WAF Blocks:** NAXSI/ModSecurity blocked attacks
 - **Network Traffic:** Total bytes in/out, top protocols
 - **Top Attackers:** Geographic map with attack origins

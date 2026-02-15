@@ -519,7 +519,7 @@ curl -u hookprobe:PASSWORD http://10.200.5.15:8123/?query=SELECT%201
 
 1. ✅ Deploy ClickHouse (Done above)
 2. ⬜ Configure Vector to send logs
-3. ⬜ Set up Filebeat for Zeek logs
+3. ⬜ Configure NAPSE ClickHouse shipper
 4. ⬜ Integrate Qsecbit
 5. ⬜ Create Grafana dashboards
 6. ⬜ Test with real traffic

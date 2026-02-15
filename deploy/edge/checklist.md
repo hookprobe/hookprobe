@@ -268,7 +268,7 @@ firewall-cmd --list-all
 - [ ] Query kernel logs: `{job="rsyslog"} |= "kernel"`
 - [ ] Query WAF logs: `{job="containerlogs"} | container_name=~".*naxsi.*"`
 - [ ] Query Django logs: `{job="containerlogs"} | container_name=~".*django.*"`
-- [ ] Query all IDS alerts: `{job="containerlogs"} | container_name=~".*suricata.*" |= "ALERT"`
+- [ ] Query all IDS alerts: `{job="containerlogs"} | container_name=~".*napse.*" |= "ALERT"`
 
 ### 16. Set Up Alerting
 - [ ] Configure notification channels (email, Slack, etc.)

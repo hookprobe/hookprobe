@@ -184,9 +184,9 @@ class ClickHouseShipper:
         if not self._connect():
             return
 
-        self._flush_buffer('suricata_alerts', self._alert_buffer, 'alerts_shipped')
-        self._flush_buffer('zeek_connections', self._conn_buffer, 'connections_shipped')
-        self._flush_buffer('zeek_dns', self._dns_buffer, 'dns_shipped')
+        self._flush_buffer('napse_alerts', self._alert_buffer, 'alerts_shipped')
+        self._flush_buffer('napse_connections', self._conn_buffer, 'connections_shipped')
+        self._flush_buffer('napse_dns', self._dns_buffer, 'dns_shipped')
 
         self._last_flush = time.time()
         self._stats['flush_count'] += 1
