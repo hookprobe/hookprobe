@@ -136,7 +136,7 @@ sudo ./install.sh --tier guardian
 ```
 
 **That's it!** The install script handles everything automatically:
-- All system packages (hostapd, dnsmasq, suricata, python3, etc.)
+- All system packages (hostapd, dnsmasq, python3, etc.)
 - Python dependencies
 - Locale configuration (en_US.UTF-8)
 - WiFi country auto-detection from your location
@@ -178,7 +178,7 @@ Access at `http://192.168.4.1:8080`
 ### Security Tab - Deep Dive
 - **L2-L7 threat breakdown** - see every layer
 - **Mobile network trust level** - understand your risk
-- **Real-time IDS alerts** - Suricata explanations
+- **Real-time IDS alerts** - NAPSE detection explanations
 - **XDP statistics** - kernel-level protection details
 
 ### DNS Protection Tab - Explainable Blocking
@@ -252,7 +252,7 @@ Current Score: 0.32 (GREEN)
 | Component | Purpose | Transparency |
 |-----------|---------|--------------|
 | **dnsXai** | DNS protection | Every block explained |
-| **Suricata** | IDS/IPS | Alert details visible |
+| **NAPSE** | Neural Adaptive Packet Synthesis | Alert details visible |
 | **XDP/eBPF** | DDoS protection | Stats and rules shown |
 | **Layer Detector** | L2-L7 analysis | Detection reasoning exposed |
 | **Mesh Agent** | Collective intelligence | Contribution visible |
