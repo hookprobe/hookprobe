@@ -131,7 +131,7 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 - ⏱️ **VictoriaMetrics** - Time-series metrics database
 - 🗄️ **ClickHouse** - OLAP database for security analytics
 - 📡 **Vector** - Log routing and transformation
-- 📝 **Filebeat** - Zeek log ingestion
+- 📝 **NAPSE Shipper** - Event ingestion from NAPSE
 - 📈 **node_exporter** - Host metrics collection
 
 **Key Features**:
@@ -151,10 +151,9 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 **Purpose**: Intrusion detection and network monitoring
 
 **Components**:
-- 🔍 **Zeek** - Network security monitor (BSD)
-- 🚨 **Snort 3** - IDS/IPS engine
-- 🦅 **Suricata** - Multi-threaded IDS/IPS
-- 🤖 **Qsecbit AI** - Threat analysis engine
+- 🧠 **NAPSE** - AI-native IDS/NSM/IPS engine
+- 🛡️ **AEGIS** - Autonomous AI orchestrator (8 agents)
+- 🤖 **Qsecbit AI** - Threat analysis and scoring engine
 
 **Key Features**:
 - Signature-based detection
@@ -221,7 +220,7 @@ HookProbe uses a **modular POD architecture** where each POD serves a specific s
 - 📧 **Postfix** - SMTP relay + mail server
 - 📬 **Dovecot** - IMAP/POP3 server
 - 🔐 **DKIM/SPF/DMARC** - Email authentication
-- 🦅 **Suricata** - Email threat monitoring
+- 🦅 **SMTP IDS** - Email traffic monitoring
 - ☁️ **Cloudflare Tunnel** - Zero-trust access
 
 **Key Features**:

@@ -356,7 +356,7 @@ systemctl enable --now fail2ban
 
 ### Security Integration
 
-- **IDS/IPS Events** - Snort, Zeek, Suricata
+- **IDS/IPS Events** - NAPSE
 - **WAF Events** - NAXSI/ModSecurity
 - **Qsecbit Scores** - RAG status tracking
 - **Kali Responses** - Automated mitigation logs

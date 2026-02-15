@@ -1,13 +1,12 @@
 """
 NAPSE D2D Bubble Feed
 
-Replaces the Zeek dependency in the D2D bubble system by feeding
-connection records and mDNS events directly from NAPSE to the
-bubble system components:
+Feeds connection records and mDNS events directly from NAPSE to the
+D2D bubble system components:
 
-  - ConnectionGraphAnalyzer (replaces conn.log parsing)
-  - ZeekMDNSParser equivalent (replaces dns.log mDNS parsing)
-  - DHCP Sentinel (replaces dhcp.log)
+  - ConnectionGraphAnalyzer (real-time connection records)
+  - MDNSParser (real-time mDNS service discovery)
+  - DHCP Sentinel (real-time DHCP lease events)
 
 Author: HookProbe Team
 License: Proprietary
@@ -29,8 +28,8 @@ class BubbleFeed:
     """
     Feeds NAPSE events to the D2D bubble ecosystem.
 
-    Replaces Zeek log file parsing with direct event delivery
-    for real-time device relationship detection.
+    Provides direct event delivery for real-time device
+    relationship detection.
     """
 
     def __init__(
@@ -42,11 +41,8 @@ class BubbleFeed:
         """
         Args:
             connection_callback: Called with ConnectionRecord for D2D analysis.
-                                Replaces ConnectionGraphAnalyzer.parse_conn_log()
             mdns_callback: Called with MDNSRecord for ecosystem detection.
-                          Replaces ZeekMDNSParser.parse_line()
             dhcp_callback: Called with DHCPRecord for device discovery.
-                          Replaces DHCP Sentinel file watcher.
         """
         self._connection_cb = connection_callback
         self._mdns_cb = mdns_callback

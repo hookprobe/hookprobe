@@ -32,7 +32,7 @@ Internet
 │                                          │
 │  ┌────────────────────────────────┐     │
 │  │  IDS/IPS (10.200.9.11)         │     │
-│  │  - Suricata monitoring         │     │
+│  │  - SMTP traffic monitoring     │     │
 │  │  - Traffic analysis            │     │
 │  └────────────────────────────────┘     │
 └──────────────────────────────────────────┘
@@ -143,7 +143,7 @@ default._domainkey.hookprobe.com. IN TXT "v=DKIM1; k=rsa; p=<public-key>"
 ```
 
 ### 3. Intrusion Detection (IDS)
-- **Suricata IDS** in DMZ (10.200.9.11)
+- **SMTP IDS** in DMZ (10.200.9.11)
 - Monitor all SMTP traffic
 - Detect:
   - SMTP enumeration attacks
@@ -205,7 +205,7 @@ Django App (10.200.1.12)
 ### Podman Compose Deployment
 All components deployed as Podman containers:
 - `dmz-mail-gateway`: Postfix relay + security filtering
-- `dmz-mail-ids`: Suricata IDS monitoring
+- `dmz-mail-ids`: SMTP IDS (mail traffic monitor)
 - `internal-mail-server`: Postfix + Dovecot
 - `cloudflared`: Cloudflare Tunnel client
 
@@ -237,7 +237,7 @@ networks:
 
 - **Mail Queue Status**: `/var/spool/postfix` monitoring
 - **Delivery Metrics**: Success/failure rates
-- **Security Events**: IDS alerts from Suricata
+- **Security Events**: SMTP IDS alerts
 - **Performance**: Queue length, delivery time
 - **Health Check**: `postfix status`, `dovecot status`
 
@@ -301,4 +301,4 @@ DEFAULT_FROM_EMAIL = 'HookProbe <noreply@hookprobe.com>'
 - [Dovecot Wiki](https://wiki.dovecot.org/)
 - [DKIM Best Practices](https://www.dkim.org/)
 - [Cloudflare Tunnel Setup](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/)
-- [Suricata Rules](https://suricata.readthedocs.io/)
+- [Suricata Rules (SMTP IDS engine)](https://suricata.readthedocs.io/)

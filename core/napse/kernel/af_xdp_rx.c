@@ -8,8 +8,8 @@
  * This is NOT an eBPF program - it runs in userspace and is compiled
  * as a shared library linked by the Rust engine via FFI.
  *
- * AF_XDP provides 3-5x throughput improvement over AF-PACKET
- * (used by Suricata) by eliminating kernel-to-userspace copies.
+ * AF_XDP provides 3-5x throughput improvement over AF_PACKET
+ * by eliminating kernel-to-userspace copies.
  *
  * UMEM Configuration (per tier):
  *   Sentinel:  1024 frames, 2KB each  = 2MB UMEM

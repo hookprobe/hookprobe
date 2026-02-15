@@ -46,7 +46,7 @@ HookProbe's automation framework implements **autonomous threat detection and re
 ```
 Sources:
 ├── System Logs (journald, syslog)
-├── Network Packets (Zeek, Snort)
+├── Network Packets (NAPSE)
 ├── Container Events (podman events)
 ├── File System (inotify)
 └── API Calls (ModSecurity, NAXSI)

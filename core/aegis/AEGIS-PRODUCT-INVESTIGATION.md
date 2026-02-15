@@ -71,8 +71,8 @@ WAN:     Failure prediction, cost-aware failover, metered backup tracking
 |--------|-----------|--------|-------------|
 | Qsecbit threat events | Per-flow | ~100 events/sec busy | JSON files, PostgreSQL |
 | dnsXai classifications | Per-query | ~10 queries/sec | Redis cache, logs |
-| Zeek connection logs | Per-flow | ~50KB/s | Log files, ClickHouse |
-| Suricata IDS alerts | Per-alert | ~1-20KB/s | EVE JSON, ClickHouse |
+| NAPSE connection records | Per-flow | ~50KB/s | EventBus, ClickHouse |
+| NAPSE IDS alerts | Per-alert | ~1-20KB/s | EventBus, ClickHouse |
 | DHCP lease events | Per-lease | ~1 event/min | Hook scripts, JSON |
 | mDNS discovery | Per-query | ~5 events/min | Presence sensor |
 | OVS flow samples | IPFIX 1/100 | ~5KB/s | IPFIX collector |
@@ -154,7 +154,7 @@ These users:
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                    SIGNAL FABRIC                                  │   │
-│  │  Qsecbit · dnsXai · SLA AI · Zeek · Suricata · mDNS · DHCP    │   │
+│  │  Qsecbit · dnsXai · SLA AI · NAPSE · mDNS · DHCP              │   │
 │  │  OVS flows · WiFi beacons · WAN probes · Mesh gossip           │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
@@ -240,7 +240,7 @@ Each agent is a **specialized security expert** with:
 
 #### 1. GUARDIAN — Network Defense Agent
 **Trigger**: L3-L4 attacks, DDoS, port scans, network anomalies
-**Data Sources**: Qsecbit L3/L4 scores, Suricata alerts, XDP stats, OVS flows
+**Data Sources**: Qsecbit L3/L4 scores, NAPSE alerts, XDP stats, OVS flows
 **Tools**: Block IP, rate limit, quarantine subnet, adjust XDP rules
 **Example**:
 ```
@@ -307,7 +307,7 @@ Says:    "I caught someone trying to intercept encrypted traffic between
 
 #### 5. SCOUT — Reconnaissance & Discovery Agent
 **Trigger**: Port scans, network enumeration, OSINT indicators, new subnet activity
-**Data Sources**: Qsecbit L4 scan detection, Zeek conn.log, flow metadata
+**Data Sources**: Qsecbit L4 scan detection, NAPSE connection records, flow metadata
 **Tools**: Honeypot redirect, scan fingerprinting, attacker profiling
 **Example**:
 ```
@@ -388,7 +388,7 @@ Says:    "Great month overall. Here's your summary:
 ### Agent Orchestration
 
 ```
-Event arrives (Qsecbit/dnsXai/DHCP/Zeek/etc.)
+Event arrives (Qsecbit/dnsXai/DHCP/NAPSE/etc.)
     │
     ▼
 ┌─────────────────────────┐
@@ -602,8 +602,7 @@ After incident:
 | **Qsecbit Bridge** | Subscribe to threat events | L2-L7 detection signals | P0 |
 | **dnsXai Bridge** | Subscribe to DNS classifications | DNS threat signals | P0 |
 | **DHCP Bridge** | Hook into lease events | Device discovery signals | P0 |
-| **Zeek Bridge** | Parse conn.log, dns.log | Flow metadata signals | P1 |
-| **Suricata Bridge** | Parse EVE JSON | IDS alert signals | P1 |
+| **NAPSE Bridge** | Subscribe to NAPSE EventBus | IDS/NSM event signals | P0 |
 | **WiFi Bridge** | hostapd control socket | WiFi state signals | P1 |
 | **WAN Bridge** | SLA AI metrics | Network health signals | P1 |
 | **Mesh Bridge** | HTP gossip subscription | Collective threat intelligence | P2 |
@@ -744,7 +743,7 @@ scikit-learn                 # Fingerprint ML (already loaded)
 │  │ Qsecbit → Redis channel: aegis.signals.threat        │   │
 │  │ dnsXai  → Redis channel: aegis.signals.dns           │   │
 │  │ DHCP    → Redis channel: aegis.signals.device        │   │
-│  │ Zeek    → Redis channel: aegis.signals.flow          │   │
+│  │ NAPSE   → Redis channel: aegis.signals.flow          │   │
 │  │ WAN     → Redis channel: aegis.signals.wan           │   │
 │  │ WiFi    → Redis channel: aegis.signals.wifi          │   │
 │  └──────────────────────────────────────────────────────┘   │
@@ -1001,7 +1000,7 @@ products/fortress/
 │       │   ├── qsecbit_bridge.py    # Qsecbit signal adapter
 │       │   ├── dnsxai_bridge.py     # dnsXai signal adapter
 │       │   ├── dhcp_bridge.py       # DHCP event adapter
-│       │   ├── zeek_bridge.py       # Zeek log adapter
+│       │   ├── napse_bridge.py      # NAPSE EventBus adapter
 │       │   └── mesh_bridge.py       # Mesh gossip adapter
 │       └── prompts/
 │           ├── soul.j2              # Soul system prompt template

@@ -321,9 +321,9 @@ qsecbit/
 |------------|------------------|------------|----------|
 | **ARP Spoofing** | MAC address change for known IP; gateway protection | 85-95% | MAC history, is_gateway flag |
 | **MAC Flooding** | FDB table size monitoring (bridge fdb) | 60-80% | fdb_count, overflow_ratio |
-| **VLAN Hopping** | 802.1Q-in-Q double tagging via Suricata | 75% | Suricata alerts |
+| **VLAN Hopping** | 802.1Q-in-Q double tagging via NAPSE | 75% | NAPSE alerts |
 | **Evil Twin** | Same SSID with different BSSID via WiFi scan | 90% | known_bssid, rogue_bssid |
-| **Rogue DHCP** | Multiple DHCP servers via Zeek dhcp.log | 85% | all_servers, new_servers |
+| **Rogue DHCP** | Multiple DHCP servers via NAPSE DHCP analysis | 85% | all_servers, new_servers |
 
 **Example Detection**:
 ```python
@@ -348,8 +348,8 @@ for threat in threats:
 | **IP Spoofing** | Martian packets in kernel logs | 70-85% | spoofed_ip, interface |
 | **ICMP Flood** | `/proc/net/snmp` InEchos rate spike | 70-85% | icmp_rate, baseline_rate |
 | **Smurf Attack** | Broadcast ICMP echo requests | 80% | broadcast_count, source_ip |
-| **Routing Attack** | Suricata BGP/OSPF anomalies | 75% | Suricata alert signature |
-| **Fragmentation** | Overlapping/malformed fragments | 80% | Suricata frag alerts |
+| **Routing Attack** | NAPSE BGP/OSPF anomaly detection | 75% | NAPSE alert signature |
+| **Fragmentation** | Overlapping/malformed fragments | 80% | NAPSE fragment alerts |
 
 ### Layer 4 - Transport Detection
 
@@ -358,9 +358,9 @@ for threat in threats:
 | Attack Type | Detection Method | Confidence | Evidence |
 |------------|------------------|------------|----------|
 | **SYN Flood** | SYN_RECV state count via `ss -s` | 70-85% | syn_recv_count, threshold |
-| **Port Scan** | Zeek conn.log analysis (50+ ports) | 75-90% | ports_scanned, scan_duration |
-| **TCP Reset** | Suricata RST anomaly detection | 75% | Suricata RST alerts |
-| **Session Hijack** | Sequence number prediction alerts | 80% | flow_id, Suricata signature |
+| **Port Scan** | NAPSE connection analysis (50+ ports) | 75-90% | ports_scanned, scan_duration |
+| **TCP Reset** | NAPSE RST anomaly detection | 75% | NAPSE RST alerts |
+| **Session Hijack** | Sequence number prediction alerts | 80% | flow_id, NAPSE signature |
 | **UDP Flood** | `/proc/net/snmp` InDatagrams spike | 70-85% | udp_rate, baseline_rate |
 
 ### Layer 5 - Session Detection
@@ -369,7 +369,7 @@ for threat in threats:
 
 | Attack Type | Detection Method | Confidence | Evidence |
 |------------|------------------|------------|----------|
-| **SSL Strip** | HTTP downgrade detection via Zeek | 80% | Zeek ssl.log, downgrade_url |
+| **SSL Strip** | HTTP downgrade detection via NAPSE | 80% | NAPSE TLS analysis, downgrade_url |
 | **TLS Downgrade** | Weak TLS version detection (SSLv2/3, TLS1.0) | 85% | tls_version, cipher_suite |
 | **Cert Pinning Bypass** | Certificate chain anomalies | 75% | cert_issuer, expected_issuer |
 | **Auth Bypass** | Brute force tracking (10+ failures) | 80% | failed_attempts, source_ip |
@@ -655,7 +655,7 @@ DEFAULT_RESPONSE_MAP = {
 │  1. CONTINUOUS MONITORING (every 1-5 seconds)                            │
 │     ┌──────────────────────────────────────────────────────────────┐    │
 │     │  • ARP cache changes    • /proc/net/snmp stats               │    │
-│     │  • Zeek/Suricata logs   • Energy consumption (RAPL)          │    │
+│     │  • NAPSE IDS events     • Energy consumption (RAPL)          │    │
 │     │  • WiFi scan (periodic) • HTTP access logs                   │    │
 │     └──────────────────────────────────────────────────────────────┘    │
 │                                    │                                     │

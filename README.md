@@ -196,7 +196,7 @@ HookProbe's core innovation is the integrated security stack that provides end-t
 | **NEURO** | Neural Resonance Protocol | Device fingerprinting via weight evolution |
 | **QSECBIT** | Quantified Security Metric | Real-time RAG scoring (GREEN/AMBER/RED) |
 | **NSE** | Neural Synaptic Encryption | Keys emerge from neural state - nobody knows the password |
-| **NAPSE** | Neural Adaptive Packet Synthesis Engine | Replaces Zeek/Suricata/Snort with AI-native detection |
+| **NAPSE** | Neural Adaptive Packet Synthesis Engine | AI-native IDS/NSM/IPS with L2-L7 deep packet analysis |
 | **AEGIS** | Autonomous AI Orchestrator | 8 specialized agents, principle-guided autonomous defense |
 
 ### The NSE Innovation
