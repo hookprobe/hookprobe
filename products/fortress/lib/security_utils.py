@@ -12,6 +12,7 @@ while maintaining operational visibility for debugging and monitoring.
 G.N.C. Security Protocol: Reviewed by Gemini (Architect) for industry best practices.
 """
 
+import hashlib
 import logging
 import re
 from typing import Optional
@@ -64,6 +65,25 @@ def mask_mac(mac: str, show_prefix: bool = True, show_suffix: bool = True) -> st
         return f"**:**:**:**:**:{parts[5]}"
     else:
         return "**:**:**:**:**:**"
+
+
+def mac_log_id(mac: str) -> str:
+    """
+    Generate a non-reversible log identifier from a MAC address (CWE-532 mitigation).
+
+    Produces a short hash suitable for log correlation without exposing the
+    actual MAC address. Unlike mask_mac(), this reveals zero octets.
+
+    Args:
+        mac: MAC address (e.g., "aa:bb:cc:dd:ee:ff")
+
+    Returns:
+        8-character hex hash, e.g., "dev_a1b2c3d4"
+    """
+    if not mac:
+        return "dev_unknown"
+    normalized = mac.upper().replace('-', ':').strip()
+    return "dev_" + hashlib.sha256(normalized.encode()).hexdigest()[:8]
 
 
 def mask_ip(ip: str) -> str:
