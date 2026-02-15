@@ -15,7 +15,7 @@
     },
     {
       "parameters": {
-        "url": "http://aiochi-clickhouse:8123/?query=SELECT%20sum(bytes_in%20%2B%20bytes_out)%20as%20total_bytes%20FROM%20aiochi.zeek_conn%20WHERE%20timestamp%20%3E%20now()%20-%20INTERVAL%205%20MINUTE%20FORMAT%20JSON",
+        "url": "http://aiochi-clickhouse:8123/?query=SELECT%20sum(bytes_in%20%2B%20bytes_out)%20as%20total_bytes%20FROM%20aiochi.napse_connections%20WHERE%20timestamp%20%3E%20now()%20-%20INTERVAL%205%20MINUTE%20FORMAT%20JSON",
         "method": "GET"
       },
       "id": "fetch-bandwidth",
@@ -41,7 +41,7 @@
         "method": "POST",
         "bodyParameters": {
           "parameters": [
-            { "name": "query", "value": "SELECT count() as blocked_count FROM aiochi.suricata_alerts WHERE timestamp > now() - INTERVAL 1 HOUR" }
+            { "name": "query", "value": "SELECT count() as blocked_count FROM aiochi.napse_alerts WHERE timestamp > now() - INTERVAL 1 HOUR" }
           ]
         }
       },

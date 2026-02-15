@@ -4,7 +4,7 @@
 
 The HookProbe Attack Mitigation System provides **automated threat detection and response** with:
 
-- ✅ **Multi-Source Intelligence**: Qsecbit AI, VictoriaMetrics, VictoriaLogs, Snort3, Zeek, ModSecurity
+- ✅ **Multi-Source Intelligence**: Qsecbit AI, VictoriaMetrics, VictoriaLogs, NAPSE, ModSecurity
 - ✅ **Honeypot Redirection**: SNAT rules redirect attackers to honeypots for analysis
 - ✅ **Automated Blocking**: Critical threats blocked immediately
 - ✅ **Email Alerts**: Security team notified at qsecbit@hookprobe.com
@@ -75,8 +75,7 @@ VICTORIAMETRICS_URL="http://10.200.5.11:9090"
 VICTORIALOGS_URL="http://10.200.5.12:9428"
 
 # Log file paths (adjust based on your installation)
-SNORT3_ALERT_FILE="/var/log/snort/alert_fast.txt"
-ZEEK_NOTICE_LOG="/opt/zeek/logs/current/notice.log"
+NAPSE_ALERT_FILE="/var/log/napse/alerts.json"
 ```
 
 ### Step 3: Install System Files
@@ -313,8 +312,7 @@ sudo /usr/local/bin/mitigation-maintenance.sh health
 1. Qsecbit detects AMBER/RED status
            ↓
 2. Query all log sources:
-   - Snort3 (network attacks)
-   - Zeek (behavioral anomalies)
+   - NAPSE (AI-native IDS)
    - ModSecurity (web attacks)
    - VictoriaLogs (application logs)
            ↓
