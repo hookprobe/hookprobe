@@ -77,7 +77,7 @@ prompt = ioc.to_prompt()
 
 **Features**:
 - MITRE ATT&CK mapping
-- Suricata/Zeek integration
+- NAPSE IDS integration
 - IoC aggregation and correlation
 - Privacy-preserving IP anonymization
 

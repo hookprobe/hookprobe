@@ -52,7 +52,7 @@ sudo ./install.sh --tier nexus
 ```bash
 --enable-aiochi      # AIOCHI (AI Eyes) - Full cognitive layer
                      # Includes: n8n, Grafana, VictoriaMetrics,
-                     # ClickHouse, Suricata, Zeek, Ollama LLM
+                     # ClickHouse, NAPSE, AEGIS, Ollama LLM
 --enable-lte         # LTE/5G failover
 ```
 
@@ -114,8 +114,8 @@ All services run in Podman containers for isolation:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │  Suricata   │  │    Zeek     │  │   ModSec    │  Security   │
-│  │   IDS/IPS   │  │  Analysis   │  │    WAF      │             │
+│  │   NAPSE     │  │   AEGIS     │  │   ModSec    │  Security   │
+│  │  IDS/NSM    │  │ Orchestrator│  │    WAF      │             │
 │  └─────────────┘  └─────────────┘  └─────────────┘             │
 │                                                                  │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
@@ -142,8 +142,8 @@ All services are managed via systemd:
 ```bash
 # Core services
 sudo systemctl status hookprobe-guardian
-sudo systemctl status hookprobe-suricata
-sudo systemctl status hookprobe-zeek
+sudo systemctl status hookprobe-napse
+sudo systemctl status hookprobe-aegis
 sudo systemctl status hookprobe-waf
 sudo systemctl status hookprobe-xdp
 

@@ -28,12 +28,12 @@ HookProbe currently uses:
 - **PostgreSQL** for relational data (Django, Keycloak)
 - **VictoriaMetrics** for time-series metrics
 - **VictoriaLogs** for log aggregation
-- **Volume-based storage** for Zeek, Snort3, ModSecurity, Honeypot logs
+- **Volume-based storage** for NAPSE, ModSecurity, Honeypot logs
 
 ### Problems Identified
 1. **Slow analytical queries** on security events (PostgreSQL not optimized for OLAP)
 2. **Limited query capabilities** in VictoriaLogs for complex security analysis
-3. **File-based logs** (Zeek, Snort3) are difficult to query and correlate
+3. **File-based logs** (NAPSE events) are difficult to query and correlate
 4. **No historical threat analysis** - Qsecbit data stored in volumes, not queryable
 5. **Storage inefficiency** - logs consume significant disk space
 6. **Slow forensics** - investigating attacks requires manual log parsing
@@ -61,8 +61,8 @@ HookProbe currently uses:
 | **PostgreSQL (POD 003)** | Django app data, Keycloak | Low (GB) | OLTP - transactional | Used for analytics, too slow |
 | **VictoriaMetrics (POD 005)** | Time-series metrics | Medium (10s GB) | Time-range queries | Perfect for metrics, keep |
 | **VictoriaLogs (POD 005)** | Log aggregation | High (100s GB) | Basic text search | Limited query capabilities |
-| **Volume: Zeek Logs** | Network traffic analysis | Very High (TB) | File-based | Difficult to query |
-| **Volume: Snort3 Logs** | IDS/IPS alerts | High (100s GB) | File-based | No correlation with other data |
+| **Volume: NAPSE Logs** | Network traffic analysis | Very High (TB) | File-based | Difficult to query |
+| **Volume: NAPSE Alerts** | IDS/IPS alerts | High (100s GB) | File-based | No correlation with other data |
 | **Volume: ModSecurity** | WAF logs (JSON) | High (100s GB) | File-based | Manual parsing required |
 | **Volume: Qsecbit Data** | AI threat scores | Medium (GB) | File-based | No historical analysis |
 | **Volume: Honeypot Data** | Attack patterns | High (100s GB) | File-based | No threat intelligence queries |
@@ -77,8 +77,7 @@ HookProbe currently uses:
 Container Logs → journald → Vector → VictoriaLogs → Grafana
                                                       (Limited queries)
 
-Zeek IDS → /opt/zeek/logs/  (Files)  → Manual analysis
-Snort3  → /var/log/snort/   (Files)  → Manual analysis
+NAPSE   → /var/log/napse/    (Files)  → Manual analysis
 ModSec  → /var/log/nginx/   (JSON)   → Manual analysis
 Qsecbit → /data/            (Files)  → No analysis
 
@@ -137,7 +136,7 @@ ClickHouse is a **columnar OLAP database** designed for real-time analytical que
 | **Real-time ingestion** | 100K+ rows/second, instant queries |
 | **Complex analytics** | Full SQL support, JOIN, subqueries |
 | **Time-series data** | Optimized partitioning by date |
-| **JSON logs** (ModSec, Zeek) | Native JSON functions |
+| **JSON logs** (ModSec, NAPSE) | Native JSON functions |
 | **Integration** | Works with Grafana, Vector, Python |
 
 ### Benchmark Comparison
@@ -198,11 +197,8 @@ DATA INGESTION PIPELINES:
    journald → Vector → ClickHouse (security events)
                     → VictoriaLogs (system logs) [optional, can deprecate]
 
-2. Zeek IDS:
-   Zeek → Filebeat → ClickHouse (network events)
-
-3. Snort3:
-   Snort3 alerts → Vector → ClickHouse (IDS alerts)
+2. NAPSE IDS/NSM:
+   NAPSE → ClickHouse Shipper → ClickHouse (network events + IDS alerts)
 
 4. ModSecurity WAF:
    Nginx JSON logs → Vector → ClickHouse (WAF events)
@@ -239,7 +235,7 @@ Current POD 005 services:
 
 **Add:**
 - **10.200.5.15 - ClickHouse** (main database)
-- **10.200.5.16 - Filebeat** (Zeek log ingestion)
+- **10.200.5.16 - NAPSE Shipper** (event ingestion)
 
 ### Database Schema Design
 
@@ -252,7 +248,7 @@ CREATE TABLE security_events (
     event_id UUID DEFAULT generateUUIDv4(),
 
     -- Source
-    source_type LowCardinality(String), -- 'zeek', 'snort', 'modsec', 'honeypot'
+    source_type LowCardinality(String), -- 'napse', 'modsec', 'honeypot'
     host String,
 
     -- Network
@@ -313,7 +309,7 @@ TTL timestamp + INTERVAL 1 YEAR
 SETTINGS index_granularity = 8192;
 ```
 
-#### 3. Network Flows (Zeek)
+#### 3. Network Flows (NAPSE)
 
 ```sql
 CREATE TABLE network_flows (
@@ -331,12 +327,12 @@ CREATE TABLE network_flows (
     packets_received UInt32,
     duration Float32,
 
-    -- Zeek analysis
+    -- NAPSE analysis
     service LowCardinality(String),
     conn_state LowCardinality(String),
 
     -- Metadata
-    zeek_uid String
+    napse_uid String
 
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
@@ -458,8 +454,8 @@ GROUP BY day, src_ip;
 
 | Data Type | Current Size | ClickHouse Size | Compression |
 |-----------|--------------|-----------------|-------------|
-| **Zeek logs (30d)** | 500 GB | 25-50 GB | **10-20x** |
-| **Snort alerts (90d)** | 100 GB | 5-10 GB | **10-20x** |
+| **NAPSE connection logs (30d)** | 500 GB | 25-50 GB | **10-20x** |
+| **NAPSE alerts (90d)** | 100 GB | 5-10 GB | **10-20x** |
 | **ModSecurity (90d)** | 200 GB | 10-20 GB | **10-20x** |
 | **Honeypot (180d)** | 150 GB | 8-15 GB | **10-20x** |
 | **Total** | **950 GB** | **48-95 GB** | **10-20x** |
@@ -580,7 +576,7 @@ ORDER BY week DESC;
 
 2. **Update setup.sh** (POD 005 section)
    - Add ClickHouse container deployment
-   - Add Filebeat container for Zeek logs
+   - Configure NAPSE ClickHouse shipper for event ingestion
    - Configure Vector to send to ClickHouse
 
 3. **Create ClickHouse configuration**
@@ -600,7 +596,7 @@ ORDER BY week DESC;
 
 **Objectives:**
 - Configure Vector to send logs to ClickHouse
-- Set up Filebeat for Zeek log ingestion
+- Set up NAPSE ClickHouse shipper for event ingestion
 - Create ingestion scripts for Qsecbit
 - Validate data flow
 
@@ -617,18 +613,12 @@ ORDER BY week DESC;
    table = "security_events"
    ```
 
-2. **Configure Filebeat for Zeek**
-   ```yaml
-   filebeat.inputs:
-   - type: log
-     enabled: true
-     paths:
-       - /opt/zeek/logs/current/*.log
-     json.keys_under_root: true
-
-   output.http:
-     hosts: ["http://10.200.5.15:8123"]
-     index: "network_flows"
+2. **Configure NAPSE ClickHouse shipper**
+   ```python
+   # NAPSE ClickHouseShipper configuration
+   # Configured in core/napse/synthesis/clickhouse_shipper.py
+   # Events are batched (1000 events or 5s) and sent via HTTP POST
+   # Tables: napse_alerts, napse_connections, napse_dns
    ```
 
 3. **Modify qsecbit.py to write to ClickHouse**
@@ -668,7 +658,7 @@ ORDER BY week DESC;
 2. **Create dashboards:**
    - Security Overview (attack trends, top attackers, blocked vs allowed)
    - WAF Analytics (rule triggers, attack categories, response times)
-   - IDS/IPS Dashboard (Zeek + Snort correlation)
+   - IDS/IPS Dashboard (NAPSE events)
    - Qsecbit Analysis (RAG trends, component breakdown)
    - Threat Hunting (custom queries)
    - Forensics Investigation (IP timeline, attack correlation)
@@ -713,7 +703,7 @@ ORDER BY week DESC;
 
 # ClickHouse Analytics
 IP_CLICKHOUSE="10.200.5.15"               # ClickHouse OLAP database
-IP_FILEBEAT="10.200.5.16"                  # Log shipper for Zeek
+IP_FILEBEAT="10.200.5.16"                  # NAPSE event shipper
 
 # ClickHouse configuration
 CLICKHOUSE_DB="security"
@@ -874,7 +864,7 @@ CREATE TABLE IF NOT EXISTS security.network_flows (
     duration Float32,
     service LowCardinality(String),
     conn_state LowCardinality(String),
-    zeek_uid String
+    napse_uid String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
 ORDER BY (timestamp, src_ip, dst_ip)
@@ -969,39 +959,8 @@ echo "  → Initializing ClickHouse schemas..."
 podman exec "${POD_MONITORING}-clickhouse" \
     clickhouse-client --multiquery < /tmp/clickhouse-config/init-db.sql
 
-echo "  → Starting Filebeat for Zeek log ingestion..."
-mkdir -p /tmp/filebeat-config
-
-cat > /tmp/filebeat-config/filebeat.yml << 'FILEBEATEOF'
-filebeat.inputs:
-- type: log
-  enabled: true
-  paths:
-    - /zeek-logs/current/*.log
-  json.keys_under_root: true
-  json.add_error_key: true
-  fields:
-    source_type: zeek
-
-output.http:
-  hosts: ["http://localhost:8123"]
-  index: "network_flows"
-  username: "${CLICKHOUSE_USER}"
-  password: "${CLICKHOUSE_PASSWORD}"
-  parameters:
-    database: security
-    table: network_flows
-FILEBEATEOF
-
-podman run -d --restart always \
-    --pod "$POD_MONITORING" \
-    --name "${POD_MONITORING}-filebeat" \
-    -v /tmp/filebeat-config/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro \
-    -v "$VOLUME_ZEEK_LOGS:/zeek-logs:ro" \
-    --user root \
-    --log-driver=journald \
-    --log-opt tag="hookprobe-filebeat" \
-    "$IMAGE_FILEBEAT"
+echo "  → NAPSE ClickHouse shipper handles event ingestion natively"
+echo "  → See core/napse/synthesis/clickhouse_shipper.py"
 
 echo "✓ ClickHouse OLAP database deployed"
 ```

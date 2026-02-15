@@ -72,9 +72,9 @@ Under GDPR Article 4(1), personal data is "any information relating to an identi
 
 | Data Type | Where Stored | Retention | Purpose |
 |-----------|--------------|-----------|---------|
-| **Attack Source IPs** | Zeek, Snort3, ModSecurity, ClickHouse | 90 days | Threat intelligence |
+| **Attack Source IPs** | NAPSE, ModSecurity, ClickHouse | 90 days | Threat intelligence |
 | **WAF Block Events** | ModSecurity, ClickHouse | 90 days | Security analysis |
-| **IDS Alerts** | Snort3, Zeek, ClickHouse | 365 days | Incident response |
+| **IDS Alerts** | NAPSE, ClickHouse | 365 days | Incident response |
 | **Honeypot Logs** | Custom honeypots | 180 days | Attacker profiling |
 | **Qsecbit Scores** | ClickHouse, VictoriaMetrics | 365 days | Trend analysis |
 
@@ -540,8 +540,8 @@ sudo crontab -e
 
 | Data Type | Retention Period | Deletion Method |
 |-----------|------------------|-----------------|
-| Zeek network flows | 30 days | File deletion + ClickHouse DELETE |
-| Snort3 alerts | 90 days | File deletion + ClickHouse DELETE |
+| NAPSE network flows | 30 days | File deletion + ClickHouse DELETE |
+| NAPSE alerts | 90 days | File deletion + ClickHouse DELETE |
 | ModSecurity WAF logs | 90 days | File deletion + ClickHouse DELETE |
 | Honeypot logs | 180 days | File deletion + ClickHouse DELETE |
 | Qsecbit scores | 365 days | ClickHouse DELETE |
@@ -898,8 +898,8 @@ After HookProbe is running:
 
 - [ ] **Verify anonymization is working**
   ```bash
-  # Check Zeek logs for anonymized IPs
-  tail /opt/zeek/logs/conn.log | grep "\.0$"  # Should see .0 IPs
+  # Check NAPSE logs for anonymized IPs
+  tail /opt/napse/logs/conn.log | grep "\.0$"  # Should see .0 IPs
   ```
 
 - [ ] **Test data retention cleanup**

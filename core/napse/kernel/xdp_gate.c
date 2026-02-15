@@ -146,7 +146,7 @@ BPF_HASH(verdict_map, struct flow_key, __u8, FLOW_TABLE_SIZE);
 /* Statistics */
 BPF_ARRAY(stats, __u64, 12);
 
-/* Ring buffer for metadata export (replaces Zeek conn.log at near-zero cost) */
+/* Ring buffer for metadata export (connection records at near-zero cost) */
 BPF_RINGBUF_OUTPUT(metadata_rb, 1 << 20);  /* 1MB ring buffer */
 
 /* AF_XDP socket map for zero-copy packet delivery */

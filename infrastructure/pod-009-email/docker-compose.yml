@@ -129,8 +129,10 @@ services:
       retries: 3
 
   # ============================================
-  # DMZ IDS/IPS (Suricata)
-  # Monitors all SMTP traffic for threats
+  # DMZ IDS/IPS (SMTP-specific traffic monitor)
+  # Standalone IDS for email traffic only — separate from
+  # the main NAPSE engine which handles LAN/WAN detection.
+  # Uses Suricata image as a lightweight SMTP protocol inspector.
   # ============================================
   dmz-mail-ids:
     image: jasonish/suricata:latest
@@ -142,9 +144,9 @@ services:
         ipv4_address: 10.200.9.11
 
     volumes:
-      - ./monitoring/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./monitoring/napse-smtp.yaml:/etc/suricata/suricata.yaml:ro
       - ./monitoring/rules:/var/lib/suricata/rules:ro
-      - suricata-logs:/var/log/suricata
+      - mail-ids-logs:/var/log/suricata
 
     cap_add:
       - NET_ADMIN
@@ -153,11 +155,10 @@ services:
 
     environment:
       - TZ=UTC
-      - SURICATA_OPTIONS=-i eth0
 
     labels:
       - "com.hookprobe.pod=009"
-      - "com.hookprobe.component=ids"
+      - "com.hookprobe.component=mail-ids"
       - "com.hookprobe.security=critical"
 
     command: -i eth0 --init-errors-fatal
@@ -271,7 +272,7 @@ services:
       - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
       - dmz-mail-logs:/var/log/dmz:ro
       - internal-mail-logs:/var/log/internal:ro
-      - suricata-logs:/var/log/suricata:ro
+      - mail-ids-logs:/var/log/suricata:ro
 
     command: -config.file=/etc/promtail/config.yml
 
@@ -323,8 +324,8 @@ volumes:
     name: hookprobe-clamav-data
   clamav-logs:
     name: hookprobe-clamav-logs
-  suricata-logs:
-    name: hookprobe-suricata-logs
+  mail-ids-logs:
+    name: hookprobe-mail-ids-logs
   internal-mail-data:
     name: hookprobe-internal-mail-data
   internal-mail-state:

@@ -1,14 +1,12 @@
 # NAPSE Detection Rules
 #
-# Originally converted from legacy Suricata rules and Zeek scripts
-#
 # Format: Each rule has content patterns compiled to Aho-Corasick automata
 # for SIMD-accelerated multi-pattern matching.
 
 version: "1.0.0"
 
 rules:
-  # SSH Brute Force (replaces local.rules + local.zeek SSH_Bruteforce)
+  # SSH Brute Force
   - id: 1000001
     msg: "NAPSE SSH Brute Force Attempt"
     category: "brute_force"
@@ -23,7 +21,7 @@ rules:
       track_by: "src_ip"
     mitre: "T1110"
 
-  # DNS Tunneling (replaces local.rules DNS tunneling + L7 detector)
+  # DNS Tunneling
   - id: 1000002
     msg: "NAPSE DNS Tunneling Detected"
     category: "dns_tunneling"
@@ -38,7 +36,7 @@ rules:
       volume_threshold: 100
     mitre: "T1071.004"
 
-  # Port Scan (replaces local.zeek Port_Scan_Detected)
+  # Port Scan
   - id: 1000003
     msg: "NAPSE Port Scan Detected"
     category: "port_scan"
@@ -53,7 +51,7 @@ rules:
       count_field: "unique_dst_ports"
     mitre: "T1046"
 
-  # Malware C2 Beacon (replaces local.rules C2 detection)
+  # Malware C2 Beacon
   - id: 1000004
     msg: "NAPSE Potential C2 Communication"
     category: "malware_c2"
@@ -75,7 +73,7 @@ rules:
       - "315b27e8b4d08f3ba6534dc84f0d9c2c"   # Empire
     mitre: "T1071.001"
 
-  # Crypto Mining (replaces local.rules crypto detection)
+  # Crypto Mining
   - id: 1000005
     msg: "NAPSE Cryptocurrency Mining Detected"
     category: "crypto_mining"
@@ -91,7 +89,7 @@ rules:
       match_mode: "any"
     mitre: "T1496"
 
-  # Rogue DHCP Server (replaces local.rules + L2 detector)
+  # Rogue DHCP Server
   - id: 1000006
     msg: "NAPSE Rogue DHCP Server Detected"
     category: "rogue_dhcp"
@@ -104,7 +102,7 @@ rules:
       authorized_servers: []  # Populated from config
     mitre: "T1557.003"
 
-  # SQL Injection (replaces Suricata SQLI rules + L7 detector)
+  # SQL Injection
   - id: 1000007
     msg: "NAPSE SQL Injection Attempt"
     category: "sql_injection"
@@ -126,7 +124,7 @@ rules:
       case_insensitive: true
     mitre: "T1190"
 
-  # XSS Attack (replaces Suricata XSS rules + L7 detector)
+  # XSS Attack
   - id: 1000008
     msg: "NAPSE Cross-Site Scripting Attempt"
     category: "xss"
@@ -147,7 +145,7 @@ rules:
       case_insensitive: true
     mitre: "T1059.007"
 
-  # TLS Downgrade (replaces L5 detector)
+  # TLS Downgrade
   - id: 1000009
     msg: "NAPSE TLS Downgrade Attack"
     category: "tls_downgrade"
@@ -160,7 +158,7 @@ rules:
       blocked_versions: ["SSLv2", "SSLv3", "TLSv1.0"]
     mitre: "T1557.002"
 
-  # Path Traversal (replaces Suricata + L7 detector)
+  # Path Traversal
   - id: 1000010
     msg: "NAPSE Path Traversal Attempt"
     category: "path_traversal"
@@ -185,7 +183,7 @@ rules:
   # AIOCHI Migration Rules (from local.rules SIDs not already covered above)
   # ============================================================================
 
-  # DNS to Non-Standard Port (replaces local.rules SID 1000004)
+  # DNS to Non-Standard Port
   - id: 1000011
     msg: "NAPSE DNS Query to Non-Standard Port"
     category: "policy_violation"
@@ -197,7 +195,7 @@ rules:
       standard_ports: [53, 853, 5353]
     mitre: "T1071.004"
 
-  # IoT Beaconing Pattern (replaces local.rules SID 1000005)
+  # IoT Beaconing Pattern
   - id: 1000012
     msg: "NAPSE IoT Device Beaconing"
     category: "trojan_activity"
@@ -214,7 +212,7 @@ rules:
       direction: "outbound"
     mitre: "T1071"
 
-  # Self-Signed Certificate (replaces local.rules SID 1000010)
+  # Self-Signed Certificate
   - id: 1000013
     msg: "NAPSE Self-Signed TLS Certificate"
     category: "policy_violation"
@@ -228,7 +226,7 @@ rules:
     mitre: "T1556"
 
   # ============================================================================
-  # AIOCHI Notice Types (ported from local.zeek)
+  # AIOCHI Notice Types
   # ============================================================================
 
   # New Device on Network (notice type: AIOCHI::New_Device)

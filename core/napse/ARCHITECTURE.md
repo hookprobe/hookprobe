@@ -31,18 +31,11 @@
 
 ## Overview
 
-NAPSE is HookProbe's proprietary IDS/NSM/IPS engine that replaces Zeek, Suricata, and Snort with a unified 3-layer architecture optimized for resource-constrained edge devices. Where existing tools were designed for data-center visibility on powerful servers, NAPSE is designed from the ground up for the realities of edge computing: limited RAM, limited CPU, and a requirement for microsecond-level blocking decisions.
+NAPSE is HookProbe's proprietary IDS/NSM/IPS engine -- a unified 3-layer architecture optimized for resource-constrained edge devices. Unlike general-purpose IDS tools designed for data-center visibility on powerful servers, NAPSE is designed from the ground up for the realities of edge computing: limited RAM, limited CPU, and a requirement for microsecond-level blocking decisions.
 
-Today, the Fortress product tier runs **two** heavyweight processes for network security monitoring:
+Traditional IDS/NSM approaches require running multiple heavyweight processes for network security monitoring, typically consuming **~2GB RAM** and **15-40% CPU** even when idle. This is the single largest resource bottleneck on 4GB Fortress devices and makes deployment on 256MB Sentinel devices impossible. Separate log formats require normalization and forwarding, and startup times (~25 seconds) create a window of blindness after every reboot.
 
-| Process | Role | RAM | CPU Idle | Container |
-|---------|------|-----|----------|-----------|
-| **Suricata** | Signature-based IDS/IPS | ~800MB | 10-20% | `fts-suricata` |
-| **Zeek** | Protocol analysis / NSM | ~1.2GB | 5-20% | `fts-zeek` |
-
-Together they consume **~2GB RAM** and **15-40% CPU** even when idle, which is the single largest resource bottleneck on 4GB Fortress devices and makes deployment on 256MB Sentinel devices impossible. Suricata and Zeek also produce separate log formats, requiring the AIOCHI log shipper to normalize and forward them. Their startup times (~25 seconds combined) create a window of blindness after every reboot.
-
-NAPSE replaces both with a single binary that:
+NAPSE solves this with a single binary that:
 
 - Uses **~200MB RAM** on Fortress (10x reduction) and **~30MB** on Sentinel
 - Idles at **<1% CPU** through eBPF/XDP kernel-level packet steering
@@ -50,7 +43,7 @@ NAPSE replaces both with a single binary that:
 - Starts in **<2 seconds** with zero warmup penalty
 - Handles **~10 Gbps** on Nexus hardware with AF_XDP zero-copy sockets
 
-NAPSE does not aim to be a general-purpose replacement for Suricata or Zeek in arbitrary deployments. It is purpose-built for the HookProbe security stack and its specific integration points: QSecBit scoring, AEGIS reasoning, D2D device relationship detection, dnsXai DNS classification, and mesh threat propagation.
+NAPSE is not a general-purpose IDS tool. It is purpose-built for the HookProbe security stack and its specific integration points: QSecBit scoring, AEGIS reasoning, D2D device relationship detection, dnsXai DNS classification, and mesh threat propagation.
 
 ---
 
@@ -123,7 +116,7 @@ NAPSE follows a strict 3-layer separation that maps to different execution conte
 │  LAYER 2: EVENT SYNTHESIS ─── Python                                                │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐               │
 │  │  Event Bus   │ │  Log Emitter │ │  QSecBit     │ │  AEGIS       │               │
-│  │  (typed ring │ │  (Zeek/EVE   │ │  Direct Feed │ │  Bridge      │               │
+│  │  (typed ring │ │  (TSV/EVE    │ │  Direct Feed │ │  Bridge      │               │
 │  │   buffer)    │ │   compat)    │ │  (bypass     │ │  (Standard-  │               │
 │  │              │ │              │ │   log files)  │ │   Signal)    │               │
 │  ├──────────────┤ ├──────────────┤ ├──────────────┤ ├──────────────┤               │
@@ -176,7 +169,7 @@ Raw Ethernet Frame (wire)
 │     → AEGIS bridge (StandardSignal emission)                       │
 │     → D2D Bubble feed (mDNS pairs, connection records)             │
 │     → ClickHouse shipper (batch INSERT)                            │
-│     → Log emitter (Zeek conn.log / Suricata eve.json compat)      │
+│     → Log emitter (TSV conn.log / EVE JSON compat)                │
 │     → Notice emitter (high-severity alerts)                        │
 │     → Prometheus metrics (counters, histograms)                    │
 └────────────────────────────────────────────────────────────────────┘
@@ -196,9 +189,9 @@ The Rust engine is exposed to Python via **PyO3** (compiled to a `.so` via matur
 
 ## Performance Targets
 
-### Suricata + Zeek vs NAPSE
+### Legacy IDS vs NAPSE
 
-| Metric | Suricata + Zeek (Current) | NAPSE (Target) | Improvement |
+| Metric | Legacy IDS/NSM (Typical) | NAPSE (Target) | Improvement |
 |--------|---------------------------|-----------------|-------------|
 | **Packet capture** | AF_PACKET | AF_XDP zero-copy | 3-5x throughput |
 | **Connection tracking** | ~10 us/lookup | <1 us/lookup (lock-free) | 10x |
@@ -409,7 +402,7 @@ pub struct Connection {
 }
 ```
 
-**Community ID** (`engine/src/community_id.rs`): Every connection is assigned a [Community ID](https://github.com/corelight/community-id-spec) v1 hash for cross-system correlation. The existing AIOCHI ClickHouse schema at `shared/aiochi/schemas/clickhouse-init.sql` already indexes on `community_id`, so NAPSE events can be correlated with historical Suricata/Zeek data from the transition period.
+**Community ID** (`engine/src/community_id.rs`): Every connection is assigned a [Community ID](https://github.com/corelight/community-id-spec) v1 hash for cross-system correlation. The existing AIOCHI ClickHouse schema at `shared/aiochi/schemas/clickhouse-init.sql` already indexes on `community_id`, enabling correlation across all NAPSE event types.
 
 **Connection Lifecycle**:
 
@@ -471,24 +464,24 @@ pub trait Parser: Send {
 }
 ```
 
-| # | Protocol | File | Replaces | Key Outputs |
-|---|----------|------|----------|-------------|
-| 1 | **TCP** | `tcp.rs` | Zeek `conn.log` | Connection records, RST analysis, retransmit stats |
-| 2 | **DNS** | `dns.rs` | Zeek `dns.log` + Suricata DNS | Query/response pairs, NXDOMAIN tracking, EDNS info |
-| 3 | **HTTP** | `http.rs` | Zeek `http.log` + Suricata HTTP | Request/response headers, URI, method, status, body hash |
-| 4 | **TLS** | `tls.rs` | Zeek `ssl.log` + Suricata TLS | JA3/JA3S, SNI, certificate chain, ALPN, cipher suite |
-| 5 | **DHCP** | `dhcp.rs` | Zeek `dhcp.log` | Lease events, Option 55 fingerprint, hostname, vendor |
-| 6 | **SSH** | `ssh.rs` | Zeek `ssh.log` | HASSH/HASSHServer fingerprints, auth methods, banner |
-| 7 | **mDNS** | `mdns.rs` | Zeek `mdns.log` (custom) | Service announcements, query/response pairing for D2D |
-| 8 | **SSDP** | `ssdp.rs` | Zeek `ssdp.log` (custom) | UPnP device discovery, service types |
-| 9 | **SMTP** | `smtp.rs` | Zeek `smtp.log` + Suricata SMTP | Envelope, headers, attachment hashes, STARTTLS |
-| 10 | **SMB** | `smb.rs` | Zeek `smb_files.log` | File access, share enumeration, named pipes |
-| 11 | **MQTT** | `mqtt.rs` | Suricata MQTT | CONNECT, PUBLISH topics, QoS levels |
-| 12 | **Modbus** | `modbus.rs` | Suricata Modbus | Function codes, register reads/writes, exception codes |
-| 13 | **DNP3** | `dnp3.rs` | Suricata DNP3 | Application layer objects, unsolicited responses |
-| 14 | **QUIC** | `quic.rs` | (new) | Initial packet SNI, QUIC version, connection ID |
-| 15 | **RDP** | `rdp.rs` | (new) | Cookie, negotiation, NLA detection |
-| 16 | **FTP** | `ftp.rs` | Zeek `ftp.log` | Commands, data channel tracking, file transfers |
+| # | Protocol | File | Log Output | Key Outputs |
+|---|----------|------|------------|-------------|
+| 1 | **TCP** | `tcp.rs` | `conn.log` | Connection records, RST analysis, retransmit stats |
+| 2 | **DNS** | `dns.rs` | `dns.log` + EVE DNS | Query/response pairs, NXDOMAIN tracking, EDNS info |
+| 3 | **HTTP** | `http.rs` | `http.log` + EVE HTTP | Request/response headers, URI, method, status, body hash |
+| 4 | **TLS** | `tls.rs` | `ssl.log` + EVE TLS | JA3/JA3S, SNI, certificate chain, ALPN, cipher suite |
+| 5 | **DHCP** | `dhcp.rs` | `dhcp.log` | Lease events, Option 55 fingerprint, hostname, vendor |
+| 6 | **SSH** | `ssh.rs` | `ssh.log` | HASSH/HASSHServer fingerprints, auth methods, banner |
+| 7 | **mDNS** | `mdns.rs` | `mdns.log` | Service announcements, query/response pairing for D2D |
+| 8 | **SSDP** | `ssdp.rs` | `ssdp.log` | UPnP device discovery, service types |
+| 9 | **SMTP** | `smtp.rs` | `smtp.log` + EVE SMTP | Envelope, headers, attachment hashes, STARTTLS |
+| 10 | **SMB** | `smb.rs` | `smb_files.log` | File access, share enumeration, named pipes |
+| 11 | **MQTT** | `mqtt.rs` | EVE MQTT | CONNECT, PUBLISH topics, QoS levels |
+| 12 | **Modbus** | `modbus.rs` | EVE Modbus | Function codes, register reads/writes, exception codes |
+| 13 | **DNP3** | `dnp3.rs` | EVE DNP3 | Application layer objects, unsolicited responses |
+| 14 | **QUIC** | `quic.rs` | EVE QUIC | Initial packet SNI, QUIC version, connection ID |
+| 15 | **RDP** | `rdp.rs` | EVE RDP | Cookie, negotiation, NLA detection |
+| 16 | **FTP** | `ftp.rs` | `ftp.log` | Commands, data channel tracking, file transfers |
 
 **Protocol Detection**: Protocols are detected using a two-stage approach:
 
@@ -590,7 +583,7 @@ class ConnectionEvent(NapseEvent):
     bytes_to_client: int
     packets_to_server: int
     packets_to_client: int
-    conn_state: str          # "S0", "S1", "SF", "REJ", etc. (Zeek-compatible)
+    conn_state: str          # "S0", "S1", "SF", "REJ", etc. (industry-standard)
 
 @dataclass
 class DNSEvent(NapseEvent):
@@ -617,7 +610,7 @@ class AlertEvent(NapseEvent):
     signature_id: str        # "NAPSE-2024-001"
     message: str             # Human-readable alert message
     severity: str            # "low", "medium", "high", "critical"
-    classtype: str           # Suricata-compatible classification
+    classtype: str           # Standard IDS classification type
     mitre_id: str            # MITRE ATT&CK technique ID
 ```
 
@@ -645,34 +638,34 @@ class EventBus:
 
 #### Log Emitter (`synthesis/log_emitter.py`)
 
-Writes Zeek-compatible and Suricata EVE-compatible log files for backward compatibility during the transition period. This allows existing log-parsing tools (AIOCHI log shipper, custom scripts) to continue working unchanged.
+Writes structured log files in standard IDS/NSM formats for compatibility with third-party log analysis tools, SIEM integrations, and the AIOCHI log shipper.
 
-**Zeek-compatible outputs**:
+**TSV-format outputs**:
 
 | Log File | Source Events | Format |
 |----------|--------------|--------|
-| `conn.log` | `ConnectionEvent` | Zeek TSV |
-| `dns.log` | `DNSEvent` | Zeek TSV |
-| `http.log` | `HTTPEvent` | Zeek TSV |
-| `ssl.log` | `TLSEvent` | Zeek TSV |
-| `dhcp.log` | `DHCPEvent` | Zeek TSV |
-| `ssh.log` | `SSHEvent` | Zeek TSV |
-| `smtp.log` | `SMTPEvent` | Zeek TSV |
-| `ftp.log` | `FTPEvent` | Zeek TSV |
-| `files.log` | `FileEvent` | Zeek TSV |
-| `notice.log` | `AlertEvent` | Zeek TSV |
+| `conn.log` | `ConnectionEvent` | NAPSE TSV |
+| `dns.log` | `DNSEvent` | NAPSE TSV |
+| `http.log` | `HTTPEvent` | NAPSE TSV |
+| `ssl.log` | `TLSEvent` | NAPSE TSV |
+| `dhcp.log` | `DHCPEvent` | NAPSE TSV |
+| `ssh.log` | `SSHEvent` | NAPSE TSV |
+| `smtp.log` | `SMTPEvent` | NAPSE TSV |
+| `ftp.log` | `FTPEvent` | NAPSE TSV |
+| `files.log` | `FileEvent` | NAPSE TSV |
+| `notice.log` | `AlertEvent` | NAPSE TSV |
 
-**Suricata EVE-compatible output**:
+**EVE JSON output**:
 
 | Log File | Source Events | Format |
 |----------|--------------|--------|
 | `eve.json` | All events | JSON-per-line (EVE format) |
 
-The log emitter writes to the same file paths that Suricata and Zeek currently use (`/var/log/napse/` symlinked from `/var/log/suricata/` and `/var/log/zeek/`), so existing consumers see no change.
+All log files are written to `/var/log/napse/`.
 
 #### QSecBit Direct Feed (`synthesis/qsecbit_feed.py`)
 
-The highest-priority consumer. Instead of QSecBit parsing log files to detect threats (the current approach with Suricata/Zeek), NAPSE feeds `ThreatEvent` objects directly into the QSecBit unified engine:
+The highest-priority consumer. NAPSE feeds `ThreatEvent` objects directly into the QSecBit unified engine, bypassing log file parsing entirely:
 
 ```python
 from core.qsecbit.unified_engine import UnifiedQsecbitEngine, ThreatEvent
@@ -747,7 +740,7 @@ The AEGIS orchestrator routes NAPSE signals using the same `source.event_type_ke
 
 #### D2D Bubble Feed (`synthesis/bubble_feed.py`)
 
-Replaces the `ZeekMDNSParser` and `ConnectionGraphAnalyzer` that currently read Zeek log files. NAPSE provides mDNS query/response pairs and connection records directly:
+Provides mDNS query/response pairs and connection records directly to the D2D Bubble system:
 
 ```python
 class BubbleFeed:
@@ -778,7 +771,7 @@ class BubbleFeed:
             )
 ```
 
-This eliminates the Zeek log file dependency entirely and provides real-time mDNS pairing with sub-second latency instead of the current 5-10 second log rotation delay.
+This provides real-time mDNS pairing with sub-second latency, avoiding any log rotation delays.
 
 #### ClickHouse Shipper (`synthesis/clickhouse_shipper.py`)
 
@@ -804,15 +797,11 @@ class ClickHouseShipper:
 
 | Table | Events | Existing? |
 |-------|--------|-----------|
-| `suricata_alerts` | `AlertEvent` | Yes (compatible) |
-| `zeek_conn` | `ConnectionEvent` | Yes (compatible) |
-| `zeek_dns` | `DNSEvent` | Yes (compatible) |
-| `napse_connections` | `ConnectionEvent` (native) | New |
-| `napse_alerts` | `AlertEvent` (native) | New |
-| `napse_tls` | `TLSEvent` | New |
-| `napse_files` | `FileEvent` | New |
-
-During the transition period, NAPSE writes to both legacy tables (Suricata/Zeek format) and native NAPSE tables. After full migration, only native tables are used.
+| `napse_connections` | `ConnectionEvent` | Primary |
+| `napse_alerts` | `AlertEvent` | Primary |
+| `napse_tls` | `TLSEvent` | Primary |
+| `napse_files` | `FileEvent` | Primary |
+| `napse_dns` | `DNSEvent` | Primary |
 
 #### Notice Emitter (`synthesis/notice_emitter.py`)
 
@@ -887,7 +876,7 @@ napse_connection_table_usage_ratio gauge
 │  │       │   │                                                       │
 │  │ NAPSE │───┤           ┌─────────┐                                 │
 │  │       │   ├──────────▶│D2D Bubble│ mDNS pairs + conn records      │
-│  └───────┘   │           └─────────┘  (replaces Zeek log parsing)    │
+│  └───────┘   │           └─────────┘  (native mDNS + conn records)   │
 │              │                                                       │
 │              │           ┌──────────┐                                │
 │              ├──────────▶│Autopilot │  Sleep-wake coordination        │

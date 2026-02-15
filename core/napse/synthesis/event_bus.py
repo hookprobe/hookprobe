@@ -23,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 class EventType(Enum):
     """NAPSE event types corresponding to protocol parser outputs."""
-    CONNECTION = auto()      # TCP/UDP connection record (replaces Zeek conn.log)
-    DNS = auto()             # DNS query/response (replaces Zeek dns.log)
-    HTTP = auto()            # HTTP request/response (replaces Zeek http.log)
-    TLS = auto()             # TLS handshake (replaces Zeek ssl.log)
-    DHCP = auto()            # DHCP lease event (replaces Zeek dhcp.log)
-    SSH = auto()             # SSH session (replaces Zeek ssh.log)
+    CONNECTION = auto()      # TCP/UDP connection record
+    DNS = auto()             # DNS query/response
+    HTTP = auto()            # HTTP request/response
+    TLS = auto()             # TLS handshake
+    DHCP = auto()            # DHCP lease event
+    SSH = auto()             # SSH session
     MDNS = auto()            # mDNS service discovery
     SSDP = auto()            # SSDP/UPnP discovery
     SMTP = auto()            # SMTP session
@@ -39,8 +39,8 @@ class EventType(Enum):
     QUIC = auto()            # QUIC connection
     RDP = auto()             # RDP session
     FTP = auto()             # FTP session
-    ALERT = auto()           # NAPSE alert (replaces Suricata EVE alert)
-    NOTICE = auto()          # NAPSE notice (replaces Zeek Notice)
+    ALERT = auto()           # NAPSE alert (signature/ML match)
+    NOTICE = auto()          # NAPSE notice (behavioral/policy event)
     FILE = auto()            # File extraction event
     FLOW_METADATA = auto()   # Lightweight flow metadata from eBPF ringbuf
     HONEYPOT_TOUCH = auto()  # Honeypot dark port interaction (from Mirage)
@@ -52,7 +52,7 @@ class EventType(Enum):
 
 @dataclass
 class ConnectionRecord:
-    """Connection record compatible with Zeek conn.log fields."""
+    """TCP/UDP connection record with standard flow fields."""
     ts: float                          # Unix timestamp
     uid: str                           # Connection UID
     id_orig_h: str                     # Source IP
@@ -72,7 +72,7 @@ class ConnectionRecord:
 
 @dataclass
 class DNSRecord:
-    """DNS record compatible with Zeek dns.log fields."""
+    """DNS query/response record."""
     ts: float
     uid: str
     id_orig_h: str
@@ -98,7 +98,7 @@ class DNSRecord:
 
 @dataclass
 class HTTPRecord:
-    """HTTP record compatible with Zeek http.log fields."""
+    """HTTP request/response record."""
     ts: float
     uid: str
     id_orig_h: str
@@ -119,7 +119,7 @@ class HTTPRecord:
 
 @dataclass
 class TLSRecord:
-    """TLS record compatible with Zeek ssl.log fields."""
+    """TLS handshake record."""
     ts: float
     uid: str
     id_orig_h: str
@@ -141,7 +141,7 @@ class TLSRecord:
 
 @dataclass
 class DHCPRecord:
-    """DHCP record compatible with Zeek dhcp.log fields."""
+    """DHCP lease event record."""
     ts: float
     uid: str = ""
     client_addr: str = ""
@@ -186,7 +186,7 @@ class MDNSRecord:
 
 @dataclass
 class NapseAlert:
-    """NAPSE alert compatible with Suricata EVE alert format."""
+    """NAPSE alert from signature or ML-based detection."""
     timestamp: str                     # ISO8601
     src_ip: str = ""
     src_port: int = 0
@@ -208,7 +208,7 @@ class NapseAlert:
 
 @dataclass
 class NapseNotice:
-    """NAPSE notice compatible with Zeek Notice framework."""
+    """NAPSE notice for behavioral and policy events."""
     ts: float
     note: str                          # New_Device, Suspicious_DNS, etc.
     msg: str = ""

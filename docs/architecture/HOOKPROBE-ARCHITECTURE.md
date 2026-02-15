@@ -645,7 +645,7 @@ Attacker's campaign fails before reaching 80% of targets
 | **003** | Persistent DB (PostgreSQL + encrypted volumes) |
 | **004** | Transient data, cache, queues (Redis/Valkey) |
 | **005** | Metrics, Logs, Dashboards (ClickHouse, Grafana) |
-| **006** | Security Detection: Suricata, Snort3, Zeek, XDP/eBPF |
+| **006** | Security Detection: NAPSE IDS/NSM/IPS, AEGIS, XDP/eBPF |
 | **007** | Autonomous AI Response & Mitigation Engine |
 | **008** | Workflow Automation (n8n, hooks, defensive playbooks) |
 | **009** | Email System, Cloudflare Tunnel, Notification Mesh |

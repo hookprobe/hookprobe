@@ -128,7 +128,7 @@ HookProbe includes multiple layers of security:
 - ✅ **Energy Monitoring**: RAPL + per-PID power tracking for anomaly detection
 - ✅ **Network Direction-Aware Analysis**: Role-based traffic pattern detection (PUBLIC_SERVER vs USER_ENDPOINT)
 - ✅ **Automated Response**: Kali Linux countermeasures triggered on AMBER/RED status
-- ✅ **Behavioral Analysis**: Zeek, Snort3, Suricata IDS/IPS
+- ✅ **Behavioral Analysis**: NAPSE AI-native IDS/NSM/IPS
 - ✅ **Honeypot System**: Attacker intelligence gathering
 - ✅ **Attack Mitigation**: Automated blocking and redirection
 - ✅ **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud) for security analytics
@@ -531,7 +531,7 @@ cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).tx
 - [ ] Identify supervisory authority (for EU deployments)
 
 **Post-Deployment**:
-- [ ] Verify anonymization working (`tail /opt/zeek/logs/conn.log | grep "\.0$"`)
+- [ ] Verify anonymization working (`tail /var/log/napse/conn.log | grep "\.0$"`)
 - [ ] Test data retention cleanup
 - [ ] Generate compliance report
 - [ ] Monitor GDPR audit log (`tail -f /var/log/hookprobe/gdpr-audit.log`)

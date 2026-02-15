@@ -209,13 +209,13 @@ send_mail(
 )
 ```
 
-### 10. Enable IDS Monitoring
+### 10. Enable SMTP IDS Monitoring
 
 ```bash
-# Start Suricata
+# Start SMTP IDS (mail traffic monitor)
 podman-compose up -d dmz-mail-ids
 
-# Verify Suricata is running
+# Verify SMTP IDS is running
 podman exec hookprobe-dmz-mail-ids suricata --build-info
 
 # Check rules
@@ -305,7 +305,7 @@ podman logs -f hookprobe-dmz-mail-gateway
 # Internal server logs
 podman logs -f hookprobe-internal-mail
 
-# Suricata IDS alerts
+# SMTP IDS alerts
 podman logs -f hookprobe-dmz-mail-ids
 
 # Firewall drops
@@ -326,14 +326,14 @@ podman exec hookprobe-dmz-mail-gateway postfix status
 
 ### Daily Tasks
 
-- Review IDS alerts: `tail -f /var/log/suricata/fast.log`
+- Review SMTP IDS alerts: `tail -f /var/log/suricata/fast.log`
 - Check mail queue: `mailq`
 - Monitor delivery failures: `grep "status=bounced" /var/log/mail.log`
 
 ### Weekly Tasks
 
 - Review DMARC reports
-- Update Suricata rules: `suricata-update`
+- Update SMTP IDS rules: `suricata-update`
 - Check firewall logs for anomalies
 - Verify backup completion
 
