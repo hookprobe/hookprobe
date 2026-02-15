@@ -196,6 +196,8 @@ HookProbe's core innovation is the integrated security stack that provides end-t
 | **NEURO** | Neural Resonance Protocol | Device fingerprinting via weight evolution |
 | **QSECBIT** | Quantified Security Metric | Real-time RAG scoring (GREEN/AMBER/RED) |
 | **NSE** | Neural Synaptic Encryption | Keys emerge from neural state - nobody knows the password |
+| **NAPSE** | Neural Adaptive Packet Synthesis Engine | Replaces Zeek/Suricata/Snort with AI-native detection |
+| **AEGIS** | Autonomous AI Orchestrator | 8 specialized agents, principle-guided autonomous defense |
 
 ### The NSE Innovation
 
@@ -219,9 +221,9 @@ Result: Encryption where nobody knows the key
 When an attack is detected, the entire stack activates:
 
 ```
-1. DETECTION   → Qsecbit identifies threat (L2-L7)
-2. SCORING     → RAG status calculated (GREEN/AMBER/RED)
-3. RESPONSE    → XDP/eBPF blocks at kernel level
+1. DETECTION   → NAPSE identifies threat (AI-native, L2-L7)
+2. SCORING     → Qsecbit RAG status (GREEN/AMBER/RED)
+3. RESPONSE    → AEGIS orchestrates defense (8 AI agents)
 4. PROPAGATION → Mesh consciousness spreads intelligence
 5. CONSENSUS   → DSM validates across validator network
 6. PROTECTION  → All nodes protected in <30 seconds
@@ -375,7 +377,7 @@ sudo ./install.sh --tier guardian   # 🏠 Home/Prosumer ($75 RPi, 1.5GB RAM)
 ```
 
 **That's it!** The install script handles everything else automatically:
-- System packages (hostapd, dnsmasq, suricata, etc.)
+- System packages (hostapd, dnsmasq, etc.)
 - Python dependencies
 - Locale and WiFi country configuration
 - Network interface setup
@@ -455,6 +457,8 @@ We didn't add privacy as an afterthought. The architecture ensures:
 ```
 hookprobe/
 ├── core/                    # Core Intelligence (documented)
+│   ├── aegis/               # AEGIS - Autonomous AI Orchestrator (proprietary)
+│   ├── napse/               # NAPSE - Neural Adaptive Packet Synthesis (proprietary)
 │   ├── htp/                 # Transport Protocol (open source)
 │   ├── qsecbit/             # AI Threat Scoring (documented, proprietary)
 │   └── neuro/               # Neural Authentication (documented, proprietary)
