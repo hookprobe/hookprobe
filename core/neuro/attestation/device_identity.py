@@ -82,30 +82,84 @@ class DeviceIdentity:
     Manages device key generation, attestation creation, and signing.
     """
 
-    def __init__(self, device_id: str, use_tpm: bool = True):
+    def __init__(self, device_id: str, use_tpm: bool = True, use_puf: bool = False):
         """
         Args:
             device_id: Unique device identifier
             use_tpm: Use hardware TPM if available
+            use_puf: Use PUF-derived identity (hardware-anchored, never stored)
         """
         self.device_id = device_id
         self.use_tpm = use_tpm and TPM_AVAILABLE
+        self.use_puf = use_puf
         self.device_key: Optional[DeviceKey] = None
+        self._puf_identity = None  # Lazy-loaded CompositeIdentity
 
-        if not self.use_tpm:
+        if not self.use_tpm and not self.use_puf:
             print("WARNING: Running in software fallback mode (NOT PRODUCTION SECURE)")
 
     def provision_device_key(self) -> DeviceKey:
         """
-        Provision device key in TPM/SE (one-time during manufacturing/enrollment).
+        Provision device key in TPM/SE/PUF (one-time during manufacturing/enrollment).
+
+        Priority: TPM > PUF > Software fallback.
 
         Returns:
             Device key with public key and attestation certificate
         """
         if self.use_tpm:
             return self._provision_tpm_key()
+        elif self.use_puf:
+            return self._provision_puf_key()
         else:
             return self._provision_software_key()
+
+    def _provision_puf_key(self) -> DeviceKey:
+        """Provision key using PUF-derived identity (never stored)."""
+        from core.neuro.puf.composite_identity import (
+            CompositeIdentity, PufSource,
+        )
+        from core.neuro.puf.clock_drift_puf import ClockDriftPuf
+        from core.neuro.puf.cache_timing_puf import CacheTimingPuf
+
+        # Build composite identity from available PUF sources
+        identity = CompositeIdentity()
+
+        # Clock drift works on all hardware including VMs
+        identity.add_source(PufSource.CLOCK_DRIFT, ClockDriftPuf(num_measurements=32))
+
+        # Cache timing is supplementary
+        identity.add_source(PufSource.CACHE_TIMING, CacheTimingPuf(iterations=64))
+
+        # Try SRAM PUF (requires /dev/mem access)
+        try:
+            from core.neuro.puf.sram_puf import SRAMPuf
+            sram = SRAMPuf()
+            identity.add_source(PufSource.SRAM, sram)
+        except Exception:
+            pass  # SRAM not available (VM or no /dev/mem)
+
+        # Generate composite response with Ed25519 keypair
+        response = identity.generate()
+        self._puf_identity = identity
+
+        key_id = hashlib.sha256(f"puf-key-{self.device_id}".encode()).digest()[:16]
+
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(response.ed25519_seed[:32])
+        public_key = private_key.public_key()
+
+        attestation_cert = self._generate_mock_attestation_cert(public_key)
+
+        device_key = DeviceKey(
+            key_id=key_id,
+            public_key=public_key.public_bytes_raw(),
+            attestation_cert=attestation_cert,
+        )
+
+        self.device_key = device_key
+        self._software_private_key = private_key  # PUF-derived, regenerated each boot
+        return device_key
 
     def _provision_tpm_key(self) -> DeviceKey:
         """Provision key using TPM 2.0."""

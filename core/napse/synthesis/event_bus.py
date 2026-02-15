@@ -43,6 +43,11 @@ class EventType(Enum):
     NOTICE = auto()          # NAPSE notice (replaces Zeek Notice)
     FILE = auto()            # File extraction event
     FLOW_METADATA = auto()   # Lightweight flow metadata from eBPF ringbuf
+    HONEYPOT_TOUCH = auto()  # Honeypot dark port interaction (from Mirage)
+    INTENT_DETECTED = auto()   # SIA intent phase detected for an entity
+    ENTITY_SANDBOXED = auto()  # Entity redirected to virtual sandbox
+    PROCESS_EXEC = auto()      # Process execution event from eBPF tracer
+    PROCESS_SUSPICIOUS = auto()  # Suspicious process detected by healing engine
 
 
 @dataclass

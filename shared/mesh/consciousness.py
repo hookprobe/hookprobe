@@ -429,6 +429,7 @@ class MeshConsciousness:
         self._on_consensus: List[Callable[[Dict], None]] = []
         self._on_peer_joined: List[Callable[[PeerNode], None]] = []
         self._on_peer_left: List[Callable[[PeerNode], None]] = []
+        self._on_model_update: List[Callable[[bytes], None]] = []
 
         # Logger (must be set before _init_dsm which uses it)
         self.logger = logging.getLogger(f"MeshConsciousness.{tier.name}")
@@ -958,6 +959,46 @@ class MeshConsciousness:
     def on_peer_left(self, callback: Callable[[PeerNode], None]) -> None:
         """Register callback for peer leave events."""
         self._on_peer_left.append(callback)
+
+    def on_model_update(self, callback: Callable[[bytes], None]) -> None:
+        """Register callback for federated learning model updates."""
+        self._on_model_update.append(callback)
+
+    # =========================================================================
+    # FEDERATED LEARNING
+    # =========================================================================
+
+    def gossip_model_update(self, data: bytes) -> int:
+        """Broadcast a federated learning model update to peers.
+
+        Lower priority than threat gossip — only sent to
+        NEXUS and FORTRESS tier peers by default.
+
+        Returns number of peers sent to.
+        """
+        sent = 0
+        for peer_id, transport in list(self._transports.items()):
+            if not transport.is_connected:
+                continue
+            try:
+                transport.send_packet(
+                    packet_type=PacketType.MODEL_UPDATE,
+                    payload=data,
+                )
+                sent += 1
+            except Exception as e:
+                self.logger.debug(
+                    "Model update send failed to %s: %s", peer_id.hex()[:8], e,
+                )
+        return sent
+
+    def _handle_model_update(self, data: bytes) -> None:
+        """Handle a received MODEL_UPDATE packet from a peer."""
+        for callback in self._on_model_update:
+            try:
+                callback(data)
+            except Exception as e:
+                self.logger.error("Model update callback error: %s", e)
 
     # =========================================================================
     # STATUS

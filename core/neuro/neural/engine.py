@@ -21,7 +21,7 @@ class WeightState:
     Stores all weights in Q16.16 fixed-point format for deterministic evolution.
     """
 
-    def __init__(self, architecture: dict):
+    def __init__(self, architecture: dict, puf_seed: bytes = None):
         """
         Initialize weights from architecture specification.
 
@@ -33,8 +33,12 @@ class WeightState:
                     'hidden_2': 64,
                     'output': 32
                 }
+            puf_seed: Optional 32-byte PUF-derived seed for weight initialization.
+                If provided, replaces the deterministic seed(42+i) with
+                hardware-anchored entropy unique to this device.
         """
         self.architecture = architecture
+        self.puf_seed = puf_seed
         self.weights = {}
         self.biases = {}
 
@@ -57,8 +61,18 @@ class WeightState:
             fan_out = next_layer_size
             scale = np.sqrt(2.0 / (fan_in + fan_out))
 
-            # Generate deterministic random weights (fixed seed)
-            np.random.seed(42 + i)  # Deterministic seed
+            # Generate deterministic random weights
+            if self.puf_seed is not None:
+                # PUF-derived seed: unique per device, per layer
+                import hashlib
+                layer_seed_bytes = hashlib.sha256(
+                    self.puf_seed + i.to_bytes(4, 'big')
+                ).digest()
+                # Convert first 4 bytes to integer seed for numpy
+                puf_layer_seed = int.from_bytes(layer_seed_bytes[:4], 'big') % (2**31)
+                np.random.seed(puf_layer_seed)
+            else:
+                np.random.seed(42 + i)  # Default deterministic seed
             W = np.random.randn(next_layer_size, fan_in) * scale
 
             # Convert to fixed-point
@@ -288,7 +302,7 @@ NEURO_Z_ARCHITECTURE = {
 }
 
 
-def create_initial_weights(seed: int = 42) -> WeightState:
+def create_initial_weights(seed: int = 42, puf_seed: bytes = None) -> WeightState:
     """
     Create initial weight state with deterministic seed.
 
@@ -296,12 +310,15 @@ def create_initial_weights(seed: int = 42) -> WeightState:
 
     Args:
         seed: Random seed for deterministic initialization
+        puf_seed: Optional 32-byte PUF-derived seed. When provided,
+            weight initialization uses hardware-anchored entropy instead
+            of the fixed numeric seed.
 
     Returns:
         WeightState instance
     """
     np.random.seed(seed)
-    return WeightState(NEURO_Z_ARCHITECTURE)
+    return WeightState(NEURO_Z_ARCHITECTURE, puf_seed=puf_seed)
 
 
 if __name__ == '__main__':

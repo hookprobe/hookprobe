@@ -80,6 +80,7 @@ ENABLE_CLICKHOUSE="${ENABLE_CLICKHOUSE:-true}"
 ENABLE_ML="${ENABLE_ML:-true}"
 ENABLE_MONITORING="${ENABLE_MONITORING:-true}"
 ENABLE_N8N="${ENABLE_N8N:-true}"
+ENABLE_FEDERATED="${ENABLE_FEDERATED:-true}"
 
 # ============================================================
 # LOGGING
@@ -1198,6 +1199,13 @@ enabled = true
 mesh_vni = 5000
 edge_mesh_vni = 4000
 
+[federated_learning]
+enabled = $ENABLE_FEDERATED
+min_participants = 3
+round_timeout_s = 300
+dp_noise_multiplier = 1.0
+dp_epsilon_target = 8.0
+
 [analytics]
 clickhouse_enabled = $ENABLE_CLICKHOUSE
 clickhouse_port = 8123
@@ -1237,6 +1245,7 @@ show_completion() {
     [ "$ENABLE_CLICKHOUSE" = true ] && echo -e "  ${GREEN}✓${NC} ClickHouse analytics"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  ${GREEN}✓${NC} Monitoring (Grafana + Victoria Metrics)"
     [ "$ENABLE_N8N" = true ] && echo -e "  ${GREEN}✓${NC} n8n Workflow Automation"
+    [ "$ENABLE_FEDERATED" = true ] && echo -e "  ${GREEN}✓${NC} Federated Learning Aggregation"
     echo ""
     echo -e "  ${BOLD}Web Interfaces:${NC}"
     [ "$ENABLE_MONITORING" = true ] && echo -e "  Grafana:          http://localhost:3000 (admin/hookprobe)"
@@ -1272,6 +1281,7 @@ main() {
             --enable-ml) ENABLE_ML=true; shift ;;
             --enable-monitoring) ENABLE_MONITORING=true; shift ;;
             --enable-n8n) ENABLE_N8N=true; shift ;;
+            --enable-federated) ENABLE_FEDERATED=true; shift ;;
             --disable-macsec) MACSEC_ENABLED=false; shift ;;
             --node-id) HOOKPROBE_NODE_ID="$2"; shift 2 ;;
             --mesh-url) HOOKPROBE_MESH_URL="$2"; shift 2 ;;
