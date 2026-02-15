@@ -12,7 +12,7 @@ from flask import render_template, jsonify, request
 from flask_login import login_required
 
 from . import aiochi_bp
-from ...security_utils import safe_error_message, mask_mac
+from ...security_utils import safe_error_message, mask_mac, mac_log_id
 from ..auth.decorators import admin_required
 
 # Import D2D Connection Graph for device color visualization
@@ -2203,7 +2203,7 @@ def api_feedback_submit(action_id):
 
         # Security: Validate MAC address format to prevent command injection (CWE-78)
         if mac_address and not _validate_mac_address(mac_address):
-            logger.warning(f"Invalid MAC address format rejected: {mask_mac(mac_address[:50])}")
+            logger.warning(f"Invalid MAC address format rejected: {mac_log_id(mac_address[:50])}")
             return jsonify({
                 'success': False,
                 'error': 'Invalid MAC address format'
@@ -2492,7 +2492,7 @@ def api_agent_trust_set(mac_address):
                 'error': 'trust_score must be between 0 and 100'
             }), 400
 
-        logger.info(f"Trust score set for {mask_mac(mac_address)}: {trust_score}")
+        logger.info(f"Trust score set for {mac_log_id(mac_address)}: {trust_score}")
 
         # In production, update ClickHouse device_trust table
         return jsonify({
