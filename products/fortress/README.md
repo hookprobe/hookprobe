@@ -268,7 +268,7 @@ sudo ./install.sh --tier fortress
 
 ```bash
 # Enable AIOCHI (AI Eyes - Cognitive Network Layer)
-# Includes: ClickHouse, Grafana, VictoriaMetrics, Suricata, Zeek, n8n, Ollama LLM
+# Includes: ClickHouse, NAPSE, AEGIS, n8n, Ollama LLM
 sudo ./install.sh --tier fortress --enable-aiochi
 
 # Enable LTE failover
@@ -406,7 +406,7 @@ Pre-configured Grafana dashboards:
 - **Network Overview**: Traffic, connections, bandwidth
 - **Security**: Threats detected, blocked attacks
 - **System Health**: CPU, RAM, disk, containers
-- **IDS/IPS**: Suricata/Zeek alerts
+- **IDS/IPS**: NAPSE alerts, AEGIS orchestration
 
 ---
 
