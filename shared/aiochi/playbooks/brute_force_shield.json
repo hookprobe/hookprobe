@@ -9,7 +9,7 @@
 
   "triggers": [
     {
-      "type": "suricata_signature",
+      "type": "napse_alert",
       "patterns": [
         "AIOCHI SSH Brute Force",
         "SSH Brute Force",
