@@ -9,7 +9,7 @@
 
   "triggers": [
     {
-      "type": "suricata_signature",
+      "type": "napse_alert",
       "patterns": [
         "ET PHISHING",
         "ETPRO PHISHING",
@@ -73,7 +73,7 @@
   "narratives": {
     "headline": "Blocked a suspicious link",
     "owner_friendly": "Someone at {{device.name}} clicked a fake website that was pretending to be {{phishing_target}}. I've blocked it so no passwords can be stolen.",
-    "technical": "Phishing domain {{trigger.domain}} blocked via dnsXai. Device {{device.mac}} flagged for monitoring. Suricata SID: {{trigger.sid}}.",
+    "technical": "Phishing domain {{trigger.domain}} blocked via dnsXai. Device {{device.mac}} flagged for monitoring. NAPSE alert ID: {{trigger.sid}}.",
     "action_prompt": "Do you recognize this website? If not, I recommend checking if any passwords were entered.",
     "resolution_options": [
       {"label": "It's safe, unblock it", "action": "unblock_domain"},

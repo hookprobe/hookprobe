@@ -2,7 +2,7 @@
 -- Cognitive Network Layer Database
 --
 -- This schema defines all tables for the AIOCHI data pipeline:
--- 1. Raw event ingestion (Suricata, Zeek)
+-- 1. Raw event ingestion (NAPSE alerts, connections, DNS)
 -- 2. Device identities (enriched fingerprints)
 -- 3. Human narratives (translated events)
 -- 4. Presence tracking (bubbles, states)
@@ -168,11 +168,11 @@ ORDER BY (timestamp, action_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 -- ============================================================================
--- RAW EVENTS - SURICATA ALERTS
--- Ingested from Suricata EVE JSON logs
+-- RAW EVENTS - NAPSE ALERTS
+-- Ingested from NAPSE event bus
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS suricata_alerts (
+CREATE TABLE IF NOT EXISTS napse_alerts (
     timestamp DateTime,
     flow_id UInt64,
     event_type String,
@@ -204,11 +204,11 @@ ORDER BY (timestamp, alert_severity, flow_id)
 TTL timestamp + INTERVAL 30 DAY;
 
 -- ============================================================================
--- RAW EVENTS - ZEEK CONNECTIONS
--- Ingested from Zeek conn.log
+-- RAW EVENTS - NAPSE CONNECTIONS
+-- Ingested from NAPSE connection tracking
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS zeek_connections (
+CREATE TABLE IF NOT EXISTS napse_connections (
     ts DateTime,
     uid String,
     id_orig_h String,             -- Source IP
@@ -239,11 +239,11 @@ ORDER BY (ts, uid)
 TTL ts + INTERVAL 7 DAY;
 
 -- ============================================================================
--- RAW EVENTS - ZEEK DNS
--- Ingested from Zeek dns.log
+-- RAW EVENTS - NAPSE DNS
+-- Ingested from NAPSE DNS tracking
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS zeek_dns (
+CREATE TABLE IF NOT EXISTS napse_dns (
     ts DateTime,
     uid String,
     id_orig_h String,
@@ -314,7 +314,7 @@ AS SELECT
     alert_category,
     count() AS count,
     max(alert_severity) AS max_severity
-FROM suricata_alerts
+FROM napse_alerts
 GROUP BY hour, alert_category;
 
 -- ============================================================================
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS threat_blocklist (
     indicator_value String,
     threat_category String,        -- "malware", "c2", "phishing", "scanner"
     severity Enum8('low' = 1, 'medium' = 2, 'high' = 3, 'critical' = 4),
-    source String,                 -- "suricata", "zeek", "user", "mesh", "external"
+    source String,                 -- "napse", "user", "mesh", "external"
     added_at DateTime DEFAULT now(),
     expires_at Nullable(DateTime),
     auto_block Bool DEFAULT true,  -- Deterministic block on match
@@ -481,7 +481,7 @@ ORDER BY (mac_address, action);
 --     alert_signature,
 --     alert_category,
 --     count() AS count
--- FROM suricata_alerts
+-- FROM napse_alerts
 -- WHERE timestamp > today()
 --   AND alert_action = 'blocked'
 -- GROUP BY alert_signature, alert_category
