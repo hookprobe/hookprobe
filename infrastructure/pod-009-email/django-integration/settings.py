@@ -252,6 +252,6 @@ Common Issues:
 Monitor POD-009:
 - DMZ Gateway: podman logs -f hookprobe-dmz-mail-gateway
 - Internal Server: podman logs -f hookprobe-internal-mail
-- IDS Alerts: tail -f /var/log/suricata/fast.log
+- IDS Alerts: tail -f /var/log/napse/alerts.json
 - Firewall Drops: tail -f /var/log/syslog | grep FW
 """

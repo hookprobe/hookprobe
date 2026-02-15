@@ -4,7 +4,7 @@ Qsecbit Unified - Base Detector Class
 Abstract base class for all layer-specific threat detectors.
 Provides common utilities for threat detection, logging, and event creation.
 
-Consumes events from the NAPSE event bus (no legacy Zeek/Suricata file reading).
+Consumes events from the NAPSE event bus.
 
 Author: HookProbe Team
 License: Proprietary
@@ -272,9 +272,8 @@ class BaseDetector(ABC):
         """
         Get buffered NAPSE events of a specific type.
 
-        Replaces _read_zeek_log() — returns typed dataclass objects
-        (ConnectionRecord, DNSRecord, HTTPRecord, TLSRecord, DHCPRecord, etc.)
-        instead of raw tab-separated string arrays.
+        Returns typed dataclass objects (ConnectionRecord, DNSRecord,
+        HTTPRecord, TLSRecord, DHCPRecord, etc.).
 
         Args:
             event_type_name: EventType name (e.g., "CONNECTION", "DNS")
@@ -291,8 +290,7 @@ class BaseDetector(ABC):
         """
         Get buffered NAPSE alerts matching signature patterns.
 
-        Replaces _read_suricata_alerts() — returns NapseAlert objects
-        instead of raw EVE JSON dicts.
+        Returns NapseAlert objects matching the given patterns.
 
         Args:
             patterns: List of regex patterns to match against alert signatures

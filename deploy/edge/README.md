@@ -263,7 +263,7 @@ NAXSI_EXTENSIVE_LOG="1"     # Detailed logging
 | **003** | 10.200.3.0/24 | Persistent DB | PostgreSQL, NFS, RADIUS |
 | **004** | 10.200.4.0/24 | Transient DB | Redis |
 | **005** | 10.200.5.0/24 | Monitoring | Grafana, Prometheus, Loki, Rsyslog |
-| **006** | 10.200.6.0/24 | Security | Suricata IDS/IPS |
+| **006** | 10.200.6.0/24 | Security | NAPSE IDS/NSM/IPS |
 | **007** | 10.200.7.0/24 | AI Response | Qsecbit, Kali Linux (on-demand) |
 
 ### Network Isolation

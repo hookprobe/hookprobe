@@ -45,7 +45,7 @@
 | **Behavioral Clustering** | DBSCAN D2D bubbles | `products/fortress/lib/behavior_clustering.py` |
 | **Multi-Modal Presence** | mDNS, BLE, spatial | `products/fortress/lib/presence_sensor.py` |
 | **mDNS Query/Response Pairing** | Device discovery tracking | `products/fortress/lib/presence_sensor.py` |
-| **D2D Connection Graph** | Zeek-based device affinity | `products/fortress/lib/connection_graph.py` |
+| **D2D Connection Graph** | NAPSE-based device affinity | `products/fortress/lib/connection_graph.py` |
 | **Temporal Affinity Scoring** | Wake/sleep correlation | `products/fortress/lib/connection_graph.py` |
 | **ClickHouse Graph Storage** | Device relationship persistence | `products/fortress/lib/clickhouse_graph.py` |
 | **n8n Bubble Webhooks** | Workflow automation | `products/fortress/lib/n8n_webhook.py` |
@@ -410,8 +410,7 @@ hookprobe/
 │       │   └── configs/                   # Service configurations
 │       │       ├── clickhouse/            # ClickHouse init scripts
 │       │       ├── grafana/               # Grafana provisioning
-│       │       ├── suricata/              # Suricata rules
-│       │       └── zeek/                  # Zeek scripts
+│       │       └── napse/                 # NAPSE configuration
 │       ├── schemas/
 │       │   └── clickhouse-init.sql        # ClickHouse schema
 │       ├── n8n-workflows/
@@ -501,7 +500,7 @@ hookprobe/
 │   │   │   ├── ecosystem_bubble.py  # Same-user device grouping
 │   │   │   ├── presence_sensor.py   # mDNS/BLE presence detection
 │   │   │   ├── behavior_clustering.py # DBSCAN device clustering
-│   │   │   ├── connection_graph.py  # D2D affinity via Zeek
+│   │   │   ├── connection_graph.py  # D2D affinity via NAPSE
 │   │   │   ├── clickhouse_graph.py  # ClickHouse graph persistence
 │   │   │   ├── n8n_webhook.py       # n8n workflow webhooks
 │   │   │   └── reinforcement_feedback.py # RL from corrections
@@ -1236,8 +1235,8 @@ AIOCHI transforms raw network data into **human-readable narratives** using loca
 │  │  CAPTURE    │───▶│   STORE     │───▶│  ANALYZE    │───▶│  NARRATE    │  │
 │  │ (IDS/NSM)   │    │ (ClickHouse)│    │ (Identity)  │    │ (LLM/n8n)   │  │
 │  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
-│   Suricata          Time-series        Device            Ollama            │
-│   Zeek              VictoriaMetrics    Fingerprinting    llama3.2:3b       │
+│   NAPSE             Time-series        Device            Ollama            │
+│   IDS/NSM           VictoriaMetrics    Fingerprinting    llama3.2:3b       │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │                         VISUALIZATION (Grafana)                         ││
@@ -1253,8 +1252,7 @@ AIOCHI transforms raw network data into **human-readable narratives** using loca
 |-----------|-----------|---------|------|
 | **ClickHouse** | aiochi-clickhouse | Event analytics database | 8123, 9000 |
 | **VictoriaMetrics** | aiochi-victoria | Time-series metrics | 8428 |
-| **Suricata** | aiochi-suricata | Deep packet inspection | host network |
-| **Zeek** | aiochi-zeek | Network security monitor | host network |
+| **NAPSE** | aiochi-napse | AI-native IDS/IPS/NSM | host network |
 | **Grafana** | aiochi-grafana | Visual dashboards | 3000 |
 | **n8n** | aiochi-narrative | Workflow automation | 5678 |
 | **Ollama** | aiochi-ollama | Local LLM (llama3.2:3b) | 11434 |
@@ -1291,7 +1289,7 @@ AIOCHI transforms technical events into human-readable stories:
 |-----------|------------------|
 | `DHCP ACK 10.200.0.45 aa:bb:cc:dd:ee:ff` | "Sarah's iPhone joined the network" |
 | `DNS query blocked: ads.tracker.com` | "Blocked advertising tracker (protects privacy)" |
-| `Suricata alert: ET SCAN` | "Someone is probing the network - already blocked" |
+| `NAPSE alert: ET SCAN` | "Someone is probing the network - already blocked" |
 | `New device: Apple vendor` | "New Apple device detected - awaiting identification" |
 
 ### CLI Commands
@@ -1438,8 +1436,7 @@ sudo ./install.sh --quick
 | fts-grafana | Monitoring dashboard | Optional (`--profile monitoring`) |
 | fts-victoria | VictoriaMetrics database | Optional (`--profile monitoring`) |
 | fts-lstm-trainer | ML training (one-shot) | Optional (`--profile training`) |
-| fts-suricata | Suricata IDS (host network) | Optional (`--profile ids`) |
-| fts-zeek | Zeek network analysis (host network) | Optional (`--profile ids`) |
+| fts-napse | NAPSE AI-native IDS/IPS/NSM (host network) | Optional (`--profile ids`) |
 | fts-xdp | XDP/eBPF DDoS protection | Optional (`--profile ids`) |
 | fts-n8n | n8n workflow automation | Optional (`--profile automation`) |
 | fts-clickhouse | ClickHouse analytics | Optional (`--profile analytics`) |
@@ -1571,7 +1568,7 @@ The D2D Bubble system (also called "Ecosystem Bubble" or "Atmospheric Presence")
 │  │  PRESENCE   │───▶│ CONNECTION  │───▶│  BEHAVIOR   │───▶│   BUBBLE    │  │
 │  │   SENSOR    │    │    GRAPH    │    │  CLUSTERING │    │   MANAGER   │  │
 │  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
-│   mDNS/BLE/WiFi     Zeek conn.log       DBSCAN ML         SDN Rules        │
+│   mDNS/BLE/WiFi     NAPSE events         DBSCAN ML         SDN Rules        │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │                      INTEGRATION MODULES                                 ││
@@ -1588,7 +1585,7 @@ The D2D Bubble system (also called "Ecosystem Bubble" or "Atmospheric Presence")
 | **Ecosystem Bubble Manager** | `ecosystem_bubble.py` | Orchestrator, bubble lifecycle, SDN rules |
 | **Presence Sensor** | `presence_sensor.py` | mDNS, BLE, network events |
 | **Behavior Clustering** | `behavior_clustering.py` | DBSCAN unsupervised clustering |
-| **Connection Graph** | `connection_graph.py` | Zeek-based D2D affinity analysis |
+| **Connection Graph** | `connection_graph.py` | NAPSE-based D2D affinity analysis |
 | **ClickHouse Storage** | `clickhouse_graph.py` | Time-series persistence for AI |
 | **n8n Webhooks** | `n8n_webhook.py` | Workflow automation integration |
 | **Reinforcement Learning** | `reinforcement_feedback.py` | Learn from user corrections |
@@ -1601,7 +1598,7 @@ S_aff = (Discovery Hits × W_discovery) + (D2D Flows × W_d2d) + (Temporal Sync 
 
 # Default Weights:
 W_discovery = 0.10   # mDNS query/response pairing
-W_d2d = 0.05         # Device-to-device connections (Zeek)
+W_d2d = 0.05         # Device-to-device connections (NAPSE)
 W_temporal = 0.02    # Wake/sleep correlation
 
 # Enhanced with Reinforcement Learning:
@@ -1623,7 +1620,7 @@ S_adjusted = S_aff + RL_adjustment  # Range: -0.5 to +0.5
 |------|-------|---------|
 | `ecosystem_bubble.py` | ~1200 | Main orchestrator, bubble CRUD, SDN |
 | `presence_sensor.py` | ~1050 | mDNS listener, BLE scanner, events |
-| `connection_graph.py` | ~1000 | Zeek parsing, temporal patterns |
+| `connection_graph.py` | ~1000 | NAPSE event parsing, temporal patterns |
 | `behavior_clustering.py` | ~600 | DBSCAN, feature engineering |
 | `clickhouse_graph.py` | ~540 | ClickHouse persistence |
 | `n8n_webhook.py` | ~455 | Async webhook client |
@@ -1839,7 +1836,7 @@ manager.move_device(mac="AA:BB:CC:DD:EE:03", to_bubble_id=bubble.bubble_id)
 **Status**: Production Ready
 **Branding**: "Sleep-and-Wake" Architecture
 
-AI Autopilot replaces continuous monitoring with event-driven detection to achieve 99% efficiency. Instead of running Suricata/Zeek 24/7 (15-40% CPU, 2GB RAM), it uses low-power sentinels that trigger deep analysis only when needed.
+AI Autopilot replaces continuous monitoring with event-driven detection to achieve 99% efficiency. Instead of running traditional IDS/NSM 24/7 (15-40% CPU, 2GB RAM), it uses low-power sentinels that trigger deep analysis only when needed.
 
 > *"Like motion-activated lights instead of stadium floodlights"*
 
@@ -1847,7 +1844,7 @@ AI Autopilot replaces continuous monitoring with event-driven detection to achie
 
 | Mode | CPU Usage | RAM Usage | Coverage |
 |------|-----------|-----------|----------|
-| Continuous (Zeek/Suricata) | 15-40% | 2GB+ | 100% |
+| Continuous (traditional IDS/NSM) | 15-40% | 2GB+ | 100% |
 | AI Autopilot (Event-Driven) | 1% idle / 10% burst | <200MB | 99% |
 
 **Architecture Overview**:
@@ -2378,7 +2375,7 @@ Use this checklist to verify complete E2E flow:
 
 ```
 [ ] DETECTION
-    [ ] Detector identifies threat (Suricata/Zeek/ML)
+    [ ] Detector identifies threat (NAPSE/ML)
     [ ] ThreatEvent created with all required fields
     [ ] Confidence score is realistic (0.0-1.0)
     [ ] Evidence dictionary populated

@@ -1,8 +1,7 @@
 """
 NAPSE Notice Emitter
 
-Generates notice events equivalent to Zeek's Notice framework.
-Replaces all 6 AIOCHI notice types from local.zeek:
+Generates behavioral and policy notice events:
   - New_Device (DHCP ACK with hostname)
   - Suspicious_DNS (long queries, suspicious TLDs)
   - TLS_Cert_Invalid / TLS_Anomaly (certificate validation failure)
@@ -28,10 +27,10 @@ from .event_bus import (
 
 logger = logging.getLogger(__name__)
 
-# Suspicious TLDs (matching local.zeek)
+# Suspicious TLDs
 SUSPICIOUS_TLDS = {'.xyz', '.tk', '.ml', '.ga', '.cf', '.gq', '.top'}
 
-# DNS tunneling threshold (matching local.zeek: 60 chars)
+# DNS tunneling threshold (60 chars)
 DNS_TUNNEL_QUERY_LENGTH = 60
 
 # Port scan threshold (matching l4_detector.py: 50 unique ports)
@@ -47,7 +46,7 @@ SSH_BRUTEFORCE_WINDOW = 300  # 5 minutes
 
 class NoticeEmitter:
     """
-    Generates NAPSE notice events equivalent to Zeek Notice framework.
+    Generates NAPSE notice events from protocol pattern analysis.
 
     Monitors protocol events for patterns that warrant notices:
     new devices, suspicious DNS, cert issues, port scans, brute force.
