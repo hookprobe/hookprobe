@@ -89,8 +89,7 @@ class MDNSParser:
     """
     Processes NAPSE MDNSRecord events for mDNS ecosystem detection.
 
-    Replaces the old ZeekMDNSParser which parsed Zeek dns.log files.
-    Now receives typed MDNSRecord objects directly from the NAPSE event bus.
+    Receives typed MDNSRecord objects directly from the NAPSE event bus.
     """
 
     def __init__(self):

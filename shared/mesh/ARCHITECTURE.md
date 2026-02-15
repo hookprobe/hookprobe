@@ -239,7 +239,7 @@ if node.join_mesh():
     node.publish_event(
         event_type=1,
         severity=3,
-        source="suricata",
+        source="napse",
         details={"alert": "port scan detected"}
     )
 

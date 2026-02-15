@@ -65,8 +65,8 @@
                       ↓
 ┌─────────────────────────────────────────────────┐
 │  2. MULTI-SOURCE ATTACK DETECTION               │
-│     ├─ Snort3 (network-based attacks)           │
-│     ├─ Zeek (behavioral anomalies)              │
+│     ├─ NAPSE (network-based attacks)           │
+│     ├─ NAPSE (behavioral anomalies)              │
 │     ├─ ModSecurity (web application attacks)    │
 │     ├─ VictoriaLogs (application logs)          │
 │     └─ VictoriaMetrics (performance anomalies)  │
@@ -200,14 +200,14 @@ Log directory disk usage: 120M
 |-------------|------------------|--------|
 | **SQL Injection** | ModSecurity, VictoriaLogs | Honeypot → Block |
 | **XSS** | ModSecurity, VictoriaLogs | Honeypot → Block |
-| **Port Scanning** | Snort3, Zeek | Honeypot |
-| **Brute Force** | Zeek, VictoriaLogs | Block |
-| **DDoS** | VictoriaMetrics, Snort3 | Block |
-| **Malware Propagation** | Dionaea, Zeek | Honeypot → Block |
+| **Port Scanning** | NAPSE | Honeypot |
+| **Brute Force** | NAPSE, VictoriaLogs | Block |
+| **DDoS** | VictoriaMetrics, NAPSE | Block |
+| **Malware Propagation** | Dionaea, NAPSE | Honeypot → Block |
 | **Path Traversal** | ModSecurity | Honeypot → Block |
 | **Command Injection** | ModSecurity, VictoriaLogs | Block |
-| **Buffer Overflow** | Snort3 | Block |
-| **Protocol Abuse** | Zeek | Honeypot |
+| **Buffer Overflow** | NAPSE | Block |
+| **Protocol Abuse** | NAPSE | Honeypot |
 
 ---
 
@@ -286,7 +286,7 @@ ATTACK BREAKDOWN:
 
 ### Issue: No attacks detected
 **Cause**: System is secure (good!) or log sources not configured  
-**Solution**: Check log file paths in config, verify Snort3/Zeek are running
+**Solution**: Check log file paths in config, verify NAPSE is running
 
 ### Issue: Honeypot not redirecting
 **Cause**: iptables SNAT rules not created  

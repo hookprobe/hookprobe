@@ -27,7 +27,7 @@
       }
     },
     {
-      "type": "suricata_signature",
+      "type": "napse_alert",
       "patterns": [
         "AIOCHI Exfil",
         "DNS Tunneling",

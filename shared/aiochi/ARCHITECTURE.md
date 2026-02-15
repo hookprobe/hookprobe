@@ -59,7 +59,7 @@ Think of AIOCHI as the "nervous system" that feels the network and translates it
 **What the user sees**: A Facebook-style scrolling feed of network events in plain English.
 
 **Behind the scenes**:
-- Suricata/Zeek → ClickHouse → LLM Translation → Human Sentence
+- NAPSE → ClickHouse → LLM Translation → Human Sentence
 - Severity-based filtering (only important stuff surfaces)
 - Device identity lookup for personalization
 
@@ -266,8 +266,8 @@ NARRATIVE_TEMPLATES = {
 │                                                                              │
 │  STAGE 1: CAPTURE                                                            │
 │  ┌─────────────┐     ┌─────────────┐                                        │
-│  │  Suricata   │────▶│   Zeek      │                                        │
-│  │  (Alerts)   │     │  (Logs)     │                                        │
+│  │   NAPSE    │────▶│   AEGIS     │                                        │
+│  │  (IDS)     │     │  (AI Orch)  │                                        │
 │  └─────────────┘     └─────────────┘                                        │
 │         │                   │                                                │
 │         ▼                   ▼                                                │
@@ -276,7 +276,7 @@ NARRATIVE_TEMPLATES = {
 │  │                       ClickHouse                                     │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │    │
 │  │  │ alerts      │  │ connections │  │ dns_queries │                  │    │
-│  │  │ (suricata)  │  │ (zeek)      │  │ (zeek)      │                  │    │
+│  │  │ (napse)     │  │ (napse)     │  │ (napse)     │                  │    │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘                  │    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │    │
 │  │  │ device_ids  │  │ narratives  │  │ metrics     │                  │    │
@@ -355,8 +355,8 @@ AIOCHI supports three deployment tiers to match your resources:
 | Container | Image | Purpose | RAM | Ports |
 |-----------|-------|---------|-----|-------|
 | `aiochi-clickhouse` | clickhouse/clickhouse-server | Event analytics DB | ~1GB | 8123, 9000 |
-| `aiochi-suricata` | jasonish/suricata | IDS threat alerts | ~300MB | host |
-| `aiochi-zeek` | zeek/zeek | Connection logging | ~400MB | host |
+| `aiochi-napse` | custom (NAPSE) | Neural Adaptive Packet Synthesis Engine | ~300MB | host |
+| `aiochi-aegis` | custom (AEGIS) | Autonomous AI Orchestrator | ~400MB | host |
 | `aiochi-logshipper` | custom (Python) | Data pipeline | ~100MB | - |
 | `aiochi-identity` | custom (Python) | Device fingerprinting | ~200MB | 8060 |
 | `aiochi-bubble` | custom (Python) | Ecosystem detection | ~200MB | 8070 |
@@ -386,8 +386,8 @@ Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana container
 |-----------|----------------|---------------|--------|
 | QSecBit | Yes | No | Real-time threat detection, always running |
 | dnsXai | Yes | No | DNS protection, always running |
-| Suricata | No | Yes | Alerting for narratives |
-| Zeek | No | Yes | Connection logging for identity |
+| NAPSE | No | Yes | AI-native IDS for threat detection |
+| AEGIS | No | Yes | Autonomous AI orchestration |
 | ClickHouse | No | Yes | Analytics, not required for security |
 | Identity Engine | No | Yes | Device fingerprinting for narratives |
 | Bubble Manager | No | Yes | Ecosystem detection |
@@ -576,7 +576,7 @@ GET  /api/v1/presence                # Current presence snapshot
 
 ```
 POST /webhook/new-device             # Triggered when new device joins
-POST /webhook/threat-detected        # Triggered by Suricata alert
+POST /webhook/threat-detected        # Triggered by NAPSE alert
 POST /webhook/device-offline         # Triggered when device disconnects
 POST /webhook/performance-alert      # Triggered by QoS degradation
 ```
@@ -646,8 +646,8 @@ shared/aiochi/
 │   ├── Containerfile.logshipper
 │   └── configs/
 │       ├── clickhouse/
-│       ├── suricata/
-│       └── zeek/
+│       ├── napse/
+│       └── aegis/
 ├── schemas/
 │   └── clickhouse-init.sql      # ClickHouse table definitions
 ├── personas/

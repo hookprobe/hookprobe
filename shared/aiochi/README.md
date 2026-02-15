@@ -61,7 +61,7 @@ sudo ./install.sh
 
 This installs the AIOCHI stack:
 - ClickHouse (event storage)
-- Suricata + Zeek (traffic analysis)
+- NAPSE + AEGIS (AI-native IDS + orchestration)
 - Identity Engine (device fingerprinting)
 - Bubble Manager (ecosystem detection)
 - Log Shipper (data pipeline)
@@ -81,9 +81,9 @@ Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed).
 │                                                                      │
 │  CAPTURE         STORE          ENRICH         TRANSLATE    DISPLAY  │
 │  ┌─────┐       ┌─────┐       ┌─────┐         ┌─────┐       ┌─────┐  │
-│  │Suri │──────▶│Click│──────▶│Ident│────────▶│n8n/ │──────▶│Admin│  │
-│  │cata │       │House│       │ity  │         │Templ│       │LTE  │  │
-│  │Zeek │       │     │       │     │         │ates │       │ UI  │  │
+│  │NAPSE│──────▶│Click│──────▶│Ident│────────▶│n8n/ │──────▶│Admin│  │
+│  │AEGIS│       │House│       │ity  │         │Templ│       │LTE  │  │
+│  │     │       │     │       │     │         │ates │       │ UI  │  │
 │  └─────┘       └─────┘       └─────┘         └─────┘       └─────┘  │
 │                                                                      │
 │  Raw Packets → Structured   → Device Labels → Human       → Fortress │
@@ -112,8 +112,8 @@ Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed).
 | Container | Purpose | Required |
 |-----------|---------|----------|
 | `aiochi-clickhouse` | Event analytics database | Core |
-| `aiochi-suricata` | IDS threat alerts | Core |
-| `aiochi-zeek` | Connection/protocol logging | Core |
+| `aiochi-napse` | Neural Adaptive Packet Synthesis Engine | Core |
+| `aiochi-aegis` | Autonomous AI Orchestrator | Core |
 | `aiochi-identity` | Device fingerprinting | Core |
 | `aiochi-bubble` | Ecosystem detection | Core |
 | `aiochi-logshipper` | Data pipeline | Core |

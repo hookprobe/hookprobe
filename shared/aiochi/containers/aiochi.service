@@ -5,8 +5,8 @@
 #
 # CORE (always started - ~2GB RAM):
 #   - ClickHouse (analytics database)
-#   - Suricata IDS (deep packet inspection)
-#   - Zeek NSM (network security monitor)
+#   - NAPSE (Neural Adaptive Packet Synthesis Engine)
+#   - AEGIS (Autonomous AI Orchestrator)
 #   - Identity Engine (device fingerprinting)
 #   - Bubble Manager (ecosystem detection)
 #   - Log Shipper (event pipeline)
@@ -47,23 +47,23 @@ EnvironmentFile=-/opt/hookprobe/shared/aiochi/containers/.env
 # podman-compose prefixes network names with project name (aiochi_aiochi-internal)
 # while manual creation would be just (aiochi-internal), both using same subnet.
 
-# Wait for FTS-mirror interface (required for Suricata/Zeek capture)
+# Wait for FTS-mirror interface (required for NAPSE capture)
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip link show FTS-mirror >/dev/null 2>&1 && exit 0; sleep 1; done; echo "[AIOCHI] Warning: FTS-mirror not found, capture may fail"; exit 0'
 
 # Start AIOCHI containers using podman-compose
 # This will create containers if they don't exist, or start existing ones
-# Core services: clickhouse, suricata, zeek, log-shipper, identity-engine, bubble-manager
+# Core services: clickhouse, napse, aegis, log-shipper, identity-engine, bubble-manager
 ExecStart=/bin/bash -c '\
     cd /opt/hookprobe/shared/aiochi/containers && \
     echo "[AIOCHI] Starting containers via podman-compose..." && \
-    CORE="clickhouse suricata zeek log-shipper identity-engine bubble-manager" && \
+    CORE="clickhouse napse aegis log-shipper identity-engine bubble-manager" && \
     /usr/bin/podman-compose -f podman-compose.aiochi.yml up -d --no-build $CORE 2>&1 && \
     echo "[AIOCHI] Container startup complete"'
 
 # Wait for containers to be healthy (up to 60s each)
 ExecStartPost=/bin/bash -c '\
     echo "[AIOCHI] Waiting for containers to be healthy..." && \
-    for c in aiochi-clickhouse aiochi-suricata aiochi-zeek aiochi-identity aiochi-logshipper aiochi-bubble; do \
+    for c in aiochi-clickhouse aiochi-napse aiochi-aegis aiochi-identity aiochi-logshipper aiochi-bubble; do \
         if podman container exists $c 2>/dev/null; then \
             for i in $(seq 1 20); do \
                 STATUS=$(podman inspect --format "{{.State.Health.Status}}" $c 2>/dev/null || echo "none"); \
