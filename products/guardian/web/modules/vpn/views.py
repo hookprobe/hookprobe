@@ -2,10 +2,13 @@
 VPN Module Views - HTP Secure Tunnel Management
 Uses HookProbe Transport Protocol with weight-bound encryption + PoSF authentication
 """
+import logging
 import os
 from flask import jsonify, request
 from . import vpn_bp
 from utils import run_command, load_json_file, save_json_file
+
+logger = logging.getLogger(__name__)
 
 
 HTP_CONFIG_DIR = '/opt/hookprobe/guardian/htp'
@@ -93,7 +96,8 @@ def api_disconnect():
 
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"HTP disconnect error: {type(e).__name__}")
+        return jsonify({'success': False, 'error': 'An internal error occurred while disconnecting'}), 500
 
 
 @vpn_bp.route('/mesh/register', methods=['POST'])
