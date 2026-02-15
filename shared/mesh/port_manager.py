@@ -65,6 +65,15 @@ class TransportMode(Enum):
     # Uses ICMP echo as carrier, very limited bandwidth
     ICMP_TUNNEL = auto()
 
+    # Steganographic modes: HTP traffic shaped to match application profiles
+    # Indistinguishable from real application traffic to network observers
+    STEGO_NETFLIX = auto()       # Shaped to match Netflix streaming
+    STEGO_ZOOM = auto()          # Shaped to match Zoom video calling
+    STEGO_HTTPS = auto()         # Shaped to match HTTPS web browsing
+
+    # Domain fronting: HTP tunneled through CDN edge servers
+    DOMAIN_FRONT = auto()        # CDN domain fronting (Cloudflare/AWS/Azure)
+
 
 class PortState(Enum):
     """State of a port binding."""

@@ -27,7 +27,10 @@ from datetime import datetime
 if TYPE_CHECKING:
     from .threat_types import QsecbitUnifiedScore
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 import socket
 
 # Import qsecbit submodules
@@ -609,6 +612,76 @@ class Qsecbit:
             self.history.pop(0)
 
         return sample
+
+    def bayesian_update(
+        self,
+        entity_id: str,
+        sia_risk_score: float,
+        intent_phase: str = "",
+        confidence: float = 0.0,
+    ) -> Optional['QsecbitSample']:
+        """Update QSecBit score using SIA Bayesian risk evidence.
+
+        Integrates SIA's per-entity risk score into the global QSecBit metric
+        by adjusting p_attack and triggering a recalculation if the SIA risk
+        is significant.
+
+        Args:
+            entity_id: IP address of the entity.
+            sia_risk_score: SIA posterior risk [0.0, 1.0].
+            intent_phase: MITRE kill chain phase name.
+            confidence: IntentDecoder confidence [0.0, 1.0].
+
+        Returns:
+            Updated QsecbitSample if recalculation occurred, else None.
+        """
+        if sia_risk_score < 0.3:
+            return None  # Not significant enough to affect global score
+
+        # Blend SIA risk into attack probability
+        # Weight SIA higher for advanced phases
+        phase_weights = {
+            "RECONNAISSANCE": 0.3,
+            "INITIAL_ACCESS": 0.5,
+            "EXECUTION": 0.7,
+            "PERSISTENCE": 0.7,
+            "LATERAL_MOVEMENT": 0.9,
+            "COLLECTION": 0.8,
+            "EXFILTRATION": 0.95,
+            "IMPACT": 1.0,
+        }
+        phase_weight = phase_weights.get(intent_phase, 0.3)
+        blended_p_attack = sia_risk_score * phase_weight * confidence
+
+        if not self.history:
+            return None
+
+        # Recalculate using the latest state with SIA-adjusted p_attack
+        latest = self.history[-1]
+        adjusted_p_attack = max(
+            latest.components.get("attack_probability", 0.0),
+            blended_p_attack,
+        )
+
+        metadata = {
+            "sia_update": True,
+            "entity_id": entity_id,
+            "sia_risk_score": sia_risk_score,
+            "intent_phase": intent_phase,
+            "confidence": confidence,
+            "blended_p_attack": blended_p_attack,
+        }
+
+        try:
+            return self.calculate(
+                x_t=latest.system_state,
+                p_attack=adjusted_p_attack,
+                c_t=np.array([confidence]),
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning("SIA bayesian_update failed: %s", e)
+            return None
 
     def _classify_rag(self, R: float) -> str:
         """Classify score into Red/Amber/Green status"""
