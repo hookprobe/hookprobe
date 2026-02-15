@@ -25,8 +25,8 @@
                     │  ┌────────────────────────────────────┐  │
                     │  │     Host-Network Containers        │  │
                     │  │  ┌──────────┐ ┌────────┐ ┌──────┐  │  │
-                    │  │  │ QSecBit  │ │Suricata│ │ Zeek │  │  │
-                    │  │  │ :9090    │ │  IDS   │ │ NSM  │  │  │
+                    │  │  │ QSecBit  │ │ NAPSE  │ │AEGIS │  │  │
+                    │  │  │ :9090    │ │  IDS   │ │  AI  │  │  │
                     │  │  └──────────┘ └────────┘ └──────┘  │  │
                     │  └────────────────────────────────────┘  │
                     │                                          │
@@ -86,8 +86,8 @@ All containers use a **single consolidated network** (`fts-internal` / 172.20.20
 | **clickhouse** | fts-internal | 172.20.200.51 | NO | data | Analytics DB |
 | **cloudflared** | fts-internal | 172.20.200.60 | YES | services | Tunnel client |
 | **qsecbit** | host | host IPs | YES | - | Threat detection |
-| **suricata** | host | host IPs | YES | - | IDS/IPS |
-| **zeek** | host | host IPs | YES | - | Network analysis |
+| **napse** | host | host IPs | YES | - | Neural Adaptive Packet Synthesis |
+| **aegis** | host | host IPs | YES | - | Autonomous AI Orchestrator |
 | **xdp** | host | host IPs | YES | - | DDoS protection |
 | **bubble-manager** | host | host IPs | YES | - | Device ecosystem detection |
 
@@ -233,7 +233,7 @@ This frees port 5353 for mDNS (Avahi + bubble manager ecosystem detection).
 
 ### GAP 5: Host-Network Container PBR
 
-**Problem**: QSecBit, Suricata, Zeek use host network. Their outbound traffic should also use PBR.
+**Problem**: QSecBit, NAPSE, AEGIS use host network. Their outbound traffic should also use PBR.
 
 **Status**: ✅ Working - host-network containers share host's network stack, so PBR marking in OUTPUT chain applies.
 

@@ -192,7 +192,7 @@ def get_connection_events(limit: int = 50) -> List[Dict]:
             service,
             duration,
             orig_bytes + resp_bytes as bytes
-        FROM zeek_connections
+        FROM napse_connections
         ORDER BY ts DESC
         LIMIT {limit}
     """
@@ -220,7 +220,7 @@ def get_dns_events(limit: int = 50) -> List[Dict]:
             query,
             qtype,
             rcode
-        FROM zeek_dns
+        FROM napse_dns
         ORDER BY ts DESC
         LIMIT {limit}
     """
@@ -236,9 +236,7 @@ def get_dns_events(limit: int = 50) -> List[Dict]:
 
 def get_napse_alerts(limit: int = 50) -> List[Dict]:
     """
-    Get recent NAPSE IDS alerts from ClickHouse (suricata_alerts table).
-
-    Note: Table name is still 'suricata_alerts' for ClickHouse schema compatibility.
+    Get recent NAPSE IDS alerts from ClickHouse.
 
     Returns:
         List of alert dicts with severity, message, etc.
@@ -257,7 +255,7 @@ def get_napse_alerts(limit: int = 50) -> List[Dict]:
             severity,
             category,
             action
-        FROM suricata_alerts
+        FROM napse_alerts
         ORDER BY timestamp DESC
         LIMIT {limit}
     """

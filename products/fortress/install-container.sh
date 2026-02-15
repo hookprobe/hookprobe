@@ -3857,9 +3857,8 @@ AIOCHIENV
 
             # NOTE: VictoriaMetrics removed - ClickHouse handles time-series analytics
 
-            # 2. Capture Tier - NAPSE IDS
-            # NAPSE is deployed via AIOCHI compose stack (podman-compose.aiochi.yml)
-            # No legacy Suricata/Zeek containers needed
+            # 2. Detection Tier - NAPSE + AEGIS
+            # NAPSE and AEGIS are deployed via AIOCHI compose stack (podman-compose.aiochi.yml)
 
             # Note: No Grafana container - visualization handled by Fortress AdminLTE web UI
             # This saves ~200MB RAM and avoids redundant dashboarding
