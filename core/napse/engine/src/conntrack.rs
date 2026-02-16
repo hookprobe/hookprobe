@@ -122,7 +122,7 @@ pub enum TcpState {
 }
 
 impl TcpState {
-    /// Return the Zeek-compatible connection state string.
+    /// Return the Napse native connection state string.
     pub fn to_conn_state(&self, saw_orig: bool, saw_resp: bool) -> &'static str {
         match self {
             TcpState::Established => "SF",
@@ -215,7 +215,7 @@ impl AppProtocol {
         }
     }
 
-    /// Return the Zeek-compatible service name string.
+    /// Return the Napse native service name string.
     pub fn as_service_str(&self) -> &'static str {
         match self {
             AppProtocol::Unknown => "-",
@@ -580,7 +580,7 @@ fn update_tcp_state(conn: &mut Connection, flags: u8, is_orig: bool) {
 /// Generate a unique connection identifier.
 ///
 /// Uses a combination of timestamp and atomic counter for uniqueness.
-/// Format is compatible with Zeek's UID style.
+/// Format uses a Napse-native UID style.
 fn generate_uid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);

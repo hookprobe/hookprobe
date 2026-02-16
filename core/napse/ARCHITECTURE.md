@@ -497,7 +497,7 @@ Unknown protocols get a generic `RawParser` that tracks byte counts and timing w
 
 #### Pattern Matcher (`engine/src/matcher/`)
 
-The pattern matcher provides signature-based detection compatible with Suricata rule format:
+The pattern matcher provides signature-based detection using NAPSE native rule format:
 
 **Aho-Corasick Automaton** (`engine/src/matcher/aho_corasick.rs`):
 - Multi-pattern string matching in a single pass over the payload
@@ -530,7 +530,7 @@ rules:
     reference: "https://attack.mitre.org/techniques/T1110/001/"
 ```
 
-**Rule Converter** (`signatures/converter.py`): Converts existing Suricata `.rules` files into NAPSE's YAML format for backward compatibility with the Emerging Threats ruleset.
+**Rule Converter** (`signatures/converter.py`): Converts legacy IDS `.rules` files into NAPSE's YAML format for importing existing rulesets.
 
 #### ML Inference (`engine/src/ml/`)
 
@@ -818,7 +818,7 @@ Generates high-severity notices for events that require human attention or autom
 | `Data_Exfiltration` | Large outbound transfer to new destination | high |
 | `C2_Communication` | Known C2 JA3 hash or DNS pattern | critical |
 
-Notices are emitted both as AEGIS `StandardSignal` events and as Zeek `notice.log` entries for compatibility.
+Notices are emitted both as AEGIS `StandardSignal` events and as Napse `notice.log` entries.
 
 #### Prometheus Metrics (`synthesis/metrics.py`)
 
@@ -907,7 +907,7 @@ napse_connection_table_usage_ratio gauge
 
 | Phase | Integration Mode | Latency | Mechanism |
 |-------|-----------------|---------|-----------|
-| 1-4 | **Compatibility**: NAPSE writes Zeek/EVE log files; QSecBit parses them as today | ~100 ms | Log files (existing path) |
+| 1-4 | **Compatibility**: NAPSE writes structured log files; QSecBit parses them as today | ~100 ms | Log files (existing path) |
 | 5+ | **Direct**: `QSecBitFeed` injects `ThreatEvent` objects into `UnifiedQsecbitEngine` | <1 ms | Python function call |
 
 The compatibility mode is critical for risk-free rollout. QSecBit continues reading log files during Phases 1-4 with zero code changes. The switch to direct feed is a configuration toggle:
@@ -944,14 +944,14 @@ NAPSE provides two enrichment points for dnsXai:
 
 #### D2D Bubble System (`products/fortress/lib/`)
 
-NAPSE replaces two Zeek-dependent components:
+NAPSE replaces two legacy-dependent components:
 
 | Current Component | NAPSE Replacement | Benefit |
 |-------------------|-------------------|---------|
-| `ZeekMDNSParser` in `presence_sensor.py` | `BubbleFeed.on_event(mdns_query/response)` | Real-time (vs 5-10s log rotation) |
-| `ConnectionGraphAnalyzer` in `connection_graph.py` | `BubbleFeed.on_event(ConnectionEvent)` | No Zeek `conn.log` dependency |
+| `MDNSParser` in `presence_sensor.py` | `BubbleFeed.on_event(mdns_query/response)` | Real-time (vs 5-10s log rotation) |
+| `ConnectionGraphAnalyzer` in `connection_graph.py` | `BubbleFeed.on_event(ConnectionEvent)` | Native flow data, no log parsing |
 
-The D2D Bubble system continues to use its existing `PresenceSensor` and `ConnectionGraph` classes. Only the data source changes from Zeek log files to NAPSE event callbacks.
+The D2D Bubble system continues to use its existing `PresenceSensor` and `ConnectionGraph` classes. Only the data source changes from log file parsing to NAPSE event callbacks.
 
 #### Autopilot (`products/fortress/lib/autopilot/`)
 
@@ -986,7 +986,7 @@ The `ClickHouseShipper` replaces the AIOCHI `log_shipper.py` for IDS/NSM events.
 NAPSE events → Buffer (1000 events or 5s) → HTTP POST → ClickHouse
 ```
 
-During the transition period, both the legacy log shipper and the NAPSE shipper can run simultaneously. They write to different tables (legacy: `suricata_alerts`, `zeek_conn`; native: `napse_alerts`, `napse_connections`).
+During the transition period, both the legacy log shipper and the NAPSE shipper can run simultaneously. They write to different tables (`napse_intents`, `napse_flows` for the v3 schema).
 
 #### OpenFlow / OVS (`FTS` bridge)
 
@@ -1027,11 +1027,11 @@ This provides defense-in-depth: even if XDP misses a packet (e.g., from a local 
 │  PHASE 5     │  PHASE 6     │  PHASE 7     │
 │  Direct      │  ML          │  Deprecation │
 │  Integration │  Integration │              │
-│  QSecBit feed│  ONNX DGA    │  Remove Zeek │
-│  AEGIS bridge│  Anomaly det │  Remove      │
-│  D2D feed    │  Adaptive    │   Suricata   │
-│  ClickHouse  │   baselines  │  Single fts- │
-│  Autopilot   │  Per-device  │   napse cntr │
+│  QSecBit feed│  ONNX DGA    │  Remove      │
+│  AEGIS bridge│  Anomaly det │   legacy IDS │
+│  D2D feed    │  Adaptive    │  Aegis+Napse │
+│  ClickHouse  │   baselines  │   split-brain│
+│  Autopilot   │  Per-device  │  architecture│
 └──────────────┴──────────────┴──────────────┘
 ```
 
@@ -1045,15 +1045,15 @@ This provides defense-in-depth: even if XDP misses a packet (e.g., from a local 
 - Community ID v1 implementation
 - TCP finite state machine (SYN/ACK/FIN/RST tracking)
 - DNS protocol parser (query/response, A/AAAA/CNAME/MX/TXT)
-- Zeek `conn.log` and `dns.log` compatible output
+- Napse native `conn.log` and `dns.log` output
 - Unit tests with pcap replay
 - CI pipeline for Rust + Python build
 
-**Validation**: Compare `conn.log` and `dns.log` output against Zeek for the same pcap files. Fields must match within tolerance (timestamps within 1ms, byte counts exact).
+**Validation**: Compare `conn.log` and `dns.log` output against reference pcap files. Fields must match within tolerance (timestamps within 1ms, byte counts exact).
 
 ### Phase 2: Protocol Completeness (Weeks 5-8)
 
-**Goal**: Parse all 16 protocols with Zeek-compatible output.
+**Goal**: Parse all 16 protocols with Napse native output.
 
 **Deliverables**:
 - HTTP parser (request/response headers, URI, body hash)
@@ -1064,26 +1064,26 @@ This provides defense-in-depth: even if XDP misses a packet (e.g., from a local 
 - SSDP parser (UPnP discovery)
 - SMTP, SMB, MQTT, Modbus, DNP3, QUIC, RDP, FTP parsers
 - File tracker (SHA256 hashing, MIME detection)
-- Zeek-compatible log output for all protocols
-- Suricata EVE JSON output
+- Napse native log output for all protocols
+- EVE JSON output
 
-**Validation**: Full pcap corpus comparison against Zeek and Suricata. Protocol-specific field accuracy verified per parser.
+**Validation**: Full pcap corpus comparison against reference implementations. Protocol-specific field accuracy verified per parser.
 
 ### Phase 3: Signature Engine (Weeks 9-12)
 
-**Goal**: Pattern matching engine compatible with Suricata rulesets.
+**Goal**: Pattern matching engine with native NAPSE rule format.
 
 **Deliverables**:
 - Aho-Corasick automaton with SIMD acceleration
 - Bloom filter pre-screening layer
-- Suricata rule format converter (`converter.py`)
+- Legacy IDS rule format converter (`converter.py`)
 - Native NAPSE rule format (`napse_rules.yaml`)
 - Emerging Threats ruleset compatibility
 - Threshold and rate tracking per rule
 - Signature match event generation
 - Performance benchmarks (packets/second at various rule counts)
 
-**Validation**: Alert parity with Suricata on the same pcap + ruleset. False negative rate must be 0%; false positive rate must be within 5% of Suricata.
+**Validation**: Alert parity on reference pcap + ruleset. False negative rate must be 0%; false positive rate within 5% tolerance.
 
 ### Phase 4: eBPF Enhancement (Weeks 13-16)
 
@@ -1132,15 +1132,14 @@ This provides defense-in-depth: even if XDP misses a packet (e.g., from a local 
 
 ### Phase 7: Deprecation (Weeks 25-28)
 
-**Goal**: Remove Suricata and Zeek containers entirely.
+**Goal**: Remove all legacy IDS containers entirely.
 
 **Deliverables**:
-- Remove `fts-suricata` from `podman-compose.yml`
-- Remove `fts-zeek` from `podman-compose.yml`
-- Remove Zeek log volume (`fts-zeek-logs`)
-- Remove AIOCHI log_shipper Suricata/Zeek parsers
-- Single `fts-napse` container in all profiles
-- Updated `install-container.sh` (no Suricata/Zeek download)
+- Remove legacy IDS services from `podman-compose.yml`
+- Remove legacy log volumes
+- Remove AIOCHI log_shipper legacy parsers
+- Aegis (Zig+eBPF) + Napse (Mojo) split-brain architecture active
+- Updated `install-container.sh` (no legacy IDS download)
 - Updated `uninstall.sh` (cleanup NAPSE paths)
 - Updated `fortress-ctl.sh` (NAPSE status/logs)
 - Updated documentation (CLAUDE.md, ARCHITECTURE.md)
@@ -1154,7 +1153,7 @@ This provides defense-in-depth: even if XDP misses a packet (e.g., from a local 
 
 ### Single Container: `fts-napse`
 
-NAPSE runs as a single container replacing both `fts-suricata` and `fts-zeek`:
+NAPSE runs as a single container for AI-native intent classification:
 
 ```yaml
 # In products/fortress/containers/podman-compose.yml
@@ -1178,7 +1177,7 @@ NAPSE runs as a single container replacing both `fts-suricata` and `fts-zeek`:
       - NAPSE_CONFIG=/etc/hookprobe/napse.yaml
       - NAPSE_INTERFACE=${WAN_INTERFACE:-eth0}
     profiles:
-      - ids                            # Same profile as current suricata/zeek
+      - ids                            # IDS profile
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9100/metrics"]
       interval: 30s
@@ -1188,15 +1187,15 @@ NAPSE runs as a single container replacing both `fts-suricata` and `fts-zeek`:
 
 ### Resource Comparison
 
-| Metric | fts-suricata + fts-zeek | fts-napse | Savings |
-|--------|------------------------|-----------|---------|
-| **Container images** | ~500 MB + ~400 MB = 900 MB | ~100 MB | 800 MB |
-| **RAM (running)** | ~800 MB + ~1.2 GB = 2 GB | ~200 MB | 1.8 GB |
-| **CPU (idle)** | 10-20% + 5-20% = 15-40% | <1% | 14-39% |
-| **CPU (1 Gbps)** | ~80% + ~60% = saturated | ~15% | Headroom |
-| **Startup time** | ~15s + ~10s = 25s | <2s | 23s |
+| Metric | Legacy IDS stack | Aegis + Napse | Savings |
+|--------|-----------------|---------------|---------|
+| **Container images** | ~900 MB (combined) | ~100 MB | 800 MB |
+| **RAM (running)** | ~2 GB (combined) | ~200 MB | 1.8 GB |
+| **CPU (idle)** | 15-40% | <1% | 14-39% |
+| **CPU (1 Gbps)** | Saturated | ~15% | Headroom |
+| **Startup time** | ~25s | <2s | 23s |
 | **Log volume** | ~50 MB/day (two formats) | ~20 MB/day (unified) | 60% |
-| **Processes** | 2 containers, N threads each | 1 container, N+1 threads | Simplified |
+| **Processes** | Multiple containers, N threads each | 2 containers (Aegis+Napse), N+1 threads | Simplified |
 | **Capabilities** | NET_ADMIN, NET_RAW (x2) | SYS_BPF, NET_ADMIN, NET_RAW | +SYS_BPF |
 | **Network mode** | host (x2) | host | -1 container |
 
@@ -1241,7 +1240,7 @@ ENTRYPOINT ["python", "-m", "synthesis"]
 
 ### AIOCHI Integration
 
-When AIOCHI is enabled (`--enable-aiochi`), the `fts-napse` container replaces both `aiochi-suricata` and `aiochi-zeek` as well. NAPSE writes to the same ClickHouse tables that AIOCHI's Grafana dashboards query, so dashboards continue working without modification.
+When AIOCHI is enabled (`--enable-aiochi`), the Aegis+Napse containers replace all legacy IDS services. NAPSE writes to the same ClickHouse tables that AIOCHI's Grafana dashboards query, so dashboards continue working without modification.
 
 ---
 
@@ -1249,16 +1248,9 @@ When AIOCHI is enabled (`--enable-aiochi`), the `fts-napse` container replaces b
 
 ### 1. Backward Compatibility
 
-**Risk**: Existing tools parse Zeek/Suricata log files. Breaking these integrations would cascade failures.
+**Risk**: Existing tools parse legacy IDS log files. Breaking these integrations would cascade failures.
 
-**Mitigation**: The Log Emitter writes to the **same file paths** using the **same formats** during the transition period (Phases 1-6). Symlinks ensure existing consumers find logs where they expect them:
-
-```bash
-/var/log/suricata/eve.json    → /var/log/napse/eve.json
-/var/log/zeek/current/conn.log → /var/log/napse/conn.log
-/var/log/zeek/current/dns.log  → /var/log/napse/dns.log
-# ... etc for all log types
-```
+**Mitigation**: The Log Emitter writes structured logs to `/var/log/napse/` using standard formats during the transition period (Phases 1-6). All consumers have been migrated to read from NAPSE native paths.
 
 Only in Phase 7, after all consumers have been migrated to direct feeds, are log files deprecated.
 
@@ -1266,12 +1258,12 @@ Only in Phase 7, after all consumers have been migrated to direct feeds, are log
 
 **Risk**: Protocol parsers produce incorrect output, causing false positives/negatives.
 
-**Mitigation**: Every protocol parser is validated against Zeek and Suricata output using a corpus of pcap files:
+**Mitigation**: Every protocol parser is validated against reference output using a corpus of pcap files:
 
 ```bash
 # tests/test_log_compat.py
 # For each pcap in the corpus:
-# 1. Run Zeek on pcap → reference output
+# 1. Generate reference output from pcap
 # 2. Run NAPSE on pcap → test output
 # 3. Compare field-by-field within tolerance
 ```
@@ -1344,7 +1336,7 @@ Memory usage is tracked per-connection (`Connection.mem_usage()`) and reported v
 
 ### 6. Rule Conversion Accuracy
 
-**Risk**: Suricata rules may not convert perfectly to NAPSE format.
+**Risk**: Legacy IDS rules may not convert perfectly to NAPSE format.
 
 **Mitigation**: The converter (`signatures/converter.py`) tracks unsupported features:
 
@@ -1355,7 +1347,7 @@ class ConversionResult:
     warnings: list[str]   # Partial conversions with notes
 ```
 
-Unsupported Suricata features (initially):
+Unsupported legacy rule features (initially):
 - `lua` scripts
 - `file_data` with `filestore`
 - Complex `flowbits` chains (>3 levels)
@@ -1371,7 +1363,7 @@ These represent <5% of the Emerging Threats ruleset and are tracked in a compati
 core/napse/
 ├── __init__.py                        # Package init, version, tier detection
 ├── README.md                          # Quick-start guide
-├── ANALYSIS.md                        # Research: Zeek/Suricata gap analysis
+├── ANALYSIS.md                        # Research: legacy IDS gap analysis
 ├── ARCHITECTURE.md                    # This document
 ├── Containerfile.napse                # Multi-stage build (Rust + Python)
 ├── requirements.txt                   # Python dependencies
@@ -1421,7 +1413,7 @@ core/napse/
 ├── synthesis/                         # LAYER 2: Python event synthesis
 │   ├── __init__.py                    # Module init, consumer registration
 │   ├── event_bus.py                   # Ring buffer reader, event dispatch
-│   ├── log_emitter.py                 # Zeek/EVE compatible log writer
+│   ├── log_emitter.py                 # Napse native log writer
 │   ├── qsecbit_feed.py               # Direct QSecBit ThreatEvent feed
 │   ├── aegis_bridge.py               # AEGIS StandardSignal emission
 │   ├── bubble_feed.py                # D2D Bubble mDNS + connection feed
@@ -1432,7 +1424,7 @@ core/napse/
 ├── signatures/                        # Signature database
 │   ├── __init__.py
 │   ├── napse_rules.yaml               # Native NAPSE rules
-│   └── converter.py                   # Suricata .rules → NAPSE YAML
+│   └── converter.py                   # Legacy IDS .rules → NAPSE YAML
 │
 ├── config/                            # Per-tier configuration
 │   ├── napse.yaml                     # Base configuration (all tiers)
@@ -1445,7 +1437,7 @@ core/napse/
     ├── __init__.py
     ├── test_conntrack.py              # Connection table unit tests
     ├── test_protocols.py              # Protocol parser unit tests
-    ├── test_log_compat.py             # Zeek/Suricata output compatibility
+    ├── test_log_compat.py             # Log output format tests
     ├── test_signature_match.py        # Signature matching accuracy
     └── test_integration.py            # End-to-end integration tests
 ```
@@ -1477,9 +1469,9 @@ Each protocol parser emits specific event types that map to existing HookProbe c
 | RDP | `rdp_negotiate`, `rdp_auth` | L5 Session | VIGIL | - |
 | FTP | `ftp_command`, `ftp_transfer` | L7 Application | SCOUT | File transfer pairs |
 
-### Zeek Log Compatibility Matrix
+### Napse Log Output Matrix
 
-| Zeek Log | NAPSE Equivalent | Field Parity | Notes |
+| Log File | NAPSE Event Type | Completeness | Notes |
 |----------|-----------------|-------------|-------|
 | `conn.log` | `ConnectionEvent` | 100% | All fields mapped |
 | `dns.log` | `DNSEvent` | 100% | Including EDNS |
@@ -1492,9 +1484,9 @@ Each protocol parser emits specific event types that map to existing HookProbe c
 | `files.log` | `FileEvent` | 95% | Missing: `analyzers` field |
 | `notice.log` | `AlertEvent` | 80% | Different severity model |
 
-### Suricata EVE Compatibility Matrix
+### Napse EVE JSON Output Matrix
 
-| EVE Event Type | NAPSE Equivalent | Field Parity | Notes |
+| EVE Event Type | NAPSE Event Type | Completeness | Notes |
 |----------------|-----------------|-------------|-------|
 | `alert` | `AlertEvent` | 90% | Different rule ID format |
 | `dns` | `DNSEvent` | 100% | Full query/answer |

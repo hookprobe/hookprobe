@@ -593,7 +593,7 @@ hookprobe/
 │   │   ├── cloudflare/              # Cloudflare config
 │   │   ├── django-integration/      # Django email settings
 │   │   ├── firewall-rules/          # iptables rules
-│   │   └── monitoring/              # Suricata SMTP rules
+│   │   └── monitoring/              # Napse SMTP intent rules
 │   └── pod-010-dsm/                 # DSM infrastructure
 │       ├── README.md
 │       └── docker-compose.yml
