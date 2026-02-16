@@ -30,8 +30,8 @@
 //! // Returns something like "1:abc123...=="
 //! ```
 
-use sha2::Digest;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use sha1::Digest;
+use std::net::IpAddr;
 
 /// ICMP type-to-code mapping for canonical direction.
 ///
@@ -187,32 +187,13 @@ fn ip_to_bytes(ip: &IpAddr) -> Vec<u8> {
 
 /// Compute SHA-1 hash of the input bytes.
 ///
-/// Uses a minimal SHA-1 implementation. Note: SHA-1 is used here because
-/// the Community-ID spec mandates it, not for cryptographic security.
+/// Community-ID v1 spec mandates SHA-1. This is not used for cryptographic
+/// security — only for deterministic flow hashing compatible with other
+/// cross-tool flow correlation standard.
 fn sha1_hash(data: &[u8]) -> [u8; 20] {
-    // TODO: Replace with a proper SHA-1 crate (e.g., sha1 crate).
-    // For now, use a basic implementation.
-    // The sha2 crate doesn't include SHA-1, so we compute it manually
-    // or add the sha1 dependency.
-
-    // Placeholder: compute using the built-in approach
-    // In production, add `sha1 = "0.10"` to Cargo.toml
-    sha1_compute(data)
-}
-
-/// Minimal SHA-1 computation.
-///
-/// TODO: Replace with the `sha1` crate for a well-tested implementation.
-/// This is a placeholder that produces deterministic output for the scaffold.
-fn sha1_compute(data: &[u8]) -> [u8; 20] {
-    // Use md-5 as a stand-in size, but we need SHA-1.
-    // For the scaffold, we produce a deterministic hash using available primitives.
-    // Production code should use: sha1::Sha1::digest(data)
-
-    use sha2::Sha256;
-    let full = Sha256::digest(data);
+    let digest = sha1::Sha1::digest(data);
     let mut result = [0u8; 20];
-    result.copy_from_slice(&full[..20]);
+    result.copy_from_slice(&digest);
     result
 }
 

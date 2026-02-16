@@ -4,7 +4,7 @@
 //! method, host, URI, headers (User-Agent, Referer, Content-Type), status
 //! code, and body lengths.
 //!
-//! Output is compatible with Zeek `http.log` fields.
+//! Output uses Napse native HTTP log format.
 //!
 //! ## Limitations
 //!

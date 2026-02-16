@@ -301,4 +301,4 @@ DEFAULT_FROM_EMAIL = 'HookProbe <noreply@hookprobe.com>'
 - [Dovecot Wiki](https://wiki.dovecot.org/)
 - [DKIM Best Practices](https://www.dkim.org/)
 - [Cloudflare Tunnel Setup](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/)
-- [Suricata Rules (SMTP IDS engine)](https://suricata.readthedocs.io/)
+- [Napse Intent Classification (SMTP IDS engine)](https://docs.hookprobe.com/architecture/security-engines/)
