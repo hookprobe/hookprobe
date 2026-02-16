@@ -1,8 +1,8 @@
 //! # SSH Protocol Parser
 //!
 //! Parses SSH version negotiation banners and tracks authentication attempts
-//! for brute-force detection. Produces events compatible with Zeek `ssh.log`
-//! field semantics.
+//! for brute-force detection. Produces events in Napse native SSH log
+//! format.
 //!
 //! ## Detection Capabilities
 //!

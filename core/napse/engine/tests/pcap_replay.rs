@@ -1,7 +1,7 @@
 //! # PCAP Replay Integration Tests
 //!
 //! Integration test scaffold for replaying pcap files through the NAPSE
-//! engine and comparing output against expected Zeek log format.
+//! engine and comparing output against expected Napse log format.
 //!
 //! ## Test Structure
 //!
@@ -9,7 +9,7 @@
 //! 1. Reads a pcap file from `tests/fixtures/`
 //! 2. Feeds packets through the engine
 //! 3. Collects output records
-//! 4. Compares against expected output (Zeek log format)
+//! 4. Compares against expected output (Napse log format)
 //!
 //! ## Fixture Format
 //!
@@ -175,7 +175,7 @@ fn test_http_request_response() {
     // TODO: Verify method, host, URI extraction
     // TODO: Verify status code
     // TODO: Verify User-Agent, Content-Type headers
-    // TODO: Compare against Zeek http.log format
+    // TODO: Compare against Napse HTTP log format
 
     todo!("Implement HTTP pcap replay test")
 }
@@ -265,7 +265,7 @@ fn test_conntrack_tcp_lifecycle() {
     // TODO: Verify connection state transitions
     // TODO: Verify Community-ID computation
     // TODO: Verify byte and packet counters
-    // TODO: Verify connection record matches Zeek conn.log format
+    // TODO: Verify connection record matches Napse flow format
 
     todo!("Implement TCP lifecycle pcap replay test")
 }
@@ -399,7 +399,7 @@ fn test_full_pipeline_mixed_traffic() {
 
 #[test]
 #[ignore = "Requires pcap fixtures"]
-fn test_zeek_log_compatibility() {
+fn test_napse_log_compatibility() {
     let fixture = fixtures_dir().join("reference-traffic.pcap");
     let expected_conn = fixtures_dir().join("reference-traffic.conn.log");
     let expected_dns = fixtures_dir().join("reference-traffic.dns.log");
@@ -411,11 +411,11 @@ fn test_zeek_log_compatibility() {
     }
 
     // TODO: Run same pcap through NAPSE engine
-    // TODO: Parse expected Zeek logs
+    // TODO: Parse expected Napse logs
     // TODO: Compare field-by-field:
     //   - conn.log: uid, proto, service, duration, orig_bytes, resp_bytes
     //   - dns.log: query, qtype, rcode, answers
     //   - ssl.log: version, cipher, server_name, ja3, ja3s
 
-    todo!("Implement Zeek log compatibility test")
+    todo!("Implement Napse log compatibility test")
 }

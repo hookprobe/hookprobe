@@ -1,11 +1,11 @@
 """
 NAPSE ClickHouse Shipper
 
-Replaces shared/aiochi/containers/scripts/log_shipper.py with direct
-ClickHouse insertion from NAPSE events, eliminating the intermediate
-log file step.
+Ships NAPSE events directly to ClickHouse (hookprobe_ids database),
+eliminating the intermediate log file step.
 
-Uses the same schema defined in shared/aiochi/schemas/clickhouse-init.sql.
+Column names must match the live ClickHouse schema exactly (napse_alerts,
+napse_conn, napse_dns tables in hookprobe_ids).
 
 Author: HookProbe Team
 License: Proprietary
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', 'localhost')
 CLICKHOUSE_PORT = int(os.getenv('CLICKHOUSE_PORT', '8123'))
 CLICKHOUSE_USER = os.getenv('CLICKHOUSE_USER', 'default')
-CLICKHOUSE_DB = os.getenv('CLICKHOUSE_DATABASE', 'aiochi')
+CLICKHOUSE_DB = os.getenv('CLICKHOUSE_DATABASE', 'hookprobe_ids')
 
 # Buffer settings
 BATCH_SIZE = 100
@@ -112,9 +112,13 @@ class ClickHouseShipper:
         logger.info("ClickHouseShipper registered with event bus")
 
     def _buffer_alert(self, _et: EventType, alert: NapseAlert) -> None:
-        """Buffer an alert for batch insertion."""
+        """Buffer an alert for batch insertion.
+
+        Column names must match hookprobe_ids.napse_alerts exactly.
+        """
         self._alert_buffer.append({
             'timestamp': alert.timestamp,
+            'event_type': 'alert',
             'src_ip': alert.src_ip,
             'src_port': alert.src_port,
             'dest_ip': alert.dest_ip,
@@ -126,19 +130,21 @@ class ClickHouseShipper:
             'alert_signature': alert.alert_signature,
             'alert_category': alert.alert_category,
             'alert_severity': alert.alert_severity,
-            'community_id': alert.community_id,
         })
         self._maybe_flush()
 
     def _buffer_connection(self, _et: EventType, record: ConnectionRecord) -> None:
-        """Buffer a connection record for batch insertion."""
+        """Buffer a connection record for batch insertion.
+
+        Column names must match hookprobe_ids.napse_conn exactly.
+        """
         self._conn_buffer.append({
-            'timestamp': datetime.fromtimestamp(record.ts).isoformat(),
+            'ts': datetime.fromtimestamp(record.ts).isoformat(),
             'uid': record.uid,
-            'src_ip': record.id_orig_h,
-            'src_port': record.id_orig_p,
-            'dest_ip': record.id_resp_h,
-            'dest_port': record.id_resp_p,
+            'id_orig_h': record.id_orig_h,
+            'id_orig_p': record.id_orig_p,
+            'id_resp_h': record.id_resp_h,
+            'id_resp_p': record.id_resp_p,
             'proto': record.proto,
             'service': record.service,
             'duration': record.duration,
@@ -147,23 +153,33 @@ class ClickHouseShipper:
             'conn_state': record.conn_state,
             'orig_pkts': record.orig_pkts,
             'resp_pkts': record.resp_pkts,
-            'community_id': record.community_id,
         })
         self._maybe_flush()
 
     def _buffer_dns(self, _et: EventType, record: DNSRecord) -> None:
-        """Buffer a DNS record for batch insertion."""
+        """Buffer a DNS record for batch insertion.
+
+        Column names must match hookprobe_ids.napse_dns exactly.
+        """
         self._dns_buffer.append({
-            'timestamp': datetime.fromtimestamp(record.ts).isoformat(),
+            'ts': datetime.fromtimestamp(record.ts).isoformat(),
             'uid': record.uid,
-            'src_ip': record.id_orig_h,
-            'src_port': record.id_orig_p,
-            'dest_ip': record.id_resp_h,
-            'dest_port': record.id_resp_p,
+            'id_orig_h': record.id_orig_h,
+            'id_orig_p': record.id_orig_p,
+            'id_resp_h': record.id_resp_h,
+            'id_resp_p': record.id_resp_p,
+            'proto': record.proto,
             'query': record.query,
+            'qclass': record.qclass,
+            'qclass_name': record.qclass_name,
+            'qtype': record.qtype,
             'qtype_name': record.qtype_name,
+            'rcode': record.rcode,
             'rcode_name': record.rcode_name,
+            'AA': int(record.AA),
             'answers': record.answers,
+            'TTLs': record.TTLs,
+            'rejected': int(record.rejected),
         })
         self._maybe_flush()
 
@@ -185,7 +201,7 @@ class ClickHouseShipper:
             return
 
         self._flush_buffer('napse_alerts', self._alert_buffer, 'alerts_shipped')
-        self._flush_buffer('napse_connections', self._conn_buffer, 'connections_shipped')
+        self._flush_buffer('napse_conn', self._conn_buffer, 'connections_shipped')
         self._flush_buffer('napse_dns', self._dns_buffer, 'dns_shipped')
 
         self._last_flush = time.time()

@@ -16,7 +16,6 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 
 ### ⚠️ Copyleft (Service Use OK)
 - AGPL-3.0 (Grafana) - Running as a service is permitted
-- GPL-2 with linking exception (Snort 3) - Use as separate service is permitted
 
 ### 🔧 System Tools (No Linking)
 - GPL-2 (nftables, kernel modules) - System utilities, not linked to HookProbe code
@@ -171,24 +170,22 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 
 ---
 
-### Intrusion Detection Systems
+### Network Security Engines
 
-**Zeek (formerly Bro)**
-- **Version**: 6.x
-- **License**: BSD-3-Clause
-- **Source**: https://zeek.org/
-- **Usage**: Network security monitoring
+**Zig (Aegis build toolchain)**
+- **Version**: 0.14+
+- **License**: MIT License
+- **Source**: https://ziglang.org/
+- **Usage**: Aegis eBPF/XDP packet capture engine
 - **Commercial Use**: ✅ Yes
 
-**Snort 3**
-- **Version**: 3.x
-- **License**: GPL-2.0 with linking exception
-- **Source**: https://www.snort.org/
-- **Usage**: Intrusion detection and prevention
-- **Note**: Used as standalone service (no linking to proprietary code)
-- **Exception Details**: Cisco allows use of Snort rules with DAQ modules
-- **Commercial Use**: ✅ Yes (as service)
-- **License Reference**: https://github.com/snort3/snort3/blob/master/LICENSE
+**Mojo (Napse runtime)**
+- **Version**: 25.1+
+- **License**: Modular Community License
+- **Source**: https://www.modular.com/mojo
+- **Usage**: Napse AI intent attribution engine
+- **Note**: Free for commercial use
+- **Commercial Use**: ✅ Yes
 
 ---
 
@@ -412,7 +409,6 @@ Some GPL tools are used as **system utilities** (nftables, kernel modules):
 
 Components with copyleft licenses are used as **services**:
 - **Grafana (AGPL-3)**: Running as web service (allowed by AGPL)
-- **Snort 3 (GPL-2 + exception)**: Standalone IDS service (linking exception applies)
 
 ### Commercial Use Clearance
 
@@ -487,7 +483,8 @@ We thank all the open-source projects and their maintainers for making HookProbe
 
 - The Grafana Labs team (VictoriaMetrics, Grafana)
 - The ClickHouse team (Yandex/ClickHouse, Inc.)
-- The Zeek project community
+- The Zig Software Foundation
+- The Modular team (Mojo)
 - The OWASP ModSecurity team
 - The PostgreSQL Global Development Group
 - The Django Software Foundation

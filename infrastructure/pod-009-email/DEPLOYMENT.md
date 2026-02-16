@@ -216,16 +216,16 @@ send_mail(
 podman-compose up -d dmz-mail-ids
 
 # Verify SMTP IDS is running
-podman exec hookprobe-dmz-mail-ids suricata --build-info
+podman exec hookprobe-dmz-mail-ids napse-brain --version
 
 # Check rules
-podman exec hookprobe-dmz-mail-ids cat /var/lib/suricata/rules/*.rules | wc -l
+podman exec hookprobe-dmz-mail-ids ls /var/lib/napse/rules/
 
-# Monitor alerts
-podman exec hookprobe-dmz-mail-ids tail -f /var/log/suricata/fast.log
+# Monitor intents
+podman exec hookprobe-dmz-mail-ids tail -f /var/log/napse/intents.json
 
-# Update rules
-podman exec hookprobe-dmz-mail-ids suricata-update
+# Restart to pick up config changes
+podman-compose restart dmz-mail-ids
 podman-compose restart dmz-mail-ids
 ```
 
@@ -326,14 +326,14 @@ podman exec hookprobe-dmz-mail-gateway postfix status
 
 ### Daily Tasks
 
-- Review SMTP IDS alerts: `tail -f /var/log/suricata/fast.log`
+- Review SMTP IDS intents: `tail -f /var/log/napse/intents.json`
 - Check mail queue: `mailq`
 - Monitor delivery failures: `grep "status=bounced" /var/log/mail.log`
 
 ### Weekly Tasks
 
 - Review DMARC reports
-- Update SMTP IDS rules: `suricata-update`
+- Review SMTP IDS rules: `ls /var/lib/napse/rules/`
 - Check firewall logs for anomalies
 - Verify backup completion
 
@@ -378,8 +378,8 @@ podman exec hookprobe-dmz-mail-gateway postfix status
 ### Problem: IDS alerts
 
 **Check:**
-1. Alert details: `/var/log/suricata/fast.log`
-2. Source IP: `grep ALERT /var/log/suricata/eve.json`
+1. Intent details: `/var/log/napse/intents.json`
+2. Source IP: `grep c2 /var/log/napse/intents.json`
 3. Block if malicious: Add to firewall rules
 
 ## Security Checklist
