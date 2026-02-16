@@ -334,7 +334,7 @@ podman exec hookprobe-dmz-mail-gateway tail -f /var/log/mail.log
 podman exec hookprobe-internal-mail tail -f /var/log/mail.log
 
 # SMTP IDS alerts
-podman exec hookprobe-dmz-mail-ids tail -f /var/log/suricata/fast.log
+podman exec hookprobe-dmz-mail-ids tail -f /var/log/napse/intents.json
 
 # Dovecot logs
 podman exec hookprobe-internal-mail tail -f /var/log/dovecot.log

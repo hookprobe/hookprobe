@@ -131,11 +131,11 @@ services:
   # ============================================
   # DMZ IDS/IPS (SMTP-specific traffic monitor)
   # Standalone IDS for email traffic only — separate from
-  # the main NAPSE engine which handles LAN/WAN detection.
-  # Uses Suricata image as a lightweight SMTP protocol inspector.
+  # the main Aegis+Napse engine which handles LAN/WAN detection.
+  # Uses Napse image as a lightweight SMTP intent classifier.
   # ============================================
   dmz-mail-ids:
-    image: jasonish/suricata:latest
+    image: hookprobe/napse:2.0
     container_name: hookprobe-dmz-mail-ids
     restart: unless-stopped
 
@@ -144,9 +144,9 @@ services:
         ipv4_address: 10.200.9.11
 
     volumes:
-      - ./monitoring/napse-smtp.yaml:/etc/suricata/suricata.yaml:ro
-      - ./monitoring/rules:/var/lib/suricata/rules:ro
-      - mail-ids-logs:/var/log/suricata
+      - ./monitoring/napse-smtp.yaml:/etc/napse/napse.yaml:ro
+      - ./monitoring/rules:/var/lib/napse/rules:ro
+      - mail-ids-logs:/var/log/napse
 
     cap_add:
       - NET_ADMIN
@@ -272,7 +272,7 @@ services:
       - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
       - dmz-mail-logs:/var/log/dmz:ro
       - internal-mail-logs:/var/log/internal:ro
-      - mail-ids-logs:/var/log/suricata:ro
+      - mail-ids-logs:/var/log/napse:ro
 
     command: -config.file=/etc/promtail/config.yml
 

@@ -60,13 +60,14 @@ RUN mkdir -p /var/log/napse/current \
 ENV NAPSE_TIER=fortress
 ENV NAPSE_INTERFACE=eth0
 ENV NAPSE_BRIDGE=FTS
+ENV PYTHONPATH=/opt
 
 # Prometheus metrics port
 EXPOSE 9092
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD python -c "import httpx; r=httpx.get('http://localhost:9092/health'); assert r.status_code==200" || exit 1
+    CMD python -c "from urllib.request import urlopen; r=urlopen('http://localhost:9092/health'); assert r.status==200" || exit 1
 
-ENTRYPOINT ["python", "-m", "core.napse.main"]
+ENTRYPOINT ["python", "-m", "napse"]
 CMD ["--config", "/opt/napse/config/napse.yaml"]

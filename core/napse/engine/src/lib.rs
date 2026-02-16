@@ -61,7 +61,7 @@ struct EngineStats {
 // Python-visible record types
 // ---------------------------------------------------------------------------
 
-/// A connection record compatible with Zeek conn.log fields.
+/// A connection record in Napse native flow format.
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionRecord {
@@ -114,7 +114,7 @@ impl ConnectionRecord {
     }
 }
 
-/// A DNS log record compatible with Zeek dns.log fields.
+/// A DNS log record in Napse native DNS format.
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DNSRecord {
@@ -170,7 +170,7 @@ impl DNSRecord {
     }
 }
 
-/// An HTTP log record compatible with Zeek http.log fields.
+/// An HTTP log record in Napse native HTTP format.
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HTTPRecord {
@@ -224,7 +224,7 @@ impl HTTPRecord {
     }
 }
 
-/// A TLS log record compatible with Zeek ssl.log fields.
+/// A TLS log record in Napse native TLS format.
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TLSRecord {
@@ -640,10 +640,10 @@ impl NapseEngine {
 ///
 /// Classes:
 ///     NapseEngine: Main engine orchestrator
-///     ConnectionRecord: Zeek-compatible conn.log record
-///     DNSRecord: Zeek-compatible dns.log record
-///     HTTPRecord: Zeek-compatible http.log record
-///     TLSRecord: Zeek-compatible ssl.log record
+///     ConnectionRecord: Napse native flow record
+///     DNSRecord: Napse native DNS record
+///     HTTPRecord: Napse native HTTP record
+///     TLSRecord: Napse native TLS record
 ///     DHCPRecord: DHCP event record for device fingerprinting
 ///     NapseAlert: Security alert
 ///     NapseNotice: Informational notice

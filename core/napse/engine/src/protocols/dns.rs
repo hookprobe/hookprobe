@@ -5,7 +5,7 @@
 //! traffic (port 5353 / 224.0.0.251) and tags with ecosystem identifiers
 //! (Apple, Google, Samsung, Amazon).
 //!
-//! Output is compatible with Zeek `dns.log` fields.
+//! Output uses Napse native DNS log format.
 //!
 //! ## Wire Format Reference
 //!
