@@ -8,6 +8,7 @@ Pipeline: principle_guard -> permission_matrix -> rate_limit -> execute -> audit
 """
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -574,6 +575,7 @@ class ToolExecutor:
     def __init__(self, memory=None):
         self._memory = memory
         self._pending_confirmations: Dict[str, Dict] = {}
+        self._confirmations_lock = threading.Lock()
 
     def execute(
         self,
@@ -660,7 +662,8 @@ class ToolExecutor:
 
     def approve_pending(self, confirm_id: str) -> ToolResult:
         """Approve a pending tool call."""
-        pending = self._pending_confirmations.pop(confirm_id, None)
+        with self._confirmations_lock:
+            pending = self._pending_confirmations.pop(confirm_id, None)
         if not pending:
             return ToolResult(
                 success=False,
@@ -677,7 +680,8 @@ class ToolExecutor:
 
     def reject_pending(self, confirm_id: str) -> bool:
         """Reject a pending tool call."""
-        pending = self._pending_confirmations.pop(confirm_id, None)
+        with self._confirmations_lock:
+            pending = self._pending_confirmations.pop(confirm_id, None)
         if pending:
             self._log_decision(
                 pending["agent_name"], pending["tool_name"], pending["params"],
@@ -688,7 +692,8 @@ class ToolExecutor:
 
     def get_pending(self) -> Dict[str, Dict]:
         """Get all pending confirmation requests."""
-        return dict(self._pending_confirmations)
+        with self._confirmations_lock:
+            return dict(self._pending_confirmations)
 
     def get_tool_definitions_for_agent(self, agent_name: str) -> List[Dict[str, Any]]:
         """Get tool definitions in OpenAI function-calling format."""
@@ -730,12 +735,13 @@ class ToolExecutor:
         """Store a pending confirmation request."""
         import uuid
         confirm_id = str(uuid.uuid4())[:8]
-        self._pending_confirmations[confirm_id] = {
-            "agent_name": agent_name,
-            "tool_name": tool_name,
-            "params": params,
-            "timestamp": time.time(),
-        }
+        with self._confirmations_lock:
+            self._pending_confirmations[confirm_id] = {
+                "agent_name": agent_name,
+                "tool_name": tool_name,
+                "params": params,
+                "timestamp": time.time(),
+            }
         return confirm_id
 
     def _log_decision(

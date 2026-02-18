@@ -88,7 +88,8 @@ class BridgeManager:
         """Start all bridges."""
         if self._callback:
             for bridge in self._bridges.values():
-                bridge.on_signal(self._callback)
+                if self._callback not in bridge._callbacks:
+                    bridge.on_signal(self._callback)
 
         for name, bridge in self._bridges.items():
             try:

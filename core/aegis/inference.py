@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -124,8 +125,7 @@ class NativeInferenceEngine:
         self._loading: bool = False
         self._load_error: str = ""
         self._start_time: float = time.time()
-        self._inference_times: List[float] = []
-        self._max_inference_samples = 100
+        self._inference_times: deque = deque(maxlen=100)
 
         # Resolved config (set during init)
         self._api_key: str = ""
@@ -401,8 +401,6 @@ class NativeInferenceEngine:
     def _record_inference_time(self, elapsed_ms: float):
         """Record an inference time sample."""
         self._inference_times.append(elapsed_ms)
-        if len(self._inference_times) > self._max_inference_samples:
-            self._inference_times = self._inference_times[-self._max_inference_samples:]
 
     def _avg_inference_ms(self) -> float:
         """Calculate average inference time."""
