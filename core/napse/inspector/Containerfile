@@ -1,0 +1,18 @@
+# HookProbe Packet Inspector Container
+# Real-time traffic capture and intent classification from dummy-mirror
+
+FROM docker.io/python:3.11-slim
+
+LABEL maintainer="qsecbit@hookprobe.com"
+LABEL description="Packet inspector: capture, classify, ship to ClickHouse"
+LABEL version="1.0.0"
+
+WORKDIR /app
+
+# No external deps needed - uses only stdlib (urllib, socket, struct)
+COPY packet_inspector.py /app/
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)" || exit 1
+
+ENTRYPOINT ["python", "-u", "/app/packet_inspector.py"]

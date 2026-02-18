@@ -1,0 +1,31 @@
+# HookProbe IDS Log Shipper Container
+# Ingests Napse v2 intent and flow logs into ClickHouse
+
+FROM docker.io/python:3.11-slim
+
+LABEL maintainer="qsecbit@hookprobe.com"
+LABEL description="Log shipper for IDS events to ClickHouse"
+LABEL version="1.0.0"
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    clickhouse-connect==0.7.0 \
+    watchdog==4.0.0 \
+    python-dateutil==2.8.2
+
+# Copy shipper script
+COPY log_shipper.py /app/
+
+# Create non-root user
+RUN useradd -r -s /bin/false shipper && \
+    chown -R shipper:shipper /app
+
+USER shipper
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD pgrep -f 'log_shipper' || exit 1
+
+ENTRYPOINT ["python", "-u", "/app/log_shipper.py"]
