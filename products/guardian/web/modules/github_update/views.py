@@ -123,7 +123,13 @@ def api_pull():
         result = pull_updates(dry_run=dry_run)
         status_code = 200 if result['success'] else 400
 
-        return jsonify(result), status_code
+        # Sanitize internal details before sending to client
+        safe_keys = {'success', 'dry_run', 'would_update', 'files', 'message',
+                     'services_to_restart', 'hint', 'commits_behind'}
+        safe_result = {k: v for k, v in result.items() if k in safe_keys}
+        if not result['success']:
+            safe_result['error'] = result.get('error', 'Update failed')
+        return jsonify(safe_result), status_code
     except Exception as e:
         return jsonify({
             'success': False,
@@ -217,15 +223,18 @@ def api_debug():
     Debug endpoint to diagnose git path detection issues.
     Requires authentication. Sensitive paths redacted.
     """
-    detected_path = get_repo_path()
+    try:
+        detected_path = get_repo_path()
 
-    git_test, git_success = run_command(
-        ['git', '-C', detected_path, 'rev-parse', '--short', 'HEAD']
-    )
+        git_test, git_success = run_command(
+            ['git', '-C', detected_path, 'rev-parse', '--short', 'HEAD']
+        )
 
-    return jsonify({
-        'success': True,
-        'git_reachable': git_success,
-        'git_commit': git_test.strip() if git_test else None,
-        'repo_detected': bool(detected_path),
-    })
+        return jsonify({
+            'success': True,
+            'git_reachable': git_success,
+            'git_commit': git_test.strip() if git_test else None,
+            'repo_detected': bool(detected_path),
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
