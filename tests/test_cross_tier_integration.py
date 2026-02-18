@@ -987,7 +987,7 @@ class TestSentinelDefense:
             with patch.object(engine, '_write_sinkhole_file'):
                 assert engine.dns_sinkhole("evil.example.com", "malware") is True
             sinkholed = engine.get_sinkholed()
-            assert "evil.example.com" in sinkholed
+            assert sinkholed.get("evil.example.com") is not None
         finally:
             engine.stop()
 

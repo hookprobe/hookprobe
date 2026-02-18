@@ -90,35 +90,40 @@ def _load_config_value(key: str, default: str, config_file: Path = None) -> str:
 
 
 def _validate_mssp_url(url: str) -> str:
-    """Validate MSSP URL to prevent SSRF against internal services."""
+    """Validate MSSP URL to prevent SSRF against internal services.
+
+    Uses an allowlist approach: only hookprobe.com and hookprobe.io
+    domains are accepted. All other URLs fall back to the default.
+    """
     from urllib.parse import urlparse
     import ipaddress
 
     parsed = urlparse(url)
 
+    # Require HTTPS
     if parsed.scheme != 'https':
         logger.warning("MSSP URL must use HTTPS, got: %s. Falling back to default.", parsed.scheme)
         return DEFAULT_MSSP_URL
 
     hostname = parsed.hostname or ''
 
-    # Block private/internal IPs
+    # Block IP addresses entirely — MSSP must use a domain name
     try:
-        addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            logger.warning("MSSP URL points to private/reserved IP. Falling back to default.")
-            return DEFAULT_MSSP_URL
-    except ValueError:
-        pass
-
-    # Block localhost variants
-    if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
-        logger.warning("MSSP URL points to localhost. Falling back to default.")
+        ipaddress.ip_address(hostname)
+        logger.warning("MSSP URL must use a domain name, not an IP. Falling back to default.")
         return DEFAULT_MSSP_URL
+    except ValueError:
+        pass  # Not an IP — good, continue with domain check
 
-    # Block cloud metadata endpoints
-    if hostname in ('169.254.169.254', 'metadata.google.internal'):
-        logger.warning("MSSP URL points to cloud metadata endpoint. Falling back to default.")
+    # Allowlist: only *.hookprobe.com and *.hookprobe.io domains
+    allowed_suffixes = ('.hookprobe.com', '.hookprobe.io')
+    hostname_lower = hostname.lower()
+    if not (hostname_lower.endswith(allowed_suffixes)
+            or hostname_lower in ('hookprobe.com', 'hookprobe.io')):
+        logger.warning(
+            "MSSP URL domain %s not in allowlist. Falling back to default.",
+            hostname
+        )
         return DEFAULT_MSSP_URL
 
     return url
