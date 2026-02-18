@@ -1,8 +1,8 @@
 """
 NAPSE Event Bus - Central Event Distribution
 
-Receives typed events from the Rust protocol engine via PyO3 callbacks
-and distributes them to all registered HookProbe consumers.
+Receives typed events from capture engines and dispatches them
+to all registered HookProbe consumers.
 
 Author: HookProbe Team
 License: Proprietary
@@ -275,41 +275,41 @@ class NapseEventBus:
             except Exception as e:
                 logger.error("Global handler error for %s: %s", event_type.name, e)
 
-    # Convenience methods called by Rust engine via PyO3
+    # Convenience methods called by capture engine
     def on_connection(self, record: ConnectionRecord) -> None:
-        """Called by Rust engine for each completed connection."""
+        """Called by capture engine for each completed connection."""
         self.emit(EventType.CONNECTION, record)
 
     def on_dns(self, record: DNSRecord) -> None:
-        """Called by Rust engine for each DNS transaction."""
+        """Called by capture engine for each DNS transaction."""
         self.emit(EventType.DNS, record)
 
     def on_http(self, record: HTTPRecord) -> None:
-        """Called by Rust engine for each HTTP transaction."""
+        """Called by capture engine for each HTTP transaction."""
         self.emit(EventType.HTTP, record)
 
     def on_tls(self, record: TLSRecord) -> None:
-        """Called by Rust engine for each TLS handshake."""
+        """Called by capture engine for each TLS handshake."""
         self.emit(EventType.TLS, record)
 
     def on_dhcp(self, record: DHCPRecord) -> None:
-        """Called by Rust engine for each DHCP transaction."""
+        """Called by capture engine for each DHCP transaction."""
         self.emit(EventType.DHCP, record)
 
     def on_ssh(self, record: SSHRecord) -> None:
-        """Called by Rust engine for each SSH session."""
+        """Called by capture engine for each SSH session."""
         self.emit(EventType.SSH, record)
 
     def on_mdns(self, record: MDNSRecord) -> None:
-        """Called by Rust engine for each mDNS event."""
+        """Called by capture engine for each mDNS event."""
         self.emit(EventType.MDNS, record)
 
     def on_alert(self, alert: NapseAlert) -> None:
-        """Called by Rust engine for signature/ML match alerts."""
+        """Called by capture engine for signature/ML match alerts."""
         self.emit(EventType.ALERT, alert)
 
     def on_notice(self, notice: NapseNotice) -> None:
-        """Called by Rust engine for notice events."""
+        """Called by capture engine for notice events."""
         self.emit(EventType.NOTICE, notice)
 
     def on_flow_metadata(self, metadata: Dict[str, Any]) -> None:
