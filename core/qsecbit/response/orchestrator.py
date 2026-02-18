@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any, Set
-from collections import defaultdict
+from collections import defaultdict, deque
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ class ResponseOrchestrator:
         self.blocked_ips: Dict[str, datetime] = {}  # IP -> block_time
         self.blocked_macs: Dict[str, datetime] = {}  # MAC -> block_time
         self.rate_limited: Dict[str, datetime] = {}  # IP -> limit_time
-        self.response_history: List[ResponseResult] = []
+        self.response_history: deque = deque(maxlen=10000)
 
         # Alert callbacks
         self.alert_callbacks: List[callable] = []
@@ -210,10 +210,6 @@ class ResponseOrchestrator:
                 # Send alert
                 if action == ResponseAction.ALERT:
                     self._send_alert(threat, result)
-
-        # Trim history
-        if len(self.response_history) > 10000:
-            self.response_history = self.response_history[-10000:]
 
         return results
 

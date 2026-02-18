@@ -17,6 +17,7 @@ Version: 5.0.0
 """
 
 import numpy as np
+from collections import deque
 from scipy.spatial.distance import mahalanobis
 from scipy.special import expit as logistic
 from scipy.stats import entropy
@@ -183,7 +184,7 @@ class Qsecbit:
 
         # State tracking
         self.prev_classifier: Optional[np.ndarray] = None
-        self.history: List[QsecbitSample] = []
+        self.history: deque = deque(maxlen=self.config.max_history_size)
         self.baseline_entropy = self._calculate_baseline_entropy()
 
         # System metadata
@@ -636,10 +637,8 @@ class Qsecbit:
         # Save to database (ClickHouse for edge, Doris for cloud)
         self._save_to_database(sample, x_t)
 
-        # Store in history
+        # Store in history (deque handles eviction automatically)
         self.history.append(sample)
-        if len(self.history) > self.config.max_history_size:
-            self.history.pop(0)
 
         return sample
 
@@ -778,7 +777,18 @@ class Qsecbit:
         return "STABLE"
 
     def export_history(self, filepath: str):
-        """Export measurement history to JSON"""
+        """Export measurement history to JSON.
+
+        Restricts output to the allowed export directory to prevent
+        path traversal (CWE-22).
+        """
+        allowed_dir = Path("/var/log/hookprobe/qsecbit/exports").resolve()
+        target = Path(filepath).resolve()
+        if not str(target).startswith(str(allowed_dir) + "/") and target != allowed_dir:
+            raise ValueError(
+                f"Export path must be under {allowed_dir}, got {filepath!r}"
+            )
+
         data = {
             'config': {
                 'alpha': self.config.alpha,
@@ -796,7 +806,8 @@ class Qsecbit:
             'history': [s.to_dict() for s in self.history]
         }
 
-        with open(filepath, 'w') as f:
+        allowed_dir.mkdir(parents=True, exist_ok=True)
+        with open(target, 'w') as f:
             json.dump(data, f, indent=2)
 
     def summary_stats(self) -> Dict:
