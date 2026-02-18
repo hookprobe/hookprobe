@@ -10,15 +10,18 @@ for LLM situational awareness.
 Phase 3: Shadow Pentester — autonomous offensive testing in digital twin
 with defense feedback loop to QSecBit signatures.
 
+Phase 4: Hybrid Inference — fast/slow path decision engine routing threat
+events between QSecBit fast path, local 0.5B model, and Nexus LLM offload.
+
 Architecture layers (phased rollout):
   Layer 1: Closed-Loop Kernel Orchestrator (Phase 1)
   Layer 2: Streaming eBPF-RAG (Phase 2)
   Layer 3: Shadow Pentester (Phase 3)
-  Layer 4: Hybrid Inference (Phase 5)
+  Layer 4: Hybrid Inference (Phase 4)
 
 Author: Andrei Toma
 License: Proprietary
-Version: 3.0.0
+Version: 4.0.0
 """
 
 from typing import Optional
@@ -55,6 +58,33 @@ from .shadow_pentester import (
 )
 from .defense_feedback import DefenseFeedback, SignatureCandidate
 from .kernel_twin import KernelDigitalTwin, TwinAttackResult, TwinDevice
+
+# Phase 4: Hybrid Inference
+from .verdict import (
+    ConfidenceLevel,
+    ThreatContext,
+    VerdictAction,
+    VerdictResult,
+    VerdictSource,
+    make_allow,
+    make_drop,
+    make_investigate,
+    make_pending,
+)
+from .nexus_offload import NexusOffloader, OffloadRequest, TracePackage
+from .llm_monitor import (
+    LLMMonitor,
+    MonitorAction,
+    MonitorAlert,
+    MonitorEventType,
+)
+from .hybrid_inference import (
+    HybridInferenceConfig,
+    HybridInferenceRouter,
+    InferenceMode,
+    TIER_CONFIGS,
+    create_hybrid_router,
+)
 
 from .types import (
     ActiveProgram,
@@ -122,6 +152,28 @@ __all__ = [
     "KernelDigitalTwin",
     "TwinAttackResult",
     "TwinDevice",
+    # Phase 4: Hybrid Inference
+    "ConfidenceLevel",
+    "ThreatContext",
+    "VerdictAction",
+    "VerdictResult",
+    "VerdictSource",
+    "make_allow",
+    "make_drop",
+    "make_investigate",
+    "make_pending",
+    "NexusOffloader",
+    "OffloadRequest",
+    "TracePackage",
+    "LLMMonitor",
+    "MonitorAction",
+    "MonitorAlert",
+    "MonitorEventType",
+    "HybridInferenceConfig",
+    "HybridInferenceRouter",
+    "InferenceMode",
+    "TIER_CONFIGS",
+    "create_hybrid_router",
     # Types
     "ActiveProgram",
     "CompilationResult",
