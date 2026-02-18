@@ -464,6 +464,43 @@ TOOL_REGISTRY: Dict[str, ToolDefinition] = {
         agents=["MEDIC"],
     ),
 
+    # NEURO-KERNEL tools
+    "deploy_ebpf": ToolDefinition(
+        name="deploy_ebpf",
+        description="Deploy a verified eBPF program to the kernel",
+        parameters={
+            "type": "object",
+            "properties": {
+                "template_name": {"type": "string", "description": "Template name from registry"},
+                "interface": {"type": "string", "description": "Network interface to attach to"},
+            },
+            "required": ["template_name"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+        requires_confirmation=True,
+    ),
+    "rollback_ebpf": ToolDefinition(
+        name="rollback_ebpf",
+        description="Rollback a deployed eBPF program to previous version",
+        parameters={
+            "type": "object",
+            "properties": {
+                "program_id": {"type": "string", "description": "Program ID to rollback"},
+            },
+            "required": ["program_id"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+    ),
+    "list_kernel_programs": ToolDefinition(
+        name="list_kernel_programs",
+        description="List all active eBPF programs managed by Neuro-Kernel",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE"],
+    ),
+
     # MEDIC tools
     "full_quarantine": ToolDefinition(
         name="full_quarantine",
