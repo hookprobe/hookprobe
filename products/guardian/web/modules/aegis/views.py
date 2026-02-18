@@ -92,7 +92,7 @@ def api_chat():
             return jsonify({
                 'success': True,
                 'session_id': session_id,
-                'response': response if isinstance(response, str) else str(response),
+                'response': response.message if hasattr(response, 'message') else str(response),
             })
         return jsonify({
             'success': False,

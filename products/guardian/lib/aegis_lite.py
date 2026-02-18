@@ -38,6 +38,9 @@ class AegisLite:
 
     def initialize(self) -> bool:
         """Initialize AEGIS-Lite with Guardian configuration."""
+        # Force cloud backend — Guardian has 1.5GB RAM, no room for local LLM
+        os.environ.setdefault("AEGIS_BACKEND", "cloud")
+
         # 1. Standard AEGIS with Lite profile paths
         try:
             from core.aegis.client import AegisClient
