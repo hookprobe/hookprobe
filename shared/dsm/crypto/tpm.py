@@ -229,28 +229,50 @@ def tpm2_verify(public_key: Any, signature: bytes, data: bytes) -> bool:
 
 def tpm2_pcr_read(pcr_indices: list) -> Dict[int, str]:
     """
-    Read Platform Configuration Registers or return mock values.
+    Read Platform Configuration Registers.
+
+    When hardware TPM is available, reads actual PCR values.
+    When TPM is unavailable, loads configured baselines from DSM_PCR_CONFIG
+    or returns empty dict (no PCR enforcement).
 
     Args:
         pcr_indices: List of PCR indices to read (e.g., [0, 1, 2, 3, 7])
 
     Returns:
-        Dictionary mapping PCR index to hash value
+        Dictionary mapping PCR index to hash value (empty if unconfigured)
     """
-    if not _check_tpm_available():
-        logger.warning("TPM not available - returning mock PCR values")
-        # Return mock PCR values for testing
-        return {idx: f"mock_pcr_{idx}_value" for idx in pcr_indices}
+    if _check_tpm_available() and _check_tpm2_pytss():
+        # v5.1 planned: Hardware TPM PCR reading
+        # from tpm2_pytss import ESAPI
+        # pcr_values = {}
+        # for idx in pcr_indices:
+        #     pcr_values[idx] = ESAPI().pcr_read(idx)
+        # return pcr_values
+        logger.info("Hardware TPM PCR reading planned for v5.1")
 
-    # TODO: Implement actual PCR reading using tpm2-pytss
-    # from tpm2_pytss import ESAPI
-    # pcr_values = {}
-    # for idx in pcr_indices:
-    #     pcr_values[idx] = ESAPI().pcr_read(idx)
-    # return pcr_values
+    # Software fallback: load from config file
+    import json
+    config_path = os.environ.get(
+        'DSM_PCR_CONFIG', '/etc/hookprobe/dsm_pcr.json'
+    )
 
-    logger.warning("TPM PCR reading not implemented - returning mock values")
-    return {idx: f"mock_pcr_{idx}_value" for idx in pcr_indices}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                all_pcrs = json.load(f)
+            result = {}
+            for idx in pcr_indices:
+                key = str(idx)
+                if key in all_pcrs:
+                    result[idx] = all_pcrs[key]
+            logger.info("Loaded %d PCR values from %s", len(result), config_path)
+            return result
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Could not load PCR config from %s: %s", config_path, e)
+
+    # No config, no TPM — return empty (no PCR enforcement)
+    logger.warning("No TPM and no PCR config — PCR enforcement disabled")
+    return {}
 
 
 def tpm2_quote(

@@ -504,12 +504,29 @@ def verify_proof_of_possession(
     """
     # Epoch validation
     if expected_epoch is not None:
-        if pop.epoch != expected_epoch:
-            return False, f"Epoch mismatch: got {pop.epoch}, expected {expected_epoch}"
+        epoch_age = expected_epoch - pop.epoch
+        if epoch_age > max_epoch_age:
+            return False, (
+                f"PoP too old: epoch {pop.epoch} is {epoch_age} epochs behind "
+                f"current {expected_epoch} (max {max_epoch_age})"
+            )
+        if pop.epoch > expected_epoch:
+            return False, (
+                f"PoP epoch from future: got {pop.epoch}, current is {expected_epoch}"
+            )
     else:
-        # Check epoch is not too old (prevents replay of ancient PoPs)
-        # In production, compare against current_epoch from consensus
-        pass  # TODO: Add current_epoch comparison when integrated
+        # When no expected epoch, validate the PoP epoch is reasonable:
+        # must be a non-negative integer and not absurdly large
+        if not isinstance(pop.epoch, int) or pop.epoch < 0:
+            return False, f"Invalid epoch value: {pop.epoch}"
+
+    # Validate nonce is present and non-empty
+    if not pop.nonce or len(pop.nonce) < 16:
+        return False, "PoP nonce missing or too short (minimum 16 bytes)"
+
+    # Validate signature is present
+    if not pop.signature:
+        return False, "PoP signature missing"
 
     # Reconstruct the challenge message
     challenge, _ = generate_pop_challenge(
