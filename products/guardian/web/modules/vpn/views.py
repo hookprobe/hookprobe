@@ -6,7 +6,7 @@ import logging
 import re
 from flask import jsonify, request
 from . import vpn_bp
-from utils import run_command, load_json_file, save_json_file
+from utils import run_command, load_json_file, save_json_file, _safe_error
 from modules.auth import require_auth
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def api_status():
 
         return jsonify(state)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @vpn_bp.route('/connect', methods=['POST'])
@@ -112,7 +112,7 @@ def api_connect():
 
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @vpn_bp.route('/disconnect', methods=['POST'])
@@ -165,7 +165,7 @@ def api_mesh_register():
             })
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @vpn_bp.route('/posf/status')
@@ -183,7 +183,7 @@ def api_posf_status():
         })
         return jsonify(posf)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @vpn_bp.route('/posf/verify', methods=['POST'])
@@ -198,7 +198,7 @@ def api_posf_verify():
             return jsonify({'success': True, 'message': 'PoSF verification complete'})
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @vpn_bp.route('/encryption/info')

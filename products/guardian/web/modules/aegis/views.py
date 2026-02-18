@@ -9,6 +9,7 @@ import uuid
 from flask import jsonify, request
 from . import aegis_bp
 from modules.auth import require_auth
+from utils import _safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def api_status():
     except Exception as e:
         return jsonify({
             'available': False,
-            'error': str(e),
+            'error': _safe_error(e),
         }), 500
 
 
@@ -100,7 +101,7 @@ def api_chat():
         }), 500
     except Exception as e:
         logger.error("AEGIS chat error: %s", e)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @aegis_bp.route('/finding', methods=['POST'])
@@ -117,7 +118,7 @@ def api_submit_finding():
         result = aegis.submit_finding(data)
         return jsonify({'success': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @aegis_bp.route('/recommendation', methods=['POST'])
@@ -134,4 +135,4 @@ def api_handle_recommendation():
         result = aegis.handle_recommendation(data)
         return jsonify({'success': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500

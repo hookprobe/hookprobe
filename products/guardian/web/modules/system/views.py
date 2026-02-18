@@ -3,7 +3,7 @@ System Module Views - System Settings and Management
 """
 from flask import jsonify, request
 from . import system_bp
-from utils import run_command, get_system_info, format_bytes
+from utils import run_command, get_system_info, format_bytes, _safe_error
 from modules.auth import require_auth
 
 
@@ -51,7 +51,7 @@ def api_info():
 
         return jsonify(info)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @system_bp.route('/services')
@@ -87,7 +87,7 @@ def api_restart_service(name):
             return jsonify({'success': True})
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @system_bp.route('/restart-services', methods=['POST'])
@@ -100,7 +100,7 @@ def api_restart_all():
             run_command(['sudo', 'systemctl', 'restart', service])
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @system_bp.route('/updates')
@@ -123,7 +123,7 @@ def api_updates():
             'count': count
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @system_bp.route('/logs')
@@ -147,7 +147,7 @@ def api_logs():
 
         return jsonify({'logs': 'No logs available'})
     except Exception as e:
-        return jsonify({'logs': str(e)})
+        return jsonify({'logs': _safe_error(e)})
 
 
 @system_bp.route('/reboot', methods=['POST'])
@@ -158,7 +158,7 @@ def api_reboot():
         run_command(['sudo', 'shutdown', '-r', '+1', 'Guardian rebooting...'])
         return jsonify({'success': True, 'message': 'Rebooting in 1 minute'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @system_bp.route('/shutdown', methods=['POST'])
@@ -169,4 +169,4 @@ def api_shutdown():
         run_command(['sudo', 'shutdown', '-h', '+1', 'Guardian shutting down...'])
         return jsonify({'success': True, 'message': 'Shutting down in 1 minute'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
