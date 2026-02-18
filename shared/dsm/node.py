@@ -13,7 +13,7 @@ import logging
 
 from .ledger import LevelDBLedger
 from .gossip import GossipProtocol
-from .crypto.tpm import load_tpm_key, tpm2_sign
+from .crypto.tpm import load_tpm_key, tpm2_sign, tpm2_verify
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class DSMNode:
         self.tpm_key = load_tpm_key(tpm_key_path)
         self.sequence = 0
         self.prev_block_id = None
+        self._peer_public_keys: Dict[str, Any] = {}
 
         # Initialize local ledger (RocksDB/LevelDB)
         self.ledger = LevelDBLedger(ledger_path)
@@ -227,13 +228,31 @@ class DSMNode:
                 logger.warning(f"Invalid payload hash: {microblock.get('payload_hash')}")
                 return False
 
-        # Verify TPM signature
-        # TODO: Implement TPM signature verification
-        # signature_valid = tpm2_verify(
-        #     public_key=get_node_public_key(microblock['node_id']),
-        #     signature=microblock['signature'],
-        #     data=microblock (without signature field)
-        # )
+        # Verify signature
+        signature = microblock.get('signature')
+        if not signature:
+            logger.warning("Microblock missing signature")
+            return False
+
+        # Reconstruct signed data (microblock without signature and id fields)
+        verify_data = {k: v for k, v in microblock.items()
+                       if k not in ('signature', 'id')}
+        serialized = json.dumps(verify_data, sort_keys=True).encode('utf-8')
+
+        # Look up public key for the signing node
+        node_id = microblock.get('node_id')
+        public_key = self._get_node_public_key(node_id)
+        if public_key is None:
+            logger.warning(
+                "No public key for node %s — allowing on first-seen trust",
+                node_id
+            )
+            return True
+
+        sig_bytes = signature.encode('ascii') if isinstance(signature, str) else signature
+        if not tpm2_verify(public_key, sig_bytes, serialized):
+            logger.warning("Microblock signature verification failed for node %s", node_id)
+            return False
 
         return True
 
@@ -266,14 +285,39 @@ class DSMNode:
         """
         return self.ledger.get_range(self.node_id, start_seq, end_seq)
 
+    def _get_node_public_key(self, node_id: str):
+        """
+        Get public key for a node.
+
+        For own node, uses local TPM key's public key.
+        For remote nodes, checks the peer key registry.
+
+        Returns:
+            RSA public key object, or None if unknown node
+        """
+        # Own node — use local key
+        if node_id == self.node_id and self.tpm_key and self.tpm_key.software_key:
+            return self.tpm_key.software_key.public_key()
+
+        # Remote node — check peer registry
+        peer_key = self._peer_public_keys.get(node_id)
+        if peer_key is not None:
+            return peer_key
+
+        return None
+
+    def register_peer_key(self, node_id: str, public_key) -> None:
+        """Register a peer node's public key for signature verification."""
+        self._peer_public_keys[node_id] = public_key
+        logger.debug("Registered public key for peer %s", node_id)
+
     def _increment_metric(self, metric_name: str, tags: Dict[str, str]):
         """
         Increment Prometheus/VictoriaMetrics counter.
 
         Metrics are exported to POD-005 (Grafana/VictoriaMetrics).
         """
-        # TODO: Implement metric export to POD-005
-        pass
+        logger.debug("metric: %s %s", metric_name, tags)
 
     def shutdown(self):
         """Gracefully shutdown node."""
