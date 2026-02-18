@@ -1,65 +1,94 @@
 # NAPSE - Neural Adaptive Packet Synthesis Engine
 # Container build for HookProbe Fortress/Guardian/Nexus tiers
 #
-# Single ~100MB container replacing legacy IDS stack.
+# Split-brain architecture: Zig (capture) + Mojo (classify) + Python (synthesis)
+# Fallback cascade: Mojo -> Python Inspector -> synthesis-only
 #
 # Build: podman build -f Containerfile.napse -t hookprobe/napse:latest .
 # Run:   Requires host network + SYS_BPF + NET_ADMIN + NET_RAW
 
-FROM python:3.12-slim AS builder
+# ---- Stage 1: Zig capture engine ----
+FROM docker.io/library/ubuntu:24.04 AS zig-builder
 
-# Install Rust toolchain for engine compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gcc g++ make pkg-config \
-    libelf-dev libbpf-dev \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    wget xz-utils libbpf-dev libelf-dev zlib1g-dev \
+    clang llvm linux-headers-generic ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/root/.cargo/bin:${PATH}"
+ARG ZIG_VERSION=0.13.0
+RUN wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-$(uname -m)-${ZIG_VERSION}.tar.xz" \
+    -O /tmp/zig.tar.xz \
+    && mkdir -p /opt/zig \
+    && tar -xf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
+    && rm /tmp/zig.tar.xz
+ENV PATH="/opt/zig:${PATH}"
 
-# Install maturin for Rust-Python bridge
-RUN pip install --no-cache-dir maturin
+WORKDIR /build/aegis
+COPY aegis/ .
+RUN zig build -Doptimize=ReleaseFast || echo "WARN: Zig build skipped (missing deps)"
 
-# Build NAPSE Rust engine
-WORKDIR /build/engine
-COPY engine/Cargo.toml engine/pyproject.toml ./
-COPY engine/src/ ./src/
-RUN maturin build --release --strip \
-    && pip install --no-cache-dir target/wheels/napse_engine-*.whl
 
-# ---- Runtime stage ----
+# ---- Stage 2: Mojo classification engine ----
+FROM docker.io/library/ubuntu:24.04 AS mojo-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Modular MAX toolchain (Mojo)
+RUN curl -ssL https://magic.modular.com/ | bash 2>/dev/null || true
+ENV PATH="/root/.modular/bin:${PATH}"
+
+WORKDIR /build/brain
+COPY brain/ .
+RUN if command -v mojo >/dev/null 2>&1; then \
+        mojo build src/main.mojo -o napse-brain; \
+    else \
+        echo "WARN: Mojo not available, using Python Inspector fallback"; \
+    fi
+
+
+# ---- Stage 3: Python dependencies ----
+FROM python:3.12-slim AS python-builder
+
+RUN pip install --no-cache-dir pyyaml httpx
+
+# ---- Stage 4: Runtime ----
 FROM python:3.12-slim
 
-# Install runtime dependencies
+# Runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libelf1 \
-    iproute2 \
+    libelf1 libbpf1 iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python BCC bindings (for eBPF)
+# Install Python BCC bindings (for eBPF kernel programs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-bpfcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy built engine wheel
-COPY --from=builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+# Copy Python site-packages
+COPY --from=python-builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
 
-# Install Python dependencies
-COPY requirements.txt /opt/napse/requirements.txt
-RUN pip install --no-cache-dir -r /opt/napse/requirements.txt
+# Copy Zig artifacts (if built successfully)
+COPY --from=zig-builder /build/aegis/zig-out/bin/ /opt/napse/aegis/
+COPY aegis/aegis.toml /etc/aegis/aegis.toml
 
-# Copy NAPSE source
+# Copy Mojo binary (if built successfully)
+COPY --from=mojo-builder /build/brain/napse-brain /opt/napse/brain/
+COPY brain/napse.toml /etc/napse/napse-brain.toml
+
+# Copy Python source
 COPY . /opt/napse/
 WORKDIR /opt/napse
 
-# Create log directories
-RUN mkdir -p /var/log/napse/current \
-    /var/lib/napse
+# Create directories
+RUN mkdir -p /var/log/napse/current /var/lib/napse /var/log/aegis
 
-# Default tier config
+# Default config
 ENV NAPSE_TIER=fortress
 ENV NAPSE_INTERFACE=eth0
 ENV NAPSE_BRIDGE=FTS
+ENV NAPSE_CAPTURE_ENGINE=auto
 ENV PYTHONPATH=/opt
 
 # Prometheus metrics port
