@@ -98,6 +98,9 @@ ROUTING_RULES = {
     "reflex.jitter_applied": ["GUARDIAN"],
     "reflex.disconnect": ["GUARDIAN", "MEDIC"],
 
+    # MSSP recommendations
+    "mssp.recommendation": ["ORACLE", "FORGE"],
+
     # Multi-agent escalation (MEDIC coordinates)
     "incident.multi_agent": ["MEDIC"],
     "incident.critical": ["MEDIC"],
