@@ -13,6 +13,7 @@ from .qsecbit_bridge import QsecbitBridge
 from .dnsxai_bridge import DnsxaiBridge
 from .dhcp_bridge import DhcpBridge
 from .wan_bridge import WanBridge
+from .napse_bridge import NAPSEBridge
 from ..types import StandardSignal
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class BridgeManager:
         self._bridges["dnsxai"] = DnsxaiBridge()
         self._bridges["dhcp"] = DhcpBridge()
         self._bridges["wan"] = WanBridge()
+        self._bridges["napse"] = NAPSEBridge()
 
     def configure(
         self,
@@ -43,6 +45,7 @@ class BridgeManager:
         dnsxai_url: str = "",
         dhcp_lease_file: str = "",
         slaai_path: str = "",
+        napse_eve_path: str = "",
     ) -> None:
         """Reconfigure bridges with custom paths/URLs."""
         if qsecbit_path:
@@ -53,6 +56,8 @@ class BridgeManager:
             self._bridges["dhcp"] = DhcpBridge(dhcp_lease_file)
         if slaai_path:
             self._bridges["wan"] = WanBridge(slaai_path)
+        if napse_eve_path:
+            self._bridges["napse"] = NAPSEBridge(napse_eve_path)
 
     def set_callback(self, callback: Callable[[StandardSignal], None]) -> None:
         """Set the signal callback (usually orchestrator.process_signal)."""
@@ -101,4 +106,5 @@ __all__ = [
     "DnsxaiBridge",
     "DhcpBridge",
     "WanBridge",
+    "NAPSEBridge",
 ]
