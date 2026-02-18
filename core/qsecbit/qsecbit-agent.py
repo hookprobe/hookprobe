@@ -346,8 +346,16 @@ class HookProbeAgent:
         # Energy metrics
         if self.energy_monitor:
             try:
-                energy_data = self.energy_monitor.get_current_metrics()
-                metrics["energy"] = energy_data
+                snapshot = self.energy_monitor.capture_snapshot()
+                if snapshot:
+                    anomalies = self.energy_monitor.detect_anomalies(snapshot)
+                    metrics["energy"] = {
+                        "package_watts": snapshot.package_watts,
+                        "nic_watts": snapshot.nic_processes_watts,
+                        "xdp_watts": snapshot.xdp_processes_watts,
+                        "anomaly_score": anomalies.get("anomaly_score", 0.0),
+                        "anomalies": anomalies.get("anomalies", []),
+                    }
             except Exception as e:
                 logger.error(f"Energy metrics collection failed: {e}")
 
@@ -360,16 +368,10 @@ class HookProbeAgent:
                 logger.error(f"XDP metrics collection failed: {e}")
 
         # Qsecbit analysis
-        if self.qsecbit and self.energy_monitor:
+        if self.qsecbit:
             try:
-                # Run qsecbit analysis
-                telemetry = {
-                    "energy": metrics.get("energy", {}),
-                    "network": metrics.get("xdp", {})
-                }
-
-                qsecbit_result = self.qsecbit.analyze(telemetry)
-                metrics["qsecbit"] = qsecbit_result
+                score = self.qsecbit.detect_threats()
+                metrics["qsecbit"] = score.to_dict()
             except Exception as e:
                 logger.error(f"Qsecbit analysis failed: {e}")
 
@@ -591,17 +593,22 @@ class HookProbeAgent:
         return threat
 
     def export_metrics(self, metrics: Dict):
-        """Export metrics to external systems"""
-        # TODO: Export to VictoriaMetrics
-        # TODO: Export to ClickHouse
-
-        # For now, just log summary
+        """Export metrics to external systems and stats file for AEGIS bridge."""
         if "qsecbit" in metrics:
             qsecbit_data = metrics["qsecbit"]
             logger.info(
                 f"Qsecbit: {qsecbit_data.get('rag_status', 'N/A')} "
                 f"score={qsecbit_data.get('score', 0.0):.3f}"
             )
+
+            # Write stats file for AEGIS bridge consumption
+            stats_dir = Path("/var/log/hookprobe/qsecbit")
+            try:
+                stats_dir.mkdir(parents=True, exist_ok=True)
+                stats_file = stats_dir / "current.json"
+                stats_file.write_text(json.dumps(qsecbit_data, default=str))
+            except Exception as e:
+                logger.warning(f"Failed to write stats file: {e}")
 
     def run_monitoring_loop(self):
         """Main monitoring loop"""
