@@ -23,13 +23,8 @@ def api_status():
     try:
         system = get_system_info()
 
-        # Get connected clients count from WiFi station dump
-        lan_iface = current_app.config.get('LAN_INTERFACE', 'wlan0')
-        output, success = run_command(f"sudo iw dev {lan_iface} station dump 2>/dev/null | grep -c Station")
-        if not success or not output.strip().isdigit():
-            # Try wlan1 as fallback
-            output, success = run_command("sudo iw dev wlan1 station dump 2>/dev/null | grep -c Station")
-        connected_clients = int(output.strip()) if success and output.strip().isdigit() else 0
+        # Get connected clients count (safe, no shell pipes)
+        connected_clients = _get_connected_clients_count()
 
         # Get network interface stats
         wan_stats = get_network_stats(current_app.config.get('WAN_INTERFACE', 'eth0'))

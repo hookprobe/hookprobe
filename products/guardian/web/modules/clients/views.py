@@ -1,23 +1,36 @@
 """
 Clients Module Views - Connected Devices Management
 """
+import ipaddress
+import re
+import tempfile
+
 from flask import jsonify
 from . import clients_bp
 from utils import run_command
+from modules.auth import require_auth
+
+
+def _validate_ip(ip):
+    """Validate an IPv4 address using the ipaddress module."""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+        return not addr.is_loopback and not addr.is_multicast
+    except (ipaddress.AddressValueError, ValueError):
+        return False
 
 
 @clients_bp.route('/list')
 def api_clients_list():
-    """Get list of connected clients."""
+    """Get list of connected clients (read-only, no auth needed)."""
     try:
         clients = []
         connected_macs = set()
 
         # Method 1: Get connected stations from hostapd_cli
-        station_output, success = run_command('hostapd_cli -i wlan0 all_sta 2>/dev/null')
+        station_output, success = run_command(['hostapd_cli', '-i', 'wlan0', 'all_sta'])
         if not success:
-            # Try wlan1 as fallback
-            station_output, success = run_command('hostapd_cli -i wlan1 all_sta 2>/dev/null')
+            station_output, success = run_command(['hostapd_cli', '-i', 'wlan1', 'all_sta'])
 
         if success and station_output:
             current_mac = None
@@ -26,7 +39,6 @@ def api_clients_list():
                 line = line.strip()
                 if not line:
                     continue
-                # MAC address line (17 chars with 5 colons)
                 if len(line) == 17 and line.count(':') == 5:
                     if current_mac:
                         connected_macs.add(current_mac)
@@ -49,9 +61,18 @@ def api_clients_list():
                 connected_macs.add(current_mac)
 
         # Method 2: Get DHCP leases for IP and hostname info
-        lease_output, _ = run_command('cat /var/lib/misc/dnsmasq.leases 2>/dev/null')
-        lease_info = {}
+        lease_output = None
+        import os
+        for path in ['/var/lib/misc/dnsmasq.leases', '/var/lib/dnsmasq/dnsmasq.leases']:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        lease_output = f.read()
+                    break
+                except (IOError, PermissionError):
+                    continue
 
+        lease_info = {}
         if lease_output:
             for line in lease_output.strip().split('\n'):
                 if line:
@@ -63,7 +84,6 @@ def api_clients_list():
                             'hostname': parts[3] if parts[3] != '*' else 'Unknown',
                         }
 
-        # Combine information - prioritize connected stations from hostapd
         for mac in connected_macs:
             client = {
                 'mac': mac,
@@ -73,7 +93,6 @@ def api_clients_list():
             }
             clients.append(client)
 
-        # If hostapd_cli didn't return stations, fall back to DHCP leases
         if not clients and lease_info:
             for mac, info in lease_info.items():
                 clients.append({
@@ -90,14 +109,13 @@ def api_clients_list():
 
 @clients_bp.route('/dhcp')
 def api_dhcp_leases():
-    """Get DHCP leases."""
+    """Get DHCP leases (read-only)."""
     import os
     import time
 
     try:
         leases = []
 
-        # Check multiple possible locations for dnsmasq leases file
         lease_paths = [
             '/var/lib/misc/dnsmasq.leases',
             '/var/lib/dnsmasq/dnsmasq.leases',
@@ -128,9 +146,7 @@ def api_dhcp_leases():
                         mac = parts[1]
                         ip = parts[2]
                         hostname = parts[3] if parts[3] != '*' else 'Unknown'
-
                         remaining = expires - int(time.time())
-
                         leases.append({
                             'mac': mac,
                             'ip': ip,
@@ -140,7 +156,6 @@ def api_dhcp_leases():
                     except (ValueError, IndexError):
                         continue
 
-        # Also try to get connected clients from ARP table if no leases found
         if not leases:
             arp_output, success = run_command(['ip', 'neigh', 'show'])
             if success and arp_output:
@@ -164,46 +179,39 @@ def api_dhcp_leases():
 
 
 @clients_bp.route('/block/<ip>', methods=['POST'])
+@require_auth
 def api_block_client(ip):
     """Block a client by IP."""
-    import re
-    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
-        return jsonify({'success': False, 'error': 'Invalid IP'}), 400
+    if not _validate_ip(ip):
+        return jsonify({'success': False, 'error': 'Invalid IP address'}), 400
 
     try:
-        run_command(f'iptables -A FORWARD -s {ip} -j DROP')
+        run_command(['iptables', '-A', 'FORWARD', '-s', ip, '-j', 'DROP'])
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @clients_bp.route('/unblock/<ip>', methods=['POST'])
+@require_auth
 def api_unblock_client(ip):
     """Unblock a client by IP."""
-    import re
-    if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
-        return jsonify({'success': False, 'error': 'Invalid IP'}), 400
+    if not _validate_ip(ip):
+        return jsonify({'success': False, 'error': 'Invalid IP address'}), 400
 
     try:
-        run_command(f'iptables -D FORWARD -s {ip} -j DROP')
+        run_command(['iptables', '-D', 'FORWARD', '-s', ip, '-j', 'DROP'])
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @clients_bp.route('/disconnect/<mac>', methods=['POST'])
+@require_auth
 def api_disconnect_client(mac):
-    """
-    Disconnect a client by MAC address.
-
-    This:
-    1. Deauthenticates the client from WiFi
-    2. Removes their DHCP lease
-    """
-    import re
+    """Disconnect a client by MAC address."""
     import os
 
-    # Validate MAC format
     if not re.match(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$', mac):
         return jsonify({'success': False, 'error': 'Invalid MAC address'}), 400
 
@@ -211,14 +219,14 @@ def api_disconnect_client(mac):
     results = []
 
     try:
-        # 1. Deauth client from WiFi using hostapd_cli
+        # 1. Deauth client from WiFi
         for iface in ['wlan0', 'wlan1']:
             output, success = run_command(['hostapd_cli', '-i', iface, 'deauthenticate', mac])
             if success:
                 results.append(f'Deauthenticated from {iface}')
                 break
 
-        # 2. Remove DHCP lease from dnsmasq
+        # 2. Remove DHCP lease (using secure temp file)
         lease_paths = [
             '/var/lib/misc/dnsmasq.leases',
             '/var/lib/dnsmasq/dnsmasq.leases',
@@ -232,14 +240,23 @@ def api_disconnect_client(mac):
                     with open(lease_file, 'r') as f:
                         lines = f.readlines()
 
-                    # Filter out the lease for this MAC
                     new_lines = [l for l in lines if mac not in l.lower()]
 
                     if len(new_lines) < len(lines):
-                        # Write updated leases
-                        with open('/tmp/dnsmasq_leases_new.tmp', 'w') as f:
-                            f.writelines(new_lines)
-                        run_command(['sudo', 'cp', '/tmp/dnsmasq_leases_new.tmp', lease_file])
+                        # Use secure temp file to avoid TOCTOU
+                        fd, tmp_path = tempfile.mkstemp(
+                            suffix='.leases', dir='/var/run'
+                        )
+                        try:
+                            with os.fdopen(fd, 'w') as f:
+                                f.writelines(new_lines)
+                            os.chmod(tmp_path, 0o600)
+                            run_command(['sudo', 'cp', tmp_path, lease_file])
+                        finally:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
                         lease_removed = True
                         results.append('DHCP lease removed')
                         break
@@ -258,12 +275,12 @@ def api_disconnect_client(mac):
             'actions': results,
             'message': 'Client disconnected'
         })
-
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @clients_bp.route('/kick/<mac>', methods=['POST'])
+@require_auth
 def api_kick_client(mac):
-    """Alias for disconnect - kick a client from the network."""
+    """Alias for disconnect."""
     return api_disconnect_client(mac)

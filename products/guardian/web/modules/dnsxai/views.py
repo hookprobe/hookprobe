@@ -223,7 +223,11 @@ def api_set_level():
 
     if set_shield_level(level):
         # Trigger blocklist update with new level in background
-        run_command('/opt/hookprobe/guardian/scripts/update-blocklists.sh --silent &')
+        import subprocess as _sp
+        _sp.Popen(
+            ['/opt/hookprobe/guardian/scripts/update-blocklists.sh', '--silent'],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL
+        )
         return jsonify({'success': True, 'level': level})
 
     return jsonify({'success': False, 'error': 'Failed to save config'}), 500
@@ -253,7 +257,7 @@ def api_whitelist():
             whitelist.append(domain)
             if save_text_file(DNS_SHIELD_WHITELIST, whitelist):
                 # Restart dnsmasq to apply whitelist
-                run_command('sudo systemctl restart dnsmasq')
+                run_command(['sudo', 'systemctl', 'restart', 'dnsmasq'])
                 return jsonify({'success': True})
         return jsonify({'success': False, 'error': 'Domain already whitelisted'}), 400
 
@@ -261,7 +265,7 @@ def api_whitelist():
         if domain in working:
             whitelist = [d for d in whitelist if d.strip().lower() != domain]
             if save_text_file(DNS_SHIELD_WHITELIST, whitelist):
-                run_command('sudo systemctl restart dnsmasq')
+                run_command(['sudo', 'systemctl', 'restart', 'dnsmasq'])
                 return jsonify({'success': True})
         return jsonify({'success': False, 'error': 'Domain not found'}), 404
 
@@ -330,13 +334,13 @@ def api_pause():
         if enabled:
             # Re-enable by restoring config
             if os.path.exists(disabled_conf) and not os.path.exists(DNSMASQ_SHIELD_CONF):
-                run_command(f'sudo mv {disabled_conf} {DNSMASQ_SHIELD_CONF}')
-            run_command('sudo systemctl restart dnsmasq')
+                run_command(['sudo', 'mv', disabled_conf, DNSMASQ_SHIELD_CONF])
+            run_command(['sudo', 'systemctl', 'restart', 'dnsmasq'])
         else:
             # Disable by moving config away
             if os.path.exists(DNSMASQ_SHIELD_CONF):
-                run_command(f'sudo mv {DNSMASQ_SHIELD_CONF} {disabled_conf}')
-            run_command('sudo systemctl restart dnsmasq')
+                run_command(['sudo', 'mv', DNSMASQ_SHIELD_CONF, disabled_conf])
+            run_command(['sudo', 'systemctl', 'restart', 'dnsmasq'])
 
     if request.method == 'GET':
         state = load_json_file(DNS_SHIELD_PAUSE, {'status': 'active', 'pause_until': 0})
@@ -401,7 +405,7 @@ def api_update():
         if not os.path.exists(update_script):
             return jsonify({'success': False, 'error': 'Update script not found'}), 500
 
-        output, success = run_command(f'{update_script} --force', timeout=120)
+        output, success = run_command([update_script, '--force'], timeout=120)
         if success:
             return jsonify({'success': True, 'message': 'Blocklists updated'})
         return jsonify({'success': False, 'error': output or 'Update failed'}), 500

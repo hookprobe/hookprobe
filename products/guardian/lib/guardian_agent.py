@@ -127,6 +127,21 @@ class GuardianAgent:
             self.mobile_protection = None
             self._log("Warning: MobileNetworkProtection not available")
 
+        # AEGIS-Lite AI assistant (cloud-only inference)
+        self.aegis_lite = None
+        try:
+            from products.guardian.lib.aegis_lite import AegisLite
+            self.aegis_lite = AegisLite()
+            if self.aegis_lite.initialize():
+                self._log("AEGIS-Lite initialized")
+            else:
+                self._log("Warning: AEGIS-Lite initialization failed")
+                self.aegis_lite = None
+        except ImportError:
+            self._log("Warning: AEGIS-Lite not available")
+        except Exception as e:
+            self._log(f"Warning: AEGIS-Lite init error: {e}")
+
         # Stats file paths
         self.stats_file = self.data_dir / "stats.json"
         self.threats_file = self.data_dir / "threats.json"
@@ -546,6 +561,14 @@ class GuardianAgent:
         self._log("Starting Guardian Agent daemon...")
         self.running = True
 
+        # Start AEGIS-Lite
+        if self.aegis_lite:
+            try:
+                self.aegis_lite.start()
+                self._log("AEGIS-Lite started")
+            except Exception as e:
+                self._log(f"Warning: AEGIS-Lite start failed: {e}")
+
         # Set up signal handlers
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -558,6 +581,14 @@ class GuardianAgent:
 
             # Wait for next check
             time.sleep(self.check_interval)
+
+        # Stop AEGIS-Lite on shutdown
+        if self.aegis_lite:
+            try:
+                self.aegis_lite.stop()
+                self._log("AEGIS-Lite stopped")
+            except Exception as e:
+                self._log(f"Warning: AEGIS-Lite stop failed: {e}")
 
         self._log("Guardian Agent daemon stopped")
 

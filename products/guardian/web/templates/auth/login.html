@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardian - Login</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #002742;
+            color: #e6dbdb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .login-card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 2.5rem;
+            width: 320px;
+            text-align: center;
+        }
+        .login-card h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+        .login-card p { font-size: 0.85rem; opacity: 0.7; margin-bottom: 1.5rem; }
+        .pin-input {
+            width: 100%;
+            padding: 0.8rem;
+            font-size: 1.5rem;
+            text-align: center;
+            letter-spacing: 0.5em;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            color: #e6dbdb;
+            outline: none;
+        }
+        .pin-input:focus { border-color: #e69500; }
+        .btn {
+            width: 100%;
+            padding: 0.8rem;
+            margin-top: 1rem;
+            font-size: 1rem;
+            background: #e69500;
+            color: #002742;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn:hover { background: #cc8400; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .error { color: #ff6b6b; font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+        .setup-note { font-size: 0.8rem; opacity: 0.6; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>Guardian</h1>
+        {% if not configured %}
+        <p>Set a PIN to secure your device</p>
+        {% else %}
+        <p>Enter your PIN to continue</p>
+        {% endif %}
+        <form id="loginForm">
+            <input type="password" id="pin" class="pin-input"
+                   inputmode="numeric" pattern="[0-9]*"
+                   placeholder="****"
+                   minlength="4" maxlength="12" autofocus>
+            <button type="submit" class="btn" id="submitBtn">
+                {% if not configured %}Set PIN{% else %}Login{% endif %}
+            </button>
+            <div class="error" id="error"></div>
+        </form>
+        {% if not configured %}
+        <div class="setup-note">Choose a PIN (4-12 digits) to protect your Guardian.</div>
+        {% endif %}
+    </div>
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const pin = document.getElementById('pin').value;
+            const btn = document.getElementById('submitBtn');
+            const err = document.getElementById('error');
+            btn.disabled = true;
+            err.textContent = '';
+            try {
+                const res = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({pin})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    window.location.href = '/';
+                } else {
+                    err.textContent = data.error || 'Authentication failed';
+                }
+            } catch(e) {
+                err.textContent = 'Connection error';
+            }
+            btn.disabled = false;
+        });
+    </script>
+</body>
+</html>

@@ -8,6 +8,10 @@ from flask import Flask
 def register_blueprints(app: Flask):
     """Register all module blueprints with the Flask app."""
 
+    # Auth module - MUST be first (provides @require_auth)
+    from .auth import auth_bp
+    app.register_blueprint(auth_bp)
+
     # Core module - Dashboard and base routes
     from .core import core_bp
     app.register_blueprint(core_bp)
@@ -55,3 +59,10 @@ def register_blueprints(app: Flask):
     # VMs module - Virtual Machine Management (Home Assistant, OpenMediaVault)
     from .vms import vms_bp
     app.register_blueprint(vms_bp)
+
+    # AEGIS module - AI security assistant
+    try:
+        from .aegis import aegis_bp
+        app.register_blueprint(aegis_bp, url_prefix='/api/aegis')
+    except ImportError:
+        pass  # AEGIS module optional
