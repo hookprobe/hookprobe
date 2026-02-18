@@ -128,7 +128,7 @@ def api_pull():
                      'services_to_restart', 'hint', 'commits_behind'}
         safe_result = {k: v for k, v in result.items() if k in safe_keys}
         if not result['success']:
-            safe_result['error'] = result.get('error', 'Update failed')
+            safe_result['error'] = 'Update failed'
         return jsonify(safe_result), status_code
     except Exception as e:
         return jsonify({
@@ -230,10 +230,18 @@ def api_debug():
             ['git', '-C', detected_path, 'rev-parse', '--short', 'HEAD']
         )
 
+        # Only return the short commit hash (safe), not raw command output
+        commit_hash = None
+        if git_success and git_test:
+            raw = git_test.strip()
+            # Validate it looks like a short git hash (hex, 7-12 chars)
+            if raw.isalnum() and len(raw) <= 12:
+                commit_hash = raw
+
         return jsonify({
             'success': True,
             'git_reachable': git_success,
-            'git_commit': git_test.strip() if git_test else None,
+            'git_commit': commit_hash,
             'repo_detected': bool(detected_path),
         })
     except Exception as e:
