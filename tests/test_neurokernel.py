@@ -1,7 +1,7 @@
 """
-Neuro-Kernel Phase 1 Tests
+Neuro-Kernel Phase 1 & Phase 2 Tests
 
-Tests for the template-based kernel orchestration system:
+Phase 1: Template-based kernel orchestration system
   - Type definitions
   - Template registry matching
   - eBPF compiler static analysis
@@ -9,6 +9,14 @@ Tests for the template-based kernel orchestration system:
   - Sensor manager lifecycle
   - Kernel orchestrator end-to-end
   - Integration with existing AEGIS components
+
+Phase 2: Streaming eBPF-RAG pipeline
+  - Event chunker aggregation
+  - Embedding engine (hash fallback)
+  - Vector store (SQLite brute-force)
+  - Streaming RAG pipeline end-to-end
+  - Memory integration (recall_streaming_context)
+  - Orchestrator LLM context building
 
 Run:
     pytest tests/test_neurokernel.py -v --override-ini="addopts="
@@ -863,3 +871,775 @@ class TestTemplateStaticAnalysis:
             assert result.passed, (
                 f"Template {template.name} failed sandbox: {result.reason}"
             )
+
+
+# ====================================================================
+# PHASE 2: STREAMING eBPF-RAG TESTS
+# ====================================================================
+
+# ------------------------------------------------------------------
+# Event Chunker Tests
+# ------------------------------------------------------------------
+
+class TestEventChunker:
+    """Test event aggregation into embeddable chunks."""
+
+    def _make_event(self, **kwargs):
+        from core.aegis.neurokernel.types import SensorEvent, SensorType
+        defaults = dict(
+            sensor_type=SensorType.NETWORK,
+            timestamp=time.time(),
+            source_ip="10.200.0.45",
+            dest_ip="192.168.1.1",
+            protocol=6,
+            port=443,
+            payload_len=128,
+        )
+        defaults.update(kwargs)
+        return SensorEvent(**defaults)
+
+    def test_ingest_single_event(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        chunker.ingest(self._make_event())
+        stats = chunker.stats()
+        assert stats["events_ingested"] == 1
+        assert stats["active_buckets"] == 1
+
+    def test_flush_completes_window(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        now = time.time()
+        # Event from 2 seconds ago (its window is completed)
+        chunker.ingest(self._make_event(timestamp=now - 2.0))
+        chunks = chunker.flush(now=now)
+        assert len(chunks) == 1
+        assert chunks[0].source_ip == "10.200.0.45"
+        assert chunks[0].event_type == "network"
+        assert chunks[0].raw_count == 1
+
+    def test_flush_keeps_active_windows(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        now = time.time()
+        # Event from right now (still active)
+        chunker.ingest(self._make_event(timestamp=now))
+        chunks = chunker.flush(now=now)
+        assert len(chunks) == 0
+
+    def test_flush_all(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        chunker.ingest(self._make_event())
+        chunks = chunker.flush_all()
+        assert len(chunks) == 1
+        assert chunker.stats()["active_buckets"] == 0
+
+    def test_batch_ingest(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        events = [self._make_event() for _ in range(10)]
+        chunker.ingest_batch(events)
+        assert chunker.stats()["events_ingested"] == 10
+
+    def test_aggregation_by_ip_and_type(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        from core.aegis.neurokernel.types import SensorType
+        chunker = EventChunker(window_s=1.0)
+        now = time.time() - 2.0
+
+        # Network events from IP A
+        for _ in range(5):
+            chunker.ingest(self._make_event(
+                source_ip="10.0.0.1", timestamp=now, sensor_type=SensorType.NETWORK,
+            ))
+        # DNS events from IP A
+        for _ in range(3):
+            chunker.ingest(self._make_event(
+                source_ip="10.0.0.1", timestamp=now, sensor_type=SensorType.DNS,
+            ))
+        # Network events from IP B
+        for _ in range(4):
+            chunker.ingest(self._make_event(
+                source_ip="10.0.0.2", timestamp=now, sensor_type=SensorType.NETWORK,
+            ))
+
+        chunks = chunker.flush(now=time.time())
+        assert len(chunks) == 3
+        ip_types = {(c.source_ip, c.event_type) for c in chunks}
+        assert ("10.0.0.1", "network") in ip_types
+        assert ("10.0.0.1", "dns") in ip_types
+        assert ("10.0.0.2", "network") in ip_types
+
+    def test_summary_generation_network(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        now = time.time() - 2.0
+        for i in range(5):
+            chunker.ingest(self._make_event(
+                timestamp=now, dest_ip=f"192.168.1.{i}", port=80 + i,
+            ))
+        chunks = chunker.flush(now=time.time())
+        assert len(chunks) == 1
+        summary = chunks[0].summary
+        assert "10.200.0.45" in summary
+        assert "5 network events" in summary
+        assert "5 unique destination" in summary
+
+    def test_summary_generation_dns(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        from core.aegis.neurokernel.types import SensorType
+        chunker = EventChunker(window_s=1.0)
+        now = time.time() - 2.0
+        chunker.ingest(self._make_event(
+            timestamp=now, sensor_type=SensorType.DNS,
+            metadata={"domains": ["example.com", "test.com"]},
+        ))
+        chunks = chunker.flush(now=time.time())
+        assert len(chunks) == 1
+        assert "DNS" in chunks[0].summary
+
+    def test_chunk_id_format(self):
+        from core.aegis.neurokernel.event_chunker import EventChunk
+        chunk = EventChunk(
+            timestamp=1000.0, source_ip="10.0.0.1",
+            event_type="network", summary="test", raw_count=1,
+        )
+        assert chunk.chunk_id == "10.0.0.1:network:1000"
+
+    def test_metrics_extraction(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        now = time.time() - 2.0
+        for i in range(3):
+            chunker.ingest(self._make_event(
+                timestamp=now, dest_ip=f"10.0.0.{i}", port=80,
+                payload_len=1024,
+            ))
+        chunks = chunker.flush(now=time.time())
+        assert len(chunks) == 1
+        m = chunks[0].key_metrics
+        assert m["event_count"] == 3.0
+        assert m["unique_dests"] == 3.0
+        assert m["total_bytes"] == 3072.0
+
+    def test_backpressure_evicts_oldest(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        chunker.MAX_BUCKETS = 3
+
+        now = time.time()
+        for i in range(5):
+            chunker.ingest(self._make_event(
+                source_ip=f"10.0.0.{i}", timestamp=now + i * 0.001,
+            ))
+        # Should have evicted to stay at MAX_BUCKETS
+        assert chunker.stats()["active_buckets"] <= 3
+
+    def test_bytes_formatting_in_summary(self):
+        from core.aegis.neurokernel.event_chunker import EventChunker
+        chunker = EventChunker(window_s=1.0)
+        now = time.time() - 2.0
+        chunker.ingest(self._make_event(timestamp=now, payload_len=2 * 1024 * 1024))
+        chunks = chunker.flush(now=time.time())
+        assert "MB" in chunks[0].summary
+
+
+# ------------------------------------------------------------------
+# Embedding Engine Tests
+# ------------------------------------------------------------------
+
+class TestEmbeddingEngine:
+    """Test the embedding engine with hash fallback."""
+
+    def test_hash_embed_basic(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        vecs = engine.embed(["hello world"])
+        assert len(vecs) == 1
+        assert len(vecs[0]) == 384
+        assert engine.dimension == 384
+
+    def test_hash_embed_deterministic(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        v1 = engine.embed(["test string"])
+        v2 = engine.embed(["test string"])
+        assert v1[0] == v2[0]
+
+    def test_hash_embed_different_strings(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        v1 = engine.embed(["hello"])[0]
+        v2 = engine.embed(["world"])[0]
+        # Different strings should produce different vectors
+        assert v1 != v2
+
+    def test_embed_single(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        vec = engine.embed_single("test")
+        assert len(vec) == 384
+
+    def test_embed_empty_list(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        result = engine.embed([])
+        assert result == []
+
+    def test_embed_batch(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        texts = [f"text {i}" for i in range(10)]
+        vecs = engine.embed(texts)
+        assert len(vecs) == 10
+        assert all(len(v) == 384 for v in vecs)
+
+    def test_vectors_are_normalized(self):
+        import math
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        vec = engine.embed_single("normalize test")
+        norm = math.sqrt(sum(x * x for x in vec))
+        assert abs(norm - 1.0) < 0.01  # Should be unit length
+
+    def test_cosine_similarity_identical(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine, cosine_similarity
+        engine = EmbeddingEngine(force_hash=True)
+        vec = engine.embed_single("identical")
+        sim = cosine_similarity(vec, vec)
+        assert abs(sim - 1.0) < 0.01
+
+    def test_cosine_similarity_different(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine, cosine_similarity
+        engine = EmbeddingEngine(force_hash=True)
+        v1 = engine.embed_single("cat")
+        v2 = engine.embed_single("supercalifragilisticexpialidocious")
+        sim = cosine_similarity(v1, v2)
+        # Different strings should have low similarity (hash-based)
+        assert sim < 0.9
+
+    def test_stats(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        stats = engine.stats()
+        assert stats["using_model"] is False
+        assert stats["dimension"] == 384
+        assert stats["backend"] == "hash"
+
+    def test_using_model_property(self):
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        engine = EmbeddingEngine(force_hash=True)
+        assert engine.using_model is False
+
+
+# ------------------------------------------------------------------
+# Vector Store Tests
+# ------------------------------------------------------------------
+
+class TestSQLiteVectorStore:
+    """Test the SQLite brute-force vector store."""
+
+    def _make_chunk(self, ip="10.0.0.1", event_type="network", ts=None, embedding=None):
+        from core.aegis.neurokernel.event_chunker import EventChunk
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        if ts is None:
+            ts = time.time()
+        if embedding is None:
+            engine = EmbeddingEngine(force_hash=True)
+            embedding = engine.embed_single(f"{ip}:{event_type}:{ts}")
+        return EventChunk(
+            timestamp=ts, source_ip=ip, event_type=event_type,
+            summary=f"{ip} generated network events",
+            raw_count=10, embedding=embedding,
+        )
+
+    def test_upsert_and_count(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        chunks = [self._make_chunk(ip=f"10.0.0.{i}") for i in range(5)]
+        stored = store.upsert(chunks)
+        assert stored == 5
+        assert store.count() == 5
+
+    def test_upsert_empty(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        assert store.upsert([]) == 0
+
+    def test_upsert_skips_no_embedding(self):
+        from core.aegis.neurokernel.event_chunker import EventChunk
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        chunk = EventChunk(
+            timestamp=time.time(), source_ip="10.0.0.1",
+            event_type="network", summary="test", raw_count=1,
+            embedding=None,  # No embedding
+        )
+        stored = store.upsert([chunk])
+        assert stored == 0
+
+    def test_search_returns_results(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        store = create_vector_store(backend="sqlite")
+        engine = EmbeddingEngine(force_hash=True)
+
+        chunks = [self._make_chunk(ip=f"10.0.0.{i}") for i in range(5)]
+        store.upsert(chunks)
+
+        query_vec = engine.embed_single("10.0.0.1 network events")
+        results = store.search(query_embedding=query_vec, k=3, time_window_s=60.0)
+        assert len(results) <= 3
+        assert all(hasattr(r, "summary") for r in results)
+        # Results should have similarity scores
+        assert all("similarity" in r.key_metrics for r in results)
+
+    def test_search_respects_time_window(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        store = create_vector_store(backend="sqlite")
+        engine = EmbeddingEngine(force_hash=True)
+
+        now = time.time()
+        # Old chunk (2 minutes ago)
+        old = self._make_chunk(ip="10.0.0.1", ts=now - 120)
+        # Recent chunk
+        recent = self._make_chunk(ip="10.0.0.2", ts=now)
+        store.upsert([old, recent])
+
+        query_vec = engine.embed_single("test")
+        results = store.search(query_embedding=query_vec, k=10, time_window_s=60.0)
+        # Only the recent chunk should be in the results
+        assert len(results) == 1
+        assert results[0].source_ip == "10.0.0.2"
+
+    def test_evict_older_than(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        now = time.time()
+        chunks = [
+            self._make_chunk(ip="10.0.0.1", ts=now - 100),
+            self._make_chunk(ip="10.0.0.2", ts=now - 50),
+            self._make_chunk(ip="10.0.0.3", ts=now),
+        ]
+        store.upsert(chunks)
+        assert store.count() == 3
+
+        evicted = store.evict_older_than(now - 60)
+        assert evicted == 1
+        assert store.count() == 2
+
+    def test_clear(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        chunks = [self._make_chunk(ip=f"10.0.0.{i}") for i in range(3)]
+        store.upsert(chunks)
+        assert store.count() == 3
+        store.clear()
+        assert store.count() == 0
+
+    def test_stats(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        chunks = [self._make_chunk()]
+        store.upsert(chunks)
+        stats = store.stats()
+        assert stats["backend"] == "sqlite"
+        assert stats["total_vectors"] == 1
+        assert stats["dimension"] == 384
+
+    def test_upsert_replaces_existing(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        store = create_vector_store(backend="sqlite")
+        now = time.time()
+        c1 = self._make_chunk(ip="10.0.0.1", ts=now)
+        store.upsert([c1])
+        assert store.count() == 1
+
+        # Same chunk_id (same ip:type:int(ts)) should replace
+        c2 = self._make_chunk(ip="10.0.0.1", ts=now)
+        store.upsert([c2])
+        assert store.count() == 1
+
+    def test_search_empty_store(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        store = create_vector_store(backend="sqlite")
+        engine = EmbeddingEngine(force_hash=True)
+        query_vec = engine.embed_single("test")
+        results = store.search(query_embedding=query_vec, k=5)
+        assert results == []
+
+    def test_factory_default_sqlite(self):
+        from core.aegis.neurokernel.vector_store import create_vector_store, SQLiteVectorStore
+        store = create_vector_store()
+        assert isinstance(store, SQLiteVectorStore)
+
+    def test_factory_chromadb_fallback(self):
+        """When chromadb unavailable, should fall back to SQLite."""
+        from core.aegis.neurokernel.vector_store import create_vector_store, SQLiteVectorStore
+        # This system likely doesn't have chromadb installed
+        store = create_vector_store(backend="chromadb")
+        assert isinstance(store, SQLiteVectorStore)
+
+
+# ------------------------------------------------------------------
+# Streaming RAG Pipeline Tests
+# ------------------------------------------------------------------
+
+class TestStreamingRAGPipeline:
+    """Test the end-to-end streaming RAG pipeline."""
+
+    def _make_event(self, ip="10.200.0.45", ts=None, **kwargs):
+        from core.aegis.neurokernel.types import SensorEvent, SensorType
+        defaults = dict(
+            sensor_type=SensorType.NETWORK,
+            timestamp=ts or time.time(),
+            source_ip=ip,
+            dest_ip="192.168.1.1",
+            protocol=6,
+            port=443,
+            payload_len=128,
+        )
+        defaults.update(kwargs)
+        return SensorEvent(**defaults)
+
+    def test_ingest_single(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        pipeline.ingest(self._make_event())
+        stats = pipeline.stats()
+        assert stats["events_received"] == 1
+        assert stats["buffer_size"] == 1
+
+    def test_ingest_batch(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        events = [self._make_event(ip=f"10.0.0.{i}") for i in range(10)]
+        pipeline.ingest_batch(events)
+        stats = pipeline.stats()
+        assert stats["events_received"] == 10
+
+    def test_tick_processes_events(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        now = time.time()
+        # Events from 2 seconds ago (so the chunker window completes)
+        for i in range(5):
+            pipeline.ingest(self._make_event(ip=f"10.0.0.{i}", ts=now - 2.0))
+
+        pipeline.tick()
+        stats = pipeline.stats()
+        assert stats["buffer_size"] == 0  # Buffer drained
+        assert stats["chunks_embedded"] > 0
+
+    def test_tick_empty_buffer(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        # Should not crash with empty buffer
+        pipeline.tick()
+        assert pipeline.stats()["chunks_embedded"] == 0
+
+    def test_query_no_events(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        result = pipeline.query("test query")
+        assert result == "No recent kernel events found."
+
+    def test_query_with_events(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline(window_s=60.0)
+        now = time.time()
+        # Ingest events from 2 seconds ago
+        for i in range(3):
+            pipeline.ingest(self._make_event(ip=f"10.0.0.{i}", ts=now - 2.0))
+        pipeline.tick()
+        result = pipeline.query("network events")
+        assert "Recent Kernel Activity" in result
+
+    def test_query_by_ip(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        now = time.time()
+        pipeline.ingest(self._make_event(ip="10.0.0.99", ts=now - 2.0))
+        pipeline.tick()
+        result = pipeline.query_by_ip("10.0.0.99")
+        # Should return something (even if hash-based similarity is imperfect)
+        assert isinstance(result, str)
+
+    def test_start_stop_lifecycle(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline(ingest_interval_s=0.1)
+        pipeline.start()
+        assert pipeline.stats()["running"] is True
+        time.sleep(0.2)  # Let the background thread do a tick
+        pipeline.stop()
+        assert pipeline.stats()["running"] is False
+
+    def test_start_idempotent(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline(ingest_interval_s=0.1)
+        pipeline.start()
+        pipeline.start()  # Should not create a second thread
+        pipeline.stop()
+
+    def test_stop_idempotent(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        pipeline.stop()  # Should not crash when not started
+        pipeline.stop()
+
+    def test_eviction(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline(window_s=1.0)
+        now = time.time()
+        # Old events (10 seconds ago)
+        for i in range(3):
+            pipeline.ingest(self._make_event(ip=f"10.0.0.{i}", ts=now - 10))
+        pipeline.tick()
+        initial = pipeline.store.count()
+        # Force eviction by calling tick again (eviction checks cutoff)
+        pipeline._evict(now)
+        assert pipeline.store.count() <= initial
+
+    def test_stats_complete(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        stats = pipeline.stats()
+        assert "running" in stats
+        assert "events_received" in stats
+        assert "chunks_embedded" in stats
+        assert "queries_served" in stats
+        assert "buffer_size" in stats
+        assert "store" in stats
+        assert "chunker" in stats
+        assert "embedder" in stats
+
+    def test_store_property(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        from core.aegis.neurokernel.vector_store import VectorStore
+        pipeline = StreamingRAGPipeline()
+        assert isinstance(pipeline.store, VectorStore)
+
+    def test_embedder_property(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        from core.aegis.neurokernel.embedding_engine import EmbeddingEngine
+        pipeline = StreamingRAGPipeline()
+        assert isinstance(pipeline.embedder, EmbeddingEngine)
+
+    def test_backpressure_limits_chunks(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        pipeline.MAX_CHUNKS_PER_TICK = 2
+        now = time.time()
+        # Create many events from different IPs (each produces a chunk)
+        for i in range(10):
+            pipeline.ingest(self._make_event(ip=f"10.0.0.{i}", ts=now - 2.0))
+        pipeline.tick()
+        # Should have limited to MAX_CHUNKS_PER_TICK
+        assert pipeline.stats()["chunks_embedded"] <= 2
+
+    def test_context_formatting(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        from core.aegis.neurokernel.event_chunker import EventChunk
+        pipeline = StreamingRAGPipeline()
+        chunks = [
+            EventChunk(
+                timestamp=time.time(),
+                source_ip="10.0.0.1",
+                event_type="network",
+                summary="10.0.0.1 generated 5 events",
+                raw_count=5,
+                key_metrics={"similarity": 0.95},
+            ),
+        ]
+        result = pipeline._format_context(chunks)
+        assert "Recent Kernel Activity (1 events)" in result
+        assert "10.0.0.1 generated 5 events" in result
+        assert "relevance: 0.95" in result
+
+    def test_format_context_empty(self):
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        result = pipeline._format_context([])
+        assert result == "No recent kernel events found."
+
+
+# ------------------------------------------------------------------
+# Memory Integration Tests
+# ------------------------------------------------------------------
+
+class TestMemoryStreamingIntegration:
+    """Test streaming RAG integration with AEGIS memory."""
+
+    def test_layer_streaming_constant(self):
+        from core.aegis.memory import LAYER_STREAMING
+        assert LAYER_STREAMING == "streaming"
+
+    def test_recall_streaming_no_pipeline(self):
+        from core.aegis.memory import MemoryManager, MemoryConfig
+        mm = MemoryManager(MemoryConfig(db_path="/tmp/test_nk_mem_1.db"))
+        result = mm.recall_streaming_context("test")
+        assert result == ""
+        mm.close()
+        import os; os.remove("/tmp/test_nk_mem_1.db")
+
+    def test_set_streaming_pipeline(self):
+        from core.aegis.memory import MemoryManager, MemoryConfig
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        mm = MemoryManager(MemoryConfig(db_path="/tmp/test_nk_mem_2.db"))
+        pipeline = StreamingRAGPipeline()
+        mm.set_streaming_pipeline(pipeline)
+        result = mm.recall_streaming_context("test")
+        assert result == "No recent kernel events found."
+        mm.close()
+        import os; os.remove("/tmp/test_nk_mem_2.db")
+
+    def test_recall_streaming_with_events(self):
+        from core.aegis.memory import MemoryManager, MemoryConfig
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        from core.aegis.neurokernel.types import SensorEvent, SensorType
+        mm = MemoryManager(MemoryConfig(db_path="/tmp/test_nk_mem_3.db"))
+        pipeline = StreamingRAGPipeline(window_s=60.0)
+        mm.set_streaming_pipeline(pipeline)
+
+        now = time.time()
+        for i in range(3):
+            pipeline.ingest(SensorEvent(
+                sensor_type=SensorType.NETWORK,
+                timestamp=now - 2.0,
+                source_ip=f"10.0.0.{i}",
+                dest_ip="192.168.1.1",
+                port=443,
+                protocol=6,
+                payload_len=128,
+            ))
+        pipeline.tick()
+
+        result = mm.recall_streaming_context("network events")
+        assert "Recent Kernel Activity" in result
+        mm.close()
+        import os; os.remove("/tmp/test_nk_mem_3.db")
+
+    def test_recall_streaming_handles_exception(self):
+        """Pipeline query error should return empty string, not raise."""
+        from core.aegis.memory import MemoryManager, MemoryConfig
+        mm = MemoryManager(MemoryConfig(db_path="/tmp/test_nk_mem_4.db"))
+
+        # Mock pipeline that raises
+        broken_pipeline = MagicMock()
+        broken_pipeline.query.side_effect = RuntimeError("boom")
+        mm.set_streaming_pipeline(broken_pipeline)
+
+        result = mm.recall_streaming_context("test")
+        assert result == ""
+        mm.close()
+        import os; os.remove("/tmp/test_nk_mem_4.db")
+
+
+# ------------------------------------------------------------------
+# Orchestrator LLM Context Tests
+# ------------------------------------------------------------------
+
+class TestOrchestratorLLMContext:
+    """Test the orchestrator's LLM context building."""
+
+    def _make_signal(self, source="napse", event_type="syn_flood", severity="HIGH", data=None):
+        from core.aegis.types import StandardSignal
+        return StandardSignal(
+            source=source,
+            event_type=event_type,
+            severity=severity,
+            data=data or {},
+        )
+
+    def test_build_llm_context_no_rag(self):
+        from core.aegis.neurokernel.kernel_orchestrator import KernelOrchestrator
+        orch = KernelOrchestrator()
+        signal = self._make_signal(data={"source_ip": "10.0.0.1"})
+        ctx = orch.build_llm_context(signal)
+        assert "napse/syn_flood" in ctx
+        assert "10.0.0.1" in ctx
+
+    def test_build_llm_context_with_rag(self):
+        from core.aegis.neurokernel.kernel_orchestrator import KernelOrchestrator
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        from core.aegis.neurokernel.types import SensorEvent, SensorType
+
+        pipeline = StreamingRAGPipeline(window_s=60.0)
+        orch = KernelOrchestrator(rag_pipeline=pipeline)
+
+        now = time.time()
+        for i in range(3):
+            pipeline.ingest(SensorEvent(
+                sensor_type=SensorType.NETWORK,
+                timestamp=now - 2.0,
+                source_ip=f"10.0.0.{i}",
+                dest_ip="192.168.1.1",
+                port=443,
+                protocol=6,
+                payload_len=128,
+            ))
+        pipeline.tick()
+
+        signal = self._make_signal(data={"source_ip": "10.0.0.1"})
+        ctx = orch.build_llm_context(signal)
+        assert "napse/syn_flood" in ctx
+        assert "Recent Kernel Activity" in ctx
+
+    def test_rag_pipeline_property(self):
+        from core.aegis.neurokernel.kernel_orchestrator import KernelOrchestrator
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        orch = KernelOrchestrator()
+        assert orch.rag_pipeline is None
+
+        pipeline = StreamingRAGPipeline()
+        orch.rag_pipeline = pipeline
+        assert orch.rag_pipeline is pipeline
+
+    def test_get_status_includes_rag(self):
+        from core.aegis.neurokernel.kernel_orchestrator import KernelOrchestrator
+        from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+        pipeline = StreamingRAGPipeline()
+        orch = KernelOrchestrator(rag_pipeline=pipeline)
+        status = orch.get_status()
+        assert "streaming_rag" in status
+
+
+# ------------------------------------------------------------------
+# Phase 2 Module Exports Tests
+# ------------------------------------------------------------------
+
+class TestPhase2Exports:
+    """Verify all Phase 2 classes are properly exported."""
+
+    def test_import_event_chunker(self):
+        from core.aegis.neurokernel import EventChunk, EventChunker
+        assert EventChunk is not None
+        assert EventChunker is not None
+
+    def test_import_embedding_engine(self):
+        from core.aegis.neurokernel import EmbeddingEngine, cosine_similarity
+        assert EmbeddingEngine is not None
+        assert cosine_similarity is not None
+
+    def test_import_vector_store(self):
+        from core.aegis.neurokernel import VectorStore, SQLiteVectorStore, create_vector_store
+        assert VectorStore is not None
+        assert SQLiteVectorStore is not None
+        assert create_vector_store is not None
+
+    def test_import_streaming_rag(self):
+        from core.aegis.neurokernel import StreamingRAGPipeline
+        assert StreamingRAGPipeline is not None
+
+    def test_all_exports(self):
+        from core.aegis.neurokernel import __all__
+        expected = [
+            "EventChunk", "EventChunker", "EmbeddingEngine",
+            "cosine_similarity", "VectorStore", "SQLiteVectorStore",
+            "create_vector_store", "StreamingRAGPipeline",
+        ]
+        for name in expected:
+            assert name in __all__, f"{name} missing from __all__"
