@@ -675,3 +675,26 @@ class TestReflexIntegration:
             engine._inference_times.append(float(i))
         assert len(engine._inference_times) == 100
         assert engine._inference_times[0] == 100.0
+
+    def test_napse_dns_entropy(self):
+        """NAPSE bridge should use Shannon entropy for DNS severity."""
+        from core.aegis.bridges.napse_bridge import NAPSEBridge
+        bridge = NAPSEBridge()
+        # High entropy + long = HIGH
+        event_dga = {'dns': {'rrname': 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2.evil.com'}}
+        assert bridge._determine_severity(event_dga, 'dns') == 'HIGH'
+        # Short normal domain = LOW
+        event_normal = {'dns': {'rrname': 'google.com'}}
+        assert bridge._determine_severity(event_normal, 'dns') == 'LOW'
+        # Very long but low entropy
+        event_long = {'dns': {'rrname': 'a' * 90 + '.example.com'}}
+        assert bridge._determine_severity(event_long, 'dns') == 'MEDIUM'
+
+    def test_routing_rules_scheduled(self):
+        """Orchestrator should route scheduled events."""
+        from core.aegis.orchestrator import ROUTING_RULES
+        assert "scheduled.health_check" in ROUTING_RULES
+        assert "scheduled.generate_report" in ROUTING_RULES
+        assert "scheduled.recommend_hardening" in ROUTING_RULES
+        assert "ORACLE" in ROUTING_RULES["scheduled.health_check"]
+        assert "FORGE" in ROUTING_RULES["scheduled.recommend_hardening"]
