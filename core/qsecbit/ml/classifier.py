@@ -282,8 +282,9 @@ class FeatureExtractor:
         features.packet_size_variance = np.var(sizes) if len(sizes) > 1 else 0.0
 
         # Inter-arrival time (IAT) statistics
+        # Packets are appended chronologically, no sort needed
         if len(recent_packets) >= 2:
-            timestamps = sorted(p['timestamp'] for p in recent_packets)
+            timestamps = [p['timestamp'] for p in recent_packets]
             iats = [(timestamps[i+1] - timestamps[i]).total_seconds()
                     for i in range(len(timestamps) - 1)]
             features.inter_arrival_time_avg = float(np.mean(iats))

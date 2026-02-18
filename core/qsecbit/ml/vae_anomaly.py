@@ -301,6 +301,10 @@ class VAEAnomalyDetector:
         # Decode
         reconstruction, dec_cache = self.decoder.forward(z)
 
+        # Cache activations for backprop (avoids O(n²) recomputation)
+        self._last_enc_cache = enc_cache
+        self._last_dec_cache = dec_cache
+
         return reconstruction, mean, logvar, z
 
     def compute_loss(
@@ -385,46 +389,44 @@ class VAEAnomalyDetector:
         """
         Full backpropagation through encoder and decoder.
 
+        Uses cached activations from forward() to avoid O(n²) recomputation.
         Computes gradients for reconstruction loss (MSE) and KL divergence,
         propagating through all layers.
         """
         batch_size = x.shape[0]
+        dec_cache = self._last_dec_cache
+        enc_cache = self._last_enc_cache
 
         # ---- Decoder backward pass ----
         # Output gradient (dL/d_reconstruction)
         d_out = (reconstruction - x) * 2.0 / batch_size
 
-        # Backprop through decoder layers (reverse order)
+        # Backprop through decoder layers (reverse order) using cached activations
         d_h = d_out
         decoder_grads = []
         for i in reversed(range(len(self.decoder.layers))):
-            layer = self.decoder.layers[i]
-            # Activation derivative
+            # Use cached pre-activations for correct derivatives
+            pre_act = dec_cache['pre_activations'][i]
             if i == len(self.decoder.layers) - 1:
-                # Sigmoid output: d_z = d_h * sigmoid'(z) = d_h * out * (1 - out)
-                act = reconstruction
+                # Sigmoid output layer
+                act = dec_cache['activations'][i]
                 d_z = d_h * act * (1 - act)
             else:
                 # ReLU hidden layers
-                pre_act = d_h  # We need pre-activation; approximate with current h
-                d_z = d_h * (d_h > 0).astype(np.float32) if i > 0 else d_h
+                d_z = d_h * relu_derivative(pre_act)
 
-            # Get input to this layer
+            # Get input to this layer from cache (O(1) instead of O(n) re-forward)
             if i == 0:
-                layer_input = z
+                layer_input = dec_cache['input']  # z
             else:
-                # Forward pass through decoder up to layer i-1 to get input
-                h = z
-                for j in range(i):
-                    h = relu(h @ self.decoder.layers[j].weights + self.decoder.layers[j].biases)
-                layer_input = h
+                layer_input = dec_cache['activations'][i - 1]
 
             grad_w = layer_input.T @ d_z
             grad_b = np.sum(d_z, axis=0)
             decoder_grads.append((grad_w, grad_b))
 
             # Propagate gradient to previous layer
-            d_h = d_z @ layer.weights.T
+            d_h = d_z @ self.decoder.layers[i].weights.T
 
         # Apply decoder gradients
         for i, (gw, gb) in enumerate(reversed(decoder_grads)):
@@ -433,20 +435,13 @@ class VAEAnomalyDetector:
 
         # ---- Encoder backward pass ----
         # Gradient through z → mean and logvar (reparameterization)
-        # dL/d_mean = dL/d_z (from decoder) + KL gradient
         kl_grad_mean = self.KL_WEIGHT * mean / batch_size
         d_mean = d_h + kl_grad_mean
 
-        # dL/d_logvar = KL gradient only (reconstruction grad through z is complex)
         kl_grad_logvar = self.KL_WEIGHT * 0.5 * (np.exp(logvar) - 1) / batch_size
 
-        # Update mean and logvar layers
-        enc_final_h = self.encoder.layers[-1].biases  # Need actual final hidden
-        # Re-forward through encoder to get final hidden activation
-        h = x
-        for layer in self.encoder.layers:
-            h = relu(h @ layer.weights + layer.biases)
-        enc_final_h = h
+        # Use cached final hidden activation (O(1) instead of re-forward)
+        enc_final_h = enc_cache['final_hidden']
 
         # Mean layer gradients
         self.encoder.mean_layer.weights -= lr * (enc_final_h.T @ d_mean)
@@ -456,29 +451,23 @@ class VAEAnomalyDetector:
         self.encoder.logvar_layer.weights -= lr * (enc_final_h.T @ kl_grad_logvar)
         self.encoder.logvar_layer.biases -= lr * np.sum(kl_grad_logvar, axis=0)
 
-        # Backprop through encoder hidden layers
+        # Backprop through encoder hidden layers using cached activations
         d_h_enc = d_mean @ self.encoder.mean_layer.weights.T + kl_grad_logvar @ self.encoder.logvar_layer.weights.T
         for i in reversed(range(len(self.encoder.layers))):
-            layer = self.encoder.layers[i]
-            # ReLU derivative
-            # Re-forward to get pre-activation for this layer
-            h = x
-            for j in range(i):
-                h = relu(h @ self.encoder.layers[j].weights + self.encoder.layers[j].biases)
-            pre_act = h @ layer.weights + layer.biases
+            # Use cached pre-activations
+            pre_act = enc_cache['pre_activations'][i]
             d_z = d_h_enc * relu_derivative(pre_act)
 
-            layer_input = h if i > 0 else x
-            if i > 0:
-                h_in = x
-                for j in range(i):
-                    h_in = relu(h_in @ self.encoder.layers[j].weights + self.encoder.layers[j].biases)
-                layer_input = h_in
+            # Use cached input (O(1) instead of O(n) re-forward)
+            if i == 0:
+                layer_input = enc_cache['input']  # x
+            else:
+                layer_input = enc_cache['activations'][i - 1]
 
-            layer.weights -= lr * (layer_input.T @ d_z)
-            layer.biases -= lr * np.sum(d_z, axis=0)
+            self.encoder.layers[i].weights -= lr * (layer_input.T @ d_z)
+            self.encoder.layers[i].biases -= lr * np.sum(d_z, axis=0)
 
-            d_h_enc = d_z @ layer.weights.T
+            d_h_enc = d_z @ self.encoder.layers[i].weights.T
 
     def _update_latent_stats(self, mean: np.ndarray) -> None:
         """Update running latent space statistics."""
