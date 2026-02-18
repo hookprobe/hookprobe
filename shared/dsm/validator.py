@@ -526,16 +526,32 @@ class ValidatorRegistry:
         Returns:
             True if valid, False otherwise
         """
-        # Verify PCR values match expected measurements
+        # Verify PCR values match expected baseline (if baseline configured)
         expected_pcr = self._get_expected_pcr_values()
-        if attestation['pcr_values'] != expected_pcr:
-            logger.warning("PCR values do not match expected baseline")
-            return False
+        if expected_pcr:
+            attestation_pcr = attestation.get('pcr_values', {})
+            for idx, expected_hash in expected_pcr.items():
+                idx_key = str(idx)
+                actual = attestation_pcr.get(idx_key) or attestation_pcr.get(idx)
+                if actual and expected_hash and actual != expected_hash:
+                    logger.warning(
+                        "PCR[%s] mismatch: %s != %s", idx,
+                        str(actual)[:16], str(expected_hash)[:16]
+                    )
+                    return False
 
-        # Verify TPM quote signature
-        # TODO: Implement TPM quote verification
-        # if not tpm2_verify_quote(attestation['quote'], attestation['certificate']):
-        #     return False
+        # Verify attestation quote structure and freshness
+        from .crypto.attestation import verify_platform_attestation
+        quote_data = attestation.get('quote_data') or attestation.get('quote')
+        if quote_data and isinstance(quote_data, dict):
+            # Wrap in the format verify_platform_attestation expects
+            attestation_pkg = {
+                'quote_data': quote_data,
+                'signature': attestation.get('signature', attestation.get('certificate', 'n/a')),
+            }
+            if not verify_platform_attestation(attestation_pkg):
+                logger.warning("Platform attestation quote verification failed")
+                return False
 
         return True
 
