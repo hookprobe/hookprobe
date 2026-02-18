@@ -126,8 +126,8 @@ class EnergyMonitor:
 
         # State tracking
         self.prev_snapshot: Optional[SystemEnergySnapshot] = None
-        self.history: List[SystemEnergySnapshot] = []
-        self.pid_power_history: Dict[int, List[float]] = {}  # PID -> [watts over time]
+        self.history: deque = deque(maxlen=1000)
+        self.pid_power_history: Dict[int, deque] = {}  # PID -> [watts over time]
         self.pid_ewma: Dict[int, float] = {}  # PID -> EWMA of power
         self.pid_baseline_mean: Dict[int, float] = {}
         self.pid_baseline_std: Dict[int, float] = {}
@@ -443,12 +443,8 @@ class EnergyMonitor:
 
                             # Update PID power history
                             if current_stat.pid not in self.pid_power_history:
-                                self.pid_power_history[current_stat.pid] = []
+                                self.pid_power_history[current_stat.pid] = deque(maxlen=1000)
                             self.pid_power_history[current_stat.pid].append(estimated_watts)
-
-                            # Keep history bounded
-                            if len(self.pid_power_history[current_stat.pid]) > 1000:
-                                self.pid_power_history[current_stat.pid].pop(0)
 
                     snapshot.nic_processes_watts = nic_total_watts
                     snapshot.xdp_processes_watts = xdp_total_watts
@@ -497,10 +493,6 @@ class EnergyMonitor:
 
         self.prev_snapshot = snapshot
         self.history.append(snapshot)
-
-        # Keep history bounded
-        if len(self.history) > 1000:
-            self.history.pop(0)
 
         return snapshot
 

@@ -37,6 +37,7 @@ import struct
 import hashlib
 import logging
 from typing import Optional, Tuple, List, Dict, Any
+from collections import deque
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -135,8 +136,7 @@ class NeuralDriftCalculator:
         }
 
         # Drift history for trend analysis
-        self._drift_history: List[float] = []
-        self._max_history = 1000
+        self._drift_history: deque = deque(maxlen=1000)
 
         logger.info("[NeuralDrift] Calculator initialized (4→64→32→1 architecture)")
 
@@ -235,10 +235,8 @@ class NeuralDriftCalculator:
         # Forward pass
         drift_score, _ = self.forward(normalized)
 
-        # Track history
+        # Track history (deque maxlen handles eviction)
         self._drift_history.append(float(drift_score[0]))
-        if len(self._drift_history) > self._max_history:
-            self._drift_history.pop(0)
 
         return float(drift_score[0])
 
