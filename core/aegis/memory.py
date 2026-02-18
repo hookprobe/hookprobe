@@ -30,6 +30,7 @@ LAYER_SESSION = "session"
 LAYER_BEHAVIORAL = "behavioral"
 LAYER_INSTITUTIONAL = "institutional"
 LAYER_THREAT_INTEL = "threat_intel"
+LAYER_STREAMING = "streaming"  # Ephemeral vector store (not persisted to SQLite)
 
 ALL_LAYERS = [LAYER_SESSION, LAYER_BEHAVIORAL, LAYER_INSTITUTIONAL, LAYER_THREAT_INTEL]
 
@@ -93,6 +94,7 @@ class MemoryManager:
         self._config = config or MemoryConfig()
         self._db_path = self._config.get_db_path()
         self._local = threading.local()
+        self._streaming_pipeline = None  # Set via set_streaming_pipeline()
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -369,6 +371,49 @@ class MemoryManager:
             logger.error("Memory recall_context error: %s", e)
 
         return "\n\n".join(parts) if parts else ""
+
+    # ------------------------------------------------------------------
+    # Streaming RAG (Neuro-Kernel Layer 2)
+    # ------------------------------------------------------------------
+
+    def set_streaming_pipeline(self, pipeline) -> None:
+        """Register the Neuro-Kernel streaming RAG pipeline.
+
+        Args:
+            pipeline: A StreamingRAGPipeline instance (or any object with
+                      a query(question, k) method).
+        """
+        self._streaming_pipeline = pipeline
+        logger.info("Streaming RAG pipeline registered with memory")
+
+    def recall_streaming_context(
+        self,
+        query: str,
+        time_window_s: float = 60.0,
+        k: int = 10,
+    ) -> str:
+        """Search the streaming RAG vector store for recent kernel events.
+
+        This is the 6th memory layer — ephemeral situational awareness
+        backed by the vector store rather than SQLite.
+
+        Args:
+            query: Natural language query (e.g., "suspicious connections
+                   from 10.200.0.45").
+            time_window_s: How far back to search (seconds).
+            k: Number of top results.
+
+        Returns:
+            Formatted context string for LLM injection, or empty string
+            if the streaming pipeline is not available.
+        """
+        if self._streaming_pipeline is None:
+            return ""
+        try:
+            return self._streaming_pipeline.query(query, k=k)
+        except Exception as e:
+            logger.error("Streaming RAG query error: %s", e)
+            return ""
 
     # ------------------------------------------------------------------
     # Forget / Decay
