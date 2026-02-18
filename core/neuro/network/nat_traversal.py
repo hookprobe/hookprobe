@@ -133,11 +133,51 @@ class STUNClient:
         return struct.pack('>HH', message_type, 0) + transaction_id
 
     def _parse_stun_response(self, response: bytes) -> Tuple[str, int]:
-        """Parse STUN Binding Response to extract external IP:port."""
-        # Simplified STUN response parser
-        # Real implementation would parse XOR-MAPPED-ADDRESS attribute
-        # For now, return placeholder
-        return ("0.0.0.0", 0)  # TODO: Implement proper STUN parsing
+        """Parse STUN Binding Response to extract XOR-MAPPED-ADDRESS.
+
+        RFC 5389 defines XOR-MAPPED-ADDRESS (0x0020) which XORs the
+        IP and port with the magic cookie to prevent ALG mangling.
+        Falls back to MAPPED-ADDRESS (0x0001) if XOR variant absent.
+        """
+        if len(response) < 20:
+            return ("0.0.0.0", 0)
+
+        # STUN header: 2B type + 2B length + 4B magic cookie + 12B txn_id
+        magic = 0x2112A442
+        offset = 20  # Start of attributes
+
+        while offset + 4 <= len(response):
+            attr_type = struct.unpack('>H', response[offset:offset + 2])[0]
+            attr_len = struct.unpack('>H', response[offset + 2:offset + 4])[0]
+
+            if attr_type == 0x0020:  # XOR-MAPPED-ADDRESS
+                if offset + 8 <= len(response):
+                    family = response[offset + 5]
+                    xport = struct.unpack('>H', response[offset + 6:offset + 8])[0]
+                    port = xport ^ (magic >> 16)
+                    if family == 0x01 and offset + 12 <= len(response):  # IPv4
+                        xip = struct.unpack('>I', response[offset + 8:offset + 12])[0]
+                        ip_int = xip ^ magic
+                        ip = "{}.{}.{}.{}".format(
+                            (ip_int >> 24) & 0xFF,
+                            (ip_int >> 16) & 0xFF,
+                            (ip_int >> 8) & 0xFF,
+                            ip_int & 0xFF,
+                        )
+                        return (ip, port)
+
+            elif attr_type == 0x0001:  # MAPPED-ADDRESS (fallback)
+                if offset + 8 <= len(response):
+                    family = response[offset + 5]
+                    port = struct.unpack('>H', response[offset + 6:offset + 8])[0]
+                    if family == 0x01 and offset + 12 <= len(response):
+                        ip = socket.inet_ntoa(response[offset + 8:offset + 12])
+                        return (ip, port)
+
+            # Advance to next attribute (padded to 4-byte boundary)
+            offset += 4 + attr_len + (4 - attr_len % 4) % 4
+
+        return ("0.0.0.0", 0)
 
     async def _detect_nat_type(self, sock, external_address: Tuple[str, int]) -> NATType:
         """
