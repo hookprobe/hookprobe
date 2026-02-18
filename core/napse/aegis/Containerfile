@@ -1,0 +1,53 @@
+# =============================================================================
+# Aegis Container - Zig/eBPF Packet Capture Engine
+# =============================================================================
+# Multi-stage build:
+#   Stage 1: Compile Zig XDP program + userspace loader
+#   Stage 2: Minimal runtime with libbpf
+
+# --- Build Stage ---
+FROM docker.io/library/ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    xz-utils \
+    libbpf-dev \
+    libelf-dev \
+    zlib1g-dev \
+    clang \
+    llvm \
+    linux-headers-generic \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig (version pinned for reproducibility)
+ARG ZIG_VERSION=0.13.0
+RUN wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-$(uname -m)-${ZIG_VERSION}.tar.xz" \
+    -O /tmp/zig.tar.xz \
+    && mkdir -p /opt/zig \
+    && tar -xf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
+    && rm /tmp/zig.tar.xz
+ENV PATH="/opt/zig:${PATH}"
+
+WORKDIR /build
+COPY . .
+
+# Build Aegis XDP program and userspace loader
+RUN zig build -Doptimize=ReleaseFast
+
+# --- Runtime Stage ---
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libbpf1 \
+    libelf1 \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/zig-out/bin/ /opt/hookprobe/aegis/
+COPY aegis.toml /etc/aegis/aegis.toml
+
+WORKDIR /opt/hookprobe/aegis
+
+ENTRYPOINT ["/opt/hookprobe/aegis/aegis-loader"]
+CMD ["--config", "/etc/aegis/aegis.toml"]
