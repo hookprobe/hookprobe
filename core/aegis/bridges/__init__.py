@@ -6,6 +6,7 @@ to the orchestrator for event processing.
 """
 
 import logging
+import os
 from typing import Callable, Dict, List, Optional
 
 from .base_bridge import BaseBridge
@@ -38,6 +39,14 @@ class BridgeManager:
         self._bridges["dhcp"] = DhcpBridge()
         self._bridges["wan"] = WanBridge()
         self._bridges["napse"] = NAPSEBridge()
+        # Lazy import to avoid circular dependency (reflex.bridge imports base_bridge)
+        from ..reflex.engine import ReflexEngine as _RE
+        from ..reflex.bridge import ReflexBridge as _RB
+        from ..reflex import register_engine as _reg
+        lan_if = os.environ.get("AEGIS_LAN_INTERFACE", "eth0")
+        self._reflex_engine = _RE(interface=lan_if)
+        _reg(self._reflex_engine)
+        self._bridges["reflex"] = _RB(self._reflex_engine)
 
     def configure(
         self,
@@ -46,6 +55,7 @@ class BridgeManager:
         dhcp_lease_file: str = "",
         slaai_path: str = "",
         napse_eve_path: str = "",
+        reflex_score_path: str = "",
     ) -> None:
         """Reconfigure bridges with custom paths/URLs."""
         if qsecbit_path:
@@ -58,6 +68,14 @@ class BridgeManager:
             self._bridges["wan"] = WanBridge(slaai_path)
         if napse_eve_path:
             self._bridges["napse"] = NAPSEBridge(napse_eve_path)
+        if reflex_score_path:
+            from ..reflex.engine import ReflexEngine as _RE
+            from ..reflex.bridge import ReflexBridge as _RB
+            from ..reflex import register_engine as _reg
+            lan_if = os.environ.get("AEGIS_LAN_INTERFACE", "eth0")
+            self._reflex_engine = _RE(interface=lan_if)
+            _reg(self._reflex_engine)
+            self._bridges["reflex"] = _RB(self._reflex_engine, reflex_score_path)
 
     def set_callback(self, callback: Callable[[StandardSignal], None]) -> None:
         """Set the signal callback (usually orchestrator.process_signal)."""
