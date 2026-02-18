@@ -127,6 +127,13 @@ class NeuralDriftCalculator:
         self._input_std = np.ones(self.INPUT_DIM, dtype=np.float32)
         self._samples_seen = 0
 
+        # EWMA momentum buffers for stable gradient updates
+        self._momentum = {
+            'layer1': {'weights': np.zeros_like(self.layer1.weights), 'biases': np.zeros_like(self.layer1.biases)},
+            'layer2': {'weights': np.zeros_like(self.layer2.weights), 'biases': np.zeros_like(self.layer2.biases)},
+            'output': {'weights': np.zeros_like(self.output_layer.weights), 'biases': np.zeros_like(self.output_layer.biases)},
+        }
+
         # Drift history for trend analysis
         self._drift_history: List[float] = []
         self._max_history = 1000
@@ -311,17 +318,23 @@ class NeuralDriftCalculator:
         d_w1 = cache['x'].T @ d_z1
         d_b1 = np.sum(d_z1, axis=0)
 
-        # Update weights with EWMA smoothing
+        # Update weights with EWMA momentum smoothing
         alpha = self.EWMA_ALPHA
 
-        self.layer1.weights -= lr * d_w1
-        self.layer1.biases -= lr * d_b1
+        self._momentum['layer1']['weights'] = alpha * self._momentum['layer1']['weights'] + (1 - alpha) * d_w1
+        self._momentum['layer1']['biases'] = alpha * self._momentum['layer1']['biases'] + (1 - alpha) * d_b1
+        self.layer1.weights -= lr * self._momentum['layer1']['weights']
+        self.layer1.biases -= lr * self._momentum['layer1']['biases']
 
-        self.layer2.weights -= lr * d_w2
-        self.layer2.biases -= lr * d_b2
+        self._momentum['layer2']['weights'] = alpha * self._momentum['layer2']['weights'] + (1 - alpha) * d_w2
+        self._momentum['layer2']['biases'] = alpha * self._momentum['layer2']['biases'] + (1 - alpha) * d_b2
+        self.layer2.weights -= lr * self._momentum['layer2']['weights']
+        self.layer2.biases -= lr * self._momentum['layer2']['biases']
 
-        self.output_layer.weights -= lr * d_w3
-        self.output_layer.biases -= lr * d_b3
+        self._momentum['output']['weights'] = alpha * self._momentum['output']['weights'] + (1 - alpha) * d_w3
+        self._momentum['output']['biases'] = alpha * self._momentum['output']['biases'] + (1 - alpha) * d_b3
+        self.output_layer.weights -= lr * self._momentum['output']['weights']
+        self.output_layer.biases -= lr * self._momentum['output']['biases']
 
     def detect_anomaly(self, telemetry: np.ndarray) -> Tuple[bool, float]:
         """
