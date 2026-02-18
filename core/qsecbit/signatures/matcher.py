@@ -443,7 +443,12 @@ class SignatureMatcher:
         protocol: Optional[str],
         port: Optional[int]
     ) -> List[ThreatSignature]:
-        """Get signatures that could apply to the given context."""
+        """Get signatures that could apply to the given context.
+
+        Protocol-agnostic signatures (empty protocols list) are always
+        included regardless of the protocol/port filter. This prevents
+        skipping signatures that apply to all protocols.
+        """
         signatures: Set[str] = set()
 
         if layer:
@@ -452,14 +457,22 @@ class SignatureMatcher:
             signatures.update(self.db.signatures.keys())
 
         if protocol:
+            # Include sigs matching the protocol + sigs with no protocol (agnostic)
             proto_sigs = set(s.sig_id for s in self.db.get_by_protocol(protocol))
-            if proto_sigs:
-                signatures &= proto_sigs
+            agnostic_sigs = set(
+                sid for sid, sig in self.db.signatures.items()
+                if not sig.protocols
+            )
+            signatures &= (proto_sigs | agnostic_sigs)
 
         if port:
+            # Include sigs matching the port + sigs with no port filter (agnostic)
             port_sigs = set(s.sig_id for s in self.db.get_by_port(port))
-            if port_sigs:
-                signatures &= port_sigs
+            agnostic_sigs = set(
+                sid for sid, sig in self.db.signatures.items()
+                if not sig.ports
+            )
+            signatures &= (port_sigs | agnostic_sigs)
 
         return [self.db.signatures[sid] for sid in signatures]
 

@@ -18,14 +18,23 @@ logger = logging.getLogger(__name__)
 
 
 class QsecbitBridge(BaseBridge):
-    """Bridge for QSecBit security score and threat events."""
+    """Bridge for QSecBit security score and threat events.
+
+    QSecBit score convention: higher score = more threat.
+      - score > 0.70 → RED (active defense)
+      - 0.45 < score < 0.70 → AMBER (monitoring)
+      - score < 0.45 → GREEN (protected)
+    """
 
     name = "qsecbit"
     poll_interval = 5.0
 
-    def __init__(self, stats_path: str = "/opt/hookprobe/fortress/data/qsecbit_stats.json"):
+    # Default path matches where qsecbit-agent writes stats
+    _DEFAULT_STATS_PATH = "/var/log/hookprobe/qsecbit/current.json"
+
+    def __init__(self, stats_path: Optional[str] = None):
         super().__init__()
-        self._stats_path = Path(stats_path)
+        self._stats_path = Path(stats_path or self._DEFAULT_STATS_PATH)
         self._last_score: Optional[float] = None
         self._last_status: Optional[str] = None
         self._last_mtime: float = 0
@@ -45,7 +54,7 @@ class QsecbitBridge(BaseBridge):
             self._last_mtime = mtime
 
             data = json.loads(self._stats_path.read_text())
-            score = data.get("score", 0.85)
+            score = data.get("score", 0.0)  # 0.0 = safe default (GREEN)
             status = data.get("rag_status", "GREEN")
             threats = data.get("threats_detected", 0)
 
@@ -63,13 +72,15 @@ class QsecbitBridge(BaseBridge):
                     },
                 ))
 
-            # New threats signal
+            # New threats signal — use rag_status for severity (not raw score)
+            # to avoid convention mismatch. Higher score = more threat.
             if threats > self._last_threat_count:
                 new_count = threats - self._last_threat_count
+                severity = "HIGH" if status == "RED" else "MEDIUM" if status == "AMBER" else "LOW"
                 signals.append(StandardSignal(
                     source="qsecbit",
                     event_type="threat.detected",
-                    severity="HIGH" if score < 0.3 else "MEDIUM",
+                    severity=severity,
                     data={
                         "new_threats": new_count,
                         "total_threats": threats,

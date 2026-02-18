@@ -106,6 +106,12 @@ class QsecbitConfig:
             self.delta = 0.15   # Quantum drift (was 20%)
             self.epsilon = 0.15 # Energy anomaly (new)
 
+        # Validate individual weights are non-negative
+        for name in ('alpha', 'beta', 'gamma', 'delta', 'epsilon'):
+            val = getattr(self, name)
+            if val < 0:
+                raise ValueError(f"Weight '{name}' must be non-negative, got {val}")
+
         weight_sum = self.alpha + self.beta + self.gamma + self.delta + self.epsilon
         if not np.isclose(weight_sum, 1.0, atol=0.01):
             raise ValueError(f"Weights must sum to 1.0, got {weight_sum}")
@@ -1070,3 +1076,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("Qsecbit Unified - Single Source of Truth for Cyber Protection")
     print("=" * 70)
+
+
+# Backward-compatible alias — qsecbit-agent.py imports this name
+QsecbitAnalyzer = Qsecbit
