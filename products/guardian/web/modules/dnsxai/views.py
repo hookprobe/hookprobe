@@ -9,7 +9,7 @@ import time
 import logging
 from flask import jsonify, request
 from . import dnsxai_bp
-from utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command
+from utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command, _safe_error
 
 # ML Engine imports
 try:
@@ -189,7 +189,7 @@ def api_stats():
             stats['ml_blocks'] = 0
             stats['cname_uncloaked'] = 0
             stats['ml_available'] = False
-            stats['ml_error'] = str(e)
+            stats['ml_error'] = _safe_error(e)
     else:
         # Fallback to persisted stats
         persisted = load_json_file(DNS_SHIELD_STATS, {})
@@ -410,7 +410,7 @@ def api_update():
             return jsonify({'success': True, 'message': 'Blocklists updated'})
         return jsonify({'success': False, 'error': output or 'Update failed'}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 # =============================================================================
@@ -458,7 +458,7 @@ def api_ml_status():
             'detector': detector.get_stats()
         })
     except Exception as e:
-        return jsonify({'available': False, 'error': str(e)}), 500
+        return jsonify({'available': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/ml/train', methods=['POST'])
@@ -505,7 +505,7 @@ def api_ml_train():
 
     except Exception as e:
         logging.error(f"ML training error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/ml/classify', methods=['POST'])
@@ -531,7 +531,7 @@ def api_ml_classify():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/ml/analyze', methods=['POST'])
@@ -558,7 +558,7 @@ def api_ml_analyze():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/ml/history')
@@ -583,7 +583,7 @@ def api_ml_history():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/ml/threats')
@@ -605,7 +605,7 @@ def api_ml_threats():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/blocked')
@@ -695,7 +695,7 @@ def api_blocked_domains():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e), 'domains': [], 'total_blocks': 0}), 500
+        return jsonify({'success': False, 'error': _safe_error(e), 'domains': [], 'total_blocks': 0}), 500
 
 
 # =============================================================================
@@ -726,7 +726,7 @@ def api_cname_check():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/cname/stats')
@@ -743,7 +743,7 @@ def api_cname_stats():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 # =============================================================================
@@ -764,7 +764,7 @@ def api_federated_status():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/federated/export')
@@ -781,7 +781,7 @@ def api_federated_export():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/federated/import', methods=['POST'])
@@ -809,7 +809,7 @@ def api_federated_import():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 # =============================================================================
@@ -890,7 +890,7 @@ def api_packet_status():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/check/domain', methods=['POST'])
@@ -918,7 +918,7 @@ def api_packet_check_domain():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/check/ip', methods=['POST'])
@@ -946,7 +946,7 @@ def api_packet_check_ip():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/analyze/dns', methods=['POST'])
@@ -982,7 +982,7 @@ def api_packet_analyze_dns():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/analyze/connection', methods=['POST'])
@@ -1018,7 +1018,7 @@ def api_packet_analyze_connection():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/detections')
@@ -1040,7 +1040,7 @@ def api_packet_detections():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/ip/block', methods=['POST'])
@@ -1066,7 +1066,7 @@ def api_packet_block_ip():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @dnsxai_bp.route('/packet/combined/check', methods=['POST'])
@@ -1144,4 +1144,4 @@ def api_combined_ad_check():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500

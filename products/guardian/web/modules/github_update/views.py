@@ -7,6 +7,7 @@ from GitHub without CLI access.
 from flask import jsonify, request
 from . import github_update_bp
 from modules.auth import require_auth
+from utils import _safe_error
 import os
 from .git_ops import (
     get_current_status,
@@ -44,7 +45,7 @@ def api_status():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
@@ -71,7 +72,7 @@ def api_check():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
@@ -99,7 +100,7 @@ def api_preview():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
@@ -126,7 +127,7 @@ def api_pull():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
@@ -168,7 +169,7 @@ def api_apply():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
@@ -189,7 +190,7 @@ def api_log():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': _safe_error(e)
         }), 500
 
 
