@@ -225,23 +225,13 @@ def api_debug():
     """
     try:
         detected_path = get_repo_path()
-
-        git_test, git_success = run_command(
+        _, git_success = run_command(
             ['git', '-C', detected_path, 'rev-parse', '--short', 'HEAD']
         )
-
-        # Only return the short commit hash (safe), not raw command output
-        commit_hash = None
-        if git_success and git_test:
-            raw = git_test.strip()
-            # Validate it looks like a short git hash (hex, 7-12 chars)
-            if raw.isalnum() and len(raw) <= 12:
-                commit_hash = raw
 
         return jsonify({
             'success': True,
             'git_reachable': git_success,
-            'git_commit': commit_hash,
             'repo_detected': bool(detected_path),
         })
     except Exception as e:
