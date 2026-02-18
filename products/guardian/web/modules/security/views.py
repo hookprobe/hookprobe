@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from flask import jsonify, request, Response
 from . import security_bp
-from utils import run_command, load_json_file
+from utils import run_command, load_json_file, _safe_error
 from modules.auth import require_auth
 
 # Block log file location
@@ -142,7 +142,7 @@ def api_blocks():
             'total': len(blocks)
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @security_bp.route('/blocks/<block_id>')
@@ -155,7 +155,7 @@ def api_block_detail(block_id):
                 return jsonify(block)
         return jsonify({'error': 'Block not found'}), 404
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @security_bp.route('/blocks/export')
@@ -170,7 +170,7 @@ def api_export_blocks():
         else:
             return _export_stix(blocks)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 def _export_stix(blocks):
@@ -364,7 +364,7 @@ def api_xdp_stats():
 
         return jsonify(stats)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @security_bp.route('/qsecbit')
@@ -392,7 +392,7 @@ def api_qsecbit():
         })
         return jsonify(data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 def _validate_ipv4(ip: str) -> bool:
@@ -426,7 +426,7 @@ def api_block_ip():
             return jsonify({'success': True, 'message': f'Blocked {ip}'})
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @security_bp.route('/unblock_ip', methods=['POST'])
@@ -452,4 +452,4 @@ def api_unblock_ip():
             return jsonify({'success': True, 'message': f'Unblocked {ip}'})
         return jsonify({'success': False, 'error': output}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500

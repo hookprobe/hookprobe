@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from flask import render_template, jsonify, current_app
 from . import qsecbit_bp
+from utils import _safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ def api_qsecbit_score():
         return jsonify({
             'score': 0.0,
             'status': 'UNKNOWN',
-            'error': str(e),
+            'error': _safe_error(e),
             'timestamp': datetime.now().isoformat()
         }), 500
 
@@ -161,7 +162,7 @@ def api_active_threats():
 
     except Exception as e:
         logger.error(f"Error getting threats: {e}")
-        return jsonify({'count': 0, 'threats': [], 'error': str(e)}), 500
+        return jsonify({'count': 0, 'threats': [], 'error': _safe_error(e)}), 500
 
 
 def _get_rag_status(score: float) -> str:

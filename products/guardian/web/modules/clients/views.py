@@ -7,7 +7,7 @@ import tempfile
 
 from flask import jsonify
 from . import clients_bp
-from utils import run_command
+from utils import run_command, _safe_error
 from modules.auth import require_auth
 
 
@@ -104,7 +104,7 @@ def api_clients_list():
 
         return jsonify(clients)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @clients_bp.route('/dhcp')
@@ -175,7 +175,7 @@ def api_dhcp_leases():
 
         return jsonify({'leases': leases})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @clients_bp.route('/block/<ip>', methods=['POST'])
@@ -189,7 +189,7 @@ def api_block_client(ip):
         run_command(['iptables', '-A', 'FORWARD', '-s', ip, '-j', 'DROP'])
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @clients_bp.route('/unblock/<ip>', methods=['POST'])
@@ -203,7 +203,7 @@ def api_unblock_client(ip):
         run_command(['iptables', '-D', 'FORWARD', '-s', ip, '-j', 'DROP'])
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @clients_bp.route('/disconnect/<mac>', methods=['POST'])
@@ -276,7 +276,7 @@ def api_disconnect_client(mac):
             'message': 'Client disconnected'
         })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @clients_bp.route('/kick/<mac>', methods=['POST'])
