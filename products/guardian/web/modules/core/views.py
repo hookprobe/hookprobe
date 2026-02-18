@@ -6,7 +6,7 @@ from flask import render_template, jsonify, current_app
 from . import core_bp
 from utils import (
     run_command, load_json_file, get_container_status,
-    get_network_stats, get_system_info, format_bytes
+    get_network_stats, get_system_info, format_bytes, _safe_error
 )
 
 
@@ -49,7 +49,7 @@ def api_status():
             }
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @core_bp.route('/api/containers')
@@ -286,7 +286,7 @@ def api_dashboard():
             'threats': {'blocked': 0},
             'recent_blocks': [],
             'system': {'uptime': '0:00', 'load': [0, 0, 0], 'temperature': 0},
-            'error': str(e)
+            'error': _safe_error(e)
         })
 
 

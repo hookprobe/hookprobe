@@ -17,7 +17,7 @@ import random
 from datetime import datetime, timedelta
 from flask import render_template, jsonify, current_app, request
 from . import cortex_bp
-from utils import load_json_file, get_system_info
+from utils import load_json_file, get_system_info, _safe_error
 
 # Add shared directory to path for cortex imports
 # Check multiple possible locations (installed vs development)
@@ -201,7 +201,7 @@ def api_cortex_location():
         })
     except Exception as e:
         current_app.logger.error(f"Location API error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @cortex_bp.route('/api/cortex/events')
@@ -222,7 +222,7 @@ def api_cortex_events():
         })
     except Exception as e:
         current_app.logger.error(f"Cortex events API error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 @cortex_bp.route('/api/cortex/demo', methods=['GET'])
@@ -386,7 +386,7 @@ def api_cortex_heartbeat():
             'cortex_id': cortex_id
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': _safe_error(e)}), 500
 
 
 # =============================================================================

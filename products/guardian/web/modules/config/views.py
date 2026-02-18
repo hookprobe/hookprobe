@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from flask import jsonify, request
 from . import config_bp
-from utils import run_command
+from utils import run_command, _safe_error
 from modules.auth import require_auth
 
 
@@ -97,7 +97,7 @@ def api_wifi_scan():
 
         return jsonify({'success': True, 'networks': unique})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/wifi/status')
@@ -188,7 +188,7 @@ def api_wifi_status():
 
         return jsonify(result)
     except Exception as e:
-        return jsonify({'connected': False, 'error': str(e)}), 500
+        return jsonify({'connected': False, 'error': _safe_error(e)}), 500
 
 
 def _nmcli_available():
@@ -563,7 +563,7 @@ def api_wifi_disconnect():
         time.sleep(1)
         return jsonify({'success': True, 'message': 'Disconnected from WiFi'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/wifi/connect', methods=['POST'])
@@ -614,8 +614,7 @@ def api_wifi_connect():
             }), 400
 
     except Exception as e:
-        import traceback
-        return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/hotspot', methods=['GET', 'POST'])
@@ -640,7 +639,7 @@ def api_hotspot():
                 'hidden': config.get('ignore_broadcast_ssid', '0') == '1'
             })
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': _safe_error(e)}), 500
 
     # POST - update config (requires auth)
     from modules.auth import require_auth as _ra  # noqa: used for check
@@ -674,7 +673,7 @@ def api_hotspot():
         _sanitize_hostapd_value(ssid)
         _sanitize_hostapd_value(password)
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        return jsonify({'success': False, 'error': _safe_error(e)}), 400
 
     try:
         channel_val = channel if channel != 'auto' else '6'
@@ -710,7 +709,7 @@ def api_hotspot():
 
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/hotspot/restart', methods=['POST'])
@@ -721,7 +720,7 @@ def api_hotspot_restart():
         run_command(['sudo', 'systemctl', 'restart', 'hostapd'])
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/hotspot/status')
@@ -783,7 +782,7 @@ def api_hotspot_status():
 
         return jsonify(status)
     except Exception as e:
-        status['error'] = str(e)
+        status['error'] = _safe_error(e)
         return jsonify(status)
 
 
@@ -807,7 +806,7 @@ def api_hotspot_start():
                 'error': f'Failed to start hostapd: {output}'
             }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/hotspot/stop', methods=['POST'])
@@ -817,7 +816,7 @@ def api_hotspot_stop():
         run_command(['sudo', 'systemctl', 'stop', 'hostapd'], timeout=15)
         return jsonify({'success': True, 'message': 'Hotspot stopped'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/interfaces')
@@ -920,7 +919,7 @@ def api_interfaces():
 
         return jsonify({'interfaces': interfaces})
     except Exception as e:
-        return jsonify({'error': str(e), 'interfaces': []}), 500
+        return jsonify({'error': _safe_error(e), 'interfaces': []}), 500
 
 
 # =============================================================================
@@ -1068,7 +1067,7 @@ def api_offline_init():
             'error': 'Offline mode manager not available'
         }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/survey')
@@ -1158,7 +1157,7 @@ def api_offline_survey():
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/scan', methods=['POST'])
@@ -1327,7 +1326,7 @@ def api_offline_channel():
             'error': 'Offline mode manager not available'
         }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/connect', methods=['POST'])
@@ -1372,7 +1371,7 @@ def api_offline_connect():
             'error': 'Offline mode manager not available'
         }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/networks')
@@ -1425,7 +1424,7 @@ def api_offline_networks():
         # Fallback to basic iwlist scan
         return api_wifi_scan()
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/fix-eth0', methods=['POST'])
@@ -1458,7 +1457,7 @@ def api_offline_fix_eth0():
             'error': 'Offline mode manager not available'
         }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 @config_bp.route('/offline/route-metrics', methods=['GET'])
@@ -1529,7 +1528,7 @@ def api_offline_route_metrics():
             }
         })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e), 'routes': []}), 500
+        return jsonify({'success': False, 'error': _safe_error(e), 'routes': []}), 500
 
 
 @config_bp.route('/eth0/config', methods=['GET', 'POST'])
@@ -1633,7 +1632,7 @@ def api_eth0_config():
         else:
             return jsonify({'success': False, 'error': 'Invalid mode'}), 400
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
 def _netmask_to_cidr(netmask):
@@ -1949,4 +1948,4 @@ def api_offline_wan_detect():
             'error': 'Offline mode manager not available'
         }), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500

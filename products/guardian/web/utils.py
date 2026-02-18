@@ -3,12 +3,26 @@ Guardian Web Application Utilities
 Shared helper functions used across modules
 """
 import json
+import logging
 import os
 import subprocess
 import shlex
 from functools import wraps
 from typing import Union, List
 from flask import current_app, jsonify
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_error(e: Exception) -> str:
+    """Return sanitized error message for HTTP responses.
+
+    Prevents CWE-209 (Information Exposure Through an Error Message)
+    by logging the full exception server-side but returning only the
+    exception type name to the client.
+    """
+    logger.exception("Request failed: %s", type(e).__name__)
+    return f"Operation failed ({type(e).__name__})"
 
 
 def run_command(cmd: Union[str, List[str]], timeout: int = 30):
