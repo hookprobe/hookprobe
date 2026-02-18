@@ -41,6 +41,15 @@ PICO_PROFILE = {
         "mesh_relay": True,  # Receive pre-processed alerts via mesh gossip
     },
 
+    # Neuro-Kernel: receive-only (deploy pre-built eBPF from Nexus)
+    "neurokernel": {
+        "enabled": False,
+        "inference_mode": "none",
+        "streaming_rag": False,
+        "shadow_pentester": False,
+        "llm_monitor": False,
+    },
+
     # Tools: defense-only subset
     "tools": {
         "enabled": [

@@ -500,6 +500,43 @@ TOOL_REGISTRY: Dict[str, ToolDefinition] = {
         },
         agents=["GUARDIAN", "MEDIC", "ORACLE"],
     ),
+    "query_kernel_context": ToolDefinition(
+        name="query_kernel_context",
+        description="Search streaming RAG for recent kernel events matching a query",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Natural language query about kernel events"},
+                "time_window_s": {"type": "number", "description": "How far back to search in seconds"},
+            },
+            "required": ["query"],
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE", "SCOUT"],
+    ),
+    "get_kernel_metrics": ToolDefinition(
+        name="get_kernel_metrics",
+        description="Get Neuro-Kernel health metrics: active programs, RAG stats, inference stats",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE"],
+    ),
+    "get_inference_verdict": ToolDefinition(
+        name="get_inference_verdict",
+        description="Route a threat context through the hybrid inference engine for a verdict",
+        parameters={
+            "type": "object",
+            "properties": {
+                "event_type": {"type": "string", "description": "Threat event type"},
+                "source_ip": {"type": "string", "description": "Source IP under analysis"},
+                "qsecbit_score": {"type": "number", "description": "Current QSecBit score (0-1)"},
+                "qsecbit_confidence": {"type": "number", "description": "QSecBit confidence (0-1)"},
+            },
+            "required": ["event_type", "source_ip"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+    ),
 
     # MEDIC tools
     "full_quarantine": ToolDefinition(

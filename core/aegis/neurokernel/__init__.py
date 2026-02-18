@@ -13,15 +13,19 @@ with defense feedback loop to QSecBit signatures.
 Phase 4: Hybrid Inference — fast/slow path decision engine routing threat
 events between QSecBit fast path, local 0.5B model, and Nexus LLM offload.
 
+Phase 5: Integration — wiring the neurokernel into AEGIS profiles, orchestrator
+routing, tool executor, memory streaming layer, and mesh transport packet types.
+
 Architecture layers (phased rollout):
   Layer 1: Closed-Loop Kernel Orchestrator (Phase 1)
   Layer 2: Streaming eBPF-RAG (Phase 2)
   Layer 3: Shadow Pentester (Phase 3)
   Layer 4: Hybrid Inference (Phase 4)
+  Layer 5: AEGIS Integration (Phase 5)
 
 Author: Andrei Toma
 License: Proprietary
-Version: 4.0.0
+Version: 5.0.0
 """
 
 from typing import Optional

@@ -46,6 +46,22 @@ FULL_PROFILE = {
         "mesh_relay": False,
     },
 
+    # Neuro-Kernel: hybrid (QSecBit fast + local 0.5B + Nexus offload)
+    "neurokernel": {
+        "enabled": True,
+        "inference_mode": "hybrid",
+        "streaming_rag": True,
+        "streaming_rag_max_vectors": 100000,
+        "streaming_rag_window_hours": 6,
+        "shadow_pentester": True,
+        "shadow_pentester_interval_s": 3600,
+        "llm_monitor": True,
+        "fast_path_threshold": 0.90,
+        "local_model_threshold": 0.70,
+        "nexus_timeout_s": 10.0,
+        "max_active_programs": 32,
+    },
+
     # Tools: full set
     "tools": {
         "enabled": "all",
