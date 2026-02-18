@@ -34,6 +34,7 @@ from .ebpf_compiler import EBPFCompiler
 from .ebpf_sandbox import EBPFSandbox
 from .ebpf_template_registry import TemplateRegistry
 from .sensor_manager import SensorManager
+from .streaming_rag import StreamingRAGPipeline
 from .types import (
     ActiveProgram,
     CompilationResult,
@@ -68,12 +69,14 @@ class KernelOrchestrator:
         sandbox: Optional[EBPFSandbox] = None,
         sensors: Optional[SensorManager] = None,
         templates: Optional[TemplateRegistry] = None,
+        rag_pipeline: Optional[StreamingRAGPipeline] = None,
     ):
         self._interface = interface
         self._compiler = compiler or EBPFCompiler()
         self._sandbox = sandbox or EBPFSandbox(self._compiler)
         self._sensors = sensors or SensorManager()
         self._templates = templates or TemplateRegistry()
+        self._rag_pipeline = rag_pipeline
 
         self._lock = threading.Lock()
         self._deploy_timestamps: List[float] = []
@@ -163,13 +166,16 @@ class KernelOrchestrator:
 
     def get_status(self) -> Dict[str, Any]:
         """Get comprehensive orchestrator status."""
-        return {
+        status = {
             "sensors": self._sensors.get_status(),
             "templates": self._templates.list_templates(),
             "template_count": len(self._templates),
             "recent_actions": self._decision_log[-10:],
             "interface": self._interface,
         }
+        if self._rag_pipeline:
+            status["streaming_rag"] = self._rag_pipeline.stats()
+        return status
 
     @property
     def sensor_manager(self) -> SensorManager:
@@ -180,6 +186,56 @@ class KernelOrchestrator:
     def template_registry(self) -> TemplateRegistry:
         """Access the template registry (for external registration)."""
         return self._templates
+
+    @property
+    def rag_pipeline(self) -> Optional[StreamingRAGPipeline]:
+        """Access the streaming RAG pipeline (if configured)."""
+        return self._rag_pipeline
+
+    @rag_pipeline.setter
+    def rag_pipeline(self, pipeline: Optional[StreamingRAGPipeline]) -> None:
+        """Set or replace the streaming RAG pipeline."""
+        self._rag_pipeline = pipeline
+
+    def build_llm_context(self, signal: StandardSignal) -> str:
+        """Build LLM context enriched with streaming RAG events.
+
+        Combines the signal data with recent kernel events from the
+        vector store. Used by Phase 3 (LLM code generation) to give
+        the model situational awareness.
+
+        Args:
+            signal: The current signal being processed.
+
+        Returns:
+            Formatted context string for LLM prompt injection.
+        """
+        parts = []
+
+        # Signal context
+        parts.append(
+            f"Current Signal: {signal.source}/{signal.event_type} "
+            f"[{signal.severity}]"
+        )
+        if signal.data:
+            ip = signal.data.get("source_ip", "")
+            if ip:
+                parts.append(f"Source IP: {ip}")
+
+        # Streaming RAG context (if available)
+        if self._rag_pipeline:
+            query = f"{signal.event_type} {signal.data.get('source_ip', '')}".strip()
+            rag_context = self._rag_pipeline.query(query, k=10)
+            if rag_context and rag_context != "No recent kernel events found.":
+                parts.append("")
+                parts.append(rag_context)
+
+        # Active programs context
+        active = self._sensors.get_status()
+        if active.get("active_programs"):
+            parts.append(f"\nActive eBPF programs: {active['active_count']}")
+
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Internal: Template deployment
