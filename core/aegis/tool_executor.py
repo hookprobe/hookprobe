@@ -715,7 +715,19 @@ class ToolExecutor:
             )
 
         # Execute
-        result = self._execute_tool(tool_name, params)
+        try:
+            result = self._execute_tool(tool_name, params)
+        except NotImplementedError as e:
+            decision_id = self._log_decision(
+                agent_name, tool_name, params, 0.0,
+                str(e), "NOT_IMPLEMENTED", False,
+            )
+            return ToolResult(
+                success=False,
+                result=str(e),
+                reasoning="Tool not yet implemented",
+                decision_id=decision_id,
+            )
 
         # Sanitize output
         result_text = sanitize_output(result)
@@ -796,9 +808,9 @@ class ToolExecutor:
                 logger.error("Tool execution error [%s]: %s", tool_name, e)
                 return f"Error: {e}"
 
-        # Stub implementation — logs the action
-        logger.info("TOOL STUB: %s(%s)", tool_name, params)
-        return f"[STUB] {tool_name} executed with params: {params}"
+        # No implementation found — fail explicitly instead of silently succeeding
+        logger.warning("Tool '%s' has no implementation — returning error", tool_name)
+        raise NotImplementedError(f"Tool '{tool_name}' is not yet implemented")
 
     def _store_pending(
         self,

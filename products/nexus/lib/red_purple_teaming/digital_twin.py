@@ -415,17 +415,33 @@ class DigitalTwinSimulator:
         - Affinity relationships
         """
         try:
-            # TODO: Implement actual Fortress API query
-            # For now, generate mock data if no devices exist
-            if not self._devices:
-                self._generate_mock_network()
+            # Try to load Fortress state from local file (shared via volume/file)
+            import json
+            data_file = os.environ.get(
+                "FORTRESS_STATE_FILE",
+                "/opt/hookprobe/data/fortress_state.json",
+            )
+            try:
+                with open(data_file) as f:
+                    state = json.load(f)
+                for device_data in state.get("devices", []):
+                    if hasattr(self, '_import_device'):
+                        self._import_device(device_data)
+                logger.info(
+                    "Synced %d devices from Fortress state file",
+                    len(state.get("devices", [])),
+                )
+            except FileNotFoundError:
+                # No state file — fall back to mock data if empty
+                if not self._devices:
+                    self._generate_mock_network()
 
             self._last_sync = datetime.now()
-            logger.debug(f"Synced from Fortress: {len(self._devices)} devices")
+            logger.debug("Synced from Fortress: %d devices", len(self._devices))
             return True
 
         except Exception as e:
-            logger.warning(f"Fortress sync failed: {e}")
+            logger.warning("Fortress sync failed: %s", e)
             return False
 
     def _generate_mock_network(self):
