@@ -15,9 +15,11 @@ from .command_executor import (
     COMMAND_WHITELIST,
     ALLOWED_FILE_PATHS
 )
+from modules.auth import require_auth
 
 
 @debug_bp.route('/commands')
+@require_auth
 def api_commands():
     """
     Get list of available commands grouped by category.
@@ -34,6 +36,7 @@ def api_commands():
 
 
 @debug_bp.route('/validate', methods=['POST'])
+@require_auth
 def api_validate():
     """
     Validate a command without executing it.
@@ -58,6 +61,7 @@ def api_validate():
 
 
 @debug_bp.route('/execute', methods=['POST'])
+@require_auth
 def api_execute():
     """
     Execute a command and return output (non-streaming).
@@ -92,6 +96,7 @@ def api_execute():
 
 
 @debug_bp.route('/stream', methods=['POST'])
+@require_auth
 def api_stream():
     """
     Execute a command and stream output via Server-Sent Events.
