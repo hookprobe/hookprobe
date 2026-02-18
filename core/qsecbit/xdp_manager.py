@@ -8,6 +8,7 @@ Version: 5.0.0
 
 import socket
 import struct
+from collections import deque
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -196,7 +197,7 @@ class XDPManager:
         self.xdp_mode: XDPMode = XDPMode.DISABLED
         self.bpf: Optional[BPF] = None
         self.enabled = False
-        self.stats_history: List[XDPStats] = []
+        self.stats_history: deque = deque(maxlen=1000)
 
         if not BCC_AVAILABLE:
             print("Warning: BCC not available. XDP/eBPF support disabled.")
@@ -307,8 +308,6 @@ class XDPManager:
             )
 
             self.stats_history.append(stats)
-            if len(self.stats_history) > 1000:
-                self.stats_history.pop(0)
 
             return stats
 
