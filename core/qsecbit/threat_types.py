@@ -91,6 +91,9 @@ class ResponseAction(Enum):
     CAPTIVE_PORTAL = auto() # Redirect to captive portal
     KILL_PROCESS = auto()   # Kill malicious process (eBPF healing)
     QUARANTINE_PROCESS = auto()  # Isolate process via cgroup
+    REFLEX_JITTER = auto()       # Stochastic delay injection (Reflex L1)
+    REFLEX_SHADOW = auto()       # Redirect to Mirage honeypot (Reflex L2)
+    REFLEX_DISCONNECT = auto()   # Surgical SIGKILL + TCP_RST (Reflex L3)
 
 
 # Attack type to OSI layer mapping
@@ -250,7 +253,7 @@ DEFAULT_RESPONSE_MAP: Dict[AttackType, List[ResponseAction]] = {
     AttackType.SYN_FLOOD: [ResponseAction.RATE_LIMIT, ResponseAction.BLOCK_IP],
     AttackType.PORT_SCAN: [ResponseAction.RATE_LIMIT, ResponseAction.ALERT],
     AttackType.TCP_RESET_ATTACK: [ResponseAction.ALERT],
-    AttackType.SESSION_HIJACK: [ResponseAction.TERMINATE_SESSION, ResponseAction.BLOCK_IP],
+    AttackType.SESSION_HIJACK: [ResponseAction.REFLEX_JITTER, ResponseAction.TERMINATE_SESSION, ResponseAction.BLOCK_IP],
     AttackType.UDP_FLOOD: [ResponseAction.RATE_LIMIT],
     AttackType.SSL_STRIP: [ResponseAction.ALERT, ResponseAction.TERMINATE_SESSION],
     AttackType.TLS_DOWNGRADE: [ResponseAction.ALERT],
@@ -258,9 +261,9 @@ DEFAULT_RESPONSE_MAP: Dict[AttackType, List[ResponseAction]] = {
     AttackType.AUTH_BYPASS: [ResponseAction.BLOCK_IP, ResponseAction.ALERT],
     AttackType.SQL_INJECTION: [ResponseAction.BLOCK_IP, ResponseAction.ALERT],
     AttackType.XSS: [ResponseAction.BLOCK_IP, ResponseAction.ALERT],
-    AttackType.DNS_TUNNELING: [ResponseAction.BLOCK_IP, ResponseAction.ALERT],
+    AttackType.DNS_TUNNELING: [ResponseAction.REFLEX_SHADOW, ResponseAction.BLOCK_IP, ResponseAction.ALERT],
     AttackType.HTTP_FLOOD: [ResponseAction.RATE_LIMIT, ResponseAction.BLOCK_IP],
-    AttackType.MALWARE_C2: [ResponseAction.QUARANTINE, ResponseAction.BLOCK_IP],
+    AttackType.MALWARE_C2: [ResponseAction.REFLEX_SHADOW, ResponseAction.QUARANTINE, ResponseAction.BLOCK_IP],
     AttackType.COMMAND_INJECTION: [ResponseAction.BLOCK_IP, ResponseAction.ALERT],
     AttackType.PATH_TRAVERSAL: [ResponseAction.BLOCK_IP],
     AttackType.UNKNOWN: [ResponseAction.MONITOR],
