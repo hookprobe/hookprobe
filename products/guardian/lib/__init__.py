@@ -5,126 +5,164 @@ Provides L2-L7 threat detection, mobile network protection, SDN control,
 network segmentation, HTP file transfer, and QSecBit integration for the
 Guardian security appliance.
 
-Modules:
-- layer_threat_detector: OSI layer-based threat detection engine (from core)
-- mobile_network_protection: Hotel/public WiFi security (from shared)
-- guardian_agent: QSecBit integration and unified reporting
-- htp_client: HookProbe Transport Protocol client for mesh communication
-- htp_file: HTP-based secure file transfer (replaces WebSocket VPN)
-- openflow_controller: OpenFlow 1.3 SDN controller with OVS integration (from shared)
-- network_segmentation: nftables-based network segmentation and firewall (from shared)
-- wifi_channel_scanner: WiFi channel analysis (from shared)
-- mesh_integration: HTP mesh network for device tracking (replaces RADIUS)
-- config: Unified configuration management with sensible defaults
+All external imports are wrapped in try/except so Guardian starts even if
+optional modules (core.threat_detection, shared.mobile_security, etc.) are
+not installed on the target device.
 
 Author: HookProbe Team
-Version: 5.0.0 Cortex
+Version: 5.1.0
 License: AGPL-3.0 - see LICENSE in this directory
 """
 
-# Core modules - shared across all products
-from core.threat_detection import (
-    LayerThreatDetector,
-    ThreatEvent,
-    ThreatSeverity,
-    OSILayer,
-    LayerThreatStats
-)
+import logging as _log
 
-# Shared mobile security module
-from shared.mobile_security import (
-    MobileNetworkProtection,
-    MobileProtectionConfig,
-    NetworkProfile,
-    NetworkThreat,
-    SecurityCheck,
-    ThreatType,
-    ProtectionStatus,
-    NetworkTrustLevel,
-    CaptivePortalStatus
-)
+_logger = _log.getLogger(__name__)
 
-from .guardian_agent import (
-    GuardianAgent,
-    GuardianMetrics
-)
+# ---- Core modules - shared across all products ----
+try:
+    from core.threat_detection import (
+        LayerThreatDetector,
+        ThreatEvent,
+        ThreatSeverity,
+        OSILayer,
+        LayerThreatStats
+    )
+except ImportError:
+    _logger.debug("core.threat_detection not available")
+    LayerThreatDetector = ThreatEvent = ThreatSeverity = OSILayer = LayerThreatStats = None
 
-from .htp_client import (
-    GuardianHTPClient,
-    GuardianHTPService,
-    HTPConfig,
-    HTPPacket,
-    HTPPacketType
-)
+# ---- Shared mobile security module ----
+try:
+    from shared.mobile_security import (
+        MobileNetworkProtection,
+        MobileProtectionConfig,
+        NetworkProfile,
+        NetworkThreat,
+        SecurityCheck,
+        ThreatType,
+        ProtectionStatus,
+        NetworkTrustLevel,
+        CaptivePortalStatus
+    )
+except ImportError:
+    _logger.debug("shared.mobile_security not available")
+    MobileNetworkProtection = MobileProtectionConfig = NetworkProfile = None
+    NetworkThreat = SecurityCheck = ThreatType = ProtectionStatus = None
+    NetworkTrustLevel = CaptivePortalStatus = None
 
-# HTP File Transfer - imported from core (single source of truth)
-from core.htp.transport.htp_file import (
-    HTPFileTransfer,
-    HTPFileServer,
-    FileOperation,
-    FileFlags,
-    FileErrorCode,
-    FileTransferHeader,
-    FileMetadata,
-    DirectoryEntry,
-    TransferState,
-    HTPFileError,
-    IntegrityError,
-    TransferError
-)
+# ---- Guardian core modules ----
+try:
+    from .guardian_agent import (
+        GuardianAgent,
+        GuardianMetrics
+    )
+except ImportError:
+    _logger.debug("guardian_agent not available")
+    GuardianAgent = GuardianMetrics = None
 
-# Shared SDN/OpenFlow controller
-from shared.network.sdn import (
-    OpenFlowController,
-    FlowEntry,
-    FlowMatch,
-    FlowAction,
-    SwitchFeatures,
-    OVSBridge,
-    VLANRange,
-    OFP_CONSTANTS
-)
+try:
+    from .htp_client import (
+        GuardianHTPClient,
+        GuardianHTPService,
+        HTPConfig,
+        HTPPacket,
+        HTPPacketType
+    )
+except ImportError:
+    _logger.debug("htp_client not available")
+    GuardianHTPClient = GuardianHTPService = HTPConfig = HTPPacket = HTPPacketType = None
 
-# Guardian-specific OpenFlow extensions
-from .openflow_controller import (
-    OVSManager,
-    GuardianVLAN,
-    OFPType,
-    OFPActionType,
-    OFPFlowModCommand,
-    OFPPort
-)
+# ---- HTP File Transfer - imported from core ----
+try:
+    from core.htp.transport.htp_file import (
+        HTPFileTransfer,
+        HTPFileServer,
+        FileOperation,
+        FileFlags,
+        FileErrorCode,
+        FileTransferHeader,
+        FileMetadata,
+        DirectoryEntry,
+        TransferState,
+        HTPFileError,
+        IntegrityError,
+        TransferError
+    )
+except ImportError:
+    _logger.debug("core.htp.transport.htp_file not available")
+    HTPFileTransfer = HTPFileServer = FileOperation = FileFlags = FileErrorCode = None
+    FileTransferHeader = FileMetadata = DirectoryEntry = TransferState = None
+    HTPFileError = IntegrityError = TransferError = None
 
-# RADIUS integration removed - Guardian now uses HTP mesh for device tracking
-# See mesh_integration.py for the new approach
+# ---- Shared SDN/OpenFlow controller ----
+try:
+    from shared.network.sdn import (
+        OpenFlowController,
+        FlowEntry,
+        FlowMatch,
+        FlowAction,
+        SwitchFeatures,
+        OVSBridge,
+        VLANRange,
+        OFP_CONSTANTS
+    )
+except ImportError:
+    _logger.debug("shared.network.sdn not available")
+    OpenFlowController = FlowEntry = FlowMatch = FlowAction = None
+    SwitchFeatures = OVSBridge = VLANRange = OFP_CONSTANTS = None
 
-# Shared network segmentation
-from shared.network import (
-    NetworkSegmentation,
-    NFTablesManager,
-    VLANConfig,
-    FirewallRule,
-    SegmentationPolicy,
-    VLANCategory,
-    SecurityZone,
-    TrafficAction,
-    SERVICE_PORTS,
-    IOT_VENDOR_VLANS,
-    get_vlan_for_mac
-)
+# ---- Guardian-specific OpenFlow extensions ----
+try:
+    from .openflow_controller import (
+        OVSManager,
+        GuardianVLAN,
+        OFPType,
+        OFPActionType,
+        OFPFlowModCommand,
+        OFPPort
+    )
+except ImportError:
+    _logger.debug("openflow_controller not available")
+    OVSManager = GuardianVLAN = OFPType = OFPActionType = OFPFlowModCommand = OFPPort = None
 
-# Alias for backwards compatibility
-NetworkSegmentationService = NetworkSegmentation
+# ---- Shared network segmentation ----
+try:
+    from shared.network import (
+        NetworkSegmentation,
+        NFTablesManager,
+        VLANConfig,
+        FirewallRule,
+        SegmentationPolicy,
+        VLANCategory,
+        SecurityZone,
+        TrafficAction,
+        SERVICE_PORTS,
+        IOT_VENDOR_VLANS,
+        get_vlan_for_mac
+    )
+    # Alias for backwards compatibility
+    NetworkSegmentationService = NetworkSegmentation
+except ImportError:
+    _logger.debug("shared.network not available")
+    NetworkSegmentation = NFTablesManager = VLANConfig = FirewallRule = None
+    SegmentationPolicy = VLANCategory = SecurityZone = TrafficAction = None
+    SERVICE_PORTS = IOT_VENDOR_VLANS = get_vlan_for_mac = None
+    NetworkSegmentationService = None
 
-# Shared wireless channel scanner
-from shared.wireless import (
-    WiFiChannelScanner,
-    ScanResult,
-    ChannelInfo,
-    DetectedNetwork,
-    Band
-)
+# ---- Shared wireless channel scanner ----
+try:
+    from shared.wireless import (
+        WiFiChannelScanner,
+        ScanResult,
+        ChannelInfo,
+        DetectedNetwork,
+        Band
+    )
+except ImportError:
+    _logger.debug("shared.wireless not available")
+    WiFiChannelScanner = ScanResult = ChannelInfo = DetectedNetwork = Band = None
 
+# ---- Configuration (always required) ----
 from .config import (
     GuardianConfig,
     OpenFlowConfig,
@@ -203,11 +241,9 @@ __all__ = [
     'OFPFlowModCommand',
     'OFPPort',
 
-    # RADIUS Integration removed - using HTP mesh instead
-
     # Network Segmentation (from shared)
     'NetworkSegmentation',
-    'NetworkSegmentationService',  # Backwards compatibility alias
+    'NetworkSegmentationService',
     'NFTablesManager',
     'VLANConfig',
     'FirewallRule',
@@ -244,4 +280,4 @@ __all__ = [
     'DEFAULT_CONFIG_PATH',
 ]
 
-__version__ = '5.0.0'
+__version__ = '5.1.0'

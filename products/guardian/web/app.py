@@ -5,23 +5,11 @@ HookProbe Guardian - Local Web UI
 Modular Flask application with Blueprint architecture.
 Runs on http://192.168.4.1:8080
 
-Version: 5.0.0 - Modular Architecture
-
-Changes in 5.1.0:
-- Refactored to modular Flask blueprint architecture
-- Beautiful responsive UI with Forty-inspired design
-- Improved mobile experience
-- HTP secure tunnel (no WireGuard/OpenVPN)
-- Enhanced dnsXai with kill switch
-
-Changes in 5.0.0:
-- Added L2-L7 OSI layer threat detection and reporting
-- Added mobile network protection for hotel/public WiFi
-- QSecBit integration with layer-specific metrics
-- New Security tab with layer breakdown visualization
+Version: 5.2.0 - Security Hardening + AEGIS Integration
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from flask import Flask, send_file
 
@@ -37,9 +25,12 @@ def create_app(config_class=Config):
 
     app.config.from_object(config_class)
 
-    # Secret key for sessions
-    if app.config.get('SECRET_KEY') is None:
-        app.config['SECRET_KEY'] = os.urandom(24)
+    # Persistent secret key (survives restarts)
+    secret_key = _load_secret_key()
+    app.config['SECRET_KEY'] = secret_key
+
+    # Session configuration
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
 
     # Register all blueprints
     register_blueprints(app)
@@ -53,33 +44,34 @@ def create_app(config_class=Config):
             return send_file(logo_path, mimetype='image/png')
         return '', 404
 
+    # Cortex module serving with path traversal protection
+    CORTEX_BASE_PATHS = [
+        Path('/opt/hookprobe/shared/cortex/frontend/js').resolve(),
+        (Path(__file__).parent.parent.parent.parent / 'shared' / 'cortex' / 'frontend' / 'js').resolve(),
+    ]
+
     @app.route('/cortex-modules/<path:filename>')
     def serve_cortex_modules(filename):
-        """Serve shared Cortex visualization modules.
-
-        Paths searched (in order):
-        1. /opt/hookprobe/shared/cortex/frontend/js/ (installed location)
-        2. Relative to repository root (development location)
-        """
-        possible_paths = [
-            # Installed location (setup.sh copies here)
-            Path('/opt/hookprobe/shared/cortex/frontend/js') / filename,
-            # Development location (relative to products/guardian/web/)
-            Path(__file__).parent.parent.parent.parent / 'shared' / 'cortex' / 'frontend' / 'js' / filename,
-        ]
-        for cortex_path in possible_paths:
-            if cortex_path.exists():
-                return send_file(cortex_path, mimetype='application/javascript')
-        app.logger.warning(f"Cortex module not found: {filename}. Tried: {[str(p) for p in possible_paths]}")
+        """Serve shared Cortex visualization modules (path-safe)."""
+        for base in CORTEX_BASE_PATHS:
+            try:
+                candidate = (base / filename).resolve()
+            except (ValueError, RuntimeError):
+                continue
+            # Verify the resolved path is within the base directory
+            if base in candidate.parents or candidate == base:
+                if candidate.exists() and candidate.is_file():
+                    return send_file(candidate, mimetype='application/javascript')
+        app.logger.warning("Cortex module not found or path denied: %s", filename)
         return '', 404
 
     @app.route('/favicon.ico')
     def serve_favicon():
         """Serve favicon."""
-        return send_file(
-            Path(app.static_folder) / 'img' / 'favicon.ico',
-            mimetype='image/x-icon'
-        ) if (Path(app.static_folder) / 'img' / 'favicon.ico').exists() else ('', 404)
+        favicon = Path(app.static_folder) / 'img' / 'favicon.ico'
+        if favicon.exists():
+            return send_file(favicon, mimetype='image/x-icon')
+        return '', 404
 
     # Error handlers
     @app.errorhandler(404)
@@ -91,6 +83,32 @@ def create_app(config_class=Config):
         return {'error': 'Internal server error'}, 500
 
     return app
+
+
+def _load_secret_key():
+    """Load or generate a persistent secret key."""
+    key_file = Path('/opt/hookprobe/guardian/secret_key')
+    env_key = os.environ.get('GUARDIAN_SECRET_KEY')
+
+    if env_key:
+        return env_key
+
+    if key_file.exists():
+        try:
+            return key_file.read_text().strip()
+        except IOError:
+            pass
+
+    # Generate and persist
+    import secrets
+    key = secrets.token_hex(32)
+    try:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(key)
+        key_file.chmod(0o600)
+    except IOError:
+        pass  # Fall through with ephemeral key
+    return key
 
 
 # Create the application instance
