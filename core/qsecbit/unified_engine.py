@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any
 from enum import Enum
+from collections import deque
 
 import numpy as np
 
@@ -205,8 +206,8 @@ class UnifiedThreatEngine:
             print("✓ Response orchestration enabled")
 
         # Scoring history
-        self.score_history: List[QsecbitUnifiedScore] = []
-        self.threat_history: List[ThreatEvent] = []
+        self.score_history: deque = deque(maxlen=1000)
+        self.threat_history: deque = deque(maxlen=10000)
 
         # Attack chain tracking
         self.active_chains: Dict[str, List[ThreatEvent]] = {}  # chain_id -> [events]
@@ -322,14 +323,9 @@ class UnifiedThreatEngine:
             hostname=self.hostname
         )
 
-        # Store history
+        # Store history (deque maxlen handles eviction)
         self.score_history.append(unified_score)
-        if len(self.score_history) > 1000:
-            self.score_history = self.score_history[-1000:]
-
         self.threat_history.extend(all_threats)
-        if len(self.threat_history) > 10000:
-            self.threat_history = self.threat_history[-10000:]
 
         # Execute responses
         if self.response_orchestrator:

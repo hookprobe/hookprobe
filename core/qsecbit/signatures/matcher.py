@@ -19,7 +19,7 @@ import hashlib
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Set, Any, Callable
-from collections import defaultdict
+from collections import defaultdict, deque
 import threading
 
 from .database import (
@@ -145,8 +145,8 @@ class SignatureMatcher:
         self._bloom = BloomFilter(size=10000)
 
         # Match cache (LRU-style)
-        self._cache: Dict[str, MatchResult] = {}
-        self._cache_order: List[str] = []
+        self._cache: Dict[str, List[MatchResult]] = {}
+        self._cache_order: deque = deque()
         self._cache_lock = threading.Lock()
 
         # Pre-compiled fast checks
@@ -299,7 +299,7 @@ class SignatureMatcher:
         with self._cache_lock:
             if cache_key in self._cache:
                 self.stats['cache_hits'] += 1
-                return [self._cache[cache_key]]
+                return self._cache[cache_key]
 
         # Get applicable signatures
         signatures = self._get_applicable_signatures(layer, protocol, port)
@@ -353,9 +353,9 @@ class SignatureMatcher:
                 (self.stats['avg_match_time_us'] * (total - 1) + match_time_us) / total
             )
 
-        # Cache first result (if any)
+        # Cache all results
         if results:
-            self._add_to_cache(cache_key, results[0])
+            self._add_to_cache(cache_key, results)
 
         return results
 
@@ -491,18 +491,18 @@ class SignatureMatcher:
             f"{feature_str}:{context_str}".encode(), usedforsecurity=False
         ).hexdigest()[:16]
 
-    def _add_to_cache(self, key: str, result: MatchResult):
-        """Add result to cache with LRU eviction."""
+    def _add_to_cache(self, key: str, results: List[MatchResult]):
+        """Add results to cache with LRU eviction."""
         with self._cache_lock:
             if key in self._cache:
                 return
 
             # Evict oldest if full
             if len(self._cache) >= self.cache_size:
-                oldest = self._cache_order.pop(0)
+                oldest = self._cache_order.popleft()
                 del self._cache[oldest]
 
-            self._cache[key] = result
+            self._cache[key] = list(results)
             self._cache_order.append(key)
 
     def clear_cache(self):

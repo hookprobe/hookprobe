@@ -22,6 +22,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread, Event
 from typing import Optional, Dict, List
+from collections import deque
 from datetime import datetime
 
 import numpy as np
@@ -161,7 +162,7 @@ class HookProbeAgent:
 
         # Threat tracking
         self.active_threats: List['ThreatEvent'] = []
-        self.rag_history: List[Dict] = []  # Track RAG status changes
+        self.rag_history: deque = deque(maxlen=100)  # Track RAG status changes
 
         # Configuration
         self.xdp_enabled = os.getenv("XDP_ENABLED", "false").lower() == "true"
@@ -403,10 +404,6 @@ class HookProbeAgent:
                 "score": score,
                 "timestamp": datetime.now().isoformat()
             })
-            # Keep only last 100 entries
-            if len(self.rag_history) > 100:
-                self.rag_history = self.rag_history[-100:]
-
         if rag_status == "RED":
             logger.warning(f"RED ALERT: Qsecbit score {score:.3f} - System under stress!")
             self._handle_red_alert(metrics, score)
