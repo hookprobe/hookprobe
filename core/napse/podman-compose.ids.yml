@@ -1,0 +1,153 @@
+# HookProbe IDS Infrastructure v3.1
+# ==================================
+#
+# Inspector (Python) + QSecBit Scoring Architecture
+#
+# Shared IDS/monitoring stack for both:
+#   - hookprobe.com (public website)
+#   - HookProbe Fortress (security platform)
+#
+# This stack receives mirrored traffic from the dummy-mirror interface
+# and provides unified threat detection and logging.
+#
+# Prerequisites:
+#   1. Run setup-vrf.sh to create dummy-mirror interface
+#   2. ClickHouse must be running and healthy
+#
+# Usage:
+#   sudo podman-compose -f podman-compose.ids.yml up -d
+#
+# Architecture:
+#   dummy-mirror (receives all mirrored traffic)
+#        |
+#        +---> Inspector (Python AF_PACKET capture + heuristic classification)
+#        |       |---> napse_intents (intent classifications -> ClickHouse)
+#        |       |---> napse_flows (flow summaries -> ClickHouse)
+#        |       +---> xdp_stats (traffic counters -> ClickHouse)
+#        |
+#        +---> Log Shipper (backup JSONL pipeline -> ClickHouse)
+#        |
+#        +---> QSecBit (security scoring from ClickHouse data)
+#
+# Version: 3.1.0
+
+name: hookprobe-ids
+
+volumes:
+  clickhouse_data:
+    name: ids-clickhouse-data
+  clickhouse_logs:
+    name: ids-clickhouse-logs
+
+services:
+  # ============================================================================
+  # DATA TIER - Event Analytics Database
+  # ============================================================================
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.8
+    container_name: ids-clickhouse
+    hostname: ids-clickhouse
+    restart: unless-stopped
+    # Host network mode - all other IDS containers already use host networking.
+    # ClickHouse binds directly on host ports 8123/9000.
+    # This avoids the broken port forwarding with internal bridge networks.
+    network_mode: host
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
+    environment:
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8123/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    labels:
+      - "hookprobe.service=clickhouse"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Event analytics database"
+
+  # ============================================================================
+  # CAPTURE + CLASSIFICATION - Inspector (Python AF_PACKET)
+  # ============================================================================
+  #
+  # Production-ready packet capture and heuristic intent classification.
+  # Captures real traffic from dummy-mirror using raw sockets and writes
+  # directly to ClickHouse (napse_intents, napse_flows, xdp_stats).
+  #
+  # Replaces Aegis (Zig/eBPF) + Napse (Mojo) scaffolds with working code.
+  # ============================================================================
+
+  inspector:
+    build:
+      context: ./inspector
+      dockerfile: Containerfile
+    container_name: ids-inspector
+    hostname: ids-inspector
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+    command: ["--interface", "dummy-mirror", "--stats-interval", "10", "--flush-interval", "30"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "hookprobe.service=inspector"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Real-time packet capture and intent classification"
+
+  # ============================================================================
+  # SCORING TIER - QSecBit Security Scoring Engine
+  # ============================================================================
+
+  qsecbit:
+    build:
+      context: ./qsecbit
+      dockerfile: Containerfile
+    container_name: ids-qsecbit
+    hostname: ids-qsecbit
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=qsecbit"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=QSecBit security scoring engine"
