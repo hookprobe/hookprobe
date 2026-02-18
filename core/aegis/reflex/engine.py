@@ -17,6 +17,7 @@ import logging
 import socket
 import struct
 import subprocess
+import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
@@ -79,9 +80,10 @@ class ReflexEngine:
         self._interface = interface
         self._mirage_port = mirage_port
 
-        # Per-IP state
+        # Per-IP state (guarded by _targets_lock)
         self._targets: Dict[str, ReflexTarget] = {}
         self._velocity_trackers: Dict[str, ScoreVelocity] = {}
+        self._targets_lock = threading.Lock()
 
         # Decision audit log
         self._decision_log: deque = deque(maxlen=10000)
@@ -117,6 +119,11 @@ class ReflexEngine:
         Returns:
             ReflexDecision if level changed, None if no change.
         """
+        with self._targets_lock:
+            return self._evaluate_locked(ip, qsecbit_score)
+
+    def _evaluate_locked(self, ip: str, qsecbit_score: float) -> Optional[ReflexDecision]:
+        """Evaluate under lock (internal)."""
         # Compute velocity
         velocity = self._compute_velocity(ip, qsecbit_score)
 
@@ -217,11 +224,12 @@ class ReflexEngine:
                 if decision:
                     decisions.append(decision)
 
-        # Run recovery checks for targets in JITTER+ levels
-        for ip, target in list(self._targets.items()):
+        # Snapshot targets under lock for recovery iteration
+        with self._targets_lock:
+            snapshot = list(self._targets.items())
+        for ip, target in snapshot:
             if target.level.value >= ReflexLevel.JITTER.value:
                 if self._recovery.has_target(ip):
-                    # Recovery engine will be updated externally with energy data
                     pass
 
         return decisions
@@ -238,25 +246,31 @@ class ReflexEngine:
         """
         result = self._recovery.update(ip, energy_z_score)
         if result == "recover":
-            target = self._targets.get(ip)
-            if target:
-                old_level = target.level
-                decision = ReflexDecision(
-                    target_ip=ip,
-                    old_level=old_level,
-                    new_level=ReflexLevel.OBSERVE,
-                    reason=f"Bayesian recovery: P(threat) < {self._recovery.RECOVERY_THRESHOLD}",
-                    qsecbit_score=target.qsecbit_score,
-                    velocity=target.score_velocity,
-                )
-                self._decision_log.append(decision)
-                self._apply_level(ip, ReflexLevel.OBSERVE, target.qsecbit_score, 0.0)
-                logger.info("Recovery: %s %s→OBSERVE (Bayesian self-heal)", ip, old_level.name)
-                return decision
+            with self._targets_lock:
+                target = self._targets.get(ip)
+                if target:
+                    old_level = target.level
+                    decision = ReflexDecision(
+                        target_ip=ip,
+                        old_level=old_level,
+                        new_level=ReflexLevel.OBSERVE,
+                        reason=f"Bayesian recovery: P(threat) < {self._recovery.RECOVERY_THRESHOLD}",
+                        qsecbit_score=target.qsecbit_score,
+                        velocity=target.score_velocity,
+                    )
+                    self._decision_log.append(decision)
+                    self._apply_level(ip, ReflexLevel.OBSERVE, target.qsecbit_score, 0.0)
+                    logger.info("Recovery: %s %s→OBSERVE (Bayesian self-heal)", ip, old_level.name)
+                    return decision
         return None
 
     def remove_target(self, ip: str) -> bool:
         """Remove all reflex interference from an IP."""
+        with self._targets_lock:
+            return self._remove_target_locked(ip)
+
+    def _remove_target_locked(self, ip: str) -> bool:
+        """Remove target under lock (internal)."""
         target = self._targets.get(ip)
         if not target:
             return False
@@ -270,6 +284,11 @@ class ReflexEngine:
 
     def force_level(self, ip: str, level: ReflexLevel, reason: str = "") -> ReflexDecision:
         """Manually force a reflex level (tool_executor interface)."""
+        with self._targets_lock:
+            return self._force_level_locked(ip, level, reason)
+
+    def _force_level_locked(self, ip: str, level: ReflexLevel, reason: str = "") -> ReflexDecision:
+        """Force level under lock (internal)."""
         current = self._targets.get(ip)
         old_level = current.level if current else ReflexLevel.OBSERVE
         score = current.qsecbit_score if current else 0.0
@@ -289,33 +308,40 @@ class ReflexEngine:
 
     def get_status(self) -> Dict[str, Any]:
         """Get comprehensive status for reporting."""
-        return {
-            "active_targets": {
-                ip: target.to_dict() for ip, target in self._targets.items()
-            },
-            "total_targets": len(self._targets),
-            "ebpf_available": self._use_ebpf,
-            "ebpf_loaded": self._bpf_loaded,
-            "recent_decisions": [d.to_dict() for d in list(self._decision_log)[-20:]],
-            "recovery_states": self._recovery.get_all_states(),
-            "level_counts": {
-                level.name: sum(
-                    1 for t in self._targets.values() if t.level == level
-                )
-                for level in ReflexLevel
-            },
-        }
+        with self._targets_lock:
+            return {
+                "active_targets": {
+                    ip: target.to_dict() for ip, target in self._targets.items()
+                },
+                "total_targets": len(self._targets),
+                "ebpf_available": self._use_ebpf,
+                "ebpf_loaded": self._bpf_loaded,
+                "recent_decisions": [d.to_dict() for d in list(self._decision_log)[-20:]],
+                "recovery_states": self._recovery.get_all_states(),
+                "level_counts": {
+                    level.name: sum(
+                        1 for t in self._targets.values() if t.level == level
+                    )
+                    for level in ReflexLevel
+                },
+            }
 
     def get_target(self, ip: str) -> Optional[Dict[str, Any]]:
         """Get state for a specific target IP."""
-        target = self._targets.get(ip)
-        if not target:
-            return None
-        result = target.to_dict()
+        with self._targets_lock:
+            target = self._targets.get(ip)
+            if not target:
+                return None
+            result = target.to_dict()
         recovery = self._recovery.get_state(ip)
         if recovery:
             result["recovery"] = recovery
         return result
+
+    def get_all_targets(self) -> Dict[str, ReflexTarget]:
+        """Get a snapshot of all targets (thread-safe)."""
+        with self._targets_lock:
+            return dict(self._targets)
 
     # ------------------------------------------------------------------
     # Internal: Level application
