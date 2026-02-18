@@ -271,6 +271,17 @@ class FeatureExtractor:
         features.avg_packet_size = np.mean(sizes) if sizes else 0.0
         features.packet_size_variance = np.var(sizes) if len(sizes) > 1 else 0.0
 
+        # Inter-arrival time (IAT) statistics
+        if len(recent_packets) >= 2:
+            timestamps = sorted(p['timestamp'] for p in recent_packets)
+            iats = [(timestamps[i+1] - timestamps[i]).total_seconds()
+                    for i in range(len(timestamps) - 1)]
+            features.inter_arrival_time_avg = float(np.mean(iats))
+            features.inter_arrival_time_std = float(np.std(iats))
+            # Burst ratio: fraction of IATs below 1ms (indicating burst traffic)
+            if iats:
+                features.burst_ratio = sum(1 for t in iats if t < 0.001) / len(iats)
+
         # Protocol distribution
         tcp_count = sum(1 for p in recent_packets if p['protocol'].lower() == 'tcp')
         udp_count = sum(1 for p in recent_packets if p['protocol'].lower() == 'udp')
