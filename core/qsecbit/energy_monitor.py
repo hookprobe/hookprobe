@@ -141,6 +141,7 @@ class EnergyMonitor:
         # RAPL availability
         self.rapl_available = False
         self.rapl_package_path: Optional[Path] = None
+        self._rapl_max_energy_uj: int = 2**32  # Conservative default
         self._detect_rapl()
 
         # NIC and XDP process patterns
@@ -195,6 +196,13 @@ class EnergyMonitor:
                     if energy_file.exists():
                         self.rapl_package_path = energy_file
                         self.rapl_available = True
+                        # Read max_energy_range_uj for correct overflow handling
+                        max_range_file = rapl_dir / "max_energy_range_uj"
+                        if max_range_file.exists():
+                            try:
+                                self._rapl_max_energy_uj = int(max_range_file.read_text().strip())
+                            except (ValueError, OSError):
+                                pass  # Keep conservative default
                         print(f"✓ RAPL energy monitoring enabled: {rapl_dir}")
                         return
 
@@ -397,10 +405,9 @@ class EnergyMonitor:
             if dt > 0:
                 # Calculate package wattage from RAPL
                 energy_delta_uj = rapl_energy - self.prev_snapshot.rapl_energy_uj
-                # Handle RAPL counter overflow (typically 32-bit or 64-bit)
+                # Handle RAPL counter overflow using max_energy_range_uj
                 if energy_delta_uj < 0:
-                    # Assume 64-bit counter overflow
-                    energy_delta_uj += 2**64
+                    energy_delta_uj += self._rapl_max_energy_uj
 
                 energy_delta_j = energy_delta_uj / 1_000_000  # Convert µJ to J
                 package_watts = energy_delta_j / dt

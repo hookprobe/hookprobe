@@ -9,9 +9,8 @@ License: Proprietary
 Version: 5.0.0
 """
 
-import os
 import json
-import shlex
+import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -142,10 +141,21 @@ class ResponseOrchestrator:
         except Exception:
             pass
 
-    def _run_command(self, cmd: str, timeout: int = 10) -> tuple:
-        """Run command safely."""
+    @staticmethod
+    def _validate_ipv4(ip: str) -> bool:
+        """Validate IPv4 address with strict octet range checking (CWE-20)."""
+        pattern = r'^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+        return bool(re.match(pattern, ip))
+
+    @staticmethod
+    def _validate_mac(mac: str) -> bool:
+        """Validate MAC address format (CWE-20)."""
+        pattern = r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'
+        return bool(re.match(pattern, mac))
+
+    def _run_command(self, cmd_list: List[str], timeout: int = 10) -> tuple:
+        """Run command safely using list form (CWE-78 fix)."""
         try:
-            cmd_list = shlex.split(cmd)
             result = subprocess.run(
                 cmd_list, capture_output=True,
                 text=True, timeout=timeout
@@ -349,14 +359,23 @@ class ResponseOrchestrator:
 
         # Fallback to iptables/nftables
         if self.policy.enable_firewall_rules:
-            # Try nftables first
+            ip = threat.source_ip
+            if not self._validate_ipv4(ip):
+                return ResponseResult(
+                    action=ResponseAction.BLOCK_IP,
+                    success=False,
+                    timestamp=datetime.now(),
+                    details=f"Invalid IP address format: {ip!r}",
+                    target=ip
+                )
+            # Try nftables first (CWE-78 fix: list form)
             _, success = self._run_command(
-                f"nft add element inet filter blocked_ips {{ {threat.source_ip} }}"
+                ['nft', 'add', 'element', 'inet', 'filter', 'blocked_ips', '{', ip, '}']
             )
             if not success:
-                # Try iptables
+                # Try iptables (CWE-78 fix: list form)
                 _, success = self._run_command(
-                    f"iptables -A INPUT -s {threat.source_ip} -j DROP"
+                    ['iptables', '-A', 'INPUT', '-s', ip, '-j', 'DROP']
                 )
 
             if success:
@@ -390,9 +409,19 @@ class ResponseOrchestrator:
 
         mac = threat.source_mac.lower()
 
-        # MAC blocking typically done via ebtables or bridge rules
+        # CWE-20: Validate MAC format
+        if not self._validate_mac(mac):
+            return ResponseResult(
+                action=ResponseAction.BLOCK_MAC,
+                success=False,
+                timestamp=datetime.now(),
+                details=f"Invalid MAC address format: {mac!r}",
+                target=mac
+            )
+
+        # MAC blocking via ebtables (CWE-78 fix: list form)
         _, success = self._run_command(
-            f"ebtables -A INPUT -s {mac} -j DROP"
+            ['ebtables', '-A', 'INPUT', '-s', mac, '-j', 'DROP']
         )
 
         if success:
@@ -424,9 +453,19 @@ class ResponseOrchestrator:
                 details="No source IP for session termination"
             )
 
-        # Kill established connections using ss/conntrack
+        ip = threat.source_ip
+        if not self._validate_ipv4(ip):
+            return ResponseResult(
+                action=ResponseAction.TERMINATE_SESSION,
+                success=False,
+                timestamp=datetime.now(),
+                details=f"Invalid IP address format: {ip!r}",
+                target=ip
+            )
+
+        # Kill established connections (CWE-78 fix: list form)
         _, success = self._run_command(
-            f"conntrack -D -s {threat.source_ip}"
+            ['conntrack', '-D', '-s', ip]
         )
 
         return ResponseResult(
@@ -461,11 +500,15 @@ class ResponseOrchestrator:
 
     def _unblock_ip(self, ip: str):
         """Remove IP block."""
+        if not self._validate_ipv4(ip):
+            return
+
         if self.xdp_manager and hasattr(self.xdp_manager, 'unblock_ip'):
             self.xdp_manager.unblock_ip(ip)
 
-        self._run_command(f"nft delete element inet filter blocked_ips {{ {ip} }} 2>/dev/null")
-        self._run_command(f"iptables -D INPUT -s {ip} -j DROP 2>/dev/null")
+        # CWE-78 fix: list form (stderr suppression handled by capture_output)
+        self._run_command(['nft', 'delete', 'element', 'inet', 'filter', 'blocked_ips', '{', ip, '}'])
+        self._run_command(['iptables', '-D', 'INPUT', '-s', ip, '-j', 'DROP'])
 
         if ip in self.blocked_ips:
             del self.blocked_ips[ip]
