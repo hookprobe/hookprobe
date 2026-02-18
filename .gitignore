@@ -282,3 +282,5 @@ config.local.sh
 # MacOS network storage
 ._.DS_Store
 .claude.local
+.claude/settings.local.json
+.claude/agent-memory/
