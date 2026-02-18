@@ -164,7 +164,7 @@ class NapseOrchestrator:
 
     Lifecycle:
         1. __init__: Parse config, create event bus
-        2. setup(): Import and wire Rust engine + Python synthesis modules
+        2. setup(): Initialize capture engine (Mojo/Inspector/synthesis-only)
         3. run(): Start metrics server, packet capture loop
         4. shutdown(): Graceful stop
     """
@@ -445,7 +445,7 @@ class NapseOrchestrator:
             sock.close()
 
     def _run_synthesis_only(self) -> None:
-        """Run in synthesis-only mode (no Rust engine).
+        """Run in synthesis-only mode (no capture engine).
 
         Useful for development or when running alongside an external
         IDS that writes EVE JSON logs.
