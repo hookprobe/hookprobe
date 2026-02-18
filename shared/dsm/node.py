@@ -190,11 +190,12 @@ class DSMNode:
         """
         Calculate unique block ID from microblock content.
 
-        Block ID is SHA-256 of all fields except 'signature'.
+        Block ID is SHA-256 of all fields except 'signature' and 'id'.
         This creates a deterministic, content-addressed identifier.
         """
-        # Copy microblock without signature
-        content = {k: v for k, v in microblock.items() if k != 'signature'}
+        # Copy microblock without signature and id (id is derived from content)
+        content = {k: v for k, v in microblock.items()
+                   if k not in ('signature', 'id')}
 
         # Serialize and hash
         serialized = json.dumps(content, sort_keys=True).encode('utf-8')
