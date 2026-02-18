@@ -581,6 +581,10 @@ class Qsecbit:
             self.config.epsilon * energy_anomaly
         )
 
+        # Clamp to valid range — external inputs (p_attack, energy_anomaly)
+        # may exceed 1.0 in edge cases
+        R = float(np.clip(R, 0.0, 1.0))
+
         # RAG classification
         rag = self._classify_rag(R)
 
