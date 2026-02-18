@@ -1,9 +1,9 @@
 """
 NAPSE Event Synthesis Layer (Layer 2)
 
-Routes structured events from the Rust protocol engine to all
-HookProbe consumers: QSecBit, AEGIS, D2D Bubbles, ClickHouse,
-Cortex, and mesh propagation.
+Routes structured events from the capture engine (Mojo Brain,
+Python Inspector, or eBPF) to all HookProbe consumers: QSecBit,
+AEGIS, D2D Bubbles, ClickHouse, Cortex, and mesh propagation.
 
 Modules:
     event_bus       - Central typed event distribution
