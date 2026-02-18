@@ -9,6 +9,8 @@ License: Proprietary
 Version: 5.0.0
 """
 
+import hashlib
+import hmac
 import math
 import pickle
 from pathlib import Path
@@ -18,6 +20,10 @@ from typing import Optional, Dict, List, Any, Tuple
 from collections import deque, defaultdict
 
 import numpy as np
+
+# HMAC key for model integrity verification (CWE-502 mitigation)
+# In production this should come from a config file or env var
+_MODEL_HMAC_KEY = b'hookprobe-qsecbit-model-integrity-key'
 
 from ..threat_types import AttackType, ThreatSeverity
 
@@ -395,10 +401,31 @@ class AttackClassifier:
         ]
 
     def _load_model(self):
-        """Load pre-trained model from disk."""
+        """Load pre-trained model from disk with integrity verification (CWE-502 fix).
+
+        Verifies HMAC-SHA256 signature before deserializing to prevent
+        arbitrary code execution via crafted pickle files.
+        The .sig file must exist alongside the model file.
+        """
+        sig_path = self.model_path.with_suffix('.sig')
         try:
-            with open(self.model_path, 'rb') as f:
-                self.model = pickle.load(f)
+            model_bytes = self.model_path.read_bytes()
+
+            # Verify HMAC signature if .sig file exists
+            if sig_path.exists():
+                expected_sig = sig_path.read_text().strip()
+                actual_sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(expected_sig, actual_sig):
+                    print(f"SECURITY: Model HMAC verification failed for {self.model_path}")
+                    self.model = None
+                    return
+            else:
+                # No signature file — refuse to load untrusted model
+                print(f"Warning: No .sig file for model {self.model_path}, skipping load (use rule-based fallback)")
+                self.model = None
+                return
+
+            self.model = pickle.loads(model_bytes)
         except Exception as e:
             print(f"Warning: Could not load ML model: {e}")
             self.model = None
