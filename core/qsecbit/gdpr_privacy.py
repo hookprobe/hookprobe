@@ -14,10 +14,11 @@ Version: 5.0.0
 """
 
 import hashlib
+import hmac
 import ipaddress
 import re
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -50,7 +51,7 @@ class GDPRConfig:
 
     # Pseudonymization
     pseudonymize_user_ids: bool = False
-    pseudonymization_salt: str = ""  # Set via environment variable
+    pseudonymization_salt: str = field(default="", repr=False)  # Set via environment variable
 
     # Retention
     retention_days: int = 90
@@ -100,9 +101,19 @@ class PrivacyPreserver:
             method = self.config.ip_method
 
             if method == AnonymizationMethod.MASK:
-                # Mask last octet: 192.168.1.123 -> 192.168.1.0
-                parts = ip.split('.')
-                return f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+                addr = ipaddress.IPv4Address(ip)
+                if addr.is_private:
+                    # HMAC pseudonymization for private IPs (GDPR-compliant)
+                    # Last-octet masking is reversible on small /24 networks
+                    salt = self.config.pseudonymization_salt or 'default-salt'
+                    tag = hmac.new(
+                        salt.encode(), ip.encode(), hashlib.sha256
+                    ).hexdigest()[:8]
+                    return f"anon-{tag}"
+                else:
+                    # Public IPs: mask last octet (large address space)
+                    parts = ip.split('.')
+                    return f"{parts[0]}.{parts[1]}.{parts[2]}.0"
 
             elif method == AnonymizationMethod.HASH:
                 # Cryptographic hash (irreversible)
