@@ -149,10 +149,10 @@ class ReflexBridge(BaseBridge):
 
             # Fallback: use global score for all known targets
             global_score = data.get("global", {}).get("score", 0.0)
-            if global_score > 0 and self._engine._targets:
+            if global_score > 0 and self._engine.get_all_targets():
                 return {
                     ip: {"score": global_score}
-                    for ip in self._engine._targets
+                    for ip in self._engine.get_all_targets()
                 }
 
             return {}
