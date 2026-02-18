@@ -6,6 +6,7 @@ Provides input/output sanitization to prevent prompt injection and
 credential leakage. Rate-limits agent actions to prevent runaway loops.
 """
 
+import json
 import logging
 import re
 import time
@@ -25,7 +26,7 @@ IMMUTABLE_PRINCIPLES = {
         "description": "Never disable firewall, IDS, DNS protection, or any security service",
         "blocked_actions": [
             "disable_firewall", "stop_qsecbit", "stop_dnsxai", "disable_ids",
-            "stop_napse", "disable_protection",
+            "stop_napse", "disable_protection", "disable_reflex",
         ],
         "blocked_patterns": [
             r"(?:disable|stop|kill|remove|shutdown)\s+(?:firewall|protection|security|qsecbit|dnsxai|napse|ids)",
@@ -355,7 +356,3 @@ def get_principles_summary() -> str:
     for key, principle in IMMUTABLE_PRINCIPLES.items():
         lines.append(f"- **{key}**: {principle['description']}")
     return "\n".join(lines)
-
-
-# Need json for check_action
-import json  # noqa: E402
