@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from flask import jsonify, request, Response
 from . import security_bp
 from utils import run_command, load_json_file
+from modules.auth import require_auth
 
 # Block log file location
 BLOCK_LOG_FILE = '/var/log/hookprobe/security/blocks.json'
@@ -403,6 +404,7 @@ def _validate_ipv4(ip: str) -> bool:
 
 
 @security_bp.route('/block_ip', methods=['POST'])
+@require_auth
 def api_block_ip():
     """Block an IP address via XDP."""
     from flask import request
@@ -428,6 +430,7 @@ def api_block_ip():
 
 
 @security_bp.route('/unblock_ip', methods=['POST'])
+@require_auth
 def api_unblock_ip():
     """Unblock an IP address."""
     from flask import request

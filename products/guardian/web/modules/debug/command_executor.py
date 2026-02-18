@@ -236,14 +236,7 @@ COMMAND_WHITELIST: Dict[str, CommandSpec] = {
         allowed_subcommands=['ps', 'logs', 'inspect', 'images', 'stats'],
         max_args=4
     ),
-    'docker': CommandSpec(
-        name='docker',
-        category=CommandCategory.CONTAINERS,
-        description='Container management (ps, logs, inspect)',
-        timeout=30,
-        allowed_subcommands=['ps', 'logs', 'inspect', 'images', 'stats'],
-        max_args=4
-    ),
+    # docker removed — project uses rootless Podman only (CLAUDE.md policy)
 
     # Logs
     'journalctl': CommandSpec(
