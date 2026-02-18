@@ -121,8 +121,9 @@ class NeuralDriftCalculator:
             biases=np.zeros(self.OUTPUT_DIM, dtype=np.float32)
         )
 
-        # Running statistics for normalization
+        # Running statistics for normalization (Welford's online algorithm)
         self._input_mean = np.zeros(self.INPUT_DIM, dtype=np.float32)
+        self._input_m2 = np.zeros(self.INPUT_DIM, dtype=np.float32)
         self._input_std = np.ones(self.INPUT_DIM, dtype=np.float32)
         self._samples_seen = 0
 
@@ -151,18 +152,19 @@ class NeuralDriftCalculator:
         return (telemetry - self._input_mean) / std
 
     def _update_running_stats(self, telemetry: np.ndarray) -> None:
-        """Update running mean and std for normalization."""
+        """Update running mean and std for normalization (Welford's algorithm)."""
         self._samples_seen += 1
 
         # Online mean update
         delta = telemetry - self._input_mean
         self._input_mean += delta / self._samples_seen
 
-        # Online std update (Welford's algorithm)
+        # Accumulate M2 for online variance (Welford's algorithm)
+        delta2 = telemetry - self._input_mean
+        self._input_m2 += delta * delta2
+
         if self._samples_seen > 1:
-            delta2 = telemetry - self._input_mean
-            m2 = (delta * delta2)
-            self._input_std = np.sqrt(m2 / self._samples_seen + 1e-6)
+            self._input_std = np.sqrt(self._input_m2 / self._samples_seen + 1e-6)
 
     def forward(self, x: np.ndarray) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
