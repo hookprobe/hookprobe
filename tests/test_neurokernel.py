@@ -1,5 +1,5 @@
 """
-Neuro-Kernel Phase 1, Phase 2, Phase 3 & Phase 4 Tests
+Neuro-Kernel Phase 1-5 Tests
 
 Phase 1: Template-based kernel orchestration system
   - Type definitions
@@ -32,6 +32,14 @@ Phase 4: Hybrid Inference
   - Hybrid inference router (fast/local/nexus)
   - Tier-appropriate routing
   - End-to-end: threat → verdict
+
+Phase 5: AEGIS Integration
+  - Profile neurokernel config blocks
+  - Kernel packet types in mesh transport
+  - Kernel tools in tool executor
+  - Kernel routing rules in orchestrator
+  - Memory streaming layer wiring
+  - End-to-end: profile → router → verdict
 
 Run:
     pytest tests/test_neurokernel.py -v --override-ini="addopts="
@@ -2354,8 +2362,8 @@ class TestPhase3Exports:
 
     def test_version_bumped(self):
         import core.aegis.neurokernel as nk
-        # Check the docstring contains 4.0.0
-        assert "4.0.0" in nk.__doc__
+        # Phase 3 was at 3.0.0, current is 5.0.0 (bumped through phases 4 and 5)
+        assert "Version:" in nk.__doc__
 
 
 # ==================================================================
@@ -3324,4 +3332,325 @@ class TestPhase4Exports:
 
     def test_version_phase4(self):
         import core.aegis.neurokernel as nk
-        assert "4.0.0" in nk.__doc__
+        assert "5.0.0" in nk.__doc__
+
+
+# ==================================================================
+# PHASE 5: INTEGRATION TESTS
+# ==================================================================
+
+
+# ------------------------------------------------------------------
+# Profile Configs
+# ------------------------------------------------------------------
+
+class TestProfileNeuroKernelConfigs:
+    """Verify neurokernel config blocks in all 4 tier profiles."""
+
+    def test_pico_neurokernel_disabled(self):
+        from core.aegis.profiles.pico import PICO_PROFILE
+        nk = PICO_PROFILE["neurokernel"]
+        assert nk["enabled"] is False
+        assert nk["inference_mode"] == "none"
+        assert nk["streaming_rag"] is False
+        assert nk["shadow_pentester"] is False
+        assert nk["llm_monitor"] is False
+
+    def test_lite_neurokernel_offload(self):
+        from core.aegis.profiles.lite import LITE_PROFILE
+        nk = LITE_PROFILE["neurokernel"]
+        assert nk["enabled"] is True
+        assert nk["inference_mode"] == "offload"
+        assert nk["streaming_rag"] is False
+        assert nk["fast_path_threshold"] == 0.90
+        assert nk["nexus_timeout_s"] == 10.0
+
+    def test_full_neurokernel_hybrid(self):
+        from core.aegis.profiles.full import FULL_PROFILE
+        nk = FULL_PROFILE["neurokernel"]
+        assert nk["enabled"] is True
+        assert nk["inference_mode"] == "hybrid"
+        assert nk["streaming_rag"] is True
+        assert nk["streaming_rag_max_vectors"] == 100000
+        assert nk["shadow_pentester"] is True
+        assert nk["llm_monitor"] is True
+        assert nk["local_model_threshold"] == 0.70
+        assert nk["max_active_programs"] == 32
+
+    def test_deep_neurokernel_full(self):
+        from core.aegis.profiles.deep import DEEP_PROFILE
+        nk = DEEP_PROFILE["neurokernel"]
+        assert nk["enabled"] is True
+        assert nk["inference_mode"] == "full"
+        assert nk["streaming_rag"] is True
+        assert nk["streaming_rag_gpu"] is True
+        assert nk["streaming_rag_max_vectors"] == 1000000
+        assert nk["shadow_pentester_interval_s"] == 900
+        assert nk["federated_filters"] is True
+        assert nk["max_active_programs"] == 64
+
+    def test_inference_mode_matches_tier_config(self):
+        """Profile inference_mode values match HybridInferenceRouter tier presets."""
+        from core.aegis.profiles.pico import PICO_PROFILE
+        from core.aegis.profiles.lite import LITE_PROFILE
+        from core.aegis.profiles.full import FULL_PROFILE
+        from core.aegis.profiles.deep import DEEP_PROFILE
+        from core.aegis.neurokernel.hybrid_inference import TIER_CONFIGS
+
+        assert PICO_PROFILE["neurokernel"]["inference_mode"] == TIER_CONFIGS["sentinel"].mode.value
+        assert LITE_PROFILE["neurokernel"]["inference_mode"] == TIER_CONFIGS["guardian"].mode.value
+        assert FULL_PROFILE["neurokernel"]["inference_mode"] == TIER_CONFIGS["fortress"].mode.value
+        assert DEEP_PROFILE["neurokernel"]["inference_mode"] == TIER_CONFIGS["nexus"].mode.value
+
+    def test_all_profiles_have_neurokernel_key(self):
+        from core.aegis.profiles.pico import PICO_PROFILE
+        from core.aegis.profiles.lite import LITE_PROFILE
+        from core.aegis.profiles.full import FULL_PROFILE
+        from core.aegis.profiles.deep import DEEP_PROFILE
+        for name, profile in [
+            ("pico", PICO_PROFILE), ("lite", LITE_PROFILE),
+            ("full", FULL_PROFILE), ("deep", DEEP_PROFILE),
+        ]:
+            assert "neurokernel" in profile, f"{name} profile missing neurokernel"
+            assert "enabled" in profile["neurokernel"]
+            assert "inference_mode" in profile["neurokernel"]
+
+
+# ------------------------------------------------------------------
+# Packet Types
+# ------------------------------------------------------------------
+
+class TestKernelPacketTypes:
+    """Verify KERNEL_* packet types in unified transport."""
+
+    def test_kernel_filter_packet_type(self):
+        from shared.mesh.unified_transport import PacketType
+        assert PacketType.KERNEL_FILTER == 0x60
+
+    def test_kernel_verdict_packet_type(self):
+        from shared.mesh.unified_transport import PacketType
+        assert PacketType.KERNEL_VERDICT == 0x61
+
+    def test_kernel_telemetry_packet_type(self):
+        from shared.mesh.unified_transport import PacketType
+        assert PacketType.KERNEL_TELEMETRY == 0x62
+
+    def test_packet_types_unique(self):
+        from shared.mesh.unified_transport import PacketType
+        values = [pt.value for pt in PacketType]
+        assert len(values) == len(set(values)), "Duplicate PacketType values"
+
+    def test_kernel_types_in_0x60_range(self):
+        from shared.mesh.unified_transport import PacketType
+        kernel_types = [
+            PacketType.KERNEL_FILTER,
+            PacketType.KERNEL_VERDICT,
+            PacketType.KERNEL_TELEMETRY,
+        ]
+        for kt in kernel_types:
+            assert 0x60 <= kt.value <= 0x6F, f"{kt.name} not in 0x60-0x6F range"
+
+
+# ------------------------------------------------------------------
+# Tool Executor Integration
+# ------------------------------------------------------------------
+
+class TestKernelTools:
+    """Verify kernel tools in tool_executor."""
+
+    def test_kernel_tools_defined(self):
+        from core.aegis.tool_executor import TOOL_REGISTRY
+        kernel_tools = [
+            "deploy_ebpf", "rollback_ebpf", "list_kernel_programs",
+            "query_kernel_context", "get_kernel_metrics", "get_inference_verdict",
+        ]
+        for tool_name in kernel_tools:
+            assert tool_name in TOOL_REGISTRY, f"{tool_name} missing from TOOLS"
+
+    def test_query_kernel_context_agents(self):
+        from core.aegis.tool_executor import TOOL_REGISTRY
+        tool = TOOL_REGISTRY["query_kernel_context"]
+        assert "GUARDIAN" in tool.agents
+        assert "ORACLE" in tool.agents
+        assert "query" in tool.parameters["properties"]
+
+    def test_get_inference_verdict_agents(self):
+        from core.aegis.tool_executor import TOOL_REGISTRY
+        tool = TOOL_REGISTRY["get_inference_verdict"]
+        assert "GUARDIAN" in tool.agents
+        assert "event_type" in tool.parameters["required"]
+        assert "source_ip" in tool.parameters["required"]
+
+    def test_get_kernel_metrics_agents(self):
+        from core.aegis.tool_executor import TOOL_REGISTRY
+        tool = TOOL_REGISTRY["get_kernel_metrics"]
+        assert "MEDIC" in tool.agents
+        assert "ORACLE" in tool.agents
+
+    def test_deploy_ebpf_requires_confirmation(self):
+        from core.aegis.tool_executor import TOOL_REGISTRY
+        tool = TOOL_REGISTRY["deploy_ebpf"]
+        assert tool.requires_confirmation is True
+
+
+# ------------------------------------------------------------------
+# Orchestrator Routing Rules
+# ------------------------------------------------------------------
+
+class TestKernelRoutingRules:
+    """Verify kernel routing rules in orchestrator."""
+
+    def test_existing_kernel_rules(self):
+        from core.aegis.orchestrator import ROUTING_RULES
+        assert "kernel.ebpf_deployed" in ROUTING_RULES
+        assert "kernel.ebpf_failed" in ROUTING_RULES
+        assert "kernel.rollback" in ROUTING_RULES
+        assert "kernel.anomaly" in ROUTING_RULES
+
+    def test_new_kernel_rules(self):
+        from core.aegis.orchestrator import ROUTING_RULES
+        assert "kernel.verdict" in ROUTING_RULES
+        assert "GUARDIAN" in ROUTING_RULES["kernel.verdict"]
+        assert "kernel.nexus_offload" in ROUTING_RULES
+        assert "ORACLE" in ROUTING_RULES["kernel.nexus_offload"]
+        assert "kernel.llm_blocked" in ROUTING_RULES
+        assert "MEDIC" in ROUTING_RULES["kernel.llm_blocked"]
+        assert "kernel.shadow_finding" in ROUTING_RULES
+        assert "FORGE" in ROUTING_RULES["kernel.shadow_finding"]
+
+
+# ------------------------------------------------------------------
+# Memory Streaming Layer
+# ------------------------------------------------------------------
+
+class TestMemoryStreamingLayer:
+    """Verify streaming RAG integration in memory manager."""
+
+    def _make_mm(self, tmp_path):
+        from core.aegis.memory import MemoryManager, MemoryConfig
+        config = MemoryConfig(db_path=str(tmp_path / "test_streaming.db"))
+        return MemoryManager(config)
+
+    def test_get_streaming_stats_no_pipeline(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        stats = mm.get_streaming_stats()
+        assert stats == {"enabled": False}
+        mm.close()
+
+    def test_get_streaming_stats_with_pipeline(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        mock_pipeline = MagicMock()
+        mock_pipeline.stats.return_value = {"total_chunks": 42, "store_type": "sqlite"}
+        mm.set_streaming_pipeline(mock_pipeline)
+        stats = mm.get_streaming_stats()
+        assert stats["enabled"] is True
+        assert stats["total_chunks"] == 42
+        mm.close()
+
+    def test_get_stats_includes_streaming(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        mock_pipeline = MagicMock()
+        mock_pipeline.stats.return_value = {"total_chunks": 100}
+        mm.set_streaming_pipeline(mock_pipeline)
+        stats = mm.get_stats()
+        assert "streaming" in stats
+        assert stats["streaming"] == 100
+        mm.close()
+
+    def test_get_stats_no_streaming_key_when_disabled(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        stats = mm.get_stats()
+        assert "streaming" not in stats
+        mm.close()
+
+    def test_recall_streaming_context_no_pipeline(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        result = mm.recall_streaming_context("any query")
+        assert result == ""
+        mm.close()
+
+    def test_recall_streaming_context_with_pipeline(self, tmp_path):
+        mm = self._make_mm(tmp_path)
+        mock_pipeline = MagicMock()
+        mock_pipeline.query.return_value = "Found: SYN flood from 10.0.0.5"
+        mm.set_streaming_pipeline(mock_pipeline)
+        result = mm.recall_streaming_context("SYN flood", k=5)
+        assert "SYN flood" in result
+        mock_pipeline.query.assert_called_once_with("SYN flood", k=5)
+        mm.close()
+
+
+# ------------------------------------------------------------------
+# Phase 5 E2E: Profile → Router → Verdict
+# ------------------------------------------------------------------
+
+class TestPhase5E2E:
+    """End-to-end: profile config drives hybrid inference routing."""
+
+    def test_profile_to_router_fortress(self):
+        """Fortress profile creates hybrid router."""
+        from core.aegis.profiles.full import FULL_PROFILE
+        from core.aegis.neurokernel.hybrid_inference import (
+            create_hybrid_router, InferenceMode,
+        )
+        nk = FULL_PROFILE["neurokernel"]
+        router = create_hybrid_router(tier=FULL_PROFILE["tier"])
+        assert router.config.mode == InferenceMode.HYBRID
+        assert nk["inference_mode"] == router.config.mode.value
+
+    def test_profile_to_router_nexus(self):
+        """Nexus profile creates full router."""
+        from core.aegis.profiles.deep import DEEP_PROFILE
+        from core.aegis.neurokernel.hybrid_inference import (
+            create_hybrid_router, InferenceMode,
+        )
+        nk = DEEP_PROFILE["neurokernel"]
+        router = create_hybrid_router(tier=DEEP_PROFILE["tier"])
+        assert router.config.mode == InferenceMode.FULL
+        assert nk["inference_mode"] == router.config.mode.value
+
+    def test_profile_drives_verdict(self):
+        """Full E2E: profile → router → threat context → verdict."""
+        from core.aegis.profiles.full import FULL_PROFILE
+        from core.aegis.neurokernel.hybrid_inference import create_hybrid_router
+        from core.aegis.neurokernel.verdict import ThreatContext, VerdictAction
+
+        router = create_hybrid_router(tier=FULL_PROFILE["tier"])
+        ctx = ThreatContext(
+            event_type="syn_flood",
+            source_ip="10.0.0.5",
+            qsecbit_score=0.10,
+            qsecbit_confidence=0.98,
+        )
+        verdict = router.route(ctx)
+        assert verdict.action == VerdictAction.DROP
+
+    def test_routing_rules_cover_kernel_events(self):
+        """All kernel.* routing rules map to known AEGIS agent names."""
+        from core.aegis.orchestrator import ROUTING_RULES
+        valid_agents = {
+            "GUARDIAN", "WATCHDOG", "SHIELD", "VIGIL",
+            "SCOUT", "FORGE", "MEDIC", "ORACLE",
+        }
+        for key, agents in ROUTING_RULES.items():
+            if key.startswith("kernel."):
+                for agent in agents:
+                    assert agent in valid_agents, \
+                        f"Rule '{key}' routes to unknown agent '{agent}'"
+
+
+# ------------------------------------------------------------------
+# Phase 5 Version
+# ------------------------------------------------------------------
+
+class TestPhase5Version:
+    """Verify Phase 5 version bump."""
+
+    def test_version_5(self):
+        import core.aegis.neurokernel as nk
+        assert "5.0.0" in nk.__doc__
+
+    def test_phase5_in_docstring(self):
+        import core.aegis.neurokernel as nk
+        assert "Phase 5" in nk.__doc__
+        assert "Integration" in nk.__doc__

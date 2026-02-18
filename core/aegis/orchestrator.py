@@ -86,6 +86,10 @@ ROUTING_RULES = {
     "kernel.ebpf_failed": ["FORGE", "MEDIC"],
     "kernel.rollback": ["MEDIC"],
     "kernel.anomaly": ["GUARDIAN", "MEDIC"],
+    "kernel.verdict": ["GUARDIAN"],
+    "kernel.nexus_offload": ["ORACLE"],
+    "kernel.llm_blocked": ["MEDIC"],
+    "kernel.shadow_finding": ["FORGE", "GUARDIAN"],
 
     # Reflex graduated response routing
     "reflex.level_changed": ["GUARDIAN", "MEDIC"],
