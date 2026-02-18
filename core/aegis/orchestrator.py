@@ -50,6 +50,15 @@ ROUTING_RULES = {
     "tls.ssl_strip": ["VIGIL"],
     "scan.detected": ["SCOUT"],
     "scan.port": ["SCOUT"],
+
+    # NAPSE IDS/IPS/NSM routing
+    "napse.ids_alert": ["GUARDIAN"],
+    "napse.anomaly": ["WATCHDOG"],
+    "napse.dns": ["WATCHDOG"],
+    "napse.tls": ["VIGIL"],
+    "napse.http": ["SCOUT"],
+    "napse.file": ["GUARDIAN", "MEDIC"],
+    "napse.flow": ["SCOUT"],
     "mirage.honeypot_deployed": ["SCOUT"],
     "mirage.attacker_profiled": ["SCOUT", "GUARDIAN"],
     "mirage.attacker_learning": ["GUARDIAN", "MEDIC"],
