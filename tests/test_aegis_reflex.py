@@ -698,3 +698,48 @@ class TestReflexIntegration:
         assert "scheduled.recommend_hardening" in ROUTING_RULES
         assert "ORACLE" in ROUTING_RULES["scheduled.health_check"]
         assert "FORGE" in ROUTING_RULES["scheduled.recommend_hardening"]
+
+    def test_reflex_log_only_mode(self):
+        """REFLEX_EXECUTOR=log-only should skip subprocess calls."""
+        with patch.dict(os.environ, {"REFLEX_EXECUTOR": "log-only"}):
+            engine = ReflexEngine(interface="lo")
+            assert engine._executor_mode == "log-only"
+            with patch("subprocess.run") as mock_run:
+                engine._run_fallback_commands([["iptables", "-A", "INPUT", "-j", "DROP"]])
+                mock_run.assert_not_called()
+
+    def test_reflex_active_mode_runs_commands(self):
+        """REFLEX_EXECUTOR=active should execute subprocess calls."""
+        with patch.dict(os.environ, {"REFLEX_EXECUTOR": "active"}):
+            engine = ReflexEngine(interface="lo")
+            assert engine._executor_mode == "active"
+            with patch("subprocess.run") as mock_run:
+                engine._run_fallback_commands([["echo", "test"]])
+                mock_run.assert_called_once()
+
+    def test_aegis_backend_cloud_skips_ollama(self):
+        """AEGIS_BACKEND=cloud should skip Ollama availability check in health."""
+        with patch.dict(os.environ, {"AEGIS_BACKEND": "cloud"}):
+            from core.aegis.inference import NativeInferenceEngine
+            engine = NativeInferenceEngine.__new__(NativeInferenceEngine)
+            engine._ready = False
+            engine._loading = False
+            engine._load_error = ""
+            engine._start_time = time.time()
+            engine._inference_times = deque(maxlen=100)
+            engine._backend_mode = "cloud"
+            engine._backend_stats = {"ollama": 0, "openrouter": 0, "template": 0}
+            engine._last_backend = ""
+            engine._enabled = True
+            engine._ollama = MagicMock()
+            engine._ollama.model_name = "test"
+            # In cloud mode, should NOT call _ollama.is_available
+            health = engine.health_check()
+            assert health["backends"]["ollama"] is False
+
+    def test_engine_atexit_registered(self):
+        """ReflexEngine should register atexit cleanup."""
+        import atexit
+        with patch.object(atexit, 'register') as mock_reg:
+            engine = ReflexEngine(interface="lo")
+            mock_reg.assert_called_once_with(engine.cleanup)

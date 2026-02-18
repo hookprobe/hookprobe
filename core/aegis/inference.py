@@ -356,7 +356,10 @@ class NativeInferenceEngine:
             "enabled": self._enabled,
             "backends": {
                 "openrouter": self.is_ready,
-                "ollama": self._ollama.is_available,
+                "ollama": (
+                    self._ollama.is_available
+                    if self._backend_mode != "cloud" else False
+                ),
                 "ollama_model": self._ollama.model_name,
             },
             "backend_mode": self._backend_mode,
@@ -366,6 +369,8 @@ class NativeInferenceEngine:
 
     def _get_tier(self) -> str:
         """Get the current intelligence tier."""
+        if self._backend_mode == "cloud":
+            return "cloud" if self._ready else ("loading" if self._loading else "template")
         if self._ready and self._ollama.is_available:
             return "hybrid"
         if self._ready:

@@ -147,6 +147,18 @@ elif [ -n "${FLASK_SECRET_KEY:-}" ]; then
     log_info "Using Flask secret key from environment"
 fi
 
+# Validate required secrets are set (no default fallbacks in production)
+if [ -n "${DATABASE_HOST:-}" ] && [ -z "${DATABASE_PASSWORD:-}" ]; then
+    log_error "DATABASE_PASSWORD is required but not set"
+    log_error "Set it in .env or via podman secret"
+    exit 1
+fi
+if [ -n "${REDIS_HOST:-}" ] && [ -z "${REDIS_PASSWORD:-}" ]; then
+    log_error "REDIS_PASSWORD is required but not set"
+    log_error "Set it in .env or via podman secret"
+    exit 1
+fi
+
 # Wait for database to be ready (if using PostgreSQL)
 if [ -n "${DATABASE_HOST}" ]; then
     log_info "Waiting for database at ${DATABASE_HOST}:${DATABASE_PORT:-5432}..."
