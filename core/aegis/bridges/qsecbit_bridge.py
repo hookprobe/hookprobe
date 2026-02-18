@@ -7,6 +7,7 @@ Emits signals when security status changes or new threats appear.
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -30,7 +31,9 @@ class QsecbitBridge(BaseBridge):
     poll_interval = 5.0
 
     # Default path matches where qsecbit-agent writes stats
-    _DEFAULT_STATS_PATH = "/var/log/hookprobe/qsecbit/current.json"
+    _DEFAULT_STATS_PATH = os.environ.get(
+        "QSECBIT_STATS_FILE", "/opt/hookprobe/data/qsecbit_stats.json"
+    )
 
     def __init__(self, stats_path: Optional[str] = None):
         super().__init__()

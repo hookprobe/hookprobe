@@ -264,6 +264,12 @@ class ResponseOrchestrator:
             return self._action_quarantine(threat)
         elif action == ResponseAction.CAPTIVE_PORTAL:
             return self._action_captive_portal(threat)
+        elif action in (
+            ResponseAction.REFLEX_JITTER,
+            ResponseAction.REFLEX_SHADOW,
+            ResponseAction.REFLEX_DISCONNECT,
+        ):
+            return self._action_reflex(action, threat)
 
         return None
 
@@ -496,6 +502,53 @@ class ResponseOrchestrator:
             details="Captive portal redirect not implemented",
             target=threat.source_ip or "unknown"
         )
+
+    def _action_reflex(self, action: ResponseAction, threat: ThreatEvent) -> ResponseResult:
+        """Dispatch to AEGIS Reflex engine for graduated interference.
+
+        Instead of a binary block, Reflex applies proportional interference
+        (jitter, shadow redirect, or surgical disconnect) based on the
+        QSecBit score. Falls back to standard response if Reflex unavailable.
+        """
+        level_map = {
+            ResponseAction.REFLEX_JITTER: "JITTER",
+            ResponseAction.REFLEX_SHADOW: "SHADOW",
+            ResponseAction.REFLEX_DISCONNECT: "DISCONNECT",
+        }
+        level_name = level_map.get(action, "UNKNOWN")
+
+        if not threat.source_ip:
+            return ResponseResult(
+                action=action,
+                success=False,
+                timestamp=datetime.now(),
+                details=f"Reflex {level_name}: no source IP",
+                target="unknown",
+            )
+
+        # Use the AEGIS Reflex singleton engine (registered by BridgeManager)
+        try:
+            from core.aegis.reflex import get_engine, ReflexLevel
+            engine = get_engine()
+            if engine is not None:
+                level = ReflexLevel[level_name]
+                decision = engine.force_level(
+                    threat.source_ip, level,
+                    reason=f"QSecBit response: {threat.attack_type} (Q={threat.confidence:.3f})",
+                )
+                return ResponseResult(
+                    action=action,
+                    success=True,
+                    timestamp=datetime.now(),
+                    details=f"Reflex {level_name} applied to {threat.source_ip} → {decision.level.name}",
+                    target=threat.source_ip,
+                )
+            # Engine not registered yet — fall back to block_ip
+            logger.warning("Reflex engine not registered, falling back to block_ip")
+            return self._action_block_ip(threat)
+        except (ImportError, KeyError) as exc:
+            logger.warning("Reflex %s failed (%s), falling back to block_ip", level_name, exc)
+            return self._action_block_ip(threat)
 
     def _unblock_ip(self, ip: str):
         """Remove IP block."""

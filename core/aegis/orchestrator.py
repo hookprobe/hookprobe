@@ -77,6 +77,13 @@ ROUTING_RULES = {
     "scheduled.audit": ["FORGE"],
     "config.change": ["FORGE"],
 
+    # Reflex graduated response routing
+    "reflex.level_changed": ["GUARDIAN", "MEDIC"],
+    "reflex.escalation": ["GUARDIAN", "MEDIC"],
+    "reflex.recovery": ["MEDIC"],
+    "reflex.jitter_applied": ["GUARDIAN"],
+    "reflex.disconnect": ["GUARDIAN", "MEDIC"],
+
     # Multi-agent escalation (MEDIC coordinates)
     "incident.multi_agent": ["MEDIC"],
     "incident.critical": ["MEDIC"],

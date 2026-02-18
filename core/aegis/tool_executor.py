@@ -413,6 +413,56 @@ TOOL_REGISTRY: Dict[str, ToolDefinition] = {
         agents=["FORGE"],
     ),
 
+    # REFLEX tools (Surgical Interference)
+    "reflex_set_level": ToolDefinition(
+        name="reflex_set_level",
+        description="Set reflex interference level for a target IP (0=observe, 1=jitter, 2=shadow, 3=disconnect)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string", "description": "Target IP address"},
+                "level": {"type": "integer", "description": "0=observe, 1=jitter, 2=shadow, 3=disconnect"},
+                "reason": {"type": "string", "description": "Reason for level change"},
+            },
+            "required": ["source_ip", "level"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+        requires_confirmation=True,
+    ),
+    "reflex_remove_target": ToolDefinition(
+        name="reflex_remove_target",
+        description="Remove all reflex interference from a target IP",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string", "description": "Target IP address"},
+            },
+            "required": ["source_ip"],
+        },
+        agents=["GUARDIAN", "MEDIC"],
+    ),
+    "reflex_status": ToolDefinition(
+        name="reflex_status",
+        description="Get current reflex interference status for all active targets",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE"],
+    ),
+    "reflex_force_recovery": ToolDefinition(
+        name="reflex_force_recovery",
+        description="Force Bayesian recovery check for a target IP",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source_ip": {"type": "string", "description": "Target IP address"},
+            },
+            "required": ["source_ip"],
+        },
+        agents=["MEDIC"],
+    ),
+
     # MEDIC tools
     "full_quarantine": ToolDefinition(
         name="full_quarantine",
