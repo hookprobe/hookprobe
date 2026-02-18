@@ -1,5 +1,5 @@
 """
-Neuro-Kernel Phase 1 & Phase 2 Tests
+Neuro-Kernel Phase 1, Phase 2 & Phase 3 Tests
 
 Phase 1: Template-based kernel orchestration system
   - Type definitions
@@ -17,6 +17,13 @@ Phase 2: Streaming eBPF-RAG pipeline
   - Streaming RAG pipeline end-to-end
   - Memory integration (recall_streaming_context)
   - Orchestrator LLM context building
+
+Phase 3: Shadow Pentester
+  - Attack library template registry
+  - Kernel digital twin
+  - Shadow pentester cycles
+  - Defense feedback pipeline
+  - End-to-end: attack → detect → signature
 
 Run:
     pytest tests/test_neurokernel.py -v --override-ini="addopts="
@@ -1643,3 +1650,701 @@ class TestPhase2Exports:
         ]
         for name in expected:
             assert name in __all__, f"{name} missing from __all__"
+
+
+# ==================================================================
+# Phase 3: Shadow Pentester Tests
+# ==================================================================
+
+
+class TestAttackLibrary:
+    """Test the attack template library."""
+
+    def test_library_has_builtin_templates(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        assert len(lib) == 13
+
+    def test_get_by_name(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        t = lib.get_by_name("port_scan")
+        assert t is not None
+        assert t.name == "port_scan"
+        assert t.mitre_id == "T1046"
+
+    def test_get_by_id(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        t = lib.get("atk-reconnaissance-port_scan")
+        assert t is not None
+        assert t.name == "port_scan"
+
+    def test_get_by_category(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackCategory
+        lib = AttackLibrary()
+        recon = lib.get_by_category(AttackCategory.RECONNAISSANCE)
+        assert len(recon) >= 3  # port_scan, arp_scan, dns_enumeration, slow_scan
+
+    def test_get_by_difficulty(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackDifficulty
+        lib = AttackLibrary()
+        trivial = lib.get_by_difficulty(AttackDifficulty.TRIVIAL)
+        assert len(trivial) >= 3  # port_scan, arp_scan, syn_flood, udp_flood
+        # All must be trivial
+        for t in trivial:
+            assert t.difficulty == AttackDifficulty.TRIVIAL
+
+    def test_list_templates(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        listing = lib.list_templates()
+        assert len(listing) == 13
+        assert all("template_id" in item for item in listing)
+        assert all("mitre_id" in item for item in listing)
+
+    def test_template_id_format(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        t = lib.get_by_name("syn_flood")
+        assert t is not None
+        assert t.template_id == "atk-impact-syn_flood"
+
+    def test_register_custom_template(self):
+        from core.aegis.neurokernel.attack_library import (
+            AttackLibrary, AttackTemplate, AttackCategory,
+            AttackDifficulty, ExpectedDetection,
+        )
+        lib = AttackLibrary()
+        custom = AttackTemplate(
+            name="custom_attack",
+            description="A custom test attack",
+            category=AttackCategory.EXECUTION,
+            difficulty=AttackDifficulty.EXPERT,
+            mitre_id="T9999",
+            mitre_technique="Custom Technique",
+            expected_detection=ExpectedDetection.BEHAVIORAL,
+        )
+        lib.register(custom)
+        assert len(lib) == 14
+        assert lib.get_by_name("custom_attack") is not None
+
+    def test_evasion_templates_expect_no_detection(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary, ExpectedDetection
+        lib = AttackLibrary()
+        slow = lib.get_by_name("slow_scan")
+        assert slow is not None
+        assert slow.expected_detection == ExpectedDetection.NONE
+        exfil = lib.get_by_name("encrypted_exfil")
+        assert exfil is not None
+        assert exfil.expected_detection == ExpectedDetection.NONE
+
+    def test_attack_execution_evaded(self):
+        from core.aegis.neurokernel.attack_library import AttackExecution
+        exec1 = AttackExecution(
+            template_id="t1", template_name="test",
+            category="recon", parameters={},
+            success=True, detected=False,
+        )
+        assert exec1.evaded_detection is True
+
+        exec2 = AttackExecution(
+            template_id="t1", template_name="test",
+            category="recon", parameters={},
+            success=True, detected=True,
+        )
+        assert exec2.evaded_detection is False
+
+    def test_attack_execution_to_dict(self):
+        from core.aegis.neurokernel.attack_library import AttackExecution
+        ex = AttackExecution(
+            template_id="t1", template_name="test",
+            category="recon", parameters={"port": 80},
+            success=True, detected=True, detection_layer="L4",
+        )
+        d = ex.to_dict()
+        assert d["template_name"] == "test"
+        assert d["detected"] is True
+        assert d["evaded_detection"] is False
+
+    def test_get_nonexistent_returns_none(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        assert lib.get("nonexistent") is None
+        assert lib.get_by_name("nonexistent") is None
+
+    def test_parameters_have_types(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        lib = AttackLibrary()
+        scan = lib.get_by_name("port_scan")
+        assert scan is not None
+        assert len(scan.parameters) >= 2
+        # target_ip should be required
+        ip_param = [p for p in scan.parameters if p.name == "target_ip"]
+        assert len(ip_param) == 1
+        assert ip_param[0].required is True
+        assert ip_param[0].param_type == "ip"
+
+
+class TestKernelDigitalTwin:
+    """Test the kernel-aware digital twin."""
+
+    def test_create_test_twin(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin(num_devices=3)
+        assert len(twin.list_devices()) == 3
+
+    def test_add_remove_device(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin, TwinDevice
+        twin = KernelDigitalTwin()
+        dev = TwinDevice(mac="AA:BB:CC:DD:EE:01", ip="10.200.0.10", hostname="test")
+        twin.add_device(dev)
+        assert len(twin.list_devices()) == 1
+
+        removed = twin.remove_device("AA:BB:CC:DD:EE:01")
+        assert removed is not None
+        assert removed.hostname == "test"
+        assert len(twin.list_devices()) == 0
+
+    def test_get_device_by_ip(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin, TwinDevice
+        twin = KernelDigitalTwin()
+        twin.add_device(TwinDevice(mac="AA:BB:CC:DD:EE:01", ip="10.200.0.10"))
+        found = twin.get_device_by_ip("10.200.0.10")
+        assert found is not None
+        assert found.mac == "AA:BB:CC:DD:EE:01"
+        assert twin.get_device_by_ip("1.2.3.4") is None
+
+    def test_get_active_hosts(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin(num_devices=5)
+        hosts = twin.get_active_hosts()
+        assert len(hosts) == 5
+        assert "10.200.0.10" in hosts
+
+    def test_get_open_services(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin(num_devices=2)
+        services = twin.get_open_services()
+        assert "10.200.0.10" in services
+        assert 80 in services["10.200.0.10"]
+
+    def test_create_snapshot(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin(num_devices=3)
+        snap = twin.create_snapshot()
+        assert snap["device_count"] == 3
+        assert "devices" in snap
+        assert "10.200.0.10" in [d["ip"] for d in snap["devices"].values()]
+
+    def test_simulate_port_scan(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("port_scan", {
+            "target_ip": "10.200.0.10",
+            "port_range": "1-50",
+        })
+        assert result["success"] is True
+        assert result["events_generated"] == 50
+
+    def test_simulate_syn_flood(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("syn_flood", {
+            "target_ip": "10.200.0.10",
+            "rate_pps": 100,
+            "duration_s": 2,
+        })
+        assert result["success"] is True
+        assert result["events_generated"] == 200
+
+    def test_simulate_dns_tunnel(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("dns_tunnel", {
+            "c2_domain": "evil.test",
+            "data_size_kb": 5,
+        })
+        assert result["success"] is True
+        assert result["events_generated"] == 50  # 5KB * 10 queries/KB
+
+    def test_simulate_dga_c2(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("dga_c2", {
+            "domain_count": 30,
+            "seed": "test",
+        })
+        assert result["success"] is True
+        assert result["events_generated"] == 30
+
+    def test_simulate_arp_spoof(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("arp_spoof", {
+            "victim_ip": "10.200.0.10",
+            "gateway_ip": "10.200.0.1",
+        })
+        assert result["success"] is True
+        assert result["events_generated"] == 10
+
+    def test_simulate_unknown_attack(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        result = twin.simulate_attack("unknown_attack_type", {})
+        assert result["success"] is True
+        assert result["events_generated"] == 1  # Generic fallback
+
+    def test_replay_events(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin, TwinDevice
+        from core.aegis.neurokernel.types import SensorEvent, SensorType
+        twin = KernelDigitalTwin()
+        twin.add_device(TwinDevice(mac="AA:BB:CC:DD:EE:01", ip="10.200.0.10"))
+        events = [
+            SensorEvent(sensor_type=SensorType.NETWORK, source_ip="10.200.0.10"),
+            SensorEvent(sensor_type=SensorType.NETWORK, source_ip="99.99.99.99"),
+        ]
+        replayed = twin.replay_events(events)
+        assert replayed == 1  # Only the matching IP
+
+    def test_stats(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin(num_devices=3)
+        twin.simulate_attack("port_scan", {"target_ip": "10.200.0.10", "port_range": "1-10"})
+        s = twin.stats()
+        assert s["device_count"] == 3
+        assert s["attacks_simulated"] == 1
+
+    def test_attack_log(self):
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        twin = KernelDigitalTwin.create_test_twin()
+        twin.simulate_attack("arp_scan", {"subnet": "10.200.0.0/24"})
+        twin.simulate_attack("port_scan", {"target_ip": "10.200.0.10", "port_range": "1-5"})
+        log = twin.get_attack_log()
+        assert len(log) == 2
+        assert log[0]["attack_name"] == "arp_scan"
+        assert log[1]["attack_name"] == "port_scan"
+
+
+class TestShadowPentester:
+    """Test the shadow pentester offensive agent."""
+
+    def _make_pentester(self):
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackDifficulty
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        from core.aegis.neurokernel.shadow_pentester import ShadowPentester
+
+        lib = AttackLibrary()
+        twin = KernelDigitalTwin.create_test_twin()
+        return ShadowPentester(
+            attack_library=lib,
+            twin=twin,
+            max_difficulty=AttackDifficulty.ADVANCED,
+        )
+
+    def test_initial_state(self):
+        from core.aegis.neurokernel.shadow_pentester import PentestPhase
+        p = self._make_pentester()
+        assert p.phase == PentestPhase.IDLE
+        s = p.stats()
+        assert s["cycle_count"] == 0
+        assert s["total_attacks"] == 0
+        assert s["has_twin"] is True
+
+    def test_run_cycle(self):
+        p = self._make_pentester()
+        result = p.run_cycle()
+        assert result.attacks_executed > 0
+        assert result.completed_at > result.started_at
+        assert result.error == ""
+
+    def test_run_cycle_with_category_filter(self):
+        from core.aegis.neurokernel.attack_library import AttackCategory
+        p = self._make_pentester()
+        result = p.run_cycle(target_categories=[AttackCategory.RECONNAISSANCE])
+        # Should only run recon attacks (port_scan, arp_scan, dns_enumeration, slow_scan)
+        for ex in result.executions:
+            assert ex.category == "reconnaissance"
+
+    def test_rate_limiting(self):
+        p = self._make_pentester()
+        r1 = p.run_cycle()
+        assert r1.error == ""
+
+        # Second cycle should be rate-limited
+        r2 = p.run_cycle()
+        assert "Rate limited" in r2.error
+
+    def test_run_single_attack(self):
+        p = self._make_pentester()
+        ex = p.run_single_attack("port_scan", {"target_ip": "10.200.0.10", "port_range": "1-10"})
+        assert ex.template_name == "port_scan"
+        assert ex.success is True
+
+    def test_run_single_unknown_attack(self):
+        p = self._make_pentester()
+        ex = p.run_single_attack("nonexistent_attack")
+        assert "not found" in ex.notes
+
+    def test_detection_simulator(self):
+        from core.aegis.neurokernel.shadow_pentester import ShadowPentester
+        from core.aegis.neurokernel.attack_library import AttackLibrary
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+
+        lib = AttackLibrary()
+        twin = KernelDigitalTwin.create_test_twin()
+
+        def always_detect(execution):
+            return (True, "L4", 5.0, "HIGH")
+
+        p = ShadowPentester(attack_library=lib, twin=twin)
+        p.set_detection_simulator(always_detect)
+
+        ex = p.run_single_attack("syn_flood", {"target_ip": "10.200.0.10"})
+        assert ex.detected is True
+        assert ex.detection_layer == "L4"
+        assert ex.severity_assigned == "HIGH"
+
+    def test_evasion_detection(self):
+        """Test that evasion templates are not detected by default."""
+        p = self._make_pentester()
+        ex = p.run_single_attack("slow_scan", {"target_ip": "10.200.0.10"})
+        assert ex.success is True
+        assert ex.detected is False
+        assert ex.evaded_detection is True
+
+    def test_cycle_result_detection_rate(self):
+        from core.aegis.neurokernel.shadow_pentester import PentestCycleResult, PentestPhase
+        result = PentestCycleResult(
+            cycle_id="test",
+            phase=PentestPhase.IDLE,
+            started_at=1.0,
+            attacks_executed=10,
+            attacks_detected=8,
+            attacks_evaded=2,
+        )
+        assert result.detection_rate == 0.8
+        assert result.evasion_rate == 0.2
+
+    def test_cycle_result_to_dict(self):
+        from core.aegis.neurokernel.shadow_pentester import PentestCycleResult, PentestPhase
+        result = PentestCycleResult(
+            cycle_id="test",
+            phase=PentestPhase.IDLE,
+            started_at=1.0,
+            completed_at=2.0,
+            attacks_executed=5,
+            attacks_detected=4,
+            attacks_evaded=1,
+        )
+        d = result.to_dict()
+        assert d["cycle_id"] == "test"
+        assert d["detection_rate"] == 0.8
+
+    def test_finding_generated_for_evasion(self):
+        """When no detection simulator is set, evasion templates generate findings."""
+        from core.aegis.neurokernel.attack_library import AttackCategory
+        p = self._make_pentester()
+        # Run only recon (includes slow_scan which is expected to evade)
+        result = p.run_cycle(target_categories=[AttackCategory.RECONNAISSANCE])
+        # slow_scan should produce a finding since it evaded
+        evaded_templates = [e.template_name for e in result.executions if e.evaded_detection]
+        assert "slow_scan" in evaded_templates
+        # Check finding was generated
+        finding_templates = [f.attack_template for f in result.findings]
+        assert "slow_scan" in finding_templates
+
+    def test_stats_after_cycle(self):
+        p = self._make_pentester()
+        p.run_cycle()
+        s = p.stats()
+        assert s["cycle_count"] == 1
+        assert s["total_attacks"] > 0
+
+    def test_history(self):
+        p = self._make_pentester()
+        p.run_cycle()
+        history = p.get_history()
+        assert len(history) == 1
+        assert "cycle_id" in history[0]
+
+    def test_pentester_with_rag_pipeline(self):
+        """Test that RAG pipeline is queried during recon."""
+        from core.aegis.neurokernel.shadow_pentester import ShadowPentester
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackCategory
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+
+        mock_rag = MagicMock()
+        mock_rag.query.return_value = "10.200.0.10 made 100 connections"
+
+        p = ShadowPentester(
+            attack_library=AttackLibrary(),
+            twin=KernelDigitalTwin.create_test_twin(),
+        )
+        p.set_rag_pipeline(mock_rag)
+        p.run_cycle(target_categories=[AttackCategory.RECONNAISSANCE])
+        mock_rag.query.assert_called()
+
+
+class TestDefenseFeedback:
+    """Test the defense feedback pipeline."""
+
+    def _make_finding(self, template_name="port_scan", severity="medium"):
+        from core.aegis.neurokernel.shadow_pentester import VulnerabilityFinding, FindingSeverity
+        sev_map = {"critical": FindingSeverity.CRITICAL, "high": FindingSeverity.HIGH,
+                    "medium": FindingSeverity.MEDIUM, "low": FindingSeverity.LOW}
+        return VulnerabilityFinding(
+            finding_id="sf-test001",
+            title=f"Undetected {template_name}",
+            description=f"Attack {template_name} evaded detection",
+            severity=sev_map.get(severity, FindingSeverity.MEDIUM),
+            attack_template=template_name,
+            mitre_id="T1046",
+            mitre_technique="Network Service Discovery",
+            target_ip="10.200.0.10",
+            detection_gap="Expected detection at L4",
+            evidence={
+                "template_id": f"atk-reconnaissance-{template_name}",
+                "template_name": template_name,
+                "category": "reconnaissance",
+                "parameters": {"target_ip": "10.200.0.10", "scan_rate": 100},
+                "success": True,
+                "detected": False,
+            },
+        )
+
+    def test_process_finding(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        finding = self._make_finding()
+        sig = fb.process_finding(finding)
+        assert sig is not None
+        assert sig.sig_id.startswith("SHADOW-")
+        assert sig.validated is True
+
+    def test_stats_after_finding(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        fb.process_finding(self._make_finding())
+        s = fb.stats()
+        assert s["findings_received"] == 1
+        assert s["signatures_generated"] == 1
+
+    def test_pending_signatures(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        fb.process_finding(self._make_finding("port_scan"))
+        fb.process_finding(self._make_finding("syn_flood"))
+        pending = fb.get_pending()
+        assert len(pending) == 2
+
+    def test_signature_has_feature_patterns(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        sig = fb.process_finding(self._make_finding("port_scan"))
+        assert sig is not None
+        assert len(sig.feature_patterns) > 0
+        # Port scan should have unique_dest_ports pattern
+        pattern_names = [p["feature_name"] for p in sig.feature_patterns]
+        assert "unique_dest_ports" in pattern_names
+
+    def test_dns_tunnel_patterns(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        from core.aegis.neurokernel.shadow_pentester import VulnerabilityFinding, FindingSeverity
+        fb = DefenseFeedback()
+        finding = VulnerabilityFinding(
+            finding_id="sf-dns",
+            title="Undetected DNS tunnel",
+            description="DNS tunnel evaded detection",
+            severity=FindingSeverity.CRITICAL,
+            attack_template="dns_tunnel",
+            mitre_id="T1048.003",
+            detection_gap="Expected detection at L7",
+            evidence={
+                "template_name": "dns_tunnel",
+                "category": "exfiltration",
+                "parameters": {"c2_domain": "evil.com"},
+                "success": True,
+                "detected": False,
+            },
+        )
+        sig = fb.process_finding(finding)
+        assert sig is not None
+        pattern_names = [p["feature_name"] for p in sig.feature_patterns]
+        assert "dns_query_rate" in pattern_names
+        assert "dns_query_length" in pattern_names
+
+    def test_osi_layer_inference(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        sig = fb.process_finding(self._make_finding("port_scan"))
+        assert sig is not None
+        assert sig.osi_layer == 4  # L4 transport from "Expected detection at L4"
+
+    def test_callback_on_signature(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        received = []
+        fb = DefenseFeedback(on_signature_generated=lambda s: received.append(s))
+        fb.process_finding(self._make_finding())
+        assert len(received) == 1
+        assert received[0].sig_id.startswith("SHADOW-")
+
+    def test_max_pending_backpressure(self):
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        fb = DefenseFeedback()
+        fb.MAX_PENDING = 5
+        for i in range(10):
+            fb.process_finding(self._make_finding(f"attack_{i}"))
+        assert len(fb.get_pending()) == 5  # Capped at MAX_PENDING
+
+    def test_signature_candidate_to_dict(self):
+        from core.aegis.neurokernel.defense_feedback import SignatureCandidate
+        sig = SignatureCandidate(
+            sig_id="SHADOW-TEST",
+            name="test-sig",
+            description="A test signature",
+            osi_layer=4,
+            severity=3,
+            attack_category="reconnaissance",
+            mitre_id="T1046",
+        )
+        d = sig.to_dict()
+        assert d["sig_id"] == "SHADOW-TEST"
+        assert d["osi_layer"] == 4
+
+
+class TestShadowPentesterE2E:
+    """End-to-end: shadow pentester → defense feedback pipeline."""
+
+    def test_full_cycle_with_feedback(self):
+        """Run a full pentest cycle and verify findings flow to defense feedback."""
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackCategory
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        from core.aegis.neurokernel.shadow_pentester import ShadowPentester
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+
+        lib = AttackLibrary()
+        twin = KernelDigitalTwin.create_test_twin()
+        feedback = DefenseFeedback()
+        pentester = ShadowPentester(
+            attack_library=lib,
+            twin=twin,
+            defense_feedback=feedback,
+        )
+
+        result = pentester.run_cycle(
+            target_categories=[AttackCategory.RECONNAISSANCE],
+        )
+
+        # Should have executed recon attacks
+        assert result.attacks_executed > 0
+
+        # slow_scan should have evaded detection
+        evaded = [e for e in result.executions if e.evaded_detection]
+        assert len(evaded) > 0
+
+        # Findings should have been reported to feedback
+        if result.findings:
+            assert feedback.stats()["findings_received"] > 0
+            assert feedback.stats()["signatures_generated"] > 0
+
+    def test_detection_simulator_prevents_findings(self):
+        """With a simulator that detects everything, no findings should be generated."""
+        from core.aegis.neurokernel.attack_library import AttackLibrary, AttackCategory
+        from core.aegis.neurokernel.kernel_twin import KernelDigitalTwin
+        from core.aegis.neurokernel.shadow_pentester import ShadowPentester
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+
+        feedback = DefenseFeedback()
+        pentester = ShadowPentester(
+            attack_library=AttackLibrary(),
+            twin=KernelDigitalTwin.create_test_twin(),
+            defense_feedback=feedback,
+        )
+        pentester.set_detection_simulator(lambda ex: (True, "L4", 1.0, "HIGH"))
+
+        result = pentester.run_cycle(
+            target_categories=[AttackCategory.IMPACT],
+        )
+
+        # All attacks detected — no findings
+        assert len(result.findings) == 0
+        assert result.attacks_detected == result.attacks_executed
+
+    def test_signature_deployment_with_mock_updater(self):
+        """Verify the feedback pipeline calls the signature updater."""
+        from core.aegis.neurokernel.defense_feedback import DefenseFeedback
+        from core.aegis.neurokernel.shadow_pentester import VulnerabilityFinding, FindingSeverity
+
+        mock_updater = MagicMock()
+        feedback = DefenseFeedback(signature_updater=mock_updater)
+
+        finding = VulnerabilityFinding(
+            finding_id="sf-e2e",
+            title="Undetected port scan",
+            description="Port scan evaded",
+            severity=FindingSeverity.MEDIUM,
+            attack_template="port_scan",
+            mitre_id="T1046",
+            detection_gap="Expected detection at L4",
+            evidence={
+                "template_name": "port_scan",
+                "category": "reconnaissance",
+                "parameters": {"scan_rate": 100},
+                "success": True,
+                "detected": False,
+            },
+        )
+
+        sig = feedback.process_finding(finding)
+        assert sig is not None
+        # Mock updater should have been called
+        mock_updater.record_detection.assert_called_once()
+
+
+class TestPhase3Exports:
+    """Verify all Phase 3 classes are properly exported."""
+
+    def test_import_attack_library(self):
+        from core.aegis.neurokernel import (
+            AttackLibrary, AttackCategory, AttackDifficulty,
+            AttackExecution, AttackTemplate, ExpectedDetection,
+        )
+        assert AttackLibrary is not None
+        assert AttackCategory is not None
+
+    def test_import_shadow_pentester(self):
+        from core.aegis.neurokernel import (
+            ShadowPentester, PentestPhase, PentestCycleResult,
+            FindingSeverity, VulnerabilityFinding,
+        )
+        assert ShadowPentester is not None
+        assert PentestPhase is not None
+
+    def test_import_defense_feedback(self):
+        from core.aegis.neurokernel import DefenseFeedback, SignatureCandidate
+        assert DefenseFeedback is not None
+        assert SignatureCandidate is not None
+
+    def test_import_kernel_twin(self):
+        from core.aegis.neurokernel import KernelDigitalTwin, TwinAttackResult, TwinDevice
+        assert KernelDigitalTwin is not None
+        assert TwinDevice is not None
+
+    def test_all_exports_phase3(self):
+        from core.aegis.neurokernel import __all__
+        expected = [
+            "AttackLibrary", "AttackCategory", "AttackDifficulty",
+            "AttackExecution", "AttackTemplate", "ExpectedDetection",
+            "ShadowPentester", "PentestPhase", "PentestCycleResult",
+            "FindingSeverity", "VulnerabilityFinding",
+            "DefenseFeedback", "SignatureCandidate",
+            "KernelDigitalTwin", "TwinAttackResult", "TwinDevice",
+        ]
+        for name in expected:
+            assert name in __all__, f"{name} missing from __all__"
+
+    def test_version_bumped(self):
+        import core.aegis.neurokernel as nk
+        # Check the docstring contains 3.0.0
+        assert "3.0.0" in nk.__doc__
