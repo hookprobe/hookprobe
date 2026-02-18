@@ -109,6 +109,7 @@ class PacketType(IntEnum):
     KERNEL_FILTER = 0x60       # Propagate verified eBPF filter
     KERNEL_VERDICT = 0x61      # Nexus verdict response
     KERNEL_TELEMETRY = 0x62    # eBPF trace offload to Nexus
+    RECOMMENDATION = 0x63      # MSSP recommendation to edge device
 
     # Emergency
     EMERGENCY_CHANNEL_SWITCH = 0xE0
