@@ -61,6 +61,17 @@ IMMUTABLE_PRINCIPLES = {
         "blocked_actions": ["override_human", "ignore_veto", "bypass_approval"],
         "blocked_patterns": [],
     },
+    "never_disable_kernel_safety": {
+        "description": "Never deploy eBPF that bypasses kernel verifier or disables safety",
+        "blocked_actions": [
+            "bypass_verifier", "disable_bpf_jit_hardening", "load_unverified_bpf",
+        ],
+        "blocked_patterns": [
+            r"bpf_probe_write_user",
+            r"bpf_override_return",
+            r"bypass.*verif",
+        ],
+    },
     "minimal_disruption": {
         "description": "Use least disruptive effective response",
         "blocked_actions": [],  # Advisory — enforced by confidence gating
