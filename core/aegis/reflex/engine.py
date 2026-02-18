@@ -13,7 +13,9 @@ License: Proprietary - see LICENSE in this directory
 Version: 2.0.0
 """
 
+import atexit
 import logging
+import os
 import socket
 import struct
 import subprocess
@@ -100,9 +102,15 @@ class ReflexEngine:
         # Track whether eBPF is usable
         self._use_ebpf = BCC_AVAILABLE
 
+        # Executor mode: "active" (default) applies rules, "log-only" just logs
+        self._executor_mode = os.environ.get("REFLEX_EXECUTOR", "active")
+
+        # Cleanup on exit
+        atexit.register(self.cleanup)
+
         logger.info(
-            "ReflexEngine initialized (interface=%s, mirage_port=%d, ebpf=%s)",
-            interface, mirage_port, self._use_ebpf,
+            "ReflexEngine initialized (interface=%s, mirage_port=%d, ebpf=%s, mode=%s)",
+            interface, mirage_port, self._use_ebpf, self._executor_mode,
         )
 
     # ------------------------------------------------------------------
@@ -560,14 +568,17 @@ class ReflexEngine:
             vel_note = f" (rapid decay dQ/dt={velocity:.4f})"
         return f"Score {direction}: Q={score:.3f}{vel_note}"
 
-    @staticmethod
-    def _run_fallback_commands(commands: List[List[str]]) -> None:
+    def _run_fallback_commands(self, commands: List[List[str]]) -> None:
         """Execute fallback commands (iptables/tc) in list form.
 
         Uses subprocess list-form (no shell=True) to prevent command injection.
         Input IPs are validated by _validate_ip() in ebpf_programs.py.
+        In log-only mode, commands are logged but not executed.
         """
         for cmd in commands:
+            if self._executor_mode == "log-only":
+                logger.info("Reflex log-only: would run %s", cmd)
+                continue
             try:
                 subprocess.run(
                     cmd, capture_output=True, timeout=5,
