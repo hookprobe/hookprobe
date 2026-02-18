@@ -1,0 +1,72 @@
+# =============================================================================
+# Aegis Configuration
+# HookProbe Adaptive Endpoint Guardian - Zig/eBPF Packet Capture Engine
+# =============================================================================
+
+[capture]
+# Network interface for packet capture (XDP attachment point)
+interface = "dummy-mirror"
+
+# BPF ring buffer size for Aegis -> Napse communication (bytes)
+# Must be power of 2. 16MB supports ~10K packets in-flight
+ring_buffer_size = 16777216
+
+# Maximum packet size to capture (MTU)
+max_packet_size = 1500
+
+# XDP attach mode: "native" (driver), "skb" (generic/fallback), "hw" (NIC offload)
+xdp_mode = "skb"
+
+[features]
+# Shannon entropy calculation per packet payload
+entropy_enabled = true
+
+# Per-source-IP packet rate tracking
+rate_tracking_enabled = true
+
+# Rate tracking window in nanoseconds (1 second)
+rate_window_ns = 1_000_000_000
+
+# High-rate threshold (packets per second) for anomaly flagging
+high_rate_threshold_pps = 1000
+
+# Feature vector dimensionality (must match Napse consumer)
+feature_vector_dims = 32
+
+[protocols]
+# Comptime-generated protocol parsers to enable
+# Each enabled parser adds ~200 bytes to the BPF program
+enabled = [
+    "ethernet",
+    "ipv4",
+    "ipv6",
+    "tcp",
+    "udp",
+    "icmp",
+    "dns",
+    "http",
+    "tls",
+    "ssh",
+    "quic",
+    "wireguard",
+    "htp",       # HookProbe Transport Protocol
+]
+
+[export]
+# Stats export interval (milliseconds)
+stats_interval_ms = 1000
+
+# ClickHouse direct insert for observation vectors
+clickhouse_enabled = true
+clickhouse_url = "http://172.32.0.10:8123"
+clickhouse_database = "hookprobe_ids"
+
+# BPF map pin path for userspace access
+bpf_pin_path = "/sys/fs/bpf/aegis"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Stats log output
+stats_log = "/var/log/aegis/stats.log"
