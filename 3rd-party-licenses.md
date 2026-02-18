@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-This document lists all third-party components used by HookProbe v5.0 and their respective licenses.
+This document lists all third-party components used by HookProbe v5.2 and their respective licenses.
 
 **License Summary**: All components use permissive licenses compatible with commercial use. HookProbe is 100% GPL-free.
 
@@ -173,17 +173,17 @@ This document lists all third-party components used by HookProbe v5.0 and their 
 ### Network Security Engines
 
 **Zig (Aegis build toolchain)**
-- **Version**: 0.14+
+- **Version**: 0.13+
 - **License**: MIT License
 - **Source**: https://ziglang.org/
-- **Usage**: Aegis eBPF/XDP packet capture engine
+- **Usage**: Aegis eBPF/XDP packet capture + feature extraction engine
 - **Commercial Use**: ✅ Yes
 
-**Mojo (Napse runtime)**
-- **Version**: 25.1+
+**Mojo (Napse Brain runtime)**
+- **Version**: MAX 25.1+
 - **License**: Modular Community License
 - **Source**: https://www.modular.com/mojo
-- **Usage**: Napse AI intent attribution engine
+- **Usage**: Napse Brain SIMD batch classification + HMM kill chain tracking
 - **Note**: Free for commercial use
 - **Commercial Use**: ✅ Yes
 
@@ -471,9 +471,9 @@ This document is updated with each release to reflect:
 - License changes
 - Clarifications
 
-**Last Updated**: 2025-01-01  
-**Document Version**: 1.0  
-**HookProbe Version**: 5.0.0
+**Last Updated**: 2026-02-18
+**Document Version**: 2.0
+**HookProbe Version**: 5.2.0
 
 ---
 
