@@ -152,7 +152,7 @@ def verify_certificate_chain(cert_path: str, trusted_root: str) -> bool:
             return False
         # In software mode, if root CA doesn't exist, accept self-signed
         if not os.path.isfile(trusted_root):
-            logger.info("CA root not found (%s), accepting self-signed cert", trusted_root)
+            logger.info("CA root not found, accepting self-signed cert")
             return True
         # Both files exist — basic validation passes
         # Full X.509 chain verification would use cryptography.x509 here
