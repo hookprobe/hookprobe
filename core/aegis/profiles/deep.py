@@ -54,6 +54,23 @@ DEEP_PROFILE = {
         "mesh_relay": False,
     },
 
+    # Neuro-Kernel: full (local 8B model, no offload needed)
+    "neurokernel": {
+        "enabled": True,
+        "inference_mode": "full",
+        "streaming_rag": True,
+        "streaming_rag_max_vectors": 1000000,
+        "streaming_rag_window_hours": 24,
+        "streaming_rag_gpu": True,
+        "shadow_pentester": True,
+        "shadow_pentester_interval_s": 900,
+        "llm_monitor": True,
+        "fast_path_threshold": 0.90,
+        "local_model_threshold": 0.70,
+        "max_active_programs": 64,
+        "federated_filters": True,
+    },
+
     # Tools: full set
     "tools": {
         "enabled": "all",

@@ -44,6 +44,17 @@ LITE_PROFILE = {
         "mesh_relay": False,
     },
 
+    # Neuro-Kernel: offload to Nexus (no local model)
+    "neurokernel": {
+        "enabled": True,
+        "inference_mode": "offload",
+        "streaming_rag": False,
+        "shadow_pentester": False,
+        "llm_monitor": False,
+        "fast_path_threshold": 0.90,
+        "nexus_timeout_s": 10.0,
+    },
+
     # Tools: standard set
     "tools": {
         "enabled": [

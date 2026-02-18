@@ -415,6 +415,24 @@ class MemoryManager:
             logger.error("Streaming RAG query error: %s", e)
             return ""
 
+    def get_streaming_stats(self) -> Dict[str, Any]:
+        """Get streaming RAG pipeline statistics.
+
+        Returns:
+            Dict with pipeline status and vector store metrics,
+            or empty dict if pipeline is not configured.
+        """
+        if self._streaming_pipeline is None:
+            return {"enabled": False}
+        try:
+            stats = {"enabled": True}
+            if hasattr(self._streaming_pipeline, "stats"):
+                stats.update(self._streaming_pipeline.stats())
+            return stats
+        except Exception as e:
+            logger.error("Streaming RAG stats error: %s", e)
+            return {"enabled": True, "error": str(e)}
+
     # ------------------------------------------------------------------
     # Forget / Decay
     # ------------------------------------------------------------------
@@ -613,6 +631,11 @@ class MemoryManager:
                 stats[layer] = row["cnt"] if row else 0
             except sqlite3.Error:
                 stats[layer] = 0
+
+        # Streaming RAG layer (vector store, not SQLite)
+        streaming = self.get_streaming_stats()
+        if streaming.get("enabled"):
+            stats["streaming"] = streaming.get("total_chunks", 0)
 
         return stats
 
