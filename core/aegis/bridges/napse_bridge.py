@@ -23,7 +23,9 @@ Event Mapping:
 
 import json
 import logging
+import math
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -186,11 +188,14 @@ class NAPSEBridge(BaseBridge):
             return 'MEDIUM'
 
         if event_type == 'dns':
-            # Check for DGA, tunneling indicators
+            # Check for DGA, tunneling indicators using Shannon entropy
             dns_data = event.get('dns', {})
             query = dns_data.get('rrname', '')
-            if len(query) > 60:  # Long domain = possible tunneling
-                return 'HIGH'
+            entropy = self._shannon_entropy(query)
+            if entropy > 3.5 and len(query) > 40:
+                return 'HIGH'   # High entropy + long = likely DGA/tunneling
+            if len(query) > 80:
+                return 'MEDIUM'  # Very long domain even with low entropy
             return 'LOW'
 
         if event_type == 'tls':
@@ -213,6 +218,18 @@ class NAPSEBridge(BaseBridge):
             return 'LOW'
 
         return 'INFO'
+
+    @staticmethod
+    def _shannon_entropy(s: str) -> float:
+        """Calculate Shannon entropy of a string (bits per character)."""
+        if not s:
+            return 0.0
+        freq = Counter(s)
+        length = len(s)
+        return -sum(
+            (count / length) * math.log2(count / length)
+            for count in freq.values()
+        )
 
     def _extract_signal_data(self, event: Dict, event_type: str) -> Dict:
         """Extract relevant fields from NAPSE event for AEGIS signal data."""

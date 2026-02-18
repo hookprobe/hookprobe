@@ -209,6 +209,7 @@ class AegisPico:
                 "severity": signal.severity,
                 "timestamp": signal.timestamp.isoformat(),
                 "data": signal.data,
+                "trusted": False,
             })
 
         # Route signal for defense action
@@ -267,9 +268,10 @@ class AegisPico:
         if any(w in query_lower for w in ("status", "health", "how")):
             stats = self.router.get_stats()
             mem = self.memory.get_stats()
+            score = self._get_current_score(mem)
             return ORACLE_TEMPLATES["status"].format(
                 status="active" if self._running else "idle",
-                score=85,
+                score=score,
                 threat_summary=f"{mem['threat_intel_entries']} threats tracked, "
                                f"{stats['actions_taken']} actions taken.",
             )
@@ -297,6 +299,18 @@ class AegisPico:
             "router": self.router.get_stats(),
             "principles": list(AEGIS_PRINCIPLES.keys()),
         }
+
+    def _get_current_score(self, mem_stats: Dict) -> int:
+        """Derive a security score from memory stats (0-100)."""
+        threats = mem_stats.get("threat_intel_entries", 0)
+        if threats == 0:
+            return 95
+        elif threats < 5:
+            return 80
+        elif threats < 20:
+            return 60
+        else:
+            return 40
 
     # ------------------------------------------------------------------
     # Internal

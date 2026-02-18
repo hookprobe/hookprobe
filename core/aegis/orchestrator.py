@@ -75,6 +75,9 @@ ROUTING_RULES = {
     "healing.syscall_openat": ["FORGE"],
     "healing.hotpatch_applied": ["FORGE"],
     "scheduled.audit": ["FORGE"],
+    "scheduled.health_check": ["ORACLE"],
+    "scheduled.generate_report": ["ORACLE"],
+    "scheduled.recommend_hardening": ["FORGE"],
     "config.change": ["FORGE"],
 
     # Reflex graduated response routing
