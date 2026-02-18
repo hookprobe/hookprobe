@@ -80,6 +80,13 @@ ROUTING_RULES = {
     "scheduled.recommend_hardening": ["FORGE"],
     "config.change": ["FORGE"],
 
+    # Neuro-Kernel routing
+    "napse.zero_day": ["GUARDIAN"],
+    "kernel.ebpf_deployed": ["MEDIC", "ORACLE"],
+    "kernel.ebpf_failed": ["FORGE", "MEDIC"],
+    "kernel.rollback": ["MEDIC"],
+    "kernel.anomaly": ["GUARDIAN", "MEDIC"],
+
     # Reflex graduated response routing
     "reflex.level_changed": ["GUARDIAN", "MEDIC"],
     "reflex.escalation": ["GUARDIAN", "MEDIC"],
