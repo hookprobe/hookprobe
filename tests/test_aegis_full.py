@@ -384,10 +384,12 @@ class TestToolExecutor:
         memory = MemoryManager(config)
         executor = ToolExecutor(memory=memory)
 
-        # GUARDIAN should be able to block_ip
+        # GUARDIAN should be able to block_ip — passes permission check
         result = executor.execute("GUARDIAN", "block_ip", {"ip": "1.2.3.4"})
-        # Will succeed (no real implementation, but permission check passes)
-        assert result.logged
+        # No real implementation registered, so returns NOT_IMPLEMENTED
+        # (previously silently succeeded as STUB — now fails explicitly)
+        assert not result.success
+        assert "not yet implemented" in result.result.lower()
 
     def test_executor_unknown_tool(self, tmp_path):
         from core.aegis.tool_executor import ToolExecutor

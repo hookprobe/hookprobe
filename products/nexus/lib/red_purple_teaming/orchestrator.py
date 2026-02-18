@@ -699,8 +699,26 @@ class PurpleTeamOrchestrator:
         return detection_results
 
     def _query_fortress_detection(self, attack: AttackResult) -> DetectionResult:
-        """Query Fortress API for detection status."""
-        # TODO: Implement actual Fortress API query
+        """Query Fortress detection from state file, fall back to simulation."""
+        import json
+        data_file = os.environ.get(
+            "FORTRESS_STATE_FILE",
+            "/opt/hookprobe/data/fortress_state.json",
+        )
+        try:
+            with open(data_file) as f:
+                state = json.load(f)
+            detections = state.get("recent_detections", [])
+            for det in detections:
+                if det.get("attack_type") == getattr(attack, "attack_type", None):
+                    return DetectionResult(
+                        detected=det.get("detected", False),
+                        detection_time=det.get("detection_time", 0),
+                        tool=det.get("tool", "fortress"),
+                        signature=det.get("signature", ""),
+                    )
+        except (FileNotFoundError, json.JSONDecodeError, AttributeError):
+            pass
         return self._simulate_detection(attack)
 
     def _simulate_detection(self, attack: AttackResult) -> DetectionResult:
@@ -1139,10 +1157,15 @@ class PurpleTeamOrchestrator:
     def _save_to_clickhouse(self, result: SimulationResult):
         """Save simulation result to ClickHouse for analytics."""
         try:
-            # TODO: Implement ClickHouse insertion
-            logger.debug("ClickHouse save not yet implemented")
+            from shared.aiochi.bubble.clickhouse_graph import get_clickhouse_store
+            store = get_clickhouse_store()
+            if store:
+                store.insert("pentest_simulations", result.to_dict())
+                logger.debug("Simulation %s saved to ClickHouse", result.simulation_id)
+        except ImportError:
+            logger.debug("ClickHouse not available, skipping persistence")
         except Exception as e:
-            logger.debug(f"ClickHouse save failed: {e}")
+            logger.debug("ClickHouse save failed: %s", e)
 
     def get_simulation_history(self) -> List[SimulationResult]:
         """Get history of all simulations."""
