@@ -360,15 +360,35 @@ class Qsecbit:
 
     def _system_entropy(self, x_t: np.ndarray) -> float:
         """
-        Calculate current system entropy
+        Calculate current system entropy from high-resolution telemetry.
 
-        Uses Shannon entropy of discretized telemetry values
+        Augments the input vector with per-core CPU, memory details, and
+        network low-order bytes for meaningful entropy differentiation
+        (16+ features instead of 4).
         """
-        # Discretize continuous values for entropy calculation
-        bins = 10
-        hist, _ = np.histogram(x_t, bins=bins, density=True)
-        hist = hist + 1e-10  # Avoid log(0)
-        return float(entropy(hist))
+        try:
+            import psutil
+            cpu_per_core = psutil.cpu_percent(percpu=True)
+            mem = psutil.virtual_memory()
+            net = psutil.net_io_counters()
+            augmented = list(x_t) + [
+                *cpu_per_core,
+                mem.available / max(mem.total, 1),
+                (net.bytes_sent % 1000) / 1000.0,
+                (net.bytes_recv % 1000) / 1000.0,
+                psutil.getloadavg()[0] / max(psutil.cpu_count() or 1, 1),
+            ]
+        except Exception:
+            augmented = list(x_t)
+
+        values = np.array([v for v in augmented if v > 0], dtype=np.float64)
+        if len(values) < 2:
+            return 0.0
+
+        # Shannon entropy over normalized values
+        total = values.sum()
+        probs = values / total
+        return float(entropy(probs))
 
     def _get_xdp_metrics(self) -> Dict[str, int]:
         """Get current XDP statistics"""
