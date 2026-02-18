@@ -78,7 +78,7 @@ class SignalFabric:
         if cached is not None:
             return cached
 
-        result = {"score": 0.85, "status": "GREEN", "threats_detected": 0, "components": {}}
+        result = {"score": 0.0, "status": "GREEN", "threats_detected": 0, "components": {}}
 
         # Read from agent data file
         try:
