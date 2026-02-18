@@ -24,6 +24,8 @@ from threading import Thread, Event
 from typing import Optional, Dict, List
 from datetime import datetime
 
+import numpy as np
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -127,7 +129,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
 def run_health_server(port: int = 8888):
     """Run health check HTTP server"""
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server = HTTPServer(('127.0.0.1', port), HealthCheckHandler)
     logger.info(f"Health check server listening on port {port}")
     server.serve_forever()
 
@@ -194,21 +196,28 @@ class HookProbeAgent:
         """Initialize monitoring components"""
         logger.info("Initializing components...")
 
-        # NIC Detection
+        # NIC Detection (all methods are static)
+        nic_info = {'interface': 'eth0', 'driver': 'unknown', 'xdp_drv': False, 'xdp_skb': True}
         try:
-            self.nic_detector = NICDetector()
-            nic_info = self.nic_detector.detect()
+            iface = NICDetector.get_primary_interface() or 'eth0'
+            info = NICDetector.get_nic_info(iface)
+            cap = NICDetector.detect_capability(iface)
+            nic_info = {
+                'interface': iface,
+                'driver': info.get('driver', 'unknown'),
+                'xdp_drv': cap.xdp_drv,
+                'xdp_skb': cap.xdp_skb,
+            }
             logger.info(f"Primary NIC: {nic_info['interface']} ({nic_info['driver']})")
             logger.info(f"XDP capability: DRV={nic_info['xdp_drv']}, SKB={nic_info['xdp_skb']}")
         except Exception as e:
             logger.error(f"NIC detection failed: {e}")
-            self.nic_detector = None
 
         # Energy Monitoring
         try:
             self.energy_monitor = EnergyMonitor(
-                role=self.deployment_role,
-                nic_interface=nic_info['interface'] if self.nic_detector else None
+                deployment_role=self.deployment_role,
+                network_interface=nic_info['interface']
             )
             logger.info(f"Energy monitoring initialized (role: {self.deployment_role.value})")
         except Exception as e:
@@ -216,7 +225,7 @@ class HookProbeAgent:
             self.energy_monitor = None
 
         # XDP/eBPF Manager
-        if self.xdp_enabled and self.nic_detector:
+        if self.xdp_enabled:
             try:
                 self.xdp_manager = XDPManager(
                     interface=nic_info['interface'],
@@ -230,10 +239,19 @@ class HookProbeAgent:
             if not self.xdp_enabled:
                 logger.info("XDP disabled (set XDP_ENABLED=true to enable)")
 
-        # Qsecbit Analyzer
+        # Qsecbit Analyzer — requires baseline telemetry parameters
         try:
             qsecbit_config = QsecbitConfig()
-            self.qsecbit = QsecbitAnalyzer(config=qsecbit_config)
+            # Default baseline: 4-dimensional system telemetry (CPU, Mem, Net, Disk)
+            baseline_mu = np.array([0.1, 0.2, 0.15, 0.33])
+            baseline_cov = np.eye(4) * 0.02
+            quantum_anchor = 6.144  # Baseline system entropy
+            self.qsecbit = QsecbitAnalyzer(
+                baseline_mu=baseline_mu,
+                baseline_cov=baseline_cov,
+                quantum_anchor=quantum_anchor,
+                config=qsecbit_config,
+            )
             logger.info("Qsecbit analyzer initialized")
         except Exception as e:
             logger.error(f"Qsecbit initialization failed: {e}")
