@@ -19,6 +19,7 @@ Provides session management for chat conversations.
 """
 
 import logging
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -44,6 +45,7 @@ class AegisClient:
         self.fabric = get_signal_fabric(config)
         self.engine = get_inference_engine()
         self._sessions: Dict[str, List[ChatMessage]] = {}
+        self._sessions_lock = threading.Lock()
 
         # Phase 1: Soul + Memory
         self.soul_config = None
@@ -167,11 +169,14 @@ class AegisClient:
         if not session_id:
             session_id = str(uuid.uuid4())
 
-        history = self._sessions.get(session_id, [])
+        # Snapshot history under lock
+        with self._sessions_lock:
+            history = list(self._sessions.get(session_id, []))
+
         user_msg = ChatMessage(role="user", content=message, timestamp=datetime.now())
         history.append(user_msg)
 
-        # Try orchestrator first (multi-agent routing)
+        # LLM call outside lock (can be slow)
         if self.orchestrator:
             response = self.orchestrator.process_user_query(
                 message, session_id, history,
@@ -193,11 +198,13 @@ class AegisClient:
 
         if len(history) > MAX_SESSION_MESSAGES:
             history = history[-MAX_SESSION_MESSAGES:]
-        self._sessions[session_id] = history
 
-        if len(self._sessions) > MAX_SESSIONS:
-            oldest_key = next(iter(self._sessions))
-            del self._sessions[oldest_key]
+        # Write back under lock
+        with self._sessions_lock:
+            self._sessions[session_id] = history
+            if len(self._sessions) > MAX_SESSIONS:
+                oldest_key = next(iter(self._sessions))
+                del self._sessions[oldest_key]
 
         return response
 
@@ -320,14 +327,16 @@ class AegisClient:
 
     def clear_session(self, session_id: str) -> bool:
         """Clear a conversation session."""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            return True
+        with self._sessions_lock:
+            if session_id in self._sessions:
+                del self._sessions[session_id]
+                return True
         return False
 
     def get_session_history(self, session_id: str) -> List[ChatMessage]:
         """Get conversation history for a session."""
-        return self._sessions.get(session_id, [])
+        with self._sessions_lock:
+            return list(self._sessions.get(session_id, []))
 
     # ------------------------------------------------------------------
     # Learning Interface

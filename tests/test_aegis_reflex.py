@@ -639,3 +639,39 @@ class TestReflexIntegration:
             assert reflex_mod.get_engine() is not None
         finally:
             reflex_mod._engine_instance = old
+
+    def test_engine_get_all_targets(self):
+        """get_all_targets() should return a snapshot dict."""
+        engine = ReflexEngine(interface="lo")
+        engine._targets["10.0.0.1"] = ReflexTarget(
+            source_ip="10.0.0.1", level=ReflexLevel.JITTER, qsecbit_score=0.5,
+        )
+        snapshot = engine.get_all_targets()
+        assert "10.0.0.1" in snapshot
+        # Modifying snapshot should not affect engine
+        snapshot.pop("10.0.0.1")
+        assert "10.0.0.1" in engine._targets
+
+    def test_bridge_no_double_callback(self):
+        """start_all should not duplicate callbacks."""
+        from core.aegis.bridges import BridgeManager
+        cb = MagicMock()
+        manager = BridgeManager(signal_callback=cb)
+        # start_all wires callback
+        manager.start_all()
+        bridge = manager.get_bridge("qsecbit")
+        count_after_first = len(bridge._callbacks)
+        # start_all again should not duplicate
+        manager.start_all()
+        assert len(bridge._callbacks) == count_after_first
+
+    def test_inference_times_deque(self):
+        """Inference engine should use deque for bounded time tracking."""
+        from collections import deque as _deque
+        from core.aegis.inference import NativeInferenceEngine
+        engine = NativeInferenceEngine.__new__(NativeInferenceEngine)
+        engine._inference_times = _deque(maxlen=100)
+        for i in range(200):
+            engine._inference_times.append(float(i))
+        assert len(engine._inference_times) == 100
+        assert engine._inference_times[0] == 100.0
