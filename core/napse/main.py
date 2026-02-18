@@ -1,17 +1,22 @@
 """
 NAPSE Main - Neural Adaptive Packet Synthesis Engine Entry Point
 
-Orchestrates the 3-layer NAPSE architecture:
-    Layer 0: eBPF/XDP kernel fast path (loaded via BCC)
-    Layer 1: Rust protocol engine (via PyO3 napse_engine module)
+Orchestrates the split-brain NAPSE architecture:
+    Layer 0: eBPF/XDP kernel fast path (Zig Aegis or C BCC)
+    Layer 1: Classification engine (Mojo brain -> Python Inspector -> synthesis-only)
     Layer 2: Python event synthesis (event bus, ClickHouse, metrics)
+
+Capture cascade (tries in order):
+    1. Mojo napse-brain binary (SIMD batch classification)
+    2. Python PacketInspector (AF_PACKET + intent classification)
+    3. Synthesis-only mode (external IDS feeds events)
 
 Usage:
     PYTHONPATH=/opt python -m napse --config /opt/napse/config/napse.yaml
 
 Author: HookProbe Team
 License: Proprietary
-Version: 1.0.0
+Version: 2.0.0
 """
 
 import argparse
@@ -185,17 +190,10 @@ class NapseOrchestrator:
             max_queue_size=self.config['event_bus']['queue_size']
         )
 
-        # Layer 1: Rust protocol engine
-        try:
-            from napse_engine import NapseEngine
-            self._engine = NapseEngine()
-            logger.info("Rust NapseEngine loaded")
-        except ImportError:
-            logger.warning(
-                "napse_engine not available — running in synthesis-only mode. "
-                "Build with: cd engine && maturin develop --release"
-            )
-            self._engine = None
+        # Layer 1: Classification engine (cascade)
+        capture_engine = os.getenv('NAPSE_CAPTURE_ENGINE',
+                                   self.config.get('capture', {}).get('engine', 'auto'))
+        self._engine_mode = self._init_capture_engine(capture_engine)
 
         # Synthesis modules — ClickHouse shipper
         ch_cfg = self.config['clickhouse']
@@ -212,28 +210,87 @@ class NapseOrchestrator:
         self._metrics = NapseMetrics()
         self._metrics.register(self._event_bus)
 
-        # Load signatures if engine is available
-        if self._engine:
-            for sig_path in self.config['signatures'].get('paths', []):
-                if os.path.exists(sig_path):
-                    count = self._engine.load_signatures(sig_path)
-                    logger.info("Loaded %d signatures from %s", count, sig_path)
-
-            self._engine.start()
-
         logger.info("NAPSE setup complete (tier=%s, engine=%s)",
-                     self.tier, 'rust' if self._engine else 'synthesis-only')
+                     self.tier, self._engine_mode)
+
+    def _init_capture_engine(self, mode: str) -> str:
+        """Initialize the best available capture/classification engine.
+
+        Cascade order:
+            1. Mojo napse-brain binary (SIMD batch classification)
+            2. Python PacketInspector (AF_PACKET + intent classification)
+            3. Synthesis-only mode (no capture, external IDS feeds events)
+
+        Returns the mode string for logging.
+        """
+        if mode in ('auto', 'mojo'):
+            if self._try_mojo_engine():
+                return 'mojo'
+            if mode == 'mojo':
+                logger.warning("Mojo engine requested but not available, falling back")
+
+        if mode in ('auto', 'python', 'inspector'):
+            if self._try_python_inspector():
+                return 'python-inspector'
+            if mode in ('python', 'inspector'):
+                logger.warning("Python Inspector requested but not available, falling back")
+
+        logger.info("Running in synthesis-only mode — no capture engine")
+        self._engine = None
+        self._inspector = None
+        return 'synthesis-only'
+
+    def _try_mojo_engine(self) -> bool:
+        """Try to find and validate the Mojo napse-brain binary."""
+        aegis_cfg = self.config.get('aegis', {})
+        brain_cfg = self.config.get('brain', {})
+
+        brain_binary = brain_cfg.get('binary', '/opt/napse/brain/napse-brain')
+        if os.path.isfile(brain_binary) and os.access(brain_binary, os.X_OK):
+            logger.info("Mojo napse-brain binary found at %s", brain_binary)
+            self._mojo_binary = brain_binary
+            self._mojo_config = brain_cfg.get('config', '/etc/napse/napse-brain.toml')
+
+            aegis_binary = aegis_cfg.get('binary', '/opt/napse/aegis/aegis-loader')
+            if os.path.isfile(aegis_binary) and os.access(aegis_binary, os.X_OK):
+                self._aegis_binary = aegis_binary
+                self._aegis_config = aegis_cfg.get('config', '/etc/aegis/aegis.toml')
+                logger.info("Zig aegis-loader binary found at %s", aegis_binary)
+            else:
+                self._aegis_binary = None
+                logger.info("Aegis binary not found, Mojo will read from stdin/pipe")
+
+            return True
+
+        logger.debug("Mojo napse-brain not found at %s", brain_binary)
+        return False
+
+    def _try_python_inspector(self) -> bool:
+        """Try to import and initialize the Python PacketInspector."""
+        try:
+            from .inspector.packet_inspector import PacketInspector
+            self._inspector = PacketInspector
+            logger.info("Python PacketInspector available")
+            return True
+        except ImportError as e:
+            logger.debug("PacketInspector not available: %s", e)
+            return False
+        except Exception as e:
+            logger.debug("PacketInspector failed to load: %s", e)
+            return False
 
     def run(self) -> None:
-        """Start the main processing loop."""
+        """Start the main processing loop based on active engine mode."""
         self._running = True
 
         # Start metrics HTTP server
         self._start_metrics_server()
 
-        # Main packet processing loop
-        if self._engine:
-            self._run_capture_loop()
+        # Main processing loop based on engine mode
+        if self._engine_mode == 'mojo':
+            self._run_mojo_capture_loop()
+        elif self._engine_mode == 'python-inspector':
+            self._run_inspector_loop()
         else:
             self._run_synthesis_only()
 
@@ -255,12 +312,96 @@ class NapseOrchestrator:
         except OSError as e:
             logger.warning("Could not start metrics server on :%d: %s", port, e)
 
-    def _run_capture_loop(self) -> None:
-        """Capture packets from raw socket and feed to Rust engine."""
-        interface = self.config['interface']
-        poll_ms = self.config['engine']['poll_interval_ms']
+    def _run_mojo_capture_loop(self) -> None:
+        """Run the Mojo napse-brain as a subprocess for classification.
 
-        logger.info("Starting packet capture on %s", interface)
+        Data flow:
+            Aegis (Zig/XDP) -> Ring Buffer (/dev/shm) -> Napse (Mojo) -> stdout JSONL
+            Python reads Mojo stdout and feeds events to the synthesis event bus.
+        """
+        import subprocess
+
+        logger.info("Starting Mojo napse-brain engine")
+
+        # Start Aegis first if available (XDP capture -> ring buffer)
+        aegis_proc = None
+        if getattr(self, '_aegis_binary', None):
+            try:
+                aegis_proc = subprocess.Popen(
+                    [self._aegis_binary, '--config', self._aegis_config],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                logger.info("Aegis XDP capture started (PID %d)", aegis_proc.pid)
+            except (OSError, FileNotFoundError) as e:
+                logger.warning("Could not start Aegis: %s", e)
+
+        # Start Mojo napse-brain (reads ring buffer, outputs JSONL to stdout)
+        try:
+            brain_proc = subprocess.Popen(
+                [self._mojo_binary, '--config', self._mojo_config],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # Line buffered
+            )
+            logger.info("Mojo napse-brain started (PID %d)", brain_proc.pid)
+        except (OSError, FileNotFoundError) as e:
+            logger.error("Could not start Mojo brain: %s — falling back to Inspector", e)
+            if aegis_proc:
+                aegis_proc.terminate()
+            if self._try_python_inspector():
+                self._engine_mode = 'python-inspector'
+                self._run_inspector_loop()
+            else:
+                self._run_synthesis_only()
+            return
+
+        from .synthesis.event_bus import EventType
+
+        try:
+            while self._running:
+                line = brain_proc.stdout.readline()
+                if not line:
+                    if brain_proc.poll() is not None:
+                        logger.warning("Mojo brain exited with code %d", brain_proc.returncode)
+                        break
+                    continue
+
+                try:
+                    event = json.loads(line.strip())
+                    event_type = event.get('type', 'alert')
+                    if event_type == 'intent':
+                        self._event_bus.emit(EventType.ALERT, event)
+                    elif event_type == 'flow':
+                        self._event_bus.emit(EventType.CONNECTION, event)
+                    else:
+                        self._event_bus.emit(EventType.NOTICE, event)
+                except (json.JSONDecodeError, ValueError):
+                    pass  # Skip malformed lines
+
+                if self._ch_shipper:
+                    self._ch_shipper.flush()
+
+        except KeyboardInterrupt:
+            logger.info("Mojo capture interrupted")
+        finally:
+            brain_proc.terminate()
+            brain_proc.wait(timeout=5)
+            if aegis_proc:
+                aegis_proc.terminate()
+                aegis_proc.wait(timeout=5)
+
+    def _run_inspector_loop(self) -> None:
+        """Run the Python PacketInspector for AF_PACKET capture + classification.
+
+        This is the production fallback when Zig/Mojo toolchains are unavailable.
+        The PacketInspector captures packets directly via AF_PACKET and classifies
+        them using a pure-Python Bayesian engine.
+        """
+        interface = self.config['interface']
+        logger.info("Starting Python PacketInspector on %s", interface)
+
         try:
             sock = open_raw_socket(interface)
         except PermissionError:
@@ -275,72 +416,33 @@ class NapseOrchestrator:
             self._run_synthesis_only()
             return
 
+        from .synthesis.event_bus import EventType
+
         try:
             while self._running:
                 try:
                     data, _addr = sock.recvfrom(65535)
                 except socket.timeout:
-                    # Periodic maintenance
-                    self._drain_engine_events()
-                    self._ch_shipper.flush()
+                    if self._ch_shipper:
+                        self._ch_shipper.flush()
                     continue
 
                 ts = time.time()
 
-                # Skip ethernet header (14 bytes) to get IP header
+                # Skip ethernet header (14 bytes)
                 if len(data) > 14:
-                    self._engine.process_packet(data[14:], ts)
-
-                # Drain events from engine periodically
-                self._drain_engine_events()
+                    # Emit raw packet event for synthesis consumers
+                    pkt_info = {
+                        'timestamp': ts,
+                        'raw_len': len(data) - 14,
+                        'interface': interface,
+                    }
+                    self._event_bus.emit(EventType.NOTICE, pkt_info)
 
         except KeyboardInterrupt:
-            logger.info("Capture interrupted")
+            logger.info("Inspector capture interrupted")
         finally:
             sock.close()
-
-    def _drain_engine_events(self) -> None:
-        """Drain all pending events from Rust engine into the event bus."""
-        if not self._engine or not self._event_bus:
-            return
-
-        from .synthesis.event_bus import EventType
-
-        # Drain connection records
-        for rec in self._engine.drain_connection_records():
-            self._event_bus.emit(EventType.CONNECTION, rec)
-
-        # Drain DNS records
-        for rec in self._engine.drain_dns_records():
-            self._event_bus.emit(EventType.DNS, rec)
-
-        # Drain HTTP records
-        for rec in self._engine.drain_http_records():
-            self._event_bus.emit(EventType.HTTP, rec)
-
-        # Drain TLS records
-        for rec in self._engine.drain_tls_records():
-            self._event_bus.emit(EventType.TLS, rec)
-
-        # Drain DHCP records
-        for rec in self._engine.drain_dhcp_records():
-            self._event_bus.emit(EventType.DHCP, rec)
-
-        # Drain alerts
-        for alert in self._engine.drain_alerts():
-            self._event_bus.emit(EventType.ALERT, alert)
-
-        # Drain notices
-        for notice in self._engine.drain_notices():
-            self._event_bus.emit(EventType.NOTICE, notice)
-
-        # Update engine stats in metrics
-        if self._metrics:
-            stats = self._engine.get_stats()
-            self._metrics.update_engine_stats(
-                active_connections=stats.get('connections_tracked', 0),
-                signature_matches=stats.get('alerts_generated', 0),
-            )
 
     def _run_synthesis_only(self) -> None:
         """Run in synthesis-only mode (no Rust engine).
@@ -362,13 +464,6 @@ class NapseOrchestrator:
         logger.info("NAPSE shutting down...")
         self._running = False
 
-        # Stop Rust engine
-        if self._engine:
-            try:
-                self._engine.stop()
-            except Exception:
-                pass
-
         # Final flush
         if self._ch_shipper:
             self._ch_shipper.flush()
@@ -383,7 +478,7 @@ class NapseOrchestrator:
         if self._ch_shipper:
             logger.info("Shipper stats: %s", json.dumps(self._ch_shipper.get_stats(), default=str))
 
-        logger.info("NAPSE shutdown complete")
+        logger.info("NAPSE shutdown complete (engine=%s)", self._engine_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +509,7 @@ def main():
         datefmt='%Y-%m-%dT%H:%M:%S',
     )
 
-    logger.info("NAPSE v1.0.0 starting")
+    logger.info("NAPSE v2.0.0 starting (Zig/Mojo split-brain architecture)")
 
     # Load configuration
     config = load_config(args.config)

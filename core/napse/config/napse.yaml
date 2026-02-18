@@ -4,14 +4,34 @@
 # Override per-tier settings by loading the tier-specific YAML file.
 
 napse:
-  version: "1.0.0"
+  version: "2.0.0"
   tier: "fortress"
 
   # Network interface to monitor
   interface: "${WAN_INTERFACE:-eth0}"
   bridge: "FTS"
 
-  # Layer 0: eBPF/XDP Kernel
+  # Capture engine selection
+  # auto: tries mojo -> python-inspector -> synthesis-only
+  # mojo: require Mojo napse-brain binary
+  # python: require Python PacketInspector
+  # synthesis-only: no capture, external IDS feeds events
+  capture:
+    engine: "auto"
+
+  # Zig Aegis capture engine (Layer 0: XDP kernel fast path)
+  aegis:
+    binary: "/opt/napse/aegis/aegis-loader"
+    config: "/etc/aegis/aegis.toml"
+    ring_buffer: "/dev/shm/aegis-napse-ring"
+    ring_size_mb: 16
+
+  # Mojo Napse-brain classification engine (Layer 1: SIMD intent attribution)
+  brain:
+    binary: "/opt/napse/brain/napse-brain"
+    config: "/etc/napse/napse-brain.toml"
+
+  # Layer 0: eBPF/XDP Kernel (C kernel programs, independent of Zig Aegis)
   kernel:
     xdp_mode: "auto"               # auto/native/driver/skb
     rate_limit_pps: 1000
@@ -24,45 +44,6 @@ napse:
       frame_size: 2048
       busy_poll: false
       busy_poll_timeout_us: 20
-
-  # Layer 1: Rust Protocol Engine
-  engine:
-    connection_table_size: 65536
-    connection_timeout_s: 120
-    max_concurrent_flows: 100000
-
-    # Protocol parsers to enable
-    parsers:
-      tcp: true
-      dns: true
-      http: true
-      tls: true
-      dhcp: true
-      ssh: true
-      mdns: true
-      ssdp: true
-      smtp: true
-      smb: true
-      mqtt: true
-      modbus: true
-      dnp3: true
-      quic: true
-      rdp: true
-      ftp: true
-
-    # Signature matching
-    matcher:
-      enabled: true
-      bloom_filter_size: 1048576    # 1M bits
-      bloom_filter_hashes: 7
-      signatures_path: "signatures/napse_rules.yaml"
-
-    # ML inference
-    ml:
-      enabled: true
-      dga_model_path: "models/dga_classifier.onnx"
-      anomaly_model_path: "models/anomaly_detector.onnx"
-      inference_budget_us: 200      # Max microseconds per packet
 
   # Layer 2: Python Event Synthesis
   synthesis:
