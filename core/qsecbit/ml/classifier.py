@@ -12,6 +12,7 @@ Version: 5.0.0
 import hashlib
 import hmac
 import math
+import os
 import pickle
 from pathlib import Path
 from dataclasses import dataclass
@@ -22,8 +23,17 @@ from collections import deque, defaultdict
 import numpy as np
 
 # HMAC key for model integrity verification (CWE-502 mitigation)
-# In production this should come from a config file or env var
-_MODEL_HMAC_KEY = b'hookprobe-qsecbit-model-integrity-key'
+# Reads from env var or keyfile; falls back to a default for development only
+def _load_hmac_key() -> bytes:
+    env_key = os.environ.get('QSECBIT_MODEL_KEY')
+    if env_key:
+        return env_key.encode()
+    keyfile = Path('/etc/hookprobe/qsecbit-model.key')
+    if keyfile.exists():
+        return keyfile.read_bytes().strip()
+    return b'hookprobe-qsecbit-model-integrity-key-dev'
+
+_MODEL_HMAC_KEY = _load_hmac_key()
 
 from ..threat_types import AttackType, ThreatSeverity
 

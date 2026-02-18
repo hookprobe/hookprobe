@@ -844,13 +844,11 @@ class Qsecbit:
         # Create config with deployment-specific weights
         config = unified.UnifiedEngineConfig(deployment_type=deployment)
 
-        # Create unified engine with same XDP manager
-        engine = unified.UnifiedThreatEngine(
-            xdp_manager=self.xdp_manager,
-            energy_monitor=self.energy_monitor,
-            config=config,
-            data_dir=data_dir
-        )
+        # Create unified engine with config
+        config.data_dir = data_dir
+        config.enable_xdp = self.xdp_manager is not None
+        config.enable_energy_monitoring = self.energy_monitor is not None
+        engine = unified.UnifiedThreatEngine(config=config)
 
         return engine
 
@@ -901,7 +899,7 @@ class Qsecbit:
         if not hasattr(self, '_unified_engine') or self._unified_engine is None:
             return {'error': 'Unified engine not initialized. Call detect_threats() first.'}
 
-        return self._unified_engine.get_statistics()
+        return self._unified_engine.get_threat_report()
 
 
 # ===============================================================================
@@ -1068,12 +1066,12 @@ if __name__ == "__main__":
             print(f"  Convergence Rate:   {score.convergence_rate:.2f}")
 
         # Statistics
-        stats = engine.get_statistics()
+        report = engine.get_threat_report()
         print(f"\nSTATISTICS:")
-        print(f"  Total Detection Runs: {stats['total_detections']}")
-        print(f"  Total Threats Found:  {stats['total_threats']}")
+        print(f"  Recent Threats:       {report.get('recent_threats', 0)}")
+        print(f"  Blocked:              {report.get('blocked_count', 0)}")
         print(f"  By Severity:")
-        for sev, count in stats.get('threats_by_severity', {}).items():
+        for sev, count in report.get('threats_by_severity', {}).items():
             if count > 0:
                 print(f"    - {sev}: {count}")
 

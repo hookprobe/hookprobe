@@ -10,6 +10,7 @@ Version: 5.0.0
 """
 
 import json
+import logging
 import re
 import subprocess
 from datetime import datetime, timedelta
@@ -17,6 +18,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any, Set
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from ..threat_types import (
     ThreatEvent, AttackType, ThreatSeverity, ResponseAction,
@@ -138,8 +141,8 @@ class ResponseOrchestrator:
                     'blocked_macs': {mac: ts.isoformat() for mac, ts in self.blocked_macs.items()},
                     'last_updated': datetime.now().isoformat()
                 }, f, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to save response state: {e}")
 
     @staticmethod
     def _validate_ipv4(ip: str) -> bool:
