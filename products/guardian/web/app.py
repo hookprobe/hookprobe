@@ -17,6 +17,10 @@ from config import Config
 from modules import register_blueprints
 
 
+# Routes exempt from authentication (login page, static assets, health)
+AUTH_EXEMPT_PREFIXES = ('/auth/', '/static/', '/favicon.ico', '/logo.png')
+
+
 def create_app(config_class=Config):
     """Application factory for Guardian web UI."""
     app = Flask(__name__,
@@ -34,6 +38,26 @@ def create_app(config_class=Config):
 
     # Register all blueprints
     register_blueprints(app)
+
+    # Global auth gate — protects ALL routes except auth and static
+    @app.before_request
+    def enforce_authentication():
+        """Require authentication for all non-exempt routes."""
+        from flask import session, request, redirect, url_for, jsonify
+
+        path = request.path
+        if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+            return None
+        if session.get('authenticated'):
+            return None
+        # API requests get 401 JSON
+        is_api = (
+            path.startswith('/api/')
+            or request.accept_mimetypes.best == 'application/json'
+        )
+        if is_api:
+            return jsonify({'error': 'Authentication required'}), 401
+        return redirect(url_for('auth.login_page'))
 
     # Static file routes
     @app.route('/logo.png')
@@ -73,6 +97,9 @@ def create_app(config_class=Config):
             return send_file(favicon, mimetype='image/x-icon')
         return '', 404
 
+    # Wire AEGIS-Lite for signal processing
+    _init_aegis_lite(app)
+
     # Error handlers
     @app.errorhandler(404)
     def not_found(e):
@@ -83,6 +110,22 @@ def create_app(config_class=Config):
         return {'error': 'Internal server error'}, 500
 
     return app
+
+
+def _init_aegis_lite(app):
+    """Initialize AEGIS-Lite client for Guardian signal processing."""
+    try:
+        from products.guardian.lib.aegis_lite import AegisLite
+        aegis = AegisLite()
+        if aegis.initialize():
+            app.extensions['aegis_lite'] = aegis
+            app.logger.info("AEGIS-Lite initialized successfully")
+        else:
+            app.logger.warning("AEGIS-Lite initialization returned False")
+    except ImportError:
+        app.logger.debug("AEGIS-Lite not available (missing dependencies)")
+    except Exception as e:
+        app.logger.warning("AEGIS-Lite init error: %s", e)
 
 
 def _load_secret_key():
