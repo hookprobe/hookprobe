@@ -162,6 +162,9 @@ services:
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       AEGIS_MODEL: "${AEGIS_MODEL:-auto}"
       AEGIS_ENABLED: "${AEGIS_ENABLED:-true}"
+      AEGIS_BACKEND: "${AEGIS_BACKEND:-cloud}"
+      AEGIS_OLLAMA_URL: "${AEGIS_OLLAMA_URL:-}"
+      AEGIS_LAN_INTERFACE: "${LAN_INTERFACE:-FTS}"
     volumes:
       - web_data:/app/data
       - web_logs:/app/logs
