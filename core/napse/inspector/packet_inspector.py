@@ -58,6 +58,57 @@ PORT_HTP = 9443  # HookProbe Transport Protocol
 PORT_BRUTE = {22, 3389, 5432, 3306, 1433, 27017}  # SSH, RDP, PG, MySQL, MSSQL, Mongo
 PORT_ADMIN = {22, 3389, 5985, 5986, 445, 135, 139}  # Admin/lateral movement ports
 
+# Known DNS-over-HTTPS resolver IPs
+DOH_RESOLVER_IPS = {
+    '1.1.1.1', '1.0.0.1',           # Cloudflare
+    '8.8.8.8', '8.8.4.4',           # Google
+    '9.9.9.9', '149.112.112.112',   # Quad9
+    '208.67.222.222', '208.67.220.220',  # OpenDNS
+}
+
+# Trusted networks - never classify as threats
+# These are known legitimate sources that should not trigger alerts
+TRUSTED_NETWORKS = [
+    ipaddress.ip_network('160.79.104.0/23'),    # Anthropic (Claude Code SSH)
+    ipaddress.ip_network('213.233.111.0/24'),    # Vodafone Romania (owner ISP - Bucharest)
+    ipaddress.ip_network('46.97.153.0/24'),      # Vodafone Romania (owner ISP - Giurgiu)
+    ipaddress.ip_network('209.249.57.0/24'),     # Mitel Networks
+    ipaddress.ip_network('169.254.0.0/16'),      # Link-local / cloud metadata
+    ipaddress.ip_network('10.0.0.0/8'),          # Private RFC1918
+    ipaddress.ip_network('172.16.0.0/12'),       # Private RFC1918
+    ipaddress.ip_network('192.168.0.0/16'),      # Private RFC1918
+    ipaddress.ip_network('127.0.0.0/8'),         # Loopback
+]
+
+# Known infrastructure IPs (CDN, repos, cloud services) - never flag as threats
+TRUSTED_IPS = set()
+
+def _build_trusted_ips():
+    """Build a set of known-good individual IPs at startup."""
+    # These are resolved once; add more as needed
+    known = [
+        '91.189.92.21',     # Ubuntu archive (apt)
+        '91.189.91.82',     # Ubuntu archive
+        '185.125.190.36',   # Ubuntu cloud images
+    ]
+    for ip in known:
+        try:
+            TRUSTED_IPS.add(ipaddress.ip_address(ip))
+        except ValueError:
+            pass
+
+_build_trusted_ips()
+
+def is_trusted_source(ip_str: str) -> bool:
+    """Check if an IP belongs to a trusted network or is a known infrastructure IP."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        if addr in TRUSTED_IPS:
+            return True
+        return any(addr in net for net in TRUSTED_NETWORKS)
+    except ValueError:
+        return False
+
 # Intent classes (must match ClickHouse schema)
 INTENT_BENIGN = 'benign'
 INTENT_SCAN = 'scan'
@@ -107,6 +158,73 @@ def shannon_entropy(data: bytes) -> float:
             p = count / length
             entropy -= p * math.log2(p)
     return entropy
+
+
+def parse_dns_query_name(payload: bytes) -> Optional[str]:
+    """
+    Parse DNS query name from UDP payload.
+    Returns the fully qualified domain name or None on error.
+    DNS wire format: [len]label[len]label...0x00
+    Skips the 12-byte DNS header (ID + flags + counts).
+    """
+    if len(payload) < 13:  # 12-byte header + at least 1 byte
+        return None
+
+    # Check that it looks like a standard query (QR=0, OPCODE=0)
+    flags = struct.unpack('!H', payload[2:4])[0]
+    if flags & 0x8000:  # QR bit set = response, not query
+        return None
+
+    labels = []
+    offset = 12  # Start after DNS header
+    total_len = 0
+
+    while offset < len(payload):
+        label_len = payload[offset]
+        if label_len == 0:
+            break
+        if label_len > 63:  # Compression pointer or invalid
+            return None
+        if offset + 1 + label_len > len(payload):
+            return None
+        total_len += label_len
+        if total_len > 253:  # Max DNS name length
+            return None
+        labels.append(payload[offset + 1:offset + 1 + label_len].decode('ascii', errors='replace'))
+        offset += 1 + label_len
+
+    if not labels:
+        return None
+
+    return '.'.join(labels)
+
+
+def label_entropy(name: str) -> float:
+    """Compute Shannon entropy of a DNS label string (characters only)."""
+    if not name:
+        return 0.0
+    # Remove dots, compute entropy of the raw characters
+    chars = name.replace('.', '')
+    if len(chars) < 4:
+        return 0.0
+    freq: Dict[str, int] = {}
+    for c in chars:
+        freq[c] = freq.get(c, 0) + 1
+    n = len(chars)
+    entropy = 0.0
+    for count in freq.values():
+        if count > 0:
+            p = count / n
+            entropy -= p * math.log2(p)
+    return entropy
+
+
+def extract_base_domain(fqdn: str) -> str:
+    """Extract the base domain (last 2 labels) from an FQDN."""
+    parts = fqdn.rstrip('.').split('.')
+    if len(parts) <= 2:
+        return fqdn
+    return '.'.join(parts[-2:])
 
 
 def community_id(proto: int, src_ip: str, dst_ip: str,
@@ -209,6 +327,12 @@ class PacketInspector:
         # Intent tracking for heuristic detection
         self.src_dst_ports: Dict[str, set] = defaultdict(set)  # src -> set of dst_ports
         self.src_port_counts: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+
+        # DNS tunnel detection tracking (per source IP per 60s window)
+        self.dns_queries_per_src: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))  # src -> base_domain -> set(subdomains)
+        self.dns_query_lengths: Dict[str, list] = defaultdict(list)  # src -> list of query name lengths
+        self.dns_high_entropy_count: Dict[str, int] = defaultdict(int)  # src -> count of high-entropy queries
+        self.dns_txt_count: Dict[str, int] = defaultdict(int)  # src -> TXT query count
         self.src_pkt_rate: Dict[str, deque] = defaultdict(deque)  # src -> deque of timestamps
 
         # Traffic counters for xdp_stats
@@ -364,6 +488,7 @@ class PacketInspector:
             'proto': proto, 'tcp_flags': tcp_flags,
             'total_length': total_length, 'payload_len': payload_len,
             'entropy': entropy,
+            'payload': payload,
         }
 
     def update_stats(self, pkt: dict):
@@ -433,24 +558,86 @@ class PacketInspector:
             flow.entropy_count += 1
             flow.max_entropy = max(flow.max_entropy, pkt['entropy'])
 
-    def classify_intent(self, pkt: dict) -> Optional[Tuple[str, float, int]]:
+    def _classify_ddos_subtype(self, pkt: dict, pps: int) -> str:
+        """Classify DDoS variant by traffic shape."""
+        tcp_flags = pkt['tcp_flags']
+        proto = pkt['proto']
+
+        if proto == PROTO_TCP:
+            # SYN flood: high SYN ratio, no ACK completion
+            if (tcp_flags & 0x02) and not (tcp_flags & 0x10):
+                return 'syn_flood'
+            # ACK flood
+            if (tcp_flags & 0x10) and not (tcp_flags & 0x02):
+                return 'ack_flood'
+            # RST flood
+            if tcp_flags & 0x04:
+                return 'rst_flood'
+        elif proto == PROTO_UDP:
+            return 'udp_flood'
+        elif proto == PROTO_ICMP:
+            return 'icmp_flood'
+
+        if pkt.get('payload_len', 0) < 100:
+            return 'small_packet_flood'
+        return 'volumetric'
+
+    def _classify_bruteforce_subtype(self, dst_port: int) -> str:
+        """Classify brute force variant by target port."""
+        if dst_port == 22:
+            return 'ssh_bruteforce'
+        if dst_port == 3389:
+            return 'rdp_bruteforce'
+        if dst_port in (80, 443, 8080, 8443):
+            return 'http_auth_bruteforce'
+        if dst_port in (5432, 3306, 1433, 27017):
+            return 'db_bruteforce'
+        if dst_port in (21, 990):
+            return 'ftp_bruteforce'
+        return 'generic_bruteforce'
+
+    def classify_intent(self, pkt: dict) -> Optional[Tuple[str, float, int, str]]:
         """
         Classify packet intent using heuristics.
-        Returns (intent_class, confidence, severity) or None for benign.
+        Returns (intent_class, confidence, severity, attack_subtype) or None for benign.
+        attack_subtype provides granular classification (e.g., 'syn_flood', 'ssh_bruteforce').
+
+        Classification philosophy:
+        - Trusted sources are NEVER flagged (allowlist check first)
+        - DDoS requires DISTRIBUTED sources at HIGH intensity
+        - Brute force requires SYN-only packets (new connections) to auth ports
+        - Port scan requires probing non-standard ports, not just visiting services
+        - Established TCP sessions (data transfer) are not attacks
         """
         src = pkt['src_ip']
         dst = pkt['dst_ip']
         dst_port = pkt['dst_port']
+        src_port = pkt['src_port']
         proto = pkt['proto']
+        tcp_flags = pkt['tcp_flags']
         now = time.time()
 
-        # Update tracking structures
+        # ---- ALLOWLIST CHECK (first, before any tracking) ----
+        # Never classify trusted sources as threats
+        if is_trusted_source(src):
+            return None
+
+        # Skip response traffic on ephemeral ports (>= 32768)
+        # These are server responses, not attacks
+        if src_port >= 32768 and dst_port < 1024:
+            # This is likely a server responding to a client - skip
+            pass  # Continue to classification for the client side
+        elif dst_port >= 32768 and src_port < 1024:
+            # Response packet from server to client on ephemeral port - benign
+            return None
+
+        # ---- UPDATE TRACKING STRUCTURES ----
         self.src_dst_ports[src].add(dst_port)
         if dst_port > 0:
             self.src_port_counts[src][dst_port] += 1
         self.src_pkt_rate[src].append(now)
 
-        # Clean old rate entries using deque popleft (O(1) amortized vs O(n) list rebuild)
+        # Clean old rate entries (60-second sliding window)
         cutoff = now - 60
         rate_deque = self.src_pkt_rate[src]
         while rate_deque and rate_deque[0] <= cutoff:
@@ -458,40 +645,133 @@ class PacketInspector:
 
         pps = len(rate_deque)
 
-        # DDoS: >1000 pkt/sec from single source
-        if pps > 1000:
+        # ---- DDoS DETECTION ----
+        # Real DDoS = DISTRIBUTED denial of service
+        # Requires: high packet rate AND multiple sources exhibiting the same behavior
+        # A single source at high rate is just a busy connection, not DDoS
+        if pps > 5000:  # 5000 pkts/60s = ~83 pps sustained (was 1000)
             self.high_rate_ips[src] = pps
-            return (INTENT_DDOS, 0.9, 1)
+            # Only classify as DDoS if we see 10+ distinct high-rate sources
+            # (i.e., a coordinated attack from multiple IPs)
+            if len(self.high_rate_ips) >= 10:
+                # Sub-classify DDoS variant by traffic shape
+                subtype = self._classify_ddos_subtype(pkt, pps)
+                return (INTENT_DDOS, 0.9, 1, subtype)
+            # Single high-rate source: just track it, don't alert
+            # It could be a legitimate bulk transfer, API client, or SSH session
 
-        # Port scan: >10 unique dst_ports from same src in window
+        # ---- PORT SCAN DETECTION ----
+        # Real port scan = probing many UNUSUAL ports, not visiting well-known services
+        # Exclude common service ports from the count
+        COMMON_PORTS = {22, 53, 80, 123, 443, 3000, 5432, 8000, 8080, 8123, 8443, 9443}
         unique_ports = len(self.src_dst_ports[src])
-        if unique_ports > 10:
-            return (INTENT_SCAN, min(0.5 + unique_ports * 0.02, 0.95), 3)
+        uncommon_ports = len(self.src_dst_ports[src] - COMMON_PORTS)
+        if uncommon_ports > 25:  # Probing 25+ non-standard ports (was 10 total)
+            return (INTENT_SCAN, min(0.5 + uncommon_ports * 0.01, 0.90), 3, 'port_scan')
 
-        # Brute force: >20 packets to auth ports from same src
-        for port in PORT_BRUTE:
-            if self.src_port_counts[src].get(port, 0) > 20:
-                return (INTENT_BRUTEFORCE, 0.85, 2)
+        # ---- BRUTE FORCE DETECTION ----
+        # Real brute force = many NEW connection attempts (SYN) to auth ports
+        # NOT just packet count (an established SSH session generates thousands of packets)
+        if proto == PROTO_TCP and (tcp_flags & 0x02) and not (tcp_flags & 0x10):
+            # This is a SYN-only packet (new connection attempt, not SYN-ACK)
+            for port in PORT_BRUTE:
+                if dst_port == port:
+                    # Track SYN-only count separately using a special key
+                    syn_key = f"syn_{port}"
+                    self.src_port_counts[src][10000 + port] = self.src_port_counts[src].get(10000 + port, 0) + 1
+                    syn_count = self.src_port_counts[src].get(10000 + port, 0)
+                    if syn_count > 50:  # 50+ SYN attempts to auth port in 60s (was 20 total pkts)
+                        subtype = self._classify_bruteforce_subtype(dst_port)
+                        return (INTENT_BRUTEFORCE, min(0.6 + syn_count * 0.005, 0.95), 2, subtype)
 
-        # High entropy exfiltration: large payload + high entropy outbound
-        if (pkt['payload_len'] > 500 and pkt['entropy'] > 7.0
-                and is_private_ip(src) and not is_private_ip(dst)):
-            return (INTENT_EXFILTRATION, 0.7, 2)
+        # ---- EXFILTRATION DETECTION ----
+        # Large payload + high entropy outbound from internal to external
+        if (pkt['payload_len'] > 1000 and pkt['entropy'] > 7.5
+                and is_private_ip(src) and not is_private_ip(dst)
+                and dst_port not in {80, 443, 53}):  # Exclude normal web/DNS
+            return (INTENT_EXFILTRATION, 0.7, 2, 'high_entropy_exfil')
 
-        # Lateral movement: internal -> internal on admin ports
+        # ---- LATERAL MOVEMENT DETECTION ----
+        # Internal -> internal SYN to admin ports
         if (is_private_ip(src) and is_private_ip(dst)
                 and dst_port in PORT_ADMIN and proto == PROTO_TCP):
-            # Only flag if it's a SYN (new connection)
-            if pkt['tcp_flags'] & 0x02:
-                return (INTENT_LATERAL, 0.6, 3)
+            if tcp_flags & 0x02 and not (tcp_flags & 0x10):  # SYN-only
+                return (INTENT_LATERAL, 0.6, 3, 'lateral_movement')
 
-        # DNS anomaly: many DNS requests or long queries
+        # ---- DNS TUNNELING DETECTION ----
         if dst_port == PORT_DNS and proto == PROTO_UDP:
             dns_count = self.src_port_counts[src].get(PORT_DNS, 0)
-            if dns_count > 50:
-                return (INTENT_SCAN, 0.65, 3)  # DNS recon
 
-        return None  # Benign
+            # Parse the DNS query name from payload
+            payload = pkt.get('payload', b'')
+            qname = parse_dns_query_name(payload) if payload else None
+
+            if qname:
+                base_domain = extract_base_domain(qname)
+                # Extract subdomain portion (everything before base domain)
+                sub = qname[:-(len(base_domain) + 1)] if len(qname) > len(base_domain) else ''
+
+                # Track unique subdomains per base domain
+                if sub:
+                    self.dns_queries_per_src[src][base_domain].add(sub)
+
+                # Track query name length
+                self.dns_query_lengths[src].append(len(qname))
+
+                # Track high-entropy query names (base32/base64 encoding signature)
+                name_ent = label_entropy(qname)
+                if name_ent > 3.5 and len(qname) > 30:
+                    self.dns_high_entropy_count[src] += 1
+
+                # Check for TXT record queries (common tunnel type, qtype at offset after qname)
+                # QTYPE is 2 bytes after the qname null terminator
+                qname_end = 12  # DNS header
+                while qname_end < len(payload) and payload[qname_end] != 0:
+                    qname_end += 1 + payload[qname_end]
+                qname_end += 1  # Skip null terminator
+                if qname_end + 2 <= len(payload):
+                    qtype = struct.unpack('!H', payload[qname_end:qname_end + 2])[0]
+                    if qtype == 16:  # TXT record
+                        self.dns_txt_count[src] += 1
+
+                # DETECTION 1: Excessive unique subdomains to a single domain
+                # Normal: a few subdomains (www, api, cdn). Tunnel: hundreds of unique labels
+                for domain, subs in self.dns_queries_per_src[src].items():
+                    if len(subs) > 50:  # 50+ unique subdomains to one domain in 60s
+                        return (INTENT_EXFILTRATION, min(0.7 + len(subs) * 0.002, 0.95), 2, 'dns_tunnel')
+
+                # DETECTION 2: High-entropy query names (base32/base64 encoded data)
+                # Legitimate DNS: low entropy (www.example.com ≈ 2.5 bits)
+                # DNS tunnel: high entropy (aGVsbG8gd29ybGQ.evil.com ≈ 4.5+ bits)
+                if self.dns_high_entropy_count[src] > 10:
+                    return (INTENT_C2_BEACON, min(0.65 + self.dns_high_entropy_count[src] * 0.005, 0.90), 2, 'dns_tunnel_entropy')
+
+                # DETECTION 3: Long DNS query names (tunnel payloads)
+                # Normal DNS queries are typically < 50 chars
+                # DNS tunnels encode data in labels, making names 100-250 chars
+                recent_lengths = self.dns_query_lengths[src]
+                if len(recent_lengths) > 5:
+                    avg_len = sum(recent_lengths) / len(recent_lengths)
+                    if avg_len > 60:  # Average query name > 60 chars
+                        return (INTENT_C2_BEACON, 0.7, 2, 'dns_tunnel_long_names')
+
+                # DETECTION 4: Excessive TXT queries (common DNS tunnel channel)
+                if self.dns_txt_count[src] > 20:
+                    return (INTENT_C2_BEACON, 0.75, 2, 'dns_tunnel_txt')
+
+            # DETECTION 5: Volume-based fallback (original check, works even without parsing)
+            if dns_count > 200:  # 200+ DNS queries in 60s
+                return (INTENT_SCAN, 0.65, 3, 'dns_scan')
+
+        # ---- DNS-over-HTTPS (DoH) DETECTION ----
+        # Large volumes of HTTPS traffic to known DoH resolvers may indicate
+        # DNS tunnel bypass using encrypted DNS
+        if proto == PROTO_TCP and dst_port == PORT_HTTPS and dst in DOH_RESOLVER_IPS:
+            doh_count = self.src_port_counts[src].get(PORT_HTTPS, 0)
+            if doh_count > 100:  # 100+ HTTPS packets to a DoH resolver in 60s
+                return (INTENT_C2_BEACON, 0.55, 4, 'doh_bypass')
+
+        return None  # Benign - this is the expected path for normal traffic
 
     def flush_stats(self):
         """Flush traffic statistics to xdp_stats table."""
@@ -562,7 +842,7 @@ class PacketInspector:
         columns = [
             'timestamp', 'src_ip', 'dst_ip', 'src_port', 'dst_port',
             'proto', 'intent_class', 'confidence', 'severity',
-            'hmm_state', 'entropy', 'community_id'
+            'hmm_state', 'entropy', 'community_id', 'features_summary'
         ]
 
         if self._ch_batch_insert('napse_intents', columns, self.pending_intents):
@@ -623,6 +903,10 @@ class PacketInspector:
         self.src_dst_ports.clear()
         self.src_port_counts.clear()
         self.high_rate_ips.clear()
+        self.dns_queries_per_src.clear()
+        self.dns_query_lengths.clear()
+        self.dns_high_entropy_count.clear()
+        self.dns_txt_count.clear()
         # Prune src_pkt_rate: remove keys with no recent timestamps
         cutoff = time.time() - 60
         stale_keys = [k for k, v in self.src_pkt_rate.items() if not v or v[-1] < cutoff]
@@ -698,7 +982,7 @@ class PacketInspector:
                     # Classify intent
                     result = self.classify_intent(pkt)
                     if result:
-                        intent_class, confidence, severity = result
+                        intent_class, confidence, severity, attack_subtype = result
                         cid = community_id(pkt['proto'], pkt['src_ip'], pkt['dst_ip'],
                                            pkt['src_port'], pkt['dst_port'])
                         ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -707,7 +991,7 @@ class PacketInspector:
                             pkt['src_port'], pkt['dst_port'], pkt['proto'],
                             intent_class, round(confidence, 4), severity,
                             INTENT_TO_HMM.get(intent_class, HMM_IDLE),
-                            round(pkt['entropy'], 4), cid
+                            round(pkt['entropy'], 4), cid, attack_subtype
                         ])
                         intent_count += 1
 
