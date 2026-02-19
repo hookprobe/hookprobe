@@ -1,0 +1,19 @@
+# HookProbe QSecBit Security Scoring Engine Container
+# Calculates QSECBIT scores from ClickHouse IDS data
+
+FROM docker.io/python:3.11-slim
+
+LABEL maintainer="qsecbit@hookprobe.com"
+LABEL description="QSecBit security scoring engine"
+LABEL version="1.0.0"
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests==2.31.0
+
+COPY qsecbit_engine.py /app/
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=30s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)" || exit 1
+
+ENTRYPOINT ["python", "-u", "/app/qsecbit_engine.py"]
