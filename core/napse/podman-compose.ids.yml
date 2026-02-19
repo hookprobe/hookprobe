@@ -1,18 +1,22 @@
-# HookProbe IDS Infrastructure v3.1
-# ==================================
+# HookProbe IDS Infrastructure v5.0 (HYDRA)
+# ===========================================
 #
-# Inspector (Python) + QSecBit Scoring Architecture
+# HYDRA Active Defense + Inspector + QSecBit Architecture
 #
-# Shared IDS/monitoring stack for both:
-#   - hookprobe.com (public website)
-#   - HookProbe Fortress (security platform)
-#
-# This stack receives mirrored traffic from the dummy-mirror interface
-# and provides unified threat detection and logging.
+# Shared IDS/monitoring stack with active threat mitigation:
+#   - XDP HYDRA: Active filtering with LPM_TRIE blocklist/allowlist + weighted IP scores
+#   - Feed Sync: Threat feed download + XDP map population
+#   - Event Consumer: RINGBUF event reader + ClickHouse writer
+#   - RDAP Enricher: IP ownership lookup + weighted scoring + adaptive sampling
+#   - Feature Extractor: 24-feature behavioral vector extraction
+#   - Anomaly Detector: Isolation Forest ML + auto-block escalation
+#   - Inspector: Python AF_PACKET heuristic classification
+#   - QSecBit: Security scoring engine
 #
 # Prerequisites:
 #   1. Run setup-vrf.sh to create dummy-mirror interface
-#   2. ClickHouse must be running and healthy
+#   2. Run hydra-xdp-deploy.sh to load XDP program
+#   3. ClickHouse must be running and healthy
 #
 # Usage:
 #   sudo podman-compose -f podman-compose.ids.yml up -d
@@ -20,16 +24,22 @@
 # Architecture:
 #   dummy-mirror (receives all mirrored traffic)
 #        |
-#        +---> Inspector (Python AF_PACKET capture + heuristic classification)
-#        |       |---> napse_intents (intent classifications -> ClickHouse)
-#        |       |---> napse_flows (flow summaries -> ClickHouse)
-#        |       +---> xdp_stats (traffic counters -> ClickHouse)
+#        +---> XDP HYDRA (kernel-level blocklist/allowlist filtering)
+#        |       |---> RINGBUF events -> Event Consumer -> ClickHouse
+#        |       +---> Feed Sync populates blocklist from threat feeds
 #        |
-#        +---> Log Shipper (backup JSONL pipeline -> ClickHouse)
+#        +---> Inspector (Python AF_PACKET capture + heuristic classification)
+#        |       |---> napse_intents -> ClickHouse
+#        |       |---> napse_flows -> ClickHouse
+#        |       +---> xdp_stats -> ClickHouse
+#        |
+#        +---> Feature Extractor -> hydra_ip_features -> Anomaly Detector
+#        |
+#        +---> RDAP Enricher -> ip_scores BPF map (kernel-level score drops)
 #        |
 #        +---> QSecBit (security scoring from ClickHouse data)
 #
-# Version: 3.1.0
+# Version: 5.0.0
 
 name: hookprobe-ids
 
@@ -38,6 +48,8 @@ volumes:
     name: ids-clickhouse-data
   clickhouse_logs:
     name: ids-clickhouse-logs
+  hydra_models:
+    name: ids-hydra-models
 
 services:
   # ============================================================================
@@ -49,9 +61,6 @@ services:
     container_name: ids-clickhouse
     hostname: ids-clickhouse
     restart: unless-stopped
-    # Host network mode - all other IDS containers already use host networking.
-    # ClickHouse binds directly on host ports 8123/9000.
-    # This avoids the broken port forwarding with internal bridge networks.
     network_mode: host
     volumes:
       - clickhouse_data:/var/lib/clickhouse
@@ -79,13 +88,6 @@ services:
 
   # ============================================================================
   # CAPTURE + CLASSIFICATION - Inspector (Python AF_PACKET)
-  # ============================================================================
-  #
-  # Production-ready packet capture and heuristic intent classification.
-  # Captures real traffic from dummy-mirror using raw sockets and writes
-  # directly to ClickHouse (napse_intents, napse_flows, xdp_stats).
-  #
-  # Replaces Aegis (Zig/eBPF) + Napse (Mojo) scaffolds with working code.
   # ============================================================================
 
   inspector:
@@ -151,3 +153,225 @@ services:
       - "hookprobe.service=qsecbit"
       - "hookprobe.vrf=hp-ids"
       - "hookprobe.purpose=QSecBit security scoring engine"
+
+  # ============================================================================
+  # HYDRA - Threat Feed Sync Daemon
+  # ============================================================================
+  #
+  # Downloads threat intelligence feeds (Spamhaus, FireHOL, ET, Feodo)
+  # and pushes CIDRs to the XDP blocklist/allowlist BPF maps via raw syscalls.
+  # Also maintains the trusted allowlist (Anthropic, Vodafone RO, Cloudflare).
+  # ============================================================================
+
+  hydra-feed:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-feed
+    hostname: ids-hydra-feed
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      XDP_INTERFACE: "dummy-mirror"
+      SYNC_INTERVAL: "3600"
+    command: ["python3", "-u", "feed_sync.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-feed"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Threat feed sync and XDP map population"
+
+  # ============================================================================
+  # HYDRA - Event Consumer
+  # ============================================================================
+  #
+  # Reads XDP RINGBUF events (drops, rate alerts) and writes to ClickHouse.
+  # Also sends Discord alerts for high-severity blocks.
+  # ============================================================================
+
+  hydra-consumer:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-consumer
+    hostname: ids-hydra-consumer
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      XDP_INTERFACE: "dummy-mirror"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
+    command: ["python3", "-u", "event_consumer.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-consumer"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=XDP RINGBUF event consumer and ClickHouse writer"
+
+  # ============================================================================
+  # HYDRA - RDAP Enricher + Adaptive Sampling
+  # ============================================================================
+  #
+  # Queries RIPE RDAP for IP ownership, classifies IPs (datacenter/ISP/CDN/VPN/Tor),
+  # computes weighted threat scores, syncs to XDP ip_scores map for kernel-level
+  # filtering, and adjusts XDP sampling rate based on CPU load.
+  # ============================================================================
+
+  hydra-enricher:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-enricher
+    hostname: ids-hydra-enricher
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-127.0.0.1}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "${POSTGRES_DB:-hookprobe}"
+      POSTGRES_USER: "${POSTGRES_USER:-hookprobe}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      XDP_INTERFACE: "dummy-mirror"
+      SCORE_DROP_THRESHOLD: "100"
+      RDAP_RATE_LIMIT: "10"
+      ENRICHER_INTERVAL: "30"
+    command: ["python3", "-u", "rdap_enricher.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-enricher"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=RDAP IP enrichment, weighted scoring, adaptive sampling"
+
+  # ============================================================================
+  # HYDRA - Feature Extractor
+  # ============================================================================
+  #
+  # Extracts 24-feature behavioral vectors per IP per 5-minute window
+  # from ClickHouse data and BPF IAT maps. Writes to hydra_ip_features.
+  # ============================================================================
+
+  hydra-features:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-features
+    hostname: ids-hydra-features
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      EXTRACT_INTERVAL: "300"
+      FEATURE_WINDOW: "300"
+      MIN_PACKETS: "10"
+    command: ["python3", "-u", "feature_extractor.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-features"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=24-feature behavioral vector extraction for ML"
+
+  # ============================================================================
+  # HYDRA - Anomaly Detector (Isolation Forest ML)
+  # ============================================================================
+  #
+  # Scores IP feature vectors with Isolation Forest anomaly detection.
+  # Writes verdicts to hydra_verdicts. Auto-blocks on escalation.
+  # ============================================================================
+
+  hydra-anomaly:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-anomaly
+    hostname: ids-hydra-anomaly
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - hydra_models:/app/models
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
+      DETECT_INTERVAL: "300"
+      MIN_TRAINING_SAMPLES: "100"
+      BASELINE_HOURS: "24"
+      RETRAIN_HOURS: "168"
+    command: ["python3", "-u", "anomaly_detector.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "hookprobe.service=hydra-anomaly"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Isolation Forest anomaly detection and auto-blocking"
