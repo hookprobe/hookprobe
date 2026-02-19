@@ -269,3 +269,141 @@ CREATE TABLE IF NOT EXISTS hookprobe_ids.iocs (
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (created_at, risk_score)
 TTL toDateTime(created_at) + INTERVAL 90 DAY;
+
+-- ============================================================================
+-- HYDRA TABLES (Active Defense Layer)
+-- ============================================================================
+
+-- XDP block/alert events from RINGBUF consumer.
+-- Each row represents a packet that was dropped or flagged by the XDP program.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.hydra_events (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    dst_ip IPv4 CODEC(ZSTD(1)),
+    src_port UInt16 CODEC(Delta, ZSTD(1)),
+    dst_port UInt16 CODEC(Delta, ZSTD(1)),
+    proto UInt8 CODEC(Delta, ZSTD(1)),
+    action LowCardinality(String) CODEC(ZSTD(1)),  -- 'drop', 'alert', 'rate_limit'
+    reason LowCardinality(String) CODEC(ZSTD(1)),  -- 'blocklist', 'rate_exceeded', 'syn_flood', 'rpf_fail'
+    feed_source LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),  -- 'spamhaus_drop', 'firehol_l1', etc.
+    tcp_flags UInt8 DEFAULT 0 CODEC(ZSTD(1)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_dst_ip dst_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_action action TYPE set(0) GRANULARITY 4,
+    INDEX idx_reason reason TYPE set(0) GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY;
+
+-- Threat feed sync status log.
+-- Tracks each feed download: success/failure, entry counts, timing.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.hydra_feed_sync (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    feed_name LowCardinality(String) CODEC(ZSTD(1)),
+    feed_url String CODEC(ZSTD(1)),
+    entries_count UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    new_entries UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    removed_entries UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    status LowCardinality(String) CODEC(ZSTD(1)),  -- 'success', 'error', 'timeout', 'unchanged'
+    sync_duration_ms UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    error_message String DEFAULT '' CODEC(ZSTD(1))
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, feed_name)
+TTL toDateTime(timestamp) + INTERVAL 365 DAY;
+
+-- nftables/XDP block log.
+-- Each row is an IP that was actively blocked at the network level.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.hydra_blocks (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    duration_seconds UInt32 DEFAULT 300 CODEC(Delta, ZSTD(1)),
+    reason LowCardinality(String) CODEC(ZSTD(1)),  -- 'threat_feed', 'rate_limit', 'brute_force', 'manual'
+    source LowCardinality(String) CODEC(ZSTD(1)),  -- 'xdp', 'nftables', 'operator'
+    auto_expired UInt8 DEFAULT 0 CODEC(ZSTD(1)),
+    event_count UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL toDateTime(timestamp) + INTERVAL 365 DAY;
+
+-- Per-IP feature vectors for ML anomaly detection (Phase 3).
+-- One row per IP per 5-minute window with extracted behavioral features.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.hydra_ip_features (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    -- Network features
+    pps Float32 CODEC(Gorilla, ZSTD(1)),
+    bps Float32 CODEC(Gorilla, ZSTD(1)),
+    unique_dst_ports UInt16 CODEC(Delta, ZSTD(1)),
+    unique_dst_ips UInt16 CODEC(Delta, ZSTD(1)),
+    syn_ratio Float32 CODEC(Gorilla, ZSTD(1)),
+    avg_pkt_size Float32 CODEC(Gorilla, ZSTD(1)),
+    -- Temporal features
+    iat_mean Float32 CODEC(Gorilla, ZSTD(1)),
+    iat_entropy Float32 CODEC(Gorilla, ZSTD(1)),
+    burst_count UInt16 CODEC(Delta, ZSTD(1)),
+    -- Behavioral features
+    port_diversity Float32 CODEC(Gorilla, ZSTD(1)),
+    protocol_mix Float32 CODEC(Gorilla, ZSTD(1)),
+    -- Full feature vector for ML input (24 features)
+    feature_vector Array(Float32) CODEC(ZSTD(1)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL toDateTime(timestamp) + INTERVAL 30 DAY;
+
+-- ML verdict log (Phase 3).
+-- Stores anomaly detection results and ensemble decisions.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.hydra_verdicts (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    anomaly_score Float32 CODEC(Gorilla, ZSTD(1)),
+    model_scores Array(Float32) CODEC(ZSTD(1)),  -- [isolation_forest, cnn, hmm]
+    verdict LowCardinality(String) CODEC(ZSTD(1)),  -- 'benign', 'suspicious', 'malicious'
+    action_taken LowCardinality(String) CODEC(ZSTD(1)),  -- 'none', 'alert', 'throttle', 'block'
+    operator_decision LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),  -- 'confirm', 'false_positive', ''
+    operator_decided_at Nullable(DateTime64(3)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_verdict verdict TYPE set(0) GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY;
+
+-- Hourly HYDRA event summary for dashboard trending.
+CREATE MATERIALIZED VIEW IF NOT EXISTS hookprobe_ids.mv_hydra_events_hourly
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, action, reason)
+AS SELECT
+    toStartOfHour(timestamp) AS hour,
+    action,
+    reason,
+    count() AS event_count,
+    uniqExact(src_ip) AS unique_sources
+FROM hookprobe_ids.hydra_events
+GROUP BY hour, action, reason;
+
+-- RDAP enrichment cache (Phase 6: IP identity awareness).
+-- Stores RDAP/RIPE query results for IP ownership classification.
+-- ReplacingMergeTree deduplicates by ip on background merge (latest queried_at wins).
+CREATE TABLE IF NOT EXISTS hookprobe_ids.rdap_cache (
+    ip IPv4,
+    queried_at DateTime DEFAULT now(),
+    rdap_name String CODEC(ZSTD(1)),
+    rdap_handle String CODEC(ZSTD(1)),
+    rdap_type LowCardinality(String) CODEC(ZSTD(1)),  -- 'datacenter', 'isp', 'cdn', 'vpn', 'tor', 'edu', 'gov', 'unknown'
+    country LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),
+    asn UInt32 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    asn_name String DEFAULT '' CODEC(ZSTD(1)),
+    abuse_contact String DEFAULT '' CODEC(ZSTD(1)),
+    cidr_prefix UInt8 DEFAULT 0 CODEC(ZSTD(1)),
+    weighted_score UInt16 DEFAULT 0 CODEC(ZSTD(1)),
+    raw_json String DEFAULT '' CODEC(ZSTD(3))
+) ENGINE = ReplacingMergeTree(queried_at)
+ORDER BY ip
+TTL queried_at + INTERVAL 30 DAY;

@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  HookProbe IDS ClickHouse Users Configuration
+
+  Note: The 'ids' user is created automatically via CLICKHOUSE_USER/CLICKHOUSE_PASSWORD
+  environment variables in podman-compose. Do NOT define it here to avoid conflicts.
+
+  Users defined here:
+    - readonly: Read-only user for dashboards (password stored as SHA-256 hash)
+-->
+<clickhouse>
+    <users>
+        <!-- Read-only Dashboard User -->
+        <readonly>
+            <password_sha256_hex>05b1ee6d42cf8563df59d880657a299b35d59e6be071f157bafcb030faf6988a</password_sha256_hex>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>readonly</profile>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </readonly>
+    </users>
+
+    <profiles>
+        <default>
+            <max_memory_usage>1000000000</max_memory_usage>
+            <max_execution_time>60</max_execution_time>
+            <load_balancing>random</load_balancing>
+        </default>
+        <readonly>
+            <readonly>1</readonly>
+            <max_memory_usage>1000000000</max_memory_usage>
+            <max_execution_time>60</max_execution_time>
+        </readonly>
+    </profiles>
+
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
+</clickhouse>

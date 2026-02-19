@@ -1,0 +1,21 @@
+FROM docker.io/library/python:3.12-slim
+
+LABEL description="HookProbe HYDRA Feed Sync + Event Consumer + ML + RDAP Enricher"
+LABEL version="3.1.0"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 \
+    bpfcc-tools \
+    curl \
+    && pip install --no-cache-dir psycopg2-binary \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create model persistence directory
+RUN mkdir -p /app/models
+
+COPY bpf_map_ops.py feed_sync.py event_consumer.py feature_extractor.py anomaly_detector.py rdap_enricher.py ./
+
+# Default: run feed_sync (override in compose for other daemons)
+CMD ["python3", "-u", "feed_sync.py"]
