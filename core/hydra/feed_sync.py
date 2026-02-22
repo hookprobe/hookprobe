@@ -423,7 +423,7 @@ def sync_all_feeds() -> dict:
             overlap = False
             for trusted in trusted_nets:
                 if block_net.overlaps(trusted):
-                    logger.warning(f"Skipping blocklist CIDR {cidr} — overlaps trusted {trusted}")
+                    logger.warning("Skipping blocklist CIDR %s — overlaps a trusted network", cidr)
                     overlap = True
                     break
             if not overlap:
