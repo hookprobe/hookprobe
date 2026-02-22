@@ -407,3 +407,147 @@ CREATE TABLE IF NOT EXISTS hookprobe_ids.rdap_cache (
 ) ENGINE = ReplacingMergeTree(queried_at)
 ORDER BY ip
 TTL queried_at + INTERVAL 30 DAY;
+
+-- ============================================================================
+-- SENTINEL TABLES (ML False Positive Discrimination Engine)
+-- ============================================================================
+
+-- Per-IP statistical profiles built by baseline_profiler.py.
+-- Welford online algorithm: stores (count, mean, M2) per feature for
+-- incremental variance computation. ReplacingMergeTree deduplicates by ip.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_ip_profiles (
+    ip IPv4,
+    updated_at DateTime DEFAULT now(),
+    window_count UInt32 DEFAULT 0,
+    feature_names Array(String) DEFAULT [],
+    feature_means Array(Float64) DEFAULT [],
+    feature_m2s Array(Float64) DEFAULT [],
+    feature_counts Array(UInt32) DEFAULT [],
+    diurnal_counts Array(UInt32) DEFAULT [],      -- 24-element hourly event counts
+    first_seen DateTime DEFAULT now(),
+    last_seen DateTime DEFAULT now(),
+    rdap_type LowCardinality(String) DEFAULT 'unknown',
+    asn UInt32 DEFAULT 0,
+    country LowCardinality(String) DEFAULT '',
+    profile_hash String DEFAULT ''
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY ip
+TTL updated_at + INTERVAL 90 DAY;
+
+-- Model state persistence for SENTINEL ensemble components.
+-- Stores trained model parameters, version history, and performance metrics.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_model_state (
+    model_name LowCardinality(String),
+    version UInt32,
+    trained_at DateTime DEFAULT now(),
+    training_samples UInt32 DEFAULT 0,
+    model_params String CODEC(ZSTD(1)),
+    precision Float32 DEFAULT 0,
+    recall Float32 DEFAULT 0,
+    f1_score Float32 DEFAULT 0,
+    false_positive_rate Float32 DEFAULT 0,
+    feature_importance String DEFAULT '' CODEC(ZSTD(1))
+) ENGINE = ReplacingMergeTree(trained_at)
+ORDER BY (model_name, version);
+
+-- SENTINEL evidence log: per-IP per-window scoring details.
+-- Records all evidence signals and final ensemble decision for audit trail.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_evidence (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    if_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    bayes_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    sentinel_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    evidence_vector Array(Float32) CODEC(ZSTD(1)),
+    verdict LowCardinality(String) DEFAULT 'unknown' CODEC(ZSTD(1)),
+    confidence Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    profile_deviation Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    cve_relevance Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    z_scores Array(Float32) CODEC(ZSTD(1)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_verdict verdict TYPE set(0) GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY;
+
+-- SENTINEL CVE context: per-IP per-port CVE relevance enrichment.
+-- Records which CVEs are relevant to observed attack patterns.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_cve_context (
+    timestamp DateTime64(3) CODEC(Delta, ZSTD(1)),
+    src_ip IPv4 CODEC(ZSTD(1)),
+    dst_port UInt16 CODEC(Delta, ZSTD(1)),
+    intent_class LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),
+    matched_cve_count UInt16 DEFAULT 0 CODEC(Delta, ZSTD(1)),
+    max_cvss_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    cve_relevance_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    top_cve_ids Array(String) DEFAULT [] CODEC(ZSTD(1)),
+    attack_vector LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),
+    attack_complexity LowCardinality(String) DEFAULT '' CODEC(ZSTD(1)),
+    has_kev UInt8 DEFAULT 0 CODEC(ZSTD(1)),
+    INDEX idx_src_ip src_ip TYPE bloom_filter() GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, src_ip, dst_port)
+TTL toDateTime(timestamp) + INTERVAL 30 DAY;
+
+-- SENTINEL temporal analysis: per-IP drift scores and campaign membership.
+-- Created dynamically by temporal_memory.py but defined here for documentation.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_temporal (
+    timestamp DateTime64(3) DEFAULT now64(3),
+    ip IPv4,
+    drift_score Float32,
+    diurnal_anomaly Float32,
+    intent_entropy Float32,
+    campaign_id String DEFAULT '',
+    campaign_reputation Float32 DEFAULT 0,
+    recent_event_rate Float32 DEFAULT 0,
+    recent_port_diversity UInt16 DEFAULT 0,
+    recent_syn_ratio Float32 DEFAULT 0,
+    intent_sequence String DEFAULT '',
+    verdict_context LowCardinality(String) DEFAULT ''
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (ip, timestamp)
+TTL toDateTime(timestamp) + INTERVAL 30 DAY;
+
+-- SENTINEL campaign co-occurrence groups: IPs appearing together in attack windows.
+-- ReplacingMergeTree deduplicates by campaign_id (latest discovered_at wins).
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_campaigns (
+    discovered_at DateTime DEFAULT now(),
+    campaign_id String,
+    member_ips Array(IPv4),
+    member_count UInt16,
+    total_cooccurrences UInt32,
+    max_reputation Float32,
+    intent_classes Array(String),
+    active UInt8 DEFAULT 1
+) ENGINE = ReplacingMergeTree(discovered_at)
+ORDER BY campaign_id
+TTL discovered_at + INTERVAL 60 DAY;
+
+-- ================================================================
+-- SENTINEL Lifecycle Metrics (model performance tracking)
+-- ================================================================
+-- Tracks SENTINEL model precision/recall/F1 over time,
+-- Page-Hinkley drift detection state, and A/B test status.
+-- Written by sentinel_lifecycle.py.
+CREATE TABLE IF NOT EXISTS hookprobe_ids.sentinel_lifecycle_metrics (
+    timestamp DateTime64(3) CODEC(Delta(8), ZSTD(1)),
+    model_version UInt32 DEFAULT 0,
+    training_samples UInt32 DEFAULT 0,
+    tp UInt32 DEFAULT 0,
+    fp UInt32 DEFAULT 0,
+    fn UInt32 DEFAULT 0,
+    tn UInt32 DEFAULT 0,
+    precision Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    recall Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    f1_score Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    false_positive_rate Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    drift_detected UInt8 DEFAULT 0,
+    drift_cumsum Float32 DEFAULT 0 CODEC(Gorilla, ZSTD(1)),
+    lifecycle_state String DEFAULT '' CODEC(ZSTD(1))
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY timestamp
+TTL toDateTime(timestamp) + INTERVAL 90 DAY;

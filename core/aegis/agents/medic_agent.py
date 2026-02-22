@@ -27,8 +27,15 @@ class MedicAgent(BaseAgent):
         r"(?:multi|cross).*agent.*(?:trigger|alert|escalat)",
         r"qsecbit.*red|critical.*threat",
         r"coordinated.*attack",
+        # HYDRA SENTINEL escalation patterns
+        r"hydra.*campaign",
+        r"hydra.*verdict.*malicious",
+        r"sentinel.*campaign|sentinel.*coordinated",
     ]
-    allowed_tools = ["full_quarantine", "forensic_capture", "incident_timeline"]
+    allowed_tools = [
+        "full_quarantine", "forensic_capture", "incident_timeline",
+        "sentinel_campaign_info",
+    ]
     confidence_threshold = 0.8  # Higher threshold — MEDIC actions are disruptive
 
     def respond_to_signal(
@@ -36,7 +43,11 @@ class MedicAgent(BaseAgent):
         signal: StandardSignal,
         context: Optional[Dict[str, Any]] = None,
     ) -> AgentResponse:
-        """Handle escalated incidents and cross-agent correlations."""
+        """Handle escalated incidents, cross-agent correlations, and HYDRA campaigns."""
+        # HYDRA SENTINEL campaign escalation
+        if signal.source == "hydra":
+            return self._handle_hydra_escalation(signal, context)
+
         source_ip = signal.data.get("source_ip", "unknown")
         related_agents = signal.data.get("related_agents", [])
         attack_chain = signal.data.get("attack_chain", [])
@@ -126,6 +137,76 @@ class MedicAgent(BaseAgent):
                     "Ask me about active incidents, quarantined devices, "
                     "or recent security events.",
             agent=self.name, confidence=0.4, sources=["template"],
+        )
+
+    def _handle_hydra_escalation(
+        self,
+        signal: StandardSignal,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> AgentResponse:
+        """Handle HYDRA SENTINEL escalation — campaigns and malicious verdicts."""
+        ip = signal.data.get("ip", "unknown")
+        campaign_id = signal.data.get("campaign_id", "")
+        score = signal.data.get("sentinel_score", 0.0)
+
+        if signal.event_type == "campaign_detected":
+            timeline = self._build_timeline(signal, context)
+            return AgentResponse(
+                agent=self.name,
+                action="forensic_capture",
+                confidence=0.9,
+                reasoning=(
+                    f"SENTINEL campaign {campaign_id} escalated to MEDIC. "
+                    f"IP {ip} (score={score:.2f}). Initiating forensic capture."
+                ),
+                user_message=(
+                    f"**Campaign Response Activated**\n\n"
+                    f"HYDRA SENTINEL detected coordinated campaign `{campaign_id}` "
+                    f"involving IP {ip} (threat score: {score:.0%}).\n\n"
+                    f"{timeline}\n\n"
+                    f"Action: Forensic capture started. Building incident timeline."
+                ),
+                tool_calls=[
+                    {
+                        "name": "forensic_capture",
+                        "params": {"source_ip": ip, "duration": 120},
+                    },
+                    {
+                        "name": "sentinel_campaign_info",
+                        "params": {"campaign_id": campaign_id},
+                    },
+                ],
+                sources=["SENTINEL", "HYDRA"],
+            )
+
+        if signal.event_type == "verdict.malicious":
+            return AgentResponse(
+                agent=self.name,
+                action="incident_timeline",
+                confidence=0.85,
+                reasoning=(
+                    f"SENTINEL malicious verdict for {ip} "
+                    f"(score={score:.2f}) escalated to MEDIC"
+                ),
+                user_message=(
+                    f"Investigating malicious IP {ip} — HYDRA SENTINEL "
+                    f"threat score: {score:.0%}. Building incident timeline."
+                ),
+                tool_calls=[{
+                    "name": "incident_timeline",
+                    "params": {"source_ip": ip},
+                }],
+                sources=["SENTINEL", "HYDRA"],
+            )
+
+        # Other HYDRA signals (drift, retrain) — log and monitor
+        return AgentResponse(
+            agent=self.name,
+            action="",
+            confidence=0.5,
+            reasoning=f"HYDRA event {signal.event_type} noted by MEDIC",
+            user_message=f"HYDRA SENTINEL event: {signal.event_type}. Logged for tracking.",
+            sources=["SENTINEL"],
         )
 
     def _build_timeline(

@@ -375,3 +375,201 @@ services:
       - "hookprobe.service=hydra-anomaly"
       - "hookprobe.vrf=hp-ids"
       - "hookprobe.purpose=Isolation Forest anomaly detection and auto-blocking"
+
+  # ============================================================================
+  # SENTINEL - Baseline Profiler (Stage 1)
+  # ============================================================================
+  #
+  # Builds per-IP statistical profiles using Welford's online algorithm.
+  # Computes Z-scores, diurnal patterns, and RDAP enrichment integration.
+  # Writes to sentinel_ip_profiles table.
+  # ============================================================================
+
+  hydra-profiler:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-profiler
+    hostname: ids-hydra-profiler
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      PROFILE_INTERVAL: "300"
+      WINDOW_SIZE: "300"
+      MIN_EVENTS: "3"
+      MAX_TRACKED_IPS: "5000"
+    command: ["python3", "-u", "baseline_profiler.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-profiler"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 1: per-IP Welford statistical profiles"
+
+  # ============================================================================
+  # SENTINEL - CVE Enricher (Stage 2)
+  # ============================================================================
+  #
+  # Downloads CVE data from NVD API 2.0 and CISA KEV feed.
+  # Stores in local SQLite, provides CVE relevance scoring per (IP, port, intent).
+  # Writes to sentinel_cve_context table.
+  # ============================================================================
+
+  hydra-cve:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-cve
+    hostname: ids-hydra-cve
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - hydra_models:/app/models
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      CVE_DB_PATH: "/app/models/cve.db"
+      CVE_SCORING_INTERVAL: "300"
+    command: ["python3", "-u", "cve_enricher.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-cve"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 2: NVD/CISA CVE relevance scoring"
+
+  # ============================================================================
+  # SENTINEL - Temporal Memory (Stage 4)
+  # ============================================================================
+  #
+  # Behavioral drift detection via KL divergence, campaign co-occurrence
+  # graph with BFS reputation propagation, intent sequence tracking.
+  # Writes to sentinel_temporal and sentinel_campaigns tables.
+  # ============================================================================
+
+  hydra-temporal:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-temporal
+    hostname: ids-hydra-temporal
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      TEMPORAL_INTERVAL: "600"
+    command: ["python3", "-u", "temporal_memory.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-temporal"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 4: drift detection, campaigns, intent sequences"
+
+  hydra-sentinel:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-sentinel
+    hostname: ids-hydra-sentinel
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      SENTINEL_INTERVAL: "300"
+      SENTINEL_MIN_TRAINING: "10"
+      SENTINEL_ENABLED: "true"
+    volumes:
+      - hydra_models:/app/models
+    command: ["python3", "-u", "sentinel_engine.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      hydra-profiler:
+        condition: service_started
+      hydra-cve:
+        condition: service_started
+      hydra-temporal:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-sentinel"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 3: Bayesian ensemble engine with calibrated TP probabilities"
+
+  hydra-lifecycle:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-lifecycle
+    hostname: ids-hydra-lifecycle
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      LIFECYCLE_INTERVAL: "300"
+      LIFECYCLE_MIN_NEW: "10"
+      LIFECYCLE_PH_THRESHOLD: "0.15"
+    command: ["python3", "-u", "sentinel_lifecycle.py"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      hydra-sentinel:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-lifecycle"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 6: self-learning lifecycle, drift detection, metrics tracking"
