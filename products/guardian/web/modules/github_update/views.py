@@ -4,11 +4,15 @@ GitHub Update Module Views - API endpoints for GitHub updates
 Provides REST API for checking, previewing, and applying updates
 from GitHub without CLI access.
 """
+import logging
+import os
+
 from flask import jsonify, request
 from . import github_update_bp
 from modules.auth import require_auth
 from utils import _safe_error
-import os
+
+logger = logging.getLogger(__name__)
 from .git_ops import (
     get_current_status,
     check_for_updates,
@@ -234,5 +238,6 @@ def api_debug():
             'git_reachable': git_success,
             'repo_detected': bool(detected_path),
         })
-    except Exception as e:
-        return jsonify({'success': False, 'error': _safe_error(e)}), 500
+    except Exception:
+        logger.exception("Debug endpoint failed")
+        return jsonify({'success': False, 'error': 'Debug check failed'}), 500
