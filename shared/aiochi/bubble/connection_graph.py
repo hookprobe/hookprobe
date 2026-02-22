@@ -244,7 +244,7 @@ IOT_VENDOR_OUIS = {
     "8C:AA:B5": "espressif",
     "50:8C:B1": "sonoff",       # Sonoff/ITEAD
     "D8:BF:C0": "sonoff",
-    "5C:CF:7F": "sonoff",
+    # 5C:CF:7F is Espressif OUI (mapped above) - Sonoff uses Espressif chips
     "2C:F4:32": "sonoff",
     "08:3A:F2": "wyze",         # Wyze devices
     "2C:AA:8E": "wyze",

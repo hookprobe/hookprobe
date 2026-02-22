@@ -144,12 +144,10 @@ IOT_VENDOR_VLANS = {
     'ec:1a:59': VLANCategory.SMART_LIGHTS,  # Belkin
 
     # Thermostats (VLAN 20)
-    '18:b4:30': VLANCategory.THERMOSTATS,   # Nest
-    '64:16:66': VLANCategory.THERMOSTATS,   # Nest
-    'f4:f5:d8': VLANCategory.THERMOSTATS,   # Google Nest
+    '18:b4:30': VLANCategory.THERMOSTATS,   # Nest (also Nest Protect sensor)
+    '64:16:66': VLANCategory.THERMOSTATS,   # Nest (also Nest Protect sensor)
     '44:61:32': VLANCategory.THERMOSTATS,   # ecobee
     '00:d0:2d': VLANCategory.THERMOSTATS,   # Honeywell
-    '5c:aa:fd': VLANCategory.THERMOSTATS,   # Sonoff
 
     # Cameras (VLAN 30)
     '9c:8e:cd': VLANCategory.CAMERAS,       # Amcrest
@@ -168,7 +166,7 @@ IOT_VENDOR_VLANS = {
     'a4:08:ea': VLANCategory.VOICE_ASSISTANTS,  # Amazon Echo
     'fc:65:de': VLANCategory.VOICE_ASSISTANTS,  # Amazon Echo
     '48:d6:d5': VLANCategory.VOICE_ASSISTANTS,  # Google Home
-    'f4:f5:d8': VLANCategory.VOICE_ASSISTANTS,  # Google Home
+    'f4:f5:d8': VLANCategory.VOICE_ASSISTANTS,  # Google Home/Nest
     '54:60:09': VLANCategory.VOICE_ASSISTANTS,  # Google Home
     '30:52:cb': VLANCategory.VOICE_ASSISTANTS,  # Google Home
     'b8:27:eb': VLANCategory.VOICE_ASSISTANTS,  # Raspberry Pi (HomePod)
@@ -176,7 +174,7 @@ IOT_VENDOR_VLANS = {
 
     # Appliances (VLAN 50)
     '50:dc:e7': VLANCategory.APPLIANCES,    # Amazon (smart plug)
-    'cc:50:e3': VLANCategory.APPLIANCES,    # Amazon
+    'cc:50:e3': VLANCategory.APPLIANCES,    # Amazon (also Espressif ESP)
     '68:54:fd': VLANCategory.APPLIANCES,    # Amazon
     'b4:7c:9c': VLANCategory.APPLIANCES,    # Amazon
     '38:f7:3d': VLANCategory.APPLIANCES,    # Amazon
@@ -202,7 +200,7 @@ IOT_VENDOR_VLANS = {
     '84:ea:ed': VLANCategory.ENTERTAINMENT, # Roku
     'c8:3a:6b': VLANCategory.ENTERTAINMENT, # Roku
     'd4:e2:2f': VLANCategory.ENTERTAINMENT, # Roku
-    '5c:aa:fd': VLANCategory.ENTERTAINMENT, # Sonos
+    '5c:aa:fd': VLANCategory.ENTERTAINMENT, # Sonos (primary use - not thermostat)
     '00:0e:58': VLANCategory.ENTERTAINMENT, # Sonos
     '94:9f:3e': VLANCategory.ENTERTAINMENT, # Sonos
     'b8:e9:37': VLANCategory.ENTERTAINMENT, # Sonos
@@ -228,8 +226,6 @@ IOT_VENDOR_VLANS = {
     '00:0b:57': VLANCategory.SENSORS,       # Silicon Labs (Zigbee)
     '84:71:27': VLANCategory.SENSORS,       # Silicon Labs
     '00:12:4b': VLANCategory.SENSORS,       # Texas Instruments (Z-Wave)
-    '18:b4:30': VLANCategory.SENSORS,       # Nest Protect
-    '64:16:66': VLANCategory.SENSORS,       # Nest Protect
     'ac:cf:85': VLANCategory.SENSORS,       # HUAWEI IoT
     'd8:f1:5b': VLANCategory.SENSORS,       # Espressif (ESP8266/ESP32)
     '24:62:ab': VLANCategory.SENSORS,       # Espressif
@@ -237,7 +233,7 @@ IOT_VENDOR_VLANS = {
     '60:01:94': VLANCategory.SENSORS,       # Espressif
     'a4:cf:12': VLANCategory.SENSORS,       # Espressif
     'bc:dd:c2': VLANCategory.SENSORS,       # Espressif
-    'cc:50:e3': VLANCategory.SENSORS,       # Espressif
+    # cc:50:e3 mapped to APPLIANCES above (Espressif/Amazon)
     '2c:f4:32': VLANCategory.SENSORS,       # Espressif
     '68:c6:3a': VLANCategory.SENSORS,       # Espressif
     '84:cc:a8': VLANCategory.SENSORS,       # Espressif

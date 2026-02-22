@@ -149,11 +149,8 @@ APPLE_FINGERPRINTS = {
         "os": "macOS 15", "confidence": 0.99,
         "hierarchy": ["Apple", "MacBook Pro", "macOS Sequoia"]
     },
-    "1,121,3,6,15,119,252,95,44,46": {
-        "name": "macOS Ventura", "vendor": "Apple", "category": "laptop",
-        "os": "macOS 13", "confidence": 0.98,
-        "hierarchy": ["Apple", "Mac", "macOS Ventura"]
-    },
+    # "1,121,3,6,15,119,252,95,44,46" → ambiguous (macOS Ventura / iPad iPadOS 16+)
+    # Handled by AMBIGUOUS_APPLE_FINGERPRINTS; see iPad entry below
     "1,121,3,6,15,119,252": {
         "name": "macOS Monterey", "vendor": "Apple", "category": "laptop",
         "os": "macOS 12", "confidence": 0.97,
@@ -161,11 +158,8 @@ APPLE_FINGERPRINTS = {
     },
     # NOTE: "1,3,6,15,119,252" is AMBIGUOUS - handled by disambiguation logic
     # Was macOS Legacy but also matches iOS Legacy and HomePod Mini
-    "1,3,6,15,119,95,252,44,46": {
-        "name": "macOS Big Sur", "vendor": "Apple", "category": "laptop",
-        "os": "macOS 11", "confidence": 0.96,
-        "hierarchy": ["Apple", "Mac", "macOS Big Sur"]
-    },
+    # "1,3,6,15,119,95,252,44,46" → ambiguous (macOS Big Sur / Apple TV 4K)
+    # See Apple TV 4K entry below
 
     # ==========================================================================
     # iOS - iPhones (iOS 17, 16, 15, etc.)
@@ -191,7 +185,7 @@ APPLE_FINGERPRINTS = {
     # ==========================================================================
     # iPadOS - iPad models (differentiated by Option 60 and mDNS)
     # ==========================================================================
-    "1,121,3,6,15,119,252,95,44,46": {
+    "1,121,3,6,15,119,252,95,44,46": {  # Also macOS Ventura - disambiguated above
         "name": "iPad (iPadOS 16+)", "vendor": "Apple", "category": "tablet",
         "os": "iPadOS 16+", "confidence": 0.97,
         "hierarchy": ["Apple", "iPad", "iPadOS"]
@@ -217,7 +211,7 @@ APPLE_FINGERPRINTS = {
         "os": "tvOS", "confidence": 0.99,
         "hierarchy": ["Apple", "Apple TV", "tvOS"]
     },
-    "1,3,6,15,119,95,252,44,46": {
+    "1,3,6,15,119,95,252,44,46": {  # Also macOS Big Sur - use vendor class to disambiguate
         "name": "Apple TV 4K", "vendor": "Apple", "category": "streaming",
         "os": "tvOS 16+", "confidence": 0.99,
         "hierarchy": ["Apple", "Apple TV", "Apple TV 4K"]
@@ -452,27 +446,21 @@ def disambiguate_apple_fingerprint(fingerprint: str, hostname: Optional[str] = N
 # =============================================================================
 
 WINDOWS_FINGERPRINTS = {
-    # Windows 11
+    # Windows 10/11/Server share the same DHCP fingerprint - use vendor class for disambiguation
     "1,3,6,15,31,33,43,44,46,47,121,249,252": {
-        "name": "Windows 11", "vendor": "Microsoft", "category": "workstation",
-        "os": "Windows 11", "confidence": 0.97,
-        "hierarchy": ["Microsoft", "Windows", "Windows 11"]
+        "name": "Windows 10/11", "vendor": "Microsoft", "category": "workstation",
+        "os": "Windows 10/11", "confidence": 0.95,
+        "hierarchy": ["Microsoft", "Windows", "Windows 10/11"]
     },
     "1,3,6,15,31,33,43,44,46,47,121,249,252,44": {
         "name": "Windows 11 Pro", "vendor": "Microsoft", "category": "workstation",
         "os": "Windows 11 Pro", "confidence": 0.97,
         "hierarchy": ["Microsoft", "Windows", "Windows 11 Pro"]
     },
-
-    # Windows 10
-    "1,3,6,15,31,33,43,44,46,47,121,249,252": {
-        "name": "Windows 10/11", "vendor": "Microsoft", "category": "workstation",
-        "os": "Windows 10/11", "confidence": 0.95,
-        "hierarchy": ["Microsoft", "Windows", "Windows 10"]
-    },
+    # Windows 10/Server 2016 share this fingerprint
     "1,15,3,6,44,46,47,31,33,121,249,252": {
-        "name": "Windows 10", "vendor": "Microsoft", "category": "workstation",
-        "os": "Windows 10", "confidence": 0.96,
+        "name": "Windows 10/Server", "vendor": "Microsoft", "category": "workstation",
+        "os": "Windows 10/Server 2016", "confidence": 0.94,
         "hierarchy": ["Microsoft", "Windows", "Windows 10"]
     },
     "1,3,6,15,31,33,43,44,46,47,121,249": {
@@ -495,17 +483,7 @@ WINDOWS_FINGERPRINTS = {
         "hierarchy": ["Microsoft", "Windows", "Windows 7"]
     },
 
-    # Windows Server
-    "1,3,6,15,31,33,43,44,46,47,121,249,252": {
-        "name": "Windows Server", "vendor": "Microsoft", "category": "server",
-        "os": "Windows Server 2019/2022", "confidence": 0.90,
-        "hierarchy": ["Microsoft", "Windows Server"]
-    },
-    "1,15,3,6,44,46,47,31,33,121,249,252": {
-        "name": "Windows Server 2016", "vendor": "Microsoft", "category": "server",
-        "os": "Windows Server 2016", "confidence": 0.88,
-        "hierarchy": ["Microsoft", "Windows Server", "2016"]
-    },
+    # Windows Server fingerprints merged into entries above (same DHCP options)
 
     # Windows IoT
     "1,3,6,15,31,33,43,44,46,47,121": {
@@ -536,11 +514,7 @@ ANDROID_FINGERPRINTS = {
         "os": "Android 11+", "confidence": 0.93,
         "hierarchy": ["Android", "Android 11+"]
     },
-    "1,121,3,6,15,28,51,58,59,119": {
-        "name": "Android 12+", "vendor": "Android", "category": "phone",
-        "os": "Android 12+", "confidence": 0.94,
-        "hierarchy": ["Android", "Android 12+"]
-    },
+    # "1,121,3,6,15,28,51,58,59,119" → also Google Pixel - see Pixel entry below
     "1,121,3,6,15,28,51,58,59,119,252": {
         "name": "Android 13+", "vendor": "Android", "category": "phone",
         "os": "Android 13+", "confidence": 0.95,
@@ -558,16 +532,16 @@ ANDROID_FINGERPRINTS = {
         "os": "Android (OneUI)", "confidence": 0.93,
         "hierarchy": ["Samsung", "Galaxy", "Flagship"]
     },
-    "1,3,6,15,28,33,51,58,59": {
-        "name": "Samsung Galaxy (Legacy)", "vendor": "Samsung", "category": "phone",
-        "os": "Android", "confidence": 0.90,
-        "hierarchy": ["Samsung", "Galaxy"]
+    "1,3,6,15,28,33,51,58,59": {  # Also Xiaomi/Redmi - use OUI to disambiguate
+        "name": "Samsung/Xiaomi Android", "vendor": "Android", "category": "phone",
+        "os": "Android", "confidence": 0.88,
+        "hierarchy": ["Android", "Samsung/Xiaomi"]
     },
 
-    # Google Pixel
+    # Google Pixel (also matches generic Android 12+ - Pixel is more specific)
     "1,121,3,6,15,28,51,58,59,119": {
-        "name": "Google Pixel", "vendor": "Google", "category": "phone",
-        "os": "Android (Stock)", "confidence": 0.96,
+        "name": "Google Pixel/Android 12+", "vendor": "Google", "category": "phone",
+        "os": "Android 12+ (Stock)", "confidence": 0.94,
         "hierarchy": ["Google", "Pixel"]
     },
     "1,3,6,15,28,51,58,59,119": {
@@ -583,12 +557,7 @@ ANDROID_FINGERPRINTS = {
         "hierarchy": ["OnePlus", "OxygenOS"]
     },
 
-    # Xiaomi
-    "1,3,6,15,28,33,51,58,59": {
-        "name": "Xiaomi/Redmi", "vendor": "Xiaomi", "category": "phone",
-        "os": "MIUI", "confidence": 0.88,
-        "hierarchy": ["Xiaomi", "MIUI"]
-    },
+    # Xiaomi - shares fingerprint with Samsung Galaxy (merged above)
 
     # Android TV / Google TV
     "1,3,6,15,28,33,51,58,59,119": {
@@ -670,11 +639,7 @@ SMART_SPEAKER_FINGERPRINTS = {
         "os": "Sonos OS", "confidence": 0.96,
         "hierarchy": ["Sonos", "Speaker"]
     },
-    "1,3,6,12,15,28,42": {
-        "name": "Sonos One/Beam", "vendor": "Sonos", "category": "voice_assistant",
-        "os": "Sonos OS", "confidence": 0.95,
-        "hierarchy": ["Sonos", "Sonos One"]
-    },
+    # "1,3,6,12,15,28,42" → also Sonos One/Beam - use OUI to disambiguate
 
     # Bose
     "1,3,6,15,28,33,42": {
@@ -707,18 +672,11 @@ SMART_TV_FINGERPRINTS = {
         "os": "webOS", "confidence": 0.94,
         "hierarchy": ["LG", "Smart TV", "webOS"]
     },
-    "1,3,6,15,28,42": {
-        "name": "LG webOS TV", "vendor": "LG", "category": "smart_tv",
-        "os": "webOS", "confidence": 0.91,
-        "hierarchy": ["LG", "Smart TV"]
-    },
+    # "1,3,6,15,28,42" → shared by LG TV, Chromecast, Nest Camera, Arlo, etc.
+    # Kept in Chromecast entry below (use OUI to disambiguate)
 
-    # Sony Smart TV
-    "1,3,6,12,15,28,33,42": {
-        "name": "Sony Smart TV", "vendor": "Sony", "category": "smart_tv",
-        "os": "Android TV", "confidence": 0.93,
-        "hierarchy": ["Sony", "Smart TV", "Android TV"]
-    },
+    # "1,3,6,12,15,28,33,42" → shared by Sony TV, Amazon Fire TV, Echo Studio
+    # Kept in Fire TV entry below (use OUI to disambiguate)
 
     # TCL/Roku TV
     "1,3,6,15,28,33": {
@@ -739,22 +697,19 @@ SMART_TV_FINGERPRINTS = {
         "hierarchy": ["Roku", "Streaming Stick"]
     },
 
-    # Amazon Fire TV
+    # Amazon Fire TV (also Sony Smart TV, Echo Studio - use OUI to disambiguate)
     "1,3,6,12,15,28,33,42": {
         "name": "Amazon Fire TV", "vendor": "Amazon", "category": "streaming",
-        "os": "Fire OS", "confidence": 0.96,
+        "os": "Fire OS", "confidence": 0.93,
         "hierarchy": ["Amazon", "Fire TV"]
     },
-    "1,3,6,15,28,33,42": {
-        "name": "Fire TV Stick", "vendor": "Amazon", "category": "streaming",
-        "os": "Fire OS", "confidence": 0.95,
-        "hierarchy": ["Amazon", "Fire TV Stick"]
-    },
+    # "1,3,6,15,28,33,42" → shared by Fire TV Stick, Ring, Hikvision, SmartThings, Bose
+    # See CAMERA_FINGERPRINTS and SMART_HUB_FINGERPRINTS for OUI-based disambiguation
 
-    # Chromecast
+    # Chromecast (also LG TV, Nest Camera, Arlo, Lutron, Ubiquiti - use OUI)
     "1,3,6,15,28,42": {
-        "name": "Chromecast", "vendor": "Google", "category": "streaming",
-        "os": "Cast OS", "confidence": 0.94,
+        "name": "Chromecast/Google Device", "vendor": "Google", "category": "streaming",
+        "os": "Cast OS", "confidence": 0.90,
         "hierarchy": ["Google", "Chromecast"]
     },
     "1,3,6,15,28,42,119": {
@@ -776,15 +731,15 @@ SMART_TV_FINGERPRINTS = {
 # =============================================================================
 
 GAMING_FINGERPRINTS = {
-    # PlayStation
+    # PlayStation (also Nintendo Switch, Samsung Galaxy - use OUI to disambiguate)
     "1,3,6,15,28,33,51,58,59": {
-        "name": "PlayStation", "vendor": "Sony", "category": "gaming",
-        "os": "PlayStation OS", "confidence": 0.95,
+        "name": "PlayStation/Console", "vendor": "Sony", "category": "gaming",
+        "os": "PlayStation OS", "confidence": 0.90,
         "hierarchy": ["Sony", "PlayStation"]
     },
-    "1,3,6,15,28,51,58,59": {
-        "name": "PlayStation 5", "vendor": "Sony", "category": "gaming",
-        "os": "PS5 OS", "confidence": 0.96,
+    "1,3,6,15,28,51,58,59": {  # Also Nintendo Switch
+        "name": "PlayStation 5/Console", "vendor": "Sony", "category": "gaming",
+        "os": "PS5 OS", "confidence": 0.90,
         "hierarchy": ["Sony", "PlayStation", "PS5"]
     },
     "1,3,6,15,28,33,51,58,59,121": {
@@ -810,17 +765,9 @@ GAMING_FINGERPRINTS = {
         "hierarchy": ["Microsoft", "Xbox", "Xbox One"]
     },
 
-    # Nintendo Switch
-    "1,3,6,15,28,33,51,58,59": {
-        "name": "Nintendo Switch", "vendor": "Nintendo", "category": "gaming",
-        "os": "Nintendo OS", "confidence": 0.90,
-        "hierarchy": ["Nintendo", "Switch"]
-    },
-    "1,3,6,15,28,51,58,59": {
-        "name": "Nintendo Switch (Alt)", "vendor": "Nintendo", "category": "gaming",
-        "os": "Nintendo OS", "confidence": 0.88,
-        "hierarchy": ["Nintendo", "Switch"]
-    },
+    # Nintendo Switch shares fingerprints with PlayStation/Samsung - use OUI to disambiguate
+    # "1,3,6,15,28,33,51,58,59" merged into PlayStation entry above
+    # "1,3,6,15,28,51,58,59" merged into PlayStation 5 entry above
 
     # Steam Deck
     "1,28,2,3,15,6,12": {
@@ -846,10 +793,10 @@ PRINTER_FINGERPRINTS = {
         "os": "HP Firmware", "confidence": 0.97,
         "hierarchy": ["HP", "LaserJet"]
     },
-    "1,3,6,15,44,47,12": {
-        "name": "HP OfficeJet", "vendor": "HP", "category": "printer",
-        "os": "HP Firmware", "confidence": 0.96,
-        "hierarchy": ["HP", "OfficeJet"]
+    "1,3,6,15,44,47,12": {  # Also Canon PIXMA - use OUI to disambiguate
+        "name": "HP OfficeJet/Canon PIXMA", "vendor": "HP", "category": "printer",
+        "os": "Printer Firmware", "confidence": 0.93,
+        "hierarchy": ["Printer", "OfficeJet/PIXMA"]
     },
     "1,3,6,12,15,28,44,47": {
         "name": "HP DeskJet", "vendor": "HP", "category": "printer",
@@ -863,10 +810,10 @@ PRINTER_FINGERPRINTS = {
         "os": "Brother Firmware", "confidence": 0.95,
         "hierarchy": ["Brother", "Printer"]
     },
-    "1,3,6,12,15,44,47": {
-        "name": "Brother MFC", "vendor": "Brother", "category": "printer",
-        "os": "Brother Firmware", "confidence": 0.96,
-        "hierarchy": ["Brother", "MFC"]
+    "1,3,6,12,15,44,47": {  # Also Epson WorkForce - use OUI to disambiguate
+        "name": "Brother MFC/Epson WorkForce", "vendor": "Brother", "category": "printer",
+        "os": "Printer Firmware", "confidence": 0.93,
+        "hierarchy": ["Printer", "MFC/WorkForce"]
     },
 
     # Canon Printers
@@ -875,11 +822,7 @@ PRINTER_FINGERPRINTS = {
         "os": "Canon Firmware", "confidence": 0.94,
         "hierarchy": ["Canon", "Printer"]
     },
-    "1,3,6,15,44,47,12": {
-        "name": "Canon PIXMA", "vendor": "Canon", "category": "printer",
-        "os": "Canon Firmware", "confidence": 0.95,
-        "hierarchy": ["Canon", "PIXMA"]
-    },
+    # "1,3,6,15,44,47,12" → merged into HP OfficeJet entry above
 
     # Epson Printers
     "1,3,6,15,28,44,47": {
@@ -887,11 +830,7 @@ PRINTER_FINGERPRINTS = {
         "os": "Epson Firmware", "confidence": 0.94,
         "hierarchy": ["Epson", "Printer"]
     },
-    "1,3,6,12,15,44,47": {
-        "name": "Epson WorkForce", "vendor": "Epson", "category": "printer",
-        "os": "Epson Firmware", "confidence": 0.95,
-        "hierarchy": ["Epson", "WorkForce"]
-    },
+    # "1,3,6,12,15,44,47" → merged into Brother MFC entry above
 
     # Xerox
     "1,3,6,15,44,47,66,67": {
@@ -906,43 +845,29 @@ PRINTER_FINGERPRINTS = {
 # =============================================================================
 
 CAMERA_FINGERPRINTS = {
-    # Ring
-    "1,3,6,15,28,33,42": {
-        "name": "Ring Camera/Doorbell", "vendor": "Ring", "category": "camera",
-        "os": "Ring OS", "confidence": 0.94,
+    # Ring (fingerprints shared with many IoT devices - use OUI to disambiguate)
+    "1,3,6,15,28,33,42": {  # Also Hikvision, SmartThings, Bose, Fire TV Stick
+        "name": "Ring/Security Camera", "vendor": "Ring", "category": "camera",
+        "os": "Embedded", "confidence": 0.85,
         "hierarchy": ["Ring", "Camera"]
     },
-    "1,3,6,15,28,33": {
-        "name": "Ring Doorbell", "vendor": "Ring", "category": "doorbell",
-        "os": "Ring OS", "confidence": 0.93,
+    "1,3,6,15,28,33": {  # Also Wyze, Echo, TCL/Roku TV, TP-Link, Ecobee, iRobot, Wink
+        "name": "Ring/IoT Device", "vendor": "Ring", "category": "doorbell",
+        "os": "Embedded", "confidence": 0.80,
         "hierarchy": ["Ring", "Doorbell"]
     },
 
-    # Nest
-    "1,3,6,15,28,42": {
-        "name": "Nest Camera", "vendor": "Google", "category": "camera",
-        "os": "Nest OS", "confidence": 0.94,
-        "hierarchy": ["Google", "Nest", "Camera"]
-    },
+    # "1,3,6,15,28,42" → shared by Nest Camera, Chromecast, LG TV, etc.
+    # Kept in SMART_TV_FINGERPRINTS Chromecast entry
     "1,3,6,15,28,42,44": {
         "name": "Nest Doorbell", "vendor": "Google", "category": "doorbell",
         "os": "Nest OS", "confidence": 0.95,
         "hierarchy": ["Google", "Nest", "Doorbell"]
     },
 
-    # Wyze
-    "1,3,6,15,28,33": {
-        "name": "Wyze Camera", "vendor": "Wyze", "category": "camera",
-        "os": "Wyze Firmware", "confidence": 0.88,
-        "hierarchy": ["Wyze", "Camera"]
-    },
+    # "1,3,6,15,28,33" → merged into Ring Doorbell entry above
 
-    # Arlo
-    "1,3,6,15,28,42": {
-        "name": "Arlo Camera", "vendor": "Arlo", "category": "camera",
-        "os": "Arlo Firmware", "confidence": 0.92,
-        "hierarchy": ["Arlo", "Camera"]
-    },
+    # "1,3,6,15,28,42" → merged into Chromecast entry in SMART_TV_FINGERPRINTS
 
     # Eufy
     "1,3,6,15,28,33,44": {
@@ -951,12 +876,7 @@ CAMERA_FINGERPRINTS = {
         "hierarchy": ["Eufy", "Camera"]
     },
 
-    # Hikvision / Dahua (Enterprise)
-    "1,3,6,15,28,33,42": {
-        "name": "Hikvision/Dahua", "vendor": "Hikvision", "category": "camera",
-        "os": "Embedded Linux", "confidence": 0.92,
-        "hierarchy": ["Hikvision", "IP Camera"]
-    },
+    # "1,3,6,15,28,33,42" → merged into Ring Camera entry above
     "1,3,6,12,15,28": {
         "name": "IP Camera (Generic)", "vendor": "Generic", "category": "camera",
         "os": "Embedded Linux", "confidence": 0.80,
@@ -983,18 +903,11 @@ SMART_HUB_FINGERPRINTS = {
         "hierarchy": ["Samsung", "SmartThings", "Hub"]
     },
 
-    # Hubitat
+    # Hubitat / Home Assistant / Linux SBC (shared fingerprint - use OUI/hostname)
     "1,28,2,3,15,6,12": {
-        "name": "Hubitat Elevation", "vendor": "Hubitat", "category": "smart_hub",
-        "os": "Hubitat OS", "confidence": 0.95,
-        "hierarchy": ["Hubitat", "Elevation"]
-    },
-
-    # Home Assistant (on various platforms)
-    "1,28,2,3,15,6,12": {
-        "name": "Home Assistant", "vendor": "Home Assistant", "category": "smart_hub",
-        "os": "Home Assistant OS", "confidence": 0.85,
-        "hierarchy": ["Home Assistant"]
+        "name": "Hubitat/Home Assistant/Linux", "vendor": "Linux", "category": "smart_hub",
+        "os": "Linux", "confidence": 0.85,
+        "hierarchy": ["Linux", "Smart Hub"]
     },
 
     # IKEA Tradfri
@@ -1024,29 +937,22 @@ SMART_HUB_FINGERPRINTS = {
 # =============================================================================
 
 IOT_FINGERPRINTS = {
-    # TP-Link / Kasa
-    "1,3,6,15,28,33": {
-        "name": "TP-Link Smart Plug", "vendor": "TP-Link", "category": "smart_plug",
-        "os": "Kasa Firmware", "confidence": 0.88,
-        "hierarchy": ["TP-Link", "Kasa", "Smart Plug"]
-    },
+    # "1,3,6,15,28,33" → highly ambiguous (Echo, Ring, TCL, Ecobee, iRobot, Wink, etc.)
+    # Mapped in CAMERA_FINGERPRINTS Ring entry (priority handles override)
+    # "1,3,6,15,28" → shared by TP-Link, Tuya, IKEA Tradfri
     "1,3,6,15,28": {
-        "name": "TP-Link Smart Device", "vendor": "TP-Link", "category": "iot",
-        "os": "Kasa Firmware", "confidence": 0.85,
-        "hierarchy": ["TP-Link", "Kasa"]
+        "name": "Smart IoT Device", "vendor": "Generic", "category": "iot",
+        "os": "Embedded", "confidence": 0.75,
+        "hierarchy": ["Generic", "IoT"]
     },
 
-    # Tuya / Smart Life (Generic Chinese IoT)
+    # "1,3,6,12,15,28" → shared by Tuya, Roborock, generic IP cameras
     "1,3,6,12,15,28": {
-        "name": "Tuya Smart Device", "vendor": "Tuya", "category": "iot",
-        "os": "Tuya Firmware", "confidence": 0.80,
-        "hierarchy": ["Tuya", "Smart Device"]
+        "name": "IoT Device", "vendor": "Generic", "category": "iot",
+        "os": "Embedded", "confidence": 0.70,
+        "hierarchy": ["Generic", "IoT"]
     },
-    "1,3,6,15,28": {
-        "name": "Tuya/SmartLife", "vendor": "Tuya", "category": "iot",
-        "os": "Tuya Firmware", "confidence": 0.75,
-        "hierarchy": ["Tuya"]
-    },
+    # "1,3,6,15,28" → merged into Smart IoT Device entry above
 
     # Wemo
     "1,3,6,15,28,33,44": {
@@ -1062,24 +968,9 @@ IOT_FINGERPRINTS = {
         "hierarchy": ["Google", "Nest", "Thermostat"]
     },
 
-    # Ecobee
-    "1,3,6,15,28,33": {
-        "name": "Ecobee Thermostat", "vendor": "Ecobee", "category": "thermostat",
-        "os": "Ecobee Firmware", "confidence": 0.92,
-        "hierarchy": ["Ecobee", "Thermostat"]
-    },
-
-    # Robot Vacuums
-    "1,3,6,15,28,33": {
-        "name": "iRobot Roomba", "vendor": "iRobot", "category": "appliance",
-        "os": "iRobot Firmware", "confidence": 0.88,
-        "hierarchy": ["iRobot", "Roomba"]
-    },
-    "1,3,6,12,15,28": {
-        "name": "Roborock", "vendor": "Roborock", "category": "appliance",
-        "os": "Roborock Firmware", "confidence": 0.85,
-        "hierarchy": ["Roborock", "Vacuum"]
-    },
+    # "1,3,6,15,28,33" → Ecobee/iRobot/Ring/TP-Link share this fingerprint
+    # Mapped in CAMERA_FINGERPRINTS Ring entry (priority handles override)
+    # "1,3,6,12,15,28" → merged into IoT Device entry above
 
     # Generic Minimal DHCP
     "1,3,6": {
@@ -1092,11 +983,7 @@ IOT_FINGERPRINTS = {
         "os": "Embedded", "confidence": 0.65,
         "hierarchy": ["Generic", "IoT"]
     },
-    "1,3,6,12,15,28": {
-        "name": "Standard IoT", "vendor": "Generic", "category": "iot",
-        "os": "Embedded Linux", "confidence": 0.70,
-        "hierarchy": ["Generic", "IoT"]
-    },
+    # "1,3,6,12,15,28" → merged into IoT Device entry above
 }
 
 # =============================================================================
@@ -1104,10 +991,10 @@ IOT_FINGERPRINTS = {
 # =============================================================================
 
 LINUX_FINGERPRINTS = {
-    # Debian/Ubuntu
+    # Debian/Ubuntu (also Raspberry Pi, Hubitat, Ubiquiti - use OUI to distinguish)
     "1,28,2,3,15,6,12": {
         "name": "Debian/Ubuntu Linux", "vendor": "Linux", "category": "workstation",
-        "os": "Debian/Ubuntu", "confidence": 0.92,
+        "os": "Debian/Ubuntu", "confidence": 0.88,
         "hierarchy": ["Linux", "Debian"]
     },
     "1,28,2,3,15,6,119,12,44,47,26,121,42": {
@@ -1123,12 +1010,8 @@ LINUX_FINGERPRINTS = {
         "hierarchy": ["Linux", "Red Hat"]
     },
 
-    # Raspberry Pi
-    "1,28,2,3,15,6,12": {
-        "name": "Raspberry Pi", "vendor": "Raspberry Pi", "category": "sbc",
-        "os": "Raspberry Pi OS", "confidence": 0.88,
-        "hierarchy": ["Raspberry Pi", "SBC"]
-    },
+    # "1,28,2,3,15,6,12" → also Raspberry Pi, Hubitat, Home Assistant, Ubiquiti
+    # Kept in Debian/Ubuntu entry above (use OUI to identify Pi)
     "1,28,2,3,15,6,119,12": {
         "name": "Raspberry Pi OS", "vendor": "Raspberry Pi", "category": "sbc",
         "os": "Raspberry Pi OS", "confidence": 0.92,
@@ -1300,7 +1183,7 @@ OUI_DATABASE = {
 
     # Espressif ESP8266/ESP32 (common IoT devices)
     "24:0A:C4": "Espressif", "24:62:AB": "Espressif", "24:6F:28": "Espressif",
-    "2C:3A:E8": "Espressif", "30:AE:A4": "Espressif", "3C:71:BF": "Espressif",
+    "30:AE:A4": "Espressif", "3C:71:BF": "Espressif",  # 2C:3A:E8 is Apple (above)
     "40:F5:20": "Espressif", "48:3F:DA": "Espressif", "4C:11:AE": "Espressif",
     "5C:CF:7F": "Espressif", "60:01:94": "Espressif", "68:C6:3A": "Espressif",
     "80:7D:3A": "Espressif", "84:CC:A8": "Espressif", "84:F3:EB": "Espressif",
@@ -1377,7 +1260,7 @@ OUI_DATABASE = {
     "5C:BA:37": "Microsoft", "60:45:BD": "Microsoft", "7C:1E:52": "Microsoft",
     "7C:ED:8D": "Microsoft", "98:5F:D3": "Microsoft", "B4:0E:DE": "Microsoft",
     "B8:48:5D": "Microsoft", "C4:9D:ED": "Microsoft", "C8:3F:26": "Microsoft",
-    "D4:81:D7": "Microsoft", "DC:B4:C4": "Microsoft",
+    "DC:B4:C4": "Microsoft",  # D4:81:D7 is Dell (below)
 
     # Sony / PlayStation
     "00:01:4A": "Sony", "00:04:1F": "Sony", "00:0A:D9": "Sony",
