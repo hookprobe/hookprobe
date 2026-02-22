@@ -29,11 +29,16 @@ class GuardianAgent(BaseAgent):
         r"xdp.*(?:block|drop)",
         r"threat\.severity\s*>=?\s*(?:HIGH|CRITICAL)",
         r"block.*ip|rate.*limit|quarantine",
+        # HYDRA SENTINEL patterns
+        r"hydra.*(?:verdict|malicious|suspicious)",
+        r"hydra.*campaign",
+        r"sentinel.*(?:block|threat|malicious)",
     ]
     allowed_tools = [
         "block_ip", "rate_limit", "quarantine_subnet", "unblock_ip",
         "sandbox_entity", "release_sandbox", "get_entity_intent",
         "profile_attacker_ttps",
+        "sentinel_query_verdict", "sentinel_campaign_info",
     ]
     confidence_threshold = 0.7
 
@@ -42,10 +47,14 @@ class GuardianAgent(BaseAgent):
         signal: StandardSignal,
         context: Optional[Dict[str, Any]] = None,
     ) -> AgentResponse:
-        """Handle network-level threats, including SIA intent signals."""
+        """Handle network-level threats, including SIA intent and HYDRA SENTINEL signals."""
         # SIA intent-aware handling
         if signal.source == "sia":
             return self._handle_sia_signal(signal)
+
+        # HYDRA SENTINEL verdict handling
+        if signal.source == "hydra":
+            return self._handle_hydra_signal(signal)
 
         severity = signal.severity
         source_ip = signal.data.get("source_ip", "unknown")
@@ -96,6 +105,111 @@ class GuardianAgent(BaseAgent):
                 ),
                 sources=["QSecBit"],
             )
+
+    def _handle_hydra_signal(self, signal: StandardSignal) -> AgentResponse:
+        """Handle HYDRA SENTINEL verdict signals with score-aware response."""
+        ip = signal.data.get("ip", "unknown")
+        score = signal.data.get("sentinel_score", 0.0)
+        confidence = signal.data.get("confidence", 0.0)
+        campaign_id = signal.data.get("campaign_id", "")
+
+        if signal.event_type == "verdict.malicious":
+            tool_calls = [{
+                "name": "block_ip",
+                "params": {
+                    "ip": ip,
+                    "duration": 3600,
+                    "reason": f"SENTINEL malicious verdict (score={score:.2f})",
+                },
+            }]
+            # Also query campaign info if part of a campaign
+            if campaign_id:
+                tool_calls.append({
+                    "name": "sentinel_campaign_info",
+                    "params": {"campaign_id": campaign_id},
+                })
+            return AgentResponse(
+                agent=self.name,
+                action="block_ip",
+                confidence=max(0.85, confidence),
+                reasoning=(
+                    f"SENTINEL verdict: malicious IP {ip} "
+                    f"(score={score:.2f}, confidence={confidence:.2f})"
+                    + (f", campaign={campaign_id}" if campaign_id else "")
+                ),
+                user_message=(
+                    f"Blocked IP {ip} — HYDRA SENTINEL classified as malicious "
+                    f"(threat score: {score:.0%}). Your network is protected."
+                ),
+                tool_calls=tool_calls,
+                sources=["SENTINEL", "HYDRA"],
+                escalate_to="MEDIC" if campaign_id else None,
+            )
+
+        if signal.event_type == "verdict.suspicious":
+            return AgentResponse(
+                agent=self.name,
+                action="rate_limit",
+                confidence=max(0.7, confidence),
+                reasoning=(
+                    f"SENTINEL verdict: suspicious IP {ip} "
+                    f"(score={score:.2f}) — rate limiting"
+                ),
+                user_message=(
+                    f"Rate-limiting IP {ip} — HYDRA SENTINEL flagged as suspicious "
+                    f"(threat score: {score:.0%}). Monitoring for escalation."
+                ),
+                tool_calls=[{
+                    "name": "rate_limit",
+                    "params": {
+                        "ip": ip,
+                        "rate": "50/s",
+                        "reason": f"SENTINEL suspicious (score={score:.2f})",
+                    },
+                }],
+                sources=["SENTINEL", "HYDRA"],
+            )
+
+        if signal.event_type == "campaign_detected":
+            return AgentResponse(
+                agent=self.name,
+                action="block_ip",
+                confidence=0.9,
+                reasoning=(
+                    f"SENTINEL campaign {campaign_id} detected — "
+                    f"IP {ip} is part of coordinated activity"
+                ),
+                user_message=(
+                    f"Blocked IP {ip} — part of coordinated campaign {campaign_id}. "
+                    f"HYDRA SENTINEL is tracking the full campaign."
+                ),
+                tool_calls=[
+                    {
+                        "name": "block_ip",
+                        "params": {
+                            "ip": ip,
+                            "duration": 7200,
+                            "reason": f"Campaign {campaign_id}",
+                        },
+                    },
+                    {
+                        "name": "sentinel_campaign_info",
+                        "params": {"campaign_id": campaign_id},
+                    },
+                ],
+                sources=["SENTINEL", "HYDRA"],
+                escalate_to="MEDIC",
+            )
+
+        # Fallback for other hydra signals (drift, retrain)
+        return AgentResponse(
+            agent=self.name,
+            action="",
+            confidence=0.5,
+            reasoning=f"HYDRA signal {signal.event_type} — monitoring",
+            user_message=f"HYDRA SENTINEL event: {signal.event_type}. Monitoring.",
+            sources=["SENTINEL"],
+        )
 
     def _handle_sia_signal(self, signal: StandardSignal) -> AgentResponse:
         """Handle SIA intent detection signals with phase-aware response."""

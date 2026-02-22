@@ -238,8 +238,92 @@ if [[ "$bf_sources" -ge 10 ]] && should_alert "distributed_bf" 1800; then
     ((alerts_sent++)) || true
 fi
 
+# ==========================================
+# SENTINEL CHECKS (HYDRA ML Pipeline)
+# ==========================================
+
+# Check 6: SENTINEL malicious IP surge (10+ malicious verdicts in 15 minutes)
+sentinel_malicious_result=$(ch_query "SELECT count() FROM hydra_verdicts WHERE timestamp > now() - INTERVAL 15 MINUTE AND verdict = 'malicious'" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_malicious_result" =~ ^[0-9]+$ ]]; then sentinel_malicious="$sentinel_malicious_result"; else sentinel_malicious=0; fi
+
+if [[ "$sentinel_malicious" -ge 10 ]] && should_alert "sentinel_malicious_surge" 900; then
+    top_malicious=$(ch_query "SELECT src_ip, max(score) as max_score FROM hydra_verdicts WHERE timestamp > now() - INTERVAL 15 MINUTE AND verdict = 'malicious' GROUP BY src_ip ORDER BY max_score DESC LIMIT 5 FORMAT TabSeparated" 2>/dev/null | while read -r ip score; do echo "  - $ip (score: $score)"; done)
+
+    send_discord_alert \
+        "SENTINEL: Malicious IP Surge" \
+        "**${sentinel_malicious} malicious IPs** detected by HYDRA SENTINEL in 15 minutes.\n\n**Top Threats:**\n${top_malicious}\n\n**Action:** IPs auto-blocked by AEGIS GUARDIAN. Review verdicts." \
+        16711680  # Red
+
+    set_last_alert "sentinel_malicious_surge"
+    ((alerts_sent++)) || true
+fi
+
+# Check 7: SENTINEL campaign detected (coordinated attack)
+sentinel_campaigns_result=$(ch_query "SELECT count(DISTINCT campaign_id) FROM sentinel_campaigns WHERE first_seen > now() - INTERVAL 30 MINUTE" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_campaigns_result" =~ ^[0-9]+$ ]]; then sentinel_campaigns="$sentinel_campaigns_result"; else sentinel_campaigns=0; fi
+
+if [[ "$sentinel_campaigns" -ge 1 ]] && should_alert "sentinel_campaign" 1800; then
+    campaign_details=$(ch_query "SELECT campaign_id, member_count, max_reputation FROM sentinel_campaigns WHERE first_seen > now() - INTERVAL 30 MINUTE ORDER BY max_reputation DESC LIMIT 3 FORMAT TabSeparated" 2>/dev/null | while read -r cid members rep; do echo "  - Campaign $cid ($members IPs, reputation: $rep)"; done)
+
+    send_discord_alert \
+        "SENTINEL: Coordinated Campaign Detected" \
+        "**${sentinel_campaigns} new campaign(s)** identified via IP co-occurrence analysis.\n\n**Campaigns:**\n${campaign_details}\n\n**Action:** MEDIC forensic capture activated. Review campaign graph." \
+        16711680  # Red
+
+    set_last_alert "sentinel_campaign"
+    ((alerts_sent++)) || true
+fi
+
+# Check 8: SENTINEL model drift (Page-Hinkley triggered)
+sentinel_drift_result=$(ch_query "SELECT max(drift_detected) FROM sentinel_lifecycle_metrics WHERE timestamp > now() - INTERVAL 10 MINUTE" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_drift_result" =~ ^[01]$ ]]; then sentinel_drift="$sentinel_drift_result"; else sentinel_drift=0; fi
+
+if [[ "$sentinel_drift" -eq 1 ]] && should_alert "sentinel_drift" 3600; then
+    send_discord_alert \
+        "SENTINEL: Model Drift Detected" \
+        "Page-Hinkley drift detector triggered — SENTINEL scoring distribution has shifted.\n\n**Action:** Automatic retrain cycle initiated. Monitor precision/recall convergence." \
+        16753920  # Amber
+
+    set_last_alert "sentinel_drift"
+    ((alerts_sent++)) || true
+fi
+
+# Check 9: SENTINEL F1 score degradation (below 0.60)
+sentinel_f1_result=$(ch_query "SELECT min(f1_score) FROM sentinel_lifecycle_metrics WHERE timestamp > now() - INTERVAL 1 HOUR AND f1_score > 0" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_f1_result" =~ ^[0-9.]+$ ]]; then
+    # Compare float: multiply by 100 for integer comparison
+    sentinel_f1_int=$(echo "$sentinel_f1_result" | awk '{printf "%d", $1 * 100}')
+    if [[ "$sentinel_f1_int" -lt 60 ]] && should_alert "sentinel_f1_low" 3600; then
+        send_discord_alert \
+            "SENTINEL: F1 Score Degradation" \
+            "SENTINEL F1 score dropped to **${sentinel_f1_result}** (threshold: 0.60).\n\nLow F1 indicates poor classification quality.\n\n**Action:** Check operator feedback queue. Consider manual model retrain." \
+            16753920  # Amber
+
+        set_last_alert "sentinel_f1_low"
+        ((alerts_sent++)) || true
+    fi
+fi
+
+# Check 10: SENTINEL pipeline stalled (no verdicts in 30 minutes)
+sentinel_verdict_result=$(ch_query "SELECT count() FROM hydra_verdicts WHERE timestamp > now() - INTERVAL 30 MINUTE" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_verdict_result" =~ ^[0-9]+$ ]]; then sentinel_verdicts="$sentinel_verdict_result"; else sentinel_verdicts=0; fi
+
+# Only alert if we expect verdicts (check if table has any data at all)
+sentinel_total_result=$(ch_query "SELECT count() FROM hydra_verdicts" 2>/dev/null | tr -d '[:space:]')
+if [[ "$sentinel_total_result" =~ ^[0-9]+$ ]]; then sentinel_total="$sentinel_total_result"; else sentinel_total=0; fi
+
+if [[ "$sentinel_total" -gt 0 && "$sentinel_verdicts" -eq 0 ]] && should_alert "sentinel_stalled" 1800; then
+    send_discord_alert \
+        "SENTINEL: Pipeline Stalled" \
+        "SENTINEL produced **0 verdicts** in the last 30 minutes.\n\nThe scoring pipeline may be down.\n\n**Action:** Check hydra-sentinel, hydra-profiler, hydra-temporal containers." \
+        16753920  # Amber
+
+    set_last_alert "sentinel_stalled"
+    ((alerts_sent++)) || true
+fi
+
 # Summary
 total_events=$(ch_query "SELECT count() FROM napse_intents WHERE timestamp > now() - INTERVAL 5 MINUTE AND intent_class != 'benign'" | tr -d '[:space:]')
 total_events=${total_events:-0}
 
-log "Check complete: DDoS=${ddos_count}(${ddos_sources}src) BF=${bf_count}(${bf_src_count}src) CritIncidents=${crit_count} Score=${latest_score} DistBF=${bf_sources} Total5m=${total_events} AlertsSent=${alerts_sent}"
+log "Check complete: DDoS=${ddos_count}(${ddos_sources}src) BF=${bf_count}(${bf_src_count}src) CritIncidents=${crit_count} Score=${latest_score} DistBF=${bf_sources} SENTINEL(mal=${sentinel_malicious},camp=${sentinel_campaigns},drift=${sentinel_drift},verdicts=${sentinel_verdicts}) Total5m=${total_events} AlertsSent=${alerts_sent}"

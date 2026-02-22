@@ -101,7 +101,7 @@ class XDPStatsCollector:
             # Read the XDP source file
             xdp_source_path = self.xdp_obj_path.replace('.o', '.c') if self.xdp_obj_path else None
             if not xdp_source_path or not os.path.exists(xdp_source_path):
-                xdp_source_path = '/home/ubuntu/hookprobe-com/containers/ids/xdp/xdp_passive_inspect.c'
+                xdp_source_path = '/opt/hookprobe/core/napse/xdp_stats/xdp_passive_inspect.c'
 
             with open(xdp_source_path, 'r') as f:
                 xdp_source = f.read()

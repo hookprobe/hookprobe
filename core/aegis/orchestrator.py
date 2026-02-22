@@ -98,6 +98,13 @@ ROUTING_RULES = {
     "reflex.jitter_applied": ["GUARDIAN"],
     "reflex.disconnect": ["GUARDIAN", "MEDIC"],
 
+    # HYDRA SENTINEL routing
+    "hydra.verdict.malicious": ["GUARDIAN", "MEDIC"],
+    "hydra.verdict.suspicious": ["GUARDIAN"],
+    "hydra.campaign_detected": ["GUARDIAN", "MEDIC", "SCOUT"],
+    "hydra.drift_detected": ["ORACLE"],
+    "hydra.model_retrained": ["ORACLE"],
+
     # MSSP recommendations
     "mssp.recommendation": ["ORACLE", "FORGE"],
 
