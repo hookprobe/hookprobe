@@ -569,8 +569,6 @@ def determine_action(ip: str, verdict: str) -> str:
     - Second consecutive: throttle (log for manual review)
     - Third+ consecutive: block (add to nftables via hydra_blocks)
     """
-    global consecutive_malicious
-
     if verdict == 'malicious':
         consecutive_malicious[ip] = consecutive_malicious.get(ip, 0) + 1
         count = consecutive_malicious[ip]
