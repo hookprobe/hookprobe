@@ -250,6 +250,123 @@ PLACEHOLDER
 }
 
 # ============================================================
+# USB WIFI DRIVER AUTO-DETECTION AND INSTALLATION
+# ============================================================
+# Scans lsusb for known WiFi adapter chipsets that need out-of-tree
+# drivers and installs them via DKMS before interface detection.
+install_usb_wifi_drivers() {
+    log_step "Checking for USB WiFi adapters requiring drivers..."
+
+    if ! command -v lsusb &>/dev/null; then
+        log_warn "lsusb not available, skipping USB WiFi detection"
+        return 0
+    fi
+
+    local usb_devices
+    usb_devices=$(lsusb 2>/dev/null)
+
+    # Map of USB vendor:product IDs to driver info
+    # Format: "usb_id_pattern|driver_module|git_repo|dkms_name"
+    # RTL8812AU/RTL8811AU family (AC600/AC1200 USB adapters)
+    local -a WIFI_USB_DRIVERS=(
+        "0bda:8812|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "0bda:881a|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "0bda:8811|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:011e|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:0120|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:010d|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:0101|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:0103|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:010e|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2357:010c|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "0846:9054|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "0b05:17d2|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "7392:a822|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "2604:0012|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+        "056e:4007|88XXau|https://github.com/aircrack-ng/rtl8812au.git|8812au"
+    )
+
+    local drivers_installed=0
+
+    for entry in "${WIFI_USB_DRIVERS[@]}"; do
+        local usb_id driver_module git_repo dkms_name
+        IFS='|' read -r usb_id driver_module git_repo dkms_name <<< "$entry"
+
+        # Check if this USB device is present
+        if ! echo "$usb_devices" | grep -qi "$usb_id"; then
+            continue
+        fi
+
+        log_info "Found USB WiFi adapter: $usb_id"
+
+        # Check if driver module is already loaded or available
+        if modprobe -n "$driver_module" 2>/dev/null; then
+            log_info "Driver $driver_module already available, loading..."
+            modprobe "$driver_module" 2>/dev/null || true
+            sleep 2
+            drivers_installed=$((drivers_installed + 1))
+            continue
+        fi
+
+        # Check if already installed via DKMS
+        if dkms status "$dkms_name" 2>/dev/null | grep -q "installed"; then
+            log_info "DKMS driver $dkms_name already installed, loading..."
+            modprobe "$driver_module" 2>/dev/null || true
+            sleep 2
+            drivers_installed=$((drivers_installed + 1))
+            continue
+        fi
+
+        log_info "Installing driver $driver_module for USB WiFi adapter..."
+
+        # Ensure build dependencies are available
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            dkms build-essential bc 2>/dev/null || {
+            log_warn "Could not install build dependencies for $driver_module"
+            continue
+        }
+
+        # Check kernel headers
+        if [ ! -d "/lib/modules/$(uname -r)/build" ]; then
+            local headers_pkg="linux-headers-$(uname -r)"
+            log_info "Installing kernel headers: $headers_pkg"
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$headers_pkg" 2>/dev/null || {
+                log_warn "Could not install kernel headers, skipping $driver_module"
+                continue
+            }
+        fi
+
+        # Clone and build driver
+        local build_dir="/tmp/guardian-wifi-driver-$$"
+        rm -rf "$build_dir"
+        if git clone --depth 1 "$git_repo" "$build_dir" 2>/dev/null; then
+            log_info "Building $driver_module via DKMS (this may take a few minutes)..."
+            cd "$build_dir"
+            if make dkms_install 2>&1 | tail -5; then
+                log_info "Driver $driver_module installed successfully"
+                modprobe "$driver_module" 2>/dev/null || true
+                sleep 2
+                drivers_installed=$((drivers_installed + 1))
+            else
+                log_warn "Failed to build driver $driver_module"
+            fi
+            cd /
+            rm -rf "$build_dir"
+        else
+            log_warn "Could not clone driver source from $git_repo"
+        fi
+    done
+
+    if [ $drivers_installed -gt 0 ]; then
+        log_info "Installed $drivers_installed USB WiFi driver(s), re-detecting interfaces..."
+        # Re-detect interfaces now that new drivers are loaded
+        detect_interfaces
+    else
+        log_info "No additional USB WiFi drivers needed"
+    fi
+}
+
+# ============================================================
 # SYSTEM LOCALE AND REGIONAL CONFIGURATION
 # ============================================================
 configure_system_locale() {
@@ -4840,16 +4957,27 @@ main() {
     # Show banner and confirm
     confirm_installation
 
-    # Check WiFi AP support
-    if [ "$WIFI_AP_SUPPORT" != "true" ]; then
-        log_error "No WiFi interface with AP mode support found"
-        log_error "Guardian requires WiFi AP capability"
-        exit 1
+    # Check WiFi AP support (will be re-checked after USB driver install)
+    if [ "$WIFI_AP_SUPPORT" != "true" ] && [ "$WIFI_COUNT" -eq 0 ]; then
+        # No WiFi at all - USB drivers might fix this, warn but continue
+        log_warn "No WiFi interfaces detected yet (USB drivers may be needed)"
+        log_info "Will re-check after installing USB WiFi drivers..."
     fi
 
     # Install base packages
     log_step "Installing base packages..."
     install_packages
+
+    # Auto-detect USB WiFi adapters and install missing drivers
+    install_usb_wifi_drivers
+
+    # Final WiFi AP check (after USB drivers are installed)
+    if [ "$WIFI_AP_SUPPORT" != "true" ]; then
+        log_error "No WiFi interface with AP mode support found"
+        log_error "Guardian requires WiFi AP capability"
+        log_error "Ensure a WiFi adapter that supports AP mode is connected"
+        exit 1
+    fi
 
     # Configure system locale (en_US.UTF-8)
     configure_system_locale

@@ -77,11 +77,22 @@ ensure_interface_up() {
 }
 
 # Setup WAN interface (wlan0) for upstream connectivity
+# In single-radio mode (only wlan0, no wlan1), the AP uses wlan0 and
+# WAN is via eth0 - skip WiFi WAN setup to avoid conflict with hostapd.
 setup_wan_interface() {
     local wan_iface="${HOOKPROBE_WAN_IFACE:-wlan0}"
+    local ap_iface="${1:-}"
 
     if [ ! -d "/sys/class/net/$wan_iface" ]; then
         log_info "WAN interface $wan_iface not present, skipping"
+        return 0
+    fi
+
+    # Single-radio mode: if WAN and AP are the same interface, the radio
+    # is reserved for AP (hostapd). WAN uplink goes through eth0 instead.
+    if [ -n "$ap_iface" ] && [ "$wan_iface" = "$ap_iface" ]; then
+        log_info "Single-radio mode: $wan_iface reserved for AP, WAN via eth0"
+        echo "eth0" > /run/guardian/wan_interface 2>/dev/null || true
         return 0
     fi
 
@@ -246,16 +257,16 @@ main() {
     # Create state directory
     mkdir -p /run/guardian
 
-    # Setup WAN interface first (wlan0 for upstream connectivity)
-    setup_wan_interface
-
-    # Detect AP interface
+    # Detect AP interface first (needed to avoid WAN/AP conflict on single-radio)
     local ap_iface
     if ! ap_iface=$(detect_ap_interface); then
         log_error "No WiFi interface found for AP mode"
         log_error "Please connect a USB WiFi adapter that supports AP mode"
         exit 1
     fi
+
+    # Setup WAN interface (skips WiFi WAN if same as AP - single-radio mode)
+    setup_wan_interface "$ap_iface"
 
     log_info "Using AP interface: $ap_iface"
 
