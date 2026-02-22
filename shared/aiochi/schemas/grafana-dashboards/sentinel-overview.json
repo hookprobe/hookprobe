@@ -1,0 +1,518 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "<div style=\"text-align: center; padding: 10px;\">\n  <h1 style=\"margin: 0; color: #e69500;\">HYDRA SENTINEL</h1>\n  <p style=\"margin: 5px 0 0 0; color: #888;\">ML Ensemble Threat Scoring &mdash; Stage 1-6 Pipeline</p>\n</div>",
+        "mode": "html"
+      },
+      "pluginVersion": "11.4.0",
+      "title": "",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#4caf50", "value": null },
+              { "color": "#ff9800", "value": 1 },
+              { "color": "#d32f2f", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 3 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Malicious IPs (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT count(DISTINCT ip) AS malicious_ips FROM hookprobe_ids.hydra_verdicts WHERE verdict = 'malicious' AND timestamp >= now() - INTERVAL 24 HOUR",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#4caf50", "value": null },
+              { "color": "#ff9800", "value": 5 },
+              { "color": "#d32f2f", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 3 },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Suspicious IPs (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT count(DISTINCT ip) AS suspicious_ips FROM hookprobe_ids.hydra_verdicts WHERE verdict = 'suspicious' AND timestamp >= now() - INTERVAL 24 HOUR",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#2e7d32", "value": null },
+              { "color": "#ff9800", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 3 },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Campaigns Detected",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT count(DISTINCT campaign_id) AS campaigns FROM hookprobe_ids.sentinel_campaigns WHERE updated_at >= now() - INTERVAL 7 DAY AND member_count >= 2",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "text": "No" } }, "type": "value" },
+            { "options": { "1": { "text": "Yes" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#4caf50", "value": null },
+              { "color": "#d32f2f", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 3 },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Model Drift",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT max(drift_detected) AS drift FROM hookprobe_ids.sentinel_lifecycle_metrics WHERE timestamp >= now() - INTERVAL 1 HOUR",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#d32f2f", "value": null },
+              { "color": "#ff9800", "value": 0.5 },
+              { "color": "#4caf50", "value": 0.8 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 3 },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Model Precision",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT precision FROM hookprobe_ids.sentinel_lifecycle_metrics ORDER BY timestamp DESC LIMIT 1",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#d32f2f", "value": null },
+              { "color": "#ff9800", "value": 0.5 },
+              { "color": "#4caf50", "value": 0.8 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 3 },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Model Recall",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT recall FROM hookprobe_ids.sentinel_lifecycle_metrics ORDER BY timestamp DESC LIMIT 1",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Verdicts",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": { "mode": "normal" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "malicious" }, "properties": [{ "id": "color", "value": { "fixedColor": "#d32f2f", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "suspicious" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ff9800", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "benign" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4caf50", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Verdicts Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT toStartOfHour(timestamp) AS time, verdict, count() AS cnt FROM hookprobe_ids.hydra_verdicts WHERE timestamp >= now() - INTERVAL 24 HOUR GROUP BY time, verdict ORDER BY time",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisLabel": "Score",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "precision" }, "properties": [{ "id": "color", "value": { "fixedColor": "#2196f3", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "recall" }, "properties": [{ "id": "color", "value": { "fixedColor": "#4caf50", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "f1_score" }, "properties": [{ "id": "color", "value": { "fixedColor": "#e69500", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "false_positive_rate" }, "properties": [{ "id": "color", "value": { "fixedColor": "#d32f2f", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Model Performance (Lifecycle Metrics)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT timestamp AS time, precision, recall, f1_score, false_positive_rate FROM hookprobe_ids.sentinel_lifecycle_metrics WHERE timestamp >= now() - INTERVAL 7 DAY ORDER BY timestamp",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisLabel": "Drift Cumsum",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "drift_cumsum" }, "properties": [{ "id": "color", "value": { "fixedColor": "#9c27b0", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Page-Hinkley Drift Detection",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT timestamp AS time, drift_cumsum, drift_detected FROM hookprobe_ids.sentinel_lifecycle_metrics WHERE timestamp >= now() - INTERVAL 7 DAY ORDER BY timestamp",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "sentinel_score" }, "properties": [{ "id": "custom.displayMode", "value": "gradient-gauge" }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "#4caf50", "value": null }, { "color": "#ff9800", "value": 0.4 }, { "color": "#d32f2f", "value": 0.7 }] } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "id": 11,
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "sentinel_score" }]
+      },
+      "title": "Top Threat IPs (Last 24h)",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT ip, verdict, round(sentinel_score, 3) AS sentinel_score, round(confidence, 3) AS confidence, campaign_id, max(timestamp) AS last_seen FROM hookprobe_ids.hydra_verdicts WHERE timestamp >= now() - INTERVAL 24 HOUR AND verdict IN ('malicious', 'suspicious') GROUP BY ip, verdict, sentinel_score, confidence, campaign_id ORDER BY sentinel_score DESC LIMIT 20",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisLabel": "IPs Profiled",
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "title": "Baseline Profiler - IPs Tracked",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT toStartOfHour(updated_at) AS time, count(DISTINCT ip) AS profiled_ips FROM hookprobe_ids.sentinel_ip_profiles WHERE updated_at >= now() - INTERVAL 7 DAY GROUP BY time ORDER BY time",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisLabel": "CVE Count",
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+      "id": 13,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "title": "CVE Enrichment - Context Records",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "rawSql": "SELECT toStartOfDay(timestamp) AS time, count() AS cve_records, countIf(max_cvss >= 9.0) AS critical_cves, countIf(in_kev = 1) AS kev_cves FROM hookprobe_ids.sentinel_cve_context WHERE timestamp >= now() - INTERVAL 30 DAY GROUP BY time ORDER BY time",
+          "refId": "A",
+          "format": 1
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["sentinel", "hydra", "ids", "security"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "HYDRA SENTINEL Overview",
+  "uid": "sentinel-overview",
+  "version": 1
+}

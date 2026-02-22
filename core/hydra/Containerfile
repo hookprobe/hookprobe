@@ -15,7 +15,7 @@ WORKDIR /app
 # Create model persistence directory
 RUN mkdir -p /app/models
 
-COPY bpf_map_ops.py feed_sync.py event_consumer.py feature_extractor.py anomaly_detector.py rdap_enricher.py ./
+COPY bpf_map_ops.py feed_sync.py event_consumer.py feature_extractor.py anomaly_detector.py rdap_enricher.py baseline_profiler.py cve_enricher.py temporal_memory.py sentinel_engine.py sentinel_lifecycle.py ./
 
 # Default: run feed_sync (override in compose for other daemons)
 CMD ["python3", "-u", "feed_sync.py"]

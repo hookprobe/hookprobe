@@ -10,10 +10,12 @@ License: Proprietary
 Version: 5.0.0
 """
 
+import json
 import os
 import socket
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 from enum import Enum
 from collections import deque
@@ -67,11 +69,15 @@ class UnifiedEngineConfig:
     amber_threshold: float = 0.45
     red_threshold: float = 0.70
 
+    # SENTINEL IDS weight (0 = disabled, auto-adjusted into formula)
+    sentinel_weight: Optional[float] = None
+
     # Detection settings
     enable_xdp: bool = True
     enable_energy_monitoring: bool = True
     enable_ml_classifier: bool = True
     enable_response_orchestration: bool = True
+    enable_sentinel: bool = True
 
     # Data directory
     data_dir: str = "/opt/hookprobe/data"
@@ -90,17 +96,20 @@ class UnifiedEngineConfig:
             DeploymentType.GUARDIAN: {
                 'l2': 0.25, 'l3': 0.10, 'l4': 0.10,
                 'l5': 0.25, 'l7': 0.10, 'energy': 0.10,
-                'behavioral': 0.05, 'correlation': 0.05
+                'behavioral': 0.05, 'correlation': 0.05,
+                'sentinel': 0.0,
             },
             DeploymentType.FORTRESS: {
-                'l2': 0.15, 'l3': 0.20, 'l4': 0.25,
-                'l5': 0.10, 'l7': 0.15, 'energy': 0.05,
-                'behavioral': 0.05, 'correlation': 0.05
+                'l2': 0.12, 'l3': 0.17, 'l4': 0.22,
+                'l5': 0.08, 'l7': 0.13, 'energy': 0.05,
+                'behavioral': 0.05, 'correlation': 0.05,
+                'sentinel': 0.13,
             },
             DeploymentType.NEXUS: {
-                'l2': 0.10, 'l3': 0.15, 'l4': 0.15,
-                'l5': 0.15, 'l7': 0.20, 'energy': 0.10,
-                'behavioral': 0.10, 'correlation': 0.05
+                'l2': 0.08, 'l3': 0.12, 'l4': 0.12,
+                'l5': 0.12, 'l7': 0.17, 'energy': 0.08,
+                'behavioral': 0.08, 'correlation': 0.05,
+                'sentinel': 0.18,
             },
         }
 
@@ -123,6 +132,8 @@ class UnifiedEngineConfig:
             weights['behavioral'] = self.behavioral_weight
         if self.correlation_weight is not None:
             weights['correlation'] = self.correlation_weight
+        if self.sentinel_weight is not None:
+            weights['sentinel'] = self.sentinel_weight
 
         # Normalize to sum to 1.0
         total = sum(weights.values())
@@ -205,6 +216,14 @@ class UnifiedThreatEngine:
             )
             print("✓ Response orchestration enabled")
 
+        # SENTINEL IDS score reader
+        self._sentinel_cache_path = Path(
+            os.environ.get("SENTINEL_CACHE_FILE",
+                           os.path.join(self.config.data_dir, "sentinel_scores.json"))
+        )
+        self._sentinel_last_mtime: float = 0
+        self._sentinel_score: float = 0.0
+
         # Scoring history
         self.score_history: deque = deque(maxlen=1000)
         self.threat_history: deque = deque(maxlen=10000)
@@ -283,12 +302,16 @@ class UnifiedThreatEngine:
         # Attack chain correlation score
         correlation_score = self._calculate_correlation_score(all_threats)
 
+        # SENTINEL IDS score (from HYDRA stack)
+        sentinel_score = self._read_sentinel_score()
+
         # Calculate unified Qsecbit score
         score = self._calculate_unified_score(
             layer_scores=layer_scores,
             energy_score=energy_score,
             behavioral_score=behavioral_score,
-            correlation_score=correlation_score
+            correlation_score=correlation_score,
+            sentinel_score=sentinel_score,
         )
 
         # Determine RAG status
@@ -334,24 +357,71 @@ class UnifiedThreatEngine:
 
         return unified_score
 
+    def _read_sentinel_score(self) -> float:
+        """Read the aggregate SENTINEL threat score from cache file.
+
+        The sentinel_engine.py writes a JSON summary after each scoring
+        cycle. We read the max sentinel_score across all scored IPs
+        as the overall SENTINEL contribution to the unified score.
+
+        Returns 0.0 if SENTINEL is disabled or no data available.
+        """
+        if not self.config.enable_sentinel:
+            return 0.0
+        if self.weights.get('sentinel', 0) == 0:
+            return 0.0
+
+        try:
+            if not self._sentinel_cache_path.exists():
+                return self._sentinel_score
+
+            mtime = self._sentinel_cache_path.stat().st_mtime
+            if mtime <= self._sentinel_last_mtime:
+                return self._sentinel_score
+            self._sentinel_last_mtime = mtime
+
+            data = json.loads(self._sentinel_cache_path.read_text())
+            verdicts = data.get("verdicts", {})
+            malicious_ips = data.get("malicious_ips", [])
+            suspicious_ips = data.get("suspicious_ips", [])
+
+            # Aggregate score: max score across all flagged IPs
+            max_score = 0.0
+            for entry in malicious_ips:
+                s = float(entry.get("score", 0))
+                if s > max_score:
+                    max_score = s
+            for entry in suspicious_ips:
+                s = float(entry.get("score", 0))
+                if s > max_score:
+                    max_score = s
+
+            self._sentinel_score = max_score
+            return self._sentinel_score
+
+        except Exception:
+            return self._sentinel_score
+
     def _calculate_unified_score(
         self,
         layer_scores: Dict[OSILayer, LayerScore],
         energy_score: float,
         behavioral_score: float,
-        correlation_score: float
+        correlation_score: float,
+        sentinel_score: float = 0.0,
     ) -> float:
         """
         Calculate the unified Qsecbit score.
 
         Formula:
-        Q = Σ(ωᵢ × Lᵢ) + β×E + γ×B + δ×C
+        Q = Σ(ωᵢ × Lᵢ) + β×E + γ×B + δ×C + ε×S
 
         Where:
         - Lᵢ = Layer-specific threat scores
         - E = Energy anomaly score
         - B = Behavioral (ML) score
         - C = Correlation score
+        - S = SENTINEL IDS score (from HYDRA stack)
         """
         score = 0.0
 
@@ -370,6 +440,7 @@ class UnifiedThreatEngine:
         score += self.weights['energy'] * energy_score
         score += self.weights['behavioral'] * behavioral_score
         score += self.weights['correlation'] * correlation_score
+        score += self.weights.get('sentinel', 0) * sentinel_score
 
         return min(1.0, score)
 
