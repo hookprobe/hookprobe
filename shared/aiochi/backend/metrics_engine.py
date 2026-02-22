@@ -563,7 +563,7 @@ class RealMetricsEngine:
             )
             if result.returncode == 0:
                 # Count lines (minus header)
-                lines = [l for l in result.stdout.strip().split('\n') if l]
+                lines = [x for x in result.stdout.strip().split('\n') if x]
                 metrics["active_connections"] = max(0, len(lines) - 1)
         except Exception:
             pass

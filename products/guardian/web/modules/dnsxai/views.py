@@ -15,7 +15,7 @@ from utils import load_json_file, save_json_file, load_text_file, save_text_file
 try:
     from .ml_engine import (
         get_classifier, get_uncloaker, get_federated, get_detector,
-        DomainFeatureExtractor, check_ml_libraries, HAS_NUMPY, HAS_SKLEARN
+        check_ml_libraries, HAS_NUMPY, HAS_SKLEARN
     )
     ML_AVAILABLE = True
 except ImportError as e:
@@ -29,7 +29,6 @@ except ImportError as e:
 try:
     from .packet_inspector import (
         get_packet_detector, get_dns_analyzer,
-        PacketAdDetector, DNSResponseAnalyzer
     )
     PACKET_INSPECTOR_AVAILABLE = True
 except ImportError as e:
@@ -826,9 +825,6 @@ def _parse_browsing_history(hours: int = 24, limit: int = 5000) -> list:
     try:
         if not os.path.exists(DNSMASQ_QUERY_LOG):
             return domains
-
-        import datetime
-        cutoff_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
 
         # Read log file (limit to last 10MB for performance)
         file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
