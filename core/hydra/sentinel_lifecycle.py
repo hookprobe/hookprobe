@@ -616,7 +616,7 @@ class SentinelLifecycle:
         self.champion_version = current_version
 
         logger.info(
-            f"Model metrics updated: v{new_version}, "
+            f"Model metrics updated: v{current_version}, "
             f"P={metrics['precision']:.3f} R={metrics['recall']:.3f} "
             f"F1={metrics['f1_score']:.3f} FPR={metrics['false_positive_rate']:.3f} "
             f"({len(training_data)} samples)"
@@ -624,7 +624,7 @@ class SentinelLifecycle:
 
         return {
             'status': 'trained',
-            'version': new_version,
+            'version': current_version,
             'samples': len(training_data),
             'metrics': metrics,
         }
