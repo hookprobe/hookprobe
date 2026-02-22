@@ -362,8 +362,6 @@ def _detect_primary_interface() -> Optional[str]:
 
     Checks for common interface names and returns the one with most traffic.
     """
-    common_interfaces = ['eth0', 'ens0', 'enp0s3', 'enp0s8', 'wlan0', 'wlp2s0']
-
     try:
         best_interface = None
         max_bytes = 0
@@ -919,7 +917,6 @@ def generate_privacy_feed(limit: int = 10) -> Dict[str, Any]:
     # Get DNS blocking stats
     dns_stats = get_dnsxai_stats()
     blocked_today = dns_stats.get('blocked_today', 0)
-    trackers_blocked = dns_stats.get('trackers_blocked', 0)
     ads_blocked = dns_stats.get('ads_blocked', 0)
 
     # Add DNS protection summary
@@ -1173,8 +1170,6 @@ def _execute_pause_kids(activate: bool) -> Dict[str, Any]:
     Uses iptables to drop outbound traffic from kids' device IPs.
     """
     try:
-        import requests
-
         # Get devices tagged as 'kids' from SDN
         devices_file = Path('/app/data/devices.json')
         kids_devices = []

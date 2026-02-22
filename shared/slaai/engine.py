@@ -18,18 +18,17 @@ import json
 import os
 import signal
 import logging
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Any, Callable
+from datetime import datetime
+from dataclasses import dataclass
+from typing import Dict, Optional, Callable
 from enum import Enum
-from pathlib import Path
 
 from .config import SLAAIConfig, load_config
 from .database import SLAAIDatabase
 from .metrics_collector import MetricsCollector, WANMetrics
 from .predictor import LSTMPredictor, Prediction
-from .failback import FailbackIntelligence, FailbackDecision, HealthCheck, FailbackPolicy
-from .cost_tracker import CostTracker, UsageStatus
+from .failback import FailbackIntelligence, HealthCheck, FailbackPolicy
+from .cost_tracker import CostTracker
 from .dns_intelligence import DNSIntelligence
 
 logger = logging.getLogger(__name__)
@@ -317,12 +316,10 @@ class SLAEngine:
     async def _evaluate_and_act(self) -> None:
         """Evaluate current state and take action if needed."""
         primary_metrics = self._latest_metrics.get(self._primary_interface)
-        backup_metrics = self._latest_metrics.get(self._backup_interface)
         primary_prediction = self._latest_predictions.get(self._primary_interface)
 
         # Calculate health scores
         primary_health = self._calculate_health(primary_metrics)
-        backup_health = self._calculate_health(backup_metrics)
 
         # Current state handling
         if self._state == SLAState.PRIMARY_ACTIVE:

@@ -14,12 +14,8 @@ Tests the enhanced security features added to HookProbe Transport Protocol:
 import os
 import sys
 import time
-import hashlib
 import struct
-from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -52,9 +48,9 @@ def test_ephemeral_key_exchange():
     assert edge_shared_secret == validator_shared_secret, "Shared secrets don't match!"
     assert len(edge_shared_secret) == 32, "Shared secret should be 32 bytes"
 
-    print(f"✓ Ephemeral key exchange successful")
+    print("✓ Ephemeral key exchange successful")
     print(f"✓ Shared secret: {edge_shared_secret.hex()[:16]}...")
-    print(f"✓ Perfect forward secrecy enabled")
+    print("✓ Perfect forward secrecy enabled")
 
 
 @pytest.mark.skipif(not _transport_mode_supported, reason="transport_mode parameter not implemented")
@@ -184,7 +180,7 @@ def test_key_rotation():
 
     assert session.weight_fingerprint == new_weight_fp, "Weight fingerprint not updated"
     assert session.key_rotation_counter == 2, "Rotation counter not incremented"
-    print(f"✓ Weight fingerprint updated and key rotated again")
+    print("✓ Weight fingerprint updated and key rotated again")
 
 
 @pytest.mark.skipif(not _transport_mode_supported, reason="transport_mode parameter not implemented")
@@ -242,19 +238,19 @@ def test_rate_limiting():
         allowed = transport._check_rate_limit(test_ip)
         assert allowed, f"Request {i+1} should be allowed"
 
-    print(f"✓ First 10 requests allowed")
+    print("✓ First 10 requests allowed")
 
     # 11th request should be rate-limited
     allowed = transport._check_rate_limit(test_ip)
     assert not allowed, "11th request should be rate-limited"
 
-    print(f"✓ 11th request correctly rate-limited")
+    print("✓ 11th request correctly rate-limited")
 
     # Different IP should still be allowed
     allowed = transport._check_rate_limit("203.0.113.43")
     assert allowed, "Different IP should be allowed"
 
-    print(f"✓ Different IP address not affected by rate limit")
+    print("✓ Different IP address not affected by rate limit")
 
 
 @pytest.mark.skipif(not _transport_mode_supported, reason="transport_mode parameter not implemented")
@@ -283,7 +279,7 @@ def test_enhanced_key_derivation():
     key3 = transport._derive_session_key_enhanced(different_secret, session_secret, weight_fp)
     assert key1 != key3, "Different inputs should produce different key"
 
-    print(f"✓ Enhanced key derivation working correctly")
+    print("✓ Enhanced key derivation working correctly")
     print(f"✓ Key: {key1.hex()[:32]}...")
 
 
@@ -307,7 +303,7 @@ def test_posf_signature_format():
     assert extracted_sig == signature, "Signature extraction failed"
     assert extracted_data == data, "Data extraction failed"
 
-    print(f"✓ PoSF signature format correct")
+    print("✓ PoSF signature format correct")
     print(f"✓ Signature length: {sig_length} bytes")
     print(f"✓ Signature: {extracted_sig.hex()[:16]}...")
 
