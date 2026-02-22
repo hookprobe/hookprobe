@@ -538,6 +538,45 @@ TOOL_REGISTRY: Dict[str, ToolDefinition] = {
         agents=["GUARDIAN", "MEDIC"],
     ),
 
+    # HYDRA SENTINEL tools
+    "sentinel_query_verdict": ToolDefinition(
+        name="sentinel_query_verdict",
+        description="Query HYDRA SENTINEL verdict and threat score for a specific IP",
+        parameters={
+            "type": "object",
+            "properties": {
+                "ip": {"type": "string", "description": "IP address to query"},
+            },
+            "required": ["ip"],
+        },
+        agents=["GUARDIAN", "MEDIC", "ORACLE"],
+    ),
+    "sentinel_campaign_info": ToolDefinition(
+        name="sentinel_campaign_info",
+        description="Get details about a SENTINEL campaign (member IPs, co-occurrence graph, reputation)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "campaign_id": {"type": "string", "description": "Campaign ID (e.g., C-1.2.3.4-5)"},
+            },
+            "required": ["campaign_id"],
+        },
+        agents=["GUARDIAN", "MEDIC", "SCOUT", "ORACLE"],
+    ),
+    "sentinel_retrain": ToolDefinition(
+        name="sentinel_retrain",
+        description="Force SENTINEL model retrain cycle (triggers Page-Hinkley drift reset)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Reason for forced retrain"},
+            },
+            "required": ["reason"],
+        },
+        agents=["ORACLE", "FORGE"],
+        requires_confirmation=True,
+    ),
+
     # MEDIC tools
     "full_quarantine": ToolDefinition(
         name="full_quarantine",

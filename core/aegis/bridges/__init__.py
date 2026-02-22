@@ -15,6 +15,7 @@ from .dnsxai_bridge import DnsxaiBridge
 from .dhcp_bridge import DhcpBridge
 from .wan_bridge import WanBridge
 from .napse_bridge import NAPSEBridge
+from .hydra_bridge import HydraBridge
 from ..types import StandardSignal
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class BridgeManager:
         self._bridges["dhcp"] = DhcpBridge()
         self._bridges["wan"] = WanBridge()
         self._bridges["napse"] = NAPSEBridge()
+        self._bridges["hydra"] = HydraBridge()
         # Lazy import to avoid circular dependency (reflex.bridge imports base_bridge)
         from ..reflex.engine import ReflexEngine as _RE
         from ..reflex.bridge import ReflexBridge as _RB
@@ -56,8 +58,11 @@ class BridgeManager:
         slaai_path: str = "",
         napse_eve_path: str = "",
         reflex_score_path: str = "",
+        hydra_cache_path: str = "",
     ) -> None:
         """Reconfigure bridges with custom paths/URLs."""
+        if hydra_cache_path:
+            self._bridges["hydra"] = HydraBridge(hydra_cache_path)
         if qsecbit_path:
             self._bridges["qsecbit"] = QsecbitBridge(qsecbit_path)
         if dnsxai_url:
@@ -126,4 +131,5 @@ __all__ = [
     "DhcpBridge",
     "WanBridge",
     "NAPSEBridge",
+    "HydraBridge",
 ]
