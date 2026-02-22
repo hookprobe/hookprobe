@@ -1491,6 +1491,8 @@ setup_network() {
         }
 
         # Add LAN physical interfaces to OVS bridge
+        # NOTE: NET_LAN_IFACES includes ALL LAN ports (including admin port)
+        # In flat bridge mode, all ports share the same L2 segment
         if [ -n "$NET_LAN_IFACES" ]; then
             for iface in $NET_LAN_IFACES; do
                 log_info "  Adding LAN interface $iface to OVS bridge..."
@@ -1501,16 +1503,6 @@ setup_network() {
         else
             log_warn "No LAN interfaces detected to add to bridge"
             log_info "  WiFi AP will provide client connectivity"
-        fi
-
-        # Add admin console interface to OVS bridge if detected
-        # This is designated as the last LAN ethernet port (by PCI order)
-        # Recommended for connecting admin workstation for initial setup
-        if [ -n "$MGMT_INTERFACE" ]; then
-            log_info "  Adding admin interface $MGMT_INTERFACE to OVS bridge..."
-            "$ovs_script" add-lan "$MGMT_INTERFACE" || {
-                log_warn "Failed to add admin interface $MGMT_INTERFACE to OVS bridge"
-            }
         fi
 
         # Setup NAT - detect WAN interface if not already set
