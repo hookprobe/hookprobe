@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-QSecBit Fortress Agent - Full Implementation
-Version: 5.2.0
+QSecBit Fortress Agent - Unified Threat Engine
+Version: 5.3.0
 License: AGPL-3.0
 
 Fortress-enhanced QSecBit with:
 - L2-L7 Layer Threat Detection (NAPSE integration)
+- SENTINEL IDS scoring (HYDRA Bayesian pipeline)
 - Extended telemetry from monitoring stack
 - XDP/eBPF DDoS protection integration
 - nftables policy scoring
 - MACsec status monitoring
 - OpenFlow flow analysis
+- Trend analysis (IMPROVING/STABLE/DEGRADING)
 - HTTP API for healthcheck and status
 """
 
@@ -685,22 +687,31 @@ def resolve_hostname(ip_address: str, mac_address: str = None) -> str:
 @dataclass
 class QSecBitConfig:
     """QSecBit configuration for Fortress"""
-    # Main component weights (must sum to 1.0)
-    alpha: float = 0.15   # System drift weight
-    beta: float = 0.10    # Network health weight
-    gamma: float = 0.35   # L2-L7 threat detection weight (primary)
-    delta: float = 0.10   # Energy efficiency weight
-    epsilon: float = 0.10 # Infrastructure health weight
+    # Main component weights (adjusted for SENTINEL integration)
+    alpha: float = 0.12   # System drift weight
+    beta: float = 0.08    # Network health weight
+    gamma: float = 0.30   # L2-L7 threat detection weight (primary)
+    delta: float = 0.08   # Energy efficiency weight
+    epsilon: float = 0.08 # Infrastructure health weight
 
     # Thresholds (higher = healthier, we want high scores)
     amber_threshold: float = 0.45
     red_threshold: float = 0.30
 
     # Fortress-specific weights
-    nftables_weight: float = 0.05
-    macsec_weight: float = 0.05
-    openflow_weight: float = 0.05
+    nftables_weight: float = 0.04
+    macsec_weight: float = 0.04
+    openflow_weight: float = 0.04
     xdp_weight: float = 0.05
+
+    # SENTINEL IDS weight (HYDRA Bayesian pipeline contribution)
+    sentinel_weight: float = 0.13
+    sentinel_cache_file: str = "/opt/hookprobe/data/sentinel_scores.json"  # legacy
+    # ClickHouse connection for IDS scores (AIOCHI shared instance)
+    sentinel_ch_url: str = "http://127.0.0.1:8123"
+    sentinel_ch_db: str = "hookprobe_ids"
+    sentinel_ch_user: str = "ids"
+    sentinel_ch_password: str = "hookprobe_ids_2026"
 
     # Layer detection weights (within gamma)
     l2_weight: float = 0.25  # Data Link (ARP, MAC, Evil Twin)
@@ -854,6 +865,13 @@ class QSecBitFortressAgent:
         self.history: List[QSecBitSample] = []
         self.all_threats: List[Any] = []  # Accumulated threats
 
+        # SENTINEL IDS score tracking (via ClickHouse)
+        self._sentinel_cache_path = Path(self.config.sentinel_cache_file)  # legacy fallback
+        self._sentinel_last_mtime: float = 0
+        self._sentinel_score: float = 0.0
+        self._sentinel_last_query: float = 0.0
+        self._sentinel_query_interval: float = 30.0  # query ClickHouse every 30s
+
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         # Initialize L2-L7 Layer Detectors
@@ -880,7 +898,7 @@ class QSecBitFortressAgent:
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
 
-        logger.info("QSecBit Fortress Agent v5.2.0 initialized")
+        logger.info("QSecBit Fortress Agent v5.3.0 initialized")
 
     def _signal_handler(self, signum, frame):
         logger.info(f"Received signal {signum}, shutting down...")
@@ -1017,18 +1035,108 @@ class QSecBitFortressAgent:
             logger.warning(f"Failed to block IP {ip} via XDP: {e}")
             return False
 
+    def read_sentinel_score(self) -> float:
+        """Read SENTINEL IDS score from ClickHouse (AIOCHI shared instance).
+
+        Queries the qsecbit_scores table written by ids-qsecbit container.
+        Also checks hydra_verdicts for active threats.
+        Returns health score (1.0 = no threats, 0.0 = max threats).
+        """
+        now = time.monotonic()
+        if now - self._sentinel_last_query < self._sentinel_query_interval:
+            return self._sentinel_score
+        self._sentinel_last_query = now
+
+        try:
+            # Query latest IDS QSecBit score (0-100 scale)
+            query = (
+                f"SELECT score, threat_score, critical_alerts, high_alerts "
+                f"FROM {self.config.sentinel_ch_db}.qsecbit_scores "
+                f"ORDER BY timestamp DESC LIMIT 1 FORMAT JSONEachRow"
+            )
+            params = urllib.parse.urlencode({
+                'query': query,
+                'user': self.config.sentinel_ch_user,
+                'password': self.config.sentinel_ch_password,
+            })
+            url = f"{self.config.sentinel_ch_url}/?{params}"
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('Accept', 'application/json')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                text = resp.read().decode().strip()
+                if not text:
+                    return self._sentinel_score
+                data = json.loads(text)
+                ids_score = float(data.get('score', 100)) / 100.0  # normalize to 0-1
+                critical = int(data.get('critical_alerts', 0))
+                high = int(data.get('high_alerts', 0))
+
+            # Check for active HYDRA verdicts in last 5 minutes
+            vquery = (
+                f"SELECT count() as cnt, max(anomaly_score) as max_score "
+                f"FROM {self.config.sentinel_ch_db}.hydra_verdicts "
+                f"WHERE timestamp > now() - INTERVAL 5 MINUTE "
+                f"FORMAT JSONEachRow"
+            )
+            vparams = urllib.parse.urlencode({
+                'query': vquery,
+                'user': self.config.sentinel_ch_user,
+                'password': self.config.sentinel_ch_password,
+            })
+            vurl = f"{self.config.sentinel_ch_url}/?{vparams}"
+            vreq = urllib.request.Request(vurl, method='GET')
+            vreq.add_header('Accept', 'application/json')
+            verdict_penalty = 0.0
+            with urllib.request.urlopen(vreq, timeout=5) as resp:
+                vtext = resp.read().decode().strip()
+                if vtext:
+                    vdata = json.loads(vtext)
+                    active_verdicts = int(vdata.get('cnt', 0))
+                    max_anomaly = float(vdata.get('max_score', 0))
+                    if active_verdicts > 0:
+                        verdict_penalty = min(0.3, max_anomaly * 0.5)
+
+            # Combine: IDS health score minus verdict penalty
+            # Apply penalty for critical/high alerts
+            alert_penalty = min(0.2, critical * 0.1 + high * 0.05)
+            self._sentinel_score = max(0.0, min(1.0, ids_score - verdict_penalty - alert_penalty))
+            return self._sentinel_score
+
+        except Exception as e:
+            logger.debug(f"SENTINEL ClickHouse query failed: {e}")
+            return self._sentinel_score
+
+    def calculate_trend(self) -> str:
+        """Calculate trend from recent score history."""
+        if len(self.history) < 10:
+            return 'STABLE'
+        recent = [s.score for s in self.history[-10:]]
+        n = len(recent)
+        x_mean = (n - 1) / 2.0
+        y_mean = sum(recent) / n
+        num = sum((i - x_mean) * (y - y_mean) for i, y in enumerate(recent))
+        den = sum((i - x_mean) ** 2 for i in range(n))
+        slope = num / den if den != 0 else 0.0
+        # Fortress scores are inverted (higher = better), so positive slope = improving
+        if slope > 0.01:
+            return 'IMPROVING'
+        elif slope < -0.01:
+            return 'DEGRADING'
+        return 'STABLE'
+
     def calculate_score(self, layer_scores: Dict[str, float] = None, xdp_stats: Dict = None) -> tuple:
-        """Calculate QSecBit score with Fortress enhancements and L2-L7 layer detection"""
+        """Calculate QSecBit score with Fortress enhancements, L2-L7 detection, and SENTINEL IDS"""
         components = {
             'drift': 0.0,
             'network': 0.0,
-            'threats': 0.0,  # Now includes L2-L7 layer scores
+            'threats': 0.0,  # Includes L2-L7 layer scores
             'energy': 0.0,
             'infrastructure': 0.0,
             'nftables': 0.0,
             'macsec': 0.0,
             'openflow': 0.0,
             'xdp': 0.0,
+            'sentinel': 0.0,  # HYDRA SENTINEL IDS contribution
         }
 
         # System drift (CPU, memory usage)
@@ -1101,7 +1209,10 @@ class QSecBitFortressAgent:
         else:
             components['xdp'] = 0.5  # Unknown
 
-        # Calculate weighted score
+        # SENTINEL IDS health (from HYDRA Bayesian pipeline)
+        components['sentinel'] = self.read_sentinel_score()
+
+        # Calculate weighted score (includes SENTINEL at 0.13 weight)
         score = (
             self.config.alpha * components['drift'] +
             self.config.beta * components['network'] +
@@ -1111,7 +1222,8 @@ class QSecBitFortressAgent:
             self.config.nftables_weight * components['nftables'] +
             self.config.macsec_weight * components['macsec'] +
             self.config.openflow_weight * components['openflow'] +
-            self.config.xdp_weight * components['xdp']
+            self.config.xdp_weight * components['xdp'] +
+            self.config.sentinel_weight * components['sentinel']
         )
 
         # Determine RAG status
@@ -1173,7 +1285,21 @@ class QSecBitFortressAgent:
                 'layer_scores': sample.layer_scores,
                 'recent_threats': sample.recent_threats,
                 'xdp_stats': sample.xdp_stats,
-                'uptime_seconds': int(time.time() - self.start_time)
+                'uptime_seconds': int(time.time() - self.start_time),
+                # Unified Threat Engine v5.3 additions
+                'engine': 'unified-v5.3',
+                'deployment_type': 'fortress',
+                'trend': self.calculate_trend(),
+                'sentinel_active': self._sentinel_score > 0.0,
+                'sentinel_score': sample.components.get('sentinel', 0.0),
+                'unified_weights': {
+                    'l2': self.config.l2_weight,
+                    'l3': self.config.l3_weight,
+                    'l4': self.config.l4_weight,
+                    'l5': self.config.l5_weight,
+                    'l7': self.config.l7_weight,
+                    'sentinel': self.config.sentinel_weight,
+                },
             }
             with open(STATS_FILE, 'w') as f:
                 json.dump(stats, f, indent=2)
@@ -2233,12 +2359,13 @@ class QSecBitFortressAgent:
                     self.save_wifi_status()
                     wifi_counter = 0
 
-                # Log detailed status
+                # Log detailed status with trend and SENTINEL
                 layer_summary = ' '.join([f"{k}={v:.2f}" for k, v in sample.layer_scores.items()])
+                sentinel_info = f" sentinel={sample.components.get('sentinel', 0):.2f}" if self._sentinel_score > 0.0 else ""
                 logger.info(
                     f"QSecBit: {sample.rag_status} score={sample.score:.3f} "
-                    f"threats={sample.threats_detected} layers=[{layer_summary}] "
-                    f"macsec={sample.macsec_status}"
+                    f"trend={self.calculate_trend()} threats={sample.threats_detected} "
+                    f"layers=[{layer_summary}]{sentinel_info}"
                 )
 
                 # Auto-block high-severity threats via XDP
@@ -2268,7 +2395,7 @@ class QSecBitFortressAgent:
         global _agent_instance
         _agent_instance = self
 
-        logger.info("Starting QSecBit Fortress Agent v5.2.0...")
+        logger.info("Starting QSecBit Fortress Agent v5.3.0...")
         self.running.set()
 
         # Start monitoring loop

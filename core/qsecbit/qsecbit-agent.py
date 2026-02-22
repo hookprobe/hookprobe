@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 qsecbit-agent.py - HookProbe Qsecbit Monitoring Daemon
-Version: 5.0.0
+Version: 5.1.0
 License: Proprietary - see LICENSE in this directory
 
 Long-running daemon for:
 - Energy monitoring (RAPL + per-PID tracking)
 - NIC monitoring and XDP/eBPF DDoS mitigation
 - Anomaly scoring (Qsecbit cyber resilience metric)
+- Unified Threat Engine with L2-L7 layer detection
+- SENTINEL IDS integration (Fortress/Nexus)
 - Telemetry export to VictoriaMetrics/ClickHouse
 """
 
@@ -66,6 +68,13 @@ try:
     THREAT_TYPES_AVAILABLE = True
 except ImportError:
     THREAT_TYPES_AVAILABLE = False
+
+# Unified Threat Engine (v5.1+ upgrade path)
+try:
+    from unified_engine import UnifiedThreatEngine, UnifiedEngineConfig, DeploymentType
+    UNIFIED_ENGINE_AVAILABLE = True
+except ImportError:
+    UNIFIED_ENGINE_AVAILABLE = False
 
 # ============================================================================
 # CONFIGURATION
@@ -143,14 +152,21 @@ def run_health_server(port: int = 8888):
 class HookProbeAgent:
     """Main HookProbe monitoring agent with E2E integration"""
 
-    def __init__(self, config_file: Optional[Path] = None):
+    def __init__(self, config_file: Optional[Path] = None,
+                 use_unified: bool = False,
+                 deployment_type: str = "guardian"):
         self.config_file = config_file
         self.running = Event()
         self.start_time = time.time()
         self.last_metrics: Dict = {}
 
+        # Engine mode
+        self.use_unified = use_unified and UNIFIED_ENGINE_AVAILABLE
+        self.deployment_type_str = deployment_type
+
         # Core Components
         self.qsecbit: Optional[QsecbitAnalyzer] = None
+        self.unified_engine: Optional['UnifiedThreatEngine'] = None
         self.energy_monitor: Optional[EnergyMonitor] = None
         self.xdp_manager: Optional[XDPManager] = None
         self.nic_detector: Optional[NICDetector] = None
@@ -170,7 +186,7 @@ class HookProbeAgent:
         self.dsm_enabled = os.getenv("DSM_ENABLED", "false").lower() == "true"
         self.mesh_enabled = os.getenv("MESH_ENABLED", "false").lower() == "true"
         self.deployment_role = self._detect_deployment_role()
-        self.node_id = os.getenv("NODE_ID", f"guardian-{os.getpid()}")
+        self.node_id = os.getenv("NODE_ID", f"{deployment_type}-{os.getpid()}")
 
         # Signal handling
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -241,23 +257,39 @@ class HookProbeAgent:
             if not self.xdp_enabled:
                 logger.info("XDP disabled (set XDP_ENABLED=true to enable)")
 
-        # Qsecbit Analyzer — requires baseline telemetry parameters
-        try:
-            qsecbit_config = QsecbitConfig()
-            # Default baseline: 4-dimensional system telemetry (CPU, Mem, Net, Disk)
-            baseline_mu = np.array([0.1, 0.2, 0.15, 0.33])
-            baseline_cov = np.eye(4) * 0.02
-            quantum_anchor = 6.144  # Baseline system entropy
-            self.qsecbit = QsecbitAnalyzer(
-                baseline_mu=baseline_mu,
-                baseline_cov=baseline_cov,
-                quantum_anchor=quantum_anchor,
-                config=qsecbit_config,
-            )
-            logger.info("Qsecbit analyzer initialized")
-        except Exception as e:
-            logger.error(f"Qsecbit initialization failed: {e}")
-            self.qsecbit = None
+        # Qsecbit Engine — Unified (v5.1+) or Legacy
+        if self.use_unified:
+            try:
+                deploy_type = DeploymentType[self.deployment_type_str.upper()]
+                config = UnifiedEngineConfig(
+                    deployment_type=deploy_type,
+                    enable_xdp=self.xdp_enabled,
+                    enable_energy_monitoring=self.energy_monitor is not None,
+                )
+                self.unified_engine = UnifiedThreatEngine(config)
+                logger.info(f"Unified Threat Engine initialized ({deploy_type.value})")
+                logger.info(f"  Weights: {self.unified_engine.weights}")
+            except Exception as e:
+                logger.error(f"Unified engine init failed, falling back to legacy: {e}")
+                self.use_unified = False
+
+        if not self.use_unified:
+            try:
+                qsecbit_config = QsecbitConfig()
+                # Default baseline: 4-dimensional system telemetry (CPU, Mem, Net, Disk)
+                baseline_mu = np.array([0.1, 0.2, 0.15, 0.33])
+                baseline_cov = np.eye(4) * 0.02
+                quantum_anchor = 6.144  # Baseline system entropy
+                self.qsecbit = QsecbitAnalyzer(
+                    baseline_mu=baseline_mu,
+                    baseline_cov=baseline_cov,
+                    quantum_anchor=quantum_anchor,
+                    config=qsecbit_config,
+                )
+                logger.info("Qsecbit legacy analyzer initialized")
+            except Exception as e:
+                logger.error(f"Qsecbit initialization failed: {e}")
+                self.qsecbit = None
 
         # Initialize E2E integration components
         self._initialize_e2e_components()
@@ -345,8 +377,9 @@ class HookProbeAgent:
             "uptime": int(time.time() - self.start_time)
         }
 
-        # Energy metrics
-        if self.energy_monitor:
+        # Energy metrics (only collected separately in legacy mode;
+        # unified engine handles energy internally)
+        if self.energy_monitor and not self.use_unified:
             try:
                 snapshot = self.energy_monitor.capture_snapshot()
                 if snapshot:
@@ -369,11 +402,20 @@ class HookProbeAgent:
             except Exception as e:
                 logger.error(f"XDP metrics collection failed: {e}")
 
-        # Qsecbit analysis
-        if self.qsecbit:
+        # Qsecbit analysis — unified or legacy
+        if self.use_unified and self.unified_engine:
+            try:
+                score = self.unified_engine.detect()
+                metrics["qsecbit"] = score.to_dict()
+                metrics["qsecbit"]["engine"] = "unified"
+                metrics["qsecbit"]["deployment_type"] = self.deployment_type_str
+            except Exception as e:
+                logger.error(f"Unified engine detection failed: {e}")
+        elif self.qsecbit:
             try:
                 score = self.qsecbit.detect_threats()
                 metrics["qsecbit"] = score.to_dict()
+                metrics["qsecbit"]["engine"] = "legacy"
             except Exception as e:
                 logger.error(f"Qsecbit analysis failed: {e}")
 
@@ -636,7 +678,8 @@ class HookProbeAgent:
 
     def start(self):
         """Start the agent"""
-        logger.info("Starting HookProbe agent...")
+        engine_mode = "unified" if self.use_unified else "legacy"
+        logger.info(f"Starting HookProbe agent (engine={engine_mode}, tier={self.deployment_type_str})...")
         logger.info(f"Base directory: {BASE_DIR}")
         logger.info(f"Config directory: {CONFIG_DIR}")
 
@@ -719,6 +762,18 @@ def main():
         default="server",
         help="Deployment role (server or endpoint)"
     )
+    parser.add_argument(
+        "--unified",
+        action="store_true",
+        default=os.getenv("QSECBIT_UNIFIED", "false").lower() == "true",
+        help="Use Unified Threat Engine (v5.1+) instead of legacy analyzer"
+    )
+    parser.add_argument(
+        "--deployment-type",
+        choices=["guardian", "fortress", "nexus"],
+        default=os.getenv("DEPLOYMENT_TYPE", "guardian"),
+        help="Product tier (affects scoring weights)"
+    )
 
     args = parser.parse_args()
 
@@ -729,9 +784,20 @@ def main():
     if args.role:
         os.environ["DEPLOYMENT_ROLE"] = args.role
 
+    # Log engine selection
+    if args.unified:
+        if UNIFIED_ENGINE_AVAILABLE:
+            logger.info(f"Unified Threat Engine requested ({args.deployment_type})")
+        else:
+            logger.warning("Unified engine requested but not available, using legacy")
+
     # Create and start agent
     global agent
-    agent = HookProbeAgent(config_file=args.config)
+    agent = HookProbeAgent(
+        config_file=args.config,
+        use_unified=args.unified,
+        deployment_type=args.deployment_type,
+    )
 
     try:
         agent.start()
