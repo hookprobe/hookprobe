@@ -96,18 +96,23 @@ setup_wan_interface() {
         return 0
     fi
 
-    log_info "Setting up WAN interface: $wan_iface"
+    log_info "Setting up WAN interface: $wan_iface (backup, eth0 is primary)"
 
     # Ensure NetworkManager manages wlan0 for WAN connectivity
     if command -v nmcli &>/dev/null; then
         nmcli device set "$wan_iface" managed yes 2>/dev/null || true
     fi
 
-    # Bring interface up
-    ensure_interface_up "$wan_iface" 15
-
-    # Write state
-    echo "$wan_iface" > /run/guardian/wan_interface 2>/dev/null || true
+    # Try to bring interface up - non-fatal since eth0 is the primary WAN.
+    # WiFi WAN only works when pre-configured with wpa_supplicant/NM profile.
+    if ensure_interface_up "$wan_iface" 15; then
+        log_info "WiFi WAN $wan_iface is up (backup path active)"
+        echo "$wan_iface" > /run/guardian/wan_interface 2>/dev/null || true
+    else
+        log_info "WiFi WAN $wan_iface not associated (no upstream WiFi configured)"
+        log_info "Using eth0 as primary WAN - WiFi WAN available when configured"
+        echo "eth0" > /run/guardian/wan_interface 2>/dev/null || true
+    fi
 }
 
 # Determine AP interface
