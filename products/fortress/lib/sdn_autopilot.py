@@ -101,21 +101,15 @@ def _is_mac_blocked(mac: str) -> bool:
 # =============================================================================
 
 FINGERPRINT_DATABASE = {
-    # Apple macOS (laptops/desktops) - various versions
-    "1,3,6,15,119,252": {"os": "macOS", "category": "laptop", "confidence": 0.95},
-    "1,121,3,6,15,119,252": {"os": "macOS Monterey+", "category": "laptop", "confidence": 0.98},
+    # Apple macOS/iOS/iPadOS - ambiguous fingerprints (macOS and iOS share many patterns)
+    # Disambiguation requires hostname/mDNS signals (handled by Fingerbank module)
+    "1,3,6,15,119,252": {"os": "Apple (macOS/iOS)", "category": "laptop", "confidence": 0.95},
+    "1,121,3,6,15,119,252": {"os": "Apple (macOS 12+/iOS 14+)", "category": "laptop", "confidence": 0.98},
     "1,121,3,6,15,108,114,119,162,252,95,44,46": {"os": "macOS Sonoma/Sequoia", "category": "laptop", "confidence": 0.98},
-    "1,121,3,6,15,119,252,95,44,46": {"os": "macOS Ventura", "category": "laptop", "confidence": 0.98},
-    "1,3,6,15,119,95,252,44,46": {"os": "macOS Big Sur", "category": "laptop", "confidence": 0.96},
-
-    # Apple iOS (iPhones/iPads) - comprehensive list for randomized MACs
-    "1,121,3,6,15,119,252": {"os": "iOS 14+", "category": "phone", "confidence": 0.98},
-    "1,3,6,15,119,252": {"os": "iOS/iPadOS", "category": "phone", "confidence": 0.95},
+    "1,121,3,6,15,119,252,95,44,46": {"os": "Apple (macOS Ventura/iOS 17+)", "category": "phone", "confidence": 0.98},
+    "1,3,6,15,119,95,252,44,46": {"os": "Apple (macOS Big Sur/iOS 15)", "category": "phone", "confidence": 0.96},
     "1,121,3,6,15,119,252,95": {"os": "iOS 16+", "category": "phone", "confidence": 0.98},
-    "1,121,3,6,15,119,252,95,44,46": {"os": "iOS 17+", "category": "phone", "confidence": 0.99},
-    "1,3,6,15,119,95,252,44,46": {"os": "iOS 15", "category": "phone", "confidence": 0.97},
     "1,121,3,6,15,108,114,119,252": {"os": "iPadOS 17+", "category": "tablet", "confidence": 0.98},
-    "1,3,6,15,119,95,252": {"os": "iOS/iPadOS", "category": "phone", "confidence": 0.96},
     # iOS uses various Option 55 combinations - catch more patterns
     "1,3,6,15,119": {"os": "iOS (minimal)", "category": "phone", "confidence": 0.85},
     "1,121,3,6,15,119": {"os": "iOS 14+", "category": "phone", "confidence": 0.90},
