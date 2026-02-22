@@ -44,47 +44,16 @@
 name: hookprobe-ids
 
 volumes:
-  clickhouse_data:
-    name: ids-clickhouse-data
-  clickhouse_logs:
-    name: ids-clickhouse-logs
   hydra_models:
     name: ids-hydra-models
 
 services:
   # ============================================================================
-  # DATA TIER - Event Analytics Database
+  # DATA TIER - Uses AIOCHI ClickHouse (aiochi-clickhouse on ports 8123/9000)
+  # Database: hookprobe_ids, User: ids
   # ============================================================================
-
-  clickhouse:
-    image: docker.io/clickhouse/clickhouse-server:24.8
-    container_name: ids-clickhouse
-    hostname: ids-clickhouse
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - clickhouse_logs:/var/log/clickhouse-server
-      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
-    environment:
-      CLICKHOUSE_DB: hookprobe_ids
-      CLICKHOUSE_USER: ids
-      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8123/ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    labels:
-      - "hookprobe.service=clickhouse"
-      - "hookprobe.vrf=hp-ids"
-      - "hookprobe.purpose=Event analytics database"
+  # NOTE: ClickHouse service disabled - using shared AIOCHI ClickHouse instance.
+  # Schema initialized via: podman exec aiochi-clickhouse clickhouse-client < init.sql
 
   # ============================================================================
   # CAPTURE + CLASSIFICATION - Inspector (Python AF_PACKET)
@@ -108,9 +77,6 @@ services:
       CLICKHOUSE_USER: ids
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
     command: ["--interface", "dummy-mirror", "--stats-interval", "10", "--flush-interval", "30"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 30s
@@ -140,9 +106,6 @@ services:
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 30s
@@ -183,9 +146,6 @@ services:
       XDP_INTERFACE: "dummy-mirror"
       SYNC_INTERVAL: "3600"
     command: ["python3", "-u", "feed_sync.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -225,9 +185,6 @@ services:
       XDP_INTERFACE: "dummy-mirror"
       DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
     command: ["python3", "-u", "event_consumer.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -275,9 +232,6 @@ services:
       RDAP_RATE_LIMIT: "10"
       ENRICHER_INTERVAL: "30"
     command: ["python3", "-u", "rdap_enricher.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -318,9 +272,6 @@ services:
       FEATURE_WINDOW: "300"
       MIN_PACKETS: "10"
     command: ["python3", "-u", "feature_extractor.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -362,9 +313,6 @@ services:
       BASELINE_HOURS: "24"
       RETRAIN_HOURS: "168"
     command: ["python3", "-u", "anomaly_detector.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -404,9 +352,6 @@ services:
       MIN_EVENTS: "3"
       MAX_TRACKED_IPS: "5000"
     command: ["python3", "-u", "baseline_profiler.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -447,9 +392,6 @@ services:
       CVE_DB_PATH: "/app/models/cve.db"
       CVE_SCORING_INTERVAL: "300"
     command: ["python3", "-u", "cve_enricher.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -486,9 +428,6 @@ services:
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
       TEMPORAL_INTERVAL: "600"
     command: ["python3", "-u", "temporal_memory.py"]
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
       interval: 60s
@@ -521,8 +460,6 @@ services:
       - hydra_models:/app/models
     command: ["python3", "-u", "sentinel_engine.py"]
     depends_on:
-      clickhouse:
-        condition: service_healthy
       hydra-profiler:
         condition: service_started
       hydra-cve:
@@ -559,8 +496,6 @@ services:
       LIFECYCLE_PH_THRESHOLD: "0.15"
     command: ["python3", "-u", "sentinel_lifecycle.py"]
     depends_on:
-      clickhouse:
-        condition: service_healthy
       hydra-sentinel:
         condition: service_started
     healthcheck:

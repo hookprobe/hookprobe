@@ -2,14 +2,37 @@
 <!--
   HookProbe IDS ClickHouse Users Configuration
 
-  Note: The 'ids' user is created automatically via CLICKHOUSE_USER/CLICKHOUSE_PASSWORD
-  environment variables in podman-compose. Do NOT define it here to avoid conflicts.
-
   Users defined here:
-    - readonly: Read-only user for dashboards (password stored as SHA-256 hash)
+    - default: Entrypoint bootstrap user (localhost only, no password)
+    - ids: Main application user with password
+    - readonly: Read-only user for dashboards
 -->
 <clickhouse>
     <users>
+        <!-- Default user for entrypoint bootstrap (localhost only) -->
+        <default>
+            <password></password>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </default>
+
+        <!-- Main IDS application user -->
+        <ids>
+            <password>hookprobe_ids_2026</password>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </ids>
+
         <!-- Read-only Dashboard User -->
         <readonly>
             <password_sha256_hex>05b1ee6d42cf8563df59d880657a299b35d59e6be071f157bafcb030faf6988a</password_sha256_hex>
