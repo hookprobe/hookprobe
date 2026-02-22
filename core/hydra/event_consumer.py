@@ -192,7 +192,7 @@ def ch_query(query: str, data: str = '') -> Optional[str]:
 
 def flush_events():
     """Flush event buffer to ClickHouse."""
-    global event_buffer, last_flush, drop_counts
+    global event_buffer, last_flush
 
     if not event_buffer:
         last_flush = time.monotonic()
@@ -297,7 +297,6 @@ def run_ringbuf_consumer():
     - Consumer page (1 page): consumer_pos at offset 0 (writable)
     - Data pages (N pages): producer_pos at offset 0 (read-only), then ring data
     """
-    global event_buffer
 
     try:
         from bpf_map_ops import get_bpf_ops
@@ -426,7 +425,6 @@ def run_poll_consumer():
 
     Generates synthetic events from BPF map deltas when RINGBUF isn't available.
     """
-    global event_buffer
 
     logger.info("Starting poll-mode consumer (reads XDP stats maps)...")
 
