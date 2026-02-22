@@ -347,6 +347,13 @@ install_usb_wifi_drivers() {
                 modprobe "$driver_module" 2>/dev/null || true
                 sleep 2
                 drivers_installed=$((drivers_installed + 1))
+
+                # Ensure module loads on boot (udev may not auto-detect all USB IDs)
+                local modules_file="/etc/modules-load.d/hookprobe-wifi.conf"
+                if [ ! -f "$modules_file" ] || ! grep -q "$driver_module" "$modules_file" 2>/dev/null; then
+                    echo "$driver_module" >> "$modules_file"
+                    log_info "Added $driver_module to $modules_file for boot loading"
+                fi
             else
                 log_warn "Failed to build driver $driver_module"
             fi
