@@ -314,14 +314,14 @@ classify_wan_lan_interfaces() {
     # This port is recommended for connecting admin workstation.
     #
     # In flat bridge mode, all ports share the same L2 segment.
-    # The admin port is just a recommendation for where to connect
-    # the admin workstation for initial setup.
+    # The admin port is INFORMATIONAL ONLY - it stays in the LAN
+    # list so it is included in the OVS bridge and netplan config.
     #
     # Examples:
     #   eth0 (WAN) + WiFi only        → No admin port (use WiFi)
     #   eth0 (WAN) + eth1             → No admin port (eth1 needed for LAN)
-    #   eth0 (WAN) + eth1 + eth2      → eth2 = Admin, eth1 = General LAN
-    #   eth0 (WAN) + eth1 + eth2 + eth3 → eth3 = Admin, eth1,eth2 = General LAN
+    #   eth0 (WAN) + eth1 + eth2      → eth2 = Admin (recommended), all on bridge
+    #   eth0 (WAN) + eth1 + eth2 + eth3 → eth3 = Admin (recommended), all on bridge
 
     local mgmt_iface=""
     local lan_iface_count
@@ -331,20 +331,15 @@ classify_wan_lan_interfaces() {
         # Get the last LAN interface (by PCI order, which is already sorted)
         mgmt_iface=$(echo "$NET_LAN_IFACES" | awk '{print $NF}')
 
-        # Remove admin interface from general LAN list
-        local new_lan_ifaces=""
-        for iface in $NET_LAN_IFACES; do
-            if [ "$iface" != "$mgmt_iface" ]; then
-                new_lan_ifaces="$new_lan_ifaces $iface"
-            fi
-        done
-        NET_LAN_IFACES=$(echo "$new_lan_ifaces" | xargs)
+        # NOTE: In flat bridge mode, the admin port stays in NET_LAN_IFACES.
+        # All LAN ports are on the same L2 segment - the admin designation
+        # is purely a recommendation for where to connect the admin workstation.
 
         log_section "Admin Console Port"
         log_success "Admin Port: $mgmt_iface (recommended for admin workstation)"
         log_info "  Connect admin workstation here for initial setup"
         log_info "  Access dashboard at: https://10.200.0.1:8443"
-        log_info "  General LAN ports: ${NET_LAN_IFACES:-none}"
+        log_info "  All LAN ports: ${NET_LAN_IFACES}"
     else
         log_info "No dedicated admin port (need 2+ LAN interfaces)"
         log_info "  Dashboard access via: any LAN port or WiFi at 10.200.0.1:8443"
