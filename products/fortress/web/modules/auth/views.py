@@ -89,7 +89,9 @@ def login():
             # Security: Validate redirect target to prevent open redirect attacks
             next_page = request.args.get('next')
             if next_page and is_safe_redirect_url(next_page):
-                return redirect(next_page)
+                # Reconstruct from parsed path only (strips scheme/netloc)
+                safe_path = urllib.parse.urlparse(next_page).path
+                return redirect(safe_path)
             return redirect(url_for('dashboard.index'))
         else:
             _failed_logins[client_ip]['count'] += 1

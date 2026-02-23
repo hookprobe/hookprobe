@@ -714,7 +714,7 @@ profile static_eth0
             import string
             alphabet = string.ascii_letters + string.digits
             password = ''.join(secrets.choice(alphabet) for _ in range(16))
-            logger.info("Generated random offline WiFi password: %s", password)
+            logger.info("Generated random offline WiFi password (length=%d)", len(password))
 
         # Determine band and mode based on channel
         if channel <= 14:
