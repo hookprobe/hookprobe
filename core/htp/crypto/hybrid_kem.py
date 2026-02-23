@@ -156,7 +156,7 @@ class HybridKEM:
             warnings.warn(
                 "Kyber512 unavailable: HTP running in classical-only mode. "
                 "Install pqc-kyber for post-quantum protection.",
-                SecurityWarning, stacklevel=2
+                RuntimeWarning, stacklevel=2
             )
             kyber_ciphertext = b'\x00' * 768  # Null signals classical-only
             kyber_shared = hashlib.sha256(
