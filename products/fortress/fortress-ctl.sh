@@ -775,13 +775,16 @@ openrouter_set_key() {
 EOF
     chmod 600 "$OPENROUTER_CONFIG"
 
-    # Also update fortress.conf for container environment variable
+    # Write API key to secure env file for container environment variable
+    # (not in fortress.conf which may be group-readable)
+    local env_file="${CONFIG_DIR}/secrets/openrouter.env"
+    mkdir -p "${CONFIG_DIR}/secrets"
+    echo "OPENROUTER_API_KEY=\"${api_key}\"" > "$env_file"
+    chmod 600 "$env_file"
+
+    # Remove from fortress.conf if present (legacy cleanup)
     if [ -f "${CONFIG_DIR}/fortress.conf" ]; then
-        if grep -q "^OPENROUTER_API_KEY=" "${CONFIG_DIR}/fortress.conf"; then
-            sed -i "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=\"${api_key}\"|" "${CONFIG_DIR}/fortress.conf"
-        else
-            echo "OPENROUTER_API_KEY=\"${api_key}\"" >> "${CONFIG_DIR}/fortress.conf"
-        fi
+        sed -i '/^OPENROUTER_API_KEY=/d' "${CONFIG_DIR}/fortress.conf"
     fi
 
     log_info "OpenRouter API key configured"

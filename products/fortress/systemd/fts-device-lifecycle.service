@@ -13,13 +13,10 @@ Type=simple
 User=root
 Group=root
 
-# Environment
+# Load base config, then host-specific overrides (container IPs vs DNS names)
 Environment=PYTHONPATH=/opt/hookprobe/fortress/lib
-Environment=DATABASE_HOST=172.20.200.10
-Environment=DATABASE_PORT=5432
-Environment=DATABASE_NAME=fortress
-Environment=DATABASE_USER=fortress
 EnvironmentFile=-/etc/hookprobe/fortress.conf
+EnvironmentFile=-/etc/hookprobe/host-services.env
 
 # Run the device lifecycle daemon
 ExecStart=/usr/bin/python3 -m device_lifecycle --daemon --verbose
