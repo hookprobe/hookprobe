@@ -1060,22 +1060,40 @@ domain-needed
             logger.warning("Single WiFi interface mode - cannot do simultaneous AP + upstream")
             wan_iface = self.config.fallback_wan_interface
 
-        # Create wpa_supplicant config
-        wpa_config = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=US
-
-network={{
-    ssid="{ssid}"
-    psk="{password}"
-    key_mgmt=WPA-PSK
-}}
-"""
+        # Create wpa_supplicant config using wpa_passphrase to hash PSK
+        # (CWE-312: avoid plaintext credentials on disk)
+        import subprocess as _sub
+        import tempfile as _tmpf
 
         try:
-            # Write config
-            temp_path = "/tmp/wpa_supplicant_upstream.conf"
-            with open(temp_path, 'w') as f:
+            # Use wpa_passphrase to generate hashed PSK (no plaintext on disk)
+            result = _sub.run(
+                ["wpa_passphrase", ssid, password],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                wpa_config = (
+                    "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
+                    "update_config=1\ncountry=US\n\n" + result.stdout
+                )
+            else:
+                # Fallback: inline PSK (sanitize special chars)
+                safe_ssid = ssid.replace('"', '\\"').replace('\n', '')
+                safe_pass = password.replace('"', '\\"').replace('\n', '')
+                wpa_config = (
+                    "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
+                    f"update_config=1\ncountry=US\n\n"
+                    f'network={{\n    ssid="{safe_ssid}"\n'
+                    f'    psk="{safe_pass}"\n    key_mgmt=WPA-PSK\n}}\n'
+                )
+
+            # Write config with restricted permissions (CWE-732)
+            os.makedirs("/run/guardian", mode=0o700, exist_ok=True)
+            fd, temp_path = _tmpf.mkstemp(
+                prefix='wpa_', suffix='.conf', dir='/run/guardian'
+            )
+            os.chmod(temp_path, 0o600)
+            with os.fdopen(fd, 'w') as f:
                 f.write(wpa_config)
 
             # If using Ethernet, just check connectivity
