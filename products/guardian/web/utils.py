@@ -5,6 +5,7 @@ Shared helper functions used across modules
 import json
 import logging
 import os
+import re
 import subprocess
 import shlex
 from functools import wraps
@@ -120,9 +121,15 @@ def get_container_status(container_name):
     return {'name': container_name, 'running': False, 'status': 'Not found'}
 
 
+_IFACE_RE = re.compile(r'^[a-zA-Z0-9_.-]{1,16}$')
+
+
 def get_network_stats(interface):
     """Get network interface statistics."""
     stats = {'rx_bytes': 0, 'tx_bytes': 0, 'rx_packets': 0, 'tx_packets': 0}
+    # Validate interface name to prevent path traversal (CWE-22)
+    if not _IFACE_RE.match(interface):
+        return stats
     try:
         with open(f'/sys/class/net/{interface}/statistics/rx_bytes', 'r') as f:
             stats['rx_bytes'] = int(f.read().strip())

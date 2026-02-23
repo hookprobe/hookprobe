@@ -77,9 +77,9 @@ except ImportError:
 class MeshConfig:
     """Configuration for mesh integration."""
 
-    # Neural seed - MUST be shared across all mesh nodes
-    # In production, this would be provisioned during deployment
-    neuro_seed: bytes = b"HookProbe-Mesh-Seed-v5.0-Cortex"
+    # Neural seed - MUST be provisioned per-device during setup.sh
+    # Read from /etc/hookprobe/mesh_seed (generated at install time)
+    neuro_seed: bytes = b""
 
     # Bootstrap peers for initial mesh connection
     bootstrap_peers: List[str] = None
@@ -105,6 +105,24 @@ class MeshConfig:
     def __post_init__(self):
         if self.bootstrap_peers is None:
             self.bootstrap_peers = []
+        # Load seed from provisioned file if not explicitly set
+        if not self.neuro_seed:
+            seed_path = Path("/etc/hookprobe/mesh_seed")
+            if seed_path.exists():
+                try:
+                    seed_hex = seed_path.read_text().strip()
+                    self.neuro_seed = bytes.fromhex(seed_hex)
+                except (ValueError, OSError) as e:
+                    logging.warning("Failed to load mesh seed: %s", e)
+            if not self.neuro_seed:
+                # Generate ephemeral seed (not persisted - mesh won't interop)
+                logging.warning(
+                    "No provisioned mesh seed found at %s. "
+                    "Using ephemeral seed - mesh authentication will not "
+                    "interoperate with other nodes. Run setup.sh to provision.",
+                    seed_path
+                )
+                self.neuro_seed = os.urandom(32)
 
 
 class GuardianMeshAgent:

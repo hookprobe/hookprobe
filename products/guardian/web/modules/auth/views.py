@@ -18,11 +18,13 @@ logger = logging.getLogger(__name__)
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
 AUTH_FILE = '/etc/hookprobe/guardian_auth.json'
+SETUP_TOKEN_FILE = '/etc/hookprobe/guardian_setup_token'
 MAX_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300  # 5 minutes
 
-# Track failed attempts per IP
+# Track failed attempts per IP (thread-safe)
 _failed_attempts = {}
+_failed_attempts_lock = __import__('threading').Lock()
 
 
 def _load_auth():
@@ -53,29 +55,41 @@ def _verify_pin(pin, stored_salt, stored_hash):
 
 def _check_lockout(client_ip):
     """Check if client IP is locked out due to failed attempts."""
-    info = _failed_attempts.get(client_ip)
-    if not info:
+    with _failed_attempts_lock:
+        info = _failed_attempts.get(client_ip)
+        if not info:
+            return False
+        if info['count'] >= MAX_ATTEMPTS:
+            elapsed = time.time() - info['last_attempt']
+            if elapsed < LOCKOUT_SECONDS:
+                return True
+            # Lockout expired, reset
+            del _failed_attempts[client_ip]
         return False
-    if info['count'] >= MAX_ATTEMPTS:
-        elapsed = time.time() - info['last_attempt']
-        if elapsed < LOCKOUT_SECONDS:
-            return True
-        # Lockout expired, reset
-        del _failed_attempts[client_ip]
-    return False
 
 
 def _record_failure(client_ip):
     """Record a failed login attempt."""
-    info = _failed_attempts.get(client_ip, {'count': 0, 'last_attempt': 0})
-    info['count'] += 1
-    info['last_attempt'] = time.time()
-    _failed_attempts[client_ip] = info
+    with _failed_attempts_lock:
+        info = _failed_attempts.get(client_ip, {'count': 0, 'last_attempt': 0})
+        info['count'] += 1
+        info['last_attempt'] = time.time()
+        _failed_attempts[client_ip] = info
 
 
 def _clear_failures(client_ip):
     """Clear failed attempts on successful login."""
-    _failed_attempts.pop(client_ip, None)
+    with _failed_attempts_lock:
+        _failed_attempts.pop(client_ip, None)
+
+
+def _load_setup_token():
+    """Load setup token for first-time PIN enrollment."""
+    try:
+        with open(SETUP_TOKEN_FILE, 'r') as f:
+            return f.read().strip()
+    except (IOError, OSError):
+        return None
 
 
 def is_auth_configured():
@@ -113,7 +127,24 @@ def login():
 
     auth = _load_auth()
     if not auth or 'pin_hash' not in auth:
-        # First-time setup: set the PIN
+        # First-time setup: require setup token for enrollment (CWE-284)
+        setup_token = data.get('setup_token', '')
+        stored_token = _load_setup_token()
+        if stored_token:
+            if not setup_token or not secrets.compare_digest(setup_token, stored_token):
+                return jsonify({
+                    'success': False,
+                    'error': 'Setup token required for first-time PIN creation',
+                    'first_time_setup': True
+                }), 403
+            # Consume the one-time token
+            try:
+                os.unlink(SETUP_TOKEN_FILE)
+            except OSError:
+                pass
+        else:
+            logger.warning("No setup token found - first-time PIN setup without token")
+
         salt, pin_hash = _hash_pin(pin)
         auth_data = {
             'pin_hash': pin_hash,

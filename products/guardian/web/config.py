@@ -9,9 +9,13 @@ class Config:
     """Base configuration."""
     SECRET_KEY = os.environ.get('GUARDIAN_SECRET_KEY') or secrets.token_hex(32)
 
-    # Session cookie security (CWE-614, CWE-1004)
+    # Session cookie security (CWE-614, CWE-1004, CWE-352)
     SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SAMESITE = 'Strict'  # CSRF protection
+    SESSION_COOKIE_SECURE = os.environ.get(
+        'GUARDIAN_TLS', 'false'
+    ).lower() == 'true'  # Set True when TLS enabled
+    PERMANENT_SESSION_LIFETIME = 28800  # 8 hours (was unlimited)
 
     # Guardian paths
     GUARDIAN_BASE = '/opt/hookprobe/guardian'
