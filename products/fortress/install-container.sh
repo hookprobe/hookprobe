@@ -4765,6 +4765,8 @@ Environment=LAN_BASE_IP=10.200.0.1
 Environment=LAN_SUBNET_MASK=${LAN_SUBNET_MASK:-24}
 # Load persisted config for NETWORK_MODE (sourced from fortress.conf)
 EnvironmentFile=-/etc/hookprobe/fortress.conf
+# Load API keys from secure env files (not in fortress.conf)
+EnvironmentFile=-/etc/hookprobe/secrets/openrouter.env
 
 # Wait for OVS to be fully ready
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 30); do ovs-vsctl show >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
