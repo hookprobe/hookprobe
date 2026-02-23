@@ -709,7 +709,12 @@ profile static_eth0
     ) -> str:
         """Generate hostapd configuration with dynamic channel"""
         ssid = ssid or self.config.default_ssid
-        password = password or "hookprobe123"  # Default password
+        if not password:
+            import secrets
+            import string
+            alphabet = string.ascii_letters + string.digits
+            password = ''.join(secrets.choice(alphabet) for _ in range(16))
+            logger.info("Generated random offline WiFi password: %s", password)
 
         # Determine band and mode based on channel
         if channel <= 14:

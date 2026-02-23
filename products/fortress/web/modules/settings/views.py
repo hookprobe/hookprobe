@@ -170,6 +170,14 @@ def api_get_config():
     return jsonify({'success': True, 'config': get_system_config()})
 
 
+_ALLOWED_CONFIG_KEYS = frozenset({
+    'wifi_ssid', 'wifi_password', 'wifi_channel', 'wifi_band',
+    'network_size', 'gateway_ip', 'dns_upstream',
+    'lte_enabled', 'lte_apn',
+    'auto_update', 'timezone', 'regulatory_domain',
+})
+
+
 @settings_bp.route('/api/config', methods=['POST'])
 @login_required
 @admin_required
@@ -180,8 +188,18 @@ def api_save_config():
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
 
+        # Whitelist allowed config keys to prevent injection of arbitrary settings
+        unknown_keys = set(data.keys()) - _ALLOWED_CONFIG_KEYS
+        if unknown_keys:
+            return jsonify({
+                'success': False,
+                'error': f'Unknown config keys: {", ".join(sorted(unknown_keys))}'
+            }), 400
+
         config = get_system_config()
-        config.update(data)
+        for key in _ALLOWED_CONFIG_KEYS:
+            if key in data:
+                config[key] = data[key]
         save_system_config(config)
 
         return jsonify({'success': True, 'message': 'Configuration saved'})

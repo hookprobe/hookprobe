@@ -1163,6 +1163,7 @@ except ImportError:
 
 @api_bp.route('/v1/alerts', methods=['POST'])
 @login_required
+@admin_required
 def receive_nexus_alert():
     """
     Receive security alerts from Nexus Purple Team.

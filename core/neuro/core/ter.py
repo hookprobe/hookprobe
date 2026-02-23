@@ -31,10 +31,15 @@ class TER:
     chain_hash: int       # 2 bytes (CRC16)
 
     def __post_init__(self):
-        assert len(self.h_entropy) == 32, "H_Entropy must be 32 bytes"
-        assert len(self.h_integrity) == 20, "H_Integrity must be 20 bytes"
-        assert 0 <= self.sequence <= 65535, "Sequence must fit in 2 bytes"
-        assert 0 <= self.chain_hash <= 65535, "Chain_Hash must fit in 2 bytes"
+        # Use explicit raises instead of assert (asserts disabled under python -O)
+        if len(self.h_entropy) != 32:
+            raise ValueError(f"H_Entropy must be 32 bytes, got {len(self.h_entropy)}")
+        if len(self.h_integrity) != 20:
+            raise ValueError(f"H_Integrity must be 20 bytes, got {len(self.h_integrity)}")
+        if not (0 <= self.sequence <= 65535):
+            raise ValueError(f"Sequence must fit in 2 bytes (0-65535), got {self.sequence}")
+        if not (0 <= self.chain_hash <= 65535):
+            raise ValueError(f"Chain_Hash must fit in 2 bytes (0-65535), got {self.chain_hash}")
 
     def to_bytes(self) -> bytes:
         """Serialize TER to 64 bytes."""
@@ -50,7 +55,8 @@ class TER:
     @classmethod
     def from_bytes(cls, data: bytes) -> 'TER':
         """Deserialize TER from 64 bytes."""
-        assert len(data) == 64, "TER must be exactly 64 bytes"
+        if len(data) != 64:
+            raise ValueError(f"TER must be exactly 64 bytes, got {len(data)}")
 
         h_entropy, h_integrity, timestamp, sequence, chain_hash = struct.unpack(
             '<32s20sQHH',
@@ -300,7 +306,9 @@ class TERValidator:
 
 
 def _calculate_shannon_entropy(data: bytes) -> float:
-    """Calculate Shannon entropy of byte sequence."""
+    """Calculate Shannon entropy of byte sequence (bits per byte)."""
+    import math
+
     if not data:
         return 0.0
 
@@ -309,12 +317,12 @@ def _calculate_shannon_entropy(data: bytes) -> float:
     for byte in data:
         byte_counts[byte] += 1
 
-    # Calculate entropy
+    # Calculate entropy: H = -Σ p(x) * log2(p(x))
     entropy = 0.0
     data_len = len(data)
     for count in byte_counts:
         if count > 0:
             prob = count / data_len
-            entropy -= prob * (prob.bit_length() - 1)
+            entropy -= prob * math.log2(prob)
 
     return entropy

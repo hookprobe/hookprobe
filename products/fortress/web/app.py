@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from flask import Flask, redirect, url_for
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
 
 from .config import Config
 
@@ -44,6 +45,10 @@ def create_app(config_class=Config):
                 app.config['SECRET_KEY'] = key
         except OSError:
             app.config['SECRET_KEY'] = os.urandom(32)
+
+    # Initialize CSRF protection (CWE-352 fix)
+    # Config already sets WTF_CSRF_ENABLED=True but CSRFProtect must be called
+    csrf = CSRFProtect(app)
 
     # Session configuration
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
