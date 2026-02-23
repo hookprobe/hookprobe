@@ -7,11 +7,14 @@ Version: 5.2.0
 Updated: 2025-12-13
 """
 
+import hmac
 import json
+import os
 import socket
 import hashlib
 import logging
 import threading
+import time as _time
 from collections import defaultdict
 from typing import List, Dict, Any, Optional, Tuple, Set, Callable
 from datetime import datetime
@@ -25,6 +28,9 @@ MAX_HOP_COUNT = 5
 ANNOUNCEMENT_TTL_SECONDS = 300  # 5 minutes
 MAX_PEERS = 50
 FANOUT = 3  # Number of peers to gossip to
+MAX_MESSAGE_SIZE = 16384  # 16KB max gossip message
+RATE_LIMIT_WINDOW = 10  # seconds
+RATE_LIMIT_MAX = 50  # max messages per peer per window
 
 
 @dataclass
@@ -37,8 +43,8 @@ class GossipMessage:
     seen_by: Set[str] = field(default_factory=set)
     timestamp: float = field(default_factory=lambda: datetime.now().timestamp())
 
-    def to_bytes(self) -> bytes:
-        """Serialize message to bytes."""
+    def to_bytes(self, mesh_key: Optional[bytes] = None) -> bytes:
+        """Serialize message to bytes with optional HMAC authentication."""
         data = {
             'msg_type': self.msg_type,
             'source_node': self.source_node,
@@ -47,12 +53,29 @@ class GossipMessage:
             'seen_by': list(self.seen_by),
             'timestamp': self.timestamp,
         }
-        return json.dumps(data).encode('utf-8')
+        body = json.dumps(data, sort_keys=True).encode('utf-8')
+        if mesh_key:
+            mac = hmac.new(mesh_key, body, hashlib.sha256).hexdigest()
+            envelope = json.dumps({'body': body.decode('utf-8'), 'mac': mac})
+            return envelope.encode('utf-8')
+        return body
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> 'GossipMessage':
-        """Deserialize message from bytes."""
-        obj = json.loads(data.decode('utf-8'))
+    def from_bytes(cls, data: bytes, mesh_key: Optional[bytes] = None) -> 'GossipMessage':
+        """Deserialize message from bytes with optional HMAC verification."""
+        raw = data.decode('utf-8')
+        obj = json.loads(raw)
+
+        # If mesh_key is set, require HMAC authentication
+        if mesh_key:
+            if 'mac' not in obj or 'body' not in obj:
+                raise ValueError("Message missing HMAC authentication")
+            body = obj['body'].encode('utf-8')
+            expected_mac = hmac.new(mesh_key, body, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(obj['mac'], expected_mac):
+                raise ValueError("HMAC verification failed - message tampered or wrong key")
+            obj = json.loads(body)
+
         return cls(
             msg_type=obj['msg_type'],
             source_node=obj['source_node'],
@@ -82,17 +105,27 @@ class GossipProtocol:
         >>> gossip.announce(block_id, microblock)
     """
 
-    def __init__(self, node_id: str, bootstrap_nodes: List[str]):
+    def __init__(self, node_id: str, bootstrap_nodes: List[str],
+                 mesh_key: Optional[bytes] = None):
         """
         Initialize gossip protocol.
 
         Args:
             node_id: This node's identifier
             bootstrap_nodes: List of validator nodes to connect to (host:port format)
+            mesh_key: Shared HMAC key for message authentication (from HTP key exchange)
         """
         self.node_id = node_id
         self.bootstrap_nodes = bootstrap_nodes
         self.peers: Dict[str, Dict[str, Any]] = {}  # peer_id -> {address, last_seen, ...}
+
+        # HMAC authentication key (shared across mesh via HTP key exchange)
+        self._mesh_key = mesh_key or os.environ.get(
+            'DSM_MESH_KEY', ''
+        ).encode('utf-8') or None
+
+        # Per-peer rate limiting: peer_addr -> [(timestamp, ...)]
+        self._peer_msg_times: Dict[str, list] = defaultdict(list)
 
         # Announced blocks cache (block_id -> (microblock, timestamp))
         self._announced_blocks: Dict[str, Tuple[Dict[str, Any], float]] = {}
@@ -374,7 +407,7 @@ class GossipProtocol:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(1.0)
-                sock.sendto(msg.to_bytes(), address)
+                sock.sendto(msg.to_bytes(mesh_key=self._mesh_key), address)
                 self.stats['messages_sent'] += 1
         except Exception as e:
             logger.debug(f"Failed to send to {address}: {e}")
@@ -401,11 +434,43 @@ class GossipProtocol:
         finally:
             sock.close()
 
+    def _is_rate_limited(self, addr: Tuple[str, int]) -> bool:
+        """Check if a peer has exceeded the message rate limit."""
+        addr_key = f"{addr[0]}:{addr[1]}"
+        now = _time.monotonic()
+        cutoff = now - RATE_LIMIT_WINDOW
+
+        # Prune old entries
+        times = self._peer_msg_times[addr_key]
+        self._peer_msg_times[addr_key] = [t for t in times if t > cutoff]
+
+        if len(self._peer_msg_times[addr_key]) >= RATE_LIMIT_MAX:
+            return True
+
+        self._peer_msg_times[addr_key].append(now)
+        return False
+
     def _handle_message(self, data: bytes, addr: Tuple[str, int]):
         """Handle incoming gossip message."""
         try:
-            msg = GossipMessage.from_bytes(data)
+            # Message size validation
+            if len(data) > MAX_MESSAGE_SIZE:
+                logger.warning("Oversized gossip message from %s (%d bytes)", addr, len(data))
+                return
+
+            # Per-peer rate limiting
+            if self._is_rate_limited(addr):
+                logger.warning("Rate-limited gossip from %s", addr)
+                return
+
+            msg = GossipMessage.from_bytes(data, mesh_key=self._mesh_key)
             self.stats['messages_received'] += 1
+
+            # Reject messages with stale timestamps (>5 min old)
+            msg_age = abs(datetime.now().timestamp() - msg.timestamp)
+            if msg_age > ANNOUNCEMENT_TTL_SECONDS:
+                logger.debug("Rejecting stale gossip message (age: %.0fs)", msg_age)
+                return
 
             # Deduplication
             msg_hash = hashlib.sha256(data).hexdigest()[:32]
@@ -414,10 +479,16 @@ class GossipProtocol:
                     return
                 self._seen_messages.add(msg_hash)
 
-            # Update peer info
+            # Update peer info (only for known or bootstrap peers when mesh_key is set)
             peer_id = hashlib.sha256(f"{addr[0]}:{addr[1]}".encode()).hexdigest()[:16]
             with self._lock:
                 if peer_id not in self.peers:
+                    if self._mesh_key:
+                        # With auth enabled, only add peers that pass HMAC
+                        # (message already verified above)
+                        if len(self.peers) >= MAX_PEERS:
+                            logger.debug("Max peers reached, ignoring new peer %s", addr)
+                            return
                     self.peers[peer_id] = {'address': addr, 'is_bootstrap': False}
                 self.peers[peer_id]['last_seen'] = datetime.now().timestamp()
 

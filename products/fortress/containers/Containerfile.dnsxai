@@ -82,9 +82,9 @@ EXPOSE 5353/udp
 EXPOSE 853/tcp
 EXPOSE 8080/tcp
 
-# Run as root in container for rootless podman bind mount compatibility
-# Container root maps to the host user running podman, allowing writes to bind mounts
-# USER dnsxai
+# SECURITY: Run as non-root user (CWE-250)
+# Use --userns=keep-id in podman run for bind mount compatibility
+USER dnsxai
 
 WORKDIR /opt/hookprobe/shared/dnsXai
 

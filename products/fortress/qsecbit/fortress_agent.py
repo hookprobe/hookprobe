@@ -26,7 +26,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from threading import Thread, Event
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
@@ -711,7 +711,9 @@ class QSecBitConfig:
     sentinel_ch_url: str = "http://127.0.0.1:8123"
     sentinel_ch_db: str = "hookprobe_ids"
     sentinel_ch_user: str = "ids"
-    sentinel_ch_password: str = "hookprobe_ids_2026"
+    sentinel_ch_password: str = field(
+        default_factory=lambda: os.environ.get('CLICKHOUSE_PASSWORD', '')
+    )
 
     # Layer detection weights (within gamma)
     l2_weight: float = 0.25  # Data Link (ARP, MAC, Evil Twin)
@@ -1054,14 +1056,13 @@ class QSecBitFortressAgent:
                 f"FROM {self.config.sentinel_ch_db}.qsecbit_scores "
                 f"ORDER BY timestamp DESC LIMIT 1 FORMAT JSONEachRow"
             )
-            params = urllib.parse.urlencode({
-                'query': query,
-                'user': self.config.sentinel_ch_user,
-                'password': self.config.sentinel_ch_password,
-            })
+            # SECURITY: Use headers instead of URL params to avoid log leakage (CWE-598)
+            params = urllib.parse.urlencode({'query': query})
             url = f"{self.config.sentinel_ch_url}/?{params}"
             req = urllib.request.Request(url, method='GET')
             req.add_header('Accept', 'application/json')
+            req.add_header('X-ClickHouse-User', self.config.sentinel_ch_user)
+            req.add_header('X-ClickHouse-Key', self.config.sentinel_ch_password)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 text = resp.read().decode().strip()
                 if not text:
@@ -1078,14 +1079,13 @@ class QSecBitFortressAgent:
                 f"WHERE timestamp > now() - INTERVAL 5 MINUTE "
                 f"FORMAT JSONEachRow"
             )
-            vparams = urllib.parse.urlencode({
-                'query': vquery,
-                'user': self.config.sentinel_ch_user,
-                'password': self.config.sentinel_ch_password,
-            })
+            # SECURITY: Use headers instead of URL params to avoid log leakage (CWE-598)
+            vparams = urllib.parse.urlencode({'query': vquery})
             vurl = f"{self.config.sentinel_ch_url}/?{vparams}"
             vreq = urllib.request.Request(vurl, method='GET')
             vreq.add_header('Accept', 'application/json')
+            vreq.add_header('X-ClickHouse-User', self.config.sentinel_ch_user)
+            vreq.add_header('X-ClickHouse-Key', self.config.sentinel_ch_password)
             verdict_penalty = 0.0
             with urllib.request.urlopen(vreq, timeout=5) as resp:
                 vtext = resp.read().decode().strip()

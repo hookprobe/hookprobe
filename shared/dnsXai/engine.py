@@ -95,7 +95,25 @@ def _load_hmac_key() -> bytes:
     keyfile = Path('/etc/hookprobe/model-integrity.key')
     if keyfile.exists():
         return keyfile.read_bytes().strip()
-    return b'hookprobe-model-integrity-key-dev'
+    # SECURITY FIX: Generate and persist a random key instead of using a
+    # publicly known fallback that defeats the CWE-502 protection.
+    try:
+        keyfile.parent.mkdir(parents=True, exist_ok=True)
+        new_key = os.urandom(32)
+        keyfile.write_bytes(new_key)
+        os.chmod(str(keyfile), 0o600)
+        logging.getLogger(__name__).warning(
+            "Generated new model integrity key at %s. "
+            "Re-sign all existing model files.", keyfile
+        )
+        return new_key
+    except OSError:
+        # Fallback for read-only filesystems (containers without volume)
+        logging.getLogger(__name__).warning(
+            "Cannot persist model key - using ephemeral key. "
+            "Set HOOKPROBE_MODEL_KEY env var for stable key."
+        )
+        return os.urandom(32)
 
 _MODEL_HMAC_KEY = _load_hmac_key()
 

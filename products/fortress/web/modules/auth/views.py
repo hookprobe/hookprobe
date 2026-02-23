@@ -5,7 +5,9 @@ Simple local authentication for small business (max 5 users).
 Uses bcrypt password hashing and Flask-Login sessions.
 """
 
+import time
 import urllib.parse
+from collections import defaultdict
 
 from flask import render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
@@ -13,6 +15,11 @@ from flask_login import login_user, logout_user, login_required, current_user
 from . import auth_bp
 from .models import User, UserRole, MAX_USERS
 from .decorators import admin_required
+
+# Login rate limiting (CWE-307 brute force prevention)
+_MAX_LOGIN_ATTEMPTS = 5
+_LOCKOUT_SECONDS = 300  # 5 minutes
+_failed_logins: dict = defaultdict(lambda: {'count': 0, 'last': 0.0})
 
 
 def is_safe_redirect_url(target: str) -> bool:
@@ -57,12 +64,25 @@ def login():
         password = request.form.get('password', '')
         remember = request.form.get('remember', False)
 
+        # Rate limiting check (CWE-307)
+        client_ip = request.remote_addr or '0.0.0.0'
+        info = _failed_logins[client_ip]
+        if info['count'] >= _MAX_LOGIN_ATTEMPTS:
+            elapsed = time.time() - info['last']
+            if elapsed < _LOCKOUT_SECONDS:
+                remaining = int(_LOCKOUT_SECONDS - elapsed)
+                flash(f'Too many failed attempts. Try again in {remaining}s.', 'danger')
+                return render_template('auth/login.html'), 429
+            # Lockout expired
+            _failed_logins.pop(client_ip, None)
+
         if not username or not password:
             flash('Please enter username and password.', 'warning')
             return render_template('auth/login.html')
 
         user = User.authenticate(username, password)
         if user:
+            _failed_logins.pop(client_ip, None)
             login_user(user, remember=bool(remember))
             flash(f'Welcome back, {user.display_name or user.id}!', 'success')
 
@@ -72,7 +92,13 @@ def login():
                 return redirect(next_page)
             return redirect(url_for('dashboard.index'))
         else:
-            flash('Invalid username or password.', 'danger')
+            _failed_logins[client_ip]['count'] += 1
+            _failed_logins[client_ip]['last'] = time.time()
+            attempts_left = _MAX_LOGIN_ATTEMPTS - _failed_logins[client_ip]['count']
+            if attempts_left > 0:
+                flash(f'Invalid username or password. ({attempts_left} attempts remaining)', 'danger')
+            else:
+                flash(f'Account locked for {_LOCKOUT_SECONDS // 60} minutes.', 'danger')
 
     return render_template('auth/login.html')
 
@@ -118,8 +144,14 @@ def change_password():
         flash('Current password is incorrect.', 'danger')
         return redirect(url_for('auth.profile'))
 
-    if len(new_password) < 8:
-        flash('New password must be at least 8 characters.', 'warning')
+    # Enforce strong password policy (CWE-521 fix)
+    from .models import User as UserModel
+    if not UserModel._is_strong_password(new_password):
+        flash(
+            'Password must be at least 12 characters with uppercase, '
+            'lowercase, digit, and special character.',
+            'warning'
+        )
         return redirect(url_for('auth.profile'))
 
     if new_password != confirm_password:

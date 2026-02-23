@@ -9,6 +9,10 @@ class Config:
     """Base configuration."""
     SECRET_KEY = os.environ.get('GUARDIAN_SECRET_KEY') or secrets.token_hex(32)
 
+    # Session cookie security (CWE-614, CWE-1004)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+
     # Guardian paths
     GUARDIAN_BASE = '/opt/hookprobe/guardian'
     LOG_PATH = '/var/log/hookprobe'

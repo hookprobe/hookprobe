@@ -138,8 +138,14 @@ class ConsensusEngine:
         )
 
         # Calculate required signatures for BFT quorum
+        # SECURITY: Use proper BFT formula, not threshold multiplication which
+        # can undercount due to int() truncation (e.g., int(10*0.67)=6, but BFT needs 7)
         total_validators = len(self.validators)
-        required_signatures = int(total_validators * self.quorum_threshold)
+        bft_required = bft_quorum_required(total_validators)
+        threshold_required = int(
+            total_validators * self.quorum_threshold + 0.999
+        )  # ceil
+        required_signatures = max(bft_required, threshold_required)
 
         # Verify quorum
         if len(signatures) < required_signatures:
