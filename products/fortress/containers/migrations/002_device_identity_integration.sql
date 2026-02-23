@@ -293,7 +293,7 @@ CREATE OR REPLACE FUNCTION register_device(
     p_mdns_name TEXT DEFAULT NULL,
     p_lease_duration INTEGER DEFAULT 3600,
     p_manufacturer VARCHAR(255) DEFAULT NULL
-) RETURNS TABLE(device_id UUID, identity_id UUID, is_new BOOLEAN, canonical_name VARCHAR) AS $$
+) RETURNS TABLE(r_device_id UUID, r_identity_id UUID, r_is_new BOOLEAN, r_canonical_name VARCHAR) AS $$
 DECLARE
     v_identity_id UUID;
     v_device_id UUID;
@@ -316,7 +316,7 @@ BEGIN
 
         -- Ensure unique canonical name (no incrementing!)
         -- If name exists, append truncated MAC
-        IF EXISTS (SELECT 1 FROM device_identities WHERE canonical_name = v_canonical_name) THEN
+        IF EXISTS (SELECT 1 FROM device_identities di WHERE di.canonical_name = v_canonical_name) THEN
             v_canonical_name := v_canonical_name || ' (' || SUBSTRING(p_mac FROM 10) || ')';
         END IF;
 
@@ -334,10 +334,10 @@ BEGIN
         UPDATE device_identities
         SET last_seen = NOW(),
             current_mac = p_mac,
-            dhcp_option55 = COALESCE(p_dhcp_option55, dhcp_option55),
-            dhcp_option61 = COALESCE(p_dhcp_option61, dhcp_option61),
-            mdns_device_id = COALESCE(p_mdns_name, mdns_device_id),
-            total_connections = total_connections + 1,
+            dhcp_option55 = COALESCE(p_dhcp_option55, device_identities.dhcp_option55),
+            dhcp_option61 = COALESCE(p_dhcp_option61, device_identities.dhcp_option61),
+            mdns_device_id = COALESCE(p_mdns_name, device_identities.mdns_device_id),
+            total_connections = device_identities.total_connections + 1,
             updated_at = NOW()
         WHERE device_identities.identity_id = v_identity_id
         RETURNING device_identities.canonical_name INTO v_canonical_name;

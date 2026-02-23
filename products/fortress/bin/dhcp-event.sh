@@ -32,6 +32,10 @@ VENDOR_CLASS="${DNSMASQ_VENDOR_CLASS:-}"
 INTERFACE="${DNSMASQ_INTERFACE:-FTS}"
 LEASE_LENGTH="${DNSMASQ_LEASE_LENGTH:-3600}"
 
+# Load host service environment (includes database credentials)
+# shellcheck source=/dev/null
+[ -f /etc/hookprobe/host-services.env ] && . /etc/hookprobe/host-services.env
+
 # Database configuration (for PostgreSQL device lifecycle)
 DATABASE_HOST="${DATABASE_HOST:-172.20.200.10}"
 DATABASE_PORT="${DATABASE_PORT:-5432}"
