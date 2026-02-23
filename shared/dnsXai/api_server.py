@@ -1338,6 +1338,23 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception:
             return False
 
+    # Bearer token for API authentication (set via env var)
+    _API_TOKEN = os.environ.get('DNSXAI_API_TOKEN', '')
+
+    def _check_auth(self) -> bool:
+        """Verify bearer token for mutating API endpoints.
+        Returns True if authenticated, False if rejected (sends 401)."""
+        if not self._API_TOKEN:
+            return True  # No token configured = auth disabled (backwards compatible)
+        auth_header = self.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer ') and auth_header[7:] == self._API_TOKEN:
+            return True
+        api_key = self.headers.get('X-API-Key', '')
+        if api_key == self._API_TOKEN:
+            return True
+        self._send_json({'error': 'Unauthorized'}, 401)
+        return False
+
     def _send_json(self, data: Any, status: int = 200):
         """Send JSON response with secure CORS headers."""
         self.send_response(status)
@@ -1413,7 +1430,10 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_error('Not found', 404)
 
     def do_POST(self):
-        """Handle POST requests."""
+        """Handle POST requests (requires auth if DNSXAI_API_TOKEN set)."""
+        if not self._check_auth():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
 
@@ -1434,7 +1454,10 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_error('Not found', 404)
 
     def do_DELETE(self):
-        """Handle DELETE requests."""
+        """Handle DELETE requests (requires auth if DNSXAI_API_TOKEN set)."""
+        if not self._check_auth():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
 

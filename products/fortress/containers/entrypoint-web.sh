@@ -106,8 +106,7 @@ if [ ! -f "${FORTRESS_CONFIG_DIR}/users.json" ]; then
   "version": "1.0"
 }
 EOF
-        log_warn "Default admin user created - LOGIN: admin / hookprobe"
-        log_warn "CHANGE THIS PASSWORD IMMEDIATELY!"
+        log_warn "Default admin user created - LOGIN: admin (change password via Web UI)"
     else
         log_error "Cannot create users.json - ${FORTRESS_CONFIG_DIR} not writable"
     fi
@@ -174,7 +173,7 @@ try:
         host='${DATABASE_HOST}',
         port='${DATABASE_PORT:-5432}',
         user='${DATABASE_USER:-fortress}',
-        password='${DATABASE_PASSWORD:-fortress_db_secret}',
+        password='${DATABASE_PASSWORD}',
         dbname='${DATABASE_NAME:-fortress}',
         connect_timeout=5
     )
@@ -220,7 +219,7 @@ import redis
 r = redis.Redis(
     host='${REDIS_HOST}',
     port=${REDIS_PORT:-6379},
-    password='${REDIS_PASSWORD:-fortress_redis_secret}',
+    password='${REDIS_PASSWORD}',
     socket_connect_timeout=3
 )
 r.ping()

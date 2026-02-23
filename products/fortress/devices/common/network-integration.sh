@@ -526,23 +526,24 @@ connect_lte() {
 
     # IMPORTANT: Set route-metric to 200 (backup WAN)
     # Default GSM metric is 700, we want 200 so it's backup to wired WAN (metric 100)
-    local nmcli_args="type gsm ifname \"$modem_device\" con-name \"$con_name\" ipv4.method auto ipv4.route-metric 200 connection.autoconnect yes"
+    # Build as array to avoid eval injection (CWE-78 fix)
+    local -a nmcli_args=(con add type gsm ifname "$modem_device" con-name "$con_name" ipv4.method auto ipv4.route-metric 200 connection.autoconnect yes)
 
     # Add APN if provided
     if [ -n "$apn" ]; then
-        nmcli_args="$nmcli_args apn \"$apn\""
+        nmcli_args+=(apn "$apn")
     fi
 
     # Add credentials if provided
     if [ -n "$username" ]; then
-        nmcli_args="$nmcli_args gsm.username \"$username\""
+        nmcli_args+=(gsm.username "$username")
     fi
     if [ -n "$password" ]; then
-        nmcli_args="$nmcli_args gsm.password \"$password\" gsm.password-flags 0"
+        nmcli_args+=(gsm.password "$password" gsm.password-flags 0)
     fi
 
     # Create the connection
-    if ! eval "nmcli con add $nmcli_args"; then
+    if ! nmcli "${nmcli_args[@]}"; then
         log_error "Failed to create LTE connection"
         return 1
     fi

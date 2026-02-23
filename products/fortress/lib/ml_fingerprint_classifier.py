@@ -31,6 +31,8 @@ Architecture:
 Target: 99% accuracy for device type, vendor, and category classification.
 """
 
+import os
+import hmac
 import json
 import logging
 import sqlite3
@@ -68,6 +70,18 @@ try:
     HAS_SKLEARN = True
 except ImportError:
     HAS_SKLEARN = False
+
+# HMAC key for model integrity verification (CWE-502 mitigation)
+def _load_hmac_key() -> bytes:
+    env_key = os.environ.get('HOOKPROBE_MODEL_KEY')
+    if env_key:
+        return env_key.encode()
+    keyfile = Path('/etc/hookprobe/model-integrity.key')
+    if keyfile.exists():
+        return keyfile.read_bytes().strip()
+    return b'hookprobe-model-integrity-key-dev'
+
+_MODEL_HMAC_KEY = _load_hmac_key()
 
 # Paths
 ML_MODEL_DIR = Path('/var/lib/hookprobe/ml_models')
@@ -512,6 +526,35 @@ class MLFingerprintClassifier:
         except Exception as e:
             logger.warning(f"Could not initialize ML database: {e}")
 
+    @staticmethod
+    def _load_verified_pickle(path: Path):
+        """Load pickle with HMAC-SHA256 integrity verification (CWE-502 fix)."""
+        sig_path = path.with_suffix(path.suffix + '.sig')
+        try:
+            model_bytes = path.read_bytes()
+            if sig_path.exists():
+                expected_sig = sig_path.read_text().strip()
+                actual_sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(expected_sig, actual_sig):
+                    logger.error(f"SECURITY: Model HMAC verification failed for {path}")
+                    return None
+            else:
+                logger.warning(f"No .sig file for {path}, skipping load (rule-based fallback)")
+                return None
+            return pickle.loads(model_bytes)
+        except Exception as e:
+            logger.warning(f"Could not load verified pickle {path}: {e}")
+            return None
+
+    @staticmethod
+    def _save_signed_pickle(obj, path: Path):
+        """Save pickle with HMAC-SHA256 signature (CWE-502 mitigation)."""
+        model_bytes = pickle.dumps(obj)
+        path.write_bytes(model_bytes)
+        sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+        sig_path = path.with_suffix(path.suffix + '.sig')
+        sig_path.write_text(sig)
+
     def _load_models(self):
         """Load trained models from disk."""
         if not HAS_XGBOOST and not HAS_SKLEARN:
@@ -526,18 +569,21 @@ class MLFingerprintClassifier:
 
             if model_path.exists() and encoder_path.exists():
                 try:
-                    with open(model_path, 'rb') as f:
-                        self.models[model_type] = pickle.load(f)
-                    with open(encoder_path, 'rb') as f:
-                        self.label_encoders[model_type] = pickle.load(f)
-                    logger.info(f"Loaded {model_type} model")
+                    model = self._load_verified_pickle(model_path)
+                    encoder = self._load_verified_pickle(encoder_path)
+                    if model is not None and encoder is not None:
+                        self.models[model_type] = model
+                        self.label_encoders[model_type] = encoder
+                        logger.info(f"Loaded {model_type} model")
+                    else:
+                        logger.warning(f"Skipping {model_type} model: HMAC verification failed")
                 except Exception as e:
                     logger.warning(f"Could not load {model_type} model: {e}")
 
         self.is_trained = len(self.models) > 0
 
     def _save_models(self):
-        """Save trained models to disk."""
+        """Save trained models to disk with HMAC signatures."""
         ML_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
         for model_type, model in self.models.items():
@@ -545,12 +591,10 @@ class MLFingerprintClassifier:
             encoder_path = ML_MODEL_DIR / f'{model_type}_encoder.pkl'
 
             try:
-                with open(model_path, 'wb') as f:
-                    pickle.dump(model, f)
+                self._save_signed_pickle(model, model_path)
                 if model_type in self.label_encoders:
-                    with open(encoder_path, 'wb') as f:
-                        pickle.dump(self.label_encoders[model_type], f)
-                logger.info(f"Saved {model_type} model")
+                    self._save_signed_pickle(self.label_encoders[model_type], encoder_path)
+                logger.info(f"Saved {model_type} model with HMAC signature")
             except Exception as e:
                 logger.error(f"Could not save {model_type} model: {e}")
 

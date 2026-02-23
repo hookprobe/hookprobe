@@ -147,9 +147,10 @@ class HybridKEM:
             # Kyber512: Encapsulate random secret
             kyber_ciphertext, kyber_shared = kyber.encaps512(public_key.kyber512_public)
         else:
-            # Fallback: use random secret (not PQ-secure)
-            kyber_ciphertext = b'\x00' * 768
-            kyber_shared = os.urandom(32)
+            # Fallback: derive shared secret from ciphertext (not PQ-secure)
+            # Both sides must derive the same way for decapsulate to match
+            kyber_ciphertext = os.urandom(768)
+            kyber_shared = hashlib.sha256(kyber_ciphertext).digest()
 
         # Combine shared secrets using KDF
         combined_shared = self._combine_secrets(x25519_shared, kyber_shared)
@@ -217,11 +218,11 @@ class HybridKEM:
         # Concatenate both shared secrets
         ikm = x25519_shared + kyber_shared
 
-        # Derive combined key using HKDF
+        # Derive combined key using HKDF with fixed domain salt
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=None,
+            salt=b"HookProbe-HTP-KEM-v2.0-salt",
             info=b"HookProbe-Neuro-v2.0-hybrid-kem"
         )
 

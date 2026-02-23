@@ -205,11 +205,22 @@ create_honeypot_container() {
     return 0
 }
 
+# Validate IPv4 address format and per-octet range (0-255)
+validate_ipv4() {
+    local ip="$1"
+    if ! [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 1
+    fi
+    local IFS='.'
+    read -r a b c d <<< "$ip"
+    (( a <= 255 && b <= 255 && c <= 255 && d <= 255 ))
+}
+
 redirect_ip_to_honeypot() {
     local malicious_ip="$1"
-    
+
     # Validate IP
-    if ! [[ "$malicious_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    if ! validate_ipv4 "$malicious_ip"; then
         log_error "Invalid IP address: $malicious_ip"
         return 1
     fi
@@ -256,9 +267,9 @@ redirect_ip_to_honeypot() {
 # ============================================================
 block_ip() {
     local malicious_ip="$1"
-    
+
     # Validate IP
-    if ! [[ "$malicious_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    if ! validate_ipv4 "$malicious_ip"; then
         log_error "Invalid IP address: $malicious_ip"
         return 1
     fi

@@ -25,7 +25,7 @@ DISCORD_WEBHOOK_NAME="${DISCORD_WEBHOOK_NAME:-HookProbe Security}"
 CLICKHOUSE_HOST="127.0.0.1"
 CLICKHOUSE_PORT="8123"
 CLICKHOUSE_USER="ids"
-CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-hookprobe_ids_secure}"
+CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
 CLICKHOUSE_DB="hookprobe_ids"
 
 # Alert thresholds (tuned to avoid false positives)
@@ -47,6 +47,10 @@ log() {
 # Execute ClickHouse query
 ch_query() {
     local query="$1"
+    if [ -z "$CLICKHOUSE_PASSWORD" ]; then
+        log "WARNING: CLICKHOUSE_PASSWORD not set, skipping query"
+        return 1
+    fi
     curl -s "http://${CLICKHOUSE_HOST}:${CLICKHOUSE_PORT}/?user=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}&database=${CLICKHOUSE_DB}" \
         --data-binary "$query" 2>/dev/null
 }

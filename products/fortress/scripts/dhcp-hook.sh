@@ -36,7 +36,10 @@ DATABASE_HOST="${DATABASE_HOST:-172.20.200.10}"
 DATABASE_PORT="${DATABASE_PORT:-5432}"
 DATABASE_NAME="${DATABASE_NAME:-fortress}"
 DATABASE_USER="${DATABASE_USER:-fortress}"
-DATABASE_PASSWORD="${DATABASE_PASSWORD:-fortress_db_secret}"
+if [[ -z "${DATABASE_PASSWORD:-}" ]]; then
+    log "ERROR: DATABASE_PASSWORD not set, cannot register device"
+    exit 1
+fi
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -203,25 +206,32 @@ if command -v psql &>/dev/null && [[ -n "$IP" ]]; then
 fi
 
 # Method 2: Python device_lifecycle module (full features with callbacks)
+# SECURITY: Pass values via environment variables, NOT inline string interpolation
+# (CWE-78 fix: attacker-controlled DHCP options like hostname/vendor_class could
+#  inject arbitrary Python code if interpolated into python3 -c strings)
 if command -v python3 &>/dev/null; then
     export PYTHONPATH="${FORTRESS_LIB}:${PYTHONPATH:-}"
     export DATABASE_HOST DATABASE_PORT DATABASE_NAME DATABASE_USER DATABASE_PASSWORD
+    export DHCP_MAC="$MAC" DHCP_IP="$IP" DHCP_HOSTNAME="$HOSTNAME"
+    export DHCP_OPTION55="$OPTION55" DHCP_OPTION61="$OPTION61"
+    export DHCP_VENDOR_CLASS="$VENDOR_CLASS" DHCP_LEASE_LENGTH="$LEASE_LENGTH"
 
     if python3 -c "import device_lifecycle" 2>/dev/null; then
         log "Using Python Device Lifecycle Manager"
 
         python3 -c "
+import os
 from device_lifecycle import get_lifecycle_manager
 
 manager = get_lifecycle_manager()
 result = manager.register_device(
-    mac='$MAC',
-    ip='$IP',
-    hostname='$HOSTNAME' if '$HOSTNAME' else None,
-    dhcp_option55='$OPTION55' if '$OPTION55' else None,
-    dhcp_option61='$OPTION61' if '$OPTION61' else None,
-    dhcp_vendor_class='$VENDOR_CLASS' if '$VENDOR_CLASS' else None,
-    lease_duration=$LEASE_LENGTH,
+    mac=os.environ['DHCP_MAC'],
+    ip=os.environ['DHCP_IP'],
+    hostname=os.environ.get('DHCP_HOSTNAME') or None,
+    dhcp_option55=os.environ.get('DHCP_OPTION55') or None,
+    dhcp_option61=os.environ.get('DHCP_OPTION61') or None,
+    dhcp_vendor_class=os.environ.get('DHCP_VENDOR_CLASS') or None,
+    lease_duration=int(os.environ.get('DHCP_LEASE_LENGTH', '3600')),
 )
 print(f'Registered: {result.canonical_name} (new={result.is_new})')
 " 2>/dev/null &
@@ -233,28 +243,37 @@ fi
 # Method 3: Fallback to curl webhook (n8n workflows)
 log "Using webhook fallback"
 
-JSON_PAYLOAD=$(cat <<EOF
-{
-    "event": "new_device",
-    "source": "dhcp_hook",
-    "data": {
-        "action": "$ACTION",
-        "mac": "$MAC",
-        "ip": "$IP",
-        "hostname": "${HOSTNAME:-null}",
-        "vendor_class": "${VENDOR_CLASS:-null}",
-        "option55": "${OPTION55:-null}",
-        "option61": "${OPTION61:-null}",
-        "interface": "${INTERFACE}",
-        "lease_length": ${LEASE_LENGTH},
-        "timestamp": "$(date -Iseconds)"
-    },
-    "trigger_probe": true
-}
-EOF
-)
+# Build JSON safely using jq to prevent injection from DHCP fields
+if command -v jq &>/dev/null && command -v curl &>/dev/null; then
+    JSON_PAYLOAD=$(jq -n \
+        --arg action "$ACTION" \
+        --arg mac "$MAC" \
+        --arg ip "$IP" \
+        --arg hostname "${HOSTNAME:-}" \
+        --arg vendor_class "${VENDOR_CLASS:-}" \
+        --arg option55 "${OPTION55:-}" \
+        --arg option61 "${OPTION61:-}" \
+        --arg interface "${INTERFACE}" \
+        --argjson lease_length "${LEASE_LENGTH}" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{
+            event: "new_device",
+            source: "dhcp_hook",
+            data: {
+                action: $action,
+                mac: $mac,
+                ip: $ip,
+                hostname: (if $hostname == "" then null else $hostname end),
+                vendor_class: (if $vendor_class == "" then null else $vendor_class end),
+                option55: (if $option55 == "" then null else $option55 end),
+                option61: (if $option61 == "" then null else $option61 end),
+                interface: $interface,
+                lease_length: $lease_length,
+                timestamp: $timestamp
+            },
+            trigger_probe: true
+        }')
 
-if command -v curl &>/dev/null; then
     curl -s -X POST \
         -H "Content-Type: application/json" \
         -d "$JSON_PAYLOAD" \
@@ -262,6 +281,8 @@ if command -v curl &>/dev/null; then
         "$WEBHOOK_URL" &>/dev/null &
 
     log "Webhook sent for $MAC"
+elif command -v curl &>/dev/null; then
+    log "WARNING: jq not available, skipping webhook (unsafe to build JSON without it)"
 else
     log "WARNING: curl not available, cannot send webhook"
 fi

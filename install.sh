@@ -1307,7 +1307,12 @@ install_sentinel() {
             bash "$SCRIPT_DIR/install-sentinel-lite.sh"
         else
             echo -e "${YELLOW}Downloading Sentinel installer...${NC}"
-            curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | bash
+            local tmpscript
+            tmpscript=$(mktemp /tmp/hookprobe-sentinel-XXXXXX.sh)
+            curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh -o "$tmpscript"
+            echo -e "${YELLOW}Review the downloaded script at: $tmpscript${NC}"
+            bash "$tmpscript"
+            rm -f "$tmpscript"
         fi
     else
         echo "Installation cancelled."
