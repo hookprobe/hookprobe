@@ -384,8 +384,30 @@ class RateLimiter:
             return max(0, self.max_requests - len(self.requests))
 
 
-# Global rate limiter
-rate_limiter = RateLimiter()
+# Per-IP rate limiters (prevents one client from starving others)
+_per_ip_limiters: Dict[str, RateLimiter] = {}
+_limiters_lock = threading.Lock()
+
+
+def _get_rate_limiter(client_ip: str = '0.0.0.0') -> RateLimiter:
+    """Get or create a per-IP rate limiter."""
+    with _limiters_lock:
+        if client_ip not in _per_ip_limiters:
+            _per_ip_limiters[client_ip] = RateLimiter()
+            # Prune old entries if too many (prevent memory exhaustion)
+            if len(_per_ip_limiters) > 100:
+                now = time.time()
+                stale = [
+                    ip for ip, rl in _per_ip_limiters.items()
+                    if not rl.requests or now - rl.requests[-1] > 300
+                ]
+                for ip in stale:
+                    del _per_ip_limiters[ip]
+        return _per_ip_limiters[client_ip]
+
+
+# Backwards-compatible global limiter (uses 0.0.0.0)
+rate_limiter = _get_rate_limiter()
 
 
 def validate_command(command_line: str) -> Tuple[bool, str, Optional[List[str]]]:

@@ -3214,23 +3214,35 @@ table ip guardian_nat
 delete table ip guardian_nat
 
 # Filtering rules (inet family supports both IPv4 and IPv6)
+# DEFAULT-DENY: Only explicitly allowed traffic passes
 table inet guardian {
-    # Input chain - allow established connections and SSH
     chain input {
-        type filter hook input priority 0; policy accept;
+        type filter hook input priority 0; policy drop;
+        # Allow loopback
+        iifname "lo" accept
         # Always allow established/related connections (keeps SSH alive)
         ct state established,related accept
         # Allow SSH on all interfaces
         tcp dport 22 accept
-        # Allow web UI
-        tcp dport 8080 accept
-        # Allow DNS queries to dnsmasq from LAN
+        # Allow web UI only from LAN bridge (not WAN)
+        iifname "br0" tcp dport 8080 accept
+        # Allow WAF port from LAN
+        iifname "br0" tcp dport 8888 accept
+        # Allow DNS queries to dnsmasq from LAN only
         iifname "br0" udp dport 53 accept
         iifname "br0" tcp dport 53 accept
+        # Allow DHCP from LAN
+        iifname "br0" udp dport 67 accept
+        # Allow ICMP (ping)
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+        # Allow mesh ports from LAN
+        iifname "br0" udp dport 8144 accept
+        iifname "br0" tcp dport 8144 accept
     }
 
     chain forward {
-        type filter hook forward priority 0; policy accept;
+        type filter hook forward priority 0; policy drop;
         ct state established,related accept
         # Allow forwarding from LAN to WAN
         iifname "br0" accept
@@ -3681,23 +3693,27 @@ install_ap_services() {
         # Create inline if source not found
         cat > /etc/systemd/system/hostapd.service.d/guardian-override.conf << 'HOSTAPD_OVERRIDE'
 # Guardian Override for hostapd.service
-# Minimal override - just clear problematic conditions and dependencies
+# Clear problematic conditions, ensure rfkill unblock before start
 
 [Unit]
 # Clear ALL conditions to prevent startup failures
 ConditionFileNotEmpty=
 ConditionPathExists=
 
-# Clear ALL dependencies - hostapd just needs the interface to exist
+# Clear ALL dependencies first
 After=
 Wants=
 Requires=
 BindsTo=
 
-# Minimal dependencies - just local filesystem
-After=local-fs.target
+# Re-add correct dependencies: wait for guardian-wlan (rfkill + interface prep)
+After=local-fs.target guardian-wlan.service
+Wants=guardian-wlan.service
 
 [Service]
+# Ensure WiFi radio is unblocked before hostapd starts
+ExecStartPre=-/usr/sbin/rfkill unblock wifi
+ExecStartPre=/bin/sleep 2
 Restart=on-failure
 RestartSec=3
 TimeoutStartSec=30
@@ -4180,7 +4196,27 @@ install_web_ui() {
         systemctl restart guardian-webui
     fi
 
-    # Create systemd service
+    # Generate per-device mesh seed if not exists (CWE-798: no hardcoded secrets)
+    if [ ! -f /etc/hookprobe/mesh_seed ]; then
+        python3 -c "import secrets; print(secrets.token_hex(32))" > /etc/hookprobe/mesh_seed
+        chmod 600 /etc/hookprobe/mesh_seed
+        log_info "Mesh seed generated (per-device unique)"
+    fi
+
+    # Generate first-time setup token for PIN enrollment (CWE-284)
+    if [ ! -f /etc/hookprobe/guardian_auth.json ]; then
+        SETUP_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(8))")
+        echo "$SETUP_TOKEN" > /etc/hookprobe/guardian_setup_token
+        chmod 600 /etc/hookprobe/guardian_setup_token
+        echo ""
+        echo "========================================================"
+        echo " GUARDIAN FIRST-TIME SETUP TOKEN: $SETUP_TOKEN"
+        echo " You will need this to set your PIN via the web UI."
+        echo "========================================================"
+        echo ""
+    fi
+
+    # Create systemd service (hardened - CWE-250: least privilege)
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Web UI
@@ -4193,6 +4229,10 @@ ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/web/app.py
 Restart=always
 RestartSec=5
 User=root
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

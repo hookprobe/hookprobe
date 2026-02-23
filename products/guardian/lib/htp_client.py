@@ -360,22 +360,20 @@ class GuardianHTPClient:
             # but expired nonces will age out via maxlen
 
     def _verify_nonce(self, nonce: int) -> bool:
-        """Verify nonce hasn't been seen before. CWE-288 fix."""
+        """Verify nonce hasn't been seen before. CWE-288 fix.
+
+        Uses deque-based history with TTL expiration. Random nonces are NOT
+        monotonically increasing, so we only check for duplicates (not ordering).
+        """
         # Clean up expired nonces periodically
         self._cleanup_expired_nonces()
 
-        # Check if nonce was already seen
+        # Check if nonce was already seen (replay detection)
         if nonce in self.nonce_history:
-            self.logger.warning(f"Replay attack detected: duplicate nonce {nonce}")
-            return False
-
-        # Monotonic nonce check with timestamp validation
-        if nonce <= self.last_remote_nonce:
-            self.logger.warning(f"Replay attack detected: non-monotonic nonce {nonce}")
+            self.logger.warning("Replay attack detected: duplicate nonce %d", nonce)
             return False
 
         # Record this nonce
-        self.last_remote_nonce = nonce
         self.nonce_history.append(nonce)
         self.nonce_timestamps[nonce] = time.time()
         return True

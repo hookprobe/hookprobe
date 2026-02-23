@@ -125,14 +125,13 @@ def api_stream():
         )
 
     def generate():
-        # Send start event
-        yield f'event: start\ndata: {{"command": "{command}"}}\n\n'
+        import json as _json
+        # Send start event (proper JSON encoding prevents injection)
+        yield f'event: start\ndata: {_json.dumps({"command": command})}\n\n'
 
         # Stream output
         for line in execute_command(command):
-            # Escape for JSON
-            escaped = line.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-            yield f'data: {{"output": "{escaped}"}}\n\n'
+            yield f'data: {_json.dumps({"output": line})}\n\n'
 
         # Send done event
         yield 'event: done\ndata: {}\n\n'
