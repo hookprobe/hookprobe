@@ -147,10 +147,21 @@ class HybridKEM:
             # Kyber512: Encapsulate random secret
             kyber_ciphertext, kyber_shared = kyber.encaps512(public_key.kyber512_public)
         else:
-            # Fallback: derive shared secret from ciphertext (not PQ-secure)
-            # Both sides must derive the same way for decapsulate to match
-            kyber_ciphertext = os.urandom(768)
-            kyber_shared = hashlib.sha256(kyber_ciphertext).digest()
+            # Classical-only mode: Kyber unavailable.
+            # SECURITY FIX: The old fallback hashed random ciphertext, which an
+            # interceptor could also compute (zero confidentiality). Instead, derive
+            # the Kyber slot from the X25519 shared secret with domain separation.
+            # This reduces to X25519-only security but doesn't break confidentiality.
+            import warnings
+            warnings.warn(
+                "Kyber512 unavailable: HTP running in classical-only mode. "
+                "Install pqc-kyber for post-quantum protection.",
+                SecurityWarning, stacklevel=2
+            )
+            kyber_ciphertext = b'\x00' * 768  # Null signals classical-only
+            kyber_shared = hashlib.sha256(
+                b"HookProbe-classical-only-kyber-slot|" + x25519_shared
+            ).digest()
 
         # Combine shared secrets using KDF
         combined_shared = self._combine_secrets(x25519_shared, kyber_shared)
@@ -193,8 +204,10 @@ class HybridKEM:
             # Kyber512: Decapsulate secret
             kyber_shared = kyber.decaps512(ciphertext.kyber512_ciphertext, kyber512_private)
         else:
-            # Fallback: derive from ciphertext (not PQ-secure)
-            kyber_shared = hashlib.sha256(ciphertext.kyber512_ciphertext).digest()
+            # Classical-only mode: derive Kyber slot from X25519 with domain separation
+            kyber_shared = hashlib.sha256(
+                b"HookProbe-classical-only-kyber-slot|" + x25519_shared
+            ).digest()
 
         # Combine shared secrets using KDF
         combined_shared = self._combine_secrets(x25519_shared, kyber_shared)

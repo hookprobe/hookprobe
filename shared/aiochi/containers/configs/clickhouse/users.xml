@@ -12,14 +12,16 @@
         </aiochi>
 
         <!-- IDS application user for HYDRA/NAPSE containers -->
+        <!-- SECURITY: Password set via 00-create-users.sql at deploy time -->
+        <!-- SECURITY: Restricted to localhost only (CWE-284), no admin privileges (CWE-250) -->
         <ids>
-            <password>hookprobe_ids_2026</password>
             <networks>
-                <ip>::/0</ip>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
             </networks>
             <profile>default</profile>
             <quota>default</quota>
-            <access_management>1</access_management>
+            <access_management>0</access_management>
         </ids>
     </users>
 </clickhouse>

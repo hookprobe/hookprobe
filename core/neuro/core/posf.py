@@ -40,8 +40,10 @@ class PoSFSigner:
         if nonce is None:
             nonce = os.urandom(8)
 
-        assert len(message_hash) == 32, "Message hash must be 32 bytes (SHA256)"
-        assert len(nonce) == 8, "Nonce must be 8 bytes"
+        if len(message_hash) != 32:
+            raise ValueError(f"Message hash must be 32 bytes (SHA256), got {len(message_hash)}")
+        if len(nonce) != 8:
+            raise ValueError(f"Nonce must be 8 bytes, got {len(nonce)}")
 
         # Combine message and nonce to create 64-byte input
         input_bytes = message_hash + nonce + b'\x00' * 24
@@ -81,7 +83,8 @@ class PoSFSigner:
 
     def _bytes_to_input_vector(self, data: bytes) -> FixedPointArray:
         """Convert 64 bytes to fixed-point input vector."""
-        assert len(data) == 64, "Input must be 64 bytes"
+        if len(data) != 64:
+            raise ValueError(f"Input must be 64 bytes, got {len(data)}")
 
         # Normalize bytes to [0, 1] range
         normalized = [b / 255.0 for b in data]
@@ -132,16 +135,20 @@ class PoSFVerifier:
         Returns:
             True if signature is valid, False otherwise
         """
-        assert len(message_hash) == 32, "Message hash must be 32 bytes"
-        assert len(nonce) == 8, "Nonce must be 8 bytes"
-        assert len(signature) == 32, "Signature must be 32 bytes"
+        if len(message_hash) != 32:
+            raise ValueError(f"Message hash must be 32 bytes, got {len(message_hash)}")
+        if len(nonce) != 8:
+            raise ValueError(f"Nonce must be 8 bytes, got {len(nonce)}")
+        if len(signature) != 32:
+            raise ValueError(f"Signature must be 32 bytes, got {len(signature)}")
 
         # Regenerate signature using expected weights
         signer = PoSFSigner(self.expected_weight_state)
         expected_signature = signer.sign(message_hash, nonce)
 
-        # Bit-for-bit comparison
-        return signature == expected_signature
+        # Constant-time comparison to prevent timing side-channel (CWE-208)
+        import hmac as _hmac
+        return _hmac.compare_digest(signature, expected_signature)
 
     def verify_ter(self, ter: TER, nonce: bytes, signature: bytes) -> bool:
         """

@@ -51,6 +51,8 @@ class Config:
     # Session
     SESSION_TYPE = 'filesystem'
     PERMANENT_SESSION_LIFETIME = 28800  # 8 hours
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
 
     # Security
     WTF_CSRF_ENABLED = True

@@ -376,11 +376,29 @@ class GlobeServer:
         app.router.add_post("/api/burst", self._api_trigger_burst)
         app.router.add_get("/api/health", self._api_health)
 
-        # CORS headers for browser access
+        # CORS headers - restrict to internal network origins (CWE-942 fix)
+        import ipaddress
+
+        def _is_internal_origin(origin: str) -> bool:
+            """Check if origin is from internal/localhost network."""
+            if not origin:
+                return False
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(origin).hostname or ''
+                if host in ('localhost', '127.0.0.1', '::1'):
+                    return True
+                ip = ipaddress.ip_address(host)
+                return ip.is_private or ip.is_loopback
+            except (ValueError, TypeError):
+                return False
+
         @web.middleware
         async def cors_middleware(request, handler):
             response = await handler(request)
-            response.headers['Access-Control-Allow-Origin'] = '*'
+            origin = request.headers.get('Origin', '')
+            if _is_internal_origin(origin):
+                response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
             return response

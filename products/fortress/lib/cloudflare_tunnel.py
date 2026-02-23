@@ -235,9 +235,9 @@ class CloudflareTunnelManager:
             if result.returncode != 0:
                 return False, f"Download failed: {result.stderr}"
 
-            # Install
-            subprocess.run(["sudo", "mv", "/tmp/cloudflared", dest], check=True)
-            subprocess.run(["sudo", "chmod", "+x", dest], check=True)
+            # Install (requires root - called during setup.sh, not from web UI)
+            shutil.move("/tmp/cloudflared", dest)
+            os.chmod(dest, 0o755)
 
             # Verify
             if self.is_cloudflared_installed():
@@ -463,7 +463,12 @@ class CloudflareTunnelManager:
     # ============================================================
 
     def _install_systemd_service(self) -> bool:
-        """Install systemd service for auto-start."""
+        """Install systemd service for auto-start.
+
+        SECURITY: Requires root privileges (called during install, not web UI).
+        Token is stored in a separate environment file with restricted permissions
+        to prevent exposure via 'systemctl cat'.
+        """
         if not self.config:
             return False
 
@@ -471,6 +476,12 @@ class CloudflareTunnelManager:
         if not cloudflared:
             return False
 
+        if os.geteuid() != 0:
+            logger.error("[TUNNEL] Systemd service installation requires root")
+            return False
+
+        # Store token in environment file (restricted permissions)
+        env_file = "/etc/hookprobe/tunnel.env"
         service_content = f"""[Unit]
 Description=Fortress Cloudflare Tunnel
 Documentation=https://hookprobe.com/docs/fortress/remote-access
@@ -479,8 +490,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-ExecStart={cloudflared} tunnel --no-autoupdate run --token {self.config.token}
+User=fortress
+EnvironmentFile={env_file}
+ExecStart={cloudflared} tunnel --no-autoupdate run --token ${{TUNNEL_TOKEN}}
 Restart=on-failure
 RestartSec=10
 KillMode=process
@@ -493,14 +505,20 @@ WantedBy=multi-user.target
         try:
             service_path = f"/etc/systemd/system/{self.SYSTEMD_SERVICE}"
 
-            # Write service file
-            with open("/tmp/fts-tunnel.service", 'w') as f:
-                f.write(service_content)
+            # Write token to environment file with restricted permissions
+            env_dir = os.path.dirname(env_file)
+            os.makedirs(env_dir, exist_ok=True)
+            with open(env_file, 'w') as f:
+                f.write(f"TUNNEL_TOKEN={self.config.token}\n")
+            os.chmod(env_file, 0o600)
 
-            subprocess.run(["sudo", "mv", "/tmp/fts-tunnel.service", service_path], check=True)
-            subprocess.run(["sudo", "chmod", "644", service_path], check=True)
-            subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
-            subprocess.run(["sudo", "systemctl", "enable", self.SYSTEMD_SERVICE], check=True)
+            # Write service file directly (we're root)
+            with open(service_path, 'w') as f:
+                f.write(service_content)
+            os.chmod(service_path, 0o644)
+
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "enable", self.SYSTEMD_SERVICE], check=True)
 
             logger.info("[TUNNEL] Systemd service installed")
             return True
@@ -509,17 +527,26 @@ WantedBy=multi-user.target
             return False
 
     def _remove_systemd_service(self) -> bool:
-        """Remove systemd service."""
+        """Remove systemd service. Requires root privileges."""
+        if os.geteuid() != 0:
+            logger.error("[TUNNEL] Systemd service removal requires root")
+            return False
+
         try:
-            subprocess.run(["sudo", "systemctl", "stop", self.SYSTEMD_SERVICE],
+            subprocess.run(["systemctl", "stop", self.SYSTEMD_SERVICE],
                           capture_output=True)
-            subprocess.run(["sudo", "systemctl", "disable", self.SYSTEMD_SERVICE],
+            subprocess.run(["systemctl", "disable", self.SYSTEMD_SERVICE],
                           capture_output=True)
 
             service_path = f"/etc/systemd/system/{self.SYSTEMD_SERVICE}"
             if os.path.exists(service_path):
-                subprocess.run(["sudo", "rm", service_path], check=True)
-                subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+                os.unlink(service_path)
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+
+            # Remove token environment file
+            env_file = "/etc/hookprobe/tunnel.env"
+            if os.path.exists(env_file):
+                os.unlink(env_file)
 
             logger.info("[TUNNEL] Systemd service removed")
             return True
