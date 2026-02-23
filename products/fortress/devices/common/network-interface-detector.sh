@@ -1028,15 +1028,15 @@ configure_wwan_nmcli() {
     # Delete existing connection
     nmcli con delete "$con_name" 2>/dev/null || true
 
-    # Build connection command with auto-connect enabled
-    local nmcli_cmd="nmcli con add type gsm ifname \"$modem_device\" con-name \"$con_name\" apn \"$apn\" ipv4.method auto connection.autoconnect yes"
+    # Build connection command as array to avoid eval injection (CWE-78 fix)
+    local -a nmcli_args=(con add type gsm ifname "$modem_device" con-name "$con_name" apn "$apn" ipv4.method auto connection.autoconnect yes)
 
     if [ "$auth_type" != "none" ] && [ -n "$username" ]; then
-        nmcli_cmd="$nmcli_cmd gsm.username \"$username\""
-        [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password \"$password\" gsm.password-flags 0"
+        nmcli_args+=(gsm.username "$username")
+        [ -n "$password" ] && nmcli_args+=(gsm.password "$password" gsm.password-flags 0)
     fi
 
-    if eval "$nmcli_cmd"; then
+    if nmcli "${nmcli_args[@]}"; then
         log_success "WWAN connection '$con_name' created"
         export NET_WWAN_CONNECTION="$con_name"
 

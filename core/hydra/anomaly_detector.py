@@ -29,6 +29,7 @@ import time
 import json
 import math
 import signal
+import hmac
 import pickle
 import logging
 import hashlib
@@ -74,6 +75,18 @@ MODEL_DIR = Path(os.environ.get('MODEL_DIR', '/app/models'))
 MODEL_PATH = MODEL_DIR / 'isolation_forest.pkl'
 SCALER_PATH = MODEL_DIR / 'feature_scaler.pkl'
 META_PATH = MODEL_DIR / 'model_meta.json'
+
+# HMAC key for model integrity verification (CWE-502 mitigation)
+def _load_hmac_key() -> bytes:
+    env_key = os.environ.get('HOOKPROBE_MODEL_KEY')
+    if env_key:
+        return env_key.encode()
+    keyfile = Path('/etc/hookprobe/model-integrity.key')
+    if keyfile.exists():
+        return keyfile.read_bytes().strip()
+    return b'hookprobe-model-integrity-key-dev'
+
+_MODEL_HMAC_KEY = _load_hmac_key()
 
 # Thresholds
 SCORE_SUSPICIOUS = 0.5
@@ -425,22 +438,48 @@ class FeatureScaler:
 # MODEL PERSISTENCE
 # ============================================================================
 
+def _save_signed_pickle(obj, path: Path):
+    """Save pickle with HMAC-SHA256 signature (CWE-502 mitigation)."""
+    model_bytes = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    path.write_bytes(model_bytes)
+    sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+    sig_path = path.with_suffix(path.suffix + '.sig')
+    sig_path.write_text(sig)
+
+
+def _load_verified_pickle(path: Path):
+    """Load pickle with HMAC-SHA256 integrity verification (CWE-502 fix)."""
+    sig_path = path.with_suffix(path.suffix + '.sig')
+    try:
+        model_bytes = path.read_bytes()
+        if sig_path.exists():
+            expected_sig = sig_path.read_text().strip()
+            actual_sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                logger.error(f"SECURITY: HMAC verification failed for {path}")
+                return None
+        else:
+            logger.warning(f"No .sig file for {path}, skipping load")
+            return None
+        return pickle.loads(model_bytes)
+    except Exception as e:
+        logger.warning(f"Could not load verified pickle {path}: {e}")
+        return None
+
+
 def save_model(forest: IsolationForest, scaler: FeatureScaler,
                meta: dict) -> bool:
-    """Save model, scaler, and metadata to disk."""
+    """Save model, scaler, and metadata to disk with HMAC signatures."""
     try:
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-        with open(MODEL_PATH, 'wb') as f:
-            pickle.dump(forest, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-        with open(SCALER_PATH, 'wb') as f:
-            pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
+        _save_signed_pickle(forest, MODEL_PATH)
+        _save_signed_pickle(scaler, SCALER_PATH)
 
         with open(META_PATH, 'w') as f:
             json.dump(meta, f, indent=2)
 
-        logger.info(f"Model saved to {MODEL_DIR}")
+        logger.info(f"Model saved to {MODEL_DIR} with HMAC signatures")
         return True
 
     except Exception as e:
@@ -449,7 +488,7 @@ def save_model(forest: IsolationForest, scaler: FeatureScaler,
 
 
 def load_model() -> Tuple[Optional[IsolationForest], Optional[FeatureScaler], dict]:
-    """Load model from disk if available."""
+    """Load model from disk with HMAC verification."""
     try:
         if not MODEL_PATH.exists():
             return None, None, {}
@@ -459,11 +498,12 @@ def load_model() -> Tuple[Optional[IsolationForest], Optional[FeatureScaler], di
             MODEL_PATH.unlink(missing_ok=True)
             return None, None, {}
 
-        with open(MODEL_PATH, 'rb') as f:
-            forest = pickle.load(f)
+        forest = _load_verified_pickle(MODEL_PATH)
+        scaler = _load_verified_pickle(SCALER_PATH)
 
-        with open(SCALER_PATH, 'rb') as f:
-            scaler = pickle.load(f)
+        if forest is None or scaler is None:
+            logger.warning("Model HMAC verification failed, using untrained state")
+            return None, None, {}
 
         meta = {}
         if META_PATH.exists():
