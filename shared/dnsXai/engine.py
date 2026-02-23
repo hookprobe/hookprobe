@@ -27,6 +27,7 @@ import math
 import struct
 import socket
 import signal
+import hmac
 import hashlib
 import logging
 import threading
@@ -84,6 +85,48 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
+
+
+# HMAC key for model integrity verification (CWE-502 mitigation)
+def _load_hmac_key() -> bytes:
+    env_key = os.environ.get('HOOKPROBE_MODEL_KEY')
+    if env_key:
+        return env_key.encode()
+    keyfile = Path('/etc/hookprobe/model-integrity.key')
+    if keyfile.exists():
+        return keyfile.read_bytes().strip()
+    return b'hookprobe-model-integrity-key-dev'
+
+_MODEL_HMAC_KEY = _load_hmac_key()
+
+
+def _load_verified_pickle(path: Path):
+    """Load pickle with HMAC-SHA256 integrity verification (CWE-502 fix)."""
+    sig_path = Path(str(path) + '.sig')
+    try:
+        model_bytes = path.read_bytes()
+        if sig_path.exists():
+            expected_sig = sig_path.read_text().strip()
+            actual_sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                logging.getLogger(__name__).error(f"SECURITY: HMAC verification failed for {path}")
+                return None
+        else:
+            logging.getLogger(__name__).warning(f"No .sig file for {path}, skipping load")
+            return None
+        return pickle.loads(model_bytes)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Could not load verified pickle {path}: {e}")
+        return None
+
+
+def _save_signed_pickle(obj, path: Path):
+    """Save pickle with HMAC-SHA256 signature (CWE-502 mitigation)."""
+    model_bytes = pickle.dumps(obj)
+    path.write_bytes(model_bytes)
+    sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+    sig_path = Path(str(path) + '.sig')
+    sig_path.write_text(sig)
 
 
 # =============================================================================
@@ -1982,11 +2025,10 @@ class LightGBMClassifier:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.model.save_model(path)
 
-        # Save scaler separately
+        # Save scaler separately with HMAC signature
         if self.scaler is not None:
-            scaler_path = str(Path(path).with_suffix('.scaler.pkl'))
-            with open(scaler_path, 'wb') as f:
-                pickle.dump(self.scaler, f)
+            scaler_path = Path(path).with_suffix('.scaler.pkl')
+            _save_signed_pickle(self.scaler, scaler_path)
 
     def load_model(self, path: str):
         """Load model from file."""
@@ -1996,11 +2038,10 @@ class LightGBMClassifier:
         self.model = lgb.Booster(model_file=path)
         self._is_trained = True
 
-        # Load scaler if exists
-        scaler_path = str(Path(path).with_suffix('.scaler.pkl'))
-        if Path(scaler_path).exists():
-            with open(scaler_path, 'rb') as f:
-                self.scaler = pickle.load(f)
+        # Load scaler with HMAC verification (CWE-502 fix)
+        scaler_path = Path(path).with_suffix('.scaler.pkl')
+        if scaler_path.exists():
+            self.scaler = _load_verified_pickle(scaler_path)
 
     def is_available(self) -> bool:
         """Check if classifier is ready for inference."""

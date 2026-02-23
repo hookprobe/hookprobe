@@ -27,7 +27,10 @@ if [ -f "$SCRIPT_DIR/products/sentinel/bootstrap.sh" ]; then
     # Run the bootstrap script from the repository
     exec bash "$SCRIPT_DIR/products/sentinel/bootstrap.sh" "$@"
 else
-    # Fallback: download and run bootstrap from GitHub
+    # Fallback: download bootstrap from GitHub then execute
     echo "Downloading Sentinel Lite bootstrap..."
-    curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh | bash -s -- "$@"
+    tmpscript=$(mktemp /tmp/hookprobe-sentinel-XXXXXX.sh)
+    curl -sSL https://raw.githubusercontent.com/hookprobe/hookprobe/main/products/sentinel/bootstrap.sh -o "$tmpscript"
+    bash "$tmpscript" "$@"
+    rm -f "$tmpscript"
 fi

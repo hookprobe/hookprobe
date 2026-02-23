@@ -108,15 +108,36 @@ echo "$TIMESTAMP [BLOCK] $MAC_ADDRESS - $REASON" >> "$LOG_FILE"
 # OUTPUT RESULT
 # ============================================================
 
-cat <<EOF
+# Build JSON safely using jq to prevent injection from user-supplied REASON
+if command -v jq &>/dev/null; then
+    jq -n \
+        --arg mac "$MAC_ADDRESS" \
+        --arg reason "$REASON" \
+        --arg ts "$TIMESTAMP" \
+        --arg bridge "$OVS_BRIDGE" \
+        '{
+            success: true,
+            action: "BLOCK",
+            mac_address: $mac,
+            reason: $reason,
+            timestamp: $ts,
+            bridge: $bridge,
+            rule_priority: 65535,
+            message: "Device blocked from network"
+        }'
+else
+    # Fallback: strip dangerous characters from REASON
+    SAFE_REASON=$(echo "$REASON" | tr -d '"\\\n\r')
+    cat <<ENDJSON
 {
     "success": true,
     "action": "BLOCK",
     "mac_address": "$MAC_ADDRESS",
-    "reason": "$REASON",
+    "reason": "$SAFE_REASON",
     "timestamp": "$TIMESTAMP",
     "bridge": "$OVS_BRIDGE",
     "rule_priority": 65535,
     "message": "Device blocked from network"
 }
-EOF
+ENDJSON
+fi

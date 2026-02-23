@@ -1272,11 +1272,11 @@ create_compose_env_file() {
     [ -z "$flask_key" ] && [ -f "$secrets_dir/flask_secret" ] && flask_key=$(cat "$secrets_dir/flask_secret")
     [ -z "$grafana_pass" ] && [ -f "$secrets_dir/grafana_password" ] && grafana_pass=$(cat "$secrets_dir/grafana_password")
 
-    # Use safe defaults if still empty (first install)
-    [ -z "$pg_pass" ] && pg_pass="fortress_db_secret"
-    [ -z "$redis_pass" ] && redis_pass="fortress_redis_secret"
-    [ -z "$flask_key" ] && flask_key="fortress_flask_secret_key_change_me"
-    [ -z "$grafana_pass" ] && grafana_pass="fortress_grafana_admin"
+    # Generate random credentials if still empty (first install)
+    [ -z "$pg_pass" ] && pg_pass=$(openssl rand -base64 24)
+    [ -z "$redis_pass" ] && redis_pass=$(openssl rand -base64 24)
+    [ -z "$flask_key" ] && flask_key=$(openssl rand -hex 32)
+    [ -z "$grafana_pass" ] && grafana_pass=$(openssl rand -base64 16)
 
     # Write .env file
     cat > "$env_file" << EOF
@@ -5468,20 +5468,20 @@ uninstall() {
 quick_install() {
     NETWORK_MODE="flat"  # Always VLAN mode
     ADMIN_USER="admin"
-    ADMIN_PASS="hookprobe"
+    ADMIN_PASS=$(openssl rand -base64 12)
     WEB_PORT="8443"
     INSTALL_ML=true
     BUILD_ML_CONTAINERS=true
     WIFI_SSID="HookProbe-Fortress"
-    WIFI_PASSWORD="hookprobe123"
+    WIFI_PASSWORD=$(openssl rand -base64 12)
     # Subnet defaults - /23 for maximum flexibility (510 devices)
     LAN_SUBNET_MASK="23"
     LAN_DHCP_START="10.200.0.100"
     LAN_DHCP_END="10.200.1.200"
 
-    log_warn "Quick install with default credentials"
-    log_warn "Admin: admin / hookprobe - CHANGE THIS IMMEDIATELY!"
-    log_warn "WiFi:  HookProbe-Fortress / hookprobe123"
+    log_warn "Quick install with generated credentials"
+    log_warn "Admin: admin / $ADMIN_PASS - save this now!"
+    log_warn "WiFi:  HookProbe-Fortress / $WIFI_PASSWORD"
 }
 
 # ============================================================
