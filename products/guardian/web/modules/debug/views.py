@@ -149,6 +149,7 @@ def api_stream():
 
 
 @debug_bp.route('/help')
+@require_auth
 def api_help():
     """
     Get help text for all commands.
@@ -163,6 +164,7 @@ def api_help():
 
 
 @debug_bp.route('/help/<command>')
+@require_auth
 def api_help_command(command):
     """
     Get help for a specific command.
@@ -196,6 +198,7 @@ def api_help_command(command):
 
 
 @debug_bp.route('/rate-limit')
+@require_auth
 def api_rate_limit():
     """
     Get current rate limit status.
@@ -212,6 +215,7 @@ def api_rate_limit():
 
 
 @debug_bp.route('/allowed-paths')
+@require_auth
 def api_allowed_paths():
     """
     Get list of allowed file paths for cat/tail/head commands.
@@ -226,6 +230,7 @@ def api_allowed_paths():
 
 
 @debug_bp.route('/history', methods=['POST'])
+@require_auth
 def api_save_history():
     """
     Save command to history (client-side storage).

@@ -589,23 +589,23 @@ configure_apn_nmcli() {
     # Delete existing connection if exists
     nmcli con delete "$con_name" 2>/dev/null || true
 
-    # Build nmcli command - use the modem control device as interface
-    local nmcli_cmd="nmcli con add type gsm ifname \"$modem_device\" con-name \"$con_name\" apn \"$apn\""
+    # Build nmcli command as array to avoid eval injection (CWE-78 fix)
+    local -a nmcli_args=(con add type gsm ifname "$modem_device" con-name "$con_name" apn "$apn")
 
     case "$auth_type" in
         pap|chap|mschapv2)
-            nmcli_cmd="$nmcli_cmd gsm.password-flags 0"
-            [ -n "$username" ] && nmcli_cmd="$nmcli_cmd gsm.username \"$username\""
-            [ -n "$password" ] && nmcli_cmd="$nmcli_cmd gsm.password \"$password\""
+            nmcli_args+=(gsm.password-flags 0)
+            [ -n "$username" ] && nmcli_args+=(gsm.username "$username")
+            [ -n "$password" ] && nmcli_args+=(gsm.password "$password")
             ;;
     esac
 
     # Add IPv4 configuration and auto-connect
-    nmcli_cmd="$nmcli_cmd ipv4.method auto connection.autoconnect yes"
+    nmcli_args+=(ipv4.method auto connection.autoconnect yes)
 
     # Execute
     lte_log "Creating connection: $con_name"
-    if eval "$nmcli_cmd" 2>&1; then
+    if nmcli "${nmcli_args[@]}" 2>&1; then
         lte_success "LTE connection '$con_name' created successfully"
         lte_log "  Interface: $modem_device"
         lte_log "  APN: $apn"

@@ -33,6 +33,7 @@ from .git_ops import (
 
 
 @github_update_bp.route('/status')
+@require_auth
 def api_status():
     """
     Get current repository status.
@@ -54,6 +55,7 @@ def api_status():
 
 
 @github_update_bp.route('/check')
+@require_auth
 def api_check():
     """
     Check for available updates from remote.
@@ -81,6 +83,7 @@ def api_check():
 
 
 @github_update_bp.route('/preview')
+@require_auth
 def api_preview():
     """
     Preview changes that would be applied.
@@ -184,6 +187,7 @@ def api_apply():
 
 
 @github_update_bp.route('/log')
+@require_auth
 def api_log():
     """
     Get recent commit log.
@@ -205,6 +209,7 @@ def api_log():
 
 
 @github_update_bp.route('/config')
+@require_auth
 def api_config():
     """
     Get update configuration (allowed paths and services).

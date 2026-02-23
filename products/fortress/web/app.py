@@ -28,9 +28,22 @@ def create_app(config_class=Config):
 
     app.config.from_object(config_class)
 
-    # Secret key for sessions - from environment or generate random
+    # Secret key for sessions - persistent across restarts (CWE-330 fix)
     if not app.config.get('SECRET_KEY'):
-        app.config['SECRET_KEY'] = os.urandom(32)
+        key_path = '/etc/hookprobe/flask-secret.key'
+        try:
+            if os.path.exists(key_path):
+                with open(key_path, 'rb') as f:
+                    app.config['SECRET_KEY'] = f.read()
+            else:
+                key = os.urandom(32)
+                os.makedirs(os.path.dirname(key_path), exist_ok=True)
+                with open(key_path, 'wb') as f:
+                    f.write(key)
+                os.chmod(key_path, 0o600)
+                app.config['SECRET_KEY'] = key
+        except OSError:
+            app.config['SECRET_KEY'] = os.urandom(32)
 
     # Session configuration
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)

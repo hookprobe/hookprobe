@@ -117,9 +117,11 @@ def get_ecosystem_bubble_manager():
         from shared.aiochi.bubble import get_bubble_manager
         return get_bubble_manager()
     except ImportError:
-        # Fallback to local module for backwards compatibility
-        from .ecosystem_bubble import get_bubble_manager
-        return get_bubble_manager()
+        import logging
+        logging.getLogger(__name__).warning(
+            "Ecosystem bubble manager not available (shared.aiochi.bubble not installed)"
+        )
+        return None
 
 
 def get_policy_resolver():

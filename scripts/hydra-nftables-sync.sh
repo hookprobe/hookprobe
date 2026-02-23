@@ -97,14 +97,28 @@ setup_nftables() {
     }
 }
 
-# Check if an IP is in the trusted list
+# Convert dotted-quad IP to 32-bit integer
+ip_to_int() {
+    local ip="$1"
+    local a b c d
+    IFS='.' read -r a b c d <<< "$ip"
+    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
+# Check if an IP is in the trusted list using proper CIDR arithmetic
 is_trusted() {
     local ip="$1"
+    local ip_int
+    ip_int=$(ip_to_int "$ip")
+
     for trusted in "${TRUSTED_IPS[@]}"; do
-        # Simple prefix check (not full CIDR math, but covers our use case)
-        local prefix="${trusted%%/*}"
-        local prefix_parts="${prefix%.*}"
-        if [[ "$ip" == ${prefix_parts}.* ]]; then
+        local network="${trusted%%/*}"
+        local cidr="${trusted##*/}"
+        local net_int mask_int
+        net_int=$(ip_to_int "$network")
+        mask_int=$(( 0xFFFFFFFF << (32 - cidr) & 0xFFFFFFFF ))
+
+        if (( (ip_int & mask_int) == (net_int & mask_int) )); then
             return 0
         fi
     done
