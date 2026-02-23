@@ -3239,6 +3239,9 @@ table inet guardian {
         # Allow mesh ports from LAN
         iifname "br0" udp dport 8144 accept
         iifname "br0" tcp dport 8144 accept
+        # Allow container traffic to Flask (WAF reverse proxy)
+        iifname "podman*" tcp dport 8080 accept
+        iifname "veth*" tcp dport 8080 accept
     }
 
     chain forward {
