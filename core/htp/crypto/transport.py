@@ -352,7 +352,7 @@ class NeuroZServer:
         message = edge_node_id.encode('utf-8')[:32] + nonce_received
         mac_expected = hmac.new(transport_key, message, hashlib.sha256).digest()
 
-        if mac_received != mac_expected:
+        if not hmac.compare_digest(mac_received, mac_expected):
             raise ValueError("KEY_CONFIRM verification failed - invalid MAC")
 
         # Create session

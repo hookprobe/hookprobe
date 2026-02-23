@@ -88,10 +88,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
 # Note: This container typically runs with --network=host for traffic analysis
 EXPOSE 9090
 
-# Run as root in container for rootless podman bind mount compatibility
-# Container root maps to the host user running podman, allowing writes to bind mounts
-# The container needs CAP_NET_ADMIN, CAP_NET_RAW for packet capture anyway
-# USER fortress
+# SECURITY: Run as non-root user (CWE-250)
+# Use --userns=keep-id in podman run for bind mount compatibility
+USER fortress
 
 WORKDIR /opt/hookprobe
 
