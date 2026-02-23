@@ -37,6 +37,8 @@ def api_wifi_scan():
     """Scan for available WiFi networks using wlan0 (WAN interface)."""
     try:
         # wlan0 is the WAN interface used to connect to upstream networks
+        # Ensure interface is up before scanning (may be down after boot)
+        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
         # Use full iwlist output to get more details including IE info
         output, success = run_command(['sudo', 'iwlist', 'wlan0', 'scan'], timeout=30)
 
@@ -1385,6 +1387,8 @@ def api_offline_networks():
     try:
         from shared.wireless import WiFiChannelScanner
 
+        # Ensure interface is up before scanning
+        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
         scanner = WiFiChannelScanner(interface='wlan0')
         result = scanner.scan()
 
