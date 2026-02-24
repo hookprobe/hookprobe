@@ -3320,8 +3320,12 @@ IPTABLES_EOF
     cat > /etc/systemd/system/guardian-routing.service << 'ROUTING_EOF'
 [Unit]
 Description=Guardian NAT and Routing Rules
-After=network-online.target
-Wants=network-online.target
+# Use network.target instead of network-online.target so routing setup
+# doesn't block when no WAN interface is available (eth0 down + no WiFi).
+# Guardian must be able to start in offline mode and apply routing later
+# when a WAN interface comes up via if-up.d/guardian-nat hook.
+After=network.target guardian-wlan.service
+Wants=network.target
 
 [Service]
 Type=oneshot
@@ -3357,44 +3361,57 @@ if [ -z "$WAN" ]; then
 fi
 
 if [ -z "$WAN" ]; then
-    echo "Error: Could not detect WAN interface"
-    exit 1
-fi
-
-echo "Detected WAN interface: $WAN"
-
-# Add MASQUERADE for WAN interface
-if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
-    iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
-    echo "Added MASQUERADE for $WAN"
-fi
-
-# Also add masquerade for other potential WAN interfaces (failover)
-for iface in eth0 wlan0; do
-    if [ "$iface" != "$WAN" ] && [ -d "/sys/class/net/$iface" ]; then
-        if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
-            iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
-            echo "Added MASQUERADE for failover interface $iface"
+    # No WAN interface detected - Guardian is in offline mode.
+    # Pre-configure MASQUERADE for both eth0 and wlan0 so routing works
+    # immediately when either interface comes up later (via if-up.d hook).
+    echo "Warning: No default route found - offline mode, pre-configuring NAT..."
+    for iface in eth0 wlan0; do
+        if [ -d "/sys/class/net/$iface" ]; then
+            if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+                echo "Pre-configured MASQUERADE for $iface (available when connected)"
+            fi
         fi
+    done
+else
+    echo "Detected WAN interface: $WAN"
+
+    # Add MASQUERADE for WAN interface
+    if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
+        echo "Added MASQUERADE for $WAN"
     fi
-done
+
+    # Also add masquerade for other potential WAN interfaces (failover)
+    for iface in eth0 wlan0; do
+        if [ "$iface" != "$WAN" ] && [ -d "/sys/class/net/$iface" ]; then
+            if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
+                echo "Added MASQUERADE for failover interface $iface"
+            fi
+        fi
+    done
+fi
 
 # Configure FORWARD rules for LAN interfaces
 for LAN in wlan1 br0; do
     if [ -d "/sys/class/net/$LAN" ]; then
-        # Allow LAN to WAN forwarding
-        if ! iptables -C FORWARD -i "$LAN" -o "$WAN" -j ACCEPT 2>/dev/null; then
-            iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
-            echo "Added FORWARD rule: $LAN -> $WAN"
+        # Interface-specific FORWARD rules (only if WAN is known)
+        if [ -n "$WAN" ]; then
+            # Allow LAN to WAN forwarding
+            if ! iptables -C FORWARD -i "$LAN" -o "$WAN" -j ACCEPT 2>/dev/null; then
+                iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
+                echo "Added FORWARD rule: $LAN -> $WAN"
+            fi
+
+            # Allow return traffic (established connections)
+            if ! iptables -C FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+                iptables -A FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
+                echo "Added FORWARD rule: $WAN -> $LAN (established)"
+            fi
         fi
 
-        # Allow return traffic (established connections)
-        if ! iptables -C FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-            iptables -A FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
-            echo "Added FORWARD rule: $WAN -> $LAN (established)"
-        fi
-
-        # General LAN outbound (for any WAN)
+        # General LAN outbound (for any WAN - works when WAN comes up later)
         if ! iptables -C FORWARD -i "$LAN" -j ACCEPT 2>/dev/null; then
             iptables -A FORWARD -i "$LAN" -j ACCEPT
         fi
