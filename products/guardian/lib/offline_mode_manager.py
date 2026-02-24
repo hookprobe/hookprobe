@@ -425,7 +425,11 @@ hostname
 clientid
 persistent
 option rapid_commit
-option domain_name_servers, domain_name, domain_search, host_name
+# Do NOT request domain_name_servers - Guardian uses local dnsmasq
+# (dnsXai chain) on 127.0.0.1 for all DNS. Accepting upstream DNS
+# causes dhcpcd to overwrite /etc/resolv.conf with the gateway IP.
+option domain_name, domain_search, host_name
+nohook resolv.conf
 option classless_static_routes
 option interface_mtu
 require dhcp_server_identifier
@@ -845,9 +849,11 @@ logger_syslog_level=2
         return f"""# HookProbe Guardian - Offline Mode dnsmasq Configuration
 # Generated: {datetime.now().isoformat()}
 
-# Interface to listen on
+# Interface: br0 for LAN clients, 127.0.0.1 for Guardian system DNS
+# Both go through dnsXai blocklist + upstream forwarders
 interface=br0
-bind-interfaces
+listen-address=127.0.0.1
+bind-dynamic
 
 # Don't read /etc/resolv.conf
 no-resolv

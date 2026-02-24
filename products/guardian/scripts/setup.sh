@@ -3090,7 +3090,7 @@ EOF
 
     cat > /etc/dnsmasq.d/guardian.conf << EOF
 # HookProbe Guardian - DHCP/DNS Configuration
-# Version: 5.1.0
+# Version: 5.2.0
 # This is the MASTER dnsmasq config - all core settings here
 
 # General settings
@@ -3099,14 +3099,17 @@ bogus-priv
 no-resolv
 no-poll
 
-# Interface - listen on bridge only
+# Interface configuration:
+# - br0: serves LAN clients (WiFi hotspot)
+# - 127.0.0.1: serves the Guardian system itself (apt, pip, curl, etc.)
+# Both go through the same dnsXai blocklist + upstream forwarders.
 interface=br0
+listen-address=127.0.0.1
 bind-dynamic
 
 # Do NOT listen on WAN interfaces
 except-interface=eth0
 except-interface=wlan0
-except-interface=lo
 
 # DHCP range (/27 subnet - 30 usable addresses)
 dhcp-range=$DHCP_START,$DHCP_END,$NETMASK,24h
@@ -3158,6 +3161,11 @@ EOF
 
 # Guardian WAN failover configuration
 # eth0 = primary (metric 100), wlan0 = backup (metric 600)
+
+# Prevent dhcpcd from overwriting /etc/resolv.conf with upstream gateway DNS.
+# Guardian uses local dnsmasq on 127.0.0.1 which chains through dnsXai
+# blocklist to upstream resolvers (1.1.1.1/9.9.9.9/8.8.8.8).
+nohook resolv.conf
 
 interface eth0
 metric 100
@@ -3790,6 +3798,27 @@ DNSMASQ_OVERRIDE
         systemctl status hostapd.service --no-pager || true
     }
     systemctl start dnsmasq.service 2>/dev/null || true
+
+    # ─────────────────────────────────────────────────────────────
+    # System DNS: point Guardian itself to local dnsmasq (127.0.0.1)
+    # ─────────────────────────────────────────────────────────────
+    # Without this, dhcpcd writes the upstream gateway as DNS in
+    # /etc/resolv.conf, which often doesn't serve DNS and breaks
+    # apt update, pip install, and all Guardian system DNS.
+    # By using 127.0.0.1 the system goes through the same dnsXai
+    # blocklist + upstream forwarders (1.1.1.1/9.9.9.9/8.8.8.8).
+    log_info "Configuring system DNS to use local dnsmasq (dnsXai chain)..."
+
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    cat > /etc/resolv.conf << 'RESOLV_EOF'
+# HookProbe Guardian - System DNS
+# Routes through local dnsmasq → dnsXai blocklist → 1.1.1.1/9.9.9.9/8.8.8.8
+# DO NOT EDIT - managed by Guardian. Locked with chattr +i.
+nameserver 127.0.0.1
+search guardian.local
+RESOLV_EOF
+    chattr +i /etc/resolv.conf 2>/dev/null || true
+    log_info "System DNS locked to 127.0.0.1 (dnsmasq/dnsXai)"
 
     # Install SSID health check script
     log_info "Installing SSID health check..."
