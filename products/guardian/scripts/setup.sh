@@ -2968,7 +2968,7 @@ configure_base_networking() {
     log_step "Configuring base networking..."
 
     local HOTSPOT_SSID="${HOOKPROBE_WIFI_SSID:-HookProbe-Guardian}"
-    local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-hookprobe123}"
+    local HOTSPOT_PASS="${HOOKPROBE_WIFI_PASS:-xprobe001wifi}"
     # /27 subnet for Guardian (30 usable addresses - sufficient for travel companion)
     local BRIDGE_IP="192.168.4.1"
     local DHCP_START="192.168.4.2"
@@ -3610,6 +3610,13 @@ fi
 if [ -d /sys/class/net/wlan0 ]; then
     ip link set wlan0 up 2>/dev/null || true
     log_info "wlan0 brought UP for scanning"
+fi
+
+# Enable hairpin mode on bridge ports so WiFi clients can reach the bridge IP (192.168.4.1)
+if [ -d /sys/class/net/br0/brif ]; then
+    for port in /sys/class/net/br0/brif/*/hairpin_mode; do
+        echo 1 > "$port" 2>/dev/null && log_info "Hairpin mode enabled on $(basename $(dirname $port))"
+    done
 fi
 
 log_info "Guardian routing setup complete"
@@ -4442,19 +4449,6 @@ install_web_ui() {
         log_info "Mesh seed generated (per-device unique)"
     fi
 
-    # Generate first-time setup token for PIN enrollment (CWE-284)
-    if [ ! -f /etc/hookprobe/guardian_auth.json ]; then
-        SETUP_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(8))")
-        echo "$SETUP_TOKEN" > /etc/hookprobe/guardian_setup_token
-        chmod 600 /etc/hookprobe/guardian_setup_token
-        echo ""
-        echo "========================================================"
-        echo " GUARDIAN FIRST-TIME SETUP TOKEN: $SETUP_TOKEN"
-        echo " You will need this to set your PIN via the web UI."
-        echo "========================================================"
-        echo ""
-    fi
-
     # Create systemd service (hardened - CWE-250: least privilege)
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
 [Unit]
@@ -4470,6 +4464,7 @@ RestartSec=5
 User=root
 NoNewPrivileges=yes
 ProtectSystem=full
+ReadWritePaths=/etc/hookprobe
 ProtectHome=yes
 PrivateTmp=yes
 
