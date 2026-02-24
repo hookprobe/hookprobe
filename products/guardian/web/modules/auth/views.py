@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 
 AUTH_FILE = '/etc/hookprobe/guardian_auth.json'
-SETUP_TOKEN_FILE = '/etc/hookprobe/guardian_setup_token'
 MAX_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300  # 5 minutes
 
@@ -83,15 +82,6 @@ def _clear_failures(client_ip):
         _failed_attempts.pop(client_ip, None)
 
 
-def _load_setup_token():
-    """Load setup token for first-time PIN enrollment."""
-    try:
-        with open(SETUP_TOKEN_FILE, 'r') as f:
-            return f.read().strip()
-    except (IOError, OSError):
-        return None
-
-
 def is_auth_configured():
     """Check if authentication has been set up."""
     auth = _load_auth()
@@ -127,24 +117,7 @@ def login():
 
     auth = _load_auth()
     if not auth or 'pin_hash' not in auth:
-        # First-time setup: require setup token for enrollment (CWE-284)
-        setup_token = data.get('setup_token', '')
-        stored_token = _load_setup_token()
-        if stored_token:
-            if not setup_token or not secrets.compare_digest(setup_token, stored_token):
-                return jsonify({
-                    'success': False,
-                    'error': 'Setup token required for first-time PIN creation',
-                    'first_time_setup': True
-                }), 403
-            # Consume the one-time token
-            try:
-                os.unlink(SETUP_TOKEN_FILE)
-            except OSError:
-                pass
-        else:
-            logger.warning("No setup token found - first-time PIN setup without token")
-
+        # First-time setup: just set the PIN
         salt, pin_hash = _hash_pin(pin)
         auth_data = {
             'pin_hash': pin_hash,
