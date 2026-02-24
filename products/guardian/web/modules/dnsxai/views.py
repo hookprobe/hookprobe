@@ -214,7 +214,7 @@ def api_stats():
 @dnsxai_bp.route('/level', methods=['POST'])
 def api_set_level():
     """Set protection level."""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     level = data.get('level', 3)
 
     if not isinstance(level, int) or level < 0 or level > 5:
@@ -241,7 +241,7 @@ def api_whitelist():
         whitelist = [d for d in whitelist if d.strip() and not d.startswith('#')]
         return jsonify({'whitelist': whitelist})
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     domain = data.get('domain', '').strip().lower()
 
     if not domain:
@@ -288,7 +288,7 @@ def api_sources():
     if request.method == 'GET':
         return jsonify({'sources': sources.get('sources', default_sources)})
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
     if request.method == 'POST':
         url = data.get('url', '').strip()
@@ -361,7 +361,7 @@ def api_pause():
         return jsonify({'status': 'active', 'remaining_seconds': 0})
 
     # POST
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     action = data.get('action', '')
     now = time.time()
 
@@ -468,7 +468,7 @@ def api_ml_train():
         return error_response
 
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {} or {}
         source = data.get('source', 'auto')  # 'auto', 'history', 'custom'
         use_seed_data = data.get('use_seed_data', True)  # Include known ad/safe domains
 
@@ -515,7 +515,7 @@ def api_ml_classify():
         return error_response
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
 
         if not domain:
@@ -541,7 +541,7 @@ def api_ml_analyze():
         return error_response
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
         cname_chain = data.get('cname_chain', [])
 
@@ -709,7 +709,7 @@ def api_cname_check():
         return error_response
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
         cname_target = data.get('cname_target', '').strip().lower()
 
@@ -791,7 +791,7 @@ def api_federated_import():
         return error_response
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         updates = data.get('updates', [])
 
         federated = get_federated()
@@ -899,7 +899,7 @@ def api_packet_check_domain():
         return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
 
         if not domain:
@@ -927,7 +927,7 @@ def api_packet_check_ip():
         return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         ip = data.get('ip', '').strip()
 
         if not ip:
@@ -955,7 +955,7 @@ def api_packet_analyze_dns():
         return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
         ip_addresses = data.get('ips', [])
         cnames = data.get('cnames', [])
@@ -991,7 +991,7 @@ def api_packet_analyze_connection():
         return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         dst_ip = data.get('dst_ip', '').strip()
         dst_port = data.get('dst_port', 443)
         payload_size = data.get('payload_size', 0)
@@ -1046,7 +1046,7 @@ def api_packet_block_ip():
         return jsonify({'success': False, 'error': 'Packet inspector not available'}), 400
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         ip = data.get('ip', '').strip()
         reason = data.get('reason', 'User blocked')
 
@@ -1072,7 +1072,7 @@ def api_combined_ad_check():
     Uses both domain classification and packet-level analysis.
     """
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         domain = data.get('domain', '').strip().lower()
         ip = data.get('ip', '').strip()
 
