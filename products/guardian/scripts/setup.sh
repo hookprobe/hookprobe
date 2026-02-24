@@ -1353,6 +1353,26 @@ struct {
 #define STATS_BLOCKLISTED 3
 
 #define RATE_LIMIT 1000  /* Max packets per second per IP */
+#define SSH_SYN_RATE_LIMIT 50  /* Max SSH SYNs per second per IP */
+
+/* SSH bypass toggle: key=0, value=0 (off) or 1 (on)
+ * When enabled, TCP port 22 packets bypass blocklist + rate limiting.
+ * Toggled at runtime via bpftool map update (no recompilation needed).
+ * Defaults to OFF (BPF array maps are zero-initialized by kernel). */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, 1);
+} ssh_bypass_map SEC(".maps");
+
+/* SSH SYN rate limiting - prevents SYN flood on port 22 when bypass is on */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32);    /* Source IP */
+    __type(value, __u64);  /* Count + timestamp (same encoding as rate_limit_map) */
+    __uint(max_entries, 1000);
+} ssh_syn_rate_map SEC(".maps");
 
 SEC("xdp")
 int xdp_ddos_filter(struct xdp_md *ctx)
@@ -1375,6 +1395,53 @@ int xdp_ddos_filter(struct xdp_md *ctx)
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
         return XDP_PASS;
+
+    /* --- SSH Bypass Check (before blocklist/rate-limit) ---
+     * When ssh_bypass_map[0] == 1, TCP port 22 packets skip all XDP
+     * filtering and proceed to nftables (which still enforces LAN-only
+     * SSH access via iifname "br0"). Includes a separate SYN rate limit
+     * to prevent SYN flood attacks on the bypassed port. */
+    if (ip->protocol == IPPROTO_TCP) {
+        struct tcphdr *tcp = (void *)((char *)ip + (ip->ihl * 4));
+        if ((void *)(tcp + 1) <= data_end) {
+            if (tcp->dest == __constant_htons(22)) {
+                __u32 bypass_key = 0;
+                __u32 *bypass_val = bpf_map_lookup_elem(
+                    &ssh_bypass_map, &bypass_key);
+                if (bypass_val && *bypass_val == 1) {
+                    /* SSH SYN rate limit (prevent SYN flood on port 22) */
+                    if (tcp->syn && !tcp->ack) {
+                        __u32 ssh_src = ip->saddr;
+                        __u64 *ssh_cnt = bpf_map_lookup_elem(
+                            &ssh_syn_rate_map, &ssh_src);
+                        __u64 ssh_now = bpf_ktime_get_ns();
+                        if (ssh_cnt) {
+                            __u64 ssh_last = *ssh_cnt >> 32;
+                            __u64 ssh_pkts = *ssh_cnt & 0xFFFFFFFF;
+                            if ((ssh_now - ssh_last) > 1000000000ULL) {
+                                *ssh_cnt = (ssh_now << 32) | 1;
+                            } else {
+                                ssh_pkts++;
+                                *ssh_cnt = (ssh_last << 32) | ssh_pkts;
+                                if (ssh_pkts > SSH_SYN_RATE_LIMIT)
+                                    return XDP_DROP;
+                            }
+                        } else {
+                            __u64 ssh_new = (ssh_now << 32) | 1;
+                            bpf_map_update_elem(&ssh_syn_rate_map,
+                                &ssh_src, &ssh_new, BPF_ANY);
+                        }
+                    }
+                    /* SSH bypass: skip blocklist + rate limit */
+                    key = STATS_PASSED;
+                    value = bpf_map_lookup_elem(&stats_map, &key);
+                    if (value)
+                        __sync_fetch_and_add(value, 1);
+                    return XDP_PASS;
+                }
+            }
+        }
+    }
 
     __u32 src_ip = ip->saddr;
 
@@ -1547,10 +1614,124 @@ def save_stats():
     with open(STATS_FILE, 'w') as f:
         json.dump(stats, f, indent=2)
 
+# --- SSH Bypass Management ---
+
+SSH_STATE_FILE = XDP_DIR / "ssh_bypass_state.json"
+SSH_BYPASS_TIMEOUT = 1800  # 30 minutes
+
+
+def set_ssh_bypass(enabled):
+    """Enable or disable SSH bypass in XDP via BPF map update.
+
+    When enabled, TCP port 22 packets bypass XDP blocklist and rate
+    limiting (but still pass through nftables which restricts SSH to
+    br0 LAN only).  Persists state with 30-minute expiry timestamp.
+    """
+    val = "1" if enabled else "0"
+    try:
+        subprocess.run(
+            ["bpftool", "map", "update", "name", "ssh_bypass_map",
+             "key", "0x00", "0x00", "0x00", "0x00",
+             "value", "0x0" + val, "0x00", "0x00", "0x00"],
+            check=True, capture_output=True, text=True,
+        )
+        _save_ssh_state(enabled)
+        state = "enabled" if enabled else "disabled"
+        print(json.dumps({"success": True, "ssh_bypass": enabled,
+                          "message": f"SSH bypass {state}"}))
+        return True
+    except subprocess.CalledProcessError as e:
+        print(json.dumps({"success": False,
+                          "error": f"bpftool failed: {e.stderr}"}))
+        return False
+
+
+def get_ssh_bypass():
+    """Read current SSH bypass state from BPF map."""
+    try:
+        result = subprocess.run(
+            ["bpftool", "map", "lookup", "name", "ssh_bypass_map",
+             "key", "0x00", "0x00", "0x00", "0x00", "-j"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            # bpftool -j returns {"key": ..., "value": ...}
+            val = data.get("value", 0)
+            if isinstance(val, list):
+                return val[0] != 0 if val else False
+            if isinstance(val, dict):
+                # Some bpftool versions use {"": [0,0,0,0]}
+                for v in val.values():
+                    if isinstance(v, list):
+                        return v[0] != 0 if v else False
+            return bool(val)
+    except Exception:
+        pass
+    # Fallback: check persisted state file
+    return _load_ssh_state()
+
+
+def get_ssh_bypass_status():
+    """Get full SSH bypass status including expiry info."""
+    enabled = get_ssh_bypass()
+    state = _load_ssh_state_raw()
+    return {
+        "enabled": enabled,
+        "expires_at": state.get("expires_at") if enabled else None,
+        "enabled_at": state.get("timestamp") if enabled else None,
+        "timeout_seconds": SSH_BYPASS_TIMEOUT,
+    }
+
+
+def ssh_timeout_check():
+    """Called by systemd timer. Disables SSH bypass if expired."""
+    state = _load_ssh_state_raw()
+    if not state.get("enabled"):
+        return
+    expires_at = state.get("expires_at")
+    if expires_at and time.time() > expires_at:
+        print("SSH bypass timeout expired, disabling")
+        set_ssh_bypass(False)
+
+
+def _save_ssh_state(enabled):
+    """Persist SSH bypass state to disk for timeout tracking."""
+    state = {
+        "enabled": enabled,
+        "timestamp": time.time(),
+        "expires_at": time.time() + SSH_BYPASS_TIMEOUT if enabled else None,
+    }
+    try:
+        with open(SSH_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except IOError:
+        pass
+
+
+def _load_ssh_state():
+    """Load SSH bypass state, respecting expiry."""
+    state = _load_ssh_state_raw()
+    if state.get("enabled") and state.get("expires_at"):
+        if time.time() > state["expires_at"]:
+            return False
+    return state.get("enabled", False)
+
+
+def _load_ssh_state_raw():
+    """Load raw SSH state without expiry interpretation."""
+    try:
+        with open(SSH_STATE_FILE, "r") as f:
+            return json.load(f)
+    except (IOError, json.JSONDecodeError):
+        return {}
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: xdp_manager.py [compile|load|unload|stats|block <ip>]")
+        print("Usage: xdp_manager.py [compile|load|unload|stats|block <ip>|"
+              "ssh-bypass on|off|status|ssh-timeout-check]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -1566,6 +1747,21 @@ if __name__ == "__main__":
         print(json.dumps(get_stats(), indent=2))
     elif cmd == "block" and len(sys.argv) > 2:
         block_ip(sys.argv[2])
+    elif cmd == "ssh-bypass":
+        if len(sys.argv) > 2:
+            action = sys.argv[2]
+            if action == "on":
+                set_ssh_bypass(True)
+            elif action == "off":
+                set_ssh_bypass(False)
+            elif action == "status":
+                print(json.dumps(get_ssh_bypass_status(), indent=2))
+            else:
+                print("Usage: xdp_manager.py ssh-bypass [on|off|status]")
+        else:
+            print(json.dumps(get_ssh_bypass_status(), indent=2))
+    elif cmd == "ssh-timeout-check":
+        ssh_timeout_check()
     else:
         print("Unknown command")
 PYEOF
@@ -1601,10 +1797,35 @@ RestartSec=30
 WantedBy=multi-user.target
 EOF
 
+    # SSH bypass auto-timeout service (checks every 60s, disables after 30min)
+    cat > /etc/systemd/system/guardian-ssh-timeout.service << 'EOF'
+[Unit]
+Description=HookProbe Guardian SSH Bypass Auto-Timeout
+After=guardian-xdp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/xdp/xdp_manager.py ssh-timeout-check
+EOF
+
+    cat > /etc/systemd/system/guardian-ssh-timeout.timer << 'EOF'
+[Unit]
+Description=Check SSH bypass timeout every 60 seconds
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target
+EOF
+
     systemctl daemon-reload
     systemctl enable guardian-xdp 2>/dev/null || true
+    systemctl enable guardian-ssh-timeout.timer 2>/dev/null || true
 
-    log_info "XDP/eBPF DDoS protection installed"
+    log_info "XDP/eBPF DDoS protection installed (with SSH bypass timeout timer)"
 }
 
 install_threat_aggregator() {
@@ -3230,8 +3451,9 @@ table inet guardian {
         iifname "lo" accept
         # Always allow established/related connections (keeps SSH alive)
         ct state established,related accept
-        # Allow SSH on all interfaces
-        tcp dport 22 accept
+        # Allow SSH from LAN bridge only (not WAN eth0/wlan0)
+        # Users connect phone to Guardian WiFi AP → br0 → SSH
+        iifname "br0" tcp dport 22 accept
         # Allow web UI only from LAN bridge (not WAN)
         iifname "br0" tcp dport 8080 accept
         # Allow WAF port from LAN

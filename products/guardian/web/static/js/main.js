@@ -985,6 +985,10 @@ async function loadSystemData() {
     } catch (error) {
         console.error('Failed to load system:', error);
     }
+    // Refresh SSH bypass status when system tab loads
+    if (typeof loadSSHStatus === 'function') {
+        loadSSHStatus();
+    }
 }
 
 function updateSystemInfo(system) {
