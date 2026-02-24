@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # HookProbe Guardian Uninstall Script
-# Version: 5.1.0
+# Version: 5.4.0
 # License: AGPL-3.0 - see LICENSE file
 #
 # Removes all Guardian components:
@@ -15,6 +15,10 @@
 # - nftables rules
 # - Guardian directories
 # - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)
+# - resolv.conf immutable flag and DNS restoration
+# - NetworkManager guardian.conf configuration
+# - sbin tool symlinks (/usr/local/bin/iw, rfkill, etc.)
+# - /etc/hookprobe configuration files
 #
 
 set -e
@@ -159,6 +163,8 @@ remove_systemd_services() {
         "guardian-offline"
         # Routing/NAT service
         "guardian-routing"
+        # wlan0 WAN interface UP service
+        "guardian-wlan0-up"
     )
 
     # Disable and remove timers first
@@ -376,10 +382,21 @@ remove_nftables_rules() {
     rm -f /etc/nftables.d/guardian.nft
     rm -f /etc/nftables.d/guardian-vlans.nft
 
-    # Remove Guardian include from nftables.conf
+    # Restore nftables.conf to default (remove guardian include and inline rules)
     if [ -f /etc/nftables.conf ]; then
-        sed -i '/guardian.nft/d' /etc/nftables.conf
-        log_info "Removed Guardian include from nftables.conf"
+        # Check if nftables.conf was replaced by Guardian (contains guardian include)
+        if grep -q "guardian.nft\|guardian_nat\|inet guardian" /etc/nftables.conf 2>/dev/null; then
+            # Restore to Debian default nftables.conf
+            cat > /etc/nftables.conf << 'NFTEOF'
+#!/usr/sbin/nft -f
+
+flush ruleset
+NFTEOF
+            log_info "Restored nftables.conf to default"
+        else
+            sed -i '/guardian.nft/d' /etc/nftables.conf
+            log_info "Removed Guardian include from nftables.conf"
+        fi
     fi
 
     # Remove iptables persistence hook script
@@ -450,8 +467,9 @@ remove_wpa_supplicant_config() {
 remove_networkmanager_config() {
     log_step "Removing NetworkManager Guardian configuration..."
 
-    # Remove Guardian NM configuration
+    # Remove Guardian NM configuration files
     rm -f /etc/NetworkManager/conf.d/guardian-unmanaged.conf 2>/dev/null || true
+    rm -f /etc/NetworkManager/conf.d/guardian.conf 2>/dev/null || true
 
     # Remove Guardian WiFi connections
     if command -v nmcli &>/dev/null && systemctl is-active NetworkManager &>/dev/null; then
@@ -667,10 +685,20 @@ remove_guardian_directories() {
         log_info "Removed /etc/hookprobe/secrets (was empty)"
     fi
 
-    # Don't remove /etc/hookprobe if other components exist
+    # Remove Guardian-specific configuration files from /etc/hookprobe
+    rm -f /etc/hookprobe/guardian.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/guardian_auth.json 2>/dev/null || true
+    rm -f /etc/hookprobe/install.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/environment 2>/dev/null || true
+    rm -f /etc/hookprobe/mesh_seed 2>/dev/null || true
+    rm -f /etc/hookprobe/wifi-interfaces.conf 2>/dev/null || true
+
+    # Don't remove /etc/hookprobe if other components exist (e.g. Fortress)
     if [ -d /etc/hookprobe ] && [ -z "$(ls -A /etc/hookprobe 2>/dev/null)" ]; then
         rm -rf /etc/hookprobe
         log_info "Removed /etc/hookprobe (was empty)"
+    elif [ -d /etc/hookprobe ]; then
+        log_info "Kept /etc/hookprobe (other components present)"
     fi
 
     # Remove Guardian log directory
@@ -981,6 +1009,21 @@ remove_ml_packages() {
 restore_network() {
     log_step "Restoring network configuration..."
 
+    # Restore resolv.conf (Guardian sets it to 127.0.0.1 with immutable flag)
+    if [ -f /etc/resolv.conf ]; then
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        # Let NetworkManager regenerate resolv.conf on restart
+        log_info "Removed resolv.conf immutable flag"
+    fi
+
+    # Remove sbin tool symlinks created by Guardian setup
+    for tool in iw rfkill iwlist iwconfig iwgetid; do
+        if [ -L "/usr/local/bin/$tool" ]; then
+            rm -f "/usr/local/bin/$tool"
+            log_info "Removed symlink /usr/local/bin/$tool"
+        fi
+    done
+
     # Restart networking service to restore original config
     if systemctl is-active NetworkManager &>/dev/null; then
         log_info "Restarting NetworkManager..."
@@ -1008,7 +1051,7 @@ main() {
     echo ""
     echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
-    echo -e "${BOLD}${RED}║                       Version 5.1.0                        ║${NC}"
+    echo -e "${BOLD}${RED}║                       Version 5.4.0                        ║${NC}"
     echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1104,6 +1147,9 @@ main() {
     echo -e "  • Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, update-*, etc.)"
     echo -e "  • Guardian log files (/var/log/hookprobe/)"
     echo -e "  • Guardian directories (/opt/hookprobe/guardian/)"
+    echo -e "  • resolv.conf restored (immutable flag removed)"
+    echo -e "  • sbin tool symlinks (iw, rfkill, iwlist, iwconfig, iwgetid)"
+    echo -e "  • /etc/hookprobe Guardian configuration files"
     echo -e "  • VM support (libvirt network, VMs, QEMU/KVM packages if selected)"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
