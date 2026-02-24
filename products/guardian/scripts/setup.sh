@@ -4464,7 +4464,7 @@ RestartSec=5
 User=root
 NoNewPrivileges=yes
 ProtectSystem=full
-ReadWritePaths=/etc/hookprobe
+ReadWritePaths=/etc/hookprobe /etc/wpa_supplicant /etc/NetworkManager/conf.d
 ProtectHome=yes
 PrivateTmp=yes
 
