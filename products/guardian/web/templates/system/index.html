@@ -64,6 +64,41 @@
     </div>
 </div>
 
+<!-- SSH Maintenance Access -->
+<div class="card" id="ssh-access-card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+            </svg>
+            SSH Maintenance Access
+        </h3>
+        <span class="badge" id="ssh-status-badge" style="font-size: 0.75rem;">Checking...</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-md);">
+            Open SSH port 22 through the XDP firewall for remote debugging (LAN only).
+            Auto-disables after <strong>30 minutes</strong> for security.
+        </p>
+        <div style="display: flex; align-items: center; gap: var(--spacing-lg); flex-wrap: wrap;">
+            <label class="toggle">
+                <input type="checkbox" id="ssh-toggle" onchange="toggleSSHAccess(this.checked)">
+                <span class="switch"></span>
+                <span id="ssh-toggle-label" style="font-weight: 600;">Disabled</span>
+            </label>
+            <div id="ssh-timer-display" style="display: none; font-family: var(--font-mono); font-size: 0.875rem; color: var(--tangerine);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 4px;">
+                    <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+                </svg>
+                <span id="ssh-countdown">30:00</span> remaining
+            </div>
+        </div>
+        <div id="ssh-warning" style="display: none; margin-top: var(--spacing-md); padding: var(--spacing-sm) var(--spacing-md); background: rgba(230, 149, 0, 0.1); border: 1px solid var(--tangerine); border-radius: var(--radius-md); font-size: 0.8125rem; color: var(--tangerine);">
+            SSH is open on the LAN bridge (br0). Connect your phone to the Guardian WiFi and use Terminus to access port 22.
+        </div>
+    </div>
+</div>
+
 <!-- Services -->
 <div class="card">
     <div class="card-header">
@@ -385,6 +420,101 @@ async function restartService(service) {
 if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'system') {
     refreshLogs();
 }
+
+// ==================== SSH Maintenance Access ====================
+let sshCountdownInterval = null;
+let sshExpiresAt = null;
+
+async function loadSSHStatus() {
+    try {
+        const result = await apiGet('/system/ssh-access');
+        updateSSHUI(result.enabled, result.expires_at);
+    } catch (error) {
+        console.error('Failed to load SSH status:', error);
+        updateSSHUI(false, null);
+    }
+}
+
+function updateSSHUI(enabled, expiresAt) {
+    const toggle = document.getElementById('ssh-toggle');
+    const label = document.getElementById('ssh-toggle-label');
+    const badge = document.getElementById('ssh-status-badge');
+    const timerDisplay = document.getElementById('ssh-timer-display');
+    const warning = document.getElementById('ssh-warning');
+
+    if (!toggle) return;
+    toggle.checked = enabled;
+
+    if (enabled) {
+        label.textContent = 'Enabled';
+        label.style.color = 'var(--tangerine)';
+        badge.textContent = 'OPEN';
+        badge.style.background = 'rgba(230, 149, 0, 0.2)';
+        badge.style.color = 'var(--tangerine)';
+        timerDisplay.style.display = 'block';
+        warning.style.display = 'block';
+        sshExpiresAt = expiresAt;
+        startSSHCountdown();
+    } else {
+        label.textContent = 'Disabled';
+        label.style.color = '';
+        badge.textContent = 'CLOSED';
+        badge.style.background = 'rgba(105, 212, 172, 0.2)';
+        badge.style.color = 'var(--pacific)';
+        timerDisplay.style.display = 'none';
+        warning.style.display = 'none';
+        stopSSHCountdown();
+    }
+}
+
+async function toggleSSHAccess(enabled) {
+    const toggle = document.getElementById('ssh-toggle');
+    try {
+        toggle.disabled = true;
+        const result = await apiPost('/system/ssh-access', { enabled });
+        if (result.success) {
+            updateSSHUI(result.enabled, result.expires_at);
+            showToast(result.message, enabled ? 'warning' : 'success');
+        } else {
+            toggle.checked = !enabled;
+            showToast(result.error || 'Failed to toggle SSH access', 'error');
+        }
+    } catch (error) {
+        toggle.checked = !enabled;
+        showToast('Failed to toggle SSH access', 'error');
+    } finally {
+        toggle.disabled = false;
+    }
+}
+
+function startSSHCountdown() {
+    stopSSHCountdown();
+    sshCountdownInterval = setInterval(() => {
+        if (!sshExpiresAt) return;
+        const now = Date.now() / 1000;
+        const remaining = Math.max(0, sshExpiresAt - now);
+        if (remaining <= 0) {
+            stopSSHCountdown();
+            updateSSHUI(false, null);
+            showToast('SSH access auto-disabled (timeout)', 'info');
+            return;
+        }
+        const minutes = Math.floor(remaining / 60);
+        const seconds = Math.floor(remaining % 60);
+        const el = document.getElementById('ssh-countdown');
+        if (el) el.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }, 1000);
+}
+
+function stopSSHCountdown() {
+    if (sshCountdownInterval) {
+        clearInterval(sshCountdownInterval);
+        sshCountdownInterval = null;
+    }
+}
+
+// Load SSH status on system tab
+loadSSHStatus();
 
 // ==================== GitHub Update Functions ====================
 const GitHubUpdate = {

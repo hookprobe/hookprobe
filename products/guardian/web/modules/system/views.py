@@ -1,10 +1,16 @@
 """
 System Module Views - System Settings and Management
 """
+import json
+import os
+
 from flask import jsonify, request
 from . import system_bp
 from utils import run_command, get_system_info, format_bytes, _safe_error
 from modules.auth import require_auth
+
+XDP_MANAGER = '/opt/hookprobe/guardian/xdp/xdp_manager.py'
+SSH_BYPASS_TIMEOUT = 1800  # 30 minutes
 
 
 @system_bp.route('/info')
@@ -168,5 +174,74 @@ def api_shutdown():
     try:
         run_command(['sudo', 'shutdown', '-h', '+1', 'Guardian shutting down...'])
         return jsonify({'success': True, 'message': 'Shutting down in 1 minute'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': _safe_error(e)}), 500
+
+
+# --- SSH Maintenance Access (XDP Bypass Toggle) ---
+
+@system_bp.route('/ssh-access')
+@require_auth
+def api_ssh_access_status():
+    """Get current SSH XDP bypass status."""
+    try:
+        output, success = run_command(
+            ['/usr/bin/python3', XDP_MANAGER, 'ssh-bypass', 'status']
+        )
+        if success and output:
+            data = json.loads(output)
+            return jsonify(data)
+        return jsonify({
+            'enabled': False, 'expires_at': None,
+            'timeout_seconds': SSH_BYPASS_TIMEOUT,
+        })
+    except Exception as e:
+        return jsonify({'error': _safe_error(e)}), 500
+
+
+@system_bp.route('/ssh-access', methods=['POST'])
+@require_auth
+def api_ssh_access_toggle():
+    """Enable or disable SSH XDP bypass for maintenance access."""
+    import time as _time
+
+    data = request.get_json() if request.is_json else {}
+    enabled = data.get('enabled', False)
+
+    if not isinstance(enabled, bool):
+        return jsonify({'error': 'enabled must be a boolean'}), 400
+
+    try:
+        action = 'on' if enabled else 'off'
+        output, success = run_command(
+            ['/usr/bin/python3', XDP_MANAGER, 'ssh-bypass', action]
+        )
+
+        if success and output:
+            result = json.loads(output)
+            if result.get('success'):
+                expires_at = (_time.time() + SSH_BYPASS_TIMEOUT
+                              if enabled else None)
+                return jsonify({
+                    'success': True,
+                    'enabled': enabled,
+                    'expires_at': expires_at,
+                    'timeout_seconds': SSH_BYPASS_TIMEOUT,
+                    'message': (
+                        f'SSH access enabled for '
+                        f'{SSH_BYPASS_TIMEOUT // 60} minutes'
+                        if enabled
+                        else 'SSH access disabled'
+                    ),
+                })
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Unknown error'),
+            }), 500
+
+        return jsonify({
+            'success': False,
+            'error': output or 'XDP manager failed',
+        }), 500
     except Exception as e:
         return jsonify({'success': False, 'error': _safe_error(e)}), 500
