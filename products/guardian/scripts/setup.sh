@@ -3099,15 +3099,14 @@ bogus-priv
 no-resolv
 no-poll
 
-# Interface - listen on bridge (LAN clients) and loopback (system DNS)
-# The Guardian system itself needs 127.0.0.1 for apt updates, pip, etc.
+# Interface - listen on bridge only
 interface=br0
-listen-address=127.0.0.1
 bind-dynamic
 
 # Do NOT listen on WAN interfaces
 except-interface=eth0
 except-interface=wlan0
+except-interface=lo
 
 # DHCP range (/27 subnet - 30 usable addresses)
 dhcp-range=$DHCP_START,$DHCP_END,$NETMASK,24h
@@ -3159,12 +3158,6 @@ EOF
 
 # Guardian WAN failover configuration
 # eth0 = primary (metric 100), wlan0 = backup (metric 600)
-
-# CRITICAL: Prevent dhcpcd from overwriting /etc/resolv.conf with upstream
-# gateway DNS. Guardian uses its own dnsmasq on 127.0.0.1 for system DNS.
-# Without this, upstream DHCP servers set the gateway as DNS which often
-# doesn't serve DNS, breaking apt update, pip install, and all system DNS.
-nohook resolv.conf
 
 interface eth0
 metric 100
@@ -3797,29 +3790,6 @@ DNSMASQ_OVERRIDE
         systemctl status hostapd.service --no-pager || true
     }
     systemctl start dnsmasq.service 2>/dev/null || true
-
-    # ─────────────────────────────────────────────────────────────
-    # Force system DNS to use local dnsmasq (127.0.0.1)
-    # ─────────────────────────────────────────────────────────────
-    # This ensures the Guardian system itself (apt, pip, curl, etc.)
-    # uses dnsmasq for DNS instead of whatever upstream DHCP provides.
-    # dnsmasq forwards to 1.1.1.1/9.9.9.9/8.8.8.8 as configured above.
-    log_info "Configuring system DNS to use local dnsmasq..."
-
-    # Remove immutable flag if set from a previous install
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-
-    cat > /etc/resolv.conf << 'RESOLV_EOF'
-# HookProbe Guardian - System DNS Configuration
-# DO NOT EDIT - managed by Guardian installer
-# DNS queries go to local dnsmasq which forwards to 1.1.1.1/9.9.9.9/8.8.8.8
-nameserver 127.0.0.1
-search guardian.local
-RESOLV_EOF
-
-    # Prevent dhcpcd/NetworkManager from overwriting resolv.conf
-    chattr +i /etc/resolv.conf 2>/dev/null || true
-    log_info "System DNS locked to 127.0.0.1 (dnsmasq)"
 
     # Install SSID health check script
     log_info "Installing SSID health check..."
