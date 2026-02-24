@@ -637,6 +637,12 @@ def api_wifi_connect():
                 method = 'wpa_supplicant'
 
         if success:
+            # Add policy-based routing so replies go back via wlan0
+            # (needed when eth0 and wlan0 are on the same subnet)
+            run_command(
+                ['sudo', '/usr/local/bin/guardian-wlan0-policy-route.sh', 'add'],
+                timeout=10
+            )
             return jsonify({
                 'success': True,
                 'message': message,
