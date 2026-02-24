@@ -84,10 +84,7 @@
     </div>
 </div>
 
-<!-- xterm.js from CDN -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
-<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<!-- xterm.js - lazy-loaded when Debug tab is activated (prevents blocking without WAN) -->
 
 <style>
 /* Terminal styling */
@@ -674,15 +671,29 @@ function updateHistoryCount() {
     document.getElementById('debug-history-count').textContent = DebugConsole.commandHistory.length;
 }
 
-// Initialize on tab load
+// Initialize on tab load (lazy-loads xterm from CDN on first use)
 function loadDebugData() {
     if (!DebugConsole.terminal) {
-        // Small delay to ensure container is visible
-        setTimeout(() => {
-            initTerminal();
-            loadCommandCategories();
-            updateRateLimit();
-        }, 100);
+        if (typeof Terminal !== 'undefined') {
+            // xterm already loaded
+            setTimeout(() => { initTerminal(); loadCommandCategories(); updateRateLimit(); }, 100);
+        } else {
+            // Lazy-load xterm.js from CDN
+            const container = document.getElementById('terminal-container');
+            if (container) container.innerHTML = '<div style="padding:2rem;color:var(--text-muted);text-align:center;">Loading terminal...</div>';
+            lazyLoadScripts([
+                'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css',
+                'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js',
+                'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js'
+            ], () => {
+                if (typeof Terminal !== 'undefined') {
+                    if (container) container.innerHTML = '';
+                    setTimeout(() => { initTerminal(); loadCommandCategories(); updateRateLimit(); }, 100);
+                } else {
+                    if (container) container.innerHTML = '<div style="padding:2rem;color:var(--text-muted);text-align:center;">Terminal requires internet connection.</div>';
+                }
+            });
+        }
     } else {
         // Re-fit terminal if already initialized
         if (DebugConsole.fitAddon) {

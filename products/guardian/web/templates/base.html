@@ -78,7 +78,7 @@
                 <li><a href="#" onclick="switchToTab('vpn'); closeMenu(); return false;">VPN</a></li>
                 <li><a href="#" onclick="switchToTab('system'); closeMenu(); return false;">System</a></li>
                 <li><a href="#" onclick="switchToTab('debug'); closeMenu(); return false;">Debug</a></li>
-                <li><a href="#" onclick="switchToTab('cortex'); closeMenu(); setTimeout(function(){if(typeof initCortexGlobe==='function')initCortexGlobe();},400); return false;">Cortex</a></li>
+                <li><a href="#" onclick="switchToTab('cortex'); closeMenu(); setTimeout(function(){if(typeof loadCortexDeps==='function')loadCortexDeps(function(){if(typeof initCortexGlobe==='function')initCortexGlobe();});},400); return false;">Cortex</a></li>
             </ul>
         </div>
         <a href="#" class="close" onclick="closeMenu(); return false;">Close</a>
@@ -193,6 +193,29 @@
                 menu.classList.add('visible');
                 document.body.classList.add('is-menu-visible');
             }
+        }
+
+        // Lazy-load external scripts on demand (non-blocking, sequential)
+        function lazyLoadScripts(urls, callback) {
+            let i = 0;
+            function next() {
+                if (i >= urls.length) { if (callback) callback(); return; }
+                const url = urls[i++];
+                if (url.endsWith('.css')) {
+                    const link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = url;
+                    document.head.appendChild(link);
+                    next();
+                } else {
+                    const s = document.createElement('script');
+                    s.src = url;
+                    s.onload = next;
+                    s.onerror = function() { console.warn('Failed to load:', url); next(); };
+                    document.head.appendChild(s);
+                }
+            }
+            next();
         }
     </script>
 
