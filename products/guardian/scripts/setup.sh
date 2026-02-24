@@ -3485,6 +3485,8 @@ table inet guardian {
         iifname "br0" tcp dport 8888 accept
         iifname "br0" udp dport 8144 accept
         iifname "br0" tcp dport 8144 accept
+        # Web UI from wlan0 (secondary WAN - upstream WiFi)
+        iifname "wlan0" tcp dport 8080 accept
         # HTP mesh (from WAN peers)
         udp dport 8144 accept
         tcp dport 8144 accept
@@ -3613,15 +3615,76 @@ if [ -d /sys/class/net/wlan0 ]; then
 fi
 
 # Enable hairpin mode on bridge ports so WiFi clients can reach the bridge IP (192.168.4.1)
-if [ -d /sys/class/net/br0/brif ]; then
+# NOTE: This may run before hostapd adds wlan1 to br0. The hostapd drop-in also
+# sets hairpin mode as ExecStartPost, so this is a best-effort fallback.
+if [ -d /sys/class/net/br0/brif ] && ls /sys/class/net/br0/brif/*/hairpin_mode >/dev/null 2>&1; then
     for port in /sys/class/net/br0/brif/*/hairpin_mode; do
-        echo 1 > "$port" 2>/dev/null && log_info "Hairpin mode enabled on $(basename $(dirname $port))"
+        [ -f "$port" ] && echo 1 > "$port" 2>/dev/null && \
+            log_info "Hairpin mode enabled on $(basename $(dirname $port))"
     done
+else
+    log_info "No bridge ports yet (hostapd not started) - hairpin will be set by hostapd drop-in"
 fi
 
 log_info "Guardian routing setup complete"
 ROUTING_SCRIPT_EOF
     chmod +x /usr/local/bin/guardian-setup-routing.sh
+
+    # Create policy-based routing script for wlan0 (secondary WAN)
+    # Ensures replies to packets arriving on wlan0 go back out wlan0
+    # instead of the default route (eth0) when both are on the same subnet.
+    cat > /usr/local/bin/guardian-wlan0-policy-route.sh << 'PBR_EOF'
+#!/bin/bash
+# Policy-based routing for wlan0 (secondary WAN)
+# Called by the web UI after connecting wlan0 to external WiFi.
+
+ACTION="$1"
+IFACE="wlan0"
+TABLE=100
+
+case "$ACTION" in
+    add)
+        IP=$(ip -4 addr show $IFACE 2>/dev/null | grep -oP 'inet \K[0-9.]+')
+        SUBNET=$(ip -4 addr show $IFACE 2>/dev/null | grep -oP 'inet \K[0-9./]+')
+        GW=$(ip route show dev $IFACE 2>/dev/null | grep default | awk '{print $3}' | head -1)
+
+        if [ -z "$IP" ]; then
+            echo "wlan0 has no IP address"
+            exit 1
+        fi
+
+        # Register routing table name
+        if ! grep -q "^${TABLE} wlan0rt" /etc/iproute2/rt_tables 2>/dev/null; then
+            echo "${TABLE} wlan0rt" >> /etc/iproute2/rt_tables
+        fi
+
+        # Flush old rules
+        ip rule del table $TABLE 2>/dev/null || true
+        ip route flush table $TABLE 2>/dev/null || true
+
+        # Add routes to table
+        [ -n "$SUBNET" ] && ip route add $SUBNET dev $IFACE table $TABLE 2>/dev/null || true
+        [ -n "$GW" ] && ip route add default via $GW dev $IFACE table $TABLE 2>/dev/null || true
+
+        # Source-based rule: replies from wlan0's IP use this table
+        ip rule add from $IP/32 table $TABLE prio 100 2>/dev/null || true
+
+        logger -t guardian-pbr "Policy routing added for wlan0 (IP=$IP, GW=$GW)"
+        echo "Policy routing enabled for wlan0 ($IP via $GW)"
+        ;;
+    del)
+        ip rule del table $TABLE 2>/dev/null || true
+        ip route flush table $TABLE 2>/dev/null || true
+        logger -t guardian-pbr "Policy routing removed for wlan0"
+        echo "Policy routing removed for wlan0"
+        ;;
+    *)
+        echo "Usage: $0 {add|del}"
+        exit 1
+        ;;
+esac
+PBR_EOF
+    chmod +x /usr/local/bin/guardian-wlan0-policy-route.sh
 
     # Create wlan0 UP service (Realtek USB WiFi needs explicit ip link set up)
     cat > /etc/systemd/system/guardian-wlan0-up.service << 'WLAN0_EOF'
@@ -3945,6 +4008,14 @@ TimeoutStartSec=30
 Environment="DAEMON_CONF=/etc/hostapd/hostapd.conf"
 HOSTAPD_OVERRIDE
     fi
+
+    # Install hostapd hairpin drop-in (sets hairpin mode AFTER hostapd starts)
+    log_info "Installing hostapd hairpin drop-in..."
+    cat > /etc/systemd/system/hostapd.service.d/hairpin.conf << 'HAIRPIN_DROPIN'
+[Service]
+# Set hairpin mode on bridge ports after hostapd starts (so wlan1 is in br0)
+ExecStartPost=/bin/sh -c 'sleep 1; for p in /sys/class/net/br0/brif/*/hairpin_mode; do [ -f "$p" ] && echo 1 > "$p" && logger -t hairpin "Enabled on $(basename $(dirname $p))"; done'
+HAIRPIN_DROPIN
 
     # Install dnsmasq service override (removes network-online dependency)
     log_info "Installing dnsmasq service override..."
