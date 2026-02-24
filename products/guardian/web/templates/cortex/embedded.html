@@ -103,64 +103,77 @@
     </div>
 </div>
 
-<!-- External Libraries (CDN) -->
-<!-- Globe.gl - 3D Globe rendering -->
-<script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
-<!-- Supercluster - Spatial clustering -->
-<script src="https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js"></script>
-<!-- KDBush - Fast spatial indexing -->
-<script src="https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js"></script>
-<!-- Deck.gl - GPU-accelerated visualization -->
-<script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
-<!-- MapLibre GL - Free basemap tiles -->
-<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
-
-<!-- Shared Cortex Modules (served from /opt/hookprobe/shared/cortex/) -->
-<script src="/cortex-modules/cluster-manager.js"></script>
-<script src="/cortex-modules/zoom-controller.js"></script>
-<script src="/cortex-modules/transitions.js"></script>
-<script src="/cortex-modules/deck-renderer.js"></script>
-<script src="/cortex-modules/basemap-config.js"></script>
-<script src="/cortex-modules/view-manager.js"></script>
-
-<!-- Cortex Embedded Wrapper -->
-<script src="{{ url_for('static', filename='js/cortex-embedded.js') }}"></script>
-
+<!-- External libraries + Cortex modules - lazy-loaded when Cortex tab is activated -->
 <script>
-    // Cortex initialization
-    // Mobile menu onclick in base.html calls initCortexGlobe directly
-    // Desktop button click handled here
+    // Cortex dependencies - loaded on demand to avoid blocking page without WAN
+    var _cortexDepsLoaded = false;
+    var _cortexDepsLoading = false;
+
+    function loadCortexDeps(callback) {
+        if (_cortexDepsLoaded) { callback(); return; }
+        if (_cortexDepsLoading) { return; }
+        _cortexDepsLoading = true;
+
+        var loading = document.getElementById('cortex-loading');
+        if (loading) {
+            loading.style.display = 'flex';
+            var text = loading.querySelector('.cortex-loading-text');
+            if (text) text.textContent = 'Loading visualization libraries...';
+        }
+
+        lazyLoadScripts([
+            // CDN libraries (order matters)
+            'https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js',
+            'https://unpkg.com/supercluster@8.0.1/dist/supercluster.min.js',
+            'https://unpkg.com/kdbush@4.0.2/dist/kdbush.min.js',
+            'https://unpkg.com/deck.gl@8.9.35/dist.min.js',
+            'https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js',
+            'https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css',
+            // Local cortex modules
+            '/cortex-modules/cluster-manager.js',
+            '/cortex-modules/zoom-controller.js',
+            '/cortex-modules/transitions.js',
+            '/cortex-modules/deck-renderer.js',
+            '/cortex-modules/basemap-config.js',
+            '/cortex-modules/view-manager.js',
+            // Cortex embedded wrapper
+            '{{ url_for("static", filename="js/cortex-embedded.js") }}'
+        ], function() {
+            _cortexDepsLoading = false;
+            if (typeof Globe !== 'undefined') {
+                _cortexDepsLoaded = true;
+                callback();
+            } else {
+                if (loading) {
+                    var text = loading.querySelector('.cortex-loading-text');
+                    if (text) text.textContent = 'Globe requires internet connection.';
+                }
+            }
+        });
+    }
+
+    // Cortex tab activation handler
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('[Cortex] DOMContentLoaded fired');
-
-        // Desktop: Listen for Cortex tab button click
-        const cortexTabBtn = document.querySelector('button[data-tab="cortex"]');
-        console.log('[Cortex] Tab button found:', !!cortexTabBtn);
-
+        var cortexTabBtn = document.querySelector('button[data-tab="cortex"]');
         if (cortexTabBtn) {
             cortexTabBtn.addEventListener('click', function() {
-                console.log('[Cortex] Tab clicked, initialized:', guardianCortex?.initialized);
-                if (typeof initCortexGlobe === 'function' && !guardianCortex?.initialized && !guardianCortex?.initializing) {
-                    console.log('[Cortex] Starting initialization from button click...');
-                    requestAnimationFrame(function() {
+                loadCortexDeps(function() {
+                    if (typeof initCortexGlobe === 'function' && typeof guardianCortex !== 'undefined' && !guardianCortex.initialized && !guardianCortex.initializing) {
                         requestAnimationFrame(function() {
-                            initCortexGlobe();
+                            requestAnimationFrame(function() { initCortexGlobe(); });
                         });
-                    });
-                }
+                    }
+                });
             });
         }
 
-        // Direct URL navigation (e.g., page load with #cortex)
         if (window.location.hash === '#cortex') {
-            console.log('[Cortex] Hash navigation detected');
-            requestAnimationFrame(function() {
-                requestAnimationFrame(function() {
-                    if (typeof initCortexGlobe === 'function') {
-                        initCortexGlobe();
-                    }
-                });
+            loadCortexDeps(function() {
+                if (typeof initCortexGlobe === 'function') {
+                    requestAnimationFrame(function() {
+                        requestAnimationFrame(function() { initCortexGlobe(); });
+                    });
+                }
             });
         }
     });
