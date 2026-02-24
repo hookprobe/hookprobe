@@ -688,6 +688,7 @@ remove_guardian_directories() {
     # Remove Guardian-specific configuration files from /etc/hookprobe
     rm -f /etc/hookprobe/guardian.conf 2>/dev/null || true
     rm -f /etc/hookprobe/guardian_auth.json 2>/dev/null || true
+    rm -f /etc/hookprobe/guardian_setup_token 2>/dev/null || true
     rm -f /etc/hookprobe/install.conf 2>/dev/null || true
     rm -f /etc/hookprobe/environment 2>/dev/null || true
     rm -f /etc/hookprobe/mesh_seed 2>/dev/null || true
