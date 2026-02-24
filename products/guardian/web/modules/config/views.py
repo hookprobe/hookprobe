@@ -601,7 +601,7 @@ def api_wifi_connect():
     """
     import os
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     ssid = data.get('ssid', '').strip()
     password = data.get('password', '')
 
@@ -672,7 +672,7 @@ def api_hotspot():
         if not _sess.get('authenticated'):
             return jsonify({'error': 'Authentication required'}), 401
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     ssid = data.get('ssid', 'Guardian-AP')
     password = data.get('password', '')
     channel = data.get('channel', 'auto')
