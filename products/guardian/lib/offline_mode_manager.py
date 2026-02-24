@@ -425,11 +425,7 @@ hostname
 clientid
 persistent
 option rapid_commit
-# Do NOT request domain_name_servers from upstream DHCP - Guardian uses
-# its own dnsmasq on 127.0.0.1 for system DNS resolution. Accepting
-# upstream DNS causes dhcpcd to overwrite /etc/resolv.conf with the
-# gateway IP, which often doesn't serve DNS and breaks apt/pip/updates.
-option domain_name, domain_search, host_name
+option domain_name_servers, domain_name, domain_search, host_name
 option classless_static_routes
 option interface_mtu
 require dhcp_server_identifier
@@ -849,10 +845,9 @@ logger_syslog_level=2
         return f"""# HookProbe Guardian - Offline Mode dnsmasq Configuration
 # Generated: {datetime.now().isoformat()}
 
-# Interface to listen on (br0 for LAN clients, loopback for system DNS)
+# Interface to listen on
 interface=br0
-listen-address=127.0.0.1
-bind-dynamic
+bind-interfaces
 
 # Don't read /etc/resolv.conf
 no-resolv
