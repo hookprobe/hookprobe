@@ -153,7 +153,14 @@ fix_wifi_wpa() {
     # Unblock WiFi
     rfkill unblock wifi 2>/dev/null || true
 
-    # Bring interface down
+    # Reconfigure interface without taking it fully DOWN.
+    # Keeping link-level UP preserves the ability to scan for networks
+    # from the web UI even during recovery. Only cycle if wpa_supplicant
+    # requires it (some drivers need a DOWN/UP to re-associate).
+    local iface_was_up=false
+    if ip link show "$INTERFACE" 2>/dev/null | grep -q "state UP\|state UNKNOWN"; then
+        iface_was_up=true
+    fi
     ip link set "$INTERFACE" down 2>/dev/null || true
     sleep 1
 
@@ -161,6 +168,9 @@ fix_wifi_wpa() {
     if ! wpa_supplicant -B -i "$INTERFACE" -c "$wpa_conf" -D nl80211 2>/dev/null; then
         if ! wpa_supplicant -B -i "$INTERFACE" -c "$wpa_conf" -D wext 2>/dev/null; then
             log_error "Failed to start wpa_supplicant"
+            # Even if wpa_supplicant fails, bring interface back UP so
+            # scanning still works (user can configure WiFi via web UI)
+            ip link set "$INTERFACE" up 2>/dev/null || true
             return 1
         fi
     fi

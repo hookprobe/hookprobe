@@ -112,6 +112,14 @@ setup_wan_interface() {
         log_info "WiFi WAN $wan_iface not associated (no upstream WiFi configured)"
         log_info "Using eth0 as primary WAN - WiFi WAN available when configured"
         echo "eth0" > /run/guardian/wan_interface 2>/dev/null || true
+
+        # IMPORTANT: Keep wlan0 at link-level UP even without an association.
+        # This allows the web UI WiFi scan to work when eth0 is also down -
+        # users need to scan for networks to configure upstream WiFi.
+        # Without this, iwlist/iw scan fails with "Network is down".
+        rfkill unblock wifi 2>/dev/null || true
+        ip link set "$wan_iface" up 2>/dev/null || true
+        log_info "$wan_iface kept UP at link level for WiFi scanning"
     fi
 }
 

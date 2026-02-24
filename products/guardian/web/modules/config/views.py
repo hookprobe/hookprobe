@@ -36,11 +36,32 @@ if str(lib_path) not in sys.path:
 def api_wifi_scan():
     """Scan for available WiFi networks using wlan0 (WAN interface)."""
     try:
+        import os
+
+        # Check if wlan0 exists
+        if not os.path.exists('/sys/class/net/wlan0'):
+            return jsonify({'success': False, 'error': 'wlan0 interface not found'}), 400
+
+        # Ensure wlan0 is UP before scanning - it may be DOWN if eth0 was the
+        # primary WAN and no upstream WiFi was configured. A DOWN interface
+        # cannot scan, so we must bring it up first.
+        run_command(['sudo', 'rfkill', 'unblock', 'wifi'], timeout=5)
+        run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
+
+        # Small delay for the interface to initialize after coming up
+        import time
+        time.sleep(1)
+
         # wlan0 is the WAN interface used to connect to upstream networks
         # Ensure interface is up before scanning (may be down after boot)
         run_command(['sudo', 'ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
         # Use full iwlist output to get more details including IE info
         output, success = run_command(['sudo', 'iwlist', 'wlan0', 'scan'], timeout=30)
+
+        if not success or 'No scan results' in output:
+            # Retry once - first scan after bringing interface up can fail
+            time.sleep(2)
+            output, success = run_command(['sudo', 'iwlist', 'wlan0', 'scan'], timeout=30)
 
         networks = []
         current = {}
