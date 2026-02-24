@@ -435,6 +435,9 @@ def _connect_with_wpa_supplicant(ssid, password, interface='wlan0'):
     import os
     import time
 
+    # Tell NetworkManager to stop managing this interface so wpa_supplicant can use it
+    run_command(['sudo', 'nmcli', 'device', 'set', interface, 'managed', 'no'], timeout=5)
+
     wpa_conf = f'/etc/wpa_supplicant/wpa_supplicant-{interface}.conf'
     wpa_dir = '/etc/wpa_supplicant'
 
@@ -616,19 +619,29 @@ def api_wifi_connect():
         # Unblock WiFi first
         run_command(['sudo', 'rfkill', 'unblock', 'wifi'], timeout=5)
 
+        method = None
+        success = False
+        message = ''
+        ip = None
+
         # Try NetworkManager first (preferred - handles everything atomically)
         if _nmcli_available():
             success, message, ip = _connect_with_nmcli(ssid, password, 'wlan0')
-        else:
-            # Fallback to wpa_supplicant
+            if success:
+                method = 'nmcli'
+
+        # Fallback to wpa_supplicant if nmcli unavailable or failed
+        if not success:
             success, message, ip = _connect_with_wpa_supplicant(ssid, password, 'wlan0')
+            if success:
+                method = 'wpa_supplicant'
 
         if success:
             return jsonify({
                 'success': True,
                 'message': message,
                 'ip': ip,
-                'method': 'nmcli' if _nmcli_available() else 'wpa_supplicant'
+                'method': method
             })
         else:
             return jsonify({
