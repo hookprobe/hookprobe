@@ -748,6 +748,26 @@ EOF
     if [ -d "/sys/class/net/wlan1" ]; then
         nmcli device set wlan1 managed no 2>/dev/null || true
     fi
+
+    # Set resolv.conf to use local dnsmasq for Guardian's own DNS
+    # This ensures DNS works regardless of which WAN interface is active
+    log_info "Configuring resolv.conf to use local dnsmasq..."
+    rm -f /etc/resolv.conf
+    cat > /etc/resolv.conf << 'RESOLV_EOF'
+# HookProbe Guardian - DNS via local dnsmasq
+# dnsmasq forwards to upstream DNS servers (1.1.1.1, 9.9.9.9, 8.8.8.8)
+nameserver 127.0.0.1
+search guardian.local
+RESOLV_EOF
+    # Protect from NM overwriting (dns=none should prevent this, but belt+suspenders)
+    chattr +i /etc/resolv.conf 2>/dev/null || true
+
+    # Create symlinks for sbin tools (may not be in PATH for non-login shells)
+    for tool in iw rfkill iwlist iwconfig iwgetid; do
+        if [ -f "/usr/sbin/$tool" ] && [ ! -e "/usr/local/bin/$tool" ]; then
+            ln -sf "/usr/sbin/$tool" "/usr/local/bin/$tool"
+        fi
+    done
 }
 
 generate_vxlan_psk() {
@@ -3432,63 +3452,64 @@ DHCPCD_EOF
     mkdir -p /etc/nftables.d
     cat > /etc/nftables.d/guardian.nft << 'EOF'
 #!/usr/sbin/nft -f
-# HookProbe Guardian - NAT and Firewall Rules
-# IMPORTANT: Preserves existing connections (SSH, etc.)
+# HookProbe Guardian - Hardened Firewall Rules (default-deny)
+# Version: 5.4.0
+#
+# This is the SINGLE SOURCE OF TRUTH for Guardian firewall rules.
+# Do NOT add rules via iptables or nft add - modify this file instead.
 
-# Delete old tables if they exist (clean slate)
 table inet guardian
 delete table inet guardian
 
 table ip guardian_nat
 delete table ip guardian_nat
 
-# Filtering rules (inet family supports both IPv4 and IPv6)
-# DEFAULT-DENY: Only explicitly allowed traffic passes
 table inet guardian {
     chain input {
         type filter hook input priority 0; policy drop;
-        # Allow loopback
+        # Loopback
         iifname "lo" accept
-        # Always allow established/related connections (keeps SSH alive)
+        # Established/related connections (keeps SSH alive)
         ct state established,related accept
-        # Allow SSH from LAN bridge only (not WAN eth0/wlan0)
-        # Users connect phone to Guardian WiFi AP → br0 → SSH
-        iifname "br0" tcp dport 22 accept
-        # Allow web UI only from LAN bridge (not WAN)
-        iifname "br0" tcp dport 8080 accept
-        # Allow WAF port from LAN
-        iifname "br0" tcp dport 8888 accept
-        # Allow DNS queries to dnsmasq from LAN only
-        iifname "br0" udp dport 53 accept
-        iifname "br0" tcp dport 53 accept
-        # Allow DHCP from LAN
-        iifname "br0" udp dport 67 accept
-        # Allow ICMP (ping)
+        # ICMP (ping, etc)
         ip protocol icmp accept
         ip6 nexthdr ipv6-icmp accept
-        # Allow mesh ports from LAN
+        # SSH (all interfaces)
+        tcp dport 22 accept
+        # LAN services (br0 = bridge for AP clients)
+        iifname "br0" udp dport 53 accept
+        iifname "br0" tcp dport 53 accept
+        iifname "br0" udp dport 67 accept
+        iifname "br0" tcp dport 80 accept
+        iifname "br0" tcp dport 8080 accept
+        iifname "br0" tcp dport 8888 accept
         iifname "br0" udp dport 8144 accept
         iifname "br0" tcp dport 8144 accept
-        # Allow container traffic to Flask (WAF reverse proxy)
-        iifname "podman*" tcp dport 8080 accept
-        iifname "veth*" tcp dport 8080 accept
+        # HTP mesh (from WAN peers)
+        udp dport 8144 accept
+        tcp dport 8144 accept
+        # Podman container access to web UI
+        iifname "podman0" tcp dport 8080 accept
+        iifname "veth*" accept
     }
 
     chain forward {
         type filter hook forward priority 0; policy drop;
+        # Established/related return traffic
         ct state established,related accept
-        # Allow forwarding from LAN to WAN
+        # LAN clients (br0) can reach any WAN
         iifname "br0" accept
+        # Hotspot AP (wlan1) can reach any WAN
+        iifname "wlan1" accept
     }
 }
 
-# NAT rules (MUST use ip family, not inet - inet doesn't support NAT)
+# NAT rules (MUST use ip family, not inet)
 table ip guardian_nat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        # Masquerade traffic going out WAN interfaces (all common patterns)
-        # Don't masquerade on LAN interfaces (br0, wlan1)
-        oifname != "br0" oifname != "wlan1" oifname != "lo" masquerade
+        # Masquerade all outbound traffic except LAN/AP/loopback/container
+        oifname != "br0" oifname != "wlan1" oifname != "lo" oifname != "podman0" masquerade
     }
 }
 EOF
@@ -3502,49 +3523,18 @@ EOF
         iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
     }
 
-    # Ensure nftables loads guardian rules at boot
+    # Configure nftables.conf to load guardian rules at boot
     log_info "Configuring nftables to load Guardian rules at boot..."
-    if [ -f /etc/nftables.conf ]; then
-        # Add include directive if not already present
-        if ! grep -q "guardian.nft" /etc/nftables.conf; then
-            echo 'include "/etc/nftables.d/guardian.nft"' >> /etc/nftables.conf
-            log_info "Added Guardian rules to nftables.conf"
-        fi
-    fi
+    cat > /etc/nftables.conf << 'NFTCONF_EOF'
+#!/usr/sbin/nft -f
+# HookProbe Guardian - nftables main config
+# All rules defined in /etc/nftables.d/guardian.nft
+# Podman (netavark) manages its own rules automatically
 
-    # Create iptables fallback script for systems without nftables
-    log_info "Creating iptables fallback for boot persistence..."
-    cat > /etc/network/if-up.d/guardian-nat << 'IPTABLES_EOF'
-#!/bin/bash
-# Guardian NAT rules - applied when network interfaces come up
-# This ensures routing works even if nftables fails
-
-# Only run for WAN interfaces
-case "$IFACE" in
-    eth0|wlan0|enp*|wlp*)
-        # Enable IP forwarding
-        echo 1 > /proc/sys/net/ipv4/ip_forward
-
-        # Add NAT masquerade if not already present
-        if ! iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null; then
-            iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE
-        fi
-
-        # Add FORWARD rules for LAN interfaces
-        for LAN_IFACE in wlan1 br0; do
-            if [ -d "/sys/class/net/$LAN_IFACE" ]; then
-                if ! iptables -C FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT 2>/dev/null; then
-                    iptables -A FORWARD -i "$LAN_IFACE" -o "$IFACE" -j ACCEPT
-                fi
-                if ! iptables -C FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-                    iptables -A FORWARD -i "$IFACE" -o "$LAN_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-                fi
-            fi
-        done
-        ;;
-esac
-IPTABLES_EOF
-    chmod +x /etc/network/if-up.d/guardian-nat 2>/dev/null || true
+flush ruleset
+include "/etc/nftables.d/guardian.nft"
+NFTCONF_EOF
+    log_info "nftables.conf configured with Guardian include"
 
     # Also create systemd service for iptables persistence (for systems using systemd-networkd)
     cat > /etc/systemd/system/guardian-routing.service << 'ROUTING_EOF'
@@ -3566,117 +3556,95 @@ ExecStart=/usr/local/bin/guardian-setup-routing.sh
 WantedBy=multi-user.target
 ROUTING_EOF
 
-    # Create the routing setup script (more readable and maintainable)
+    # Create the routing setup script (idempotent - nftables handles NAT/forward)
     cat > /usr/local/bin/guardian-setup-routing.sh << 'ROUTING_SCRIPT_EOF'
 #!/bin/bash
-# Guardian NAT/Routing Setup Script
-# Dynamically detects WAN interface and configures NAT/forwarding
+# Guardian Routing Setup Script
+# Ensures IP forwarding is enabled and WAN is reachable at boot.
+# Firewall rules (NAT, forward) are managed by /etc/nftables.d/guardian.nft
+#
+# Version: 5.4.0
 
-set -e
+LOG_TAG="guardian-routing"
+
+log_info() {
+    logger -t "$LOG_TAG" -p user.info "$1"
+    echo "[INFO] $1"
+}
+
+log_warn() {
+    logger -t "$LOG_TAG" -p user.warning "$1"
+    echo "[WARN] $1"
+}
 
 # Enable IP forwarding
 echo 1 > /proc/sys/net/ipv4/ip_forward
+sysctl -q -w net.ipv4.ip_forward=1 2>/dev/null || true
 
-# Detect WAN interface from default route
-WAN=$(ip route | grep '^default' | head -1 | awk '{print $5}')
-
-if [ -z "$WAN" ]; then
-    echo "Warning: No default route found, trying common interfaces..."
-    for iface in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
-        if [ -d "/sys/class/net/$iface" ] && ip addr show "$iface" | grep -q "inet "; then
-            WAN="$iface"
-            break
-        fi
-    done
+# Ensure nftables guardian rules are loaded
+if ! nft list table inet guardian >/dev/null 2>&1; then
+    log_info "Loading guardian nftables rules..."
+    nft -f /etc/nftables.d/guardian.nft 2>/dev/null || log_warn "Failed to load guardian.nft"
 fi
 
-if [ -z "$WAN" ]; then
-    # No WAN interface detected - Guardian is in offline mode.
-    # Pre-configure MASQUERADE for both eth0 and wlan0 so routing works
-    # immediately when either interface comes up later (via if-up.d hook).
-    echo "Warning: No default route found - offline mode, pre-configuring NAT..."
-    for iface in eth0 wlan0; do
-        if [ -d "/sys/class/net/$iface" ]; then
-            if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
-                iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
-                echo "Pre-configured MASQUERADE for $iface (available when connected)"
-            fi
-        fi
-    done
-else
-    echo "Detected WAN interface: $WAN"
+# Wait for default route (up to 30 seconds at boot)
+MAX_WAIT=30
+WAIT=0
 
-    # Add MASQUERADE for WAN interface
-    if ! iptables -t nat -C POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null; then
-        iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE
-        echo "Added MASQUERADE for $WAN"
+while [ $WAIT -lt $MAX_WAIT ]; do
+    WAN=$(ip route 2>/dev/null | grep '^default' | head -1 | awk '{print $5}')
+    if [ -n "$WAN" ]; then
+        log_info "WAN interface detected: $WAN"
+        break
     fi
-
-    # Also add masquerade for other potential WAN interfaces (failover)
-    for iface in eth0 wlan0; do
-        if [ "$iface" != "$WAN" ] && [ -d "/sys/class/net/$iface" ]; then
-            if ! iptables -t nat -C POSTROUTING -o "$iface" -j MASQUERADE 2>/dev/null; then
-                iptables -t nat -A POSTROUTING -o "$iface" -j MASQUERADE
-                echo "Added MASQUERADE for failover interface $iface"
-            fi
-        fi
-    done
-fi
-
-# Configure FORWARD rules for LAN interfaces
-for LAN in wlan1 br0; do
-    if [ -d "/sys/class/net/$LAN" ]; then
-        # Interface-specific FORWARD rules (only if WAN is known)
-        if [ -n "$WAN" ]; then
-            # Allow LAN to WAN forwarding
-            if ! iptables -C FORWARD -i "$LAN" -o "$WAN" -j ACCEPT 2>/dev/null; then
-                iptables -A FORWARD -i "$LAN" -o "$WAN" -j ACCEPT
-                echo "Added FORWARD rule: $LAN -> $WAN"
-            fi
-
-            # Allow return traffic (established connections)
-            if ! iptables -C FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-                iptables -A FORWARD -i "$WAN" -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
-                echo "Added FORWARD rule: $WAN -> $LAN (established)"
-            fi
-        fi
-
-        # General LAN outbound (for any WAN - works when WAN comes up later)
-        if ! iptables -C FORWARD -i "$LAN" -j ACCEPT 2>/dev/null; then
-            iptables -A FORWARD -i "$LAN" -j ACCEPT
-        fi
-
-        # General return traffic to LAN
-        if ! iptables -C FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-            iptables -A FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT
-        fi
-    fi
+    sleep 2
+    WAIT=$((WAIT + 2))
+    [ $((WAIT % 10)) -eq 0 ] && log_warn "Waiting for WAN interface... (${WAIT}s)"
 done
 
-echo "Guardian routing setup complete"
+if [ -z "$WAN" ]; then
+    log_warn "No default route after ${MAX_WAIT}s - NAT still active via nftables"
+fi
+
+# Bring wlan0 up for WiFi scanning (Realtek USB driver needs explicit up)
+if [ -d /sys/class/net/wlan0 ]; then
+    ip link set wlan0 up 2>/dev/null || true
+    log_info "wlan0 brought UP for scanning"
+fi
+
+log_info "Guardian routing setup complete"
 ROUTING_SCRIPT_EOF
     chmod +x /usr/local/bin/guardian-setup-routing.sh
 
+    # Create wlan0 UP service (Realtek USB WiFi needs explicit ip link set up)
+    cat > /etc/systemd/system/guardian-wlan0-up.service << 'WLAN0_EOF'
+[Unit]
+Description=Bring wlan0 (WAN WiFi) interface up for scanning
+After=network-pre.target systemd-udevd.service
+Before=guardian-webui.service guardian-routing.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/rfkill unblock wifi
+ExecStartPre=/bin/sleep 4
+ExecStart=/bin/bash -c '/usr/bin/ip link set wlan0 up 2>/dev/null || { sleep 2; /usr/bin/ip link set wlan0 up 2>/dev/null; } || true'
+
+[Install]
+WantedBy=multi-user.target
+WLAN0_EOF
+
     systemctl daemon-reload
     systemctl enable guardian-routing.service 2>/dev/null || true
+    systemctl enable guardian-wlan0-up.service 2>/dev/null || true
     systemctl start guardian-routing.service 2>/dev/null || true
 
-    # Also apply routing rules immediately (in case service start failed or for immediate effect)
+    # Also apply routing rules immediately
     log_info "Applying NAT/routing rules immediately..."
     /usr/local/bin/guardian-setup-routing.sh 2>&1 || {
-        log_warn "Routing script failed, applying basic rules..."
-        # Fallback: apply basic rules directly
+        log_warn "Routing script failed, applying basic nftables rules..."
         echo 1 > /proc/sys/net/ipv4/ip_forward
-        WAN=$(ip route | grep '^default' | head -1 | awk '{print $5}')
-        if [ -n "$WAN" ]; then
-            iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null || true
-        fi
-        for LAN in wlan1 br0; do
-            [ -d "/sys/class/net/$LAN" ] && {
-                iptables -A FORWARD -i "$LAN" -j ACCEPT 2>/dev/null || true
-                iptables -A FORWARD -o "$LAN" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-            }
-        done
+        nft -f /etc/nftables.d/guardian.nft 2>/dev/null || true
     }
 
     log_info "Base networking configuration complete"
