@@ -174,8 +174,8 @@ services:
       # This fixes GID mismatch when host fortress group != container GID 1000
       - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:rw,U
       # Bind mount host config directory (install script creates users.json here)
-      # Read-only, world-readable (644) - no secrets stored here
-      - /etc/hookprobe:/etc/hookprobe:ro
+      # rw,U required - web app writes to users.json (last_login, password changes)
+      - /etc/hookprobe:/etc/hookprobe:rw,U
       # SDN Auto Pilot database (device classification data)
       # NOTE: rw,U required for web UI to set policies (quarantine, move segment, etc.)
       - /var/lib/hookprobe:/var/lib/hookprobe:rw,U
