@@ -224,7 +224,7 @@ class User(UserMixin):
             cls._storage_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cls._storage_path, 'w') as f:
                 json.dump({'users': users, 'version': '1.0'}, f, indent=2)
-            cls._storage_path.chmod(0o600)
+            cls._storage_path.chmod(0o660)
             return True
         except Exception:
             return False
