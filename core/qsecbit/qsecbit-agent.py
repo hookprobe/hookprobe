@@ -16,6 +16,7 @@ Long-running daemon for:
 import os
 import sys
 import time
+import uuid
 import signal
 import logging
 import argparse
@@ -549,6 +550,8 @@ class HookProbeAgent:
 
         # Create DDoS threat event
         threat = ThreatEvent(
+            id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
             attack_type=AttackType.SYN_FLOOD,  # Most common DDoS
             layer=OSILayer.L4_TRANSPORT,
             source_ip=xdp_stats.get("top_attacker_ip", "unknown"),
@@ -619,6 +622,8 @@ class HookProbeAgent:
             evidence["xdp_packets"] = xdp_data.get("packets", 0)
 
         threat = ThreatEvent(
+            id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
             attack_type=attack_type,
             layer=layer,
             source_ip=xdp_data.get("top_attacker_ip"),  # May be None
