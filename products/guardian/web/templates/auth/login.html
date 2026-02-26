@@ -136,7 +136,7 @@
                 err.textContent = data.error || 'Authentication failed';
                 pin.value = '';
                 pin.focus();
-            } catch(e) {
+            } catch(fetchErr) {
                 err.textContent = 'Connection error';
             }
             btn.disabled = false;
