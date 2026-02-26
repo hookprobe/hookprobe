@@ -360,6 +360,227 @@ services:
   # See: shared/aiochi/containers/podman-compose.aiochi.yml
   # ============================================================
 
+  # ============================================================
+  # IDS TIER - HYDRA/NAPSE Deep Packet Analysis (--profile ids)
+  # ============================================================
+  # HYDRA containers provide ML-powered threat intelligence:
+  # - Feed sync: Threat intel feeds → XDP blocking maps
+  # - Event consumer: XDP RINGBUF events → ClickHouse
+  # - RDAP enricher: IP ownership classification
+  # - Feature extractor: 24-feature ML vectors
+  # - Anomaly detector: Isolation Forest ML
+  # - SENTINEL stages: 6-stage false positive discrimination
+  #
+  # Requires: ClickHouse (analytics profile) for event storage
+  # Total RAM: ~1.5GB additional
+  #
+  # Enable with: --enable-ids during install
+
+  # HYDRA Feed Sync - Downloads threat feeds → XDP blocklist/allowlist
+  hydra-feed:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-feed
+    restart: unless-stopped
+    hostname: fts-hydra-feed
+    entrypoint: ["python3", "feed_sync.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Event Consumer - XDP RINGBUF events → ClickHouse
+  hydra-consumer:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-consumer
+    restart: unless-stopped
+    hostname: fts-hydra-consumer
+    entrypoint: ["python3", "event_consumer.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA RDAP Enricher - IP ownership classification + XDP ip_scores
+  hydra-enricher:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-enricher
+    restart: unless-stopped
+    hostname: fts-hydra-enricher
+    entrypoint: ["python3", "rdap_enricher.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      POSTGRES_HOST: 172.20.200.10
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fortress
+      POSTGRES_USER: fortress
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Feature Extractor - 24-feature ML vectors per IP
+  hydra-features:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-features
+    restart: unless-stopped
+    hostname: fts-hydra-features
+    entrypoint: ["python3", "feature_extractor.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Anomaly Detector - Isolation Forest ML scoring
+  hydra-anomaly:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-anomaly
+    restart: unless-stopped
+    hostname: fts-hydra-anomaly
+    entrypoint: ["python3", "anomaly_detector.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      HOOKPROBE_MODEL_KEY: "${HOOKPROBE_MODEL_KEY:-}"
+      MODEL_DIR: /app/models
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.80
+    profiles: ["ids"]
+
+  # HYDRA SENTINEL Lifecycle - Model retraining + drift detection
+  hydra-lifecycle:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-lifecycle
+    restart: unless-stopped
+    hostname: fts-hydra-lifecycle
+    entrypoint: ["python3", "sentinel_lifecycle.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.81
+    profiles: ["ids"]
+
+  # HYDRA Temporal Memory - Behavioral drift + campaign detection
+  hydra-temporal:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-temporal
+    restart: unless-stopped
+    hostname: fts-hydra-temporal
+    entrypoint: ["python3", "temporal_memory.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.82
+    profiles: ["ids"]
+
+  # QSECBIT IDS Engine - SENTINEL-aware security scoring
+  qsecbit-ids:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-qsecbit-ids
+    restart: unless-stopped
+    hostname: fts-qsecbit-ids
+    entrypoint: ["python3", "/app/qsecbit/qsecbit_engine.py", "--auto-incidents"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.83
+    profiles: ["ids"]
+
 # ============================================================
 # SECRETS
 # ============================================================
@@ -409,6 +630,11 @@ volumes:
   dfs_data:
     driver: local
     name: fts-dfs-data
+
+  # IDS Tier (--profile ids)
+  hydra_models:
+    driver: local
+    name: fts-hydra-models
 
 
 # ============================================================

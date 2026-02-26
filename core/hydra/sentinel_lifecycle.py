@@ -664,7 +664,12 @@ class SentinelLifecycle:
 # ============================================================================
 
 def init_schema() -> bool:
-    """Create sentinel_lifecycle_metrics table if it doesn't exist."""
+    """Verify sentinel_lifecycle_metrics table exists.
+
+    This table is now created by configs/clickhouse/init.sql at container
+    startup. This function issues CREATE TABLE IF NOT EXISTS as a safety net
+    for non-container deployments.
+    """
     create_sql = f"""
         CREATE TABLE IF NOT EXISTS {CH_DB}.sentinel_lifecycle_metrics (
             timestamp DateTime64(3) CODEC(Delta(8), ZSTD(1)),

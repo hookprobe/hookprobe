@@ -26,6 +26,24 @@
 - [Risk Mitigation](#risk-mitigation)
 - [Directory Structure](#directory-structure)
 - [Appendix: Protocol Parser Reference](#appendix-protocol-parser-reference)
+- [AEGIS Disambiguation](#aegis-disambiguation)
+
+---
+
+## AEGIS Disambiguation
+
+HookProbe has two components named "AEGIS" that serve entirely different purposes:
+
+| Component | Location | Language | Purpose |
+|-----------|----------|----------|---------|
+| **AEGIS XDP** | `core/napse/aegis/` | Zig | XDP/eBPF kernel-level packet capture fast-path |
+| **AEGIS AI** | `core/aegis/` | Python | AI reasoning layer with 8 agents, LLM integration, tool execution |
+
+**AEGIS XDP** (this directory) is the kernel fast-path that captures packets at line rate using XDP/eBPF and feeds them into NAPSE's classification pipeline via BPF ring buffers. It operates at Layer 0 of the NAPSE stack.
+
+**AEGIS AI** (`core/aegis/`) is a completely separate system — it is the AI orchestrator that provides natural language reasoning, security analysis, and automated response using local/cloud LLMs. It has 8 specialized agents (GUARDIAN, WATCHDOG, SHIELD, VIGIL, SCOUT, FORGE, MEDIC, ORACLE) and a soul/memory/psyche architecture.
+
+These two systems are independent and do not share code. They can both be deployed simultaneously.
 
 ---
 

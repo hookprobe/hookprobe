@@ -87,6 +87,21 @@
 | **Ollama LLM integration** | Local AI reasoning | `shared/aiochi/containers/` (aiochi-ollama service) |
 | **AIOCHI n8n workflows** | Agentic security | `shared/aiochi/n8n-workflows/` |
 | **AIOCHI ClickHouse schema** | Event analytics | `shared/aiochi/schemas/clickhouse-init.sql` |
+| **NAPSE IDS/NSM** | AI-native IDS engine | `core/napse/` |
+| **NAPSE packet inspector** | Deep packet inspection | `core/napse/inspector/packet_inspector.py` |
+| **NAPSE QSecBit scoring** | SENTINEL-aware scoring | `core/napse/qsecbit/qsecbit_engine.py` |
+| **NAPSE ClickHouse schema** | IDS event tables | `core/napse/configs/clickhouse/init.sql` |
+| **HYDRA threat intel** | Feed sync + SENTINEL pipeline | `core/hydra/` |
+| **HYDRA feed sync** | Threat feed → XDP blocklist | `core/hydra/feed_sync.py` |
+| **HYDRA anomaly detection** | Isolation Forest ML | `core/hydra/anomaly_detector.py` |
+| **HYDRA SENTINEL lifecycle** | Self-learning IDS | `core/hydra/sentinel_lifecycle.py` |
+| **HYDRA temporal memory** | Behavioral drift tracking | `core/hydra/temporal_memory.py` |
+| **HYDRA RDAP enrichment** | IP ownership classification | `core/hydra/rdap_enricher.py` |
+| **HYDRA Fortress containers** | IDS profile deployment | `products/fortress/containers/Containerfile.hydra` |
+| **Guardian HYDRA lite** | Feed sync + event consumer only | `products/guardian/lib/hydra_lite.py` |
+| **AEGIS AI reasoning** | 8-agent AI orchestrator | `core/aegis/` |
+| **AEGIS XDP fast-path** | Zig XDP scaffolding (not AI) | `core/napse/aegis/` |
+| **VIRE visualization** | hookprobe-com only (dashboard viz) | _Not in this codebase_ |
 | **Community guidelines** | Code of Conduct | `CODE_OF_CONDUCT.md` |
 | **Contributing** | Contribution guide | `docs/CONTRIBUTING.md` |
 | **Security reporting** | Vulnerability disclosure | `docs/SECURITY.md` |

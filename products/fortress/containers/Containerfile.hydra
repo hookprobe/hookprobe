@@ -1,0 +1,75 @@
+# ==============================================================================
+# Fortress HYDRA IDS Container
+# ==============================================================================
+# Shared image for all HYDRA microservices (feed_sync, event_consumer,
+# rdap_enricher, feature_extractor, anomaly_detector, sentinel_lifecycle,
+# temporal_memory, qsecbit_engine).
+#
+# Each container overrides ENTRYPOINT in podman-compose.yml to run
+# a specific module.
+#
+# Build:
+#   podman build -f Containerfile.hydra -t fts-hydra:latest ../..
+#
+# Run (example - feed sync):
+#   podman run --network=host --cap-add=NET_ADMIN fts-hydra:latest python3 feed_sync.py
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for numpy/scipy compilation
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install ML dependencies (numpy, scipy, scikit-learn for Isolation Forest)
+COPY products/fortress/containers/requirements-ml.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-ml.txt
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Runtime dependencies
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libgomp1 \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -u 1000 -g nogroup -d /app -s /sbin/nologin hydra
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /app/models /app/data /var/log/hookprobe \
+    && chown -R hydra:nogroup /app /var/log/hookprobe
+
+# Copy all HYDRA modules (includes bpf_map_ops.py)
+COPY --chown=hydra:nogroup core/hydra/ /app/
+
+# Environment
+ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
+
+# Health check - verify Python process is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python3 -c 'import os, signal; os.kill(1, 0)'
+
+# SECURITY: Run as non-root user (CWE-250)
+USER hydra
+
+WORKDIR /app
+
+# Default entrypoint - overridden per-service in podman-compose.yml
+ENTRYPOINT ["python3"]
+CMD ["feed_sync.py"]
