@@ -11,7 +11,7 @@ class Config:
 
     # Session cookie security (CWE-614, CWE-1004, CWE-352)
     SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = 'Strict'  # CSRF protection
+    SESSION_COOKIE_SAMESITE = 'Lax'  # Lax allows same-site navigation after fetch() login
     SESSION_COOKIE_SECURE = os.environ.get(
         'GUARDIAN_TLS', 'false'
     ).lower() == 'true'  # Set True when TLS enabled
