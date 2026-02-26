@@ -83,6 +83,12 @@ TRUSTED_NETWORKS = [
 # Known infrastructure IPs (CDN, repos, cloud services) - never flag as threats
 TRUSTED_IPS = set()
 
+# SENTINEL benign cache: IPs confirmed benign by SENTINEL engine
+# Loaded from /app/models/sentinel_benign_cache.txt (shared volume)
+SENTINEL_BENIGN_IPS: set = set()
+SENTINEL_CACHE_PATH = '/app/models/sentinel_benign_cache.txt'
+_sentinel_cache_mtime = 0.0
+
 def _build_trusted_ips():
     """Build a set of known-good individual IPs at startup."""
     # These are resolved once; add more as needed
@@ -97,13 +103,39 @@ def _build_trusted_ips():
         except ValueError:
             pass
 
+def _refresh_sentinel_cache():
+    """Reload SENTINEL benign IP cache from shared file if changed."""
+    global SENTINEL_BENIGN_IPS, _sentinel_cache_mtime
+    try:
+        mtime = os.path.getmtime(SENTINEL_CACHE_PATH)
+        if mtime <= _sentinel_cache_mtime:
+            return  # No change
+        _sentinel_cache_mtime = mtime
+        new_ips = set()
+        with open(SENTINEL_CACHE_PATH, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    try:
+                        new_ips.add(ipaddress.ip_address(line))
+                    except ValueError:
+                        pass
+        SENTINEL_BENIGN_IPS = new_ips
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
 _build_trusted_ips()
+_refresh_sentinel_cache()
 
 def is_trusted_source(ip_str: str) -> bool:
-    """Check if an IP belongs to a trusted network or is a known infrastructure IP."""
+    """Check if an IP belongs to a trusted network, known infrastructure, or SENTINEL benign cache."""
     try:
         addr = ipaddress.ip_address(ip_str)
         if addr in TRUSTED_IPS:
+            return True
+        if addr in SENTINEL_BENIGN_IPS:
             return True
         return any(addr in net for net in TRUSTED_NETWORKS)
     except ValueError:
@@ -912,6 +944,8 @@ class PacketInspector:
         stale_keys = [k for k, v in self.src_pkt_rate.items() if not v or v[-1] < cutoff]
         for k in stale_keys:
             del self.src_pkt_rate[k]
+        # Refresh SENTINEL benign IP cache from shared volume
+        _refresh_sentinel_cache()
 
     def run(self):
         """Main capture loop."""

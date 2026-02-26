@@ -182,19 +182,27 @@ rdap_cache = LRUCache(maxsize=50000, ttl_seconds=86400)
 # CLICKHOUSE CLIENT
 # ============================================================================
 
+def ch_escape(value: str) -> str:
+    """Escape a string for safe use in ClickHouse SQL VALUES.
+
+    ClickHouse requires: backslash FIRST, then single quote.
+    This prevents injection via RDAP response fields or other external data.
+    """
+    return value.replace('\\', '\\\\').replace("'", "\\'")
+
+
 def ch_query(query: str, data: str = '') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API."""
+    """Execute a ClickHouse query via HTTP API with auth in headers (not URL)."""
     if not CH_PASSWORD:
         return None
     try:
         url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({
-            'query': query,
-            'user': CH_USER,
-            'password': CH_PASSWORD,
-        })
+        params = urlencode({'query': query})
         full_url = f"{url}?{params}"
         req = Request(full_url)
+        # Auth via headers instead of URL params (avoids password in logs)
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
         if data:
             req.data = data.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
@@ -630,19 +638,21 @@ def enrich_ip(ip: str) -> Optional[dict]:
 
     # Write to ClickHouse rdap_cache
     raw_json = json.dumps(rdap_data)[:4000]  # Truncate for storage
-    # Escape single quotes for ClickHouse
-    rdap_name_esc = result['rdap_name'].replace("'", "\\'")
-    rdap_handle_esc = result['rdap_handle'].replace("'", "\\'")
-    asn_name_esc = result['asn_name'].replace("'", "\\'")
-    abuse_esc = result['abuse_contact'].replace("'", "\\'")
-    raw_json_esc = raw_json.replace("'", "\\'")
+    # Escape all external strings (RDAP data could contain injection payloads)
+    rdap_name_esc = ch_escape(result['rdap_name'])
+    rdap_handle_esc = ch_escape(result['rdap_handle'])
+    asn_name_esc = ch_escape(result['asn_name'])
+    abuse_esc = ch_escape(result['abuse_contact'])
+    raw_json_esc = ch_escape(raw_json)
+    country_esc = ch_escape(country[:2])
+    ip_type_esc = ch_escape(ip_type)
 
     ch_query(
         f"INSERT INTO {CH_DB}.rdap_cache "
         f"(ip, rdap_name, rdap_handle, rdap_type, country, asn, asn_name, "
         f"abuse_contact, cidr_prefix, weighted_score, raw_json) VALUES",
         f"(IPv4StringToNum('{ip}'), '{rdap_name_esc}', '{rdap_handle_esc}', "
-        f"'{ip_type}', '{country}', {asn}, '{asn_name_esc}', "
+        f"'{ip_type_esc}', '{country_esc}', {asn}, '{asn_name_esc}', "
         f"'{abuse_esc}', {cidr_prefix}, {score}, '{raw_json_esc}')"
     )
 
