@@ -164,7 +164,12 @@ def ch_ddl(query: str) -> bool:
 # ============================================================================
 
 def ensure_tables():
-    """Create sentinel_temporal and sentinel_campaigns tables if needed."""
+    """Verify sentinel_temporal and sentinel_campaigns tables exist.
+
+    These tables are now created by configs/clickhouse/init.sql at container
+    startup. This function issues CREATE TABLE IF NOT EXISTS as a safety net
+    for non-container deployments.
+    """
     ch_ddl(f"""
         CREATE TABLE IF NOT EXISTS {CH_DB}.sentinel_temporal (
             timestamp DateTime64(3) DEFAULT now64(3),

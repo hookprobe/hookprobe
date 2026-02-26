@@ -3826,6 +3826,53 @@ PYEOF
 }
 
 # ============================================================
+# LIGHTWEIGHT HYDRA SETUP (Feed Sync + Event Consumer)
+# ============================================================
+install_hydra_lite() {
+    log_step "Installing lightweight HYDRA integration..."
+
+    local HOOKPROBE_ROOT="$(cd "$GUARDIAN_ROOT/../.." && pwd)"
+    local HYDRA_SRC="$HOOKPROBE_ROOT/core/hydra"
+    local HYDRA_DEST="/opt/hookprobe/guardian/hydra"
+    local HYDRA_DATA="/opt/hookprobe/guardian/data/hydra"
+
+    # Create directories
+    mkdir -p "$HYDRA_DEST"
+    mkdir -p "$HYDRA_DATA/feeds"
+    mkdir -p "$HYDRA_DATA/events"
+
+    # Copy hydra_lite.py from Guardian lib (already installed)
+    if [ -f "/opt/hookprobe/guardian/lib/hydra_lite.py" ]; then
+        log_info "hydra_lite.py already installed via Guardian lib"
+    fi
+
+    # Copy core HYDRA modules needed for lightweight mode
+    if [ -d "$HYDRA_SRC" ]; then
+        log_info "Copying HYDRA feed_sync and bpf_map_ops from core..."
+        cp "$HYDRA_SRC/feed_sync.py" "$HYDRA_DEST/" 2>/dev/null || true
+        cp "$HYDRA_SRC/bpf_map_ops.py" "$HYDRA_DEST/" 2>/dev/null || true
+        cp "$HYDRA_SRC/__init__.py" "$HYDRA_DEST/" 2>/dev/null || true
+
+        local copied=$(ls -1 "$HYDRA_DEST"/*.py 2>/dev/null | wc -l)
+        log_info "Installed $copied HYDRA modules (lightweight mode)"
+    else
+        log_warn "HYDRA source not found at $HYDRA_SRC - feed sync disabled"
+    fi
+
+    # Set environment for Guardian's memory-constrained mode
+    cat >> /etc/hookprobe/guardian.conf << 'EOF'
+
+# HYDRA Lightweight Mode (feed sync + event consumer only)
+# ~100-200MB RAM overhead; NO SENTINEL, ML, enricher, or features
+GUARDIAN_HYDRA_LITE=true
+GUARDIAN_DATA_DIR=/opt/hookprobe/guardian/data
+EOF
+
+    chmod -R 755 "$HYDRA_DEST"
+    log_info "HYDRA lightweight integration installed"
+}
+
+# ============================================================
 # OFFLINE MODE SERVICE INSTALLATION
 # ============================================================
 install_offline_mode_service() {
@@ -5384,6 +5431,10 @@ main() {
     # Install Guardian Python library
     log_step "Installing Guardian library..."
     install_guardian_lib
+
+    # Install lightweight HYDRA (feed sync + event consumer, ~100-200MB RAM)
+    log_step "Installing lightweight HYDRA..."
+    install_hydra_lite
 
     # Install Offline Mode service (smart channel selection, route metrics)
     log_step "Installing Offline Mode service..."

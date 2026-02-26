@@ -148,17 +148,58 @@ class QSecBitEngine:
 
     def calculate_threat_score(self, hours: int = 1) -> Tuple[int, Dict[str, int]]:
         """
-        Calculate threat score based on Napse intent classifications.
+        Calculate threat score based on calibrated SENTINEL verdicts.
 
-        Scoring logic (v2 - rate-based, not raw counts):
+        Scoring logic (v3 - SENTINEL-aware):
         - Start at 100 (perfect)
-        - Use UNIQUE SOURCE IPs per intent class (not raw event counts)
-          - A single IP generating 100K events is 1 source, not 100K threats
+        - Use SENTINEL evidence when available (calibrated ML + heuristics)
+        - Count only IPs with sentinel_score >= 0.4 (suspicious+) as real threats
+        - Fall back to napse_intents if SENTINEL has no recent data
         - DDoS requires 10+ distributed sources to count
         - Apply logarithmic scaling (diminishing returns on deductions)
         """
-        # Count unique SOURCES per severity, not raw events
-        # This prevents a single noisy IP from tanking the score
+        # Try SENTINEL-calibrated threat counts first
+        sentinel_query = """
+            SELECT
+                uniqIf(src_ip, sentinel_score >= 0.7) as malicious_sources,
+                uniqIf(src_ip, sentinel_score >= 0.4 AND sentinel_score < 0.7) as suspicious_sources,
+                uniqIf(src_ip, sentinel_score < 0.4) as benign_sources,
+                countIf(sentinel_score >= 0.7) as malicious,
+                countIf(sentinel_score >= 0.4 AND sentinel_score < 0.7) as suspicious,
+                countIf(sentinel_score < 0.4) as benign,
+                count() as total
+            FROM sentinel_evidence
+            WHERE timestamp >= now() - INTERVAL {hours:UInt32} HOUR
+        """
+
+        sentinel_results = self._query_clickhouse(sentinel_query, {'hours': hours})
+
+        if sentinel_results and int(sentinel_results[0].get('total', 0)) > 0:
+            # SENTINEL data available — use calibrated scores
+            r = sentinel_results[0]
+            try:
+                malicious_sources = int(r.get('malicious_sources', 0))
+                suspicious_sources = int(r.get('suspicious_sources', 0))
+                malicious = int(r.get('malicious', 0))
+                suspicious = int(r.get('suspicious', 0))
+                benign = int(r.get('benign', 0))
+            except (ValueError, TypeError):
+                malicious_sources = suspicious_sources = 0
+                malicious = suspicious = benign = 0
+
+            # SENTINEL-calibrated deductions (more conservative than raw intents)
+            score = 100
+            score -= min(malicious_sources * 8, 40)    # Each malicious source: -8 (max 40)
+            score -= min(suspicious_sources * 3, 20)    # Each suspicious source: -3 (max 20)
+
+            return max(0, score), {
+                'critical': malicious,
+                'high': suspicious,
+                'medium': benign,
+                'low': 0
+            }
+
+        # Fallback: raw napse_intents (no SENTINEL data)
         query = """
             SELECT
                 uniqIf(src_ip, severity = 1) as critical_sources,
