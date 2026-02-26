@@ -191,7 +191,7 @@ def ch_query(query: str, data: str = '') -> Optional[str]:
 
 def flush_events():
     """Flush event buffer to ClickHouse."""
-    global event_buffer, last_flush, drop_counts
+    global event_buffer, last_flush
 
     if not event_buffer:
         last_flush = time.monotonic()
@@ -503,8 +503,6 @@ def run_poll_consumer():
 
     Generates synthetic events from BPF map deltas when RINGBUF isn't available.
     """
-    global event_buffer
-
     logger.info("Starting poll-mode consumer (reads XDP stats maps)...")
 
     try:
