@@ -1,7 +1,7 @@
 """
 Guardian Authentication Views
 
-PIN-based authentication with bcrypt hashing.
+PIN-based authentication with PBKDF2-SHA256 hashing.
 PIN is set during setup.sh and stored in /etc/hookprobe/guardian_auth.json.
 """
 import hashlib
@@ -24,6 +24,17 @@ LOCKOUT_SECONDS = 300  # 5 minutes
 # Track failed attempts per IP (thread-safe)
 _failed_attempts = {}
 _failed_attempts_lock = __import__('threading').Lock()
+
+
+def _get_client_ip():
+    """Get real client IP, accounting for WAF/reverse proxy."""
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    real_ip = request.headers.get('X-Real-IP', '')
+    if real_ip:
+        return real_ip.strip()
+    return request.remote_addr
 
 
 def _load_auth():
@@ -53,27 +64,30 @@ def _verify_pin(pin, stored_salt, stored_hash):
 
 
 def _check_lockout(client_ip):
-    """Check if client IP is locked out due to failed attempts."""
+    """Check if client IP is locked out. Returns (locked, remaining_seconds, attempts_used)."""
     with _failed_attempts_lock:
         info = _failed_attempts.get(client_ip)
         if not info:
-            return False
+            return False, 0, 0
         if info['count'] >= MAX_ATTEMPTS:
             elapsed = time.time() - info['last_attempt']
             if elapsed < LOCKOUT_SECONDS:
-                return True
+                remaining = int(LOCKOUT_SECONDS - elapsed)
+                return True, remaining, info['count']
             # Lockout expired, reset
             del _failed_attempts[client_ip]
-        return False
+            return False, 0, 0
+        return False, 0, info['count']
 
 
 def _record_failure(client_ip):
-    """Record a failed login attempt."""
+    """Record a failed login attempt. Returns updated count."""
     with _failed_attempts_lock:
         info = _failed_attempts.get(client_ip, {'count': 0, 'last_attempt': 0})
         info['count'] += 1
         info['last_attempt'] = time.time()
         _failed_attempts[client_ip] = info
+        return info['count']
 
 
 def _clear_failures(client_ip):
@@ -100,12 +114,15 @@ def login_page():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """Authenticate with PIN."""
-    client_ip = request.remote_addr
+    client_ip = _get_client_ip()
 
-    if _check_lockout(client_ip):
-        remaining = int(LOCKOUT_SECONDS - (time.time() - _failed_attempts[client_ip]['last_attempt']))
+    locked, remaining, attempts = _check_lockout(client_ip)
+    if locked:
+        logger.warning("Locked out IP %s tried login (%d attempts)", client_ip, attempts)
         return jsonify({
             'success': False,
+            'locked': True,
+            'remaining': remaining,
             'error': f'Too many attempts. Try again in {remaining}s'
         }), 429
 
@@ -143,13 +160,25 @@ def login():
         session['authenticated'] = True
         session.permanent = True
         _clear_failures(client_ip)
+        logger.info("Successful login from %s", client_ip)
         return jsonify({'success': True})
 
-    _record_failure(client_ip)
-    attempts_left = MAX_ATTEMPTS - _failed_attempts.get(client_ip, {}).get('count', 0)
+    count = _record_failure(client_ip)
+    attempts_left = max(0, MAX_ATTEMPTS - count)
+    logger.warning("Failed login from %s (attempt %d/%d)", client_ip, count, MAX_ATTEMPTS)
+
+    if attempts_left == 0:
+        return jsonify({
+            'success': False,
+            'locked': True,
+            'remaining': LOCKOUT_SECONDS,
+            'error': f'Too many attempts. Locked for {LOCKOUT_SECONDS // 60} minutes'
+        }), 429
+
     return jsonify({
         'success': False,
-        'error': f'Invalid PIN ({max(0, attempts_left)} attempts remaining)'
+        'attempts_left': attempts_left,
+        'error': f'Invalid PIN ({attempts_left} attempts remaining)'
     }), 401
 
 
