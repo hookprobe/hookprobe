@@ -79,25 +79,63 @@
         {% endif %}
     </div>
     <script>
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const pin = document.getElementById('pin').value;
+        let lockoutTimer = null;
+
+        function startLockout(seconds) {
+            const pin = document.getElementById('pin');
             const btn = document.getElementById('submitBtn');
             const err = document.getElementById('error');
+            pin.disabled = true;
+            btn.disabled = true;
+            pin.value = '';
+            if (lockoutTimer) clearInterval(lockoutTimer);
+            let remaining = seconds;
+            err.textContent = 'Locked out. Try again in ' + remaining + 's';
+            lockoutTimer = setInterval(() => {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(lockoutTimer);
+                    lockoutTimer = null;
+                    pin.disabled = false;
+                    btn.disabled = false;
+                    err.textContent = '';
+                    pin.focus();
+                } else {
+                    err.textContent = 'Locked out. Try again in ' + remaining + 's';
+                }
+            }, 1000);
+        }
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (lockoutTimer) return;
+            const pin = document.getElementById('pin');
+            const btn = document.getElementById('submitBtn');
+            const err = document.getElementById('error');
+            if (!pin.value || pin.value.length < 4) {
+                err.textContent = 'PIN must be at least 4 digits';
+                return;
+            }
             btn.disabled = true;
             err.textContent = '';
             try {
                 const res = await fetch('/auth/login', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({pin})
+                    body: JSON.stringify({pin: pin.value})
                 });
                 const data = await res.json();
                 if (data.success) {
                     window.location.href = '/';
-                } else {
-                    err.textContent = data.error || 'Authentication failed';
+                    return;
                 }
+                if (data.locked) {
+                    startLockout(data.remaining || 300);
+                    return;
+                }
+                err.textContent = data.error || 'Authentication failed';
+                pin.value = '';
+                pin.focus();
             } catch(e) {
                 err.textContent = 'Connection error';
             }
