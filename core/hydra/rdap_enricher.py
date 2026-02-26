@@ -538,10 +538,16 @@ def get_behavioral_signals(ip: str) -> Tuple[int, int, bool]:
     rate_alerts = 0
     in_feed = False
 
+    # Validate IP before using in query
+    try:
+        validated_ip = str(ipaddress.IPv4Address(ip))
+    except (ValueError, ipaddress.AddressValueError):
+        return blocked_count, rate_alerts, in_feed
+
     # Count blocks in last hour
     result = ch_query(
         f"SELECT count() FROM {CH_DB}.hydra_events "
-        f"WHERE src_ip = IPv4StringToNum('{ip}') "
+        f"WHERE src_ip = IPv4StringToNum('{validated_ip}') "
         f"AND action = 'drop' "
         f"AND timestamp >= now() - INTERVAL 1 HOUR "
         f"FORMAT TabSeparated"
@@ -552,7 +558,7 @@ def get_behavioral_signals(ip: str) -> Tuple[int, int, bool]:
     # Count rate alerts in last hour
     result = ch_query(
         f"SELECT count() FROM {CH_DB}.hydra_events "
-        f"WHERE src_ip = IPv4StringToNum('{ip}') "
+        f"WHERE src_ip = IPv4StringToNum('{validated_ip}') "
         f"AND action = 'alert' "
         f"AND timestamp >= now() - INTERVAL 1 HOUR "
         f"FORMAT TabSeparated"
@@ -652,7 +658,7 @@ def enrich_ip(ip: str) -> Optional[dict]:
         f"(ip, rdap_name, rdap_handle, rdap_type, country, asn, asn_name, "
         f"abuse_contact, cidr_prefix, weighted_score, raw_json) VALUES",
         f"(IPv4StringToNum('{ip}'), '{rdap_name_esc}', '{rdap_handle_esc}', "
-        f"'{ip_type_esc}', '{country_esc}', {asn}, '{asn_name_esc}', "
+        f"'{ip_type_esc}', '{country_esc}', {int(asn)}, '{asn_name_esc}', "
         f"'{abuse_esc}', {cidr_prefix}, {score}, '{raw_json_esc}')"
     )
 
