@@ -1,6 +1,13 @@
 # =============================================================================
-# Aegis Configuration
-# HookProbe Adaptive Endpoint Guardian - Zig/eBPF Packet Capture Engine
+# AEGIS XDP - Zig/eBPF Packet Capture Engine
+# HookProbe Adaptive Endpoint Guardian
+#
+# NOTE: This is the AEGIS XDP fast-path component (Zig/eBPF kernel-level
+# capture). NOT to be confused with AEGIS AI (core/aegis/) which is the
+# Python AI reasoning layer with 8 agents and LLM integration.
+#
+# AEGIS XDP:  core/napse/aegis/  - XDP packet capture (this file)
+# AEGIS AI:   core/aegis/        - AI orchestrator (Python, 67 files)
 # =============================================================================
 
 [capture]

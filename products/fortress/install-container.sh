@@ -1409,6 +1409,7 @@ LOG_DIR=${LOG_DIR}
 
 # Optional features
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
+INSTALL_IDS=${INSTALL_IDS:-false}
 INSTALL_LTE=${INSTALL_LTE:-false}
 INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
 
@@ -3571,8 +3572,17 @@ start_optional_services() {
         log_info "ClickHouse started (HTTP: localhost:8123, Native: localhost:9000)"
     fi
 
-    # IDS/IPS (NAPSE + XDP) - NAPSE is deployed via AIOCHI compose stack
-    # No standalone IDS containers needed; NAPSE handles all IDS functionality
+    # HYDRA IDS - ML threat intelligence containers (--enable-ids)
+    # When AIOCHI is enabled, NAPSE/IDS is handled by the AIOCHI compose stack
+    if [ "${INSTALL_IDS:-}" = true ] && [ "${INSTALL_AIOCHI:-}" != true ]; then
+        log_info "Starting HYDRA IDS containers..."
+
+        local hydra_services="hydra-feed hydra-consumer hydra-enricher hydra-features hydra-anomaly hydra-lifecycle hydra-temporal qsecbit-ids"
+        # shellcheck disable=SC2086
+        podman-compose up -d --no-build $hydra_services 2>/dev/null || log_warn "Some HYDRA containers may already be running"
+
+        log_info "HYDRA IDS started (feed sync, event consumer, RDAP enricher, anomaly detector, SENTINEL)"
+    fi
 
     # Cloudflare Tunnel
     if [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
@@ -5548,6 +5558,14 @@ main() {
                 export AIOCHI_AI=true
                 export AIOCHI_FULL=true
                 ;;
+            --enable-ids)
+                # HYDRA IDS - ML-powered threat intelligence (~1.5GB RAM)
+                # Includes: Feed sync, Event consumer, RDAP enricher,
+                # Feature extractor, Anomaly detector, SENTINEL stages
+                # Requires ClickHouse for event storage
+                export INSTALL_IDS=true
+                export INSTALL_CLICKHOUSE=true
+                ;;
             --enable-remote-access)
                 export INSTALL_CLOUDFLARE_TUNNEL=true
                 ;;
@@ -5595,6 +5613,11 @@ main() {
                 echo "  --aiochi-workflows        Add n8n workflow automation (~500MB more)"
                 echo "  --aiochi-ai               Add Ollama LLM for AI narratives (~4GB more)"
                 echo "  --aiochi-full             Full AIOCHI stack with all components (~8GB total)"
+                echo ""
+                echo "IDS (HYDRA) - ML Threat Intelligence:"
+                echo "  --enable-ids              Install HYDRA IDS (~1.5GB RAM)"
+                echo "                            Feed sync, event consumer, RDAP enricher,"
+                echo "                            anomaly detector, SENTINEL stages"
                 echo ""
                 echo "Other Optional Components:"
                 echo "  --enable-remote-access    Configure Cloudflare Tunnel"

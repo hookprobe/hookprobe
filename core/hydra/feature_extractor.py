@@ -89,7 +89,7 @@ signal.signal(signal.SIGINT, signal_handler)
 # ============================================================================
 
 def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API."""
+    """Execute a ClickHouse query via HTTP API with auth in headers (not URL)."""
     if not CH_PASSWORD:
         return None
 
@@ -97,12 +97,13 @@ def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
         url = f"http://{CH_HOST}:{CH_PORT}/"
         params = urlencode({
             'query': query + (f" FORMAT {fmt}" if fmt else ""),
-            'user': CH_USER,
-            'password': CH_PASSWORD,
         })
         full_url = f"{url}?{params}"
 
         req = Request(full_url)
+        # Auth via headers instead of URL params (avoids password in logs)
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
         with urlopen(req, timeout=30) as resp:
             return resp.read().decode('utf-8')
 
@@ -112,20 +113,19 @@ def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
 
 
 def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT."""
+    """Execute a ClickHouse INSERT with auth in headers (not URL)."""
     if not CH_PASSWORD:
         return False
 
     try:
         url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({
-            'query': query,
-            'user': CH_USER,
-            'password': CH_PASSWORD,
-        })
+        params = urlencode({'query': query})
         full_url = f"{url}?{params}"
 
         req = Request(full_url)
+        # Auth via headers instead of URL params (avoids password in logs)
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
         if data:
             req.data = data.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
