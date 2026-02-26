@@ -598,7 +598,9 @@ def send_discord_alert(ip: str, score: float, verdict: str, action: str) -> None
 # ============================================================================
 
 # Track consecutive malicious windows per IP for graduated response
+# Bounded to prevent memory leak: evict oldest entries beyond 10,000
 consecutive_malicious: Dict[str, int] = {}
+_MAX_TRACKED_IPS = 10000
 
 
 def determine_action(ip: str, verdict: str) -> str:
@@ -612,6 +614,13 @@ def determine_action(ip: str, verdict: str) -> str:
     if verdict == 'malicious':
         consecutive_malicious[ip] = consecutive_malicious.get(ip, 0) + 1
         count = consecutive_malicious[ip]
+
+        # Evict oldest entries if dict grows too large (memory leak prevention)
+        if len(consecutive_malicious) > _MAX_TRACKED_IPS:
+            # Remove IPs with lowest counts (least suspicious)
+            sorted_ips = sorted(consecutive_malicious, key=consecutive_malicious.get)
+            for old_ip in sorted_ips[:len(consecutive_malicious) - _MAX_TRACKED_IPS]:
+                del consecutive_malicious[old_ip]
 
         if count >= 3:
             return 'block'
