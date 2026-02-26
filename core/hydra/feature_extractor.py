@@ -129,6 +129,8 @@ def ch_insert(query: str, data: str = '') -> bool:
         if data:
             req.data = data.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
+        else:
+            req.data = b''  # Force POST (GET is readonly in ClickHouse)
 
         with urlopen(req, timeout=30) as resp:
             resp.read()
@@ -162,19 +164,19 @@ def extract_network_features(window_seconds: int) -> Dict[str, dict]:
 
 
 def _extract_from_napse_intents(window_seconds: int) -> Dict[str, dict]:
-    """Extract features from napse_intents (packet-level data)."""
+    """Extract features from aegis_observations (packet-level data with TCP flags)."""
     query = f"""
         SELECT
             IPv4NumToString(src_ip) AS ip,
             count() AS total_packets,
-            sum(packet_size) AS total_bytes,
+            sum(payload_len) AS total_bytes,
             uniq(dst_port) AS unique_dst_ports,
             uniq(dst_ip) AS unique_dst_ips,
             countIf(tcp_flags = 2) AS syn_count,
             countIf(tcp_flags = 4) AS rst_count,
-            avg(packet_size) AS avg_pkt_size,
-            countIf(packet_size < 100) AS small_pkts
-        FROM {CH_DB}.napse_intents
+            avg(payload_len) AS avg_pkt_size,
+            countIf(payload_len < 100) AS small_pkts
+        FROM {CH_DB}.aegis_observations
         WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
         GROUP BY src_ip
         HAVING total_packets >= {MIN_PACKETS}
@@ -336,8 +338,8 @@ def extract_temporal_features_from_ch(window_seconds: int) -> Dict[str, dict]:
             min(timestamp) AS first_seen,
             max(timestamp) AS last_seen,
             uniq(toStartOfMinute(timestamp)) AS active_minutes,
-            stddevPop(packet_size) AS pkt_size_stddev
-        FROM {CH_DB}.napse_intents
+            stddevPop(bytes_orig) AS pkt_size_stddev
+        FROM {CH_DB}.napse_flows
         WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
         GROUP BY src_ip
         HAVING flow_count >= {MIN_PACKETS}
@@ -434,14 +436,14 @@ def extract_behavioral_features(window_seconds: int) -> Dict[str, dict]:
             IPv4NumToString(src_ip) AS ip,
             uniq(dst_port) AS unique_ports,
             count() AS total,
-            countIf(protocol = 6) AS tcp_count,
-            countIf(protocol = 17) AS udp_count,
-            countIf(protocol = 1) AS icmp_count,
+            countIf(proto = 6) AS tcp_count,
+            countIf(proto = 17) AS udp_count,
+            countIf(proto = 1) AS icmp_count,
             countIf(dst_port = 53) AS dns_count,
             uniq(dst_ip, dst_port) AS unique_services,
             uniq(src_port) AS unique_src_ports,
-            countIf(severity <= 2 AND intent_class != 'benign') AS threat_events
-        FROM {CH_DB}.napse_intents
+            countIf(intent_class != '' AND intent_class != 'benign') AS threat_events
+        FROM {CH_DB}.napse_flows
         WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
         GROUP BY src_ip
         HAVING total >= {MIN_PACKETS}

@@ -332,6 +332,8 @@ def ch_query(query: str, data: str = '') -> Optional[str]:
         if data:
             req.data = data.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
+        else:
+            req.data = b''  # Force POST (GET is readonly in ClickHouse)
 
         with urlopen(req, timeout=10) as resp:
             return resp.read().decode('utf-8')
