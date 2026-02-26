@@ -102,19 +102,14 @@ def test_jitter_injection():
     transport = HookProbeTransport("test-node", listen_port=0, transport_mode="BALANCED")
 
     session = HTPSession(
-        session_id=os.urandom(8),
+        flow_token=int.from_bytes(os.urandom(8), 'big'),
         peer_address=("127.0.0.1", 5000),
         state=SessionState.ESTABLISHED,
-        chacha_key=os.urandom(32),
+        encryption_key=os.urandom(32),
         send_sequence=0,
         recv_sequence=0,
-        weight_fingerprint=os.urandom(64),
         created_timestamp=time.time(),
         last_activity=time.time(),
-        heartbeat_interval=30.0,
-        jitter_min_ms=100,
-        jitter_max_ms=1000,
-        transport_mode="BALANCED"
     )
 
     # Calculate jitter multiple times
@@ -140,33 +135,29 @@ def test_key_rotation():
 
     transport = HookProbeTransport("test-node", listen_port=0, transport_mode="BALANCED")
 
-    # Create a session with shared secret
-    session_id = os.urandom(8)
+    # Create a session
+    flow_token = int.from_bytes(os.urandom(8), 'big')
     session = HTPSession(
-        session_id=session_id,
+        flow_token=flow_token,
         peer_address=("127.0.0.1", 5000),
         state=SessionState.ESTABLISHED,
-        chacha_key=os.urandom(32),
+        encryption_key=os.urandom(32),
         send_sequence=0,
         recv_sequence=0,
-        shared_secret=os.urandom(32),
-        weight_fingerprint=os.urandom(64),
         created_timestamp=time.time(),
         last_activity=time.time(),
-        heartbeat_interval=30.0,
-        transport_mode="BALANCED"
     )
 
-    transport.sessions[session_id] = session
+    transport.sessions[flow_token] = session
 
     # Store original key
-    original_key = session.chacha_key
+    original_key = session.encryption_key
 
     # Rotate key
-    transport._rotate_session_key(session_id)
+    transport._rotate_session_key(flow_token)
 
     # Key should have changed
-    new_key = session.chacha_key
+    new_key = session.encryption_key
     assert new_key != original_key, "Key didn't change after rotation"
     assert session.key_rotation_counter == 1, "Rotation counter not incremented"
 
@@ -176,7 +167,7 @@ def test_key_rotation():
 
     # Test weight fingerprint update triggering rotation
     new_weight_fp = os.urandom(64)
-    transport.update_weight_fingerprint(session_id, new_weight_fp)
+    transport.update_weight_fingerprint(flow_token, new_weight_fp)
 
     assert session.weight_fingerprint == new_weight_fp, "Weight fingerprint not updated"
     assert session.key_rotation_counter == 2, "Rotation counter not incremented"
@@ -190,30 +181,25 @@ def test_transport_mode_switching():
 
     transport = HookProbeTransport("test-node", listen_port=0, transport_mode="BALANCED")
 
-    session_id = os.urandom(8)
+    flow_token = int.from_bytes(os.urandom(8), 'big')
     session = HTPSession(
-        session_id=session_id,
+        flow_token=flow_token,
         peer_address=("127.0.0.1", 5000),
         state=SessionState.ESTABLISHED,
-        chacha_key=os.urandom(32),
+        encryption_key=os.urandom(32),
         send_sequence=0,
         recv_sequence=0,
-        weight_fingerprint=os.urandom(64),
         created_timestamp=time.time(),
         last_activity=time.time(),
-        heartbeat_interval=30.0,
-        jitter_min_ms=100,
-        jitter_max_ms=1000,
-        transport_mode="BALANCED"
     )
 
-    transport.sessions[session_id] = session
+    transport.sessions[flow_token] = session
 
     # Test switching to each mode
     modes = ["BURST", "STEALTH", "GHOST", "BALANCED"]
 
     for mode in modes:
-        transport.set_transport_mode(session_id, mode)
+        transport.set_transport_mode(flow_token, mode)
 
         assert session.transport_mode == mode, f"Mode not switched to {mode}"
 

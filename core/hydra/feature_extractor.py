@@ -31,11 +31,9 @@ import math
 import signal
 import logging
 import struct
-import subprocess
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
 
 logging.basicConfig(

@@ -49,7 +49,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 
 logging.basicConfig(
