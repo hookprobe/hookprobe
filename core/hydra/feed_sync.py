@@ -347,15 +347,21 @@ def log_feed_sync(feed_name: str, feed_url: str, entries_count: int,
     """Log feed sync result to ClickHouse."""
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-    # Escape single quotes in error message
-    error_msg_safe = error_msg.replace("'", "\\'").replace("\\", "\\\\")[:500]
-    feed_url_safe = feed_url.replace("'", "\\'")
+    def _ch_escape(s: str) -> str:
+        """Escape for ClickHouse SQL: backslash FIRST, then quote."""
+        return s.replace('\\', '\\\\').replace("'", "\\'")
+
+    # Escape all external strings before SQL interpolation
+    feed_name_safe = _ch_escape(feed_name)[:100]
+    feed_url_safe = _ch_escape(feed_url)[:500]
+    status_safe = _ch_escape(status)[:20]
+    error_msg_safe = _ch_escape(error_msg)[:500]
 
     query = f"""INSERT INTO {CH_DB}.hydra_feed_sync
         (timestamp, feed_name, feed_url, entries_count, new_entries,
          removed_entries, status, sync_duration_ms, error_message)
-        VALUES ('{now}', '{feed_name}', '{feed_url_safe}', {entries_count},
-                {new_entries}, {removed_entries}, '{status}',
+        VALUES ('{now}', '{feed_name_safe}', '{feed_url_safe}', {entries_count},
+                {new_entries}, {removed_entries}, '{status_safe}',
                 {duration_ms}, '{error_msg_safe}')"""
 
     ch_query(query)

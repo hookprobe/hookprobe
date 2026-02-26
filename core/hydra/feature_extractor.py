@@ -12,7 +12,7 @@ Features are grouped into 4 categories:
   - Reputation (3): ip_score, total_events, escalation_level
 
 Data sources:
-  - ClickHouse: napse_intents, napse_flows, hydra_events
+  - ClickHouse: napse_intents (preferred) or napse_flows (fallback), hydra_events
   - BPF maps: iat_map (read via bpf_map_ops if available)
   - PostgreSQL: ip_reputation table
 
@@ -145,11 +145,24 @@ def ch_insert(query: str, data: str = '') -> bool:
 
 def extract_network_features(window_seconds: int) -> Dict[str, dict]:
     """
-    Extract network features from napse_intents + napse_flows.
+    Extract network features from napse_intents (packet-level), falling back
+    to napse_flows (flow-level summaries) when napse_intents is unavailable.
 
     Per IP: pps, bps, unique_dst_ports, unique_dst_ips, syn_ratio,
             rst_ratio, avg_pkt_size, small_pkt_ratio
     """
+    # Try packet-level table first (has TCP flags for syn/rst ratios)
+    features = _extract_from_napse_intents(window_seconds)
+    if features:
+        return features
+
+    # Fallback to flow-level table (no TCP flags, but has flow summaries)
+    logger.debug("napse_intents empty/unavailable, falling back to napse_flows")
+    return _extract_from_napse_flows(window_seconds)
+
+
+def _extract_from_napse_intents(window_seconds: int) -> Dict[str, dict]:
+    """Extract features from napse_intents (packet-level data)."""
     query = f"""
         SELECT
             IPv4NumToString(src_ip) AS ip,
@@ -188,6 +201,54 @@ def extract_network_features(window_seconds: int) -> Dict[str, dict]:
                 'rst_ratio': float(row['rst_count']) / total if total > 0 else 0,
                 'avg_pkt_size': float(row['avg_pkt_size']),
                 'small_pkt_ratio': float(row['small_pkts']) / total if total > 0 else 0,
+            }
+        except (json.JSONDecodeError, KeyError, ZeroDivisionError):
+            continue
+
+    return features
+
+
+def _extract_from_napse_flows(window_seconds: int) -> Dict[str, dict]:
+    """Extract features from napse_flows (flow-level summaries from inspector)."""
+    query = f"""
+        SELECT
+            IPv4NumToString(src_ip) AS ip,
+            count() AS total_flows,
+            sum(pkts_orig) AS total_packets,
+            sum(bytes_orig) AS total_bytes,
+            uniq(dst_port) AS unique_dst_ports,
+            uniq(dst_ip) AS unique_dst_ips,
+            countIf(proto = 6) AS tcp_flows,
+            avg(bytes_orig / greatest(pkts_orig, 1)) AS avg_pkt_size,
+            countIf(bytes_orig < 200) AS small_flows
+        FROM {CH_DB}.napse_flows
+        WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
+        GROUP BY src_ip
+        HAVING total_packets >= {MIN_PACKETS}
+    """
+
+    result = ch_query(query)
+    if not result:
+        return {}
+
+    features = {}
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            ip = row['ip']
+            total_pkts = float(row['total_packets'])
+            total_flows = float(row['total_flows'])
+            features[ip] = {
+                'pps': total_pkts / window_seconds,
+                'bps': float(row['total_bytes']) * 8 / window_seconds,
+                'unique_dst_ports': int(row['unique_dst_ports']),
+                'unique_dst_ips': int(row['unique_dst_ips']),
+                'syn_ratio': 0.0,  # Not available at flow level
+                'rst_ratio': 0.0,  # Not available at flow level
+                'avg_pkt_size': float(row['avg_pkt_size']),
+                'small_pkt_ratio': float(row['small_flows']) / total_flows if total_flows > 0 else 0,
             }
         except (json.JSONDecodeError, KeyError, ZeroDivisionError):
             continue

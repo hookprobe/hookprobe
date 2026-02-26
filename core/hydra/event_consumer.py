@@ -191,7 +191,7 @@ def ch_query(query: str, data: str = '') -> Optional[str]:
 
 def flush_events():
     """Flush event buffer to ClickHouse."""
-    global event_buffer, last_flush
+    global event_buffer, last_flush, drop_counts
 
     if not event_buffer:
         last_flush = time.monotonic()
@@ -338,12 +338,19 @@ def run_ringbuf_consumer():
         os.close(fd)
         return False
 
-    logger.info("RINGBUF consumer started (mmap mode)")
+    logger.info("RINGBUF consumer started (hybrid mode: RINGBUF + XDP stats polling)")
 
     mask = ringbuf_size - 1  # Ring buffer size is always power of 2
     # Ring data starts at page_size offset in data_pages (after producer page)
     data_start = page_size
     events_consumed = 0
+
+    # XDP stats polling state (hybrid mode)
+    prev_stats = [0] * 7
+    STAT_LABELS = ['TOTAL', 'PASSED', 'DROPPED', 'ALLOWLISTED', 'BLOCKLISTED', 'RATE_DROPS', 'SCORE_DROPS']
+    stats_poll_count = 0
+    STATS_POLL_INTERVAL = 10  # seconds between XDP stats polls
+    last_stats_poll = time.monotonic()
 
     while running:
         try:
@@ -402,6 +409,20 @@ def run_ringbuf_consumer():
                 if events_consumed > 0 and int(time.monotonic()) % 60 < FLUSH_INTERVAL:
                     logger.info(f"RINGBUF: {events_consumed} events consumed total")
 
+            # Hybrid: periodically poll XDP stats and write to xdp_stats table
+            if time.monotonic() - last_stats_poll >= STATS_POLL_INTERVAL:
+                try:
+                    poll_xdp_stats(ops, prev_stats, STAT_LABELS, stats_poll_count)
+                    # Update prev_stats
+                    curr = []
+                    for i in range(7):
+                        curr.append(ops.read_percpu_u64('hydra_stats', i))
+                    prev_stats = curr
+                except Exception as e:
+                    logger.debug(f"XDP stats poll error: {e}")
+                stats_poll_count += 1
+                last_stats_poll = time.monotonic()
+
         except Exception as e:
             logger.debug(f"RINGBUF read error: {e}")
 
@@ -415,6 +436,64 @@ def run_ringbuf_consumer():
     return True
 
 
+def poll_xdp_stats(ops, prev_stats, stat_labels, poll_count):
+    """Poll XDP stats from BPF map and write to ClickHouse xdp_stats table."""
+    curr_stats = []
+    for i in range(7):
+        curr_stats.append(ops.read_percpu_u64('hydra_stats', i))
+
+    deltas = [curr_stats[i] - prev_stats[i] for i in range(7)]
+
+    # Log XDP stats every 60s
+    if poll_count % 6 == 0:
+        logger.info(
+            f"XDP stats: total={curr_stats[0]} passed={curr_stats[1]} "
+            f"dropped={curr_stats[2]} blocklisted={curr_stats[4]} "
+            f"score_drops={curr_stats[6]} "
+            f"(+{deltas[0]} +{deltas[2]}drop +{deltas[4]}bl +{deltas[6]}sc)"
+        )
+
+    # Write XDP stats to ClickHouse for dashboard consumption
+    if CH_PASSWORD and any(d != 0 for d in deltas):
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        query = (
+            f"INSERT INTO {CH_DB}.xdp_stats "
+            "(timestamp, total_packets, packets_passed, packets_dropped, "
+            "rate_drops, delta_packets) VALUES"
+        )
+        data = (
+            f"('{now}', {curr_stats[0]}, {curr_stats[1]}, {curr_stats[2]}, "
+            f"{curr_stats[5]}, {deltas[0]})"
+        )
+        ch_query(query, data)
+
+    # Generate synthetic hydra_events for high_rate_ips (for dashboard feed)
+    if deltas[4] > 0 or deltas[5] > 0 or deltas[6] > 0:
+        try:
+            hr_id = ops.find_map_by_name('high_rate_ips')
+            if hr_id:
+                entries = ops.map_dump(hr_id)
+                for key_bytes, val_bytes in entries:
+                    if len(key_bytes) >= 4:
+                        src_ip = str(ipaddress.IPv4Address(key_bytes[:4]))
+                        rate = struct.unpack('<Q', val_bytes[:8])[0] if len(val_bytes) >= 8 else 0
+                        event_buffer.append({
+                            'timestamp_ns': 0,
+                            'src_ip': src_ip,
+                            'dst_ip': '0.0.0.0',
+                            'src_port': 0,
+                            'dst_port': 0,
+                            'proto': 0,
+                            'event_type': 'alert',
+                            'reason': 'rate_exceeded',
+                            'tcp_flags': 0,
+                            'rate_pps': rate,
+                        })
+                        drop_counts[src_ip] += 1
+        except Exception as e:
+            logger.debug(f"high_rate_ips read error: {e}")
+
+
 # ============================================================================
 # POLL MODE CONSUMER (fallback — reads BPF maps for stats-based events)
 # ============================================================================
@@ -424,6 +503,7 @@ def run_poll_consumer():
 
     Generates synthetic events from BPF map deltas when RINGBUF isn't available.
     """
+    global event_buffer
 
     logger.info("Starting poll-mode consumer (reads XDP stats maps)...")
 
