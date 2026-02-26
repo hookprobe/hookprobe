@@ -86,12 +86,7 @@ def login():
             login_user(user, remember=bool(remember))
             flash(f'Welcome back, {user.display_name or user.id}!', 'success')
 
-            # Security: Validate redirect target to prevent open redirect attacks
-            next_page = request.args.get('next')
-            if next_page and is_safe_redirect_url(next_page):
-                # Reconstruct from parsed path only (strips scheme/netloc)
-                safe_path = urllib.parse.urlparse(next_page).path
-                return redirect(safe_path)
+            # Redirect to dashboard (ignoring 'next' param to prevent open redirect CWE-601)
             return redirect(url_for('dashboard.index'))
         else:
             _failed_logins[client_ip]['count'] += 1
