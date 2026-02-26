@@ -6,7 +6,6 @@ Uses bcrypt password hashing and Flask-Login sessions.
 """
 
 import time
-import urllib.parse
 from collections import defaultdict
 
 from flask import render_template, redirect, url_for, flash, request, jsonify
@@ -20,34 +19,6 @@ from .decorators import admin_required
 _MAX_LOGIN_ATTEMPTS = 5
 _LOCKOUT_SECONDS = 300  # 5 minutes
 _failed_logins: dict = defaultdict(lambda: {'count': 0, 'last': 0.0})
-
-
-def is_safe_redirect_url(target: str) -> bool:
-    """
-    Validate redirect target to prevent open redirect vulnerabilities.
-
-    Security: Blocks protocol-relative URLs, absolute URLs, javascript: URLs,
-    and only allows paths starting with a single forward slash.
-    """
-    if not target or not isinstance(target, str):
-        return False
-
-    # Block javascript: URLs
-    if target.lower().startswith('javascript:'):
-        return False
-
-    # Parse the target URL
-    parsed = urllib.parse.urlparse(target)
-
-    # Block URLs with scheme (http://, https://, etc.) or netloc (//evil.com)
-    if parsed.scheme or parsed.netloc:
-        return False
-
-    # Only allow paths starting with single / but not //
-    if not parsed.path.startswith('/') or parsed.path.startswith('//'):
-        return False
-
-    return True
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
@@ -142,8 +113,7 @@ def change_password():
         return redirect(url_for('auth.profile'))
 
     # Enforce strong password policy (CWE-521 fix)
-    from .models import User as UserModel
-    if not UserModel._is_strong_password(new_password):
+    if not User._is_strong_password(new_password):
         flash(
             'Password must be at least 12 characters with uppercase, '
             'lowercase, digit, and special character.',

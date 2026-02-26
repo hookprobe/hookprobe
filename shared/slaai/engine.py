@@ -118,8 +118,7 @@ class SLAEngine:
 
         self.metrics = MetricsCollector(
             ping_targets=self.config.ping_targets,
-            dns_test_servers=["1.1.1.1", "8.8.8.8"],
-            database=self.database,
+            dns_server="1.1.1.1",
         )
 
         self.predictor = LSTMPredictor(
