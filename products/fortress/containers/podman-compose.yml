@@ -558,6 +558,91 @@ services:
         ipv4_address: 172.20.200.82
     profiles: ["ids"]
 
+  # HYDRA SENTINEL Baseline Profiler - Per-IP Welford statistics + Z-scores
+  hydra-sentinel:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-sentinel
+    restart: unless-stopped
+    hostname: fts-hydra-sentinel
+    entrypoint: ["python3", "baseline_profiler.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      PROFILE_INTERVAL: "300"
+      WINDOW_SIZE: "300"
+      MIN_EVENTS: "3"
+      MAX_TRACKED_IPS: "5000"
+      PERSIST_EVERY: "6"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.84
+    profiles: ["ids"]
+
+  # HYDRA CVE Enricher - NVD + CISA KEV integration for false positive discrimination
+  hydra-cve:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-cve
+    restart: unless-stopped
+    hostname: fts-hydra-cve
+    entrypoint: ["python3", "cve_enricher.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      CVE_DB_PATH: "/app/models/cve.db"
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      CVE_FULL_SYNC_HOURS: "168"
+      CVE_INCR_SYNC_HOURS: "24"
+      CVE_SCORING_INTERVAL: "300"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.85
+    profiles: ["ids"]
+
+  # HYDRA SENTINEL Engine - Bayesian ensemble scoring (Naive Bayes + Z-scores + CVE + RDAP)
+  hydra-sentinel-engine:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-sentinel-engine
+    restart: unless-stopped
+    hostname: fts-hydra-sentinel-engine
+    entrypoint: ["python3", "sentinel_engine.py"]
+    environment:
+      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      SENTINEL_INTERVAL: "300"
+      SENTINEL_ENABLED: "true"
+      SENTINEL_MIN_TRAINING: "10"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.86
+    profiles: ["ids"]
+
   # QSECBIT IDS Engine - SENTINEL-aware security scoring
   qsecbit-ids:
     build:
