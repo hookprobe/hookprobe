@@ -1060,7 +1060,7 @@ def profile_cycle() -> dict:
     # Extract features from the current window
     features = extract_window_features(WINDOW_SIZE)
     if not features:
-        return {'updated': 0, 'features': 0}
+        return {'updated': 0, 'features': 0, 'total_profiles': len(profiles)}
 
     # Update profiles
     updated = update_profiles_with_window(features)
