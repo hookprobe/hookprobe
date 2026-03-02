@@ -132,13 +132,16 @@ class MSSPBootstrap:
 
         mac_addresses = []
         try:
-            result = os.popen("ip -o link show | awk -F'\\\\s+' '{print $2, $(NF-2)}'")
-            for line in result.read().splitlines():
-                parts = line.split()
-                if len(parts) >= 2:
-                    iface = parts[0].rstrip(":")
-                    mac = parts[1]
-                    if iface != "lo" and mac != "00:00:00:00:00:00":
+            import subprocess as _sp
+            r = _sp.run(
+                ["ip", "-j", "link", "show"],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                for iface in json.loads(r.stdout):
+                    name = iface.get("ifname", "")
+                    mac = iface.get("address", "")
+                    if name and name != "lo" and mac and mac != "00:00:00:00:00:00":
                         mac_addresses.append(mac)
         except Exception:
             pass
@@ -260,6 +263,7 @@ class MSSPBootstrap:
                 new_lines.append(f"{key}={val}")
 
         self._config_path.write_text("\n".join(new_lines) + "\n")
+        os.chmod(str(self._config_path), 0o600)
 
     # ------------------------------------------------------------------
     # HTTP helper
