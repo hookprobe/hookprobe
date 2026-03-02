@@ -50,8 +50,15 @@ from dataclasses import dataclass
 if TYPE_CHECKING:
     from shared.mesh.consciousness import PeerNode
 
-# Add paths for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'shared'))
+# Add paths for imports (works in both repo and deployed layout)
+_lib_dir = Path(__file__).parent
+for _candidate in [
+    _lib_dir.parent.parent.parent / 'shared',      # repo: products/guardian/lib/ → shared/
+    _lib_dir.parent.parent / 'shared',              # deployed: /opt/hookprobe/guardian/lib/ → /opt/hookprobe/shared/
+]:
+    if (_candidate / 'mesh').is_dir():
+        sys.path.insert(0, str(_candidate))
+        break
 
 # Import mesh components
 try:
