@@ -132,6 +132,9 @@ class AegisLite:
 
     def _collect_telemetry(self) -> dict:
         """Collect full telemetry for heartbeat — generic system + guardian extensions."""
+        import json
+        from pathlib import Path
+
         # Generic system/network/security telemetry from /proc
         try:
             from shared.mssp.telemetry_collector import TelemetryCollector
@@ -142,25 +145,43 @@ class AegisLite:
         telemetry["status"] = "online"
         telemetry["version"] = self.VERSION
 
-        # Guardian-specific extensions
+        # Guardian-specific extensions from agent or stats file
+        guardian_ext: Dict[str, Any] = {}
         if self._guardian_agent:
             try:
                 metrics = self._guardian_agent.collect_metrics()
                 telemetry["qsecbit"] = round((1.0 - metrics.qsecbit_score) * 100) if metrics.qsecbit_score is not None else None
-                telemetry["extensions"] = {
-                    "guardian": {
-                        "qsecbitScore": metrics.qsecbit_score,
-                        "ragStatus": metrics.rag_status,
-                        "layerThreats": metrics.layer_threats,
-                        "mobileProtection": metrics.mobile_protection,
-                        "xdpStats": metrics.xdp_stats,
-                        "idsStats": metrics.ids_stats,
-                        "components": metrics.components,
-                        "recentThreats": metrics.recent_threats[:5] if metrics.recent_threats else [],
-                    }
+                guardian_ext = {
+                    "qsecbitScore": metrics.qsecbit_score,
+                    "ragStatus": metrics.rag_status,
+                    "layerThreats": metrics.layer_threats,
+                    "mobileProtection": metrics.mobile_protection,
+                    "xdpStats": metrics.xdp_stats,
+                    "idsStats": metrics.ids_stats,
+                    "components": metrics.components,
+                    "recentThreats": metrics.recent_threats[:5] if metrics.recent_threats else [],
                 }
             except Exception as e:
                 logger.debug("Guardian metrics collection error: %s", e)
+
+        # Fallback: read QSecBit stats from disk (written by guardian-qsecbit service)
+        if "qsecbit" not in telemetry:
+            try:
+                stats_path = Path("/opt/hookprobe/guardian/data/stats.json")
+                if stats_path.exists():
+                    stats = json.loads(stats_path.read_text())
+                    score = stats.get("score")
+                    if score is not None:
+                        telemetry["qsecbit"] = round((1.0 - score) * 100)
+                        guardian_ext.setdefault("qsecbitScore", score)
+                        guardian_ext.setdefault("ragStatus", stats.get("rag_status", "UNKNOWN"))
+                        guardian_ext.setdefault("components", stats.get("components", {}))
+                        guardian_ext.setdefault("xdpStats", stats.get("xdp", {}))
+            except Exception:
+                pass
+
+        if guardian_ext:
+            telemetry.setdefault("extensions", {})["guardian"] = guardian_ext
 
         if self._aegis_client:
             try:
