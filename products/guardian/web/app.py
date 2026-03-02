@@ -167,10 +167,14 @@ def _init_aegis_lite(app):
     import sys
     import threading
 
-    # Ensure lib/ is importable (deployed layout: web/ is cwd, lib/ is sibling)
-    lib_dir = str(Path(__file__).resolve().parent.parent / 'lib')
-    if lib_dir not in sys.path:
-        sys.path.insert(0, lib_dir)
+    # Ensure lib/ and project root are importable for deployed layout
+    # web/ is cwd, lib/ is sibling, shared/ is at /opt/hookprobe/shared/
+    _base = Path(__file__).resolve().parent.parent
+    lib_dir = str(_base / 'lib')
+    project_root = str(_base.parent)  # /opt/hookprobe
+    for p in (lib_dir, project_root):
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
     try:
         try:
