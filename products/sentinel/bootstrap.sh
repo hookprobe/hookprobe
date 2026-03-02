@@ -49,7 +49,7 @@ LOG_DIR="/var/log/hookprobe"
 RUN_DIR="/run/hookprobe"
 
 # Defaults
-MESH_ENDPOINT="${MESH_ENDPOINT:-mesh.hookprobe.com}"
+MESH_ENDPOINT="${MESH_ENDPOINT:-mssp.hookprobe.com}"
 MESH_PORT="${MESH_PORT:-8443}"
 HEALTH_PORT="${HEALTH_PORT:-9090}"
 SENTINEL_REGION="${SENTINEL_REGION:-auto}"
@@ -1430,7 +1430,7 @@ Usage:
   curl -sSL ... | sudo bash -s -- [OPTIONS]
 
 Options:
-  --mesh-endpoint URL   Mesh backend server (default: mesh.hookprobe.com)
+  --mesh-endpoint URL   Mesh backend server (default: mssp.hookprobe.com)
   --mesh-port PORT      Mesh port (default: 8443)
   --mesh-token TOKEN    Mesh authentication token
   --mssp-url URL        MSSP dashboard URL (default: https://mssp.hookprobe.com)

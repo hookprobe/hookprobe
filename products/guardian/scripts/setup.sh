@@ -4415,7 +4415,7 @@ network:
 # HTP (HookProbe Transport Protocol) Configuration
 htp:
   enabled: true
-  mesh_host: "mesh.hookprobe.com"
+  mesh_host: "mssp.hookprobe.com"
   mesh_port: 8443
   use_tls: true
   reconnect_interval: 30

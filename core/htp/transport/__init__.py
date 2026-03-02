@@ -2,7 +2,7 @@
 HTP Transport Layer
 
 Core HookProbe Transport Protocol implementation including:
-- htp.py: Base HTP protocol (9 message types, UDP 4719)
+- htp.py: Base HTP protocol (9 message types, UDP 8144)
 - htp_file.py: File transfer CRUD extension
 - htp_vpn.py: VPN tunnel implementation
 

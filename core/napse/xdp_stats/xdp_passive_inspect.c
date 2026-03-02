@@ -47,7 +47,7 @@
 #define PORT_DNS     2
 #define PORT_SSH     3
 #define PORT_VPN     4  /* WireGuard 51820, OpenVPN 1194 */
-#define PORT_HTP     5  /* HookProbe Transport Protocol 4719, 8144 */
+#define PORT_HTP     5  /* HookProbe Transport Protocol 8144 */
 #define PORT_OTHER   6
 #define PORT_MAX     7
 
@@ -138,8 +138,7 @@ static __always_inline __u32 get_port_category(__u16 port)
     case 51820:  /* WireGuard */
     case 1194:   /* OpenVPN */
         return PORT_VPN;
-    case 4719:   /* HTP primary */
-    case 8144:   /* HTP secondary */
+    case 8144:   /* HTP primary */
     case 853:    /* DNS-over-TLS / HTP */
     case 3478:   /* STUN / HTP */
         return PORT_HTP;

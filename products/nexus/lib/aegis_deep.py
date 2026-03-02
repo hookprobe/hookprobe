@@ -40,6 +40,7 @@ class AegisDeep:
         self._aegis_client = None
         self._mssp_worker = None
         self._analysis_engine = None
+        self._pending_provision_id = ""
 
     def initialize(self) -> bool:
         """Initialize AEGIS-Deep with Nexus enhancements."""
@@ -67,11 +68,35 @@ class AegisDeep:
         except Exception as e:
             logger.warning("Analysis engine init failed: %s", e)
 
-        # 3. MSSP intelligence worker
+        # 3. Bootstrap provisioning (first-boot: claim code → API key)
+        api_key = ""
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            bootstrap = MSSPBootstrap(product_type="nexus")
+            result = bootstrap.start_provision()
+            if result["status"] == "already_provisioned":
+                api_key = result["api_key"]
+                logger.info("Nexus already provisioned")
+            elif result["status"] == "pending_claim":
+                logger.info(
+                    "Claim code: %s — enter in dashboard to claim this Nexus node",
+                    result["claim_code"],
+                )
+                self._pending_provision_id = result.get("provision_id", "")
+            elif result["status"] == "error":
+                logger.warning("Provisioning failed: %s", result.get("error"))
+        except Exception as e:
+            logger.warning("Bootstrap init failed: %s", e)
+
+        # 4. MSSP intelligence worker
         try:
             from .intelligence import NexusMSSPWorker
+            from shared.mssp import MSSPClient
+
+            mssp_client = MSSPClient(api_key=api_key) if api_key else None
             self._mssp_worker = NexusMSSPWorker(
                 nexus_node_id=self._nexus_node_id,
+                mssp_client=mssp_client,
             )
             logger.info("MSSP worker initialized")
         except Exception as e:
@@ -84,10 +109,36 @@ class AegisDeep:
         if self._aegis_client:
             self._aegis_client.start()
 
+        # If pending claim, check once before starting worker
+        if self._pending_provision_id:
+            self._try_complete_provision()
+
         if self._mssp_worker:
             self._mssp_worker.start()
 
         logger.info("AEGIS-Deep started on %s", self._nexus_node_id)
+
+    def _try_complete_provision(self) -> None:
+        """Check if pending claim was completed, initialize MSSP client if so."""
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            from shared.mssp import MSSPClient
+
+            bootstrap = MSSPBootstrap(product_type="nexus")
+            result = bootstrap.check_claim_status(self._pending_provision_id)
+
+            if result.get("claimed"):
+                api_key = result["api_key"]
+                logger.info("Nexus claim completed — API key received")
+                if self._mssp_worker and not self._mssp_worker._client:
+                    self._mssp_worker._client = MSSPClient(api_key=api_key)
+                self._pending_provision_id = ""
+            else:
+                logger.info(
+                    "Claim pending — enter claim code in dashboard to activate"
+                )
+        except Exception as e:
+            logger.debug("Provision check error: %s", e)
 
     def stop(self) -> None:
         """Stop all Nexus services."""

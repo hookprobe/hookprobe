@@ -61,7 +61,7 @@ HookProbe is a **federated cybersecurity mesh** that delivers enterprise-grade s
 │   │ Living          │   │ Collective      │   │ Trust Fabric    │              │
 │   │ Cryptography    │   │ Intelligence    │   │ + File Transfer │              │
 │   │                 │   │                 │   │                 │              │
-│   │ • TER Sensors   │   │ • Microblocks   │   │ • UDP 4719      │              │
+│   │ • TER Sensors   │   │ • Microblocks   │   │ • UDP 8144      │              │
 │   │ • Weight Evolve │   │ • BLS Consensus │   │ • ChaCha20      │              │
 │   │ • PoSF Signing  │   │ • Merkle DAG    │   │ • NAT Traversal │              │
 │   │ • Deterministic │   │ • Byzantine FT  │   │ • CRUD Files    │              │
@@ -325,7 +325,7 @@ def bft_quorum_required(total_validators: int) -> int:
 - **NAT-friendly**: UDP with heartbeat keep-alive
 - **Auditability**: Open source, fully transparent
 
-**Port**: UDP 4719
+**Port**: UDP 8144
 
 ### Core Message Types
 

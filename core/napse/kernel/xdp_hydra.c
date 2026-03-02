@@ -316,7 +316,6 @@ static __always_inline __u32 get_port_category(__u16 port)
     case 51820:
     case 1194:
         return PORT_VPN;
-    case 4719:
     case 8144:
     case 853:
     case 3478:

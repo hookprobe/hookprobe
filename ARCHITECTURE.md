@@ -59,7 +59,7 @@ We flip the SOC model inside-out with a federated architecture where:
 │   │  Transport Protocol │ ◄────► │   Security Metric   │                        │
 │   └─────────────────────┘       └─────────────────────┘                        │
 │           │                               │                                     │
-│   • UDP 4719                      • Universal language                          │
+│   • UDP 8144                      • Universal language                          │
 │   • ChaCha20-Poly1305             • 0.0-1.0 resilience score                   │
 │   • Kyber (post-quantum)          • Privacy-preserving                          │
 │   • NAT/CGNAT traversal           • Federated aggregation                       │
@@ -325,7 +325,7 @@ Contributors earn:
 │                                                                                 │
 │   Layer 2: Transport                                                            │
 │   ┌─────────────────────────────────────────────────────────────────────────┐  │
-│   │    HTP (UDP 4719)    │    ChaCha20-Poly1305    │    Kyber (Quantum)     │  │
+│   │    HTP (UDP 8144)    │    ChaCha20-Poly1305    │    Kyber (Quantum)     │  │
 │   └─────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
 │   Layer 1: Detection                                                            │

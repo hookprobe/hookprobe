@@ -43,7 +43,7 @@ detect_os
 # ============================================================
 # Detected: $OS_NAME $OS_VERSION
 LOCAL_HOST_IP=$(ip route get 1.1.1.1 | awk '{print $7; exit}')
-EXTERNAL_DOMAIN="mesh.hookprobe.com"         # Your MESH domain
+EXTERNAL_DOMAIN="mssp.hookprobe.com"         # Your MESH domain
 CLOUDFLARE_TUNNEL_TOKEN="CHANGE_ME"          # Cloudflare tunnel token
 
 # ============================================================
@@ -270,8 +270,8 @@ BACKUP_SCHEDULE="0 2 * * *"         # Daily at 2 AM
 # MONITORING CONFIGURATION
 # ============================================================
 ENABLE_METRICS="true"
-PROMETHEUS_ENDPOINT="http://prometheus.mesh.hookprobe.com"
-ALERTMANAGER_ENDPOINT="http://alertmanager.mesh.hookprobe.com"
+PROMETHEUS_ENDPOINT="http://prometheus.mssp.hookprobe.com"
+ALERTMANAGER_ENDPOINT="http://alertmanager.mssp.hookprobe.com"
 
 # ============================================================
 # EXPORTS (for use in setup.sh)

@@ -70,7 +70,7 @@ def sanitize_node_id(node_id: str) -> str:
 
 
 NODE_ID = sanitize_node_id(os.environ.get("SENTINEL_NODE_ID", f"sentinel-{socket.gethostname()}"))
-MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mesh.hookprobe.com")
+MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mssp.hookprobe.com")
 MESH_PORT = safe_int_env("MESH_PORT", 8443, 1, 65535)
 LISTEN_PORT = safe_int_env("SENTINEL_PORT", 8443, 1, 65535)
 METRICS_PORT = safe_int_env("METRICS_PORT", 9090, 1, 65535)

@@ -4,11 +4,11 @@
 # Installs the HTP VPN Gateway on any Linux server.
 # Run on MSSP, Fortress, or any machine with internet access.
 #
-# Usage: sudo ./install.sh [--wan eth0] [--port 4719] [--uninstall]
+# Usage: sudo ./install.sh [--wan eth0] [--port 8144] [--uninstall]
 set -euo pipefail
 
 WAN_INTERFACE="${WAN_INTERFACE:-eth0}"
-LISTEN_PORT="${LISTEN_PORT:-4719}"
+LISTEN_PORT="${LISTEN_PORT:-8144}"
 MAX_CLIENTS="${MAX_CLIENTS:-10}"
 INSTALL_DIR="/opt/hookprobe"
 CONF_DIR="/etc/hookprobe"
