@@ -240,7 +240,7 @@ if __name__ == '__main__':
 
     if use_dev_server:
         # Development: Flask dev server (no TLS)
-        app.run(host='0.0.0.0', port=port, debug=True)
+        app.run(host='0.0.0.0', port=port, debug=use_dev_server)
     else:
         # Production: self-signed TLS + gunicorn (or Flask TLS fallback)
         ensure_tls_cert()
