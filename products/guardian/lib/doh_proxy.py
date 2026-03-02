@@ -36,10 +36,12 @@ from urllib.error import URLError
 logger = logging.getLogger(__name__)
 
 # DoH resolver endpoints (privacy-focused, tried in order)
+# IMPORTANT: Use IP addresses, NOT hostnames, to avoid circular DNS dependency
+# (system resolv.conf -> dnsmasq -> this proxy -> needs DNS to resolve hostname)
 DOH_RESOLVERS = [
-    'https://cloudflare-dns.com/dns-query',  # Cloudflare (fastest)
-    'https://dns.quad9.net/dns-query',        # Quad9 (threat-blocking)
-    'https://dns.google/dns-query',           # Google (fallback)
+    'https://1.1.1.1/dns-query',              # Cloudflare (fastest)
+    'https://9.9.9.9/dns-query',              # Quad9 (threat-blocking)
+    'https://8.8.8.8/dns-query',              # Google (fallback)
 ]
 
 # Configuration
