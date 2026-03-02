@@ -363,9 +363,9 @@ function loadInitialData() {
 async function loadDashboardData() {
     try {
         const [status, threats, containers, dhcp, qsecbit] = await Promise.all([
-            apiGet('/status'),
-            apiGet('/threats'),
-            apiGet('/containers'),
+            apiGet('/status').catch(() => ({ connected_clients: 0, uptime: '—' })),
+            apiGet('/threats').catch(() => ({ stats: { blocked: 0, total: 0 } })),
+            apiGet('/containers').catch(() => ({})),
             apiGet('/clients/dhcp').catch(() => ({ leases: [] })),
             apiGet('/qsecbit').catch(() => null)
         ]);
@@ -422,9 +422,9 @@ function updateContainerStatus(containers) {
 async function loadSecurityData() {
     try {
         const [threats, layers, xdp, qsecbit] = await Promise.all([
-            apiGet('/threats'),
-            apiGet('/layer_threats'),
-            apiGet('/xdp_stats'),
+            apiGet('/threats').catch(() => ({ stats: { total: 0, blocked: 0 } })),
+            apiGet('/layer_threats').catch(() => ({})),
+            apiGet('/xdp_stats').catch(() => ({ drops: 0, active_rules: 0 })),
             apiGet('/qsecbit').catch(() => null)
         ]);
 
@@ -556,9 +556,9 @@ function updateLayerCards(layers) {
 async function loadDnsxaiData() {
     try {
         const [stats, whitelist, sources, mlStatus] = await Promise.all([
-            apiGet('/dnsxai/stats'),
-            apiGet('/dnsxai/whitelist'),
-            apiGet('/dnsxai/sources'),
+            apiGet('/dnsxai/stats').catch(() => ({ total_queries: 0, blocked: 0, block_rate: 0 })),
+            apiGet('/dnsxai/whitelist').catch(() => ({ whitelist: [] })),
+            apiGet('/dnsxai/sources').catch(() => ({ sources: [] })),
             apiGet('/dnsxai/ml/status').catch(() => ({ available: false }))
         ]);
 
@@ -783,8 +783,8 @@ function updateDnsxaiSources(sources) {
 async function loadClientsData() {
     try {
         const [clients, dhcp] = await Promise.all([
-            apiGet('/clients/list'),
-            apiGet('/clients/dhcp')
+            apiGet('/clients/list').catch(() => []),
+            apiGet('/clients/dhcp').catch(() => ({ leases: [] }))
         ]);
 
         const leases = dhcp.leases || [];
