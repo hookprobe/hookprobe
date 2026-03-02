@@ -29,6 +29,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("/etc/hookprobe/node.conf")
+CLAIM_FILE = Path("/etc/hookprobe/claim_code")
 POLL_INTERVAL = 5  # seconds between status polls
 MAX_POLL_TIME = 900  # 15 minutes max wait for claim
 
@@ -101,8 +102,8 @@ class MSSPBootstrap:
             logger.error("Invalid provision response: %s", data)
             return ""
 
-        # Display claim code
-        self._display_claim_code(claim_code)
+        # Display + save claim code
+        self._display_claim_code(claim_code, provision_id)
 
         # Poll for claim
         api_key = self._poll_for_claim(provision_id)
@@ -110,8 +111,9 @@ class MSSPBootstrap:
             logger.error("Provisioning timed out — claim code was not entered in dashboard")
             return ""
 
-        # Write config
+        # Write config + remove claim_code file (no longer needed)
         self._write_config(api_key)
+        self._remove_claim_file()
         logger.info("Provisioning complete — API key written to %s", self._config_path)
         return api_key
 
@@ -156,8 +158,8 @@ class MSSPBootstrap:
     # Claim code display
     # ------------------------------------------------------------------
 
-    def _display_claim_code(self, code: str) -> None:
-        """Print claim code prominently so the user can enter it in the dashboard."""
+    def _display_claim_code(self, code: str, provision_id: str = "") -> None:
+        """Print claim code and save to /etc/hookprobe/claim_code for retrieval."""
         separator = "=" * 60
         msg = (
             f"\n{separator}\n"
@@ -172,6 +174,30 @@ class MSSPBootstrap:
         # Print to stdout AND log
         print(msg)
         logger.info("Claim code: %s (enter in dashboard at %s)", code, self._mssp_url)
+
+        # Persist claim code to file so user/automation can retrieve it
+        claim_path = self._config_path.parent / "claim_code"
+        try:
+            claim_path.parent.mkdir(parents=True, exist_ok=True)
+            claim_path.write_text(
+                f"CLAIM_CODE={code}\n"
+                f"PROVISION_ID={provision_id}\n"
+                f"PRODUCT={self._product_type}\n"
+                f"MSSP_URL={self._mssp_url}\n"
+            )
+            os.chmod(str(claim_path), 0o600)
+            logger.info("Claim code saved to %s", claim_path)
+        except Exception as e:
+            logger.warning("Could not save claim code to %s: %s", claim_path, e)
+
+    def _remove_claim_file(self) -> None:
+        """Remove the claim_code file after successful provisioning."""
+        claim_path = self._config_path.parent / "claim_code"
+        try:
+            if claim_path.exists():
+                claim_path.unlink()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Polling
