@@ -197,57 +197,31 @@ def api_mssp_register():
         return jsonify({'success': False, 'error': 'Invalid endpoint'}), 400
 
     try:
-        import sys
-        sys.path.insert(0, '/opt/hookprobe/shared')
-        from mssp import get_mssp_client
-
+        import os
         mssp_url = f'https://{endpoint}'
-        client = get_mssp_client(
-            tier='guardian', mssp_url=mssp_url, auth_token=registration_code
-        )
-        health = client.health_check()
 
-        if health.get('connected'):
-            # Save token to guardian.conf
-            conf_path = '/etc/hookprobe/guardian.conf'
-            try:
-                lines = []
-                if __import__('os').path.exists(conf_path):
-                    with open(conf_path, 'r') as f:
-                        lines = f.readlines()
+        # Save config to /etc/hookprobe/node.conf
+        conf_path = '/etc/hookprobe/node.conf'
+        try:
+            conf_lines = [
+                f'MSSP_URL={mssp_url}\n',
+                f'API_KEY={registration_code}\n',
+            ]
+            with open(conf_path, 'w') as f:
+                f.writelines(conf_lines)
+        except IOError as e:
+            logger.warning("Could not write node.conf: %s", e)
+            return jsonify({'success': False, 'error': 'Could not save config'}), 500
 
-                updated = False
-                new_lines = []
-                for line in lines:
-                    if line.strip().startswith('MSSP_AUTH_TOKEN='):
-                        new_lines.append(f'MSSP_AUTH_TOKEN={registration_code}\n')
-                        updated = True
-                    elif line.strip().startswith('MSSP_URL='):
-                        new_lines.append(f'MSSP_URL={mssp_url}\n')
-                    else:
-                        new_lines.append(line)
-                if not updated:
-                    new_lines.append(f'MSSP_AUTH_TOKEN={registration_code}\n')
-
-                with open(conf_path, 'w') as f:
-                    f.writelines(new_lines)
-            except IOError as e:
-                logger.warning("Could not update guardian.conf: %s", e)
-
-            # Start heartbeat
-            client.start_heartbeat(interval=60)
-
-            return jsonify({
-                'success': True,
-                'message': f'Registered with MSSP at {endpoint}',
-                'device_id': client.device_id,
-                'mssp_status': health.get('mssp_status'),
-            })
+        # Test connection with a heartbeat
+        from shared.mssp import MSSPClient
+        client = MSSPClient(api_key=registration_code, mssp_url=mssp_url)
+        recs = client.heartbeat({'status': 'online', 'version': 'guardian'})
 
         return jsonify({
-            'success': False,
-            'error': 'Could not connect to MSSP - check registration code'
-        }), 401
+            'success': True,
+            'message': f'Connected to MSSP at {endpoint}',
+        })
     except Exception as e:
         logger.error("MSSP registration error: %s", type(e).__name__)
         return jsonify({'success': False, 'error': 'MSSP registration failed'}), 500
@@ -258,11 +232,14 @@ def api_mssp_register():
 def api_mssp_status():
     """Get MSSP connection status."""
     try:
-        import sys
-        sys.path.insert(0, '/opt/hookprobe/shared')
-        from mssp import get_mssp_client
-        client = get_mssp_client(tier='guardian')
-        return jsonify(client.health_check())
+        from shared.mssp import MSSPClient
+        client = MSSPClient()
+        return jsonify({
+            'connected': bool(client._api_key),
+            'url': client._url,
+            'running': client.is_running,
+            'pending': client.pending_count,
+        })
     except Exception as e:
         return jsonify({
             'connected': False,

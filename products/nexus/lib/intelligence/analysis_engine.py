@@ -17,7 +17,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from shared.mssp.types import IntelligenceReport, RecommendedAction, ThreatFinding
+from shared.mssp import Finding
+from .recommender import RecommendedAction
 
 from .correlator import ThreatCorrelator
 from .recommender import ActionRecommender
@@ -42,7 +43,7 @@ THREAT_MITRE_MAP = {
 class AnalysisResult:
     """Result of deep analysis on a finding."""
 
-    def __init__(self, finding: ThreatFinding):
+    def __init__(self, finding: Finding):
         self.finding = finding
         self.mitre_techniques: List[str] = []
         self.cross_device_hits = 0
@@ -74,11 +75,11 @@ class NexusAnalysisEngine:
             "avg_analysis_ms": 0.0,
         }
 
-    def analyze(self, finding: ThreatFinding) -> AnalysisResult:
+    def analyze(self, finding: Finding) -> AnalysisResult:
         """Run the full analysis pipeline on a finding.
 
         Args:
-            finding: The ThreatFinding to analyze.
+            finding: The Finding to analyze.
 
         Returns:
             AnalysisResult with recommendations.
@@ -87,11 +88,14 @@ class NexusAnalysisEngine:
         result = AnalysisResult(finding)
 
         # Step 1: Enrich with correlation
+        severity_str = {1: "CRITICAL", 2: "HIGH", 3: "MEDIUM", 4: "LOW", 5: "INFO"}.get(
+            finding.severity, "LOW"
+        )
         correlation = self.correlator.ingest(
             ioc_value=finding.ioc_value,
             ioc_type=finding.ioc_type,
-            source_node=finding.source_node_id,
-            severity=finding.severity,
+            source_node=finding.evidence.get("source_node", ""),
+            severity=severity_str,
         )
 
         result.cross_device_hits = correlation.hit_count
@@ -143,18 +147,22 @@ class NexusAnalysisEngine:
 
         return result
 
-    def to_intelligence_report(self, result: AnalysisResult) -> IntelligenceReport:
-        """Convert analysis result to MSSP IntelligenceReport."""
-        return IntelligenceReport(
-            finding_id=result.finding.finding_id,
-            analyzed_by=self._nexus_node_id,
-            analysis_duration_ms=result.analysis_duration_ms,
-            threat_assessment=result.threat_assessment,
-            cross_device_hits=result.cross_device_hits,
-            mitre_techniques=result.mitre_techniques,
-            recommendations=result.recommendations,
-            summary=result.summary,
-        )
+    def to_intelligence_report(self, result: AnalysisResult) -> Dict:
+        """Convert analysis result to intelligence report dict."""
+        return {
+            "finding_id": result.finding.finding_id,
+            "analyzed_by": self._nexus_node_id,
+            "analysis_duration_ms": result.analysis_duration_ms,
+            "threat_assessment": result.threat_assessment,
+            "cross_device_hits": result.cross_device_hits,
+            "mitre_techniques": result.mitre_techniques,
+            "recommendations": [
+                {"action": r.action_type, "target": r.target,
+                 "priority": r.priority, "confidence": r.confidence}
+                for r in result.recommendations
+            ],
+            "summary": result.summary,
+        }
 
     def get_stats(self) -> Dict:
         return {
@@ -167,15 +175,15 @@ class NexusAnalysisEngine:
     # Internal
     # ------------------------------------------------------------------
 
-    def _classify_mitre(self, finding: ThreatFinding) -> str:
+    def _classify_mitre(self, finding: Finding) -> str:
         """Map threat to MITRE ATT&CK technique ID."""
         # Direct mapping from threat type
         mitre_id = THREAT_MITRE_MAP.get(finding.threat_type, "")
         if mitre_id:
             return mitre_id
 
-        # Check raw evidence for more clues
-        evidence = finding.raw_evidence
+        # Check evidence for more clues
+        evidence = finding.evidence
         if evidence.get("signature", ""):
             sig = evidence["signature"].lower()
             if "scan" in sig:
@@ -188,7 +196,7 @@ class NexusAnalysisEngine:
         return ""
 
     def _assess_threat(
-        self, finding: ThreatFinding, correlation
+        self, finding: Finding, correlation
     ) -> str:
         """Assess overall threat level."""
         # Campaign = likely real
@@ -196,7 +204,7 @@ class NexusAnalysisEngine:
             return "confirmed"
 
         # High confidence + high severity = likely
-        if finding.confidence >= 0.8 and finding.severity in ("CRITICAL", "HIGH"):
+        if finding.confidence >= 0.8 and finding.severity <= 2:
             return "likely"
 
         # Multiple sources = likely
@@ -210,7 +218,7 @@ class NexusAnalysisEngine:
         return "possible"
 
     def _compute_confidence(
-        self, finding: ThreatFinding, correlation
+        self, finding: Finding, correlation
     ) -> float:
         """Compute overall confidence score."""
         base = finding.confidence
@@ -230,8 +238,9 @@ class NexusAnalysisEngine:
     def _generate_summary(self, result: AnalysisResult) -> str:
         """Generate plain-English summary."""
         f = result.finding
+        source = f.evidence.get("source_node", "unknown")[:12]
         parts = [
-            f"Analyzed {f.threat_type} from {f.source_tier} node {f.source_node_id[:12]}.",
+            f"Analyzed {f.threat_type} from node {source}.",
             f"IOC: {f.ioc_type} = {f.ioc_value}.",
             f"Assessment: {result.threat_assessment} (confidence: {result.confidence:.0%}).",
         ]

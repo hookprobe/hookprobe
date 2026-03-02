@@ -49,7 +49,6 @@ class SentinelAgent:
         self._mesh = None
         self._defense = None
         self._mssp = None
-        self._recommendation_thread = None
 
     def initialize(self) -> bool:
         """Initialize all Sentinel components."""
@@ -73,10 +72,11 @@ class SentinelAgent:
         except Exception as e:
             logger.error("AEGIS-Pico init failed: %s", e)
 
-        # 3. MSSP client
+        # 3. MSSP client (single-contract piggyback via heartbeat)
         try:
-            from shared.mssp import get_mssp_client
-            self._mssp = get_mssp_client(tier="sentinel")
+            from shared.mssp import MSSPClient
+            self._mssp = MSSPClient()
+            self._mssp.on_recommendation(self._handle_recommendation)
             if self._aegis:
                 self._aegis.set_mssp_client(self._mssp)
             logger.info("MSSP client initialized")
@@ -111,16 +111,9 @@ class SentinelAgent:
         if self._mesh:
             self._mesh.start()
 
-        # Start MSSP heartbeat
+        # Start MSSP heartbeat (recommendations arrive via heartbeat response)
         if self._mssp:
-            self._mssp.start_heartbeat(interval=120)
-
-        # Start recommendation polling
-        if self._mssp:
-            self._recommendation_thread = threading.Thread(
-                target=self._poll_recommendations_loop, daemon=True,
-            )
-            self._recommendation_thread.start()
+            self._mssp.start(collect_telemetry=self._collect_telemetry)
 
         logger.info("Sentinel Agent started — all components active")
 
@@ -133,7 +126,7 @@ class SentinelAgent:
         if self._mesh:
             self._mesh.stop()
         if self._mssp:
-            self._mssp.stop_heartbeat()
+            self._mssp.stop()
         if self._defense:
             self._defense.stop()
 
@@ -154,7 +147,10 @@ class SentinelAgent:
         if self._defense:
             status["components"]["defense"] = self._defense.get_stats()
         if self._mssp:
-            status["components"]["mssp"] = self._mssp.get_stats()
+            status["components"]["mssp"] = {
+                "running": self._mssp.is_running,
+                "pending": self._mssp.pending_count,
+            }
 
         return status
 
@@ -184,51 +180,48 @@ class SentinelAgent:
         except Exception as e:
             logger.warning("Mesh threat processing error: %s", e)
 
-    def _poll_recommendations_loop(self) -> None:
-        """Poll MSSP for recommendations and execute them."""
-        poll_interval = 30  # seconds
-        while self._running:
-            try:
-                if self._mssp:
-                    recommendations = self._mssp.poll_recommendations()
-                    for rec in recommendations:
-                        self._handle_recommendation(rec)
-            except Exception as e:
-                logger.warning("Recommendation poll error: %s", e)
-
-            time.sleep(poll_interval)
-
     def _handle_recommendation(self, rec) -> None:
-        """Handle a single recommendation from MSSP."""
-        try:
-            # Verify signature
-            from shared.mssp.auth import verify_recommendation_signature
-            rec_dict = rec.to_dict() if hasattr(rec, 'to_dict') else rec
-            if not verify_recommendation_signature(rec_dict):
-                logger.warning("Rejected recommendation: invalid signature")
-                return
+        """Handle a verified recommendation from MSSP (via heartbeat response).
 
-            # Acknowledge receipt
-            action_id = getattr(rec, 'action_id', rec_dict.get('action_id', ''))
-            if action_id:
-                self._mssp.acknowledge_recommendation(action_id)
+        Signature verification is done by MSSPClient before this callback fires.
+        """
+        try:
+            from shared.mssp import Feedback
+            rec_dict = rec.to_dict() if hasattr(rec, 'to_dict') else rec
 
             # Execute via AEGIS-Pico
+            success = False
             if self._aegis:
                 success = self._aegis.execute_recommendation(rec_dict)
 
-                # Submit feedback
-                if self._mssp:
-                    from shared.mssp.types import ExecutionFeedback
-                    feedback = ExecutionFeedback(
-                        action_id=action_id,
-                        success=success,
-                        effect_observed="executed" if success else "failed",
-                    )
-                    self._mssp.submit_feedback(feedback)
+            # Queue feedback for next heartbeat
+            if self._mssp:
+                feedback = Feedback(
+                    action_id=rec.id,
+                    success=success,
+                    effect="executed" if success else "failed",
+                )
+                self._mssp.queue_feedback(feedback)
 
         except Exception as e:
             logger.error("Recommendation handling error: %s", e)
+
+    def _collect_telemetry(self) -> dict:
+        """Collect telemetry data for heartbeat."""
+        telemetry: Dict = {
+            "status": "online" if self._running else "offline",
+            "version": self.VERSION,
+        }
+
+        if self._defense:
+            stats = self._defense.get_stats()
+            telemetry["defenseStats"] = stats
+
+        if self._aegis:
+            aegis_status = self._aegis.get_status()
+            telemetry["aegisStatus"] = aegis_status
+
+        return telemetry
 
     @staticmethod
     def _map_severity(numeric: int) -> str:

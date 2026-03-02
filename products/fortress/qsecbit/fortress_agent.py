@@ -2368,12 +2368,16 @@ class QSecBitFortressAgent:
                     f"layers=[{layer_summary}]{sentinel_info}"
                 )
 
-                # Auto-block high-severity threats via XDP
+                # Auto-block high-severity threats via XDP + submit findings
                 for threat in sample.recent_threats:
                     if threat.get('severity') in ('CRITICAL', 'HIGH') and threat.get('source_ip'):
                         if not threat.get('blocked'):
                             if self.block_ip_via_xdp(threat['source_ip']):
                                 logger.info(f"Auto-blocked {threat['source_ip']} via XDP")
+                                threat['blocked'] = True
+                    # Submit significant threats to MSSP
+                    if threat.get('severity') in ('CRITICAL', 'HIGH', 'MEDIUM'):
+                        self.submit_threat_finding(threat)
 
                 time.sleep(interval)
             except Exception as e:
@@ -2398,6 +2402,25 @@ class QSecBitFortressAgent:
         logger.info("Starting QSecBit Fortress Agent v5.3.0...")
         self.running.set()
 
+        # Bootstrap MSSP provisioning (first boot only)
+        self._mssp = None
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            from shared.mssp import MSSPClient
+
+            bootstrap = MSSPBootstrap(product_type="fortress")
+            api_key = bootstrap.provision_if_needed()
+
+            if api_key:
+                self._mssp = MSSPClient(api_key=api_key)
+                self._mssp.on_recommendation(self._handle_recommendation)
+                self._mssp.start(collect_telemetry=self._collect_telemetry)
+                logger.info("MSSP client started (heartbeat active)")
+            else:
+                logger.warning("MSSP not provisioned — running offline")
+        except Exception as e:
+            logger.warning(f"MSSP bootstrap error (offline mode): {e}")
+
         # Start monitoring loop
         monitor_thread = Thread(target=self.run_monitoring_loop, daemon=True)
         monitor_thread.start()
@@ -2414,7 +2437,131 @@ class QSecBitFortressAgent:
     def stop(self):
         """Stop the agent"""
         logger.info("Stopping QSecBit Fortress Agent...")
+        if self._mssp:
+            try:
+                self._mssp.stop()
+            except Exception:
+                pass
         self.running.clear()
+
+    # ------------------------------------------------------------------
+    # MSSP Integration
+    # ------------------------------------------------------------------
+
+    def _collect_telemetry(self) -> dict:
+        """Collect full telemetry for MSSP heartbeat."""
+        try:
+            from shared.mssp.telemetry_collector import TelemetryCollector
+            telemetry = TelemetryCollector.collect_all()
+        except Exception:
+            telemetry = {"status": "online"}
+
+        telemetry["status"] = "online"
+        telemetry["version"] = "5.3.0"
+
+        # QSecBit score (inverted: fortress uses 0=good, 1=bad; dashboard uses 0-100 where 100=good)
+        if self.last_sample:
+            telemetry["qsecbit"] = round((1.0 - self.last_sample.score) * 100)
+
+        # Fortress-specific extensions
+        sample = self.last_sample
+        extensions: Dict[str, Any] = {}
+        if sample:
+            extensions["fortress"] = {
+                "score": sample.score,
+                "ragStatus": sample.rag_status,
+                "layers": sample.layer_scores,
+                "components": sample.components,
+                "threatsDetected": sample.threats_detected,
+                "policyViolations": sample.policy_violations,
+                "macsecStatus": sample.macsec_status,
+                "ovsFlows": sample.openflow_flows,
+                "xdpStats": sample.xdp_stats,
+                "sentinelScore": self._sentinel_score,
+                "trend": self.calculate_trend(),
+                "recentThreats": sample.recent_threats[:5],
+            }
+
+            # WAN health from saved file
+            try:
+                wan_file = DATA_DIR / "wan_health.json"
+                if wan_file.exists():
+                    wan_data = json.loads(wan_file.read_text())
+                    extensions["fortress"]["wanHealth"] = {
+                        "state": wan_data.get("state"),
+                        "active": wan_data.get("active"),
+                        "primaryUp": wan_data.get("primary", {}).get("is_connected", False),
+                        "backupUp": wan_data.get("backup", {}).get("is_connected", False),
+                    }
+            except Exception:
+                pass
+
+            # Connected device count from saved file
+            try:
+                devices_file = DATA_DIR / "devices.json"
+                if devices_file.exists():
+                    dev_data = json.loads(devices_file.read_text())
+                    extensions["fortress"]["connectedDevices"] = dev_data.get("count", 0)
+            except Exception:
+                pass
+
+        if extensions:
+            telemetry["extensions"] = extensions
+
+        return telemetry
+
+    def _handle_recommendation(self, rec) -> None:
+        """Handle recommendation from MSSP dashboard."""
+        try:
+            from shared.mssp import Feedback
+
+            action = rec.action if hasattr(rec, 'action') else ""
+            target = rec.target if hasattr(rec, 'target') else ""
+            success = False
+
+            if action in ("BLOCK_IP", "block_ip") and target:
+                success = self.block_ip_via_xdp(target)
+                logger.info("Recommendation %s: block_ip %s → %s",
+                           rec.id, target, "OK" if success else "FAILED")
+            elif action in ("rate_limit", "RATE_LIMIT"):
+                logger.info("Recommendation %s: rate_limit %s (logged)", rec.id, target)
+                success = True
+            else:
+                logger.info("Recommendation %s: unhandled action %s", rec.id, action)
+
+            if self._mssp:
+                self._mssp.queue_feedback(Feedback(
+                    action_id=rec.id,
+                    success=success,
+                    effect="executed" if success else "unsupported",
+                ))
+        except Exception as e:
+            logger.error("Recommendation handling error: %s", e)
+
+    def submit_threat_finding(self, threat: dict) -> None:
+        """Submit a detected threat as a Finding to the MSSP."""
+        if not self._mssp:
+            return
+        try:
+            from shared.mssp import Finding
+            severity_map = {"CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4, "INFO": 5}
+            finding = Finding(
+                threat_type=threat.get("attack_type", "unknown"),
+                severity=severity_map.get(threat.get("severity", "LOW"), 4),
+                confidence=threat.get("confidence", 0.5),
+                ioc_type="ip" if threat.get("source_ip") else "pattern",
+                ioc_value=threat.get("source_ip", threat.get("description", "")[:500]),
+                description=threat.get("description", ""),
+                local_action="blocked" if threat.get("blocked") else "detected",
+                evidence={
+                    "layer": threat.get("layer", ""),
+                    "attack_type": threat.get("attack_type", ""),
+                    "source": "fortress-l2l7",
+                },
+            )
+            self._mssp.queue_finding(finding)
+        except Exception as e:
+            logger.debug("Finding submission error: %s", e)
 
 
 def main():
