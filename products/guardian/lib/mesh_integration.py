@@ -573,6 +573,19 @@ class GuardianMeshAgent:
             self.stats['autonomous_operations'] += 1
             self.logger.info("Operating in autonomous mode")
 
+        # Write status to JSON file for other services to read
+        self._write_status_file()
+
+    def _write_status_file(self) -> None:
+        """Write mesh status to JSON file for other services to read."""
+        status_path = Path(self.config.data_dir) / "mesh_status.json"
+        try:
+            full_status = self.get_status()
+            with open(status_path, 'w') as f:
+                json.dump(full_status, f, indent=2, default=str)
+        except Exception as e:
+            self.logger.debug("Could not write mesh status file: %s", e)
+
     def _handle_peer_joined(self, peer: 'PeerNode') -> None:
         """Handle peer joining the mesh."""
         self.logger.info(
