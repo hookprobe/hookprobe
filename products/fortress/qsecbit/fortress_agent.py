@@ -2329,6 +2329,7 @@ class QSecBitFortressAgent:
         traffic_counter = 0
         device_counter = 0
         wifi_counter = 0
+        provision_counter = 0
 
         while self.running.is_set():
             try:
@@ -2379,6 +2380,25 @@ class QSecBitFortressAgent:
                     if threat.get('severity') in ('CRITICAL', 'HIGH', 'MEDIUM'):
                         self.submit_threat_finding(threat)
 
+                # Check pending MSSP claim every 6 cycles (~60s)
+                if self._pending_provision_id and not self._mssp:
+                    provision_counter += 1
+                    if provision_counter >= 6:
+                        provision_counter = 0
+                        try:
+                            from shared.mssp.bootstrap import MSSPBootstrap
+                            from shared.mssp import MSSPClient
+                            bootstrap = MSSPBootstrap(product_type="fortress")
+                            claim = bootstrap.check_claim_status(self._pending_provision_id)
+                            if claim.get("claimed"):
+                                self._mssp = MSSPClient(api_key=claim["api_key"])
+                                self._mssp.on_recommendation(self._handle_recommendation)
+                                self._mssp.start(collect_telemetry=self._collect_telemetry)
+                                self._pending_provision_id = ""
+                                logger.info("Fortress claimed — MSSP client started")
+                        except Exception as e:
+                            logger.debug("Claim check: %s", e)
+
                 time.sleep(interval)
             except Exception as e:
                 logger.error(f"Monitoring error: {e}")
@@ -2402,22 +2422,30 @@ class QSecBitFortressAgent:
         logger.info("Starting QSecBit Fortress Agent v5.3.0...")
         self.running.set()
 
-        # Bootstrap MSSP provisioning (first boot only)
+        # Bootstrap MSSP provisioning (non-blocking, first boot only)
         self._mssp = None
+        self._pending_provision_id = ""
         try:
             from shared.mssp.bootstrap import MSSPBootstrap
             from shared.mssp import MSSPClient
 
             bootstrap = MSSPBootstrap(product_type="fortress")
-            api_key = bootstrap.provision_if_needed()
+            result = bootstrap.start_provision()
 
-            if api_key:
+            if result["status"] == "already_provisioned":
+                api_key = result["api_key"]
                 self._mssp = MSSPClient(api_key=api_key)
                 self._mssp.on_recommendation(self._handle_recommendation)
                 self._mssp.start(collect_telemetry=self._collect_telemetry)
                 logger.info("MSSP client started (heartbeat active)")
+            elif result["status"] == "pending_claim":
+                self._pending_provision_id = result.get("provision_id", "")
+                logger.info(
+                    "Claim code: %s — enter in dashboard to claim this Fortress",
+                    result.get("claim_code", "?"),
+                )
             else:
-                logger.warning("MSSP not provisioned — running offline")
+                logger.warning("MSSP provisioning: %s", result.get("error", result["status"]))
         except Exception as e:
             logger.warning(f"MSSP bootstrap error (offline mode): {e}")
 

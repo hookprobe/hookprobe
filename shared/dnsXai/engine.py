@@ -1351,7 +1351,7 @@ class MultiTierWhitelist:
 
         # HookProbe infrastructure
         'hookprobe.com', 'api.hookprobe.com',
-        'update.hookprobe.com', 'mesh.hookprobe.com',
+        'update.hookprobe.com', 'mssp.hookprobe.com',
     }
 
     # Enterprise domains (commonly used business services)

@@ -273,7 +273,7 @@ cd hookprobe && git pull && sudo ./install.sh --upgrade
 
 | Issue | Solution |
 |-------|----------|
-| Can't reach mesh | Check firewall, ensure UDP 4719 (HTP) is open |
+| Can't reach mesh | Check firewall, ensure UDP 8144 (HTP) is open |
 | Validation failed | Verify NODE_ID and MESH_URL in config |
 | Service won't start | Check logs: `journalctl -u hookprobe-* -n 50` |
 | No internet on hotspot | Check upstream connection on Guardian |

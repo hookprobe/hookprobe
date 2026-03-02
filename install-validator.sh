@@ -11,7 +11,7 @@
 # 3. Hardware meets minimum requirements
 #
 # Usage:
-#   sudo ./install-validator.sh --mesh-url https://mesh.hookprobe.com
+#   sudo ./install-validator.sh --mesh-url https://mssp.hookprobe.com
 #
 
 set -e
@@ -63,7 +63,7 @@ check_root() {
 check_mesh_url() {
     if [ -z "$mesh_URL" ]; then
         echo -e "${RED}ERROR: mesh URL not provided${NC}"
-        echo "Usage: $0 --mesh-url https://mesh.hookprobe.com"
+        echo "Usage: $0 --mesh-url https://mssp.hookprobe.com"
         exit 1
     fi
 }
