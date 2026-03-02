@@ -54,6 +54,45 @@ log() {
 }
 
 # ============================================================
+# MAC RANDOMIZATION (Privacy)
+# ============================================================
+randomize_wan_mac() {
+    # Randomize MAC address on WiFi WAN interface for travel privacy.
+    # Uses locally-administered address (second nibble bit 1 set).
+    # Only applies to wlan0 (WAN WiFi), NOT wlan1 (AP) or eth0 (wired).
+    local iface="$1"
+
+    # Only randomize WiFi WAN interface
+    if [ "$iface" != "$WAN_SECONDARY" ]; then
+        return 0
+    fi
+
+    # Check if wpa_supplicant handles MAC randomization (preferred)
+    if grep -q "mac_addr=1" /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null; then
+        log INFO "MAC randomization handled by wpa_supplicant (mac_addr=1)"
+        return 0
+    fi
+
+    # Manual MAC randomization as fallback
+    # Generate locally-administered random MAC (x2:xx:xx:xx:xx:xx)
+    local new_mac
+    new_mac=$(printf '%02x:%02x:%02x:%02x:%02x:%02x' \
+        $(( (RANDOM % 256) | 0x02 & 0xFE )) \
+        $((RANDOM % 256)) $((RANDOM % 256)) \
+        $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)))
+
+    log INFO "Randomizing WAN MAC on $iface: $new_mac"
+    ip link set dev "$iface" down 2>/dev/null || true
+    ip link set dev "$iface" address "$new_mac" 2>/dev/null || {
+        log WARN "Failed to set random MAC on $iface"
+        ip link set dev "$iface" up 2>/dev/null || true
+        return 1
+    }
+    ip link set dev "$iface" up 2>/dev/null || true
+    log INFO "WAN MAC randomized on $iface"
+}
+
+# ============================================================
 # INTERFACE MANAGEMENT
 # ============================================================
 interface_exists() {
@@ -213,6 +252,9 @@ configure_wan() {
     # Check if WAN changed
     if [ "$new_wan" != "$CURRENT_WAN" ]; then
         log INFO "Switching WAN from '$CURRENT_WAN' to '$new_wan'"
+
+        # Randomize MAC on WiFi WAN for travel privacy
+        randomize_wan_mac "$new_wan"
 
         # Update routing
         remove_default_routes
