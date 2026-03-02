@@ -11,11 +11,15 @@
 
     <title>{% block title %}HookProbe Guardian{% endblock %}</title>
 
-    <!-- Google Fonts - loaded async so UI works offline without WAN -->
-    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'" crossorigin>
-    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+    <!-- System font stack - works offline, no CDN dependency -->
+    <style>
+        :root {
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            --font-mono: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+        }
+    </style>
 
-    <!-- FontAwesome 6 - loaded async so UI works offline without WAN -->
+    <!-- FontAwesome 6 - optional CDN enhancement, UI works without it via SVG icons -->
     <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'" crossorigin="anonymous">
     <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"></noscript>
 
@@ -111,47 +115,78 @@
         };
 
         // API utilities - defined early for templates
-        async function apiGet(endpoint) {
+        // Default timeout prevents hanging when network is unavailable
+        const API_TIMEOUT_MS = 8000;
+
+        async function apiGet(endpoint, timeoutMs = API_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const response = await fetch(`${Guardian.apiBase}${endpoint}`);
+                const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
+                    signal: controller.signal
+                });
                 const data = await response.json();
                 if (!response.ok) { data._httpStatus = response.status; }
                 return data;
             } catch (error) {
-                console.error(`API GET ${endpoint}:`, error);
+                if (error.name === 'AbortError') {
+                    console.warn(`API GET ${endpoint}: timed out after ${timeoutMs}ms`);
+                } else {
+                    console.error(`API GET ${endpoint}:`, error);
+                }
                 throw error;
+            } finally {
+                clearTimeout(timer);
             }
         }
 
-        async function apiPost(endpoint, data = {}) {
+        async function apiPost(endpoint, data = {}, timeoutMs = API_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify(data),
+                    signal: controller.signal
                 });
                 const result = await response.json();
                 if (!response.ok) { result._httpStatus = response.status; }
                 return result;
             } catch (error) {
-                console.error(`API POST ${endpoint}:`, error);
+                if (error.name === 'AbortError') {
+                    console.warn(`API POST ${endpoint}: timed out after ${timeoutMs}ms`);
+                } else {
+                    console.error(`API POST ${endpoint}:`, error);
+                }
                 throw error;
+            } finally {
+                clearTimeout(timer);
             }
         }
 
-        async function apiDelete(endpoint, data = {}) {
+        async function apiDelete(endpoint, data = {}, timeoutMs = API_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const response = await fetch(`${Guardian.apiBase}${endpoint}`, {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify(data),
+                    signal: controller.signal
                 });
                 const result = await response.json();
                 if (!response.ok) { result._httpStatus = response.status; }
                 return result;
             } catch (error) {
-                console.error(`API DELETE ${endpoint}:`, error);
+                if (error.name === 'AbortError') {
+                    console.warn(`API DELETE ${endpoint}: timed out after ${timeoutMs}ms`);
+                } else {
+                    console.error(`API DELETE ${endpoint}:`, error);
+                }
                 throw error;
+            } finally {
+                clearTimeout(timer);
             }
         }
 

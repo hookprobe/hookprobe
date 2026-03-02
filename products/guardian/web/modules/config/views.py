@@ -33,6 +33,7 @@ if str(lib_path) not in sys.path:
 
 
 @config_bp.route('/wifi/scan', methods=['POST'])
+@require_auth
 def api_wifi_scan():
     """Scan for available WiFi networks using wlan0 (WAN interface)."""
     try:
@@ -124,6 +125,7 @@ def api_wifi_scan():
 
 
 @config_bp.route('/wifi/status')
+@require_auth
 def api_wifi_status():
     """Get wlan0 connection status."""
     try:
@@ -571,6 +573,7 @@ network={{
 
 
 @config_bp.route('/wifi/disconnect', methods=['POST'])
+@require_auth
 def api_wifi_disconnect():
     """Disconnect wlan0 from current network."""
     try:
@@ -660,6 +663,7 @@ def api_wifi_connect():
 
 
 @config_bp.route('/hotspot', methods=['GET', 'POST'])
+@require_auth
 def api_hotspot():
     """Get or update hotspot configuration."""
     if request.method == 'GET':
@@ -766,6 +770,7 @@ def api_hotspot_restart():
 
 
 @config_bp.route('/hotspot/status')
+@require_auth
 def api_hotspot_status():
     """Get detailed hotspot/SSID status including service state."""
     import os
@@ -829,6 +834,7 @@ def api_hotspot_status():
 
 
 @config_bp.route('/hotspot/start', methods=['POST'])
+@require_auth
 def api_hotspot_start():
     """Start the hotspot (SSID broadcast)."""
     try:
@@ -852,6 +858,7 @@ def api_hotspot_start():
 
 
 @config_bp.route('/hotspot/stop', methods=['POST'])
+@require_auth
 def api_hotspot_stop():
     """Stop the hotspot (SSID broadcast)."""
     try:
@@ -862,6 +869,7 @@ def api_hotspot_stop():
 
 
 @config_bp.route('/interfaces')
+@require_auth
 def api_interfaces():
     """Get network interface information (physical interfaces only)."""
     try:
@@ -969,6 +977,7 @@ def api_interfaces():
 # =============================================================================
 
 @config_bp.route('/offline/status')
+@require_auth
 def api_offline_status():
     """
     Get offline mode status with fallback to direct detection.
@@ -1083,6 +1092,7 @@ def _get_interface_ip(interface):
 
 
 @config_bp.route('/offline/init', methods=['POST'])
+@require_auth
 def api_offline_init():
     """
     Initialize offline mode.
@@ -1113,6 +1123,7 @@ def api_offline_init():
 
 
 @config_bp.route('/offline/survey')
+@require_auth
 def api_offline_survey():
     """
     Get channel utilization from iw survey dump.
@@ -1203,6 +1214,7 @@ def api_offline_survey():
 
 
 @config_bp.route('/offline/scan', methods=['POST'])
+@require_auth
 def api_offline_scan():
     """
     Get channel data using non-disruptive methods.
@@ -1320,6 +1332,7 @@ def api_offline_scan():
 
 
 @config_bp.route('/offline/channel', methods=['POST'])
+@require_auth
 def api_offline_channel():
     """
     Change AP channel.
@@ -1372,6 +1385,7 @@ def api_offline_channel():
 
 
 @config_bp.route('/offline/connect', methods=['POST'])
+@require_auth
 def api_offline_connect():
     """
     Connect to upstream WiFi network.
@@ -1417,6 +1431,7 @@ def api_offline_connect():
 
 
 @config_bp.route('/offline/networks')
+@require_auth
 def api_offline_networks():
     """
     Get available upstream networks for connection.
@@ -1472,6 +1487,7 @@ def api_offline_networks():
 
 
 @config_bp.route('/offline/fix-eth0', methods=['POST'])
+@require_auth
 def api_offline_fix_eth0():
     """
     Fix eth0 DHCP issues (169.254.x.x link-local addresses).
@@ -1505,6 +1521,7 @@ def api_offline_fix_eth0():
 
 
 @config_bp.route('/offline/route-metrics', methods=['GET'])
+@require_auth
 def api_offline_route_metrics():
     """
     Get route metrics showing eth0 as primary and wlan0 as fallback.
@@ -1576,6 +1593,7 @@ def api_offline_route_metrics():
 
 
 @config_bp.route('/eth0/config', methods=['GET', 'POST'])
+@require_auth
 def api_eth0_config():
     """
     Get or set eth0 configuration (DHCP or manual).
@@ -1860,6 +1878,7 @@ static ip_address={ip}/{prefix}
 # =============================================================================
 
 @config_bp.route('/channel/status')
+@require_auth
 def api_channel_status():
     """
     Get automatic WiFi channel optimization status.
@@ -1956,6 +1975,7 @@ def api_channel_status():
 
 
 @config_bp.route('/offline/wan-detect')
+@require_auth
 def api_offline_wan_detect():
     """
     Detect the best WAN interface.

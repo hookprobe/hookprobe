@@ -21,6 +21,7 @@ def _validate_ip(ip):
 
 
 @clients_bp.route('/list')
+@require_auth
 def api_clients_list():
     """Get list of connected clients (read-only, no auth needed)."""
     try:
@@ -108,6 +109,7 @@ def api_clients_list():
 
 
 @clients_bp.route('/dhcp')
+@require_auth
 def api_dhcp_leases():
     """Get DHCP leases (read-only)."""
     import os

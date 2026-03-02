@@ -3,18 +3,25 @@
 HookProbe Guardian - Local Web UI
 
 Modular Flask application with Blueprint architecture.
-Runs on http://192.168.4.1:8080
+Production: gunicorn with self-signed TLS on https://192.168.4.1:8080
+Development: Flask dev server on http://0.0.0.0:8080
 
-Version: 5.2.0 - Security Hardening + AEGIS Integration
+Version: 5.5.0 - HTTPS + gunicorn + Security Hardening
 """
 
 import os
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, send_file
 
 from config import Config
 from modules import register_blueprints
+
+# TLS certificate paths
+TLS_CERT_DIR = Path('/etc/hookprobe/tls')
+TLS_CERT_FILE = TLS_CERT_DIR / 'guardian.crt'
+TLS_KEY_FILE = TLS_CERT_DIR / 'guardian.key'
 
 
 # Routes exempt from authentication (login page, static assets, health)
@@ -33,8 +40,12 @@ def create_app(config_class=Config):
     secret_key = _load_secret_key()
     app.config['SECRET_KEY'] = secret_key
 
-    # Session configuration
-    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+    # Session configuration - 8 hours max
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
+
+    # Enable secure cookies when TLS is available
+    if TLS_CERT_FILE.exists() and TLS_KEY_FILE.exists():
+        app.config['SESSION_COOKIE_SECURE'] = True
 
     # Register all blueprints
     register_blueprints(app)
@@ -154,14 +165,64 @@ def _load_secret_key():
     return key
 
 
+def ensure_tls_cert():
+    """Generate self-signed TLS certificate if not present."""
+    if TLS_CERT_FILE.exists() and TLS_KEY_FILE.exists():
+        return True
+
+    try:
+        TLS_CERT_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            'openssl', 'req', '-x509', '-newkey', 'ec',
+            '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+            '-keyout', str(TLS_KEY_FILE),
+            '-out', str(TLS_CERT_FILE),
+            '-days', '3650',
+            '-nodes',
+            '-subj', '/CN=guardian.local/O=HookProbe/OU=Guardian',
+            '-addext', 'subjectAltName=DNS:guardian.local,IP:192.168.4.1,IP:127.0.0.1',
+        ], check=True, capture_output=True, timeout=30)
+        os.chmod(str(TLS_KEY_FILE), 0o600)
+        os.chmod(str(TLS_CERT_FILE), 0o644)
+        return True
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Failed to generate TLS cert: %s", e)
+        return False
+
+
 # Create the application instance
 app = create_app()
 
 
 if __name__ == '__main__':
-    # Development server
-    app.run(
-        host='0.0.0.0',
-        port=8080,
-        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-    )
+    port = int(os.environ.get('GUARDIAN_PORT', '8080'))
+    use_dev_server = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+
+    if use_dev_server:
+        # Development: Flask dev server (no TLS)
+        app.run(host='0.0.0.0', port=port, debug=True)
+    else:
+        # Production: self-signed TLS + gunicorn (or Flask TLS fallback)
+        ensure_tls_cert()
+
+        try:
+            # Prefer gunicorn for production
+            subprocess.run([
+                'gunicorn',
+                '--bind', f'0.0.0.0:{port}',
+                '--workers', '2',
+                '--threads', '4',
+                '--timeout', '120',
+                '--certfile', str(TLS_CERT_FILE),
+                '--keyfile', str(TLS_KEY_FILE),
+                '--access-logfile', '/var/log/hookprobe/guardian-web-access.log',
+                '--error-logfile', '/var/log/hookprobe/guardian-web-error.log',
+                'app:app',
+            ], check=True)
+        except FileNotFoundError:
+            # Fallback: Flask with SSL context
+            ssl_ctx = None
+            if TLS_CERT_FILE.exists() and TLS_KEY_FILE.exists():
+                ssl_ctx = (str(TLS_CERT_FILE), str(TLS_KEY_FILE))
+            app.run(host='0.0.0.0', port=port, ssl_context=ssl_ctx)

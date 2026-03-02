@@ -13,8 +13,8 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'  # Lax allows same-site navigation after fetch() login
     SESSION_COOKIE_SECURE = os.environ.get(
-        'GUARDIAN_TLS', 'false'
-    ).lower() == 'true'  # Set True when TLS enabled
+        'GUARDIAN_TLS', 'true'
+    ).lower() == 'true'  # True by default (self-signed TLS auto-generated)
     PERMANENT_SESSION_LIFETIME = 28800  # 8 hours (was unlimited)
 
     # Guardian paths
