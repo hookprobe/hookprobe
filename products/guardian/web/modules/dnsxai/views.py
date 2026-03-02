@@ -134,7 +134,7 @@ def get_dns_stats():
         file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
         read_size = min(file_size, 1024 * 1024)  # 1MB max
 
-        with open(DNSMASQ_QUERY_LOG, 'r') as f:
+        with open(DNSMASQ_QUERY_LOG, 'r', encoding='utf-8', errors='replace') as f:
             if file_size > read_size:
                 f.seek(file_size - read_size)
                 f.readline()  # Skip partial line
@@ -142,8 +142,8 @@ def get_dns_stats():
             for line in f:
                 if ' query[' in line:
                     stats['total_queries'] += 1
-                # Blocked queries return 0.0.0.0
-                if ' is 0.0.0.0' in line or '/0.0.0.0' in line:
+                # Blocked queries return 0.0.0.0 (config/reply lines)
+                if ' is 0.0.0.0' in line:
                     stats['blocked'] += 1
 
         stats['allowed'] = max(0, stats['total_queries'] - stats['blocked'])
@@ -639,16 +639,16 @@ def api_blocked_domains():
         file_size = os.path.getsize(DNSMASQ_QUERY_LOG)
         read_size = min(file_size, 2 * 1024 * 1024)  # 2MB max
 
-        with open(DNSMASQ_QUERY_LOG, 'r') as f:
+        with open(DNSMASQ_QUERY_LOG, 'r', encoding='utf-8', errors='replace') as f:
             if file_size > read_size:
                 f.seek(file_size - read_size)
                 f.readline()  # Skip partial line
 
             # Parse blocked queries (return 0.0.0.0)
-            # Format: "Dec 8 10:30:45 dnsmasq[123]: /0.0.0.0 example.com is 0.0.0.0"
-            # Or: "Dec 8 10:30:45 dnsmasq[123]: config example.com is 0.0.0.0"
+            # Format with log-queries=extra:
+            #   "Mar 2 17:42:57 dnsmasq[2375]: 21 127.0.0.1/47346 config doubleclick.net is 0.0.0.0"
             for line in f:
-                if ' is 0.0.0.0' in line or '/0.0.0.0' in line:
+                if ' is 0.0.0.0' in line:
                     try:
                         # Extract domain from different log formats
                         domain = None
