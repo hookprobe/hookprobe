@@ -114,6 +114,9 @@ class MeshConfig:
     def __post_init__(self):
         if self.bootstrap_peers is None:
             self.bootstrap_peers = []
+        # Auto-populate bootstrap_peers from MSSP_URL when empty
+        if not self.bootstrap_peers:
+            self.bootstrap_peers = self._peers_from_mssp()
         # Load seed from provisioned file if not explicitly set
         if not self.neuro_seed:
             seed_path = Path("/etc/hookprobe/mesh_seed")
@@ -132,6 +135,24 @@ class MeshConfig:
                     seed_path
                 )
                 self.neuro_seed = os.urandom(32)
+
+    @staticmethod
+    def _peers_from_mssp() -> List[str]:
+        """Derive bootstrap peer from MSSP_URL in /etc/hookprobe/node.conf."""
+        try:
+            conf = Path("/etc/hookprobe/node.conf")
+            if not conf.exists():
+                return []
+            for line in conf.read_text().splitlines():
+                if line.startswith("MSSP_URL="):
+                    from urllib.parse import urlparse
+                    url = line.split("=", 1)[1].strip()
+                    host = urlparse(url).hostname
+                    if host:
+                        return [f"{host}:8144"]
+        except Exception:
+            pass
+        return []
 
 
 class GuardianMeshAgent:
