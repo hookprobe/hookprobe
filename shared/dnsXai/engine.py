@@ -1818,16 +1818,22 @@ class DomainClassifier:
             json.dump(model_data, f)
 
     def load_model(self, path: str):
-        """Load model from JSON file."""
-        with open(path, 'r') as f:
-            model_data = json.load(f)
+        """Load model from JSON file. Falls back to default weights on error."""
+        try:
+            with open(path, 'r') as f:
+                model_data = json.load(f)
 
-        self.weights_1 = model_data['weights_1']
-        self.bias_1 = model_data['bias_1']
-        self.weights_2 = model_data['weights_2']
-        self.bias_2 = model_data['bias_2']
-        self.feature_means = model_data.get('feature_means', {})
-        self.feature_stds = model_data.get('feature_stds', {})
+            self.weights_1 = model_data['weights_1']
+            self.bias_1 = model_data['bias_1']
+            self.weights_2 = model_data['weights_2']
+            self.bias_2 = model_data['bias_2']
+            self.feature_means = model_data.get('feature_means', {})
+            self.feature_stds = model_data.get('feature_stds', {})
+        except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
+            logging.getLogger(__name__).warning(
+                "Cannot load model from %s (%s), using default weights", path, e
+            )
+            self._initialize_default_model()
 
     def get_weights(self) -> Dict[str, Any]:
         """Get model weights for federated learning."""
