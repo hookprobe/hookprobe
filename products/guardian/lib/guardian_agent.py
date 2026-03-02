@@ -153,7 +153,8 @@ class GuardianAgent:
             from products.guardian.lib.aegis_lite import AegisLite
             self.aegis_lite = AegisLite()
             if self.aegis_lite.initialize():
-                self._log("AEGIS-Lite initialized")
+                self.aegis_lite.set_guardian_agent(self)
+                self._log("AEGIS-Lite initialized (with guardian agent telemetry)")
             else:
                 self._log("Warning: AEGIS-Lite initialization failed")
                 self.aegis_lite = None
@@ -625,6 +626,18 @@ class GuardianAgent:
         """Start the agent in daemon mode"""
         self._log("Starting Guardian Agent daemon...")
         self.running = True
+
+        # Bootstrap MSSP provisioning (first boot only)
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            bootstrap = MSSPBootstrap(product_type="guardian")
+            api_key = bootstrap.provision_if_needed()
+            if api_key:
+                self._log("MSSP provisioning OK")
+            else:
+                self._log("Warning: MSSP not provisioned (offline mode)")
+        except Exception as e:
+            self._log(f"Warning: MSSP bootstrap error: {e}")
 
         # Start AEGIS-Lite
         if self.aegis_lite:

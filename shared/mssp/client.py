@@ -1,540 +1,287 @@
 """
-HookProbe Universal MSSP Client
+HookProbe MSSP Client — Single-contract piggyback architecture.
 
 PROPRIETARY AND CONFIDENTIAL
 Copyright (c) 2024-2026 HookProbe Technologies
-Licensed under Commercial License - See LICENSING.md
-
-Universal MSSP client for all product tiers. Handles:
-- Device heartbeat with metrics
-- Threat finding submission (v2 intelligence API)
-- Recommendation polling
-- Execution feedback reporting
-- Legacy v1 threat/alert forwarding (backward compat)
 
 Architecture:
-    Edge Node (any tier) → MSSP Dashboard (Central)
-    - Edge collects local metrics, threats, and AEGIS intelligence
-    - MSSP aggregates, routes to Nexus for deep analysis
-    - Recommendations flow back for local execution + mesh propagation
+    Everything goes through POST /api/nodes/heartbeat:
+    - UP:   telemetry + findings + feedback
+    - DOWN: next interval + signed recommendations
 
-Endpoints:
-    POST /api/v1/devices/{device_id}/heartbeat/        - Device metrics (legacy)
-    POST /api/v1/security/threats/ingest/              - Threat reports (legacy)
-    POST /api/v1/security/alerts/ingest/               - IDS alerts (legacy)
-    POST /api/v2/intel/findings/                       - Intelligence findings (new)
-    GET  /api/v2/intel/recommendations/                - Poll recommendations (new)
-    POST /api/v2/intel/recommendations/{id}/ack        - Acknowledge recommendation (new)
-    POST /api/v2/intel/feedback/                       - Execution feedback (new)
+    Auth: X-API-Key header with hp_ prefixed key (issued during claim)
+    Signing: HMAC-SHA256 derived from API key (domain-separated)
+    Config: /etc/hookprobe/node.conf (MSSP_URL + API_KEY)
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
 import threading
 import time
-import urllib.error
-import urllib.request
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Optional
 
-from .types import (
-    DeviceMetrics,
-    ExecutionFeedback,
-    RecommendedAction,
-    ThreatFinding,
-)
+from .types import Feedback, Finding, Recommendation
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-DEFAULT_MSSP_URL = 'https://mssp.hookprobe.com'
-DEFAULT_TIMEOUT = 10
-HEARTBEAT_INTERVAL = 60
-MAX_RETRY_ATTEMPTS = 3
-RETRY_DELAY = 5
 
+class MSSPClient:
+    """Unified MSSP client for all HookProbe edge nodes.
 
-def _load_config_value(key: str, default: str, config_file: Path = None) -> str:
-    """Load a config value from environment or config file."""
-    env_value = os.environ.get(key)
-    if env_value:
-        return env_value
+    Usage:
+        mssp = MSSPClient()  # reads /etc/hookprobe/node.conf
+        mssp.on_recommendation(handle_rec)
+        mssp.start(collect_telemetry=my_telemetry_fn)
+    """
 
-    if config_file is None:
-        # Auto-detect tier config
-        for path in [
-            Path('/etc/hookprobe/fortress.conf'),
-            Path('/etc/hookprobe/guardian.conf'),
-            Path('/etc/hookprobe/sentinel.conf'),
-            Path('/etc/hookprobe/nexus.conf'),
-        ]:
-            if path.exists():
-                config_file = path
-                break
+    VERSION = '3.0.0'
 
-    if config_file and config_file.exists():
-        try:
-            with open(config_file, 'r') as f:
-                for line in f:
+    def __init__(self, api_key: str = None, mssp_url: str = None):
+        self._api_key = api_key or self._load_config('API_KEY', '')
+        self._url = mssp_url or self._load_config('MSSP_URL', 'https://mssp.hookprobe.com')
+
+        # Derive signing key for recommendation verification (domain separation)
+        self._signing_key = hmac.new(
+            self._api_key.encode(), b'hookprobe-rec-v1', hashlib.sha256
+        ).digest() if self._api_key else b''
+
+        # Heartbeat state
+        self._interval = 60
+        self._backoff = 60
+        self._consecutive_failures = 0
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+        # Pending intelligence data (thread-safe)
+        self._pending_findings: list[Finding] = []
+        self._pending_feedback: list[Feedback] = []
+        self._lock = threading.Lock()
+
+        # Recommendation callback
+        self._on_recommendation: Optional[Callable[[Recommendation], None]] = None
+
+        if self._api_key:
+            logger.info("MSSP client initialized: %s", self._url)
+        else:
+            logger.warning("MSSP client has no API key — heartbeats will fail")
+
+    @staticmethod
+    def _load_config(key: str, default: str) -> str:
+        """Load config value from environment or /etc/hookprobe/node.conf."""
+        val = os.environ.get(key)
+        if val:
+            return val
+
+        conf = Path('/etc/hookprobe/node.conf')
+        if conf.exists():
+            try:
+                for line in conf.read_text().splitlines():
                     stripped = line.strip()
                     if stripped.startswith(f'{key}='):
-                        value = stripped.split('=', 1)[1].strip().strip('"\'')
-                        if value and value.lower() != 'none':
-                            return value
-        except Exception as e:
-            logger.debug("Could not load config %s: %s", key, e)
+                        return stripped.split('=', 1)[1].strip().strip('"\'')
+            except Exception as e:
+                logger.debug("Could not read config %s: %s", key, e)
 
-    return default
+        return default
 
+    # =========================================================================
+    # Intelligence Queue
+    # =========================================================================
 
-def _validate_mssp_url(url: str) -> str:
-    """Validate MSSP URL to prevent SSRF against internal services.
+    def queue_finding(self, finding: Finding) -> None:
+        """Queue a threat finding for submission on next heartbeat."""
+        with self._lock:
+            self._pending_findings.append(finding)
 
-    Uses an allowlist approach: only hookprobe.com and hookprobe.io
-    domains are accepted. All other URLs fall back to the default.
-    """
-    from urllib.parse import urlparse
-    import ipaddress
+    def queue_feedback(self, feedback: Feedback) -> None:
+        """Queue execution feedback for submission on next heartbeat."""
+        with self._lock:
+            self._pending_feedback.append(feedback)
 
-    parsed = urlparse(url)
+    def on_recommendation(self, callback: Callable[[Recommendation], None]) -> None:
+        """Register a callback for verified recommendations."""
+        self._on_recommendation = callback
 
-    # Require HTTPS
-    if parsed.scheme != 'https':
-        logger.warning("MSSP URL must use HTTPS, got: %s. Falling back to default.", parsed.scheme)
-        return DEFAULT_MSSP_URL
+    # =========================================================================
+    # Heartbeat (the single communication endpoint)
+    # =========================================================================
 
-    hostname = parsed.hostname or ''
+    def heartbeat(self, telemetry: dict) -> list[Recommendation]:
+        """Single round trip: telemetry+findings+feedback up, recommendations down.
 
-    # Block IP addresses entirely — MSSP must use a domain name
-    try:
-        ipaddress.ip_address(hostname)
-        logger.warning("MSSP URL must use a domain name, not an IP. Falling back to default.")
-        return DEFAULT_MSSP_URL
-    except ValueError:
-        pass  # Not an IP — good, continue with domain check
+        Returns list of verified recommendations.
+        """
+        # Drain pending queues (thread-safe, batch up to 50)
+        with self._lock:
+            findings = self._pending_findings[:50]
+            feedback = self._pending_feedback[:50]
+            self._pending_findings = self._pending_findings[50:]
+            self._pending_feedback = self._pending_feedback[50:]
 
-    # Allowlist: only *.hookprobe.com and *.hookprobe.io domains
-    allowed_suffixes = ('.hookprobe.com', '.hookprobe.io')
-    hostname_lower = hostname.lower()
-    if not (hostname_lower.endswith(allowed_suffixes)
-            or hostname_lower in ('hookprobe.com', 'hookprobe.io')):
-        logger.warning(
-            "MSSP URL domain %s not in allowlist. Falling back to default.",
-            hostname
-        )
-        return DEFAULT_MSSP_URL
-
-    return url
-
-
-def _generate_device_id(tier: str = "unknown") -> str:
-    """Generate a unique device ID from hostname and MAC."""
-    import hashlib
-    import socket
-
-    hostname = socket.gethostname()
-    mac = 'unknown'
-    try:
-        import uuid as _uuid
-        mac = ':'.join(f'{(_uuid.getnode() >> i) & 0xff:02x}' for i in range(0, 48, 8))
-    except Exception:
-        pass
-
-    unique_string = f"{hostname}-{mac}"
-    return f"{tier}-{hashlib.sha256(unique_string.encode()).hexdigest()[:12]}"
-
-
-class HookProbeMSSPClient:
-    """Universal MSSP client for all HookProbe product tiers.
-
-    Handles both legacy v1 API (heartbeat, threats, alerts) and
-    new v2 intelligence API (findings, recommendations, feedback).
-    """
-
-    VERSION = '2.0.0'
-
-    def __init__(
-        self,
-        tier: str = "fortress",
-        mssp_url: str = None,
-        device_id: str = None,
-        auth_token: str = None,
-        config_file: Path = None,
-        timeout: int = DEFAULT_TIMEOUT,
-    ):
-        self.tier = tier
-        raw_url = mssp_url or _load_config_value('MSSP_URL', DEFAULT_MSSP_URL, config_file)
-        self.mssp_url = _validate_mssp_url(raw_url)
-        self.device_id = device_id or _load_config_value(
-            'DEVICE_ID', _generate_device_id(tier), config_file
-        )
-        self.auth_token = auth_token or _load_config_value('MSSP_AUTH_TOKEN', '', config_file)
-        self.timeout = timeout
-
-        # Background heartbeat
-        self._heartbeat_running = False
-        self._heartbeat_thread: Optional[threading.Thread] = None
-        self._last_heartbeat: Optional[datetime] = None
-        self._metrics_callback: Optional[Callable[[], DeviceMetrics]] = None
-
-        # Statistics
-        self._stats = {
-            'heartbeats_sent': 0,
-            'heartbeats_failed': 0,
-            'findings_submitted': 0,
-            'findings_failed': 0,
-            'recommendations_received': 0,
-            'feedback_sent': 0,
-            'threats_reported': 0,
-            'threats_failed': 0,
+        payload = {
+            **telemetry,
+            'findings': [f.to_dict() for f in findings] if findings else [],
+            'feedback': [f.to_dict() for f in feedback] if feedback else [],
         }
 
-        logger.info(
-            "MSSP client initialized: %s (tier=%s, device=%s)",
-            self.mssp_url, self.tier, self.device_id,
+        resp = self._post('/api/nodes/heartbeat', payload)
+        if resp is None:
+            # Re-queue on failure
+            with self._lock:
+                self._pending_findings = findings + self._pending_findings
+                self._pending_feedback = feedback + self._pending_feedback
+            return []
+
+        # Success — reset backoff
+        data = resp.get('data', {})
+        self._interval = data.get('nextHeartbeat', 60)
+        self._consecutive_failures = 0
+        self._backoff = 60
+
+        # Process recommendations
+        recs = []
+        for r in data.get('recommendations', []):
+            try:
+                rec = Recommendation.from_dict(r)
+                if self._verify_sig(rec):
+                    recs.append(rec)
+                    if self._on_recommendation:
+                        try:
+                            self._on_recommendation(rec)
+                        except Exception as e:
+                            logger.error("Recommendation callback error: %s", e)
+                else:
+                    logger.warning("Invalid signature on recommendation %s — discarding", rec.id)
+            except Exception as e:
+                logger.warning("Failed to parse recommendation: %s", e)
+
+        if recs:
+            logger.info("Received %d verified recommendation(s)", len(recs))
+
+        return recs
+
+    # =========================================================================
+    # Background Heartbeat Loop
+    # =========================================================================
+
+    def start(self, collect_telemetry: Callable[[], dict]) -> None:
+        """Start background heartbeat loop.
+
+        Args:
+            collect_telemetry: Callable returning HeartbeatV2Request-compatible dict
+        """
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop, args=(collect_telemetry,), daemon=True
         )
+        self._thread.start()
+        logger.info("Background heartbeat started (interval: %ds)", self._interval)
+
+    def stop(self) -> None:
+        """Stop background heartbeat loop."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _loop(self, collect_telemetry: Callable[[], dict]) -> None:
+        while self._running:
+            try:
+                telemetry = collect_telemetry()
+                self.heartbeat(telemetry)
+            except Exception as e:
+                logger.error("Heartbeat error: %s", e)
+                self._consecutive_failures += 1
+
+                if self._consecutive_failures >= 10:
+                    logger.critical(
+                        "10 consecutive heartbeat failures — stopping. Check API_KEY and MSSP_URL."
+                    )
+                    self._running = False
+                    return
+
+                # Exponential backoff: 60s → 120s → 240s → ... → max 1h
+                self._backoff = min(self._backoff * 2, 3600)
+
+            sleep_time = self._backoff if self._consecutive_failures > 0 else self._interval
+            time.sleep(sleep_time)
 
     # =========================================================================
     # HTTP Transport
     # =========================================================================
 
-    def _request(
-        self,
-        method: str,
-        endpoint: str,
-        data: Dict = None,
-        retry: bool = True,
-    ) -> Optional[Dict]:
-        """Make HTTP request to MSSP with retry logic."""
-        url = f"{self.mssp_url.rstrip('/')}{endpoint}"
-        attempts = MAX_RETRY_ATTEMPTS if retry else 1
+    def _post(self, path: str, payload: dict) -> Optional[dict]:
+        import urllib.error
+        import urllib.request
 
-        for attempt in range(attempts):
-            try:
-                headers = {
-                    'Content-Type': 'application/json',
-                    'User-Agent': f'HookProbe-MSSP-Client/{self.VERSION} ({self.tier})',
-                    'X-HookProbe-Tier': self.tier,
-                    'X-HookProbe-Device': self.device_id,
-                }
-                if self.auth_token:
-                    headers['Authorization'] = f'Token {self.auth_token}'
+        url = f"{self._url.rstrip('/')}{path}"
+        data = json.dumps(payload).encode('utf-8')
 
-                if data:
-                    payload = json.dumps(data).encode('utf-8')
-                    request = urllib.request.Request(
-                        url, data=payload, method=method, headers=headers,
-                    )
+        req = urllib.request.Request(url, data=data, method='POST', headers={
+            'Content-Type': 'application/json',
+            'X-API-Key': self._api_key,
+            'User-Agent': f'HookProbe/{self.VERSION}',
+        })
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status in (200, 201):
+                    return json.loads(resp.read().decode('utf-8'))
                 else:
-                    request = urllib.request.Request(url, method=method, headers=headers)
-
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    if response.status in (200, 201):
-                        return json.loads(response.read().decode('utf-8'))
-                    else:
-                        logger.warning("MSSP returned %d for %s", response.status, endpoint)
-                        return None
-
-            except urllib.error.HTTPError as e:
-                logger.warning("MSSP HTTP error: %d for %s", e.code, endpoint)
-                if e.code in (401, 403):
-                    logger.error("MSSP authentication failed — check MSSP_AUTH_TOKEN")
+                    logger.warning("MSSP returned %d for %s", resp.status, path)
                     return None
-                if e.code == 404:
-                    return None
-            except urllib.error.URLError as e:
-                logger.debug("MSSP connection error (attempt %d): %s", attempt + 1, e.reason)
-            except Exception as e:
-                logger.debug("MSSP request error (attempt %d): %s", attempt + 1, e)
-
-            if attempt < attempts - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
-
-        return None
-
-    # =========================================================================
-    # V2 Intelligence API — Findings
-    # =========================================================================
-
-    def submit_finding(self, finding: ThreatFinding) -> Optional[Dict]:
-        """Submit a threat finding to MSSP for analysis.
-
-        POST /api/v2/intel/findings/
-
-        Returns:
-            Response dict with finding_id and status, or None on failure
-        """
-        if not finding.source_node_id:
-            finding.source_node_id = self.device_id
-        if not finding.source_tier:
-            finding.source_tier = self.tier
-
-        payload = finding.to_dict()
-        response = self._request('POST', '/api/v2/intel/findings/', payload)
-
-        if response is not None:
-            self._stats['findings_submitted'] += 1
-            logger.info(
-                "Finding submitted: %s (%s, %s)",
-                finding.finding_id, finding.threat_type, finding.severity,
-            )
-            return response
-
-        self._stats['findings_failed'] += 1
-        return None
-
-    def get_finding_status(self, finding_id: str) -> Optional[Dict]:
-        """Get the status and recommendations for a finding.
-
-        GET /api/v2/intel/findings/{finding_id}/
-        """
-        return self._request('GET', f'/api/v2/intel/findings/{finding_id}/')
-
-    # =========================================================================
-    # V2 Intelligence API — Recommendations
-    # =========================================================================
-
-    def poll_recommendations(self) -> List[RecommendedAction]:
-        """Poll MSSP for new recommendations for this device.
-
-        GET /api/v2/intel/recommendations/?device_id={device_id}
-
-        Returns:
-            List of RecommendedAction objects
-        """
-        response = self._request(
-            'GET',
-            f'/api/v2/intel/recommendations/?device_id={self.device_id}',
-            retry=False,
-        )
-
-        if response is None:
-            return []
-
-        actions = []
-        for item in response.get('recommendations', []):
-            try:
-                action = RecommendedAction.from_dict(item)
-                actions.append(action)
-            except Exception as e:
-                logger.warning("Failed to parse recommendation: %s", e)
-
-        if actions:
-            self._stats['recommendations_received'] += len(actions)
-            logger.info("Received %d recommendation(s) from MSSP", len(actions))
-
-        return actions
-
-    def acknowledge_recommendation(self, action_id: str) -> bool:
-        """Acknowledge receipt of a recommendation.
-
-        POST /api/v2/intel/recommendations/{action_id}/ack
-        """
-        response = self._request(
-            'POST',
-            f'/api/v2/intel/recommendations/{action_id}/ack',
-            {'device_id': self.device_id},
-        )
-        return response is not None
-
-    # =========================================================================
-    # V2 Intelligence API — Feedback
-    # =========================================================================
-
-    def submit_feedback(self, feedback: ExecutionFeedback) -> bool:
-        """Submit execution feedback to MSSP for continuous learning.
-
-        POST /api/v2/intel/feedback/
-        """
-        if not feedback.node_id:
-            feedback.node_id = self.device_id
-
-        response = self._request('POST', '/api/v2/intel/feedback/', feedback.to_dict())
-        if response is not None:
-            self._stats['feedback_sent'] += 1
-            return True
-        return False
-
-    # =========================================================================
-    # V1 Legacy API — Heartbeat
-    # =========================================================================
-
-    def send_heartbeat(self, metrics: DeviceMetrics = None) -> bool:
-        """Send device heartbeat with metrics to MSSP.
-
-        POST /api/v1/devices/{device_id}/heartbeat/
-        """
-        if metrics is None:
-            if self._metrics_callback:
-                metrics = self._metrics_callback()
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                logger.error("MSSP auth failed (HTTP %d) — check API_KEY in /etc/hookprobe/node.conf", e.code)
+                self._consecutive_failures += 1
             else:
-                metrics = self._collect_local_metrics()
+                logger.warning("MSSP HTTP %d for %s", e.code, path)
+            return None
+        except urllib.error.URLError as e:
+            logger.debug("MSSP connection error: %s", e.reason)
+            return None
+        except Exception as e:
+            logger.debug("MSSP request error: %s", e)
+            return None
 
-        payload = metrics.to_dict()
-        endpoint = f'/api/v1/devices/{self.device_id}/heartbeat/'
+    # =========================================================================
+    # Signature Verification
+    # =========================================================================
 
-        response = self._request('POST', endpoint, payload)
-        if response is not None:
-            self._last_heartbeat = datetime.now()
-            self._stats['heartbeats_sent'] += 1
-            return True
+    def _verify_sig(self, rec: Recommendation) -> bool:
+        """Verify HMAC-SHA256 signature on a recommendation.
 
-        self._stats['heartbeats_failed'] += 1
-        return False
+        The signing key is derived from the API key:
+            signing_key = HMAC-SHA256(api_key, "hookprobe-rec-v1")
+        The signature covers all fields except 'sig', canonicalized as sorted JSON.
+        """
+        if not rec.sig or not self._signing_key:
+            return False
 
-    def _collect_local_metrics(self) -> DeviceMetrics:
-        """Collect local system metrics."""
-        metrics = DeviceMetrics(aegis_tier=self.tier)
-
-        try:
-            with open('/proc/stat', 'r') as f:
-                cpu_line = f.readline()
-                cpu_times = list(map(int, cpu_line.split()[1:5]))
-                idle = cpu_times[3]
-                total = sum(cpu_times)
-                metrics.cpu_usage = min(100, max(0, (1 - idle / max(total, 1)) * 100))
-        except Exception:
-            pass
-
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                meminfo = {}
-                for line in f:
-                    parts = line.split(':')
-                    if len(parts) == 2:
-                        key = parts[0].strip()
-                        value = int(parts[1].strip().split()[0])
-                        meminfo[key] = value
-                total = meminfo.get('MemTotal', 1)
-                available = meminfo.get('MemAvailable', 0)
-                metrics.ram_usage = min(100, max(0, (1 - available / total) * 100))
-        except Exception:
-            pass
-
-        try:
-            stat = os.statvfs('/')
-            total = stat.f_blocks * stat.f_frsize
-            free = stat.f_bfree * stat.f_frsize
-            metrics.disk_usage = min(100, max(0, (1 - free / max(total, 1)) * 100))
-        except Exception:
-            pass
-
-        try:
-            with open('/proc/uptime', 'r') as f:
-                metrics.uptime_seconds = int(float(f.read().split()[0]))
-        except Exception:
-            pass
-
-        return metrics
-
-    def set_metrics_callback(self, callback: Callable[[], DeviceMetrics]) -> None:
-        self._metrics_callback = callback
-
-    def start_heartbeat(self, interval: int = HEARTBEAT_INTERVAL) -> None:
-        if self._heartbeat_running:
-            return
-        self._heartbeat_running = True
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop, args=(interval,), daemon=True,
+        payload = json.dumps(
+            {k: v for k, v in rec.to_dict().items() if k != 'sig'},
+            sort_keys=True
         )
-        self._heartbeat_thread.start()
-        logger.info("Background heartbeat started (interval: %ds)", interval)
+        expected = hmac.new(
+            self._signing_key, payload.encode('utf-8'), hashlib.sha256
+        ).hexdigest()
 
-    def _heartbeat_loop(self, interval: int) -> None:
-        while self._heartbeat_running:
-            try:
-                self.send_heartbeat()
-            except Exception as e:
-                logger.warning("Heartbeat error: %s", e)
-            time.sleep(interval)
-
-    def stop_heartbeat(self) -> None:
-        self._heartbeat_running = False
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=5.0)
-
-    # =========================================================================
-    # V1 Legacy API — Threats & Alerts
-    # =========================================================================
-
-    def report_threats(self, threats: List[Dict]) -> bool:
-        """Report threat events to MSSP (legacy v1 format).
-
-        POST /api/v1/security/threats/ingest/
-        """
-        if not threats:
-            return True
-
-        payload = {
-            'source': self.tier,
-            'device_id': self.device_id,
-            'threats': threats,
-        }
-
-        response = self._request('POST', '/api/v1/security/threats/ingest/', payload)
-        if response is not None:
-            self._stats['threats_reported'] += len(threats)
-            return True
-
-        self._stats['threats_failed'] += len(threats)
-        return False
-
-    def forward_ids_alerts(
-        self,
-        source: str,
-        events: List[Dict],
-        log_type: str = 'alert',
-    ) -> bool:
-        """Forward IDS alerts to MSSP (NAPSE EVE JSON format).
-
-        POST /api/v1/security/alerts/ingest/
-        """
-        if not events:
-            return True
-
-        payload = {'source': source, 'log_type': log_type, 'events': events}
-        response = self._request('POST', '/api/v1/security/alerts/ingest/', payload)
-        return response is not None
+        return hmac.compare_digest(expected, rec.sig)
 
     # =========================================================================
     # Health & Stats
     # =========================================================================
 
-    def health_check(self) -> Dict:
-        response = self._request('GET', '/health/', retry=False)
-        connected = response is not None
-        return {
-            'connected': connected,
-            'mssp_url': self.mssp_url,
-            'device_id': self.device_id,
-            'tier': self.tier,
-            'mssp_status': response.get('status') if response else None,
-            'last_heartbeat': self._last_heartbeat.isoformat() if self._last_heartbeat else None,
-            'stats': self._stats.copy(),
-        }
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
-    def get_stats(self) -> Dict:
-        return {
-            **self._stats,
-            'last_heartbeat': self._last_heartbeat.isoformat() if self._last_heartbeat else None,
-            'heartbeat_running': self._heartbeat_running,
-            'tier': self.tier,
-        }
-
-
-# =============================================================================
-# Singleton per tier
-# =============================================================================
-
-_clients: Dict[str, HookProbeMSSPClient] = {}
-_client_lock = threading.Lock()
-
-
-def get_mssp_client(tier: str = "fortress", **kwargs) -> HookProbeMSSPClient:
-    """Get or create the singleton MSSP client for a tier."""
-    with _client_lock:
-        if tier not in _clients:
-            _clients[tier] = HookProbeMSSPClient(tier=tier, **kwargs)
-        return _clients[tier]
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending_findings) + len(self._pending_feedback)

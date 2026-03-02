@@ -9,47 +9,67 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from shared.mssp.types import ActionPriority, ActionType, RecommendedAction
+from dataclasses import dataclass, field
 
 from .correlator import CorrelationResult
 
 logger = logging.getLogger(__name__)
 
+
+# Priority constants (1=critical through 5=info)
+CRITICAL, HIGH, MEDIUM, LOW, INFO = 1, 2, 3, 4, 5
+
+
+@dataclass
+class RecommendedAction:
+    """Local recommendation type for Nexus analysis pipeline."""
+    finding_id: str = ""
+    action_type: str = ""
+    target: str = ""
+    confidence: float = 0.0
+    reasoning: str = ""
+    ttl_seconds: int = 3600
+    priority: int = 4
+    mitre_attack_id: str = ""
+    mesh_propagate: bool = False
+    nexus_analysis: dict = field(default_factory=dict)
+
+
 # MITRE ATT&CK technique → recommended actions
 MITRE_ACTION_MAP = {
     # Reconnaissance
-    "T1595": [("monitor", ActionPriority.LOW)],  # Active Scanning
-    "T1046": [("rate_limit", ActionPriority.MEDIUM)],  # Network Service Discovery
+    "T1595": [("monitor", LOW)],             # Active Scanning
+    "T1046": [("rate_limit", MEDIUM)],       # Network Service Discovery
 
     # Initial Access
-    "T1190": [("block_ip", ActionPriority.HIGH)],  # Exploit Public-Facing Application
-    "T1566": [("alert", ActionPriority.MEDIUM)],  # Phishing
+    "T1190": [("block_ip", HIGH)],           # Exploit Public-Facing Application
+    "T1566": [("alert", MEDIUM)],            # Phishing
 
     # Execution
-    "T1059": [("quarantine", ActionPriority.HIGH)],  # Command and Scripting
-    "T1203": [("block_ip", ActionPriority.CRITICAL)],  # Exploitation for Client Execution
+    "T1059": [("quarantine", HIGH)],         # Command and Scripting
+    "T1203": [("block_ip", CRITICAL)],       # Exploitation for Client Execution
 
     # Command and Control
-    "T1071": [("block_domain", ActionPriority.HIGH)],  # Application Layer Protocol
-    "T1568": [("dns_sinkhole", ActionPriority.HIGH)],  # Dynamic Resolution (DGA)
-    "T1572": [("block_ip", ActionPriority.HIGH)],  # Protocol Tunneling
+    "T1071": [("block_domain", HIGH)],       # Application Layer Protocol
+    "T1568": [("dns_sinkhole", HIGH)],       # Dynamic Resolution (DGA)
+    "T1572": [("block_ip", HIGH)],           # Protocol Tunneling
 
     # Exfiltration
-    "T1048": [("block_ip", ActionPriority.CRITICAL)],  # Exfiltration Over Alternative Protocol
-    "T1041": [("terminate_session", ActionPriority.CRITICAL)],  # Exfiltration Over C2
+    "T1048": [("block_ip", CRITICAL)],       # Exfiltration Over Alternative Protocol
+    "T1041": [("terminate_session", CRITICAL)],  # Exfiltration Over C2
 
     # Impact
-    "T1498": [("rate_limit", ActionPriority.CRITICAL)],  # Network Denial of Service
-    "T1499": [("block_ip", ActionPriority.CRITICAL)],  # Endpoint Denial of Service
+    "T1498": [("rate_limit", CRITICAL)],     # Network Denial of Service
+    "T1499": [("block_ip", CRITICAL)],       # Endpoint Denial of Service
 }
 
 # Severity → default action map
 SEVERITY_ACTION_MAP = {
-    "CRITICAL": ("block_ip", ActionPriority.CRITICAL),
-    "HIGH": ("block_ip", ActionPriority.HIGH),
-    "MEDIUM": ("rate_limit", ActionPriority.MEDIUM),
-    "LOW": ("monitor", ActionPriority.LOW),
-    "INFO": ("alert", ActionPriority.INFO),
+    "CRITICAL": ("block_ip", CRITICAL),
+    "HIGH": ("block_ip", HIGH),
+    "MEDIUM": ("rate_limit", MEDIUM),
+    "LOW": ("monitor", LOW),
+    "INFO": ("alert", INFO),
 }
 
 
@@ -126,7 +146,7 @@ class ActionRecommender:
 
         # Set mesh propagation for HIGH+ priority
         for rec in recommendations:
-            if rec.priority <= ActionPriority.HIGH.value:
+            if rec.priority <= HIGH:
                 rec.mesh_propagate = True
 
         # Sort by priority (lower = higher)
@@ -149,20 +169,13 @@ class ActionRecommender:
         mitre_id: str = "",
     ) -> RecommendedAction:
         """Build a RecommendedAction with standard fields."""
-        # Map action type string to ActionType enum value
-        action_type_value = action_type
-        for at in ActionType:
-            if at.value == action_type:
-                action_type_value = at.value
-                break
-
         # TTL based on priority
         ttl_map = {1: 86400, 2: 14400, 3: 3600, 4: 1800, 5: 900}
         ttl = ttl_map.get(priority, 3600)
 
         return RecommendedAction(
             finding_id=finding_id,
-            action_type=action_type_value,
+            action_type=action_type,
             target=target,
             confidence=confidence,
             reasoning=reasoning,

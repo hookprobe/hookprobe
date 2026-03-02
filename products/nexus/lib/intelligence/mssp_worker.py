@@ -14,8 +14,7 @@ import threading
 import time
 from typing import Dict, Optional
 
-from shared.mssp.client import HookProbeMSSPClient, get_mssp_client
-from shared.mssp.types import ThreatFinding
+from shared.mssp import MSSPClient, Finding
 
 from .analysis_engine import NexusAnalysisEngine
 
@@ -35,7 +34,7 @@ class NexusMSSPWorker:
         self,
         nexus_node_id: str = "",
         poll_interval: int = DEFAULT_POLL_INTERVAL,
-        mssp_client: Optional[HookProbeMSSPClient] = None,
+        mssp_client: Optional[MSSPClient] = None,
     ):
         self._nexus_node_id = nexus_node_id
         self._poll_interval = poll_interval
@@ -58,7 +57,10 @@ class NexusMSSPWorker:
             return
 
         if not self._client:
-            self._client = get_mssp_client(tier="nexus")
+            self._client = MSSPClient()
+
+        # Recommendations arriving via heartbeat trigger analysis
+        self._client.on_recommendation(self._handle_recommendation)
 
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -72,7 +74,7 @@ class NexusMSSPWorker:
             self._thread.join(timeout=10.0)
         logger.info("Nexus MSSP worker stopped")
 
-    def analyze_finding(self, finding: ThreatFinding) -> bool:
+    def analyze_finding(self, finding: Finding) -> bool:
         """Manually analyze a single finding.
 
         Returns True if analysis completed and results submitted.
@@ -81,21 +83,19 @@ class NexusMSSPWorker:
             result = self._engine.analyze(finding)
             report = self._engine.to_intelligence_report(result)
 
-            # Submit results back to MSSP
+            # Queue results back to MSSP via next heartbeat
             if self._client:
-                # Submit each recommendation
                 for rec in result.recommendations:
-                    self._client.submit_finding(ThreatFinding(
-                        source_tier="nexus",
-                        source_node_id=self._nexus_node_id,
+                    self._client.queue_finding(Finding(
                         threat_type=finding.threat_type,
                         severity=finding.severity,
                         confidence=result.confidence,
                         ioc_value=finding.ioc_value,
                         ioc_type=finding.ioc_type,
                         description=result.summary,
-                        raw_evidence={
-                            "nexus_analysis": report.to_dict(),
+                        evidence={
+                            "nexus_analysis": report,
+                            "source_node": self._nexus_node_id,
                         },
                     ))
 
@@ -116,6 +116,21 @@ class NexusMSSPWorker:
             "engine": self._engine.get_stats(),
         }
 
+    def _handle_recommendation(self, rec) -> None:
+        """Handle a recommendation from MSSP — convert to finding and analyze."""
+        try:
+            self._stats["jobs_pulled"] += 1
+            finding = Finding(
+                finding_id=rec.finding_id or rec.id,
+                threat_type=rec.action,
+                severity=rec.priority,
+                ioc_value=rec.target,
+                description=rec.reasoning,
+            )
+            self.analyze_finding(finding)
+        except Exception as e:
+            logger.warning("Recommendation handling error: %s", e)
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -131,26 +146,21 @@ class NexusMSSPWorker:
             time.sleep(self._poll_interval)
 
     def _poll_once(self) -> None:
-        """Single poll iteration."""
+        """Single poll iteration — heartbeat drives the loop now.
+
+        Recommendations arrive as part of heartbeat response via
+        the on_recommendation callback. This method sends a heartbeat
+        with telemetry to keep the connection alive.
+        """
         if not self._client:
             return
 
-        # Poll for recommendations (which are actually findings needing analysis)
-        # In a full implementation, this would use a dedicated Nexus queue endpoint
-        # For now, we poll the standard recommendations endpoint
         try:
-            recommendations = self._client.poll_recommendations()
-            for rec in recommendations:
-                self._stats["jobs_pulled"] += 1
-                # Convert recommendation to finding for analysis
-                finding = ThreatFinding(
-                    finding_id=rec.finding_id,
-                    threat_type=rec.action_type,
-                    severity="HIGH",
-                    ioc_value=rec.target,
-                    source_tier="mssp",
-                    needs_deep_analysis=True,
-                )
-                self.analyze_finding(finding)
+            telemetry = {
+                "status": "online",
+                "version": "nexus-worker",
+                "stats": self._stats,
+            }
+            self._client.heartbeat(telemetry)
         except Exception as e:
-            logger.debug("Poll iteration error: %s", e)
+            logger.debug("Heartbeat error: %s", e)
