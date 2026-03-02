@@ -349,7 +349,7 @@ table {self.family} {self.table_name} {{
         udp dport {{ 1812, 1813 }} accept
 
         # Allow HTP (HookProbe Transport Protocol)
-        udp dport 4719 accept
+        udp dport 8144 accept
 
         # Allow OpenFlow
         tcp dport {{ 6633, 6653 }} accept
@@ -1011,7 +1011,7 @@ SERVICE_PORTS = {
     'zwave': ('tcp', 4200),
     'radius_auth': ('udp', 1812),
     'radius_acct': ('udp', 1813),
-    'htp': ('udp', 4719),
+    'htp': ('udp', 8144),
     'openflow': ('tcp', '6633,6653'),
 }
 

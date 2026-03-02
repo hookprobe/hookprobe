@@ -156,11 +156,23 @@ class NexusMSSPWorker:
             return
 
         try:
-            telemetry = {
-                "status": "online",
-                "version": "nexus-worker",
-                "stats": self._stats,
+            # Collect full system telemetry
+            try:
+                from shared.mssp.telemetry_collector import TelemetryCollector
+                telemetry = TelemetryCollector.collect_all()
+            except Exception:
+                telemetry = {"status": "online"}
+
+            telemetry["version"] = "nexus-worker"
+
+            # Nexus-specific extensions
+            telemetry["extensions"] = {
+                "nexus": {
+                    "stats": self._stats,
+                    "engineStats": self._engine.get_stats() if self._engine else {},
+                },
             }
+
             self._client.heartbeat(telemetry)
         except Exception as e:
             logger.debug("Heartbeat error: %s", e)

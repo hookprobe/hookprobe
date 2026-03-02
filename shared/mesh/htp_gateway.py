@@ -19,8 +19,8 @@ Also responds to STUN Binding Requests on the same port, so nodes
 can discover their public IP:port for NAT traversal.
 
 Architecture:
-    [Guardian]──UDP 4719──→[Gateway TUN htp-gw]──→[Internet]
-    [Fortress]──UDP 4719──→[      ↑ same      ]──→[Internet]
+    [Guardian]──UDP 8144──→[Gateway TUN htp-gw]──→[Internet]
+    [Fortress]──UDP 8144──→[      ↑ same      ]──→[Internet]
 
 Author: HookProbe Team
 Version: 1.0.0
@@ -90,7 +90,7 @@ STUN_ATTR_SOFTWARE = 0x8022
 
 # Limits
 DEFAULT_MAX_CLIENTS = 10
-DEFAULT_LISTEN_PORT = 4719
+DEFAULT_LISTEN_PORT = 8144
 
 
 # ============================================================

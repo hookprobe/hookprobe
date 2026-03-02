@@ -51,8 +51,8 @@ VPN_CONFIG_FILE = '/etc/hookprobe/guardian_vpn.json'
 NFTABLES_VPN_RULES = '/etc/nftables.d/guardian-vpn.nft'
 
 # Default settings
-DEFAULT_GATEWAY_HOST = 'mesh.hookprobe.com'
-DEFAULT_GATEWAY_PORT = 4719
+DEFAULT_GATEWAY_HOST = 'mssp.hookprobe.com'
+DEFAULT_GATEWAY_PORT = 8144
 TUN_DEVICE_NAME = 'htp0'
 TUN_LOCAL_IP = '10.250.0.2'
 TUN_REMOTE_IP = '10.250.0.1'
@@ -438,7 +438,7 @@ table inet guardian_vpn {{
     def _resolve_gateway(self) -> Optional[str]:
         """Resolve gateway hostname to IP address.
 
-        When the configured host is the unresolvable default (mesh.hookprobe.com),
+        When the configured host is the unresolvable default (mssp.hookprobe.com),
         fall back to the MSSP host from /etc/hookprobe/node.conf so Guardian can
         tunnel through the MSSP server without manual configuration.
         """

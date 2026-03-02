@@ -14,7 +14,7 @@ Features:
 - Reliable packet delivery with acknowledgments
 - Bandwidth-adaptive streaming
 
-Port: UDP 4719
+Port: UDP 8144
 
 Author: HookProbe Team
 Version: 5.0.0 Cortex
@@ -66,9 +66,9 @@ except ImportError:
 # CONSTANTS
 # =============================================================================
 
-HTP_PORT = 4719
+HTP_PORT = 8144
 HTP_VERSION = 0x0001
-DEFAULT_MESH_HOST = "mesh.hookprobe.com"
+DEFAULT_MESH_HOST = "mssp.hookprobe.com"
 
 # Packet types
 class HTPPacketType(Enum):

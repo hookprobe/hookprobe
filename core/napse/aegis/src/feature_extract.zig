@@ -52,7 +52,7 @@ pub const PortCategory = enum(u8) {
     dns = 2, // 53
     ssh = 3, // 22
     vpn = 4, // 51820, 1194
-    htp = 5, // 4719, 8144, 853, 3478
+    htp = 5, // 8144, 853, 3478
     smtp = 6, // 25, 465, 587
     other = 7,
 };
@@ -64,7 +64,7 @@ pub fn classifyPort(port: u16) PortCategory {
         53 => .dns,
         22 => .ssh,
         51820, 1194 => .vpn,
-        4719, 8144, 853, 3478 => .htp,
+        8144, 853, 3478 => .htp,
         25, 465, 587 => .smtp,
         else => .other,
     };
@@ -217,7 +217,7 @@ test "port classification" {
     try std.testing.expectEqual(PortCategory.http, classifyPort(80));
     try std.testing.expectEqual(PortCategory.https, classifyPort(443));
     try std.testing.expectEqual(PortCategory.dns, classifyPort(53));
-    try std.testing.expectEqual(PortCategory.htp, classifyPort(4719));
+    try std.testing.expectEqual(PortCategory.htp, classifyPort(8144));
     try std.testing.expectEqual(PortCategory.other, classifyPort(12345));
 }
 
