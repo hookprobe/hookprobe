@@ -628,16 +628,45 @@ class GuardianAgent:
         self.running = True
 
         # Bootstrap MSSP provisioning (first boot only)
+        fresh_provision = False
         try:
             from shared.mssp.bootstrap import MSSPBootstrap
             bootstrap = MSSPBootstrap(product_type="guardian")
             api_key = bootstrap.provision_if_needed()
             if api_key:
                 self._log("MSSP provisioning OK")
+                fresh_provision = True
             else:
                 self._log("Warning: MSSP not provisioned (offline mode)")
         except Exception as e:
             self._log(f"Warning: MSSP bootstrap error: {e}")
+
+        # Re-initialize AegisLite if bootstrap just wrote a new API key,
+        # because the MSSPClient created during __init__ may have had no key.
+        if fresh_provision and self.aegis_lite is not None:
+            mssp = self.aegis_lite._mssp_client
+            if mssp and not mssp._api_key:
+                try:
+                    from products.guardian.lib.aegis_lite import AegisLite
+                    self.aegis_lite = AegisLite()
+                    if self.aegis_lite.initialize():
+                        self.aegis_lite.set_guardian_agent(self)
+                        self._log("AEGIS-Lite re-initialized with fresh MSSP API key")
+                    else:
+                        self.aegis_lite = None
+                except Exception as e:
+                    self._log(f"Warning: AEGIS-Lite re-init failed: {e}")
+        elif fresh_provision and self.aegis_lite is None:
+            try:
+                from products.guardian.lib.aegis_lite import AegisLite
+                self.aegis_lite = AegisLite()
+                if self.aegis_lite.initialize():
+                    self.aegis_lite.set_guardian_agent(self)
+                    self._log("AEGIS-Lite initialized after MSSP provisioning")
+                else:
+                    self.aegis_lite = None
+            except Exception as e:
+                self._log(f"Warning: AEGIS-Lite init failed: {e}")
 
         # Start AEGIS-Lite
         if self.aegis_lite:
