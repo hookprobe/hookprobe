@@ -183,10 +183,152 @@ def api_mesh_register():
         return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
 
+@vpn_bp.route('/api/mssp/provision', methods=['POST'])
+@require_auth
+def api_mssp_provision():
+    """Provision this Guardian with MSSP — generates a claim code.
+
+    The claim code is displayed to the user, who then enters it in the
+    MSSP dashboard to claim the device.  The device polls for the claim
+    status and receives its API key once claimed.
+    """
+    data = request.get_json() or {}
+    endpoint = data.get('endpoint', 'mssp.hookprobe.com')
+
+    if not _validate_endpoint(endpoint):
+        return jsonify({'success': False, 'error': 'Invalid endpoint'}), 400
+
+    mssp_url = f'https://{endpoint}'
+
+    try:
+        from shared.mssp.bootstrap import MSSPBootstrap
+        bootstrap = MSSPBootstrap(product_type='guardian', mssp_url=mssp_url)
+
+        # Already provisioned?
+        existing_key = bootstrap._read_config('API_KEY')
+        if existing_key:
+            return jsonify({
+                'success': True,
+                'status': 'already_provisioned',
+                'message': 'Device is already connected to MSSP',
+            })
+
+        # Collect fingerprint and POST /api/nodes/provision
+        fingerprint = bootstrap._get_fingerprint()
+        import platform as _pf
+        provision_data = {
+            'hostname': _pf.node(),
+            'nodeType': 'guardian',
+            'fingerprint': fingerprint,
+        }
+        resp = bootstrap._post('/api/nodes/provision', provision_data)
+        if not resp or not resp.get('success'):
+            error = resp.get('error', 'Unknown error') if resp else 'No response from MSSP'
+            return jsonify({'success': False, 'error': error}), 502
+
+        resp_data = resp.get('data', {})
+
+        # Already registered as a full node
+        if resp_data.get('status') == 'already_registered':
+            return jsonify({
+                'success': True,
+                'status': 'already_registered',
+                'message': 'Device is already registered. Set API_KEY in /etc/hookprobe/node.conf.',
+                'nodeId': resp_data.get('existingNodeId'),
+            })
+
+        claim_code = resp_data.get('claimCode', '')
+        provision_id = resp_data.get('provisionId', '')
+        expires = resp_data.get('claimCodeExpires', '')
+
+        if not claim_code or not provision_id:
+            return jsonify({'success': False, 'error': 'Invalid provision response'}), 502
+
+        # Log claim code prominently
+        bootstrap._display_claim_code(claim_code)
+
+        return jsonify({
+            'success': True,
+            'status': 'pending',
+            'claimCode': claim_code,
+            'provisionId': provision_id,
+            'claimCodeExpires': expires,
+            'message': f'Enter claim code in the MSSP dashboard at {mssp_url}',
+            'pollEndpoint': f'/vpn/api/mssp/provision/poll?id={provision_id}',
+        })
+    except Exception as e:
+        logger.error("MSSP provision error: %s", e)
+        return jsonify({'success': False, 'error': 'Provisioning failed'}), 500
+
+
+@vpn_bp.route('/api/mssp/provision/poll')
+@require_auth
+def api_mssp_provision_poll():
+    """Poll whether the claim code has been entered in the dashboard."""
+    provision_id = request.args.get('id', '')
+    if not provision_id:
+        return jsonify({'success': False, 'error': 'Provision ID required'}), 400
+
+    endpoint = request.args.get('endpoint', 'mssp.hookprobe.com')
+    mssp_url = f'https://{endpoint}'
+
+    try:
+        import json as _json
+        import urllib.request as _ur
+
+        url = f'{mssp_url}/api/nodes/provision/status?id={provision_id}'
+        req = _ur.Request(url, method='GET', headers={
+            'Accept': 'application/json',
+            'User-Agent': 'HookProbe-Guardian/provision-poll',
+        })
+        with _ur.urlopen(req, timeout=10) as resp:
+            body = _json.loads(resp.read())
+
+        data = body.get('data', {})
+        if data.get('claimed'):
+            api_key = data.get('apiKey', '')
+            if api_key:
+                # Write config
+                from shared.mssp.bootstrap import MSSPBootstrap
+                bootstrap = MSSPBootstrap(product_type='guardian', mssp_url=mssp_url)
+                bootstrap._write_config(api_key)
+                logger.info("MSSP claim successful — API key written to config")
+
+                return jsonify({
+                    'success': True,
+                    'claimed': True,
+                    'message': 'Device claimed successfully! MSSP connection active.',
+                })
+
+            return jsonify({
+                'success': True,
+                'claimed': True,
+                'message': 'Claimed but API key not delivered yet — try again.',
+            })
+
+        return jsonify({
+            'success': True,
+            'claimed': False,
+            'message': 'Waiting for claim code to be entered in dashboard...',
+        })
+    except Exception as e:
+        logger.debug("Provision poll error: %s", e)
+        return jsonify({
+            'success': True,
+            'claimed': False,
+            'message': 'Polling... (could not reach MSSP)',
+        })
+
+
 @vpn_bp.route('/api/mssp/register', methods=['POST'])
 @require_auth
 def api_mssp_register():
-    """Register this Guardian node with MSSP."""
+    """Register this Guardian node with MSSP using an existing API key.
+
+    This is the direct registration path for users who already have an
+    API key (e.g., from manual provisioning).  For first-time setup,
+    use /api/mssp/provision instead.
+    """
     data = request.get_json() or {}
     endpoint = data.get('endpoint', 'mssp.hookprobe.com')
     registration_code = data.get('registration_code', '')
@@ -242,17 +384,32 @@ def api_mssp_register():
 def api_mssp_status():
     """Get MSSP connection status."""
     try:
-        from shared.mssp import MSSPClient
-        client = MSSPClient()
+        from shared.mssp.bootstrap import MSSPBootstrap
+        bootstrap = MSSPBootstrap(product_type='guardian')
+        api_key = bootstrap._read_config('API_KEY')
+        mssp_url = bootstrap._read_config('MSSP_URL') or 'https://mssp.hookprobe.com'
+
+        if api_key:
+            from shared.mssp import MSSPClient
+            client = MSSPClient(api_key=api_key, mssp_url=mssp_url)
+            return jsonify({
+                'connected': True,
+                'provisioned': True,
+                'url': mssp_url,
+                'running': client.is_running,
+                'pending': client.pending_count,
+            })
+
         return jsonify({
-            'connected': bool(client._api_key),
-            'url': client._url,
-            'running': client.is_running,
-            'pending': client.pending_count,
+            'connected': False,
+            'provisioned': False,
+            'url': mssp_url,
+            'message': 'Not provisioned — use /api/mssp/provision to get a claim code',
         })
     except Exception as e:
         return jsonify({
             'connected': False,
+            'provisioned': False,
             'error': str(type(e).__name__),
         })
 
