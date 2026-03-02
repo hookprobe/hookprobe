@@ -4567,22 +4567,90 @@ install_web_ui() {
         log_info "Mesh seed generated (per-device unique)"
     fi
 
-    # Create systemd service (hardened - CWE-250: least privilege)
+    # Install gunicorn for production HTTPS serving
+    log_info "Installing gunicorn..."
+    pip3 install --break-system-packages gunicorn 2>&1 | tail -1 || \
+    pip3 install gunicorn 2>&1 | tail -1 || \
+    log_warn "Could not install gunicorn - will use Flask dev server"
+
+    # Generate self-signed TLS certificate for HTTPS
+    if [ ! -f /etc/hookprobe/tls/guardian.crt ]; then
+        log_info "Generating TLS certificate..."
+        mkdir -p /etc/hookprobe/tls
+        openssl req -x509 -newkey ec \
+            -pkeyopt ec_paramgen_curve:prime256v1 \
+            -keyout /etc/hookprobe/tls/guardian.key \
+            -out /etc/hookprobe/tls/guardian.crt \
+            -days 3650 -nodes \
+            -subj '/CN=guardian.local/O=HookProbe/OU=Guardian' \
+            -addext 'subjectAltName=DNS:guardian.local,IP:192.168.4.1,IP:127.0.0.1' \
+            2>/dev/null
+        chmod 600 /etc/hookprobe/tls/guardian.key
+        chmod 644 /etc/hookprobe/tls/guardian.crt
+        log_info "TLS certificate generated (ECDSA P-256, 10yr)"
+    fi
+
+    # Deploy DoH proxy
+    log_info "Setting up DNS-over-HTTPS proxy..."
+    cp "$INSTALL_DIR/guardian/lib/doh_proxy.py" /opt/hookprobe/guardian/lib/ 2>/dev/null || true
+    cp "$SCRIPT_DIR/../config/systemd/guardian-doh.service" /etc/systemd/system/ 2>/dev/null || \
+    cat > /etc/systemd/system/guardian-doh.service << 'DOH_EOF'
+[Unit]
+Description=HookProbe Guardian DNS-over-HTTPS Proxy
+After=network.target
+Before=dnsmasq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/doh_proxy.py
+Restart=always
+RestartSec=3
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-doh
+
+[Install]
+WantedBy=multi-user.target
+DOH_EOF
+
+    # Install webui service (gunicorn + TLS with Flask fallback)
+    cp "$SCRIPT_DIR/../config/systemd/guardian-webui.service" /etc/systemd/system/ 2>/dev/null || \
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
 [Unit]
 Description=HookProbe Guardian Web UI
-After=network.target
+After=network.target guardian-doh.service
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/hookprobe/guardian/web
-ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/web/app.py
+ExecStart=/bin/bash -c '\
+    if command -v gunicorn >/dev/null 2>&1 && \
+       [ -f /etc/hookprobe/tls/guardian.crt ] && \
+       [ -f /etc/hookprobe/tls/guardian.key ]; then \
+        exec gunicorn \
+            --bind 0.0.0.0:8080 \
+            --workers 2 \
+            --threads 4 \
+            --timeout 120 \
+            --certfile /etc/hookprobe/tls/guardian.crt \
+            --keyfile /etc/hookprobe/tls/guardian.key \
+            --access-logfile /var/log/hookprobe/guardian-web-access.log \
+            --error-logfile /var/log/hookprobe/guardian-web-error.log \
+            app:app; \
+    else \
+        exec /usr/bin/python3 /opt/hookprobe/guardian/web/app.py; \
+    fi'
 Restart=always
 RestartSec=5
 User=root
 NoNewPrivileges=yes
 ProtectSystem=full
-ReadWritePaths=/etc/hookprobe /etc/wpa_supplicant /etc/NetworkManager/conf.d
+ReadWritePaths=/etc/hookprobe /etc/wpa_supplicant /etc/NetworkManager/conf.d /var/log/hookprobe
 ProtectHome=yes
 PrivateTmp=yes
 
@@ -4591,9 +4659,10 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
+    systemctl enable guardian-doh
     systemctl enable guardian-webui
 
-    log_info "Web UI installed"
+    log_info "Web UI + DoH proxy installed (gunicorn + TLS)"
 }
 
 # ============================================================
@@ -4622,6 +4691,7 @@ enable_services() {
     systemctl enable guardian-aggregator 2>/dev/null || true
     systemctl enable guardian-neuro 2>/dev/null || true
     systemctl enable guardian-qsecbit 2>/dev/null || true
+    systemctl enable guardian-doh 2>/dev/null || true
     systemctl enable guardian-webui 2>/dev/null || true
 
     log_info "Services enabled"
@@ -4635,6 +4705,9 @@ start_services() {
     systemctl start openvswitch-switch 2>/dev/null || systemctl start openvswitch 2>/dev/null || true
 
     systemctl start nftables 2>/dev/null || true
+
+    # Start DoH proxy before dnsmasq (dnsmasq forwards to it on 127.0.0.1:5053)
+    systemctl start guardian-doh 2>/dev/null || log_warn "DoH proxy failed to start - dnsmasq will use fallback DNS"
 
     systemctl start dnsmasq
 

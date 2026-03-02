@@ -1,0 +1,44 @@
+[Unit]
+Description=HookProbe Guardian Web UI
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target guardian-doh.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hookprobe/guardian/web
+# Use gunicorn with TLS if available, fallback to Flask
+ExecStart=/bin/bash -c '\
+    if command -v gunicorn >/dev/null 2>&1 && \
+       [ -f /etc/hookprobe/tls/guardian.crt ] && \
+       [ -f /etc/hookprobe/tls/guardian.key ]; then \
+        exec gunicorn \
+            --bind 0.0.0.0:8080 \
+            --workers 2 \
+            --threads 4 \
+            --timeout 120 \
+            --certfile /etc/hookprobe/tls/guardian.crt \
+            --keyfile /etc/hookprobe/tls/guardian.key \
+            --access-logfile /var/log/hookprobe/guardian-web-access.log \
+            --error-logfile /var/log/hookprobe/guardian-web-error.log \
+            app:app; \
+    else \
+        exec /usr/bin/python3 /opt/hookprobe/guardian/web/app.py; \
+    fi'
+Restart=always
+RestartSec=5
+User=root
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/etc/hookprobe /etc/wpa_supplicant /etc/NetworkManager/conf.d /var/log/hookprobe
+ProtectHome=yes
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-webui
+
+[Install]
+WantedBy=multi-user.target

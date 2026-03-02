@@ -172,21 +172,19 @@ table ip guardian_nat {
 EOF
 fi
 
-# Apply nftables rules
+# Apply nftables rules (nftables is required, no iptables fallback)
 echo "[4/5] Applying nftables rules..."
-if nft -f /etc/nftables.d/guardian.nft 2>/dev/null; then
+if ! command -v nft &>/dev/null; then
+    echo "  ERROR: nftables not found. Install with: apt install nftables"
+    exit 1
+fi
+
+if nft -f /etc/nftables.d/guardian.nft; then
     echo "  nftables rules applied successfully"
 else
-    echo "  nftables failed, using iptables fallback..."
-    # Clear old NAT rules and add new ones
-    iptables -t nat -F POSTROUTING 2>/dev/null || true
-    if [ "$WAN_IFACE" = "both" ]; then
-        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
-        iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE 2>/dev/null || true
-    else
-        iptables -t nat -A POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null || true
-    fi
-    echo "  iptables MASQUERADE rules applied"
+    echo "  ERROR: nftables rules failed to apply"
+    echo "  Check syntax: nft -c -f /etc/nftables.d/guardian.nft"
+    exit 1
 fi
 
 # Restart dnsmasq to ensure it's running properly
@@ -235,7 +233,7 @@ echo "  LAN Interface: br0"
 echo ""
 
 echo "NAT Rules:"
-nft list table ip guardian_nat 2>/dev/null || iptables -t nat -L POSTROUTING -n 2>/dev/null || echo "  (no rules found)"
+nft list table ip guardian_nat 2>/dev/null || echo "  (no nftables rules found)"
 
 echo ""
 echo "Routing Table:"

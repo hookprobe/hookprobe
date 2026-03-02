@@ -72,8 +72,8 @@ COMMAND_WHITELIST: Dict[str, CommandSpec] = {
     'curl': CommandSpec(
         name='curl',
         category=CommandCategory.NETWORK,
-        description='Transfer data from URL (headers only)',
-        timeout=30,
+        description='Transfer data from URL (headers only, no redirects)',
+        timeout=15,
         allowed_args=['-I', '-s', '-w', '--head', '--silent'],
         max_args=4,
         requires_arg=True
@@ -353,6 +353,20 @@ DANGEROUS_PATTERNS = [
     r'\bpoweroff\b',
 ]
 
+# Blocked target patterns for network commands (SSRF / metadata protection)
+_BLOCKED_TARGETS_RE = re.compile(
+    r'^('
+    r'169\.254\.'            # AWS/cloud metadata (link-local)
+    r'|metadata\.google\.'   # GCP metadata
+    r'|100\.100\.100\.200'   # Alibaba metadata
+    r'|fd00::'               # ULA IPv6
+    r'|fe80::'               # Link-local IPv6
+    r'|::1'                  # IPv6 loopback
+    r'|0\.0\.0\.0'           # Unspecified
+    r')',
+    re.IGNORECASE
+)
+
 
 class RateLimiter:
     """Simple rate limiter for command execution."""
@@ -492,6 +506,12 @@ def validate_command(command_line: str) -> Tuple[bool, str, Optional[List[str]]]
             if not is_allowed:
                 return False, f"Access to '{file_arg}' is not allowed", None
 
+    # Block network commands targeting metadata/dangerous endpoints
+    if cmd_name in ('curl', 'ping', 'traceroute', 'mtr', 'dig', 'nslookup', 'host'):
+        for arg in cmd_args:
+            if not arg.startswith('-') and _BLOCKED_TARGETS_RE.search(arg):
+                return False, "Target address is blocked (metadata/internal)", None
+
     return True, "", args
 
 
@@ -588,6 +608,16 @@ def execute_command(command_line: str) -> Generator[str, None, None]:
         # Add -c 4 if not specified
         if '-c' not in args:
             args = [args[0], '-c', '4'] + args[1:]
+
+    # Special handling for curl (SSRF protection)
+    if cmd_name == 'curl':
+        # Prevent redirect-based SSRF to internal services
+        args = [args[0], '--max-redirs', '0', '--max-time', '10'] + args[1:]
+
+    # Special handling for ps (use safe format to avoid leaking secrets in cmdlines)
+    if cmd_name == 'ps':
+        # Override to a safe format that truncates command column
+        args = ['ps', '-eo', 'pid,user,%cpu,%mem,vsz,rss,stat,start,comm']
 
     # Special handling for top (batch mode)
     if cmd_name == 'top':
