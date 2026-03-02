@@ -328,26 +328,38 @@ def _collect_mac() -> dict:
 def _collect_auth() -> dict:
     auth: Dict[str, Any] = {}
     try:
-        # Failed logins from auth.log / secure
-        for log_path in ["/var/log/auth.log", "/var/log/secure"]:
-            if Path(log_path).exists():
-                result = subprocess.run(
-                    ["grep", "-c", "Failed password", log_path],
-                    capture_output=True, text=True, timeout=5
-                )
-                if result.returncode == 0:
-                    auth["failedLogins24h"] = int(result.stdout.strip())
-                break
+        # Failed logins in last 24h via journalctl (accurate window)
+        result = subprocess.run(
+            ["journalctl", "-u", "sshd", "--since", "24 hours ago",
+             "--no-pager", "--output", "cat"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            auth["failedLogins24h"] = result.stdout.count("Failed password")
     except Exception:
-        pass
+        # Fallback: grep auth.log (may over-count if log not rotated daily)
+        try:
+            for log_path in ["/var/log/auth.log", "/var/log/secure"]:
+                if Path(log_path).exists():
+                    result = subprocess.run(
+                        ["grep", "-c", "Failed password", log_path],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        auth["failedLogins24h"] = int(result.stdout.strip())
+                    break
+        except Exception:
+            pass
     try:
         # SSH config checks
         sshd_config = Path("/etc/ssh/sshd_config")
         if sshd_config.exists():
             content = sshd_config.read_text()
-            auth["rootLoginEnabled"] = "PermitRootLogin yes" in content
-            auth["passwordAuthEnabled"] = "PasswordAuthentication no" not in content
-            port_match = re.search(r"^Port\s+(\d+)", content, re.MULTILINE)
+            root_match = re.search(r"^\s*PermitRootLogin\s+(\w+)", content, re.MULTILINE)
+            auth["rootLoginEnabled"] = root_match is None or root_match.group(1).lower() == "yes"
+            pw_match = re.search(r"^\s*PasswordAuthentication\s+(\w+)", content, re.MULTILINE)
+            auth["passwordAuthEnabled"] = pw_match is None or pw_match.group(1).lower() != "no"
+            port_match = re.search(r"^\s*Port\s+(\d+)", content, re.MULTILINE)
             if port_match:
                 auth["sshPort"] = int(port_match.group(1))
             else:

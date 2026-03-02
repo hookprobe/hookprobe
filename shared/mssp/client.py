@@ -238,7 +238,6 @@ class MSSPClient:
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 logger.error("MSSP auth failed (HTTP %d) — check API_KEY in /etc/hookprobe/node.conf", e.code)
-                self._consecutive_failures += 1
             else:
                 logger.warning("MSSP HTTP %d for %s", e.code, path)
             return None
