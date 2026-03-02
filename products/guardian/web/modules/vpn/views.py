@@ -193,30 +193,40 @@ def api_mssp_register():
 
     if not registration_code:
         return jsonify({'success': False, 'error': 'Registration code required'}), 400
+    if not _validate_token(registration_code):
+        return jsonify({'success': False, 'error': 'Invalid registration code format'}), 400
     if not _validate_endpoint(endpoint):
         return jsonify({'success': False, 'error': 'Invalid endpoint'}), 400
 
+    mssp_url = f'https://{endpoint}'
+
+    # Test connection FIRST — do not write config if heartbeat fails
     try:
         import os
-        mssp_url = f'https://{endpoint}'
+        import tempfile
+        from shared.mssp import MSSPClient
+        client = MSSPClient(api_key=registration_code, mssp_url=mssp_url)
+        resp = client._post('/api/nodes/heartbeat', {'status': 'online', 'version': 'guardian'})
+        if resp is None:
+            return jsonify({'success': False, 'error': 'Could not connect to MSSP (check key and endpoint)'}), 400
 
-        # Save config to /etc/hookprobe/node.conf
+        # Heartbeat succeeded — write config atomically with restricted permissions
         conf_path = '/etc/hookprobe/node.conf'
         try:
-            conf_lines = [
-                f'MSSP_URL={mssp_url}\n',
-                f'API_KEY={registration_code}\n',
-            ]
-            with open(conf_path, 'w') as f:
-                f.writelines(conf_lines)
+            os.makedirs('/etc/hookprobe', exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir='/etc/hookprobe', prefix='.node.conf.tmp')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    f.write(f'MSSP_URL={mssp_url}\n')
+                    f.write(f'API_KEY={registration_code}\n')
+                os.chmod(tmp_path, 0o600)
+                os.rename(tmp_path, conf_path)
+            except Exception:
+                os.unlink(tmp_path)
+                raise
         except IOError as e:
             logger.warning("Could not write node.conf: %s", e)
             return jsonify({'success': False, 'error': 'Could not save config'}), 500
-
-        # Test connection with a heartbeat
-        from shared.mssp import MSSPClient
-        client = MSSPClient(api_key=registration_code, mssp_url=mssp_url)
-        recs = client.heartbeat({'status': 'online', 'version': 'guardian'})
 
         return jsonify({
             'success': True,
