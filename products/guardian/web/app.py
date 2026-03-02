@@ -108,6 +108,44 @@ def create_app(config_class=Config):
             return send_file(favicon, mimetype='image/x-icon')
         return '', 404
 
+    # Security response headers (OWASP recommendations)
+    @app.after_request
+    def set_security_headers(response):
+        """Add security headers to all responses."""
+        # Prevent MIME-type sniffing
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        # Prevent clickjacking
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        # Control referrer leakage
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        # Disable dangerous browser features
+        response.headers['Permissions-Policy'] = (
+            'geolocation=(), microphone=(), camera=(), usb=()'
+        )
+        # Content Security Policy — allow inline styles (Jinja templates use them),
+        # block all external resources, prevent XSS via script injection
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        # HSTS — enforce HTTPS for 1 year (only when TLS is active)
+        if TLS_CERT_FILE.exists():
+            response.headers['Strict-Transport-Security'] = (
+                'max-age=31536000; includeSubDomains'
+            )
+        # Prevent caching of authenticated pages
+        if response.status_code == 200 and response.content_type.startswith('text/html'):
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+        return response
+
     # Wire AEGIS-Lite for signal processing
     _init_aegis_lite(app)
 

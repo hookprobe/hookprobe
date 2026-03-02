@@ -1,0 +1,31 @@
+[Unit]
+Description=HookProbe Guardian DNS-over-HTTPS Proxy
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target
+Before=dnsmasq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/doh_proxy.py
+Restart=always
+RestartSec=3
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-doh
+
+[Install]
+WantedBy=multi-user.target
