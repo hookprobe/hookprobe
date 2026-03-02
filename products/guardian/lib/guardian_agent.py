@@ -627,46 +627,32 @@ class GuardianAgent:
         self._log("Starting Guardian Agent daemon...")
         self.running = True
 
-        # Bootstrap MSSP provisioning (first boot only)
+        # Bootstrap MSSP provisioning (non-blocking)
         fresh_provision = False
+        self._mssp_bootstrap = None
+        self._mssp_provision_id = None
         try:
             from shared.mssp.bootstrap import MSSPBootstrap
             bootstrap = MSSPBootstrap(product_type="guardian")
-            api_key = bootstrap.provision_if_needed()
-            if api_key:
-                self._log("MSSP provisioning OK")
+            result = bootstrap.start_provision()
+            status = result.get("status", "")
+            if status == "already_provisioned":
+                self._log("MSSP provisioned")
                 fresh_provision = True
+            elif status == "pending_claim":
+                self._log(
+                    "MSSP claim code generated — enter in dashboard to claim this device"
+                )
+                self._mssp_bootstrap = bootstrap
+                self._mssp_provision_id = result.get("provision_id", "")
             else:
-                self._log("Warning: MSSP not provisioned (offline mode)")
+                self._log(f"Warning: MSSP not provisioned ({result.get('error', 'offline mode')})")
         except Exception as e:
             self._log(f"Warning: MSSP bootstrap error: {e}")
 
-        # Re-initialize AegisLite if bootstrap just wrote a new API key,
-        # because the MSSPClient created during __init__ may have had no key.
-        if fresh_provision and self.aegis_lite is not None:
-            mssp = self.aegis_lite._mssp_client
-            if mssp and not mssp._api_key:
-                try:
-                    from products.guardian.lib.aegis_lite import AegisLite
-                    self.aegis_lite = AegisLite()
-                    if self.aegis_lite.initialize():
-                        self.aegis_lite.set_guardian_agent(self)
-                        self._log("AEGIS-Lite re-initialized with fresh MSSP API key")
-                    else:
-                        self.aegis_lite = None
-                except Exception as e:
-                    self._log(f"Warning: AEGIS-Lite re-init failed: {e}")
-        elif fresh_provision and self.aegis_lite is None:
-            try:
-                from products.guardian.lib.aegis_lite import AegisLite
-                self.aegis_lite = AegisLite()
-                if self.aegis_lite.initialize():
-                    self.aegis_lite.set_guardian_agent(self)
-                    self._log("AEGIS-Lite initialized after MSSP provisioning")
-                else:
-                    self.aegis_lite = None
-            except Exception as e:
-                self._log(f"Warning: AEGIS-Lite init failed: {e}")
+        # Re-initialize AegisLite if bootstrap found an existing API key
+        if fresh_provision:
+            self._reinit_aegis_lite()
 
         # Start AEGIS-Lite
         if self.aegis_lite:
@@ -682,11 +668,36 @@ class GuardianAgent:
             signal.signal(signal.SIGTERM, self._handle_signal)
             signal.signal(signal.SIGINT, self._handle_signal)
 
+        claim_check_counter = 0
         while self.running:
             try:
                 self.collect_metrics()
             except Exception as e:
                 self._log(f"Error collecting metrics: {e}")
+
+            # Periodically check if MSSP claim was completed (~every 10s)
+            if self._mssp_provision_id:
+                claim_check_counter += 1
+                checks_per_interval = max(1, int(self.check_interval / 10))
+                if claim_check_counter >= checks_per_interval:
+                    claim_check_counter = 0
+                    try:
+                        result = self._mssp_bootstrap.check_claim_status(
+                            self._mssp_provision_id
+                        )
+                        if result.get("claimed"):
+                            self._log("MSSP claim successful — API key received")
+                            self._mssp_provision_id = None
+                            self._mssp_bootstrap = None
+                            self._reinit_aegis_lite()
+                            if self.aegis_lite:
+                                try:
+                                    self.aegis_lite.start()
+                                    self._log("AEGIS-Lite started after claim")
+                                except Exception as e:
+                                    self._log(f"Warning: AEGIS-Lite start failed: {e}")
+                    except Exception:
+                        pass
 
             # Wait for next check
             time.sleep(self.check_interval)
@@ -700,6 +711,20 @@ class GuardianAgent:
                 self._log(f"Warning: AEGIS-Lite stop failed: {e}")
 
         self._log("Guardian Agent daemon stopped")
+
+    def _reinit_aegis_lite(self):
+        """(Re-)initialize AegisLite with current API key from node.conf."""
+        try:
+            from products.guardian.lib.aegis_lite import AegisLite
+            self.aegis_lite = AegisLite()
+            if self.aegis_lite.initialize():
+                self.aegis_lite.set_guardian_agent(self)
+                self._log("AEGIS-Lite initialized with MSSP API key")
+            else:
+                self.aegis_lite = None
+        except Exception as e:
+            self._log(f"Warning: AEGIS-Lite init failed: {e}")
+            self.aegis_lite = None
 
     def _handle_signal(self, signum, frame):
         """Handle termination signals"""
