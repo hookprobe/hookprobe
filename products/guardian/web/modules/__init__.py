@@ -60,6 +60,13 @@ def register_blueprints(app: Flask):
     from .vms import vms_bp
     app.register_blueprint(vms_bp)
 
+    # Mesh module - HTP/Neuro/NSE mesh status
+    try:
+        from .mesh import mesh_bp
+        app.register_blueprint(mesh_bp, url_prefix='/api/mesh')
+    except ImportError:
+        pass  # Mesh module optional
+
     # AEGIS module - AI security assistant
     try:
         from .aegis import aegis_bp

@@ -37,11 +37,15 @@ class AegisLite:
         self._recommendation_handler = None
 
     def initialize(self) -> bool:
-        """Initialize AEGIS-Lite with Guardian configuration."""
+        """Initialize AEGIS-Lite with Guardian configuration.
+
+        Returns True if at least one of AEGIS core or MSSP client initialized.
+        MSSP works independently of AEGIS (doesn't need local LLM).
+        """
         # Force cloud backend — Guardian has 1.5GB RAM, no room for local LLM
         os.environ.setdefault("AEGIS_BACKEND", "cloud")
 
-        # 1. Standard AEGIS with Lite profile paths
+        # 1. Standard AEGIS with Lite profile paths (optional — may not be available)
         try:
             from core.aegis.client import AegisClient
             from core.aegis.signal_fabric import SignalFabricConfig
@@ -55,10 +59,9 @@ class AegisLite:
             self._aegis_client = AegisClient(config)
             logger.info("AEGIS-Lite client initialized")
         except Exception as e:
-            logger.error("AEGIS-Lite init failed: %s", e)
-            return False
+            logger.warning("AEGIS core unavailable (MSSP-only mode): %s", e)
 
-        # 2. MSSP client
+        # 2. MSSP client (independent of AEGIS core)
         try:
             from shared.mssp import get_mssp_client
             self._mssp_client = get_mssp_client(tier="guardian")
@@ -76,7 +79,7 @@ class AegisLite:
         except Exception as e:
             logger.warning("Recommendation handler init failed: %s", e)
 
-        return True
+        return self._aegis_client is not None or self._mssp_client is not None
 
     def start(self) -> None:
         """Start AEGIS-Lite with all services."""
