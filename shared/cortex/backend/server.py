@@ -16,7 +16,7 @@ Usage:
     python server.py --demo
 
     # Production mode (connect to mesh)
-    python server.py --bootstrap mesh.hookprobe.com:8144
+    python server.py --bootstrap mssp.hookprobe.com:8144
 
     # With product connector
     python server.py --connector guardian --node-id guardian-home-001

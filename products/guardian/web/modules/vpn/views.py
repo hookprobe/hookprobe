@@ -94,7 +94,7 @@ def _default_gateway_host() -> str:
                         return host
     except Exception:
         pass
-    return 'mesh.hookprobe.com'
+    return 'mssp.hookprobe.com'
 
 
 @vpn_bp.route('/connect', methods=['POST'])
@@ -168,7 +168,7 @@ def api_disconnect():
 def api_mesh_register():
     """Register this Guardian node with mesh."""
     data = request.get_json() or {}
-    mesh_endpoint = data.get('endpoint', 'mesh.hookprobe.com')
+    mesh_endpoint = data.get('endpoint', 'mssp.hookprobe.com')
     registration_code = data.get('registration_code', '')
 
     if not registration_code:

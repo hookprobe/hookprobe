@@ -64,6 +64,9 @@ class MSSPClient:
         # Recommendation callback
         self._on_recommendation: Optional[Callable[[Recommendation], None]] = None
 
+        # Gateway endpoint (discovered via heartbeat response)
+        self.gateway_endpoint: str = ""
+
         if self._api_key:
             logger.info("MSSP client initialized: %s", self._url)
         else:
@@ -141,6 +144,11 @@ class MSSPClient:
         self._interval = data.get('nextHeartbeat', 60)
         self._consecutive_failures = 0
         self._backoff = 60
+
+        # Track gateway endpoint for VPN connections
+        gw = data.get('gatewayEndpoint')
+        if gw and isinstance(gw, str):
+            self.gateway_endpoint = gw
 
         # Process recommendations
         recs = []

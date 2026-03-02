@@ -83,7 +83,7 @@ ENABLE_CLICKHOUSE=false
 ENABLE_LTE=false
 
 # Mesh/HTP Configuration
-MESH_ENDPOINT="${MESH_ENDPOINT:-mesh.hookprobe.com}"
+MESH_ENDPOINT="${MESH_ENDPOINT:-mssp.hookprobe.com}"
 MESH_PORT="${MESH_PORT:-8443}"
 HTP_NODE_ID=""
 HTP_SENTINEL_MODE="${HTP_SENTINEL_MODE:-false}"
@@ -3159,7 +3159,7 @@ from collections import defaultdict
 
 # Configuration from environment
 NODE_ID = os.environ.get("HTP_NODE_ID", "validator-unknown")
-MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mesh.hookprobe.com")
+MESH_ENDPOINT = os.environ.get("MESH_ENDPOINT", "mssp.hookprobe.com")
 MESH_PORT = int(os.environ.get("MESH_PORT", "8443"))
 LISTEN_PORT = int(os.environ.get("SENTINEL_LISTEN_PORT", "8443"))
 METRICS_PORT = int(os.environ.get("SENTINEL_METRICS_PORT", "9090"))

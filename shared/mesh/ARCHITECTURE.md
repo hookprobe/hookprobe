@@ -812,7 +812,7 @@ from shared.mesh import TunnelRegistrationClient
 
 # Fortress node registers with mesh registry
 client = TunnelRegistrationClient(
-    registry_endpoint="https://mesh.hookprobe.com",
+    registry_endpoint="https://mssp.hookprobe.com",
     node_id="fortress-01"
 )
 
