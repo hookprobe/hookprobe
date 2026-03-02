@@ -130,10 +130,13 @@ setup_nat_for_interface() {
     # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward
 
-    # Try nftables first
-    if command -v nft &>/dev/null; then
-        # Create nftables NAT rules
-        nft -f - <<EOF 2>/dev/null || true
+    # nftables is required (no iptables fallback)
+    if ! command -v nft &>/dev/null; then
+        log ERROR "nftables (nft) not found - install with: apt install nftables"
+        return 1
+    fi
+
+    nft -f - <<EOF
 table ip guardian_nat
 delete table ip guardian_nat
 
@@ -144,13 +147,7 @@ table ip guardian_nat {
     }
 }
 EOF
-        log INFO "nftables NAT configured for $wan_iface"
-    else
-        # Fallback to iptables
-        iptables -t nat -F POSTROUTING 2>/dev/null || true
-        iptables -t nat -A POSTROUTING -o "$wan_iface" -j MASQUERADE
-        log INFO "iptables NAT configured for $wan_iface"
-    fi
+    log INFO "nftables NAT configured for $wan_iface"
 }
 
 set_default_route() {
@@ -350,10 +347,7 @@ show_status() {
 
     # NAT rules
     echo "NAT Rules:"
-    if command -v nft &>/dev/null; then
-        nft list table ip guardian_nat 2>/dev/null | grep masquerade || echo "  (no nftables rules)"
-    fi
-    iptables -t nat -L POSTROUTING -n 2>/dev/null | grep MASQUERADE || true
+    nft list table ip guardian_nat 2>/dev/null | grep masquerade || echo "  (no nftables rules)"
 }
 
 # ============================================================
