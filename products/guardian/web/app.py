@@ -122,14 +122,15 @@ def create_app(config_class=Config):
         response.headers['Permissions-Policy'] = (
             'geolocation=(), microphone=(), camera=(), usb=()'
         )
-        # Content Security Policy — allow inline styles (Jinja templates use them),
-        # block all external resources, prevent XSS via script injection
+        # Content Security Policy — allow inline scripts/styles (templates use
+        # onclick handlers and inline <script> blocks extensively).
+        # FontAwesome CDN is allowed for style/font when internet is available.
         response.headers['Content-Security-Policy'] = (
             "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
             "img-src 'self' data:; "
-            "font-src 'self'; "
+            "font-src 'self' https://cdnjs.cloudflare.com; "
             "connect-src 'self'; "
             "frame-ancestors 'self'; "
             "base-uri 'self'; "
