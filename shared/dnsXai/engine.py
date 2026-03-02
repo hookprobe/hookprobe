@@ -1428,6 +1428,9 @@ class MultiTierWhitelist:
         should NOT inherit parent domain whitelist.
 
         Example: ads.yahoo.com should NOT be whitelisted even if yahoo.com is.
+
+        NOTE: Uses exact word matching (not substring) to avoid false positives
+        on CDN hostnames like metricsedge-continent-wrr.v.aaplimg.com.
         """
         # Get the subdomain part (everything before the parent)
         if not domain.endswith('.' + parent) and domain != parent:
@@ -1444,14 +1447,10 @@ class MultiTierWhitelist:
         if subdomain_parts and subdomain_parts[0] in self.TRACKING_PREFIXES:
             return True
 
-        # Check if any part contains tracking keywords
+        # Check if any part is an exact tracking keyword (whole word match)
         for part in subdomain_parts:
             if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
                 return True
-            # Check for keyword substrings in longer parts
-            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
-                if len(keyword) >= 3 and keyword in part:
-                    return True
 
         return False
 
@@ -3479,17 +3478,52 @@ class CNAMEUncloaker:
 
         return None
 
+    # CDN/infrastructure domains where hostnames are machine-generated
+    # and should NOT trigger tracking subdomain keyword detection.
+    # These are content delivery networks, not user-facing services.
+    CDN_INFRASTRUCTURE_DOMAINS = {
+        'aaplimg.com', 'mzstatic.com', 'cdn-apple.com', 'apple-dns.net',
+        'gstatic.com', 'ggpht.com', '1e100.net', 'googlevideo.com',
+        'googleusercontent.com', 'gvt1.com', 'gvt2.com', 'gvt3.com',
+        'cloudfront.net', 'amazonaws.com', 'azureedge.net',
+        'akamaiedge.net', 'akamai.net', 'akamaitechnologies.com',
+        'edgekey.net', 'edgesuite.net', 'edgecastcdn.net',
+        'cloudflare.com', 'cloudflare-dns.com', 'cdninstagram.com',
+        'fbcdn.net', 'fbsbx.com', 'fastly.net', 'fastlylb.net',
+        'azurewebsites.net', 'blob.core.windows.net', 'trafficmanager.net',
+        'msedge.net', 'windows.net', 'vo.msecnd.net',
+        'icloud-content.com', 'apple-cloudkit.com',
+        'ytimg.com', 'youtube-nocookie.com',
+    }
+
+    def _is_cdn_domain(self, domain: str) -> bool:
+        """Check if domain belongs to a CDN where hostnames are machine-generated."""
+        parts = domain.lower().split('.')
+        for i in range(len(parts)):
+            parent = '.'.join(parts[i:])
+            if parent in self.CDN_INFRASTRUCTURE_DOMAINS:
+                return True
+        return False
+
     def _is_tracking_subdomain(self, domain: str) -> bool:
         """Check if domain is a tracking/advertising subdomain of a legitimate parent.
 
         Example: analytics.google.com should be blocked even though google.com is legitimate.
         This prevents advertisers from hiding tracking behind legitimate parent domains.
+
+        NOTE: CDN domains (aaplimg.com, gstatic.com, etc.) are exempt because their
+        hostnames are machine-generated and often contain words that coincidentally
+        match tracking keywords (e.g., metricsedge-continent-wrr.v.aaplimg.com).
         """
         domain_lower = domain.lower()
         parts = domain_lower.split('.')
 
         if len(parts) < 3:
             # Need at least subdomain.domain.tld to check subdomain patterns
+            return False
+
+        # Skip CDN domains - their hostnames are machine-generated
+        if self._is_cdn_domain(domain_lower):
             return False
 
         # Check first subdomain part against tracking keywords
@@ -3508,11 +3542,11 @@ class CNAMEUncloaker:
             ):
                 return True
 
-        # Check if any part contains tracking keywords (e.g., ad-delivery in x.ad-delivery.google.com)
+        # Check if any subdomain part is an exact tracking keyword
+        # (whole word match only - avoids false positives like "metricsedge")
         for part in parts[:-2]:  # Exclude domain.tld
-            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
-                if keyword in part:
-                    return True
+            if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
+                return True
 
         return False
 
@@ -3521,13 +3555,9 @@ class CNAMEUncloaker:
 
         IMPORTANT: Tracking subdomains (analytics.google.com, pixel.facebook.com)
         are NOT considered legitimate even if their parent domain is in the list.
+        CDN hostnames are exempt from tracking subdomain detection.
         """
         domain_lower = domain.lower()
-
-        # FIRST: Check if this is a tracking subdomain - if so, NOT legitimate
-        # This prevents advertisers from hiding behind legitimate parent domains
-        if self._is_tracking_subdomain(domain_lower):
-            return False
 
         # Check system connectivity domains first (highest priority)
         if domain_lower in self.SYSTEM_CONNECTIVITY_DOMAINS:
@@ -3546,20 +3576,32 @@ class CNAMEUncloaker:
             return True
 
         # Check parent domains (e.g., subdomain.aaplimg.com -> aaplimg.com)
-        # Tracking subdomains already excluded above, so safe to allow parent matches
         parts = domain_lower.split('.')
+        is_infra = False
         for i in range(len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self.LEGITIMATE_INFRASTRUCTURE:
-                return True
+                is_infra = True
+                break
             if parent in self.SYSTEM_CONNECTIVITY_DOMAINS:
-                return True
+                is_infra = True
+                break
             if parent in self.SECURITY_SERVICE_DOMAINS:
-                return True
+                is_infra = True
+                break
             if parent in self.SOFTWARE_DISTRIBUTION_DOMAINS:
-                return True
+                is_infra = True
+                break
 
-        return False
+        if not is_infra:
+            return False
+
+        # Parent is infrastructure - but check for tracking subdomains
+        # This blocks ads.google.com even though google.com is infra
+        if self._is_tracking_subdomain(domain_lower):
+            return False
+
+        return True
 
     def _is_whitelisted(self, domain: str, whitelist: Set[str]) -> bool:
         """Check if domain matches whitelist (supports wildcards and parent domains).
@@ -4561,6 +4603,9 @@ class AIAdBlocker:
         should NOT inherit parent domain whitelist.
 
         Example: ads.yahoo.com should NOT be whitelisted even if yahoo.com is.
+
+        NOTE: Uses exact word matching (not substring) to avoid false positives
+        on CDN hostnames like metricsedge-continent-wrr.v.aaplimg.com.
         """
         # Get the subdomain part (everything before the parent)
         if not domain.endswith('.' + parent) and domain != parent:
@@ -4577,14 +4622,10 @@ class AIAdBlocker:
         if subdomain_parts and subdomain_parts[0] in self.TRACKING_PREFIXES:
             return True
 
-        # Check if any part contains tracking keywords
+        # Check if any part is an exact tracking keyword (whole word match)
         for part in subdomain_parts:
             if part in self.TRACKING_SUBDOMAIN_KEYWORDS:
                 return True
-            # Check for keyword substrings in longer parts
-            for keyword in self.TRACKING_SUBDOMAIN_KEYWORDS:
-                if len(keyword) >= 3 and keyword in part:
-                    return True
 
         return False
 
