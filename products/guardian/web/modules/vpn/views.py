@@ -6,6 +6,7 @@ import logging
 import re
 import sys
 import threading
+from pathlib import Path
 from flask import jsonify, request
 from . import vpn_bp
 from utils import run_command, load_json_file, save_json_file, _safe_error
@@ -80,12 +81,28 @@ def api_status():
         return jsonify({'error': _safe_error(e)}), 500
 
 
+def _default_gateway_host() -> str:
+    """Resolve default VPN gateway: MSSP host from node.conf, else fallback."""
+    try:
+        conf = Path('/etc/hookprobe/node.conf')
+        if conf.exists():
+            for line in conf.read_text().splitlines():
+                if line.startswith('MSSP_URL='):
+                    from urllib.parse import urlparse
+                    host = urlparse(line.split('=', 1)[1].strip()).hostname
+                    if host:
+                        return host
+    except Exception:
+        pass
+    return 'mesh.hookprobe.com'
+
+
 @vpn_bp.route('/connect', methods=['POST'])
 @require_auth
 def api_connect():
     """Connect to mesh via HTP tunnel."""
     data = request.get_json() or {}
-    mesh_endpoint = data.get('endpoint', 'mesh.hookprobe.com')
+    mesh_endpoint = data.get('endpoint', _default_gateway_host())
     device_token = data.get('device_token', '')
     kill_switch = data.get('kill_switch', True)
 
