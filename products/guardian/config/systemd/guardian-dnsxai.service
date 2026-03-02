@@ -1,0 +1,38 @@
+[Unit]
+Description=HookProbe Guardian dnsXai ML DNS Resolver
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target guardian-doh.service
+Before=dnsmasq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/shared/dnsXai/engine.py \
+    --serve \
+    --address 127.0.0.1 \
+    --port 5353 \
+    --upstream 127.0.0.1 \
+    --upstream-port 5053 \
+    --data-dir /var/lib/hookprobe/dnsxai
+Restart=always
+RestartSec=3
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe/dnsxai /var/log/hookprobe /opt/hookprobe/guardian/models
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-dnsxai
+
+[Install]
+WantedBy=multi-user.target
