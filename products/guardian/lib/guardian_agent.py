@@ -676,9 +676,11 @@ class GuardianAgent:
             except Exception as e:
                 self._log(f"Warning: AEGIS-Lite start failed: {e}")
 
-        # Set up signal handlers
-        signal.signal(signal.SIGTERM, self._handle_signal)
-        signal.signal(signal.SIGINT, self._handle_signal)
+        # Set up signal handlers (only works in main thread)
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, self._handle_signal)
+            signal.signal(signal.SIGINT, self._handle_signal)
 
         while self.running:
             try:
