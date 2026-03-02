@@ -345,25 +345,25 @@ class AegisPico:
             return False
 
     def _submit_finding(self, signal: StandardSignal) -> None:
-        """Submit a finding to MSSP for deep analysis."""
+        """Queue a finding for MSSP submission on next heartbeat."""
         if not self._mssp_client:
             return
 
         try:
-            from shared.mssp.types import ThreatFinding
+            from shared.mssp import Finding
 
-            finding = ThreatFinding(
-                source_tier="sentinel",
+            severity_map = {"CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4, "INFO": 5}
+            finding = Finding(
                 threat_type=signal.event_type,
-                severity=signal.severity,
+                severity=severity_map.get(signal.severity, 4),
                 confidence=0.7,
                 ioc_type="ip" if signal.data.get("src_ip") else "domain",
                 ioc_value=signal.data.get("src_ip") or signal.data.get("query", ""),
-                raw_evidence=signal.data,
-                needs_deep_analysis=signal.severity == "CRITICAL",
+                evidence=signal.data,
+                local_action="auto_defended" if signal.severity in ("CRITICAL", "HIGH") else "",
                 description=f"Sentinel detection: {signal.event_type}",
             )
 
-            self._mssp_client.submit_finding(finding)
+            self._mssp_client.queue_finding(finding)
         except Exception as e:
             logger.warning("Failed to submit finding to MSSP: %s", e)
