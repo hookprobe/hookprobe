@@ -3,11 +3,28 @@ Git Operations - Safe git command wrappers for GitHub updates
 
 All operations are read-only or use --ff-only for safety.
 Designed to work without CLI access (via web UI).
+
+SECURITY:
+- All external binaries use absolute paths to prevent PATH manipulation
+- Service names validated against strict allowlist before systemctl calls
+- No shell=True anywhere to prevent command injection
 """
+import logging
 import os
+import re
 import subprocess
 import shlex
 from typing import Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Absolute paths for external binaries (prevents PATH manipulation attacks)
+GIT_BIN = '/usr/bin/git'
+SYSTEMCTL_BIN = '/bin/systemctl'
+SUDO_BIN = '/usr/bin/sudo'
+
+# Strict service name pattern (alphanumeric, hyphens only)
+_SERVICE_NAME_RE = re.compile(r'^[a-z][a-z0-9\-]{0,63}$')
 
 
 def run_command(cmd, timeout=30):
@@ -17,7 +34,7 @@ def run_command(cmd, timeout=30):
         if isinstance(cmd, str):
             cmd_list = shlex.split(cmd)
         else:
-            cmd_list = cmd
+            cmd_list = list(cmd)
 
         result = subprocess.run(
             cmd_list,
@@ -111,7 +128,7 @@ def _try_add_safe_directory(repo_path: str) -> bool:
     """
     # Try adding to global config (requires write access to user's gitconfig)
     output, success = run_command(
-        ['git', 'config', '--global', '--add', 'safe.directory', repo_path],
+        [GIT_BIN, 'config', '--global', '--add', 'safe.directory', repo_path],
         timeout=10
     )
     if success:
@@ -120,7 +137,7 @@ def _try_add_safe_directory(repo_path: str) -> bool:
     # If global config fails, try system config with sudo
     # This is a fallback that may work if sudoers is configured
     output, success = run_command(
-        ['sudo', '-n', 'git', 'config', '--system', '--add', 'safe.directory', repo_path],
+        [SUDO_BIN, '-n', GIT_BIN, 'config', '--system', '--add', 'safe.directory', repo_path],
         timeout=10
     )
     return success
@@ -180,7 +197,7 @@ def get_repo_path() -> str:
     # Priority 6: Use git to find repo root from this file's location
     this_file_dir = os.path.dirname(os.path.abspath(__file__))
     output, success = run_command(
-        ['git', '-C', this_file_dir, 'rev-parse', '--show-toplevel']
+        [GIT_BIN, '-C', this_file_dir, 'rev-parse', '--show-toplevel']
     )
     if success and output and os.path.isdir(output):
         _cached_repo_path = output
@@ -232,22 +249,22 @@ def get_current_status() -> Dict:
 
     # Get current commit hash
     commit_output, commit_success = run_command(
-        ['git', '-C', repo_path, 'rev-parse', '--short', 'HEAD']
+        [GIT_BIN, '-C', repo_path, 'rev-parse', '--short', 'HEAD']
     )
 
     # Get current branch
     branch_output, branch_success = run_command(
-        ['git', '-C', repo_path, 'rev-parse', '--abbrev-ref', 'HEAD']
+        [GIT_BIN, '-C', repo_path, 'rev-parse', '--abbrev-ref', 'HEAD']
     )
 
     # Get full commit hash for comparison
     full_commit, _ = run_command(
-        ['git', '-C', repo_path, 'rev-parse', 'HEAD']
+        [GIT_BIN, '-C', repo_path, 'rev-parse', 'HEAD']
     )
 
     # Get commit date
     date_output, _ = run_command(
-        ['git', '-C', repo_path, 'log', '-1', '--format=%ci']
+        [GIT_BIN, '-C', repo_path, 'log', '-1', '--format=%ci']
     )
 
     # If git commands failed but we have install config, use those values
@@ -291,9 +308,9 @@ def fetch_updates() -> Tuple[bool, str]:
     repo_path = get_repo_path()
 
     # First verify git is available
-    git_version, git_available = run_command(['git', '--version'], timeout=5)
+    git_version, git_available = run_command([GIT_BIN, '--version'], timeout=5)
     if not git_available:
-        return False, 'Git is not installed or not available in PATH'
+        return False, f'Git is not installed at {GIT_BIN}'
 
     # Verify the repo path has a .git directory
     git_dir = os.path.join(repo_path, '.git')
@@ -316,7 +333,7 @@ def fetch_updates() -> Tuple[bool, str]:
 
     # Check if remote is configured
     remote_output, remote_ok = run_command(
-        ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+        [GIT_BIN, '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
         timeout=10
     )
     if not remote_ok:
@@ -339,7 +356,7 @@ def fetch_updates() -> Tuple[bool, str]:
             if safe_dir_ok:
                 # Retry getting remote URL
                 remote_output, remote_ok = run_command(
-                    ['git', '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+                    [GIT_BIN, '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
                     timeout=10
                 )
                 if remote_ok:
@@ -361,7 +378,7 @@ def fetch_updates() -> Tuple[bool, str]:
             remote_url = install_config.get('HOOKPROBE_REMOTE_URL', DEFAULT_REMOTE_URL)
 
             add_output, add_ok = run_command(
-                ['git', '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
+                [GIT_BIN, '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
                 timeout=10
             )
             if not add_ok:
@@ -375,7 +392,7 @@ def fetch_updates() -> Tuple[bool, str]:
                 if 'already exists' in add_output.lower():
                     # Try to set the URL instead
                     set_output, set_ok = run_command(
-                        ['git', '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
+                        [GIT_BIN, '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
                         timeout=10
                     )
                     if not set_ok:
@@ -385,7 +402,7 @@ def fetch_updates() -> Tuple[bool, str]:
 
     # Try to fetch
     output, success = run_command(
-        ['git', '-C', repo_path, 'fetch', REMOTE_NAME],
+        [GIT_BIN, '-C', repo_path, 'fetch', REMOTE_NAME],
         timeout=60
     )
 
@@ -402,7 +419,7 @@ def fetch_updates() -> Tuple[bool, str]:
         if safe_dir_ok:
             # Retry fetch after adding safe.directory
             output, success = run_command(
-                ['git', '-C', repo_path, 'fetch', REMOTE_NAME],
+                [GIT_BIN, '-C', repo_path, 'fetch', REMOTE_NAME],
                 timeout=60
             )
             if success:
@@ -446,12 +463,12 @@ def check_for_updates() -> Dict:
 
     # Get current HEAD
     local_head, _ = run_command(
-        ['git', '-C', repo_path, 'rev-parse', 'HEAD']
+        [GIT_BIN, '-C', repo_path, 'rev-parse', 'HEAD']
     )
 
     # Get remote HEAD
     remote_head, _ = run_command(
-        ['git', '-C', repo_path, 'rev-parse', f'{REMOTE_NAME}/{branch}']
+        [GIT_BIN, '-C', repo_path, 'rev-parse', f'{REMOTE_NAME}/{branch}']
     )
 
     if local_head.strip() == remote_head.strip():
@@ -464,14 +481,14 @@ def check_for_updates() -> Dict:
 
     # Count commits behind
     count_output, _ = run_command(
-        ['git', '-C', repo_path, 'rev-list', '--count',
+        [GIT_BIN, '-C', repo_path, 'rev-list', '--count',
          f'HEAD..{REMOTE_NAME}/{branch}']
     )
     commits_behind = int(count_output.strip()) if count_output.isdigit() else 0
 
     # Get commit list (limit to 20 for UI)
     log_output, _ = run_command(
-        ['git', '-C', repo_path, 'log', '--oneline',
+        [GIT_BIN, '-C', repo_path, 'log', '--oneline',
          f'HEAD..{REMOTE_NAME}/{branch}', '-n', '20']
     )
 
@@ -506,7 +523,7 @@ def preview_changes() -> Dict:
 
     # Get diff stat
     diff_output, success = run_command(
-        ['git', '-C', repo_path, 'diff', '--stat', '--name-only',
+        [GIT_BIN, '-C', repo_path, 'diff', '--stat', '--name-only',
          f'HEAD..{REMOTE_NAME}/{branch}']
     )
 
@@ -701,7 +718,7 @@ def pull_updates(dry_run: bool = False) -> Dict:
 
     # Check for local changes that would prevent pull
     status_output, _ = run_command(
-        ['git', '-C', repo_path, 'status', '--porcelain']
+        [GIT_BIN, '-C', repo_path, 'status', '--porcelain']
     )
 
     if status_output and status_output.strip():
@@ -716,7 +733,7 @@ def pull_updates(dry_run: bool = False) -> Dict:
 
     # Perform fast-forward only pull (safe - fails on conflicts)
     pull_output, success = run_command(
-        ['git', '-C', repo_path, 'pull', '--ff-only', REMOTE_NAME, branch],
+        [GIT_BIN, '-C', repo_path, 'pull', '--ff-only', REMOTE_NAME, branch],
         timeout=120
     )
 
@@ -774,8 +791,17 @@ def restart_services(services: List[str]) -> Dict:
             }
             continue
 
+        # Validate service name against strict pattern
+        if not _SERVICE_NAME_RE.match(service):
+            logger.warning("Rejected invalid service name: %s", service)
+            results[service] = {
+                'success': False,
+                'error': 'Invalid service name'
+            }
+            continue
+
         output, success = run_command(
-            ['sudo', 'systemctl', 'restart', service],
+            [SUDO_BIN, SYSTEMCTL_BIN, 'restart', service],
             timeout=30
         )
 
@@ -803,7 +829,7 @@ def get_update_log() -> List[Dict]:
     repo_path = get_repo_path()
 
     log_output, success = run_command(
-        ['git', '-C', repo_path, 'log', '--oneline', '-n', '10',
+        [GIT_BIN, '-C', repo_path, 'log', '--oneline', '-n', '10',
          '--format=%h|%s|%ci|%an']
     )
 
