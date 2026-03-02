@@ -5404,6 +5404,14 @@ def main():
         help='Upstream DNS server (default: 1.1.1.1)'
     )
     parser.add_argument(
+        '--upstream-port', type=int, default=53,
+        help='Upstream DNS port (default: 53, use 5053 for DoH proxy)'
+    )
+    parser.add_argument(
+        '--data-dir', type=str, default=None,
+        help='Data directory for blocklists and config (default: from env or /opt/hookprobe/shared/dnsXai/data)'
+    )
+    parser.add_argument(
         '--stats', action='store_true',
         help='Show statistics'
     )
@@ -5454,6 +5462,9 @@ def main():
     config.dns_listen_port = args.port
     config.dns_listen_addr = args.address
     config.upstream_dns = args.upstream
+    config.upstream_port = args.upstream_port
+    if args.data_dir:
+        config.data_dir = args.data_dir
 
     # Create ad blocker
     blocker = AIAdBlocker(config)

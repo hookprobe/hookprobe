@@ -127,6 +127,26 @@ class GuardianAgent:
             self.mobile_protection = None
             self._log("Warning: MobileNetworkProtection not available")
 
+        # Captive portal detector
+        self.captive_portal_detector = None
+        try:
+            from products.guardian.lib.captive_portal_detector import CaptivePortalDetector
+            self.captive_portal_detector = CaptivePortalDetector()
+            self._log("CaptivePortalDetector initialized")
+        except ImportError:
+            self._log("Warning: CaptivePortalDetector not available")
+
+        # Evil twin AP detector
+        self.evil_twin_detector = None
+        self._evil_twin_last_scan = 0
+        self._evil_twin_scan_interval = 300  # 5 minutes
+        try:
+            from products.guardian.lib.evil_twin_detector import EvilTwinDetector
+            self.evil_twin_detector = EvilTwinDetector()
+            self._log("EvilTwinDetector initialized")
+        except ImportError:
+            self._log("Warning: EvilTwinDetector not available")
+
         # AEGIS-Lite AI assistant (cloud-only inference)
         self.aegis_lite = None
         try:
@@ -448,10 +468,55 @@ class GuardianAgent:
         xdp_stats = self.get_xdp_stats()
         network_stats = self.get_network_stats()
 
+        # Captive portal check
+        captive_result = None
+        if self.captive_portal_detector:
+            try:
+                captive_result = self.captive_portal_detector.check()
+                if captive_result.is_captive:
+                    self._log(f"Captive portal detected: {captive_result.portal_type}")
+            except Exception as e:
+                self._log(f"Captive portal check error: {e}")
+
+        # Evil twin scan (rate-limited to every 5 minutes)
+        evil_twin_alerts = []
+        now = time.time()
+        if self.evil_twin_detector and (now - self._evil_twin_last_scan) >= self._evil_twin_scan_interval:
+            try:
+                evil_twin_alerts = self.evil_twin_detector.scan()
+                self._evil_twin_last_scan = now
+                if evil_twin_alerts:
+                    self._log(f"Evil twin alerts: {len(evil_twin_alerts)}")
+            except Exception as e:
+                self._log(f"Evil twin scan error: {e}")
+
         # Calculate QSecBit score
         qsecbit_score, rag_status, components = self.calculate_qsecbit_score(
             threat_report, mobile_report, ids_stats, xdp_stats
         )
+
+        # Adjust score for captive portal and evil twin
+        if captive_result and captive_result.is_captive:
+            # Captive portal = untrusted network, boost threat score
+            qsecbit_score = min(1.0, qsecbit_score + 0.10)
+            components['captive_portal'] = round(captive_result.confidence, 4)
+        if evil_twin_alerts:
+            # Evil twin = active attack indicator
+            severity_boost = sum(
+                0.15 if a.severity.value == 'critical' else
+                0.10 if a.severity.value == 'high' else
+                0.05 for a in evil_twin_alerts
+            )
+            qsecbit_score = min(1.0, qsecbit_score + severity_boost)
+            components['evil_twin_alerts'] = len(evil_twin_alerts)
+
+        # Recalculate RAG status after adjustments
+        if qsecbit_score >= 0.70:
+            rag_status = "RED"
+        elif qsecbit_score >= 0.45:
+            rag_status = "AMBER"
+        else:
+            rag_status = "GREEN"
 
         # Build layer threats summary
         layer_threats = {}
