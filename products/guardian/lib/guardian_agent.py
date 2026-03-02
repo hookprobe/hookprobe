@@ -240,12 +240,12 @@ class GuardianAgent:
             'icmp_flood_blocked': 0
         }
 
-        # Check if XDP is loaded
-        output, success = self._run_command('ip link show | grep xdp')
-        stats['xdp_enabled'] = bool(success and output)
+        # Check if XDP is loaded (avoid pipes - shlex.split cannot handle them)
+        output, success = self._run_command('ip link show')
+        stats['xdp_enabled'] = bool(success and 'xdp' in output)
 
         # Try to get XDP stats from bpftool
-        output, success = self._run_command('bpftool map dump name xdp_stats 2>/dev/null')
+        output, success = self._run_command('bpftool map dump name xdp_stats')
         if success and output:
             try:
                 # Parse bpftool output (simplified)
@@ -281,9 +281,9 @@ class GuardianAgent:
             'ssl_connections': 0,
         }
 
-        # Check if NAPSE container is running
-        output, success = self._run_command('podman ps --format "{{.Names}}" | grep -i napse')
-        stats['running'] = bool(success and output.strip())
+        # Check if NAPSE container is running (avoid pipes - shlex.split cannot handle them)
+        output, success = self._run_command(['podman', 'ps', '--format', '{{.Names}}'])
+        stats['running'] = bool(success and 'napse' in output.lower())
 
         if not stats['running']:
             return stats
@@ -308,12 +308,12 @@ class GuardianAgent:
             'nic_info': {}
         }
 
-        # Get active connections count
-        output, success = self._run_command('ss -tuln | wc -l')
+        # Get active connections count (avoid pipes - shlex.split cannot handle them)
+        output, success = self._run_command('ss -tuln')
         if success:
             try:
-                stats['connections'] = int(output) - 1  # Subtract header
-            except ValueError:
+                stats['connections'] = max(0, len(output.strip().splitlines()) - 1)
+            except (ValueError, AttributeError):
                 pass
 
         # Get interface stats
