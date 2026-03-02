@@ -163,19 +163,75 @@ def create_app(config_class=Config):
 
 
 def _init_aegis_lite(app):
-    """Initialize AEGIS-Lite client for Guardian signal processing."""
+    """Initialize AEGIS-Lite and start MSSP heartbeats if provisioned."""
+    import sys
+    import threading
+
+    # Ensure lib/ is importable (deployed layout: web/ is cwd, lib/ is sibling)
+    lib_dir = str(Path(__file__).resolve().parent.parent / 'lib')
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+
     try:
-        from products.guardian.lib.aegis_lite import AegisLite
+        try:
+            from products.guardian.lib.aegis_lite import AegisLite
+        except ImportError:
+            from aegis_lite import AegisLite
+
         aegis = AegisLite()
         if aegis.initialize():
             app.extensions['aegis_lite'] = aegis
-            app.logger.info("AEGIS-Lite initialized successfully")
+            aegis.start()
+            app.logger.info("AEGIS-Lite initialized and MSSP heartbeat started")
         else:
             app.logger.warning("AEGIS-Lite initialization returned False")
     except ImportError:
         app.logger.debug("AEGIS-Lite not available (missing dependencies)")
     except Exception as e:
         app.logger.warning("AEGIS-Lite init error: %s", e)
+
+    # Background claim poller — if there's a pending claim, poll until resolved
+    def _background_claim_poll():
+        import time
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            bootstrap = MSSPBootstrap(product_type='guardian')
+            state = bootstrap.get_provision_state()
+            if state['status'] != 'pending_claim':
+                return  # Nothing to poll
+
+            provision_id = state.get('provision_id', '')
+            if not provision_id:
+                return
+
+            app.logger.info("Background claim poll starting (provision_id=%s)", provision_id[:8])
+            for _ in range(180):  # 15 minutes max (180 * 5s)
+                time.sleep(5)
+                try:
+                    result = bootstrap.check_claim_status(provision_id)
+                    if result.get('claimed'):
+                        app.logger.info("MSSP claim completed — reloading AegisLite")
+                        # Re-init AegisLite with the new API key
+                        try:
+                            try:
+                                from products.guardian.lib.aegis_lite import AegisLite as AL
+                            except ImportError:
+                                from aegis_lite import AegisLite as AL
+                            aegis = AL()
+                            if aegis.initialize():
+                                app.extensions['aegis_lite'] = aegis
+                                aegis.start()
+                                app.logger.info("AEGIS-Lite restarted with MSSP API key")
+                        except Exception as e:
+                            app.logger.warning("AegisLite re-init after claim: %s", e)
+                        return
+                except Exception:
+                    pass  # Network errors, keep polling
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=_background_claim_poll, daemon=True)
+    thread.start()
 
 
 def _load_secret_key():
