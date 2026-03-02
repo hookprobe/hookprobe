@@ -244,33 +244,106 @@ class StatsTracker:
         with self._lock:
             self._stats['cache_misses'] += 1
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get current statistics from log files written by DNS resolver."""
-        # Check pause expiry first (this auto-resumes if time expired)
-        currently_paused = self.is_paused()
-
-        # Read actual stats from log files (written by engine.py resolver)
-        total_queries = 0
-        blocked_queries = 0
-        allowed_queries = 0
-        ml_blocks = 0
-
+    def _scan_queries_log(self, path: Path) -> tuple:
+        """Scan a queries log file and return (total, blocked, allowed, ml_blocks)."""
+        total = blocked = allowed = ml_blk = 0
         try:
-            if QUERIES_LOG.exists():
-                with open(QUERIES_LOG, 'r') as f:
+            if path.exists():
+                with open(path, 'r') as f:
                     for line in f:
                         parts = line.strip().split('\t')
                         if len(parts) >= 2:
-                            total_queries += 1
+                            total += 1
                             if parts[1] == 'BLOCKED':
-                                blocked_queries += 1
-                                # Check if ML classified (method contains 'ml')
+                                blocked += 1
                                 if len(parts) >= 5 and 'ml' in parts[4].lower():
-                                    ml_blocks += 1
+                                    ml_blk += 1
                             else:
-                                allowed_queries += 1
+                                allowed += 1
         except Exception as e:
-            logger.warning(f"Could not read queries log for stats: {e}")
+            logger.warning(f"Could not read queries log {path}: {e}")
+        return total, blocked, allowed, ml_blk
+
+    def _get_cumulative_stats_file(self) -> Path:
+        """Path to cumulative stats file that survives log rotation."""
+        return USERDATA_DIR / 'cumulative_stats.json'
+
+    def _load_cumulative_stats(self) -> dict:
+        """Load cumulative stats from persistent file."""
+        path = self._get_cumulative_stats_file()
+        try:
+            if path.exists():
+                with open(path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load cumulative stats: {e}")
+        return {'total': 0, 'blocked': 0, 'allowed': 0, 'ml_blocks': 0,
+                'last_rotated_file': None}
+
+    def _save_cumulative_stats(self, stats: dict):
+        """Save cumulative stats to persistent file."""
+        try:
+            with open(self._get_cumulative_stats_file(), 'w') as f:
+                json.dump(stats, f)
+        except Exception as e:
+            logger.warning(f"Could not save cumulative stats: {e}")
+
+    def _find_rotated_queries_logs(self) -> list:
+        """Find rotated queries log files (uncompressed only, sorted newest first)."""
+        rotated = []
+        try:
+            for p in LOG_DIR.glob('dnsxai-queries.log-*'):
+                if not p.name.endswith('.gz'):
+                    rotated.append(p)
+        except Exception:
+            pass
+        rotated.sort(reverse=True)
+        return rotated
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current statistics from log files written by DNS resolver.
+
+        Reads the current queries log plus any uncompressed rotated log files
+        to provide accurate stats that survive log rotation. Also maintains
+        a cumulative stats file for historical totals from compressed logs.
+        """
+        # Check pause expiry first (this auto-resumes if time expired)
+        currently_paused = self.is_paused()
+
+        # Load cumulative baseline (stats from already-compressed rotated logs)
+        cumulative = self._load_cumulative_stats()
+
+        # Check for new uncompressed rotated files we haven't counted yet
+        rotated_logs = self._find_rotated_queries_logs()
+        last_counted = cumulative.get('last_rotated_file')
+        new_rotated_total = new_rotated_blocked = new_rotated_allowed = new_rotated_ml = 0
+
+        for rlog in rotated_logs:
+            if last_counted and rlog.name <= last_counted:
+                break
+            t, b, a, m = self._scan_queries_log(rlog)
+            new_rotated_total += t
+            new_rotated_blocked += b
+            new_rotated_allowed += a
+            new_rotated_ml += m
+
+        # Update cumulative stats if we found new rotated files
+        if new_rotated_total > 0 and rotated_logs:
+            cumulative['total'] += new_rotated_total
+            cumulative['blocked'] += new_rotated_blocked
+            cumulative['allowed'] += new_rotated_allowed
+            cumulative['ml_blocks'] += new_rotated_ml
+            cumulative['last_rotated_file'] = rotated_logs[0].name
+            self._save_cumulative_stats(cumulative)
+
+        # Read current (active) log file
+        cur_total, cur_blocked, cur_allowed, cur_ml = self._scan_queries_log(QUERIES_LOG)
+
+        # Combine: cumulative (compressed history) + rotated (recent) + current
+        total_queries = cumulative['total'] + cur_total
+        blocked_queries = cumulative['blocked'] + cur_blocked
+        allowed_queries = cumulative['allowed'] + cur_allowed
+        ml_blocks = cumulative['ml_blocks'] + cur_ml
 
         # Calculate block rate
         block_rate = 0.0
@@ -306,48 +379,66 @@ class StatsTracker:
                 'last_updated': datetime.now().isoformat(),
             }
 
-    def get_blocked_domains(self, limit: int = 100) -> list:
-        """Get recently blocked domains from log file (deduplicated, whitelist filtered).
+    def _read_blocked_log_file(self, path: Path, limit: int,
+                               blocked: list, seen_domains: set):
+        """Read a single blocked log file and append entries to blocked list."""
+        try:
+            if not path.exists():
+                return
+            with open(path, 'r') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    lines = f.readlines()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-        G.N.C. Phase 2 (Nemotron Security Fix): Added file locking to prevent
-        concurrent read/write race conditions.
+                for line in reversed(lines):
+                    if len(blocked) >= limit:
+                        return
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 4:
+                        domain = parts[1].lower()
+                        if domain in seen_domains:
+                            continue
+                        if whitelist_manager.contains(domain):
+                            continue
+                        seen_domains.add(domain)
+                        blocked.append({
+                            'domain': domain,
+                            'reason': parts[2],
+                            'timestamp': parts[0],
+                            'ml_classified': 'ml' in parts[2].lower()
+                        })
+        except Exception as e:
+            logger.warning(f"Could not read blocked log {path}: {e}")
+
+    def get_blocked_domains(self, limit: int = 100) -> list:
+        """Get recently blocked domains from log files (deduplicated, whitelist filtered).
+
+        Reads the current blocked log plus recent uncompressed rotated files
+        to provide accurate data that survives log rotation.
         """
         blocked = []
         seen_domains = set()
 
-        try:
-            if BLOCKED_LOG.exists():
-                with open(BLOCKED_LOG, 'r') as f:
-                    # Acquire shared lock for reading (allows concurrent reads, blocks writes)
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                    try:
-                        lines = f.readlines()
-                    finally:
-                        # Release lock
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        # Read current blocked log first (most recent entries)
+        self._read_blocked_log_file(BLOCKED_LOG, limit, blocked, seen_domains)
 
-                    # Process from newest to oldest (reversed) to get most recent entries
-                    for line in reversed(lines):
-                        if len(blocked) >= limit:
-                            break
-                        parts = line.strip().split('\t')
-                        if len(parts) >= 4:
-                            domain = parts[1].lower()
-                            # Skip duplicates
-                            if domain in seen_domains:
-                                continue
-                            # Skip whitelisted domains
-                            if whitelist_manager.contains(domain):
-                                continue
-                            seen_domains.add(domain)
-                            blocked.append({
-                                'domain': domain,
-                                'reason': parts[2],
-                                'timestamp': parts[0],
-                                'ml_classified': 'ml' in parts[2].lower()
-                            })
-        except Exception as e:
-            logger.warning(f"Could not read blocked log: {e}")
+        # If we haven't reached the limit, also read recent rotated files
+        if len(blocked) < limit:
+            try:
+                rotated = sorted(
+                    [p for p in LOG_DIR.glob('dnsxai-blocked.log-*')
+                     if not p.name.endswith('.gz')],
+                    reverse=True
+                )
+                for rlog in rotated[:3]:  # At most 3 recent rotated files
+                    if len(blocked) >= limit:
+                        break
+                    self._read_blocked_log_file(rlog, limit, blocked, seen_domains)
+            except Exception as e:
+                logger.warning(f"Could not scan rotated blocked logs: {e}")
+
         return blocked
 
     def remove_from_blocked_log(self, domain: str) -> bool:
@@ -809,9 +900,28 @@ class SimpleDomainFeatureExtractor:
 
     # Legitimate CDN/infrastructure domains - context-sensitive (not auto-block)
     LEGITIMATE_INFRASTRUCTURE = {
-        'microsoft.com', 'apple.com', 'google.com', 'akamai.com',
-        'cloudflare.com', 'amazonaws.com', 'azureedge.net', 'cloudfront.net',
+        # Major platforms
+        'microsoft.com', 'apple.com', 'google.com', 'facebook.com', 'meta.com',
+        'amazon.com', 'netflix.com', 'twitter.com', 'x.com', 'linkedin.com',
+        'yahoo.com', 'outlook.com', 'live.com', 'hotmail.com',
+        # CDN/Infrastructure
+        'akamai.com', 'akamaiedge.net', 'akamaitechnologies.com',
+        'cloudflare.com', 'cloudflare-dns.com',
+        'amazonaws.com', 'azureedge.net', 'cloudfront.net',
         'gstatic.com', 'googleapis.com', 'icloud.com', 'office.com',
+        'fastly.net', 'edgekey.net', 'edgesuite.net',
+        # Apple CDN
+        'aaplimg.com', 'mzstatic.com', 'cdn-apple.com', 'apple-dns.net',
+        'apple-cloudkit.com', 'icloud-content.com',
+        # Google CDN
+        'googlevideo.com', 'googleusercontent.com', 'ggpht.com',
+        '1e100.net', 'gvt1.com', 'gvt2.com', 'gvt3.com',
+        'youtube.com', 'ytimg.com',
+        # Microsoft CDN
+        'msedge.net', 'windows.net', 'microsoftonline.com',
+        'azure.com', 'office365.com',
+        # Facebook/Meta CDN
+        'fbcdn.net', 'fbsbx.com', 'cdninstagram.com',
     }
 
     # Package repositories and software distribution - CRITICAL: NEVER block
@@ -841,8 +951,51 @@ class SimpleDomainFeatureExtractor:
             re.IGNORECASE
         )
 
+    # Tracking subdomain keywords - domains starting with these are NOT
+    # protected even if parent is infrastructure (e.g., ads.google.com)
+    _TRACKING_SUBDOMAIN_KEYWORDS = {
+        'ads', 'ad', 'adserv', 'adserver', 'adtrack', 'adtech', 'advert',
+        'pagead', 'adsense', 'adservice', 'adwords', 'doubleclick',
+        'track', 'tracker', 'tracking', 'clicktrack', 'trk',
+        'analytics', 'analytic', 'metric', 'metrics', 'stats', 'stat',
+        'telemetry', 'telem', 'beacon', 'pixel', 'tag',
+        'collect', 'collector', 'log', 'logs', 'logging',
+        'event', 'events', 'click', 'impression', 'fingerprint',
+        'sponsor', 'promo', 'affiliate', 'banner', 'syndication',
+    }
+
+    def _is_tracking_subdomain_of(self, domain: str) -> bool:
+        """Check if domain is a tracking subdomain of an infrastructure parent.
+
+        Matches the logic in engine.py CNAMEUncloaker._is_tracking_subdomain.
+        Uses exact word matching (not substring) to avoid CDN false positives.
+        """
+        parts = domain.lower().split('.')
+        if len(parts) < 3:
+            return False
+
+        # Check all subdomain parts (excluding domain.tld) for exact keyword match
+        for part in parts[:-2]:
+            if part in self._TRACKING_SUBDOMAIN_KEYWORDS:
+                return True
+
+        # Check first part for tracking prefix patterns (e.g., ads2, ad-server)
+        first_part = parts[0]
+        for prefix in self._TRACKING_SUBDOMAIN_KEYWORDS:
+            if first_part.startswith(prefix) and (
+                len(first_part) == len(prefix) or
+                first_part[len(prefix):].isdigit() or
+                (first_part[len(prefix)] in '-_' if len(first_part) > len(prefix) else False)
+            ):
+                return True
+        return False
+
     def _is_protected_domain(self, domain: str) -> bool:
-        """Check if domain is protected (system connectivity, security, CDN, software repos)."""
+        """Check if domain is protected (system connectivity, security, CDN, software repos).
+
+        Matches the engine's _is_legitimate_infrastructure logic: tracking subdomains
+        (ads.google.com) are NOT protected even if parent is infrastructure.
+        """
         domain_lower = domain.lower()
 
         # Check exact match first
@@ -855,18 +1008,30 @@ class SimpleDomainFeatureExtractor:
 
         # Check parent domains
         parts = domain_lower.split('.')
+        is_infra = False
         for i in range(len(parts)):
             parent = '.'.join(parts[i:])
             if parent in self.SYSTEM_CONNECTIVITY_DOMAINS:
-                return True
+                is_infra = True
+                break
             if parent in self.SECURITY_SERVICE_DOMAINS:
-                return True
+                is_infra = True
+                break
             if parent in self.LEGITIMATE_INFRASTRUCTURE:
-                return True
+                is_infra = True
+                break
             if parent in self.SOFTWARE_DISTRIBUTION_DOMAINS:
-                return True
+                is_infra = True
+                break
 
-        return False
+        if not is_infra:
+            return False
+
+        # Parent is infrastructure - but tracking subdomains are NOT protected
+        if self._is_tracking_subdomain_of(domain_lower):
+            return False
+
+        return True
 
     def quick_classify(self, domain: str) -> Tuple[bool, float, str]:
         """
@@ -1964,24 +2129,41 @@ class APIHandler(BaseHTTPRequestHandler):
             'note': 'DNS engine auto-reloads whitelist every 5 seconds when file changes'
         })
 
-    def _get_blocked_stats(self):
-        """Get comprehensive blocking statistics for dashboard."""
-        # Read all blocked entries
-        blocked = []
+    def _read_blocked_entries(self, path: Path) -> list:
+        """Read blocked entries from a single log file."""
+        entries = []
         try:
-            if BLOCKED_LOG.exists():
-                with open(BLOCKED_LOG, 'r') as f:
+            if path.exists():
+                with open(path, 'r') as f:
                     for line in f:
                         parts = line.strip().split('\t')
                         if len(parts) >= 4:
-                            blocked.append({
+                            entries.append({
                                 'timestamp': parts[0],
                                 'domain': parts[1],
                                 'reason': parts[2],
                                 'ml': parts[3] == 'True'
                             })
         except Exception as e:
-            logger.warning(f"Could not read blocked log: {e}")
+            logger.warning(f"Could not read blocked log {path}: {e}")
+        return entries
+
+    def _get_blocked_stats(self):
+        """Get comprehensive blocking statistics for dashboard."""
+        # Read blocked entries from current + recent rotated log files
+        blocked = self._read_blocked_entries(BLOCKED_LOG)
+
+        # Also read recent uncompressed rotated files for 7-day trend data
+        try:
+            rotated = sorted(
+                [p for p in LOG_DIR.glob('dnsxai-blocked.log-*')
+                 if not p.name.endswith('.gz')],
+                reverse=True
+            )
+            for rlog in rotated[:7]:  # Up to 7 days of rotated files
+                blocked.extend(self._read_blocked_entries(rlog))
+        except Exception as e:
+            logger.warning(f"Could not scan rotated blocked logs: {e}")
 
         # Time-based stats
         now = datetime.now()
