@@ -3493,6 +3493,9 @@ table inet guardian {
         # Podman container access to web UI
         iifname "podman0" tcp dport 8080 accept
         iifname "veth*" accept
+        # Upstream LAN access (Fortress) to Web UI and WAF
+        iifname "eth0" tcp dport 8080 accept
+        iifname "eth0" tcp dport 8888 accept
     }
 
     chain forward {
@@ -3508,6 +3511,16 @@ table inet guardian {
 
 # NAT rules (MUST use ip family, not inet)
 table ip guardian_nat {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        # Force all client DNS through Guardian dnsmasq (dnsXai protection).
+        # Without this, devices using private DNS / DoT bypass the blocklist.
+        iifname "br0" udp dport 53 dnat to 192.168.4.1:53
+        iifname "br0" tcp dport 53 dnat to 192.168.4.1:53
+        # Also redirect DNS-over-TLS (port 853) to prevent bypass
+        iifname "br0" tcp dport 853 redirect to :53
+    }
+
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         # Masquerade all outbound traffic except LAN/AP/loopback/container
