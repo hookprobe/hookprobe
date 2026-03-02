@@ -436,12 +436,40 @@ table inet guardian_vpn {{
     # =========================================================================
 
     def _resolve_gateway(self) -> Optional[str]:
-        """Resolve gateway hostname to IP address."""
+        """Resolve gateway hostname to IP address.
+
+        When the configured host is the unresolvable default (mesh.hookprobe.com),
+        fall back to the MSSP host from /etc/hookprobe/node.conf so Guardian can
+        tunnel through the MSSP server without manual configuration.
+        """
+        host = self.config.gateway_host
+
+        # If using the default placeholder that doesn't resolve, try MSSP host
+        if host == DEFAULT_GATEWAY_HOST:
+            mssp_host = self._mssp_host()
+            if mssp_host:
+                host = mssp_host
+                logger.info("Using MSSP host as VPN gateway: %s", host)
+
         try:
-            return socket.gethostbyname(self.config.gateway_host)
+            return socket.gethostbyname(host)
         except socket.gaierror as e:
-            logger.error("Cannot resolve gateway %s: %s", self.config.gateway_host, e)
+            logger.error("Cannot resolve gateway %s: %s", host, e)
             return None
+
+    @staticmethod
+    def _mssp_host() -> Optional[str]:
+        """Read MSSP hostname from /etc/hookprobe/node.conf."""
+        try:
+            conf = Path('/etc/hookprobe/node.conf')
+            if conf.exists():
+                for line in conf.read_text().splitlines():
+                    if line.startswith('MSSP_URL='):
+                        from urllib.parse import urlparse
+                        return urlparse(line.split('=', 1)[1].strip()).hostname
+        except Exception:
+            pass
+        return None
 
     def _create_udp_socket(self) -> bool:
         """Create UDP socket for HTP tunnel."""
