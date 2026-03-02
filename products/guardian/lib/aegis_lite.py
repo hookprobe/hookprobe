@@ -26,7 +26,7 @@ class AegisLite:
     - Cloud-only inference (no local Ollama)
     - 3-layer memory (session + behavioral + threat_intel)
     - Direct NAPSE event consumption
-    - MSSP intelligence loop
+    - MSSP intelligence loop with full telemetry
     """
 
     VERSION = "1.0.0"
@@ -34,7 +34,7 @@ class AegisLite:
     def __init__(self):
         self._aegis_client = None
         self._mssp_client = None
-        self._recommendation_handler = None
+        self._guardian_agent = None  # Set via set_guardian_agent()
 
     def initialize(self) -> bool:
         """Initialize AEGIS-Lite with Guardian configuration.
@@ -61,23 +61,14 @@ class AegisLite:
         except Exception as e:
             logger.warning("AEGIS core unavailable (MSSP-only mode): %s", e)
 
-        # 2. MSSP client (independent of AEGIS core)
+        # 2. MSSP client (single-contract piggyback via heartbeat)
         try:
-            from shared.mssp import get_mssp_client
-            self._mssp_client = get_mssp_client(tier="guardian")
+            from shared.mssp import MSSPClient
+            self._mssp_client = MSSPClient()
+            self._mssp_client.on_recommendation(self._handle_mssp_recommendation)
             logger.info("MSSP client initialized for Guardian")
         except Exception as e:
             logger.warning("MSSP client init failed: %s", e)
-
-        # 3. Recommendation handler
-        try:
-            from shared.mssp import RecommendationHandler
-            self._recommendation_handler = RecommendationHandler(
-                mssp_client=self._mssp_client,
-            )
-            logger.info("Recommendation handler initialized")
-        except Exception as e:
-            logger.warning("Recommendation handler init failed: %s", e)
 
         return self._aegis_client is not None or self._mssp_client is not None
 
@@ -87,18 +78,22 @@ class AegisLite:
             self._aegis_client.start()
 
         if self._mssp_client:
-            self._mssp_client.start_heartbeat(interval=60)
+            self._mssp_client.start(collect_telemetry=self._collect_telemetry)
 
         logger.info("AEGIS-Lite started")
 
     def stop(self) -> None:
         """Stop all services."""
         if self._mssp_client:
-            self._mssp_client.stop_heartbeat()
+            self._mssp_client.stop()
         if self._aegis_client:
             self._aegis_client.stop()
 
         logger.info("AEGIS-Lite stopped")
+
+    def set_guardian_agent(self, agent) -> None:
+        """Set reference to GuardianAgent for telemetry collection."""
+        self._guardian_agent = agent
 
     def chat(self, session_id: str, message: str):
         """Chat with AEGIS-Lite (cloud inference)."""
@@ -107,17 +102,73 @@ class AegisLite:
         return None
 
     def submit_finding(self, finding) -> bool:
-        """Submit a finding to MSSP."""
+        """Queue a finding for MSSP submission on next heartbeat."""
         if self._mssp_client:
-            result = self._mssp_client.submit_finding(finding)
-            return result is not None
+            from shared.mssp import Finding
+            if not isinstance(finding, Finding):
+                finding = Finding(**finding) if isinstance(finding, dict) else finding
+            self._mssp_client.queue_finding(finding)
+            return True
         return False
 
-    def handle_recommendation(self, action) -> bool:
-        """Handle a recommendation from MSSP/mesh."""
-        if self._recommendation_handler:
-            return self._recommendation_handler.handle(action)
-        return False
+    def _handle_mssp_recommendation(self, rec) -> None:
+        """Handle a verified recommendation from MSSP (via heartbeat response)."""
+        try:
+            from shared.mssp import Feedback
+            rec_dict = rec.to_dict() if hasattr(rec, 'to_dict') else rec
+
+            success = False
+            if self._aegis_client:
+                success = self._aegis_client.execute_action(rec_dict)
+
+            if self._mssp_client:
+                self._mssp_client.queue_feedback(Feedback(
+                    action_id=rec.id,
+                    success=success,
+                    effect="executed" if success else "failed",
+                ))
+        except Exception as e:
+            logger.error("Recommendation handling error: %s", e)
+
+    def _collect_telemetry(self) -> dict:
+        """Collect full telemetry for heartbeat — generic system + guardian extensions."""
+        # Generic system/network/security telemetry from /proc
+        try:
+            from shared.mssp.telemetry_collector import TelemetryCollector
+            telemetry = TelemetryCollector.collect_all()
+        except Exception:
+            telemetry: Dict[str, Any] = {"status": "online"}
+
+        telemetry["status"] = "online"
+        telemetry["version"] = self.VERSION
+
+        # Guardian-specific extensions
+        if self._guardian_agent:
+            try:
+                metrics = self._guardian_agent.collect_metrics()
+                telemetry["qsecbit"] = round((1.0 - metrics.qsecbit_score) * 100) if metrics.qsecbit_score is not None else None
+                telemetry["extensions"] = {
+                    "guardian": {
+                        "qsecbitScore": metrics.qsecbit_score,
+                        "ragStatus": metrics.rag_status,
+                        "layerThreats": metrics.layer_threats,
+                        "mobileProtection": metrics.mobile_protection,
+                        "xdpStats": metrics.xdp_stats,
+                        "idsStats": metrics.ids_stats,
+                        "components": metrics.components,
+                        "recentThreats": metrics.recent_threats[:5] if metrics.recent_threats else [],
+                    }
+                }
+            except Exception as e:
+                logger.debug("Guardian metrics collection error: %s", e)
+
+        if self._aegis_client:
+            try:
+                telemetry.setdefault("extensions", {})["aegisStatus"] = self._aegis_client.get_full_status()
+            except Exception:
+                pass
+
+        return telemetry
 
     def get_status(self) -> Dict[str, Any]:
         """Get AEGIS-Lite status."""
@@ -130,6 +181,9 @@ class AegisLite:
         if self._aegis_client:
             status["aegis"] = self._aegis_client.get_full_status()
         if self._mssp_client:
-            status["mssp"] = self._mssp_client.get_stats()
+            status["mssp"] = {
+                "running": self._mssp_client.is_running,
+                "pending": self._mssp_client.pending_count,
+            }
 
         return status
