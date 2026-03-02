@@ -1,0 +1,35 @@
+[Unit]
+Description=HookProbe Guardian Mesh Daemon (HTP/Neuro/DSM)
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target guardian-qsecbit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/mesh_integration.py --daemon --config /opt/hookprobe/guardian/mesh.conf --data-dir /opt/hookprobe/guardian/data --verbose
+Restart=always
+RestartSec=30
+User=root
+Group=root
+
+# Memory cap for Pi (mesh consciousness + transport)
+MemoryMax=200M
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe/guardian/data /var/log/hookprobe /etc/hookprobe
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-mesh
+
+[Install]
+WantedBy=multi-user.target
