@@ -10,6 +10,7 @@ import logging
 from flask import jsonify, request
 from . import dnsxai_bp
 from utils import load_json_file, save_json_file, load_text_file, save_text_file, run_command, _safe_error
+from modules.auth import require_auth
 
 # ML Engine imports
 try:
@@ -162,6 +163,7 @@ def is_protection_active():
 
 
 @dnsxai_bp.route('/stats')
+@require_auth
 def api_stats():
     """Get dnsXai statistics from DNS Shield with ML metrics."""
     # Get real-time stats from dnsmasq log
@@ -212,6 +214,7 @@ def api_stats():
 
 
 @dnsxai_bp.route('/level', methods=['POST'])
+@require_auth
 def api_set_level():
     """Set protection level."""
     data = request.get_json(silent=True) or {}
@@ -233,6 +236,7 @@ def api_set_level():
 
 
 @dnsxai_bp.route('/whitelist', methods=['GET', 'POST', 'DELETE'])
+@require_auth
 def api_whitelist():
     """Manage whitelisted domains."""
     if request.method == 'GET':
@@ -272,6 +276,7 @@ def api_whitelist():
 
 
 @dnsxai_bp.route('/sources', methods=['GET', 'POST', 'DELETE'])
+@require_auth
 def api_sources():
     """Manage blocklist sources."""
     # Default source
@@ -324,6 +329,7 @@ def api_sources():
 
 
 @dnsxai_bp.route('/pause', methods=['GET', 'POST'])
+@require_auth
 def api_pause():
     """Pause/resume dnsXai protection."""
     disabled_conf = f'{DNSMASQ_SHIELD_CONF}.disabled'
@@ -397,6 +403,7 @@ def api_pause():
 
 
 @dnsxai_bp.route('/update', methods=['POST'])
+@require_auth
 def api_update():
     """Trigger blocklist update."""
     try:
@@ -417,6 +424,7 @@ def api_update():
 # =============================================================================
 
 @dnsxai_bp.route('/ml/status')
+@require_auth
 def api_ml_status():
     """Get ML engine status and capabilities."""
     # Dynamic check - allows detection after package installation
@@ -461,6 +469,7 @@ def api_ml_status():
 
 
 @dnsxai_bp.route('/ml/train', methods=['POST'])
+@require_auth
 def api_ml_train():
     """Train ML model on browsing history with seed data for ad detection."""
     ready, error_response = _check_ml_ready()
@@ -508,6 +517,7 @@ def api_ml_train():
 
 
 @dnsxai_bp.route('/ml/classify', methods=['POST'])
+@require_auth
 def api_ml_classify():
     """Classify a domain using ML."""
     ready, error_response = _check_ml_ready()
@@ -534,6 +544,7 @@ def api_ml_classify():
 
 
 @dnsxai_bp.route('/ml/analyze', methods=['POST'])
+@require_auth
 def api_ml_analyze():
     """Real-time threat analysis for a domain."""
     ready, error_response = _check_ml_ready()
@@ -561,6 +572,7 @@ def api_ml_analyze():
 
 
 @dnsxai_bp.route('/ml/history')
+@require_auth
 def api_ml_history():
     """Get browsing history for ML training."""
     try:
@@ -586,6 +598,7 @@ def api_ml_history():
 
 
 @dnsxai_bp.route('/ml/threats')
+@require_auth
 def api_ml_threats():
     """Get recent ML-detected threats."""
     if not ML_AVAILABLE:
@@ -608,6 +621,7 @@ def api_ml_threats():
 
 
 @dnsxai_bp.route('/blocked')
+@require_auth
 def api_blocked_domains():
     """Get recently blocked domains from dnsmasq log with block counts."""
     import time
@@ -702,6 +716,7 @@ def api_blocked_domains():
 # =============================================================================
 
 @dnsxai_bp.route('/cname/check', methods=['POST'])
+@require_auth
 def api_cname_check():
     """Check if a CNAME is hiding a tracker."""
     ready, error_response = _check_ml_ready()
@@ -729,6 +744,7 @@ def api_cname_check():
 
 
 @dnsxai_bp.route('/cname/stats')
+@require_auth
 def api_cname_stats():
     """Get CNAME uncloaking statistics."""
     if not ML_AVAILABLE:
@@ -750,6 +766,7 @@ def api_cname_stats():
 # =============================================================================
 
 @dnsxai_bp.route('/federated/status')
+@require_auth
 def api_federated_status():
     """Get federated learning status."""
     if not ML_AVAILABLE:
@@ -767,6 +784,7 @@ def api_federated_status():
 
 
 @dnsxai_bp.route('/federated/export')
+@require_auth
 def api_federated_export():
     """Export local updates for federation."""
     if not ML_AVAILABLE:
@@ -784,6 +802,7 @@ def api_federated_export():
 
 
 @dnsxai_bp.route('/federated/import', methods=['POST'])
+@require_auth
 def api_federated_import():
     """Import updates from other nodes."""
     ready, error_response = _check_ml_ready()
@@ -866,6 +885,7 @@ def _parse_browsing_history(hours: int = 24, limit: int = 5000) -> list:
 # =============================================================================
 
 @dnsxai_bp.route('/packet/status')
+@require_auth
 def api_packet_status():
     """Get packet-level ad detection status and statistics."""
     if not PACKET_INSPECTOR_AVAILABLE:
@@ -890,6 +910,7 @@ def api_packet_status():
 
 
 @dnsxai_bp.route('/packet/check/domain', methods=['POST'])
+@require_auth
 def api_packet_check_domain():
     """
     Check if a domain matches known ad/tracker patterns.
@@ -918,6 +939,7 @@ def api_packet_check_domain():
 
 
 @dnsxai_bp.route('/packet/check/ip', methods=['POST'])
+@require_auth
 def api_packet_check_ip():
     """
     Check if an IP belongs to a known ad network.
@@ -946,6 +968,7 @@ def api_packet_check_ip():
 
 
 @dnsxai_bp.route('/packet/analyze/dns', methods=['POST'])
+@require_auth
 def api_packet_analyze_dns():
     """
     Analyze a DNS response for ad indicators.
@@ -982,6 +1005,7 @@ def api_packet_analyze_dns():
 
 
 @dnsxai_bp.route('/packet/analyze/connection', methods=['POST'])
+@require_auth
 def api_packet_analyze_connection():
     """
     Analyze a network connection for ad/tracking activity.
@@ -1018,6 +1042,7 @@ def api_packet_analyze_connection():
 
 
 @dnsxai_bp.route('/packet/detections')
+@require_auth
 def api_packet_detections():
     """Get recent packet-level ad detections."""
     if not PACKET_INSPECTOR_AVAILABLE:
@@ -1040,6 +1065,7 @@ def api_packet_detections():
 
 
 @dnsxai_bp.route('/packet/ip/block', methods=['POST'])
+@require_auth
 def api_packet_block_ip():
     """Add an IP to the blocked ad network list."""
     if not PACKET_INSPECTOR_AVAILABLE:
@@ -1066,6 +1092,7 @@ def api_packet_block_ip():
 
 
 @dnsxai_bp.route('/packet/combined/check', methods=['POST'])
+@require_auth
 def api_combined_ad_check():
     """
     Combined ML + Packet analysis for comprehensive ad detection.

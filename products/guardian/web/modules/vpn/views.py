@@ -4,6 +4,8 @@ Uses HookProbe Transport Protocol with weight-bound encryption + PoSF authentica
 """
 import logging
 import re
+import sys
+import threading
 from flask import jsonify, request
 from . import vpn_bp
 from utils import run_command, load_json_file, save_json_file, _safe_error
@@ -11,12 +13,35 @@ from modules.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
+# Import HTP VPN client
+sys.path.insert(0, '/opt/hookprobe/guardian/lib')
+try:
+    from htp_vpn_client import HTPVPNClient, VPNConfig, VPNState
+    HTP_VPN_AVAILABLE = True
+except ImportError:
+    HTP_VPN_AVAILABLE = False
+    logger.warning("HTP VPN client not available")
+
 HTP_CONFIG_DIR = '/opt/hookprobe/guardian/htp'
 HTP_STATE_FILE = f'{HTP_CONFIG_DIR}/state.json'
 
 # Validation patterns
 _HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$')
 _TOKEN_RE = re.compile(r'^[a-zA-Z0-9_\-]{1,128}$')
+
+# Singleton VPN client instance (managed by web app lifecycle)
+_vpn_client = None
+_vpn_lock = threading.Lock()
+
+
+def _get_vpn_client() -> 'HTPVPNClient':
+    """Get or create VPN client singleton."""
+    global _vpn_client
+    if _vpn_client is None and HTP_VPN_AVAILABLE:
+        with _vpn_lock:
+            if _vpn_client is None:
+                _vpn_client = HTPVPNClient()
+    return _vpn_client
 
 
 def _validate_endpoint(endpoint):
@@ -38,37 +63,18 @@ def _validate_token(token):
 def api_status():
     """Get HTP tunnel connection status."""
     try:
+        client = _get_vpn_client()
+        if client:
+            return jsonify(client.get_status())
+
+        # Fallback: read state file if VPN client not loaded
         state = load_json_file(HTP_STATE_FILE, {
             'connected': False,
+            'state': 'stopped',
             'server': None,
-            'mesh_node': None,
-            'public_ip': None,
-            'uptime': '0:00',
             'protocol': 'HTP',
-            'encryption': 'Kyber-1024 + ChaCha20-Poly1305',
-            'posf_verified': False
+            'encryption': 'ChaCha20-Poly1305 (NSE)',
         })
-
-        # Check if HTP tunnel is running
-        htp_output, htp_success = run_command(['pgrep', '-f', 'htp-tunnel'])
-        if htp_success and htp_output:
-            state['connected'] = True
-
-            # Get mesh connection details
-            mesh_state = load_json_file('/opt/hookprobe/guardian/mesh/connection.json', {})
-            state['server'] = mesh_state.get('endpoint', 'mesh.hookprobe.com')
-            state['mesh_node'] = mesh_state.get('node_id', 'Unknown')
-            state['posf_verified'] = mesh_state.get('posf_verified', False)
-
-        # Get public IP if connected (cached)
-        if state['connected']:
-            ip_output, _ = run_command(
-                ['curl', '-s', 'https://api.ipify.org', '--connect-timeout', '5'],
-                timeout=10
-            )
-            if ip_output:
-                state['public_ip'] = ip_output.strip()
-
         return jsonify(state)
     except Exception as e:
         return jsonify({'error': _safe_error(e)}), 500
@@ -81,36 +87,43 @@ def api_connect():
     data = request.get_json() or {}
     mesh_endpoint = data.get('endpoint', 'mesh.hookprobe.com')
     device_token = data.get('device_token', '')
+    kill_switch = data.get('kill_switch', True)
 
-    # Validate inputs to prevent command injection
+    # Validate inputs
     if not _validate_endpoint(mesh_endpoint):
         return jsonify({'success': False, 'error': 'Invalid mesh endpoint'}), 400
     if not _validate_token(device_token):
         return jsonify({'success': False, 'error': 'Invalid device token'}), 400
 
+    if not HTP_VPN_AVAILABLE:
+        return jsonify({'success': False, 'error': 'HTP VPN module not available'}), 503
+
     try:
-        # Build command as list (safe from injection)
-        cmd = [
-            '/opt/hookprobe/core/htp/transport/htp-tunnel.py',
-            'connect', '--mesh', mesh_endpoint
-        ]
-        if device_token:
-            cmd.extend(['--token', device_token])
+        client = _get_vpn_client()
+        if not client:
+            return jsonify({'success': False, 'error': 'Could not initialize VPN client'}), 500
 
-        output, success = run_command(cmd, timeout=30)
+        # Update config
+        client.config.gateway_host = mesh_endpoint
+        client.config.device_token = device_token
+        client.config.kill_switch = bool(kill_switch)
+        client.config.save()
 
-        if success:
-            state = {
-                'connected': True,
-                'server': mesh_endpoint,
-                'protocol': 'HTP',
-                'encryption': 'Kyber-1024 + ChaCha20-Poly1305',
-                'posf_verified': True
-            }
-            save_json_file(HTP_STATE_FILE, state)
-            return jsonify({'success': True, 'protocol': 'HTP', 'mesh': mesh_endpoint})
+        # Start VPN in background thread (handshake may take a few seconds)
+        def _connect_bg():
+            if not client.start():
+                logger.error("HTP VPN connection failed")
 
-        return jsonify({'success': False, 'error': output}), 500
+        connect_thread = threading.Thread(target=_connect_bg, daemon=True)
+        connect_thread.start()
+
+        return jsonify({
+            'success': True,
+            'message': 'HTP VPN connecting...',
+            'protocol': 'HTP',
+            'encryption': 'ChaCha20-Poly1305 (NSE)',
+            'kill_switch': kill_switch,
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': _safe_error(e)}), 500
 
@@ -120,11 +133,13 @@ def api_connect():
 def api_disconnect():
     """Disconnect HTP tunnel."""
     try:
-        run_command(['pkill', '-f', 'htp-tunnel'])
+        client = _get_vpn_client()
+        if client:
+            client.stop()
+            return jsonify({'success': True, 'message': 'HTP VPN disconnected'})
 
-        state = {'connected': False, 'server': None, 'posf_verified': False}
-        save_json_file(HTP_STATE_FILE, state)
-
+        # Fallback: kill any running VPN process
+        run_command(['pkill', '-f', 'htp_vpn_client'])
         return jsonify({'success': True})
     except Exception as e:
         logger.error("HTP disconnect error: %s", type(e).__name__)
@@ -289,6 +304,7 @@ def api_posf_verify():
 
 
 @vpn_bp.route('/encryption/info')
+@require_auth
 def api_encryption_info():
     """Get encryption information (public, no auth needed)."""
     return jsonify({

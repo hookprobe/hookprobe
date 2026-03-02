@@ -6,6 +6,7 @@ import os
 import subprocess
 from flask import jsonify, request, current_app
 from . import vms_bp
+from modules.auth import require_auth
 
 # Guardian manages only these specific VMs through this API.
 MANAGED_VMS = {'homeassistant', 'openmediavault'}
@@ -129,6 +130,7 @@ def _get_vm_url(vm_name):
 
 
 @vms_bp.route('/api/vms/status')
+@require_auth
 def api_vms_status():
     """Get overall VM support status."""
     libvirt_available = _check_libvirt_available()
@@ -158,6 +160,7 @@ def api_vms_status():
 
 
 @vms_bp.route('/api/vms')
+@require_auth
 def api_vms_list():
     """List all Guardian-managed VMs."""
     if not _check_libvirt_available():
@@ -181,6 +184,7 @@ def api_vms_list():
 
 
 @vms_bp.route('/api/vms/<vm_name>')
+@require_auth
 def api_vm_detail(vm_name):
     """Get detailed information about a specific VM."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -200,6 +204,7 @@ def api_vm_detail(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/start', methods=['POST'])
+@require_auth
 def api_vm_start(vm_name):
     """Start a VM."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -224,6 +229,7 @@ def api_vm_start(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/stop', methods=['POST'])
+@require_auth
 def api_vm_stop(vm_name):
     """Stop (graceful shutdown) a VM."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -247,6 +253,7 @@ def api_vm_stop(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/force-stop', methods=['POST'])
+@require_auth
 def api_vm_force_stop(vm_name):
     """Force stop a VM (like pulling the power cord)."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -270,6 +277,7 @@ def api_vm_force_stop(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/restart', methods=['POST'])
+@require_auth
 def api_vm_restart(vm_name):
     """Restart a VM."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -294,6 +302,7 @@ def api_vm_restart(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/autostart', methods=['POST'])
+@require_auth
 def api_vm_autostart(vm_name):
     """Enable/disable VM autostart."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -324,6 +333,7 @@ def api_vm_autostart(vm_name):
 
 
 @vms_bp.route('/api/vms/<vm_name>/console')
+@require_auth
 def api_vm_console_info(vm_name):
     """Get VNC console connection info for a VM."""
     valid, error_response = _validate_vm_name(vm_name)
@@ -358,6 +368,7 @@ def api_vm_console_info(vm_name):
 
 
 @vms_bp.route('/api/vms/stats')
+@require_auth
 def api_vms_stats():
     """Get resource usage stats for all VMs."""
     if not _check_libvirt_available():
@@ -397,6 +408,7 @@ def api_vms_stats():
 
 
 @vms_bp.route('/api/vms/health')
+@require_auth
 def api_vms_health():
     """Get health status of VMs (for dashboard integration)."""
     if not _check_libvirt_available():

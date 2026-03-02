@@ -14,6 +14,7 @@ SSH_BYPASS_TIMEOUT = 1800  # 30 minutes
 
 
 @system_bp.route('/info')
+@require_auth
 def api_info():
     """Get system information (read-only, no auth needed)."""
     try:

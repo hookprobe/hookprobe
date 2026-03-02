@@ -65,17 +65,23 @@
         <p>Enter your PIN to continue</p>
         {% endif %}
         <form id="loginForm">
+            {% if not configured %}
+            <input type="text" id="setupToken" class="pin-input"
+                   placeholder="Setup Token"
+                   style="font-size:1rem; letter-spacing:0.1em; margin-bottom:0.75rem"
+                   autocomplete="off">
+            {% endif %}
             <input type="password" id="pin" class="pin-input"
                    inputmode="numeric" pattern="[0-9]*"
                    placeholder="****"
-                   minlength="4" maxlength="12" autofocus>
+                   minlength="4" maxlength="12" {% if configured %}autofocus{% endif %}>
             <button type="submit" class="btn" id="submitBtn">
                 {% if not configured %}Set PIN{% else %}Login{% endif %}
             </button>
             <div class="error" id="error"></div>
         </form>
         {% if not configured %}
-        <div class="setup-note">Choose a PIN (4-12 digits) to protect your Guardian.</div>
+        <div class="setup-note">Enter the setup token shown during installation, then choose a PIN (4-12 digits).</div>
         {% endif %}
     </div>
     <script>
@@ -119,10 +125,15 @@
             btn.disabled = true;
             err.textContent = '';
             try {
+                const payload = {pin: pin.value};
+                const tokenEl = document.getElementById('setupToken');
+                if (tokenEl && tokenEl.value) {
+                    payload.setup_token = tokenEl.value.trim();
+                }
                 const res = await fetch('/auth/login', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({pin: pin.value})
+                    body: JSON.stringify(payload)
                 });
                 const data = await res.json();
                 if (data.success) {
