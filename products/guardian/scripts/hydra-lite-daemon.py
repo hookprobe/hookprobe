@@ -11,10 +11,10 @@ import sys
 import logging
 import threading
 
-# Add project root to path for imports
-sys.path.insert(0, '/opt/hookprobe')
+# Add Guardian lib to path for imports
+sys.path.insert(0, '/opt/hookprobe/guardian/lib')
 
-from products.guardian.lib.hydra_lite import HydraLite
+from hydra_lite import HydraLite
 
 logging.basicConfig(
     level=logging.INFO,
