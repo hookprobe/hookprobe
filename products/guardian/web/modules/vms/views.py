@@ -24,9 +24,11 @@ def _run_virsh(args, timeout=30):
         )
         return result.stdout.strip(), result.returncode == 0
     except subprocess.TimeoutExpired:
+        current_app.logger.warning("virsh command timed out: %s", args)
         return "Command timed out", False
     except Exception as e:
-        return str(e), False
+        current_app.logger.error("virsh command failed: %s", e)
+        return "VM operation failed", False
 
 
 def _check_libvirt_available():
