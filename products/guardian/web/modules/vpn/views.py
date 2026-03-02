@@ -232,39 +232,71 @@ def api_mssp_register():
         return jsonify({'success': False, 'error': 'MSSP registration failed'}), 500
 
 
+@vpn_bp.route('/api/mssp/provision', methods=['POST'])
+@require_auth
+def api_mssp_provision():
+    """Start MSSP provisioning (non-blocking). Returns claim code to display."""
+    try:
+        from shared.mssp.bootstrap import MSSPBootstrap
+
+        bootstrap = MSSPBootstrap(product_type='guardian')
+        result = bootstrap.start_provision()
+        return jsonify(result)
+    except Exception as e:
+        logger.error("MSSP provision error: %s", type(e).__name__)
+        return jsonify({'status': 'error', 'error': 'Provisioning request failed'}), 500
+
+
+@vpn_bp.route('/api/mssp/claim/check', methods=['POST'])
+@require_auth
+def api_mssp_claim_check():
+    """Check if a pending claim code has been entered in the dashboard."""
+    try:
+        from shared.mssp.bootstrap import MSSPBootstrap
+
+        data = request.get_json() or {}
+        provision_id = data.get('provision_id', '')
+
+        bootstrap = MSSPBootstrap(product_type='guardian')
+
+        # Fall back to reading provision_id from claim file on disk
+        if not provision_id:
+            state = bootstrap.get_provision_state()
+            provision_id = state.get('provision_id', '')
+
+        if not provision_id:
+            return jsonify({'error': 'No pending provisioning found'}), 400
+
+        if not _validate_token(provision_id):
+            return jsonify({'error': 'Invalid provision ID format'}), 400
+
+        result = bootstrap.check_claim_status(provision_id)
+        return jsonify(result)
+    except Exception as e:
+        logger.error("MSSP claim check error: %s", type(e).__name__)
+        return jsonify({'error': 'Claim status check failed'}), 500
+
+
 @vpn_bp.route('/api/mssp/status')
 @require_auth
 def api_mssp_status():
     """Get MSSP connection status and claim code if pending."""
     try:
         from shared.mssp.bootstrap import MSSPBootstrap
-        from pathlib import Path
 
         bootstrap = MSSPBootstrap(product_type='guardian')
-        api_key = bootstrap._read_config('API_KEY')
-        mssp_url = bootstrap._read_config('MSSP_URL') or 'https://mssp.hookprobe.com'
+        state = bootstrap.get_provision_state()
 
         result = {
-            'connected': bool(api_key),
-            'provisioned': bool(api_key),
-            'url': mssp_url,
+            'connected': state['status'] == 'provisioned',
+            'provisioned': state['status'] == 'provisioned',
+            'url': state.get('mssp_url', 'https://mssp.hookprobe.com'),
+            'status': state['status'],
         }
 
-        # If not yet provisioned, check for a pending claim code on disk
-        if not api_key:
-            claim_path = Path('/etc/hookprobe/claim_code')
-            if claim_path.exists():
-                try:
-                    claim_data = {}
-                    for line in claim_path.read_text().splitlines():
-                        if '=' in line:
-                            k, v = line.split('=', 1)
-                            claim_data[k.strip()] = v.strip()
-                    result['claimCode'] = claim_data.get('CLAIM_CODE', '')
-                    result['provisionId'] = claim_data.get('PROVISION_ID', '')
-                    result['status'] = 'pending_claim'
-                except Exception:
-                    pass
+        if state['status'] == 'pending_claim':
+            result['claimCode'] = state.get('claim_code', '')
+            result['provisionId'] = state.get('provision_id', '')
 
         return jsonify(result)
     except Exception as e:

@@ -166,35 +166,77 @@
     </div>
 </div>
 
-<!-- MSSP Registration -->
-<div class="card">
-    <div class="card-header">
+<!-- MSSP Connection -->
+<div class="card" id="mssp-card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
         <h3 class="card-title">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
                 <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
             </svg>
-            MSSP Registration
+            MSSP Connection
         </h3>
+        <span id="mssp-status-badge" style="display: none; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600;"></span>
     </div>
     <div class="card-body">
-        <p class="text-muted" style="margin-bottom: var(--spacing-lg);">Register this Guardian node with your MSSP to enable secure tunnel communications and federated threat intelligence.</p>
+        <!-- State: Not provisioned -->
+        <div id="mssp-state-unprovisioned">
+            <p class="text-muted" style="margin-bottom: var(--spacing-lg);">This Guardian node is not yet registered with an MSSP. Start provisioning to generate a claim code, then enter it in your HookProbe dashboard to claim this device.</p>
+            <button class="btn btn-primary" onclick="startProvision()" id="mssp-provision-btn">Start Provisioning</button>
+        </div>
 
-        <form id="mssp-register-form" onsubmit="registerMssp(event)">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
-                <div class="form-group">
-                    <label class="form-label">MSSP Endpoint</label>
-                    <input type="text" class="form-input" id="mssp-endpoint" value="mssp.hookprobe.com" placeholder="mssp.hookprobe.com">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Registration Code</label>
-                    <input type="text" class="form-input" id="mssp-code" placeholder="Enter your registration code">
+        <!-- State: Pending claim -->
+        <div id="mssp-state-pending" style="display: none;">
+            <p class="text-muted" style="margin-bottom: var(--spacing-md);">Enter this claim code in your HookProbe dashboard to claim this device:</p>
+            <div style="text-align: center; padding: var(--spacing-xl) 0;">
+                <div id="mssp-claim-code" style="font-family: monospace; font-size: 2rem; font-weight: 700; letter-spacing: 0.15em; color: var(--hp-accent); background: var(--bg-light); display: inline-block; padding: var(--spacing-md) var(--spacing-xl); border-radius: var(--radius-lg); border: 2px dashed var(--hp-accent);">
+                    ----
                 </div>
             </div>
-            <p class="text-muted" style="font-size: 0.85rem; margin-bottom: var(--spacing-md);">Obtain your registration code from your MSSP administrator</p>
-            <button type="submit" class="btn btn-primary">Register with MSSP</button>
-        </form>
+            <div style="text-align: center; margin-top: var(--spacing-md);">
+                <div style="display: flex; align-items: center; justify-content: center; gap: var(--spacing-sm); color: var(--text-muted);">
+                    <span class="spinner" style="width: 14px; height: 14px; border: 2px solid var(--text-muted); border-top-color: var(--hp-accent); border-radius: 50%; animation: spin 1s linear infinite; display: inline-block;"></span>
+                    <span id="mssp-claim-waiting">Waiting for claim code to be entered in dashboard...</span>
+                </div>
+                <p class="text-muted" style="font-size: 0.85rem; margin-top: var(--spacing-sm);">Dashboard: <span id="mssp-dashboard-url">mssp.hookprobe.com</span> &middot; Code expires in 15 minutes</p>
+            </div>
+        </div>
+
+        <!-- State: Provisioned / Connected -->
+        <div id="mssp-state-connected" style="display: none;">
+            <div style="display: flex; align-items: center; gap: var(--spacing-md);">
+                <div style="width: 48px; height: 48px; border-radius: 50%; background: rgba(46, 204, 113, 0.15); display: flex; align-items: center; justify-content: center;">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2.5">
+                        <path d="M9 12l2 2 4-4"/>
+                        <circle cx="12" cy="12" r="10"/>
+                    </svg>
+                </div>
+                <div>
+                    <div style="font-weight: 600;">Connected to MSSP</div>
+                    <div class="text-muted" id="mssp-connected-url">mssp.hookprobe.com</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual API Key (collapsed advanced option) -->
+        <details style="margin-top: var(--spacing-xl); border-top: 1px solid var(--border-color); padding-top: var(--spacing-lg);" id="mssp-manual-section">
+            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9rem;">Advanced: Register with existing API key</summary>
+            <form id="mssp-register-form" onsubmit="registerMssp(event)" style="margin-top: var(--spacing-md);">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                    <div class="form-group">
+                        <label class="form-label">MSSP Endpoint</label>
+                        <input type="text" class="form-input" id="mssp-endpoint" value="mssp.hookprobe.com" placeholder="mssp.hookprobe.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="text" class="form-input" id="mssp-code" placeholder="hp_...">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm" style="margin-top: var(--spacing-sm);">Register</button>
+            </form>
+        </details>
     </div>
 </div>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
 
 <!-- Encryption Details -->
 <div class="card">
@@ -262,6 +304,10 @@
 </div>
 
 <script>
+// MSSP Provisioning State
+let _msspClaimPollTimer = null;
+let _msspProvisionId = null;
+
 // HTP Tab Functions
 async function loadHtpData() {
     try {
@@ -277,6 +323,9 @@ async function loadHtpData() {
     } catch (error) {
         console.error('Failed to load PoSF status:', error);
     }
+
+    // Load MSSP status
+    loadMsspStatus();
 }
 
 function updateHtpStatus(data) {
@@ -387,7 +436,7 @@ async function registerMssp(event) {
     const code = document.getElementById('mssp-code').value;
 
     if (!code) {
-        showToast('Please enter a registration code', 'warning');
+        showToast('Please enter an API key', 'warning');
         return;
     }
 
@@ -402,11 +451,120 @@ async function registerMssp(event) {
         if (result.success) {
             showToast('Successfully registered with MSSP', 'success');
             document.getElementById('mssp-code').value = '';
+            loadMsspStatus();
         } else {
             showToast('Registration failed: ' + (result.error || 'Unknown error'), 'error');
         }
     } catch (error) {
         showToast('Registration failed: ' + error.message, 'error');
+    }
+}
+
+// ============================================================
+// MSSP Provisioning Functions
+// ============================================================
+
+async function loadMsspStatus() {
+    try {
+        const data = await apiGet('/vpn/api/mssp/status');
+        const badge = document.getElementById('mssp-status-badge');
+        const stateUn = document.getElementById('mssp-state-unprovisioned');
+        const statePending = document.getElementById('mssp-state-pending');
+        const stateConnected = document.getElementById('mssp-state-connected');
+        const manualSection = document.getElementById('mssp-manual-section');
+
+        // Hide all states
+        stateUn.style.display = 'none';
+        statePending.style.display = 'none';
+        stateConnected.style.display = 'none';
+
+        if (data.provisioned) {
+            stateConnected.style.display = 'block';
+            document.getElementById('mssp-connected-url').textContent = data.url || 'mssp.hookprobe.com';
+            badge.textContent = 'Connected';
+            badge.style.display = 'inline-block';
+            badge.style.background = 'rgba(46, 204, 113, 0.15)';
+            badge.style.color = '#2ecc71';
+            manualSection.style.display = 'none';
+            stopClaimPolling();
+        } else if (data.status === 'pending_claim' && data.claimCode) {
+            statePending.style.display = 'block';
+            document.getElementById('mssp-claim-code').textContent = data.claimCode;
+            document.getElementById('mssp-dashboard-url').textContent = (data.url || 'mssp.hookprobe.com').replace('https://', '');
+            _msspProvisionId = data.provisionId || '';
+            badge.textContent = 'Pending Claim';
+            badge.style.display = 'inline-block';
+            badge.style.background = 'rgba(230, 149, 0, 0.15)';
+            badge.style.color = '#e69500';
+            manualSection.style.display = 'none';
+            startClaimPolling();
+        } else {
+            stateUn.style.display = 'block';
+            badge.style.display = 'none';
+            manualSection.style.display = '';
+            stopClaimPolling();
+        }
+    } catch (error) {
+        console.error('Failed to load MSSP status:', error);
+    }
+}
+
+async function startProvision() {
+    const btn = document.getElementById('mssp-provision-btn');
+    btn.disabled = true;
+    btn.textContent = 'Provisioning...';
+
+    try {
+        const result = await apiPost('/vpn/api/mssp/provision');
+
+        if (result.status === 'already_provisioned') {
+            showToast('Already provisioned', 'success');
+            loadMsspStatus();
+            return;
+        }
+
+        if (result.status === 'pending_claim') {
+            showToast('Claim code generated', 'success');
+            _msspProvisionId = result.provision_id || '';
+            loadMsspStatus();
+            return;
+        }
+
+        showToast('Provisioning failed: ' + (result.error || 'Unknown error'), 'error');
+        btn.disabled = false;
+        btn.textContent = 'Start Provisioning';
+    } catch (error) {
+        showToast('Provisioning failed: ' + error.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Start Provisioning';
+    }
+}
+
+function startClaimPolling() {
+    if (_msspClaimPollTimer) return;
+    _msspClaimPollTimer = setInterval(checkClaimStatus, 5000);
+}
+
+function stopClaimPolling() {
+    if (_msspClaimPollTimer) {
+        clearInterval(_msspClaimPollTimer);
+        _msspClaimPollTimer = null;
+    }
+}
+
+async function checkClaimStatus() {
+    try {
+        const result = await apiPost('/vpn/api/mssp/claim/check', {
+            provision_id: _msspProvisionId
+        });
+
+        if (result.claimed) {
+            stopClaimPolling();
+            showToast('Device claimed successfully! MSSP connected.', 'success');
+            loadMsspStatus();
+        }
+    } catch (error) {
+        // Silently ignore poll errors
     }
 }
 
