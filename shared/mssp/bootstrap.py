@@ -56,6 +56,8 @@ class MSSPBootstrap:
         """Return API key — from config if already provisioned, or bootstrap fresh.
 
         Returns empty string if provisioning fails or times out.
+        WARNING: This method BLOCKS for up to 15 minutes while polling.
+        Prefer start_provision() + check_claim_status() for non-blocking use.
         """
         # Already provisioned?
         existing_key = self._read_config("API_KEY")
@@ -116,6 +118,134 @@ class MSSPBootstrap:
         self._remove_claim_file()
         logger.info("Provisioning complete — API key written to %s", self._config_path)
         return api_key
+
+    # ------------------------------------------------------------------
+    # Non-blocking provisioning API
+    # ------------------------------------------------------------------
+
+    def start_provision(self) -> dict:
+        """Non-blocking: request a claim code and return immediately.
+
+        Returns dict with:
+            {"status": "already_provisioned", "api_key": "..."} — already has key
+            {"status": "pending_claim", "claim_code": "...", "provision_id": "..."} — new claim
+            {"status": "already_registered", "error": "..."} — device registered elsewhere
+            {"status": "error", "error": "..."} — failure
+        """
+        existing_key = self._read_config("API_KEY")
+        if existing_key:
+            return {"status": "already_provisioned", "api_key": existing_key}
+
+        # Check for an existing pending claim on disk
+        pending = self._read_claim_file()
+        if pending.get("provision_id"):
+            logger.info("Resuming pending claim (provision_id=%s)", pending["provision_id"])
+            return {
+                "status": "pending_claim",
+                "claim_code": pending.get("claim_code", ""),
+                "provision_id": pending["provision_id"],
+            }
+
+        logger.info("Starting non-blocking provisioning for %s", self._product_type)
+
+        fingerprint = self._get_fingerprint()
+        hostname = platform.node()
+
+        resp = self._post("/api/nodes/provision", {
+            "hostname": hostname,
+            "nodeType": self._product_type,
+            "fingerprint": fingerprint,
+        })
+
+        if not resp or not resp.get("success"):
+            error = resp.get("error", "Unknown error") if resp else "No response"
+            logger.error("Provisioning failed: %s", error)
+            return {"status": "error", "error": error}
+
+        data = resp.get("data", {})
+
+        if data.get("status") == "already_registered":
+            msg = (
+                f"Device already registered (node {data.get('existingNodeId', '?')}) "
+                f"but no local API_KEY"
+            )
+            logger.warning(msg)
+            return {"status": "already_registered", "error": msg}
+
+        provision_id = data.get("provisionId", "")
+        claim_code = data.get("claimCode", "")
+
+        if not provision_id or not claim_code:
+            return {"status": "error", "error": "Invalid provision response"}
+
+        # Save claim code to disk + display on console
+        self._display_claim_code(claim_code, provision_id)
+
+        return {
+            "status": "pending_claim",
+            "claim_code": claim_code,
+            "provision_id": provision_id,
+        }
+
+    def check_claim_status(self, provision_id: str) -> dict:
+        """Single poll: check if claim code was entered in dashboard.
+
+        Returns:
+            {"claimed": True, "api_key": "..."} — claimed, config written
+            {"claimed": False} — not yet claimed
+            {"error": "..."} — network/API error
+        """
+        try:
+            url = f"{self._mssp_url.rstrip('/')}/api/nodes/provision/status?id={provision_id}"
+            req = urllib.request.Request(url, method="GET", headers={
+                "Accept": "application/json",
+                "User-Agent": f"HookProbe-Bootstrap/{self._product_type}",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read())
+
+            data = body.get("data", {})
+            if data.get("claimed"):
+                api_key = data.get("apiKey", "")
+                if api_key:
+                    self._write_config(api_key)
+                    self._remove_claim_file()
+                    logger.info("Claim successful — API key written to %s", self._config_path)
+                    return {"claimed": True, "api_key": api_key}
+                return {"error": "Claimed but no apiKey in response"}
+
+            return {"claimed": False}
+
+        except Exception as e:
+            logger.debug("Claim status check error: %s", e)
+            return {"error": str(e)}
+
+    def get_provision_state(self) -> dict:
+        """Read-only: check disk for current provisioning state (no network calls).
+
+        Returns:
+            {"status": "provisioned", "api_key": "...", "mssp_url": "..."}
+            {"status": "pending_claim", "claim_code": "...", "provision_id": "..."}
+            {"status": "not_provisioned", "mssp_url": "..."}
+        """
+        api_key = self._read_config("API_KEY")
+        if api_key:
+            return {
+                "status": "provisioned",
+                "api_key": api_key,
+                "mssp_url": self._mssp_url,
+            }
+
+        pending = self._read_claim_file()
+        if pending.get("provision_id"):
+            return {
+                "status": "pending_claim",
+                "claim_code": pending.get("claim_code", ""),
+                "provision_id": pending["provision_id"],
+                "mssp_url": self._mssp_url,
+            }
+
+        return {"status": "not_provisioned", "mssp_url": self._mssp_url}
 
     # ------------------------------------------------------------------
     # Fingerprint
@@ -198,6 +328,26 @@ class MSSPBootstrap:
                 claim_path.unlink()
         except Exception:
             pass
+
+    def _read_claim_file(self) -> dict:
+        """Read pending claim data from disk. Returns empty dict if no claim file."""
+        claim_path = self._config_path.parent / "claim_code"
+        try:
+            if claim_path.exists():
+                data = {}
+                for line in claim_path.read_text().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        data[k.strip()] = v.strip()
+                return {
+                    "claim_code": data.get("CLAIM_CODE", ""),
+                    "provision_id": data.get("PROVISION_ID", ""),
+                    "product": data.get("PRODUCT", ""),
+                    "mssp_url": data.get("MSSP_URL", ""),
+                }
+        except Exception:
+            pass
+        return {}
 
     # ------------------------------------------------------------------
     # Polling
