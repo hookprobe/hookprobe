@@ -1,0 +1,35 @@
+[Unit]
+Description=HookProbe Guardian MSSP Webhook Receiver
+Documentation=https://github.com/hookprobe/hookprobe
+After=network.target guardian-mesh.service
+Wants=guardian-mesh.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/scripts/mssp-webhook-daemon.py
+Restart=always
+RestartSec=10
+User=root
+Group=root
+
+# Lightweight Flask server on localhost
+MemoryMax=50M
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/hookprobe /var/log/hookprobe /opt/hookprobe/guardian/data
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-mssp-webhook
+
+[Install]
+WantedBy=multi-user.target

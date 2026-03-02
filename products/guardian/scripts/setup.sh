@@ -4712,6 +4712,95 @@ HYDRA_EOF
     systemctl enable guardian-hydra-lite 2>/dev/null || true
     log_info "HYDRA-Lite threat feed service installed"
 
+    # Deploy Mesh Daemon service (HTP/Neuro/DSM)
+    log_info "Setting up Guardian Mesh Daemon..."
+    mkdir -p /opt/hookprobe/guardian/data
+
+    # Copy mesh config if not already present
+    if [ ! -f /opt/hookprobe/guardian/mesh.conf ]; then
+        cp "$SCRIPT_DIR/../config/mesh.conf" /opt/hookprobe/guardian/mesh.conf 2>/dev/null || \
+        cat > /opt/hookprobe/guardian/mesh.conf << 'MESH_CONF_EOF'
+{
+    "enabled": true,
+    "autonomous_enabled": true,
+    "threat_sharing": true,
+    "collective_scoring": true,
+    "bootstrap_peers": []
+}
+MESH_CONF_EOF
+    fi
+
+    # Ensure mesh seed exists
+    if [ ! -f /etc/hookprobe/mesh_seed ]; then
+        python3 -c "import secrets; print(secrets.token_hex(32))" > /etc/hookprobe/mesh_seed
+        chmod 600 /etc/hookprobe/mesh_seed
+        log_info "Generated mesh seed"
+    fi
+
+    cp "$SCRIPT_DIR/../config/systemd/guardian-mesh.service" /etc/systemd/system/ 2>/dev/null || \
+    cat > /etc/systemd/system/guardian-mesh.service << 'MESH_EOF'
+[Unit]
+Description=HookProbe Guardian Mesh Daemon (HTP/Neuro/DSM)
+After=network-online.target guardian-qsecbit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/mesh_integration.py --daemon --config /opt/hookprobe/guardian/mesh.conf --data-dir /opt/hookprobe/guardian/data --verbose
+Restart=always
+RestartSec=30
+User=root
+MemoryMax=200M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe/guardian/data /var/log/hookprobe /etc/hookprobe
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-mesh
+
+[Install]
+WantedBy=multi-user.target
+MESH_EOF
+
+    systemctl enable guardian-mesh 2>/dev/null || true
+    log_info "Guardian Mesh Daemon installed"
+
+    # Deploy MSSP Webhook Receiver service
+    log_info "Setting up MSSP Webhook Receiver..."
+    cp "$INSTALL_DIR/guardian/scripts/mssp-webhook-daemon.py" /opt/hookprobe/guardian/scripts/ 2>/dev/null || true
+
+    cp "$SCRIPT_DIR/../config/systemd/guardian-mssp-webhook.service" /etc/systemd/system/ 2>/dev/null || \
+    cat > /etc/systemd/system/guardian-mssp-webhook.service << 'WEBHOOK_EOF'
+[Unit]
+Description=HookProbe Guardian MSSP Webhook Receiver
+After=network.target guardian-mesh.service
+Wants=guardian-mesh.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/scripts/mssp-webhook-daemon.py
+Restart=always
+RestartSec=10
+User=root
+MemoryMax=50M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/hookprobe /var/log/hookprobe /opt/hookprobe/guardian/data
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-mssp-webhook
+
+[Install]
+WantedBy=multi-user.target
+WEBHOOK_EOF
+
+    systemctl enable guardian-mssp-webhook 2>/dev/null || true
+    log_info "MSSP Webhook Receiver installed"
+
     # Install webui service (gunicorn + TLS with Flask fallback)
     cp "$SCRIPT_DIR/../config/systemd/guardian-webui.service" /etc/systemd/system/ 2>/dev/null || \
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
@@ -4788,6 +4877,8 @@ enable_services() {
     systemctl enable guardian-doh 2>/dev/null || true
     systemctl enable guardian-dnsxai 2>/dev/null || true
     systemctl enable guardian-hydra-lite 2>/dev/null || true
+    systemctl enable guardian-mesh 2>/dev/null || true
+    systemctl enable guardian-mssp-webhook 2>/dev/null || true
     systemctl enable guardian-webui 2>/dev/null || true
 
     log_info "Services enabled"
@@ -4926,6 +5017,14 @@ fi  # end of "if hostapd not already running"
     # Neuro protocol
     log_info "  - Starting Neuro Protocol..."
     systemctl start guardian-neuro 2>/dev/null || true
+
+    # Mesh daemon (HTP/Neuro/DSM)
+    log_info "  - Starting Mesh Daemon..."
+    systemctl start guardian-mesh 2>/dev/null || true
+
+    # MSSP Webhook Receiver
+    log_info "  - Starting MSSP Webhook Receiver..."
+    systemctl start guardian-mssp-webhook 2>/dev/null || true
 
     # dnsXai Ad Block (integrated with dnsmasq, no separate service needed)
     log_info "  - dnsXai Ad Block: Active (via dnsmasq)"
