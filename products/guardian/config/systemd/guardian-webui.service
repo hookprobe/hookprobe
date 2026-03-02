@@ -32,7 +32,9 @@ User=root
 NoNewPrivileges=yes
 ProtectSystem=full
 ReadWritePaths=/etc/hookprobe /etc/wpa_supplicant /etc/NetworkManager/conf.d /var/log/hookprobe
-ProtectHome=yes
+# ProtectHome=read-only: allows git update feature to read the repo in /home.
+# setup.sh adds the repo path to ReadWritePaths for pull operations.
+ProtectHome=read-only
 PrivateTmp=yes
 
 # Logging
