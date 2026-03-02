@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Guardian Mesh Integration - Decentralized Security Mesh for Guardian
 
