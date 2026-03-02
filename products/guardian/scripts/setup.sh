@@ -3361,10 +3361,9 @@ dhcp-option=option:dns-server,$BRIDGE_IP
 dhcp-option=option:domain-search,guardian.local
 dhcp-option=option:domain-name,guardian.local
 
-# Upstream DNS servers (privacy-focused)
-server=1.1.1.1
-server=9.9.9.9
-server=8.8.8.8
+# Upstream DNS: dnsXai ML resolver on port 5353
+# Chain: dnsmasq:53 -> dnsXai:5353 -> DoH:5053 -> HTTPS upstream
+server=127.0.0.1#5353
 
 # Domain
 domain=guardian.local
@@ -4631,6 +4630,88 @@ SyslogIdentifier=guardian-doh
 WantedBy=multi-user.target
 DOH_EOF
 
+    # Deploy dnsXai ML DNS resolver
+    log_info "Setting up dnsXai ML DNS resolver..."
+    mkdir -p /var/lib/hookprobe/dnsxai
+    mkdir -p /opt/hookprobe/guardian/models
+
+    # Convert StevenBlack blocklist from dnsmasq address= format to domain-per-line for dnsXai
+    local dnsmasq_blocklist="/opt/hookprobe/guardian/dns-shield/blocked-hosts"
+    local dnsxai_blocklist="/var/lib/hookprobe/dnsxai/blocklist.txt"
+    if [ -f "$dnsmasq_blocklist" ]; then
+        log_info "Converting blocklist for dnsXai..."
+        sed -n 's|^address=/\(.*\)/0\.0\.0\.0$|\1|p' "$dnsmasq_blocklist" > "$dnsxai_blocklist"
+        local count=$(wc -l < "$dnsxai_blocklist")
+        log_info "Converted $count domains for dnsXai ML resolver"
+    fi
+
+    cp "$SCRIPT_DIR/../config/systemd/guardian-dnsxai.service" /etc/systemd/system/ 2>/dev/null || \
+    cat > /etc/systemd/system/guardian-dnsxai.service << 'DNSXAI_EOF'
+[Unit]
+Description=HookProbe Guardian dnsXai ML DNS Resolver
+After=network.target guardian-doh.service
+Before=dnsmasq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/shared/dnsXai/engine.py --serve --address 127.0.0.1 --port 5353 --upstream 127.0.0.1 --upstream-port 5053 --data-dir /var/lib/hookprobe/dnsxai
+Restart=always
+RestartSec=3
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe/dnsxai /var/log/hookprobe /opt/hookprobe/guardian/models
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-dnsxai
+
+[Install]
+WantedBy=multi-user.target
+DNSXAI_EOF
+
+    systemctl enable guardian-dnsxai 2>/dev/null || true
+    log_info "dnsXai ML DNS resolver installed"
+
+    # Deploy HYDRA-Lite threat feed service
+    log_info "Setting up HYDRA-Lite threat feed service..."
+    mkdir -p /opt/hookprobe/guardian/data/hydra/feeds
+    mkdir -p /opt/hookprobe/guardian/data/hydra/events
+
+    cp "$INSTALL_DIR/guardian/scripts/hydra-lite-daemon.py" /opt/hookprobe/guardian/scripts/ 2>/dev/null || true
+    cp "$SCRIPT_DIR/../config/systemd/guardian-hydra-lite.service" /etc/systemd/system/ 2>/dev/null || \
+    cat > /etc/systemd/system/guardian-hydra-lite.service << 'HYDRA_EOF'
+[Unit]
+Description=HookProbe Guardian HYDRA-Lite Threat Feed Sync
+After=network-online.target guardian-dnsxai.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/scripts/hydra-lite-daemon.py
+Restart=always
+RestartSec=30
+User=root
+MemoryMax=256M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe/guardian/data/hydra /var/log/hookprobe /etc/hookprobe
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-hydra-lite
+
+[Install]
+WantedBy=multi-user.target
+HYDRA_EOF
+
+    systemctl enable guardian-hydra-lite 2>/dev/null || true
+    log_info "HYDRA-Lite threat feed service installed"
+
     # Install webui service (gunicorn + TLS with Flask fallback)
     cp "$SCRIPT_DIR/../config/systemd/guardian-webui.service" /etc/systemd/system/ 2>/dev/null || \
     cat > /etc/systemd/system/guardian-webui.service << 'EOF'
@@ -4705,6 +4786,8 @@ enable_services() {
     systemctl enable guardian-neuro 2>/dev/null || true
     systemctl enable guardian-qsecbit 2>/dev/null || true
     systemctl enable guardian-doh 2>/dev/null || true
+    systemctl enable guardian-dnsxai 2>/dev/null || true
+    systemctl enable guardian-hydra-lite 2>/dev/null || true
     systemctl enable guardian-webui 2>/dev/null || true
 
     log_info "Services enabled"
@@ -4719,8 +4802,11 @@ start_services() {
 
     systemctl start nftables 2>/dev/null || true
 
-    # Start DoH proxy before dnsmasq (dnsmasq forwards to it on 127.0.0.1:5053)
-    systemctl start guardian-doh 2>/dev/null || log_warn "DoH proxy failed to start - dnsmasq will use fallback DNS"
+    # Start DoH proxy before dnsXai (dnsXai forwards to DoH on 127.0.0.1:5053)
+    systemctl start guardian-doh 2>/dev/null || log_warn "DoH proxy failed to start - dnsXai will use direct upstream"
+
+    # Start dnsXai ML resolver before dnsmasq (dnsmasq forwards to dnsXai on 127.0.0.1:5353)
+    systemctl start guardian-dnsxai 2>/dev/null || log_warn "dnsXai ML resolver failed to start - dnsmasq will need fallback DNS"
 
     systemctl start dnsmasq
 
