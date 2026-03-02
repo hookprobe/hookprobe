@@ -132,6 +132,7 @@ def _get_demo_blocks():
 
 
 @security_bp.route('/blocks')
+@require_auth
 def api_blocks():
     """Get recent blocked events."""
     try:
@@ -146,6 +147,7 @@ def api_blocks():
 
 
 @security_bp.route('/blocks/<block_id>')
+@require_auth
 def api_block_detail(block_id):
     """Get detailed info for a specific block."""
     try:
@@ -159,6 +161,7 @@ def api_block_detail(block_id):
 
 
 @security_bp.route('/blocks/export')
+@require_auth
 def api_export_blocks():
     """Export blocks in STIX 2.1 or CSV format."""
     try:
@@ -318,6 +321,7 @@ def _export_csv(blocks):
 
 
 @security_bp.route('/xdp_stats')
+@require_auth
 def api_xdp_stats():
     """Get XDP/eBPF statistics."""
     import os
@@ -368,6 +372,7 @@ def api_xdp_stats():
 
 
 @security_bp.route('/qsecbit')
+@require_auth
 def api_qsecbit():
     """Get current QSecBit score and components."""
     try:
