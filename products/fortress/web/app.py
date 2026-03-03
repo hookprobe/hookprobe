@@ -211,8 +211,8 @@ def _start_mssp_claim_poller(app):
     import time
 
     def _poll():
-        # Ensure shared.mssp is importable
-        for candidate in ['/opt/hookprobe', str(__file__).rsplit('/products/', 1)[0]]:
+        # Ensure shared.mssp is importable (works in both repo and container)
+        for candidate in ['/app', '/opt/hookprobe', str(__file__).rsplit('/products/', 1)[0]]:
             if candidate not in sys.path:
                 sys.path.insert(0, candidate)
 
