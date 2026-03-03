@@ -2506,9 +2506,9 @@ class QSecBitFortressAgent:
         telemetry["status"] = "online"
         telemetry["version"] = "5.3.0"
 
-        # QSecBit score (inverted: fortress uses 0=good, 1=bad; dashboard uses 0-100 where 100=good)
+        # QSecBit score: 0-100 where 100 = fully protected (GREEN > 55, AMBER 30-55, RED < 30)
         if self.last_sample:
-            telemetry["qsecbit"] = round((1.0 - self.last_sample.score) * 100)
+            telemetry["qsecbit"] = round(self.last_sample.score * 100)
 
         # Fortress-specific extensions
         sample = self.last_sample
