@@ -165,19 +165,23 @@ def api_claim_check():
 
         result = bootstrap.check_claim_status(provision_id)
 
-        # Never return API key in JSON — it's written to disk only
+        # Never return API key or internal state in JSON
         if result.get('claimed'):
             return jsonify({
                 'claimed': True,
                 'message': 'Fortress claimed. MSSP heartbeat will start shortly.',
             })
 
-        return jsonify(result)
+        # Only expose safe fields — never raw result (may contain api_key)
+        return jsonify({
+            'claimed': False,
+            'status': result.get('status', 'pending'),
+        })
 
     except Exception as e:
         logger.error("MSSP claim check error: %s", type(e).__name__)
         return jsonify({
-            'error': safe_error_message(e, 'claim check'),
+            'error': 'Claim status check failed',
         }), 500
 
 
