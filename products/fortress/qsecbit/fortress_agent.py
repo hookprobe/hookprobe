@@ -2485,6 +2485,13 @@ class QSecBitFortressAgent:
         except Exception as e:
             logger.warning("MSSP client init: %s", e)
 
+        # Collect WAN health immediately so first heartbeat has data
+        try:
+            self.save_wan_health()
+            logger.info("Initial WAN health snapshot saved")
+        except Exception as e:
+            logger.warning("Initial WAN health collection failed: %s", e)
+
         # Start monitoring loop
         monitor_thread = Thread(target=self.run_monitoring_loop, daemon=True)
         monitor_thread.start()
@@ -2540,9 +2547,9 @@ class QSecBitFortressAgent:
 
         # Fortress-specific extensions
         sample = self.last_sample
-        extensions: Dict[str, Any] = {}
+        extensions: Dict[str, Any] = {"fortress": {}}
         if sample:
-            extensions["fortress"] = {
+            extensions["fortress"].update({
                 "score": sample.score,
                 "ragStatus": sample.rag_status,
                 "layers": sample.layer_scores,
@@ -2555,47 +2562,60 @@ class QSecBitFortressAgent:
                 "sentinelScore": self._sentinel_score,
                 "trend": self.calculate_trend(),
                 "recentThreats": sample.recent_threats[:5],
+            })
+
+        # WAN health from saved file (full telemetry for MSSP dashboard)
+        # Always send — runs even without a QSecBit sample
+        try:
+            wan_file = DATA_DIR / "wan_health.json"
+            if wan_file.exists():
+                wan_data = json.loads(wan_file.read_text())
+            else:
+                wan_data = {"state": "unknown", "active": None, "primary": None, "backup": None}
+
+            primary = wan_data.get("primary") or {}
+            backup = wan_data.get("backup") or {}
+            extensions["fortress"]["wanHealth"] = {
+                "state": wan_data.get("state", "unknown"),
+                "active": wan_data.get("active"),
+                # Primary WAN
+                "primaryUp": primary.get("is_connected", False) if primary else False,
+                "primaryInterface": primary.get("interface"),
+                "primaryHealth": int(primary.get("health_score", 0) * 100) if primary else 0,
+                "primaryStatus": primary.get("status", "DOWN") if primary else "DOWN",
+                "primaryRtt": primary.get("rtt_ms"),
+                # Backup WAN
+                "backupUp": backup.get("is_connected", False) if backup else False,
+                "backupInterface": backup.get("interface"),
+                "backupHealth": int(backup.get("health_score", 0) * 100) if backup else 0,
+                "backupStatus": backup.get("status", "NOT_CONFIGURED") if backup else "NOT_CONFIGURED",
+                "backupRtt": backup.get("rtt_ms"),
+                "backupIsLte": backup.get("is_lte", False) if backup else False,
+                "backupSignal": backup.get("signal_dbm"),
+            }
+        except Exception:
+            # Last-resort fallback — always send something
+            extensions["fortress"]["wanHealth"] = {
+                "state": "unknown", "active": None,
+                "primaryUp": False, "primaryInterface": None, "primaryHealth": 0,
+                "primaryStatus": "DOWN", "primaryRtt": None,
+                "backupUp": False, "backupInterface": None, "backupHealth": 0,
+                "backupStatus": "NOT_CONFIGURED", "backupRtt": None,
+                "backupIsLte": False, "backupSignal": None,
             }
 
-            # WAN health from saved file (full telemetry for MSSP dashboard)
-            try:
-                wan_file = DATA_DIR / "wan_health.json"
-                if wan_file.exists():
-                    wan_data = json.loads(wan_file.read_text())
-                    primary = wan_data.get("primary", {})
-                    backup = wan_data.get("backup", {})
-                    extensions["fortress"]["wanHealth"] = {
-                        "state": wan_data.get("state"),
-                        "active": wan_data.get("active"),
-                        # Primary WAN
-                        "primaryUp": primary.get("is_connected", False),
-                        "primaryInterface": primary.get("interface"),
-                        "primaryHealth": int(primary.get("health_score", 0) * 100),
-                        "primaryStatus": primary.get("status", "DOWN"),
-                        "primaryRtt": primary.get("rtt_ms"),
-                        # Backup WAN
-                        "backupUp": backup.get("is_connected", False),
-                        "backupInterface": backup.get("interface"),
-                        "backupHealth": int(backup.get("health_score", 0) * 100),
-                        "backupStatus": backup.get("status", "DOWN"),
-                        "backupRtt": backup.get("rtt_ms"),
-                        "backupIsLte": backup.get("is_lte", False),
-                        "backupSignal": backup.get("signal_dbm"),
-                    }
-            except Exception:
-                pass
+        # Connected device count from saved file
+        try:
+            devices_file = DATA_DIR / "devices.json"
+            if devices_file.exists():
+                dev_data = json.loads(devices_file.read_text())
+                extensions["fortress"]["connectedDevices"] = dev_data.get("count", 0)
+            else:
+                extensions["fortress"]["connectedDevices"] = 0
+        except Exception:
+            extensions["fortress"]["connectedDevices"] = 0
 
-            # Connected device count from saved file
-            try:
-                devices_file = DATA_DIR / "devices.json"
-                if devices_file.exists():
-                    dev_data = json.loads(devices_file.read_text())
-                    extensions["fortress"]["connectedDevices"] = dev_data.get("count", 0)
-            except Exception:
-                pass
-
-        if extensions:
-            telemetry["extensions"] = extensions
+        telemetry["extensions"] = extensions
 
         return telemetry
 
