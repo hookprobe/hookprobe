@@ -2329,7 +2329,7 @@ class QSecBitFortressAgent:
         traffic_counter = 0
         device_counter = 0
         wifi_counter = 0
-        provision_counter = 0
+        mssp_recheck_counter = 0
 
         while self.running.is_set():
             try:
@@ -2380,24 +2380,24 @@ class QSecBitFortressAgent:
                     if threat.get('severity') in ('CRITICAL', 'HIGH', 'MEDIUM'):
                         self.submit_threat_finding(threat)
 
-                # Check pending MSSP claim every 6 cycles (~60s)
-                if self._pending_provision_id and not self._mssp:
-                    provision_counter += 1
-                    if provision_counter >= 6:
-                        provision_counter = 0
+                # Re-check for MSSP API_KEY every ~60s (written by fts-web after claim)
+                if not self._mssp:
+                    mssp_recheck_counter += 1
+                    if mssp_recheck_counter >= 6:
+                        mssp_recheck_counter = 0
                         try:
-                            from shared.mssp.bootstrap import MSSPBootstrap
                             from shared.mssp import MSSPClient
-                            bootstrap = MSSPBootstrap(product_type="fortress")
-                            claim = bootstrap.check_claim_status(self._pending_provision_id)
-                            if claim.get("claimed"):
-                                self._mssp = MSSPClient(api_key=claim["api_key"])
+                            c = MSSPClient()
+                            if c._api_key:
+                                self._mssp = c
                                 self._mssp.on_recommendation(self._handle_recommendation)
                                 self._mssp.start(collect_telemetry=self._collect_telemetry)
-                                self._pending_provision_id = ""
-                                logger.info("Fortress claimed — MSSP client started")
-                        except Exception as e:
-                            logger.debug("Claim check: %s", e)
+                                logger.info("MSSP API_KEY detected — heartbeat started")
+                        except Exception:
+                            pass
+
+                # Write MSSP status for web UI consumption
+                self._write_mssp_status()
 
                 time.sleep(interval)
             except Exception as e:
@@ -2422,32 +2422,23 @@ class QSecBitFortressAgent:
         logger.info("Starting QSecBit Fortress Agent v5.3.0...")
         self.running.set()
 
-        # Bootstrap MSSP provisioning (non-blocking, first boot only)
+        # MSSP client — read-only consumer of /etc/hookprobe/node.conf
+        # Provisioning (claim code generation, API key writing) is owned by
+        # fts-web which has rw access to /etc/hookprobe.  This container
+        # mounts /etc/hookprobe as :ro so it can only READ the API_KEY.
         self._mssp = None
-        self._pending_provision_id = ""
         try:
-            from shared.mssp.bootstrap import MSSPBootstrap
             from shared.mssp import MSSPClient
-
-            bootstrap = MSSPBootstrap(product_type="fortress")
-            result = bootstrap.start_provision()
-
-            if result["status"] == "already_provisioned":
-                api_key = result["api_key"]
-                self._mssp = MSSPClient(api_key=api_key)
+            client = MSSPClient()  # reads API_KEY from /etc/hookprobe/node.conf
+            if client._api_key:
+                self._mssp = client
                 self._mssp.on_recommendation(self._handle_recommendation)
                 self._mssp.start(collect_telemetry=self._collect_telemetry)
                 logger.info("MSSP client started (heartbeat active)")
-            elif result["status"] == "pending_claim":
-                self._pending_provision_id = result.get("provision_id", "")
-                logger.info(
-                    "Claim code: %s — enter in dashboard to claim this Fortress",
-                    result.get("claim_code", "?"),
-                )
             else:
-                logger.warning("MSSP provisioning: %s", result.get("error", result["status"]))
+                logger.info("No MSSP API_KEY — waiting for claim via web UI")
         except Exception as e:
-            logger.warning(f"MSSP bootstrap error (offline mode): {e}")
+            logger.warning("MSSP client init: %s", e)
 
         # Start monitoring loop
         monitor_thread = Thread(target=self.run_monitoring_loop, daemon=True)
@@ -2475,6 +2466,17 @@ class QSecBitFortressAgent:
     # ------------------------------------------------------------------
     # MSSP Integration
     # ------------------------------------------------------------------
+
+    def _write_mssp_status(self):
+        """Write MSSP heartbeat status to shared data dir for web UI."""
+        try:
+            status = {
+                "connected": self._mssp is not None,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            (DATA_DIR / "mssp_status.json").write_text(json.dumps(status))
+        except Exception:
+            pass
 
     def _collect_telemetry(self) -> dict:
         """Collect full telemetry for MSSP heartbeat."""
