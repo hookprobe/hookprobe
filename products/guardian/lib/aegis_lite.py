@@ -159,7 +159,7 @@ class AegisLite:
         if self._guardian_agent:
             try:
                 metrics = self._guardian_agent.collect_metrics()
-                telemetry["qsecbit"] = round((1.0 - metrics.qsecbit_score) * 100) if metrics.qsecbit_score is not None else None
+                telemetry["qsecbit"] = round(metrics.qsecbit_score * 100) if metrics.qsecbit_score is not None else None
                 guardian_ext = {
                     "qsecbitScore": metrics.qsecbit_score,
                     "ragStatus": metrics.rag_status,
@@ -181,7 +181,7 @@ class AegisLite:
                     stats = json.loads(stats_path.read_text())
                     score = stats.get("score")
                     if score is not None:
-                        telemetry["qsecbit"] = round((1.0 - score) * 100)
+                        telemetry["qsecbit"] = round(score * 100)
                         guardian_ext.setdefault("qsecbitScore", score)
                         guardian_ext.setdefault("ragStatus", stats.get("rag_status", "UNKNOWN"))
                         guardian_ext.setdefault("components", stats.get("components", {}))
