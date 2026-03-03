@@ -111,59 +111,56 @@ fi
 echo "[mesh] Starting services..."
 
 # Trap to cleanup on exit
-HEALTH_PID=""
+PEER_SERVER_PID=""
+VPN_GW_PID=""
 cleanup() {
     echo "[mesh] Shutting down..."
-    [ -n "$HEALTH_PID" ] && kill "$HEALTH_PID" 2>/dev/null || true
+    [ -n "$PEER_SERVER_PID" ] && kill "$PEER_SERVER_PID" 2>/dev/null || true
+    [ -n "$VPN_GW_PID" ] && kill "$VPN_GW_PID" 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# Start health check endpoint in background
-# This serves the container healthcheck on CORTEX_WS_PORT (8766)
-echo "[mesh] Starting health endpoint on port ${CORTEX_WS_PORT:-8766}..."
-python3 -c "
-import asyncio, os, json, time
-
-async def handle(reader, writer):
-    request = await reader.read(1024)
-    if b'GET /health' in request:
-        body = json.dumps({
-            'status': 'healthy',
-            'service': 'mesh-orchestrator',
-            'node_id': os.environ.get('MESH_NODE_ID', 'unknown'),
-            'uptime': int(time.time() - START),
-        })
-        resp = f'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n{body}'
-    else:
-        resp = 'HTTP/1.1 404 Not Found\r\n\r\n'
-    writer.write(resp.encode())
-    await writer.drain()
-    writer.close()
-    await writer.wait_closed()
-
-START = time.time()
-
-async def main():
-    port = int(os.environ.get('CORTEX_WS_PORT', 8766))
-    server = await asyncio.start_server(handle, '0.0.0.0', port)
-    print(f'[health] Listening on port {port}')
-    await server.serve_forever()
-
-asyncio.run(main())
-" 2>&1 | sed 's/^/[health] /' &
-HEALTH_PID=$!
-
-# Give health endpoint time to bind
-sleep 1
-
-# Start HTP VPN Gateway (uses shared/mesh/htp_gateway.py)
-# This is the real gateway: creates TUN device, handles HELLO→CHALLENGE→ATTEST→ACCEPT
-# handshake, assigns client IPs from 10.250.0.0/24, encrypts with ChaCha20-Poly1305,
-# and responds to STUN Binding Requests on the same port.
-echo "[mesh] Starting HTP VPN Gateway on port ${HTP_PRIMARY_PORT:-8144}..."
-exec python3 /opt/hookprobe/shared/mesh/htp_gateway.py \
+# ---------------------------------------------------------------------------
+# 1. Mesh Peer Server (TCP 8144) + HTTP API (TCP 8766)
+# ---------------------------------------------------------------------------
+# mesh_server.py now serves health/status/gossip on --api-port internally,
+# so no separate health server process is needed.
+echo "[mesh] Starting Mesh Peer Server on TCP ${HTP_PRIMARY_PORT:-8144}..."
+echo "[mesh] HTTP API (health/status/gossip) on TCP ${CORTEX_WS_PORT:-8766}..."
+python3 /opt/hookprobe/shared/mesh/mesh_server.py \
     --port "${HTP_PRIMARY_PORT:-8144}" \
-    --wan "${WAN_INTERFACE:-eth0}" \
-    --max-clients "${MAX_VPN_CLIENTS:-20}" \
-    --verbose
+    --api-port "${CORTEX_WS_PORT:-8766}" \
+    --node-id "${MESH_NODE_ID:-fortress001}" \
+    --verbose \
+    > >(sed -u 's/^/[peer-server] /') 2>&1 &
+PEER_SERVER_PID=$!
+
+# Give peer server time to bind
+sleep 2
+
+# ---------------------------------------------------------------------------
+# 2. HTP VPN Gateway (UDP 8144) — optional, graceful failure without TUN
+# ---------------------------------------------------------------------------
+# Creates TUN device, handles HELLO→CHALLENGE→ATTEST→ACCEPT handshake,
+# assigns client IPs from 10.250.0.0/24, encrypts with ChaCha20-Poly1305,
+# and responds to STUN Binding Requests on the same port.
+# NOTE: If /dev/net/tun is unavailable the gateway exits — this is non-fatal,
+# the peer server continues running for mesh gossip.
+if [ -c /dev/net/tun ]; then
+    echo "[mesh] Starting HTP VPN Gateway on UDP ${HTP_PRIMARY_PORT:-8144}..."
+    python3 /opt/hookprobe/shared/mesh/htp_gateway.py \
+        --port "${HTP_PRIMARY_PORT:-8144}" \
+        --wan "${WAN_INTERFACE:-eth0}" \
+        --max-clients "${MAX_VPN_CLIENTS:-20}" \
+        --verbose \
+        > >(sed -u 's/^/[vpn-gw] /') 2>&1 &
+    VPN_GW_PID=$!
+else
+    echo "[mesh] /dev/net/tun not available — VPN gateway disabled (gossip-only mode)"
+fi
+
+# Wait for peer server — it's the critical process
+wait "$PEER_SERVER_PID"
+echo "[mesh] Peer server exited, shutting down..."
+cleanup

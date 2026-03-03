@@ -1,19 +1,16 @@
-# HookProbe Fortress - Mesh Orchestrator (Optional)
+# DEPRECATED: Mesh orchestrator is now defined in podman-compose.yml (profiles: ["mesh"])
 #
-# This file contains the mesh-orchestrator service which provides
-# HTP/Neuro/DSM communication for federation with other HookProbe products.
+# Use instead:
+#   podman-compose up -d mesh-orchestrator     (from main compose)
+#   install.sh --enable-mesh                   (during installation)
 #
-# Usage:
-#   podman-compose -f podman-compose.yml -f podman-compose.mesh.yml up -d mesh-orchestrator
+# This file used bridge network (172.20.200.70) which required port forwarding.
+# The main compose definition uses host network so fts-mesh listens directly
+# on 10.200.0.1:8144 for LAN peers (Guardian/Sentinel).
 #
-# Or to start all services including mesh:
-#   podman-compose -f podman-compose.yml -f podman-compose.mesh.yml up -d
+# Kept for reference only. Do not use.
 #
-# NOTE: This is separate from the main compose file because podman-compose 1.x
-# doesn't properly support profiles. With docker-compose 2.x, you could use
-# --profile mesh instead.
-#
-# Version: 5.5.0
+# Version: 5.5.0 (deprecated)
 # License: AGPL-3.0
 
 version: '3.8'

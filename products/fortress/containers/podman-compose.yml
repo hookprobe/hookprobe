@@ -346,6 +346,47 @@ services:
     # Core service - always started (provides mesh threat detection)
 
   # ============================================================
+  # MESH TIER - HTP/Neuro/DSM Communication Hub (--profile mesh)
+  # ============================================================
+
+  # Mesh Orchestrator - Peer server (TCP 8144) + HTTP API (8766)
+  # Accepts incoming mesh peer connections from Guardian/Sentinel nodes
+  # on the LAN (10.200.0.1:8144) and relays gossip threat intelligence.
+  mesh-orchestrator:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.mesh
+    image: localhost/fts-mesh:latest
+    container_name: fts-mesh
+    restart: unless-stopped
+    hostname: fts-mesh
+    environment:
+      MESH_NODE_ID: "${MESH_NODE_ID:-fortress001}"
+      MESH_NODE_TYPE: fortress
+      HTP_PRIMARY_PORT: "8144"
+      CORTEX_WS_PORT: "8766"
+      WAN_INTERFACE: "${WAN_INTERFACE:-eth0}"
+    volumes:
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
+      - mesh_data:/opt/hookprobe/mesh/data
+      - mesh_neuro:/opt/hookprobe/mesh/neuro
+    # Host network: must listen on 10.200.0.1:8144 for LAN peers (Guardian)
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    profiles: ["mesh"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8766/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
   # BUBBLE MANAGER - MOVED TO AIOCHI STACK
   # ============================================================
   # Ecosystem Bubble Manager has been moved to AIOCHI stack (aiochi-bubble)
@@ -717,6 +758,14 @@ volumes:
   dfs_data:
     driver: local
     name: fts-dfs-data
+
+  # Mesh Tier (--profile mesh)
+  mesh_data:
+    driver: local
+    name: fts-mesh-data
+  mesh_neuro:
+    driver: local
+    name: fts-mesh-neuro
 
   # IDS Tier (--profile ids)
   hydra_models:
