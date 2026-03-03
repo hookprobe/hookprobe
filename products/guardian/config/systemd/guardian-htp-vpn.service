@@ -1,0 +1,34 @@
+[Unit]
+Description=HookProbe Guardian HTP VPN Client
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target guardian-qsecbit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/htp_vpn_client.py --wan wlan0
+Restart=always
+RestartSec=30
+User=root
+Group=root
+
+# Needs root for TUN device + nftables kill-switch
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Memory cap for Pi
+MemoryMax=100M
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe/guardian/htp /var/log/hookprobe /etc/hookprobe /dev/net/tun
+ProtectHome=yes
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-htp-vpn
+
+[Install]
+WantedBy=multi-user.target

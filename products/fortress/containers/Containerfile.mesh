@@ -4,19 +4,25 @@
 # HTP/Neuro/DSM Communication Hub for inter-product mesh networking
 # Enables secure communication with Guardian, Sentinel, Nexus, MSSP
 #
-# Port Selection (from shared/mesh/ARCHITECTURE.md):
-#   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
-#   FALLBACK:  8443/UDP + 8443/TCP (TLS-wrapped)
-#   STEALTH:   853/UDP + 853/TCP (DoT/DoQ cover)
-#   RELAY:     3478/UDP (STUN/TURN NAT traversal)
-#   CORTEX:    8766/TCP (WebSocket for visualization)
+# Port Selection (from shared/mesh/ARCHITECTURE.md + port_manager.py):
+#   PRIMARY:   8144/UDP + 8144/TCP    (HTP native, IANA unassigned)
+#   FALLBACK:  443/UDP  + 443/TCP     (QUIC/TLS cover, blends with HTTPS)
+#   STEALTH:   853/UDP  + 853/TCP     (DoQ/DoT cover, encrypted DNS)
+#   RELAY:     3478/UDP               (STUN/TURN NAT traversal)
+#   CORTEX:    8766/TCP               (WebSocket for visualization)
+#
+# NOTE: Fortress deployments override FALLBACK→8543 and STEALTH→8853
+# via podman-compose.mesh.yml to avoid conflicts with web UI (8443)
+# and dnsXai DoT (853). These are deployment-time env overrides.
 #
 # Build:
 #   podman build -f Containerfile.mesh -t fts-mesh:latest ../..
 #
-# Run:
-#   podman run -p 8144:8144/udp -p 8144:8144/tcp \
-#              -p 853:853/udp -p 853:853/tcp \
+# Run (requires --cap-add for TUN device + iptables):
+#   podman run --cap-add NET_ADMIN --cap-add NET_RAW \
+#              --device /dev/net/tun \
+#              -p 8144:8144/udp -p 8144:8144/tcp \
+#              -p 443:443/udp -p 443:443/tcp \
 #              -p 3478:3478/udp -p 8766:8766 \
 #              fts-mesh:latest
 # ==============================================================================
@@ -49,9 +55,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libffi8 \
     libssl3 \
     iproute2 \
+    iptables \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin fortress
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -66,21 +72,20 @@ RUN mkdir -p /opt/hookprobe/core/htp \
              /opt/hookprobe/mesh/data \
              /opt/hookprobe/mesh/neuro \
              /var/log/hookprobe \
-    && chown -R fortress:nogroup /opt/hookprobe /var/log/hookprobe
 
 # Copy core modules
-COPY --chown=fortress:nogroup core/__init__.py /opt/hookprobe/core/
-COPY --chown=fortress:nogroup core/htp/ /opt/hookprobe/core/htp/
-COPY --chown=fortress:nogroup core/neuro/ /opt/hookprobe/core/neuro/
+COPY core/__init__.py /opt/hookprobe/core/
+COPY core/htp/ /opt/hookprobe/core/htp/
+COPY core/neuro/ /opt/hookprobe/core/neuro/
 
 # Copy shared modules
-COPY --chown=fortress:nogroup shared/__init__.py /opt/hookprobe/shared/
-COPY --chown=fortress:nogroup shared/mesh/ /opt/hookprobe/shared/mesh/
-COPY --chown=fortress:nogroup shared/dsm/ /opt/hookprobe/shared/dsm/
-COPY --chown=fortress:nogroup shared/cortex/backend/ /opt/hookprobe/shared/cortex/backend/
+COPY shared/__init__.py /opt/hookprobe/shared/
+COPY shared/mesh/ /opt/hookprobe/shared/mesh/
+COPY shared/dsm/ /opt/hookprobe/shared/dsm/
+COPY shared/cortex/backend/ /opt/hookprobe/shared/cortex/backend/
 
 # Copy entrypoint script
-COPY --chown=fortress:nogroup products/fortress/containers/entrypoint-mesh.sh /opt/hookprobe/
+COPY products/fortress/containers/entrypoint-mesh.sh /opt/hookprobe/
 
 # Environment
 ENV PYTHONPATH="/opt/hookprobe"
@@ -90,9 +95,9 @@ ENV MESH_DATA_DIR=/opt/hookprobe/mesh/data
 ENV NEURO_WEIGHT_DIR=/opt/hookprobe/mesh/neuro
 ENV LOG_DIR=/var/log/hookprobe
 
-# HTP Ports
+# HTP Ports (canonical from ARCHITECTURE.md; Fortress overrides via compose env)
 ENV HTP_PRIMARY_PORT=8144
-ENV HTP_FALLBACK_PORT=8443
+ENV HTP_FALLBACK_PORT=443
 ENV HTP_STEALTH_PORT=853
 ENV HTP_RELAY_PORT=3478
 
@@ -104,14 +109,14 @@ ENV CORTEX_WS_PORT=8766
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8766/health", timeout=5)'
 
-# Expose ports
+# Expose ports (canonical; Fortress compose overrides fallback/stealth)
 # HTP Primary
 EXPOSE 8144/udp
 EXPOSE 8144/tcp
-# HTP Fallback
-EXPOSE 8443/udp
-EXPOSE 8443/tcp
-# HTP Stealth (DoT/DoQ cover)
+# HTP Fallback (443 canonical; Fortress uses 8543 via compose)
+EXPOSE 443/udp
+EXPOSE 443/tcp
+# HTP Stealth (853 canonical; Fortress uses 8853 via compose)
 EXPOSE 853/udp
 EXPOSE 853/tcp
 # STUN/TURN relay
@@ -119,9 +124,7 @@ EXPOSE 3478/udp
 # Cortex WebSocket
 EXPOSE 8766
 
-# Run as non-root
-USER fortress
-
+# Runs as root — gateway needs TUN device + iptables MASQUERADE
 WORKDIR /opt/hookprobe
 
 ENTRYPOINT ["/bin/bash", "/opt/hookprobe/entrypoint-mesh.sh"]
