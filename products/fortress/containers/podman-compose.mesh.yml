@@ -25,11 +25,16 @@ services:
 
   # Mesh Orchestrator - HTP/Neuro/DSM Communication Hub
   # Enables secure mesh communication with Guardian, Sentinel, Nexus
-  # Port Selection (from shared/mesh/ARCHITECTURE.md):
-  #   PRIMARY:   8144/UDP + 8144/TCP (HTP native)
-  #   FALLBACK:  8543/UDP + 8543/TCP (TLS-wrapped, avoids web UI 8443 conflict)
-  #   STEALTH:   8853/UDP + 8853/TCP (DoT/DoQ cover, 853 used by dnsXai DoT)
-  #   RELAY:     3478/UDP (STUN/TURN for NAT traversal)
+  #
+  # Canonical ports (ARCHITECTURE.md + port_manager.py):
+  #   PRIMARY:   8144/UDP + 8144/TCP    (HTP native, IANA unassigned)
+  #   FALLBACK:  443/UDP  + 443/TCP     (QUIC/TLS cover)
+  #   STEALTH:   853/UDP  + 853/TCP     (DoQ/DoT cover)
+  #   RELAY:     3478/UDP               (STUN/TURN)
+  #
+  # Fortress overrides (avoid local port conflicts):
+  #   FALLBACK → 8543 (web UI runs on 8443)
+  #   STEALTH  → 8853 (dnsXai DoT on 853)
   mesh-orchestrator:
     build:
       context: ../..
@@ -38,6 +43,11 @@ services:
     container_name: fts-mesh
     restart: unless-stopped
     hostname: fts-mesh
+    cap_add:
+      - NET_ADMIN    # TUN device creation + ip route
+      - NET_RAW      # Raw sockets for STUN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       # Mesh identity
       MESH_NODE_ID: "${MESH_NODE_ID:-fortress-${HOSTNAME:-node}}"
@@ -55,6 +65,9 @@ services:
       DSM_ENABLED: "true"
       DSM_CONSENSUS_QUORUM: 0.67
       DSM_CHECKPOINT_INTERVAL: 300
+      # HTP VPN Gateway
+      WAN_INTERFACE: "${WAN_INTERFACE:-eth0}"
+      MAX_VPN_CLIENTS: "${MAX_VPN_CLIENTS:-20}"
       # Peer discovery (comma-separated list of known peers)
       MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-}"
       # Mesh uplink (optional)
