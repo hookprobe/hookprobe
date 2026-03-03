@@ -41,7 +41,8 @@ class L2DataLinkDetector(BaseDetector):
         super().__init__(
             name="L2DataLinkDetector",
             layer=OSILayer.L2_DATA_LINK,
-            data_dir=data_dir
+            data_dir=data_dir,
+            dedup_window_seconds=300  # 5 min dedup for gateway environments
         )
 
         self.mac_flooding_threshold = mac_flooding_threshold
