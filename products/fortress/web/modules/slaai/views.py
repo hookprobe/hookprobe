@@ -96,25 +96,27 @@ def _build_status_from_wan(wan):
         'backup_is_lte': backup.get('is_lte', False),
         # Traffic (read separately)
         'traffic': {},
-        # Prediction placeholder
+        # Prediction (LSTM not yet available in container mode)
         'prediction': {
-            'failure_probability': 0.08,
-            'confidence': 0.87,
+            'failure_probability': None,
+            'confidence': None,
             'predicted_failure_time': None,
+            '_estimated': True,
         },
-        # SLA metrics
+        # SLA metrics from PBR state
         'uptime_pct': wan.get('uptime_pct', 99.9),
-        'rto_actual_s': 2.3,
+        'rto_actual_s': None,
         'rto_target_s': 5.0,
         'rpo_actual_bytes': 0,
         'rpo_target_bytes': 0,
-        'failover_count_24h': 0,
+        'failover_count_24h': wan.get('pbr', {}).get('failover_count', 0),
         'failover_history': [],
         # DNS status
         'dns_status': {
-            'active_provider': 'cloudflare',
-            'latency_ms': 12,
-            'health': 0.98,
+            'active_provider': 'system',
+            'latency_ms': None,
+            'health': None,
+            '_estimated': True,
         },
         # Failback status
         'failback_status': {
