@@ -2420,9 +2420,11 @@ class QSecBitFortressAgent:
                             if self.block_ip_via_xdp(threat['source_ip']):
                                 logger.info(f"Auto-blocked {threat['source_ip']} via XDP")
                                 threat['blocked'] = True
-                    # Submit significant threats to MSSP
+                    # Submit significant threats to MSSP + mesh gossip
                     if threat.get('severity') in ('CRITICAL', 'HIGH', 'MEDIUM'):
                         self.submit_threat_finding(threat)
+                    if threat.get('severity') in ('CRITICAL', 'HIGH'):
+                        self._broadcast_to_mesh(threat)
 
                 # Re-check for MSSP API_KEY every ~60s (written by fts-web after claim)
                 if not self._mssp:
@@ -2615,6 +2617,31 @@ class QSecBitFortressAgent:
         except Exception:
             extensions["fortress"]["connectedDevices"] = 0
 
+        # Mesh status from fts-mesh container
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "http://localhost:8766/status", method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                mesh_data = json.loads(resp.read().decode())
+            mesh_info = mesh_data.get("mesh", {})
+            extensions["fortress"]["meshStatus"] = {
+                "active": mesh_info.get("mesh_active", False),
+                "peerCount": mesh_info.get("peer_count", 0),
+                "peers": [
+                    {"nodeId": p.get("node_id", ""), "tier": p.get("tier", "")}
+                    for p in mesh_info.get("peers", [])
+                ],
+                "intelReceived": mesh_info.get("intel_received", 0),
+                "vpnGateway": True,
+            }
+        except Exception:
+            extensions["fortress"]["meshStatus"] = {
+                "active": False, "peerCount": 0, "peers": [],
+                "intelReceived": 0, "vpnGateway": False,
+            }
+
         telemetry["extensions"] = extensions
 
         return telemetry
@@ -2646,6 +2673,27 @@ class QSecBitFortressAgent:
                 ))
         except Exception as e:
             logger.error("Recommendation handling error: %s", e)
+
+    def _broadcast_to_mesh(self, threat: dict) -> None:
+        """Forward threat to mesh peers via fts-mesh gossip API."""
+        try:
+            payload = json.dumps({
+                'type': 'threat_intel',
+                'source_node': 'fortress001',
+                'threat_type': threat.get('attack_type', 'unknown'),
+                'severity': threat.get('severity', 'MEDIUM'),
+                'source_ip': threat.get('source_ip', ''),
+                'confidence': threat.get('confidence', 0.5),
+                'timestamp': time.time(),
+            }).encode()
+            req = urllib.request.Request(
+                "http://localhost:8766/gossip",
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+            )
+            urllib.request.urlopen(req, timeout=2)
+        except Exception:
+            pass  # fts-mesh may not be running
 
     def submit_threat_finding(self, threat: dict) -> None:
         """Submit a detected threat as a Finding to the MSSP."""

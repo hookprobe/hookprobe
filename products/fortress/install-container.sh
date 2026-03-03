@@ -1410,6 +1410,7 @@ LOG_DIR=${LOG_DIR}
 # Optional features
 INSTALL_AIOCHI=${INSTALL_AIOCHI:-false}
 INSTALL_IDS=${INSTALL_IDS:-false}
+INSTALL_MESH=${INSTALL_MESH:-false}
 INSTALL_LTE=${INSTALL_LTE:-false}
 INSTALL_TUNNEL=${INSTALL_TUNNEL:-false}
 
@@ -3584,6 +3585,15 @@ start_optional_services() {
         log_info "HYDRA IDS started (feed sync, event consumer, RDAP enricher, anomaly detector, SENTINEL)"
     fi
 
+    # Mesh Orchestrator - HTP/Neuro/DSM peer server (--enable-mesh)
+    if [ "${INSTALL_MESH:-}" = true ]; then
+        log_info "Starting Mesh Orchestrator..."
+
+        podman-compose up -d --no-build mesh-orchestrator 2>/dev/null || log_warn "Mesh orchestrator may already be running"
+
+        log_info "Mesh started (peer server: 8144/tcp, API: 8766/tcp)"
+    fi
+
     # Cloudflare Tunnel
     if [ "${INSTALL_CLOUDFLARE_TUNNEL:-}" = true ] && [ -n "${CLOUDFLARE_TOKEN:-}" ]; then
         log_info "Starting Cloudflare Tunnel..."
@@ -5569,6 +5579,11 @@ main() {
             --enable-remote-access)
                 export INSTALL_CLOUDFLARE_TUNNEL=true
                 ;;
+            --enable-mesh)
+                # Mesh Orchestrator - HTP/Neuro/DSM communication hub
+                # Accepts Guardian/Sentinel peer connections on port 8144
+                export INSTALL_MESH=true
+                ;;
             --enable-lte)
                 export INSTALL_LTE=true
                 ;;
@@ -5620,6 +5635,7 @@ main() {
                 echo "                            anomaly detector, SENTINEL stages"
                 echo ""
                 echo "Other Optional Components:"
+                echo "  --enable-mesh             Enable mesh orchestrator (Guardian/Sentinel peers)"
                 echo "  --enable-remote-access    Configure Cloudflare Tunnel"
                 echo "  --enable-lte              Enable LTE modem failover"
                 echo ""
