@@ -29,6 +29,7 @@ from threading import Thread, Event
 from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -64,6 +65,21 @@ logger = logging.getLogger('qsecbit-fortress')
 DATA_DIR = Path(os.environ.get('QSECBIT_DATA_DIR', '/opt/hookprobe/fortress/data'))
 STATS_FILE = DATA_DIR / "qsecbit_stats.json"
 CONFIG_DIR = Path("/etc/hookprobe")
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON atomically via temp file + rename to prevent partial reads."""
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix='.tmp_')
+    try:
+        with os.fdopen(tmp_fd, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
 
 # OVS Bridge name (FTS = abbreviation for fortress)
 OVS_BRIDGE = os.environ.get('OVS_BRIDGE', 'FTS')
@@ -588,6 +604,19 @@ def get_mdns_hostnames() -> Dict[str, str]:
     return hostnames
 
 
+def _get_lan_subnet() -> str:
+    """Read LAN subnet from fortress.conf, fallback to default."""
+    conf_file = CONFIG_DIR / 'fortress.conf'
+    if conf_file.exists():
+        try:
+            for line in conf_file.read_text().splitlines():
+                if line.startswith('LAN_SUBNET='):
+                    return line.split('=', 1)[1].strip().strip('"\'')
+        except Exception:
+            pass
+    return '10.200.0.0/23'
+
+
 def get_netbios_hostnames() -> Dict[str, str]:
     """Get hostnames from NetBIOS (Windows devices).
 
@@ -599,7 +628,7 @@ def get_netbios_hostnames() -> Dict[str, str]:
     try:
         # Scan local network for NetBIOS names
         result = subprocess.run(
-            ['nbtscan', '-q', '-s', '\t', '10.200.0.0/23'],  # Fortress default subnet
+            ['nbtscan', '-q', '-s', '\t', _get_lan_subnet()],
             capture_output=True, text=True, timeout=10
         )
 
@@ -1306,8 +1335,7 @@ class QSecBitFortressAgent:
                     'sentinel': self.config.sentinel_weight,
                 },
             }
-            with open(STATS_FILE, 'w') as f:
-                json.dump(stats, f, indent=2)
+            _atomic_write_json(STATS_FILE, stats)
         except Exception as e:
             logger.error(f"Failed to save stats: {e}")
 
@@ -1852,9 +1880,7 @@ class QSecBitFortressAgent:
                         health['backup']['status'] = 'ACTIVE'
                         health['backup']['health_score'] = max(0.5, health['backup'].get('health_score', 0))
 
-            wan_file = DATA_DIR / "wan_health.json"
-            with open(wan_file, 'w') as f:
-                json.dump(health, f, indent=2)
+            _atomic_write_json(DATA_DIR / "wan_health.json", health)
             logger.debug(f"WAN health saved: state={health['state']}, active={health.get('active')}")
         except Exception as e:
             logger.warning(f"Failed to save WAN health: {e}")
@@ -2068,12 +2094,10 @@ class QSecBitFortressAgent:
         """Collect and save interface traffic data for SLAAI dashboard."""
         try:
             traffic = self.collect_interface_traffic()
-            traffic_file = DATA_DIR / "interface_traffic.json"
-            with open(traffic_file, 'w') as f:
-                json.dump({
-                    'timestamp': datetime.now().isoformat(),
-                    'interfaces': traffic
-                }, f, indent=2)
+            _atomic_write_json(DATA_DIR / "interface_traffic.json", {
+                'timestamp': datetime.now().isoformat(),
+                'interfaces': traffic
+            })
             logger.debug(f"Interface traffic saved: {len(traffic)} interfaces")
         except Exception as e:
             logger.warning(f"Failed to save interface traffic: {e}")
@@ -2096,7 +2120,7 @@ class QSecBitFortressAgent:
         table. We intentionally do NOT exclude the FTS interface — container
         traffic is filtered by IP prefix instead.
         """
-        devices = []
+        seen_macs: Dict[str, dict] = {}  # MAC -> device dict (dedup multi-VLAN)
 
         # Interfaces to exclude (internal/container networks)
         exclude_interface_prefixes = (
@@ -2155,12 +2179,17 @@ class QSecBitFortressAgent:
 
                     mac = mac.upper()
 
+                    # Deduplicate by MAC (prefer REACHABLE over STALE)
+                    existing = seen_macs.get(mac)
+                    if existing and state != 'REACHABLE':
+                        continue
+
                     # Enrich device data
                     manufacturer = lookup_manufacturer(mac)
                     hostname = resolve_hostname(ip_addr, mac)  # Pass MAC for DHCP lookup
                     device_type = detect_device_type(mac, hostname, manufacturer)
 
-                    devices.append({
+                    seen_macs[mac] = {
                         'ip_address': ip_addr,
                         'mac_address': mac,
                         'state': state,
@@ -2169,10 +2198,11 @@ class QSecBitFortressAgent:
                         'manufacturer': manufacturer,
                         'interface': interface,
                         'last_seen': datetime.now().isoformat(),
-                    })
+                    }
         except Exception as e:
             logger.debug(f"Failed to collect devices: {e}")
 
+        devices = list(seen_macs.values())
         logger.debug(f"Collected {len(devices)} devices with enrichment")
         return devices
 
@@ -2311,9 +2341,7 @@ class QSecBitFortressAgent:
         """Collect and save WiFi status for SDN dashboard."""
         try:
             wifi_status = self.collect_wifi_status()
-            wifi_file = DATA_DIR / "wifi_status.json"
-            with open(wifi_file, 'w') as f:
-                json.dump(wifi_status, f, indent=2)
+            _atomic_write_json(DATA_DIR / "wifi_status.json", wifi_status)
             if wifi_status['primary_ssid']:
                 logger.debug(f"WiFi status saved: SSID={wifi_status['primary_ssid']} channel={wifi_status['primary_channel']}")
             else:
@@ -2332,8 +2360,7 @@ class QSecBitFortressAgent:
                 'devices': devices,
                 'count': len(devices),
             }
-            with open(devices_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            _atomic_write_json(devices_file, data)
             logger.debug(f"Devices saved: {len(devices)} devices")
         except Exception as e:
             logger.warning(f"Failed to save devices: {e}")
@@ -2424,7 +2451,8 @@ class QSecBitFortressAgent:
     def run_api_server(self, port: int = 9090):
         """Run HTTP API server"""
         try:
-            server = HTTPServer(('0.0.0.0', port), QSecBitAPIHandler)
+            api_host = os.environ.get('QSECBIT_API_HOST', '0.0.0.0')
+            server = HTTPServer((api_host, port), QSecBitAPIHandler)
             logger.info(f"QSecBit API server listening on port {port}")
             while self.running.is_set():
                 server.handle_request()
