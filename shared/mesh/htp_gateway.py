@@ -194,10 +194,12 @@ class HTPVPNGateway:
 
     def __init__(self, listen_port: int = DEFAULT_LISTEN_PORT,
                  wan_interface: str = "eth0",
-                 max_clients: int = DEFAULT_MAX_CLIENTS):
+                 max_clients: int = DEFAULT_MAX_CLIENTS,
+                 bind_address: str = "0.0.0.0"):
         self.listen_port = listen_port
         self.wan_interface = wan_interface
         self.max_clients = max_clients
+        self.bind_address = bind_address  # nosec: VPN gateway intentionally listens on all interfaces
 
         # State
         self.sessions: Dict[int, GatewaySession] = {}        # flow_token → session
@@ -233,7 +235,7 @@ class HTPVPNGateway:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.bind(("0.0.0.0", self.listen_port))
+            self.sock.bind((self.bind_address, self.listen_port))
             self.sock.settimeout(0.5)
         except Exception as e:
             logger.error("Failed to bind UDP port %d: %s", self.listen_port, e)
@@ -809,6 +811,8 @@ def main():
                         help="WAN interface for NAT masquerade (default: eth0)")
     parser.add_argument("--max-clients", type=int, default=DEFAULT_MAX_CLIENTS,
                         help=f"Maximum concurrent VPN clients (default: {DEFAULT_MAX_CLIENTS})")
+    parser.add_argument("--bind", default="0.0.0.0",
+                        help="Bind address (default: 0.0.0.0)")
     parser.add_argument("--config", help="Config file path (JSON)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug logging")
     parser.add_argument("--status", action="store_true",
@@ -828,6 +832,7 @@ def main():
     port = args.port
     wan = args.wan
     max_clients = args.max_clients
+    bind_addr = args.bind
 
     if args.config:
         try:
@@ -835,6 +840,7 @@ def main():
             port = conf.get("port", port)
             wan = conf.get("wan_interface", wan)
             max_clients = conf.get("max_clients", max_clients)
+            bind_addr = conf.get("bind_address", bind_addr)
         except Exception as e:
             logger.error("Failed to load config %s: %s", args.config, e)
             sys.exit(1)
@@ -849,6 +855,7 @@ def main():
         listen_port=port,
         wan_interface=wan,
         max_clients=max_clients,
+        bind_address=bind_addr,
     )
 
     # Signal handling

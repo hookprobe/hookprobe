@@ -288,7 +288,17 @@ def api_mssp_claim_check():
             return jsonify({'error': 'Invalid provision ID format'}), 400
 
         result = bootstrap.check_claim_status(provision_id)
-        return jsonify(result)
+
+        # Only expose safe fields — never raw result (may contain api_key)
+        if result.get('claimed'):
+            return jsonify({
+                'claimed': True,
+                'message': 'Guardian claimed. MSSP heartbeat will start shortly.',
+            })
+        return jsonify({
+            'claimed': False,
+            'status': result.get('status', 'pending'),
+        })
     except Exception as e:
         logger.error("MSSP claim check error: %s", type(e).__name__)
         return jsonify({'error': 'Claim status check failed'}), 500
