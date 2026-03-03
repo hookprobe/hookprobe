@@ -2088,15 +2088,19 @@ class QSecBitFortressAgent:
 
         Filters out:
         - Internal container network devices (podman, docker, veth)
-        - OVS internal interfaces (FTS, FTS-mirror)
         - IPv6 link-local addresses (fe80::)
+        - Container network IPs (172.20.200.x)
+        - Fortress gateway self-IP (10.200.0.1)
+
+        Note: LAN/WiFi clients appear on 'dev FTS' (OVS bridge) in the ARP
+        table. We intentionally do NOT exclude the FTS interface — container
+        traffic is filtered by IP prefix instead.
         """
         devices = []
 
         # Interfaces to exclude (internal/container networks)
         exclude_interface_prefixes = (
             'podman', 'docker', 'veth', 'cni', 'br-',  # Container networks
-            'FTS',  # OVS bridge and mirrors
             'lo',   # Loopback
         )
 
@@ -2109,6 +2113,9 @@ class QSecBitFortressAgent:
             'fe80:',        # IPv6 link-local
             '::1',          # IPv6 loopback
         )
+
+        # Exact IPs to exclude (gateway self — prefix match unsafe for .1 vs .1x)
+        exclude_ip_exact = {'10.200.0.1'}
 
         try:
             proc = subprocess.run(
@@ -2139,6 +2146,11 @@ class QSecBitFortressAgent:
                     # Filter out internal IP ranges
                     if any(ip_addr.startswith(prefix) for prefix in exclude_ip_prefixes):
                         logger.debug(f"Skipping device with internal IP: {ip_addr}")
+                        continue
+
+                    # Filter out exact IPs (gateway self)
+                    if ip_addr in exclude_ip_exact:
+                        logger.debug(f"Skipping gateway self IP: {ip_addr}")
                         continue
 
                     mac = mac.upper()
@@ -2517,16 +2529,30 @@ class QSecBitFortressAgent:
                 "recentThreats": sample.recent_threats[:5],
             }
 
-            # WAN health from saved file
+            # WAN health from saved file (full telemetry for MSSP dashboard)
             try:
                 wan_file = DATA_DIR / "wan_health.json"
                 if wan_file.exists():
                     wan_data = json.loads(wan_file.read_text())
+                    primary = wan_data.get("primary", {})
+                    backup = wan_data.get("backup", {})
                     extensions["fortress"]["wanHealth"] = {
                         "state": wan_data.get("state"),
                         "active": wan_data.get("active"),
-                        "primaryUp": wan_data.get("primary", {}).get("is_connected", False),
-                        "backupUp": wan_data.get("backup", {}).get("is_connected", False),
+                        # Primary WAN
+                        "primaryUp": primary.get("is_connected", False),
+                        "primaryInterface": primary.get("interface"),
+                        "primaryHealth": int(primary.get("health_score", 0) * 100),
+                        "primaryStatus": primary.get("status", "DOWN"),
+                        "primaryRtt": primary.get("rtt_ms"),
+                        # Backup WAN
+                        "backupUp": backup.get("is_connected", False),
+                        "backupInterface": backup.get("interface"),
+                        "backupHealth": int(backup.get("health_score", 0) * 100),
+                        "backupStatus": backup.get("status", "DOWN"),
+                        "backupRtt": backup.get("rtt_ms"),
+                        "backupIsLte": backup.get("is_lte", False),
+                        "backupSignal": backup.get("signal_dbm"),
                     }
             except Exception:
                 pass
