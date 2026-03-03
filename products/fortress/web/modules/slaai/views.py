@@ -13,6 +13,7 @@ from flask_login import login_required
 from datetime import datetime, timedelta
 import json
 import logging
+from pathlib import Path
 
 from . import slaai_bp
 from ..auth.decorators import operator_required
@@ -20,11 +21,13 @@ from ...security_utils import safe_error_message
 
 logger = logging.getLogger(__name__)
 
+# Shared data directory (mounted as rw volume in fts-web container)
+DATA_DIR = Path('/opt/hookprobe/fortress/data')
+
 # Import system data module for real data
 SYSTEM_DATA_AVAILABLE = False
 try:
     import sys
-    from pathlib import Path
     # Add lib path
     lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
     if lib_path.exists() and str(lib_path) not in sys.path:
@@ -43,6 +46,110 @@ try:
     SYSTEM_DATA_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"system_data module not available: {e}")
+
+
+def _read_json_file(filename):
+    """Read a JSON file from the shared data directory (container-safe)."""
+    path = DATA_DIR / filename
+    try:
+        if path.exists():
+            with open(path) as f:
+                return json.load(f)
+    except Exception as exc:
+        logger.debug(f"Failed to read {filename}: {exc}")
+    return None
+
+
+def _build_status_from_wan(wan):
+    """Build SLAAI status dict from raw wan_health.json data.
+
+    Maps the file format (written by fts-qsecbit) to the API format
+    expected by the SDN page's updateWanHealthBar() JavaScript.
+    """
+    primary = wan.get('primary') or {}
+    backup = wan.get('backup') or {}
+    active = wan.get('active')
+    active_is_primary = wan.get('active_is_primary', False)
+
+    return {
+        'state': wan.get('state', 'disconnected'),
+        'timestamp': wan.get('timestamp', datetime.now().isoformat()),
+        'active_interface': active,
+        'active_is_primary': active_is_primary,
+        # Primary WAN
+        'primary_interface': primary.get('interface'),
+        'primary_health': primary.get('health_score', 0),
+        'primary_status': primary.get('status', 'DOWN'),
+        'primary_rtt': primary.get('rtt_ms'),
+        'primary_jitter': primary.get('jitter_ms'),
+        'primary_loss': primary.get('packet_loss', 100),
+        'primary_ip': primary.get('ip'),
+        # Backup WAN
+        'backup_interface': backup.get('interface'),
+        'backup_health': backup.get('health_score', 0),
+        'backup_status': backup.get('status', 'DOWN'),
+        'backup_rtt': backup.get('rtt_ms'),
+        'backup_jitter': backup.get('jitter_ms'),
+        'backup_signal': backup.get('signal_dbm'),
+        'backup_loss': backup.get('packet_loss', 100),
+        'backup_ip': backup.get('ip'),
+        'backup_is_lte': backup.get('is_lte', False),
+        # Traffic (read separately)
+        'traffic': {},
+        # Prediction placeholder
+        'prediction': {
+            'failure_probability': 0.08,
+            'confidence': 0.87,
+            'predicted_failure_time': None,
+        },
+        # SLA metrics
+        'uptime_pct': wan.get('uptime_pct', 99.9),
+        'rto_actual_s': 2.3,
+        'rto_target_s': 5.0,
+        'rpo_actual_bytes': 0,
+        'rpo_target_bytes': 0,
+        'failover_count_24h': 0,
+        'failover_history': [],
+        # DNS status
+        'dns_status': {
+            'active_provider': 'cloudflare',
+            'latency_ms': 12,
+            'health': 0.98,
+        },
+        # Failback status
+        'failback_status': {
+            'can_failback': not active_is_primary and primary.get('status') != 'FAILED',
+            'reason': 'Primary is active' if active_is_primary else 'Primary not yet recovered',
+        },
+        # Cost tracking
+        'cost_status': _read_cost_status(backup.get('interface')),
+    }
+
+
+def _read_cost_status(backup_iface):
+    """Read LTE cost status from limits file (container-safe)."""
+    limits_file = Path('/var/lib/hookprobe/lte-limits.json')
+    result = {
+        'interface': backup_iface or 'wwan0',
+        'daily_usage_mb': 0,
+        'daily_budget_mb': None,
+        'monthly_usage_mb': 0,
+        'monthly_budget_mb': None,
+        'cost_per_gb': None,
+        'current_cost': 0.0,
+        'budget_remaining': None,
+    }
+    try:
+        if limits_file.exists():
+            data = json.loads(limits_file.read_text())
+            if data.get('monthly_limit_gb'):
+                result['monthly_budget_mb'] = data['monthly_limit_gb'] * 1024
+            if data.get('daily_limit_gb'):
+                result['daily_budget_mb'] = data['daily_limit_gb'] * 1024
+            result['cost_per_gb'] = data.get('cost_per_gb')
+    except Exception:
+        pass
+    return result
 
 # Try to import SLA AI engine components (optional)
 SLAAI_ENGINE_AVAILABLE = False
@@ -131,7 +238,7 @@ def index():
 def api_status():
     """Get current SLA status as JSON."""
     try:
-        # Use real system data if available
+        # Use real system data if available (native mode)
         if SYSTEM_DATA_AVAILABLE:
             status = get_slaai_status()
             return jsonify({
@@ -140,7 +247,17 @@ def api_status():
                 'demo_mode': False
             })
 
-        # Fall back to demo data
+        # Container fallback: read shared data files directly
+        wan = _read_json_file('wan_health.json')
+        if wan:
+            status = _build_status_from_wan(wan)
+            return jsonify({
+                'success': True,
+                'status': status,
+                'demo_mode': False
+            })
+
+        # Last resort: demo data
         return jsonify({
             'success': True,
             'status': get_demo_sla_status(),
@@ -162,19 +279,24 @@ def api_status():
 def api_metrics():
     """Get WAN metrics for charts."""
     try:
+        wan = None
         if SYSTEM_DATA_AVAILABLE:
             wan = get_wan_health()
-            now = datetime.now()
+        else:
+            wan = _read_json_file('wan_health.json')
 
-            # Current metrics from real data
+        if wan:
+            now = datetime.now()
+            primary = wan.get('primary') or {}
+            backup = wan.get('backup') or {}
             current_metrics = {
                 'timestamp': now.isoformat(),
-                'primary_rtt': wan['primary']['rtt_ms'] if wan.get('primary') else None,
-                'primary_jitter': wan['primary']['jitter_ms'] if wan.get('primary') else None,
-                'primary_loss': wan['primary']['packet_loss'] if wan.get('primary') else 100,
-                'backup_rtt': wan['backup']['rtt_ms'] if wan.get('backup') else None,
-                'backup_signal': wan['backup'].get('signal_dbm') if wan.get('backup') else None,
-                'backup_loss': wan['backup']['packet_loss'] if wan.get('backup') else 100,
+                'primary_rtt': primary.get('rtt_ms'),
+                'primary_jitter': primary.get('jitter_ms'),
+                'primary_loss': primary.get('packet_loss', 100),
+                'backup_rtt': backup.get('rtt_ms'),
+                'backup_signal': backup.get('signal_dbm'),
+                'backup_loss': backup.get('packet_loss', 100),
             }
 
             return jsonify({
@@ -269,6 +391,17 @@ def api_traffic():
                 'success': True,
                 'traffic': traffic,
                 'vlans': vlans,
+                'demo_mode': False
+            })
+
+        # Container fallback: read shared data files directly
+        traffic_data = _read_json_file('interface_traffic.json')
+        vlans_data = _read_json_file('vlans.json')
+        if traffic_data or vlans_data:
+            return jsonify({
+                'success': True,
+                'traffic': traffic_data.get('interfaces', []) if traffic_data else [],
+                'vlans': vlans_data.get('vlans', []) if vlans_data else [],
                 'demo_mode': False
             })
 
