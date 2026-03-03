@@ -46,11 +46,13 @@ services:
     cap_add:
       - NET_ADMIN    # TUN device creation + ip route
       - NET_RAW      # Raw sockets for STUN
+    sysctls:
+      - net.ipv4.ip_forward=1
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:
-      # Mesh identity
-      MESH_NODE_ID: "${MESH_NODE_ID:-fortress-${HOSTNAME:-node}}"
+      # Mesh identity (set MESH_NODE_ID in .env or /etc/hookprobe/fortress.conf)
+      MESH_NODE_ID: "${MESH_NODE_ID:-fortress001}"
       MESH_NODE_TYPE: fortress
       MESH_DATA_DIR: /opt/hookprobe/mesh/data
       # HTP configuration
@@ -110,11 +112,6 @@ services:
     networks:
       fts-internal:
         ipv4_address: 172.20.200.70
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
 # Mesh volumes (only used when mesh is enabled)
 volumes:
@@ -129,4 +126,4 @@ volumes:
 networks:
   fts-internal:
     external: true
-    name: fts-internal
+    name: containers_fts-internal
