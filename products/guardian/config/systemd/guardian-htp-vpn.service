@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/htp_vpn_client.py --wan wlan0
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/lib/htp_vpn_client.py
 Restart=always
 RestartSec=30
 User=root
@@ -21,7 +21,7 @@ MemoryMax=100M
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/hookprobe/guardian/htp /var/log/hookprobe /etc/hookprobe /dev/net/tun
+ReadWritePaths=/opt/hookprobe/guardian/htp /var/log/hookprobe /etc/hookprobe /etc/nftables.d /dev/net/tun
 ProtectHome=yes
 PrivateTmp=yes
 
