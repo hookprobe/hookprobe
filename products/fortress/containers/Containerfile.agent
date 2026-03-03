@@ -73,6 +73,11 @@ COPY --chown=fortress:nogroup products/fortress/__init__.py /opt/hookprobe/fortr
 COPY --chown=fortress:nogroup products/fortress/qsecbit/ /opt/hookprobe/fortress/qsecbit/
 COPY --chown=fortress:nogroup products/fortress/lib/ /opt/hookprobe/fortress/lib/
 
+# Copy shared MSSP module for heartbeat and telemetry
+RUN mkdir -p /opt/hookprobe/shared/mssp
+COPY --chown=fortress:nogroup shared/mssp/ /opt/hookprobe/shared/mssp/
+RUN touch /opt/hookprobe/shared/__init__.py && chown fortress:nogroup /opt/hookprobe/shared/__init__.py
+
 # Environment
 ENV PYTHONPATH="/opt/hookprobe"
 ENV PYTHONUNBUFFERED=1
