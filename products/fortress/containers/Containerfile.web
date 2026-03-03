@@ -81,6 +81,10 @@ COPY shared/aiochi/playbooks/ /app/shared/aiochi/playbooks/
 COPY shared/aiochi/__init__.py /app/shared/aiochi/__init__.py
 RUN touch /app/shared/__init__.py
 
+# Copy shared MSSP module for managed security provisioning
+RUN mkdir -p /app/shared/mssp
+COPY shared/mssp/ /app/shared/mssp/
+
 # Copy gunicorn configuration
 COPY products/fortress/web/gunicorn.conf.py /app/gunicorn.conf.py
 
