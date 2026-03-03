@@ -1256,6 +1256,8 @@ Commands:
   start         Start all Fortress services
   restart       Restart all services (stop + start)
 
+  mssp-status   Show MSSP connection status
+
   status        Show installation status
 
   list-backups  List available backups
@@ -1278,6 +1280,52 @@ EOF
 }
 
 # ============================================================
+# MSSP STATUS
+# ============================================================
+mssp_status() {
+    local node_conf="${CONFIG_DIR}/node.conf"
+    local claim_file="${CONFIG_DIR}/claim_code"
+    local status_file="${INSTALL_DIR}/data/mssp_status.json"
+
+    echo -e "${CYAN}${BOLD}MSSP Status${NC}"
+    echo "----------------------------"
+
+    # Check API key
+    if [ -f "$node_conf" ] && grep -q '^API_KEY=' "$node_conf" 2>/dev/null; then
+        local mssp_url
+        mssp_url=$(grep '^MSSP_URL=' "$node_conf" 2>/dev/null | cut -d= -f2-)
+        echo -e "Status:   ${GREEN}Provisioned${NC}"
+        echo -e "Endpoint: ${mssp_url:-https://mssp.hookprobe.com}"
+        echo -e "API Key:  ****$(grep '^API_KEY=' "$node_conf" | cut -d= -f2- | tail -c 5)"
+    elif [ -f "$claim_file" ]; then
+        local code
+        code=$(cat "$claim_file" 2>/dev/null)
+        echo -e "Status:   ${YELLOW}Pending Claim${NC}"
+        echo -e "Code:     ${BOLD}${code}${NC}"
+        echo ""
+        echo "Enter this code at mssp.hookprobe.com to claim this Fortress."
+    else
+        echo -e "Status:   ${DIM}Not Provisioned${NC}"
+        echo ""
+        echo "Use the web UI (MSSP page) or fortress-ctl to connect."
+    fi
+
+    # Heartbeat status from fts-qsecbit
+    if [ -f "$status_file" ]; then
+        local connected timestamp
+        connected=$(python3 -c "import json; d=json.load(open('$status_file')); print(d.get('connected', False))" 2>/dev/null || echo "")
+        timestamp=$(python3 -c "import json; d=json.load(open('$status_file')); print(d.get('timestamp', ''))" 2>/dev/null || echo "")
+        if [ "$connected" = "True" ]; then
+            echo -e "Heartbeat: ${GREEN}Active${NC} (${timestamp})"
+        elif [ -n "$connected" ]; then
+            echo -e "Heartbeat: ${YELLOW}Inactive${NC} (${timestamp})"
+        fi
+    fi
+
+    echo ""
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 main() {
@@ -1286,7 +1334,7 @@ main() {
 
     # Check root for most commands
     case "$command" in
-        status|list-backups|help|--help|-h)
+        status|mssp-status|list-backups|help|--help|-h)
             ;;
         device)
             # device list/show don't need root, but set-policy does
@@ -1496,6 +1544,10 @@ main() {
             stop_all_services
             sleep 2
             start_all_services
+            ;;
+
+        mssp-status)
+            mssp_status
             ;;
 
         status)

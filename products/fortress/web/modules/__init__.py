@@ -63,3 +63,7 @@ def register_blueprints(app: Flask):
     # AEGIS module - AI Security Assistant (ORACLE chat)
     from .aegis import aegis_bp
     app.register_blueprint(aegis_bp)
+
+    # MSSP module - Managed Security Service Provider integration
+    from .mssp import mssp_bp
+    app.register_blueprint(mssp_bp)

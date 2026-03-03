@@ -193,7 +193,58 @@ def create_app(config_class=Config):
         except Exception as e:
             app.logger.warning(f"NAC startup sync failed: {e}")
 
+    # Start MSSP claim poller (background, if a pending claim exists on disk)
+    _start_mssp_claim_poller(app)
+
     return app
+
+
+def _start_mssp_claim_poller(app):
+    """Background thread: poll MSSP for pending claim resolution.
+
+    If a claim code exists on disk but no API_KEY yet, polls every 5s
+    for up to 15 minutes.  On success, writes API_KEY to node.conf.
+    This runs inside fts-web which has rw access to /etc/hookprobe.
+    """
+    import sys
+    import threading
+    import time
+
+    def _poll():
+        # Ensure shared.mssp is importable
+        for candidate in ['/opt/hookprobe', str(__file__).rsplit('/products/', 1)[0]]:
+            if candidate not in sys.path:
+                sys.path.insert(0, candidate)
+
+        try:
+            from shared.mssp.bootstrap import MSSPBootstrap
+            bootstrap = MSSPBootstrap(product_type='fortress')
+            state = bootstrap.get_provision_state()
+
+            if state['status'] != 'pending_claim':
+                return
+
+            provision_id = state.get('provision_id', '')
+            if not provision_id:
+                return
+
+            app.logger.info("MSSP claim poller started (provision=%s...)", provision_id[:8])
+
+            for _ in range(180):  # 15 min max (180 * 5s)
+                time.sleep(5)
+                try:
+                    result = bootstrap.check_claim_status(provision_id)
+                    if result.get('claimed'):
+                        app.logger.info("MSSP claim completed — API key written")
+                        return
+                except Exception:
+                    pass
+
+            app.logger.info("MSSP claim poller timed out (15 min)")
+        except Exception as e:
+            app.logger.debug("MSSP claim poller: %s", e)
+
+    threading.Thread(target=_poll, daemon=True).start()
 
 
 # Create the application instance
