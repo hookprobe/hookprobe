@@ -114,9 +114,13 @@ class MeshConfig:
     def __post_init__(self):
         if self.bootstrap_peers is None:
             self.bootstrap_peers = []
-        # Auto-populate bootstrap_peers from MSSP_URL when empty
+        # Auto-populate bootstrap_peers from config sources when empty
         if not self.bootstrap_peers:
             self.bootstrap_peers = self._peers_from_mssp()
+        # Also try default gateway (Fortress LAN) if not already listed
+        gw_peer = self._peer_from_gateway()
+        if gw_peer and gw_peer not in self.bootstrap_peers:
+            self.bootstrap_peers.append(gw_peer)
         # Load seed from provisioned file if not explicitly set
         if not self.neuro_seed:
             seed_path = Path("/etc/hookprobe/mesh_seed")
@@ -153,6 +157,31 @@ class MeshConfig:
         except Exception:
             pass
         return []
+
+    @staticmethod
+    def _peer_from_gateway() -> str:
+        """Detect default gateway IP and use it as a mesh peer.
+
+        When Guardian sits behind Fortress on the LAN, the default
+        gateway (e.g. 10.200.0.1) is the Fortress OVS bridge IP.
+        Adding it as a bootstrap peer enables automatic LAN mesh.
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["ip", "-4", "route", "show", "default"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Output: "default via 10.200.0.1 dev eth0 ..."
+            for part in result.stdout.split():
+                if part.count('.') == 3:
+                    # Validate it looks like a private/LAN IP
+                    octets = part.split('.')
+                    if len(octets) == 4 and all(o.isdigit() for o in octets):
+                        return f"{part}:8144"
+        except Exception:
+            pass
+        return ""
 
 
 class GuardianMeshAgent:
