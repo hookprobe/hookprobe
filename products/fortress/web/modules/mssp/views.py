@@ -37,8 +37,9 @@ MSSP_STATUS_FILE = Path('/opt/hookprobe/fortress/data/mssp_status.json')
 def _add_shared_path():
     """Ensure shared/mssp is importable."""
     for candidate in [
-        Path(__file__).resolve().parents[4] / 'shared',     # repo layout
-        Path('/opt/hookprobe/shared'),                       # deployed layout
+        Path('/app/shared'),                                  # container layout
+        Path(__file__).resolve().parents[4] / 'shared',       # repo layout
+        Path('/opt/hookprobe/shared'),                        # deployed layout
     ]:
         if (candidate / 'mssp').is_dir() and str(candidate.parent) not in sys.path:
             sys.path.insert(0, str(candidate.parent))
@@ -121,6 +122,12 @@ def api_provision():
                 'status': 'already_provisioned',
                 'message': 'This Fortress is already registered with MSSP.',
             })
+
+        # Start background claim poller now that a claim code exists
+        if result.get('claim_code'):
+            from flask import current_app
+            from ...app import _start_mssp_claim_poller
+            _start_mssp_claim_poller(current_app._get_current_object())
 
         return jsonify(result)
 
