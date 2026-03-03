@@ -410,17 +410,25 @@ class HTPVPNGateway:
                         self._handle_stun(data, addr)
                         continue
 
-                # HTP protocol
-                version, ptype = struct.unpack(">HB", data[:3])
+                # HTP protocol — disambiguate handshake vs data frames
+                # Handshake frames start with HTP_VERSION (0x0001) + packet type
+                # Data frames start with flow_token (8 bytes, random) + seq + type
+                version = struct.unpack(">H", data[:2])[0]
 
-                if ptype == HELLO:
-                    self._handle_hello(data, addr)
-                elif ptype == ATTEST:
-                    self._handle_attest(data, addr)
-                elif ptype in (IP_PACKET, KEEPALIVE, CLOSE):
+                if version == HTP_VERSION:
+                    # Handshake frame: >HB (version + type)
+                    ptype = data[2]
+                    if ptype == HELLO:
+                        self._handle_hello(data, addr)
+                    elif ptype == ATTEST:
+                        self._handle_attest(data, addr)
+                    else:
+                        logger.debug("Unknown handshake type 0x%02x from %s", ptype, addr)
+                elif len(data) >= 13:
+                    # Data frame: >QIB (flow_token + sequence + type)
                     self._handle_data(data, addr)
                 else:
-                    logger.debug("Unknown packet type 0x%02x from %s", ptype, addr)
+                    logger.debug("Short packet (%d bytes) from %s", len(data), addr)
 
             except Exception as e:
                 if self._running:
