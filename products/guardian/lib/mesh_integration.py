@@ -114,13 +114,14 @@ class MeshConfig:
     def __post_init__(self):
         if self.bootstrap_peers is None:
             self.bootstrap_peers = []
-        # Auto-populate bootstrap_peers from config sources when empty
-        if not self.bootstrap_peers:
-            self.bootstrap_peers = self._peers_from_mssp()
-        # Also try default gateway (Fortress LAN) if not already listed
-        gw_peer = self._peer_from_gateway()
-        if gw_peer and gw_peer not in self.bootstrap_peers:
-            self.bootstrap_peers.append(gw_peer)
+        # Only auto-discover peers when mesh is enabled
+        if self.enabled:
+            if not self.bootstrap_peers:
+                self.bootstrap_peers = self._peers_from_mssp()
+            # Also try default gateway (Fortress LAN) if not already listed
+            gw_peer = self._peer_from_gateway()
+            if gw_peer and gw_peer not in self.bootstrap_peers:
+                self.bootstrap_peers.append(gw_peer)
         # Load seed from provisioned file if not explicitly set
         if not self.neuro_seed:
             seed_path = Path("/etc/hookprobe/mesh_seed")
