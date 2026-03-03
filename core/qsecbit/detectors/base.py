@@ -362,6 +362,7 @@ class BaseDetector(ABC):
         Calculate normalized threat score for this layer (0.0-1.0).
 
         Uses weighted sum of severity counts, normalized to 1.0.
+        Gateway devices see more traffic so normalization is relaxed.
         """
         if not self.threats:
             return 0.0
@@ -381,5 +382,5 @@ class BaseDetector(ABC):
         # Weighted score
         weighted = critical * 1.0 + high * 0.6 + medium * 0.3 + low * 0.1
 
-        # Normalize (5 weighted threats = 1.0)
-        return min(1.0, weighted / 5.0)
+        # Normalize (10 weighted threats = 1.0, relaxed for gateway devices)
+        return min(1.0, weighted / 10.0)
