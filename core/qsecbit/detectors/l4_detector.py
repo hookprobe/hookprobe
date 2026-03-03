@@ -38,7 +38,7 @@ class L4TransportDetector(BaseDetector):
         syn_flood_threshold: int = 100,
         port_scan_threshold: int = 50,
         rst_anomaly_threshold: int = 5000,
-        udp_flood_threshold: int = 50000
+        udp_flood_threshold: int = 500000
     ):
         super().__init__(
             name="L4TransportDetector",
@@ -54,8 +54,9 @@ class L4TransportDetector(BaseDetector):
         # Tracking
         self.port_scan_tracker: Dict[str, Set[str]] = defaultdict(set)  # src_ip -> {ports}
         self.prev_tcp_stats: Optional[Dict[str, int]] = None
+        self.prev_tcp_stat_time: Optional[datetime] = None
         self.prev_udp_stats: Optional[Dict[str, int]] = None
-        self.prev_stat_time: Optional[datetime] = None
+        self.prev_udp_stat_time: Optional[datetime] = None
 
     def detect(self) -> List[ThreatEvent]:
         """Run all L4 detection methods."""
@@ -206,8 +207,8 @@ class L4TransportDetector(BaseDetector):
         now = datetime.now()
 
         # Calculate RST rate
-        if self.prev_tcp_stats and self.prev_stat_time:
-            delta_time = (now - self.prev_stat_time).total_seconds()
+        if self.prev_tcp_stats and self.prev_tcp_stat_time:
+            delta_time = (now - self.prev_tcp_stat_time).total_seconds()
             if delta_time > 0:
                 out_rsts = tcp_stats.get('OutRsts', 0)
                 prev_rsts = self.prev_tcp_stats.get('OutRsts', 0)
@@ -229,7 +230,7 @@ class L4TransportDetector(BaseDetector):
                         threats.append(threat)
 
         self.prev_tcp_stats = tcp_stats
-        self.prev_stat_time = now
+        self.prev_tcp_stat_time = now
 
         return threats
 
@@ -301,21 +302,22 @@ class L4TransportDetector(BaseDetector):
 
         now = datetime.now()
 
-        if self.prev_udp_stats and self.prev_stat_time:
-            delta_time = (now - self.prev_stat_time).total_seconds()
-            if delta_time > 0:
+        if self.prev_udp_stats and self.prev_udp_stat_time:
+            delta_time = (now - self.prev_udp_stat_time).total_seconds()
+            if delta_time > 1:  # Require at least 1s between measurements
                 in_dgrams = udp_stats.get('InDatagrams', 0)
                 prev_dgrams = self.prev_udp_stats.get('InDatagrams', 0)
                 dgram_rate = (in_dgrams - prev_dgrams) / delta_time
 
-                if dgram_rate > self.udp_flood_threshold / 60:
+                per_sec_threshold = self.udp_flood_threshold / 60
+                if dgram_rate > per_sec_threshold:
                     threat = self._create_threat_event(
                         attack_type=AttackType.UDP_FLOOD,
                         description=f"UDP flood detected: {dgram_rate:.0f} datagrams/sec",
-                        confidence=min(0.9, 0.6 + dgram_rate / self.udp_flood_threshold * 0.2),
+                        confidence=min(0.9, 0.6 + dgram_rate / per_sec_threshold * 0.1),
                         evidence={
                             'dgram_rate': dgram_rate,
-                            'threshold': self.udp_flood_threshold,
+                            'threshold_per_sec': per_sec_threshold,
                             'total_datagrams': in_dgrams
                         }
                     )
@@ -324,5 +326,6 @@ class L4TransportDetector(BaseDetector):
                         threats.append(threat)
 
         self.prev_udp_stats = udp_stats
+        self.prev_udp_stat_time = now
 
         return threats

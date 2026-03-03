@@ -687,12 +687,12 @@ def resolve_hostname(ip_address: str, mac_address: str = None) -> str:
 @dataclass
 class QSecBitConfig:
     """QSecBit configuration for Fortress"""
-    # Main component weights (adjusted for SENTINEL integration)
+    # Main component weights (adjusted for SENTINEL integration, sum=1.0)
     alpha: float = 0.12   # System drift weight
-    beta: float = 0.08    # Network health weight
+    beta: float = 0.10    # Network health weight
     gamma: float = 0.30   # L2-L7 threat detection weight (primary)
     delta: float = 0.08   # Energy efficiency weight
-    epsilon: float = 0.08 # Infrastructure health weight
+    epsilon: float = 0.10  # Infrastructure health weight
 
     # Thresholds (higher = healthier, we want high scores)
     amber_threshold: float = 0.45
@@ -870,7 +870,7 @@ class QSecBitFortressAgent:
         # SENTINEL IDS score tracking (via ClickHouse)
         self._sentinel_cache_path = Path(self.config.sentinel_cache_file)  # legacy fallback
         self._sentinel_last_mtime: float = 0
-        self._sentinel_score: float = 0.0
+        self._sentinel_score: float = 1.0  # Healthy default when IDS unavailable
         self._sentinel_last_query: float = 0.0
         self._sentinel_query_interval: float = 30.0  # query ClickHouse every 30s
 
@@ -888,6 +888,11 @@ class QSecBitFortressAgent:
                     'L5': L5SessionDetector(data_dir=data_dir),
                     'L7': L7ApplicationDetector(data_dir=data_dir),
                 }
+                # Fortress IS the gateway — trust current network to avoid
+                # ARP spoofing false positives from normal DHCP lease changes
+                l2 = self.layer_detectors.get('L2')
+                if l2 and hasattr(l2, 'trust_current_network'):
+                    l2.trust_current_network()
                 logger.info(f"Initialized {len(self.layer_detectors)} L2-L7 layer detectors")
             except Exception as e:
                 logger.warning(f"Failed to initialize layer detectors: {e}")
