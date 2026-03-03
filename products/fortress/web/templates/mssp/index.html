@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block title %}MSSP - HookProbe Fortress{% endblock %}
+
+{% block page_header %}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">MSSP</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Status Card -->
+    <div class="col-lg-6">
+        <div class="card" id="status-card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-cloud mr-2"></i>MSSP Connection</h3>
+                <div class="card-tools">
+                    <span class="badge" id="status-badge">Loading...</span>
+                </div>
+            </div>
+            <div class="card-body text-center" id="status-body">
+                <i class="fas fa-spinner fa-spin fa-3x mb-3"></i>
+                <p>Loading MSSP status...</p>
+            </div>
+            <div class="card-footer" id="status-footer"></div>
+        </div>
+    </div>
+
+    <!-- Info / Manual Registration Card -->
+    <div class="col-lg-6">
+        <div class="card card-outline card-info">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-info-circle mr-2"></i>About MSSP</h3>
+            </div>
+            <div class="card-body">
+                <p>
+                    <strong>Managed Security Service Provider</strong>
+                </p>
+                <p>
+                    Connect your Fortress to HookProbe's MSSP platform for centralised
+                    monitoring, threat intelligence, and remote management.
+                </p>
+                <ul>
+                    <li><i class="fas fa-heartbeat text-info mr-2"></i>Health monitoring and alerting</li>
+                    <li><i class="fas fa-shield-alt text-info mr-2"></i>Collective threat intelligence</li>
+                    <li><i class="fas fa-chart-line text-info mr-2"></i>Security score tracking</li>
+                    <li><i class="fas fa-cogs text-info mr-2"></i>Remote policy recommendations</li>
+                </ul>
+                <div class="callout callout-info">
+                    <h5><i class="fas fa-lock mr-2"></i>Secure by Design</h5>
+                    <p class="mb-0">
+                        Your Fortress initiates all connections outbound. No inbound ports
+                        are required. The API key is stored locally and never leaves the device.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Registration (shown when not provisioned) -->
+        <div class="card card-outline card-secondary" id="manual-card" style="display:none;">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-key mr-2"></i>Manual Registration</h3>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">
+                    If you already have an API key, enter it here to connect directly.
+                </p>
+                <form id="register-form">
+                    <div class="form-group">
+                        <label for="reg-endpoint">MSSP Endpoint</label>
+                        <input type="text" class="form-control" id="reg-endpoint"
+                               value="mssp.hookprobe.com" placeholder="mssp.hookprobe.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-apikey">API Key</label>
+                        <input type="password" class="form-control" id="reg-apikey"
+                               placeholder="Enter your API key" autocomplete="off">
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="btn-register">
+                        <i class="fas fa-link mr-2"></i>Connect
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alert container -->
+<div id="alert-container"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const CSRF_TOKEN = '{{ csrf_token() }}';
+    let pollTimer = null;
+
+    function headers(json) {
+        const h = {'X-CSRFToken': CSRF_TOKEN};
+        if (json) h['Content-Type'] = 'application/json';
+        return h;
+    }
+
+    function showAlert(msg, type) {
+        const id = 'alert-' + Date.now();
+        $('#alert-container').prepend(
+            '<div id="' + id + '" class="alert alert-' + type + ' alert-dismissible fade show">' +
+            '<button type="button" class="close" data-dismiss="alert">&times;</button>' +
+            msg + '</div>'
+        );
+        setTimeout(function() { $('#' + id).alert('close'); }, 8000);
+    }
+
+    function renderNotProvisioned() {
+        $('#status-card').removeClass('card-success card-warning card-danger').addClass('card-secondary');
+        $('#status-badge').attr('class', 'badge badge-secondary').text('Not Connected');
+        $('#status-body').html(
+            '<i class="fas fa-cloud fa-4x text-muted mb-3"></i>' +
+            '<h4 class="text-muted">Not Connected</h4>' +
+            '<p>This Fortress is not registered with an MSSP platform.</p>'
+        );
+        $('#status-footer').html(
+            '<button class="btn btn-primary" id="btn-provision">' +
+            '<i class="fas fa-plus-circle mr-2"></i>Start Provisioning</button>'
+        );
+        $('#manual-card').show();
+        $('#btn-provision').on('click', startProvision);
+        stopPolling();
+    }
+
+    function renderPendingClaim(data) {
+        const code = data.claimCode || '????-????-????';
+        $('#status-card').removeClass('card-success card-secondary card-danger').addClass('card-warning');
+        $('#status-badge').attr('class', 'badge badge-warning').text('Pending Claim');
+        $('#status-body').html(
+            '<i class="fas fa-clock fa-4x text-warning mb-3"></i>' +
+            '<h4 class="text-warning">Awaiting Claim</h4>' +
+            '<p>Enter this code at <strong>' + (data.url || 'mssp.hookprobe.com') + '</strong></p>' +
+            '<div class="bg-dark rounded p-3 mb-3">' +
+            '  <h2 class="mb-0 text-monospace text-white" id="claim-code" style="letter-spacing:0.15em;cursor:pointer;" ' +
+            '      title="Click to copy">' + escapeHtml(code) + '</h2>' +
+            '</div>' +
+            '<small class="text-muted"><i class="fas fa-sync fa-spin mr-1"></i>Checking every 5 seconds...</small>'
+        );
+        $('#status-footer').html(
+            '<button class="btn btn-outline-secondary btn-sm" id="btn-copy-code">' +
+            '<i class="fas fa-copy mr-1"></i>Copy Code</button>' +
+            '<button class="btn btn-outline-danger btn-sm ml-2" id="btn-cancel">' +
+            '<i class="fas fa-times mr-1"></i>Cancel</button>'
+        );
+        $('#manual-card').hide();
+
+        $('#btn-copy-code, #claim-code').on('click', function() {
+            navigator.clipboard.writeText(code).then(function() {
+                showAlert('Claim code copied to clipboard.', 'success');
+            });
+        });
+        $('#btn-cancel').on('click', disconnect);
+
+        startPolling(data.provisionId);
+    }
+
+    function renderProvisioned(data) {
+        const hb = data.heartbeatActive;
+        const lastHb = data.lastHeartbeat ? new Date(data.lastHeartbeat).toLocaleString() : 'N/A';
+        $('#status-card').removeClass('card-secondary card-warning card-danger').addClass('card-success');
+        $('#status-badge').attr('class', 'badge badge-success').text('Connected');
+        $('#status-body').html(
+            '<i class="fas fa-check-circle fa-4x text-success mb-3"></i>' +
+            '<h4 class="text-success">Connected to MSSP</h4>' +
+            '<div class="row text-center mt-3">' +
+            '  <div class="col-6">' +
+            '    <div class="description-block border-right">' +
+            '      <h5 class="description-header">' +
+            '        <span class="badge badge-' + (hb ? 'success' : 'warning') + '">' +
+                       (hb ? 'Active' : 'Inactive') + '</span>' +
+            '      </h5>' +
+            '      <span class="description-text text-muted">Heartbeat</span>' +
+            '    </div>' +
+            '  </div>' +
+            '  <div class="col-6">' +
+            '    <div class="description-block">' +
+            '      <h5 class="description-header">' + escapeHtml(lastHb) + '</h5>' +
+            '      <span class="description-text text-muted">Last Report</span>' +
+            '    </div>' +
+            '  </div>' +
+            '</div>'
+        );
+        $('#status-footer').html(
+            '<button class="btn btn-outline-danger btn-sm" id="btn-disconnect">' +
+            '<i class="fas fa-unlink mr-2"></i>Disconnect</button>'
+        );
+        $('#manual-card').hide();
+        $('#btn-disconnect').on('click', function() {
+            if (confirm('Disconnect from MSSP? You can reconnect later.')) disconnect();
+        });
+        stopPolling();
+    }
+
+    function renderError(msg) {
+        $('#status-card').removeClass('card-success card-warning card-secondary').addClass('card-danger');
+        $('#status-badge').attr('class', 'badge badge-danger').text('Error');
+        $('#status-body').html(
+            '<i class="fas fa-exclamation-triangle fa-4x text-danger mb-3"></i>' +
+            '<h4 class="text-danger">Error</h4>' +
+            '<p>' + escapeHtml(msg) + '</p>'
+        );
+        $('#status-footer').html(
+            '<button class="btn btn-secondary" onclick="location.reload()">' +
+            '<i class="fas fa-sync mr-2"></i>Retry</button>'
+        );
+    }
+
+    function loadStatus() {
+        fetch('{{ url_for("mssp.api_status") }}')
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) return renderError(data.error);
+                if (data.provisioned) return renderProvisioned(data);
+                if (data.status === 'pending_claim') return renderPendingClaim(data);
+                renderNotProvisioned();
+            })
+            .catch(() => renderError('Unable to reach MSSP status API.'));
+    }
+
+    function startProvision() {
+        $('#btn-provision').prop('disabled', true).html(
+            '<i class="fas fa-spinner fa-spin mr-2"></i>Provisioning...');
+        fetch('{{ url_for("mssp.api_provision") }}', {method: 'POST', headers: headers(true)})
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'already_provisioned') {
+                    showAlert(data.message, 'info');
+                    loadStatus();
+                } else if (data.claim_code) {
+                    renderPendingClaim({
+                        claimCode: data.claim_code,
+                        provisionId: data.provision_id
+                    });
+                } else if (data.error) {
+                    showAlert(data.error, 'danger');
+                    renderNotProvisioned();
+                } else {
+                    loadStatus();
+                }
+            })
+            .catch(err => {
+                showAlert('Provisioning failed: ' + err, 'danger');
+                renderNotProvisioned();
+            });
+    }
+
+    function startPolling(provisionId) {
+        stopPolling();
+        pollTimer = setInterval(function() {
+            const body = provisionId ? {provision_id: provisionId} : {};
+            fetch('{{ url_for("mssp.api_claim_check") }}', {
+                method: 'POST',
+                headers: headers(true),
+                body: JSON.stringify(body)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.claimed) {
+                    showAlert('Fortress claimed successfully!', 'success');
+                    stopPolling();
+                    loadStatus();
+                }
+            })
+            .catch(() => {});
+        }, 5000);
+    }
+
+    function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    function disconnect() {
+        fetch('{{ url_for("mssp.api_disconnect") }}', {method: 'POST', headers: headers(true)})
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    loadStatus();
+                } else {
+                    showAlert(data.error || 'Disconnect failed', 'danger');
+                }
+            })
+            .catch(err => showAlert('Disconnect failed: ' + err, 'danger'));
+    }
+
+    // Manual registration form
+    $('#register-form').on('submit', function(e) {
+        e.preventDefault();
+        const key = $('#reg-apikey').val().trim();
+        const endpoint = $('#reg-endpoint').val().trim();
+        if (!key) { showAlert('API key is required.', 'warning'); return; }
+        $('#btn-register').prop('disabled', true).html(
+            '<i class="fas fa-spinner fa-spin mr-2"></i>Connecting...');
+        fetch('{{ url_for("mssp.api_register") }}', {
+            method: 'POST',
+            headers: headers(true),
+            body: JSON.stringify({api_key: key, endpoint: endpoint})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showAlert(data.message, 'success');
+                loadStatus();
+            } else {
+                showAlert(data.error || 'Registration failed', 'danger');
+            }
+            $('#btn-register').prop('disabled', false).html(
+                '<i class="fas fa-link mr-2"></i>Connect');
+        })
+        .catch(err => {
+            showAlert('Registration failed: ' + err, 'danger');
+            $('#btn-register').prop('disabled', false).html(
+                '<i class="fas fa-link mr-2"></i>Connect');
+        });
+    });
+
+    function escapeHtml(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.appendChild(document.createTextNode(s));
+        return d.innerHTML;
+    }
+
+    // Initial load
+    loadStatus();
+
+    // Refresh status every 30 seconds when provisioned
+    setInterval(function() {
+        if (!pollTimer) loadStatus();
+    }, 30000);
+})();
+</script>
+{% endblock %}
