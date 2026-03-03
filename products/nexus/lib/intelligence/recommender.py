@@ -121,7 +121,7 @@ class ActionRecommender:
                 recommendations.append(rec)
         else:
             action_type, priority = SEVERITY_ACTION_MAP.get(
-                severity, ("alert", ActionPriority.INFO),
+                severity, ("alert", INFO),
             )
             rec = self._build_recommendation(
                 finding_id=finding_id,
