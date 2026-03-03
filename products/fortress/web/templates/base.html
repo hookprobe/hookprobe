@@ -193,6 +193,12 @@
                     <!-- 8. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
+                    <li class="nav-item">
+                        <a href="{{ url_for('mssp.index') }}" class="nav-link {% if request.endpoint and 'mssp' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-cloud"></i>
+                            <p>MSSP</p>
+                        </a>
+                    </li>
                     <li class="nav-item {% if 'settings' in request.endpoint %}menu-open{% endif %}">
                         <a href="#" class="nav-link {% if 'settings' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-cog"></i>
