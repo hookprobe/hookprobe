@@ -43,6 +43,10 @@ CHANNEL_HEADER_SIZE = 16
 CHANNEL_HEADER_FMT = '>BBIIIH'
 
 
+# Max payload size for a single channel message (1 MB)
+MAX_CHANNEL_PAYLOAD = 1 * 1024 * 1024
+
+
 class ChannelMsgType(IntEnum):
     DATA = 0x01
     KEEPALIVE = 0x02
@@ -417,6 +421,27 @@ class MeshPeerServer:
 
             peer_data = msg['data']
 
+            # Validate peer fields
+            p_node_id = peer_data.get('node_id', '')
+            if len(p_node_id) > 64:
+                peer_data['node_id'] = p_node_id[:64]
+            valid_tiers = {'SENTINEL', 'GUARDIAN', 'FORTRESS', 'NEXUS', 'UNKNOWN'}
+            if peer_data.get('tier', 'UNKNOWN') not in valid_tiers:
+                peer_data['tier'] = 'UNKNOWN'
+            caps = peer_data.get('capabilities', [])
+            if isinstance(caps, list) and len(caps) > 20:
+                peer_data['capabilities'] = caps[:20]
+
+            # Reject duplicate node_id (prevent impersonation)
+            decoded_nid = peer_data.get('node_id', '')
+            with self._lock:
+                if decoded_nid in self._peers:
+                    logger.warning(
+                        "Duplicate node_id %s from %s — rejecting",
+                        decoded_nid[:16], endpoint,
+                    )
+                    return None
+
             # Send our info back
             our_info = {
                 'type': 'peer_info',
@@ -600,6 +625,10 @@ class MeshPeerServer:
             ) = struct.unpack(CHANNEL_HEADER_FMT, header)
 
             payload = b''
+            if length > MAX_CHANNEL_PAYLOAD:
+                raise ValueError(
+                    f"Payload too large: {length} > {MAX_CHANNEL_PAYLOAD}"
+                )
             if length > 0:
                 payload = _recv_exact(sock, length)
 
@@ -682,6 +711,7 @@ class _MeshAPIHandler(BaseHTTPRequestHandler):
     server_ref: 'MeshPeerServer' = None
     start_time: float = 0.0
     node_id: str = ''
+    gossip_token: str = ''  # shared secret for /gossip POST
 
     def log_message(self, fmt, *args):
         logger.debug("HTTP %s", fmt % args)
@@ -705,6 +735,12 @@ class _MeshAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == '/gossip':
+            # Authenticate: require X-Gossip-Token header
+            if self.gossip_token:
+                token = self.headers.get('X-Gossip-Token', '')
+                if not secrets.compare_digest(token, self.gossip_token):
+                    self._respond(403, '{"error": "forbidden"}')
+                    return
             length = int(self.headers.get('Content-Length', 0))
             if length > 0 and length < 65536:
                 body = self.rfile.read(length)
@@ -732,16 +768,18 @@ class _MeshAPIHandler(BaseHTTPRequestHandler):
 
 def _start_http_api(
     server_ref: MeshPeerServer, port: int, node_id: str,
+    gossip_token: str = '',
 ) -> threading.Thread:
     """Start the HTTP API in a daemon thread. Returns the thread."""
     _MeshAPIHandler.server_ref = server_ref
     _MeshAPIHandler.start_time = time.time()
     _MeshAPIHandler.node_id = node_id
-    httpd = HTTPServer(('0.0.0.0', port), _MeshAPIHandler)
+    _MeshAPIHandler.gossip_token = gossip_token
+    httpd = HTTPServer(('127.0.0.1', port), _MeshAPIHandler)
     httpd.timeout = 2.0
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
-    logger.info("MeshHTTPAPI listening on 0.0.0.0:%d", port)
+    logger.info("MeshHTTPAPI listening on 127.0.0.1:%d", port)
     return t
 
 
@@ -783,7 +821,8 @@ def main():
     server.start()
 
     # Start HTTP API (health/status/gossip)
-    _start_http_api(server, args.api_port, args.node_id)
+    gossip_token = os.environ.get('MESH_GOSSIP_TOKEN', '')
+    _start_http_api(server, args.api_port, args.node_id, gossip_token)
 
     # Block forever, writing status to /tmp for compatibility
     status_file = '/tmp/mesh_status.json'
