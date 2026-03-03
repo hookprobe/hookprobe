@@ -2679,17 +2679,21 @@ class QSecBitFortressAgent:
         try:
             payload = json.dumps({
                 'type': 'threat_intel',
-                'source_node': 'fortress001',
+                'source_node': os.environ.get('MESH_NODE_ID', 'fortress001'),
                 'threat_type': threat.get('attack_type', 'unknown'),
                 'severity': threat.get('severity', 'MEDIUM'),
                 'source_ip': threat.get('source_ip', ''),
                 'confidence': threat.get('confidence', 0.5),
                 'timestamp': time.time(),
             }).encode()
+            headers = {'Content-Type': 'application/json'}
+            gossip_token = os.environ.get('MESH_GOSSIP_TOKEN', '')
+            if gossip_token:
+                headers['X-Gossip-Token'] = gossip_token
             req = urllib.request.Request(
                 "http://localhost:8766/gossip",
                 data=payload,
-                headers={'Content-Type': 'application/json'},
+                headers=headers,
             )
             urllib.request.urlopen(req, timeout=2)
         except Exception:
