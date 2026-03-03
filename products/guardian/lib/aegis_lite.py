@@ -12,11 +12,16 @@ Architecture:
     AEGIS-Lite → MSSP (findings) ← MSSP (recommendations)
 """
 
+import json
 import logging
 import os
+import threading
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+VPN_CONFIG_FILE = Path('/etc/hookprobe/guardian_vpn.json')
 
 
 class AegisLite:
@@ -35,6 +40,9 @@ class AegisLite:
         self._aegis_client = None
         self._mssp_client = None
         self._guardian_agent = None  # Set via set_guardian_agent()
+        self._last_gateway_endpoint: str = ""
+        self._gw_watcher_thread: Optional[threading.Thread] = None
+        self._gw_watcher_running = False
 
     def initialize(self) -> bool:
         """Initialize AEGIS-Lite with Guardian configuration.
@@ -79,11 +87,15 @@ class AegisLite:
 
         if self._mssp_client:
             self._mssp_client.start(collect_telemetry=self._collect_telemetry)
+            self._start_gateway_watcher()
 
         logger.info("AEGIS-Lite started")
 
     def stop(self) -> None:
         """Stop all services."""
+        self._gw_watcher_running = False
+        if self._gw_watcher_thread:
+            self._gw_watcher_thread.join(timeout=5)
         if self._mssp_client:
             self._mssp_client.stop()
         if self._aegis_client:
@@ -132,9 +144,6 @@ class AegisLite:
 
     def _collect_telemetry(self) -> dict:
         """Collect full telemetry for heartbeat — generic system + guardian extensions."""
-        import json
-        from pathlib import Path
-
         # Generic system/network/security telemetry from /proc
         try:
             from shared.mssp.telemetry_collector import TelemetryCollector
@@ -190,6 +199,53 @@ class AegisLite:
                 pass
 
         return telemetry
+
+    def _start_gateway_watcher(self) -> None:
+        """Watch for gateway endpoint changes from MSSP heartbeat responses."""
+        self._gw_watcher_running = True
+        self._gw_watcher_thread = threading.Thread(
+            target=self._gateway_watcher_loop, daemon=True
+        )
+        self._gw_watcher_thread.start()
+
+    def _gateway_watcher_loop(self) -> None:
+        """Periodically check if MSSP returned a new gateway endpoint."""
+        import time
+        while self._gw_watcher_running:
+            try:
+                if self._mssp_client and self._mssp_client.gateway_endpoint:
+                    gw = self._mssp_client.gateway_endpoint
+                    if gw != self._last_gateway_endpoint:
+                        self._update_vpn_config(gw)
+                        self._last_gateway_endpoint = gw
+            except Exception as e:
+                logger.debug("Gateway watcher error: %s", e)
+            time.sleep(30)
+
+    def _update_vpn_config(self, gateway_endpoint: str) -> None:
+        """Write gateway endpoint to VPN config file for the HTP VPN service."""
+        try:
+            # Parse host:port
+            if ':' in gateway_endpoint:
+                host, port_str = gateway_endpoint.rsplit(':', 1)
+                port = int(port_str)
+            else:
+                host = gateway_endpoint
+                port = 8144
+
+            # Read existing config or create new
+            config: Dict[str, Any] = {}
+            if VPN_CONFIG_FILE.exists():
+                config = json.loads(VPN_CONFIG_FILE.read_text())
+
+            config['gateway_host'] = host
+            config['gateway_port'] = port
+
+            VPN_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            VPN_CONFIG_FILE.write_text(json.dumps(config, indent=2) + '\n')
+            logger.info("VPN config updated: gateway=%s:%d", host, port)
+        except Exception as e:
+            logger.error("Failed to update VPN config: %s", e)
 
     def get_status(self) -> Dict[str, Any]:
         """Get AEGIS-Lite status."""
