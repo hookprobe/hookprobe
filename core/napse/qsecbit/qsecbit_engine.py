@@ -141,7 +141,10 @@ class QSecBitEngine:
                 auth=(self.ch_user, self.ch_password),
                 timeout=10
             )
-            return response.status_code == 200
+            if response.status_code != 200:
+                logger.error(f"ClickHouse insert failed ({response.status_code}): {response.text[:300]}")
+                return False
+            return True
         except Exception as e:
             logger.error(f"ClickHouse insert error: {e}")
             return False
@@ -199,6 +202,22 @@ class QSecBitEngine:
                 'low': 0
             }
 
+        # Check XDP active defense layer: even if SENTINEL/Napse see no threats,
+        # XDP may be blocking thousands of malicious IPs. QSecBit should reflect
+        # that threats EXIST even when they are being mitigated.
+        xdp_query = """
+            SELECT
+                uniqExact(src_ip) as blocked_sources,
+                count() as blocked_events
+            FROM hydra_events
+            WHERE timestamp >= now() - INTERVAL {hours:UInt32} HOUR
+              AND action IN ('drop', 'score_drop', 'rate_limit')
+        """
+        xdp_results = self._query_clickhouse(xdp_query, {'hours': hours})
+        xdp_blocked = 0
+        if xdp_results:
+            xdp_blocked = int(xdp_results[0].get('blocked_sources', 0))
+
         # Fallback: raw napse_intents (no SENTINEL data)
         query = """
             SELECT
@@ -217,6 +236,13 @@ class QSecBitEngine:
 
         results = self._query_clickhouse(query, {'hours': hours})
         if not results:
+            # No Napse data, but XDP may be blocking threats
+            if xdp_blocked >= 1000:
+                return 85, {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+            elif xdp_blocked >= 100:
+                return 90, {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+            elif xdp_blocked >= 10:
+                return 95, {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
             return 100, {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
 
         r = results[0]
@@ -248,6 +274,17 @@ class QSecBitEngine:
         score -= min(high_sources * 5, 30)         # Each high source: -5 (max 30)
         score -= min(medium_sources * 2, 20)       # Each medium source: -2 (max 20)
         score -= min(low_sources * 1, 10)          # Each low source: -1 (max 10)
+
+        # XDP pressure adjustment: if Napse sees 0 threats but XDP is actively
+        # blocking, cap the score to reflect that threats exist (just mitigated)
+        napse_total = critical_sources + high_sources + medium_sources + low_sources
+        if napse_total == 0 and xdp_blocked > 0:
+            if xdp_blocked >= 1000:
+                score = min(score, 85)
+            elif xdp_blocked >= 100:
+                score = min(score, 90)
+            elif xdp_blocked >= 10:
+                score = min(score, 95)
 
         return max(0, score), {
             'critical': critical,
@@ -711,6 +748,168 @@ def auto_create_iocs(engine: QSecBitEngine):
             if engine._insert_clickhouse(insert_sql, params):
                 logger.info(f"Created IoC: {ip} (risk: {risk}, intents: {intents})")
 
+    # Generate IoCs from SENTINEL malicious verdicts (calibrated ML)
+    sentinel_query = """
+        SELECT
+            IPv4NumToString(src_ip) as ip,
+            count() as evidence_count,
+            max(sentinel_score) as max_score,
+            argMax(verdict, timestamp) as latest_verdict
+        FROM sentinel_evidence
+        WHERE timestamp >= now() - INTERVAL 1 HOUR
+          AND sentinel_score >= 0.7
+        GROUP BY src_ip
+        LIMIT 20
+    """
+    sentinel_results = engine._query_clickhouse(sentinel_query, {})
+    for r in (sentinel_results or []):
+        ip = str(r.get('ip', ''))
+        if not ip or _is_private_ip(ip):
+            continue
+
+        check_query = """
+            SELECT id FROM iocs
+            WHERE type = 'ip' AND value = {p_ip:String}
+              AND created_at >= now() - INTERVAL 24 HOUR
+            LIMIT 1
+        """
+        existing = engine._query_clickhouse(check_query, {'p_ip': ip})
+        if not existing:
+            score = float(r.get('max_score', 0.7))
+            risk = min(int(score * 100), 95)
+            confidence = min(int(score * 90), 90)
+
+            insert_sql = """
+                INSERT INTO iocs (
+                    created_at, type, value, confidence, risk_score, threat_type,
+                    status, sources, detection_count
+                ) VALUES (
+                    now64(3),
+                    'ip', {p_ip:String}, {p_confidence:UInt8}, {p_risk:UInt8}, 'sentinel_malicious',
+                    'active', ['SENTINEL'], {p_count:UInt32}
+                )
+            """
+            params = {
+                'p_ip': ip,
+                'p_confidence': confidence,
+                'p_risk': risk,
+                'p_count': int(r.get('evidence_count', 1)),
+            }
+            if engine._insert_clickhouse(insert_sql, params):
+                logger.info(f"Created IoC from SENTINEL: {ip} (score: {score:.2f})")
+
+    # Generate IoCs from high-volume XDP-blocked IPs
+    xdp_query = """
+        SELECT
+            IPv4NumToString(src_ip) as ip,
+            count() as block_count,
+            uniq(reason) as unique_reasons
+        FROM hydra_events
+        WHERE timestamp >= now() - INTERVAL 1 HOUR
+          AND action IN ('drop', 'score_drop')
+        GROUP BY src_ip
+        HAVING block_count >= 500
+        LIMIT 20
+    """
+    xdp_results = engine._query_clickhouse(xdp_query, {})
+    for r in (xdp_results or []):
+        ip = str(r.get('ip', ''))
+        if not ip or _is_private_ip(ip):
+            continue
+
+        check_query = """
+            SELECT id FROM iocs
+            WHERE type = 'ip' AND value = {p_ip:String}
+              AND created_at >= now() - INTERVAL 24 HOUR
+            LIMIT 1
+        """
+        existing = engine._query_clickhouse(check_query, {'p_ip': ip})
+        if not existing:
+            blocks = int(r.get('block_count', 0))
+            risk = min(50 + blocks // 100, 90)
+            confidence = min(60 + int(r.get('unique_reasons', 1)) * 10, 85)
+
+            insert_sql = """
+                INSERT INTO iocs (
+                    created_at, type, value, confidence, risk_score, threat_type,
+                    status, sources, detection_count
+                ) VALUES (
+                    now64(3),
+                    'ip', {p_ip:String}, {p_confidence:UInt8}, {p_risk:UInt8}, 'xdp_blocked',
+                    'blocked', ['HYDRA-XDP'], {p_count:UInt32}
+                )
+            """
+            params = {
+                'p_ip': ip,
+                'p_confidence': confidence,
+                'p_risk': risk,
+                'p_count': blocks,
+            }
+            if engine._insert_clickhouse(insert_sql, params):
+                logger.info(f"Created IoC from XDP: {ip} (blocks: {blocks})")
+
+
+def auto_create_incidents_from_campaigns(engine: QSecBitEngine):
+    """Auto-create incidents from detected campaigns (coordinated attacks)."""
+    query = """
+        SELECT
+            campaign_id,
+            member_count,
+            total_cooccurrences,
+            max_reputation
+        FROM sentinel_campaigns FINAL
+        WHERE active = 1
+          AND member_count >= 5
+          AND discovered_at >= now() - INTERVAL 24 HOUR
+        ORDER BY max_reputation DESC
+        LIMIT 5
+    """
+    results = engine._query_clickhouse(query, {})
+    if not results:
+        logger.debug("No qualifying campaigns for auto-incidents")
+    for r in (results or []):
+        campaign_id = str(r.get('campaign_id', ''))[:200]
+        if not campaign_id:
+            continue
+
+        title = f'Campaign: {campaign_id}'
+        check_query = """
+            SELECT id FROM incidents
+            WHERE title = {p_title:String}
+              AND created_at >= now() - INTERVAL 24 HOUR
+            LIMIT 1
+        """
+        existing = engine._query_clickhouse(check_query, {'p_title': title})
+        if not existing:
+            members = int(r.get('member_count', 0))
+            reputation = float(r.get('max_reputation', 0))
+            severity = 'critical' if reputation > 0.7 else ('high' if members > 20 else 'medium')
+
+            insert_sql = """
+                INSERT INTO incidents (
+                    created_at, title, description, severity, status, category,
+                    sources, affected_devices, threat_score
+                ) VALUES (
+                    now64(3),
+                    {p_title:String},
+                    {p_desc:String},
+                    {p_severity:String}, 'new', 'coordinated_attack',
+                    ['SENTINEL-Campaign'], {p_members:UInt32},
+                    {p_threat:UInt8}
+                )
+            """
+            params = {
+                'p_title': title,
+                'p_desc': f'Coordinated attack campaign with {members} IPs, '
+                          f'{int(r.get("total_cooccurrences", 0))} co-occurrences, '
+                          f'reputation {reputation:.2f}',
+                'p_severity': severity,
+                'p_members': members,
+                'p_threat': min(int(reputation * 100), 95),
+            }
+            if engine._insert_clickhouse(insert_sql, params):
+                logger.info(f"Created campaign incident: {campaign_id} ({members} members)")
+
 
 def main():
     parser = argparse.ArgumentParser(description='QSECBIT Security Scoring Engine')
@@ -749,6 +948,7 @@ def main():
             if args.auto_incidents:
                 auto_create_incidents(engine)
                 auto_create_iocs(engine)
+                auto_create_incidents_from_campaigns(engine)
 
         except Exception as e:
             logger.error(f"Error in scoring loop: {e}")
