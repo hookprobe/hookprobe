@@ -1029,7 +1029,8 @@ class SentinelEngine:
                 operator_decision,
                 timestamp
             FROM {CH_DB}.hydra_verdicts
-            WHERE operator_decision IN ('confirm', 'false_positive')
+            WHERE operator_decision IN ('confirm', 'false_positive',
+                                        'auto_confirm', 'auto_false_positive')
               AND timestamp >= now() - INTERVAL 90 DAY
             ORDER BY timestamp
         """
@@ -1047,7 +1048,7 @@ class SentinelEngine:
                 ip = row['ip']
                 decision = row['operator_decision']
                 ts = str(row.get('timestamp', ''))
-                labeled_ips[ip] = (decision == 'confirm', ts)
+                labeled_ips[ip] = (decision in ('confirm', 'auto_confirm'), ts)
             except (json.JSONDecodeError, KeyError):
                 continue
 
@@ -1422,6 +1423,125 @@ def _write_benign_cache(evidence_batch: List[dict], engine: SentinelEngine):
 
 
 # ============================================================================
+# CROSS-ENGINE CONSENSUS AUTO-LABELING
+# ============================================================================
+# When multiple independent engines agree on a verdict with high confidence,
+# auto-label the verdict for SENTINEL training. This enables self-improving
+# ML without requiring manual operator feedback.
+#
+# Consensus rules (conservative to prevent feedback loops):
+#   - AUTO_CONFIRM: SENTINEL suspicious/malicious + anomaly malicious + blocklist hit
+#   - AUTO_FP: SENTINEL benign (score < 0.15) + anomaly benign + no blocklist
+#
+# Labels are tagged 'auto_confirm' / 'auto_false_positive' (distinct from
+# manual 'confirm' / 'false_positive') so they can be filtered or weighted
+# differently during training.
+
+AUTO_LABEL_INTERVAL = 6  # Run auto-labeling every N scoring cycles
+
+
+def auto_label_by_consensus() -> dict:
+    """
+    Find IPs where multiple engines agree and auto-label their verdicts.
+    Returns {'labeled': N, 'confirms': N, 'fps': N}.
+    """
+    # Find IPs with both SENTINEL evidence and anomaly verdicts in the last hour
+    # that don't already have an operator_decision
+    query = f"""
+        SELECT
+            s.src_ip AS ip,
+            s.sentinel_score,
+            s.verdict AS sentinel_verdict,
+            v.anomaly_score,
+            v.verdict AS anomaly_verdict,
+            v.timestamp
+        FROM (
+            SELECT src_ip, argMax(sentinel_score, timestamp) AS sentinel_score,
+                   argMax(verdict, timestamp) AS verdict
+            FROM {CH_DB}.sentinel_evidence
+            WHERE timestamp >= now() - INTERVAL 1 HOUR
+            GROUP BY src_ip
+        ) s
+        JOIN (
+            SELECT src_ip, argMax(anomaly_score, timestamp) AS anomaly_score,
+                   argMax(verdict, timestamp) AS verdict,
+                   max(timestamp) AS timestamp
+            FROM {CH_DB}.hydra_verdicts
+            WHERE timestamp >= now() - INTERVAL 1 HOUR
+              AND operator_decision = ''
+            GROUP BY src_ip
+        ) v ON s.src_ip = v.src_ip
+    """
+
+    result = ch_query(query)
+    if not result:
+        return {'labeled': 0, 'confirms': 0, 'fps': 0}
+
+    confirms = 0
+    fps = 0
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            ip = row['ip']
+            s_score = float(row.get('sentinel_score') or 0)
+            s_verdict = str(row.get('sentinel_verdict') or '')
+            a_score = float(row.get('anomaly_score') or 0)
+            a_verdict = str(row.get('anomaly_verdict') or '')
+
+            decision = None
+
+            # AUTO_CONFIRM: Both engines flag suspicious/malicious
+            # Requires SENTINEL score ≥ 0.5 AND anomaly score in suspicious range
+            if (s_verdict in ('suspicious', 'malicious') and s_score >= 0.5 and
+                    a_verdict in ('suspicious', 'malicious')):
+                # Extra check: IP must be on a blocklist for auto-confirm
+                bl_query = f"""
+                    SELECT count() AS bl_hits
+                    FROM {CH_DB}.hydra_events
+                    WHERE src_ip = toIPv4('{ip}')
+                      AND feed_source != ''
+                      AND timestamp >= now() - INTERVAL 1 HOUR
+                """
+                bl_result = ch_query(bl_query)
+                if bl_result:
+                    try:
+                        bl_row = json.loads(bl_result.strip().split('\n')[0])
+                        if int(bl_row.get('bl_hits') or 0) > 0:
+                            decision = 'auto_confirm'
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+
+            # AUTO_FP: Both engines agree benign with high confidence
+            elif s_verdict == 'benign' and s_score < 0.15 and a_verdict == 'benign':
+                decision = 'auto_false_positive'
+
+            if decision:
+                # Update the verdict record with auto-label
+                update_q = (
+                    f"ALTER TABLE {CH_DB}.hydra_verdicts UPDATE "
+                    f"operator_decision = '{decision}', "
+                    f"operator_decided_at = '{now}' "
+                    f"WHERE src_ip = toIPv4('{ip}') "
+                    f"AND operator_decision = '' "
+                    f"AND timestamp >= now() - INTERVAL 1 HOUR"
+                )
+                ch_query(update_q, fmt='')
+                if decision == 'auto_confirm':
+                    confirms += 1
+                else:
+                    fps += 1
+
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            continue
+
+    return {'labeled': confirms + fps, 'confirms': confirms, 'fps': fps}
+
+
+# ============================================================================
 # MAIN LOOP
 # ============================================================================
 
@@ -1491,7 +1611,17 @@ def main():
             elif cycle_count % 12 == 0:  # Log every hour when idle
                 logger.info(f"Cycle {cycle_count}: no active IPs in hydra_events")
 
-            # Periodic retrain
+            # Consensus auto-labeling (generates training data)
+            if cycle_count % AUTO_LABEL_INTERVAL == 0:
+                try:
+                    al = auto_label_by_consensus()
+                    if al['labeled'] > 0:
+                        logger.info(f"Auto-labeled {al['labeled']} verdicts "
+                                    f"({al['confirms']} confirm, {al['fps']} FP)")
+                except Exception as e:
+                    logger.debug(f"Auto-labeling error: {e}")
+
+            # Periodic retrain (uses both operator + auto labels)
             if time.monotonic() - last_train > RETRAIN_INTERVAL:
                 train_result = engine.train_from_verdicts()
                 last_train = time.monotonic()
