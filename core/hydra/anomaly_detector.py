@@ -88,9 +88,14 @@ def _load_hmac_key() -> bytes:
 
 _MODEL_HMAC_KEY = _load_hmac_key()
 
-# Thresholds
+# Default thresholds (overridden by adaptive calibration after training)
 SCORE_SUSPICIOUS = 0.5
 SCORE_MALICIOUS = 0.7
+
+# Adaptive thresholds computed from training data score distribution
+# These are updated after each model training to match percentiles
+_adaptive_suspicious = None  # Set to 95th percentile of training scores
+_adaptive_malicious = None   # Set to 99th percentile of training scores
 
 # Number of features (must match feature_extractor.py)
 N_FEATURES = 24
@@ -674,8 +679,21 @@ def write_block_request(ip: str, reason: str) -> None:
 # MAIN DETECTION LOOP
 # ============================================================================
 
+def _percentile(sorted_vals: List[float], p: float) -> float:
+    """Compute p-th percentile (0-100) from a sorted list."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    f = int(k)
+    c = f + 1 if f + 1 < len(sorted_vals) else f
+    d = k - f
+    return sorted_vals[f] + d * (sorted_vals[c] - sorted_vals[f])
+
+
 def train_model(hours: int = None) -> Tuple[Optional[IsolationForest], Optional[FeatureScaler]]:
     """Train or retrain the Isolation Forest model."""
+    global _adaptive_suspicious, _adaptive_malicious
+
     if hours is None:
         hours = BASELINE_HOURS
 
@@ -698,6 +716,22 @@ def train_model(hours: int = None) -> Tuple[Optional[IsolationForest], Optional[
     forest = IsolationForest(n_trees=100, sample_size=256)
     forest.fit(scaled_data)
 
+    # Calibrate thresholds from training data score distribution
+    # Training data is assumed mostly benign (malicious excluded in query)
+    # So anomaly scores on training data represent the "normal" distribution
+    train_scores = sorted(forest.score_samples(scaled_data))
+    _adaptive_suspicious = _percentile(train_scores, 95)  # Top 5% = suspicious
+    _adaptive_malicious = _percentile(train_scores, 99)   # Top 1% = malicious
+
+    # Ensure minimum separation between thresholds
+    if _adaptive_malicious - _adaptive_suspicious < 0.05:
+        _adaptive_malicious = _adaptive_suspicious + 0.05
+
+    logger.info(f"Adaptive thresholds: suspicious={_adaptive_suspicious:.4f}, "
+                f"malicious={_adaptive_malicious:.4f} "
+                f"(score range: {train_scores[0]:.4f}-{train_scores[-1]:.4f}, "
+                f"median={_percentile(train_scores, 50):.4f})")
+
     # Save model
     meta = {
         'trained_at': datetime.now(timezone.utc).isoformat(),
@@ -706,7 +740,9 @@ def train_model(hours: int = None) -> Tuple[Optional[IsolationForest], Optional[
         'n_trees': 100,
         'sample_size': 256,
         'baseline_hours': hours,
-        'version': '1.0.0',
+        'version': '2.0.0',
+        'threshold_suspicious': _adaptive_suspicious,
+        'threshold_malicious': _adaptive_malicious,
     }
     save_model(forest, scaler, meta)
 
@@ -739,12 +775,16 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     n_suspicious = 0
     n_malicious = 0
 
+    # Use adaptive thresholds if available, otherwise fixed defaults
+    thresh_suspicious = _adaptive_suspicious if _adaptive_suspicious is not None else SCORE_SUSPICIOUS
+    thresh_malicious = _adaptive_malicious if _adaptive_malicious is not None else SCORE_MALICIOUS
+
     for ip, score in zip(ips, scores):
-        # Classify
-        if score > SCORE_MALICIOUS:
+        # Classify using calibrated thresholds
+        if score > thresh_malicious:
             verdict = 'malicious'
             n_malicious += 1
-        elif score > SCORE_SUSPICIOUS:
+        elif score > thresh_suspicious:
             verdict = 'suspicious'
             n_suspicious += 1
         else:
@@ -771,12 +811,10 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     # Write verdicts
     written = write_verdicts(verdicts)
 
-    if n_suspicious > 0 or n_malicious > 0:
-        logger.info(f"Scored {len(ips)} IPs: "
-                     f"{n_malicious} malicious, {n_suspicious} suspicious, "
-                     f"{len(ips) - n_malicious - n_suspicious} benign")
-    else:
-        logger.debug(f"Scored {len(ips)} IPs: all benign")
+    n_benign = len(ips) - n_malicious - n_suspicious
+    logger.info(f"Scored {len(ips)} IPs: "
+                f"{n_malicious} malicious, {n_suspicious} suspicious, "
+                f"{n_benign} benign")
 
     return written
 
@@ -797,6 +835,16 @@ def main():
     if forest is None:
         logger.info(f"No trained model found. Collecting baseline ({BASELINE_HOURS}h)...")
         logger.info("Will attempt training once enough data accumulates.")
+    else:
+        # Restore adaptive thresholds from saved metadata
+        if meta.get('threshold_suspicious') is not None:
+            _adaptive_suspicious = float(meta['threshold_suspicious'])
+            _adaptive_malicious = float(meta['threshold_malicious'])
+            logger.info(f"Restored adaptive thresholds: suspicious={_adaptive_suspicious:.4f}, "
+                        f"malicious={_adaptive_malicious:.4f}")
+        else:
+            # Model was trained with old version — retrain to calibrate
+            logger.info("Model lacks adaptive thresholds, will retrain to calibrate")
 
     last_train_time = time.time()
     retrain_interval = RETRAIN_HOURS * 3600

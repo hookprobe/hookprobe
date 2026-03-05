@@ -1488,6 +1488,8 @@ def main():
                     f"(B:{v.get('benign', 0)} S:{v.get('suspicious', 0)} "
                     f"M:{v.get('malicious', 0)}{vc_str})"
                 )
+            elif cycle_count % 12 == 0:  # Log every hour when idle
+                logger.info(f"Cycle {cycle_count}: no active IPs in hydra_events")
 
             # Periodic retrain
             if time.monotonic() - last_train > RETRAIN_INTERVAL:
