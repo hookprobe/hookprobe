@@ -111,21 +111,33 @@ def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
 
 
 def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT with auth in headers (not URL)."""
+    """Execute a ClickHouse INSERT with auth in headers (not URL).
+
+    Splits INSERT ... VALUES ... so the VALUES data goes in the POST body.
+    """
     if not CH_PASSWORD:
         return False
 
     try:
         url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({'query': query})
+
+        # Split at VALUES boundary: header in URL param, data in POST body
+        if ' VALUES ' in query and not data:
+            parts = query.split(' VALUES ', 1)
+            url_query = parts[0] + ' VALUES'
+            body = parts[1]
+        else:
+            url_query = query
+            body = data
+
+        params = urlencode({'query': url_query})
         full_url = f"{url}?{params}"
 
         req = Request(full_url)
-        # Auth via headers instead of URL params (avoids password in logs)
         req.add_header('X-ClickHouse-User', CH_USER)
         req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        if data:
-            req.data = data.encode('utf-8')
+        if body:
+            req.data = body.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
         else:
             req.data = b''  # Force POST (GET is readonly in ClickHouse)
