@@ -607,11 +607,13 @@ class CampaignGraph:
                     if ip_a < ip_b:
                         total_weight += self.edges.get(ip_a, {}).get(ip_b, 0)
 
-            safe_root = root.replace('.', '_')
             # campaign_id must be stable across cycles so ReplacingMergeTree
-            # can deduplicate. Previously included member_count which changed
-            # every cycle, creating thousands of duplicate campaigns.
-            campaign_id = f"C-{safe_root}"
+            # can deduplicate. Use lexicographically smallest member IP as
+            # anchor — it is uniquely determined by the member set, not by
+            # graph insertion order or which IP was the union-find root.
+            sorted_members = sorted(members)
+            safe_anchor = sorted_members[0].replace('.', '_')
+            campaign_id = f"C-{safe_anchor}"
 
             self.campaigns[campaign_id] = members
             for ip in members:
