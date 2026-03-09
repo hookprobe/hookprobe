@@ -1121,6 +1121,10 @@ class SentinelEngine:
                 'samples': gnb.total_samples,
             }
 
+        # Compute training metrics (needed before calibration log)
+        tp = sum(1 for l in labels_for_cal if l == 1)
+        fp = sum(1 for l in labels_for_cal if l == 0)
+
         # Calibrate — but ONLY if both classes are present.
         # Single-class calibration (e.g., all labels=1) maps every score
         # to 1.0, which makes benign classification impossible.
@@ -1137,10 +1141,6 @@ class SentinelEngine:
         self.calibrator = calibrator
         self.version += 1
         self.last_trained = datetime.now(timezone.utc).isoformat()
-
-        # Compute training metrics
-        tp = sum(1 for l in labels_for_cal if l == 1)
-        fp = sum(1 for l in labels_for_cal if l == 0)
 
         stats = {
             'status': 'trained',
