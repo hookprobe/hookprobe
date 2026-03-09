@@ -64,6 +64,32 @@ MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 # Feature toggle for gradual rollout
 SENTINEL_ENABLED = os.environ.get('SENTINEL_ENABLED', 'true').lower() == 'true'
 
+# Trusted infrastructure IPs — excluded from suspicious/malicious classification.
+# These are OCI/internal IPs that generate legitimate traffic.
+import ipaddress as _ipaddr
+
+TRUSTED_NETWORKS = [
+    _ipaddr.ip_network('10.0.0.0/8'),       # Private (OCI VCN)
+    _ipaddr.ip_network('172.16.0.0/12'),     # Private
+    _ipaddr.ip_network('192.168.0.0/16'),    # Private
+    _ipaddr.ip_network('129.153.0.0/16'),    # OCI Ashburn/Phoenix
+    _ipaddr.ip_network('140.238.0.0/16'),    # OCI Frankfurt/London
+    _ipaddr.ip_network('140.245.0.0/16'),    # OCI
+    _ipaddr.ip_network('168.138.0.0/16'),    # OCI EU
+    _ipaddr.ip_network('132.145.0.0/16'),    # OCI
+    _ipaddr.ip_network('152.70.0.0/16'),     # OCI
+    _ipaddr.ip_network('158.101.0.0/16'),    # OCI
+    _ipaddr.ip_network('193.122.0.0/16'),    # OCI
+]
+
+def _is_trusted_ip(ip_str: str) -> bool:
+    """Check if an IP is in the trusted infrastructure list."""
+    try:
+        addr = _ipaddr.ip_address(ip_str)
+        return any(addr in net for net in TRUSTED_NETWORKS)
+    except (ValueError, TypeError):
+        return False
+
 running = True
 
 
@@ -896,20 +922,34 @@ class SentinelEngine:
         verdict, and confidence.
         """
         # Bayes score (learned from operator feedback)
-        if self.gnb.total_samples >= MIN_TRAINING_DECISIONS:
+        # Guard: if model has no negative (FP) examples, GNB returns
+        # uninformed log_odds=0 → sigmoid=0.5, but isotonic calibrator
+        # trained on all-TP data maps 0.5→1.0, making it impossible to
+        # classify anything as benign. Detect and degrade gracefully.
+        has_both_classes = (self.gnb.pos_count >= 2 and self.gnb.neg_count >= 2)
+
+        if self.gnb.total_samples >= MIN_TRAINING_DECISIONS and has_both_classes:
             raw_bayes = self.gnb.predict_proba(evidence)
             bayes_score = self.calibrator.calibrate(raw_bayes) \
                 if self.calibrator.bins else raw_bayes
+        elif self.gnb.total_samples >= MIN_TRAINING_DECISIONS:
+            # Model trained but single-class only — use raw GNB without
+            # calibrator (which would inflate scores). GNB returns 0.5
+            # when neg_count < 2, which is the correct uninformed prior.
+            bayes_score = self.gnb.predict_proba(evidence)
         else:
             bayes_score = 0.5  # Uninformed prior
 
         # Heuristic score (rule-based, always available)
         heuristic_score = self._heuristic_score(evidence, temporal)
 
-        # Ensemble
-        if self.gnb.total_samples >= MIN_TRAINING_DECISIONS:
+        # Ensemble — reduce Bayes weight when model is single-class
+        if self.gnb.total_samples >= MIN_TRAINING_DECISIONS and has_both_classes:
             sentinel_score = (self.w_bayes * bayes_score +
                               self.w_heuristic * heuristic_score)
+        elif self.gnb.total_samples >= MIN_TRAINING_DECISIONS:
+            # Single-class model: heavily favour heuristics, bayes is just noise
+            sentinel_score = 0.15 * bayes_score + 0.85 * heuristic_score
         else:
             # Before training: rely entirely on heuristics
             sentinel_score = heuristic_score
@@ -1081,10 +1121,16 @@ class SentinelEngine:
                 'samples': gnb.total_samples,
             }
 
-        # Calibrate
+        # Calibrate — but ONLY if both classes are present.
+        # Single-class calibration (e.g., all labels=1) maps every score
+        # to 1.0, which makes benign classification impossible.
         calibrator = IsotonicCalibrator()
-        if len(scores_for_cal) >= 5:
+        n_classes = len(set(labels_for_cal))
+        if len(scores_for_cal) >= 5 and n_classes >= 2:
             calibrator.fit(scores_for_cal, labels_for_cal)
+        elif n_classes < 2:
+            logger.warning(f"Skipping calibration: only {n_classes} class(es) in "
+                          f"training data ({tp} TP, {fp} FP). Need both TP and FP.")
 
         # Update engine
         self.gnb = gnb
@@ -1323,7 +1369,18 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     for item in evidence_batch:
         ip = item['ip']
         evidence = item['evidence']
-        result = engine.predict(evidence, item.get('temporal'))
+
+        # Override verdict for trusted infrastructure IPs
+        if _is_trusted_ip(ip):
+            result = {
+                'sentinel_score': 0.0,
+                'bayes_score': 0.0,
+                'heuristic_score': 0.0,
+                'verdict': 'benign',
+                'confidence': 1.0,
+            }
+        else:
+            result = engine.predict(evidence, item.get('temporal'))
 
         verdicts[result['verdict']] = verdicts.get(result['verdict'], 0) + 1
 
@@ -1359,10 +1416,16 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     # This closes the operator feedback loop: SENTINEL scores → verdicts →
     # operator confirm/FP → model retrains from feedback
     verdict_rows = []
+    trusted_skipped = 0
     for item in evidence_batch:
         result = engine.predict(item['evidence'], item.get('temporal'))
         if result['verdict'] in ('suspicious', 'malicious'):
             ip = item['ip']
+            # Skip trusted infrastructure IPs — they generate legitimate
+            # traffic that should never be escalated as threats.
+            if _is_trusted_ip(ip):
+                trusted_skipped += 1
+                continue
             if not _should_write_verdict(ip):
                 continue
             action = 'escalate' if result['verdict'] == 'malicious' else 'alert'
@@ -1391,6 +1454,9 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
 
     # Write benign IP cache for inspector fast-path
     _write_benign_cache(evidence_batch, engine)
+
+    if trusted_skipped > 0:
+        logger.debug(f"Skipped {trusted_skipped} trusted IPs from verdicts")
 
     return {
         'scored': total,
@@ -1494,6 +1560,10 @@ def auto_label_by_consensus() -> dict:
 
             decision = None
 
+            # Skip trusted infrastructure IPs
+            if _is_trusted_ip(ip):
+                continue
+
             # AUTO_CONFIRM: Both engines flag suspicious/malicious
             # Requires SENTINEL score ≥ 0.5 AND anomaly score in suspicious range
             if (s_verdict in ('suspicious', 'malicious') and s_score >= 0.5 and
@@ -1515,9 +1585,34 @@ def auto_label_by_consensus() -> dict:
                     except (json.JSONDecodeError, KeyError, ValueError):
                         pass
 
-            # AUTO_FP: Both engines agree benign with high confidence
-            elif s_verdict == 'benign' and s_score < 0.15 and a_verdict == 'benign':
-                decision = 'auto_false_positive'
+            # AUTO_FP: Anomaly detector says benign with high confidence.
+            # Relaxed from requiring SENTINEL benign (which was impossible
+            # when Bayes model trained only on TP data). Now uses:
+            #   - Anomaly detector: benign verdict
+            #   - SENTINEL heuristic score < 0.3 (low threat signals)
+            #   - No blocklist hits for this IP
+            # This breaks the circular dependency: SENTINEL needs FP labels
+            # to learn benign, but couldn't generate them without FP examples.
+            elif a_verdict == 'benign' and s_score < 0.3:
+                # Verify no blocklist hits (safety check)
+                bl_query = f"""
+                    SELECT count() AS bl_hits
+                    FROM {CH_DB}.hydra_events
+                    WHERE src_ip = toIPv4('{ip}')
+                      AND reason = 'blocklist'
+                      AND timestamp >= now() - INTERVAL 1 HOUR
+                """
+                bl_result = ch_query(bl_query)
+                is_clean = True
+                if bl_result:
+                    try:
+                        bl_row = json.loads(bl_result.strip().split('\n')[0])
+                        if int(bl_row.get('bl_hits') or 0) > 0:
+                            is_clean = False
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass
+                if is_clean:
+                    decision = 'auto_false_positive'
 
             if decision:
                 # Update the verdict record with auto-label
