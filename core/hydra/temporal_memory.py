@@ -608,7 +608,10 @@ class CampaignGraph:
                         total_weight += self.edges.get(ip_a, {}).get(ip_b, 0)
 
             safe_root = root.replace('.', '_')
-            campaign_id = f"C-{safe_root}-{len(members)}"
+            # campaign_id must be stable across cycles so ReplacingMergeTree
+            # can deduplicate. Previously included member_count which changed
+            # every cycle, creating thousands of duplicate campaigns.
+            campaign_id = f"C-{safe_root}"
 
             self.campaigns[campaign_id] = members
             for ip in members:
