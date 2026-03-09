@@ -65,21 +65,15 @@ MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 SENTINEL_ENABLED = os.environ.get('SENTINEL_ENABLED', 'true').lower() == 'true'
 
 # Trusted infrastructure IPs — excluded from suspicious/malicious classification.
-# These are OCI/internal IPs that generate legitimate traffic.
+# Only RFC-1918/loopback ranges. Public OCI CIDRs are NOT trusted because
+# attackers can run tooling from OCI free-tier instances.
 import ipaddress as _ipaddr
 
 TRUSTED_NETWORKS = [
-    _ipaddr.ip_network('10.0.0.0/8'),       # Private (OCI VCN)
-    _ipaddr.ip_network('172.16.0.0/12'),     # Private
-    _ipaddr.ip_network('192.168.0.0/16'),    # Private
-    _ipaddr.ip_network('129.153.0.0/16'),    # OCI Ashburn/Phoenix
-    _ipaddr.ip_network('140.238.0.0/16'),    # OCI Frankfurt/London
-    _ipaddr.ip_network('140.245.0.0/16'),    # OCI
-    _ipaddr.ip_network('168.138.0.0/16'),    # OCI EU
-    _ipaddr.ip_network('132.145.0.0/16'),    # OCI
-    _ipaddr.ip_network('152.70.0.0/16'),     # OCI
-    _ipaddr.ip_network('158.101.0.0/16'),    # OCI
-    _ipaddr.ip_network('193.122.0.0/16'),    # OCI
+    _ipaddr.ip_network('10.0.0.0/8'),       # RFC-1918
+    _ipaddr.ip_network('172.16.0.0/12'),     # RFC-1918
+    _ipaddr.ip_network('192.168.0.0/16'),    # RFC-1918
+    _ipaddr.ip_network('127.0.0.0/8'),       # Loopback
 ]
 
 def _is_trusted_ip(ip_str: str) -> bool:
@@ -89,6 +83,14 @@ def _is_trusted_ip(ip_str: str) -> bool:
         return any(addr in net for net in TRUSTED_NETWORKS)
     except (ValueError, TypeError):
         return False
+
+
+def _safe_ip(ip_str: str) -> Optional[str]:
+    """Validate and normalize IP string. Returns None if invalid."""
+    try:
+        return str(_ipaddr.ip_address(ip_str))
+    except (ValueError, TypeError):
+        return None
 
 running = True
 
@@ -515,6 +517,9 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
     if not ip_data:
         return []
 
+    # Step 1.5: Load anomaly detector (Isolation Forest) scores
+    anomaly_scores = _load_anomaly_scores(list(ip_data.keys()), window_seconds)
+
     # Step 2: Load RDAP data for these IPs
     rdap_data = _load_rdap_batch(list(ip_data.keys()))
 
@@ -538,8 +543,8 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
     for ip, stats in ip_data.items():
         evidence = [0.0] * N_EVIDENCE
 
-        # Feature 0: IF score (not available standalone — set to 0)
-        evidence[0] = 0.0
+        # Feature 0: Isolation Forest anomaly score from anomaly detector
+        evidence[0] = anomaly_scores.get(ip, 0.0)
 
         # Features 1-2: RDAP
         rdap = rdap_data.get(ip, {})
@@ -658,6 +663,36 @@ def _clamp_z(z: float, limit: float = 5.0) -> float:
     if not math.isfinite(z):
         return 0.0
     return max(-limit, min(limit, z))
+
+
+def _load_anomaly_scores(ips: List[str], window_seconds: int = 3600) -> Dict[str, float]:
+    """Load most recent Isolation Forest anomaly scores per IP from hydra_verdicts."""
+    if not ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{_safe_ip(ip) or ip}')" for ip in ips[:500])
+    query = f"""
+        SELECT
+            IPv4NumToString(src_ip) AS ip,
+            argMax(anomaly_score, timestamp) AS anomaly_score
+        FROM {CH_DB}.hydra_verdicts
+        WHERE src_ip IN ({ip_list})
+          AND timestamp >= now() - INTERVAL {max(window_seconds, 300)} SECOND
+          AND anomaly_score > 0
+        GROUP BY src_ip
+    """
+    result = ch_query(query)
+    if not result:
+        return {}
+    scores: Dict[str, float] = {}
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            scores[row['ip']] = float(row.get('anomaly_score') or 0)
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+    return scores
 
 
 def _load_rdap_batch(ips: List[str]) -> Dict[str, dict]:
@@ -1070,7 +1105,8 @@ class SentinelEngine:
                 timestamp
             FROM {CH_DB}.hydra_verdicts
             WHERE operator_decision IN ('confirm', 'false_positive',
-                                        'auto_confirm', 'auto_false_positive')
+                                        'auto_confirm', 'auto_false_positive',
+                                        'auto_fp')
               AND timestamp >= now() - INTERVAL 90 DAY
             ORDER BY timestamp
         """
@@ -1283,20 +1319,22 @@ def _collect_historical_evidence(ip: str, verdict_ts: str = '') -> Optional[List
 
     try:
         row = json.loads(result.strip().split('\n')[0])
-        if int(row.get('event_count') or 0) < 1:
-            return None
+        event_count = int(row.get('event_count') or 0)
 
         evidence = [0.0] * N_EVIDENCE
 
-        # Fill what we can from event stats
-        evidence[10] = math.log1p(int(row.get('event_count') or 0))
-        evidence[11] = math.log1p(int(row.get('unique_ports') or 0))
-        evidence[12] = float(row.get('blocklist_ratio') or 0)
-        evidence[13] = float(row.get('syn_ratio') or 0)
-        evidence[15] = 1.0 if row.get('feed_src') else 0.0
-        evidence[18] = float(row.get('port_entropy') or 0)
+        # Fill from event stats (only when events exist).
+        # A mostly-zero evidence vector IS informative for FP-labeled IPs:
+        # it tells GNB "when there is no event activity, the IP is likely FP."
+        if event_count >= 1:
+            evidence[10] = math.log1p(event_count)
+            evidence[11] = math.log1p(int(row.get('unique_ports') or 0))
+            evidence[12] = float(row.get('blocklist_ratio') or 0)
+            evidence[13] = float(row.get('syn_ratio') or 0)
+            evidence[15] = 1.0 if row.get('feed_src') else 0.0
+            evidence[18] = float(row.get('port_entropy') or 0)
 
-        # RDAP
+        # RDAP (always available regardless of events)
         rdap = _load_rdap_batch([ip])
         if ip in rdap:
             evidence[1] = rdap_type_score(rdap[ip].get('rdap_type', 'unknown'))
@@ -1366,13 +1404,15 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     rows = []
     verdicts = {'benign': 0, 'suspicious': 0, 'malicious': 0}
 
+    # Score each IP once and cache the result on the item dict.
+    # Previously scored 3x per IP per cycle (evidence write, verdict write,
+    # benign cache) — eliminated determinism risk and 3x CPU waste.
     for item in evidence_batch:
         ip = item['ip']
         evidence = item['evidence']
 
-        # Override verdict for trusted infrastructure IPs
         if _is_trusted_ip(ip):
-            result = {
+            item['_result'] = {
                 'sentinel_score': 0.0,
                 'bayes_score': 0.0,
                 'heuristic_score': 0.0,
@@ -1380,7 +1420,15 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
                 'confidence': 1.0,
             }
         else:
-            result = engine.predict(evidence, item.get('temporal'))
+            item['_result'] = engine.predict(evidence, item.get('temporal'))
+
+    for item in evidence_batch:
+        ip = item['ip']
+        safe = _safe_ip(ip)
+        if safe is None:
+            continue
+        evidence = item['evidence']
+        result = item['_result']
 
         verdicts[result['verdict']] = verdicts.get(result['verdict'], 0) + 1
 
@@ -1388,8 +1436,8 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
         ev_str = '[' + ','.join(f'{v:.6f}' for v in evidence) + ']'
 
         rows.append(
-            f"('{now}', toIPv4('{ip}'), "
-            f"0, "  # if_score (not available standalone)
+            f"('{now}', toIPv4('{safe}'), "
+            f"{evidence[0]:.6f}, "  # if_score from anomaly detector
             f"{result['bayes_score']:.6f}, "
             f"{result['sentinel_score']:.6f}, "
             f"{ev_str}, "
@@ -1412,33 +1460,42 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
         if ch_insert(query, ', '.join(batch)):
             total += len(batch)
 
-    # Write verdicts for suspicious/malicious IPs to hydra_verdicts
-    # This closes the operator feedback loop: SENTINEL scores → verdicts →
-    # operator confirm/FP → model retrains from feedback
+    # Write verdicts to hydra_verdicts for ALL classified IPs.
+    # Benign IPs with 'monitor' action are needed so auto_label_by_consensus()
+    # can find them in the JOIN and generate AUTO_FP training labels.
     verdict_rows = []
     trusted_skipped = 0
     for item in evidence_batch:
-        result = engine.predict(item['evidence'], item.get('temporal'))
+        result = item['_result']
+        ip = item['ip']
+
+        # Skip trusted infrastructure IPs — they get hardcoded benign
+        if _is_trusted_ip(ip):
+            trusted_skipped += 1
+            continue
+        if not _should_write_verdict(ip):
+            continue
+
         if result['verdict'] in ('suspicious', 'malicious'):
-            ip = item['ip']
-            # Skip trusted infrastructure IPs — they generate legitimate
-            # traffic that should never be escalated as threats.
-            if _is_trusted_ip(ip):
-                trusted_skipped += 1
-                continue
-            if not _should_write_verdict(ip):
-                continue
             action = 'escalate' if result['verdict'] == 'malicious' else 'alert'
-            ms = ','.join(f"{v:.6f}" for v in [
-                0.0, result['bayes_score'], result['sentinel_score']
-            ])
-            verdict_rows.append(
-                f"('{now}', toIPv4('{ip}'), "
-                f"{result['sentinel_score']:.6f}, "
-                f"[{ms}], "
-                f"'{result['verdict']}', "
-                f"'{action}')"
-            )
+        elif result['verdict'] == 'benign' and result['confidence'] > 0.6:
+            action = 'monitor'
+        else:
+            continue
+
+        safe = _safe_ip(ip)
+        if safe is None:
+            continue
+        ms = ','.join(f"{v:.6f}" for v in [
+            0.0, result['bayes_score'], result['sentinel_score']
+        ])
+        verdict_rows.append(
+            f"('{now}', toIPv4('{safe}'), "
+            f"{result['sentinel_score']:.6f}, "
+            f"[{ms}], "
+            f"'{result['verdict']}', "
+            f"'{action}')"
+        )
 
     verdict_count = 0
     if verdict_rows:
@@ -1470,20 +1527,23 @@ BENIGN_CACHE_PATH = '/app/models/sentinel_benign_cache.txt'
 
 
 def _write_benign_cache(evidence_batch: List[dict], engine: SentinelEngine):
-    """Write confirmed-benign IPs to cache file for inspector fast-path."""
+    """Write confirmed-benign IPs to cache file for inspector fast-path.
+    Uses atomic rename to prevent inspector from reading a truncated file."""
     try:
         benign_ips = []
         for item in evidence_batch:
-            result = engine.predict(item['evidence'], item.get('temporal'))
+            result = item.get('_result') or engine.predict(item['evidence'], item.get('temporal'))
             # Only cache IPs with high benign confidence (score < 0.2)
             if result['sentinel_score'] < 0.2 and result['confidence'] > 0.8:
                 benign_ips.append(item['ip'])
 
         if benign_ips:
-            with open(BENIGN_CACHE_PATH, 'w') as f:
+            tmp_path = BENIGN_CACHE_PATH + '.tmp'
+            with open(tmp_path, 'w') as f:
                 f.write(f"# SENTINEL benign cache, updated {datetime.now(timezone.utc).isoformat()}\n")
                 for ip in sorted(set(benign_ips)):
                     f.write(f"{ip}\n")
+            os.replace(tmp_path, BENIGN_CACHE_PATH)  # Atomic on POSIX
     except Exception as e:
         logger.debug(f"Benign cache write failed (non-critical): {e}")
 
@@ -1510,9 +1570,15 @@ def auto_label_by_consensus() -> dict:
     """
     Find IPs where multiple engines agree and auto-label their verdicts.
     Returns {'labeled': N, 'confirms': N, 'fps': N}.
+
+    Uses a single JOIN query with pre-aggregated blocklist hits (no N+1).
+    Two AUTO_FP paths:
+      A) Both engines agree benign (original)
+      B) SENTINEL benign + CDN/ISP RDAP type + no blocklist (RDAP-corroborated)
     """
-    # Find IPs with both SENTINEL evidence and anomaly verdicts in the last hour
-    # that don't already have an operator_decision
+    # Single query: join SENTINEL evidence with hydra_verdicts (which now
+    # includes benign IPs with action='monitor'), plus blocklist counts
+    # and RDAP type — eliminates the N+1 blocklist query pattern.
     query = f"""
         SELECT
             s.src_ip AS ip,
@@ -1520,7 +1586,9 @@ def auto_label_by_consensus() -> dict:
             s.verdict AS sentinel_verdict,
             v.anomaly_score,
             v.verdict AS anomaly_verdict,
-            v.timestamp
+            v.timestamp,
+            bl.bl_hits,
+            r.rdap_type
         FROM (
             SELECT src_ip, argMax(sentinel_score, timestamp) AS sentinel_score,
                    argMax(verdict, timestamp) AS verdict
@@ -1537,6 +1605,17 @@ def auto_label_by_consensus() -> dict:
               AND operator_decision = ''
             GROUP BY src_ip
         ) v ON s.src_ip = v.src_ip
+        LEFT JOIN (
+            SELECT src_ip, count() AS bl_hits
+            FROM {CH_DB}.hydra_events
+            WHERE timestamp >= now() - INTERVAL 1 HOUR
+              AND feed_source != ''
+            GROUP BY src_ip
+        ) bl ON s.src_ip = bl.src_ip
+        LEFT JOIN (
+            SELECT ip AS src_ip, rdap_type
+            FROM {CH_DB}.rdap_cache FINAL
+        ) r ON s.src_ip = r.src_ip
     """
 
     result = ch_query(query)
@@ -1553,10 +1632,15 @@ def auto_label_by_consensus() -> dict:
         try:
             row = json.loads(line)
             ip = row['ip']
+            safe = _safe_ip(ip)
+            if safe is None:
+                continue
             s_score = float(row.get('sentinel_score') or 0)
             s_verdict = str(row.get('sentinel_verdict') or '')
             a_score = float(row.get('anomaly_score') or 0)
             a_verdict = str(row.get('anomaly_verdict') or '')
+            bl_hits = int(row.get('bl_hits') or 0)
+            rdap_type = str(row.get('rdap_type') or '').lower()
 
             decision = None
 
@@ -1564,63 +1648,29 @@ def auto_label_by_consensus() -> dict:
             if _is_trusted_ip(ip):
                 continue
 
-            # AUTO_CONFIRM: Both engines flag suspicious/malicious
-            # Requires SENTINEL score ≥ 0.5 AND anomaly score in suspicious range
+            # AUTO_CONFIRM: Both engines flag suspicious/malicious + on blocklist
             if (s_verdict in ('suspicious', 'malicious') and s_score >= 0.5 and
-                    a_verdict in ('suspicious', 'malicious')):
-                # Extra check: IP must be on a blocklist for auto-confirm
-                bl_query = f"""
-                    SELECT count() AS bl_hits
-                    FROM {CH_DB}.hydra_events
-                    WHERE src_ip = toIPv4('{ip}')
-                      AND feed_source != ''
-                      AND timestamp >= now() - INTERVAL 1 HOUR
-                """
-                bl_result = ch_query(bl_query)
-                if bl_result:
-                    try:
-                        bl_row = json.loads(bl_result.strip().split('\n')[0])
-                        if int(bl_row.get('bl_hits') or 0) > 0:
-                            decision = 'auto_confirm'
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        pass
+                    a_verdict in ('suspicious', 'malicious') and bl_hits > 0):
+                decision = 'auto_confirm'
 
-            # AUTO_FP: Anomaly detector says benign with high confidence.
-            # Relaxed from requiring SENTINEL benign (which was impossible
-            # when Bayes model trained only on TP data). Now uses:
-            #   - Anomaly detector: benign verdict
-            #   - SENTINEL heuristic score < 0.3 (low threat signals)
-            #   - No blocklist hits for this IP
-            # This breaks the circular dependency: SENTINEL needs FP labels
-            # to learn benign, but couldn't generate them without FP examples.
-            elif a_verdict == 'benign' and s_score < 0.3:
-                # Verify no blocklist hits (safety check)
-                bl_query = f"""
-                    SELECT count() AS bl_hits
-                    FROM {CH_DB}.hydra_events
-                    WHERE src_ip = toIPv4('{ip}')
-                      AND reason = 'blocklist'
-                      AND timestamp >= now() - INTERVAL 1 HOUR
-                """
-                bl_result = ch_query(bl_query)
-                is_clean = True
-                if bl_result:
-                    try:
-                        bl_row = json.loads(bl_result.strip().split('\n')[0])
-                        if int(bl_row.get('bl_hits') or 0) > 0:
-                            is_clean = False
-                    except (json.JSONDecodeError, KeyError, ValueError):
-                        pass
-                if is_clean:
-                    decision = 'auto_false_positive'
+            # AUTO_FP Path A: Both engines agree benign + no blocklist
+            elif a_verdict == 'benign' and s_score < 0.3 and bl_hits == 0:
+                decision = 'auto_false_positive'
+
+            # AUTO_FP Path B: SENTINEL benign + CDN/ISP/education/government
+            # RDAP type as independent corroborating signal + no blocklist.
+            # The anomaly detector is unreliable for external IPs (trained
+            # mostly on internal traffic), so RDAP type substitutes.
+            elif (s_verdict == 'benign' and s_score < 0.35 and bl_hits == 0 and
+                    rdap_type in ('cdn', 'isp', 'education', 'government')):
+                decision = 'auto_false_positive'
 
             if decision:
-                # Update the verdict record with auto-label
                 update_q = (
                     f"ALTER TABLE {CH_DB}.hydra_verdicts UPDATE "
                     f"operator_decision = '{decision}', "
                     f"operator_decided_at = '{now}' "
-                    f"WHERE src_ip = toIPv4('{ip}') "
+                    f"WHERE src_ip = toIPv4('{safe}') "
                     f"AND operator_decision = '' "
                     f"AND timestamp >= now() - INTERVAL 1 HOUR"
                 )

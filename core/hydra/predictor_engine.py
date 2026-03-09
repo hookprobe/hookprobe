@@ -784,7 +784,7 @@ def auto_label_benign_cdn() -> int:
             continue
         values.append(
             f"('{now_ts}', IPv4StringToNum('{ip}'), 0.2, [0.2], "
-            f"'benign', 'none', 'auto_fp', '{now_ts}')"
+            f"'benign', 'none', 'auto_false_positive', '{now_ts}')"
         )
 
     if not values:
