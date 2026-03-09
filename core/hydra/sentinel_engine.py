@@ -673,12 +673,12 @@ def _load_anomaly_scores(ips: List[str], window_seconds: int = 3600) -> Dict[str
     query = f"""
         SELECT
             IPv4NumToString(src_ip) AS ip,
-            argMax(anomaly_score, timestamp) AS anomaly_score
+            argMax(anomaly_score, timestamp) AS latest_anomaly
         FROM {CH_DB}.hydra_verdicts
         WHERE src_ip IN ({ip_list})
           AND timestamp >= now() - INTERVAL {max(window_seconds, 300)} SECOND
-          AND anomaly_score > 0
         GROUP BY src_ip
+        HAVING latest_anomaly > 0
     """
     result = ch_query(query)
     if not result:
@@ -689,7 +689,7 @@ def _load_anomaly_scores(ips: List[str], window_seconds: int = 3600) -> Dict[str
             continue
         try:
             row = json.loads(line)
-            scores[row['ip']] = float(row.get('anomaly_score') or 0)
+            scores[row['ip']] = float(row.get('latest_anomaly') or 0)
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
     return scores
