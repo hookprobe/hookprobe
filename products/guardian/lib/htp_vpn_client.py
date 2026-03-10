@@ -617,24 +617,18 @@ table inet guardian_vpn {{
     def _encrypt_packet(self, plaintext: bytes) -> bytes:
         """Encrypt IP packet with ChaCha20-Poly1305 using session key."""
         if not self.session_key:
-            return plaintext
+            raise RuntimeError("No session key — cannot encrypt")
 
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-            nonce = secrets.token_bytes(12)
-            cipher = ChaCha20Poly1305(self.session_key)
-            ciphertext = cipher.encrypt(nonce, plaintext, None)
-            return nonce + ciphertext
-        except ImportError:
-            return plaintext
-        except Exception as e:
-            logger.warning("Encryption error: %s", e)
-            return plaintext
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        nonce = secrets.token_bytes(12)
+        cipher = ChaCha20Poly1305(self.session_key)
+        ciphertext = cipher.encrypt(nonce, plaintext, None)
+        return nonce + ciphertext
 
     def _decrypt_packet(self, encrypted: bytes) -> Optional[bytes]:
         """Decrypt IP packet with ChaCha20-Poly1305, fallback to old key."""
         if not self.session_key or len(encrypted) < 28:
-            return encrypted
+            return None  # No key or too short for valid ciphertext
 
         try:
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -643,7 +637,7 @@ table inet guardian_vpn {{
             cipher = ChaCha20Poly1305(self.session_key)
             return cipher.decrypt(nonce, ciphertext, None)
         except ImportError:
-            return encrypted
+            raise RuntimeError("cryptography package required for VPN encryption")
         except Exception:
             # Try old key during grace period
             if self.old_session_key and time.time() < self.old_key_expires:

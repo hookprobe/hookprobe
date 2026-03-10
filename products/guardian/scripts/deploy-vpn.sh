@@ -14,8 +14,22 @@ GUARDIAN_HOST="10.200.0.3"
 GUARDIAN_USER="andrei"
 MSSP_HOST="mssp.hookprobe.com"
 MSSP_USER="andrei"
-PSK="Gf4BWtyWstFM1ImwafyG-KcSebIsjc-5A8wh4z7QCfY"
 REPO_DIR="/home/andrei/hookprobe"
+
+# PSK must be provided via --psk flag or VPN_PSK env var (NEVER hardcode)
+PSK="${VPN_PSK:-}"
+if [ "$1" = "--psk" ] && [ -n "${2:-}" ]; then
+    PSK="$2"
+elif [ "$1" = "--psk-file" ] && [ -f "${2:-}" ]; then
+    PSK="$(cat "$2" | tr -d '[:space:]')"
+fi
+if [ -z "$PSK" ]; then
+    echo "ERROR: PSK required. Usage:"
+    echo "  $0 --psk <psk-value>"
+    echo "  $0 --psk-file /path/to/psk"
+    echo "  VPN_PSK=<value> $0"
+    exit 1
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
