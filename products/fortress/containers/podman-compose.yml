@@ -367,7 +367,7 @@ services:
       HTP_PRIMARY_PORT: "8144"
       CORTEX_WS_PORT: "8766"
       WAN_INTERFACE: "${WAN_INTERFACE:-eth0}"
-      MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-mssp.hookprobe.com:8144}"
+      MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-mssp.hookprobe.com:8443}"
     volumes:
       - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
       - /etc/hookprobe:/etc/hookprobe:ro
