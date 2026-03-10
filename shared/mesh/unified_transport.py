@@ -650,7 +650,8 @@ class UnifiedTransport:
 
                     return True
 
-            except Exception:
+            except Exception as e:
+                logger.debug("Resonance ACK parse error: %s (data len=%d)", e, len(data))
                 continue
 
         return False

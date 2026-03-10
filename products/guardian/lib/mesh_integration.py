@@ -117,8 +117,12 @@ class MeshConfig:
         # Only auto-discover peers when mesh is enabled
         if self.enabled:
             if not self.bootstrap_peers:
+                # Priority 1: MSSP gateway endpoint (dynamic, from heartbeat)
+                self.bootstrap_peers = self._peers_from_gateway_endpoint()
+            if not self.bootstrap_peers:
+                # Priority 2: MSSP hostname from node.conf
                 self.bootstrap_peers = self._peers_from_mssp()
-            # Also try default gateway (Fortress LAN) if not already listed
+            # Priority 3: LAN gateway (Fortress on local network)
             gw_peer = self._peer_from_gateway()
             if gw_peer and gw_peer not in self.bootstrap_peers:
                 self.bootstrap_peers.append(gw_peer)
@@ -140,6 +144,26 @@ class MeshConfig:
                     seed_path
                 )
                 self.neuro_seed = os.urandom(32)
+
+    @staticmethod
+    def _peers_from_gateway_endpoint() -> List[str]:
+        """Read mesh relay endpoint from MSSP heartbeat response.
+
+        The MSSP heartbeat returns a ``gatewayEndpoint`` field that points
+        to the mesh relay address.  The Guardian MSSP client writes this
+        to a JSON file so the mesh agent can pick it up on next restart
+        or health-check cycle.
+        """
+        try:
+            gw_file = Path("/opt/hookprobe/guardian/data/mssp_gateway.json")
+            if gw_file.exists():
+                data = json.loads(gw_file.read_text())
+                endpoint = data.get('endpoint', '')
+                if endpoint and ':' in endpoint:
+                    return [endpoint]
+        except Exception:
+            pass
+        return []
 
     @staticmethod
     def _peers_from_mssp() -> List[str]:
@@ -615,12 +639,17 @@ class GuardianMeshAgent:
         if not self.consciousness:
             return
 
+        # Refresh bootstrap peers from MSSP gateway endpoint
+        new_peers = MeshConfig._peers_from_gateway_endpoint()
+        for p in new_peers:
+            self.consciousness.add_bootstrap_peer(p)
+
         status = self.consciousness.get_status()
 
         if status['peer_count'] == 0:
             self.logger.warning("No mesh peers connected")
 
-            # Try to reconnect
+            # Try to reconnect using all known bootstrap peers
             if self.config.bootstrap_peers:
                 for peer in self.config.bootstrap_peers:
                     try:

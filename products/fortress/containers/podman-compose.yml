@@ -351,7 +351,8 @@ services:
 
   # Mesh Orchestrator - Peer server (TCP 8144) + HTTP API (8766)
   # Accepts incoming mesh peer connections from Guardian/Sentinel nodes
-  # on the LAN (10.200.0.1:8144) and relays gossip threat intelligence.
+  # on the LAN (10.200.0.1:8144) and connects outbound to MSSP relay
+  # for internet-based mesh (NAT/CGNAT traversal via MSSP).
   mesh-orchestrator:
     build:
       context: ../..
@@ -366,6 +367,7 @@ services:
       HTP_PRIMARY_PORT: "8144"
       CORTEX_WS_PORT: "8766"
       WAN_INTERFACE: "${WAN_INTERFACE:-eth0}"
+      MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-mssp.hookprobe.com:8144}"
     volumes:
       - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
       - /etc/hookprobe:/etc/hookprobe:ro
