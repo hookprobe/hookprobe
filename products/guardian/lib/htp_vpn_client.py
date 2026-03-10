@@ -288,7 +288,7 @@ class HTPVPNClient:
             # 1. Add specific route to gateway through original interface
             if original_gw:
                 subprocess.run(
-                    ['ip', 'route', 'add', f'{gw_ip}/32', 'via', original_gw, 'dev', wan],
+                    ['ip', 'route', 'replace', f'{gw_ip}/32', 'via', original_gw, 'dev', wan],
                     capture_output=True, check=True
                 )
 
@@ -340,10 +340,25 @@ class HTPVPNClient:
         lan = self.config.lan_interface
         gw_ip = getattr(self, '_gateway_ip', None)
         gw_port = self.config.gateway_port
+        tun = self.config.tun_device
 
         if not gw_ip:
             logger.warning("No gateway IP for kill-switch rules")
             return
+
+        # Detect local (RFC1918) gateway — if on Fortress LAN, allow local services
+        local_net_rules = ""
+        try:
+            import ipaddress
+            gw_addr = ipaddress.ip_address(gw_ip)
+            if gw_addr.is_private:
+                # Gateway is on LAN — allow full access to that subnet
+                # This covers Fortress admin UI, local services, SSH
+                local_net_rules = f"""
+        # Allow LAN gateway subnet (Fortress local network)
+        ip daddr {gw_ip} accept"""
+        except Exception:
+            pass
 
         rules = f"""#!/usr/sbin/nft -f
 # Guardian VPN Kill-Switch - auto-generated, do not edit
@@ -359,26 +374,27 @@ table inet guardian_vpn {{
         # Allow LAN (hotspot clients can still reach Guardian)
         oifname "{lan}" accept
 
-        # Allow HTP tunnel to gateway (UDP for VPN, TCP for mesh peer)
+        # Allow HTP tunnel to gateway (UDP for VPN, TCP for mesh)
         ip daddr {gw_ip} udp dport {gw_port} accept
         ip daddr {gw_ip} tcp dport {gw_port} accept
 
-        # Allow DNS to resolve gateway hostname (only during connect)
-        udp dport 53 accept
-        tcp dport 53 accept
+        # Allow local DNS only (dnsmasq on loopback/br0, DoH via tunnel)
+        oifname "{lan}" udp dport 53 accept
+        oifname "lo" udp dport 53 accept
+
+        # Allow DoH resolvers (encrypted DNS survives VPN reconnection)
+        ip daddr {{ 1.1.1.1, 1.0.0.1, 9.9.9.9, 149.112.112.112, 8.8.8.8, 8.8.4.4 }} tcp dport 443 accept
 
         # Allow DHCP on WAN (need to get IP from hotel WiFi)
         oifname "{wan}" udp dport 67 accept
         oifname "{wan}" udp sport 68 accept
 
         # Allow traffic through TUN device (tunnel encapsulated)
-        oifname "{self.config.tun_device}" accept
+        oifname "{tun}" accept
 
-        # Allow ICMP for network diagnostics (ping gateway, path MTU)
-        icmp type {{ echo-request, echo-reply, destination-unreachable }} accept
-
-        # Allow access to Fortress gateway (admin UI, APIs, local services)
-        ip daddr {gw_ip} accept
+        # Allow ICMP for path MTU discovery
+        icmp type {{ destination-unreachable }} accept
+{local_net_rules}
 
         # Allow established/related (for tunnel responses)
         ct state established,related accept
@@ -391,13 +407,10 @@ table inet guardian_vpn {{
         type filter hook forward priority 0; policy drop;
 
         # Allow LAN clients to reach tunnel
-        iifname "{lan}" oifname "{self.config.tun_device}" accept
+        iifname "{lan}" oifname "{tun}" accept
 
         # Allow tunnel responses back to LAN clients
-        iifname "{self.config.tun_device}" oifname "{lan}" accept
-
-        # Allow LAN clients to reach Fortress gateway (admin, local services)
-        iifname "{lan}" oifname "{wan}" ip daddr {gw_ip} accept
+        iifname "{tun}" oifname "{lan}" accept
 
         # Allow established/related
         ct state established,related accept

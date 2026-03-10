@@ -156,10 +156,16 @@ sleep 2
 # the peer server continues running for mesh gossip.
 if [ -c /dev/net/tun ]; then
     echo "[mesh] Starting HTP VPN Gateway on UDP ${HTP_PRIMARY_PORT:-8144}..."
+    PSK_ARG=""
+    if [ -f "${VPN_PSK_FILE:-/opt/hookprobe/mesh/data/vpn_psk}" ]; then
+        PSK_ARG="--psk-file ${VPN_PSK_FILE:-/opt/hookprobe/mesh/data/vpn_psk}"
+        echo "[mesh] VPN PSK authentication enabled"
+    fi
     python3 /opt/hookprobe/shared/mesh/htp_gateway.py \
         --port "${HTP_PRIMARY_PORT:-8144}" \
         --wan "${WAN_INTERFACE:-eth0}" \
         --max-clients "${MAX_VPN_CLIENTS:-20}" \
+        $PSK_ARG \
         --verbose \
         > >(sed -u 's/^/[vpn-gw] /') 2>&1 &
     VPN_GW_PID=$!

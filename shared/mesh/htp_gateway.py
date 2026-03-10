@@ -195,11 +195,13 @@ class HTPVPNGateway:
     def __init__(self, listen_port: int = DEFAULT_LISTEN_PORT,
                  wan_interface: str = "eth0",
                  max_clients: int = DEFAULT_MAX_CLIENTS,
-                 bind_address: str = "0.0.0.0"):
+                 bind_address: str = "0.0.0.0",
+                 psk: str = ""):
         self.listen_port = listen_port
         self.wan_interface = wan_interface
         self.max_clients = max_clients
         self.bind_address = bind_address  # nosec: VPN gateway intentionally listens on all interfaces
+        self.psk = psk  # Pre-shared key (device_token) — included in session key derivation
 
         # State
         self.sessions: Dict[int, GatewaySession] = {}        # flow_token → session
@@ -213,6 +215,10 @@ class HTPVPNGateway:
         self.tun_fd: Optional[int] = None
         self._lock = threading.Lock()
         self._running = False
+
+        # Rate limiting: track HELLO timestamps per source IP
+        self._hello_times: Dict[str, list] = {}  # ip → [timestamps]
+        self._hello_rate_limit = 5  # max HELLOs per IP per 60s
 
         # Stats
         self.started_at: float = 0
@@ -444,6 +450,17 @@ class HTPVPNGateway:
             logger.debug("HELLO too short (%d bytes) from %s", len(data), addr)
             return
 
+        # Rate limit HELLOs per source IP
+        src_ip = addr[0]
+        now = time.time()
+        times = self._hello_times.get(src_ip, [])
+        times = [t for t in times if now - t < 60]
+        if len(times) >= self._hello_rate_limit:
+            logger.warning("HELLO rate limit exceeded from %s (%d/60s)", src_ip, len(times))
+            return
+        times.append(now)
+        self._hello_times[src_ip] = times
+
         version, ptype, node_id_raw, client_nonce, flow_token = struct.unpack(
             ">HB32s32sQ", data[:75]
         )
@@ -495,8 +512,10 @@ class HTPVPNGateway:
             self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
             return
 
-        # Derive session key (identical to client)
+        # Derive session key (must match client's derivation)
         key_material = pending.client_nonce + pending.gateway_challenge
+        if self.psk:
+            key_material += self.psk.encode()
         session_key = hashlib.sha256(key_material).digest()
 
         # Verify HMAC
@@ -821,6 +840,10 @@ def main():
                         help=f"Maximum concurrent VPN clients (default: {DEFAULT_MAX_CLIENTS})")
     parser.add_argument("--bind", default="0.0.0.0",
                         help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--psk", default="",
+                        help="Pre-shared key (device_token) for client authentication")
+    parser.add_argument("--psk-file", default="",
+                        help="File containing pre-shared key (one line, stripped)")
     parser.add_argument("--config", help="Config file path (JSON)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug logging")
     parser.add_argument("--status", action="store_true",
@@ -842,6 +865,15 @@ def main():
     max_clients = args.max_clients
     bind_addr = args.bind
 
+    # Resolve PSK
+    psk = args.psk
+    if args.psk_file:
+        try:
+            psk = Path(args.psk_file).read_text().strip()
+        except Exception as e:
+            logger.error("Failed to read PSK file %s: %s", args.psk_file, e)
+            sys.exit(1)
+
     if args.config:
         try:
             conf = json.loads(Path(args.config).read_text())
@@ -849,6 +881,8 @@ def main():
             wan = conf.get("wan_interface", wan)
             max_clients = conf.get("max_clients", max_clients)
             bind_addr = conf.get("bind_address", bind_addr)
+            if not psk:
+                psk = conf.get("psk", "")
         except Exception as e:
             logger.error("Failed to load config %s: %s", args.config, e)
             sys.exit(1)
@@ -858,12 +892,18 @@ def main():
         logger.error("Gateway requires root for TUN device and iptables")
         sys.exit(1)
 
+    if psk:
+        logger.info("PSK authentication enabled")
+    else:
+        logger.warning("No PSK configured — any client can connect (use --psk or --psk-file)")
+
     # Create and start gateway
     gateway = HTPVPNGateway(
         listen_port=port,
         wan_interface=wan,
         max_clients=max_clients,
         bind_address=bind_addr,
+        psk=psk,
     )
 
     # Signal handling
