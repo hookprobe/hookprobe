@@ -979,6 +979,9 @@ class MeshPeerServer:
             str(intel)[:120],
         )
 
+        # Relay gossip to all other connected peers (MSSP relay mode)
+        self._relay_gossip(session.node_id, payload)
+
     def _handle_security_event(
         self, session: PeerSession, payload: bytes,
     ) -> None:
@@ -1014,8 +1017,33 @@ class MeshPeerServer:
             pass
 
     # ------------------------------------------------------------------
-    # Send gossip to all peers
+    # Relay / broadcast gossip to peers
     # ------------------------------------------------------------------
+
+    def _relay_gossip(
+        self, source_node_id: str, payload: bytes,
+    ) -> int:
+        """Relay raw gossip payload to all peers except the source."""
+        pkt = self._build_mesh_packet(PacketType.GOSSIP, payload)
+        sent = 0
+        with self._lock:
+            for nid, session in list(self._peers.items()):
+                if nid == source_node_id:
+                    continue  # Don't echo back to sender
+                try:
+                    with session.lock:
+                        self._send_channel_msg(
+                            session.sock, ChannelMsgType.DATA, pkt,
+                        )
+                    sent += 1
+                    logger.debug(
+                        "Relayed gossip to %s", nid[:16],
+                    )
+                except Exception:
+                    pass
+        if sent:
+            logger.info("Relayed gossip to %d peers", sent)
+        return sent
 
     def broadcast_gossip(self, intel: Dict) -> int:
         """Send threat intelligence to all connected peers. Returns count."""
@@ -1023,15 +1051,25 @@ class MeshPeerServer:
         pkt = self._build_mesh_packet(PacketType.GOSSIP, payload)
         sent = 0
         with self._lock:
-            for session in list(self._peers.values()):
+            peers = list(self._peers.items())
+            logger.info(
+                "broadcast_gossip: %d peers to send to", len(peers),
+            )
+            for nid, session in peers:
                 try:
                     with session.lock:
                         self._send_channel_msg(
                             session.sock, ChannelMsgType.DATA, pkt,
                         )
                     sent += 1
-                except Exception:
-                    pass
+                    logger.info(
+                        "broadcast_gossip: sent to %s", nid[:16],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "broadcast_gossip: failed to send to %s: %s",
+                        nid[:16], e,
+                    )
         return sent
 
     # ------------------------------------------------------------------
