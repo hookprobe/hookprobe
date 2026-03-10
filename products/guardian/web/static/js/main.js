@@ -124,6 +124,7 @@ function loadTabData(tabName) {
             break;
         case 'vpn':
             loadVpnData();
+            if (typeof loadHtpData === 'function') loadHtpData();
             break;
         case 'system':
             loadSystemData();

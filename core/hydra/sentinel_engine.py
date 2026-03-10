@@ -1513,7 +1513,7 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     _write_benign_cache(evidence_batch, engine)
 
     if trusted_skipped > 0:
-        logger.debug(f"Skipped {trusted_skipped} trusted IPs from verdicts")
+        logger.debug("Skipped %d trusted sources from verdicts", trusted_skipped)
 
     return {
         'scored': total,

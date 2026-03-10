@@ -67,6 +67,12 @@ RECONNECT_BASE_DELAY = 5
 RECONNECT_MAX_DELAY = 120
 OLD_KEY_TTL = 10  # Keep old key valid for 10s after rekey
 
+# HKDF context strings (must match gateway)
+HKDF_SALT_SESSION = b"htp-vpn-session-salt-v2"
+HKDF_INFO_SESSION = b"htp-vpn-session-key-v2"
+HKDF_SALT_REKEY = b"htp-vpn-rekey-salt-v2"
+HKDF_INFO_REKEY = b"htp-vpn-rekey-v2"
+
 
 class VPNState(Enum):
     """VPN tunnel state."""
@@ -92,6 +98,7 @@ class VPNConfig:
     tun_local_ip: str = TUN_LOCAL_IP
     tun_remote_ip: str = TUN_REMOTE_IP
     mtu: int = TUN_MTU
+    server_pubkey: str = ''  # Ed25519 public key hex for server identity verification
 
     @classmethod
     def load(cls, path: str = VPN_CONFIG_FILE) -> 'VPNConfig':
@@ -564,15 +571,56 @@ table inet guardian_vpn {{
                 logger.warning("Expected CHALLENGE, got type 0x%02x", ptype)
                 return False
 
-            # Extract challenge and derive session key
+            # Extract challenge and verify server identity
             challenge = data[3:35] if len(data) >= 35 else secrets.token_bytes(32)
 
-            # Derive session key: HKDF(nonce || challenge || device_token)
-            import hashlib
-            key_material = nonce + challenge
+            # Verify Ed25519 server identity if CHALLENGE includes signature
+            # Format: challenge(32) + pubkey(32) + signature(64) = 128 bytes after header
+            if len(data) >= 131:
+                server_pubkey_bytes = data[35:67]
+                server_sig = data[67:131]
+                try:
+                    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                    server_pub = Ed25519PublicKey.from_public_bytes(server_pubkey_bytes)
+                    server_pub.verify(server_sig, challenge + nonce)
+                    logger.info("Server identity verified (Ed25519)")
+
+                    # Pin on first use (TOFU) or verify against pinned key
+                    server_hex = server_pubkey_bytes.hex()
+                    if self.config.server_pubkey:
+                        if self.config.server_pubkey != server_hex:
+                            logger.error("SERVER KEY CHANGED! Pinned: %s, Got: %s",
+                                         self.config.server_pubkey[:16], server_hex[:16])
+                            logger.error("Possible MITM attack — aborting handshake")
+                            return False
+                    else:
+                        logger.info("Pinning server key (TOFU): %s", server_hex[:16])
+                        self.config.server_pubkey = server_hex
+                        self.config.save()
+                except Exception as e:
+                    logger.warning("Server signature verification failed: %s", e)
+                    if self.config.server_pubkey:
+                        logger.error("Server key was pinned — refusing unsigned CHALLENGE")
+                        return False
+            elif self.config.server_pubkey:
+                logger.error("Server sent unsigned CHALLENGE but key is pinned — aborting")
+                return False
+            else:
+                logger.debug("Server sent unsigned CHALLENGE (no identity verification)")
+
+            # Derive session key using HKDF-SHA256
+            # Salt is a constant independent of IKM (per RFC 5869)
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+            from cryptography.hazmat.primitives import hashes as _hashes
+            ikm = nonce + challenge
             if self.config.device_token:
-                key_material += self.config.device_token.encode()
-            self.session_key = hashlib.sha256(key_material).digest()
+                ikm += self.config.device_token.encode()
+            self.session_key = _HKDF(
+                algorithm=_hashes.SHA256(),
+                length=32,
+                salt=HKDF_SALT_SESSION,
+                info=HKDF_INFO_SESSION,
+            ).derive(ikm)
 
             # Build ATTEST response (prove we derived the correct key)
             import hmac
@@ -666,8 +714,15 @@ table inet guardian_vpn {{
                 logger.warning("REKEY nonce wrong size: %d", len(rekey_nonce))
                 return
 
-            # Derive new session key
-            new_key = hashlib.sha256(self.session_key + rekey_nonce).digest()
+            # Derive new session key using HKDF-SHA256
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+            from cryptography.hazmat.primitives import hashes as _hashes
+            new_key = _HKDF(
+                algorithm=_hashes.SHA256(),
+                length=32,
+                salt=HKDF_SALT_REKEY,
+                info=HKDF_INFO_REKEY,
+            ).derive(self.session_key + rekey_nonce)
 
             # Send REKEY_ACK: encrypt the rekey_nonce with the NEW key as proof
             ack_cipher = ChaCha20Poly1305(new_key)
