@@ -356,8 +356,9 @@ table inet guardian_vpn {{
         # Allow LAN (hotspot clients can still reach Guardian)
         oifname "{lan}" accept
 
-        # Allow HTP tunnel UDP to gateway
+        # Allow HTP tunnel to gateway (UDP for VPN, TCP for mesh peer)
         ip daddr {gw_ip} udp dport {gw_port} accept
+        ip daddr {gw_ip} tcp dport {gw_port} accept
 
         # Allow DNS to resolve gateway hostname (only during connect)
         udp dport 53 accept
@@ -369,6 +370,12 @@ table inet guardian_vpn {{
 
         # Allow traffic through TUN device (tunnel encapsulated)
         oifname "{self.config.tun_device}" accept
+
+        # Allow ICMP for network diagnostics (ping gateway, path MTU)
+        icmp type {{ echo-request, echo-reply, destination-unreachable }} accept
+
+        # Allow access to Fortress gateway (admin UI, APIs, local services)
+        ip daddr {gw_ip} accept
 
         # Allow established/related (for tunnel responses)
         ct state established,related accept
@@ -385,6 +392,9 @@ table inet guardian_vpn {{
 
         # Allow tunnel responses back to LAN clients
         iifname "{self.config.tun_device}" oifname "{lan}" accept
+
+        # Allow LAN clients to reach Fortress gateway (admin, local services)
+        iifname "{lan}" oifname "{wan}" ip daddr {gw_ip} accept
 
         # Allow established/related
         ct state established,related accept

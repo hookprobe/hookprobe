@@ -68,6 +68,7 @@ NAC_POLICY_TRIGGER_FILE = Path('/opt/hookprobe/fortress/data/.nac_policy_sync')
 # Network configuration
 GATEWAY_IP = "10.200.0.1"
 LAN_SUBNET = "10.200.0.0/23"
+OVS_BRIDGE = "FTS"
 
 # Blocked MACs file - devices that have been manually disconnected/deleted
 # These should not be auto-recreated by sync_device() or ensure_device_exists()
@@ -94,6 +95,34 @@ def _is_mac_blocked(mac: str) -> bool:
     """Check if a MAC address is in the blocked list."""
     mac = mac.upper().replace('-', ':')
     return mac in _load_blocked_macs()
+
+
+def _get_infrastructure_macs() -> set:
+    """Return MACs that belong to the OVS bridge or gateway.
+
+    These are NOT client devices — quarantining them kills all connectivity.
+    The bridge LOCAL port MAC is the gateway; it appears in ARP/FDB tables
+    but must never enter the device identity pipeline.
+    """
+    macs = set()
+    try:
+        out = subprocess.run(
+            ['ip', '-o', 'link', 'show', OVS_BRIDGE],
+            capture_output=True, text=True, timeout=5
+        )
+        # Format: "N: FTS: <...> link/ether 00:d0:b4:03:b7:0f brd ..."
+        for token in out.stdout.split():
+            if ':' in token and len(token) == 17 and token.count(':') == 5:
+                macs.add(token.upper())
+    except Exception:
+        pass
+    # Also exclude the gateway IP's ARP entry (which resolves to the bridge MAC)
+    return macs
+
+
+def _is_infrastructure_mac(mac: str) -> bool:
+    """Check if a MAC belongs to infrastructure (bridge, gateway)."""
+    return mac.upper().replace('-', ':') in _get_infrastructure_macs()
 
 
 # =============================================================================
@@ -1213,6 +1242,22 @@ class SDNAutoPilot:
                 signals={},
                 reason='Device was manually disconnected',
                 device_name='Blocked Device'
+            )
+
+        # CRITICAL: Never register infrastructure MACs (bridge, gateway) as devices.
+        # The OVS bridge LOCAL port MAC appears in ARP/FDB tables but is the
+        # gateway itself — quarantining it kills all IP connectivity.
+        if _is_infrastructure_mac(mac):
+            logger.debug(f"Skipping infrastructure MAC: {mac[:8]}:XX:XX:XX")
+            return IdentityScore(
+                policy='full_access',
+                confidence=1.0,
+                vendor='Infrastructure',
+                os_fingerprint='',
+                category='infrastructure',
+                signals={},
+                reason='OVS bridge or gateway MAC',
+                device_name='Gateway'
             )
 
         identity = self.calculate_identity(mac, hostname, dhcp_fingerprint, vendor_class)
