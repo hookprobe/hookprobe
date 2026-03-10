@@ -217,6 +217,7 @@ class AegisLite:
                     gw = self._mssp_client.gateway_endpoint
                     if gw != self._last_gateway_endpoint:
                         self._update_vpn_config(gw)
+                        self._persist_mesh_gateway(gw)
                         self._last_gateway_endpoint = gw
             except Exception as e:
                 logger.debug("Gateway watcher error: %s", e)
@@ -246,6 +247,21 @@ class AegisLite:
             logger.info("VPN config updated: gateway=%s:%d", host, port)
         except Exception as e:
             logger.error("Failed to update VPN config: %s", e)
+
+    @staticmethod
+    def _persist_mesh_gateway(gateway_endpoint: str) -> None:
+        """Write gateway endpoint for mesh_integration.py to discover."""
+        try:
+            import time as _time
+            gw_file = Path("/opt/hookprobe/guardian/data/mssp_gateway.json")
+            gw_file.parent.mkdir(parents=True, exist_ok=True)
+            gw_file.write_text(json.dumps({
+                "endpoint": gateway_endpoint,
+                "ts": _time.time(),
+            }))
+            logger.debug("Mesh gateway persisted: %s", gateway_endpoint)
+        except Exception as e:
+            logger.debug("Failed to persist mesh gateway: %s", e)
 
     def get_status(self) -> Dict[str, Any]:
         """Get AEGIS-Lite status."""

@@ -126,12 +126,19 @@ trap cleanup SIGTERM SIGINT
 # ---------------------------------------------------------------------------
 # mesh_server.py now serves health/status/gossip on --api-port internally,
 # so no separate health server process is needed.
+BOOTSTRAP_ARGS=""
+if [ -n "${MESH_BOOTSTRAP_PEERS:-}" ]; then
+    echo "[mesh] Bootstrap peers: ${MESH_BOOTSTRAP_PEERS}"
+    BOOTSTRAP_ARGS="--bootstrap ${MESH_BOOTSTRAP_PEERS}"
+fi
+
 echo "[mesh] Starting Mesh Peer Server on TCP ${HTP_PRIMARY_PORT:-8144}..."
 echo "[mesh] HTTP API (health/status/gossip) on TCP ${CORTEX_WS_PORT:-8766}..."
 python3 /opt/hookprobe/shared/mesh/mesh_server.py \
     --port "${HTP_PRIMARY_PORT:-8144}" \
     --api-port "${CORTEX_WS_PORT:-8766}" \
     --node-id "${MESH_NODE_ID:-fortress001}" \
+    ${BOOTSTRAP_ARGS} \
     --verbose \
     > >(sed -u 's/^/[peer-server] /') 2>&1 &
 PEER_SERVER_PID=$!

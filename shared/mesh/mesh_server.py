@@ -125,6 +125,7 @@ class MeshPeerServer:
         host: str = '0.0.0.0',
         port: int = 8144,
         neuro_seed: bytes = b'',
+        bootstrap_peers: Optional[List[str]] = None,
     ):
         self.node_id = node_id
         self.tier = tier
@@ -135,11 +136,28 @@ class MeshPeerServer:
         self._server_sock: Optional[socket.socket] = None
         self._running = False
         self._accept_thread: Optional[threading.Thread] = None
+        self._bootstrap_thread: Optional[threading.Thread] = None
         self._peers: Dict[str, PeerSession] = {}
+        self._connected_endpoints: set = set()  # track outbound connections
         self._lock = threading.Lock()
+
+        # Bootstrap peers for outbound connections (e.g. MSSP relay)
+        self._bootstrap_peers: List[str] = bootstrap_peers or []
 
         # Flow token for this server
         self._flow_token = secrets.token_bytes(8)
+
+        # Neuro encoder for proper resonance handshake
+        _node_id_bytes = hashlib.sha256(node_id.encode()).digest()[:16]
+        try:
+            from shared.mesh.neuro_encoder import NeuroResonanceEncoder
+            self._encoder = NeuroResonanceEncoder(self.neuro_seed, _node_id_bytes)
+        except ImportError:
+            try:
+                from neuro_encoder import NeuroResonanceEncoder
+                self._encoder = NeuroResonanceEncoder(self.neuro_seed, _node_id_bytes)
+            except ImportError:
+                self._encoder = None
 
         # Gossip intelligence received from peers
         self._received_intel: List[Dict] = []
@@ -153,7 +171,7 @@ class MeshPeerServer:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start listening for peer connections."""
+        """Start listening for peer connections and connecting to bootstrap peers."""
         self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_sock.settimeout(2.0)
@@ -168,6 +186,16 @@ class MeshPeerServer:
         logger.info(
             "MeshPeerServer listening on %s:%d/tcp", self.host, self.port,
         )
+
+        # Start outbound bootstrap connections (e.g. to MSSP relay)
+        if self._bootstrap_peers:
+            self._bootstrap_thread = threading.Thread(
+                target=self._bootstrap_loop, daemon=True,
+            )
+            self._bootstrap_thread.start()
+            logger.info(
+                "Bootstrap peers: %s", ', '.join(self._bootstrap_peers),
+            )
 
     def stop(self) -> None:
         """Stop the server and disconnect all peers."""
@@ -195,6 +223,7 @@ class MeshPeerServer:
         """Return mesh status for the health endpoint."""
         with self._lock:
             peers = [p.to_status() for p in self._peers.values()]
+            connected_out = list(self._connected_endpoints)
         with self._intel_lock:
             intel_count = len(self._received_intel)
         return {
@@ -202,6 +231,8 @@ class MeshPeerServer:
             'peer_count': len(peers),
             'peers': peers,
             'intel_received': intel_count,
+            'bootstrap_peers': self._bootstrap_peers,
+            'connected_outbound': connected_out,
         }
 
     # ------------------------------------------------------------------
@@ -225,6 +256,71 @@ class MeshPeerServer:
                 target=self._handle_peer, args=(conn, endpoint),
                 daemon=True,
             ).start()
+
+    # ------------------------------------------------------------------
+    # Outbound bootstrap (connect to MSSP relay, other Fortresses)
+    # ------------------------------------------------------------------
+
+    def _bootstrap_loop(self) -> None:
+        """Periodically connect outbound to bootstrap peers (MSSP, etc.).
+
+        This enables mesh connectivity when this node is behind NAT/CGNAT
+        and cannot accept inbound connections from the internet.  Both sides
+        connect outbound to MSSP; MSSP relays gossip between them.
+        """
+        # Initial delay to let the server socket bind first
+        time.sleep(5)
+
+        while self._running:
+            for endpoint in self._bootstrap_peers:
+                # Skip if already connected to this endpoint
+                with self._lock:
+                    if endpoint in self._connected_endpoints:
+                        continue
+
+                try:
+                    host, port_str = endpoint.rsplit(':', 1)
+                    port = int(port_str)
+                except ValueError:
+                    logger.warning("Invalid bootstrap peer: %s", endpoint)
+                    continue
+
+                try:
+                    logger.info(
+                        "Bootstrap connecting to %s:%d ...", host, port,
+                    )
+                    sock = socket.create_connection(
+                        (host, port), timeout=15,
+                    )
+                    with self._lock:
+                        self._connected_endpoints.add(endpoint)
+
+                    threading.Thread(
+                        target=self._handle_outbound_peer,
+                        args=(sock, endpoint),
+                        daemon=True,
+                    ).start()
+
+                except Exception as e:
+                    logger.debug(
+                        "Bootstrap connect to %s failed: %s", endpoint, e,
+                    )
+
+            # Retry every 60 seconds
+            for _ in range(60):
+                if not self._running:
+                    return
+                time.sleep(1)
+
+    def _handle_outbound_peer(
+        self, sock: socket.socket, endpoint: str,
+    ) -> None:
+        """Handle an outbound connection — same handshake as inbound."""
+        try:
+            self._handle_peer(sock, endpoint)
+        finally:
+            with self._lock:
+                self._connected_endpoints.discard(endpoint)
 
     # ------------------------------------------------------------------
     # Per-peer handler
@@ -333,18 +429,29 @@ class MeshPeerServer:
     # Layer 2: MeshPacket RESONATE (INIT→ACK→CONFIRM)
     # ------------------------------------------------------------------
 
+    def _recv_data_msg(self, sock: socket.socket, timeout: float) -> bytes:
+        """Receive next DATA channel message, skipping ACKs/keepalives."""
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError("Timed out waiting for DATA message")
+            msg_type, raw = self._recv_channel_msg(sock, timeout=remaining)
+            if msg_type == ChannelMsgType.DATA:
+                return raw
+            # Client's _receive_loop sends channel ACKs (0x02) and
+            # keepalives (0x03) — skip them on the server side.
+            logger.debug(
+                "Skipping channel msg type=0x%02x len=%d (waiting for DATA)",
+                msg_type.value, len(raw),
+            )
+
     def _resonance_handshake(self, sock: socket.socket) -> bool:
         """Server side of UnifiedTransport resonance handshake."""
         try:
             # Receive RESONATE INIT (inside a DATA channel message)
-            msg_type, raw = self._recv_channel_msg(sock, timeout=30.0)
-            logger.debug(
-                "Resonance: got channel msg type=0x%02x len=%d",
-                msg_type.value, len(raw),
-            )
-            if msg_type != ChannelMsgType.DATA:
-                logger.debug("Expected DATA (0x01), got 0x%02x", msg_type.value)
-                return False
+            raw = self._recv_data_msg(sock, timeout=30.0)
+            logger.debug("Resonance INIT: got %d bytes", len(raw))
 
             pkt = self._parse_mesh_packet(raw)
             if pkt is None:
@@ -358,18 +465,39 @@ class MeshPeerServer:
             if len(payload) < 1 or payload[0] != 0x01:  # INIT
                 return False
 
-            # Build ACK response
-            # Generate a simple RDV-like response (just entropy)
-            ack_data = b'\x02' + secrets.token_bytes(64)  # 0x02 = ACK
+            # Use ResonanceHandshake to generate a proper ACK that the
+            # client's process_ack() can parse (nonce + valid RDV).
+            # The client strips the first marker byte before calling
+            # process_ack, and process_ack expects [0x02][nonce][RDV],
+            # so we produce [0x02] + process_init() output which itself
+            # starts with [0x02][nonce][RDV].
+            try:
+                try:
+                    from shared.mesh.neuro_encoder import ResonanceHandshake
+                except ImportError:
+                    from neuro_encoder import ResonanceHandshake
+                handshake = ResonanceHandshake(
+                    encoder=self._encoder,
+                    channel_binding=self._flow_token,
+                    is_initiator=False,
+                )
+                ok, ack_body = handshake.process_init(payload[1:])
+                if not ok:
+                    logger.debug("ResonanceHandshake.process_init failed: %s", ack_body)
+                    return False
+                ack_data = b'\x02' + ack_body
+            except Exception as e:
+                logger.debug("ResonanceHandshake import/use failed, falling back: %s", e)
+                ack_data = b'\x02' + secrets.token_bytes(64)
+
             ack_pkt = self._build_mesh_packet(
                 PacketType.RESONATE, ack_data,
             )
             self._send_channel_msg(sock, ChannelMsgType.DATA, ack_pkt)
+            logger.debug("Resonance ACK sent, waiting for CONFIRM...")
 
             # Receive CONFIRM
-            msg_type, raw = self._recv_channel_msg(sock, timeout=30.0)
-            if msg_type != ChannelMsgType.DATA:
-                return False
+            raw = self._recv_data_msg(sock, timeout=30.0)
 
             pkt = self._parse_mesh_packet(raw)
             if pkt is None or pkt['type'] != PacketType.RESONATE:
@@ -377,6 +505,7 @@ class MeshPeerServer:
             if len(pkt['payload']) < 1 or pkt['payload'][0] != 0x03:  # CONFIRM
                 return False
 
+            logger.debug("Resonance CONFIRM received — handshake complete")
             return True
 
         except Exception as e:
@@ -390,17 +519,22 @@ class MeshPeerServer:
     def _weight_sync(self, sock: socket.socket) -> bool:
         """Server side of weight fingerprint exchange."""
         try:
-            msg_type, raw = self._recv_channel_msg(sock, timeout=30.0)
-            if msg_type != ChannelMsgType.DATA:
-                return False
+            raw = self._recv_data_msg(sock, timeout=30.0)
 
             pkt = self._parse_mesh_packet(raw)
             if pkt is None or pkt['type'] != PacketType.WEIGHT_SYNC:
                 return False
 
-            # Respond with our own (dummy) weight fingerprint
-            # 16-byte fingerprint + 4-byte generation
-            our_fp = struct.pack('>16sI', secrets.token_bytes(16), 1)
+            # Respond with our weight fingerprint (proper 80-byte format)
+            # Format: >64sIIQ (fingerprint, epoch, ter_sequence, timestamp_us)
+            if self._encoder:
+                our_fp = self._encoder.get_weight_fingerprint().to_bytes()
+            else:
+                our_fp = struct.pack(
+                    '>64sIIQ',
+                    secrets.token_bytes(64), 1, 0,
+                    int(time.time() * 1_000_000) & 0xFFFFFFFFFFFFFFFF,
+                )
             resp_pkt = self._build_mesh_packet(
                 PacketType.WEIGHT_SYNC, our_fp,
             )
@@ -669,7 +803,7 @@ class MeshPeerServer:
         self, ptype: PacketType, payload: bytes,
     ) -> bytes:
         """Build a MeshPacket (48-byte header + payload)."""
-        checksum = _channel_checksum(payload)
+        checksum = _mesh_checksum(payload)
         header = struct.pack(
             MESH_HEADER_FMT,
             MESH_VERSION,
@@ -708,6 +842,11 @@ def _channel_checksum(data: bytes) -> int:
     """Match ResilientChannel._calculate_checksum (SHA256-based)."""
     h = hashlib.sha256(data).digest()
     return struct.unpack('>I', h[:4])[0]
+
+
+def _mesh_checksum(data: bytes) -> int:
+    """Match MeshPacket._crc32 (CRC32-based) in unified_transport."""
+    return zlib.crc32(data) & 0xFFFFFFFF
 
 
 def _recv_exact(sock: socket.socket, length: int) -> bytes:
@@ -807,6 +946,16 @@ def _start_http_api(
 # Standalone entry point (run inside the fts-mesh container)
 # ---------------------------------------------------------------------------
 
+def _parse_bootstrap_peers(raw: str) -> List[str]:
+    """Parse comma-separated bootstrap peers, filtering empty/invalid entries."""
+    peers = []
+    for p in raw.split(','):
+        p = p.strip()
+        if p and ':' in p:
+            peers.append(p)
+    return peers
+
+
 def main():
     import argparse
     import os
@@ -825,6 +974,11 @@ def main():
         '--node-id',
         default=os.environ.get('MESH_NODE_ID', 'fortress001'),
     )
+    parser.add_argument(
+        '--bootstrap',
+        default=os.environ.get('MESH_BOOTSTRAP_PEERS', ''),
+        help='Comma-separated bootstrap peers (e.g. mssp.hookprobe.com:8144)',
+    )
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
 
@@ -833,10 +987,13 @@ def main():
         format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
     )
 
+    bootstrap_peers = _parse_bootstrap_peers(args.bootstrap)
+
     server = MeshPeerServer(
         node_id=args.node_id,
         tier='FORTRESS',
         port=args.port,
+        bootstrap_peers=bootstrap_peers,
     )
     server.start()
 
