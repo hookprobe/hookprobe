@@ -636,12 +636,19 @@ class MeshConsciousness:
             neuro_seed=self.neuro_seed,
         )
 
-        if transport.connect(host, port=port, timeout=15.0):
+        if transport.connect(host, timeout=15.0):
             # Exchange peer info
             peer_info = self._exchange_peer_info(transport)
             if peer_info:
                 self._peers[peer_info.node_id] = peer_info
                 self._transports[peer_info.node_id] = transport
+
+                # Register callback for incoming gossip/DSM events
+                transport._on_packet.append(
+                    lambda pkt, _pi=peer_info: self._handle_incoming_packet(
+                        _pi, pkt,
+                    )
+                )
 
                 self.logger.info(
                     f"Connected to peer {peer_info.node_id.hex()[:8]} "
@@ -887,6 +894,40 @@ class MeshConsciousness:
                     transport.gossip(intel.to_bytes())
                 except Exception as e:
                     self.logger.debug(f"Gossip failed to {peer_id.hex()[:8]}: {e}")
+
+    def _handle_incoming_packet(
+        self, peer_info: PeerNode, packet: MeshPacket,
+    ) -> None:
+        """Handle an incoming mesh packet from a connected peer."""
+        if packet.packet_type == PacketType.GOSSIP:
+            try:
+                intel = ThreatIntelligence.from_bytes(packet.payload)
+                self.logger.info(
+                    "Gossip received from %s: %s",
+                    peer_info.node_id.hex()[:8],
+                    intel.threat_type,
+                )
+                self._handle_received_intel(intel)
+            except Exception:
+                # Fallback: try JSON gossip (from mesh_server relay)
+                try:
+                    import json as _json
+                    data = _json.loads(packet.payload.decode())
+                    self.logger.info(
+                        "Gossip (JSON) received from %s: %s",
+                        peer_info.node_id.hex()[:8],
+                        str(data)[:100],
+                    )
+                    for callback in self._on_intelligence:
+                        try:
+                            callback(data)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    self.logger.debug(
+                        "Could not parse gossip from %s: %s",
+                        peer_info.node_id.hex()[:8], e,
+                    )
 
     def _handle_received_intel(self, intel: ThreatIntelligence) -> None:
         """Handle intelligence received from a peer."""

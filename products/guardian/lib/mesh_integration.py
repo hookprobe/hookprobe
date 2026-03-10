@@ -122,10 +122,9 @@ class MeshConfig:
             if not self.bootstrap_peers:
                 # Priority 2: MSSP hostname from node.conf
                 self.bootstrap_peers = self._peers_from_mssp()
-            # Priority 3: LAN gateway (Fortress on local network)
-            gw_peer = self._peer_from_gateway()
-            if gw_peer and gw_peer not in self.bootstrap_peers:
-                self.bootstrap_peers.append(gw_peer)
+            if not self.bootstrap_peers:
+                # Priority 3: Dedicated mesh relay (default)
+                self.bootstrap_peers = ["mesh.hookprobe.com:8144"]
         # Load seed from provisioned file if not explicitly set
         if not self.neuro_seed:
             seed_path = Path("/etc/hookprobe/mesh_seed")
@@ -167,18 +166,21 @@ class MeshConfig:
 
     @staticmethod
     def _peers_from_mssp() -> List[str]:
-        """Derive bootstrap peer from MSSP_URL in /etc/hookprobe/node.conf."""
+        """Derive mesh bootstrap peer from node.conf.
+
+        Uses the dedicated mesh relay (mesh.hookprobe.com) rather than
+        MSSP_URL, since MSSP_URL points to the web API behind Cloudflare
+        which doesn't expose the mesh port.
+        """
         try:
             conf = Path("/etc/hookprobe/node.conf")
             if not conf.exists():
                 return []
+            # If node.conf exists, the node is registered with MSSP —
+            # use the dedicated mesh relay endpoint
             for line in conf.read_text().splitlines():
                 if line.startswith("MSSP_URL="):
-                    from urllib.parse import urlparse
-                    url = line.split("=", 1)[1].strip()
-                    host = urlparse(url).hostname
-                    if host:
-                        return [f"{host}:8144"]
+                    return ["mesh.hookprobe.com:8144"]
         except Exception:
             pass
         return []
