@@ -239,6 +239,34 @@ class ResilientChannel:
 
         return False
 
+    def connect_endpoint(
+        self,
+        host: str,
+        port: int,
+        timeout: float = 30.0,
+    ) -> bool:
+        """Connect to a specific host:port (for bootstrap peers).
+
+        Uses TLS wrapping for Cloudflare-proxied ports (443, 8443).
+        The TLS is only an outer transport envelope — the actual mesh
+        payload is protected by HTP post-quantum crypto (Kyber + ChaCha20).
+        """
+        self._target_host = host
+        self._stop_event.clear()
+
+        use_tls = port in (443, 8443)
+        mode = TransportMode.TLS_WRAPPED if use_tls else TransportMode.PRIMARY_TCP
+        port_config = PortConfig(
+            port=port, protocol='tcp', mode=mode, priority=0,
+        )
+        try:
+            if self._connect_to_port(host, port_config, timeout):
+                self._start_threads()
+                return True
+        except Exception:
+            pass
+        return False
+
     def _connect_to_port(
         self,
         host: str,

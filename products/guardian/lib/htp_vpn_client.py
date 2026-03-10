@@ -52,7 +52,7 @@ NFTABLES_VPN_RULES = '/etc/nftables.d/guardian-vpn.nft'
 
 # Default settings
 DEFAULT_GATEWAY_HOST = 'mssp.hookprobe.com'
-DEFAULT_GATEWAY_PORT = 8144
+DEFAULT_GATEWAY_PORT = 8443
 TUN_DEVICE_NAME = 'htp0'
 TUN_LOCAL_IP = '10.250.0.2'
 TUN_REMOTE_IP = '10.250.0.1'

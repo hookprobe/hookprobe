@@ -23,6 +23,7 @@ import json
 import logging
 import secrets
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -292,6 +293,15 @@ class MeshPeerServer:
                     sock = socket.create_connection(
                         (host, port), timeout=15,
                     )
+                    # Wrap in TLS for Cloudflare-proxied ports (443, 8443)
+                    if port in (443, 8443):
+                        ctx = ssl.create_default_context()
+                        sock = ctx.wrap_socket(
+                            sock, server_hostname=host,
+                        )
+                        logger.debug(
+                            "TLS wrapped for %s:%d", host, port,
+                        )
                     with self._lock:
                         self._connected_endpoints.add(endpoint)
 
@@ -977,7 +987,7 @@ def main():
     parser.add_argument(
         '--bootstrap',
         default=os.environ.get('MESH_BOOTSTRAP_PEERS', ''),
-        help='Comma-separated bootstrap peers (e.g. mssp.hookprobe.com:8144)',
+        help='Comma-separated bootstrap peers (e.g. mssp.hookprobe.com:8443)',
     )
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()

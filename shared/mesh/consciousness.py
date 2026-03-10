@@ -636,7 +636,7 @@ class MeshConsciousness:
             neuro_seed=self.neuro_seed,
         )
 
-        if transport.connect(host, timeout=15.0):
+        if transport.connect(host, port=port, timeout=15.0):
             # Exchange peer info
             peer_info = self._exchange_peer_info(transport)
             if peer_info:

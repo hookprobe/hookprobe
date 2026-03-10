@@ -389,6 +389,7 @@ class UnifiedTransport:
     def connect(
         self,
         host: str,
+        port: Optional[int] = None,
         timeout: Optional[float] = None,
     ) -> bool:
         """
@@ -396,6 +397,8 @@ class UnifiedTransport:
 
         Args:
             host: Target hostname or IP
+            port: Specific port to connect to (bypasses port manager).
+                  Uses TLS wrapping for Cloudflare-proxied ports (443, 8443).
             timeout: Connection timeout
 
         Returns:
@@ -406,7 +409,14 @@ class UnifiedTransport:
         # Phase 1: Channel connection
         self._set_state(TransportState.CONNECTING)
 
-        if not self.channel.connect(host, timeout=timeout):
+        if port:
+            connected = self.channel.connect_endpoint(
+                host, port, timeout=timeout,
+            )
+        else:
+            connected = self.channel.connect(host, timeout=timeout)
+
+        if not connected:
             self._set_state(TransportState.DISCONNECTED)
             return False
 

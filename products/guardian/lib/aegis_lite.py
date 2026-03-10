@@ -232,7 +232,7 @@ class AegisLite:
                 port = int(port_str)
             else:
                 host = gateway_endpoint
-                port = 8144
+                port = 8443
 
             # Read existing config or create new
             config: Dict[str, Any] = {}

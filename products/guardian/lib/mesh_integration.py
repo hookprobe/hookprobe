@@ -178,7 +178,7 @@ class MeshConfig:
                     url = line.split("=", 1)[1].strip()
                     host = urlparse(url).hostname
                     if host:
-                        return [f"{host}:8144"]
+                        return [f"{host}:8443"]
         except Exception:
             pass
         return []
