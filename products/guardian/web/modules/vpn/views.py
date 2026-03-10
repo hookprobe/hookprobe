@@ -62,21 +62,90 @@ def _validate_token(token):
 @vpn_bp.route('/status')
 @require_auth
 def api_status():
-    """Get HTP tunnel connection status."""
+    """Get HTP tunnel connection status — checks actual system state."""
     try:
-        client = _get_vpn_client()
-        if client:
-            return jsonify(client.get_status())
+        import subprocess as _sp
 
-        # Fallback: read state file if VPN client not loaded
-        state = load_json_file(HTP_STATE_FILE, {
-            'connected': False,
-            'state': 'stopped',
-            'server': None,
-            'protocol': 'HTP',
+        # Check if htp0 TUN device exists and is UP
+        tun_up = False
+        tun_ip = None
+        try:
+            result = _sp.run(
+                ['ip', '-j', 'addr', 'show', 'htp0'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                import json as _json
+                ifaces = _json.loads(result.stdout)
+                if ifaces and ifaces[0].get('operstate', '').upper() in ('UP', 'UNKNOWN'):
+                    tun_up = True
+                    for addr_info in ifaces[0].get('addr_info', []):
+                        if addr_info.get('family') == 'inet':
+                            tun_ip = addr_info.get('local')
+        except Exception:
+            pass
+
+        # Check if systemd service is active
+        service_active = False
+        try:
+            result = _sp.run(
+                ['systemctl', 'is-active', 'guardian-htp-vpn'],
+                capture_output=True, text=True, timeout=5
+            )
+            service_active = result.stdout.strip() == 'active'
+        except Exception:
+            pass
+
+        connected = tun_up and service_active
+
+        # Load VPN config for display
+        config = {}
+        try:
+            conf_path = Path('/etc/hookprobe/guardian_vpn.json')
+            if conf_path.exists():
+                import json as _json
+                config = _json.loads(conf_path.read_text())
+        except Exception:
+            pass
+
+        # Get uptime from service
+        uptime = None
+        if connected:
+            try:
+                result = _sp.run(
+                    ['systemctl', 'show', 'guardian-htp-vpn', '--property=ActiveEnterTimestamp'],
+                    capture_output=True, text=True, timeout=5
+                )
+                ts_line = result.stdout.strip()
+                if '=' in ts_line:
+                    from datetime import datetime
+                    ts_str = ts_line.split('=', 1)[1].strip()
+                    if ts_str:
+                        start = datetime.strptime(ts_str, '%a %Y-%m-%d %H:%M:%S %Z')
+                        elapsed = int((datetime.now() - start).total_seconds())
+                        if elapsed > 0:
+                            hours, remainder = divmod(elapsed, 3600)
+                            minutes, seconds = divmod(remainder, 60)
+                            uptime = f"{hours}:{minutes:02d}:{seconds:02d}"
+            except Exception:
+                pass
+
+        return jsonify({
+            'state': 'connected' if connected else 'stopped',
+            'connected': connected,
+            'server': config.get('gateway_host', 'mesh.hookprobe.com'),
+            'protocol': 'HTP (HookProbe Transport Protocol)',
             'encryption': 'ChaCha20-Poly1305 (NSE)',
+            'authentication': 'Ed25519 + HKDF-SHA256',
+            'key_exchange': 'HKDF-SHA256 + PSK',
+            'tun_device': 'htp0',
+            'tun_ip': tun_ip or config.get('tun_local_ip', '10.250.0.2'),
+            'kill_switch': config.get('kill_switch', True),
+            'node_id': config.get('node_id', ''),
+            'uptime': uptime,
+            'service_active': service_active,
+            'tun_up': tun_up,
         })
-        return jsonify(state)
     except Exception as e:
         return jsonify({'error': _safe_error(e)}), 500
 
@@ -100,46 +169,28 @@ def _default_gateway_host() -> str:
 @vpn_bp.route('/connect', methods=['POST'])
 @require_auth
 def api_connect():
-    """Connect to mesh via HTP tunnel."""
-    data = request.get_json() or {}
-    mesh_endpoint = data.get('endpoint', _default_gateway_host())
-    device_token = data.get('device_token', '')
-    kill_switch = data.get('kill_switch', True)
-
-    # Validate inputs
-    if not _validate_endpoint(mesh_endpoint):
-        return jsonify({'success': False, 'error': 'Invalid mesh endpoint'}), 400
-    if not _validate_token(device_token):
-        return jsonify({'success': False, 'error': 'Invalid device token'}), 400
-
-    if not HTP_VPN_AVAILABLE:
-        return jsonify({'success': False, 'error': 'HTP VPN module not available'}), 503
-
+    """Connect to mesh via HTP tunnel (starts systemd service)."""
     try:
-        client = _get_vpn_client()
-        if not client:
-            return jsonify({'success': False, 'error': 'Could not initialize VPN client'}), 500
+        import subprocess as _sp
 
-        # Update config
-        client.config.gateway_host = mesh_endpoint
-        client.config.device_token = device_token
-        client.config.kill_switch = bool(kill_switch)
-        client.config.save()
+        # Start the systemd VPN service
+        result = _sp.run(
+            ['systemctl', 'start', 'guardian-htp-vpn'],
+            capture_output=True, text=True, timeout=15
+        )
 
-        # Start VPN in background thread (handshake may take a few seconds)
-        def _connect_bg():
-            if not client.start():
-                logger.error("HTP VPN connection failed")
-
-        connect_thread = threading.Thread(target=_connect_bg, daemon=True)
-        connect_thread.start()
+        if result.returncode != 0:
+            logger.error("Failed to start VPN service: %s", result.stderr.strip())
+            return jsonify({
+                'success': False,
+                'error': 'Failed to start VPN service'
+            }), 500
 
         return jsonify({
             'success': True,
             'message': 'HTP VPN connecting...',
             'protocol': 'HTP',
             'encryption': 'ChaCha20-Poly1305 (NSE)',
-            'kill_switch': kill_switch,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': _safe_error(e)}), 500
@@ -148,16 +199,74 @@ def api_connect():
 @vpn_bp.route('/disconnect', methods=['POST'])
 @require_auth
 def api_disconnect():
-    """Disconnect HTP tunnel."""
+    """Disconnect HTP tunnel — stops service and reverts to local breakout."""
     try:
-        client = _get_vpn_client()
-        if client:
-            client.stop()
-            return jsonify({'success': True, 'message': 'HTP VPN disconnected'})
+        import subprocess as _sp
 
-        # Fallback: kill any running VPN process
-        run_command(['pkill', '-f', 'htp_vpn_client'])
-        return jsonify({'success': True})
+        # Stop the systemd VPN service (triggers graceful shutdown:
+        # removes kill switch, restores default route, tears down TUN)
+        result = _sp.run(
+            ['systemctl', 'stop', 'guardian-htp-vpn'],
+            capture_output=True, text=True, timeout=15
+        )
+
+        # Ensure kill switch is removed and default route restored
+        # (belt-and-suspenders in case the service didn't clean up)
+        _sp.run(['nft', 'delete', 'table', 'inet', 'guardian_vpn'],
+                capture_output=True, timeout=5)
+        _sp.run(['ip', 'link', 'delete', 'htp0'],
+                capture_output=True, timeout=5)
+
+        # Restore default route via local gateway if missing
+        route_check = _sp.run(
+            ['ip', 'route', 'show', 'default'],
+            capture_output=True, text=True, timeout=5
+        )
+        if not route_check.stdout.strip():
+            try:
+                import json as _json
+                conf_path = Path('/etc/hookprobe/guardian_vpn.json')
+                wan_iface = 'eth0'
+                if conf_path.exists():
+                    config = _json.loads(conf_path.read_text())
+                    wan_iface = config.get('wan_interface', 'eth0')
+
+                # Read saved original gateway from VPN state file
+                state_path = Path('/opt/hookprobe/guardian/htp/vpn_state.json')
+                original_gw = None
+                if state_path.exists():
+                    state = _json.loads(state_path.read_text())
+                    original_gw = state.get('original_gateway')
+
+                if original_gw:
+                    _sp.run(['ip', 'route', 'add', 'default', 'via', original_gw, 'dev', wan_iface],
+                            capture_output=True, timeout=5)
+                    logger.info("Restored default route via %s dev %s (from saved state)", original_gw, wan_iface)
+                else:
+                    # Fallback: try DHCP proto routes
+                    gw_result = _sp.run(
+                        ['ip', 'route', 'show', 'dev', wan_iface, 'proto', 'dhcp'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for line in gw_result.stdout.splitlines():
+                        if 'default via' in line:
+                            gw = line.split('via')[1].split()[0]
+                            _sp.run(['ip', 'route', 'add', 'default', 'via', gw, 'dev', wan_iface],
+                                    capture_output=True, timeout=5)
+                            logger.info("Restored default route via %s dev %s (from DHCP)", gw, wan_iface)
+                            break
+                    else:
+                        logger.warning("No saved gateway and no DHCP route — cannot restore default route")
+            except Exception as e:
+                logger.warning("Route restore error: %s", e)
+
+        if result.returncode != 0:
+            logger.warning("VPN service stop returned %d: %s", result.returncode, result.stderr.strip())
+
+        return jsonify({
+            'success': True,
+            'message': 'VPN disconnected — using local internet breakout'
+        })
     except Exception as e:
         logger.error("HTP disconnect error: %s", type(e).__name__)
         return jsonify({'success': False, 'error': 'An internal error occurred while disconnecting'}), 500
@@ -195,9 +304,11 @@ def api_mesh_register():
                 'message': 'Successfully registered with mesh',
                 'device_id': output.strip() if output else 'unknown'
             })
-        return jsonify({'success': False, 'error': output}), 500
+        logger.error("Mesh registration failed: %s", output)
+        return jsonify({'success': False, 'error': 'Mesh registration failed'}), 500
     except Exception as e:
-        return jsonify({'success': False, 'error': _safe_error(e)}), 500
+        logger.error("Mesh registration error: %s", type(e).__name__)
+        return jsonify({'success': False, 'error': 'Mesh registration failed'}), 500
 
 
 @vpn_bp.route('/api/mssp/register', methods=['POST'])

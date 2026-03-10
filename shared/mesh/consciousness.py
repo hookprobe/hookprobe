@@ -920,8 +920,8 @@ class MeshConsciousness:
                     return body
                 self.logger.warning("Gossip HMAC verification failed")
                 return None
-            # Unsigned gossip — accept with warning (backwards compat)
-            self.logger.debug("Unsigned gossip received (no HMAC envelope)")
+            # Unsigned gossip — accept with warning (backwards compat, reject in v6)
+            self.logger.warning("Unsigned gossip accepted (backwards compat — will be rejected in v6)")
             return raw
         except Exception:
             # Not JSON envelope — treat as raw unsigned gossip
