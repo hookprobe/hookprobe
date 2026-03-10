@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import secrets
 import socket
 import ssl
@@ -178,6 +179,35 @@ class MeshPeerServer:
         self._server_sock.settimeout(2.0)
         self._server_sock.bind((self.host, self.port))
         self._server_sock.listen(10)
+
+        # Wrap listen socket in TLS if certs exist and port is 8443/443.
+        # Outbound bootstrap connections already wrap in TLS for these ports,
+        # so the server side must match.
+        self._tls_enabled = False
+        if self.port in (443, 8443):
+            cert_paths = [
+                ('/etc/nginx/ssl/mssp.hookprobe.com.crt',
+                 '/etc/nginx/ssl/mssp.hookprobe.com.key'),
+                ('/opt/hookprobe/mesh/data/mesh.crt',
+                 '/opt/hookprobe/mesh/data/mesh.key'),
+            ]
+            for cert_file, key_file in cert_paths:
+                if os.path.exists(cert_file) and os.path.exists(key_file):
+                    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    ctx.load_cert_chain(cert_file, key_file)
+                    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+                    self._server_sock = ctx.wrap_socket(
+                        self._server_sock, server_side=True,
+                    )
+                    self._tls_enabled = True
+                    logger.info("TLS enabled on port %d (%s)", self.port, cert_file)
+                    break
+            if not self._tls_enabled:
+                logger.warning(
+                    "Port %d expects TLS but no certs found — running plain TCP",
+                    self.port,
+                )
+
         self._running = True
 
         self._accept_thread = threading.Thread(
@@ -185,7 +215,8 @@ class MeshPeerServer:
         )
         self._accept_thread.start()
         logger.info(
-            "MeshPeerServer listening on %s:%d/tcp", self.host, self.port,
+            "MeshPeerServer listening on %s:%d/%s",
+            self.host, self.port, "tls" if self._tls_enabled else "tcp",
         )
 
         # Start outbound bootstrap connections (e.g. to MSSP relay)
