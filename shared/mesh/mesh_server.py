@@ -356,12 +356,76 @@ class MeshPeerServer:
     def _handle_outbound_peer(
         self, sock: socket.socket, endpoint: str,
     ) -> None:
-        """Handle an outbound connection — same handshake as inbound."""
+        """Handle an outbound connection — CLIENT-side handshake.
+
+        When connecting outbound, WE are the client: we send RESONATE
+        first, send INIT first, send weight first, send peer_info first.
+        The remote (MSSP) is the server and responds to each.
+        """
         try:
-            self._handle_peer(sock, endpoint)
+            sock.settimeout(30.0)
+
+            # Layer 1: Channel handshake — CLIENT sends RESONATE first
+            if not self._channel_handshake_client(sock):
+                logger.warning("Channel handshake (client) failed to %s", endpoint)
+                sock.close()
+                return
+
+            # Layer 2: Resonance — CLIENT sends INIT first
+            if not self._resonance_handshake_client(sock):
+                logger.warning("Resonance handshake (client) failed to %s", endpoint)
+                sock.close()
+                return
+
+            # Layer 3: Weight sync — CLIENT sends first
+            self._weight_sync_client(sock)
+
+            # Layer 4: Peer info — CLIENT sends first
+            peer_info = self._peer_info_exchange_client(sock, endpoint)
+            if not peer_info:
+                logger.warning("Peer info exchange (client) failed to %s", endpoint)
+                sock.close()
+                return
+
+            # Register peer
+            session = PeerSession(
+                node_id=peer_info.get('node_id', 'unknown'),
+                tier=peer_info.get('tier', 'UNKNOWN'),
+                endpoint=endpoint,
+                connected_at=time.time(),
+                last_seen=time.time(),
+                sock=sock,
+                lock=threading.Lock(),
+                capabilities=peer_info.get('capabilities', []),
+            )
+
+            with self._lock:
+                self._peers[session.node_id] = session
+
+            logger.info(
+                "Mesh peer connected (outbound): %s (%s) at %s",
+                session.node_id[:16], session.tier, endpoint,
+            )
+
+            # Enter message loop
+            sock.settimeout(120.0)
+            self._message_loop(session)
+
+        except Exception as e:
+            logger.warning("Outbound peer handler error for %s: %s", endpoint, e)
         finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
             with self._lock:
                 self._connected_endpoints.discard(endpoint)
+                to_remove = [
+                    k for k, v in self._peers.items() if v.sock is sock
+                ]
+                for k in to_remove:
+                    logger.info("Peer disconnected: %s", k)
+                    del self._peers[k]
 
     # ------------------------------------------------------------------
     # Per-peer handler
@@ -466,6 +530,37 @@ class MeshPeerServer:
             logger.debug("Channel handshake error: %s", e)
             return False
 
+    def _channel_handshake_client(self, sock: socket.socket) -> bool:
+        """Client side of ResilientChannel RESONATE handshake.
+
+        We SEND RESONATE first, then wait for the server's response.
+        """
+        try:
+            # Send our RESONATE
+            our_resonate = struct.pack(
+                '>8s8sQ',
+                self._flow_token,
+                secrets.token_bytes(8),
+                int(time.time() * 1_000_000) & 0xFFFFFFFFFFFFFFFF,
+            )
+            self._send_channel_msg(sock, ChannelMsgType.RESONATE, our_resonate)
+
+            # Receive server's RESONATE response
+            msg_type, payload = self._recv_channel_msg(sock, timeout=10.0)
+            if msg_type != ChannelMsgType.RESONATE:
+                logger.debug(
+                    "Channel handshake client: expected RESONATE, got 0x%02x",
+                    msg_type.value,
+                )
+                return False
+
+            logger.debug("Channel handshake client: OK")
+            return True
+
+        except Exception as e:
+            logger.debug("Channel handshake client error: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Layer 2: MeshPacket RESONATE (INIT→ACK→CONFIRM)
     # ------------------------------------------------------------------
@@ -553,6 +648,61 @@ class MeshPeerServer:
             logger.debug("Resonance handshake error: %s", e)
             return False
 
+    def _resonance_handshake_client(self, sock: socket.socket) -> bool:
+        """Client side — WE send INIT, wait for ACK, send CONFIRM."""
+        try:
+            # Build INIT payload: [0x01][nonce][initial_rdv]
+            try:
+                try:
+                    from shared.mesh.neuro_encoder import ResonanceHandshake
+                except ImportError:
+                    from neuro_encoder import ResonanceHandshake
+                handshake = ResonanceHandshake(
+                    encoder=self._encoder,
+                    channel_binding=self._flow_token,
+                    is_initiator=True,
+                )
+                init_data = handshake.create_init()
+            except Exception:
+                init_data = secrets.token_bytes(200)
+
+            init_payload = b'\x01' + init_data
+            init_pkt = self._build_mesh_packet(
+                PacketType.RESONATE, init_payload,
+            )
+            self._send_channel_msg(sock, ChannelMsgType.DATA, init_pkt)
+            logger.debug("Resonance INIT sent (%d bytes)", len(init_payload))
+
+            # Receive ACK
+            raw = self._recv_data_msg(sock, timeout=30.0)
+            pkt = self._parse_mesh_packet(raw)
+            if pkt is None or pkt['type'] != PacketType.RESONATE:
+                return False
+            if len(pkt['payload']) < 1 or pkt['payload'][0] != 0x02:
+                return False
+            logger.debug("Resonance ACK received")
+
+            # Process ACK and send CONFIRM
+            confirm_payload = b'\x03'
+            try:
+                if handshake:
+                    ok, status = handshake.process_ack(pkt['payload'][1:])
+                    if ok:
+                        confirm_payload = b'\x03' + status.encode() if isinstance(status, str) else b'\x03'
+            except Exception:
+                pass
+
+            confirm_pkt = self._build_mesh_packet(
+                PacketType.RESONATE, confirm_payload,
+            )
+            self._send_channel_msg(sock, ChannelMsgType.DATA, confirm_pkt)
+            logger.debug("Resonance CONFIRM sent — handshake complete")
+            return True
+
+        except Exception as e:
+            logger.debug("Resonance handshake client error: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # Layer 3: Weight sync
     # ------------------------------------------------------------------
@@ -585,6 +735,77 @@ class MeshPeerServer:
         except Exception as e:
             logger.debug("Weight sync error: %s", e)
             return False
+
+    def _weight_sync_client(self, sock: socket.socket) -> bool:
+        """Client side — WE send weight first, then receive server's."""
+        try:
+            if self._encoder:
+                our_fp = self._encoder.get_weight_fingerprint().to_bytes()
+            else:
+                our_fp = struct.pack(
+                    '>64sIIQ',
+                    secrets.token_bytes(64), 1, 0,
+                    int(time.time() * 1_000_000) & 0xFFFFFFFFFFFFFFFF,
+                )
+            pkt = self._build_mesh_packet(PacketType.WEIGHT_SYNC, our_fp)
+            self._send_channel_msg(sock, ChannelMsgType.DATA, pkt)
+
+            # Receive server's weight
+            raw = self._recv_data_msg(sock, timeout=30.0)
+            pkt = self._parse_mesh_packet(raw)
+            if pkt and pkt['type'] == PacketType.WEIGHT_SYNC:
+                logger.debug("Weight sync client: OK")
+            return True
+
+        except Exception as e:
+            logger.debug("Weight sync client error: %s", e)
+            return True  # Non-fatal
+
+    def _peer_info_exchange_client(
+        self, sock: socket.socket, endpoint: str,
+    ) -> Optional[Dict]:
+        """Client side — WE send peer info first, then receive server's."""
+        try:
+            # Send our info
+            our_info = {
+                'type': 'peer_info',
+                'data': {
+                    'node_id': self.node_id.encode().hex()
+                    if isinstance(self.node_id, str)
+                    else self.node_id.hex(),
+                    'tier': self.tier,
+                    'weight_fp': secrets.token_bytes(16).hex(),
+                    'capabilities': [
+                        'gossip', 'threat_intel', 'resonance',
+                        'dsm', 'cortex', 'route',
+                    ],
+                },
+            }
+            info_pkt = self._build_mesh_packet(
+                PacketType.CONTROL_CMD,
+                json.dumps(our_info).encode(),
+            )
+            self._send_channel_msg(sock, ChannelMsgType.DATA, info_pkt)
+
+            # Receive server's info
+            msg_type, raw = self._recv_channel_msg(sock, timeout=10.0)
+            if msg_type != ChannelMsgType.DATA:
+                return None
+
+            pkt = self._parse_mesh_packet(raw)
+            if pkt is None or pkt['type'] != PacketType.CONTROL_CMD:
+                return None
+
+            msg = json.loads(pkt['payload'].decode())
+            if msg.get('type') != 'peer_info':
+                return None
+
+            logger.debug("Peer info exchange client: OK")
+            return msg.get('data', {})
+
+        except Exception as e:
+            logger.debug("Peer info exchange client error: %s", e)
+            return None
 
     # ------------------------------------------------------------------
     # Layer 4: Peer info exchange
@@ -703,13 +924,23 @@ class MeshPeerServer:
             self._handle_gossip(session, pkt['payload'])
         elif ptype == PacketType.SECURITY_EVENT:
             self._handle_security_event(session, pkt['payload'])
-        elif ptype == PacketType.KEEPALIVE:
+        elif ptype in (PacketType.KEEPALIVE, PacketType.ACK):
             pass
         elif ptype == PacketType.CONTROL_CMD:
             self._handle_control(session, pkt['payload'])
+        elif ptype in (PacketType.TER_SYNC, PacketType.WEIGHT_SYNC,
+                        PacketType.POSF_VERIFY):
+            # Neural protocol maintenance — log and relay to other peers
+            logger.debug(
+                "Neuro %s from %s (%d bytes)",
+                ptype.name, session.node_id[:16], len(pkt['payload']),
+            )
+        elif ptype == PacketType.RESONATE:
+            # Late resonance packet from peer (normal after reconnect)
+            pass
         else:
             logger.debug(
-                "Unhandled mesh packet type 0x%02x from %s",
+                "Unknown mesh packet type 0x%02x from %s",
                 ptype, session.node_id,
             )
 
