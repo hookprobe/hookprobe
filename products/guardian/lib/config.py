@@ -96,7 +96,7 @@ class HTPConfig:
 
     # Mesh connection
     mesh_host: str = "mssp.hookprobe.com"
-    mesh_port: int = 8144
+    mesh_port: int = 8443
     mesh_websocket_port: int = 443
     mesh_websocket_path: str = "/ws/guardian"
 
@@ -582,7 +582,7 @@ openflow:
 htp:
   enabled: true
   mesh_host: "mssp.hookprobe.com"
-  mesh_port: 8144
+  mesh_port: 8443
   mesh_websocket_port: 443
   mesh_websocket_path: "/ws/guardian"
 
