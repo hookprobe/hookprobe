@@ -186,6 +186,8 @@ class MeshPeerServer:
         self._tls_enabled = False
         if self.port in (443, 8443):
             cert_paths = [
+                ('/etc/nginx/ssl/mesh.hookprobe.com.crt',
+                 '/etc/nginx/ssl/mesh.hookprobe.com.key'),
                 ('/etc/nginx/ssl/mssp.hookprobe.com.crt',
                  '/etc/nginx/ssl/mssp.hookprobe.com.key'),
                 ('/opt/hookprobe/mesh/data/mesh.crt',
@@ -1254,7 +1256,7 @@ def main():
     parser.add_argument(
         '--bootstrap',
         default=os.environ.get('MESH_BOOTSTRAP_PEERS', ''),
-        help='Comma-separated bootstrap peers (e.g. mssp.hookprobe.com:8443)',
+        help='Comma-separated bootstrap peers (e.g. mesh.hookprobe.com:8144)',
     )
     parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
