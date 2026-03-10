@@ -317,8 +317,14 @@ table inet hookprobe_vrf {
         # ClickHouse (IDS analytics - host network mode)
         tcp dport { 8123, 9000 } accept
 
-        # Fortress/MSSP Dashboard
+        # Fortress/MSSP Dashboard + Mesh TCP peering (Cloudflare-compatible)
         tcp dport 8443 accept
+        udp dport 8443 accept
+
+        # HTP VPN data plane + STUN (direct to origin, not through Cloudflare)
+        tcp dport 8144 accept
+        udp dport 8144 accept
+        udp dport 3478 accept
 
         # DNS
         udp dport 53 accept
