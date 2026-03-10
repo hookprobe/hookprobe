@@ -626,7 +626,7 @@ class MeshConsciousness:
             neuro_seed=self.neuro_seed,
         )
 
-        if transport.connect(host, timeout=10.0):
+        if transport.connect(host, timeout=15.0):
             # Exchange peer info
             peer_info = self._exchange_peer_info(transport)
             if peer_info:
@@ -682,7 +682,7 @@ class MeshConsciousness:
             return PeerNode(
                 node_id=bytes.fromhex(data['node_id']),
                 tier=TierRole[data['tier']],
-                endpoint=f"{transport._target_host}:{transport.port_manager.active_port.port if transport.port_manager.active_port else 8144}",
+                endpoint=f"{getattr(transport.channel, '_target_host', 'unknown')}:{transport.port_manager.active_port.port if transport.port_manager.active_port else 8144}",
                 weight_fingerprint=bytes.fromhex(data['weight_fp']),
                 resonance_state=ResonanceState.ALIGNED,
                 last_seen=time.time(),
