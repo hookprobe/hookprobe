@@ -41,6 +41,26 @@ LAN_NETWORK="${LAN_NETWORK:-10.200.0.0/16}"
 GATEWAY_IP="${GATEWAY_IP:-10.200.0.1}"
 CONTAINER_NETWORK="172.20.0.0/16"
 
+# Infrastructure MACs that must NEVER be quarantined or policy-restricted.
+# The bridge MAC is the OVS LOCAL port — it IS the gateway; quarantining it
+# drops all IP traffic to/from the router and breaks every client.
+get_infrastructure_macs() {
+    local bridge_mac
+    bridge_mac=$(ip link show "$OVS_BRIDGE" 2>/dev/null | awk '/link\/ether/ {print toupper($2)}' | tr '-' ':')
+    echo "${bridge_mac:-}"
+}
+
+is_infrastructure_mac() {
+    local mac="$1"
+    local infra_mac
+    for infra_mac in $(get_infrastructure_macs); do
+        if [ "$mac" = "$infra_mac" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Trigger file from container for real-time policy application
 POLICY_TRIGGER_FILE="/opt/hookprobe/fortress/data/.nac_policy_sync"
 
@@ -196,6 +216,13 @@ apply_policy() {
 
     # Normalize MAC: uppercase and colons (OVS expects XX:XX:XX:XX:XX:XX format)
     mac=$(echo "$mac" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
+
+    # SAFETY: Never apply restrictive policies to infrastructure MACs
+    # The bridge MAC is the gateway — quarantining it kills all connectivity
+    if is_infrastructure_mac "$mac"; then
+        log_warn "BLOCKED: refusing to apply '$policy' to infrastructure MAC $mac (bridge/gateway)"
+        return 0
+    fi
 
     # Remove existing rules first
     remove_device_rules "$mac"
