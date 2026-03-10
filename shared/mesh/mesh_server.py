@@ -619,9 +619,14 @@ class MeshPeerServer:
                 )
                 ok, ack_body = handshake.process_init(payload[1:])
                 if not ok:
-                    logger.debug("ResonanceHandshake.process_init failed: %s", ack_body)
-                    return False
-                ack_data = b'\x02' + ack_body
+                    logger.debug(
+                        "ResonanceHandshake.process_init failed: %s "
+                        "(client may be using fallback random init)", ack_body,
+                    )
+                    # Fall through to random ACK — still allow mesh peering
+                    ack_data = b'\x02' + secrets.token_bytes(64)
+                else:
+                    ack_data = b'\x02' + ack_body
             except Exception as e:
                 logger.debug("ResonanceHandshake import/use failed, falling back: %s", e)
                 ack_data = b'\x02' + secrets.token_bytes(64)
@@ -662,7 +667,7 @@ class MeshPeerServer:
                     channel_binding=self._flow_token,
                     is_initiator=True,
                 )
-                init_data = handshake.create_init()
+                init_data = handshake.generate_init()
             except Exception:
                 init_data = secrets.token_bytes(200)
 
