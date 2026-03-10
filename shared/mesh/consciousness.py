@@ -398,6 +398,10 @@ class MeshConsciousness:
         self.listen_port = listen_port
         self.data_dir = data_dir
 
+        # Gossip signing key (derived from neuro_seed, matches DSM pattern)
+        import hashlib as _hl
+        self._gossip_key = _hl.sha256(b"gossip-auth:" + neuro_seed).digest()
+
         # State
         self._state = ConsciousnessState.DORMANT
         self._lock = threading.RLock()
@@ -889,19 +893,56 @@ class MeshConsciousness:
                 if intel.hop_count >= self.MAX_GOSSIP_HOPS:
                     continue
 
-                # Send gossip
+                # Send signed gossip (HMAC envelope)
                 try:
-                    transport.gossip(intel.to_bytes())
+                    transport.gossip(self._sign_gossip(intel.to_bytes()))
                 except Exception as e:
                     self.logger.debug(f"Gossip failed to {peer_id.hex()[:8]}: {e}")
+
+    def _sign_gossip(self, payload: bytes) -> bytes:
+        """Sign gossip payload with HMAC-SHA256 (DSM-compatible envelope)."""
+        import hashlib, hmac, json as _json
+        body_str = payload.decode("utf-8", errors="replace")
+        mac = hmac.new(self._gossip_key, payload, hashlib.sha256).hexdigest()
+        return _json.dumps({"body": body_str, "mac": mac}).encode("utf-8")
+
+    def _verify_gossip(self, raw: bytes) -> Optional[bytes]:
+        """Verify and unwrap signed gossip. Returns payload or None."""
+        import hashlib, hmac, json as _json
+        try:
+            envelope = _json.loads(raw.decode("utf-8"))
+            if "mac" in envelope and "body" in envelope:
+                body = envelope["body"].encode("utf-8")
+                expected = hmac.new(
+                    self._gossip_key, body, hashlib.sha256,
+                ).hexdigest()
+                if hmac.compare_digest(envelope["mac"], expected):
+                    return body
+                self.logger.warning("Gossip HMAC verification failed")
+                return None
+            # Unsigned gossip — accept with warning (backwards compat)
+            self.logger.debug("Unsigned gossip received (no HMAC envelope)")
+            return raw
+        except Exception:
+            # Not JSON envelope — treat as raw unsigned gossip
+            return raw
 
     def _handle_incoming_packet(
         self, peer_info: PeerNode, packet: MeshPacket,
     ) -> None:
         """Handle an incoming mesh packet from a connected peer."""
         if packet.packet_type == PacketType.GOSSIP:
+            # Verify signature (if signed), unwrap envelope
+            verified_payload = self._verify_gossip(packet.payload)
+            if verified_payload is None:
+                self.logger.warning(
+                    "Gossip from %s rejected (bad signature)",
+                    peer_info.node_id.hex()[:8],
+                )
+                return
+
             try:
-                intel = ThreatIntelligence.from_bytes(packet.payload)
+                intel = ThreatIntelligence.from_bytes(verified_payload)
                 self.logger.info(
                     "Gossip received from %s: %s",
                     peer_info.node_id.hex()[:8],
@@ -912,7 +953,7 @@ class MeshConsciousness:
                 # Fallback: try JSON gossip (from mesh_server relay)
                 try:
                     import json as _json
-                    data = _json.loads(packet.payload.decode())
+                    data = _json.loads(verified_payload.decode())
                     self.logger.info(
                         "Gossip (JSON) received from %s: %s",
                         peer_info.node_id.hex()[:8],
