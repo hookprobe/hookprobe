@@ -22,6 +22,7 @@ Version: 5.5.0
 License: AGPL-3.0
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -64,6 +65,7 @@ TUN_MTU = 1400
 KEEPALIVE_INTERVAL = 25
 RECONNECT_BASE_DELAY = 5
 RECONNECT_MAX_DELAY = 120
+OLD_KEY_TTL = 10  # Keep old key valid for 10s after rekey
 
 
 class VPNState(Enum):
@@ -128,6 +130,8 @@ class HTPVPNClient:
 
         # Session state
         self.session_key: bytes = b''
+        self.old_session_key: bytes = b''
+        self.old_key_expires: float = 0
         self.flow_token: int = 0
         self.tx_sequence: int = 0
         self.rx_sequence: int = 0
@@ -628,7 +632,7 @@ table inet guardian_vpn {{
             return plaintext
 
     def _decrypt_packet(self, encrypted: bytes) -> Optional[bytes]:
-        """Decrypt IP packet with ChaCha20-Poly1305."""
+        """Decrypt IP packet with ChaCha20-Poly1305, fallback to old key."""
         if not self.session_key or len(encrypted) < 28:
             return encrypted
 
@@ -640,9 +644,57 @@ table inet guardian_vpn {{
             return cipher.decrypt(nonce, ciphertext, None)
         except ImportError:
             return encrypted
-        except Exception as e:
-            logger.warning("Decryption error: %s", e)
+        except Exception:
+            # Try old key during grace period
+            if self.old_session_key and time.time() < self.old_key_expires:
+                try:
+                    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+                    cipher = ChaCha20Poly1305(self.old_session_key)
+                    return cipher.decrypt(encrypted[:12], encrypted[12:], None)
+                except Exception:
+                    pass
+            logger.warning("Decryption error (both keys failed)")
             return None
+
+    def _handle_rekey(self, payload: bytes):
+        """Handle REKEY from gateway — derive new key and send ACK."""
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            # Decrypt the rekey nonce using current session key
+            if len(payload) < 28:
+                return
+            nonce_enc = payload[:12]
+            ciphertext = payload[12:]
+            cipher = ChaCha20Poly1305(self.session_key)
+            rekey_nonce = cipher.decrypt(nonce_enc, ciphertext, None)
+
+            if len(rekey_nonce) != 32:
+                logger.warning("REKEY nonce wrong size: %d", len(rekey_nonce))
+                return
+
+            # Derive new session key
+            new_key = hashlib.sha256(self.session_key + rekey_nonce).digest()
+
+            # Send REKEY_ACK: encrypt the rekey_nonce with the NEW key as proof
+            ack_cipher = ChaCha20Poly1305(new_key)
+            ack_nonce = secrets.token_bytes(12)
+            ack_payload = ack_nonce + ack_cipher.encrypt(ack_nonce, rekey_nonce, None)
+
+            self.tx_sequence = (self.tx_sequence + 1) & 0xFFFFFFFF
+            frame = struct.pack('>QIB', self.flow_token, self.tx_sequence, 0x19)
+            frame += ack_payload
+
+            if self.udp_socket and self.gateway_addr:
+                self.udp_socket.sendto(frame, self.gateway_addr)
+
+            # Commit key rotation
+            self.old_session_key = self.session_key
+            self.old_key_expires = time.time() + OLD_KEY_TTL
+            self.session_key = new_key
+            logger.info("REKEY complete (forward secrecy)")
+
+        except Exception as e:
+            logger.warning("REKEY handler error: %s", e)
 
     # =========================================================================
     # PACKET FORWARDING
@@ -704,6 +756,9 @@ table inet guardian_vpn {{
                         os.write(self.tun_fd, ip_packet)
                         self.bytes_received += len(ip_packet)
                         self.packets_received += 1
+
+                elif ptype == 0x18:  # REKEY
+                    self._handle_rekey(payload)
 
                 elif ptype == 0x14:  # KEEPALIVE
                     self.last_keepalive = time.time()

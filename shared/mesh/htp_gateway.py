@@ -62,6 +62,8 @@ REJECT = 0x05
 CLOSE = 0x09
 IP_PACKET = 0x10
 KEEPALIVE = 0x14
+REKEY = 0x18
+REKEY_ACK = 0x19
 
 # TUN device
 IFF_TUN = 0x0001
@@ -80,6 +82,8 @@ KEEPALIVE_INTERVAL = 25
 SESSION_TIMEOUT = 75  # 3 × keepalive
 HANDSHAKE_TIMEOUT = 30  # Pending handshake expiry
 MAINTENANCE_INTERVAL = 15
+REKEY_INTERVAL = 300  # Rekey sessions every 5 minutes
+OLD_KEY_TTL = 10  # Keep old key valid for 10s after rekey
 
 # STUN (RFC 5389)
 STUN_MAGIC_COOKIE = 0x2112A442
@@ -123,6 +127,11 @@ class GatewaySession:
     bytes_received: int = 0
     packets_sent: int = 0
     packets_received: int = 0
+    # Rekey state
+    old_session_key: Optional[bytes] = None
+    old_key_expires: float = 0
+    last_rekey: float = 0
+    rekey_pending_nonce: Optional[bytes] = None
 
 
 # ============================================================
@@ -597,7 +606,7 @@ class HTPVPNGateway:
 
         if ptype == IP_PACKET:
             payload = data[13:]
-            ip_packet = self._decrypt_packet(payload, session.session_key)
+            ip_packet = self._decrypt_with_fallback(payload, session)
             if ip_packet and self.tun_fd is not None:
                 # Rewrite source IP from client's hardcoded 10.250.0.2 → assigned IP
                 ip_packet = rewrite_src_ip(ip_packet, session.assigned_ip)
@@ -615,6 +624,72 @@ class HTPVPNGateway:
         elif ptype == CLOSE:
             logger.info("Client %s sent CLOSE", session.node_id)
             self._remove_session(flow_token)
+
+        elif ptype == REKEY_ACK:
+            self._handle_rekey_ack(data[13:], session)
+
+    # =========================================================================
+    # SESSION REKEYING (Forward Secrecy)
+    # =========================================================================
+
+    def _initiate_rekey(self, session: GatewaySession):
+        """Send REKEY to client with fresh nonce for key rotation."""
+        rekey_nonce = secrets.token_bytes(32)
+        session.rekey_pending_nonce = rekey_nonce
+
+        # Encrypt the rekey nonce with current session key
+        encrypted_nonce = self._encrypt_packet(rekey_nonce, session.session_key)
+
+        session.tx_sequence = (session.tx_sequence + 1) & 0xFFFFFFFF
+        frame = struct.pack(">QIB", session.flow_token, session.tx_sequence, REKEY)
+        frame += encrypted_nonce
+
+        try:
+            self.sock.sendto(frame, session.client_addr)
+            logger.info("REKEY sent to %s", session.node_id)
+        except Exception as e:
+            logger.warning("REKEY send failed to %s: %s", session.node_id, e)
+            session.rekey_pending_nonce = None
+
+    def _handle_rekey_ack(self, payload: bytes, session: GatewaySession):
+        """Handle REKEY_ACK — client proved it derived the new key."""
+        if not session.rekey_pending_nonce:
+            logger.debug("REKEY_ACK from %s with no pending rekey", session.node_id)
+            return
+
+        # Derive the new key (same derivation as client)
+        new_key = hashlib.sha256(
+            session.session_key + session.rekey_pending_nonce
+        ).digest()
+
+        # Verify: decrypt the ACK payload with the new key
+        # Client sends the rekey_nonce encrypted with the new key as proof
+        proof = self._decrypt_packet(payload, new_key)
+        if not proof or proof != session.rekey_pending_nonce:
+            logger.warning("REKEY_ACK verification failed from %s", session.node_id)
+            session.rekey_pending_nonce = None
+            return
+
+        # Commit key rotation
+        session.old_session_key = session.session_key
+        session.old_key_expires = time.time() + OLD_KEY_TTL
+        session.session_key = new_key
+        session.last_rekey = time.time()
+        session.rekey_pending_nonce = None
+        logger.info("REKEY complete for %s (forward secrecy)", session.node_id)
+
+    def _decrypt_with_fallback(
+        self, encrypted: bytes, session: GatewaySession,
+    ) -> Optional[bytes]:
+        """Decrypt trying current key first, then old key if in grace period."""
+        result = self._decrypt_packet(encrypted, session.session_key)
+        if result is not None:
+            return result
+        # Try old key during grace period
+        if (session.old_session_key
+                and time.time() < session.old_key_expires):
+            return self._decrypt_packet(encrypted, session.old_session_key)
+        return None
 
     def _tun_read_loop(self):
         """Read packets from TUN and route to correct client."""
@@ -790,6 +865,23 @@ class HTPVPNGateway:
                         stale.append(addr)
                 for addr in stale:
                     self.pending.pop(addr, None)
+
+            # Initiate rekey for sessions due for rotation
+            with self._lock:
+                rekey_candidates = [
+                    s for s in self.sessions.values()
+                    if (now - (s.last_rekey or s.created_at) > REKEY_INTERVAL
+                        and not s.rekey_pending_nonce)
+                ]
+            for session in rekey_candidates:
+                self._initiate_rekey(session)
+
+            # Expire old keys past their TTL
+            with self._lock:
+                for session in self.sessions.values():
+                    if (session.old_session_key
+                            and now > session.old_key_expires):
+                        session.old_session_key = None
 
     # =========================================================================
     # STATUS
