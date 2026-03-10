@@ -457,6 +457,16 @@ class MeshConsciousness:
             ConsciousnessState.AUTONOMOUS,
         )
 
+    def add_bootstrap_peer(self, endpoint: str) -> None:
+        """Add a bootstrap peer dynamically (e.g. from MSSP gateway endpoint).
+
+        The peer will be tried on the next discovery cycle.  If already
+        present in the list, this is a no-op.
+        """
+        if endpoint and endpoint not in self._bootstrap_peers:
+            self._bootstrap_peers.append(endpoint)
+            self.logger.info("Dynamic bootstrap peer added: %s", endpoint)
+
     def _init_dsm(self) -> None:
         """Initialize DSM components if available."""
         if not DSM_AVAILABLE:
