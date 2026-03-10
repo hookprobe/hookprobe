@@ -32,6 +32,9 @@
     <meta name="apple-mobile-web-app-title" content="AI Eyes">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/aiochi-icon-192.png') }}">
 
+    <!-- CSRF token for AJAX requests (Flask-WTF) -->
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+
     {% block extra_css %}{% endblock %}
 </head>
 <body class="hold-transition sidebar-mini sidebar-collapse layout-fixed dark-mode">
@@ -313,6 +316,28 @@
         style.textContent = '#toast-container.toast-top-right { top: 70px !important; right: 20px !important; }';
         document.head.appendChild(style);
     });
+</script>
+<!-- CSRF token injection for all fetch() calls -->
+<script>
+(function() {
+    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    if (!csrfMeta) return;
+    var token = csrfMeta.getAttribute('content');
+    var _fetch = window.fetch;
+    window.fetch = function(url, opts) {
+        opts = opts || {};
+        var method = (opts.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+            opts.headers = opts.headers || {};
+            if (opts.headers instanceof Headers) {
+                if (!opts.headers.has('X-CSRFToken')) opts.headers.set('X-CSRFToken', token);
+            } else {
+                if (!opts.headers['X-CSRFToken']) opts.headers['X-CSRFToken'] = token;
+            }
+        }
+        return _fetch.call(this, url, opts);
+    };
+})();
 </script>
 <!-- Fortress Component Library -->
 <script src="{{ url_for('static', filename='js/components.js') }}"></script>
