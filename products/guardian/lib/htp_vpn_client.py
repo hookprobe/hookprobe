@@ -51,8 +51,11 @@ VPN_CONFIG_FILE = '/etc/hookprobe/guardian_vpn.json'
 NFTABLES_VPN_RULES = '/etc/nftables.d/guardian-vpn.nft'
 
 # Default settings
+# VPN uses UDP — must connect direct to origin, not through Cloudflare proxy.
+# Cloudflare only proxies HTTP/HTTPS (TCP). UDP 8443 would be black-holed.
+# The gateway endpoint (host:port) is provided by the heartbeat API at runtime.
 DEFAULT_GATEWAY_HOST = 'mssp.hookprobe.com'
-DEFAULT_GATEWAY_PORT = 8443
+DEFAULT_GATEWAY_PORT = 8144
 TUN_DEVICE_NAME = 'htp0'
 TUN_LOCAL_IP = '10.250.0.2'
 TUN_REMOTE_IP = '10.250.0.1'
