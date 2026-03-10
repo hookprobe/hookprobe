@@ -753,17 +753,16 @@ class HTPVPNGateway:
             ciphertext = cipher.encrypt(nonce, plaintext, None)
             return nonce + ciphertext
         except ImportError:
-            logger.warning("cryptography not installed — sending unencrypted")
-            return plaintext
+            raise RuntimeError("cryptography package required for VPN encryption")
         except Exception as e:
             logger.warning("Encrypt error: %s", e)
-            return plaintext
+            return None
 
     @staticmethod
     def _decrypt_packet(encrypted: bytes, session_key: bytes) -> Optional[bytes]:
         """Decrypt IP packet with ChaCha20-Poly1305."""
         if len(encrypted) < 28:  # 12 nonce + 16 tag minimum
-            return encrypted  # Possibly unencrypted
+            return None  # Too short for valid ciphertext
 
         try:
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -772,7 +771,7 @@ class HTPVPNGateway:
             cipher = ChaCha20Poly1305(session_key)
             return cipher.decrypt(nonce, ciphertext, None)
         except ImportError:
-            return encrypted
+            raise RuntimeError("cryptography package required for VPN encryption")
         except Exception:
             return None
 
@@ -987,7 +986,9 @@ def main():
     if psk:
         logger.info("PSK authentication enabled")
     else:
-        logger.warning("No PSK configured — any client can connect (use --psk or --psk-file)")
+        logger.error("No PSK configured — refusing to start without authentication")
+        logger.error("Use --psk <value> or --psk-file <path> to set a pre-shared key")
+        sys.exit(1)
 
     # Create and start gateway
     gateway = HTPVPNGateway(
