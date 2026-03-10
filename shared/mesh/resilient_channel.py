@@ -209,7 +209,7 @@ class ResilientChannel:
         timeout: float = 30.0,
     ) -> bool:
         """
-        Connect to remote host using best available port.
+        Connect to remote host, trying ports in priority order.
 
         Args:
             host: Target hostname or IP
@@ -221,19 +221,23 @@ class ResilientChannel:
         self._target_host = host
         self._stop_event.clear()
 
-        # Select best port
-        port_config = self.port_manager.select_best_port()
-        if not port_config:
-            return False
+        # Try ports in priority order with a total deadline.
+        # Each port gets at least 5s but we stop when the deadline expires.
+        deadline = time.time() + timeout
+        per_port_timeout = max(min(timeout / max(len(self.port_manager.ports), 1), 10.0), 5.0)
+        for port_config in self.port_manager.ports:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                t = min(per_port_timeout, remaining)
+                if self._connect_to_port(host, port_config, t):
+                    self._start_threads()
+                    return True
+            except Exception:
+                continue
 
-        # Attempt connection
-        success = self._connect_to_port(host, port_config, timeout)
-
-        if success:
-            # Start background threads
-            self._start_threads()
-
-        return success
+        return False
 
     def _connect_to_port(
         self,
@@ -355,8 +359,8 @@ class ResilientChannel:
 
             self._send_raw(MessageType.RESONATE, handshake_data)
 
-            # Wait for response
-            msg_type, response = self._recv_raw(timeout=10.0)
+            # Wait for response (use socket's existing timeout, don't override)
+            msg_type, response = self._recv_raw()
             if msg_type != MessageType.RESONATE:
                 return False
 
