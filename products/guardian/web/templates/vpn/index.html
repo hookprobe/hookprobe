@@ -25,7 +25,7 @@
                 </svg>
                 Connect
             </button>
-            <button class="btn btn-secondary" onclick="htpDisconnect()" id="htp-disconnect-btn" style="display: none;">Disconnect</button>
+            <button class="btn btn-secondary" onclick="htpDisconnect()" id="htp-disconnect-btn" style="display: none;">Disconnect (Local Breakout)</button>
         </div>
     </div>
 </div>
@@ -311,14 +311,14 @@ let _msspProvisionId = null;
 // HTP Tab Functions
 async function loadHtpData() {
     try {
-        const status = await apiGet('/vpn/api/status');
+        const status = await apiGet('/vpn/status');
         updateHtpStatus(status);
     } catch (error) {
         console.error('Failed to load HTP status:', error);
     }
 
     try {
-        const posf = await apiGet('/vpn/api/posf/status');
+        const posf = await apiGet('/vpn/posf/status');
         updatePosfStatus(posf);
     } catch (error) {
         console.error('Failed to load PoSF status:', error);
@@ -337,28 +337,29 @@ function updateHtpStatus(data) {
 
     if (data.connected) {
         statusEl.textContent = 'Connected';
-        statusSub.textContent = 'Secure tunnel active via HTP';
+        const uptimeStr = data.uptime ? ` (uptime: ${data.uptime})` : '';
+        statusSub.textContent = `Secure tunnel active via HTP${uptimeStr}`;
         statusIcon.style.background = 'rgba(46, 204, 113, 0.2)';
         statusIcon.querySelector('svg').style.color = 'var(--success)';
         connectBtn.style.display = 'none';
         disconnectBtn.style.display = 'inline-flex';
 
         document.getElementById('htp-server').textContent = data.server || 'mssp.hookprobe.com';
-        document.getElementById('htp-node').textContent = data.mssp_node || '-';
-        document.getElementById('htp-ip').textContent = data.public_ip || 'N/A';
-        document.getElementById('htp-encryption').textContent = 'Kyber + ChaCha20';
-        document.getElementById('htp-posf').textContent = data.posf_verified ? 'Verified' : 'Pending';
+        document.getElementById('htp-node').textContent = data.node_id || '-';
+        document.getElementById('htp-ip').textContent = data.tun_ip || 'N/A';
+        document.getElementById('htp-encryption').textContent = 'ChaCha20-Poly1305';
+        document.getElementById('htp-posf').textContent = data.kill_switch ? 'Kill Switch ON' : 'Kill Switch OFF';
     } else {
         statusEl.textContent = 'Disconnected';
-        statusSub.textContent = 'Connect to MSSP for secure communications';
-        statusIcon.style.background = 'rgba(139, 92, 246, 0.2)';
-        statusIcon.querySelector('svg').style.color = 'var(--hp-purple)';
+        statusSub.textContent = 'Using local internet breakout';
+        statusIcon.style.background = 'rgba(231, 76, 60, 0.2)';
+        statusIcon.querySelector('svg').style.color = 'var(--danger, #e74c3c)';
         connectBtn.style.display = 'inline-flex';
         disconnectBtn.style.display = 'none';
 
-        document.getElementById('htp-server').textContent = 'Not connected';
-        document.getElementById('htp-node').textContent = '-';
-        document.getElementById('htp-ip').textContent = 'N/A';
+        document.getElementById('htp-server').textContent = data.server || 'Not connected';
+        document.getElementById('htp-node').textContent = data.node_id || '-';
+        document.getElementById('htp-ip').textContent = 'Local breakout';
         document.getElementById('htp-encryption').textContent = '-';
         document.getElementById('htp-posf').textContent = '-';
     }
@@ -381,7 +382,7 @@ async function htpConnect() {
     showToast('Connecting to MSSP via HTP...', 'info');
 
     try {
-        const result = await apiPost('/vpn/api/connect', { endpoint: endpoint });
+        const result = await apiPost('/vpn/connect', { endpoint: endpoint });
         if (result.success) {
             showToast('Connected to MSSP via HTP', 'success');
             loadHtpData();
@@ -394,14 +395,14 @@ async function htpConnect() {
 }
 
 async function htpDisconnect() {
-    if (!confirm('Are you sure you want to disconnect from MSSP?')) {
+    if (!confirm('Disconnect VPN and switch to local internet breakout?')) {
         return;
     }
 
     showToast('Disconnecting from MSSP...', 'info');
 
     try {
-        const result = await apiPost('/vpn/api/disconnect');
+        const result = await apiPost('/vpn/disconnect');
         if (result.success) {
             showToast('Disconnected from MSSP', 'success');
             loadHtpData();
@@ -417,7 +418,7 @@ async function verifyPosf() {
     showToast('Running PoSF verification...', 'info');
 
     try {
-        const result = await apiPost('/vpn/api/posf/verify');
+        const result = await apiPost('/vpn/posf/verify');
         if (result.success) {
             showToast('PoSF verification complete', 'success');
             loadHtpData();

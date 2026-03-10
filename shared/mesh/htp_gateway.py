@@ -92,6 +92,16 @@ STUN_BINDING_RESPONSE = 0x0101
 STUN_ATTR_XOR_MAPPED_ADDRESS = 0x0020
 STUN_ATTR_SOFTWARE = 0x8022
 
+# HKDF context strings (must match client)
+HKDF_SALT_SESSION = b"htp-vpn-session-salt-v2"
+HKDF_INFO_SESSION = b"htp-vpn-session-key-v2"
+HKDF_SALT_REKEY = b"htp-vpn-rekey-salt-v2"
+HKDF_INFO_REKEY = b"htp-vpn-rekey-v2"
+
+# ATTEST rate limiting
+ATTEST_MAX_FAILURES = 3
+ATTEST_BLOCK_DURATION = 300  # 5 minutes
+
 # Limits
 DEFAULT_MAX_CLIENTS = 10
 DEFAULT_LISTEN_PORT = 8144
@@ -229,9 +239,89 @@ class HTPVPNGateway:
         self._hello_times: Dict[str, list] = {}  # ip → [timestamps]
         self._hello_rate_limit = 5  # max HELLOs per IP per 60s
 
+        # ATTEST failure rate limiting: ip → [failure_timestamps]
+        self._attest_failures: Dict[str, list] = {}
+
+        # Ed25519 server identity key (persistent across restarts)
+        self._signing_key, self._verify_key_bytes = self._load_or_create_identity()
+
         # Stats
         self.started_at: float = 0
         self.total_sessions: int = 0
+
+    # =========================================================================
+    # CRYPTOGRAPHIC HELPERS
+    # =========================================================================
+
+    @staticmethod
+    def _load_or_create_identity():
+        """Load or create Ed25519 signing key for server identity verification."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        key_path = Path("/opt/hookprobe/mesh/data/gateway_ed25519.key")
+        pub_path = Path("/opt/hookprobe/mesh/data/gateway_ed25519.pub")
+
+        try:
+            if key_path.exists():
+                key_data = key_path.read_bytes()
+                signing_key = serialization.load_pem_private_key(key_data, password=None)
+                pub_bytes = signing_key.public_key().public_bytes(
+                    serialization.Encoding.Raw, serialization.PublicFormat.Raw
+                )
+                logger.info("Loaded Ed25519 identity key from %s", key_path)
+                return signing_key, pub_bytes
+        except Exception as e:
+            logger.warning("Failed to load identity key: %s (generating new)", e)
+
+        # Generate new keypair
+        signing_key = Ed25519PrivateKey.generate()
+        pub_bytes = signing_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            key_path.write_bytes(signing_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+            key_path.chmod(0o600)
+            pub_path.write_bytes(pub_bytes)
+            logger.info("Generated new Ed25519 identity key → %s", key_path)
+            logger.info("Server public key (hex): %s", pub_bytes.hex())
+        except Exception as e:
+            logger.warning("Could not persist identity key: %s", e)
+
+        return signing_key, pub_bytes
+
+    @staticmethod
+    def _hkdf_derive(ikm: bytes, salt: bytes, info: bytes) -> bytes:
+        """Derive a 32-byte key using HKDF-SHA256."""
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        from cryptography.hazmat.primitives import hashes
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            info=info,
+        ).derive(ikm)
+
+    def _is_attest_blocked(self, ip: str) -> bool:
+        """Check if IP is blocked due to ATTEST failures."""
+        failures = self._attest_failures.get(ip, [])
+        now = time.time()
+        # Clean old failures
+        failures = [t for t in failures if now - t < ATTEST_BLOCK_DURATION]
+        self._attest_failures[ip] = failures
+        return len(failures) >= ATTEST_MAX_FAILURES
+
+    def _record_attest_failure(self, ip: str):
+        """Record a failed ATTEST attempt."""
+        if ip not in self._attest_failures:
+            self._attest_failures[ip] = []
+        self._attest_failures[ip].append(time.time())
 
     # =========================================================================
     # LIFECYCLE
@@ -497,14 +587,28 @@ class HTPVPNGateway:
         with self._lock:
             self.pending[addr] = pending
 
-        # Send CHALLENGE
-        challenge_pkt = struct.pack(">HB", HTP_VERSION, CHALLENGE) + gateway_challenge
+        # Send CHALLENGE with Ed25519 signature for server identity verification
+        # Format: version(2) + type(1) + challenge(32) + pubkey(32) + signature(64) = 131 bytes
+        challenge_payload = gateway_challenge
+        try:
+            sig = self._signing_key.sign(gateway_challenge + pending.client_nonce)
+            challenge_pkt = struct.pack(">HB", HTP_VERSION, CHALLENGE) + challenge_payload
+            challenge_pkt += self._verify_key_bytes + sig
+        except Exception as e:
+            logger.warning("Ed25519 signing failed: %s (sending unsigned)", e)
+            challenge_pkt = struct.pack(">HB", HTP_VERSION, CHALLENGE) + challenge_payload
         self.sock.sendto(challenge_pkt, addr)
         logger.debug("CHALLENGE sent to %s (%s)", node_id, addr)
 
     def _handle_attest(self, data: bytes, addr: Tuple[str, int]):
         """Handle ATTEST from client — verify and establish session."""
         if len(data) < 43:
+            return
+
+        # Check ATTEST rate limiting
+        src_ip = addr[0]
+        if self._is_attest_blocked(src_ip):
+            logger.warning("ATTEST blocked (rate limited) from %s", src_ip)
             return
 
         version, ptype, received_mac, flow_token = struct.unpack(">HB32sQ", data[:43])
@@ -518,14 +622,16 @@ class HTPVPNGateway:
 
         if flow_token != pending.flow_token:
             logger.warning("ATTEST flow_token mismatch from %s", addr)
+            self._record_attest_failure(src_ip)
             self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
             return
 
-        # Derive session key (must match client's derivation)
-        key_material = pending.client_nonce + pending.gateway_challenge
+        # Derive session key using HKDF-SHA256 (must match client's derivation)
+        # IKM includes both nonces + PSK; salt is a constant (independent of IKM per RFC 5869)
+        ikm = pending.client_nonce + pending.gateway_challenge
         if self.psk:
-            key_material += self.psk.encode()
-        session_key = hashlib.sha256(key_material).digest()
+            ikm += self.psk.encode()
+        session_key = self._hkdf_derive(ikm, HKDF_SALT_SESSION, HKDF_INFO_SESSION)
 
         # Verify HMAC
         expected_mac = hmac.new(
@@ -536,6 +642,7 @@ class HTPVPNGateway:
 
         if not hmac.compare_digest(received_mac, expected_mac):
             logger.warning("ATTEST MAC mismatch from %s (%s)", pending.node_id, addr)
+            self._record_attest_failure(src_ip)
             self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
             return
 
@@ -559,6 +666,14 @@ class HTPVPNGateway:
         )
 
         with self._lock:
+            # Guard against flow_token collision from different clients
+            if flow_token in self.sessions and self.sessions[flow_token].client_addr != addr:
+                logger.warning("Flow token collision from %s (existing: %s)",
+                               addr, self.sessions[flow_token].client_addr)
+                self._release_client_ip(client_ip)
+                self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+                return
+
             # Remove any old session from same address
             old_flow = self.addr_to_flow.pop(addr, None)
             if old_flow and old_flow in self.sessions:
@@ -657,10 +772,12 @@ class HTPVPNGateway:
             logger.debug("REKEY_ACK from %s with no pending rekey", session.node_id)
             return
 
-        # Derive the new key (same derivation as client)
-        new_key = hashlib.sha256(
-            session.session_key + session.rekey_pending_nonce
-        ).digest()
+        # Derive the new key using HKDF (same derivation as client)
+        new_key = self._hkdf_derive(
+            ikm=session.session_key + session.rekey_pending_nonce,
+            salt=HKDF_SALT_REKEY,
+            info=HKDF_INFO_REKEY,
+        )
 
         # Verify: decrypt the ACK payload with the new key
         # Client sends the rekey_nonce encrypted with the new key as proof
@@ -873,7 +990,9 @@ class HTPVPNGateway:
                         and not s.rekey_pending_nonce)
                 ]
             for session in rekey_candidates:
-                self._initiate_rekey(session)
+                with self._lock:
+                    if not session.rekey_pending_nonce:  # re-check under lock
+                        self._initiate_rekey(session)
 
             # Expire old keys past their TTL
             with self._lock:
@@ -881,6 +1000,18 @@ class HTPVPNGateway:
                     if (session.old_session_key
                             and now > session.old_key_expires):
                         session.old_session_key = None
+
+            # Prune stale rate-limit entries to prevent unbounded dict growth
+            cutoff_hello = now - 60
+            cutoff_attest = now - ATTEST_BLOCK_DURATION
+            self._hello_times = {
+                ip: ts for ip, ts in self._hello_times.items()
+                if any(t > cutoff_hello for t in ts)
+            }
+            self._attest_failures = {
+                ip: ts for ip, ts in self._attest_failures.items()
+                if any(t > cutoff_attest for t in ts)
+            }
 
     # =========================================================================
     # STATUS

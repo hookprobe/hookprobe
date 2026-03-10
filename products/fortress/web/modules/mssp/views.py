@@ -173,9 +173,11 @@ def api_claim_check():
             })
 
         # Only expose safe fields — never raw result (may contain api_key)
+        raw_status = result.get('status', 'pending')
+        safe_status = raw_status if raw_status in ('pending', 'active', 'expired') else 'pending'
         return jsonify({
             'claimed': False,
-            'status': result.get('status', 'pending'),
+            'status': safe_status,
         })
 
     except Exception as e:

@@ -329,6 +329,7 @@ class MeshPeerServer:
                     # Wrap in TLS for Cloudflare-proxied ports (443, 8443)
                     if port in (443, 8443):
                         ctx = ssl.create_default_context()
+                        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
                         sock = ctx.wrap_socket(
                             sock, server_hostname=host,
                         )
