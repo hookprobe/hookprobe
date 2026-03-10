@@ -66,9 +66,9 @@ except ImportError:
 # CONSTANTS
 # =============================================================================
 
-HTP_PORT = 8443
+HTP_PORT = 8144
 HTP_VERSION = 0x0001
-DEFAULT_MESH_HOST = "mssp.hookprobe.com"
+DEFAULT_MESH_HOST = "mesh.hookprobe.com"
 
 # Packet types
 class HTPPacketType(Enum):

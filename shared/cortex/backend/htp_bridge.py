@@ -575,8 +575,8 @@ def create_bridge(
 
 
 def create_production_bridge(
-    mesh_host: str = "mssp.hookprobe.com",
-    mesh_port: int = 8443,
+    mesh_host: str = "mesh.hookprobe.com",
+    mesh_port: int = 8144,
 ) -> HTPBridge:
     """Create an HTP bridge configured for production mesh connection."""
     return create_bridge(
