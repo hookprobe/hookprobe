@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import secrets
@@ -305,6 +306,10 @@ class MeshPeerServer:
         try:
             # Receive client's RESONATE
             msg_type, payload = self._recv_channel_msg(sock, timeout=10.0)
+            logger.debug(
+                "Channel handshake: got type=0x%02x len=%d",
+                msg_type.value, len(payload),
+            )
             if msg_type != ChannelMsgType.RESONATE:
                 return False
             if len(payload) < 24:
@@ -333,11 +338,20 @@ class MeshPeerServer:
         try:
             # Receive RESONATE INIT (inside a DATA channel message)
             msg_type, raw = self._recv_channel_msg(sock, timeout=30.0)
+            logger.debug(
+                "Resonance: got channel msg type=0x%02x len=%d",
+                msg_type.value, len(raw),
+            )
             if msg_type != ChannelMsgType.DATA:
+                logger.debug("Expected DATA (0x01), got 0x%02x", msg_type.value)
                 return False
 
             pkt = self._parse_mesh_packet(raw)
-            if pkt is None or pkt['type'] != PacketType.RESONATE:
+            if pkt is None:
+                logger.debug("Failed to parse mesh packet from %d bytes", len(raw))
+                return False
+            if pkt['type'] != PacketType.RESONATE:
+                logger.debug("Expected RESONATE (0x10), got 0x%02x", pkt['type'])
                 return False
 
             payload = pkt['payload']
@@ -644,7 +658,7 @@ class MeshPeerServer:
         sequence: int = 0,
     ) -> None:
         """Send a ResilientChannel-framed message."""
-        checksum = zlib.crc32(data) & 0xFFFFFFFF
+        checksum = _channel_checksum(data)
         header = struct.pack(
             CHANNEL_HEADER_FMT,
             msg_type.value, 0, sequence, len(data), checksum, 0,
@@ -655,7 +669,7 @@ class MeshPeerServer:
         self, ptype: PacketType, payload: bytes,
     ) -> bytes:
         """Build a MeshPacket (48-byte header + payload)."""
-        checksum = zlib.crc32(payload) & 0xFFFFFFFF
+        checksum = _channel_checksum(payload)
         header = struct.pack(
             MESH_HEADER_FMT,
             MESH_VERSION,
@@ -688,6 +702,12 @@ class MeshPeerServer:
             }
         except Exception:
             return None
+
+
+def _channel_checksum(data: bytes) -> int:
+    """Match ResilientChannel._calculate_checksum (SHA256-based)."""
+    h = hashlib.sha256(data).digest()
+    return struct.unpack('>I', h[:4])[0]
 
 
 def _recv_exact(sock: socket.socket, length: int) -> bytes:

@@ -150,12 +150,14 @@ class PortConfig:
 # Priority order: UDP variants preferred, then TCP fallbacks
 DEFAULT_PORTS = [
     # === Priority 1: Primary HTP on 8144 ===
+    # PRIMARY modes use raw framing (no padding/wrapping) for direct
+    # protocol interop with mesh_server and other HTP endpoints.
     PortConfig(
         port=8144,
         protocol='udp',
         mode=TransportMode.PRIMARY_UDP,
         priority=1,
-        padding_enabled=True,
+        padding_enabled=False,
         timing_jitter_ms=0,
     ),
     PortConfig(
@@ -163,7 +165,7 @@ DEFAULT_PORTS = [
         protocol='tcp',
         mode=TransportMode.PRIMARY_TCP,
         priority=2,
-        padding_enabled=True,
+        padding_enabled=False,
         timing_jitter_ms=0,
     ),
 
