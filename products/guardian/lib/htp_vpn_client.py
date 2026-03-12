@@ -60,7 +60,7 @@ DEFAULT_GATEWAY_PORT = 8144
 TUN_DEVICE_NAME = 'htp0'
 TUN_LOCAL_IP = '10.250.0.2'
 TUN_REMOTE_IP = '10.250.0.1'
-TUN_NETMASK = '255.255.255.252'  # /30
+TUN_NETMASK = '255.255.255.0'  # /24 (multi-client)
 TUN_MTU = 1400
 KEEPALIVE_INTERVAL = 25
 RECONNECT_BASE_DELAY = 5
@@ -159,6 +159,9 @@ class HTPVPNClient:
         self.last_keepalive: float = 0
         self.reconnect_count: int = 0
 
+        # Gateway-assigned TUN IP (set during handshake)
+        self._assigned_ip: str = ''
+
         # Callbacks
         self.on_state_change: Optional[Callable[[VPNState], None]] = None
 
@@ -210,7 +213,7 @@ class HTPVPNClient:
     # =========================================================================
 
     def _create_tun(self) -> bool:
-        """Create and configure TUN device."""
+        """Create TUN device (does NOT assign IP — that happens after handshake)."""
         try:
             # Open TUN device
             tun_fd = os.open('/dev/net/tun', os.O_RDWR)
@@ -222,14 +225,8 @@ class HTPVPNClient:
 
             self.tun_fd = tun_fd
 
-            # Configure IP address and bring up
+            # Set MTU and bring link up (no IP yet — gateway assigns it)
             dev = self.config.tun_device
-            subprocess.run(
-                ['ip', 'addr', 'add',
-                 f'{self.config.tun_local_ip}/30',
-                 'dev', dev],
-                check=True, capture_output=True
-            )
             subprocess.run(
                 ['ip', 'link', 'set', dev, 'mtu', str(self.config.mtu)],
                 check=True, capture_output=True
@@ -239,11 +236,27 @@ class HTPVPNClient:
                 check=True, capture_output=True
             )
 
-            logger.info("TUN device %s created: %s/30", dev, self.config.tun_local_ip)
+            logger.info("TUN device %s created (awaiting IP from gateway)", dev)
             return True
 
         except Exception as e:
             logger.error("Failed to create TUN device: %s", e)
+            return False
+
+    def _configure_tun_ip(self, assigned_ip: str) -> bool:
+        """Assign the gateway-provided IP to the TUN device."""
+        dev = self.config.tun_device
+        try:
+            subprocess.run(
+                ['ip', 'addr', 'add', f'{assigned_ip}/24', 'dev', dev],
+                check=True, capture_output=True
+            )
+            self.config.tun_local_ip = assigned_ip
+            logger.info("TUN %s configured: %s/24", dev, assigned_ip)
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to configure TUN IP %s: %s",
+                         assigned_ip, e.stderr.decode() if e.stderr else e)
             return False
 
     def _destroy_tun(self):
@@ -650,6 +663,24 @@ table inet guardian_vpn {{
             if len(data) >= 3:
                 version, ptype = struct.unpack('>HB', data[:3])
                 if ptype == 0x04:  # ACCEPT
+                    # Parse assigned IP from ACCEPT packet (4 bytes after header)
+                    if len(data) >= 7:
+                        assigned_ip = socket.inet_ntoa(data[3:7])
+                        # Validate IP is within VPN subnet
+                        import ipaddress
+                        try:
+                            if ipaddress.ip_address(assigned_ip) not in ipaddress.ip_network('10.250.0.0/24'):
+                                logger.error("Gateway assigned IP %s outside VPN subnet — rejecting", assigned_ip)
+                                return False
+                        except ValueError:
+                            logger.error("Gateway sent invalid IP in ACCEPT")
+                            return False
+                        logger.info("Gateway assigned IP: %s", assigned_ip)
+                        self._assigned_ip = assigned_ip
+                    else:
+                        # Fallback to config default if gateway doesn't send IP
+                        self._assigned_ip = self.config.tun_local_ip
+                        logger.info("No IP in ACCEPT, using default: %s", self._assigned_ip)
                     logger.info("HTP handshake complete with %s", self.gateway_addr)
                     return True
                 elif ptype == 0x05:  # REJECT
@@ -886,6 +917,13 @@ table inet guardian_vpn {{
             self._set_state(VPNState.ERROR)
             return False
 
+        # Step 3b: Configure TUN IP from gateway-assigned address
+        assigned_ip = self._assigned_ip or self.config.tun_local_ip
+        if not self._configure_tun_ip(assigned_ip):
+            self._cleanup_connection()
+            self._set_state(VPNState.ERROR)
+            return False
+
         # Step 4: Set up routing
         if not self._setup_routing():
             self._cleanup_connection()
@@ -950,6 +988,7 @@ table inet guardian_vpn {{
 
     def _cleanup_connection(self):
         """Clean up socket and TUN."""
+        self._assigned_ip = ''
         if self.udp_socket:
             try:
                 self.udp_socket.close()
