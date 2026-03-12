@@ -64,6 +64,6 @@ def register_blueprints(app: Flask):
     from .aegis import aegis_bp
     app.register_blueprint(aegis_bp)
 
-    # MSSP module - Managed Security Service Provider integration
-    from .mssp import mssp_bp
-    app.register_blueprint(mssp_bp)
+    # VPN & Mesh module - HTP tunnel, mesh peers, and MSSP provisioning
+    from .vpn import vpn_bp
+    app.register_blueprint(vpn_bp)

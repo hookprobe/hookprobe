@@ -1205,7 +1205,18 @@ class _MeshAPIHandler(BaseHTTPRequestHandler):
                 'uptime': int(time.time() - self.start_time),
             }
             if self.server_ref:
-                status['mesh'] = self.server_ref.get_status()
+                mesh = self.server_ref.get_status()
+                status['mesh'] = mesh
+                # Top-level fields for dashboard compatibility
+                status['peers'] = mesh.get('peers', [])
+                status['peer_count'] = mesh.get('peer_count', 0)
+                status['bootstrap_peers'] = ','.join(
+                    mesh.get('bootstrap_peers', []),
+                )
+                status['gossip'] = {
+                    'intel_received': mesh.get('intel_received', 0),
+                }
+                status['vpn_gateway'] = self._read_vpn_gateway_status()
             self._respond(200, json.dumps(status))
         else:
             self._respond(404, '{"error": "not found"}')
@@ -1235,6 +1246,22 @@ class _MeshAPIHandler(BaseHTTPRequestHandler):
         else:
             self._respond(404, '{"error": "not found"}')
 
+    @staticmethod
+    def _read_vpn_gateway_status() -> dict:
+        """Read VPN gateway status from shared file written by htp_gateway.py."""
+        try:
+            with open('/tmp/htp_gateway_status.json') as f:
+                data = json.load(f)
+            # Only trust status if written within last 60s
+            if time.time() - data.get('ts', 0) < 60:
+                return {
+                    'active': data.get('active', False),
+                    'clients': data.get('clients', 0),
+                }
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            pass
+        return {'active': False, 'clients': 0}
+
     def _respond(self, code: int, body: str):
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
@@ -1252,7 +1279,8 @@ def _start_http_api(
     _MeshAPIHandler.start_time = time.time()
     _MeshAPIHandler.node_id = node_id
     _MeshAPIHandler.gossip_token = gossip_token
-    httpd = HTTPServer(('127.0.0.1', port), _MeshAPIHandler)
+    # Bind to all interfaces so fts-web container can reach via bridge gateway
+    httpd = HTTPServer(('0.0.0.0', port), _MeshAPIHandler)
     httpd.timeout = 2.0
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()

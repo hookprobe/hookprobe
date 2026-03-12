@@ -1,0 +1,456 @@
+{% extends "base.html" %}
+{% block title %}VPN & Mesh{% endblock %}
+{% block page_header %}{% endblock %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">VPN & Mesh</li>
+{% endblock %}
+
+{% block content %}
+<!-- Alert container (top) -->
+<div id="alert-container"></div>
+
+<!-- Row 1: Mesh + VPN Tunnel side by side -->
+<div class="row">
+    <!-- Mesh Status -->
+    <div class="col-lg-4">
+        <div class="small-box {% if status.state == 'connected' %}bg-success{% elif status.state == 'starting' %}bg-warning{% else %}bg-secondary{% endif %}" id="mesh-box">
+            <div class="inner">
+                <h3 id="peer-count">{{ status.peer_count }}</h3>
+                <p>Mesh Peers</p>
+            </div>
+            <div class="icon"><i class="fas fa-network-wired"></i></div>
+            <div class="small-box-footer">
+                <span id="mesh-state-text">
+                    {% if status.state == 'connected' %}
+                    <i class="fas fa-check mr-1"></i>Connected
+                    {% set hours = status.uptime_seconds // 3600 %}{% set mins = (status.uptime_seconds % 3600) // 60 %}
+                    &mdash; {{ hours }}h {{ mins }}m
+                    {% elif status.state == 'starting' %}
+                    <i class="fas fa-spinner fa-spin mr-1"></i>Starting...
+                    {% else %}
+                    <i class="fas fa-times mr-1"></i>Offline
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- VPN Gateway (inbound — serving Guardian/Sentinel) -->
+    <div class="col-lg-4">
+        <div class="small-box {% if status.vpn_gateway and status.vpn_gateway.active %}bg-info{% else %}bg-secondary{% endif %}">
+            <div class="inner">
+                <h3 id="vpn-clients">{{ status.vpn_gateway.clients if status.vpn_gateway else 0 }}</h3>
+                <p>VPN Clients (Gateway)</p>
+            </div>
+            <div class="icon"><i class="fas fa-shield-alt"></i></div>
+            <div class="small-box-footer" id="vpn-gw-footer">
+                {% if status.vpn_gateway and status.vpn_gateway.active %}
+                <i class="fas fa-check mr-1"></i>Active (UDP 8144)
+                {% elif status.state == 'connected' %}
+                Gossip only (no VPN gateway PSK)
+                {% else %}
+                Gateway offline
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- VPN Tunnel (outbound — exit via MSSP) -->
+    <div class="col-lg-4">
+        <div class="small-box bg-dark" id="tunnel-box">
+            <div class="inner">
+                <h3 id="tunnel-state-h3">--</h3>
+                <p>VPN Tunnel (Exit IP)</p>
+            </div>
+            <div class="icon"><i class="fas fa-globe"></i></div>
+            <div class="small-box-footer" id="tunnel-footer">Loading...</div>
+        </div>
+    </div>
+</div>
+
+{% if current_user.is_admin %}
+<!-- Row 2: VPN Tunnel Controls + MSSP Heartbeat -->
+<div class="row">
+    <!-- VPN Tunnel Control -->
+    <div class="col-lg-6">
+        <div class="card card-outline card-dark" id="tunnel-card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-route mr-2"></i>VPN Tunnel</h3>
+                <div class="card-tools">
+                    <span class="badge badge-secondary" id="tunnel-badge">Loading...</span>
+                </div>
+            </div>
+            <div class="card-body p-3">
+                <div class="row">
+                    <div class="col-7">
+                        <table class="table table-sm table-borderless mb-0">
+                            <tr><td class="text-muted" style="width:90px">Status</td><td id="tunnel-status">-</td></tr>
+                            <tr><td class="text-muted">Tunnel IP</td><td id="tunnel-ip">-</td></tr>
+                            <tr><td class="text-muted">Uptime</td><td id="tunnel-uptime">-</td></tr>
+                            <tr><td class="text-muted">Traffic</td><td id="tunnel-traffic">-</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-5">
+                        <label class="mb-1"><small>Kill Switch</small></label>
+                        <select class="form-control form-control-sm mb-2" id="kill-switch-select">
+                            <option value="off">OFF</option>
+                            <option value="host" selected>HOST</option>
+                            <option value="full">FULL</option>
+                        </select>
+                        <small class="text-muted d-block mb-2" id="ks-help">HOST: Fortress only. LAN uses local ISP.</small>
+                        <button class="btn btn-success btn-sm btn-block" id="btn-tunnel-connect" style="display:none;">
+                            <i class="fas fa-plug mr-1"></i>Connect
+                        </button>
+                        <button class="btn btn-danger btn-sm btn-block" id="btn-tunnel-disconnect" style="display:none;">
+                            <i class="fas fa-stop mr-1"></i>Disconnect
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MSSP Heartbeat -->
+    <div class="col-lg-6">
+        <div class="card" id="mssp-status-card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-cloud mr-2"></i>MSSP Heartbeat</h3>
+                <div class="card-tools">
+                    <span class="badge" id="mssp-badge">Loading...</span>
+                </div>
+            </div>
+            <div class="card-body p-3" id="mssp-body">
+                <div class="text-center"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+            </div>
+            <div class="card-footer p-2" id="mssp-footer"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Manual MSSP registration (hidden by default) -->
+<div class="row" id="manual-row" style="display:none;">
+    <div class="col-lg-6 offset-lg-6">
+        <div class="card card-outline card-secondary">
+            <div class="card-header py-2">
+                <h3 class="card-title"><i class="fas fa-key mr-2"></i>Manual MSSP Registration</h3>
+            </div>
+            <div class="card-body p-3">
+                <form id="register-form" class="form-inline flex-wrap">
+                    <input type="text" class="form-control form-control-sm mr-2 mb-1" id="reg-endpoint"
+                           value="mssp.hookprobe.com" style="width:200px;" placeholder="Endpoint">
+                    <input type="password" class="form-control form-control-sm mr-2 mb-1" id="reg-apikey"
+                           placeholder="API Key" style="width:200px;" autocomplete="off">
+                    <button type="submit" class="btn btn-primary btn-sm mb-1" id="btn-register">
+                        <i class="fas fa-link mr-1"></i>Connect
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Row 3: Peers Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline card-primary">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-users mr-2"></i>Connected Peers ({{ status.peer_count }})</h3>
+                <div class="card-tools">
+                    <button class="btn btn-tool" onclick="refreshPeers()"><i class="fas fa-sync"></i></button>
+                    <button class="btn btn-tool" data-card-widget="collapse"><i class="fas fa-minus"></i></button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm table-striped mb-0" id="peers-table">
+                    <thead><tr><th>Node</th><th>Tier</th><th>Endpoint</th><th>Connected</th></tr></thead>
+                    <tbody id="peers-tbody">
+                        {% if status.peers %}
+                        {% for peer in status.peers %}
+                        <tr>
+                            <td><code>{{ peer.node_id or 'unknown' }}</code></td>
+                            <td>
+                                {% set t = (peer.tier or 'unknown')|upper %}
+                                {% if t == 'GUARDIAN' %}<span class="badge badge-primary">Guardian</span>
+                                {% elif t == 'SENTINEL' %}<span class="badge badge-secondary">Sentinel</span>
+                                {% elif t == 'FORTRESS' %}<span class="badge badge-success">Fortress</span>
+                                {% elif t == 'NEXUS' %}<span class="badge badge-warning">Nexus</span>
+                                {% else %}<span class="badge badge-dark">{{ peer.tier or '?' }}</span>{% endif %}
+                            </td>
+                            <td><code>{{ peer.endpoint or '' }}</code></td>
+                            <td>{% set cs = peer.connected_seconds or 0 %}{% if cs >= 3600 %}{{ (cs // 3600) }}h {{ ((cs % 3600) // 60) }}m{% elif cs >= 60 %}{{ (cs // 60) }}m{% else %}{{ cs }}s{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">No peers connected</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Row 4: Gossip Stats -->
+<div class="row">
+    <div class="col-12">
+        <div class="card card-outline card-secondary">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-broadcast-tower mr-2"></i>Gossip & Threat Intel</h3>
+                <div class="card-tools">
+                    <button class="btn btn-tool" data-card-widget="collapse"><i class="fas fa-minus"></i></button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row" id="gossip-stats">
+                    <div class="col-md-3 text-center">
+                        <h4 id="gossip-sent">{{ status.gossip.messages_sent or 0 }}</h4>
+                        <small class="text-muted">Messages Sent</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h4 id="gossip-recv">{{ status.gossip.messages_received or 0 }}</h4>
+                        <small class="text-muted">Messages Received</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h4 id="gossip-threats">{{ status.gossip.threats_shared or 0 }}</h4>
+                        <small class="text-muted">Threats Shared</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h4>{{ status.bootstrap_peers or 'N/A' }}</h4>
+                        <small class="text-muted">Bootstrap Relay</small>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">
+                        Protocol: HTP v2 | Encryption: ChaCha20-Poly1305 | Auth: HKDF-SHA256 + Ed25519
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function escapeHtml(s) {
+    if (!s) return '';
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+}
+function formatBytes(b) {
+    if (!b) return '0 B';
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+    if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+    return (b/1073741824).toFixed(2) + ' GB';
+}
+function showAlert(msg, type) {
+    var id = 'a' + Date.now();
+    document.getElementById('alert-container').insertAdjacentHTML('afterbegin',
+        '<div id="'+id+'" class="alert alert-'+type+' alert-dismissible fade show py-2 mb-2">' +
+        '<button type="button" class="close" data-dismiss="alert">&times;</button>'+msg+'</div>');
+    setTimeout(function(){ var e=document.getElementById(id); if(e) e.remove(); }, 6000);
+}
+
+// ---- Mesh + Gateway auto-refresh ----
+function refreshPeers() {
+    fetch('/vpn/api/peers').then(r=>r.json()).then(data => {
+        if (!data.success) return;
+        var tb = document.getElementById('peers-tbody');
+        if (!data.peers.length) { tb.innerHTML='<tr><td colspan="4" class="text-center text-muted py-3">No peers</td></tr>'; return; }
+        var h='';
+        data.peers.forEach(function(p){
+            var t=(p.tier||'?').toUpperCase();
+            var badge = t==='GUARDIAN'?'primary':t==='SENTINEL'?'secondary':t==='FORTRESS'?'success':t==='NEXUS'?'warning':'dark';
+            var cs=p.connected_seconds||0;
+            var ct=cs>=3600?Math.floor(cs/3600)+'h '+Math.floor((cs%3600)/60)+'m':cs>=60?Math.floor(cs/60)+'m':cs+'s';
+            h+='<tr><td><code>'+escapeHtml(p.node_id||'?')+'</code></td><td><span class="badge badge-'+badge+'">'+(p.tier||'?')+'</span></td><td><code>'+escapeHtml(p.endpoint||'')+'</code></td><td>'+ct+'</td></tr>';
+        });
+        tb.innerHTML=h;
+        document.getElementById('peer-count').textContent=data.peer_count;
+    });
+}
+setInterval(function(){
+    fetch('/vpn/api/status').then(r=>r.json()).then(d=>{
+        if(d.uptime_seconds){var h=Math.floor(d.uptime_seconds/3600),m=Math.floor((d.uptime_seconds%3600)/60);
+            var el=document.getElementById('mesh-state-text');
+            if(el) el.innerHTML='<i class="fas fa-check mr-1"></i>Connected &mdash; '+h+'h '+m+'m';}
+        var pc=document.getElementById('peer-count');if(pc)pc.textContent=d.peer_count||0;
+        var vc=document.getElementById('vpn-clients');if(vc)vc.textContent=(d.vpn_gateway&&d.vpn_gateway.clients)||0;
+        // Gossip stats
+        if(d.gossip){
+            var gs=document.getElementById('gossip-sent');if(gs)gs.textContent=d.gossip.messages_sent||0;
+            var gr=document.getElementById('gossip-recv');if(gr)gr.textContent=d.gossip.messages_received||0;
+            var gt=document.getElementById('gossip-threats');if(gt)gt.textContent=d.gossip.threats_shared||0;
+        }
+    }).catch(function(){});
+}, 15000);
+
+{% if current_user.is_admin %}
+// ---- VPN Tunnel Control ----
+(function(){
+    var ksHelp = {'off':'No protection. VPN is optional.','host':'Fortress host only. LAN uses local ISP (safe for POS).','full':'ALL traffic through tunnel. LAN down if MSSP offline.'};
+
+    function loadTunnel(){
+        fetch('/vpn/api/tunnel/status').then(r=>r.json()).then(d=>{
+            var badge=document.getElementById('tunnel-badge');
+            var box=document.getElementById('tunnel-box');
+            var h3=document.getElementById('tunnel-state-h3');
+            var foot=document.getElementById('tunnel-footer');
+            if(d.connected){
+                badge.className='badge badge-success'; badge.textContent='Connected';
+                box.className='small-box bg-success';
+                h3.textContent=d.tun_ip||'Connected';
+                foot.innerHTML='<i class="fas fa-check mr-1"></i>'+escapeHtml(d.server||'')+' &mdash; '+formatBytes(d.bytes_sent||0)+' / '+formatBytes(d.bytes_received||0);
+                document.getElementById('tunnel-status').innerHTML='<span class="badge badge-success">Connected</span>';
+                document.getElementById('tunnel-card').className='card card-outline card-success';
+                document.getElementById('btn-tunnel-connect').style.display='none';
+                document.getElementById('btn-tunnel-disconnect').style.display='block';
+            } else if(d.state==='connecting'||d.state==='reconnecting'){
+                badge.className='badge badge-warning'; badge.textContent=d.state;
+                box.className='small-box bg-warning';
+                h3.textContent='...';
+                foot.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>'+d.state;
+                document.getElementById('tunnel-status').innerHTML='<span class="badge badge-warning">'+d.state+'</span>';
+                document.getElementById('tunnel-card').className='card card-outline card-warning';
+                document.getElementById('btn-tunnel-connect').style.display='none';
+                document.getElementById('btn-tunnel-disconnect').style.display='block';
+            } else {
+                badge.className='badge badge-secondary'; badge.textContent=d.configured?'Disconnected':'Not Set Up';
+                box.className='small-box bg-dark';
+                h3.textContent='--';
+                foot.textContent=d.configured?'Disconnected — click Connect':'No VPN config';
+                document.getElementById('tunnel-status').innerHTML='<span class="badge badge-secondary">'+(d.configured?'Stopped':'No config')+'</span>';
+                document.getElementById('tunnel-card').className='card card-outline card-dark';
+                document.getElementById('btn-tunnel-connect').style.display='block';
+                document.getElementById('btn-tunnel-disconnect').style.display='none';
+            }
+            document.getElementById('tunnel-ip').textContent=d.tun_ip||'-';
+            document.getElementById('tunnel-uptime').textContent=d.uptime||'-';
+            document.getElementById('tunnel-traffic').textContent=d.connected?formatBytes(d.bytes_sent||0)+' / '+formatBytes(d.bytes_received||0):'-';
+            if(d.kill_switch) document.getElementById('kill-switch-select').value=d.kill_switch;
+        }).catch(function(){});
+    }
+
+    document.getElementById('kill-switch-select').addEventListener('change',function(){
+        var m=this.value;
+        document.getElementById('ks-help').textContent=ksHelp[m]||'';
+        fetch('/vpn/api/tunnel/kill-switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})})
+        .then(r=>r.json()).then(d=>{if(d.success)showAlert('Kill switch: '+m.toUpperCase(),'info');else showAlert(d.error||'Failed','danger');});
+    });
+
+    document.getElementById('btn-tunnel-connect').addEventListener('click',function(){
+        this.disabled=true; this.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>...';
+        fetch('/vpn/api/tunnel/connect',{method:'POST',headers:{'Content-Type':'application/json'}})
+        .then(r=>r.json()).then(d=>{if(d.success){showAlert(d.message,'success');setTimeout(loadTunnel,2000);}else showAlert(d.error,'danger');
+            this.disabled=false;this.innerHTML='<i class="fas fa-plug mr-1"></i>Connect';}.bind(this));
+    });
+
+    document.getElementById('btn-tunnel-disconnect').addEventListener('click',function(){
+        if(!confirm('Disconnect? Traffic reverts to local ISP.'))return;
+        this.disabled=true;
+        fetch('/vpn/api/tunnel/disconnect',{method:'POST',headers:{'Content-Type':'application/json'}})
+        .then(r=>r.json()).then(d=>{showAlert(d.success?d.message:(d.error||'Failed'),d.success?'success':'danger');setTimeout(loadTunnel,1000);});
+    });
+
+    loadTunnel();
+    setInterval(loadTunnel,10000);
+})();
+
+// ---- MSSP Heartbeat ----
+(function(){
+    var pollTimer=null;
+
+    function renderNotProvisioned(){
+        $('#mssp-status-card').attr('class','card card-outline card-secondary');
+        $('#mssp-badge').attr('class','badge badge-secondary').text('Not Connected');
+        $('#mssp-body').html('<div class="d-flex align-items-center"><i class="fas fa-cloud fa-2x text-muted mr-3"></i><div><strong>Not registered</strong><br><small class="text-muted">Use provisioning or manual registration below</small></div></div>');
+        $('#mssp-footer').html('<button class="btn btn-primary btn-sm" id="btn-provision"><i class="fas fa-plus-circle mr-1"></i>Provision</button>');
+        $('#manual-row').show();
+        $('#btn-provision').on('click',startProvision);
+        stopPoll();
+    }
+
+    function renderPending(data){
+        var code=data.claimCode||'????';
+        $('#mssp-status-card').attr('class','card card-outline card-warning');
+        $('#mssp-badge').attr('class','badge badge-warning').text('Pending');
+        $('#mssp-body').html('<div class="text-center"><p class="mb-1">Enter this code at <strong>'+(data.url||'mssp.hookprobe.com')+'</strong></p><div class="bg-dark rounded p-2 d-inline-block"><h3 class="mb-0 text-white text-monospace" style="letter-spacing:.1em;cursor:pointer" id="claim-code" title="Click to copy">'+escapeHtml(code)+'</h3></div><br><small class="text-muted"><i class="fas fa-sync fa-spin mr-1"></i>Checking...</small></div>');
+        $('#mssp-footer').html('<button class="btn btn-outline-danger btn-sm" id="btn-cancel"><i class="fas fa-times mr-1"></i>Cancel</button>');
+        $('#manual-row').hide();
+        $('#claim-code').on('click',function(){navigator.clipboard.writeText(code);showAlert('Copied!','success');});
+        $('#btn-cancel').on('click',msspDisconnect);
+        startPoll(data.provisionId);
+    }
+
+    function renderProvisioned(data){
+        var hb=data.heartbeatActive;
+        $('#mssp-status-card').attr('class','card card-outline card-success');
+        $('#mssp-badge').attr('class','badge badge-success').text('Connected');
+        var lastT=data.lastHeartbeat?new Date(data.lastHeartbeat).toLocaleTimeString():'N/A';
+        $('#mssp-body').html('<div class="d-flex align-items-center"><i class="fas fa-check-circle fa-2x text-success mr-3"></i><div><strong>MSSP Connected</strong><br><small>Heartbeat: <span class="badge badge-'+(hb?'success':'warning')+'">'+(hb?'Active':'Inactive')+'</span> &mdash; Last: '+escapeHtml(lastT)+'</small></div></div>');
+        $('#mssp-footer').html('<button class="btn btn-outline-danger btn-sm" id="btn-disconnect"><i class="fas fa-unlink mr-1"></i>Disconnect</button>');
+        $('#manual-row').hide();
+        $('#btn-disconnect').on('click',function(){if(confirm('Disconnect MSSP?'))msspDisconnect();});
+        stopPoll();
+    }
+
+    function renderError(msg){
+        $('#mssp-status-card').attr('class','card card-outline card-danger');
+        $('#mssp-badge').attr('class','badge badge-danger').text('Error');
+        $('#mssp-body').html('<div class="text-danger"><i class="fas fa-exclamation-triangle mr-2"></i>'+escapeHtml(msg)+'</div>');
+        $('#mssp-footer').html('<button class="btn btn-secondary btn-sm" onclick="loadMssp()"><i class="fas fa-sync mr-1"></i>Retry</button>');
+    }
+
+    window.loadMssp=function(){
+        fetch('/vpn/mssp/status').then(r=>r.json()).then(d=>{
+            if(d.error)return renderError(d.error);
+            if(d.provisioned)return renderProvisioned(d);
+            if(d.status==='pending_claim')return renderPending(d);
+            renderNotProvisioned();
+        }).catch(()=>renderError('MSSP API unreachable'));
+    };
+
+    function startProvision(){
+        $('#btn-provision').prop('disabled',true).html('<i class="fas fa-spinner fa-spin mr-1"></i>...');
+        fetch('/vpn/mssp/provision',{method:'POST',headers:{'Content-Type':'application/json'}})
+        .then(r=>r.json()).then(d=>{
+            if(d.status==='already_provisioned'){showAlert(d.message,'info');loadMssp();}
+            else if(d.claim_code)renderPending({claimCode:d.claim_code,provisionId:d.provision_id});
+            else{showAlert(d.error||'Failed','danger');renderNotProvisioned();}
+        }).catch(()=>{showAlert('Provision failed','danger');renderNotProvisioned();});
+    }
+
+    function startPoll(pid){
+        stopPoll();
+        pollTimer=setInterval(function(){
+            fetch('/vpn/mssp/claim/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pid?{provision_id:pid}:{})})
+            .then(r=>r.json()).then(d=>{if(d.claimed){showAlert('Claimed!','success');stopPoll();loadMssp();}});
+        },5000);
+    }
+    function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null;}}
+
+    function msspDisconnect(){
+        fetch('/vpn/mssp/disconnect',{method:'POST',headers:{'Content-Type':'application/json'}})
+        .then(r=>r.json()).then(d=>{showAlert(d.success?d.message:(d.error||'Failed'),d.success?'success':'danger');loadMssp();});
+    }
+
+    $('#register-form').on('submit',function(e){
+        e.preventDefault();
+        var k=$('#reg-apikey').val().trim(),ep=$('#reg-endpoint').val().trim();
+        if(!k){showAlert('API key required','warning');return;}
+        $('#btn-register').prop('disabled',true);
+        fetch('/vpn/mssp/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:k,endpoint:ep})})
+        .then(r=>r.json()).then(d=>{if(d.success){showAlert(d.message,'success');loadMssp();}else showAlert(d.error,'danger');$('#btn-register').prop('disabled',false);});
+    });
+
+    loadMssp();
+    setInterval(function(){if(!pollTimer)loadMssp();},30000);
+})();
+{% endif %}
+</script>
+{% endblock %}

@@ -169,6 +169,14 @@
                         </a>
                     </li>
 
+                    <!-- 4b. VPN & MESH (HTP tunnel + peer management) -->
+                    <li class="nav-item">
+                        <a href="{{ url_for('vpn.index') }}" class="nav-link {% if request.endpoint and 'vpn' in request.endpoint %}active{% endif %}">
+                            <i class="nav-icon fas fa-network-wired"></i>
+                            <p>VPN & Mesh</p>
+                        </a>
+                    </li>
+
                     <!-- 5. AIOCHI (Cognitive Network Layer) -->
                     <li class="nav-item">
                         <a href="{{ url_for('aiochi.index') }}" class="nav-link {% if request.endpoint == 'aiochi.index' %}active{% endif %}">
@@ -196,12 +204,6 @@
                     <!-- 8. SETTINGS (Admin only) -->
                     {% if current_user.is_admin %}
                     <li class="nav-header">ADMIN</li>
-                    <li class="nav-item">
-                        <a href="{{ url_for('mssp.index') }}" class="nav-link {% if request.endpoint and 'mssp' in request.endpoint %}active{% endif %}">
-                            <i class="nav-icon fas fa-cloud"></i>
-                            <p>MSSP</p>
-                        </a>
-                    </li>
                     <li class="nav-item {% if 'settings' in request.endpoint %}menu-open{% endif %}">
                         <a href="#" class="nav-link {% if 'settings' in request.endpoint %}active{% endif %}">
                             <i class="nav-icon fas fa-cog"></i>
