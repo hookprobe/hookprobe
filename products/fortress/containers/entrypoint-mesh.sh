@@ -157,9 +157,14 @@ sleep 2
 if [ -c /dev/net/tun ]; then
     echo "[mesh] Starting HTP VPN Gateway on UDP ${HTP_PRIMARY_PORT:-8144}..."
     PSK_ARG=""
-    if [ -f "${VPN_PSK_FILE:-/opt/hookprobe/mesh/data/vpn_psk}" ]; then
-        PSK_ARG="--psk-file ${VPN_PSK_FILE:-/opt/hookprobe/mesh/data/vpn_psk}"
-        echo "[mesh] VPN PSK authentication enabled"
+    VPN_PSK_PATH="${VPN_PSK_FILE:-/opt/hookprobe/mesh/data/vpn_psk}"
+    # Fallback: check persistent /etc/hookprobe mount (survives container recreate)
+    if [ ! -f "$VPN_PSK_PATH" ] && [ -f "/etc/hookprobe/mesh_vpn_psk" ]; then
+        VPN_PSK_PATH="/etc/hookprobe/mesh_vpn_psk"
+    fi
+    if [ -f "$VPN_PSK_PATH" ]; then
+        PSK_ARG="--psk-file $VPN_PSK_PATH"
+        echo "[mesh] VPN PSK authentication enabled (from $VPN_PSK_PATH)"
     fi
     python3 /opt/hookprobe/shared/mesh/htp_gateway.py \
         --port "${HTP_PRIMARY_PORT:-8144}" \

@@ -289,6 +289,16 @@ configure_openflow() {
     # Priority 1000: Allow ARP (essential for L2 connectivity)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL"
 
+    # Priority 950: ALWAYS allow traffic to/from the gateway IP
+    # QSecBit quarantine rules (priority 700-750) must never block gateway access
+    # Without this, new-device quarantine breaks dashboard, SSH, DNS, and DHCP relay
+    GATEWAY_IP=$(ip -4 addr show "$OVS_BRIDGE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    if [ -n "$GATEWAY_IP" ]; then
+        ovs-ofctl add-flow "$OVS_BRIDGE" "priority=950,ip,nw_dst=$GATEWAY_IP,actions=NORMAL"
+        ovs-ofctl add-flow "$OVS_BRIDGE" "priority=950,ip,nw_src=$GATEWAY_IP,actions=NORMAL"
+        log_info "Gateway-always-allow rules added for $GATEWAY_IP (priority 950)"
+    fi
+
     # Priority 900: Allow DHCP (essential for client IP assignment)
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=67,actions=NORMAL"
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=68,actions=NORMAL"

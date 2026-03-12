@@ -1,0 +1,41 @@
+[Unit]
+Description=HookProbe Fortress HTP VPN Client
+Documentation=https://hookprobe.com/docs/fortress/vpn
+After=network-online.target fortress-vlan.service fts-wan-failover.service
+Wants=network-online.target
+# Only run if VPN config exists and is enabled
+ConditionPathExists=/etc/hookprobe/fortress_vpn.json
+
+[Service]
+Type=simple
+# Clean up stale rules from prior crash that ExecStopPost never ran for
+ExecStartPre=-/usr/sbin/nft delete table inet fortress_vpn
+ExecStartPre=-/usr/sbin/ip rule del fwmark 0x300/0xf00 table 300
+ExecStartPre=-/usr/sbin/ip link del htp0
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/lib/htp_vpn_client.py
+# Safety net: ensure kill switch and routing are always cleaned up
+ExecStopPost=-/usr/sbin/nft delete table inet fortress_vpn
+ExecStopPost=-/usr/sbin/ip rule del fwmark 0x300/0xf00 table 300 priority 45
+ExecStopPost=-/usr/sbin/ip route flush table 300
+ExecStopPost=-/usr/sbin/ip link del htp0
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-htp-vpn
+
+# Runtime directory for state file
+RuntimeDirectory=fortress
+RuntimeDirectoryMode=0755
+
+# Security hardening
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/fortress /etc/hookprobe /etc/iproute2
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

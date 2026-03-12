@@ -227,6 +227,7 @@ class HTPVPNGateway:
         self.pending: Dict[Tuple[str, int], PendingHandshake] = {}  # addr → pending
         self.addr_to_flow: Dict[Tuple[str, int], int] = {}   # addr → flow_token
         self.ip_to_flow: Dict[str, int] = {}                 # assigned_ip → flow_token
+        self.node_to_flow: Dict[str, int] = {}              # node_id → flow_token
         self._used_ips: set = set()
 
         # Sockets / TUN
@@ -378,6 +379,7 @@ class HTPVPNGateway:
         self.pending.clear()
         self.addr_to_flow.clear()
         self.ip_to_flow.clear()
+        self.node_to_flow.clear()
         self._used_ips.clear()
 
         self._cleanup_nat()
@@ -441,14 +443,43 @@ class HTPVPNGateway:
     # =========================================================================
 
     def _setup_nat(self):
-        """Enable IP forwarding and NAT masquerade for VPN traffic."""
+        """Enable IP forwarding, FORWARD rules, and NAT masquerade for VPN traffic."""
         try:
             Path("/proc/sys/net/ipv4/ip_forward").write_text("1")
         except Exception as e:
             logger.warning("Could not enable IP forwarding: %s", e)
 
+        # Disable reverse path filter on TUN (packets arrive with VPN-subnet src)
+        for sysctl_path in [
+            f"/proc/sys/net/ipv4/conf/{TUN_DEVICE_NAME}/rp_filter",
+            "/proc/sys/net/ipv4/conf/all/rp_filter",
+        ]:
+            try:
+                Path(sysctl_path).write_text("0")
+            except Exception:
+                pass
+
+        # Explicit FORWARD rules (required in container environments where
+        # the default FORWARD policy may be DROP or restrictive)
+        for fwd_rule in [
+            ["-i", TUN_DEVICE_NAME, "-o", self.wan_interface, "-j", "ACCEPT"],
+            ["-i", self.wan_interface, "-o", TUN_DEVICE_NAME,
+             "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        ]:
+            try:
+                chk = subprocess.run(
+                    ["iptables", "-C", "FORWARD"] + fwd_rule, capture_output=True
+                )
+                if chk.returncode != 0:
+                    subprocess.run(
+                        ["iptables", "-A", "FORWARD"] + fwd_rule,
+                        check=True, capture_output=True
+                    )
+            except Exception as e:
+                logger.warning("FORWARD rule setup failed: %s", e)
+
         try:
-            # Check if rule exists first
+            # Check if MASQUERADE rule exists first
             result = subprocess.run(
                 ["iptables", "-t", "nat", "-C", "POSTROUTING",
                  "-s", TUN_SUBNET, "-o", self.wan_interface, "-j", "MASQUERADE"],
@@ -465,7 +496,19 @@ class HTPVPNGateway:
             logger.error("Failed to set up NAT: %s", e)
 
     def _cleanup_nat(self):
-        """Remove NAT rules."""
+        """Remove NAT and FORWARD rules."""
+        for fwd_rule in [
+            ["-i", TUN_DEVICE_NAME, "-o", self.wan_interface, "-j", "ACCEPT"],
+            ["-i", self.wan_interface, "-o", TUN_DEVICE_NAME,
+             "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        ]:
+            try:
+                subprocess.run(
+                    ["iptables", "-D", "FORWARD"] + fwd_rule,
+                    capture_output=True, timeout=5
+                )
+            except Exception:
+                pass
         try:
             subprocess.run(
                 ["iptables", "-t", "nat", "-D", "POSTROUTING",
@@ -595,8 +638,11 @@ class HTPVPNGateway:
             challenge_pkt = struct.pack(">HB", HTP_VERSION, CHALLENGE) + challenge_payload
             challenge_pkt += self._verify_key_bytes + sig
         except Exception as e:
-            logger.warning("Ed25519 signing failed: %s (sending unsigned)", e)
-            challenge_pkt = struct.pack(">HB", HTP_VERSION, CHALLENGE) + challenge_payload
+            logger.error("Ed25519 signing failed: %s — rejecting %s", e, node_id)
+            with self._lock:
+                self.pending.pop(addr, None)
+            self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+            return
         self.sock.sendto(challenge_pkt, addr)
         logger.debug("CHALLENGE sent to %s (%s)", node_id, addr)
 
@@ -646,26 +692,42 @@ class HTPVPNGateway:
             self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
             return
 
-        # Assign client IP
-        client_ip = self._assign_client_ip()
-        if not client_ip:
-            logger.error("No IPs available for %s", pending.node_id)
-            self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
-            return
-
-        # Create session
-        now = time.time()
-        session = GatewaySession(
-            flow_token=flow_token,
-            node_id=pending.node_id,
-            session_key=session_key,
-            client_addr=addr,
-            assigned_ip=client_ip,
-            created_at=now,
-            last_activity=now,
-        )
-
+        # Single atomic lock block: evict stale sessions, assign IP, register
+        # — prevents IP pool race and capacity TOCTOU under concurrent handshakes.
         with self._lock:
+            # Evict existing session from the same node_id (reconnect)
+            old_flow = self.node_to_flow.get(pending.node_id)
+            if old_flow and old_flow in self.sessions:
+                old_session = self.sessions.pop(old_flow)
+                self.addr_to_flow.pop(old_session.client_addr, None)
+                self.ip_to_flow.pop(old_session.assigned_ip, None)
+                self.node_to_flow.pop(old_session.node_id, None)
+                self._release_client_ip(old_session.assigned_ip)
+                logger.info("Evicted stale session for %s (%s) on reconnect",
+                            old_session.node_id, old_session.assigned_ip)
+
+            # Remove any old session from same address (NAT rebinding)
+            old_addr_flow = self.addr_to_flow.pop(addr, None)
+            if old_addr_flow and old_addr_flow in self.sessions:
+                old_session = self.sessions.pop(old_addr_flow)
+                self.ip_to_flow.pop(old_session.assigned_ip, None)
+                self.node_to_flow.pop(old_session.node_id, None)
+                self._release_client_ip(old_session.assigned_ip)
+
+            # Capacity check (accurate inside lock)
+            if len(self.sessions) >= self.max_clients:
+                logger.error("Max clients reached (%d), rejecting %s",
+                             self.max_clients, pending.node_id)
+                self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+                return
+
+            # Assign client IP (inside lock — prevents duplicate assignment)
+            client_ip = self._assign_client_ip()
+            if not client_ip:
+                logger.error("No IPs available for %s", pending.node_id)
+                self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+                return
+
             # Guard against flow_token collision from different clients
             if flow_token in self.sessions and self.sessions[flow_token].client_addr != addr:
                 logger.warning("Flow token collision from %s (existing: %s)",
@@ -674,19 +736,24 @@ class HTPVPNGateway:
                 self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
                 return
 
-            # Remove any old session from same address
-            old_flow = self.addr_to_flow.pop(addr, None)
-            if old_flow and old_flow in self.sessions:
-                old_session = self.sessions.pop(old_flow)
-                self.ip_to_flow.pop(old_session.assigned_ip, None)
-                self._release_client_ip(old_session.assigned_ip)
-
+            # Create and register session
+            now = time.time()
+            session = GatewaySession(
+                flow_token=flow_token,
+                node_id=pending.node_id,
+                session_key=session_key,
+                client_addr=addr,
+                assigned_ip=client_ip,
+                created_at=now,
+                last_activity=now,
+            )
             self.sessions[flow_token] = session
             self.addr_to_flow[addr] = flow_token
             self.ip_to_flow[client_ip] = flow_token
+            self.node_to_flow[pending.node_id] = flow_token
             self.total_sessions += 1
 
-        # Send ACCEPT (with assigned IP for future multi-client awareness)
+        # Send ACCEPT outside lock (with assigned IP)
         accept_pkt = struct.pack(">HB", HTP_VERSION, ACCEPT) + socket.inet_aton(client_ip)
         self.sock.sendto(accept_pkt, addr)
 
@@ -722,15 +789,29 @@ class HTPVPNGateway:
         if ptype == IP_PACKET:
             payload = data[13:]
             ip_packet = self._decrypt_with_fallback(payload, session)
-            if ip_packet and self.tun_fd is not None:
-                # Rewrite source IP from client's hardcoded 10.250.0.2 → assigned IP
+            if not ip_packet or self.tun_fd is None:
+                pass
+            elif len(ip_packet) < 20 or (ip_packet[0] >> 4) != 4:
+                # Drop non-IPv4 (IPv6, malformed) — only IPv4 tunneling supported
+                logger.debug("Dropped non-IPv4 packet (ver=%d) from %s",
+                             ip_packet[0] >> 4 if ip_packet else 0, session.node_id)
+            else:
+                # Rewrite source IP from client's local TUN IP → assigned IP
                 ip_packet = rewrite_src_ip(ip_packet, session.assigned_ip)
-                try:
-                    os.write(self.tun_fd, ip_packet)
-                    session.bytes_received += len(ip_packet)
-                    session.packets_received += 1
-                except OSError as e:
-                    logger.warning("TUN write error: %s", e)
+
+                # Client-to-client isolation: drop packets destined to VPN subnet
+                # (except gateway itself). Prevents lateral movement between clients.
+                dst = get_dst_ip(ip_packet)
+                if dst and dst.startswith("10.250.0.") and dst != TUN_GATEWAY_IP:
+                    logger.debug("Dropped client-to-client packet %s→%s",
+                                 session.assigned_ip, dst)
+                else:
+                    try:
+                        os.write(self.tun_fd, ip_packet)
+                        session.bytes_received += len(ip_packet)
+                        session.packets_received += 1
+                    except OSError as e:
+                        logger.warning("TUN write error: %s", e)
 
         elif ptype == KEEPALIVE:
             # Echo keepalive back
@@ -822,6 +903,10 @@ class HTPVPNGateway:
                 if not packet or len(packet) < 20:
                     continue
 
+                # Only process IPv4 packets
+                if (packet[0] >> 4) != 4:
+                    continue
+
                 # Get destination IP to find which client
                 dst_ip = get_dst_ip(packet)
                 if not dst_ip:
@@ -834,8 +919,8 @@ class HTPVPNGateway:
                 if not session:
                     continue
 
-                # Rewrite destination from assigned IP → 10.250.0.2 (what client expects)
-                packet = rewrite_dst_ip(packet, "10.250.0.2")
+                # Rewrite destination to client's assigned IP (each client has its own)
+                packet = rewrite_dst_ip(packet, session.assigned_ip)
 
                 # Encrypt and send
                 encrypted = self._encrypt_packet(packet, session.session_key)
@@ -946,6 +1031,7 @@ class HTPVPNGateway:
             if session:
                 self.addr_to_flow.pop(session.client_addr, None)
                 self.ip_to_flow.pop(session.assigned_ip, None)
+                self.node_to_flow.pop(session.node_id, None)
                 self._release_client_ip(session.assigned_ip)
                 logger.info("Session removed: %s (%s) [%d pkts, %.1f KB]",
                             session.node_id, session.assigned_ip,
@@ -1013,9 +1099,32 @@ class HTPVPNGateway:
                 if any(t > cutoff_attest for t in ts)
             }
 
+            # Write status file for mesh_server.py dashboard integration
+            self._write_status_file()
+
     # =========================================================================
     # STATUS
     # =========================================================================
+
+    _STATUS_FILE = "/tmp/htp_gateway_status.json"
+
+    def _write_status_file(self):
+        """Write compact status to a file for mesh_server.py to read."""
+        try:
+            with self._lock:
+                client_count = len(self.sessions)
+            status = {
+                "active": self._running,
+                "clients": client_count,
+                "uptime_s": int(time.time() - self.started_at) if self.started_at else 0,
+                "ts": time.time(),
+            }
+            tmp = self._STATUS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(status, f)
+            os.replace(tmp, self._STATUS_FILE)
+        except Exception:
+            pass  # Non-critical — dashboard shows stale data
 
     def get_status(self) -> dict:
         """Get gateway status for monitoring."""
