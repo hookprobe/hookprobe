@@ -890,7 +890,12 @@ class FortressVPNClient:
             else:
                 # Reject unsigned CHALLENGE if we have a pinned TOFU key
                 host_key = f"{self.config.gateway_host}:{self.config.gateway_port}"
-                known = self._load_known_hosts()
+                known = {}
+                if KNOWN_HOSTS_FILE.exists():
+                    try:
+                        known = json.loads(KNOWN_HOSTS_FILE.read_text())
+                    except (json.JSONDecodeError, OSError):
+                        pass
                 if known.get(host_key):
                     logger.error("Known gateway %s has TOFU key but sent unsigned "
                                  "CHALLENGE — possible downgrade attack, aborting", host_key)
