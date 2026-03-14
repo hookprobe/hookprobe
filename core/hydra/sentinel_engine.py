@@ -130,7 +130,7 @@ def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
             return resp.read().decode('utf-8')
 
     except Exception as e:
-        logger.error(f"ClickHouse query error: {e}")
+        logger.error("ClickHouse query error: %s", type(e).__name__)
         return None
 
 
@@ -152,7 +152,7 @@ def ch_insert(query: str, data: str = '') -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"ClickHouse insert error: {e}")
+        logger.error("ClickHouse insert error: %s", type(e).__name__)
         return False
 
 
@@ -1692,7 +1692,7 @@ def auto_label_by_consensus() -> dict:
 
 def main():
     logger.info("SENTINEL Engine starting...")
-    logger.info(f"ClickHouse: {CH_HOST}:{CH_PORT}/{CH_DB}")
+    logger.info("ClickHouse: connected to %s", CH_DB)
     logger.info(f"Scoring interval: {SCORING_INTERVAL}s")
     logger.info(f"Feature toggle: {'ENABLED' if SENTINEL_ENABLED else 'DISABLED'}")
     logger.info(f"Evidence features: {N_EVIDENCE}")
