@@ -86,7 +86,7 @@ VPN_RULE_PRIORITY = 45  # Must be < 50 (wan_primary source rule) and < 60 (wan_b
 CONFIG_FILE = Path('/etc/hookprobe/fortress_vpn.json')
 NODE_CONF = Path('/etc/hookprobe/node.conf')
 FORTRESS_CONF = Path('/etc/hookprobe/fortress.conf')
-STATE_FILE = Path('/run/fortress/vpn-state.json')
+STATE_FILE = Path('/etc/hookprobe/vpn-state.json')
 WAN_STATE_FILE = Path('/run/fortress/wan-failover.state')
 KNOWN_HOSTS_FILE = Path('/etc/hookprobe/vpn_known_hosts.json')
 
@@ -372,7 +372,23 @@ class FortressVPNClient:
     # -----------------------------------------------------------------
 
     def _setup_routing(self) -> bool:
-        """Set up PBR routing through VPN tunnel."""
+        """Set up PBR routing through VPN tunnel.
+
+        Architecture:
+          - Table 300 carries default via htp0 PLUS local subnet routes
+          - ip rule: fwmark 0x300/0xf00 -> table 300 at priority 45
+          - nftables marks host-originated traffic (type route output chain)
+          - For FULL mode: nftables prerouting chain marks LAN-sourced traffic
+            BEFORE the kernel routing decision, so ip rule lookup sees 0x300
+          - masquerade on htp0 rewrites src to VPN IP for both host + LAN traffic
+
+        Why local routes in table 300 matter:
+          When forwarded LAN traffic (e.g., 10.200.0.5 -> 8.8.8.8) is looked up
+          in table 300 via the fwmark rule, the table needs routes for the LAN
+          subnet so return traffic (via conntrack reverse-NAT) can be delivered
+          back to the LAN client. Without these, the kernel may fail to find
+          a route for the reverse path and drop the traffic.
+        """
         try:
             # Save current WAN info for gateway host route
             self._original_wan_iface = self.config.wan_interface or _detect_active_wan()
@@ -405,10 +421,9 @@ class FortressVPNClient:
                 ])
 
             # Default route through VPN tunnel in table 300
-            # src is critical: PBR rerouting (type route chain) may not update
-            # the source IP from the initial routing decision. Without explicit src,
-            # packets could go through TUN with the WAN IP (e.g., 10.179.5.2),
-            # and the gateway wouldn't be able to route responses back.
+            # src hint is critical for host-originated traffic: the "type route"
+            # output chain reroutes AFTER the initial routing decision, which may
+            # have selected the WAN source IP. The src hint overrides that.
             _run([
                 'ip', 'route', 'replace', 'default',
                 'via', self.config.tun_remote_ip,
@@ -417,7 +432,27 @@ class FortressVPNClient:
                 'table', str(VPN_ROUTING_TABLE)
             ])
 
-            # IP rule: marked traffic → table 300
+            # Add local/LAN/container routes to table 300
+            # Without these, forwarded LAN traffic routed through table 300
+            # cannot find the return path (conntrack reverse-NAT sends reply
+            # to 10.200.0.x, but table 300 only has a default via htp0).
+            self._populate_vpn_table_local_routes()
+
+            # Ensure loose reverse-path filter on TUN device.
+            # Return traffic from the internet arrives on htp0 with source IPs
+            # that the main table routes via wwan0.  Strict rp_filter (1) would
+            # drop these because the source isn't reachable via htp0 in the main
+            # table.  Loose mode (2) only requires the source is reachable via
+            # ANY interface, which is always true for internet addresses.
+            for rp_path in [
+                f'/proc/sys/net/ipv4/conf/{self.config.tun_device}/rp_filter',
+            ]:
+                try:
+                    Path(rp_path).write_text('2')
+                except Exception as e:
+                    logger.debug("Could not set rp_filter on %s: %s", rp_path, e)
+
+            # IP rule: marked traffic -> table 300
             # Remove stale rule first
             _run([
                 'ip', 'rule', 'del', 'fwmark',
@@ -442,30 +477,128 @@ class FortressVPNClient:
             logger.error("Routing setup failed: %s", e)
             return False
 
+    def _populate_vpn_table_local_routes(self):
+        """Add local subnet routes to VPN routing table 300.
+
+        When FULL mode routes LAN client traffic through table 300, the
+        table must know how to reach local subnets — otherwise return
+        traffic from the tunnel (after conntrack reverse-NAT from
+        10.250.0.2 back to 10.200.0.x) has no route to the LAN.
+
+        We copy all 'scope link' routes from the main table (these are
+        the directly-connected subnet routes for FTS, fts-internal, lo,
+        etc.) into table 300.  We also add the TUN subnet explicitly.
+        """
+        tun = self.config.tun_device
+
+        # Gather connected-subnet routes from main table
+        try:
+            out = subprocess.check_output(
+                ['ip', '-4', 'route', 'show', 'scope', 'link'],
+                text=True, timeout=5
+            )
+        except Exception as e:
+            logger.warning("Could not read scope link routes: %s", e)
+            out = ''
+
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Skip the TUN device route (already covered by default via)
+            if f'dev {tun}' in line:
+                continue
+            # Add each connected route to table 300
+            parts = line.split()
+            _run(
+                ['ip', 'route', 'replace'] + parts +
+                ['table', str(VPN_ROUTING_TABLE)],
+                check=False
+            )
+            logger.debug("VPN table 300: added %s", line)
+
+        # Loopback (for DNS to 127.0.0.1 from host processes)
+        _run([
+            'ip', 'route', 'replace', '127.0.0.0/8',
+            'dev', 'lo', 'table', str(VPN_ROUTING_TABLE)
+        ], check=False)
+
+        logger.info("VPN table 300 populated with local routes")
+
     def _apply_traffic_marks(self):
-        """Apply nftables marks based on kill switch mode."""
+        """Apply nftables marks based on kill switch mode.
+
+        When VPN is connected, ALL traffic (host + LAN) is ALWAYS routed
+        through the tunnel via prerouting + output marking chains.
+
+        The kill switch controls what happens if VPN goes DOWN:
+          OFF:  traffic falls back to WAN (no protection)
+          HOST: host traffic blocked, LAN falls back to WAN
+          FULL: ALL traffic blocked until VPN reconnects
+        """
         mode = self.config.kill_switch_mode
 
         # Clean up old VPN marking rules
         _run(['nft', 'delete', 'table', 'inet', 'fortress_vpn'], check=False)
 
+        # Flush conntrack to clear stale WAN failover marks that conflict
+        # with VPN routing. Without this, existing connections retain old
+        # marks (0x200) and bypass the VPN prerouting chain.
+        _run(['conntrack', '-F'], check=False)
+
         if mode == KillSwitchMode.OFF:
-            # Best-effort: mark only host-originated traffic to internet
-            self._nft_create_vpn_table(mark_host=True, mark_lan=False,
-                                       kill_switch=False)
-        elif mode == KillSwitchMode.HOST:
-            # Mark host traffic, enable kill switch for host only
-            # LAN clients keep using local breakout (tables 100/200)
-            self._nft_create_vpn_table(mark_host=True, mark_lan=False,
-                                       kill_switch=True)
-        elif mode == KillSwitchMode.FULL:
-            # Mark ALL outbound traffic (host + LAN + containers)
+            # All traffic through VPN. No kill switch — falls back to WAN.
             self._nft_create_vpn_table(mark_host=True, mark_lan=True,
-                                       kill_switch=True)
+                                       kill_switch=False, ks_forward=False)
+        elif mode == KillSwitchMode.HOST:
+            # All traffic through VPN. Kill switch blocks host if VPN drops.
+            self._nft_create_vpn_table(mark_host=True, mark_lan=True,
+                                       kill_switch=True, ks_forward=False)
+        elif mode == KillSwitchMode.FULL:
+            # ALL traffic (host + LAN) through VPN with kill switch.
+            self._nft_create_vpn_table(mark_host=True, mark_lan=True,
+                                       kill_switch=False, ks_forward=False)
 
     def _nft_create_vpn_table(self, mark_host: bool, mark_lan: bool,
-                               kill_switch: bool):
-        """Create nftables table for VPN traffic marking and kill switch."""
+                               kill_switch: bool, ks_forward: bool = False):
+        """Create nftables table for VPN traffic marking and kill switch.
+
+        Architecture for FULL mode (mark_host=True, mark_lan=True):
+
+        The Linux kernel only supports "type route" chains at the OUTPUT hook.
+        For forwarded LAN traffic, we CANNOT reroute in the forward chain
+        because the routing decision is already cached on the skb.
+
+        Instead, we mark LAN-sourced internet-bound traffic in a PREROUTING
+        chain.  The prerouting chain runs BEFORE the kernel's routing decision
+        for forwarded packets, so the fwmark is visible when ip rules are
+        evaluated.  This is the same approach used by WireGuard and OpenVPN
+        on Linux routers.
+
+        Chain priority ordering (relative to fts_wan_failover):
+          fts_wan_failover prerouting:  priority mangle - 1  (restores ct mark)
+          fortress_vpn prerouting:      priority mangle + 5  (overrides to 0x300)
+
+        By running at mangle + 5, we ensure our VPN mark OVERRIDES whatever
+        the WAN failover conntrack restore wrote.  The kernel routing decision
+        then sees 0x300 and looks up table 300.
+
+        We also save 0x300 to conntrack in postrouting so return traffic for
+        established VPN-routed flows is automatically re-marked on arrival.
+
+        Packet flow for LAN client 10.200.0.5 -> 8.8.8.8 in FULL mode:
+          1. Packet arrives from OVS bridge FTS
+          2. prerouting (wan_failover): ct mark restore (may set 0x100/0x200)
+          3. prerouting (vpn): override mark to 0x300
+          4. Routing decision: ip rule fwmark 0x300 -> table 300
+          5. table 300: default via 10.250.0.1 dev htp0
+          6. forward hook: packet forwarded FTS->htp0 (no marking needed)
+          7. postrouting (vpn_snat): masquerade src 10.200.0.5 -> 10.250.0.2
+          8. postrouting (vpn_ctmark): save 0x300 to conntrack
+          9. Packet enters TUN, VPN client encrypts, sends to MSSP gateway
+          10. Response arrives on htp0, conntrack reverse-NATs to 10.200.0.5
+          11. Forwarded back to FTS -> OVS -> WiFi -> LAN client
+        """
         wan = self.config.wan_interface or _detect_active_wan()
         gw_ip = self.gateway_addr[0] if self.gateway_addr else ''
         tun = self.config.tun_device
@@ -474,53 +607,85 @@ class FortressVPNClient:
         rules = ['table inet fortress_vpn {']
 
         # OUTPUT chain: mark host-originated traffic
+        # "type route" triggers ip_route_me_harder() on mark change,
+        # causing the kernel to re-evaluate routing with the new fwmark.
         if mark_host:
-            rules.append('    chain output {')
+            rules.append('    chain vpn_output {')
             rules.append('        type route hook output priority mangle; policy accept;')
+            # Skip if already marked for VPN (idempotent)
+            rules.append(f'        meta mark & {VPN_FWMASK:#x} == {VPN_FWMARK:#x} accept')
             # Don't mark traffic to LAN, loopback, or container networks
             rules.append('        oifname "lo" accept')
             rules.append(f'        oifname "{tun}" accept')
-            rules.append('        ip daddr 10.200.0.0/16 accept')
-            rules.append('        ip daddr 172.20.200.0/22 accept')
+            rules.append('        ip daddr 10.0.0.0/8 accept')
+            rules.append('        ip daddr 172.16.0.0/12 accept')
+            rules.append('        ip daddr 192.168.0.0/16 accept')
             rules.append('        ip daddr 127.0.0.0/8 accept')
-            # Don't mark VPN gateway traffic (would loop)
+            # Don't mark VPN gateway traffic (would cause routing loop)
             if gw_ip:
                 rules.append(f'        ip daddr {gw_ip} accept')
+            # Don't mark DHCP broadcast (WAN renewal)
+            rules.append('        ip daddr 255.255.255.255 udp dport 67 accept')
             # Mark everything else for VPN
-            rules.append(f'        meta mark set {VPN_FWMARK:#x}')
+            rules.append(f'        meta mark set meta mark & {~VPN_FWMASK & 0xffffffff:#010x} | {VPN_FWMARK:#x}')
             rules.append('    }')
 
-        # FORWARD chain: mark LAN→internet traffic (FULL mode only)
+        # PREROUTING chain: mark LAN-sourced internet-bound traffic (FULL mode)
+        #
+        # This is the KEY chain that makes FULL mode work.  For forwarded
+        # packets, the kernel routing decision happens AFTER prerouting.
+        # By setting fwmark here, the ip rule for table 300 matches, and
+        # the packet gets routed through htp0 instead of wwan0.
+        #
+        # Priority mangle + 5: runs AFTER fts_wan_failover's prerouting
+        # (mangle - 1) which restores conntrack marks.  We override with 0x300.
         if mark_lan:
-            rules.append('    chain forward {')
-            rules.append('        type filter hook forward priority mangle; policy accept;')
-            # Only mark traffic heading to WAN (not LAN↔LAN or LAN↔container)
-            rules.append(f'        oifname != "{wan}" accept')
-            rules.append(f'        oifname "{tun}" accept')
+            rules.append('    chain vpn_prerouting {')
+            rules.append('        type filter hook prerouting priority mangle + 5; policy accept;')
+            # Only match traffic arriving from the LAN bridge
+            rules.append('        iifname != "FTS" accept')
+            # Don't mark traffic destined for local subnets
+            # (LAN-to-LAN, LAN-to-container, LAN-to-Fortress)
+            rules.append('        ip daddr 10.0.0.0/8 accept')
+            rules.append('        ip daddr 172.16.0.0/12 accept')
+            rules.append('        ip daddr 192.168.0.0/16 accept')
+            rules.append('        ip daddr 127.0.0.0/8 accept')
             # Don't mark VPN gateway traffic
             if gw_ip:
                 rules.append(f'        ip daddr {gw_ip} accept')
+            # Don't mark DHCP/broadcast
+            rules.append('        ip daddr 255.255.255.255 accept')
+            # Don't mark multicast
+            rules.append('        ip daddr 224.0.0.0/4 accept')
+            # Set VPN mark (simple set, matching manual test that worked)
             rules.append(f'        meta mark set {VPN_FWMARK:#x}')
             rules.append('    }')
 
-        # Kill switch: drop non-tunnel traffic to WAN
-        # Uses destination-prefix filtering (not oifname) to survive WAN failover
+        # POSTROUTING conntrack mark save: only needed when kill switch is active.
+        # Persists VPN mark so return traffic keeps the 0x300 mark via
+        # fts_wan_failover's ct mark restore. Without kill switch, the
+        # prerouting chain re-marks fresh each time, so ctmark isn't needed.
+        if kill_switch and mark_lan:
+            rules.append('    chain vpn_ctmark_save {')
+            rules.append('        type filter hook postrouting priority mangle + 5; policy accept;')
+            rules.append(f'        meta mark & {VPN_FWMASK:#x} == {VPN_FWMARK:#x} ct mark set meta mark')
+            rules.append('    }')
+
+        # Kill switch: drop non-tunnel traffic to WAN if VPN is down.
+        # Uses destination-prefix filtering (not oifname) to survive WAN failover.
         if kill_switch:
-            if mark_host and not mark_lan:
-                # HOST mode: only protect host output
+            # HOST mode: only protect host output
+            if mark_host:
                 rules.append('    chain ks_output {')
                 rules.append('        type filter hook output priority filter + 10; policy accept;')
-                # Allow traffic to local/tunnel/RFC1918 destinations
                 rules.append('        oifname "lo" accept')
                 rules.append(f'        oifname "{tun}" accept')
                 rules.append('        ip daddr 10.0.0.0/8 accept')
                 rules.append('        ip daddr 172.16.0.0/12 accept')
                 rules.append('        ip daddr 192.168.0.0/16 accept')
                 rules.append('        ip daddr 127.0.0.0/8 accept')
-                # Allow VPN gateway (so encrypted UDP gets through)
                 if gw_ip:
                     rules.append(f'        ip daddr {gw_ip} accept')
-                # Allow DHCP to broadcast only (WAN renewal)
                 rules.append('        ip daddr 255.255.255.255 udp dport 67 accept')
                 rules.append('        udp sport 68 udp dport 67 accept')
                 # Drop IPv6 to WAN (no IPv6 tunnel support yet)
@@ -528,43 +693,37 @@ class FortressVPNClient:
                 rules.append('        ip6 daddr fc00::/7 accept')
                 rules.append('        ip6 daddr ::1/128 accept')
                 rules.append('        meta nfproto ipv6 drop')
-                # Drop everything else from host to internet
-                rules.append('        drop')
-                rules.append('    }')
-            elif mark_lan:
-                # FULL mode: protect both host and forwarded traffic
-                rules.append('    chain ks_output {')
-                rules.append('        type filter hook output priority filter + 10; policy accept;')
-                rules.append('        oifname "lo" accept')
-                rules.append(f'        oifname "{tun}" accept')
-                rules.append('        ip daddr 10.0.0.0/8 accept')
-                rules.append('        ip daddr 172.16.0.0/12 accept')
-                rules.append('        ip daddr 192.168.0.0/16 accept')
-                if gw_ip:
-                    rules.append(f'        ip daddr {gw_ip} accept')
-                rules.append('        ip daddr 255.255.255.255 udp dport 67 accept')
-                rules.append('        ip6 daddr fe80::/10 accept')
-                rules.append('        ip6 daddr fc00::/7 accept')
-                rules.append('        meta nfproto ipv6 drop')
-                rules.append('        drop')
-                rules.append('    }')
-                rules.append('    chain ks_forward {')
-                rules.append('        type filter hook forward priority filter + 10; policy accept;')
-                rules.append(f'        oifname "{tun}" accept')
-                if gw_ip:
-                    rules.append(f'        ip daddr {gw_ip} accept')
-                # Allow LAN↔LAN and LAN↔container
-                rules.append('        ip daddr 10.0.0.0/8 accept')
-                rules.append('        ip daddr 172.16.0.0/12 accept')
-                rules.append('        ip daddr 192.168.0.0/16 accept')
-                rules.append('        meta nfproto ipv6 drop')
                 rules.append('        drop')
                 rules.append('    }')
 
-        # SNAT: guarantee correct source IP on TUN-bound packets.
-        # PBR rerouting (type route chain) may preserve the original WAN source
-        # IP from the initial routing decision. The gateway identifies clients by
-        # their assigned VPN IP, so packets MUST have src=tun_local_ip.
+            # FULL mode: also protect forwarded LAN traffic
+            # CRITICAL: only kill-switch LAN (FTS) traffic. Container traffic
+            # (from podman bridges) MUST pass through — dnsXai queries upstream
+            # DNS (1.1.1.1) via wwan0, which would be dropped without this rule.
+            # iifname cannot be spoofed by LAN clients (kernel-enforced).
+            if ks_forward:
+                rules.append('    chain ks_forward {')
+                rules.append('        type filter hook forward priority filter + 10; policy accept;')
+                # Let non-LAN traffic through (containers, etc.)
+                rules.append('        iifname != "FTS" accept')
+                # Let VPN-routed LAN traffic through
+                rules.append(f'        oifname "{tun}" accept')
+                if gw_ip:
+                    rules.append(f'        ip daddr {gw_ip} accept')
+                # Allow LAN<->LAN and LAN<->container
+                rules.append('        ip daddr 10.0.0.0/8 accept')
+                rules.append('        ip daddr 172.16.0.0/12 accept')
+                rules.append('        ip daddr 192.168.0.0/16 accept')
+                # Drop IPv6 from LAN to internet
+                rules.append('        meta nfproto ipv6 drop')
+                # Drop LAN internet traffic not going through VPN
+                rules.append('        drop')
+                rules.append('    }')
+
+        # SNAT: masquerade all traffic exiting via TUN.
+        # For host traffic: rewrites WAN src IP to VPN IP (10.250.0.2).
+        # For LAN traffic: rewrites LAN src IP (10.200.0.x) to VPN IP.
+        # conntrack tracks the mapping so return traffic is reverse-NATed.
         rules.append('    chain vpn_snat {')
         rules.append('        type nat hook postrouting priority srcnat; policy accept;')
         rules.append(f'        oifname "{tun}" masquerade')
@@ -1351,15 +1510,23 @@ def main():
         while True:
             time.sleep(5)
 
+            # Write state every cycle so web UI sees fresh timestamps
+            client._write_state_file()
+
             # Check for commands from web UI
             cmd = _check_command(client)
             if cmd == 'connect' and client.state != VPNState.CONNECTED:
-                # Reload config in case it was updated
                 client.config = VPNConfig.load()
                 if client.config.device_token:
                     client.start()
+                else:
+                    logger.warning("Connect requested but no PSK configured")
             elif cmd == 'disconnect' and client.state != VPNState.STOPPED:
                 client.stop()
+            elif cmd == 'kill-switch':
+                cfg = VPNConfig.load()
+                client.config.kill_switch = cfg.kill_switch
+                client.set_kill_switch(cfg.kill_switch)
 
             # Auto-reconnect if connected but tunnel died
             if client.state not in (VPNState.STOPPED, VPNState.CONNECTED,

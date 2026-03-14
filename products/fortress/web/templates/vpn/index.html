@@ -93,12 +93,16 @@
                     </div>
                     <div class="col-5">
                         <label class="mb-1"><small>Kill Switch</small></label>
-                        <select class="form-control form-control-sm mb-2" id="kill-switch-select">
-                            <option value="off">OFF</option>
-                            <option value="host" selected>HOST</option>
-                            <option value="full">FULL</option>
-                        </select>
+                        <div class="d-flex align-items-center mb-1" id="ks-slider-wrap">
+                            <input type="range" min="0" max="2" step="1" value="1" class="custom-range" id="kill-switch-slider" style="flex:1;">
+                        </div>
+                        <div class="d-flex justify-content-between" style="font-size:.7rem;margin-top:-4px;">
+                            <span id="ks-l0" class="text-muted">OFF</span>
+                            <span id="ks-l1">HOST</span>
+                            <span id="ks-l2">FULL</span>
+                        </div>
                         <small class="text-muted d-block mb-2" id="ks-help">HOST: Fortress only. LAN uses local ISP.</small>
+                        <input type="hidden" id="kill-switch-select" value="host">
                         <button class="btn btn-success btn-sm btn-block" id="btn-tunnel-connect" style="display:none;">
                             <i class="fas fa-plug mr-1"></i>Connect
                         </button>
@@ -293,10 +297,27 @@ setInterval(function(){
 {% if current_user.is_admin %}
 // ---- VPN Tunnel Control ----
 (function(){
-    var ksHelp = {'off':'No protection. VPN is optional.','host':'Fortress host only. LAN uses local ISP (safe for POS).','full':'ALL traffic through tunnel. LAN down if MSSP offline.'};
+    var ksMap = {0:'off',1:'host',2:'full'};
+    var ksRev = {'off':0,'host':1,'full':2};
+    var ksHelp = {'off':'VPN on, no kill switch. Falls back to ISP if tunnel drops.','host':'Blocks Fortress internet if tunnel drops. LAN falls back to ISP.','full':'Blocks ALL internet if tunnel drops. Maximum protection.'};
+    var ksColors = {0:'text-muted',1:'text-warning',2:'text-danger'};
+    var slider = document.getElementById('kill-switch-slider');
+    var hidden = document.getElementById('kill-switch-select');
+
+    function updateSliderUI(mode) {
+        var idx = ksRev[mode]; if(idx===undefined) idx=0;
+        slider.value = idx;
+        hidden.value = mode;
+        document.getElementById('ks-help').textContent = ksHelp[mode]||'';
+        // Highlight active label, dim others
+        for(var i=0;i<3;i++){
+            var el=document.getElementById('ks-l'+i);
+            if(el){el.className=(i===idx)?(ksColors[i]+' font-weight-bold'):'text-muted';}
+        }
+    }
 
     function loadTunnel(){
-        fetch('/vpn/api/tunnel/status').then(r=>r.json()).then(d=>{
+        fetch('/vpn/api/tunnel/status').then(function(r){return r.json();}).then(function(d){
             var badge=document.getElementById('tunnel-badge');
             var box=document.getElementById('tunnel-box');
             var h3=document.getElementById('tunnel-state-h3');
@@ -332,29 +353,39 @@ setInterval(function(){
             document.getElementById('tunnel-ip').textContent=d.tun_ip||'-';
             document.getElementById('tunnel-uptime').textContent=d.uptime||'-';
             document.getElementById('tunnel-traffic').textContent=d.connected?formatBytes(d.bytes_sent||0)+' / '+formatBytes(d.bytes_received||0):'-';
-            if(d.kill_switch) document.getElementById('kill-switch-select').value=d.kill_switch;
+            if(d.kill_switch) updateSliderUI(d.kill_switch);
         }).catch(function(){});
     }
 
-    document.getElementById('kill-switch-select').addEventListener('change',function(){
-        var m=this.value;
-        document.getElementById('ks-help').textContent=ksHelp[m]||'';
-        fetch('/vpn/api/tunnel/kill-switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})})
-        .then(r=>r.json()).then(d=>{if(d.success)showAlert('Kill switch: '+m.toUpperCase(),'info');else showAlert(d.error||'Failed','danger');});
+    slider.addEventListener('input',function(){
+        var mode = ksMap[this.value]||'host';
+        updateSliderUI(mode);
+        fetch('/vpn/api/tunnel/kill-switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
+        .then(function(r){return r.json();}).then(function(d){
+            if(d.success) showAlert('Kill switch: '+mode.toUpperCase(),'info');
+            else showAlert(d.error||'Failed','danger');
+        });
     });
 
     document.getElementById('btn-tunnel-connect').addEventListener('click',function(){
-        this.disabled=true; this.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>...';
+        var btn=this;
+        btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>...';
         fetch('/vpn/api/tunnel/connect',{method:'POST',headers:{'Content-Type':'application/json'}})
-        .then(r=>r.json()).then(d=>{if(d.success){showAlert(d.message,'success');setTimeout(loadTunnel,2000);}else showAlert(d.error,'danger');
-            this.disabled=false;this.innerHTML='<i class="fas fa-plug mr-1"></i>Connect';}.bind(this));
+        .then(function(r){return r.json();}).then(function(d){
+            if(d.success){showAlert(d.message,'success');setTimeout(loadTunnel,2000);}
+            else showAlert(d.error||'Failed','danger');
+            btn.disabled=false;btn.innerHTML='<i class="fas fa-plug mr-1"></i>Connect';
+        });
     });
 
     document.getElementById('btn-tunnel-disconnect').addEventListener('click',function(){
-        if(!confirm('Disconnect? Traffic reverts to local ISP.'))return;
+        if(!confirm('Disconnect VPN? Traffic reverts to local ISP.'))return;
         this.disabled=true;
         fetch('/vpn/api/tunnel/disconnect',{method:'POST',headers:{'Content-Type':'application/json'}})
-        .then(r=>r.json()).then(d=>{showAlert(d.success?d.message:(d.error||'Failed'),d.success?'success':'danger');setTimeout(loadTunnel,1000);});
+        .then(function(r){return r.json();}).then(function(d){
+            showAlert(d.success?d.message:(d.error||'Failed'),d.success?'success':'danger');
+            setTimeout(loadTunnel,1000);
+        });
     });
 
     loadTunnel();
