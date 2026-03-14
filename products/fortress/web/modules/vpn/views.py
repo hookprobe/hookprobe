@@ -216,7 +216,7 @@ def api_health():
 #   /run/fortress/vpn-state.json      - state written by daemon (bind-mounted)
 #   /etc/hookprobe/vpn_command        - control file (web writes, host reads)
 
-VPN_STATE_FILE = Path('/run/fortress/vpn-state.json')
+VPN_STATE_FILE = Path('/etc/hookprobe/vpn-state.json')
 VPN_CONFIG_FILE = Path('/etc/hookprobe/fortress_vpn.json')
 VPN_COMMAND_FILE = Path('/etc/hookprobe/vpn_command')
 
