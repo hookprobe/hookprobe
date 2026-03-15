@@ -890,6 +890,30 @@ def main():
     ensure_tables()
     logger.info("Tables verified")
 
+    # Initialize Risk Velocity + Flash-RAG engine
+    try:
+        from risk_velocity import RiskVelocityEngine
+        risk_engine = RiskVelocityEngine()
+        logger.info("Risk Velocity engine initialized (Flash-RAG enabled)")
+    except ImportError:
+        logger.warning("risk_velocity module not available, creating stub")
+        class _StubEngine:
+            def compute_velocities(self): return []
+            def flash_rag_lookback(self, _): return []
+        risk_engine = _StubEngine()
+
+    # Initialize Cognitive Defense Loop (Autonomous Organism)
+    try:
+        from cognitive_defense import CognitiveDefenseLoop
+        cognitive = CognitiveDefenseLoop()
+        logger.info("Cognitive Defense Loop initialized (Reflex + Reasoning + Neuroplasticity)")
+    except ImportError:
+        logger.warning("cognitive_defense module not available, creating stub")
+        class _StubCognitive:
+            def process_cycle(self, *a): return []
+            def get_stats(self): return {}
+        cognitive = _StubCognitive()
+
     cycle_count = 0
 
     # Initial pattern mining
@@ -949,12 +973,30 @@ def main():
                 labels_total += auto_label_from_rdap()
                 labels_total += auto_label_benign_cdn()
 
+            # Phase 4: Risk Velocity + Flash-RAG (every cycle)
+            velocity_count = 0
+            rag_count = 0
+            cognitive_actions = 0
+            try:
+                velocity_results = risk_engine.compute_velocities()
+                velocity_count = len(velocity_results)
+                rag_contexts = risk_engine.flash_rag_lookback(velocity_results)
+                rag_count = len(rag_contexts)
+
+                # Phase 5: Cognitive Defense Loop (Autonomous Organism)
+                actions = cognitive.process_cycle(velocity_results, rag_contexts)
+                cognitive_actions = len(actions)
+
+            except Exception as e:
+                logger.error(f"Risk velocity/Cognitive error: {e}")
+
             logger.info(
                 f"Cycle {cycle_count}: "
                 f"{len(escalations)} escalations, {len(campaigns)} campaigns, "
                 f"{alerts_written} alerts written"
                 + (f", {patterns_total} patterns mined" if patterns_total else "")
                 + (f", {labels_total} auto-labels" if labels_total else "")
+                + (f", {velocity_count} velocities, {rag_count} RAG, {cognitive_actions} actions" if velocity_count else "")
             )
 
         except Exception as e:

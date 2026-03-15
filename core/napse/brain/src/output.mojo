@@ -16,6 +16,7 @@ struct IntentEvent:
     """A single Napse intent classification event.
 
     This is the output format that replaces Suricata's EVE JSON alert format.
+    Extended with Neural-Kernel fields for behavioral tokens and risk velocity.
     """
     var timestamp: String         # ISO 8601 nanosecond precision
     var src_ip: String
@@ -32,6 +33,12 @@ struct IntentEvent:
     var entropy: Float32          # Shannon entropy of triggering packet
     var community_id: String      # Cross-tool flow correlation ID
     var features_summary: String  # Compact key feature representation
+    # Neural-Kernel extensions (v3.0)
+    var token_narrative: String   # Behavioral token: "[SCAN | HIGH_ENTROPY | ...]"
+    var composite_token: UInt16   # Packed 16-bit token ID
+    var risk_velocity: Float32    # β₁ = ΔRisk/Δt per minute
+    var kill_chain_confidence: Float32  # HMM state probability
+    var rag_triggered: Bool       # Flash-RAG lookback was executed
 
     fn to_json(self) -> String:
         """Serialize to JSON string for file/API output."""
@@ -65,7 +72,17 @@ struct IntentEvent:
         json += self.community_id
         json += '","features_summary":"'
         json += self.features_summary
-        json += '"}'
+        json += '","token_narrative":"'
+        json += self.token_narrative
+        json += '","composite_token":'
+        json += str(self.composite_token)
+        json += ',"risk_velocity":'
+        json += str(self.risk_velocity)
+        json += ',"kill_chain_confidence":'
+        json += str(self.kill_chain_confidence)
+        json += ',"rag_triggered":'
+        json += "true" if self.rag_triggered else "false"
+        json += '}'
         return json
 
 
@@ -93,6 +110,10 @@ struct FlowSummary:
     var intent_class: String      # Dominant intent over flow lifetime
     var confidence: Float32       # Average confidence
     var hmm_final_state: String   # Final kill chain stage
+    # Neural-Kernel extensions (v3.0)
+    var token_sequence: String    # Behavioral token sequence (comma-separated composites)
+    var risk_velocity: Float32    # Flow-level risk velocity
+    var cognitive_action: String  # Action taken by cognitive defense (if any)
 
     fn to_json(self) -> String:
         """Serialize to JSON string."""
@@ -132,6 +153,12 @@ struct FlowSummary:
         json += str(self.confidence)
         json += ',"hmm_final_state":"'
         json += self.hmm_final_state
+        json += '","token_sequence":"'
+        json += self.token_sequence
+        json += '","risk_velocity":'
+        json += str(self.risk_velocity)
+        json += ',"cognitive_action":"'
+        json += self.cognitive_action
         json += '"}'
         return json
 

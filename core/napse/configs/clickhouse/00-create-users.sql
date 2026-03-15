@@ -9,7 +9,7 @@ CREATE USER IF NOT EXISTS ids
     IDENTIFIED WITH sha256_password BY '${CLICKHOUSE_IDS_PASSWORD}'
     HOST LOCAL
     DEFAULT DATABASE hookprobe_ids
-    SETTINGS max_execution_time = 60;
+    SETTINGS max_execution_time = 60, allow_experimental_vector_similarity_index = 1;
 
 CREATE USER IF NOT EXISTS readonly
     IDENTIFIED WITH sha256_password BY '${CLICKHOUSE_READONLY_PASSWORD}'
