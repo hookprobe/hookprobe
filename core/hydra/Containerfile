@@ -1,7 +1,7 @@
 FROM docker.io/library/python:3.12-slim
 
-LABEL description="HookProbe HYDRA Feed Sync + Event Consumer + ML + RDAP Enricher"
-LABEL version="3.1.0"
+LABEL description="HookProbe HYDRA Feed Sync + Event Consumer + ML + Neural-Kernel"
+LABEL version="3.2.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
@@ -15,7 +15,11 @@ WORKDIR /app
 # Create model persistence directory
 RUN mkdir -p /app/models
 
+# Core HYDRA pipeline
 COPY bpf_map_ops.py feed_sync.py event_consumer.py feature_extractor.py anomaly_detector.py rdap_enricher.py baseline_profiler.py cve_enricher.py temporal_memory.py sentinel_engine.py sentinel_lifecycle.py predictor_engine.py ./
+
+# Neural-Kernel: Risk Velocity + Cognitive Defense Loop
+COPY risk_velocity.py cognitive_defense.py ./
 
 # Default: run feed_sync (override in compose for other daemons)
 CMD ["python3", "-u", "feed_sync.py"]

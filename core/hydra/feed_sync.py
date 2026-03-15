@@ -370,6 +370,80 @@ def log_feed_sync(feed_name: str, feed_url: str, entries_count: int,
 
 
 # ============================================================================
+# NEURAL-KERNEL: Cognitive Defense Block Sync
+# ============================================================================
+
+def sync_cognitive_blocks() -> Tuple[Set[str], int]:
+    """Read active cognitive defense blocks from ClickHouse and convert to CIDRs.
+
+    The Neural-Kernel's ActionEnforcer writes blocks to hydra_blocks with
+    source='neural_kernel'. This function reads those blocks and converts
+    them to /32 CIDRs for XDP LPM_TRIE enforcement.
+
+    Also cleans up expired blocks (auto_expired=1 or past TTL).
+
+    Returns (active_cidrs, expired_count).
+    """
+    if not CH_PASSWORD:
+        return set(), 0
+
+    cognitive_cidrs: Set[str] = set()
+    expired_count = 0
+
+    try:
+        # Read active cognitive blocks (not yet expired)
+        query = f"""
+            SELECT
+                IPv4NumToString(src_ip) AS ip,
+                duration_seconds,
+                toUnixTimestamp(timestamp) AS created_ts
+            FROM {CH_DB}.hydra_blocks
+            WHERE source = 'neural_kernel'
+              AND auto_expired = 0
+              AND timestamp >= now() - INTERVAL 24 HOUR
+        """
+        result = ch_query(query)
+        if result:
+            now_unix = time.time()
+            for line in result.strip().split('\n'):
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                    ip = row.get('ip', '')
+                    duration = int(row.get('duration_seconds', 3600))
+                    created = float(row.get('created_ts', 0))
+
+                    if not ip:
+                        continue
+
+                    # Check TTL expiry
+                    if created > 0 and (now_unix - created) > duration:
+                        # TTL expired — mark as expired
+                        expire_query = (
+                            f"ALTER TABLE {CH_DB}.hydra_blocks "
+                            f"UPDATE auto_expired = 1 "
+                            f"WHERE src_ip = IPv4StringToNum('{ip}') "
+                            f"AND source = 'neural_kernel' AND auto_expired = 0"
+                        )
+                        ch_query(expire_query, fmt='')
+                        expired_count += 1
+                    else:
+                        # Still active — add to blocklist
+                        cognitive_cidrs.add(f"{ip}/32")
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+
+        if cognitive_cidrs:
+            logger.info(f"Cognitive blocks: {len(cognitive_cidrs)} active, {expired_count} expired")
+
+    except Exception as e:
+        logger.error(f"Cognitive block sync error: {e}")
+
+    return cognitive_cidrs, expired_count
+
+
+# ============================================================================
 # MAIN SYNC LOOP
 # ============================================================================
 
@@ -438,6 +512,10 @@ def sync_all_feeds() -> dict:
         except ValueError:
             pass
 
+    # Merge cognitive defense blocks from Neural-Kernel
+    cognitive_cidrs, cognitive_expired = sync_cognitive_blocks()
+    safe_cidrs.update(cognitive_cidrs)
+
     # Update XDP maps
     blocklist_count = update_xdp_map_batch('blocklist', safe_cidrs, value=1)
     allowlist_count = update_allowlist()
@@ -448,12 +526,16 @@ def sync_all_feeds() -> dict:
         'total_cidrs': len(safe_cidrs),
         'blocklist_loaded': blocklist_count,
         'allowlist_loaded': allowlist_count,
+        'cognitive_blocks': len(cognitive_cidrs),
+        'cognitive_expired': cognitive_expired,
         'feeds': feed_results,
     }
 
-    logger.info(f"Sync complete: {len(safe_cidrs)} blocklist CIDRs, "
+    logger.info(f"Sync complete: {len(safe_cidrs)} blocklist CIDRs "
+               f"({len(cognitive_cidrs)} cognitive), "
                f"{allowlist_count} allowlist entries, "
-               f"{blocklist_count} pushed to XDP")
+               f"{blocklist_count} pushed to XDP"
+               + (f", {cognitive_expired} expired" if cognitive_expired else ""))
 
     return summary
 
