@@ -157,6 +157,8 @@ def ch_insert(query: str, data: str = '') -> bool:
         if data:
             req.data = data.encode('utf-8')
             req.add_header('Content-Type', 'text/plain')
+        else:
+            req.data = b''  # Force POST (GET is readonly in ClickHouse)
 
         with urlopen(req, timeout=30) as resp:
             resp.read()

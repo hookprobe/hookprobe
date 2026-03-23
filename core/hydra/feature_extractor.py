@@ -593,8 +593,13 @@ def assemble_features(
 
         vector = []
         for fname in FEATURE_NAMES:
-            val = (net.get(fname) or temp.get(fname) or
-                   behav.get(fname) or rep.get(fname) or 0)
+            # Use explicit 'in' check — Python 'or' treats 0.0 as falsy,
+            # which corrupts feature vectors for benign quiet IPs
+            val = 0.0
+            for src in (net, temp, behav, rep):
+                if fname in src:
+                    val = src[fname]
+                    break
             vector.append(float(val))
 
         vectors[ip] = vector
