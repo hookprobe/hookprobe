@@ -97,6 +97,13 @@ class FortressConfig:
     web_port: int = 8443
     web_ssl: bool = True
 
+    # HIP (HookProbe Intelligence Platform)
+    hip_enabled: bool = True
+    hip_local_llm: bool = False          # Enable local LLM (requires llama-cpp-python)
+    hip_llm_model: str = ""              # Auto-detected from hardware if empty
+    hip_npu_backend: str = "auto"        # auto | cpu | npu
+    hip_model_dir: str = "/opt/hookprobe/models"
+
     # Features
     macsec_enabled: bool = True
     openflow_enabled: bool = True
