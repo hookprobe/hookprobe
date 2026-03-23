@@ -132,6 +132,12 @@ declare -g SYS_IS_NUC=false
 declare -g SYS_IS_GENERIC_X86=false
 declare -g SYS_PLATFORM_NAME=""
 
+# NPU / AI Accelerator detection
+declare -g SYS_HAS_NPU=false
+declare -g SYS_NPU_TYPE=""
+declare -g SYS_NPU_TOPS=0
+declare -g SYS_HAS_GPU=false
+
 # Deployment tier eligibility
 declare -g CAN_SENTINEL=false
 declare -g CAN_GUARDIAN=false
@@ -584,6 +590,51 @@ detect_gpu() {
     fi
 }
 
+detect_npu() {
+    SYS_HAS_NPU=false
+    SYS_NPU_TYPE=""
+    SYS_NPU_TOPS=0
+
+    # Hailo-8 / Hailo-8L (RPi AI HAT+)
+    if [ -e /dev/hailo0 ]; then
+        SYS_HAS_NPU=true
+        SYS_NPU_TYPE="hailo"
+        # Hailo-8 = 26 TOPS, Hailo-8L = 13 TOPS
+        if [ -f /sys/class/hailo_chardev/hailo0/board_info ]; then
+            if grep -qi "hailo8l" /sys/class/hailo_chardev/hailo0/board_info 2>/dev/null; then
+                SYS_NPU_TOPS=13
+                SYS_NPU_TYPE="hailo-8l"
+            else
+                SYS_NPU_TOPS=26
+                SYS_NPU_TYPE="hailo-8"
+            fi
+        else
+            SYS_NPU_TOPS=13
+            SYS_NPU_TYPE="hailo-8l"
+        fi
+    # Rockchip RK3588 NPU
+    elif [ -e /dev/rknpu ] || [ -e /dev/rknpu_service ]; then
+        SYS_HAS_NPU=true
+        SYS_NPU_TYPE="rk3588"
+        SYS_NPU_TOPS=6
+    # Google Coral Edge TPU
+    elif [ -e /dev/apex_0 ]; then
+        SYS_HAS_NPU=true
+        SYS_NPU_TYPE="coral"
+        SYS_NPU_TOPS=4
+    # Intel NPU (Meteor Lake AI Boost) — x86_64 only
+    elif [ "$(uname -m)" = "x86_64" ] && [ -d /sys/class/accel ] && [ "$(ls /sys/class/accel/ 2>/dev/null | wc -l)" -gt 0 ]; then
+        SYS_HAS_NPU=true
+        SYS_NPU_TYPE="intel-npu"
+        SYS_NPU_TOPS=11
+    # BeagleY-AI (TI AM67A)
+    elif [ -f /proc/device-tree/compatible ] && grep -q "ti,am67" /proc/device-tree/compatible 2>/dev/null; then
+        SYS_HAS_NPU=true
+        SYS_NPU_TYPE="beagle-ai"
+        SYS_NPU_TOPS=4
+    fi
+}
+
 detect_container_runtime() {
     SYS_HAS_PODMAN=false
     SYS_PODMAN_VERSION=""
@@ -626,6 +677,7 @@ detect_capabilities() {
     detect_cgroups
     detect_security
     detect_gpu
+    detect_npu
     detect_container_runtime
     evaluate_deployment_tiers
 
