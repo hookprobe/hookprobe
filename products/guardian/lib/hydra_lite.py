@@ -48,6 +48,7 @@ class HydraLite:
     Provides:
     - Threat feed sync → XDP blocklist/allowlist maps
     - XDP RINGBUF event logging to local files
+    - Hardware detection + inference bridge (via core.brain)
 
     Does NOT provide (Fortress/Nexus only):
     - RDAP IP enrichment
@@ -61,6 +62,21 @@ class HydraLite:
         self.running = False
         self._feed_thread: Optional[threading.Thread] = None
         self._consumer_thread: Optional[threading.Thread] = None
+        self.hw_profile = None
+        self.inference_bridge = None
+
+        # Initialize hardware detection + inference bridge
+        try:
+            from core.brain.hw_detect import detect_hardware
+            from core.brain.inference_bridge import InferenceBridge
+            self.hw_profile = detect_hardware()
+            self.inference_bridge = InferenceBridge(tier='guardian', hw_profile=self.hw_profile)
+            logger.info(f"Brain initialized: {self.hw_profile.accelerator.value} "
+                        f"({self.hw_profile.tops} TOPS), tier={self.hw_profile.tier_recommendation}")
+        except ImportError:
+            logger.info("core.brain not available — running without inference bridge")
+        except Exception as e:
+            logger.warning(f"Brain initialization failed: {e}")
 
         # Ensure data directories exist
         FEED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -161,9 +177,14 @@ class HydraLite:
     @property
     def status(self) -> dict:
         """Return current status for Guardian dashboard."""
-        return {
+        status = {
             'enabled': self.running,
             'feed_sync': self._feed_thread is not None and self._feed_thread.is_alive(),
             'event_consumer': self._consumer_thread is not None and self._consumer_thread.is_alive(),
             'note': 'Lightweight mode (feed sync + event consumer only)',
         }
+        if self.hw_profile:
+            status['hardware'] = self.hw_profile.to_dict()
+        if self.inference_bridge:
+            status['inference'] = self.inference_bridge.device_info()
+        return status

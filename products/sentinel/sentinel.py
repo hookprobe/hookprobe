@@ -1151,6 +1151,21 @@ def main():
     log.info(f"Metrics:  HTTP:{METRICS_PORT}")
     log.info(f"Mesh:     {MESH_ENDPOINT}:{MESH_PORT}")
     log.info(f"Memory:   {MEMORY_LIMIT}MB limit")
+
+    # Hardware detection (for heartbeat reporting)
+    hw_profile = None
+    try:
+        from core.brain.hw_detect import detect_hardware
+        hw_profile = detect_hardware()
+        log.info(f"Hardware: {hw_profile.accelerator.value} ({hw_profile.tops} TOPS)")
+        log.info(f"  Arch:   {hw_profile.cpu_arch}, {hw_profile.cpu_cores} cores")
+        log.info(f"  RAM:    {hw_profile.ram_mb}MB")
+        log.info(f"  Tier:   {hw_profile.tier_recommendation} (recommended)")
+    except ImportError:
+        log.info("Hardware: core.brain not available (standalone mode)")
+    except Exception as e:
+        log.debug(f"Hardware detection: {e}")
+
     log.info("-" * 50)
     log.info(f"Security: {'ENABLED' if security_manager else 'DISABLED'}")
     if security_manager:
