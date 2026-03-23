@@ -57,6 +57,9 @@ RUN mkdir -p /app/models /app/data /var/log/hookprobe \
 # Copy all HYDRA modules (includes bpf_map_ops.py)
 COPY --chown=hydra:nogroup core/hydra/ /app/
 
+# Copy Brain module (hardware detection + inference bridge)
+COPY --chown=hydra:nogroup core/brain/ /app/brain/
+
 # Environment
 ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
