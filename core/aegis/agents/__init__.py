@@ -17,6 +17,7 @@ from .vigil_agent import VigilAgent
 from .scout_agent import ScoutAgent
 from .forge_agent import ForgeAgent
 from .medic_agent import MedicAgent
+from .scribe_agent import ScribeAgent
 
 if TYPE_CHECKING:
     from ..inference import NativeInferenceEngine
@@ -36,7 +37,8 @@ AGENT_CLASSES = [
     ScoutAgent,
     ForgeAgent,
     MedicAgent,
-    OracleAgentV2,  # ORACLE is always last (catch-all)
+    ScribeAgent,     # Content generation from incidents
+    OracleAgentV2,   # ORACLE is always last (catch-all)
 ]
 
 
