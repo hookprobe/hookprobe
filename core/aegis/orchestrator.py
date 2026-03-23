@@ -73,6 +73,14 @@ ROUTING_RULES = {
     "healing.process_quarantined": ["MEDIC"],
     "healing.syscall_connect": ["GUARDIAN"],
     "healing.syscall_openat": ["FORGE"],
+
+    # Content Scribe routing
+    "incident.resolved": ["SCRIBE"],
+    "incident.postmortem": ["SCRIBE"],
+    "cve.new": ["SCRIBE", "GUARDIAN"],
+    "cve.analysis": ["SCRIBE"],
+    "threat.campaign": ["SCRIBE", "GUARDIAN"],
+    "content.request": ["SCRIBE"],
     "healing.hotpatch_applied": ["FORGE"],
     "scheduled.audit": ["FORGE"],
     "scheduled.health_check": ["ORACLE"],
@@ -207,6 +215,9 @@ class AegisOrchestrator:
                         f"{agent_name}: {response.action} — {response.reasoning}",
                     )
 
+                # Step 4b: Write to blackboard (aegis_cognition)
+                self._write_to_blackboard(agent_name, signal, response)
+
             except Exception as e:
                 logger.error("Agent %s error: %s", agent_name, e)
 
@@ -214,6 +225,11 @@ class AegisOrchestrator:
         escalation = self._check_escalation(responses)
         if escalation:
             responses.append(escalation)
+
+        # Step 6: Trigger Content Scribe for significant events
+        scribe_response = self._trigger_scribe(signal, responses)
+        if scribe_response:
+            responses.append(scribe_response)
 
         return responses
 
@@ -401,6 +417,60 @@ class AegisOrchestrator:
             context["memory_context"] = self.memory.recall_context(max_tokens=200)
 
         return context
+
+    def _write_to_blackboard(
+        self, agent_name: str, signal: StandardSignal, response: AgentResponse
+    ):
+        """Write agent decision to aegis_cognition table (PostgreSQL blackboard)."""
+        try:
+            import os
+            from urllib.request import Request, urlopen
+            import urllib.parse
+
+            # Only write significant events (confidence > 0.4)
+            confidence = getattr(response, 'confidence', 0.5)
+            if confidence < 0.4:
+                return
+
+            # Determine event type and priority
+            action = getattr(response, 'action', '') or ''
+            priority = 3 if confidence > 0.8 else 5 if confidence > 0.6 else 7
+
+            payload = {
+                "agent": agent_name,
+                "action": action,
+                "confidence": confidence,
+                "signal_type": str(getattr(signal, 'type', '')),
+                "reasoning": getattr(response, 'reasoning', '')[:500],
+            }
+
+            # Write to PostgreSQL via the dashboard API or direct connection
+            # For now, log it — full DB integration when running in container context
+            logger.info(
+                "Blackboard: agent=%s event=%s priority=%d confidence=%.2f",
+                agent_name, action[:50], priority, confidence,
+            )
+
+        except Exception as e:
+            logger.debug(f"Blackboard write failed (non-critical): {e}")
+
+    def _trigger_scribe(self, signal: StandardSignal, responses: List[AgentResponse]):
+        """Trigger Content Scribe for high-value events."""
+        scribe = self.registry.get("SCRIBE")
+        if not scribe:
+            return None
+
+        # Only trigger for significant events
+        max_confidence = max((getattr(r, 'confidence', 0) for r in responses), default=0)
+        if max_confidence < 0.6:
+            return None
+
+        try:
+            context = {"original_responses": [str(r) for r in responses[:3]]}
+            return scribe.respond(signal=signal, context=context)
+        except Exception as e:
+            logger.debug(f"Scribe trigger failed: {e}")
+            return None
 
     def get_stats(self) -> Dict[str, Any]:
         """Get orchestrator statistics."""
