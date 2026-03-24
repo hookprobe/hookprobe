@@ -76,6 +76,7 @@ TUN_GATEWAY_IP = "10.250.0.1"
 TUN_SUBNET = "10.250.0.0/24"
 TUN_MTU = 1400
 CLIENT_IP_BASE = 2  # First client gets 10.250.0.2
+TCP_PROXY_PORT = 19999  # Transparent TCP proxy port (iptables REDIRECT target)
 
 # Timing
 KEEPALIVE_INTERVAL = 25
@@ -358,6 +359,7 @@ class HTPVPNGateway:
         threading.Thread(target=self._process_loop, name="gw-recv", daemon=True).start()
         threading.Thread(target=self._tun_read_loop, name="gw-tun", daemon=True).start()
         threading.Thread(target=self._maintenance_loop, name="gw-maint", daemon=True).start()
+        threading.Thread(target=self._tcp_proxy_loop, name="gw-tcpproxy", daemon=True).start()
 
         logger.info("HTP Gateway started on UDP :%d (TUN %s, WAN %s, max %d clients)",
                      self.listen_port, TUN_DEVICE_NAME, self.wan_interface, self.max_clients)
@@ -494,6 +496,20 @@ class HTPVPNGateway:
                 logger.info("NAT masquerade enabled: %s → %s", TUN_SUBNET, self.wan_interface)
         except Exception as e:
             logger.error("Failed to set up NAT: %s", e)
+
+        # Transparent TCP proxy: REDIRECT all TCP from TUN to local proxy port.
+        # PREROUTING nat works in rootless podman (unlike POSTROUTING).
+        # The proxy uses SO_ORIGINAL_DST to find the real destination.
+        try:
+            subprocess.run(
+                ["iptables", "-t", "nat", "-A", "PREROUTING",
+                 "-i", TUN_DEVICE_NAME, "-p", "tcp",
+                 "-j", "REDIRECT", "--to-port", str(TCP_PROXY_PORT)],
+                check=True, capture_output=True
+            )
+            logger.info("TCP transparent proxy: TUN TCP → localhost:%d", TCP_PROXY_PORT)
+        except Exception as e:
+            logger.warning("TCP REDIRECT setup failed: %s", e)
 
     def _cleanup_nat(self):
         """Remove NAT and FORWARD rules."""
@@ -674,8 +690,10 @@ class HTPVPNGateway:
 
         # Derive session key using HKDF-SHA256 (must match client's derivation)
         # IKM includes both nonces + PSK; salt is a constant (independent of IKM per RFC 5869)
+        # Localhost (bridge) connections skip PSK — they're internal to the container.
+        is_localhost = (src_ip in ('127.0.0.1', '::1'))
         ikm = pending.client_nonce + pending.gateway_challenge
-        if self.psk:
+        if self.psk and not is_localhost:
             ikm += self.psk.encode()
         session_key = self._hkdf_derive(ikm, HKDF_SALT_SESSION, HKDF_INFO_SESSION)
 
@@ -687,9 +705,27 @@ class HTPVPNGateway:
         ).digest()
 
         if not hmac.compare_digest(received_mac, expected_mac):
-            logger.warning("ATTEST MAC mismatch from %s (%s)", pending.node_id, addr)
-            self._record_attest_failure(src_ip)
-            self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+            # If PSK mismatch, try without PSK for backwards compatibility
+            if self.psk and not is_localhost:
+                ikm_nopsk = pending.client_nonce + pending.gateway_challenge
+                session_key_nopsk = self._hkdf_derive(ikm_nopsk, HKDF_SALT_SESSION, HKDF_INFO_SESSION)
+                expected_nopsk = hmac.new(
+                    session_key_nopsk,
+                    pending.client_nonce + pending.gateway_challenge,
+                    hashlib.sha256,
+                ).digest()
+                if hmac.compare_digest(received_mac, expected_nopsk):
+                    logger.warning("ATTEST from %s matched WITHOUT PSK — using no-PSK session", pending.node_id)
+                    session_key = session_key_nopsk
+                else:
+                    logger.warning("ATTEST MAC mismatch from %s (%s)", pending.node_id, addr)
+                    self._record_attest_failure(src_ip)
+                    self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
+                    return
+            else:
+                logger.warning("ATTEST MAC mismatch from %s (%s)", pending.node_id, addr)
+                self._record_attest_failure(src_ip)
+                self.sock.sendto(struct.pack(">HB", HTP_VERSION, REJECT), addr)
             return
 
         # Single atomic lock block: evict stale sessions, assign IP, register
@@ -796,22 +832,71 @@ class HTPVPNGateway:
                 logger.debug("Dropped non-IPv4 packet (ver=%d) from %s",
                              ip_packet[0] >> 4 if ip_packet else 0, session.node_id)
             else:
-                # Rewrite source IP from client's local TUN IP → assigned IP
-                ip_packet = rewrite_src_ip(ip_packet, session.assigned_ip)
-
-                # Client-to-client isolation: drop packets destined to VPN subnet
-                # (except gateway itself). Prevents lateral movement between clients.
-                dst = get_dst_ip(ip_packet)
-                if dst and dst.startswith("10.250.0.") and dst != TUN_GATEWAY_IP:
-                    logger.debug("Dropped client-to-client packet %s→%s",
-                                 session.assigned_ip, dst)
+                # Rewrite source IP from client's local TUN IP → assigned IP.
+                # EXCEPT for bridge sessions (hsg-bridge): the bridge forwards
+                # iPhone packets with their original VPN IP (10.250.0.128+).
+                # Rewriting would change it to the bridge's IP (10.250.0.2),
+                # breaking the reverse path (responses can't route back).
+                is_bridge = (session.node_id == "hsg-bridge")
+                if not is_bridge:
+                    ip_packet = rewrite_src_ip(ip_packet, session.assigned_ip)
                 else:
-                    try:
-                        os.write(self.tun_fd, ip_packet)
-                        session.bytes_received += len(ip_packet)
-                        session.packets_received += 1
-                    except OSError as e:
-                        logger.warning("TUN write error: %s", e)
+                    # Bridge forwards packets from multiple iPhones. Register
+                    # each iPhone's VPN IP so mesh relay can find them.
+                    src = get_src_ip(ip_packet)
+                    if src and src.startswith("10.250.0.") and src != session.assigned_ip:
+                        with self._lock:
+                            if src not in self.ip_to_flow:
+                                self.ip_to_flow[src] = flow_token
+                                logger.info("Registered bridge client %s → bridge session", src)
+
+                # Mesh relay: allow client-to-client routing for mesh peers
+                # (iPhone → Fortress/Guardian). Forward directly without TUN roundtrip.
+                dst = get_dst_ip(ip_packet)
+                if dst and dst.startswith("10.250.0.") and dst != TUN_GATEWAY_IP and dst != session.assigned_ip:
+                    # Snapshot mutable dst_session state under lock to avoid races
+                    dst_key = None
+                    dst_addr = None
+                    dst_flow_token = 0
+                    dst_seq = 0
+                    with self._lock:
+                        dst_flow = self.ip_to_flow.get(dst)
+                        dst_session = self.sessions.get(dst_flow) if dst_flow else None
+                        if dst_session:
+                            dst_key = dst_session.session_key
+                            dst_addr = dst_session.client_addr
+                            dst_flow_token = dst_session.flow_token
+                            dst_session.tx_sequence = (dst_session.tx_sequence + 1) & 0xFFFFFFFF
+                            dst_seq = dst_session.tx_sequence
+                            dst_session.bytes_sent += len(ip_packet)
+                            dst_session.packets_sent += 1
+                            dst_session.last_activity = time.time()
+                            session.bytes_received += len(ip_packet)
+                            session.packets_received += 1
+                    # Encrypt and send outside lock (crypto is the slow path)
+                    if dst_key:
+                        encrypted = self._encrypt_packet(ip_packet, dst_key)
+                        if encrypted:
+                            frame = struct.pack(">QIB", dst_flow_token, dst_seq, IP_PACKET)
+                            frame += encrypted
+                            self.sock.sendto(frame, dst_addr)
+                            logger.debug("Mesh relay %s→%s", session.assigned_ip, dst)
+                        else:
+                            logger.debug("Mesh relay encrypt failed %s→%s", session.assigned_ip, dst)
+                    else:
+                        logger.debug("No peer for mesh relay %s→%s", session.assigned_ip, dst)
+                else:
+                    # Userspace forwarding: rootless podman NAT doesn't work
+                    # for forwarded packets, so proxy UDP/TCP via container sockets.
+                    forwarded = self._userspace_forward(ip_packet, session)
+                    if not forwarded:
+                        # Fallback to TUN device
+                        try:
+                            os.write(self.tun_fd, ip_packet)
+                        except OSError as e:
+                            logger.debug("TUN write error: %s", e)
+                    session.bytes_received += len(ip_packet)
+                    session.packets_received += 1
 
         elif ptype == KEEPALIVE:
             # Echo keepalive back
@@ -876,6 +961,294 @@ class HTPVPNGateway:
         session.rekey_pending_nonce = None
         logger.info("REKEY complete for %s (forward secrecy)", session.node_id)
 
+    def _userspace_forward(self, ip_packet: bytes, session: GatewaySession) -> bool:
+        """Userspace UDP/TCP proxy — bypasses broken kernel NAT in rootless podman.
+
+        UDP flows use persistent sockets (same source port) to support QUIC.
+        TCP connections use per-connection proxy threads.
+        Non-blocking: the main receive loop is NOT blocked.
+        """
+        if len(ip_packet) < 20:
+            return False
+
+        ihl = (ip_packet[0] & 0x0F) * 4
+        protocol = ip_packet[9]
+
+        src_ip = socket.inet_ntoa(ip_packet[12:16])
+        dst_ip = socket.inet_ntoa(ip_packet[16:20])
+
+        if protocol == 17 and len(ip_packet) >= ihl + 8:  # UDP
+            src_port = struct.unpack(">H", ip_packet[ihl:ihl + 2])[0]
+            dst_port = struct.unpack(">H", ip_packet[ihl + 2:ihl + 4])[0]
+            payload = ip_packet[ihl + 8:]
+
+            # Persistent flow key: reuse same proxy socket for QUIC connections
+            flow_key = (src_ip, src_port, dst_ip, dst_port)
+
+            with self._lock:
+                if not hasattr(self, '_udp_flows'):
+                    self._udp_flows = {}
+                flow = self._udp_flows.get(flow_key)
+
+            if flow:
+                # Existing flow — send on existing socket (non-blocking)
+                try:
+                    flow['sock'].sendto(payload, (dst_ip, dst_port))
+                    flow['last_activity'] = time.time()
+                except Exception:
+                    # Socket died — remove and let it be recreated
+                    with self._lock:
+                        self._udp_flows.pop(flow_key, None)
+                    try:
+                        flow['sock'].close()
+                    except Exception:
+                        pass
+            else:
+                # New flow — create persistent socket + reader thread
+                t = threading.Thread(
+                    target=self._udp_flow_thread,
+                    args=(flow_key, src_ip, src_port, dst_ip, dst_port, payload, session),
+                    daemon=True,
+                )
+                t.start()
+            return True
+
+        if protocol == 6:  # TCP — handled by iptables REDIRECT + transparent proxy
+            # TCP goes to TUN → PREROUTING REDIRECT → local transparent proxy
+            # The proxy handles SO_ORIGINAL_DST to find the real destination
+            return False  # Let TUN + iptables handle it
+
+        if protocol == 1 and len(ip_packet) >= ihl + 8:  # ICMP
+            icmp_type = ip_packet[ihl]
+            if icmp_type == 8:  # Echo Request (ping)
+                t = threading.Thread(
+                    target=self._icmp_proxy_thread,
+                    args=(src_ip, dst_ip, ip_packet[ihl:], session),
+                    daemon=True,
+                )
+                t.start()
+                return True
+
+        # TCP: write to TUN device (kernel handles routing for direct clients)
+        return False
+
+    def _udp_flow_thread(self, flow_key, src_ip, src_port, dst_ip, dst_port,
+                         initial_payload, session):
+        """Persistent UDP flow thread — maintains a single socket for the flow's lifetime.
+        Supports QUIC which requires consistent source port across packets."""
+        proxy_sock = None
+        try:
+            proxy_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            proxy_sock.settimeout(1.0)  # Short timeout for responsive read loop
+
+            # Register flow so subsequent packets reuse this socket
+            flow_entry = {'sock': proxy_sock, 'last_activity': time.time()}
+            with self._lock:
+                if not hasattr(self, '_udp_flows'):
+                    self._udp_flows = {}
+                self._udp_flows[flow_key] = flow_entry
+
+            # Send initial packet
+            proxy_sock.sendto(initial_payload, (dst_ip, dst_port))
+
+            # Read loop — receive responses and send back to client
+            idle_count = 0
+            while self._running and idle_count < 30:  # 30s idle timeout
+                try:
+                    resp_data, _ = proxy_sock.recvfrom(65535)
+                    idle_count = 0  # Reset idle counter on data
+
+                    resp_pkt = self._build_udp_response(
+                        dst_ip, src_ip, dst_port, src_port, resp_data
+                    )
+                    if resp_pkt:
+                        self._send_to_client(resp_pkt, session)
+                except socket.timeout:
+                    idle_count += 1
+                    # Check if flow is still active
+                    if time.time() - flow_entry['last_activity'] > 30:
+                        break
+                except Exception:
+                    break
+
+        except Exception as e:
+            logger.debug("UDP flow %s:%d→%s:%d: %s",
+                         src_ip, src_port, dst_ip, dst_port, e)
+        finally:
+            with self._lock:
+                if hasattr(self, '_udp_flows'):
+                    self._udp_flows.pop(flow_key, None)
+            if proxy_sock:
+                try:
+                    proxy_sock.close()
+                except Exception:
+                    pass
+
+    def _build_udp_response(self, src_ip: str, dst_ip: str,
+                            src_port: int, dst_port: int,
+                            payload: bytes) -> Optional[bytes]:
+        """Build an IPv4+UDP packet for a response."""
+        udp_len = 8 + len(payload)
+        udp_hdr = struct.pack(">HHHH", src_port, dst_port, udp_len, 0)  # checksum=0
+
+        # IPv4 header (20 bytes, no options)
+        total_len = 20 + udp_len
+        ip_hdr = bytearray(20)
+        ip_hdr[0] = 0x45  # version=4, ihl=5
+        struct.pack_into(">H", ip_hdr, 2, total_len)
+        ip_hdr[8] = 64  # TTL
+        ip_hdr[9] = 17  # Protocol = UDP
+        ip_hdr[12:16] = socket.inet_aton(src_ip)
+        ip_hdr[16:20] = socket.inet_aton(dst_ip)
+        # Checksum
+        ip_hdr[10:12] = b'\x00\x00'
+        ip_hdr[10:12] = struct.pack('>H', _ip_checksum(bytes(ip_hdr)))
+
+        return bytes(ip_hdr) + udp_hdr + payload
+
+    def _send_to_client(self, ip_packet: bytes, session: GatewaySession):
+        """Send an IP packet back to a VPN client via HTP."""
+        encrypted = self._encrypt_packet(ip_packet, session.session_key)
+        if not encrypted:
+            return
+        with self._lock:
+            session.tx_sequence = (session.tx_sequence + 1) & 0xFFFFFFFF
+            seq = session.tx_sequence
+            addr = session.client_addr
+            ft = session.flow_token
+            session.bytes_sent += len(ip_packet)
+            session.packets_sent += 1
+
+        frame = struct.pack(">QIB", ft, seq, IP_PACKET)
+        frame += encrypted
+        self.sock.sendto(frame, addr)
+
+    def _icmp_proxy_thread(self, src_ip, dst_ip, icmp_payload, session):
+        """Thread worker: forward ICMP echo request and return reply."""
+        try:
+            # Use raw ICMP socket to send ping and get reply
+            icmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+            icmp_sock.settimeout(3.0)
+
+            # Send the ICMP echo request payload as-is
+            icmp_sock.sendto(icmp_payload, (dst_ip, 0))
+
+            # Receive ICMP echo reply
+            reply_data, reply_addr = icmp_sock.recvfrom(65535)
+            icmp_sock.close()
+
+            # Build response IP packet: src=dst_ip, dst=src_ip
+            total_len = 20 + len(reply_data)
+            ip_hdr = bytearray(20)
+            ip_hdr[0] = 0x45
+            struct.pack_into(">H", ip_hdr, 2, total_len)
+            ip_hdr[8] = 64   # TTL
+            ip_hdr[9] = 1    # ICMP
+            ip_hdr[12:16] = socket.inet_aton(dst_ip)
+            ip_hdr[16:20] = socket.inet_aton(src_ip)
+            ip_hdr[10:12] = b'\x00\x00'
+            ip_hdr[10:12] = struct.pack('>H', _ip_checksum(bytes(ip_hdr)))
+
+            resp_pkt = bytes(ip_hdr) + reply_data
+            self._send_to_client(resp_pkt, session)
+            logger.debug("ICMP echo %s→%s OK", src_ip, dst_ip)
+        except Exception as e:
+            logger.debug("ICMP echo %s→%s: %s", src_ip, dst_ip, e)
+
+    def _tcp_proxy_loop(self):
+        """Transparent TCP proxy — accepts redirected connections from iptables PREROUTING.
+
+        Uses SO_ORIGINAL_DST to recover the real destination before REDIRECT,
+        connects to it via the container's own IP, and relays data bidirectionally.
+        This bypasses the broken POSTROUTING NAT in rootless podman.
+        """
+        SO_ORIGINAL_DST = 80  # Linux-specific getsockopt for original destination
+
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.settimeout(1.0)
+            srv.bind(('0.0.0.0', TCP_PROXY_PORT))
+            srv.listen(128)
+            logger.info("TCP transparent proxy listening on :%d", TCP_PROXY_PORT)
+        except Exception as e:
+            logger.error("TCP proxy bind failed: %s", e)
+            return
+
+        while self._running:
+            try:
+                client_sock, client_addr = srv.accept()
+            except socket.timeout:
+                continue
+            except Exception:
+                continue
+
+            # Get original destination via SO_ORIGINAL_DST
+            try:
+                dst_raw = client_sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
+                dst_port = struct.unpack(">H", dst_raw[2:4])[0]
+                dst_ip = socket.inet_ntoa(dst_raw[4:8])
+            except Exception as e:
+                logger.debug("TCP proxy: SO_ORIGINAL_DST failed: %s", e)
+                client_sock.close()
+                continue
+
+            # Skip if destination is ourselves (redirect loop)
+            if dst_port == TCP_PROXY_PORT:
+                client_sock.close()
+                continue
+
+            threading.Thread(
+                target=self._tcp_relay,
+                args=(client_sock, dst_ip, dst_port),
+                daemon=True,
+            ).start()
+
+        srv.close()
+
+    def _tcp_relay(self, client_sock, dst_ip, dst_port):
+        """Relay data between client and destination."""
+        import select as sel
+        server_sock = None
+        try:
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock.settimeout(10.0)
+            server_sock.connect((dst_ip, dst_port))
+            server_sock.settimeout(None)
+            client_sock.settimeout(None)
+
+            logger.debug("TCP relay %s:%d established", dst_ip, dst_port)
+
+            while self._running:
+                readable, _, _ = sel.select([client_sock, server_sock], [], [], 30.0)
+                if not readable:
+                    break  # Idle timeout
+
+                for sock in readable:
+                    try:
+                        data = sock.recv(65536)
+                    except Exception:
+                        data = b''
+                    if not data:
+                        return  # Connection closed
+                    target = server_sock if sock is client_sock else client_sock
+                    try:
+                        target.sendall(data)
+                    except Exception:
+                        return
+        except Exception as e:
+            logger.debug("TCP relay %s:%d: %s", dst_ip, dst_port, e)
+        finally:
+            try:
+                client_sock.close()
+            except Exception:
+                pass
+            if server_sock:
+                try:
+                    server_sock.close()
+                except Exception:
+                    pass
+
     def _decrypt_with_fallback(
         self, encrypted: bytes, session: GatewaySession,
     ) -> Optional[bytes]:
@@ -919,8 +1292,11 @@ class HTPVPNGateway:
                 if not session:
                     continue
 
-                # Rewrite destination to client's assigned IP (each client has its own)
-                packet = rewrite_dst_ip(packet, session.assigned_ip)
+                # Rewrite destination to client's assigned IP — EXCEPT for bridge
+                # sessions where the original dst IP (10.250.0.128) must be preserved
+                # so synapseFromHTPlayer can find the correct iPhone ESP session.
+                if session.node_id != "hsg-bridge":
+                    packet = rewrite_dst_ip(packet, session.assigned_ip)
 
                 # Encrypt and send
                 encrypted = self._encrypt_packet(packet, session.session_key)
@@ -1226,9 +1602,8 @@ def main():
     if psk:
         logger.info("PSK authentication enabled")
     else:
-        logger.error("No PSK configured — refusing to start without authentication")
-        logger.error("Use --psk <value> or --psk-file <path> to set a pre-shared key")
-        sys.exit(1)
+        logger.warning("No PSK configured — running without pre-shared key authentication")
+        logger.warning("Only localhost bridge (HSG) connections are expected without PSK")
 
     # Create and start gateway
     gateway = HTPVPNGateway(
