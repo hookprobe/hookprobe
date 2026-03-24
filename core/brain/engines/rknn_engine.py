@@ -57,3 +57,10 @@ class RKNNEngine:
             "accelerator": "RK3588 NPU", "backend": "RKNN",
             "model_format": "RKNN", "model": Path(self._model_path).name, "tops": 6,
         }
+
+
+def create_engine(hw_profile):
+    """Factory function for inference_bridge.py integration."""
+    model_dir = __import__('os').environ.get('HOOKPROBE_MODEL_DIR', '/opt/hookprobe/models')
+    model_path = f"{model_dir}/hookprobe-anomaly-{hw_profile.accelerator.value}.rknn"
+    return RKNNEngine(model_path)
