@@ -69,3 +69,10 @@ class TensorRTEngine:
             "accelerator": "NVIDIA Jetson", "backend": "TensorRT",
             "model_format": "TensorRT Engine", "model": Path(self._model_path).name, "tops": 67,
         }
+
+
+def create_engine(hw_profile):
+    """Factory function for inference_bridge.py integration."""
+    model_dir = __import__('os').environ.get('HOOKPROBE_MODEL_DIR', '/opt/hookprobe/models')
+    model_path = f"{model_dir}/hookprobe-anomaly-{hw_profile.accelerator.value}.engine"
+    return TensorRTEngine(model_path)
