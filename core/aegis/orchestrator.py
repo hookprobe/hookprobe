@@ -444,11 +444,29 @@ class AegisOrchestrator:
                 "reasoning": getattr(response, 'reasoning', '')[:500],
             }
 
-            # Write to PostgreSQL via the dashboard API or direct connection
-            # For now, log it — full DB integration when running in container context
+            # Write to PostgreSQL via podman exec (host context)
+            import subprocess, json, uuid
+            cognition_id = str(uuid.uuid4())
+            event_type = f"{signal.source}.{signal.event_type}" if hasattr(signal, 'source') else action
+            source_signal = str(getattr(signal, 'source', ''))
+            payload_json = json.dumps(payload).replace("'", "''")
+            rag_ctx = getattr(response, 'sources', []) or []
+            rag_arr = "ARRAY[" + ",".join(f"'{s}'" for s in rag_ctx[:5]) + "]" if rag_ctx else "NULL"
+
+            sql = (
+                f"INSERT INTO aegis_cognition "
+                f"(id, agent_id, event_type, priority, payload, rag_context, source_signal, resolved) "
+                f"VALUES ('{cognition_id}', '{agent_name}', '{event_type[:100]}', {priority}, "
+                f"'{payload_json}'::jsonb, {rag_arr}, '{source_signal[:100]}', FALSE) "
+                f"ON CONFLICT DO NOTHING;"
+            )
+            subprocess.run(
+                ["podman", "exec", "hookprobe-postgres", "psql", "-U", "hookprobe", "-d", "hookprobe", "-c", sql],
+                capture_output=True, timeout=5
+            )
             logger.info(
-                "Blackboard: agent=%s event=%s priority=%d confidence=%.2f",
-                agent_name, action[:50], priority, confidence,
+                "Blackboard WRITE: agent=%s event=%s priority=%d confidence=%.2f",
+                agent_name, event_type[:50], priority, confidence,
             )
 
         except Exception as e:
