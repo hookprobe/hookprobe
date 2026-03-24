@@ -1,0 +1,31 @@
+{
+  "name": "@hookprobe/sdk",
+  "version": "0.1.0",
+  "description": "HookProbe MSSP API client for TypeScript/JavaScript",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "files": ["dist", "src"],
+  "keywords": ["hookprobe", "cybersecurity", "ids", "sdk", "qsecbit"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hookprobe/hookprobe"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

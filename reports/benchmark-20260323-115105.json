@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-03-23T11:51:06Z",
+  "hookprobe_version": "5.5.0",
+  "hardware": {
+    "accelerator": "cpu",
+    "tops": 0.5,
+    "inference_engine": "cpu",
+    "quantization": "Q4_K_M",
+    "ram_mb": 23975,
+    "cpu_cores": 4,
+    "cpu_arch": "aarch64",
+    "simd_width": 128,
+    "max_model_mb": 4795,
+    "tier_recommendation": "nexus",
+    "can_run_llm": true,
+    "llm_recommendation": "llama-3.1-70b-q4",
+    "is_mock": false
+  },
+  "benchmark": {
+    "iterations": 100,
+    "classification": {
+      "avg_latency_ms": 0.0023,
+      "median_latency_ms": 0.002,
+      "p99_latency_ms": 0.0236,
+      "min_latency_ms": 0.0019,
+      "max_latency_ms": 0.0236
+    },
+    "throughput": {
+      "classifications_per_sec": 469126.8,
+      "batch_size": 100,
+      "batch_elapsed_ms": 0.21
+    },
+    "memory": {
+      "peak_rss_mb": 33.1
+    },
+    "engine": {
+      "classify_backend": "cpu-sklearn",
+      "llm_backend": "none"
+    }
+  }
+}
