@@ -56,3 +56,10 @@ class CoreMLEngine:
             "accelerator": "Apple Neural Engine", "backend": "CoreML",
             "model_format": "mlpackage", "model": Path(self._model_path).name, "tops": 38,
         }
+
+
+def create_engine(hw_profile):
+    """Factory function for inference_bridge.py integration."""
+    model_dir = __import__('os').environ.get('HOOKPROBE_MODEL_DIR', '/opt/hookprobe/models')
+    model_path = f"{model_dir}/hookprobe-anomaly-{hw_profile.accelerator.value}.mlpackage"
+    return CoreMLEngine(model_path)
