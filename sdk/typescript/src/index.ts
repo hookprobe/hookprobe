@@ -43,7 +43,10 @@ export class HookProbeClient {
   private timeout: number;
 
   constructor(options: HookProbeClientOptions) {
-    this.baseUrl = (options.baseUrl || "https://mssp.hookprobe.com").replace(/\/+$/, "");
+    // Strip trailing slashes without regex (CodeQL: polynomial regex on uncontrolled data)
+    let url = options.baseUrl || "https://mssp.hookprobe.com";
+    while (url.endsWith("/")) url = url.slice(0, -1);
+    this.baseUrl = url;
     this.apiKey = options.apiKey;
     this.timeout = options.timeout || 30000;
   }
