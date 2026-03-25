@@ -1168,11 +1168,11 @@ class HTPVPNGateway:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.settimeout(1.0)
-            # Bind to configured interface (default: localhost for security).
-            # Transparent proxy requires 0.0.0.0 when iptables REDIRECT is active,
-            # but we bind to localhost by default and let the operator override via
-            # TCP_PROXY_BIND_ADDR env var when transparent proxy is explicitly enabled.
-            bind_addr = os.environ.get('TCP_PROXY_BIND_ADDR', '127.0.0.1')
+            # Bind to TUN gateway IP — accepts iptables REDIRECT'd packets from htp-gw.
+            # REDIRECT rewrites destination to the ingress interface address (10.250.0.1),
+            # NOT loopback. Binding to 127.0.0.1 would silently drop all VPN TCP traffic.
+            # This is NOT reachable from WAN (WAN interface does not have 10.250.0.1).
+            bind_addr = os.environ.get('TCP_PROXY_BIND_ADDR', TUN_GATEWAY_IP)
             srv.bind((bind_addr, TCP_PROXY_PORT))
             srv.listen(128)
             logger.info("TCP transparent proxy listening on %s:%d", bind_addr, TCP_PROXY_PORT)
