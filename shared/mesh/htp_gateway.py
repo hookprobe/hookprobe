@@ -1168,9 +1168,14 @@ class HTPVPNGateway:
             srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.settimeout(1.0)
-            srv.bind(('0.0.0.0', TCP_PROXY_PORT))
+            # Bind to configured interface (default: localhost for security).
+            # Transparent proxy requires 0.0.0.0 when iptables REDIRECT is active,
+            # but we bind to localhost by default and let the operator override via
+            # TCP_PROXY_BIND_ADDR env var when transparent proxy is explicitly enabled.
+            bind_addr = os.environ.get('TCP_PROXY_BIND_ADDR', '127.0.0.1')
+            srv.bind((bind_addr, TCP_PROXY_PORT))
             srv.listen(128)
-            logger.info("TCP transparent proxy listening on :%d", TCP_PROXY_PORT)
+            logger.info("TCP transparent proxy listening on %s:%d", bind_addr, TCP_PROXY_PORT)
         except Exception as e:
             logger.error("TCP proxy bind failed: %s", e)
             return
