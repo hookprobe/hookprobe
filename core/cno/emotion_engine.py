@@ -373,7 +373,9 @@ class EmotionEngine:
 def _ch_escape(s: str) -> str:
     if not s:
         return ''
-    return s.replace('\\', '\\\\').replace("'", "\\'")
+    return (s.replace('\\', '\\\\').replace("'", "\\'")
+             .replace('\n', '\\n').replace('\r', '\\r')
+             .replace('\t', '\\t').replace('\0', ''))
 
 
 def _ch_post(query: str) -> bool:

@@ -509,6 +509,7 @@ class CNOOrganism:
         """Start the health HTTP endpoint."""
         HealthHandler.organism = self
         try:
+            socketserver.TCPServer.allow_reuse_address = True
             self._health_server = socketserver.TCPServer(
                 ('0.0.0.0', HEALTH_PORT), HealthHandler)
             self._health_thread = threading.Thread(

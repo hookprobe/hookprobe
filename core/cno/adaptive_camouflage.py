@@ -232,9 +232,9 @@ class AdaptiveCamouflage:
 
         if self._bpf_write:
             # Key: index 0 in camo_config ARRAY
-            key = struct.pack('>I', 0)
+            key = struct.pack('<I', 0)
             # Value: enabled=1, ttl_jitter=16, window_idx=0
-            value = struct.pack('>BBB', 1, TTL_JITTER_RANGE, 0)
+            value = struct.pack('<BBB', 1, TTL_JITTER_RANGE, 0)
             self._bpf_write(BPFMapWrite(
                 map_name='camo_config',
                 key=key,
@@ -246,8 +246,8 @@ class AdaptiveCamouflage:
         """Disable TTL jitter in BPF map."""
         logger.info("CAMO: TTL jitter deactivated")
         if self._bpf_write:
-            key = struct.pack('>I', 0)
-            value = struct.pack('>BBB', 0, 0, 0)  # disabled
+            key = struct.pack('<I', 0)
+            value = struct.pack('<BBB', 0, 0, 0)  # disabled
             self._bpf_write(BPFMapWrite(
                 map_name='camo_config',
                 key=key,
@@ -267,8 +267,8 @@ class AdaptiveCamouflage:
 
         if self._bpf_write:
             # Write to camo_config[1] = {window_size: u16}
-            key = struct.pack('>I', 1)
-            value = struct.pack('>H', window)
+            key = struct.pack('<I', 1)
+            value = struct.pack('<H', window)
             self._bpf_write(BPFMapWrite(
                 map_name='camo_config',
                 key=key,
@@ -280,8 +280,8 @@ class AdaptiveCamouflage:
         """Reset TCP window to default."""
         logger.info("CAMO: TCP window reset to default")
         if self._bpf_write:
-            key = struct.pack('>I', 1)
-            value = struct.pack('>H', 0)  # 0 = use kernel default
+            key = struct.pack('<I', 1)
+            value = struct.pack('<H', 0)  # 0 = use kernel default
             self._bpf_write(BPFMapWrite(
                 map_name='camo_config',
                 key=key,
