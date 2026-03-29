@@ -46,7 +46,7 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Configurable base path for module file checks (different inside container)
-HOOKPROBE_BASE = os.environ.get('HOOKPROBE_BASE', HOOKPROBE_BASE)
+HOOKPROBE_BASE = os.environ.get('HOOKPROBE_BASE', '/home/ubuntu/hookprobe')
 
 
 class ComponentState(str, Enum):

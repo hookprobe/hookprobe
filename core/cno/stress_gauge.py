@@ -26,6 +26,7 @@ Version: 1.0.0
 
 import logging
 import os
+import re
 import struct
 import threading
 import time
