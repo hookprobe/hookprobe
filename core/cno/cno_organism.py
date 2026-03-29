@@ -60,6 +60,11 @@ from .emotion_engine import EmotionEngine
 from .adaptive_camouflage import AdaptiveCamouflage
 from .session_analyzer import SessionAnalyzer
 from .app_tracker import AppTracker
+from .federated_sync import FederatedSync
+from .npu_bridge import NPUBridge
+from .fec_codec import FECCodec
+from .activation import ActivationController
+from .transport_mapper import TransportMapper
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +352,21 @@ class CNOOrganism:
             submit_event=self._controller.submit_upward
         )
 
+        # Phase 4: Federated Intelligence
+        self._federated = FederatedSync(on_global_update=self._on_federated_update)
+
+        # Phase 4: NPU acceleration bridge
+        self._npu = NPUBridge()
+
+        # Phase 4: FEC codec for mesh transport
+        self._fec = FECCodec()
+
+        # Phase 5: Activation controller (dormant component lifecycle)
+        self._activation = ActivationController()
+
+        # Phase 5: Transport mapper (network topology)
+        self._topology = TransportMapper(submit_event=self._controller.submit_upward)
+
         # HYDRA bridge (feeds existing pipeline data)
         self._bridge = HYDRABridge(self._controller, self._siem)
 
@@ -430,6 +450,12 @@ class CNOOrganism:
                 ttl_seconds=1800,
                 reason=f"Multi-RAG throttle: {v}",
             )
+
+    def _on_federated_update(self, bloom_stats: Dict[str, Any]) -> None:
+        """Called by FederatedSync when global threat view changes."""
+        logger.info("FEDERATED: global view updated — %d peers, density=%.3f",
+                     bloom_stats.get('peer_count', 0),
+                     bloom_stats.get('global_density', 0))
 
     def _on_emotion_change(self, old: EmotionState, new: EmotionState,
                            valence: float, arousal: float) -> None:
@@ -557,7 +583,14 @@ class CNOOrganism:
         self._siem.start()
         self._stress.start()
         self._controller.start()
+        self._federated.start()
         self._start_health_server()
+
+        # Activate dormant components progressively
+        activation_results = self._activation.activate_all()
+        active = sum(1 for v in activation_results.values() if v)
+        logger.info("Activation: %d/%d components activated",
+                     active, len(activation_results))
 
         logger.info("All CNO components started. Entering main bridge loop.")
 
@@ -565,6 +598,8 @@ class CNOOrganism:
         session_cycle_count = 0
         SESSION_ANALYZE_EVERY = 3  # Every 3rd bridge cycle (30s at 10s interval)
         APP_ANALYZE_EVERY = 6      # Every 6th bridge cycle (60s at 10s interval)
+        TOPOLOGY_EVERY = 30        # Every 30th cycle (5 min at 10s interval)
+        HEALTH_CHECK_EVERY = 60    # Every 60th cycle (10 min at 10s interval)
 
         # Main loop: poll HYDRA data and inject into CNO
         while self._running:
@@ -615,6 +650,19 @@ class CNOOrganism:
                     if any(v > 0 for v in app_findings.values()):
                         logger.info("APP TRACKER: %s", app_findings)
 
+                # Periodic topology rebuild (every 5 min)
+                if session_cycle_count % TOPOLOGY_EVERY == 0:
+                    topo = self._topology.rebuild_topology()
+                    if topo.get('new_nodes', 0) > 0:
+                        logger.info("TOPOLOGY: %s", topo)
+
+                # Periodic activation health check (every 10 min)
+                if session_cycle_count % HEALTH_CHECK_EVERY == 0:
+                    health = self._activation.health_check_all()
+                    degraded = [k for k, v in health.items() if v == 'degraded']
+                    if degraded:
+                        logger.warning("ACTIVATION: degraded components: %s", degraded)
+
             except Exception as e:
                 logger.error("Main loop error: %s", e)
 
@@ -625,6 +673,7 @@ class CNOOrganism:
         logger.info("Stopping CNO Organism...")
         self._running = False
 
+        self._federated.stop()
         self._multi_rag.shutdown()
         self._controller.stop()
         self._stress.stop()
@@ -654,7 +703,7 @@ class CNOOrganism:
             'organism': {
                 'status': 'alive' if self._running else 'stopped',
                 'uptime_s': round(time.time() - self._started_at, 1),
-                'version': '3.0.0',
+                'version': '5.0.0',
             },
             'brainstem': {
                 'note': 'XDP programs managed externally (setup-vrf.sh)',
@@ -680,6 +729,11 @@ class CNOOrganism:
                 'session_analyzer': self._session_analyzer.get_stats(),
                 'app_tracker': self._app_tracker.get_stats(),
             },
+            'federation': self._federated.get_stats(),
+            'npu': self._npu.get_stats(),
+            'fec': self._fec.get_stats(),
+            'topology': self._topology.get_summary(),
+            'activation': self._activation.get_status(),
             'bridge': self._bridge.get_stats(),
         }
 
