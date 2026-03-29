@@ -133,7 +133,7 @@ class TransportMapper:
             f"groupUniqArray(proto) AS protos, "
             f"groupUniqArray(dst_port) AS ports "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE start_time > now() - INTERVAL {TOPOLOGY_WINDOW_S} SECOND "
+            f"WHERE timestamp > now() - INTERVAL {TOPOLOGY_WINDOW_S} SECOND "
             f"GROUP BY src_ip, dst_ip "
             f"ORDER BY flows DESC "
             f"LIMIT 2000"

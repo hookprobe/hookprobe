@@ -33,6 +33,7 @@ import ipaddress
 import logging
 import os
 import re
+import socket
 import struct
 import threading
 import time
@@ -53,6 +54,23 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
+# BPF map operations — import from HYDRA's bpf_map_ops.py
+_BPF_AVAILABLE = False
+_bpf_ops = None
+try:
+    import sys as _sys
+    _hydra_path = os.environ.get('HYDRA_PATH', '/home/ubuntu/hookprobe/core/hydra')
+    if _hydra_path not in _sys.path:
+        _sys.path.insert(0, _hydra_path)
+    from bpf_map_ops import BPFMapOps as _BPFMapOps
+    _bpf_ops = _BPFMapOps()
+    _BPF_AVAILABLE = True
+    logger.info("BPF map ops loaded from %s", _hydra_path)
+except ImportError:
+    logger.info("BPF map ops unavailable — BPF writes will be logged only")
+except Exception as _e:
+    logger.warning("BPF map ops init failed: %s — writes will be logged only", _e)
+
 # IPv4 validation
 _IPV4_RE = re.compile(
     r'^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}'
@@ -65,6 +83,10 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
 
 # Private/reserved IP ranges — never block these
 _RESERVED_NETS = [
@@ -218,10 +240,9 @@ class SynapticController:
             logger.warning("Refusing to block reserved IP: %s", ip)
             return False
 
-        # Pack for LPM_TRIE: prefixlen (u32) + addr (u32 network byte order)
+        # Pack for LPM_TRIE: prefixlen (u32 LE) + addr (network byte order)
         try:
-            addr_int = int(ipaddress.ip_address(ip))
-            key = struct.pack('<II', 32, addr_int)
+            key = struct.pack('<I', 32) + socket.inet_aton(ip)
             value = struct.pack('<I', 1)  # 1 = blocked
         except (ValueError, struct.error) as e:
             logger.error("Failed to pack IP %s: %s", ip, e)
@@ -274,16 +295,13 @@ class SynapticController:
         success = 0
         for write in batch:
             try:
-                # For now, log the intended write. In production, this calls
-                # bpf_map_ops.py via subprocess or direct ctypes BPF syscall.
-                logger.debug(
-                    "BPF write: map=%s op=%s reason=%s",
-                    write.map_name, write.operation, write.reason,
-                )
-                self._stats['bpf_writes'] += 1
-                success += 1
+                ok = self._execute_bpf_write(write)
+                if ok:
+                    self._stats['bpf_writes'] += 1
+                    success += 1
+                else:
+                    self._stats['bpf_errors'] += 1
 
-                # Audit trail
                 self._audit(
                     event_type='bpf_write',
                     details={
@@ -291,6 +309,7 @@ class SynapticController:
                         'operation': write.operation,
                         'reason': write.reason,
                         'ttl_seconds': write.ttl_seconds,
+                        'success': ok,
                     },
                 )
 
@@ -299,6 +318,36 @@ class SynapticController:
                 self._stats['bpf_errors'] += 1
 
         return success
+
+    def _execute_bpf_write(self, write: BPFMapWrite) -> bool:
+        """Execute a single BPF map write via bpf_map_ops or log-only fallback."""
+        if _BPF_AVAILABLE and _bpf_ops:
+            try:
+                if write.map_name in ('blocklist', 'allowlist'):
+                    # LPM_TRIE update via bpf_map_ops
+                    ok = _bpf_ops.map_update_by_name(
+                        write.map_name, write.key, write.value
+                    )
+                    return ok
+                elif write.map_name in ('stress_level', 'camo_config'):
+                    # ARRAY map update
+                    ok = _bpf_ops.map_update_by_name(
+                        write.map_name, write.key, write.value
+                    )
+                    return ok
+                else:
+                    logger.debug("Unknown BPF map: %s", write.map_name)
+                    return False
+            except Exception as e:
+                logger.error("BPF ops error for %s: %s", write.map_name, e)
+                return False
+        else:
+            # Fallback: log-only mode (BPF ops unavailable)
+            logger.debug(
+                "BPF write (log-only): map=%s op=%s reason=%s",
+                write.map_name, write.operation, write.reason,
+            )
+            return True  # Count as success for stats in dev mode
 
     # ------------------------------------------------------------------
     # Upward Routing (Sensory → Cognition)
@@ -355,8 +404,7 @@ class SynapticController:
 
         elif event.route == SynapticRoute.XDP_ALLOWLIST:
             if _IPV4_RE.match(ip):
-                addr_int = int(ipaddress.ip_address(ip))
-                key = struct.pack('<II', 32, addr_int)
+                key = struct.pack('<I', 32) + socket.inet_aton(ip)
                 value = struct.pack('<I', 1)
                 self.queue_bpf_write(BPFMapWrite(
                     map_name='allowlist', key=key, value=value,

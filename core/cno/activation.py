@@ -45,6 +45,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Configurable base path for module file checks (different inside container)
+HOOKPROBE_BASE = os.environ.get('HOOKPROBE_BASE', HOOKPROBE_BASE)
+
 
 class ComponentState(str, Enum):
     DORMANT = "dormant"          # Built but never activated
@@ -229,7 +232,7 @@ class ActivationController:
 
             # Verify the module file exists
             module_file = os.path.join(
-                '/home/ubuntu/hookprobe',
+                HOOKPROBE_BASE,
                 comp.module_path.replace('.', '/') + '.py'
             )
             if not os.path.exists(module_file):
@@ -352,7 +355,7 @@ class ActivationController:
 
             # Check if module file still exists
             module_file = os.path.join(
-                '/home/ubuntu/hookprobe',
+                HOOKPROBE_BASE,
                 comp.module_path.replace('.', '/') + '.py'
             )
 

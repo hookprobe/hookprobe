@@ -46,6 +46,10 @@ CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
 # IPv4 validation
 _IPV4_RE = re.compile(
     r'^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}'
@@ -262,33 +266,9 @@ class LocalBaselineSilo(RAGSilo):
                     recidivism = mal_count / total
                     score = max(score, recidivism)
 
-            # Query 3: IP profile deviation (Z-score from Welford baseline)
-            profile_query = (
-                f"SELECT mean_vector, variance_vector, count "
-                f"FROM {CH_DB}.sentinel_profile_state "
-                f"WHERE ip = '{_safe_ip(ip)}' "
-                f"LIMIT 1"
-            )
-            p_result = _ch_query(profile_query)
-            if p_result and p_result.strip() and features:
-                # Profile exists — compute deviation
-                parts = p_result.strip().split('\t')
-                if len(parts) >= 3 and int(parts[2] or 0) > 10:
-                    try:
-                        mean_vec = json.loads(parts[0])
-                        var_vec = json.loads(parts[1])
-                        if len(mean_vec) == len(features):
-                            z_scores = []
-                            for i in range(min(len(features), len(mean_vec))):
-                                std = max(var_vec[i] ** 0.5, 1e-6) if i < len(var_vec) else 1.0
-                                z = abs(features[i] - mean_vec[i]) / std
-                                z_scores.append(min(z, 5.0))
-                            avg_z = sum(z_scores) / len(z_scores) if z_scores else 0
-                            # Normalize: avg_z of 3+ = highly anomalous
-                            deviation_score = min(avg_z / 3.0, 1.0)
-                            score = max(score, deviation_score)
-                    except (json.JSONDecodeError, ValueError, IndexError):
-                        pass
+            # Note: Z-score profile deviation (Welford baseline) will be
+            # wired when sentinel_profile_state table is created in
+            # a future ClickHouse schema migration.
 
         except Exception as e:
             logger.debug("Local baseline silo error: %s", e)
@@ -597,7 +577,7 @@ class MultiRAGConsensus:
         # Escalation: any single silo above 0.9
         elif any(s >= THRESHOLD_ESCALATE for s in [global_score, local_score, psych_score]):
             verdict = 'malicious'
-            action = 'block_ip'
+            action = 'block'
             confidence = max(global_score, local_score, psych_score)
             self._stats['escalations'] += 1
 
@@ -605,7 +585,7 @@ class MultiRAGConsensus:
         elif agreeing >= MIN_SILOS_AGREE:
             if consensus_score >= 0.7:
                 verdict = 'malicious'
-                action = 'block_ip'
+                action = 'block'
             else:
                 verdict = 'suspicious'
                 action = 'investigate'
