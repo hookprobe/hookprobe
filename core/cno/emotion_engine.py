@@ -32,6 +32,7 @@ Version: 1.0.0
 import logging
 import math
 import os
+import re
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.request import Request, urlopen
