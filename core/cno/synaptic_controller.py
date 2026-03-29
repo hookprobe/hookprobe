@@ -221,8 +221,8 @@ class SynapticController:
         # Pack for LPM_TRIE: prefixlen (u32) + addr (u32 network byte order)
         try:
             addr_int = int(ipaddress.ip_address(ip))
-            key = struct.pack('>II', 32, addr_int)
-            value = struct.pack('>I', 1)  # 1 = blocked
+            key = struct.pack('<II', 32, addr_int)
+            value = struct.pack('<I', 1)  # 1 = blocked
         except (ValueError, struct.error) as e:
             logger.error("Failed to pack IP %s: %s", ip, e)
             return False
@@ -248,8 +248,8 @@ class SynapticController:
             StressState.FIGHT: 2,
             StressState.RECOVERY: 3,
         }
-        key = struct.pack('>I', 0)
-        value = struct.pack('>B', state_map.get(state, 0))
+        key = struct.pack('<I', 0)
+        value = struct.pack('<B', state_map.get(state, 0))
 
         self.queue_bpf_write(BPFMapWrite(
             map_name='stress_level',
@@ -356,8 +356,8 @@ class SynapticController:
         elif event.route == SynapticRoute.XDP_ALLOWLIST:
             if _IPV4_RE.match(ip):
                 addr_int = int(ipaddress.ip_address(ip))
-                key = struct.pack('>II', 32, addr_int)
-                value = struct.pack('>I', 1)
+                key = struct.pack('<II', 32, addr_int)
+                value = struct.pack('<I', 1)
                 self.queue_bpf_write(BPFMapWrite(
                     map_name='allowlist', key=key, value=value,
                     reason=reason,
@@ -429,7 +429,6 @@ class SynapticController:
                         SynapticRoute.XDP_CAMOUFLAGE,
                         SynapticRoute.XDP_FLOW_CTRL,
                         SynapticRoute.BASELINE_UPDATE,
-                        SynapticRoute.SIEM_INGEST,
                         SynapticRoute.SCRIBE,
                     ):
                         self.route_downward(event)
@@ -485,10 +484,11 @@ class SynapticController:
             import json as _json
             rows = []
             for entry in batch:
-                ts = entry.pop('timestamp', time.time())
-                evt = entry.pop('event_type', 'unknown')
+                ts = entry.get('timestamp', time.time())
+                evt = entry.get('event_type', 'unknown')
+                ts_ms = int(ts * 1000)
                 rows.append(
-                    f"(now64(3), '{_ch_escape(evt)}', "
+                    f"(fromUnixTimestamp64Milli({ts_ms}), '{_ch_escape(evt)}', "
                     f"'{_ch_escape(entry.get('source_layer', ''))}', "
                     f"'{_ch_escape(entry.get('route', ''))}', "
                     f"'{_ch_escape(entry.get('source_ip', ''))}', "
@@ -547,10 +547,12 @@ class SynapticController:
 # ------------------------------------------------------------------
 
 def _ch_escape(s: str) -> str:
-    """Escape string for ClickHouse SQL."""
+    """Escape string for ClickHouse SQL (handles injection vectors)."""
     if not s:
         return ''
-    return s.replace('\\', '\\\\').replace("'", "\\'")
+    return (s.replace('\\', '\\\\').replace("'", "\\'")
+             .replace('\n', '\\n').replace('\r', '\\r')
+             .replace('\t', '\\t').replace('\0', ''))
 
 
 def _ch_post(query: str) -> bool:
