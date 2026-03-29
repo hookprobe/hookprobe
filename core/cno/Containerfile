@@ -19,7 +19,7 @@ COPY __init__.py __main__.py types.py synaptic_controller.py stress_gauge.py pac
 COPY multi_rag_consensus.py emotion_engine.py adaptive_camouflage.py ./cno/
 COPY session_analyzer.py app_tracker.py ./cno/
 COPY bloom_sharing.py federated_sync.py npu_bridge.py fec_codec.py ./cno/
-COPY activation.py transport_mapper.py ./cno/
+COPY activation.py transport_mapper.py cno_aegis_bridge.py ./cno/
 
 # Entry point: runs cno/__main__.py which fires cno_organism.main()
 CMD ["python3", "-u", "-m", "cno"]
