@@ -47,6 +47,10 @@ CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
 # Circumplex parameters
 VALENCE_DECAY = 0.05           # Valence drifts toward 0 per cycle (neutral)
 AROUSAL_DECAY = 0.08           # Arousal decays faster (organism calms down)

@@ -188,7 +188,7 @@ class AppTracker:
             f"SELECT dst_ip, dst_port, count(*) AS flows, "
             f"uniq(src_ip) AS unique_clients "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE start_time > now() - INTERVAL {PROFILE_WINDOW_S} SECOND "
+            f"WHERE timestamp > now() - INTERVAL {PROFILE_WINDOW_S} SECOND "
             f"AND dst_port < 10000 "
             f"GROUP BY dst_ip, dst_port "
             f"HAVING flows >= 5 "
@@ -246,7 +246,7 @@ class AppTracker:
         query = (
             f"SELECT dst_ip, dst_port, count(*) AS flows "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE start_time > now() - INTERVAL {PROFILE_WINDOW_S} SECOND "
+            f"WHERE timestamp > now() - INTERVAL {PROFILE_WINDOW_S} SECOND "
             f"AND src_ip = '{_safe_ip(profile.listen_ip)}' "
             f"GROUP BY dst_ip, dst_port "
             f"HAVING flows >= 2 "
@@ -296,7 +296,7 @@ class AppTracker:
         query = (
             f"SELECT src_ip, dst_ip, dst_port, src_port, count(*) AS flows "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE start_time > now() - INTERVAL 300 SECOND "
+            f"WHERE timestamp > now() - INTERVAL 300 SECOND "
             f"AND src_port > 1024 "
             f"AND dst_port < 10000 "
             f"GROUP BY src_ip, dst_ip, dst_port, src_port "

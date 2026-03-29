@@ -78,6 +78,10 @@ CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
 HEALTH_PORT = int(os.environ.get('CNO_HEALTH_PORT', '8900'))
 BRIDGE_INTERVAL_S = float(os.environ.get('CNO_BRIDGE_INTERVAL', '10'))
 BRIDGE_LOOKBACK_S = int(os.environ.get('CNO_BRIDGE_LOOKBACK', '15'))
@@ -246,9 +250,9 @@ class HYDRABridge:
         """Bridge recent NAPSE flows into PacketSIEM working memory."""
         query = (
             f"SELECT src_ip, dst_ip, src_port, dst_port, proto, "
-            f"bytes_orig, intent_class, toUnixTimestamp(start_time) "
+            f"bytes_orig, intent_class, toUnixTimestamp(timestamp) "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE start_time > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
+            f"WHERE timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
             f"LIMIT 500"
         )
         result = _ch_query(query)
@@ -438,18 +442,14 @@ class CNOOrganism:
             self._emotion.process_stimulus('novel_pattern', confidence * 0.6, verdict)
 
         # Route action to Brainstem
-        if action == 'block_ip' and ip:
+        if action == 'block' and ip:
             self._controller.push_to_blocklist(
                 ip=ip, ttl_seconds=3600,
                 reason=f"Multi-RAG consensus: {v} (confidence={confidence:.2f})",
             )
-        elif action == 'throttle' and ip:
-            self._controller.submit_downward(
-                route=SynapticRoute.XDP_BLOCKLIST,
-                source_ip=ip, action='throttle',
-                ttl_seconds=1800,
-                reason=f"Multi-RAG throttle: {v}",
-            )
+        elif action == 'investigate' and ip:
+            # Log for analyst review — no automatic block for investigate
+            logger.info("RAG INVESTIGATE: %s requires human review", ip)
 
     def _on_federated_update(self, bloom_stats: Dict[str, Any]) -> None:
         """Called by FederatedSync when global threat view changes."""
@@ -570,7 +570,7 @@ class CNOOrganism:
         self._started_at = time.time()
 
         logger.info("=" * 60)
-        logger.info("  COGNITIVE NETWORK ORGANISM v%s", "1.0.0")
+        logger.info("  COGNITIVE NETWORK ORGANISM v%s", "5.0.0")
         logger.info("  Brainstem:   XDP programs (external)")
         logger.info("  Cerebellum:  PacketSIEM + StressGauge")
         logger.info("  Cerebrum:    SynapticController + handlers")
