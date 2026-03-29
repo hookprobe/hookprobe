@@ -51,6 +51,7 @@ THRESHOLD_FIGHT = 0.60        # 0.35 - 0.60 = FIGHT
 # Above 0.60 = FIGHT (no separate RECOVERY threshold — recovery is time-based)
 
 HYSTERESIS_SECONDS = 30.0     # Min time in a state before transition
+RECOVERY_MAX_SECONDS = 300.0  # Max 5 min in RECOVERY before auto-transition to CALM
 GAUGE_INTERVAL_S = 5.0        # Compute stress every 5 seconds
 HISTORY_WINDOW = 60           # Keep 60 samples (5 min at 5s intervals)
 
@@ -143,18 +144,23 @@ class StressGauge:
         return 0.0
 
     def _collect_active_incidents(self) -> float:
-        """Count unresolved AEGIS cognition entries (0.0 - 1.0).
+        """Count recent unresolved malicious verdicts (0.0 - 1.0).
 
+        Uses ClickHouse hydra_verdicts (not PostgreSQL) since the CNO
+        container has no access to the rootless podman network.
         Normalized: 0 = 0.0, >=10 = 1.0
         """
         try:
             query = (
-                "SELECT count(*) FROM aegis_cognition "
-                "WHERE NOT resolved AND priority <= 5"
+                f"SELECT count(DISTINCT src_ip) "
+                f"FROM {CH_DB}.hydra_verdicts "
+                f"WHERE timestamp > now() - INTERVAL 300 SECOND "
+                f"AND verdict = 'malicious' "
+                f"AND action_taken NOT IN ('block', 'blocked')"
             )
-            result = _pg_query(query)
+            result = _ch_query(query)
             if result:
-                count = int(result.strip())
+                count = int(result.strip() or 0)
                 return min(count / 10.0, 1.0)
         except Exception as e:
             logger.debug("Active incidents query failed: %s", e)
@@ -268,8 +274,13 @@ class StressGauge:
         candidate_state = self._score_to_state(score)
 
         # Recovery → CALM transition when score drops below CALM threshold
-        if self._state == StressState.RECOVERY and score < THRESHOLD_CALM:
-            candidate_state = StressState.CALM
+        # OR after max dwell time in RECOVERY with score below ALERT threshold
+        if self._state == StressState.RECOVERY:
+            if score < THRESHOLD_CALM:
+                candidate_state = StressState.CALM
+            elif (score < THRESHOLD_ALERT and
+                  (now - self._state_entered_at) >= RECOVERY_MAX_SECONDS):
+                candidate_state = StressState.CALM
 
         # Hysteresis: require sustained change before transitioning
         now = time.monotonic()
@@ -366,7 +377,9 @@ class StressGauge:
 def _ch_escape(s: str) -> str:
     if not s:
         return ''
-    return s.replace('\\', '\\\\').replace("'", "\\'")
+    return (s.replace('\\', '\\\\').replace("'", "\\'")
+             .replace('\n', '\\n').replace('\r', '\\r')
+             .replace('\t', '\\t').replace('\0', ''))
 
 
 def _ch_query(query: str) -> Optional[str]:
@@ -399,17 +412,3 @@ def _ch_post(query: str) -> bool:
         return False
 
 
-def _pg_query(query: str) -> Optional[str]:
-    """Execute a PostgreSQL query via podman exec."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ['podman', 'exec', 'hookprobe-postgres', 'psql', '-U', 'hookprobe',
-             '-d', 'hookprobe', '-t', '-A', '-c', query],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return None

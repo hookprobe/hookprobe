@@ -86,28 +86,28 @@ class PacketSIEM:
         """Ingest a single packet snapshot into working memory.
 
         Designed for minimal latency — counter updates only, no I/O.
+        All mutations under self._lock to prevent races with _rebuild_counters().
         """
         with self._lock:
             self._packets.append(snapshot)
 
-        # Fast counter updates (no lock needed — atomic increments in CPython)
-        self._total_ingested += 1
-        self._total_bytes += snapshot.bytes_len
-        self._src_counter[snapshot.src_ip] += 1
-        self._dst_counter[snapshot.dst_ip] += 1
-        self._proto_counter[snapshot.proto] += 1
-        self._intent_counter[snapshot.intent_class] += 1
-        self._action_counter[snapshot.action] += 1
+            self._total_ingested += 1
+            self._total_bytes += snapshot.bytes_len
+            self._src_counter[snapshot.src_ip] += 1
+            self._dst_counter[snapshot.dst_ip] += 1
+            self._proto_counter[snapshot.proto] += 1
+            self._intent_counter[snapshot.intent_class] += 1
+            self._action_counter[snapshot.action] += 1
 
-        # Flow tracking (5-tuple hash for uniqueness)
-        flow_key = (
-            f"{snapshot.src_ip}:{snapshot.src_port}-"
-            f"{snapshot.dst_ip}:{snapshot.dst_port}-{snapshot.proto}"
-        )
-        self._unique_flows.add(flow_key)
+            # Flow tracking (5-tuple hash for uniqueness)
+            flow_key = (
+                f"{snapshot.src_ip}:{snapshot.src_port}-"
+                f"{snapshot.dst_ip}:{snapshot.dst_port}-{snapshot.proto}"
+            )
+            self._unique_flows.add(flow_key)
 
-        # Invalidate cache
-        self._cached_state = None
+            # Invalidate cache
+            self._cached_state = None
 
     def ingest_batch(self, snapshots: List[PacketSnapshot]) -> int:
         """Ingest a batch of packet snapshots. Returns count ingested."""
