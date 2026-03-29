@@ -454,12 +454,14 @@ class MultiRAGConsensus:
     The "conscious thought" of the organism — slow but thorough.
     """
 
-    def __init__(self, on_verdict=None):
-        """Initialize with optional verdict callback.
+    def __init__(self, on_verdict=None, npu_bridge=None):
+        """Initialize with optional verdict callback and NPU bridge.
 
         Args:
             on_verdict: Callback(verdict_dict) called when consensus reached.
+            npu_bridge: Optional NPUBridge for accelerated anomaly scoring.
         """
+        self._npu = npu_bridge
         self._silos = [
             GlobalThreatSilo(),
             LocalBaselineSilo(),
@@ -499,6 +501,16 @@ class MultiRAGConsensus:
         self._stats['queries'] += 1
         start = time.monotonic()
 
+        # NPU-accelerated anomaly pre-score (augments consensus)
+        npu_score = 0.0
+        if self._npu and features:
+            try:
+                npu_score, npu_method = self._npu.classify_anomaly(features)
+                event.payload['npu_anomaly_score'] = npu_score
+                event.payload['npu_method'] = npu_method
+            except Exception as e:
+                logger.debug("NPU pre-score failed: %s", e)
+
         # Query all silos in parallel
         silo_results = {}
         futures = {}
@@ -521,8 +533,9 @@ class MultiRAGConsensus:
                 }
                 self._stats['errors'] += 1
 
-        # Compute weighted consensus
-        consensus = self._compute_consensus(ip, silo_results, token_narrative)
+        # Compute weighted consensus (with optional NPU tie-breaker)
+        consensus = self._compute_consensus(ip, silo_results, token_narrative,
+                                            npu_score=npu_score)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         consensus['total_latency_ms'] = elapsed_ms
@@ -551,8 +564,9 @@ class MultiRAGConsensus:
         return consensus
 
     def _compute_consensus(self, ip: str, silo_results: Dict[str, Dict],
-                           token_narrative: str) -> Dict[str, Any]:
-        """Compute weighted consensus from silo scores."""
+                           token_narrative: str,
+                           npu_score: float = 0.0) -> Dict[str, Any]:
+        """Compute weighted consensus from silo scores with optional NPU tie-break."""
         global_score = silo_results.get('global_threat', {}).get('score', 0)
         local_score = silo_results.get('local_baseline', {}).get('score', 0)
         psych_score = silo_results.get('attacker_psychology', {}).get('score', 0)
@@ -567,6 +581,11 @@ class MultiRAGConsensus:
         # Count silos agreeing (above threshold)
         agreeing = sum(1 for s in [global_score, local_score, psych_score]
                        if s >= THRESHOLD_ACTION)
+
+        # NPU tie-breaker: if NPU strongly agrees with 1 silo, count as 2
+        if npu_score >= 0.8 and agreeing == 1:
+            agreeing = 2
+            consensus_score = max(consensus_score, npu_score * 0.3 + consensus_score * 0.7)
 
         # Fast-path benign: all silos below 0.3
         if all(s < THRESHOLD_BENIGN for s in [global_score, local_score, psych_score]):

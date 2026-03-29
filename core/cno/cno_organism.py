@@ -66,6 +66,7 @@ from .npu_bridge import NPUBridge
 from .fec_codec import FECCodec
 from .activation import ActivationController
 from .transport_mapper import TransportMapper
+from .cno_aegis_bridge import CNOAegisBridge
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,31 @@ BRIDGE_LOOKBACK_S = int(os.environ.get('CNO_BRIDGE_LOOKBACK', '15'))
 # Risk velocity thresholds (mirrors cognitive_defense.py)
 REFLEX_VELOCITY = float(os.environ.get('REFLEX_VELOCITY', '0.30'))
 REASON_VELOCITY = float(os.environ.get('REASON_VELOCITY', '0.10'))
+
+# ============================================================================
+# Tier-Aware Component Gating
+# ============================================================================
+
+HOOKPROBE_TIER = os.environ.get('HOOKPROBE_TIER', 'fortress').lower()
+
+TIER_CAPABILITIES = {
+    'sentinel': set(),  # CNO disabled entirely
+    'guardian': {'siem', 'stress', 'controller', 'bridge', 'health',
+                 'session', 'aegis_bridge'},
+    'fortress': {'siem', 'stress', 'controller', 'bridge', 'health',
+                 'session', 'aegis_bridge', 'cognitive_defense', 'multi_rag',
+                 'emotion', 'camouflage', 'sia', 'app_tracker', 'npu',
+                 'activation', 'topology'},
+    'nexus': {'siem', 'stress', 'controller', 'bridge', 'health',
+              'session', 'aegis_bridge', 'cognitive_defense', 'multi_rag',
+              'emotion', 'camouflage', 'sia', 'app_tracker', 'npu',
+              'activation', 'topology', 'federated', 'fec'},
+}
+
+
+def _has(cap: str) -> bool:
+    """Check if current tier has a capability."""
+    return cap in TIER_CAPABILITIES.get(HOOKPROBE_TIER, TIER_CAPABILITIES['fortress'])
 
 
 # ============================================================================
@@ -329,50 +355,58 @@ class CNOOrganism:
     """The living organism — wires all components and runs the main loop."""
 
     def __init__(self):
-        # Cerebellum components
+        if HOOKPROBE_TIER == 'sentinel':
+            raise SystemExit("CNO disabled on Sentinel tier (insufficient RAM)")
+
+        self._tier = HOOKPROBE_TIER
+
+        # === Always created (Guardian+) ===
         self._siem = PacketSIEM()
         self._stress = StressGauge(on_state_change=self._on_stress_change)
-
-        # Thalamus (spans all layers)
         self._controller = SynapticController()
 
-        # Cerebrum: Multi-RAG Consensus (cortex)
-        self._multi_rag = MultiRAGConsensus(on_verdict=self._on_rag_verdict)
-
-        # Cerebrum: Emotion Engine (amygdala)
-        self._emotion = EmotionEngine(on_emotion_change=self._on_emotion_change)
-
-        # Cerebrum: Adaptive Camouflage (deception system)
-        self._camouflage = AdaptiveCamouflage(
-            bpf_write_callback=self._controller.queue_bpf_write
+        # === Tier-gated components ===
+        self._multi_rag = (
+            MultiRAGConsensus(on_verdict=self._on_rag_verdict,
+                              npu_bridge=NPUBridge() if _has('npu') else None)
+            if _has('multi_rag') else None
+        )
+        self._npu = NPUBridge() if _has('npu') else None
+        self._emotion = (
+            EmotionEngine(on_emotion_change=self._on_emotion_change)
+            if _has('emotion') else None
+        )
+        self._camouflage = (
+            AdaptiveCamouflage(bpf_write_callback=self._controller.queue_bpf_write)
+            if _has('camouflage') else None
+        )
+        self._session_analyzer = (
+            SessionAnalyzer(submit_event=self._controller.submit_upward)
+            if _has('session') else None
+        )
+        self._app_tracker = (
+            AppTracker(submit_event=self._controller.submit_upward)
+            if _has('app_tracker') else None
+        )
+        self._federated = (
+            FederatedSync(on_global_update=self._on_federated_update)
+            if _has('federated') else None
+        )
+        self._fec = FECCodec() if _has('fec') else None
+        self._activation = ActivationController() if _has('activation') else None
+        self._topology = (
+            TransportMapper(submit_event=self._controller.submit_upward)
+            if _has('topology') else None
         )
 
-        # Cerebrum: Session Analyzer (Wernicke's area)
-        self._session_analyzer = SessionAnalyzer(
-            submit_event=self._controller.submit_upward
-        )
+        # CNO-AEGIS bridge (connects CNO signal system to AEGIS routing)
+        self._aegis_bridge = CNOAegisBridge(self._controller) if _has('aegis_bridge') else None
 
-        # Cerebellum: App Tracker (motor cortex)
-        self._app_tracker = AppTracker(
-            submit_event=self._controller.submit_upward
-        )
+        # CognitiveDefense + SIA (lazy-initialized in run())
+        self._cognitive_defense = None
+        self._sia_engine = None
 
-        # Phase 4: Federated Intelligence
-        self._federated = FederatedSync(on_global_update=self._on_federated_update)
-
-        # Phase 4: NPU acceleration bridge
-        self._npu = NPUBridge()
-
-        # Phase 4: FEC codec for mesh transport
-        self._fec = FECCodec()
-
-        # Phase 5: Activation controller (dormant component lifecycle)
-        self._activation = ActivationController()
-
-        # Phase 5: Transport mapper (network topology)
-        self._topology = TransportMapper(submit_event=self._controller.submit_upward)
-
-        # HYDRA bridge (feeds existing pipeline data)
+        # HYDRA bridge (always active)
         self._bridge = HYDRABridge(self._controller, self._siem)
 
         # Health server
@@ -383,7 +417,13 @@ class CNOOrganism:
         self._running = False
         self._started_at = 0.0
 
-        logger.info("CNO Organism created")
+        active = sum(1 for c in [
+            self._siem, self._stress, self._controller, self._multi_rag,
+            self._emotion, self._camouflage, self._session_analyzer,
+            self._app_tracker, self._federated, self._fec, self._activation,
+            self._topology, self._aegis_bridge, self._npu,
+        ] if c is not None)
+        logger.info("CNO Organism created (tier=%s, %d components)", self._tier, active)
 
     def _on_stress_change(self, old: StressState, new: StressState,
                           score: float) -> None:
@@ -404,10 +444,11 @@ class CNOOrganism:
             payload={'stress_state': new},
         )
 
-        # Feed stress change to Emotion Engine
-        self._emotion.process_stimulus('stress_change', score, {
-            'stress_state': new,
-        })
+        # Feed stress change to Emotion Engine (if active)
+        if self._emotion:
+            self._emotion.process_stimulus('stress_change', score, {
+                'stress_state': new,
+            })
 
         # If entering FIGHT, also push high-risk IPs to blocklist
         if new == StressState.FIGHT:
@@ -486,54 +527,119 @@ class CNOOrganism:
             },
         )
 
-    def _register_cerebrum_handlers(self) -> None:
-        """Register Cerebrum processing handlers with the Synaptic Controller.
+    def _init_cognitive_defense(self) -> None:
+        """Lazy-init CognitiveDefenseLoop (requires HYDRA in sys.path)."""
+        if not _has('cognitive_defense'):
+            return
+        try:
+            hydra_path = os.environ.get('HYDRA_PATH',
+                                        '/home/ubuntu/hookprobe/core/hydra')
+            if hydra_path not in sys.path:
+                sys.path.insert(0, hydra_path)
+            from cognitive_defense import CognitiveDefenseLoop
+            self._cognitive_defense = CognitiveDefenseLoop()
+            logger.info("CognitiveDefenseLoop wired (Reflex/Reason/Learn active)")
+        except Exception as e:
+            logger.warning("CognitiveDefense unavailable: %s", e)
 
-        Phase 1: Log-only handlers. Phase 2+ will wire to actual engines.
-        """
+    def _init_sia(self) -> None:
+        """Initialize SIA Engine for kill-chain attribution."""
+        if not _has('sia'):
+            return
+        try:
+            hookprobe_base = os.environ.get('HOOKPROBE_BASE',
+                                            '/home/ubuntu/hookprobe')
+            if hookprobe_base not in sys.path:
+                sys.path.insert(0, hookprobe_base)
+            from core.napse.intelligence.sia_engine import SIAEngine
+            self._sia_engine = SIAEngine()
+
+            # Wire SIA signal callback → CNO AEGIS bridge or direct inject
+            def _on_sia_signal(signal):
+                if self._aegis_bridge:
+                    self._aegis_bridge.feed_from_aegis(signal)
+                else:
+                    self._controller.submit_upward(
+                        source_layer=BrainLayer.CEREBRUM,
+                        route=SynapticRoute.ENTITY_GRAPH,
+                        event_type=getattr(signal, 'event_type', 'sia.intent'),
+                        priority=2,
+                        source_ip=getattr(signal, 'data', {}).get('source_ip', ''),
+                        payload=getattr(signal, 'data', {}),
+                    )
+
+            self._sia_engine.set_signal_callback(_on_sia_signal)
+            logger.info("SIA Engine wired for kill-chain attribution")
+        except Exception as e:
+            logger.warning("SIA Engine unavailable: %s", e)
+
+    def _register_cerebrum_handlers(self) -> None:
+        """Register Cerebrum processing handlers with the Synaptic Controller."""
+
         def _handle_cognitive_defense(event: SynapticEvent):
-            """Route to existing cognitive_defense.py (Reflex/Reason/Learn)."""
-            logger.info(
-                "CEREBRUM[cognitive_defense]: %s from %s (pri=%d, score=%s)",
-                event.event_type, event.source_ip, event.priority,
-                event.payload.get('anomaly_score', '?'),
-            )
-            # Phase 2: Call CognitiveDefenseLoop.process() directly
+            """Route to CognitiveDefenseLoop (Reflex/Reason/Learn)."""
+            if self._cognitive_defense:
+                # Build micro-cycle input from event payload
+                velocity_result = {
+                    'ip': event.source_ip,
+                    'risk_velocity': event.payload.get('risk_velocity', 0),
+                    'latest_score': event.payload.get(
+                        'anomaly_score',
+                        event.payload.get('composite_risk', 0.5)),
+                }
+                rag_ctx = []
+                if event.payload.get('rag_triggered'):
+                    rag_ctx = [{'ip': event.source_ip,
+                                'prompt_context': event.payload.get('rag_context', '')}]
+                try:
+                    actions = self._cognitive_defense.process_cycle(
+                        [velocity_result], rag_ctx
+                    )
+                    for action in (actions or []):
+                        act = action.get('action', 'monitor')
+                        ip = action.get('ip', '')
+                        ttl = action.get('ttl_seconds', 3600)
+                        reason = action.get('reasoning', act)
+                        if act in ('block_ip', 'block_subnet') and ip:
+                            self._controller.push_to_blocklist(ip, ttl, reason)
+                except Exception as e:
+                    logger.error("CognitiveDefense cycle error: %s", e)
+            else:
+                logger.debug(
+                    "CEREBRUM[cognitive_defense]: %s from %s (log-only, no loop)",
+                    event.event_type, event.source_ip,
+                )
 
         def _handle_multi_rag(event: SynapticEvent):
             """Route to Multi-RAG Consensus engine."""
-            logger.info(
-                "CEREBRUM[multi_rag]: %s from %s (velocity=%s)",
-                event.event_type, event.source_ip,
-                event.payload.get('risk_velocity', '?'),
-            )
-            try:
-                self._multi_rag.evaluate(event)
-            except Exception as e:
-                logger.error("Multi-RAG evaluation failed: %s", e)
+            if self._multi_rag:
+                try:
+                    self._multi_rag.evaluate(event)
+                except Exception as e:
+                    logger.error("Multi-RAG evaluation failed: %s", e)
+            else:
+                logger.debug("CEREBRUM[multi_rag]: not active on %s tier", self._tier)
 
         def _handle_temporal(event: SynapticEvent):
             """Route to Temporal Memory engine."""
-            logger.debug(
-                "CEREBRUM[temporal]: %s from %s",
-                event.event_type, event.source_ip,
-            )
+            logger.debug("CEREBRUM[temporal]: %s from %s",
+                         event.event_type, event.source_ip)
 
         def _handle_entity_graph(event: SynapticEvent):
-            """Route to Entity Graph / SIA engine (Phase 2)."""
-            logger.debug(
-                "CEREBRUM[entity_graph]: %s from %s",
-                event.event_type, event.source_ip,
-            )
+            """Route to SIA Engine for kill chain attribution."""
+            if self._sia_engine and event.source_ip:
+                try:
+                    self._sia_engine.process_entity(event.source_ip)
+                except Exception as e:
+                    logger.error("SIA process_entity error: %s", e)
+            else:
+                logger.debug("CEREBRUM[entity_graph]: %s from %s",
+                             event.event_type, event.source_ip)
 
         def _handle_session_analysis(event: SynapticEvent):
             """Route to Session Analyzer (Wernicke's area)."""
-            logger.debug(
-                "CEREBRUM[session_analysis]: %s from %s",
-                event.event_type, event.source_ip,
-            )
-            # Session analysis is primarily driven by the periodic cycle,
-            # but individual events can trigger focused analysis here.
+            logger.debug("CEREBRUM[session_analysis]: %s from %s",
+                         event.event_type, event.source_ip)
 
         self._controller.register_handler(
             SynapticRoute.COGNITIVE_DEFENSE, _handle_cognitive_defense)
@@ -580,18 +686,24 @@ class CNOOrganism:
         # Register Cerebrum route handlers
         self._register_cerebrum_handlers()
 
+        # Wire CognitiveDefense and SIA (Fortress+ only)
+        self._init_cognitive_defense()
+        self._init_sia()
+
         # Start components
         self._siem.start()
         self._stress.start()
         self._controller.start()
-        self._federated.start()
+        if self._federated:
+            self._federated.start()
         self._start_health_server()
 
-        # Activate dormant components progressively
-        activation_results = self._activation.activate_all()
-        active = sum(1 for v in activation_results.values() if v)
-        logger.info("Activation: %d/%d components activated",
-                     active, len(activation_results))
+        # Activate dormant components progressively (Fortress+ only)
+        if self._activation:
+            activation_results = self._activation.activate_all()
+            active = sum(1 for v in activation_results.values() if v)
+            logger.info("Activation: %d/%d components activated",
+                         active, len(activation_results))
 
         logger.info("All CNO components started. Entering main bridge loop.")
 
@@ -607,8 +719,11 @@ class CNOOrganism:
             try:
                 stats = self._bridge.poll_cycle()
 
-                # Evaluate emotion state each cycle
-                emotion, valence, arousal = self._emotion.evaluate()
+                # Evaluate emotion state each cycle (Fortress+ only)
+                emotion_name = 'n/a'
+                if self._emotion:
+                    emotion, valence, arousal = self._emotion.evaluate()
+                    emotion_name = emotion.value
 
                 # Periodic status log
                 spatial = self._siem.get_spatial_state()
@@ -619,46 +734,47 @@ class CNOOrganism:
                         "BRIDGE: verdicts=%d velocities=%d flows=%d | "
                         "STRESS=%s EMOTION=%s | SIEM: %d pkts, %d src_ips, threat=%.1f%%",
                         stats['verdicts'], stats['velocities'], stats['flows'],
-                        stress.value, emotion.value,
+                        stress.value, emotion_name,
                         spatial.total_packets, spatial.unique_src_ips,
                         spatial.threat_ratio * 100,
                     )
 
                 # Feed spatial awareness anomalies to emotion engine
-                if spatial.is_under_attack:
-                    dominant = spatial.dominant_threat
-                    if dominant in ('ddos', 'bruteforce'):
-                        self._emotion.process_stimulus('ddos_detected', spatial.threat_ratio)
-                    elif dominant == 'scan':
-                        self._emotion.process_stimulus('scan_detected', spatial.threat_ratio)
-                    elif dominant == 'exfiltration':
-                        self._emotion.process_stimulus('exfiltration_detected', spatial.threat_ratio)
-                    else:
-                        self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
-                elif spatial.threat_ratio < 0.01 and stress == StressState.CALM:
-                    self._emotion.process_stimulus('all_clear', 0.1)
+                if self._emotion:
+                    if spatial.is_under_attack:
+                        dominant = spatial.dominant_threat
+                        if dominant in ('ddos', 'bruteforce'):
+                            self._emotion.process_stimulus('ddos_detected', spatial.threat_ratio)
+                        elif dominant == 'scan':
+                            self._emotion.process_stimulus('scan_detected', spatial.threat_ratio)
+                        elif dominant == 'exfiltration':
+                            self._emotion.process_stimulus('exfiltration_detected', spatial.threat_ratio)
+                        else:
+                            self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
+                    elif spatial.threat_ratio < 0.01 and stress == StressState.CALM:
+                        self._emotion.process_stimulus('all_clear', 0.1)
 
                 # Periodic session analysis (every 30s)
                 session_cycle_count += 1
-                if session_cycle_count % SESSION_ANALYZE_EVERY == 0:
+                if self._session_analyzer and session_cycle_count % SESSION_ANALYZE_EVERY == 0:
                     session_findings = self._session_analyzer.analyze_cycle()
                     if any(v > 0 for v in session_findings.values()):
                         logger.info("SESSION: %s", session_findings)
 
                 # Periodic app deviation analysis (every 60s)
-                if session_cycle_count % APP_ANALYZE_EVERY == 0:
+                if self._app_tracker and session_cycle_count % APP_ANALYZE_EVERY == 0:
                     app_findings = self._app_tracker.analyze_cycle()
                     if any(v > 0 for v in app_findings.values()):
                         logger.info("APP TRACKER: %s", app_findings)
 
                 # Periodic topology rebuild (every 5 min)
-                if session_cycle_count % TOPOLOGY_EVERY == 0:
+                if self._topology and session_cycle_count % TOPOLOGY_EVERY == 0:
                     topo = self._topology.rebuild_topology()
                     if topo.get('new_nodes', 0) > 0:
                         logger.info("TOPOLOGY: %s", topo)
 
                 # Periodic activation health check (every 10 min)
-                if session_cycle_count % HEALTH_CHECK_EVERY == 0:
+                if self._activation and session_cycle_count % HEALTH_CHECK_EVERY == 0:
                     health = self._activation.health_check_all()
                     degraded = [k for k, v in health.items() if v == 'degraded']
                     if degraded:
@@ -674,8 +790,10 @@ class CNOOrganism:
         logger.info("Stopping CNO Organism...")
         self._running = False
 
-        self._federated.stop()
-        self._multi_rag.shutdown()
+        if self._federated:
+            self._federated.stop()
+        if self._multi_rag:
+            self._multi_rag.shutdown()
         self._controller.stop()
         self._stress.stop()
         self._siem.stop()
@@ -705,6 +823,9 @@ class CNOOrganism:
                 'status': 'alive' if self._running else 'stopped',
                 'uptime_s': round(time.time() - self._started_at, 1),
                 'version': '5.0.0',
+                'tier': self._tier,
+                'cognitive_defense': self._cognitive_defense is not None,
+                'sia_engine': self._sia_engine is not None,
             },
             'brainstem': {
                 'note': 'XDP programs managed externally (setup-vrf.sh)',
@@ -725,16 +846,17 @@ class CNOOrganism:
             },
             'cerebrum': {
                 'synaptic': self._controller.get_stats(),
-                'multi_rag': self._multi_rag.get_stats(),
-                'emotion': self._emotion.get_status(),
-                'session_analyzer': self._session_analyzer.get_stats(),
-                'app_tracker': self._app_tracker.get_stats(),
+                'multi_rag': self._multi_rag.get_stats() if self._multi_rag else None,
+                'emotion': self._emotion.get_status() if self._emotion else None,
+                'session_analyzer': self._session_analyzer.get_stats() if self._session_analyzer else None,
+                'app_tracker': self._app_tracker.get_stats() if self._app_tracker else None,
+                'aegis_bridge': self._aegis_bridge.get_stats() if self._aegis_bridge else None,
             },
-            'federation': self._federated.get_stats(),
-            'npu': self._npu.get_stats(),
-            'fec': self._fec.get_stats(),
-            'topology': self._topology.get_summary(),
-            'activation': self._activation.get_status(),
+            'federation': self._federated.get_stats() if self._federated else None,
+            'npu': self._npu.get_stats() if self._npu else None,
+            'fec': self._fec.get_stats() if self._fec else None,
+            'topology': self._topology.get_summary() if self._topology else None,
+            'activation': self._activation.get_status() if self._activation else None,
             'bridge': self._bridge.get_stats(),
         }
 
