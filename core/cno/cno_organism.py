@@ -58,6 +58,8 @@ from .packet_siem import PacketSIEM
 from .multi_rag_consensus import MultiRAGConsensus
 from .emotion_engine import EmotionEngine
 from .adaptive_camouflage import AdaptiveCamouflage
+from .session_analyzer import SessionAnalyzer
+from .app_tracker import AppTracker
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +337,16 @@ class CNOOrganism:
             bpf_write_callback=self._controller.queue_bpf_write
         )
 
+        # Cerebrum: Session Analyzer (Wernicke's area)
+        self._session_analyzer = SessionAnalyzer(
+            submit_event=self._controller.submit_upward
+        )
+
+        # Cerebellum: App Tracker (motor cortex)
+        self._app_tracker = AppTracker(
+            submit_event=self._controller.submit_upward
+        )
+
         # HYDRA bridge (feeds existing pipeline data)
         self._bridge = HYDRABridge(self._controller, self._siem)
 
@@ -488,11 +500,13 @@ class CNOOrganism:
             )
 
         def _handle_session_analysis(event: SynapticEvent):
-            """Route to Session Analyzer (Phase 3)."""
+            """Route to Session Analyzer (Wernicke's area)."""
             logger.debug(
                 "CEREBRUM[session_analysis]: %s from %s",
                 event.event_type, event.source_ip,
             )
+            # Session analysis is primarily driven by the periodic cycle,
+            # but individual events can trigger focused analysis here.
 
         self._controller.register_handler(
             SynapticRoute.COGNITIVE_DEFENSE, _handle_cognitive_defense)
@@ -547,6 +561,11 @@ class CNOOrganism:
 
         logger.info("All CNO components started. Entering main bridge loop.")
 
+        # Cycle counters for periodic analysis
+        session_cycle_count = 0
+        SESSION_ANALYZE_EVERY = 3  # Every 3rd bridge cycle (30s at 10s interval)
+        APP_ANALYZE_EVERY = 6      # Every 6th bridge cycle (60s at 10s interval)
+
         # Main loop: poll HYDRA data and inject into CNO
         while self._running:
             try:
@@ -582,6 +601,19 @@ class CNOOrganism:
                         self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
                 elif spatial.threat_ratio < 0.01 and stress == StressState.CALM:
                     self._emotion.process_stimulus('all_clear', 0.1)
+
+                # Periodic session analysis (every 30s)
+                session_cycle_count += 1
+                if session_cycle_count % SESSION_ANALYZE_EVERY == 0:
+                    session_findings = self._session_analyzer.analyze_cycle()
+                    if any(v > 0 for v in session_findings.values()):
+                        logger.info("SESSION: %s", session_findings)
+
+                # Periodic app deviation analysis (every 60s)
+                if session_cycle_count % APP_ANALYZE_EVERY == 0:
+                    app_findings = self._app_tracker.analyze_cycle()
+                    if any(v > 0 for v in app_findings.values()):
+                        logger.info("APP TRACKER: %s", app_findings)
 
             except Exception as e:
                 logger.error("Main loop error: %s", e)
@@ -622,7 +654,7 @@ class CNOOrganism:
             'organism': {
                 'status': 'alive' if self._running else 'stopped',
                 'uptime_s': round(time.time() - self._started_at, 1),
-                'version': '2.0.0',
+                'version': '3.0.0',
             },
             'brainstem': {
                 'note': 'XDP programs managed externally (setup-vrf.sh)',
@@ -645,6 +677,8 @@ class CNOOrganism:
                 'synaptic': self._controller.get_stats(),
                 'multi_rag': self._multi_rag.get_stats(),
                 'emotion': self._emotion.get_status(),
+                'session_analyzer': self._session_analyzer.get_stats(),
+                'app_tracker': self._app_tracker.get_stats(),
             },
             'bridge': self._bridge.get_stats(),
         }

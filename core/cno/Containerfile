@@ -1,7 +1,7 @@
 FROM docker.io/library/python:3.12-slim
 
 LABEL description="HookProbe Cognitive Network Organism (CNO) — Living Defense System"
-LABEL version="2.0.0"
+LABEL version="3.0.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
@@ -13,6 +13,7 @@ WORKDIR /app
 # CNO core modules — must be in a package directory for relative imports
 COPY __init__.py __main__.py types.py synaptic_controller.py stress_gauge.py packet_siem.py cno_organism.py ./cno/
 COPY multi_rag_consensus.py emotion_engine.py adaptive_camouflage.py ./cno/
+COPY session_analyzer.py app_tracker.py ./cno/
 
 # Entry point: runs cno/__main__.py which fires cno_organism.main()
 CMD ["python3", "-u", "-m", "cno"]
