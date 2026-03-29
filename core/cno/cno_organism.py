@@ -46,6 +46,7 @@ from urllib.request import Request, urlopen
 # CNO components
 from .types import (
     BrainLayer,
+    EmotionState,
     PacketSnapshot,
     StressState,
     SynapticEvent,
@@ -54,6 +55,9 @@ from .types import (
 from .synaptic_controller import SynapticController
 from .stress_gauge import StressGauge
 from .packet_siem import PacketSIEM
+from .multi_rag_consensus import MultiRAGConsensus
+from .emotion_engine import EmotionEngine
+from .adaptive_camouflage import AdaptiveCamouflage
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +324,17 @@ class CNOOrganism:
         # Thalamus (spans all layers)
         self._controller = SynapticController()
 
+        # Cerebrum: Multi-RAG Consensus (cortex)
+        self._multi_rag = MultiRAGConsensus(on_verdict=self._on_rag_verdict)
+
+        # Cerebrum: Emotion Engine (amygdala)
+        self._emotion = EmotionEngine(on_emotion_change=self._on_emotion_change)
+
+        # Cerebrum: Adaptive Camouflage (deception system)
+        self._camouflage = AdaptiveCamouflage(
+            bpf_write_callback=self._controller.queue_bpf_write
+        )
+
         # HYDRA bridge (feeds existing pipeline data)
         self._bridge = HYDRABridge(self._controller, self._siem)
 
@@ -337,7 +352,8 @@ class CNOOrganism:
                           score: float) -> None:
         """Called by StressGauge when stress state transitions.
 
-        Pushes the new state to the BPF flow control map and logs.
+        Pushes the new state to the BPF flow control map,
+        feeds the Emotion Engine, and logs.
         """
         logger.info("ORGANISM STRESS: %s → %s (score=%.3f)",
                      old.value, new.value, score)
@@ -351,6 +367,11 @@ class CNOOrganism:
             payload={'stress_state': new},
         )
 
+        # Feed stress change to Emotion Engine
+        self._emotion.process_stimulus('stress_change', score, {
+            'stress_state': new,
+        })
+
         # If entering FIGHT, also push high-risk IPs to blocklist
         if new == StressState.FIGHT:
             spatial = self._siem.get_spatial_state()
@@ -362,6 +383,69 @@ class CNOOrganism:
                         ttl_seconds=1800,
                         reason=f"FIGHT mode auto-block: {entry['pps']:.0f} pps",
                     )
+
+    def _on_rag_verdict(self, verdict: Dict[str, Any]) -> None:
+        """Called by MultiRAGConsensus when a consensus verdict is reached.
+
+        Routes the verdict to the appropriate Brainstem feedback.
+        """
+        action = verdict.get('action', 'monitor')
+        ip = verdict.get('src_ip', '')
+        confidence = verdict.get('confidence', 0)
+        v = verdict.get('verdict', 'benign')
+
+        logger.info(
+            "RAG CONSENSUS: %s → %s (action=%s, confidence=%.2f, silos=%d/3)",
+            ip, v, action, confidence, verdict.get('silos_agreeing', 0),
+        )
+
+        # Feed to Emotion Engine
+        if v == 'malicious':
+            self._emotion.process_stimulus('threat_detected', confidence, verdict)
+        elif v == 'suspicious':
+            self._emotion.process_stimulus('novel_pattern', confidence * 0.6, verdict)
+
+        # Route action to Brainstem
+        if action == 'block_ip' and ip:
+            self._controller.push_to_blocklist(
+                ip=ip, ttl_seconds=3600,
+                reason=f"Multi-RAG consensus: {v} (confidence={confidence:.2f})",
+            )
+        elif action == 'throttle' and ip:
+            self._controller.submit_downward(
+                route=SynapticRoute.XDP_BLOCKLIST,
+                source_ip=ip, action='throttle',
+                ttl_seconds=1800,
+                reason=f"Multi-RAG throttle: {v}",
+            )
+
+    def _on_emotion_change(self, old: EmotionState, new: EmotionState,
+                           valence: float, arousal: float) -> None:
+        """Called by EmotionEngine when emotional state transitions.
+
+        Applies the corresponding camouflage profile.
+        """
+        logger.info(
+            "ORGANISM EMOTION: %s → %s (valence=%.2f, arousal=%.2f)",
+            old.value, new.value, valence, arousal,
+        )
+
+        # Get camouflage profile and apply
+        profile = self._emotion.get_camouflage_profile()
+        self._camouflage.apply_profile(new, profile)
+
+        # Push camouflage state to BPF
+        self._controller.submit_downward(
+            route=SynapticRoute.XDP_CAMOUFLAGE,
+            source_ip="",
+            action="camouflage_update",
+            priority=2,
+            payload={
+                'emotion': new.value,
+                'level': profile['level'],
+                'techniques': profile['techniques'],
+            },
+        )
 
     def _register_cerebrum_handlers(self) -> None:
         """Register Cerebrum processing handlers with the Synaptic Controller.
@@ -378,12 +462,16 @@ class CNOOrganism:
             # Phase 2: Call CognitiveDefenseLoop.process() directly
 
         def _handle_multi_rag(event: SynapticEvent):
-            """Route to Multi-RAG Consensus engine (Phase 2)."""
+            """Route to Multi-RAG Consensus engine."""
             logger.info(
                 "CEREBRUM[multi_rag]: %s from %s (velocity=%s)",
                 event.event_type, event.source_ip,
                 event.payload.get('risk_velocity', '?'),
             )
+            try:
+                self._multi_rag.evaluate(event)
+            except Exception as e:
+                logger.error("Multi-RAG evaluation failed: %s", e)
 
         def _handle_temporal(event: SynapticEvent):
             """Route to Temporal Memory engine."""
@@ -463,6 +551,9 @@ class CNOOrganism:
             try:
                 stats = self._bridge.poll_cycle()
 
+                # Evaluate emotion state each cycle
+                emotion, valence, arousal = self._emotion.evaluate()
+
                 # Periodic status log
                 spatial = self._siem.get_spatial_state()
                 stress = self._stress.state
@@ -470,12 +561,26 @@ class CNOOrganism:
                 if stats['verdicts'] > 0 or stats['velocities'] > 0:
                     logger.info(
                         "BRIDGE: verdicts=%d velocities=%d flows=%d | "
-                        "STRESS=%s | SIEM: %d pkts, %d src_ips, threat=%.1f%%",
+                        "STRESS=%s EMOTION=%s | SIEM: %d pkts, %d src_ips, threat=%.1f%%",
                         stats['verdicts'], stats['velocities'], stats['flows'],
-                        stress.value,
+                        stress.value, emotion.value,
                         spatial.total_packets, spatial.unique_src_ips,
                         spatial.threat_ratio * 100,
                     )
+
+                # Feed spatial awareness anomalies to emotion engine
+                if spatial.is_under_attack:
+                    dominant = spatial.dominant_threat
+                    if dominant in ('ddos', 'bruteforce'):
+                        self._emotion.process_stimulus('ddos_detected', spatial.threat_ratio)
+                    elif dominant == 'scan':
+                        self._emotion.process_stimulus('scan_detected', spatial.threat_ratio)
+                    elif dominant == 'exfiltration':
+                        self._emotion.process_stimulus('exfiltration_detected', spatial.threat_ratio)
+                    else:
+                        self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
+                elif spatial.threat_ratio < 0.01 and stress == StressState.CALM:
+                    self._emotion.process_stimulus('all_clear', 0.1)
 
             except Exception as e:
                 logger.error("Main loop error: %s", e)
@@ -487,6 +592,7 @@ class CNOOrganism:
         logger.info("Stopping CNO Organism...")
         self._running = False
 
+        self._multi_rag.shutdown()
         self._controller.stop()
         self._stress.stop()
         self._siem.stop()
@@ -515,10 +621,11 @@ class CNOOrganism:
             'organism': {
                 'status': 'alive' if self._running else 'stopped',
                 'uptime_s': round(time.time() - self._started_at, 1),
-                'version': '1.0.0',
+                'version': '2.0.0',
             },
             'brainstem': {
                 'note': 'XDP programs managed externally (setup-vrf.sh)',
+                'camouflage': self._camouflage.get_status(),
             },
             'cerebellum': {
                 'stress': self._stress.get_status(),
@@ -535,6 +642,8 @@ class CNOOrganism:
             },
             'cerebrum': {
                 'synaptic': self._controller.get_stats(),
+                'multi_rag': self._multi_rag.get_stats(),
+                'emotion': self._emotion.get_status(),
             },
             'bridge': self._bridge.get_stats(),
         }
