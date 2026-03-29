@@ -664,6 +664,90 @@ def write_features_to_clickhouse(vectors: Dict[str, List[float]]) -> int:
 # MAIN LOOP
 # ============================================================================
 
+def extract_verdict_features(window_seconds: int) -> Dict[str, dict]:
+    """
+    Extract minimal feature vectors for IPs that have SENTINEL verdicts
+    but no sustained flows (e.g., short-burst scanners, SYN probes).
+    This fills the gap where flow-driven extraction misses ephemeral connections.
+    """
+    # Find IPs with recent verdicts that DON'T have recent feature vectors
+    # Use LEFT ANTI JOIN (ClickHouse doesn't support NOT IN with alias in HAVING)
+    query = f"""
+        SELECT
+            IPv4NumToString(v.src_ip) AS ip,
+            count() AS verdict_count,
+            avg(v.anomaly_score) AS avg_score,
+            countIf(v.verdict = 'malicious') AS malicious_count,
+            countIf(v.verdict = 'suspicious') AS suspicious_count,
+            countIf(v.verdict = 'benign') AS benign_count,
+            uniq(v.action_taken) AS unique_actions,
+            max(v.anomaly_score) AS max_score
+        FROM {CH_DB}.hydra_verdicts v
+        LEFT ANTI JOIN (
+            SELECT DISTINCT src_ip
+            FROM {CH_DB}.hydra_ip_features
+            WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
+        ) f ON v.src_ip = f.src_ip
+        WHERE v.timestamp >= now() - INTERVAL {window_seconds} SECOND
+        GROUP BY v.src_ip
+        ORDER BY verdict_count DESC
+        LIMIT 50
+        FORMAT JSONEachRow
+    """
+
+    result = ch_query(query)
+    features = {}
+    if not result:
+        return features
+
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            ip = row['ip']
+            vc = float(row.get('verdict_count', 0))
+            avg_s = float(row.get('avg_score', 0))
+            mal = float(row.get('malicious_count', 0))
+            sus = float(row.get('suspicious_count', 0))
+            ben = float(row.get('benign_count', 0))
+
+            # Build synthetic network features from verdict metadata
+            features[ip] = {
+                'pps': min(vc / max(window_seconds, 1), 100),  # verdicts as proxy
+                'bps': 0.0,
+                'unique_dst_ports': 1.0,
+                'unique_dst_ips': 1.0,
+                'syn_ratio': 0.8 if mal > ben else 0.2,
+                'rst_ratio': 0.0,
+                'avg_pkt_size': 64.0,  # assume small probe packets
+                'small_pkt_ratio': 0.9,
+                # Temporal (sparse)
+                'iat_mean': 0.1,
+                'iat_stddev': 0.05,
+                'iat_entropy': 0.5,
+                'burst_count': max(1, int(vc / 10)),
+                'iat_range_ratio': 0.5,
+                'iat_concentration': 0.5,
+                # Behavioral
+                'port_diversity': 0.3,
+                'protocol_mix': 0.2,
+                'dns_query_ratio': 0.0,
+                'session_duration': 1.0,
+                'unique_services': 1.0,
+                'threat_ratio': mal / max(vc, 1),
+                'connection_reuse': 0.1,
+                # Reputation
+                'ip_reputation_score': 100 if mal > sus + ben else 500,
+                'total_historical_events': int(vc),
+                'escalation_level': 2 if mal > 0 else 0,
+            }
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+
+    return features
+
+
 def extract_cycle():
     """Run one feature extraction cycle."""
     logger.info(f"Starting feature extraction (window={FEATURE_WINDOW}s)...")
@@ -689,6 +773,31 @@ def extract_cycle():
     all_ips = list(set(network.keys()) | set(behavioral.keys()))
     reputation = extract_reputation_features(all_ips)
     logger.info(f"Reputation features: {len(reputation)} IPs")
+
+    # Verdict-driven: catch IPs classified by SENTINEL but missing from flows
+    verdict_features = extract_verdict_features(FEATURE_WINDOW)
+    if verdict_features:
+        logger.info(f"Verdict-only features: {len(verdict_features)} IPs (no flow data)")
+        # Merge into network/behavioral so they get assembled
+        for ip, feats in verdict_features.items():
+            if ip not in network:
+                network[ip] = {k: feats[k] for k in feats
+                               if k in ('pps', 'bps', 'unique_dst_ports', 'unique_dst_ips',
+                                        'syn_ratio', 'rst_ratio', 'avg_pkt_size', 'small_pkt_ratio')}
+            if ip not in temporal:
+                temporal[ip] = {k: feats[k] for k in feats
+                                if k in ('iat_mean', 'iat_stddev', 'iat_entropy',
+                                         'burst_count', 'iat_range_ratio', 'iat_concentration')}
+            if ip not in behavioral:
+                behavioral[ip] = {k: feats[k] for k in feats
+                                  if k in ('port_diversity', 'protocol_mix', 'dns_query_ratio',
+                                           'session_duration', 'unique_services', 'threat_ratio',
+                                           'connection_reuse')}
+            if ip not in reputation:
+                reputation[ip] = {k: feats[k] for k in feats
+                                  if k in ('ip_reputation_score', 'total_historical_events',
+                                           'escalation_level')}
+        all_ips = list(set(all_ips) | set(verdict_features.keys()))
 
     # Assemble and write
     vectors = assemble_features(network, temporal, behavioral, reputation)
