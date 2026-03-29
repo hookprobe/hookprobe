@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Environment defaults for paths that differ inside container
+ENV HOOKPROBE_BASE=/home/ubuntu/hookprobe
+ENV HYDRA_PATH=/home/ubuntu/hookprobe/core/hydra
+
 # CNO core modules — must be in a package directory for relative imports
 COPY __init__.py __main__.py types.py synaptic_controller.py stress_gauge.py packet_siem.py cno_organism.py ./cno/
 COPY multi_rag_consensus.py emotion_engine.py adaptive_camouflage.py ./cno/

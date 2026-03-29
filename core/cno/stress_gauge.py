@@ -44,6 +44,10 @@ CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
 # Stress thresholds (composite score 0.0 - 1.0)
 THRESHOLD_CALM = 0.15         # Below this = CALM
 THRESHOLD_ALERT = 0.35        # 0.15 - 0.35 = ALERT
@@ -273,18 +277,18 @@ class StressGauge:
         score = self.compute_composite()
         candidate_state = self._score_to_state(score)
 
+        # Must compute now BEFORE RECOVERY check (NameError fix)
+        now = time.monotonic()
+        dwell = now - self._state_entered_at
+
         # Recovery → CALM transition when score drops below CALM threshold
         # OR after max dwell time in RECOVERY with score below ALERT threshold
         if self._state == StressState.RECOVERY:
             if score < THRESHOLD_CALM:
                 candidate_state = StressState.CALM
             elif (score < THRESHOLD_ALERT and
-                  (now - self._state_entered_at) >= RECOVERY_MAX_SECONDS):
+                  dwell >= RECOVERY_MAX_SECONDS):
                 candidate_state = StressState.CALM
-
-        # Hysteresis: require sustained change before transitioning
-        now = time.monotonic()
-        dwell = now - self._state_entered_at
 
         if candidate_state != self._state and dwell >= HYSTERESIS_SECONDS:
             old_state = self._state
