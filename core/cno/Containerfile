@@ -3,10 +3,10 @@ FROM docker.io/library/python:3.12-slim
 LABEL description="HookProbe Cognitive Network Organism (CNO) — Living Defense System"
 LABEL version="5.0.0"
 
+# Optional: install iproute2 + curl (skip if DNS unavailable during build)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iproute2 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    iproute2 curl && rm -rf /var/lib/apt/lists/* \
+    || echo "WARN: apt packages skipped (DNS unavailable)"
 
 WORKDIR /app
 

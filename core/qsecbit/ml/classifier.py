@@ -23,15 +23,15 @@ from collections import deque, defaultdict
 import numpy as np
 
 # HMAC key for model integrity verification (CWE-502 mitigation)
-# Reads from env var or keyfile; falls back to a default for development only
-def _load_hmac_key() -> bytes:
+# Requires env var or keyfile — no hardcoded fallback.
+def _load_hmac_key() -> Optional[bytes]:
     env_key = os.environ.get('QSECBIT_MODEL_KEY')
     if env_key:
         return env_key.encode()
     keyfile = Path('/etc/hookprobe/qsecbit-model.key')
     if keyfile.exists():
         return keyfile.read_bytes().strip()
-    return b'hookprobe-qsecbit-model-integrity-key-dev'
+    return None
 
 _MODEL_HMAC_KEY = _load_hmac_key()
 
@@ -432,6 +432,11 @@ class AttackClassifier:
         sig_path = self.model_path.with_suffix('.sig')
         try:
             model_bytes = self.model_path.read_bytes()
+
+            if _MODEL_HMAC_KEY is None:
+                print("SECURITY: QSECBIT_MODEL_KEY env var not set — refusing to load model")
+                self.model = None
+                return
 
             # Verify HMAC signature if .sig file exists
             if sig_path.exists():
