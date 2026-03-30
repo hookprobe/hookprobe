@@ -23,6 +23,7 @@ Usage:
     python3 anomaly_detector.py [--mode baseline|detect]
 """
 
+import ipaddress
 import os
 import sys
 import time
@@ -77,14 +78,15 @@ SCALER_PATH = MODEL_DIR / 'feature_scaler.pkl'
 META_PATH = MODEL_DIR / 'model_meta.json'
 
 # HMAC key for model integrity verification (CWE-502 mitigation)
-def _load_hmac_key() -> bytes:
+# Requires env var or keyfile — no hardcoded fallback.
+def _load_hmac_key() -> Optional[bytes]:
     env_key = os.environ.get('HOOKPROBE_MODEL_KEY')
     if env_key:
         return env_key.encode()
     keyfile = Path('/etc/hookprobe/model-integrity.key')
     if keyfile.exists():
         return keyfile.read_bytes().strip()
-    return b'hookprobe-model-integrity-key-dev'
+    return None
 
 _MODEL_HMAC_KEY = _load_hmac_key()
 
@@ -465,6 +467,9 @@ class FeatureScaler:
 
 def _save_signed_pickle(obj, path: Path):
     """Save pickle with HMAC-SHA256 signature (CWE-502 mitigation)."""
+    if _MODEL_HMAC_KEY is None:
+        logger.error("HOOKPROBE_MODEL_KEY env var not set — refusing to save model")
+        return
     model_bytes = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
     path.write_bytes(model_bytes)
     sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
@@ -474,6 +479,9 @@ def _save_signed_pickle(obj, path: Path):
 
 def _load_verified_pickle(path: Path):
     """Load pickle with HMAC-SHA256 integrity verification (CWE-502 fix)."""
+    if _MODEL_HMAC_KEY is None:
+        logger.error("HOOKPROBE_MODEL_KEY env var not set — refusing to load model")
+        return None
     sig_path = path.with_suffix(path.suffix + '.sig')
     try:
         model_bytes = path.read_bytes()
@@ -548,6 +556,17 @@ def load_model() -> Tuple[Optional[IsolationForest], Optional[FeatureScaler], di
 # VERDICT WRITING
 # ============================================================================
 
+def _ch_escape(s: str) -> str:
+    """Escape a string for safe interpolation into a ClickHouse query."""
+    return s.replace('\\', '\\\\').replace("'", "\\'")
+
+
+def _validate_ip(ip: str) -> str:
+    """Validate that ip is a well-formed IPv4 address; raise ValueError otherwise."""
+    ipaddress.IPv4Address(ip)
+    return ip
+
+
 def write_verdicts(verdicts: List[dict]) -> int:
     """Write anomaly verdicts to ClickHouse."""
     if not verdicts:
@@ -556,11 +575,15 @@ def write_verdicts(verdicts: List[dict]) -> int:
     rows = []
     for v in verdicts:
         ts = v['timestamp']
-        ip = v['ip']
+        try:
+            ip = _validate_ip(v['ip'])
+        except (ValueError, KeyError):
+            logger.warning(f"write_verdicts: skipping verdict with invalid IP: {v.get('ip')!r}")
+            continue
         score = v['anomaly_score']
         model_scores = "[" + ",".join(f"{s:.6f}" for s in v.get('model_scores', [score])) + "]"
-        verdict = v['verdict']
-        action = v.get('action', 'none')
+        verdict = _ch_escape(str(v['verdict']))
+        action = _ch_escape(str(v.get('action', 'none')))
 
         rows.append(
             f"('{ts}', IPv4StringToNum('{ip}'), {score:.6f}, "

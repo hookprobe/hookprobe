@@ -323,8 +323,11 @@ class _CPUClassifier:
                 import hashlib
                 import pickle
 
-                key = os.environ.get("HOOKPROBE_MODEL_KEY",
-                                     "hookprobe-model-integrity-key-dev").encode()
+                key_str = os.environ.get("HOOKPROBE_MODEL_KEY")
+                if not key_str:
+                    logger.error("HOOKPROBE_MODEL_KEY env var not set — refusing to load model")
+                    return
+                key = key_str.encode()
                 sig_path = model_path.with_suffix(model_path.suffix + ".sig")
 
                 data = model_path.read_bytes()
@@ -334,6 +337,10 @@ class _CPUClassifier:
                     if not hmac.compare_digest(computed_sig, expected_sig):
                         logger.error("Model signature mismatch — refusing to load")
                         return
+                else:
+                    # SA-05 fix: refuse to load unsigned models (CWE-502)
+                    logger.warning(f"No .sig file for model {model_path}, refusing to load unsigned model")
+                    return
 
                 self._model = pickle.loads(data)
                 self._model_loaded = True
