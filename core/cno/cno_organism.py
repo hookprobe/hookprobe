@@ -296,8 +296,9 @@ class HYDRABridge:
 
             try:
                 snapshot = PacketSnapshot(
-                    timestamp=float(parts[7] or time.time()),
-                    src_ip=parts[0],
+                    timestamp=time.time(),  # Use current time — SIEM is working memory,
+                    src_ip=parts[0],        # not a historical record. ClickHouse timestamps
+                                            # lag 5+ min due to inspector flush delay.
                     dst_ip=parts[1],
                     src_port=int(parts[2] or 0),
                     dst_port=int(parts[3] or 0),
@@ -599,9 +600,18 @@ class CNOOrganism:
                         act = action.get('action', 'monitor')
                         ip = action.get('ip', '')
                         ttl = action.get('ttl_seconds', 3600)
+                        conf = action.get('confidence', 0.5)
                         reason = action.get('reasoning', act)
                         if act in ('block_ip', 'block_subnet') and ip:
                             self._controller.push_to_blocklist(ip, ttl, reason)
+                        # Feed cognitive defense actions to Emotion Engine
+                        if self._emotion and act not in ('monitor', 'ignore'):
+                            stim = 'threat_detected' if act in ('block_ip', 'block_subnet') else \
+                                   'scan_detected' if act in ('investigate', 'throttle') else \
+                                   'stress_change'  # alert
+                            self._emotion.process_stimulus(stim, conf, {
+                                'action': act, 'ip': ip,
+                            })
                 except Exception as e:
                     logger.error("CognitiveDefense cycle error: %s", e)
             else:

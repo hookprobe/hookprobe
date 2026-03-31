@@ -53,8 +53,11 @@ if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
     raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
 
 # Circumplex parameters
-VALENCE_DECAY = 0.05           # Valence drifts toward 0 per cycle (neutral)
-AROUSAL_DECAY = 0.08           # Arousal decays faster (organism calms down)
+# Decay rates are per-evaluation (every EMOTION_EVAL_INTERVAL_S).
+# Too fast → emotions never accumulate from sparse stimuli.
+# Too slow → organism stays angry/fearful long after threats pass.
+VALENCE_DECAY = 0.01           # Valence drifts toward 0 per cycle (neutral)
+AROUSAL_DECAY = 0.015          # Arousal decays toward 0 per cycle
 EMOTION_HYSTERESIS_S = 20.0    # Min dwell time before emotion transition
 EMOTION_EVAL_INTERVAL_S = 5.0  # Evaluate every 5 seconds
 
