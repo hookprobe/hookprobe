@@ -1,3 +1,5 @@
 # These are supported funding model platforms
 
 github: hookprobe
+open_collective: hookprobe
+custom: ["https://hookprobe.com/pricing"]
