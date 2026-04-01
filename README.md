@@ -10,16 +10,24 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/hookprobe/hookprobe/stargazers"><img src="https://img.shields.io/github/stars/hookprobe/hookprobe?style=flat-square&color=00e5ff&label=Stars" alt="GitHub Stars"/></a>
+  <a href="https://github.com/hookprobe/hookprobe/network/members"><img src="https://img.shields.io/github/forks/hookprobe/hookprobe?style=flat-square&color=00ff9d" alt="Forks"/></a>
+  <a href="https://github.com/hookprobe/hookprobe/issues"><img src="https://img.shields.io/github/issues/hookprobe/hookprobe?style=flat-square&color=ffaa00" alt="Issues"/></a>
   <img src="https://img.shields.io/badge/Version-5.1_Neural-00e5ff?style=flat-square" alt="Version 5.1 Neural"/>
-  <img src="https://img.shields.io/badge/License-AGPL_v3.0_+_Commercial-blue?style=flat-square" alt="Dual License"/>
-  <img src="https://img.shields.io/badge/Python-3.9+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
-  <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"/>
+  <a href="https://github.com/hookprobe/hookprobe/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3.0-blue?style=flat-square" alt="AGPL License"/></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/🔓_Open_Source-Auditable_Code-00ff88?style=flat-square" alt="Open Source"/>
-  <img src="https://img.shields.io/badge/🔒_Privacy-Data_Never_Leaves_Edge-ff6b6b?style=flat-square" alt="Privacy First"/>
-  <img src="https://img.shields.io/badge/🤝_Collective-Mesh_Intelligence-ffaa00?style=flat-square" alt="Collective Defense"/>
+  <img src="https://img.shields.io/badge/Platform-Raspberry_Pi_|_x86_|_ARM-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Multi-Platform"/>
+  <img src="https://img.shields.io/badge/Python-3.9+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
+  <img src="https://img.shields.io/badge/Zig-0.13+-f7a41d?style=flat-square&logo=zig&logoColor=white" alt="Zig"/>
+  <img src="https://img.shields.io/badge/eBPF/XDP-Kernel_Level-ff6b6b?style=flat-square" alt="eBPF/XDP"/>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Data-Never_Leaves_Your_Edge-00ff88?style=flat-square" alt="Privacy First"/>
+  <img src="https://img.shields.io/badge/Cost-$75_Hardware_|_$0_Software-ffaa00?style=flat-square" alt="Cost"/>
+  <img src="https://img.shields.io/badge/Setup-5_Minutes-00B4FF?style=flat-square" alt="Quick Setup"/>
 </p>
 
 <p align="center">
@@ -43,7 +51,17 @@
 
 HookProbe is a **decentralized security mesh** where every node protects every other node. When a Guardian in Tokyo blocks a zero-day, a Sentinel in São Paulo is protected in seconds. When a Fortress in Berlin identifies ransomware, the entire mesh learns instantly.
 
-**⭐ Star this repo** if you believe security should be accessible to everyone. Stars help others discover protection.
+**⭐ Star this repo** if you believe security should be accessible to everyone. Every star helps others discover protection.
+
+<p align="center">
+  <a href="https://star-history.com/#hookprobe/hookprobe&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" width="600" />
+    </picture>
+  </a>
+</p>
 
 ---
 
@@ -523,11 +541,28 @@ HookProbe isn't a product. It's a **movement**. A family of people who believe t
 
 | Action | Impact |
 |--------|--------|
-| ⭐ **Star this repo** | Help others discover protection |
+| ⭐ **[Star this repo](https://github.com/hookprobe/hookprobe)** | Help others discover protection |
 | 🔧 **Deploy HookProbe** | Strengthen the mesh for everyone |
 | 🐛 **Find vulnerabilities** | Make the stack stronger |
 | 📝 **Contribute code/docs** | Build the future together |
-| 📢 **Share the project** | Spread the word |
+| 📢 **Share on [Reddit](https://reddit.com/r/homelab) / [HN](https://news.ycombinator.com) / [X](https://twitter.com)** | Spread the word |
+| 💖 **[Sponsor development](https://github.com/sponsors/hookprobe)** | Fund open-source security for everyone |
+
+### Growth vs. the Incumbents
+
+We're the new kid, but we're growing. Here's how HookProbe stacks up in the open-source IDS space:
+
+<p align="center">
+  <a href="https://star-history.com/#hookprobe/hookprobe&CrowdSec/crowdsec&OISF/suricata&zeek/zeek&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe,CrowdSec/crowdsec,OISF/suricata,zeek/zeek&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe,CrowdSec/crowdsec,OISF/suricata,zeek/zeek&type=Date" />
+      <img alt="Star History — HookProbe vs CrowdSec vs Suricata vs Zeek" src="https://api.star-history.com/svg?repos=hookprobe/hookprobe,CrowdSec/crowdsec,OISF/suricata,zeek/zeek&type=Date&theme=dark" width="600" />
+    </picture>
+  </a>
+</p>
+
+> *Every open-source IDS started with 0 stars. CrowdSec had 22 stars once too. The difference is what happens next.*
 
 ### What "Family" Means
 
@@ -537,6 +572,20 @@ HookProbe isn't a product. It's a **movement**. A family of people who believe t
 - 🛡️ **We protect each other** - One node's detection → Everyone's protection
 
 **Read our [Manifesto](MANIFESTO.md)** to understand what we're building and why.
+
+---
+
+## 📖 From the Blog
+
+Deep-dives, benchmarks, and real-world threat detection results:
+
+- **[Zeek + Suricata on Raspberry Pi: Edge IDS Setup Guide](https://hookprobe.com/blog/zeek-suricata-raspberry-pi-edge-security)** — Our most popular guide
+- **[NAPSE vs Zeek vs Suricata vs Snort: IDS Comparison](https://hookprobe.com/blog/replacing-zeek-suricata-snort-napse-aegis)** — Head-to-head benchmarks
+- **[Building an Autonomous SOC on Raspberry Pi 5](https://hookprobe.com/blog/autonomous-soc-node-raspberry-pi-5-zeek)** — Full walkthrough
+- **[How HookProbe Detects CVE-2025-32432](https://hookprobe.com/blog/how-hookprobe-detects-cve-2025-32432-craft-cms)** — Real CVE detection analysis
+- **[Threat Landscape Report — March 2026](https://hookprobe.com/blog/threat-landscape-2026-03)** — Monthly threat intelligence
+
+[**Browse all 86+ articles →**](https://hookprobe.com/blog) | [**Subscribe via RSS →**](https://hookprobe.com/rss.xml) | [**Documentation →**](https://docs.hookprobe.com)
 
 ---
 
@@ -577,11 +626,16 @@ HookProbe isn't a product. It's a **movement**. A family of people who believe t
   <a href="https://mssp.hookprobe.com/?site=demo-site">🎯 Live Demo</a> ·
   <a href="https://hookprobe.com">🌐 Website</a> ·
   <a href="docs/installation/INSTALLATION.md">⚡ Get Started</a> ·
-  <a href="MANIFESTO.md">📜 Read The Manifesto</a> ·
-  <a href="docs/CONTRIBUTING.md">🛠️ Contribute</a> ·
+  <a href="https://hookprobe.com/blog">📝 Blog</a> ·
+  <a href="https://hookprobe.com/rss.xml">📡 RSS</a> ·
+  <a href="https://github.com/sponsors/hookprobe">💖 Sponsor</a> ·
   <a href="https://github.com/hookprobe/hookprobe/discussions">💬 Community</a>
 </p>
 
 <p align="center">
   <em>"In a world where attackers share everything, defenders must too."</em>
+</p>
+
+<p align="center">
+  <sub>Built with love in Romania. Protecting networks worldwide.</sub>
 </p>
