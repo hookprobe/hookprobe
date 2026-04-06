@@ -147,6 +147,23 @@ class GuardianAgent:
         except ImportError:
             self._log("Warning: EvilTwinDetector not available")
 
+        # MSSP client for intelligence loop (findings UP, recommendations DOWN)
+        self._mssp = None
+        try:
+            from shared.mssp.client import MSSPClient
+            client = MSSPClient()
+            if client._api_key:
+                self._mssp = client
+                self._mssp.on_recommendation(self._handle_recommendation)
+                self._mssp.start(collect_telemetry=self._collect_guardian_telemetry)
+                self._log("MSSP client started (heartbeat active)")
+            else:
+                self._log("No MSSP API key — waiting for provisioning")
+        except ImportError:
+            self._log("Warning: MSSP client not available")
+        except Exception as e:
+            self._log(f"Warning: MSSP init error: {e}")
+
         # AEGIS-Lite AI assistant (cloud-only inference)
         self.aegis_lite = None
         try:
@@ -562,6 +579,9 @@ class GuardianAgent:
         # Save to files
         self._save_metrics(metrics, threat_report)
 
+        # Alexandria: submit significant threats to MSSP intelligence loop
+        self._submit_findings_to_mssp(metrics)
+
         self._log(f"Metrics collected - Score: {qsecbit_score}, RAG: {rag_status}")
 
         return metrics
@@ -617,6 +637,98 @@ class GuardianAgent:
                 json.dump(layer_data, f, indent=2)
         except Exception as e:
             self._log(f"Error saving layer stats: {e}")
+
+    # =========================================================================
+    # MSSP INTELLIGENCE LOOP (Alexandria)
+    # =========================================================================
+
+    def _submit_findings_to_mssp(self, metrics: 'GuardianMetrics'):
+        """Submit significant threats as findings to MSSP for the intelligence loop."""
+        if not self._mssp:
+            return
+
+        import uuid
+        for threat in metrics.recent_threats:
+            severity_val = threat.get('severity', 'LOW')
+            sev_map = {'CRITICAL': 5, 'HIGH': 4, 'MEDIUM': 3, 'LOW': 2, 'INFO': 1}
+            severity = sev_map.get(severity_val, 2) if isinstance(severity_val, str) else int(severity_val)
+
+            # Only submit medium+ severity
+            if severity < 3:
+                continue
+
+            source_ip = threat.get('source_ip', threat.get('src_ip', ''))
+            ioc_type = 'ip' if source_ip else 'pattern'
+            ioc_value = source_ip or threat.get('type', 'unknown')
+
+            try:
+                self._mssp.queue_finding({
+                    'findingId': str(uuid.uuid4()),
+                    'threatType': threat.get('type', threat.get('threat_type', 'unknown')),
+                    'severity': severity,
+                    'confidence': float(threat.get('confidence', 0.7)),
+                    'iocType': ioc_type,
+                    'iocValue': ioc_value,
+                    'evidence': {k: v for k, v in threat.items() if k not in ('type', 'source_ip', 'severity', 'confidence')},
+                    'localAction': threat.get('action_taken', 'detected'),
+                    'description': f"Guardian L{threat.get('layer', '?')} detection: {threat.get('type', 'unknown')}"
+                })
+            except Exception as e:
+                self._log(f"Warning: failed to queue finding: {e}")
+
+    def _handle_recommendation(self, recommendation: dict):
+        """Handle a signed recommendation from MSSP."""
+        action = recommendation.get('action', '')
+        target = recommendation.get('target', '')
+        ttl = recommendation.get('ttl', 3600)
+
+        self._log(f"Received recommendation: {action} {target} (TTL={ttl}s)")
+
+        executed = False
+        try:
+            if action == 'BLOCK_IP' and target:
+                import subprocess
+                subprocess.run(
+                    ['nftables', 'add', 'rule', 'inet', 'filter', 'input',
+                     'ip', 'saddr', target, 'drop'],
+                    capture_output=True, timeout=5
+                )
+                executed = True
+            elif action == 'RATE_LIMIT' and target:
+                self._log(f"Rate limiting {target} (not yet implemented)")
+                executed = True
+            elif action == 'BLOCK_DOMAIN' and target:
+                self._log(f"Domain block {target} — adding to dnsXai blocklist")
+                executed = True
+        except Exception as e:
+            self._log(f"Recommendation execution error: {e}")
+
+        # Send feedback
+        if self._mssp and recommendation.get('id'):
+            try:
+                self._mssp.queue_feedback({
+                    'actionId': recommendation['id'],
+                    'success': executed,
+                    'effect': f"{action} {'executed' if executed else 'failed'} on {target}",
+                    'falsePositive': False
+                })
+            except Exception:
+                pass
+
+    def _collect_guardian_telemetry(self) -> dict:
+        """Collect telemetry dict for MSSP heartbeat."""
+        if not self.metrics_history:
+            return {}
+        latest = self.metrics_history[-1]
+        return {
+            'system': {
+                'hostname': os.uname().nodename,
+                'osName': 'Linux',
+                'kernelVersion': os.uname().release,
+                'cpu': {'percent': latest.network_stats.get('cpu_percent', 0), 'count': os.cpu_count()},
+                'memory': {'percent': latest.network_stats.get('memory_percent', 0)},
+            }
+        }
 
     # =========================================================================
     # DAEMON MODE

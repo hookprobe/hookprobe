@@ -863,6 +863,42 @@ class MeshConsciousness:
 
         return local_results
 
+    def get_peer_threats(self, minutes: int = 60) -> list:
+        """Get recent threat intelligence from the local cache (includes peer-gossiped threats).
+
+        This provides cold-start context for newly online nodes —
+        all threats received via gossip are stored in the local cache.
+
+        Args:
+            minutes: How far back to look (default 60 minutes)
+
+        Returns:
+            List of threat intelligence dicts with source_node, type, ioc_value, etc.
+        """
+        recent = self.threat_cache.get_recent(limit=200)
+        if not recent:
+            return []
+
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        results = []
+        for intel in recent:
+            # Filter by time if the intel has a timestamp
+            ts = getattr(intel, 'timestamp', None)
+            if ts and hasattr(ts, 'timestamp'):
+                if ts < cutoff:
+                    continue
+            results.append({
+                'type': getattr(intel, 'threat_type', 'unknown'),
+                'source_ip': getattr(intel, 'ioc_value', ''),
+                'ioc_type': getattr(intel, 'ioc_type', 'ip'),
+                'severity': getattr(intel, 'severity', 'MEDIUM'),
+                'confidence': getattr(intel, 'confidence', 0.5),
+                'source_node': getattr(intel, 'source_node', 'unknown'),
+                'hop_count': getattr(intel, 'hop_count', 0),
+            })
+        return results
+
     def _process_gossip_queue(self) -> None:
         """Process pending gossip queue."""
         if not self._pending_gossip:
