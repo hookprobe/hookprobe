@@ -535,7 +535,7 @@ class MultiRAGConsensus:
 
         # Compute weighted consensus (with optional NPU tie-breaker)
         consensus = self._compute_consensus(ip, silo_results, token_narrative,
-                                            npu_score=npu_score)
+                                            npu_score=npu_score, context=context)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         consensus['total_latency_ms'] = elapsed_ms
@@ -565,7 +565,8 @@ class MultiRAGConsensus:
 
     def _compute_consensus(self, ip: str, silo_results: Dict[str, Dict],
                            token_narrative: str,
-                           npu_score: float = 0.0) -> Dict[str, Any]:
+                           npu_score: float = 0.0,
+                           context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Compute weighted consensus from silo scores with optional NPU tie-break."""
         global_score = silo_results.get('global_threat', {}).get('score', 0)
         local_score = silo_results.get('local_baseline', {}).get('score', 0)
@@ -640,6 +641,7 @@ class MultiRAGConsensus:
             },
             'reasoning': ' | '.join(reasonings),
             'behavioral_token': token_narrative,
+            'kill_chain_stage': context.get('kill_chain_state', 'idle') if isinstance(context, dict) else 'idle',
             'silo_details': silo_results,
         }
 
@@ -651,13 +653,14 @@ class MultiRAGConsensus:
                 f"INSERT INTO {CH_DB}.cno_consensus_log "
                 f"(timestamp, src_ip, silo_global_score, silo_local_score, "
                 f"silo_psych_score, consensus_score, consensus_verdict, "
-                f"consensus_action, confidence, behavioral_token) "
+                f"consensus_action, confidence, behavioral_token, kill_chain_stage) "
                 f"VALUES (now64(3), '{_safe_ip(consensus['src_ip'])}', "
                 f"{scores['global_threat']}, {scores['local_baseline']}, "
                 f"{scores['attacker_psychology']}, {consensus['consensus_score']}, "
                 f"'{consensus['verdict']}', '{consensus['action']}', "
                 f"{consensus['confidence']}, "
-                f"'{_ch_escape(consensus.get('behavioral_token', ''))}')"
+                f"'{_ch_escape(consensus.get('behavioral_token', ''))}', "
+                f"'{_ch_escape(consensus.get('kill_chain_stage', 'idle'))}')"
             )
             _ch_post(query)
         except Exception as e:
