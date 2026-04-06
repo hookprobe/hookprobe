@@ -934,6 +934,35 @@ class QSecBitFortressAgent:
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
 
+        # =====================================================================
+        # CNO Cerebellum — Stress/Emotion Awareness (Alexandria Phase 1)
+        # =====================================================================
+        self._cno_siem = None
+        self._cno_stress = None
+        self._cno_emotion = None
+        try:
+            hookprobe_base = os.environ.get('HOOKPROBE_BASE', os.path.expanduser('~/hookprobe'))
+            if hookprobe_base not in sys.path:
+                sys.path.insert(0, hookprobe_base)
+
+            from core.cno.packet_siem import PacketSIEM
+            from core.cno.stress_gauge import StressGauge
+            from core.cno.emotion_engine import EmotionEngine
+            from core.cno.types import PacketSnapshot, StressState, EmotionState
+
+            self._PacketSnapshot = PacketSnapshot
+            self._StressState = StressState
+            self._EmotionState = EmotionState
+
+            self._cno_siem = PacketSIEM(window_seconds=60.0, max_snapshots=5000)
+            self._cno_stress = StressGauge(on_state_change=self._on_cno_stress_change)
+            self._cno_emotion = EmotionEngine(on_emotion_change=self._on_cno_emotion_change)
+            logger.info("CNO Cerebellum initialized (PacketSIEM + StressGauge + EmotionEngine)")
+        except ImportError as e:
+            logger.info(f"CNO Cerebellum not available (import: {e})")
+        except Exception as e:
+            logger.warning(f"CNO Cerebellum init failed: {e}")
+
         logger.info("QSecBit Fortress Agent v5.3.0 initialized")
 
     def _signal_handler(self, signum, frame):
@@ -1275,6 +1304,22 @@ class QSecBitFortressAgent:
         # Run L2-L7 layer detection
         layer_scores, new_threats, threat_count = self.run_layer_detection()
 
+        # CNO Cerebellum: ingest detected threats into PacketSIEM
+        if self._cno_siem and new_threats:
+            for t in new_threats:
+                try:
+                    self._cno_siem.ingest(self._PacketSnapshot(
+                        timestamp=time.time(),
+                        src_ip=t.get('source_ip', t.get('src_ip', '')),
+                        dst_ip=t.get('dest_ip', t.get('dst_ip', '')),
+                        src_port=int(t.get('src_port', 0)),
+                        dst_port=int(t.get('dst_port', 0)),
+                        action='drop' if t.get('blocked') else 'alert',
+                        intent_class=t.get('attack_type', t.get('type', 'unknown')),
+                    ))
+                except Exception:
+                    pass
+
         # Get XDP stats
         xdp_stats = self.get_xdp_stats()
 
@@ -1335,6 +1380,22 @@ class QSecBitFortressAgent:
                     'sentinel': self.config.sentinel_weight,
                 },
             }
+            # CNO Cerebellum state (Alexandria)
+            if self._cno_stress:
+                stats['cno_stress'] = self._cno_stress.state.value if hasattr(self._cno_stress, 'state') else 'unknown'
+                stats['cno_stress_score'] = getattr(self._cno_stress, '_composite_score', 0.0)
+            if self._cno_emotion:
+                stats['cno_emotion'] = self._cno_emotion._state.value if hasattr(self._cno_emotion, '_state') else 'unknown'
+                stats['cno_valence'] = getattr(self._cno_emotion, '_valence', 0.0)
+                stats['cno_arousal'] = getattr(self._cno_emotion, '_arousal', 0.0)
+            if self._cno_siem:
+                try:
+                    spatial = self._cno_siem.get_spatial_state()
+                    stats['cno_siem_packets'] = spatial.total_packets
+                    stats['cno_threat_ratio'] = round(spatial.threat_ratio, 4)
+                    stats['cno_unique_sources'] = spatial.unique_src_ips
+                except Exception:
+                    pass
             _atomic_write_json(STATS_FILE, stats)
         except Exception as e:
             logger.error(f"Failed to save stats: {e}")
@@ -2426,6 +2487,42 @@ class QSecBitFortressAgent:
                     if threat.get('severity') in ('CRITICAL', 'HIGH'):
                         self._broadcast_to_mesh(threat)
 
+                # CNO Cerebellum: evaluate stress + emotion every 5 cycles (50s)
+                if self._cno_stress and self._cno_emotion and self._cno_siem:
+                    try:
+                        spatial = self._cno_siem.get_spatial_state()
+
+                        # Feed spatial state signals to stress gauge
+                        self._cno_stress._xdp_drop_rate = spatial.drops / max(spatial.total_packets, 1)
+                        self._cno_stress._active_incidents = spatial.alerts
+                        self._cno_stress._cpu_load = sample.components.get('infrastructure', 0.5)
+
+                        # Evaluate stress
+                        stress_state, stress_score = self._cno_stress.evaluate()
+
+                        # Feed threats to emotion engine
+                        if spatial.is_under_attack:
+                            dominant = spatial.dominant_threat
+                            if dominant in ('ddos', 'bruteforce'):
+                                self._cno_emotion.process_stimulus('ddos_detected', spatial.threat_ratio)
+                            elif dominant in ('scan', 'portscan'):
+                                self._cno_emotion.process_stimulus('scan_detected', spatial.threat_ratio)
+                            else:
+                                self._cno_emotion.process_stimulus('threat_detected', spatial.threat_ratio)
+                        elif spatial.threat_ratio < 0.05:
+                            calm_strength = max(0.05, (0.05 - spatial.threat_ratio) / 0.05)
+                            self._cno_emotion.process_stimulus('all_clear', calm_strength)
+
+                        emotion_state, valence, arousal = self._cno_emotion.evaluate()
+
+                        logger.info(
+                            f"CNO: stress={stress_state.value} emotion={emotion_state.value} "
+                            f"spatial={spatial.total_packets}pkts/{spatial.unique_src_ips}src "
+                            f"threat_ratio={spatial.threat_ratio:.3f}"
+                        )
+                    except Exception as e:
+                        logger.debug(f"CNO evaluation error: {e}")
+
                 # Re-check for MSSP API_KEY every ~60s (written by fts-web after claim)
                 if not self._mssp:
                     mssp_recheck_counter += 1
@@ -2565,6 +2662,14 @@ class QSecBitFortressAgent:
                 "trend": self.calculate_trend(),
                 "recentThreats": sample.recent_threats[:5],
             })
+            # CNO Cerebellum state (Alexandria — sent to central for mesh consciousness)
+            if self._cno_stress:
+                extensions["fortress"]["cnoStress"] = self._cno_stress.state.value if hasattr(self._cno_stress, 'state') else 'unknown'
+                extensions["fortress"]["cnoStressScore"] = round(getattr(self._cno_stress, '_composite_score', 0.0), 4)
+            if self._cno_emotion:
+                extensions["fortress"]["cnoEmotion"] = self._cno_emotion._state.value if hasattr(self._cno_emotion, '_state') else 'unknown'
+                extensions["fortress"]["cnoValence"] = round(getattr(self._cno_emotion, '_valence', 0.0), 4)
+                extensions["fortress"]["cnoArousal"] = round(getattr(self._cno_emotion, '_arousal', 0.0), 4)
 
         # WAN health from saved file (full telemetry for MSSP dashboard)
         # Always send — runs even without a QSecBit sample
@@ -2723,6 +2828,18 @@ class QSecBitFortressAgent:
             self._mssp.queue_finding(finding)
         except Exception as e:
             logger.debug("Finding submission error: %s", e)
+
+    # ------------------------------------------------------------------
+    # CNO Cerebellum Callbacks (Alexandria)
+    # ------------------------------------------------------------------
+
+    def _on_cno_stress_change(self, old_state, new_state, score):
+        """Called when StressGauge transitions states."""
+        logger.info(f"CNO STRESS: {old_state.value} → {new_state.value} (score={score:.3f})")
+
+    def _on_cno_emotion_change(self, old_emotion, new_emotion, valence, arousal):
+        """Called when EmotionEngine transitions emotions."""
+        logger.info(f"CNO EMOTION: {old_emotion.value} → {new_emotion.value} (v={valence:.2f}, a={arousal:.2f})")
 
 
 def main():
