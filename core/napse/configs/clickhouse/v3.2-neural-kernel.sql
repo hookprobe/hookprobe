@@ -21,10 +21,14 @@ ALTER TABLE hookprobe_ids.hydra_ip_features
     ADD INDEX IF NOT EXISTS idx_feature_vec feature_vector
     TYPE vector_similarity('hnsw', 'cosineDistance') GRANULARITY 2;
 
--- Vector index on attack pattern centroids (for pattern matching)
-ALTER TABLE hookprobe_ids.sentinel_attack_patterns
-    ADD INDEX IF NOT EXISTS idx_pattern_centroid feature_centroid
-    TYPE vector_similarity('hnsw', 'cosineDistance') GRANULARITY 2;
+-- NOTE: Vector index on attack pattern centroids REMOVED.
+-- The HNSW index rejects empty arrays, but most patterns (temporal, intent,
+-- campaign) don't have feature centroids. The empty DEFAULT [] caused every
+-- INSERT to fail with: "arrays in column 'feature_centroid' must not be empty"
+-- If vector search is needed on patterns, populate feature_centroid first.
+-- ALTER TABLE hookprobe_ids.sentinel_attack_patterns
+--     ADD INDEX IF NOT EXISTS idx_pattern_centroid feature_centroid
+--     TYPE vector_similarity('hnsw', 'cosineDistance') GRANULARITY 2;
 
 -- ============================================================================
 -- P0: PER-IP RISK VELOCITY TIME SERIES
