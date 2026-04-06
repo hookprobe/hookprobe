@@ -218,7 +218,8 @@ class HYDRABridge:
         """Bridge risk velocities — route high-velocity IPs to Cognitive Defense."""
         query = (
             f"SELECT src_ip, risk_velocity, composite_risk, "
-            f"kill_chain_state, rag_triggered "
+            f"kill_chain_state, rag_triggered, "
+            f"arrayStringConcat(token_sequence, ' ') AS token_str "
             f"FROM {CH_DB}.ip_risk_scores "
             f"WHERE timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
             f"AND abs(risk_velocity) > {REASON_VELOCITY} "
@@ -242,6 +243,7 @@ class HYDRABridge:
             risk = float(parts[2] or 0)
             kill_chain = parts[3]
             rag_triggered = int(parts[4] or 0)
+            token_str = parts[5] if len(parts) > 5 else ''
 
             # Catastrophic velocity → Cognitive Defense (Reflex)
             if abs(velocity) > REFLEX_VELOCITY:
@@ -266,6 +268,7 @@ class HYDRABridge:
                     'composite_risk': risk,
                     'kill_chain_state': kill_chain,
                     'rag_triggered': rag_triggered,
+                    'token_narrative': token_str,
                 },
             )
             count += 1
@@ -277,7 +280,8 @@ class HYDRABridge:
         """Bridge recent NAPSE flows into PacketSIEM working memory."""
         query = (
             f"SELECT src_ip, dst_ip, src_port, dst_port, proto, "
-            f"bytes_orig, intent_class, toUnixTimestamp(timestamp) "
+            f"bytes_orig, COALESCE(intent_class, '') AS intent_class, "
+            f"toUnixTimestamp(timestamp) "
             f"FROM {CH_DB}.napse_flows "
             f"WHERE timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
             f"LIMIT 500"
@@ -761,8 +765,10 @@ class CNOOrganism:
                             self._emotion.process_stimulus('exfiltration_detected', spatial.threat_ratio)
                         else:
                             self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
-                    elif spatial.threat_ratio < 0.01 and stress == StressState.CALM:
-                        self._emotion.process_stimulus('all_clear', 0.1)
+                    elif spatial.threat_ratio < 0.05:
+                        # Recovery signal — strength proportional to how calm things are
+                        calm_strength = max(0.05, (0.05 - spatial.threat_ratio) / 0.05)
+                        self._emotion.process_stimulus('all_clear', calm_strength)
 
                 # Periodic session analysis (every 30s)
                 session_cycle_count += 1
@@ -839,7 +845,7 @@ class CNOOrganism:
             },
             'brainstem': {
                 'note': 'XDP programs managed externally (setup-vrf.sh)',
-                'camouflage': self._camouflage.get_status(),
+                'camouflage': self._camouflage.get_status() if self._camouflage else None,
             },
             'cerebellum': {
                 'stress': self._stress.get_status(),
