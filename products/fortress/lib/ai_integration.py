@@ -82,6 +82,16 @@ class FortressAIIntegration:
         # Response handlers
         self._response_handlers: List[Callable[[DefenseStrategy], None]] = []
 
+        # MSSP client for intelligence loop (Alexandria)
+        self._mssp = None
+        try:
+            from shared.mssp.client import MSSPClient
+            client = MSSPClient()
+            if client._api_key:
+                self._mssp = client
+        except Exception:
+            pass
+
         # Statistics
         self._events_processed = 0
         self._iocs_generated = 0
@@ -163,6 +173,24 @@ class FortressAIIntegration:
         )
         self._iocs_generated += 1
         result["ioc"] = ioc.to_dict()
+
+        # Alexandria: submit IoC as finding to MSSP intelligence loop
+        if self._mssp and source_ip:
+            import uuid
+            try:
+                self._mssp.queue_finding({
+                    'findingId': str(uuid.uuid4()),
+                    'threatType': attack_type,
+                    'severity': min(5, max(1, int(prediction.confidence * 5))),
+                    'confidence': float(prediction.confidence),
+                    'iocType': ioc.type if hasattr(ioc, 'type') else 'ip',
+                    'iocValue': source_ip,
+                    'evidence': {'prediction': prediction.to_dict() if hasattr(prediction, 'to_dict') else str(prediction)},
+                    'localAction': 'ioc_generated',
+                    'description': f"Fortress AI: {attack_type} prediction (LSTM)"
+                })
+            except Exception:
+                pass
 
         # Get defense strategy
         if auto_respond:
