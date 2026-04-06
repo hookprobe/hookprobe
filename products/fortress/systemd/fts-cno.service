@@ -1,0 +1,42 @@
+[Unit]
+Description=HookProbe Fortress CNO — Cognitive Network Organism
+Documentation=https://hookprobe.com/docs/cno
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=andrei
+Group=andrei
+WorkingDirectory=/home/andrei/hookprobe
+Environment=PYTHONPATH=/home/andrei/hookprobe
+Environment=HOOKPROBE_BASE=/home/andrei/hookprobe
+Environment=HYDRA_PATH=/home/andrei/hookprobe/core/hydra
+Environment=HOOKPROBE_TIER=fortress
+Environment=HOOKPROBE_NODE_ID=fortress-n100-01
+Environment=CLICKHOUSE_HOST=127.0.0.1
+Environment=CLICKHOUSE_PORT=8123
+Environment=CLICKHOUSE_DB=hookprobe_ids
+Environment=CLICKHOUSE_USER=aiochi
+Environment=CLICKHOUSE_PASSWORD=aiochi_secure_password
+Environment=CNO_HEALTH_PORT=8900
+Environment=CNO_BRIDGE_INTERVAL=10
+Environment=CNO_BRIDGE_LOOKBACK=900
+Environment=REFLEX_VELOCITY=0.30
+Environment=REASON_VELOCITY=0.10
+Environment=OLLAMA_URL=http://127.0.0.1:11434
+Environment=OLLAMA_MODEL=tinyllama
+
+ExecStart=/usr/bin/python3 -u -m core.cno
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-cno
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
