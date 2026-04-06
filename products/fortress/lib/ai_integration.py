@@ -83,14 +83,11 @@ class FortressAIIntegration:
         self._response_handlers: List[Callable[[DefenseStrategy], None]] = []
 
         # MSSP client for intelligence loop (Alexandria)
+        # NOTE: Do NOT create a standalone MSSPClient here — it won't have a
+        # heartbeat loop running, so queued findings would never be flushed.
+        # Instead, the fortress_agent sets this via set_mssp_client() after init,
+        # sharing the same client instance that owns the active heartbeat loop.
         self._mssp = None
-        try:
-            from shared.mssp.client import MSSPClient
-            client = MSSPClient()
-            if client._api_key:
-                self._mssp = client
-        except Exception:
-            pass
 
         # Statistics
         self._events_processed = 0
@@ -100,6 +97,11 @@ class FortressAIIntegration:
 
         # Load saved state
         self._load_state()
+
+    def set_mssp_client(self, mssp_client):
+        """Set a shared MSSP client for finding submission.
+        Called by fortress_agent after MSSP client is initialized."""
+        self._mssp = mssp_client
 
     def _detect_tier(self) -> ComputeTier:
         """Detect compute tier based on system resources"""
