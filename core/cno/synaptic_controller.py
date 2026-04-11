@@ -54,6 +54,52 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Thalamus Priority Tiers (Phase 2-U C2)
+# =============================================================================
+# The SynapticController is the thalamus. To formalize the v1.3 "priority =
+# biology" principle, every event is classified into one of three tiers:
+#
+#   TIER_AUTONOMIC (P0) — reflex/wire-speed. XDP writes, stress commits.
+#                         Cannot be blocked by ANY other tier.
+#   TIER_SOMATIC  (P1) — coordination/working memory. Cerebellum signals.
+#                         Cannot be blocked by cognitive tier.
+#   TIER_COGNITIVE (P2) — reasoning/content. Multi-RAG consensus, SEO work.
+#                         Bounded queue share; P2 flood cannot displace P0/P1.
+#
+# Priority classification:
+#   int priority 0-3  → TIER_AUTONOMIC
+#   int priority 4-6  → TIER_SOMATIC
+#   int priority 7+   → TIER_COGNITIVE
+#
+# Backpressure caps (tier-weighted queue admission):
+#   P0 always admitted up to MAX_QUEUE_SIZE
+#   P1 admitted up to 70% of MAX_QUEUE_SIZE
+#   P2 admitted up to 40% of MAX_QUEUE_SIZE
+#
+# This guarantees that a P2 flood (e.g. SEO embedding burst) can never fill
+# the queue to the point of dropping incoming P0 (XDP commit) events.
+# =============================================================================
+
+TIER_AUTONOMIC = 'autonomic'
+TIER_SOMATIC = 'somatic'
+TIER_COGNITIVE = 'cognitive'
+
+TIER_ADMIT_FRACTION: Dict[str, float] = {
+    TIER_AUTONOMIC: 1.00,
+    TIER_SOMATIC: 0.70,
+    TIER_COGNITIVE: 0.40,
+}
+
+
+def classify_tier(priority: int) -> str:
+    """Map integer priority to a thalamus tier."""
+    if priority <= 3:
+        return TIER_AUTONOMIC
+    if priority <= 6:
+        return TIER_SOMATIC
+    return TIER_COGNITIVE
+
 # BPF map operations — import from HYDRA's bpf_map_ops.py
 _BPF_AVAILABLE = False
 _bpf_ops = None
@@ -146,10 +192,24 @@ class SynapticController:
             'downward_routes': 0,
         }
 
+        # Phase 2-U C2: per-tier metrics (autonomic/somatic/cognitive)
+        self._tier_stats: Dict[str, Dict[str, int]] = {
+            TIER_AUTONOMIC: {'received': 0, 'dispatched': 0, 'dropped': 0},
+            TIER_SOMATIC:   {'received': 0, 'dispatched': 0, 'dropped': 0},
+            TIER_COGNITIVE: {'received': 0, 'dispatched': 0, 'dropped': 0},
+        }
+        # Rolling queue depth by tier (updated on submit/dispatch for
+        # backpressure calculation — separate from the single _queue deque)
+        self._tier_queue_depth: Dict[str, int] = {
+            TIER_AUTONOMIC: 0,
+            TIER_SOMATIC: 0,
+            TIER_COGNITIVE: 0,
+        }
+
         self._running = False
         self._threads: List[threading.Thread] = []
 
-        logger.info("SynapticController initialized")
+        logger.info("SynapticController initialized with tier backpressure")
 
     # ------------------------------------------------------------------
     # Registration
@@ -171,14 +231,37 @@ class SynapticController:
     def submit(self, event: SynapticEvent) -> bool:
         """Submit an event to the synaptic queue.
 
-        Thread-safe. Returns False if queue is full (event dropped).
+        Thread-safe. Returns False if the tier-weighted admission cap rejects
+        the event. P0 events are always admitted (up to MAX_QUEUE_SIZE). P1
+        is capped at 70% of MAX_QUEUE_SIZE. P2 is capped at 40%.
+
+        This guarantees that a P2 flood can never starve P0 events.
         """
+        tier = classify_tier(event.priority)
+        admit_cap = int(self.MAX_QUEUE_SIZE * TIER_ADMIT_FRACTION[tier])
+
         with self._lock:
-            if len(self._queue) >= self.MAX_QUEUE_SIZE:
+            total_depth = len(self._queue)
+            tier_depth = self._tier_queue_depth[tier]
+
+            # Hard cap: if total queue is full, drop (even P0 can't escape this)
+            if total_depth >= self.MAX_QUEUE_SIZE:
                 self._stats['events_dropped'] += 1
+                self._tier_stats[tier]['dropped'] += 1
                 return False
+
+            # Tier-weighted backpressure: P1/P2 rejected when their share
+            # of the queue would exceed their admission cap. P0 skips this
+            # check (always accepted up to the hard cap above).
+            if tier != TIER_AUTONOMIC and tier_depth >= admit_cap:
+                self._stats['events_dropped'] += 1
+                self._tier_stats[tier]['dropped'] += 1
+                return False
+
             self._queue.append(event)
             self._stats['events_received'] += 1
+            self._tier_stats[tier]['received'] += 1
+            self._tier_queue_depth[tier] += 1
         return True
 
     def submit_upward(self, source_layer: BrainLayer, route: SynapticRoute,
@@ -469,6 +552,7 @@ class SynapticController:
             events.sort(key=lambda e: e.priority)
 
             for event in events:
+                tier = classify_tier(event.priority)
                 try:
                     # Determine direction based on route
                     if event.route in (
@@ -484,9 +568,16 @@ class SynapticController:
                         self.route_upward(event)
 
                     self._stats['events_dispatched'] += 1
+                    self._tier_stats[tier]['dispatched'] += 1
 
                 except Exception as e:
                     logger.error("Dispatch error for %s: %s", event, e)
+                finally:
+                    # Decrement tier depth regardless of success so the
+                    # backpressure counter stays in sync with the real queue
+                    with self._lock:
+                        if self._tier_queue_depth[tier] > 0:
+                            self._tier_queue_depth[tier] -= 1
 
             # Periodic BPF flush
             now = time.monotonic()
@@ -580,13 +671,26 @@ class SynapticController:
         logger.info("SynapticController stopped")
 
     def get_stats(self) -> Dict[str, Any]:
-        """Return controller statistics."""
+        """Return controller statistics including per-tier metrics."""
         return {
             **self._stats,
             'queue_depth': len(self._queue),
             'bpf_queue_depth': len(self._bpf_queue),
             'audit_buffer_depth': len(self._audit_buffer),
             'running': self._running,
+            # Phase 2-U C2: tier-level thalamus metrics
+            'thalamus': {
+                'tiers': {
+                    tier: {
+                        **stats,
+                        'queue_depth': self._tier_queue_depth[tier],
+                        'admit_cap': int(self.MAX_QUEUE_SIZE * TIER_ADMIT_FRACTION[tier]),
+                    }
+                    for tier, stats in self._tier_stats.items()
+                },
+                'admit_fraction': TIER_ADMIT_FRACTION,
+                'max_queue': self.MAX_QUEUE_SIZE,
+            },
         }
 
 
