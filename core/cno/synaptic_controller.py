@@ -388,6 +388,12 @@ class SynapticController:
                 self._audit(
                     event_type='bpf_write',
                     details={
+                        # source_layer and route are top-level columns in
+                        # cno_synaptic_log — without them this audit row
+                        # would render as an anonymous "(empty label)" in
+                        # the dashboard's High-Priority Memory Sectors list.
+                        'source_layer': 'brainstem',
+                        'route': f'bpf_{write.map_name}',
                         'map_name': write.map_name,
                         'operation': write.operation,
                         'reason': write.reason,
@@ -521,6 +527,10 @@ class SynapticController:
             self._audit(
                 event_type='downward_route',
                 details={
+                    # Downward routes originate in the cerebrum and flow
+                    # to the brainstem. Previously this audit row had an
+                    # empty source_layer because it wasn't passed through.
+                    'source_layer': 'cerebrum',
                     'route': event.route.value,
                     'action': action,
                     'source_ip': ip,
