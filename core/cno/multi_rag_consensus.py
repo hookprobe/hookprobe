@@ -498,8 +498,18 @@ class MultiRAGConsensus:
         token_narrative = event.payload.get('token_narrative', '')
         context = event.payload
 
+        # Phase 2B: If no feature vector is provided (e.g. verdict bridge
+        # events only have anomaly_score), build a minimal one from the
+        # payload so the global-threat silo has data to correlate against.
+        if not features and 'anomaly_score' in context:
+            score = float(context.get('anomaly_score', 0))
+            features = [score] * 6 + [0.0] * 18  # 24-dim, first 6 = score
+
         self._stats['queries'] += 1
         start = time.monotonic()
+        logger.info("MULTI-RAG query start: IP=%s features=%d narrative=%s event=%s",
+                     ip, len(features), token_narrative[:30] or '(empty)',
+                     event.event_type)
 
         # NPU-accelerated anomaly pre-score (augments consensus)
         npu_score = 0.0
@@ -525,8 +535,13 @@ class MultiRAGConsensus:
             try:
                 result = future.result(timeout=RAG_TIMEOUT_S)
                 silo_results[silo_name] = result
+                logger.info("  SILO %s: score=%.3f (%d results, %dms) — %s",
+                            silo_name, result.get('score', 0),
+                            len(result.get('results', [])),
+                            result.get('latency_ms', 0),
+                            result.get('reasoning', '')[:80])
             except Exception as e:
-                logger.debug("Silo %s failed: %s", silo_name, e)
+                logger.warning("  SILO %s FAILED: %s", silo_name, e)
                 silo_results[silo_name] = {
                     'silo': silo_name, 'score': 0.0, 'results': [],
                     'reasoning': f'Error: {e}', 'latency_ms': 0,
@@ -550,6 +565,14 @@ class MultiRAGConsensus:
         verdict = consensus['verdict']
         if verdict in self._stats:
             self._stats[verdict] += 1
+
+        # Phase 2B: Log final verdict at INFO level
+        logger.info("MULTI-RAG VERDICT: %s (score=%.3f) for %s [action=%s, latency=%dms]",
+                     consensus.get('verdict', '?'),
+                     consensus.get('consensus_score', 0),
+                     ip,
+                     consensus.get('action', 'none'),
+                     elapsed_ms)
 
         # Log to ClickHouse
         self._log_consensus(consensus)
