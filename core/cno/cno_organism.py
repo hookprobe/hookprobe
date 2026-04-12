@@ -245,7 +245,7 @@ class HYDRABridge:
             rag_triggered = int(parts[4] or 0)
             token_str = parts[5] if len(parts) > 5 else ''
 
-            # Catastrophic velocity → Cognitive Defense (Reflex)
+            # Catastrophic velocity → Cognitive Defense (Reflex, P1)
             if abs(velocity) > REFLEX_VELOCITY:
                 route = SynapticRoute.COGNITIVE_DEFENSE
                 priority = 1
@@ -257,20 +257,41 @@ class HYDRABridge:
                 route = SynapticRoute.COGNITIVE_DEFENSE
                 priority = 4
 
+            payload = {
+                'risk_velocity': velocity,
+                'composite_risk': risk,
+                'kill_chain_state': kill_chain,
+                'rag_triggered': rag_triggered,
+                'token_narrative': token_str,
+            }
+
             self._controller.submit_upward(
                 source_layer=BrainLayer.CEREBELLUM,
                 route=route,
                 event_type="velocity.spike",
                 priority=priority,
                 source_ip=src_ip,
-                payload={
-                    'risk_velocity': velocity,
-                    'composite_risk': risk,
-                    'kill_chain_state': kill_chain,
-                    'rag_triggered': rag_triggered,
-                    'token_narrative': token_str,
-                },
+                payload=payload,
             )
+
+            # Alexandria fix: ALSO submit a copy to Multi-RAG at P2 (cognitive)
+            # priority. The previous routing was exclusive — events went to
+            # CognitiveDefense OR Multi-RAG but never both. Since rag_triggered
+            # was always 0, Multi-RAG was permanently starved (0 queries in 8+
+            # days). Now every velocity spike above the reason threshold also
+            # gets a consensus evaluation. The thalamus P2 40% admission cap
+            # prevents flooding — only ~40% of these will be admitted.
+            if (route != SynapticRoute.MULTI_RAG
+                    and abs(velocity) > REASON_VELOCITY * 0.5):
+                self._controller.submit_upward(
+                    source_layer=BrainLayer.CEREBELLUM,
+                    route=SynapticRoute.MULTI_RAG,
+                    event_type="velocity.spike.rag",
+                    priority=6,  # P2 cognitive tier
+                    source_ip=src_ip,
+                    payload=payload,
+                )
+
             count += 1
 
         self._stats['velocities_bridged'] += count
@@ -608,12 +629,24 @@ class CNOOrganism:
                         reason = action.get('reasoning', act)
                         if act in ('block_ip', 'block_subnet') and ip:
                             self._controller.push_to_blocklist(ip, ttl, reason)
-                        # Feed cognitive defense actions to Emotion Engine
+                        # Feed cognitive defense actions to Emotion Engine.
+                        # v2 Alexandria fix: routine blocks of known-bad IPs
+                        # are EXPECTED behavior, not new threats. Dampen their
+                        # emotional intensity by 80% so the organism doesn't
+                        # stay permanently anxious/fearful from its own
+                        # defense-loop. Only novel actions (investigate,
+                        # throttle) register at full emotional intensity.
                         if self._emotion and act not in ('monitor', 'ignore'):
-                            stim = 'threat_detected' if act in ('block_ip', 'block_subnet') else \
-                                   'scan_detected' if act in ('investigate', 'throttle') else \
-                                   'stress_change'  # alert
-                            self._emotion.process_stimulus(stim, conf, {
+                            if act in ('block_ip', 'block_subnet'):
+                                stim = 'threat_resolved'  # we handled it = positive
+                                emo_conf = conf * 0.2  # dampen routine blocks
+                            elif act in ('investigate', 'throttle'):
+                                stim = 'scan_detected'
+                                emo_conf = conf * 0.6  # moderate attention
+                            else:
+                                stim = 'stress_change'
+                                emo_conf = conf * 0.4
+                            self._emotion.process_stimulus(stim, emo_conf, {
                                 'action': act, 'ip': ip,
                             })
                 except Exception as e:
@@ -628,9 +661,24 @@ class CNOOrganism:
             """Route to Multi-RAG Consensus engine."""
             if self._multi_rag:
                 try:
-                    self._multi_rag.evaluate(event)
+                    result = self._multi_rag.evaluate(event)
+                    if result:
+                        verdict = result.get('consensus_verdict', 'unknown')
+                        score = result.get('consensus_score', 0)
+                        logger.info(
+                            "MULTI-RAG verdict: %s (%.2f) for %s [%s]",
+                            verdict, score, event.source_ip, event.event_type,
+                        )
+                    else:
+                        logger.debug(
+                            "MULTI-RAG: no result for %s (event=%s)",
+                            event.source_ip, event.event_type,
+                        )
                 except Exception as e:
-                    logger.error("Multi-RAG evaluation failed: %s", e)
+                    logger.error(
+                        "Multi-RAG evaluation FAILED for %s: %s",
+                        event.source_ip, e, exc_info=True,
+                    )
             else:
                 logger.debug("CEREBRUM[multi_rag]: not active on %s tier", self._tier)
 

@@ -56,8 +56,15 @@ if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
 # Decay rates are per-evaluation (every EMOTION_EVAL_INTERVAL_S).
 # Too fast → emotions never accumulate from sparse stimuli.
 # Too slow → organism stays angry/fearful long after threats pass.
-VALENCE_DECAY = 0.01           # Valence drifts toward 0 per cycle (neutral)
-AROUSAL_DECAY = 0.015          # Arousal decays toward 0 per cycle
+# Decay rates — v2 retuned for Alexandria audit. Previous values (0.01/0.015)
+# were too slow to recover from the constant stream of CognitiveDefense
+# block stimuli (~50K blocklist entries generating routine threat_detected
+# events). The organism stayed anxious/fearful permanently.
+# New rates: 2.5× faster, so valence reaches neutral in ~2.5 min of calm
+# instead of ~5.5 min. This allows the all_clear signal (every 10s when
+# threat_ratio < 5%) to actually pull the organism toward serene.
+VALENCE_DECAY = 0.025          # Valence drifts toward 0 per cycle (neutral)
+AROUSAL_DECAY = 0.025          # Arousal decays toward 0 per cycle
 EMOTION_HYSTERESIS_S = 20.0    # Min dwell time before emotion transition
 EMOTION_EVAL_INTERVAL_S = 5.0  # Evaluate every 5 seconds
 
@@ -160,15 +167,21 @@ class EmotionEngine:
             self._arousal += intensity * 0.3
             self._has_known_threat = True
 
-        elif stimulus_type == 'threat_resolved':
-            # Resolution → positive shift
-            self._valence += intensity * 0.3
-            self._arousal -= intensity * 0.2
+        elif stimulus_type in ('threat_resolved', 'block_success'):
+            # Resolution / successful defense → positive shift.
+            # v2 Alexandria fix: successful blocks should feel GOOD —
+            # the organism handled the threat. This counterbalances the
+            # negative accumulation from routine defense operations.
+            self._valence += intensity * 0.4
+            self._arousal -= intensity * 0.25
 
         elif stimulus_type == 'all_clear':
-            # No threats for extended period
-            self._valence += 0.1
-            self._arousal -= 0.15
+            # No threats for extended period — v2 strengthened recovery.
+            # Previous +0.1/-0.15 was overwhelmed by CognitiveDefense
+            # block stimuli. Now strong enough to pull toward serene
+            # within 2-3 minutes of sustained quiet.
+            self._valence += 0.2
+            self._arousal -= 0.2
 
         elif stimulus_type == 'stress_change':
             # Direct stress state mapping
