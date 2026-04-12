@@ -197,18 +197,38 @@ class HYDRABridge:
                 route = SynapticRoute.TEMPORAL_MEMORY
                 priority = 5
 
+            payload = {
+                'anomaly_score': score,
+                'verdict': verdict,
+                'action_taken': action,
+            }
+
             self._controller.submit_upward(
                 source_layer=BrainLayer.CEREBELLUM,
                 route=route,
                 event_type=f"hydra.verdict.{verdict}",
                 priority=priority,
                 source_ip=src_ip,
-                payload={
-                    'anomaly_score': score,
-                    'verdict': verdict,
-                    'action_taken': action,
-                },
+                payload=payload,
             )
+
+            # Phase 2A: ALSO submit malicious verdicts to Multi-RAG for
+            # consensus evaluation. The verdict bridge was the only active
+            # data pipeline (50 verdicts/cycle), but it routed 100% to
+            # COGNITIVE_DEFENSE or TEMPORAL_MEMORY — Multi-RAG got ZERO
+            # events despite being registered. Only the velocity bridge
+            # had a MULTI_RAG path, but ip_risk_scores data was 6 days
+            # stale, so velocity events were always 0.
+            if verdict == 'malicious' and route != SynapticRoute.MULTI_RAG:
+                self._controller.submit_upward(
+                    source_layer=BrainLayer.CEREBELLUM,
+                    route=SynapticRoute.MULTI_RAG,
+                    event_type="hydra.verdict.rag",
+                    priority=3,  # P2 cognitive tier
+                    source_ip=src_ip,
+                    payload=payload,
+                )
+
             count += 1
 
         self._stats['verdicts_bridged'] += count
@@ -287,7 +307,13 @@ class HYDRABridge:
                     source_layer=BrainLayer.CEREBELLUM,
                     route=SynapticRoute.MULTI_RAG,
                     event_type="velocity.spike.rag",
-                    priority=6,  # P2 cognitive tier
+                    # Phase 2A: P6→P3. At P6 (informational) the thalamus
+                    # dropped 85%+ of these events via the admission cap.
+                    # P3 = high-cognitive, matching the original MULTI_RAG
+                    # rag_triggered path priority. The P2 40% cap still
+                    # applies but P3 is near the somatic admission boundary
+                    # so more events get through.
+                    priority=3,
                     source_ip=src_ip,
                     payload=payload,
                 )
@@ -503,11 +529,20 @@ class CNOOrganism:
             ip, v, action, confidence, verdict.get('silos_agreeing', 0),
         )
 
-        # Feed to Emotion Engine
-        if v == 'malicious':
-            self._emotion.process_stimulus('threat_detected', confidence, verdict)
-        elif v == 'suspicious':
-            self._emotion.process_stimulus('novel_pattern', confidence * 0.6, verdict)
+        # Feed to Emotion Engine — Phase 2C: malicious verdicts are
+        # RESOLVED threats (we identified and can act on them), not new
+        # scares. Benign verdicts are calming. This matches the v3 approach
+        # where successful defense = positive stimulus.
+        if self._emotion:
+            if v == 'malicious':
+                # We identified a real threat — resolved, not panic
+                self._emotion.process_stimulus('threat_resolved', confidence * 0.15, verdict)
+            elif v == 'suspicious':
+                # Uncertain — slight arousal but not full negative
+                self._emotion.process_stimulus('novel_pattern', confidence * 0.05, verdict)
+            elif v == 'benign':
+                # All clear for this IP — calming
+                self._emotion.process_stimulus('all_clear', 0.05, verdict)
 
         # Route action to Brainstem
         if action == 'block' and ip:
