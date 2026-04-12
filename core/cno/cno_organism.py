@@ -621,6 +621,7 @@ class CNOOrganism:
                     actions = self._cognitive_defense.process_cycle(
                         [velocity_result], rag_ctx
                     )
+                    action_count = 0
                     for action in (actions or []):
                         act = action.get('action', 'monitor')
                         ip = action.get('ip', '')
@@ -629,26 +630,20 @@ class CNOOrganism:
                         reason = action.get('reasoning', act)
                         if act in ('block_ip', 'block_subnet') and ip:
                             self._controller.push_to_blocklist(ip, ttl, reason)
-                        # Feed cognitive defense actions to Emotion Engine.
-                        # v2 Alexandria fix: routine blocks of known-bad IPs
-                        # are EXPECTED behavior, not new threats. Dampen their
-                        # emotional intensity by 80% so the organism doesn't
-                        # stay permanently anxious/fearful from its own
-                        # defense-loop. Only novel actions (investigate,
-                        # throttle) register at full emotional intensity.
-                        if self._emotion and act not in ('monitor', 'ignore'):
-                            if act in ('block_ip', 'block_subnet'):
-                                stim = 'threat_resolved'  # we handled it = positive
-                                emo_conf = conf * 0.2  # dampen routine blocks
-                            elif act in ('investigate', 'throttle'):
-                                stim = 'scan_detected'
-                                emo_conf = conf * 0.6  # moderate attention
-                            else:
-                                stim = 'stress_change'
-                                emo_conf = conf * 0.4
-                            self._emotion.process_stimulus(stim, emo_conf, {
-                                'action': act, 'ip': ip,
-                            })
+                        if act not in ('monitor', 'ignore'):
+                            action_count += 1
+
+                    # Alexandria fix v3: ONE aggregate stimulus per cognitive
+                    # cycle instead of one-per-IP. Previous per-IP approach
+                    # (4 IPs × scan_detected) overwhelmed emotion recovery.
+                    # All successful actions = threat_resolved (positive).
+                    # Intensity capped at 0.15 regardless of how many IPs.
+                    if self._emotion and action_count > 0:
+                        self._emotion.process_stimulus(
+                            'threat_resolved',
+                            min(0.15, action_count * 0.03),
+                            {'actions': action_count},
+                        )
                 except Exception as e:
                     logger.error("CognitiveDefense cycle error: %s", e)
             else:
