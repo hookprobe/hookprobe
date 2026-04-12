@@ -153,7 +153,13 @@ class StressGauge:
 
         Uses ClickHouse hydra_verdicts (not PostgreSQL) since the CNO
         container has no access to the rootless podman network.
-        Normalized: 0 = 0.0, >=10 = 1.0
+
+        Alexandria fix: Previous normalization (÷10) meant 10 distinct
+        malicious IPs = max stress. On an internet-facing server, 50-150
+        distinct malicious IPs per 5 minutes is NORMAL background noise
+        from scanners/bots. This was pegging the signal permanently at 1.0.
+        Raised to ÷200 so only a genuine attack spike (200+ novel IPs)
+        triggers full stress. Normal background (~100 IPs) reads ~0.5.
         """
         try:
             query = (
@@ -166,7 +172,7 @@ class StressGauge:
             result = _ch_query(query)
             if result:
                 count = int(result.strip() or 0)
-                return min(count / 10.0, 1.0)
+                return min(count / 200.0, 1.0)
         except Exception as e:
             logger.debug("Active incidents query failed: %s", e)
         return 0.0
@@ -207,7 +213,12 @@ class StressGauge:
     def _collect_anomaly_distribution(self) -> float:
         """Get fraction of IPs scored as suspicious/malicious (0.0 - 1.0).
 
-        Normalized: 0% suspicious = 0.0, >20% = 1.0
+        Alexandria fix: Previous threshold (20%) was too low for an
+        internet-facing IDS — SENTINEL classifies 50-70% of external
+        traffic as suspicious/malicious (scanners, bots, known-bad IPs).
+        This pegged the signal permanently at 1.0. Raised to 80% so only
+        a true anomalous spike (nearly ALL traffic is malicious) triggers
+        full stress. Normal internet background (~60%) reads ~0.75.
         """
         try:
             query = (
@@ -225,7 +236,7 @@ class StressGauge:
                     total = float(parts[1] or 1)
                     if total > 0:
                         ratio = threats / total
-                        return min(ratio / 0.20, 1.0)
+                        return min(ratio / 0.80, 1.0)
         except Exception as e:
             logger.debug("Anomaly distribution query failed: %s", e)
         return 0.0
