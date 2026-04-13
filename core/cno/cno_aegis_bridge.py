@@ -148,36 +148,47 @@ class CNOAegisBridge:
         """Convert a SynapticEvent → StandardSignal for AEGIS routing.
 
         Imports StandardSignal lazily to avoid circular dependency.
+        Falls back to SimpleNamespace (supports attribute access) if
+        the aegis package is unreachable.
         """
+        severity = _PRIORITY_TO_SEVERITY.get(event.priority, 'MEDIUM')
+        source = _infer_source(event.event_type)
+        data = {
+            'source_ip': event.source_ip,
+            'dest_ip': event.dest_ip,
+            **event.payload,
+        }
+
         try:
             from ..aegis.types import StandardSignal
         except ImportError:
-            # Fallback: create a dict that looks like StandardSignal
-            return {
-                'source': _infer_source(event.event_type),
-                'event_type': event.event_type,
-                'severity': _PRIORITY_TO_SEVERITY.get(event.priority, 'MEDIUM'),
-                'data': {
-                    'source_ip': event.source_ip,
-                    'dest_ip': event.dest_ip,
-                    **event.payload,
-                },
-            }
+            try:
+                import sys as _sys
+                _base = os.environ.get('HOOKPROBE_BASE',
+                                       '/home/ubuntu/hookprobe')
+                if _base not in _sys.path:
+                    _sys.path.insert(0, _base)
+                from core.aegis.types import StandardSignal
+            except ImportError:
+                # Final fallback: SimpleNamespace has attribute access
+                # (unlike a plain dict which caused .severity errors)
+                from types import SimpleNamespace
+                return SimpleNamespace(
+                    source=source,
+                    event_type=event.event_type,
+                    severity=severity,
+                    data=data,
+                )
 
-        severity = _PRIORITY_TO_SEVERITY.get(event.priority, 'MEDIUM')
-        source = _infer_source(event.event_type)
+        # Add CNO-specific metadata to data dict for StandardSignal
+        data['cno_layer'] = event.source_layer.value
+        data['cno_route'] = event.route.value
 
         return StandardSignal(
             source=source,
             event_type=event.event_type,
             severity=severity,
-            data={
-                'source_ip': event.source_ip,
-                'dest_ip': event.dest_ip,
-                'cno_layer': event.source_layer.value,
-                'cno_route': event.route.value,
-                **event.payload,
-            },
+            data=data,
         )
 
     def route_to_aegis(self, event):
