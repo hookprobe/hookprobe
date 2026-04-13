@@ -261,9 +261,14 @@ class EmotionEngine:
         if self._active_scan and a >= 0.3:
             return EmotionState.ANXIOUS
 
-        # VIGILANT: near-neutral valence, moderate arousal
-        # (something is happening, but not clearly threatening)
-        if abs(v) < 0.3 and 0.3 <= a < 0.6:
+        # VIGILANT: near-neutral valence, elevated arousal
+        # (something is happening, but not clearly threatening).
+        # Phase 3 fix: extended from a<0.6 to a>=0.3. The previous
+        # cap at 0.6 meant neutral-valence + high-arousal (the
+        # high_activity stimulus) fell through all classifications
+        # to the SERENE default. VIGILANT is the correct state for
+        # "organism is alert and processing" without fear or anger.
+        if abs(v) < 0.3 and a >= 0.3:
             return EmotionState.VIGILANT
 
         # SERENE: positive valence, low arousal (all is well)
