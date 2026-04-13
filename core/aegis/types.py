@@ -9,7 +9,44 @@ from dataclasses import dataclass, field as dc_field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+
+# Phase 12: pydantic fallback for environments without pip (e.g., CNO
+# container where DNS is unavailable during build). If pydantic can't
+# be imported, use a lightweight dataclass-based BaseModel shim.
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    # Shim: BaseModel = dataclass, Field = dc_field
+    # Loses validation but preserves the interface for type hints.
+    from dataclasses import dataclass as _dc, field as _f
+
+    class _ShimMeta(type):
+        """Metaclass that makes the BaseModel shim work like pydantic."""
+        def __new__(mcs, name, bases, namespace):
+            annotations = namespace.get('__annotations__', {})
+            defaults = {}
+            for k, v in list(namespace.items()):
+                if hasattr(v, '_shim_default'):
+                    defaults[k] = v._shim_default
+            namespace['__annotations__'] = annotations
+            cls = super().__new__(mcs, name, bases, namespace)
+            cls = _dc(cls)
+            return cls
+
+    class BaseModel(metaclass=_ShimMeta):
+        """Lightweight pydantic BaseModel shim using dataclasses."""
+        pass
+
+    class _FieldProxy:
+        def __call__(self, default=..., default_factory=None, **kwargs):
+            if default_factory:
+                return _f(default_factory=default_factory)
+            if default is not ...:
+                r = _f(default=default)
+                r._shim_default = default
+                return r
+            return _f(default=None)
+    Field = _FieldProxy()
 
 
 class ChatMessage(BaseModel):
