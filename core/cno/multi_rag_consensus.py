@@ -64,7 +64,15 @@ WEIGHT_PSYCHOLOGY = 0.25
 # Consensus thresholds
 THRESHOLD_ACTION = 0.50       # Minimum per-silo score for "agree"
 THRESHOLD_BENIGN = 0.30       # All silos below this → fast-path benign
-THRESHOLD_ESCALATE = 0.90     # Single silo above this → escalate immediately
+# Phase 16: first-contact unknown IPs should be NEUTRAL (0.5), not
+# scored at 0.0 (which lets the global silo dominate). Unknown = no
+# evidence either way, not "safe".
+FIRST_CONTACT_SCORE = 0.4
+# Phase 16: raised from 0.90 to 0.95. At 0.90, the local baseline silo
+# (which scores 1.0 for IPs with past malicious history) BYPASSES the
+# 2-of-3 consensus for every repeat offender. At 0.95, only truly
+# extreme signals trigger single-silo escalation.
+THRESHOLD_ESCALATE = 0.95
 MIN_SILOS_AGREE = 2           # Minimum silos that must agree for action
 
 # RAG query limits
@@ -206,12 +214,19 @@ class LocalBaselineSilo(RAGSilo):
     def query(self, ip: str, features: List[float],
               token_narrative: str, context: Dict[str, Any]) -> Dict[str, Any]:
         start = time.monotonic()
-        score = 0.0
         results = []
+        is_first_contact = True  # Phase 16: track if we have any history
 
         if not _IPV4_RE.match(ip):
             return {'silo': self.name, 'score': 0.0, 'results': [],
                     'reasoning': 'Invalid IP', 'latency_ms': 0}
+
+        # Phase 16: start at FIRST_CONTACT_SCORE (neutral) instead of 0.0.
+        # Unknown IPs should not be either safe (0.0) or dangerous (1.0)
+        # — they should be ambiguous (0.4), letting the OTHER silos
+        # drive the verdict. This prevents the local silo from being
+        # a rubber stamp that always agrees with the global silo.
+        score = FIRST_CONTACT_SCORE
 
         try:
             # Query 1: Historical risk velocity for this IP
@@ -226,6 +241,7 @@ class LocalBaselineSilo(RAGSilo):
             )
             v_result = _ch_query(velocity_query)
             if v_result:
+                is_first_contact = False
                 for line in v_result.strip().split('\n'):
                     if not line.strip():
                         continue
@@ -253,6 +269,7 @@ class LocalBaselineSilo(RAGSilo):
             vd_result = _ch_query(verdict_query)
             if vd_result:
                 mal_count = 0
+                ben_count = 0
                 total = 0
                 for line in vd_result.strip().split('\n'):
                     if not line.strip():
@@ -262,8 +279,17 @@ class LocalBaselineSilo(RAGSilo):
                         total += 1
                         if parts[0] == 'malicious':
                             mal_count += 1
+                        elif parts[0] == 'benign':
+                            ben_count += 1
                 if total > 0:
-                    recidivism = mal_count / total
+                    is_first_contact = False
+                    # Phase 16: recidivism is capped at 0.85 to prevent
+                    # circular reasoning (past malicious → future malicious
+                    # → even more malicious history → permanent 1.0). Any
+                    # benign verdict in history reduces the score further.
+                    recidivism = min(0.85, mal_count / total)
+                    if ben_count > 0:
+                        recidivism *= 0.7  # benign evidence dampens recidivism
                     score = max(score, recidivism)
 
             # Note: Z-score profile deviation (Welford baseline) will be
@@ -274,9 +300,10 @@ class LocalBaselineSilo(RAGSilo):
             logger.debug("Local baseline silo error: %s", e)
 
         elapsed = int((time.monotonic() - start) * 1000)
-        reasoning = f"{len(results)} historical records, recency-weighted score"
-        if not results:
-            reasoning = "No local history for this IP (first contact)"
+        if is_first_contact:
+            reasoning = f"No local history (first contact, neutral score={FIRST_CONTACT_SCORE})"
+        else:
+            reasoning = f"{len(results)} historical records, recency-weighted score"
 
         return {
             'silo': self.name,
