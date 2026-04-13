@@ -693,21 +693,45 @@ class MultiRAGConsensus:
         }
 
     def _log_consensus(self, consensus: Dict[str, Any]) -> None:
-        """Log consensus verdict to ClickHouse."""
+        """Log consensus verdict to ClickHouse with XAI audit trail.
+
+        Gap 6 fix: now writes reasoning + per-silo details + NPU score
+        so post-incident forensic investigators can trace WHY a verdict
+        was reached, not just WHAT the verdict was.
+        """
         try:
+            import json as _json
+
             scores = consensus['silo_scores']
+
+            # Build compact silo details (score + reasoning per silo, no full result arrays)
+            silo_details = {}
+            for silo_name, silo_result in consensus.get('silo_results', {}).items():
+                silo_details[silo_name] = {
+                    'score': round(silo_result.get('score', 0), 4),
+                    'reasoning': silo_result.get('reasoning', '')[:200],
+                    'result_count': len(silo_result.get('results', [])),
+                    'latency_ms': silo_result.get('latency_ms', 0),
+                }
+
+            reasoning = _ch_escape(consensus.get('reasoning', '')[:500])
+            silo_json = _ch_escape(_json.dumps(silo_details, default=str)[:2000])
+            npu = consensus.get('npu_anomaly_score', 0)
+
             query = (
                 f"INSERT INTO {CH_DB}.cno_consensus_log "
                 f"(timestamp, src_ip, silo_global_score, silo_local_score, "
                 f"silo_psych_score, consensus_score, consensus_verdict, "
-                f"consensus_action, confidence, behavioral_token, kill_chain_stage) "
+                f"consensus_action, confidence, behavioral_token, "
+                f"kill_chain_stage, reasoning, silo_details, npu_score) "
                 f"VALUES (now64(3), '{_safe_ip(consensus['src_ip'])}', "
                 f"{scores['global_threat']}, {scores['local_baseline']}, "
                 f"{scores['attacker_psychology']}, {consensus['consensus_score']}, "
                 f"'{consensus['verdict']}', '{consensus['action']}', "
                 f"{consensus['confidence']}, "
                 f"'{_ch_escape(consensus.get('behavioral_token', ''))}', "
-                f"'{_ch_escape(consensus.get('kill_chain_stage', 'idle'))}')"
+                f"'{_ch_escape(consensus.get('kill_chain_stage', 'idle'))}', "
+                f"'{reasoning}', '{silo_json}', {npu})"
             )
             _ch_post(query)
         except Exception as e:
