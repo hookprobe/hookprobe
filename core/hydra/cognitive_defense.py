@@ -338,7 +338,10 @@ class ReasoningLoop:
         Constructs a prompt from behavioral tokens + RAG context,
         then parses the LLM's structured JSON response.
         """
-        narrative = token.get('narrative', '[UNKNOWN]')
+        # Security audit H4: sanitize narrative before LLM prompt injection.
+        # token_narrative can contain attacker-controlled data from HTTP headers.
+        raw_narrative = token.get('narrative', '[UNKNOWN]')
+        narrative = ''.join(c for c in raw_narrative if c.isalnum() or c in ' _-+./,[]():')[:200]
         prompt_parts = [
             f"THREAT ANALYSIS REQUEST",
             f"IP: {ip}",
