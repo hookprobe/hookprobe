@@ -404,20 +404,40 @@ class SessionAnalyzer:
 
     def _emit_finding(self, event_type: str, source_ip: str,
                       priority: int, payload: Dict[str, Any]) -> None:
-        """Emit a session finding as a SynapticEvent."""
+        """Emit a session finding as a SynapticEvent.
+
+        Phase 4 fix: Route to MULTI_RAG (was COGNITIVE_DEFENSE). Session
+        findings should get consensus evaluation before triggering defense.
+        Also submit a P1 copy to COGNITIVE_DEFENSE for critical patterns
+        (ssh_brute, dns_tunnel) so they get immediate reflex action.
+        """
         if not self._submit:
             logger.info("SESSION FINDING: %s from %s: %s",
                         event_type, source_ip, payload)
             return
 
+        # Primary path: Multi-RAG consensus
         self._submit(
             source_layer=BrainLayer.CEREBRUM,
-            route=SynapticRoute.COGNITIVE_DEFENSE,
+            route=SynapticRoute.MULTI_RAG,
             event_type=event_type,
-            priority=priority,
+            priority=3,  # P2 cognitive tier
             source_ip=source_ip,
             payload=payload,
         )
+
+        # Critical patterns also get immediate CognitiveDefense action
+        critical = ('session.ssh_brute', 'session.dns_tunnel',
+                    'session.tls_downgrade')
+        if event_type in critical:
+            self._submit(
+                source_layer=BrainLayer.CEREBRUM,
+                route=SynapticRoute.COGNITIVE_DEFENSE,
+                event_type=event_type,
+                priority=1,  # P0 autonomic (reflex)
+                source_ip=source_ip,
+                payload=payload,
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         return dict(self._stats)

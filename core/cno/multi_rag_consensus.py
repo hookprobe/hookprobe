@@ -498,12 +498,36 @@ class MultiRAGConsensus:
         token_narrative = event.payload.get('token_narrative', '')
         context = event.payload
 
-        # Phase 2B: If no feature vector is provided (e.g. verdict bridge
-        # events only have anomaly_score), build a minimal one from the
-        # payload so the global-threat silo has data to correlate against.
-        if not features and 'anomaly_score' in context:
-            score = float(context.get('anomaly_score', 0))
-            features = [score] * 6 + [0.0] * 18  # 24-dim, first 6 = score
+        # Phase 2B/4: If no feature vector is provided, build a minimal
+        # 24-dim vector from available payload fields so the global-threat
+        # silo has data to correlate against.
+        if not features:
+            if 'anomaly_score' in context:
+                # Verdict bridge events
+                score = float(context.get('anomaly_score', 0))
+                features = [score] * 6 + [0.0] * 18
+            elif 'flows' in context or 'pattern' in context:
+                # Session analyzer events — encode pattern as numeric
+                flows = float(context.get('flows', 0))
+                port = float(context.get('dest_port', 0))
+                features = [
+                    min(1.0, flows / 100.0),   # flow count normalized
+                    port / 65535.0,             # port normalized
+                    0.7,                        # session anomaly baseline
+                ] + [0.0] * 21
+            elif 'dest_port' in context:
+                # App tracker events — C2 port detection
+                port = float(context.get('dest_port', 0))
+                features = [
+                    0.9,                        # app deviation = high risk
+                    port / 65535.0,
+                ] + [0.0] * 22
+            # Build token narrative from pattern/anomaly if empty
+            if not token_narrative:
+                pattern = context.get('pattern', context.get('anomaly', ''))
+                mitre = context.get('mitre_technique', '')
+                if pattern:
+                    token_narrative = f"{pattern} {mitre}".strip()
 
         self._stats['queries'] += 1
         start = time.monotonic()
