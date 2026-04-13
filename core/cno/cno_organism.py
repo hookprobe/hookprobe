@@ -627,10 +627,22 @@ class CNOOrganism:
                     logger.debug("StreamingRAG ingest: %s", e)
 
     def _on_federated_update(self, bloom_stats: Dict[str, Any]) -> None:
-        """Called by FederatedSync when global threat view changes."""
-        logger.info("FEDERATED: global view updated — %d peers, density=%.3f",
-                     bloom_stats.get('peer_count', 0),
-                     bloom_stats.get('global_density', 0))
+        """Called by FederatedSync when global threat view changes.
+
+        Phase 18: logs reputation metrics alongside bloom stats.
+        """
+        rep = bloom_stats.get('reputation', {})
+        logger.info(
+            "FEDERATED: %d peers, density=%.3f, trusted=%d/%d, "
+            "bft_pass=%d, bft_fail=%d",
+            bloom_stats.get('peer_count', 0),
+            bloom_stats.get('global_density', 0),
+            sum(1 for p in rep.get('peers', {}).values()
+                if p.get('trust', 0) >= 0.15),
+            rep.get('peer_count', 0),
+            rep.get('bft_votes_passed', 0),
+            rep.get('bft_votes_failed', 0),
+        )
 
     def _on_emotion_change(self, old: EmotionState, new: EmotionState,
                            valence: float, arousal: float) -> None:
