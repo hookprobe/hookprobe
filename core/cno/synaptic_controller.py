@@ -108,7 +108,7 @@ try:
     _hydra_path = os.environ.get('HYDRA_PATH', '/home/ubuntu/hookprobe/core/hydra')
     if _hydra_path not in _sys.path:
         _sys.path.insert(0, _hydra_path)
-    from bpf_map_ops import BPFMapOps as _BPFMapOps
+    from bpf_map_ops import BpfMapOps as _BPFMapOps  # Phase 6: fixed case (was BPFMapOps)
     _bpf_ops = _BPFMapOps()
     _BPF_AVAILABLE = True
     logger.info("BPF map ops loaded from %s", _hydra_path)
