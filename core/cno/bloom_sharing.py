@@ -116,12 +116,24 @@ class BloomFilter:
         header = struct.pack('<III', self.size, self.num_hashes, self._count)
         return header + bytes(self._bits)
 
+    # Security audit C4: max filter size to prevent OOM from rogue peers
+    MAX_BLOOM_SIZE_BITS = 16 * 1024 * 1024 * 8  # 16MB max
+    MAX_BLOOM_HASHES = 20
+
     @classmethod
     def from_bytes(cls, data: bytes) -> 'BloomFilter':
-        """Deserialize filter from bytes."""
+        """Deserialize filter from bytes with size validation.
+
+        Security audit C4: rogue nodes can send size=0xFFFFFFFF causing
+        512MB allocation → OOM. Validate size + density before accepting.
+        """
         if len(data) < 12:
             raise ValueError("Bloom filter data too short")
         size, num_hashes, count = struct.unpack('<III', data[:12])
+        if size == 0 or size > cls.MAX_BLOOM_SIZE_BITS:
+            raise ValueError(f"Bloom filter size out of range: {size}")
+        if num_hashes == 0 or num_hashes > cls.MAX_BLOOM_HASHES:
+            raise ValueError(f"Bloom hash count out of range: {num_hashes}")
         bf = cls(size_bits=size, num_hashes=num_hashes)
         expected_bytes = size // 8
         bf._bits = bytearray(data[12:12 + expected_bytes])
@@ -251,10 +263,31 @@ class BloomSharingEngine:
         self._stats['filters_shared'] += 1
         return noisy.to_bytes()
 
+    MAX_PEER_FILTERS = 100  # Security audit H5: prevent unbounded growth
+
     def receive_peer_filter(self, peer_id: str, data: bytes) -> bool:
-        """Receive and merge a peer's Bloom filter."""
+        """Receive and merge a peer's Bloom filter with validation.
+
+        Security audits C4 + H5: validates filter size, density, and
+        enforces maximum peer count to prevent OOM from rogue nodes.
+        """
         try:
             peer_filter = BloomFilter.from_bytes(data)
+
+            # H5: reject saturated filters (all 1s = mesh-wide DOS)
+            density = peer_filter.bit_density()
+            if density > 0.90:
+                logger.warning("Rejecting saturated filter from %s (density=%.3f)",
+                               peer_id, density)
+                return False
+
+            # H5: enforce max peer count
+            if (len(self._peer_filters) >= self.MAX_PEER_FILTERS
+                    and peer_id not in self._peer_filters):
+                logger.warning("Peer filter limit (%d) reached, rejecting %s",
+                               self.MAX_PEER_FILTERS, peer_id)
+                return False
+
             self._peer_filters[peer_id] = peer_filter
 
             # Rebuild global filter from all peers (atomic assignment)
