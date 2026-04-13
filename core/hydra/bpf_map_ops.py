@@ -174,10 +174,22 @@ class BpfMapOps:
     # ------------------------------------------------------------------
 
     def _get_map_fd(self, map_id: int) -> int:
-        """Get a file descriptor for a map by ID. Caller must close it."""
+        """Get a file descriptor for a map by ID. Caller must close it.
+
+        Security audit C1: evict stale cache entries on ENOENT so the
+        next find_map_by_name() re-enumerates instead of using the stale ID.
+        """
         attr = struct.pack('I', map_id) + b'\x00' * 124
         fd_ret, fd_errno, _ = self._bpf(BPF_MAP_GET_FD_BY_ID, attr)
         if fd_ret < 0:
+            # Evict stale cache entry (map may have been reloaded)
+            self._map_info_cache.pop(map_id, None)
+            stale_names = [n for n, mid in self._map_cache.items() if mid == map_id]
+            for n in stale_names:
+                del self._map_cache[n]
+            if stale_names:
+                logger.warning("BPF cache evicted stale map ID %d (names: %s)",
+                               map_id, stale_names)
             raise OSError(fd_errno, f"BPF_MAP_GET_FD_BY_ID failed for map {map_id}")
         return fd_ret
 
