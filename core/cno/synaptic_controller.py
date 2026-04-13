@@ -419,7 +419,12 @@ class SynapticController:
                     )
                     return ok
                 elif write.map_name in ('stress_level', 'camo_config'):
-                    # ARRAY map update
+                    # ARRAY map update — these maps only exist when the
+                    # xdp_flow_ctrl program is loaded. On systems with
+                    # only xdp_hydra + xdp_synwall, the maps don't exist.
+                    # Check first to avoid 13+ WARNING logs per session.
+                    if _bpf_ops.find_map_by_name(write.map_name) is None:
+                        return True  # Silently skip — program not loaded
                     ok = _bpf_ops.map_update_by_name(
                         write.map_name, write.key, write.value
                     )
