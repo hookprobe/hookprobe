@@ -831,9 +831,15 @@ class CNOOrganism:
                         spatial.threat_ratio * 100,
                     )
 
-                # Feed spatial awareness anomalies to emotion engine
+                # Phase 3: Emotion stimulus balance.
+                # Three layers: (1) spatial threat detection for genuine attacks,
+                # (2) high_activity for sustained defense workload, (3) all_clear
+                # ONLY when both spatial and verdict bridge are quiet.
                 if self._emotion:
-                    if spatial.is_under_attack:
+                    verdict_count = stats.get('verdicts', 0)
+
+                    # Layer 1: spatial attack detection (genuine network attack)
+                    if spatial.is_under_attack and spatial.threat_ratio > 0.20:
                         dominant = spatial.dominant_threat
                         if dominant in ('ddos', 'bruteforce'):
                             self._emotion.process_stimulus('ddos_detected', spatial.threat_ratio)
@@ -843,8 +849,21 @@ class CNOOrganism:
                             self._emotion.process_stimulus('exfiltration_detected', spatial.threat_ratio)
                         else:
                             self._emotion.process_stimulus('threat_detected', spatial.threat_ratio)
-                    elif spatial.threat_ratio < 0.05:
-                        # Recovery signal — strength proportional to how calm things are
+
+                    # Layer 2: high verdict activity → vigilant arousal.
+                    # If the bridge processed >10 verdicts this cycle, the
+                    # organism is under sustained load. Emit a mild arousal
+                    # stimulus so it reaches VIGILANT instead of staying
+                    # permanently SERENE during 50K verdicts/hour.
+                    elif verdict_count > 10:
+                        activity_intensity = min(1.0, verdict_count / 50.0)
+                        self._emotion.process_stimulus('high_activity', activity_intensity)
+
+                    # Layer 3: all_clear ONLY when both spatial is quiet AND
+                    # the verdict bridge processed few/no threats this cycle.
+                    # Previously all_clear fired every cycle even during 50K
+                    # malicious verdicts because spatial.threat_ratio was 0.
+                    elif spatial.threat_ratio < 0.05 and verdict_count <= 5:
                         calm_strength = max(0.05, (0.05 - spatial.threat_ratio) / 0.05)
                         self._emotion.process_stimulus('all_clear', calm_strength)
 
