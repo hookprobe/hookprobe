@@ -348,28 +348,51 @@ class AppTracker:
 
     def _emit_deviation(self, source_ip: str, dest_ip: str, dest_port: int,
                         app_type: str, anomaly: str, priority: int) -> None:
-        """Emit an application deviation event."""
-        logger.warning("APP DEVIATION: %s", anomaly)
+        """Emit an application deviation event.
+
+        Phase 4 fix: C2/suspicious port connections go to COGNITIVE_DEFENSE
+        at P1 (critical reflex). Other deviations go to MULTI_RAG at P3
+        for consensus evaluation. Previously ALL went to COGNITIVE_DEFENSE
+        where the payload format mismatched (no risk_velocity field).
+        """
+        logger.warning("APP DEVIATION: %s → %s:%d (%s)", anomaly, dest_ip,
+                       dest_port, app_type)
 
         if not self._submit:
             return
 
-        self._submit(
-            source_layer=BrainLayer.CEREBELLUM,
-            route=SynapticRoute.COGNITIVE_DEFENSE,
-            event_type='app.deviation',
-            priority=priority,
-            source_ip=source_ip,
-            payload={
-                'dest_ip': dest_ip,
-                'dest_port': dest_port,
-                'app_type': app_type,
-                'anomaly': anomaly,
-                'mitre_technique': 'T1071 - Application Layer Protocol'
-                if dest_port not in SUSPICIOUS_OUTBOUND_PORTS
-                else f'T1571 - Non-Standard Port ({SUSPICIOUS_OUTBOUND_PORTS.get(dest_port, "")})',
-            },
-        )
+        mitre = ('T1571 - Non-Standard Port'
+                 if dest_port in SUSPICIOUS_OUTBOUND_PORTS
+                 else 'T1071 - Application Layer Protocol')
+
+        payload = {
+            'dest_ip': dest_ip,
+            'dest_port': dest_port,
+            'app_type': app_type,
+            'anomaly': anomaly,
+            'mitre_technique': mitre,
+        }
+
+        # C2 ports: immediate reflex action via CognitiveDefense
+        if dest_port in SUSPICIOUS_OUTBOUND_PORTS:
+            self._submit(
+                source_layer=BrainLayer.CEREBELLUM,
+                route=SynapticRoute.COGNITIVE_DEFENSE,
+                event_type='app.deviation.critical',
+                priority=1,  # P0 autonomic — reflex block
+                source_ip=source_ip,
+                payload=payload,
+            )
+        # Other deviations: consensus evaluation via Multi-RAG
+        else:
+            self._submit(
+                source_layer=BrainLayer.CEREBELLUM,
+                route=SynapticRoute.MULTI_RAG,
+                event_type='app.deviation',
+                priority=3,  # P2 cognitive tier
+                source_ip=source_ip,
+                payload=payload,
+            )
 
     # ------------------------------------------------------------------
     # Status

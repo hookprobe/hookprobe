@@ -713,9 +713,14 @@ class CNOOrganism:
                 logger.debug("CEREBRUM[multi_rag]: not active on %s tier", self._tier)
 
         def _handle_temporal(event: SynapticEvent):
-            """Route to Temporal Memory engine."""
-            logger.debug("CEREBRUM[temporal]: %s from %s",
-                         event.event_type, event.source_ip)
+            """Route to Temporal Memory — track behavioral trends.
+
+            Phase 4: enriched from stub to info logger with context
+            extraction. Full temporal drift engine is Phase 5+.
+            """
+            logger.info("TEMPORAL: %s from %s (verdict=%s)",
+                        event.event_type, event.source_ip,
+                        event.payload.get('verdict', 'n/a'))
 
         def _handle_entity_graph(event: SynapticEvent):
             """Route to SIA Engine for kill chain attribution."""
@@ -729,9 +734,54 @@ class CNOOrganism:
                              event.event_type, event.source_ip)
 
         def _handle_session_analysis(event: SynapticEvent):
-            """Route to Session Analyzer (Wernicke's area)."""
-            logger.debug("CEREBRUM[session_analysis]: %s from %s",
-                         event.event_type, event.source_ip)
+            """Route session analysis findings to CognitiveDefense.
+
+            Phase 4: implemented from stub. Receives session findings
+            that were already evaluated by Multi-RAG (session_analyzer
+            now routes to MULTI_RAG first, then critical patterns also
+            fire to COGNITIVE_DEFENSE). This handler processes the
+            COGNITIVE_DEFENSE copy for reflex action.
+
+            Maps session payload fields to CognitiveDefense format
+            (which expects risk_velocity + composite_risk).
+            """
+            pattern = event.payload.get('pattern', event.event_type)
+            mitre = event.payload.get('mitre_technique', '')
+            flows = event.payload.get('flows', 0)
+
+            logger.info("SESSION FINDING: %s from %s (%s, %d flows)",
+                        pattern, event.source_ip, mitre, flows)
+
+            # Build velocity result compatible with CognitiveDefense
+            if self._cognitive_defense:
+                velocity_result = {
+                    'ip': event.source_ip,
+                    'risk_velocity': 0.5,  # session findings = moderate risk
+                    'latest_score': min(1.0, flows / 100.0),
+                }
+                rag_ctx = [{
+                    'ip': event.source_ip,
+                    'prompt_context': f"Session: {pattern} ({mitre})",
+                }]
+                try:
+                    actions = self._cognitive_defense.process_cycle(
+                        [velocity_result], rag_ctx
+                    )
+                    action_count = 0
+                    for action in (actions or []):
+                        act = action.get('action', 'monitor')
+                        ip = action.get('ip', '')
+                        if act in ('block_ip', 'block_subnet') and ip:
+                            self._controller.push_to_blocklist(
+                                ip, 3600,
+                                f"Session analysis: {pattern}",
+                            )
+                            action_count += 1
+                    if action_count > 0:
+                        logger.info("SESSION→DEFENSE: %d blocks for %s",
+                                    action_count, event.source_ip)
+                except Exception as e:
+                    logger.error("Session→CognitiveDefense error: %s", e)
 
         self._controller.register_handler(
             SynapticRoute.COGNITIVE_DEFENSE, _handle_cognitive_defense)
