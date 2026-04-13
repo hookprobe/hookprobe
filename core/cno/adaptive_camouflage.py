@@ -105,6 +105,7 @@ class AdaptiveCamouflage:
         # Tarpit state
         self._tarpit_active = False
         self._tarpit_ips: Set[str] = set()  # IPs being tarpitted
+        self._tarpit = None  # Phase 9: PythonTarpit instance (lazy init)
 
         # Thread control
         self._running = False
@@ -355,18 +356,32 @@ class AdaptiveCamouflage:
     def _activate_tarpit(self) -> None:
         """Activate TCP tarpit for detected attackers.
 
-        Tarpits accept connections but send data at 1 byte per second,
-        wasting attacker resources.
+        Phase 9: replaced log-only stub with real PythonTarpit that accepts
+        connections on ports 23/445/3389/5900 and drip-feeds a fake SSH
+        banner at 1 byte per 5 seconds, wasting attacker time.
         """
         self._tarpit_active = True
         self._stats['tarpits_activated'] += 1
-        logger.info("CAMO: Tarpit activated (%dms delay per byte)", TARPIT_DELAY_MS)
-        # Phase 2: Deploy actual tarpit (e.g., endlessh for SSH)
+        logger.info("CAMO: Tarpit activated (%.1fs delay per byte)", TARPIT_DELAY_MS / 1000)
+
+        if self._tarpit is None:
+            try:
+                from .python_tarpit import PythonTarpit
+                self._tarpit = PythonTarpit(
+                    ports=[23, 445, 3389, 5900],
+                    delay_s=TARPIT_DELAY_MS / 1000.0,
+                )
+                self._tarpit.start()
+            except Exception as e:
+                logger.error("CAMO: Tarpit start failed: %s", e)
 
     def _deactivate_tarpit(self) -> None:
         """Deactivate tarpit."""
         self._tarpit_active = False
         self._tarpit_ips.clear()
+        if self._tarpit:
+            self._tarpit.stop()
+            self._tarpit = None
         logger.info("CAMO: Tarpit deactivated")
 
     # ------------------------------------------------------------------
