@@ -546,16 +546,65 @@ class SynapticController:
     # ------------------------------------------------------------------
 
     def _dispatch_loop(self) -> None:
-        """Main event dispatch loop (runs in dedicated thread)."""
-        logger.info("Synaptic dispatch loop started")
+        """Main event dispatch loop (runs in dedicated thread).
+
+        Gap 1 fix: upward routing (cognitive handlers like Multi-RAG) is
+        now dispatched to a ThreadPoolExecutor instead of being called
+        inline. Multi-RAG evaluate() takes ~189ms per call — calling it
+        synchronously blocked the entire dispatch loop, causing 86% event
+        drop rate and 100% queue fill.
+
+        Downward routing (BPF writes, blocklist) stays synchronous because
+        it's fast (<1ms) and order-sensitive.
+
+        The handler pool has max_workers=4 so up to 4 cognitive evaluations
+        run in parallel. Each handler completion decrements the tier depth
+        counter asynchronously via the done callback.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        logger.info("Synaptic dispatch loop started (async handlers, 4 workers)")
         last_bpf_flush = time.monotonic()
         last_audit_flush = time.monotonic()
 
+        # Handler pool for slow cognitive work (Multi-RAG, CognitiveDefense)
+        handler_pool = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="cno-handler",
+        )
+
+        _DOWNWARD_ROUTES = frozenset((
+            SynapticRoute.XDP_BLOCKLIST,
+            SynapticRoute.XDP_ALLOWLIST,
+            SynapticRoute.XDP_CAMOUFLAGE,
+            SynapticRoute.XDP_FLOW_CTRL,
+            SynapticRoute.BASELINE_UPDATE,
+            SynapticRoute.SCRIBE,
+        ))
+
+        def _handle_upward(event: SynapticEvent, tier: str) -> None:
+            """Called in handler_pool thread — runs the registered handler."""
+            try:
+                self.route_upward(event)
+                self._stats['events_dispatched'] += 1
+                self._tier_stats[tier]['dispatched'] += 1
+            except Exception as e:
+                logger.error("Async dispatch error for %s: %s",
+                             event.event_type, e)
+            finally:
+                with self._lock:
+                    if self._tier_queue_depth[tier] > 0:
+                        self._tier_queue_depth[tier] -= 1
+
         while self._running:
-            # Drain queue — process up to 100 events per cycle
+            # Drain queue — increased from 100 to 500 per cycle to keep
+            # up with the 6+ events/sec submission rate. The old 100/cycle
+            # at 100ms sleep = 1000/sec theoretical, but each inline
+            # handler call blocked for 189ms, reducing real throughput
+            # to ~5/sec. With async dispatch, 500/cycle is fine.
             events: List[SynapticEvent] = []
             with self._lock:
-                for _ in range(min(len(self._queue), 100)):
+                batch = min(len(self._queue), 500)
+                for _ in range(batch):
                     events.append(self._queue.popleft())
 
             # Sort by priority (lower = higher priority)
@@ -563,31 +612,21 @@ class SynapticController:
 
             for event in events:
                 tier = classify_tier(event.priority)
-                try:
-                    # Determine direction based on route
-                    if event.route in (
-                        SynapticRoute.XDP_BLOCKLIST,
-                        SynapticRoute.XDP_ALLOWLIST,
-                        SynapticRoute.XDP_CAMOUFLAGE,
-                        SynapticRoute.XDP_FLOW_CTRL,
-                        SynapticRoute.BASELINE_UPDATE,
-                        SynapticRoute.SCRIBE,
-                    ):
+                if event.route in _DOWNWARD_ROUTES:
+                    # Downward = synchronous (BPF writes are fast, order matters)
+                    try:
                         self.route_downward(event)
-                    else:
-                        self.route_upward(event)
-
-                    self._stats['events_dispatched'] += 1
-                    self._tier_stats[tier]['dispatched'] += 1
-
-                except Exception as e:
-                    logger.error("Dispatch error for %s: %s", event, e)
-                finally:
-                    # Decrement tier depth regardless of success so the
-                    # backpressure counter stays in sync with the real queue
-                    with self._lock:
-                        if self._tier_queue_depth[tier] > 0:
-                            self._tier_queue_depth[tier] -= 1
+                        self._stats['events_dispatched'] += 1
+                        self._tier_stats[tier]['dispatched'] += 1
+                    except Exception as e:
+                        logger.error("Dispatch error (down): %s", e)
+                    finally:
+                        with self._lock:
+                            if self._tier_queue_depth[tier] > 0:
+                                self._tier_queue_depth[tier] -= 1
+                else:
+                    # Upward = async via handler pool (cognitive handlers are slow)
+                    handler_pool.submit(_handle_upward, event, tier)
 
             # Periodic BPF flush
             now = time.monotonic()
