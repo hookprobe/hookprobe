@@ -102,10 +102,14 @@ TIER_CAPABILITIES = {
     'sentinel': set(),  # CNO disabled entirely
     'guardian': {'siem', 'stress', 'controller', 'bridge', 'health',
                  'session', 'aegis_bridge'},
+    # Phase 13: added 'federated' + 'fec' to fortress tier. Previously
+    # only nexus had federation, but with a single-server deployment,
+    # fortress IS the nexus. Federation runs in local-only mode when
+    # MSSP_API_URL is unset (builds local Bloom filter, no sharing).
     'fortress': {'siem', 'stress', 'controller', 'bridge', 'health',
                  'session', 'aegis_bridge', 'cognitive_defense', 'multi_rag',
                  'emotion', 'camouflage', 'sia', 'app_tracker', 'npu',
-                 'activation', 'topology'},
+                 'activation', 'topology', 'federated', 'fec'},
     'nexus': {'siem', 'stress', 'controller', 'bridge', 'health',
               'session', 'aegis_bridge', 'cognitive_defense', 'multi_rag',
               'emotion', 'camouflage', 'sia', 'app_tracker', 'npu',
