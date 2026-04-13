@@ -136,3 +136,51 @@ AS SELECT
     countState() AS transitions
 FROM hookprobe_ids.cno_stress_history
 GROUP BY window;
+
+
+-- ------------------------------------------------------------------
+-- CNO Peer Reputation — Phase 18 Mesh Trust Scoring
+-- ------------------------------------------------------------------
+-- Tracks per-peer trust scores, accuracy rates, and consistency.
+-- Inserted every sync cycle (5 min) for trend analysis.
+-- Used by the Mesh Reputation System for BFT voting decisions.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_peer_reputation
+(
+    timestamp               DateTime64(3)   DEFAULT now64(3),
+    peer_id                 String,                            -- UUID of mesh peer
+    trust_score             Float32         DEFAULT 0.5,       -- 0.0-1.0 (0.5 = neutral)
+    filters_received        UInt32          DEFAULT 0,         -- Total filters from this peer
+    accuracy_rate           Float32         DEFAULT 0.5,       -- hits / (hits + misses)
+    consistency_failures    UInt32          DEFAULT 0,         -- Times density didn't match declared count
+    silence_seconds         Int32           DEFAULT -1,        -- Seconds since last contact (-1 = never)
+
+    INDEX idx_peer_id peer_id TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_trust   trust_score TYPE minmax GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, peer_id)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
+-- Materialized View: Peer Trust Trends (hourly)
+-- ------------------------------------------------------------------
+-- Pre-aggregates peer trust for dashboard trend graphs.
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS hookprobe_ids.mv_peer_trust_hourly
+ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(window)
+ORDER BY (window, peer_id)
+TTL toDateTime(window) + INTERVAL 30 DAY
+AS SELECT
+    toStartOfHour(timestamp) AS window,
+    peer_id,
+    avgState(trust_score) AS avg_trust,
+    avgState(accuracy_rate) AS avg_accuracy,
+    maxState(filters_received) AS total_filters,
+    maxState(consistency_failures) AS total_consistency_fails
+FROM hookprobe_ids.cno_peer_reputation
+GROUP BY window, peer_id;
