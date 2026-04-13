@@ -51,6 +51,11 @@ CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
     raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
 
+# UUID format validation (compiled once at import time)
+_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE)
+
 
 class FederatedSync:
     """Orchestrates Bloom filter sharing across the mesh network.
@@ -95,7 +100,11 @@ class FederatedSync:
     # ------------------------------------------------------------------
 
     def sync_cycle(self) -> Dict[str, Any]:
-        """Execute one sync cycle: build → share → receive."""
+        """Execute one sync cycle: build → share → receive → validate → decay.
+
+        Phase 18: added post-hoc accuracy validation (step 4), silence
+        decay (step 5), and ClickHouse persistence (step 6).
+        """
         self._stats['sync_cycles'] += 1
         start = time.monotonic()
 
@@ -114,6 +123,15 @@ class FederatedSync:
         # Step 3: Receive peer filters (if available)
         received = self._receive_from_mssp() if MSSP_API_URL else 0
 
+        # Phase 18 Step 4: validate peer accuracy against local NAPSE flows
+        accuracy_checked = self._validate_peer_accuracy()
+
+        # Phase 18 Step 5: decay trust for silent peers
+        decayed = self._bloom_engine.reputation.decay_silent_peers()
+
+        # Phase 18 Step 6: persist reputation metrics to ClickHouse
+        self._persist_reputation_metrics()
+
         elapsed_ms = int((time.monotonic() - start) * 1000)
         self._last_sync = time.time()
 
@@ -121,6 +139,8 @@ class FederatedSync:
             'local_ips': ip_count,
             'shared': shared,
             'received': received,
+            'accuracy_checked': accuracy_checked,
+            'trust_decayed': decayed,
             'elapsed_ms': elapsed_ms,
         }
 
@@ -131,10 +151,12 @@ class FederatedSync:
             except Exception as e:
                 logger.error("Global update callback failed: %s", e)
 
-        if ip_count > 0 or received > 0:
+        if ip_count > 0 or received > 0 or accuracy_checked > 0:
             logger.info(
-                "FEDERATED SYNC: local_ips=%d, shared=%s, received=%d, elapsed=%dms",
-                ip_count, shared, received, elapsed_ms,
+                "FEDERATED SYNC: local_ips=%d, shared=%s, received=%d, "
+                "accuracy=%d, decayed=%d, elapsed=%dms",
+                ip_count, shared, received, accuracy_checked, decayed,
+                elapsed_ms,
             )
 
         return result
@@ -175,7 +197,10 @@ class FederatedSync:
             return False
 
     def _receive_from_mssp(self) -> int:
-        """Receive peer Bloom filters from MSSP relay."""
+        """Receive peer Bloom filters from MSSP relay.
+
+        Phase 18: passes declared_ip_count for consistency validation.
+        """
         if not MSSP_API_URL:
             return 0
 
@@ -187,9 +212,6 @@ class FederatedSync:
                 data = json.loads(resp.read().decode('utf-8'))
 
             received = 0
-            _UUID_RE = __import__('re').compile(
-                r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-                __import__('re').IGNORECASE)
             for entry in data.get('filters', []):
                 peer_id = entry.get('node_id', '')
                 # Security audit H6: validate node_id format
@@ -201,7 +223,11 @@ class FederatedSync:
                     continue  # Skip our own filter
 
                 filter_data = base64.b64decode(entry.get('data', ''))
-                if self._bloom_engine.receive_peer_filter(peer_id, filter_data):
+                # Phase 18: pass declared count for consistency check
+                declared_count = entry.get('stats', {}).get('count', 0)
+                if self._bloom_engine.receive_peer_filter(
+                        peer_id, filter_data,
+                        declared_ip_count=declared_count):
                     received += 1
                     self._stats['receive_successes'] += 1
 
@@ -212,13 +238,84 @@ class FederatedSync:
             return 0
 
     # ------------------------------------------------------------------
+    # Phase 18: Accuracy Validation & Reputation Persistence
+    # ------------------------------------------------------------------
+
+    def _validate_peer_accuracy(self) -> int:
+        """Post-hoc check: did peer-flagged IPs appear in our NAPSE flows?
+
+        Phase 18: For each peer filter, sample up to 50 IPs from our recent
+        local verdicts and check if the peer also flagged them. This measures
+        overlap (accuracy) — high overlap means the peer sees similar threats.
+        """
+        reputation = self._bloom_engine.reputation
+        peer_filters = self._bloom_engine._peer_filters
+        if not peer_filters:
+            return 0
+
+        # Get our recent local IPs from ClickHouse
+        query = (
+            f"SELECT DISTINCT src_ip "
+            f"FROM {CH_DB}.hydra_verdicts "
+            f"WHERE timestamp > now() - INTERVAL 1 HOUR "
+            f"LIMIT 50"
+        )
+        result = _ch_query(query)
+        if not result:
+            return 0
+
+        local_ips = [ip.strip() for ip in result.strip().split('\n')
+                     if ip.strip()]
+        checked = 0
+        for ip in local_ips:
+            for peer_id, peer_filter in peer_filters.items():
+                seen = peer_filter.contains(ip)
+                reputation.record_accuracy(peer_id, ip, seen)
+                checked += 1
+
+        if checked > 0:
+            logger.debug("REPUTATION: validated %d peer-IP pairs", checked)
+        return checked
+
+    def _persist_reputation_metrics(self) -> None:
+        """Persist peer reputation metrics to ClickHouse.
+
+        Phase 18: batch insert current reputation state for trend analysis.
+        """
+        metrics = self._bloom_engine.reputation.get_peer_metrics_for_ch()
+        if not metrics:
+            return
+
+        try:
+            rows = []
+            for m in metrics:
+                rows.append(
+                    f"(now64(3), '{_ch_escape(m['peer_id'])}', "
+                    f"{m['trust_score']}, {m['filters_received']}, "
+                    f"{m['accuracy_rate']}, {m['consistency_failures']}, "
+                    f"{m['silence_seconds']})"
+                )
+            if not rows:
+                return
+            values = ', '.join(rows)
+            query = (
+                f"INSERT INTO {CH_DB}.cno_peer_reputation "
+                f"(timestamp, peer_id, trust_score, filters_received, "
+                f"accuracy_rate, consistency_failures, silence_seconds) "
+                f"VALUES {values}"
+            )
+            _ch_post(query)
+        except Exception as e:
+            logger.debug("Reputation persist failed: %s", e)
+
+    # ------------------------------------------------------------------
     # Lookup API
     # ------------------------------------------------------------------
 
     def is_mesh_known_threat(self, ip: str) -> Tuple[bool, str]:
         """Check if an IP is flagged by any node in the mesh.
 
-        This enriches the Multi-RAG Consensus with federated intel.
+        Phase 18: mesh threats now require BFT consensus from 2+ trusted peers.
         """
         self._stats['mesh_lookups'] += 1
         return self._bloom_engine.is_known_threat(ip)
@@ -260,3 +357,40 @@ class FederatedSync:
             'last_sync': self._last_sync,
             'bloom': self._bloom_engine.get_stats(),
         }
+
+
+# ------------------------------------------------------------------
+# ClickHouse helpers (shared with bloom_sharing.py)
+# ------------------------------------------------------------------
+
+def _ch_query(query: str) -> Optional[str]:
+    try:
+        url = f"http://{CH_HOST}:{CH_PORT}/"
+        data = query.encode('utf-8')
+        req = Request(url, data=data)
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+        req.add_header('X-ClickHouse-Database', CH_DB)
+        with urlopen(req, timeout=10) as resp:
+            return resp.read().decode('utf-8')
+    except Exception:
+        return None
+
+
+def _ch_post(query: str) -> bool:
+    try:
+        url = f"http://{CH_HOST}:{CH_PORT}/"
+        data = query.encode('utf-8')
+        req = Request(url, data=data, method='POST')
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+        req.add_header('X-ClickHouse-Database', CH_DB)
+        with urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _ch_escape(s: str) -> str:
+    """Escape string for ClickHouse SQL (prevents injection)."""
+    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "")
