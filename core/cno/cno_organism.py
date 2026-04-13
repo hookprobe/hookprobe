@@ -891,19 +891,31 @@ class CNOOrganism:
 
         # Phase 12: Wire AEGIS Orchestrator into the CNO-AEGIS bridge.
         # The bridge was created in __init__ without an orchestrator (None).
-        # Now that all components are loaded, try to bootstrap AEGIS.
+        # Now that all components are loaded, bootstrap the full AEGIS stack:
+        #   AgentRegistry → discovers 9 agents
+        #   ToolExecutor → provides 43+ tools
+        #   AegisOrchestrator → 72 routing rules
         if self._aegis_bridge and _has('aegis_bridge'):
             try:
                 hookprobe_base = os.environ.get('HOOKPROBE_BASE',
                                                 '/home/ubuntu/hookprobe')
                 if hookprobe_base not in sys.path:
                     sys.path.insert(0, hookprobe_base)
+                from core.aegis.agents import AgentRegistry
+                from core.aegis.tool_executor import ToolExecutor
                 from core.aegis.orchestrator import AegisOrchestrator
-                orchestrator = AegisOrchestrator()
+
+                registry = AgentRegistry()
+                tool_executor = ToolExecutor()
+                orchestrator = AegisOrchestrator(
+                    registry=registry,
+                    tool_executor=tool_executor,
+                )
                 self._aegis_bridge._orchestrator = orchestrator
-                logger.info("AEGIS: Orchestrator wired into CNO bridge "
-                            "(%d routing rules)", len(orchestrator._rules)
-                            if hasattr(orchestrator, '_rules') else 0)
+                agent_names = [a.name for a in registry.agents] \
+                    if hasattr(registry, 'agents') else []
+                logger.info("AEGIS: Orchestrator wired (%d agents: %s)",
+                            len(agent_names), ', '.join(agent_names[:5]))
             except Exception as e:
                 logger.warning("AEGIS Orchestrator unavailable: %s", e)
 
