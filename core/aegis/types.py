@@ -37,16 +37,13 @@ except ImportError:
         """Lightweight pydantic BaseModel shim using dataclasses."""
         pass
 
-    class _FieldProxy:
-        def __call__(self, default=..., default_factory=None, **kwargs):
-            if default_factory:
-                return _f(default_factory=default_factory)
-            if default is not ...:
-                r = _f(default=default)
-                r._shim_default = default
-                return r
-            return _f(default=None)
-    Field = _FieldProxy()
+    def Field(default=..., default_factory=None, **kwargs):
+        """Lightweight pydantic Field shim using dataclass field()."""
+        if default_factory is not None:
+            return _f(default_factory=default_factory)
+        if default is not ...:
+            return _f(default=default)
+        return _f(default=None)
 
 
 class ChatMessage(BaseModel):
