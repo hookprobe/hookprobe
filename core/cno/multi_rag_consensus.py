@@ -706,7 +706,7 @@ class MultiRAGConsensus:
 
             # Build compact silo details (score + reasoning per silo, no full result arrays)
             silo_details = {}
-            for silo_name, silo_result in consensus.get('silo_results', {}).items():
+            for silo_name, silo_result in consensus.get('silo_details', {}).items():
                 silo_details[silo_name] = {
                     'score': round(silo_result.get('score', 0), 4),
                     'reasoning': silo_result.get('reasoning', '')[:200],
