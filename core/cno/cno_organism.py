@@ -644,6 +644,79 @@ class CNOOrganism:
             rep.get('bft_votes_failed', 0),
         )
 
+    def _on_zero_day_detected(self, candidate: Dict[str, Any]) -> None:
+        """Called by ZeroDayDetector when a novel pattern is found.
+
+        Phase 19: Routes the candidate to the organism's consciousness:
+        - Logs the detection with hypothesis
+        - Emits a 'novel_pattern' stimulus to the emotion engine
+        - Submits a COGNITIVE event to the synaptic controller
+        - Persists to ClickHouse for XAI audit trail
+        """
+        ip = candidate.get('source_ip', 'unknown')
+        novelty = candidate.get('novelty_score', 0)
+        hypothesis = candidate.get('hypothesis', '')
+
+        logger.warning(
+            "ZERO-DAY CANDIDATE: %s (novelty=%.2f, type=%s) — %s",
+            ip, novelty, candidate.get('event_type', '?'),
+            hypothesis[:200] if hypothesis else candidate.get('summary', '')[:200])
+
+        # Emotion: novel_pattern = mild arousal (VIGILANT, not FEARFUL)
+        if self._emotion:
+            self._emotion.process_stimulus(
+                'novel_pattern', intensity=min(0.3, novelty * 0.5))
+
+        # Synaptic: submit as COGNITIVE event for further analysis
+        if self._controller:
+            self._controller.submit_upward(
+                event_type='zero_day_candidate',
+                source_layer='cerebrum',
+                route='cognitive_defense',
+                priority=5,  # SOMATIC tier — important but not reflex
+                data={
+                    'source_ip': ip,
+                    'novelty_score': novelty,
+                    'summary': candidate.get('summary', ''),
+                    'hypothesis': hypothesis,
+                    'event_type': candidate.get('event_type', ''),
+                },
+            )
+
+        # Persist to ClickHouse
+        self._log_zero_day_candidate(candidate)
+
+    def _log_zero_day_candidate(self, candidate: Dict[str, Any]) -> None:
+        """Persist zero-day candidate to ClickHouse for audit trail."""
+        try:
+            from .synaptic_controller import _ch_escape, CH_DB, CH_HOST, CH_PORT
+            from .synaptic_controller import CH_USER, CH_PASSWORD
+            from urllib.request import Request, urlopen
+
+            ip = _ch_escape(candidate.get('source_ip', ''))
+            summary = _ch_escape(candidate.get('summary', '')[:500])
+            hypothesis = _ch_escape(candidate.get('hypothesis', '')[:1000])
+            event_type = _ch_escape(candidate.get('event_type', ''))
+            novelty = candidate.get('novelty_score', 0)
+            max_sim = candidate.get('max_similarity', 0)
+
+            query = (
+                f"INSERT INTO {CH_DB}.cno_zero_day_candidates "
+                f"(timestamp, source_ip, event_type, novelty_score, "
+                f"max_similarity, summary, hypothesis) VALUES "
+                f"(now64(3), '{ip}', '{event_type}', {novelty}, "
+                f"{max_sim}, '{summary}', '{hypothesis}')"
+            )
+            url = f"http://{CH_HOST}:{CH_PORT}/"
+            req = Request(url, data=query.encode('utf-8'), method='POST')
+            req.add_header('X-ClickHouse-User', CH_USER)
+            req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+            req.add_header('X-ClickHouse-Database', CH_DB)
+            with urlopen(req, timeout=5):
+                pass
+        except Exception as e:
+            logger.debug("Zero-day CH log failed: %s", e)
+
     def _on_emotion_change(self, old: EmotionState, new: EmotionState,
                            valence: float, arousal: float) -> None:
         """Called by EmotionEngine when emotional state transitions.
@@ -989,10 +1062,24 @@ class CNOOrganism:
             )
             register_orchestrator(self._kernel_orchestrator)
 
-            self._streaming_rag = StreamingRAGPipeline()
+            # Phase 19: wire zero-day detection with LLM hypothesis generation
+            llm_fn = None
+            try:
+                from core.hydra.cognitive_defense import call_openrouter
+                llm_fn = lambda sys, user: call_openrouter(
+                    prompt=user, system_prompt=sys,
+                    max_tokens=300, temperature=0.4)
+            except ImportError:
+                pass
 
-            logger.info("NEURO-KERNEL: Orchestrator + StreamingRAG wired "
-                        "(interface=dummy-mirror)")
+            self._streaming_rag = StreamingRAGPipeline(
+                on_zero_day=self._on_zero_day_detected,
+                llm_fn=llm_fn,
+            )
+
+            logger.info("NEURO-KERNEL: Orchestrator + StreamingRAG + ZeroDayDetector "
+                        "wired (interface=dummy-mirror, llm=%s)",
+                        llm_fn is not None)
         except Exception as e:
             logger.warning("NEURO-KERNEL unavailable: %s", e)
 
