@@ -576,9 +576,6 @@ class CNOOrganism:
             logger.info("RAG INVESTIGATE: %s requires human review", ip)
 
         # Phase 12: route verdicts to AEGIS agents via the bridge.
-        # The 72 routing rules in AegisOrchestrator will dispatch to
-        # GUARDIAN (for high-severity blocks), WATCHDOG (for DNS),
-        # MEDIC (for incident escalation), SCRIBE (for reporting), etc.
         if self._aegis_bridge and v in ('malicious', 'suspicious'):
             event = SynapticEvent(
                 source_layer=BrainLayer.CEREBRUM,
@@ -591,6 +588,43 @@ class CNOOrganism:
             responses = self._aegis_bridge.route_to_aegis(event)
             if responses:
                 logger.info("AEGIS: %d agent responses for %s", len(responses), ip)
+
+            # Phase 14: feed to Neuro-Kernel for eBPF template matching.
+            # KernelOrchestrator checks if the threat matches a known
+            # pattern (DDoS, port scan, DNS tunnel, etc.) and deploys
+            # a purpose-built eBPF program at NIC level.
+            if self._kernel_orchestrator:
+                try:
+                    signal = self._aegis_bridge.synaptic_to_signal(event)
+                    action = self._kernel_orchestrator.handle_signal(signal)
+                    if action:
+                        logger.info(
+                            "NEURO-KERNEL: deployed %s for %s (template=%s)",
+                            action.action_type if hasattr(action, 'action_type') else 'program',
+                            ip,
+                            action.template_name if hasattr(action, 'template_name') else 'unknown',
+                        )
+                except Exception as e:
+                    logger.debug("NEURO-KERNEL signal: %s", e)
+
+            # Phase 14: feed to StreamingRAG for real-time threat context.
+            if self._streaming_rag:
+                try:
+                    from core.aegis.neurokernel.types import SensorEvent, SensorType
+                    sensor_event = SensorEvent(
+                        sensor_type=SensorType.NAPSE_IDS,
+                        source_ip=ip,
+                        dest_ip='',
+                        event_type=f"verdict.{v}",
+                        payload={
+                            'score': verdict.get('consensus_score', 0),
+                            'action': action,
+                            'confidence': confidence,
+                        },
+                    )
+                    self._streaming_rag.ingest(sensor_event)
+                except Exception as e:
+                    logger.debug("StreamingRAG ingest: %s", e)
 
     def _on_federated_update(self, bloom_stats: Dict[str, Any]) -> None:
         """Called by FederatedSync when global threat view changes."""
@@ -918,6 +952,34 @@ class CNOOrganism:
                     logger.warning("AEGIS: Client initialized but no orchestrator")
             except Exception as e:
                 logger.warning("AEGIS unavailable: %s", e)
+
+        # Phase 14: Wire Neuro-Kernel into the CNO.
+        # KernelOrchestrator matches threat signals to eBPF templates and
+        # deploys them at kernel level. StreamingRAG ingests sensor events
+        # for real-time threat context. Shadow Pentester tests defenses.
+        self._kernel_orchestrator = None
+        self._streaming_rag = None
+        try:
+            hookprobe_base = os.environ.get('HOOKPROBE_BASE',
+                                            '/home/ubuntu/hookprobe')
+            if hookprobe_base not in sys.path:
+                sys.path.insert(0, hookprobe_base)
+            from core.aegis.neurokernel import (
+                KernelOrchestrator, register_orchestrator,
+            )
+            from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
+
+            self._kernel_orchestrator = KernelOrchestrator(
+                interface='dummy-mirror',
+            )
+            register_orchestrator(self._kernel_orchestrator)
+
+            self._streaming_rag = StreamingRAGPipeline()
+
+            logger.info("NEURO-KERNEL: Orchestrator + StreamingRAG wired "
+                        "(interface=dummy-mirror)")
+        except Exception as e:
+            logger.warning("NEURO-KERNEL unavailable: %s", e)
 
         # Start components
         self._siem.start()
