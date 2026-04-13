@@ -866,6 +866,12 @@ class CNOOrganism:
         self._init_cognitive_defense()
         self._init_sia()
 
+        # Phase 11: update bridge's SIA flag AFTER init (bridge is created
+        # in __init__ before SIA loads, so sia_active defaults to False)
+        if self._sia_engine and self._bridge:
+            self._bridge._sia_active = True
+            logger.info("BRIDGE: SIA routing enabled (entity_graph events will flow)")
+
         # Start components
         self._siem.start()
         self._stress.start()
