@@ -889,35 +889,31 @@ class CNOOrganism:
             self._bridge._sia_active = True
             logger.info("BRIDGE: SIA routing enabled (entity_graph events will flow)")
 
-        # Phase 12: Wire AEGIS Orchestrator into the CNO-AEGIS bridge.
-        # The bridge was created in __init__ without an orchestrator (None).
-        # Now that all components are loaded, bootstrap the full AEGIS stack:
-        #   AgentRegistry → discovers 9 agents
-        #   ToolExecutor → provides 43+ tools
-        #   AegisOrchestrator → 72 routing rules
+        # Phase 12: Wire AEGIS multi-agent system into the CNO.
+        # AegisClient bootstraps the full stack with graceful fallbacks:
+        #   SignalFabric → InferenceEngine → SoulConfig → Memory →
+        #   AgentRegistry (9 agents) → ToolExecutor (43 tools) →
+        #   AegisOrchestrator (72 routing rules) → Bridges → Scheduler
         if self._aegis_bridge and _has('aegis_bridge'):
             try:
                 hookprobe_base = os.environ.get('HOOKPROBE_BASE',
                                                 '/home/ubuntu/hookprobe')
                 if hookprobe_base not in sys.path:
                     sys.path.insert(0, hookprobe_base)
-                from core.aegis.agents import AgentRegistry
-                from core.aegis.tool_executor import ToolExecutor
-                from core.aegis.orchestrator import AegisOrchestrator
+                from core.aegis.client import AegisClient
 
-                registry = AgentRegistry()
-                tool_executor = ToolExecutor()
-                orchestrator = AegisOrchestrator(
-                    registry=registry,
-                    tool_executor=tool_executor,
-                )
-                self._aegis_bridge._orchestrator = orchestrator
-                agent_names = [a.name for a in registry.agents] \
-                    if hasattr(registry, 'agents') else []
-                logger.info("AEGIS: Orchestrator wired (%d agents: %s)",
-                            len(agent_names), ', '.join(agent_names[:5]))
+                aegis = AegisClient()
+                if aegis.orchestrator:
+                    self._aegis_bridge._orchestrator = aegis.orchestrator
+                    agent_count = len(aegis.registry._agents) \
+                        if aegis.registry else 0
+                    logger.info(
+                        "AEGIS: %d agents wired via AegisClient",
+                        agent_count)
+                else:
+                    logger.warning("AEGIS: Client initialized but no orchestrator")
             except Exception as e:
-                logger.warning("AEGIS Orchestrator unavailable: %s", e)
+                logger.warning("AEGIS unavailable: %s", e)
 
         # Start components
         self._siem.start()
