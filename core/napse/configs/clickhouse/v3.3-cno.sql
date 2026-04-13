@@ -184,3 +184,29 @@ AS SELECT
     maxState(consistency_failures) AS total_consistency_fails
 FROM hookprobe_ids.cno_peer_reputation
 GROUP BY window, peer_id;
+
+
+-- ------------------------------------------------------------------
+-- CNO Zero-Day Candidates — Phase 19 Novelty Detection
+-- ------------------------------------------------------------------
+-- Records patterns that don't match any known attack signature.
+-- Includes LLM-generated hypotheses for XAI audit trail.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_zero_day_candidates
+(
+    timestamp           DateTime64(3)   DEFAULT now64(3),
+    source_ip           String,
+    event_type          LowCardinality(String),     -- 'network', 'syscall', 'file', 'dns'
+    novelty_score       Float32         DEFAULT 0,  -- 0.0-1.0 (higher = more novel)
+    max_similarity      Float32         DEFAULT 0,  -- Nearest neighbor similarity
+    summary             String          DEFAULT '',  -- Natural language event summary
+    hypothesis          String          DEFAULT '',  -- LLM-generated hypothesis
+
+    INDEX idx_src_ip    source_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_novelty   novelty_score TYPE minmax GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, source_ip)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
