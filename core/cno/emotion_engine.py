@@ -175,13 +175,25 @@ class EmotionEngine:
             self._valence += intensity * 0.4
             self._arousal -= intensity * 0.25
 
+        elif stimulus_type == 'high_activity':
+            # Phase 3: sustained defense activity → healthy vigilance.
+            # The organism is actively processing threats — it should feel
+            # alert (aroused) but NOT afraid (valence stays neutral/mild-
+            # negative). This creates the VIGILANT state (|valence| < 0.3,
+            # arousal 0.3-0.6) which was previously unreachable because
+            # every stimulus was either fear-inducing or resolution-calming.
+            self._valence -= intensity * 0.08  # mild negative (we're busy)
+            self._arousal += intensity * 0.35  # moderate arousal (alert)
+
         elif stimulus_type == 'all_clear':
-            # No threats for extended period — v2 strengthened recovery.
-            # Previous +0.1/-0.15 was overwhelmed by CognitiveDefense
-            # block stimuli. Now strong enough to pull toward serene
-            # within 2-3 minutes of sustained quiet.
-            self._valence += 0.2
-            self._arousal -= 0.2
+            # Phase 3 v2: scaled down from fixed +0.2 to +0.08. The
+            # previous +0.2 per cycle overpowered ALL negative stimuli
+            # and locked the organism in permanent serenity even during
+            # 50K malicious verdicts/hour. At +0.08, all_clear still
+            # recovers to serene within ~5 minutes of quiet, but
+            # high_activity can compete during active defense.
+            self._valence += 0.08
+            self._arousal -= 0.08
 
         elif stimulus_type == 'stress_change':
             # Direct stress state mapping
