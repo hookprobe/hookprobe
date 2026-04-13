@@ -40,6 +40,7 @@ Usage:
 import os
 import re
 import json
+import threading
 import time
 import logging
 from datetime import datetime, timezone
@@ -103,6 +104,8 @@ _LLM_CACHE: Dict[str, Tuple[float, Dict]] = {}  # ip → (timestamp, result)
 _LLM_CACHE_TTL = 300  # 5 minutes
 _LLM_CALLS_THIS_MINUTE = 0
 _LLM_MINUTE_RESET = 0.0
+# Security audit H1: thread-safe rate limiter (4 handler threads race on check+increment)
+_LLM_RATE_LOCK = threading.Lock()
 
 # ============================================================================
 # OPENROUTER LLM CLIENT
@@ -126,15 +129,18 @@ def call_openrouter(prompt: str, system_prompt: str = '',
         logger.debug("OpenRouter API key not configured")
         return None
 
-    # Rate limiter: max 8 calls per minute (free tier = 16, keep headroom)
-    now = time.time()
-    if now - _LLM_MINUTE_RESET > 60:
-        _LLM_CALLS_THIS_MINUTE = 0
-        _LLM_MINUTE_RESET = now
-    if _LLM_CALLS_THIS_MINUTE >= 8:
-        logger.debug("LLM rate limit: %d calls this minute, skipping",
-                     _LLM_CALLS_THIS_MINUTE)
-        return None
+    # Security audit H1: thread-safe rate limiter. 4 handler threads can
+    # bypass the check simultaneously without the lock.
+    with _LLM_RATE_LOCK:
+        now = time.time()
+        if now - _LLM_MINUTE_RESET > 60:
+            _LLM_CALLS_THIS_MINUTE = 0
+            _LLM_MINUTE_RESET = now
+        if _LLM_CALLS_THIS_MINUTE >= 8:
+            logger.debug("LLM rate limit: %d calls this minute, skipping",
+                         _LLM_CALLS_THIS_MINUTE)
+            return None
+        _LLM_CALLS_THIS_MINUTE += 1
 
     preferred = model or OR_MODEL_REASONING
     models = [preferred]
@@ -152,8 +158,6 @@ def call_openrouter(prompt: str, system_prompt: str = '',
 
     for m in models:
         try:
-            _LLM_CALLS_THIS_MINUTE += 1
-
             payload = json.dumps({
                 'model': m,
                 'messages': messages,
