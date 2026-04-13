@@ -8,8 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 curl && rm -rf /var/lib/apt/lists/* \
     || echo "WARN: apt packages skipped (DNS unavailable)"
 
-# Phase 12: AEGIS Orchestrator depends on pydantic for signal validation
-RUN pip install --no-cache-dir pydantic 2>/dev/null || echo "WARN: pydantic install skipped"
+# Phase 12: AEGIS Orchestrator depends on pydantic for signal validation.
+# Install BEFORE apt packages so DNS failure in apt doesn't block pip
+# (pip uses its own resolver). Use --break-system-packages for slim images.
+RUN pip install --no-cache-dir --break-system-packages pydantic || \
+    pip install --no-cache-dir pydantic || \
+    echo "WARN: pydantic install failed"
 
 WORKDIR /app
 
