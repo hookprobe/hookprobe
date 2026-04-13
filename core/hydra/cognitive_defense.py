@@ -75,12 +75,16 @@ CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 # Free models rotate frequently — env overrides are the primary config.
 OR_API_KEY = os.environ.get('OPENROUTER_API_KEY', '')
 OR_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
+# Best free models as of April 2026 (sorted by capability):
+#   reasoning: Gemma 4 31B (256K context, configurable thinking mode)
+#   creative:  GPT-OSS 20B MoE (function calling, structured outputs)
+#   fast:      Nemotron Nano 9B v2 (reasoning + non-reasoning, low latency)
 OR_MODEL_REASONING = os.environ.get('OPENROUTER_MODEL_REASONING',
-                                     'google/gemma-3-27b-it:free')
+                                     'google/gemma-4-31b-it:free')
 OR_MODEL_CREATIVE = os.environ.get('OPENROUTER_MODEL_CREATIVE',
-                                    'meta-llama/llama-3.3-70b-instruct:free')
+                                    'openai/gpt-oss-20b:free')
 OR_MODEL_FAST = os.environ.get('OPENROUTER_MODEL_FAST',
-                                'google/gemma-3-4b-it:free')
+                                'nvidia/nemotron-nano-9b-v2:free')
 
 # Reflex thresholds (bypass LLM — direct XDP action)
 REFLEX_VELOCITY = float(os.environ.get('REFLEX_VELOCITY', '0.30'))  # Catastrophic
