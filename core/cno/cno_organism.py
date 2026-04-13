@@ -129,9 +129,11 @@ class HYDRABridge:
     metadata, then injects them as SynapticEvents and PacketSnapshots.
     """
 
-    def __init__(self, controller: SynapticController, siem: PacketSIEM):
+    def __init__(self, controller: SynapticController, siem: PacketSIEM,
+                 sia_active: bool = False):
         self._controller = controller
         self._siem = siem
+        self._sia_active = sia_active  # Phase 11: flag for SIA routing
         self._last_poll = time.time()
         self._stats = {
             'verdicts_bridged': 0,
@@ -233,7 +235,7 @@ class HYDRABridge:
             # attribution. SIA tracks IP→IP connections, detects phase
             # progression (RECON→LATERAL→EXFIL), and triggers sandbox
             # at BayesianScorer threshold (0.92 posterior).
-            if self._sia_engine:
+            if self._sia_active:
                 self._controller.submit_upward(
                     source_layer=BrainLayer.CEREBELLUM,
                     route=SynapticRoute.ENTITY_GRAPH,
@@ -473,7 +475,8 @@ class CNOOrganism:
         self._sia_engine = None
 
         # HYDRA bridge (always active)
-        self._bridge = HYDRABridge(self._controller, self._siem)
+        self._bridge = HYDRABridge(self._controller, self._siem,
+                                    sia_active=(self._sia_engine is not None))
 
         # Health server
         self._health_server = None
