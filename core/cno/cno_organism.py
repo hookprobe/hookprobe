@@ -203,10 +203,25 @@ class HYDRABridge:
                 route = SynapticRoute.TEMPORAL_MEMORY
                 priority = 5
 
+            # Synthesize a token narrative from verdict data so the
+            # psychology silo (Silo 3) has TTP patterns to match against.
+            # Without this, the silo always returns score=0.
+            token_parts = []
+            if score >= 0.8:
+                token_parts.append('HIGH_ENTROPY')
+            if verdict == 'malicious':
+                token_parts.append('KNOWN_BAD')
+            if action == 'block':
+                token_parts.append('FLOOD')
+            elif action == 'throttle':
+                token_parts.append('BURST')
+            token_narrative = ' '.join(token_parts)
+
             payload = {
                 'anomaly_score': score,
                 'verdict': verdict,
                 'action_taken': action,
+                'token_narrative': token_narrative,
             }
 
             self._controller.submit_upward(
@@ -219,12 +234,7 @@ class HYDRABridge:
             )
 
             # Phase 2A: ALSO submit malicious verdicts to Multi-RAG for
-            # consensus evaluation. The verdict bridge was the only active
-            # data pipeline (50 verdicts/cycle), but it routed 100% to
-            # COGNITIVE_DEFENSE or TEMPORAL_MEMORY — Multi-RAG got ZERO
-            # events despite being registered. Only the velocity bridge
-            # had a MULTI_RAG path, but ip_risk_scores data was 6 days
-            # stale, so velocity events were always 0.
+            # consensus evaluation.
             if verdict == 'malicious' and route != SynapticRoute.MULTI_RAG:
                 self._controller.submit_upward(
                     source_layer=BrainLayer.CEREBELLUM,
@@ -296,6 +306,19 @@ class HYDRABridge:
             else:
                 route = SynapticRoute.COGNITIVE_DEFENSE
                 priority = 4
+
+            # Synthesize narrative from velocity data if token_str is empty
+            if not token_str:
+                vel_parts = []
+                if abs(velocity) > REFLEX_VELOCITY:
+                    vel_parts.append('ACCELERATING')
+                if risk > 0.7:
+                    vel_parts.append('KNOWN_BAD')
+                if kill_chain in ('lateral_movement', 'exfiltration'):
+                    vel_parts.append('DRIP_FEED')
+                elif kill_chain in ('execution', 'command_control'):
+                    vel_parts.append('DNS_TUNNEL')
+                token_str = ' '.join(vel_parts)
 
             payload = {
                 'risk_velocity': velocity,
