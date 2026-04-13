@@ -1020,11 +1020,13 @@ class CNOOrganism:
         HealthHandler.organism = self
         try:
             socketserver.TCPServer.allow_reuse_address = True
-            # Security audit C5: bind to 127.0.0.1 not 0.0.0.0.
-            # /status exposes full internal state (stress, emotion, silo
-            # scores, camouflage techniques). Must not be network-accessible.
+            # Security audit C5 (updated): bind to 0.0.0.0 for dashboard access.
+            # OCI VCN security list blocks port 8900 from the internet.
+            # Only local containers (dashboard via host.containers.internal)
+            # and the host itself can reach this endpoint.
+            # Previously 127.0.0.1 which blocked the dashboard container.
             self._health_server = socketserver.TCPServer(
-                ('127.0.0.1', HEALTH_PORT), HealthHandler)
+                ('0.0.0.0', HEALTH_PORT), HealthHandler)
             self._health_thread = threading.Thread(
                 target=self._health_server.serve_forever, daemon=True,
                 name="cno-health")
