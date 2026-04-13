@@ -238,40 +238,49 @@ class EmotionEngine:
     # ------------------------------------------------------------------
 
     def _classify_emotion(self) -> EmotionState:
-        """Map (valence, arousal) + context to discrete emotion."""
+        """Map (valence, arousal) + context to discrete emotion.
+
+        Phase 3 rewrite: the previous classifier had gaps where
+        positive-valence + high-arousal or neutral-valence + extreme-
+        arousal fell through all checks to a SERENE default. This
+        meant the organism reported SERENE at arousal=1.0.
+
+        New approach: check arousal FIRST as a primary axis, then
+        refine by valence and context flags. SERENE is only possible
+        when arousal < 0.3 — otherwise the organism is activated.
+        """
         v = self._valence
         a = self._arousal
 
-        # ANGRY: negative valence, high arousal, AND we recognize the threat
-        # (we're angry because we know what it is and can fight it)
+        # ── Low arousal: SERENE (the only calm state) ──────────
+        if a < 0.3 and v > -0.2:
+            return EmotionState.SERENE
+
+        # ── High arousal (a >= 0.3): classify by valence + context ──
+
+        # ANGRY: negative valence + known threat (we can fight it)
         if v < -0.3 and a >= 0.6 and self._has_known_threat and not self._has_novel_threat:
             return EmotionState.ANGRY
 
-        # FEARFUL: very negative valence, very high arousal
-        # (novel/unknown threats, or data exfiltration detected)
+        # FEARFUL: very negative valence + very high arousal
         if v < -0.4 and a >= 0.7:
             return EmotionState.FEARFUL
         if self._data_exfil and a >= 0.5:
             return EmotionState.FEARFUL
 
-        # ANXIOUS: negative valence, moderate-high arousal
-        # (uncertain situation, reconnaissance, unknown intent)
-        if v < -0.2 and 0.4 <= a < 0.7:
+        # ANXIOUS: negative valence + moderate arousal
+        if v < -0.2 and a >= 0.4:
             return EmotionState.ANXIOUS
         if self._active_scan and a >= 0.3:
             return EmotionState.ANXIOUS
 
-        # VIGILANT: near-neutral valence, elevated arousal
-        # (something is happening, but not clearly threatening).
-        # Phase 3 fix: extended from a<0.6 to a>=0.3. The previous
-        # cap at 0.6 meant neutral-valence + high-arousal (the
-        # high_activity stimulus) fell through all classifications
-        # to the SERENE default. VIGILANT is the correct state for
-        # "organism is alert and processing" without fear or anger.
-        if abs(v) < 0.3 and a >= 0.3:
+        # VIGILANT: everything else with elevated arousal.
+        # This covers: neutral/positive valence + any arousal >= 0.3.
+        # The organism is alert and processing but not threatened.
+        if a >= 0.3:
             return EmotionState.VIGILANT
 
-        # SERENE: positive valence, low arousal (all is well)
+        # Fallback (low arousal + mildly negative valence)
         return EmotionState.SERENE
 
     def evaluate(self) -> Tuple[EmotionState, float, float]:
