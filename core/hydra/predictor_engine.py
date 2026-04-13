@@ -980,6 +980,18 @@ def main():
             try:
                 velocity_results = risk_engine.compute_velocities()
                 velocity_count = len(velocity_results)
+
+                # Gap 3 fix: persist velocity scores to ip_risk_scores.
+                # compute_velocities() computes and returns results but
+                # _write_risk_scores() was NEVER called — the table was
+                # stale since April 6 because velocities were computed,
+                # passed to CognitiveDefense, but never written to CH.
+                if velocity_results:
+                    from datetime import datetime, timezone
+                    now_ts = datetime.now(timezone.utc).strftime(
+                        '%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    risk_engine._write_risk_scores(velocity_results, now_ts)
+
                 rag_contexts = risk_engine.flash_rag_lookback(velocity_results)
                 rag_count = len(rag_contexts)
 
