@@ -47,6 +47,162 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
+class LLMCodeGenerator:
+    """Phase 20: Generate eBPF programs from natural-language threat descriptions.
+
+    Uses the LLM to translate attack descriptions into compilable XDP C code.
+    The generated code goes through the same safety pipeline as templates:
+    static analysis → kernel verifier → sandbox → deploy.
+
+    Safety invariants:
+    1. Prompt constrains the LLM to safe eBPF patterns only
+    2. Static analysis catches banned patterns in generated code
+    3. Kernel verifier catches memory safety issues
+    4. Rate limit: max 2 generated deploys per hour (conservative)
+    5. Rollback: 300s auto-rollback if no improvement
+    """
+
+    MAX_GENERATED_PER_HOUR = 2
+    GENERATION_TIMEOUT_S = 30
+
+    # System prompt for eBPF code generation
+    SYSTEM_PROMPT = (
+        "You are an eBPF/XDP security engineer. Generate a SINGLE XDP program "
+        "in C that mitigates the described network attack.\n\n"
+        "CONSTRAINTS (MUST follow all):\n"
+        "- Use BCC-style macros: BPF_HASH, BPF_ARRAY, BPF_PERCPU_ARRAY\n"
+        "- Include ONLY: <uapi/linux/bpf.h>, <linux/if_ether.h>, <linux/ip.h>, "
+        "<linux/tcp.h>, <linux/udp.h>\n"
+        "- Entry function signature: int xdp_filter(struct xdp_md *ctx)\n"
+        "- Return XDP_PASS for allowed traffic, XDP_DROP for blocked traffic\n"
+        "- ALWAYS bounds-check data pointers: if ((void *)(hdr + 1) > data_end) return XDP_PASS;\n"
+        "- Use rate limiting per source IP (BPF_HASH with u32 key = ip->saddr)\n"
+        "- NEVER use: bpf_probe_write_user, bpf_override_return, system(), exec(), "
+        "asm volatile, popen(), fork(), dlopen()\n"
+        "- Maximum 100 lines of C code\n"
+        "- Default to XDP_PASS for any packet you don't understand\n\n"
+        "Output ONLY the C code in a ```c code block. No explanations."
+    )
+
+    # Example template included in prompt for few-shot learning
+    EXAMPLE_TEMPLATE = (
+        "EXAMPLE — SYN flood rate limiter:\n"
+        "```c\n"
+        "#include <uapi/linux/bpf.h>\n"
+        "#include <linux/if_ether.h>\n"
+        "#include <linux/ip.h>\n"
+        "#include <linux/tcp.h>\n"
+        "BPF_HASH(pkt_count, u32, u64, 65536);\n"
+        "BPF_HASH(pkt_window, u32, u64, 65536);\n"
+        "#define RATE_LIMIT 100\n"
+        "#define WINDOW_NS 1000000000ULL\n"
+        "int xdp_filter(struct xdp_md *ctx) {\n"
+        "    void *data = (void *)(long)ctx->data;\n"
+        "    void *data_end = (void *)(long)ctx->data_end;\n"
+        "    struct ethhdr *eth = data;\n"
+        "    if ((void *)(eth + 1) > data_end) return XDP_PASS;\n"
+        "    if (eth->h_proto != __constant_htons(ETH_P_IP)) return XDP_PASS;\n"
+        "    struct iphdr *ip = (void *)(eth + 1);\n"
+        "    if ((void *)(ip + 1) > data_end) return XDP_PASS;\n"
+        "    // ... rate limit by ip->saddr ...\n"
+        "    return XDP_PASS;\n"
+        "}\n"
+        "```\n"
+    )
+
+    def __init__(
+        self,
+        compiler: EBPFCompiler,
+        llm_fn: Optional[callable] = None,
+    ):
+        self._compiler = compiler
+        self._llm_fn = llm_fn
+        self._generation_timestamps: List[float] = []
+        self._lock = threading.Lock()
+        self._stats = {
+            'attempts': 0,
+            'successes': 0,
+            'compile_failures': 0,
+            'llm_failures': 0,
+            'rate_limited': 0,
+        }
+
+    def can_generate(self) -> bool:
+        """Check if generation rate limit allows another attempt."""
+        now = time.time()
+        with self._lock:
+            self._generation_timestamps = [
+                t for t in self._generation_timestamps if now - t < 3600.0
+            ]
+            return len(self._generation_timestamps) < self.MAX_GENERATED_PER_HOUR
+
+    def generate(self, threat_description: str,
+                 rag_context: str = "") -> Optional[str]:
+        """Generate eBPF C code from a threat description.
+
+        Args:
+            threat_description: Natural-language description of the attack.
+            rag_context: Optional RAG context from recent kernel events.
+
+        Returns:
+            Extracted C source code, or None on failure.
+        """
+        if not self._llm_fn:
+            logger.debug("LLM function not configured — cannot generate")
+            return None
+
+        if not self.can_generate():
+            self._stats['rate_limited'] += 1
+            logger.warning("LLM code generation rate limit exceeded (max %d/hr)",
+                           self.MAX_GENERATED_PER_HOUR)
+            return None
+
+        self._stats['attempts'] += 1
+
+        # Build the user prompt
+        user_prompt = f"THREAT DESCRIPTION:\n{threat_description}\n"
+        if rag_context:
+            user_prompt += f"\nRECENT CONTEXT:\n{rag_context}\n"
+        user_prompt += f"\n{self.EXAMPLE_TEMPLATE}\n"
+        user_prompt += "Generate a single XDP program to mitigate this threat."
+
+        try:
+            llm_output = self._llm_fn(self.SYSTEM_PROMPT, user_prompt)
+            if not llm_output:
+                self._stats['llm_failures'] += 1
+                return None
+
+            # Extract code from LLM output
+            code = self._compiler.extract_code(llm_output)
+            if not code:
+                self._stats['llm_failures'] += 1
+                logger.warning("LLM output contained no extractable C code")
+                return None
+
+            # Record successful generation
+            with self._lock:
+                self._generation_timestamps.append(time.time())
+
+            self._stats['successes'] += 1
+            logger.info("LLM generated %d chars of eBPF code", len(code))
+            return code
+
+        except Exception as e:
+            self._stats['llm_failures'] += 1
+            logger.error("LLM code generation failed: %s", e)
+            return None
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            **self._stats,
+            'pending_capacity': (
+                self.MAX_GENERATED_PER_HOUR
+                - len([t for t in self._generation_timestamps
+                       if time.time() - t < 3600.0])
+            ),
+        }
+
+
 class KernelOrchestrator:
     """Closed-loop: signal → template match → verify → deploy.
 
@@ -70,6 +226,7 @@ class KernelOrchestrator:
         sensors: Optional[SensorManager] = None,
         templates: Optional[TemplateRegistry] = None,
         rag_pipeline: Optional[StreamingRAGPipeline] = None,
+        llm_fn: Optional[callable] = None,
     ):
         self._interface = interface
         self._compiler = compiler or EBPFCompiler()
@@ -77,6 +234,10 @@ class KernelOrchestrator:
         self._sensors = sensors or SensorManager()
         self._templates = templates or TemplateRegistry()
         self._rag_pipeline = rag_pipeline
+
+        # Phase 20: LLM code generator for novel threats
+        self._code_generator = LLMCodeGenerator(
+            compiler=self._compiler, llm_fn=llm_fn)
 
         self._lock = threading.Lock()
         self._deploy_timestamps: List[float] = []
@@ -89,9 +250,10 @@ class KernelOrchestrator:
     def handle_signal(self, signal: StandardSignal) -> Optional[KernelAction]:
         """Process a signal that may require kernel-level response.
 
-        Decision tree (Phase 1):
-        1. Is this a known pattern? → Use template eBPF
-        2. No match? → Return None (let other AEGIS agents handle)
+        Decision tree:
+        1. Is this a known pattern? → Use template eBPF (Phase 1)
+        2. No template match? → Try LLM code generation (Phase 20)
+        3. No LLM available? → Return None (let other AEGIS agents handle)
 
         Args:
             signal: Normalized signal from any bridge.
@@ -99,29 +261,156 @@ class KernelOrchestrator:
         Returns:
             KernelAction if a program was deployed, None otherwise.
         """
-        # Step 1: Check template registry
+        # Step 1: Check template registry (Phase 1 — fast path)
         match = self._templates.match(signal)
-        if not match:
+        if match:
+            logger.info(
+                "Template match: %s (confidence=%.2f) for signal %s/%s",
+                match.template_name, match.confidence,
+                signal.source, signal.event_type,
+            )
+
+            # Rate limit check
+            if not self._check_rate_limit():
+                logger.warning("Deploy rate limit exceeded — skipping %s",
+                               match.template_name)
+                return None
+
+            # Duplicate check
+            if self._is_duplicate(match):
+                logger.debug("Template %s already deployed — skipping",
+                             match.template_name)
+                return None
+
+            return self._deploy_template(match, signal)
+
+        # Step 2: Phase 20 — No template match, try LLM code generation
+        return self.handle_novel_threat(signal)
+
+    def handle_novel_threat(
+        self, signal: StandardSignal,
+        threat_description: str = "",
+    ) -> Optional[KernelAction]:
+        """Phase 20: Generate and deploy eBPF for a novel (non-template) threat.
+
+        Pipeline: LLM generate → extract → compile → verify → sandbox → deploy
+
+        Safety layers:
+        1. Rate limit: max 2 generated programs per hour
+        2. Static analysis: banned patterns, helper whitelist
+        3. Kernel verifier: memory safety, bounds checks
+        4. Sandbox: compilation verification
+        5. Auto-rollback: 300s timeout if no improvement
+
+        Args:
+            signal: The signal that triggered this (for context + logging).
+            threat_description: Optional override; defaults to signal data.
+
+        Returns:
+            KernelAction with DEPLOY_GENERATED type, or None on failure.
+        """
+        if not self._code_generator._llm_fn:
             return None
 
-        logger.info(
-            "Template match: %s (confidence=%.2f) for signal %s/%s",
-            match.template_name, match.confidence,
-            signal.source, signal.event_type,
+        if not self._check_rate_limit():
+            logger.warning("Deploy rate limit exceeded — skipping novel threat")
+            return None
+
+        # Build threat description from signal if not provided
+        if not threat_description:
+            threat_description = (
+                f"Attack type: {signal.event_type}\n"
+                f"Source: {signal.source}\n"
+                f"Severity: {signal.severity}\n"
+            )
+            if signal.data:
+                ip = signal.data.get('source_ip', '')
+                if ip:
+                    threat_description += f"Source IP: {ip}\n"
+                summary = signal.data.get('summary', '')
+                if summary:
+                    threat_description += f"Summary: {summary}\n"
+
+        # Build RAG context
+        rag_context = self.build_llm_context(signal)
+
+        # Generate code via LLM
+        logger.info("PHASE 20: Generating eBPF for novel threat: %s/%s",
+                     signal.source, signal.event_type)
+        c_source = self._code_generator.generate(threat_description, rag_context)
+        if not c_source:
+            self._log_action_dict(
+                "generate_failed", "llm_generated",
+                f"LLM code generation failed for {signal.event_type}")
+            return None
+
+        # Compile and verify (same pipeline as templates)
+        compilation = self._compiler.compile_and_verify(
+            c_source, ProgramType.XDP)
+        if not compilation.success:
+            self._code_generator._stats['compile_failures'] += 1
+            self._log_action_dict(
+                "generate_compile_failed", "llm_generated",
+                f"Generated code failed compilation: {compilation.error}")
+            logger.warning("PHASE 20: Generated code failed compilation: %s",
+                           compilation.error)
+            return None
+
+        # Sandbox test
+        sandbox_result = self._sandbox.test(
+            compilation, duration_s=self.SANDBOX_DURATION_S)
+        if not sandbox_result.passed:
+            self._log_action_dict(
+                "generate_sandbox_failed", "llm_generated",
+                f"Generated code failed sandbox: {sandbox_result.reason}")
+            return None
+
+        # Deploy
+        program_id = self._generate_program_id("llm_generated", signal)
+        now = time.time()
+        active = ActiveProgram(
+            program_id=program_id,
+            program_type=ProgramType.XDP,
+            attach_point=self._interface,
+            template_name="llm_generated",
+            deployed_at=now,
+            rollback_deadline=now + self.ROLLBACK_TIMEOUT_S,
+            c_source=c_source,
+            signal_source=f"{signal.source}/{signal.event_type}",
         )
 
-        # Step 2: Rate limit check
-        if not self._check_rate_limit():
-            logger.warning("Deploy rate limit exceeded — skipping %s", match.template_name)
+        if not self._sensors.deploy(active):
+            logger.warning("Sensor manager rejected generated program deployment")
             return None
 
-        # Step 3: Duplicate check
-        if self._is_duplicate(match):
-            logger.debug("Template %s already deployed — skipping", match.template_name)
-            return None
+        action = KernelAction(
+            action_type=KernelActionType.DEPLOY_GENERATED,
+            program_id=program_id,
+            program_type=ProgramType.XDP,
+            attach_point=self._interface,
+            template_name="llm_generated",
+            target_ip=signal.data.get("source_ip", "") if signal.data else "",
+            compilation=compilation,
+            sandbox=sandbox_result,
+            rollback_timeout_s=self.ROLLBACK_TIMEOUT_S,
+            metadata={
+                "signal_source": signal.source,
+                "signal_event": signal.event_type,
+                "signal_severity": signal.severity,
+                "threat_description": threat_description[:500],
+                "generated_code_length": len(c_source),
+                "phase": "20_self_evolving",
+            },
+        )
 
-        # Step 4: Deploy the template
-        return self._deploy_template(match, signal)
+        self._log_action(action, "Phase 20: Deployed LLM-generated program")
+        logger.info(
+            "PHASE 20: Deployed LLM-generated XDP program %s on %s "
+            "(rollback in %ds, %d chars)",
+            program_id, self._interface,
+            self.ROLLBACK_TIMEOUT_S, len(c_source),
+        )
+        return action
 
     def rollback(self, program_id: str) -> Optional[KernelAction]:
         """Rollback a deployed program.
@@ -172,6 +461,8 @@ class KernelOrchestrator:
             "template_count": len(self._templates),
             "recent_actions": self._decision_log[-10:],
             "interface": self._interface,
+            # Phase 20: LLM code generation stats
+            "code_generator": self._code_generator.get_stats(),
         }
         if self._rag_pipeline:
             status["streaming_rag"] = self._rag_pipeline.stats()

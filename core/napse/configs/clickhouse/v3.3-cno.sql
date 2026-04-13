@@ -210,3 +210,33 @@ PARTITION BY toYYYYMM(timestamp)
 ORDER BY (timestamp, source_ip)
 TTL toDateTime(timestamp) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
+-- CNO Generated Programs — Phase 20 Self-Evolving XDP
+-- ------------------------------------------------------------------
+-- Records LLM-generated eBPF programs deployed by the Kernel Orchestrator.
+-- Includes the generated C source, compilation status, and deployment outcome.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_generated_programs
+(
+    timestamp           DateTime64(3)   DEFAULT now64(3),
+    program_id          String,
+    signal_source       String          DEFAULT '',     -- What triggered generation
+    signal_event        String          DEFAULT '',
+    threat_description  String          DEFAULT '',     -- Input to LLM
+    code_length         UInt32          DEFAULT 0,      -- Generated C source length
+    compilation_status  LowCardinality(String) DEFAULT 'unknown',
+    sandbox_status      LowCardinality(String) DEFAULT 'unknown',
+    deployed            Bool            DEFAULT false,
+    rollback_at         Nullable(DateTime64(3)),
+    source_ip           String          DEFAULT '',
+
+    INDEX idx_program_id program_id TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_deployed   deployed TYPE set(2) GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, program_id)
+TTL toDateTime(timestamp) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;

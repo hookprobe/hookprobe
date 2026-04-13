@@ -683,6 +683,30 @@ class CNOOrganism:
                 },
             )
 
+        # Phase 20: For high-novelty candidates, attempt self-evolving XDP
+        if novelty >= 0.75 and self._kernel_orchestrator:
+            try:
+                from ..aegis.types import StandardSignal
+                signal = StandardSignal(
+                    source='zero_day_detector',
+                    event_type=candidate.get('event_type', 'novel_pattern'),
+                    severity='HIGH',
+                    data={
+                        'source_ip': ip,
+                        'summary': candidate.get('summary', ''),
+                        'hypothesis': hypothesis,
+                    },
+                )
+                action = self._kernel_orchestrator.handle_novel_threat(
+                    signal, threat_description=hypothesis or
+                    candidate.get('summary', ''))
+                if action:
+                    logger.info(
+                        "PHASE 20: Self-evolving XDP deployed for %s (%s)",
+                        ip, action.program_id)
+            except Exception as e:
+                logger.debug("Phase 20 code generation: %s", e)
+
         # Persist to ClickHouse
         self._log_zero_day_candidate(candidate)
 
@@ -1057,12 +1081,7 @@ class CNOOrganism:
             )
             from core.aegis.neurokernel.streaming_rag import StreamingRAGPipeline
 
-            self._kernel_orchestrator = KernelOrchestrator(
-                interface='dummy-mirror',
-            )
-            register_orchestrator(self._kernel_orchestrator)
-
-            # Phase 19: wire zero-day detection with LLM hypothesis generation
+            # Phase 19/20: wire LLM for both hypothesis generation and code gen
             llm_fn = None
             try:
                 from core.hydra.cognitive_defense import call_openrouter
@@ -1072,14 +1091,22 @@ class CNOOrganism:
             except ImportError:
                 pass
 
+            # Phase 20: pass LLM to orchestrator for self-evolving XDP programs
+            self._kernel_orchestrator = KernelOrchestrator(
+                interface='dummy-mirror',
+                llm_fn=llm_fn,
+            )
+            register_orchestrator(self._kernel_orchestrator)
+
             self._streaming_rag = StreamingRAGPipeline(
                 on_zero_day=self._on_zero_day_detected,
                 llm_fn=llm_fn,
             )
 
-            logger.info("NEURO-KERNEL: Orchestrator + StreamingRAG + ZeroDayDetector "
-                        "wired (interface=dummy-mirror, llm=%s)",
-                        llm_fn is not None)
+            logger.info(
+                "NEURO-KERNEL: Orchestrator + StreamingRAG + ZeroDayDetector "
+                "+ LLMCodeGenerator wired (interface=dummy-mirror, llm=%s)",
+                llm_fn is not None)
         except Exception as e:
             logger.warning("NEURO-KERNEL unavailable: %s", e)
 
