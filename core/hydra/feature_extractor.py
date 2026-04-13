@@ -670,30 +670,27 @@ def extract_verdict_features(window_seconds: int) -> Dict[str, dict]:
     but no sustained flows (e.g., short-burst scanners, SYN probes).
     This fills the gap where flow-driven extraction misses ephemeral connections.
     """
-    # Find IPs with recent verdicts that DON'T have recent feature vectors
-    # Use LEFT ANTI JOIN (ClickHouse doesn't support NOT IN with alias in HAVING)
-    query = f"""
-        SELECT
-            IPv4NumToString(v.src_ip) AS ip,
-            count() AS verdict_count,
-            avg(v.anomaly_score) AS avg_score,
-            countIf(v.verdict = 'malicious') AS malicious_count,
-            countIf(v.verdict = 'suspicious') AS suspicious_count,
-            countIf(v.verdict = 'benign') AS benign_count,
-            uniq(v.action_taken) AS unique_actions,
-            max(v.anomaly_score) AS max_score
-        FROM {CH_DB}.hydra_verdicts v
-        LEFT ANTI JOIN (
-            SELECT DISTINCT src_ip
-            FROM {CH_DB}.hydra_ip_features
-            WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
-        ) f ON v.src_ip = f.src_ip
-        WHERE v.timestamp >= now() - INTERVAL {window_seconds} SECOND
-        GROUP BY v.src_ip
-        ORDER BY verdict_count DESC
-        LIMIT 50
-        FORMAT JSONEachRow
-    """
+    # Find IPs with recent verdicts that DON'T have recent feature vectors.
+    # Fixed: LEFT ANTI JOIN causes HTTP 400 on some ClickHouse versions
+    # when sent via URL-encoded HTTP query. Use NOT IN subquery instead.
+    query = (
+        f"SELECT IPv4NumToString(src_ip) AS ip, "
+        f"count() AS verdict_count, "
+        f"avg(anomaly_score) AS avg_score, "
+        f"countIf(verdict = 'malicious') AS malicious_count, "
+        f"countIf(verdict = 'suspicious') AS suspicious_count, "
+        f"countIf(verdict = 'benign') AS benign_count, "
+        f"uniq(action_taken) AS unique_actions, "
+        f"max(anomaly_score) AS max_score "
+        f"FROM {CH_DB}.hydra_verdicts "
+        f"WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND "
+        f"AND src_ip NOT IN ("
+        f"  SELECT DISTINCT src_ip FROM {CH_DB}.hydra_ip_features "
+        f"  WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND"
+        f") "
+        f"GROUP BY src_ip "
+        f"ORDER BY verdict_count DESC LIMIT 50"
+    )
 
     result = ch_query(query)
     features = {}
