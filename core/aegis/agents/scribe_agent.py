@@ -59,6 +59,16 @@ class ScribeAgent(BaseAgent):
 
     confidence_threshold = 0.5  # Lower threshold — content is always reviewed
 
+    def respond_to_signal(self, signal: StandardSignal,
+                          context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+        """BaseAgent abstract method — delegate to respond()."""
+        return self.respond(signal=signal, context=context)
+
+    def respond_to_query(self, query: str,
+                         context: Optional[Dict[str, Any]] = None) -> AgentResponse:
+        """BaseAgent abstract method — delegate to respond()."""
+        return self.respond(query=query, context=context)
+
     def respond(
         self,
         signal: Optional[StandardSignal] = None,
