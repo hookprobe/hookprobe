@@ -229,6 +229,20 @@ class HYDRABridge:
                     payload=payload,
                 )
 
+            # Phase 11: feed ALL verdicts to Entity Graph for SIA kill-chain
+            # attribution. SIA tracks IP→IP connections, detects phase
+            # progression (RECON→LATERAL→EXFIL), and triggers sandbox
+            # at BayesianScorer threshold (0.92 posterior).
+            if self._sia_engine:
+                self._controller.submit_upward(
+                    source_layer=BrainLayer.CEREBELLUM,
+                    route=SynapticRoute.ENTITY_GRAPH,
+                    event_type=f"hydra.verdict.sia",
+                    priority=5,  # P1 somatic — SIA needs all traffic
+                    source_ip=src_ip,
+                    payload=payload,
+                )
+
             count += 1
 
         self._stats['verdicts_bridged'] += count
@@ -723,12 +737,29 @@ class CNOOrganism:
                         event.payload.get('verdict', 'n/a'))
 
         def _handle_entity_graph(event: SynapticEvent):
-            """Route to SIA Engine for kill chain attribution."""
+            """Route to SIA Engine for kill chain attribution.
+
+            Phase 11: improved from silent call to full logging. The SIA
+            engine tracks IP behavioral progression through MITRE ATT&CK
+            kill chain phases. When BayesianScorer posterior crosses 0.92,
+            the signal callback triggers sandbox/isolation.
+            """
             if self._sia_engine and event.source_ip:
                 try:
-                    self._sia_engine.process_entity(event.source_ip)
+                    result = self._sia_engine.process_entity(event.source_ip)
+                    if result:
+                        phase = getattr(result, 'current_phase', None)
+                        conf = getattr(result, 'current_confidence', 0)
+                        risk = getattr(result, 'risk_score', 0)
+                        if phase and conf > 0.3:
+                            logger.info(
+                                "SIA: %s → phase=%s conf=%.2f risk=%.2f",
+                                event.source_ip,
+                                phase.name if hasattr(phase, 'name') else str(phase),
+                                conf, risk,
+                            )
                 except Exception as e:
-                    logger.error("SIA process_entity error: %s", e)
+                    logger.debug("SIA process_entity: %s", e)
             else:
                 logger.debug("CEREBRUM[entity_graph]: %s from %s",
                              event.event_type, event.source_ip)
