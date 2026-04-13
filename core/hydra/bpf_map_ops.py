@@ -211,6 +211,20 @@ class BpfMapOps:
         finally:
             os.close(fd)
 
+    def map_update_by_name(self, map_name: str, key: bytes, value: bytes,
+                           flags: int = BPF_ANY) -> bool:
+        """Update a BPF map entry by map name (convenience wrapper).
+
+        Phase 6: added for CNO SynapticController which knows map names
+        (blocklist, allowlist, stress_level, camo_config) but not IDs.
+        Resolves name → ID via find_map_by_name(), then calls map_update().
+        """
+        map_id = self.find_map_by_name(map_name)
+        if map_id is None:
+            logger.warning("BPF map not found: %s", map_name)
+            return False
+        return self.map_update(map_id, key, value, flags)
+
     def map_lookup(self, map_id: int, key: bytes, value_size: int) -> Optional[bytes]:
         """Lookup a single entry in a BPF map.
 
