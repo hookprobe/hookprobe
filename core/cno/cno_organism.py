@@ -571,6 +571,23 @@ class CNOOrganism:
             # Log for analyst review — no automatic block for investigate
             logger.info("RAG INVESTIGATE: %s requires human review", ip)
 
+        # Phase 12: route verdicts to AEGIS agents via the bridge.
+        # The 72 routing rules in AegisOrchestrator will dispatch to
+        # GUARDIAN (for high-severity blocks), WATCHDOG (for DNS),
+        # MEDIC (for incident escalation), SCRIBE (for reporting), etc.
+        if self._aegis_bridge and v in ('malicious', 'suspicious'):
+            event = SynapticEvent(
+                source_layer=BrainLayer.CEREBRUM,
+                route=SynapticRoute.COGNITIVE_DEFENSE,
+                event_type=f"hydra.verdict.{v}",
+                priority=2 if v == 'malicious' else 5,
+                source_ip=ip,
+                payload=verdict,
+            )
+            responses = self._aegis_bridge.route_to_aegis(event)
+            if responses:
+                logger.info("AEGIS: %d agent responses for %s", len(responses), ip)
+
     def _on_federated_update(self, bloom_stats: Dict[str, Any]) -> None:
         """Called by FederatedSync when global threat view changes."""
         logger.info("FEDERATED: global view updated — %d peers, density=%.3f",
@@ -871,6 +888,24 @@ class CNOOrganism:
         if self._sia_engine and self._bridge:
             self._bridge._sia_active = True
             logger.info("BRIDGE: SIA routing enabled (entity_graph events will flow)")
+
+        # Phase 12: Wire AEGIS Orchestrator into the CNO-AEGIS bridge.
+        # The bridge was created in __init__ without an orchestrator (None).
+        # Now that all components are loaded, try to bootstrap AEGIS.
+        if self._aegis_bridge and _has('aegis_bridge'):
+            try:
+                hookprobe_base = os.environ.get('HOOKPROBE_BASE',
+                                                '/home/ubuntu/hookprobe')
+                if hookprobe_base not in sys.path:
+                    sys.path.insert(0, hookprobe_base)
+                from core.aegis.orchestrator import AegisOrchestrator
+                orchestrator = AegisOrchestrator()
+                self._aegis_bridge._orchestrator = orchestrator
+                logger.info("AEGIS: Orchestrator wired into CNO bridge "
+                            "(%d routing rules)", len(orchestrator._rules)
+                            if hasattr(orchestrator, '_rules') else 0)
+            except Exception as e:
+                logger.warning("AEGIS Orchestrator unavailable: %s", e)
 
         # Start components
         self._siem.start()
