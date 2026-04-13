@@ -70,14 +70,17 @@ CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
 # OpenRouter configuration
+# Phase 10: Updated model defaults to working free-tier models (April 2026).
+# Previous defaults (deepseek-r1t2-chimera, nemotron-3-nano) returned 404.
+# Free models rotate frequently — env overrides are the primary config.
 OR_API_KEY = os.environ.get('OPENROUTER_API_KEY', '')
 OR_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
 OR_MODEL_REASONING = os.environ.get('OPENROUTER_MODEL_REASONING',
-                                     'tngtech/deepseek-r1t2-chimera:free')
+                                     'google/gemma-3-27b-it:free')
 OR_MODEL_CREATIVE = os.environ.get('OPENROUTER_MODEL_CREATIVE',
-                                    'arcee-ai/trinity-large-preview:free')
+                                    'meta-llama/llama-3.3-70b-instruct:free')
 OR_MODEL_FAST = os.environ.get('OPENROUTER_MODEL_FAST',
-                                'nvidia/nemotron-3-nano-30b-a3b:free')
+                                'google/gemma-3-4b-it:free')
 
 # Reflex thresholds (bypass LLM — direct XDP action)
 REFLEX_VELOCITY = float(os.environ.get('REFLEX_VELOCITY', '0.30'))  # Catastrophic
@@ -87,9 +90,15 @@ REFLEX_SCORE = float(os.environ.get('REFLEX_SCORE', '0.95'))        # Near-certa
 REASON_VELOCITY = float(os.environ.get('REASON_VELOCITY', '0.10'))  # Elevated risk
 REASON_SCORE = float(os.environ.get('REASON_SCORE', '0.70'))        # Suspicious
 
-# LLM rate limiting
-MAX_LLM_CALLS_PER_CYCLE = int(os.environ.get('MAX_LLM_CALLS', '5'))
-LLM_TIMEOUT = int(os.environ.get('LLM_TIMEOUT', '30'))
+# LLM rate limiting — free tier is 16 req/min. Cap at 8 to leave headroom.
+MAX_LLM_CALLS_PER_CYCLE = int(os.environ.get('MAX_LLM_CALLS', '3'))
+LLM_TIMEOUT = int(os.environ.get('LLM_TIMEOUT', '20'))
+
+# Phase 10: LLM response cache — avoid re-analyzing the same IP within 5 min
+_LLM_CACHE: Dict[str, Tuple[float, Dict]] = {}  # ip → (timestamp, result)
+_LLM_CACHE_TTL = 300  # 5 minutes
+_LLM_CALLS_THIS_MINUTE = 0
+_LLM_MINUTE_RESET = 0.0
 
 # ============================================================================
 # OPENROUTER LLM CLIENT
@@ -98,13 +107,29 @@ LLM_TIMEOUT = int(os.environ.get('LLM_TIMEOUT', '30'))
 def call_openrouter(prompt: str, system_prompt: str = '',
                     max_tokens: int = 500, temperature: float = 0.3,
                     model: str = '') -> Optional[str]:
-    """Call OpenRouter API with multi-model failover.
+    """Call OpenRouter API with multi-model failover + rate limiting.
+
+    Phase 10: Added per-minute rate limiter (8 req/min for free tier
+    which allows 16). Also uses IP-level response caching so the same
+    IP isn't re-analyzed within 5 minutes.
 
     Tries: preferred model → reasoning → creative → fast
     Returns LLM response text or None on failure.
     """
+    global _LLM_CALLS_THIS_MINUTE, _LLM_MINUTE_RESET
+
     if not OR_API_KEY:
         logger.debug("OpenRouter API key not configured")
+        return None
+
+    # Rate limiter: max 8 calls per minute (free tier = 16, keep headroom)
+    now = time.time()
+    if now - _LLM_MINUTE_RESET > 60:
+        _LLM_CALLS_THIS_MINUTE = 0
+        _LLM_MINUTE_RESET = now
+    if _LLM_CALLS_THIS_MINUTE >= 8:
+        logger.debug("LLM rate limit: %d calls this minute, skipping",
+                     _LLM_CALLS_THIS_MINUTE)
         return None
 
     preferred = model or OR_MODEL_REASONING
@@ -123,6 +148,8 @@ def call_openrouter(prompt: str, system_prompt: str = '',
 
     for m in models:
         try:
+            _LLM_CALLS_THIS_MINUTE += 1
+
             payload = json.dumps({
                 'model': m,
                 'messages': messages,
@@ -140,19 +167,40 @@ def call_openrouter(prompt: str, system_prompt: str = '',
                 data = json.loads(resp.read().decode('utf-8'))
                 content = data.get('choices', [{}])[0].get('message', {}).get('content')
                 if content:
-                    logger.debug(f"OpenRouter [{m}]: {len(content)} chars")
+                    logger.info("OpenRouter [%s]: %d chars (call %d/min)",
+                                m, len(content), _LLM_CALLS_THIS_MINUTE)
                     return content
 
         except HTTPError as e:
             if e.code == 429:
+                logger.debug("OpenRouter [%s]: 429 rate limited", m)
                 continue  # Rate limited — try next model
-            logger.debug(f"OpenRouter [{m}] HTTP {e.code}: {e}")
+            logger.debug("OpenRouter [%s] HTTP %d", m, e.code)
             continue
         except Exception as e:
-            logger.debug(f"OpenRouter [{m}] error: {e}")
+            logger.debug("OpenRouter [%s] error: %s", m, e)
             continue
 
     return None
+
+
+def get_cached_llm_result(ip: str) -> Optional[Dict]:
+    """Return cached LLM result for an IP if still fresh."""
+    entry = _LLM_CACHE.get(ip)
+    if entry and (time.time() - entry[0]) < _LLM_CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def cache_llm_result(ip: str, result: Dict) -> None:
+    """Cache an LLM result for an IP."""
+    _LLM_CACHE[ip] = (time.time(), result)
+    # Evict old entries every 100 caches
+    if len(_LLM_CACHE) > 500:
+        cutoff = time.time() - _LLM_CACHE_TTL
+        stale = [k for k, (t, _) in _LLM_CACHE.items() if t < cutoff]
+        for k in stale:
+            del _LLM_CACHE[k]
 
 
 # ============================================================================
@@ -888,17 +936,28 @@ class CognitiveDefenseLoop:
             # ---- PHASE 2: REASONING ----
             if (velocity > REASON_VELOCITY or score > REASON_SCORE) \
                     and llm_calls_this_cycle < MAX_LLM_CALLS_PER_CYCLE:
+                # Phase 10: check IP cache before calling LLM
+                cached = get_cached_llm_result(ip)
+                if cached:
+                    actions.append(cached)
+                    logger.info(
+                        "REASONING (cached): %s on %s",
+                        cached['action'], ip)
+                    continue
+
                 rag = rag_by_ip.get(ip)
                 reason_action = self.reasoning.analyze(
                     ip, velocity, score, token, rag
                 )
                 if reason_action:
                     actions.append(reason_action)
+                    cache_llm_result(ip, reason_action)  # Phase 10: cache result
                     llm_calls_this_cycle += 1
                     logger.info(
-                        f"REASONING: {reason_action['action']} on {ip} "
-                        f"(confidence={reason_action['confidence']:.2f}, "
-                        f"reason={reason_action.get('reasoning', '')[:80]})"
+                        "REASONING: %s on %s (confidence=%.2f, reason=%s)",
+                        reason_action['action'], ip,
+                        reason_action['confidence'],
+                        reason_action.get('reasoning', '')[:80]
                     )
 
         # ---- PHASE 3: NEUROPLASTICITY ----
