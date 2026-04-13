@@ -187,8 +187,16 @@ class FederatedSync:
                 data = json.loads(resp.read().decode('utf-8'))
 
             received = 0
+            _UUID_RE = __import__('re').compile(
+                r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+                __import__('re').IGNORECASE)
             for entry in data.get('filters', []):
                 peer_id = entry.get('node_id', '')
+                # Security audit H6: validate node_id format
+                if not peer_id or not _UUID_RE.match(peer_id):
+                    logger.warning("Rejecting filter with invalid node_id: %r",
+                                   str(peer_id)[:64])
+                    continue
                 if peer_id == NODE_ID:
                     continue  # Skip our own filter
 
