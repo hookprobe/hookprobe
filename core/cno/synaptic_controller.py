@@ -165,6 +165,9 @@ class SynapticController:
     BPF_BATCH_INTERVAL_S = 1.0         # Batch BPF writes every 1s
     AUDIT_FLUSH_INTERVAL_S = 30.0      # Flush audit log every 30s
     MAX_BPF_WRITES_PER_BATCH = 50      # Rate limit BPF operations
+    # Phase 17: blocklist capacity management
+    MAX_BLOCKLIST_SIZE = 65_536         # Match BPF LPM_TRIE max_entries
+    BLOCKLIST_EVICT_INTERVAL_S = 300   # Check every 5 min
 
     def __init__(self):
         # Event queue (priority-sorted: lower number = higher priority)
@@ -208,6 +211,16 @@ class SynapticController:
 
         self._running = False
         self._threads: List[threading.Thread] = []
+
+        # Phase 17: blocklist TTL tracking for dedup + auto-eviction
+        self._blocklist_ttl: Dict[str, float] = {}  # ip → expire_timestamp
+        self._blocklist_lock = threading.Lock()
+        self._last_evict_time = 0.0
+        self._blocklist_stats = {
+            'dedup_hits': 0,
+            'evictions': 0,
+            'pressure_evictions': 0,
+        }
 
         logger.info("SynapticController initialized with tier backpressure")
 
@@ -313,7 +326,9 @@ class SynapticController:
                           reason: str = "") -> bool:
         """Queue an IP for XDP blocklist insertion.
 
-        Validates the IP and rejects private/reserved addresses.
+        Phase 17: dedup + TTL tracking + memory pressure eviction.
+        Skips if IP is already blocked and not expired.
+        Auto-evicts oldest entries when blocklist approaches max size.
         """
         if not _IPV4_RE.match(ip):
             logger.warning("Invalid IP for blocklist: %r", ip)
@@ -323,6 +338,19 @@ class SynapticController:
             logger.warning("Refusing to block reserved IP: %s", ip)
             return False
 
+        now = time.time()
+
+        with self._blocklist_lock:
+            # Dedup: skip if already blocked and not expired
+            if ip in self._blocklist_ttl:
+                if self._blocklist_ttl[ip] > now:
+                    self._blocklist_stats['dedup_hits'] += 1
+                    return True  # Already blocked, not expired
+
+            # Memory pressure: evict oldest entries if at capacity
+            if len(self._blocklist_ttl) >= self.MAX_BLOCKLIST_SIZE:
+                self._pressure_evict_oldest(self.MAX_BLOCKLIST_SIZE // 10)
+
         # Pack for LPM_TRIE: prefixlen (u32 LE) + addr (network byte order)
         try:
             key = struct.pack('<I', 32) + socket.inet_aton(ip)
@@ -330,6 +358,9 @@ class SynapticController:
         except (ValueError, struct.error) as e:
             logger.error("Failed to pack IP %s: %s", ip, e)
             return False
+
+        with self._blocklist_lock:
+            self._blocklist_ttl[ip] = now + ttl_seconds
 
         self.queue_bpf_write(BPFMapWrite(
             map_name='blocklist',
@@ -339,6 +370,78 @@ class SynapticController:
             reason=reason,
         ))
         return True
+
+    def _evict_expired_blocklist(self) -> int:
+        """Remove expired IPs from the XDP blocklist.
+
+        Phase 17: called periodically from the dispatch loop.
+        Deletes expired entries from both the tracking dict and the
+        BPF LPM_TRIE map (kernel 6.17 supports LPM_TRIE delete).
+        """
+        now = time.time()
+        with self._blocklist_lock:
+            expired = [ip for ip, exp in self._blocklist_ttl.items()
+                       if exp <= now]
+        evicted = 0
+
+        for ip in expired:
+            self._delete_from_blocklist(ip)
+            evicted += 1
+
+        if evicted > 0:
+            self._blocklist_stats['evictions'] += evicted
+            with self._blocklist_lock:
+                active = len(self._blocklist_ttl)
+            logger.info("BLOCKLIST: evicted %d expired IPs (%d active)",
+                        evicted, active)
+        return evicted
+
+    def _pressure_evict_oldest(self, count: int) -> int:
+        """Evict the oldest N entries under memory pressure.
+
+        Phase 17: called when blocklist hits MAX_BLOCKLIST_SIZE.
+        Sorts by expiry time and removes the soonest-to-expire entries.
+        Must be called with _blocklist_lock held.
+        """
+        if not self._blocklist_ttl:
+            return 0
+        # Sort by expiry time (ascending) — evict soonest-to-expire first
+        oldest = sorted(self._blocklist_ttl.items(), key=lambda x: x[1])
+        to_evict = [ip for ip, _ in oldest[:count]]
+        evicted = 0
+
+        for ip in to_evict:
+            del self._blocklist_ttl[ip]
+            # BPF delete happens outside lock to avoid holding it too long
+            evicted += 1
+
+        self._blocklist_stats['pressure_evictions'] += evicted
+        logger.warning("BLOCKLIST: pressure-evicted %d oldest entries "
+                       "(%d active, max %d)",
+                       evicted, len(self._blocklist_ttl),
+                       self.MAX_BLOCKLIST_SIZE)
+        return evicted
+
+    def _delete_from_blocklist(self, ip: str) -> bool:
+        """Delete a single IP from the BPF blocklist map and tracking dict.
+
+        Phase 17: uses bpf_map_ops.map_delete() for real kernel eviction.
+        Kernel 6.17 supports BPF_MAP_DELETE_ELEM on LPM_TRIE maps.
+        """
+        try:
+            key = struct.pack('<I', 32) + socket.inet_aton(ip)
+            if _BPF_AVAILABLE and _bpf_ops:
+                map_id = _bpf_ops.find_map_by_name('blocklist')
+                if map_id is not None:
+                    _bpf_ops.map_delete(map_id, key)
+            with self._blocklist_lock:
+                self._blocklist_ttl.pop(ip, None)
+            return True
+        except Exception as e:
+            logger.debug("Blocklist delete error for %s: %s", ip, e)
+            with self._blocklist_lock:
+                self._blocklist_ttl.pop(ip, None)
+            return False
 
     def update_stress_level(self, state: StressState) -> None:
         """Push stress state to the BPF stress_level map.
@@ -644,6 +747,11 @@ class SynapticController:
                 self._flush_audit()
                 last_audit_flush = now
 
+            # Phase 17: periodic blocklist eviction (every 5 min)
+            if now - self._last_evict_time >= self.BLOCKLIST_EVICT_INTERVAL_S:
+                self._evict_expired_blocklist()
+                self._last_evict_time = now
+
             # Sleep if no events (avoid busy-wait)
             if not events:
                 time.sleep(self.DISPATCH_INTERVAL_S)
@@ -744,6 +852,15 @@ class SynapticController:
                 },
                 'admit_fraction': TIER_ADMIT_FRACTION,
                 'max_queue': self.MAX_QUEUE_SIZE,
+            },
+            # Phase 17: blocklist capacity management stats
+            'blocklist': {
+                'active': len(self._blocklist_ttl),
+                'max': self.MAX_BLOCKLIST_SIZE,
+                'utilization_pct': round(
+                    len(self._blocklist_ttl) * 100 / self.MAX_BLOCKLIST_SIZE, 1
+                ),
+                **self._blocklist_stats,
             },
         }
 
