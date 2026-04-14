@@ -595,11 +595,22 @@ class CNOOrganism:
                 self._emotion.process_stimulus('all_clear', 0.05, verdict)
 
         # Route action to Brainstem
+        # Phase 21: honor metacognitive router's ttl_override_s for QUARANTINE
         if action == 'block' and ip:
             self._controller.push_to_blocklist(
                 ip=ip, ttl_seconds=3600,
                 reason=f"Multi-RAG consensus: {v} (confidence={confidence:.2f})",
             )
+        elif action == 'quarantine' and ip:
+            # Phase 21: soft-block with short TTL; verdict is provisional
+            ttl = int(verdict.get('ttl_override_s', 1800))
+            meta_reason = verdict.get('meta_reason', 'provisional')
+            self._controller.push_to_blocklist(
+                ip=ip, ttl_seconds=ttl,
+                reason=f"PROVISIONAL:{meta_reason}:{v}(conf={confidence:.2f})",
+            )
+            logger.info("META QUARANTINE: %s for %ds (reason=%s)",
+                         ip, ttl, meta_reason)
         elif action == 'investigate' and ip:
             # Log for analyst review — no automatic block for investigate
             logger.info("RAG INVESTIGATE: %s requires human review", ip)
