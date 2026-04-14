@@ -70,12 +70,12 @@ struct process_info {
 /* eBPF Maps */
 BPF_HASH(process_table, __u32, struct process_info, PROCESS_TABLE_SIZE);
 BPF_HASH(kill_list, __u32, __u8, 4096);  /* PIDs flagged for kill by userspace */
-BPF_ARRAY(pt_stats, __u64, 4);
+BPF_PERCPU_ARRAY(pt_stats, __u64, 4);
 BPF_RINGBUF_OUTPUT(process_events, RINGBUF_SIZE);
 
 static __always_inline void pt_inc_stat(__u32 idx) {
     __u64 *val = pt_stats.lookup(&idx);
-    if (val) __sync_fetch_and_add(val, 1);
+    if (val) (*val)++;  /* per-CPU */
 }
 
 /* Check if comm is a shell */

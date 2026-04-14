@@ -98,13 +98,17 @@ struct lpm_key {
     __u32 addr;
 };
 
-/* Per-source IP SYN rate tracker */
+/* Per-source IP SYN rate tracker
+ * Phase 27b: 64-byte aligned. syn_count is HOT (atomic +1 every SYN);
+ * last_reset is COLD (read once per window). Padding prevents adjacent
+ * map entries from sharing a cache line. */
 struct syn_rate {
-    __u64 syn_count;
-    __u64 last_reset;
-};
+    __u64 syn_count;        /* HOT */
+    __u64 last_reset;       /* COLD */
+    __u64 _pad[6];          /* pad to 64 bytes */
+} __attribute__((aligned(64)));
 
-/* Connection tracking entry */
+/* Connection tracking entry — key is read-only; alignment not critical */
 struct conn_key {
     __u32 src_ip;
     __u32 dst_ip;
@@ -114,12 +118,13 @@ struct conn_key {
     __u8  pad[3];
 };
 
+/* Phase 27b: conn_val hot fields ordered first; aligned to half-cache-line */
 struct conn_val {
-    __u8  state;
+    __u32 packets;          /* HOT — incremented every packet */
+    __u64 last_seen;        /* HOT — updated every packet */
+    __u8  state;            /* WARM — read every packet, written rarely */
     __u8  pad[3];
-    __u32 packets;
-    __u64 last_seen;
-};
+} __attribute__((aligned(32)));
 
 /* RINGBUF event */
 struct synwall_event {
@@ -133,7 +138,7 @@ struct synwall_event {
     __u8  reason;
     __u8  tcp_flags;
     __u32 syn_rate_pps;
-};
+} __attribute__((aligned(32)));
 
 /* ========================================================================
  * BPF MAPS
