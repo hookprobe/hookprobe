@@ -193,19 +193,24 @@ struct {
     __type(value, __u8);   /* feed source ID */
 } blocklist SEC(".maps");
 
-/* Per-source IP state tracking */
+/* Per-source IP state tracking
+ * Phase 27f: PERCPU_HASH eliminates atomic CAS on packets/bytes increments.
+ * Each CPU has its own copy of rate_info; aggregation in userspace.
+ * Note: PERCPU_HASH max_entries is per-CPU, so total memory grows with
+ * ncpu — keep entries reasonable. 65536 × 4 CPUs × 64B = 16 MB. */
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 524288);  /* 500K unique IPs */
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 65536);   /* 64K unique IPs (per CPU) */
     __type(key, __u32);           /* Source IPv4 address */
     __type(value, struct rate_info);
 } ip_state SEC(".maps");
 
 /* Per-source IP IAT state (inter-arrival time tracking).
- * Read by feature_extractor.py for ML feature extraction. */
+ * Phase 27f: also PERCPU_HASH. Histogram updates no longer contend.
+ * Read by feature_extractor.py via bpf_map_lookup_percpu_elem. */
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);  /* 64K unique IPs */
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 16384);  /* 16K unique IPs (per CPU) */
     __type(key, __u32);          /* Source IPv4 address */
     __type(value, struct iat_state);
 } iat_map SEC(".maps");
@@ -269,9 +274,10 @@ struct {
 } port_stats SEC(".maps");
 
 /* Per-source IP packet rate (legacy, kept for existing exporter) */
+/* Phase 27f: legacy rate map → also PERCPU. Userspace exporter aggregates. */
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 16384);
     __type(key, __u32);
     __type(value, struct rate_info);
 } src_ip_rate SEC(".maps");
@@ -412,10 +418,10 @@ static __always_inline void update_iat(__u32 src_ip)
         if (state->last_arrival_ns > 0 && now > state->last_arrival_ns) {
             __u64 iat_ns = now - state->last_arrival_ns;
 
-            /* Update histogram */
+            /* Update histogram. Phase 27f: per-CPU map → no atomic. */
             __u32 bucket = iat_to_bucket(iat_ns);
             if (bucket < IAT_BUCKETS)
-                __sync_fetch_and_add(&state->histogram[bucket], 1);
+                state->histogram[bucket]++;
 
             /* Update aggregate stats */
             state->count++;
@@ -460,8 +466,10 @@ static __always_inline __u64 update_rate(__u32 src_ip, __u64 pkt_len)
             new_info.last_update = now;
             bpf_map_update_elem(&ip_state, &src_ip, &new_info, BPF_ANY);
         } else {
-            __sync_fetch_and_add(&info->packets, 1);
-            __sync_fetch_and_add(&info->bytes, pkt_len);
+            /* Phase 27f: per-CPU map → no atomic needed.
+             * Each CPU has its own slot; userspace aggregates on read. */
+            info->packets++;
+            info->bytes += pkt_len;
             pps = info->packets;
         }
     } else {
@@ -479,8 +487,9 @@ static __always_inline __u64 update_rate(__u32 src_ip, __u64 pkt_len)
             struct rate_info li = { .packets = 1, .bytes = pkt_len, .last_update = now };
             bpf_map_update_elem(&src_ip_rate, &src_ip, &li, BPF_ANY);
         } else {
-            __sync_fetch_and_add(&legacy->packets, 1);
-            __sync_fetch_and_add(&legacy->bytes, pkt_len);
+            /* Phase 27f: per-CPU map → no atomic */
+            legacy->packets++;
+            legacy->bytes += pkt_len;
         }
     } else {
         struct rate_info li = { .packets = 1, .bytes = pkt_len, .last_update = now };

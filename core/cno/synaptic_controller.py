@@ -765,7 +765,14 @@ class SynapticController:
                 for _ in range(batch):
                     events.append(self._queue.popleft())
 
-            # Sort by priority (lower = higher priority)
+            # Sort by priority (lower = higher priority).
+            # NOTE: Phase 27d shipped a Zig radix sort .so (35x faster
+            # at the C boundary: 2µs vs 70µs for N=500), but ctypes
+            # marshaling overhead (Python attribute access + buffer
+            # alloc per call) costs ~245µs — net 3x SLOWER than this
+            # Python sort. Native path is kept available in core/cno/native/
+            # for future use when SynapticEvent is restructured to be
+            # ctypes-compatible (no per-call attribute marshaling).
             events.sort(key=lambda e: e.priority)
 
             for event in events:

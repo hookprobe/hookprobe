@@ -16,19 +16,27 @@ ifeq ($(ARCH),aarch64)
   CFLAGS += -march=armv8-a
 endif
 
-SRCS := popcount.c
-TARGET := libpopcount.so
+.PHONY: all clean test popcount xsk sort
 
-.PHONY: all clean test
+all: popcount xsk sort
 
-all: $(TARGET)
-
-$(TARGET): $(SRCS)
+popcount: libpopcount.so
+libpopcount.so: popcount.c
 	$(CC) $(CFLAGS) -shared -o $@ $<
-	@echo "Built $(TARGET) ($(ARCH))"
+	@echo "Built libpopcount.so ($(ARCH))"
+
+xsk: libxsk_consumer.so
+libxsk_consumer.so: xsk_consumer.c
+	$(CC) $(CFLAGS) -shared -o $@ $< -lxdp -lbpf -lelf -lz
+	@echo "Built libxsk_consumer.so ($(ARCH))"
+
+sort: libsynaptic_sort.so
+libsynaptic_sort.so: synaptic_sort.zig
+	zig build-lib synaptic_sort.zig -O ReleaseFast -dynamic -fPIC -fno-stack-check
+	@echo "Built libsynaptic_sort.so ($(ARCH))"
 
 clean:
-	rm -f $(TARGET)
+	rm -f libpopcount.so libxsk_consumer.so libsynaptic_sort.so libsynaptic_sort.so.o
 
 test: $(TARGET)
 	@python3 -c "import ctypes; \
