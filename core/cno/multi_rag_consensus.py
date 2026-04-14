@@ -408,6 +408,51 @@ class AttackerPsychologySilo(RAGSilo):
             'severity': 0.4,
             'description': 'Chaotic timing pattern (botnet indicator)',
         },
+        # L98: tokens emitted by SessionAnalyzer + AppTracker that previously
+        # had no TTP_PATTERNS entry, so the psychology silo returned score=0
+        # for lateral movement, C2 beacons, and data exfiltration events.
+        'LATERAL_MOVEMENT': {
+            'tactic': 'Lateral Movement',
+            'technique': 'T1021 - Remote Services',
+            'severity': 0.75,
+            'description': 'Lateral movement across internal network',
+        },
+        'SMB_LATERAL': {
+            'tactic': 'Lateral Movement',
+            'technique': 'T1021.002 - SMB/Windows Admin Shares',
+            'severity': 0.80,
+            'description': 'Lateral movement via SMB',
+        },
+        'RDP_LATERAL': {
+            'tactic': 'Lateral Movement',
+            'technique': 'T1021.001 - Remote Desktop Protocol',
+            'severity': 0.80,
+            'description': 'Lateral movement via RDP',
+        },
+        'C2_BEACON': {
+            'tactic': 'Command and Control',
+            'technique': 'T1071 - Application Layer Protocol',
+            'severity': 0.85,
+            'description': 'C2 beacon pattern detected',
+        },
+        'DATA_EXFILTRATION': {
+            'tactic': 'Exfiltration',
+            'technique': 'T1041 - Exfiltration Over C2 Channel',
+            'severity': 0.85,
+            'description': 'Large outbound transfer to known-bad or novel peer',
+        },
+        'CONNECTION_FLOOD': {  # alias for FLOOD in SessionAnalyzer output
+            'tactic': 'Impact',
+            'technique': 'T1498 - Network Denial of Service',
+            'severity': 0.6,
+            'description': 'Connection flood (potential L4 DDoS)',
+        },
+        'PORT_SCAN': {  # alias for SCAN_SWEEP in session output
+            'tactic': 'Reconnaissance',
+            'technique': 'T1595 - Active Scanning',
+            'severity': 0.4,
+            'description': 'Port scan activity',
+        },
     }
 
     def __init__(self):
