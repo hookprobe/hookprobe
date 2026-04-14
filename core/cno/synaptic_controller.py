@@ -322,13 +322,31 @@ class SynapticController:
         with self._bpf_lock:
             self._bpf_queue.append(write)
 
+    # Phase 26c: eviction class hierarchy. Higher numbers = more protected.
+    EVICTION_CLASS_PROVISIONAL = 0   # Phase 21 quarantine, evict first
+    EVICTION_CLASS_NORMAL = 1        # Default single-source verdict
+    EVICTION_CLASS_PROTECTED = 2     # Mesh-voted (2+ peers) or high-rate confirmed
+
     def push_to_blocklist(self, ip: str, ttl_seconds: int = 3600,
-                          reason: str = "") -> bool:
+                          reason: str = "",
+                          eviction_class: int = EVICTION_CLASS_NORMAL) -> bool:
         """Queue an IP for XDP blocklist insertion.
 
         Phase 17: dedup + TTL tracking + memory pressure eviction.
-        Skips if IP is already blocked and not expired.
-        Auto-evicts oldest entries when blocklist approaches max size.
+        Phase 26c: eviction class — PROTECTED entries (mesh-voted or
+        high-rate confirmed) survive pressure eviction; PROVISIONAL
+        (quarantine) and NORMAL evict first under attack.
+
+        This mitigates the /16 flood attack: attacker floods 70K fake IPs
+        as singletons → all NORMAL/PROVISIONAL → evicted first → real
+        PROTECTED C2 block survives.
+
+        Args:
+            ip: IPv4 address to block
+            ttl_seconds: time-to-live in seconds
+            reason: human-readable reason (also used to infer class
+                    if the prefix is "PROVISIONAL:" — Phase 21 quarantine)
+            eviction_class: PROVISIONAL (0) | NORMAL (1) | PROTECTED (2)
         """
         if not _IPV4_RE.match(ip):
             logger.warning("Invalid IP for blocklist: %r", ip)
@@ -338,29 +356,43 @@ class SynapticController:
             logger.warning("Refusing to block reserved IP: %s", ip)
             return False
 
+        # Auto-classify from reason prefix (Phase 21 integration)
+        if reason.startswith("PROVISIONAL:"):
+            eviction_class = self.EVICTION_CLASS_PROVISIONAL
+        elif "mesh consensus" in reason.lower() or "bft" in reason.lower():
+            eviction_class = self.EVICTION_CLASS_PROTECTED
+
         now = time.time()
 
         with self._blocklist_lock:
             # Dedup: skip if already blocked and not expired
             if ip in self._blocklist_ttl:
-                if self._blocklist_ttl[ip] > now:
+                existing = self._blocklist_ttl[ip]
+                if existing['expiry'] > now:
+                    # Upgrade class if new reason is more protected
+                    if eviction_class > existing.get('class', 1):
+                        existing['class'] = eviction_class
                     self._blocklist_stats['dedup_hits'] += 1
-                    return True  # Already blocked, not expired
+                    return True
 
-            # Memory pressure: evict oldest entries if at capacity
+            # Memory pressure: evict CLASS-AWARE if at capacity
             if len(self._blocklist_ttl) >= self.MAX_BLOCKLIST_SIZE:
                 self._pressure_evict_oldest(self.MAX_BLOCKLIST_SIZE // 10)
 
         # Pack for LPM_TRIE: prefixlen (u32 LE) + addr (network byte order)
         try:
             key = struct.pack('<I', 32) + socket.inet_aton(ip)
-            value = struct.pack('<I', 1)  # 1 = blocked
+            value = struct.pack('<I', 1)
         except (ValueError, struct.error) as e:
             logger.error("Failed to pack IP %s: %s", ip, e)
             return False
 
         with self._blocklist_lock:
-            self._blocklist_ttl[ip] = now + ttl_seconds
+            self._blocklist_ttl[ip] = {
+                'expiry': now + ttl_seconds,
+                'class': eviction_class,
+                'inserted': now,
+            }
 
         self.queue_bpf_write(BPFMapWrite(
             map_name='blocklist',
@@ -380,8 +412,11 @@ class SynapticController:
         """
         now = time.time()
         with self._blocklist_lock:
-            expired = [ip for ip, exp in self._blocklist_ttl.items()
-                       if exp <= now]
+            # Phase 26c: entries are now dicts {expiry, class, inserted}
+            expired = [
+                ip for ip, meta in self._blocklist_ttl.items()
+                if (meta['expiry'] if isinstance(meta, dict) else meta) <= now
+            ]
         evicted = 0
 
         for ip in expired:
@@ -397,29 +432,44 @@ class SynapticController:
         return evicted
 
     def _pressure_evict_oldest(self, count: int) -> int:
-        """Evict the oldest N entries under memory pressure.
+        """Evict entries under memory pressure — CLASS-AWARE (Phase 26c).
 
-        Phase 17: called when blocklist hits MAX_BLOCKLIST_SIZE.
-        Sorts by expiry time and removes the soonest-to-expire entries.
+        Sort key: (eviction_class ASC, expiry ASC). PROVISIONAL evicts first,
+        then NORMAL, then PROTECTED. Within each class, soonest-to-expire
+        evicts first. This mitigates the /16 flood attack where attacker
+        floods 70K singleton fake-malicious IPs to evict real C2 blocks.
+
         Must be called with _blocklist_lock held.
         """
         if not self._blocklist_ttl:
             return 0
-        # Sort by expiry time (ascending) — evict soonest-to-expire first
-        oldest = sorted(self._blocklist_ttl.items(), key=lambda x: x[1])
+
+        def _sort_key(item):
+            ip, meta = item
+            if isinstance(meta, dict):
+                return (meta.get('class', 1), meta['expiry'])
+            # Backward-compat with old tuple format
+            return (1, meta)
+
+        oldest = sorted(self._blocklist_ttl.items(), key=_sort_key)
         to_evict = [ip for ip, _ in oldest[:count]]
         evicted = 0
 
+        # Track per-class eviction counts for visibility
+        class_evicts = {0: 0, 1: 0, 2: 0}
         for ip in to_evict:
+            meta = self._blocklist_ttl.get(ip)
+            cls = meta.get('class', 1) if isinstance(meta, dict) else 1
+            class_evicts[cls] = class_evicts.get(cls, 0) + 1
             del self._blocklist_ttl[ip]
-            # BPF delete happens outside lock to avoid holding it too long
             evicted += 1
 
         self._blocklist_stats['pressure_evictions'] += evicted
-        logger.warning("BLOCKLIST: pressure-evicted %d oldest entries "
-                       "(%d active, max %d)",
-                       evicted, len(self._blocklist_ttl),
-                       self.MAX_BLOCKLIST_SIZE)
+        logger.warning(
+            "BLOCKLIST: pressure-evicted %d entries "
+            "(provisional=%d normal=%d protected=%d, %d active, max %d)",
+            evicted, class_evicts[0], class_evicts[1], class_evicts[2],
+            len(self._blocklist_ttl), self.MAX_BLOCKLIST_SIZE)
         return evicted
 
     def _delete_from_blocklist(self, ip: str) -> bool:
