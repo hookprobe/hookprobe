@@ -162,10 +162,12 @@ struct {
     __type(value, __u8);
 } sw_blocklist SEC(".maps");
 
-/* Per-source IP SYN rate tracking */
+/* Per-source IP SYN rate tracking
+ * Phase 27f: PERCPU eliminates atomic CAS on syn_count increment.
+ * SYN floods are exactly the workload where atomic contention hurts most. */
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 131072);  /* 128K unique sources */
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __uint(max_entries, 32768);  /* 32K unique sources per CPU */
     __type(key, __u32);
     __type(value, struct syn_rate);
 } syn_rate_map SEC(".maps");
@@ -327,7 +329,8 @@ static __always_inline __u32 check_syn_rate(__u32 src_ip)
             bpf_map_update_elem(&syn_rate_map, &src_ip, &new_rate, BPF_ANY);
             return prev_rate;
         } else {
-            __sync_fetch_and_add(&rate->syn_count, 1);
+            /* Phase 27f: per-CPU map → no atomic */
+            rate->syn_count++;
             return (__u32)rate->syn_count;
         }
     } else {
