@@ -476,17 +476,46 @@ class CNOOrganism:
         except ImportError:
             pass
 
+        # Phase 23: Predictive coder + outcome observer
+        self._predictive_coder = None
+        self._outcome_observer = None
+        try:
+            from .predictive_coder import PredictiveCoder
+            from .outcome_observer import OutcomeObserver
+            from . import multi_rag_consensus as _mrc
+            # Instantiate predictive coder with refs to consensus module
+            psych_silo = None
+            # Psychology silo reference is obtained AFTER multi_rag is created
+            # (see below — we populate it right after _multi_rag init)
+            self._predictive_coder = PredictiveCoder(
+                consensus_module=_mrc,
+                psychology_silo=None)  # populated after _multi_rag init
+            self._outcome_observer = OutcomeObserver(
+                emotion_engine=None)  # wired after _emotion init
+            logger.info("Predictive coder + outcome observer enabled (Phase 23)")
+        except ImportError:
+            pass
+
         # === Tier-gated components ===
         self._multi_rag = (
             MultiRAGConsensus(on_verdict=self._on_rag_verdict_with_episode,
                               npu_bridge=NPUBridge() if _has('npu') else None)
             if _has('multi_rag') else None
         )
+        # Phase 23: plug psychology silo reference into predictive coder
+        if self._predictive_coder and self._multi_rag:
+            for silo in self._multi_rag._silos:
+                if silo.name == 'attacker_psychology':
+                    self._predictive_coder._psych_silo = silo
+                    break
         self._npu = NPUBridge() if _has('npu') else None
         self._emotion = (
             EmotionEngine(on_emotion_change=self._on_emotion_change)
             if _has('emotion') else None
         )
+        # Phase 23: plug emotion reference into outcome observer
+        if self._outcome_observer and self._emotion:
+            self._outcome_observer._emotion = self._emotion
         self._camouflage = (
             AdaptiveCamouflage(bpf_write_callback=self._controller.queue_bpf_write)
             if _has('camouflage') else None
@@ -619,14 +648,23 @@ class CNOOrganism:
             return 0.0
 
     def _on_episode_closed(self, episode: Dict[str, Any]) -> None:
-        """Phase 22 callback: episode resolved with outcome."""
+        """Phase 22 callback: episode resolved with outcome.
+
+        Phase 23: feeds the closed episode to predictive coder so it
+        can drift silo weights + TTP severities.
+        """
         logger.info(
-            "CNO learned: %s outcome=%s err=%.3f (Phase 23 will drift weights)",
+            "CNO learned: %s outcome=%s err=%.3f",
             episode.get('src_ip', '?'),
             episode.get('final_outcome', '?'),
             episode.get('prediction_error', 0))
-        # Phase 23 predictive coder will consume this via its own callback
-        # registration in a later phase. For now, just log.
+
+        # Phase 23: delta-rule update on consensus parameters
+        if self._predictive_coder:
+            try:
+                self._predictive_coder.on_episode_closed(episode)
+            except Exception as e:
+                logger.debug("Predictive coder error: %s", e)
 
     def _on_rag_verdict(self, verdict: Dict[str, Any]) -> None:
         """Called by MultiRAGConsensus when a consensus verdict is reached.
@@ -1329,6 +1367,14 @@ class CNOOrganism:
                                         closed)
                     except Exception as e:
                         logger.debug("Episode reconcile error: %s", e)
+
+                # Phase 23a: observe outcomes of recent blocks (every 10 min)
+                if (self._outcome_observer
+                        and session_cycle_count % EPISODE_RECONCILE_EVERY == 0):
+                    try:
+                        self._outcome_observer.observe_recent_blocks()
+                    except Exception as e:
+                        logger.debug("Outcome observer error: %s", e)
 
                 # Periodic topology rebuild (every 5 min)
                 if self._topology and session_cycle_count % TOPOLOGY_EVERY == 0:
