@@ -860,7 +860,11 @@ def main():
         logger.info("Will attempt training once enough data accumulates.")
     else:
         # Restore adaptive thresholds from saved metadata
+        # BUG FIX (L97): missing 'global' declaration made these local vars,
+        # so every run fell back to hardcoded 0.5/0.7 defaults. Every
+        # anomaly score since Mar-5 calibration was miscalibrated.
         if meta.get('threshold_suspicious') is not None:
+            global _adaptive_suspicious, _adaptive_malicious
             _adaptive_suspicious = float(meta['threshold_suspicious'])
             _adaptive_malicious = float(meta['threshold_malicious'])
             logger.info(f"Restored adaptive thresholds: suspicious={_adaptive_suspicious:.4f}, "
