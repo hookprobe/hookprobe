@@ -476,6 +476,15 @@ class CNOOrganism:
         except ImportError:
             pass
 
+        # Phase 24: Global workspace (shared "conscious" state)
+        self._workspace = None
+        try:
+            from .global_workspace import GlobalWorkspace
+            self._workspace = GlobalWorkspace()
+            logger.info("Global workspace enabled (Phase 24)")
+        except ImportError:
+            pass
+
         # Phase 23: Predictive coder + outcome observer
         self._predictive_coder = None
         self._outcome_observer = None
@@ -572,9 +581,14 @@ class CNOOrganism:
 
         Pushes the new state to the BPF flow control map,
         feeds the Emotion Engine, and logs.
+        Phase 24: broadcasts new state to global workspace.
         """
         logger.info("ORGANISM STRESS: %s → %s (score=%.3f)",
                      old.value, new.value, score)
+
+        # Phase 24: broadcast to global workspace
+        if self._workspace:
+            self._workspace.update_stress(new.value)
 
         # Push to BPF map via Synaptic Controller
         self._controller.submit_downward(
@@ -804,6 +818,11 @@ class CNOOrganism:
             ip, novelty, candidate.get('event_type', '?'),
             hypothesis[:200] if hypothesis else candidate.get('summary', '')[:200])
 
+        # Phase 24: flag novel pattern in global workspace (silos will boost
+        # APT-category TTPs on next query)
+        if self._workspace:
+            self._workspace.flag_novel_pattern()
+
         # Emotion: novel_pattern = mild arousal (VIGILANT, not FEARFUL)
         if self._emotion:
             self._emotion.process_stimulus(
@@ -891,11 +910,16 @@ class CNOOrganism:
         """Called by EmotionEngine when emotional state transitions.
 
         Applies the corresponding camouflage profile.
+        Phase 24: broadcasts new state to global workspace.
         """
         logger.info(
             "ORGANISM EMOTION: %s → %s (valence=%.2f, arousal=%.2f)",
             old.value, new.value, valence, arousal,
         )
+
+        # Phase 24: broadcast to global workspace
+        if self._workspace:
+            self._workspace.update_emotion(new.value, valence, arousal)
 
         # Get camouflage profile and apply
         profile = self._emotion.get_camouflage_profile()
@@ -1355,6 +1379,13 @@ class CNOOrganism:
                     app_findings = self._app_tracker.analyze_cycle()
                     if any(v > 0 for v in app_findings.values()):
                         logger.info("APP TRACKER: %s", app_findings)
+
+                # Phase 24: tick global workspace (TTL expiry + persist)
+                if self._workspace:
+                    try:
+                        self._workspace.tick()
+                    except Exception as e:
+                        logger.debug("Workspace tick error: %s", e)
 
                 # Phase 22: periodic episode reconciliation (every 10 min)
                 if (self._episodic_memory
