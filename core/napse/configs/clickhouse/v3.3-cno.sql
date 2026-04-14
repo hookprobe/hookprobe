@@ -213,6 +213,34 @@ SETTINGS index_granularity = 8192;
 
 
 -- ------------------------------------------------------------------
+-- CNO Sleep Cycles — Phase 25 Nocturnal Consolidation Audit
+-- ------------------------------------------------------------------
+-- One row per sleep cycle. Triggered when CALM+SERENE for 30min during
+-- 02:00-05:00 UTC. Replays high-error episodes, prunes dead TTPs,
+-- discovers new patterns, recalibrates anomaly thresholds.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_sleep_cycles
+(
+    cycle_id                  String,
+    started_at                DateTime64(3),
+    ended_at                  Nullable(DateTime64(3)),
+    trigger_reason            LowCardinality(String),
+    episodes_replayed         UInt32 DEFAULT 0,
+    patterns_pruned           UInt16 DEFAULT 0,
+    patterns_compressed       UInt16 DEFAULT 0,
+    thresholds_recalibrated   UInt8 DEFAULT 0,
+    weight_drift_magnitude    Float32 DEFAULT 0,
+
+    INDEX idx_cycle_id cycle_id TYPE bloom_filter() GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(started_at)
+ORDER BY started_at
+TTL toDateTime(started_at) + INTERVAL 180 DAY
+SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
 -- CNO Workspace State — Phase 24 Global Workspace Audit
 -- ------------------------------------------------------------------
 -- Every 30s snapshot of the organism's "conscious" state: focus_ip,

@@ -493,15 +493,27 @@ class CNOOrganism:
             from .outcome_observer import OutcomeObserver
             from . import multi_rag_consensus as _mrc
             # Instantiate predictive coder with refs to consensus module
-            psych_silo = None
-            # Psychology silo reference is obtained AFTER multi_rag is created
-            # (see below — we populate it right after _multi_rag init)
             self._predictive_coder = PredictiveCoder(
                 consensus_module=_mrc,
                 psychology_silo=None)  # populated after _multi_rag init
             self._outcome_observer = OutcomeObserver(
                 emotion_engine=None)  # wired after _emotion init
             logger.info("Predictive coder + outcome observer enabled (Phase 23)")
+        except ImportError:
+            pass
+
+        # Phase 25: Sleep cycle (nocturnal consolidation)
+        self._sleep_cycle = None
+        try:
+            from .sleep_cycle import SleepCycle
+            from core.hydra import anomaly_detector as _ad
+            self._sleep_cycle = SleepCycle(
+                episodic_memory=self._episodic_memory,
+                predictive_coder=self._predictive_coder,
+                anomaly_detector_module=_ad,
+                psychology_silo=None,  # wired after _multi_rag
+                workspace=self._workspace)
+            logger.info("Sleep cycle enabled (Phase 25)")
         except ImportError:
             pass
 
@@ -512,10 +524,14 @@ class CNOOrganism:
             if _has('multi_rag') else None
         )
         # Phase 23: plug psychology silo reference into predictive coder
-        if self._predictive_coder and self._multi_rag:
+        # Phase 25: and into sleep cycle
+        if self._multi_rag:
             for silo in self._multi_rag._silos:
                 if silo.name == 'attacker_psychology':
-                    self._predictive_coder._psych_silo = silo
+                    if self._predictive_coder:
+                        self._predictive_coder._psych_silo = silo
+                    if self._sleep_cycle:
+                        self._sleep_cycle._psych_silo = silo
                     break
         self._npu = NPUBridge() if _has('npu') else None
         self._emotion = (
@@ -1406,6 +1422,13 @@ class CNOOrganism:
                         self._outcome_observer.observe_recent_blocks()
                     except Exception as e:
                         logger.debug("Outcome observer error: %s", e)
+
+                # Phase 25: check sleep trigger every cycle (internally gated)
+                if self._sleep_cycle:
+                    try:
+                        self._sleep_cycle.maybe_sleep()
+                    except Exception as e:
+                        logger.debug("Sleep cycle error: %s", e)
 
                 # Periodic topology rebuild (every 5 min)
                 if self._topology and session_cycle_count % TOPOLOGY_EVERY == 0:
