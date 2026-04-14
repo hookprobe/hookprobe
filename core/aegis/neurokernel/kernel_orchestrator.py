@@ -239,6 +239,24 @@ class KernelOrchestrator:
         self._code_generator = LLMCodeGenerator(
             compiler=self._compiler, llm_fn=llm_fn)
 
+        # Phase 26: Prefrontal Cortex executive veto on generated programs
+        self._prefrontal = None
+        try:
+            from core.cno.prefrontal_cortex import PrefrontalCortex
+            self._prefrontal = PrefrontalCortex()
+            logger.info("Prefrontal cortex enabled (Phase 26 veto active)")
+        except ImportError:
+            try:
+                # Fallback path for IDS container layout
+                import sys as _sys, os as _os
+                _sys.path.insert(0, _os.environ.get('HOOKPROBE_BASE',
+                                                     '/home/ubuntu/hookprobe'))
+                from core.cno.prefrontal_cortex import PrefrontalCortex
+                self._prefrontal = PrefrontalCortex()
+                logger.info("Prefrontal cortex enabled (Phase 26)")
+            except ImportError:
+                logger.info("Prefrontal cortex unavailable — Phase 20 unprotected")
+
         self._lock = threading.Lock()
         self._deploy_timestamps: List[float] = []
         self._decision_log: List[Dict[str, Any]] = []
@@ -364,6 +382,23 @@ class KernelOrchestrator:
                 "generate_sandbox_failed", "llm_generated",
                 f"Generated code failed sandbox: {sandbox_result.reason}")
             return None
+
+        # Phase 26: Prefrontal Cortex executive veto
+        # AFTER sandbox, BEFORE deploy. Catches verifier-passing but
+        # adversarial code (magic-packet backdoors, RFC-1918 drops, etc).
+        if self._prefrontal:
+            try:
+                approved, reason = self._prefrontal.evaluate(c_source, signal)
+                if not approved:
+                    self._log_action_dict(
+                        "generate_prefrontal_veto", "llm_generated",
+                        f"Prefrontal cortex vetoed: {reason}")
+                    logger.warning(
+                        "PHASE 26 VETO: generated XDP rejected — %s", reason)
+                    return None
+            except Exception as e:
+                logger.error("Prefrontal cortex error (failing closed): %s", e)
+                return None
 
         # Deploy
         program_id = self._generate_program_id("llm_generated", signal)
