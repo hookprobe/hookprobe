@@ -213,6 +213,34 @@ SETTINGS index_granularity = 8192;
 
 
 -- ------------------------------------------------------------------
+-- CNO Workspace State — Phase 24 Global Workspace Audit
+-- ------------------------------------------------------------------
+-- Every 30s snapshot of the organism's "conscious" state: focus_ip,
+-- emotion, stress, novel_flag, working_hypothesis, active MITRE tactics.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_workspace_state
+(
+    timestamp             DateTime64(3) DEFAULT now64(3),
+    focus_ip              String,
+    focus_score           Float32,
+    current_emotion       LowCardinality(String),
+    current_stress        LowCardinality(String),
+    emotion_valence       Float32,
+    emotion_arousal       Float32,
+    novel_pattern_flag    UInt8,
+    working_hypothesis    String,
+    recent_tactics        Array(String),
+
+    INDEX idx_focus_ip focus_ip TYPE bloom_filter() GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY timestamp
+TTL toDateTime(timestamp) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
 -- CNO Weight History — Phase 23 Predictive Coder Drift Audit
 -- ------------------------------------------------------------------
 -- Every 5 min the predictive coder persists current silo weights.
