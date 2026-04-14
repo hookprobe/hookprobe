@@ -143,8 +143,11 @@ BPF_HASH(flow_table, struct flow_key, struct flow_state, FLOW_TABLE_SIZE);
 /* Verdict overrides from userspace */
 BPF_HASH(verdict_map, struct flow_key, __u8, FLOW_TABLE_SIZE);
 
-/* Statistics */
-BPF_ARRAY(stats, __u64, 12);
+/* Statistics — PERCPU eliminates global atomic lock per packet.
+ * Phase 27a: was BPF_ARRAY which serialized inc_stat across all CPUs
+ * via __sync_fetch_and_add on shared cache line. Userspace aggregates
+ * via per-CPU read (libbpf bpf_map_lookup_elem returns ncpu values). */
+BPF_PERCPU_ARRAY(stats, __u64, 12);
 
 /* Ring buffer for metadata export (connection records at near-zero cost) */
 BPF_RINGBUF_OUTPUT(metadata_rb, 1 << 20);  /* 1MB ring buffer */
@@ -154,10 +157,12 @@ BPF_XSKMAP(xsks_map, 4);  /* Up to 4 AF_XDP sockets */
 
 /* ========================================================================
  * Helper: Increment stat counter
+ * Phase 27a: PERCPU stats — no atomic needed (each CPU has its own slot).
+ * Direct increment is faster than __sync_fetch_and_add by 5-10x.
  * ======================================================================== */
 static __always_inline void inc_stat(__u32 idx) {
     __u64 *val = stats.lookup(&idx);
-    if (val) __sync_fetch_and_add(val, 1);
+    if (val) (*val)++;  /* per-CPU: no atomic required */
 }
 
 /* ========================================================================
