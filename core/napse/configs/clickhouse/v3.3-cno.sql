@@ -213,6 +213,49 @@ SETTINGS index_granularity = 8192;
 
 
 -- ------------------------------------------------------------------
+-- CNO Episodic Memory — Phase 22 Narrative Episodes (Hippocampus)
+-- ------------------------------------------------------------------
+-- One row per Multi-RAG verdict. Opened at verdict time, closed 10min
+-- later when outcome is determined (block_success / block_ineffective /
+-- false_positive / true_negative). Phase 23 predictive coder consumes
+-- closed episodes to drift silo weights. Phase 25 sleep replays high-
+-- prediction-error episodes for learning.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_episodic_memory
+(
+    episode_id                   String,
+    onset_ts                     DateTime64(3) DEFAULT now64(3),
+    resolution_ts                Nullable(DateTime64(3)),
+    src_ip                       String,
+    event_type                   LowCardinality(String) DEFAULT '',
+    initial_verdict              LowCardinality(String),
+    initial_confidence           Float32 DEFAULT 0,
+    initial_consensus_score      Float32 DEFAULT 0.5,
+    initial_silo_scores_json     String DEFAULT '{}',
+    initial_action               LowCardinality(String),
+    meta_route                   LowCardinality(String) DEFAULT 'STANDARD',
+    ttp_sequence                 Array(String),
+    consensus_trace              String DEFAULT '',
+    final_outcome                LowCardinality(String) DEFAULT 'pending',
+    prediction_error             Float32 DEFAULT 0,
+    actual_outcome_score         Float32 DEFAULT 0,
+    packet_rate_delta_pct        Float32 DEFAULT 0,
+    replay_count                 UInt16 DEFAULT 0,
+    lessons_learned              String DEFAULT '',
+
+    INDEX idx_episode_id episode_id TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_src_ip     src_ip TYPE bloom_filter() GRANULARITY 4,
+    INDEX idx_outcome    final_outcome TYPE set(8) GRANULARITY 4,
+    INDEX idx_pred_err   prediction_error TYPE minmax GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(onset_ts)
+ORDER BY (onset_ts, src_ip)
+TTL toDateTime(onset_ts) + INTERVAL 365 DAY
+SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
 -- CNO Generated Programs — Phase 20 Self-Evolving XDP
 -- ------------------------------------------------------------------
 -- Records LLM-generated eBPF programs deployed by the Kernel Orchestrator.
