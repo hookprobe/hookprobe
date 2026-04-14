@@ -308,15 +308,21 @@ class HYDRABridge:
                 priority = 4
 
             # Synthesize narrative from velocity data if token_str is empty
+            # L98: correct kill-chain → TTP token mapping (was semantically
+            # wrong — lateral_movement→DRIP_FEED conflated different tactics)
             if not token_str:
                 vel_parts = []
                 if abs(velocity) > REFLEX_VELOCITY:
                     vel_parts.append('ACCELERATING')
                 if risk > 0.7:
                     vel_parts.append('KNOWN_BAD')
-                if kill_chain in ('lateral_movement', 'exfiltration'):
-                    vel_parts.append('DRIP_FEED')
-                elif kill_chain in ('execution', 'command_control'):
+                if kill_chain == 'lateral_movement':
+                    vel_parts.append('LATERAL_MOVEMENT')
+                elif kill_chain == 'exfiltration':
+                    vel_parts.append('DATA_EXFILTRATION')
+                elif kill_chain == 'command_control':
+                    vel_parts.append('C2_BEACON')
+                elif kill_chain == 'execution':
                     vel_parts.append('DNS_TUNNEL')
                 token_str = ' '.join(vel_parts)
 
@@ -691,14 +697,17 @@ class CNOOrganism:
                 'novel_pattern', intensity=min(0.3, novelty * 0.5))
 
         # Synaptic: submit as COGNITIVE event for further analysis
+        # BUG FIX (L96): Use BrainLayer/SynapticRoute enums, not strings.
+        # And the kwarg is 'payload', not 'data' — prior version silently
+        # dropped the payload, so every zero-day event routed with empty data.
         if self._controller:
             self._controller.submit_upward(
+                source_layer=BrainLayer.CEREBRUM,
+                route=SynapticRoute.COGNITIVE_DEFENSE,
                 event_type='zero_day_candidate',
-                source_layer='cerebrum',
-                route='cognitive_defense',
                 priority=5,  # SOMATIC tier — important but not reflex
-                data={
-                    'source_ip': ip,
+                source_ip=ip,
+                payload={
                     'novelty_score': novelty,
                     'summary': candidate.get('summary', ''),
                     'hypothesis': hypothesis,
