@@ -466,9 +466,19 @@ class CNOOrganism:
         self._stress = StressGauge(on_state_change=self._on_stress_change)
         self._controller = SynapticController()
 
+        # Phase 22: Episodic memory (hippocampus) — opens episode per verdict
+        self._episodic_memory = None
+        try:
+            from .episodic_memory import EpisodicMemory
+            self._episodic_memory = EpisodicMemory(
+                on_episode_closed=self._on_episode_closed)
+            logger.info("Episodic memory enabled (Phase 22)")
+        except ImportError:
+            pass
+
         # === Tier-gated components ===
         self._multi_rag = (
-            MultiRAGConsensus(on_verdict=self._on_rag_verdict,
+            MultiRAGConsensus(on_verdict=self._on_rag_verdict_with_episode,
                               npu_bridge=NPUBridge() if _has('npu') else None)
             if _has('multi_rag') else None
         )
@@ -563,6 +573,60 @@ class CNOOrganism:
                         ttl_seconds=1800,
                         reason=f"FIGHT mode auto-block: {entry['pps']:.0f} pps",
                     )
+
+    def _on_rag_verdict_with_episode(self, verdict: Dict[str, Any]) -> None:
+        """Phase 22 wrapper: open episode THEN run the normal verdict handler.
+
+        Ensures every Multi-RAG verdict becomes a narrative episode that
+        Phase 23 can learn from and Phase 25 can replay.
+        """
+        if self._episodic_memory:
+            try:
+                self._episodic_memory.open_episode(verdict)
+            except Exception as e:
+                logger.debug("Episode open error: %s", e)
+        self._on_rag_verdict(verdict)
+
+    def _query_packet_rate(self, src_ip: str, since_ts: float,
+                            until_ts: float) -> float:
+        """Phase 22 helper: query napse_flows for packet rate from an IP.
+
+        Returns packets-per-second between the two timestamps.
+        """
+        try:
+            from .synaptic_controller import (
+                CH_DB as _chdb, CH_HOST as _chh, CH_PORT as _chp,
+                CH_USER as _chu, CH_PASSWORD as _chpw, _ch_escape
+            )
+            from urllib.request import Request, urlopen
+            query = (
+                f"SELECT sum(pkts_orig + pkts_resp) / {max(1, until_ts - since_ts)} AS pps "
+                f"FROM {_chdb}.napse_flows "
+                f"WHERE src_ip = '{_ch_escape(src_ip)}' "
+                f"AND timestamp >= toDateTime64({since_ts}, 3) "
+                f"AND timestamp <  toDateTime64({until_ts}, 3) "
+                f"FORMAT TSV"
+            )
+            url = f"http://{_chh}:{_chp}/"
+            req = Request(url, data=query.encode('utf-8'))
+            req.add_header('X-ClickHouse-User', _chu)
+            req.add_header('X-ClickHouse-Key', _chpw)
+            req.add_header('X-ClickHouse-Database', _chdb)
+            with urlopen(req, timeout=5) as resp:
+                val = resp.read().decode('utf-8').strip()
+                return float(val) if val else 0.0
+        except Exception:
+            return 0.0
+
+    def _on_episode_closed(self, episode: Dict[str, Any]) -> None:
+        """Phase 22 callback: episode resolved with outcome."""
+        logger.info(
+            "CNO learned: %s outcome=%s err=%.3f (Phase 23 will drift weights)",
+            episode.get('src_ip', '?'),
+            episode.get('final_outcome', '?'),
+            episode.get('prediction_error', 0))
+        # Phase 23 predictive coder will consume this via its own callback
+        # registration in a later phase. For now, just log.
 
     def _on_rag_verdict(self, verdict: Dict[str, Any]) -> None:
         """Called by MultiRAGConsensus when a consensus verdict is reached.
@@ -1178,6 +1242,7 @@ class CNOOrganism:
         APP_ANALYZE_EVERY = 6      # Every 6th bridge cycle (60s at 10s interval)
         TOPOLOGY_EVERY = 30        # Every 30th cycle (5 min at 10s interval)
         HEALTH_CHECK_EVERY = 60    # Every 60th cycle (10 min at 10s interval)
+        EPISODE_RECONCILE_EVERY = 60   # Every 60th cycle (10 min) — Phase 22
 
         # Main loop: poll HYDRA data and inject into CNO
         while self._running:
@@ -1252,6 +1317,18 @@ class CNOOrganism:
                     app_findings = self._app_tracker.analyze_cycle()
                     if any(v > 0 for v in app_findings.values()):
                         logger.info("APP TRACKER: %s", app_findings)
+
+                # Phase 22: periodic episode reconciliation (every 10 min)
+                if (self._episodic_memory
+                        and session_cycle_count % EPISODE_RECONCILE_EVERY == 0):
+                    try:
+                        closed = self._episodic_memory.reconcile_pending(
+                            napse_flows_query_fn=self._query_packet_rate)
+                        if closed > 0:
+                            logger.info("EPISODE RECONCILE: closed %d episodes",
+                                        closed)
+                    except Exception as e:
+                        logger.debug("Episode reconcile error: %s", e)
 
                 # Periodic topology rebuild (every 5 min)
                 if self._topology and session_cycle_count % TOPOLOGY_EVERY == 0:
