@@ -76,12 +76,12 @@ struct pid_monitor {
 /* eBPF Maps */
 BPF_HASH(pid_monitors, __u32, struct pid_monitor, MONITOR_TABLE_SIZE);
 BPF_HASH(sc_kill_list, __u32, __u8, 4096);
-BPF_ARRAY(sc_stats, __u64, 4);
+BPF_PERCPU_ARRAY(sc_stats, __u64, 4);
 BPF_RINGBUF_OUTPUT(syscall_events, RINGBUF_SIZE);
 
 static __always_inline void sm_inc_stat(__u32 idx) {
     __u64 *val = sc_stats.lookup(&idx);
-    if (val) __sync_fetch_and_add(val, 1);
+    if (val) (*val)++;  /* per-CPU */
 }
 
 /* Check if port is a known C2 port */
