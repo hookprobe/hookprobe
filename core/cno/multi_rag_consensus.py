@@ -526,12 +526,15 @@ class MultiRAGConsensus:
     The "conscious thought" of the organism — slow but thorough.
     """
 
-    def __init__(self, on_verdict=None, npu_bridge=None):
+    def __init__(self, on_verdict=None, npu_bridge=None,
+                 on_deep_analysis=None):
         """Initialize with optional verdict callback and NPU bridge.
 
         Args:
             on_verdict: Callback(verdict_dict) called when consensus reached.
             npu_bridge: Optional NPUBridge for accelerated anomaly scoring.
+            on_deep_analysis: Phase 21 — callback for uncertain verdicts
+                that need LLM + shadow pentester re-analysis.
         """
         self._npu = npu_bridge
         self._silos = [
@@ -544,6 +547,17 @@ class MultiRAGConsensus:
             thread_name_prefix="rag-silo",
         )
         self._on_verdict = on_verdict
+
+        # Phase 21: metacognitive router for confidence-gated routing
+        self._metacognition = None
+        try:
+            from .metacognition import MetacognitiveRouter
+            self._metacognition = MetacognitiveRouter(
+                on_deep_analysis_requested=on_deep_analysis)
+            logger.info("Metacognitive router enabled (Phase 21)")
+        except ImportError:
+            logger.info("Metacognition module unavailable — fast-path only")
+
         self._stats = {
             'queries': 0,
             'benign': 0,
@@ -669,6 +683,11 @@ class MultiRAGConsensus:
                      ip,
                      consensus.get('action', 'none'),
                      elapsed_ms)
+
+        # Phase 21: route through metacognitive gate BEFORE commit
+        if self._metacognition:
+            consensus['src_ip'] = ip  # ensure router has src_ip
+            consensus = self._metacognition.route(consensus)
 
         # Log to ClickHouse
         self._log_consensus(consensus)
@@ -810,7 +829,10 @@ class MultiRAGConsensus:
             logger.debug("Consensus log failed: %s", e)
 
     def get_stats(self) -> Dict[str, Any]:
-        return dict(self._stats)
+        stats = dict(self._stats)
+        if self._metacognition:
+            stats['metacognition'] = self._metacognition.get_stats()
+        return stats
 
     def shutdown(self) -> None:
         """Shutdown the thread pool."""
