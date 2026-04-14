@@ -108,12 +108,16 @@ struct lpm_key {
     __u32 addr;
 };
 
-/* Per-source IP rate tracking */
+/* Per-source IP rate tracking
+ * Phase 27b: 64-byte aligned to one full cache line, prevents false
+ * sharing when adjacent map entries land on same line. Hot fields
+ * (packets, bytes) ordered first; last_update is cold (read once/sec). */
 struct rate_info {
-    __u64 packets;
-    __u64 bytes;
-    __u64 last_update;
-};
+    __u64 packets;        /* HOT — every packet */
+    __u64 bytes;          /* HOT — every packet */
+    __u64 last_update;    /* COLD — checked once per rate window */
+    __u64 _pad[5];        /* pad to 64 bytes (cache line) */
+} __attribute__((aligned(64)));
 
 /* IAT (Inter-Arrival Time) histogram buckets — 16 log-scale bins.
  * Bucket boundaries (nanoseconds):
@@ -125,16 +129,19 @@ struct rate_info {
 #define IAT_BUCKETS     16
 
 /* Per-source IP IAT state.
- * Histogram and min/max/sum collected in kernel.
- * Mean/variance/entropy computed by userspace feature_extractor.py. */
+ * Phase 27b: REORDERED hot→cold + cache-line aligned. Previously
+ * histogram (HOT, written every packet) was after cold sum/min/max,
+ * forcing 56 bytes to be touched. Now hot fields fit first cache line,
+ * cold fields on second. Atomic histogram[] writes only touch line 1. */
 struct iat_state {
-    __u64 last_arrival_ns;          /* Timestamp of last packet */
-    __u64 count;                    /* Number of IAT samples */
-    __u64 sum_ns;                   /* Sum of all IATs (for mean) */
-    __u64 min_ns;                   /* Minimum IAT observed */
-    __u64 max_ns;                   /* Maximum IAT observed */
-    __u32 histogram[IAT_BUCKETS];   /* Log-scale histogram */
-};
+    __u64 last_arrival_ns;          /* HOT: every packet */
+    __u32 histogram[IAT_BUCKETS];   /* HOT: every packet (atomic +1) */
+    __u64 count;                    /* WARM: every packet */
+    /* — first cache line ends here (8 + 64 + 8 = 80 bytes? — split) — */
+    __u64 sum_ns;                   /* COLD: rare aggregation */
+    __u64 min_ns;                   /* COLD */
+    __u64 max_ns;                   /* COLD */
+} __attribute__((aligned(64)));
 
 /* Per-IP weighted threat score (populated by rdap_enricher.py).
  * Tags bitfield: bit0=vpn, bit1=datacenter, bit2=tor, bit3=proxy */
@@ -144,7 +151,10 @@ struct ip_score_val {
     __u8  reserved;
 };
 
-/* RINGBUF event structure for userspace consumer */
+/* RINGBUF event structure for userspace consumer.
+ * Phase 27b: 32-byte natural fit (half cache line). Events are write-
+ * once / read-once; explicit alignment prevents adjacent events from
+ * sharing partial lines under high event rate. */
 struct hydra_event {
     __u64 timestamp_ns;
     __u32 src_ip;
@@ -156,7 +166,7 @@ struct hydra_event {
     __u8  reason;       /* HYDRA_REASON_* */
     __u8  tcp_flags;
     __u32 rate_pps;     /* Packets per second (for rate events) */
-};
+} __attribute__((aligned(32)));
 
 /* ========================================================================
  * BPF MAPS

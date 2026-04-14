@@ -62,7 +62,7 @@ BPF_HASH(ct_table, struct ct_key, struct ct_entry, CT_TABLE_SIZE);
 BPF_HASH(half_open_map, __u32, struct half_open_count, 65536);
 
 /* Statistics */
-BPF_ARRAY(ct_stats, __u64, 4);
+BPF_PERCPU_ARRAY(ct_stats, __u64, 4);
 
 enum {
     CT_STAT_NEW = 0,
@@ -73,7 +73,7 @@ enum {
 
 static __always_inline void ct_inc_stat(__u32 idx) {
     __u64 *val = ct_stats.lookup(&idx);
-    if (val) __sync_fetch_and_add(val, 1);
+    if (val) (*val)++;  /* per-CPU */
 }
 
 /**

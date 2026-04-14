@@ -59,12 +59,12 @@ struct hotpatch_event {
 
 /* eBPF Maps */
 BPF_HASH(patch_table, __u32, struct patch_rule, PATCH_TABLE_SIZE);
-BPF_ARRAY(hp_stats, __u64, 4);
+BPF_PERCPU_ARRAY(hp_stats, __u64, 4);
 BPF_RINGBUF_OUTPUT(hotpatch_events, RINGBUF_SIZE);
 
 static __always_inline void hp_inc_stat(__u32 idx) {
     __u64 *val = hp_stats.lookup(&idx);
-    if (val) __sync_fetch_and_add(val, 1);
+    if (val) (*val)++;  /* per-CPU */
 }
 
 /* Check if two comm strings match (or rule comm is empty = match all) */
