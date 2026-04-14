@@ -403,24 +403,40 @@ def try_read_bpf_iat_map() -> Dict[str, List[int]]:
         if iat_map_id is None:
             return {}
 
+        # Phase 27f: iat_map is now PERCPU. map_dump returns ncpu values
+        # per key; we sum them. Phase 27b: struct iat_state was reordered:
+        #   last_arrival_ns: u64 @ 0
+        #   histogram[16]:   u32 * 16 @ 8        (64 bytes)
+        #   count:           u64 @ 72
+        #   sum/min/max_ns:  u64 * 3 @ 80, 88, 96
+        #   (aligned(64) → struct size = 128 with padding)
         entries = ops.map_dump(iat_map_id)
         histograms = {}
+        struct_size = 128  # __attribute__((aligned(64))) rounds 104 → 128
+
+        try:
+            ncpu = ops.get_num_cpus()
+        except Exception:
+            ncpu = 1
 
         for key_bytes, val_bytes in entries:
             if len(key_bytes) < 4:
                 continue
-
             ip = str(ipaddress.IPv4Address(key_bytes[:4]))
 
-            # struct iat_state: 5 * u64 + IAT_BUCKETS * u32
-            # = 40 + 64 = 104 bytes
-            if len(val_bytes) < 40 + IAT_BUCKETS * 4:
-                continue
-
-            # Extract histogram (starts at offset 40)
-            histogram = list(struct.unpack_from(f'<{IAT_BUCKETS}I', val_bytes, 40))
-            if sum(histogram) > 0:
-                histograms[ip] = histogram
+            # PERCPU returns ncpu * struct_size bytes; aggregate.
+            agg = [0] * IAT_BUCKETS
+            for cpu in range(ncpu):
+                base = cpu * struct_size
+                if base + 8 + IAT_BUCKETS * 4 > len(val_bytes):
+                    break
+                # Histogram is at offset 8 in new layout (after last_arrival_ns)
+                cpu_hist = struct.unpack_from(
+                    f'<{IAT_BUCKETS}I', val_bytes, base + 8)
+                for i, v in enumerate(cpu_hist):
+                    agg[i] += v
+            if sum(agg) > 0:
+                histograms[ip] = agg
 
         return histograms
 

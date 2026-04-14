@@ -266,6 +266,11 @@ class BpfMapOps:
         finally:
             os.close(fd)
 
+    def get_num_cpus(self) -> int:
+        """Phase 27f helper: number of CPUs the kernel allocates per-CPU
+        slots for. Used by feature_extractor to size PERCPU dump reads."""
+        return os.cpu_count() or 1
+
     def map_lookup_percpu(self, map_id: int, key: bytes,
                           value_size: int) -> Optional[List[bytes]]:
         """Lookup a PERCPU map entry, returning per-CPU values.
