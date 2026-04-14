@@ -705,11 +705,19 @@ class CNOOrganism:
         ip = verdict.get('src_ip', '')
         confidence = verdict.get('confidence', 0)
         v = verdict.get('verdict', 'benign')
+        consensus_score = verdict.get('consensus_score', 0)
 
         logger.info(
             "RAG CONSENSUS: %s → %s (action=%s, confidence=%.2f, silos=%d/3)",
             ip, v, action, confidence, verdict.get('silos_agreeing', 0),
         )
+
+        # Phase 24: update global workspace focus on winning coalition.
+        # Silos read this on next query for context-aware weighting.
+        if self._workspace and ip and v in ('malicious', 'suspicious'):
+            hypothesis = verdict.get('reasoning', '') or verdict.get(
+                'metacognition', {}).get('route', '')
+            self._workspace.update_focus(ip, consensus_score, hypothesis)
 
         # Feed to Emotion Engine — Phase 2C: malicious verdicts are
         # RESOLVED threats (we identified and can act on them), not new
@@ -1059,7 +1067,9 @@ class CNOOrganism:
                 try:
                     result = self._multi_rag.evaluate(event)
                     if result:
-                        verdict = result.get('consensus_verdict', 'unknown')
+                        # Bug fix: dict key is 'verdict' not 'consensus_verdict'
+                        # — was always logging 'unknown' regardless of actual class
+                        verdict = result.get('verdict', 'unknown')
                         score = result.get('consensus_score', 0)
                         logger.info(
                             "MULTI-RAG verdict: %s (%.2f) for %s [%s]",
@@ -1514,7 +1524,21 @@ class CNOOrganism:
                 'session_analyzer': self._session_analyzer.get_stats() if self._session_analyzer else None,
                 'app_tracker': self._app_tracker.get_stats() if self._app_tracker else None,
                 'aegis_bridge': self._aegis_bridge.get_stats() if self._aegis_bridge else None,
+                # CNO 2.0 / Phase 21-25 visibility (was missing — dashboard shows "—")
+                'episodic_memory': (self._episodic_memory.get_stats()
+                                     if self._episodic_memory else None),
+                'predictive_coder': (self._predictive_coder.get_stats()
+                                      if self._predictive_coder else None),
+                'outcome_observer': (self._outcome_observer.get_stats()
+                                      if self._outcome_observer else None),
+                'sleep_cycle': (self._sleep_cycle.get_stats()
+                                 if self._sleep_cycle else None),
             },
+            'workspace': self._workspace.get_stats() if self._workspace else None,
+            'kernel_orchestrator': (self._kernel_orchestrator.get_status()
+                                     if self._kernel_orchestrator else None),
+            'streaming_rag': (self._streaming_rag.stats()
+                               if self._streaming_rag else None),
             'federation': self._federated.get_stats() if self._federated else None,
             'npu': self._npu.get_stats() if self._npu else None,
             'fec': self._fec.get_stats() if self._fec else None,
