@@ -213,6 +213,31 @@ SETTINGS index_granularity = 8192;
 
 
 -- ------------------------------------------------------------------
+-- CNO Weight History — Phase 23 Predictive Coder Drift Audit
+-- ------------------------------------------------------------------
+-- Every 5 min the predictive coder persists current silo weights.
+-- Drift magnitude = sum(|current - initial|) across all silos.
+-- Enables dashboards showing how weights evolve per-deployment.
+
+CREATE TABLE IF NOT EXISTS hookprobe_ids.cno_weight_history
+(
+    timestamp            DateTime64(3) DEFAULT now64(3),
+    weight_global        Float32,
+    weight_local         Float32,
+    weight_psychology    Float32,
+    drift_magnitude      Float32 DEFAULT 0,
+    updates_applied      UInt32 DEFAULT 0,
+
+    INDEX idx_drift drift_magnitude TYPE minmax GRANULARITY 4
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY timestamp
+TTL toDateTime(timestamp) + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
+
+-- ------------------------------------------------------------------
 -- CNO Episodic Memory — Phase 22 Narrative Episodes (Hippocampus)
 -- ------------------------------------------------------------------
 -- One row per Multi-RAG verdict. Opened at verdict time, closed 10min
