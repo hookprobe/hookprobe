@@ -37,6 +37,11 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
 
+# Phase Q — Agency adoption for the LPM-trie batch updates that mutate
+# XDP allowlist/blocklist BPF maps. Bypassing this would let a poisoned
+# feed silently allowlist attacker CIDRs or blocklist legitimate ones.
+from core.agency_shim import ActionKind as _AK_Q, agency_gated as _gated_Q
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [FEED_SYNC] %(levelname)s: %(message)s'
@@ -290,6 +295,16 @@ def find_map_id(map_name: str) -> Optional[int]:
         return None
 
 
+# Phase Q — Agency-gated batch update. We gate at the BATCH boundary
+# (one decision per call) rather than per-CIDR — the per-CIDR
+# alternative would be N gatekeeper roundtrips per blocklist refresh
+# (typically 50K entries) which would be a startup-killer. Subject is
+# the map name + entry count so audit shows the blast.
+@_gated_Q(
+    kind=_AK_Q.UPDATE_ALLOWLIST,
+    proposer="hydra.feed_sync",
+    subject_fn=lambda map_name, cidrs, value=1: f"map:{map_name}:n={len(cidrs)}",
+)
 def update_xdp_map_batch(map_name: str, cidrs: Set[str], value: int = 1) -> int:
     """Update an LPM_TRIE BPF map with a batch of CIDRs.
 
