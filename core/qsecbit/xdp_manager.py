@@ -339,6 +339,10 @@ class XDPManager:
             print(f"Error blocking IP {ip_address}: {e}")
             return False
 
+    # Phase Q — Agency-gated. Unblock is the inverse of block; both are LOW
+    # blast (single map-entry mutation, easy to roll back) but BOTH need
+    # gating — an attacker who can unblock their own IP defeats the firewall.
+    @_gated(kind=_AK.UNBLOCK_IP, proposer="qsecbit.xdp_manager")
     def unblock_ip(self, ip_address: str) -> bool:
         """Unblock an IP address"""
         if not self.enabled or not self.bpf:

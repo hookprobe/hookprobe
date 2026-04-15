@@ -61,6 +61,7 @@ else:
         RATE_LIMIT = "rate_limit"
         QUARANTINE_NODE = "quarantine_node"
         QUARANTINE_PROCESS = "quarantine_process"
+        KILL_PROCESS = "kill_process"
         APPLY_PROFILE = "apply_profile"
         SCALE_CONTAINER = "scale_container"
         RESTART_CONTAINER = "restart_container"
@@ -68,6 +69,9 @@ else:
         FEDERATED_AGGREGATE = "federated_aggregate"
         RETRAIN_MODEL = "retrain_model"
         BROADCAST_LESSON = "broadcast_lesson"
+        # Phase Q — kernel/fast-path mutations
+        PUSH_REPUTATION = "push_reputation"
+        UPDATE_ALLOWLIST = "update_allowlist"
 
     class BlastRadius:  # type: ignore[no-redef]
         LOW = "low"

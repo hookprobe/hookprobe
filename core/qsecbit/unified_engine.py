@@ -569,6 +569,11 @@ class UnifiedThreatEngine:
             return self.xdp_manager.block_ip(ip)
         return False
 
+    # Phase Q — Agency-gated. xdp_manager.unblock_ip is independently gated;
+    # this gate is on the ENGINE-LEVEL call (the public-facing surface that
+    # callers reach for). Without this gate, the engine could request unblock
+    # via paths that bypass xdp_manager (e.g. future direct BPF map writes).
+    @_gated(kind=_AK.UNBLOCK_IP, proposer="qsecbit.unified_engine")
     def unblock_ip(self, ip: str) -> bool:
         """Manually unblock an IP address."""
         if self.xdp_manager:
