@@ -559,6 +559,10 @@ class UnifiedThreatEngine:
         """Get recent threat events as dictionaries."""
         return [t.to_dict() for t in self.threat_history[-limit:]]
 
+    # Phase H.C3 — Alexandria Agency adoption.
+    from core.agency_shim import ActionKind as _AK, agency_gated as _gated
+
+    @_gated(kind=_AK.BLOCK_IP, proposer="qsecbit.unified_engine")
     def block_ip(self, ip: str) -> bool:
         """Manually block an IP address."""
         if self.xdp_manager:

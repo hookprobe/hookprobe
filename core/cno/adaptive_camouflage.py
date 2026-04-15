@@ -131,6 +131,22 @@ class AdaptiveCamouflage:
     # Profile Application
     # ------------------------------------------------------------------
 
+    # Phase H.C4 — Alexandria Agency adoption. apply_profile returns None;
+    # on_deny returns None too so the type contract holds. Subject is the
+    # emotion name + level so the audit trail is human-readable.
+    from core.agency_shim import (
+        ActionKind as _AK, BlastRadius as _BR, agency_gated as _gated,
+    )
+
+    @_gated(
+        kind=_AK.APPLY_PROFILE,
+        proposer="cno.adaptive_camouflage",
+        blast=_BR.MEDIUM,
+        subject_fn=lambda self, emotion, profile: (
+            f"{getattr(emotion, 'value', emotion)}:lvl{profile.get('level', 0)}"
+        ),
+        on_deny=lambda decision: None,
+    )
     def apply_profile(self, emotion: EmotionState,
                       profile: Dict[str, Any]) -> None:
         """Apply a camouflage profile from the Emotion Engine.
