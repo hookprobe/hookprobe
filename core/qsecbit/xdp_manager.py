@@ -315,6 +315,10 @@ class XDPManager:
             print(f"Error getting XDP stats: {e}")
             return None
 
+    # Phase H.C2 — Alexandria Agency adoption.
+    from core.agency_shim import ActionKind as _AK, agency_gated as _gated
+
+    @_gated(kind=_AK.BLOCK_IP, proposer="qsecbit.xdp_manager")
     def block_ip(self, ip_address: str) -> bool:
         """Block an IP address at XDP layer"""
         if not self.enabled or not self.bpf:

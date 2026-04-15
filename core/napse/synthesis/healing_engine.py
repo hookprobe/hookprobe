@@ -286,6 +286,15 @@ class HealingEngine:
             logger.error("No permission to kill PID %d", pid)
             return False
 
+    # Phase H.C5 — Alexandria Agency adoption. PID is stringified for the
+    # subject; default blast=MEDIUM (in-host action, reversible).
+    from core.agency_shim import ActionKind as _AK, agency_gated as _gated
+
+    @_gated(
+        kind=_AK.QUARANTINE_PROCESS,
+        proposer="napse.healing_engine",
+        subject_fn=lambda self, pid, reason="": f"pid:{pid}",
+    )
     def quarantine_process(self, pid: int, reason: str = "") -> bool:
         """Quarantine a process via cgroup isolation.
 
