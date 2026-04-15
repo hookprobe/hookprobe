@@ -327,6 +327,12 @@ class SynapticController:
     EVICTION_CLASS_NORMAL = 1        # Default single-source verdict
     EVICTION_CLASS_PROTECTED = 2     # Mesh-voted (2+ peers) or high-rate confirmed
 
+    # Phase H.C1 — Alexandria Agency adoption. No-op when Alexandria is
+    # absent (Sentinel tier, dev rig); routes through Warden + Gatekeeper
+    # when ids-alexandria-agency is on PYTHONPATH.
+    from core.agency_shim import ActionKind as _AK, agency_gated as _gated
+
+    @_gated(kind=_AK.BLOCK_IP, proposer="cno.synaptic_controller")
     def push_to_blocklist(self, ip: str, ttl_seconds: int = 3600,
                           reason: str = "",
                           eviction_class: int = EVICTION_CLASS_NORMAL) -> bool:
