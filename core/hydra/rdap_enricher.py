@@ -40,6 +40,12 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
 
+# Phase Q — Agency adoption for the XDP ip_scores fast-path push.
+# A poisoned/spoofed reputation push could let an attacker mark themselves
+# benign or mark a legitimate IP malicious. The shim is a no-op when
+# alexandria isn't on PYTHONPATH (Sentinel/Guardian tiers).
+from core.agency_shim import ActionKind as _AK_Q, agency_gated as _gated_Q
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [ENRICHER] %(levelname)s: %(message)s'
@@ -281,6 +287,11 @@ def pg_upsert_reputation(ip: str, asn: int, asn_name: str,
 
 from bpf_map_ops import get_bpf_ops
 
+@_gated_Q(
+    kind=_AK_Q.PUSH_REPUTATION,
+    proposer="hydra.rdap_enricher",
+    subject_fn=lambda ip_str, score, tags: f"ip:{ip_str}",
+)
 def push_ip_score(ip_str: str, score: int, tags: int) -> bool:
     """Push a single IP score to the XDP ip_scores BPF map."""
     try:

@@ -25,6 +25,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
+# Phase Q — Agency adoption for the irreversible kill_process path. Imported
+# at module scope (not inside the class) so the decorator on kill_process
+# at line ~252 binds; quarantine_process retains its inline import for
+# backward-compat with the original C5 patch.
+from core.agency_shim import ActionKind as _AK_Q, agency_gated as _gated_Q
+
 logger = logging.getLogger(__name__)
 
 
@@ -249,6 +255,15 @@ class HealingEngine:
 
         return record
 
+    # Phase Q — Agency-gated. SIGKILL is irreversible; this is CRITICAL via
+    # the alexandria default_blast table (alexandria/action.py KILL_PROCESS).
+    # Under cortisol_cap (Phase B + L33) this denies during stress, exactly
+    # the desired behavior for an irreversible action.
+    @_gated_Q(
+        kind=_AK_Q.KILL_PROCESS,
+        proposer="napse.healing_engine",
+        subject_fn=lambda self, pid, reason="": f"pid:{pid}",
+    )
     def kill_process(self, pid: int, reason: str = "") -> bool:
         """Kill a malicious process.
 
