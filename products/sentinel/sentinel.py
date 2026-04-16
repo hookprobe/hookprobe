@@ -412,22 +412,25 @@ class SentinelMSSPClient:
         """
         Send heartbeat with metrics to MSSP.
 
-        Uses the new /api/nodes/heartbeat endpoint with API key auth.
-        Falls back to legacy endpoint if API key not available.
+        Requires the v2 API-key endpoint (/api/nodes/heartbeat). The legacy
+        /api/v1/devices/.../heartbeat/ endpoint was removed server-side; calls
+        to it return 404 and are no longer attempted.
 
         Args:
             metrics: Dict with cpu_usage, ram_usage, qsecbit_score, etc.
 
         Returns:
-            True if successful
+            True if successful, False if no API key is configured.
         """
-        # Try new API key-based endpoint first
         api_key = self._load_api_key()
-        if api_key:
-            return self._send_heartbeat_v2(metrics, api_key)
-
-        # Fall back to legacy endpoint
-        return self._send_heartbeat_legacy(metrics)
+        if not api_key:
+            self._stats['heartbeats_failed'] += 1
+            log.error(
+                "[MSSP] No API key configured at /etc/hookprobe/secrets/api-key. "
+                "Heartbeat skipped. Run the enrollment flow to provision a key."
+            )
+            return False
+        return self._send_heartbeat_v2(metrics, api_key)
 
     def _load_api_key(self) -> str:
         """Load API key from secrets directory if available."""

@@ -157,67 +157,72 @@ def ch_insert(query: str, data: str = '') -> bool:
 
 def extract_network_features(window_seconds: int) -> Dict[str, dict]:
     """
-    Extract network features from napse_intents (packet-level), falling back
-    to napse_flows (flow-level summaries) when napse_intents is unavailable.
+    Extract network features from napse_flows + hydra_events.
 
     Per IP: pps, bps, unique_dst_ports, unique_dst_ips, syn_ratio,
             rst_ratio, avg_pkt_size, small_pkt_ratio
+
+    napse_flows provides flow-level summaries (volumes, port/IP fan-out,
+    packet size). hydra_events provides TCP-flag observations for XDP
+    drop/alert events, which we use to derive syn_ratio / rst_ratio for
+    IPs that appear in both. IPs only present in one source are merged.
+
+    Why not aegis_observations? The table is defined in the schema but
+    has no writer in the current inspector pipeline — prior code queried
+    it, always got empty, silently fell through, and left syn/rst ratios
+    pinned to 0. TODO: extend inspector to emit packet-level rows so we
+    can drop the hydra_events approximation.
     """
-    # Try packet-level table first (has TCP flags for syn/rst ratios)
-    features = _extract_from_napse_intents(window_seconds)
-    if features:
-        return features
+    flow_features = _extract_from_napse_flows(window_seconds)
+    tcp_ratios = _extract_tcp_ratios_from_events(window_seconds)
 
-    # Fallback to flow-level table (no TCP flags, but has flow summaries)
-    logger.debug("napse_intents empty/unavailable, falling back to napse_flows")
-    return _extract_from_napse_flows(window_seconds)
+    # Merge tcp_ratios into flow_features for overlapping IPs
+    for ip, ratios in tcp_ratios.items():
+        if ip in flow_features:
+            flow_features[ip].update(ratios)
+    return flow_features
 
 
-def _extract_from_napse_intents(window_seconds: int) -> Dict[str, dict]:
-    """Extract features from aegis_observations (packet-level data with TCP flags)."""
+def _extract_tcp_ratios_from_events(window_seconds: int) -> Dict[str, Dict[str, float]]:
+    """Best-effort syn_ratio / rst_ratio from hydra_events (XDP drop/alert set).
+
+    Biased toward IPs already flagged by XDP, so this only refines features
+    for IPs that appear here AND in napse_flows. IPs present in hydra_events
+    but absent from flows are ignored — we don't want XDP-only observations
+    to synthesize feature rows.
+    """
     query = f"""
         SELECT
             IPv4NumToString(src_ip) AS ip,
-            count() AS total_packets,
-            sum(payload_len) AS total_bytes,
-            uniq(dst_port) AS unique_dst_ports,
-            uniq(dst_ip) AS unique_dst_ips,
+            count() AS total,
             countIf(tcp_flags = 2) AS syn_count,
-            countIf(tcp_flags = 4) AS rst_count,
-            avg(payload_len) AS avg_pkt_size,
-            countIf(payload_len < 100) AS small_pkts
-        FROM {CH_DB}.aegis_observations
+            countIf(tcp_flags = 4) AS rst_count
+        FROM {CH_DB}.hydra_events
         WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
+          AND proto = 6
         GROUP BY src_ip
-        HAVING total_packets >= {MIN_PACKETS}
+        HAVING total >= {MIN_PACKETS}
     """
-
     result = ch_query(query)
     if not result:
         return {}
 
-    features = {}
+    ratios: Dict[str, Dict[str, float]] = {}
     for line in result.strip().split('\n'):
         if not line:
             continue
         try:
             row = json.loads(line)
-            ip = row['ip']
-            total = float(row['total_packets'])
-            features[ip] = {
-                'pps': total / window_seconds,
-                'bps': float(row['total_bytes']) * 8 / window_seconds,
-                'unique_dst_ports': int(row['unique_dst_ports']),
-                'unique_dst_ips': int(row['unique_dst_ips']),
-                'syn_ratio': float(row['syn_count']) / total if total > 0 else 0,
-                'rst_ratio': float(row['rst_count']) / total if total > 0 else 0,
-                'avg_pkt_size': float(row['avg_pkt_size']),
-                'small_pkt_ratio': float(row['small_pkts']) / total if total > 0 else 0,
+            total = float(row['total'])
+            if total <= 0:
+                continue
+            ratios[row['ip']] = {
+                'syn_ratio': float(row['syn_count']) / total,
+                'rst_ratio': float(row['rst_count']) / total,
             }
-        except (json.JSONDecodeError, KeyError, ZeroDivisionError):
+        except (json.JSONDecodeError, KeyError, ValueError):
             continue
-
-    return features
+    return ratios
 
 
 def _extract_from_napse_flows(window_seconds: int) -> Dict[str, dict]:
