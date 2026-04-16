@@ -421,56 +421,135 @@ class AegisOrchestrator:
     def _write_to_blackboard(
         self, agent_name: str, signal: StandardSignal, response: AgentResponse
     ):
-        """Write agent decision to aegis_cognition table (PostgreSQL blackboard)."""
+        """Write agent decision to aegis_cognition via the dashboard HTTP API.
+
+        Phase 1 rewrite: the previous implementation shelled out to
+        `podman exec hookprobe-postgres psql -c <f-string SQL>` which:
+          1. Only worked on the OCI host where the hookprobe-postgres
+             container exists — every customer-side Guardian/Sentinel/Fortress
+             silently failed.
+          2. Built SQL via f-string interpolation with `.replace("'", "''")`
+             quote-escaping, which is unsafe for attacker-influenced RAG
+             context strings.
+
+        This version POSTs to /api/internal/cognition (authenticated by an
+        API key identical to the heartbeat key) and lets the server insert
+        the row with parameterized psycopg2 placeholders.
+
+        Configuration (env):
+          AEGIS_COGNITION_URL   — e.g. https://mssp.hookprobe.com/api/internal/cognition
+                                  Defaults to mssp.hookprobe.com above.
+          AEGIS_API_KEY         — customer-node API key (shared with heartbeat)
+                                  or path to a key file at
+                                  /etc/hookprobe/secrets/api-key.
+          AEGIS_COGNITION_TIMEOUT — seconds, default 5.
+
+        If the URL or key is unavailable, the call is skipped with a debug
+        log (non-fatal) — the write is best-effort by design.
+        """
+        import os
+        import json
+        import urllib.request
+        import urllib.error
+
+        # Only write significant events (confidence > 0.4)
+        confidence = getattr(response, 'confidence', 0.5)
+        if confidence < 0.4:
+            return
+
+        endpoint = os.environ.get(
+            'AEGIS_COGNITION_URL',
+            'https://mssp.hookprobe.com/api/internal/cognition',
+        )
+        api_key = os.environ.get('AEGIS_API_KEY') or self._load_agent_api_key()
+        if not api_key:
+            logger.debug(
+                "Blackboard write skipped: no AEGIS_API_KEY configured. "
+                "Provision via /etc/hookprobe/secrets/api-key or set the env var."
+            )
+            return
+
+        action = getattr(response, 'action', '') or ''
+        priority = 3 if confidence > 0.8 else 5 if confidence > 0.6 else 7
+
+        signal_source = str(getattr(signal, 'source', '') or '')
+        signal_event = str(getattr(signal, 'event_type', '') or '')
+        event_type = (
+            f"{signal_source}.{signal_event}"
+            if signal_source and signal_event
+            else (signal_source or signal_event or action or 'unknown')
+        )[:200]
+
+        payload = {
+            'agent': agent_name,
+            'action': action,
+            'confidence': float(confidence),
+            'signal_type': str(getattr(signal, 'type', '') or ''),
+            'reasoning': str(getattr(response, 'reasoning', '') or '')[:500],
+        }
+
+        rag_ctx = getattr(response, 'sources', None) or []
+        rag_context = [str(s)[:500] for s in list(rag_ctx)[:5]]
+
+        body = {
+            'agent_id': agent_name[:64],
+            'event_type': event_type,
+            'priority': priority,
+            'payload': payload,
+            'rag_context': rag_context,
+            'source_signal': signal_source[:200],
+        }
+
+        timeout = float(os.environ.get('AEGIS_COGNITION_TIMEOUT', '5'))
+        data = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(
+            endpoint,
+            data=data,
+            headers={
+                'Content-Type': 'application/json',
+                'X-API-Key': api_key,
+                'User-Agent': 'HookProbe-AEGIS/1.0',
+            },
+            method='POST',
+        )
+
         try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if 200 <= resp.status < 300:
+                    logger.info(
+                        "Blackboard WRITE: agent=%s event=%s priority=%d confidence=%.2f",
+                        agent_name, event_type[:50], priority, confidence,
+                    )
+                else:
+                    logger.warning(
+                        "Blackboard write returned HTTP %d for agent=%s event=%s",
+                        resp.status, agent_name, event_type[:50],
+                    )
+        except urllib.error.HTTPError as e:
+            # Log body when available to aid debugging (e.g. 401, 403, 400)
+            try:
+                detail = e.read().decode('utf-8', errors='replace')[:300]
+            except Exception:
+                detail = ''
+            logger.warning(
+                "Blackboard write HTTPError %d: %s", e.code, detail,
+            )
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.debug("Blackboard write connection error (non-fatal): %s", e)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug("Blackboard write unexpected error (non-fatal): %s", e)
+
+    def _load_agent_api_key(self) -> str:
+        """Load the shared heartbeat/cognition API key from the node's secrets dir."""
+        try:
+            path = '/etc/hookprobe/secrets/api-key'
             import os
-            from urllib.request import Request, urlopen
-            import urllib.parse
-
-            # Only write significant events (confidence > 0.4)
-            confidence = getattr(response, 'confidence', 0.5)
-            if confidence < 0.4:
-                return
-
-            # Determine event type and priority
-            action = getattr(response, 'action', '') or ''
-            priority = 3 if confidence > 0.8 else 5 if confidence > 0.6 else 7
-
-            payload = {
-                "agent": agent_name,
-                "action": action,
-                "confidence": confidence,
-                "signal_type": str(getattr(signal, 'type', '')),
-                "reasoning": getattr(response, 'reasoning', '')[:500],
-            }
-
-            # Write to PostgreSQL via podman exec (host context)
-            import subprocess, json, uuid
-            cognition_id = str(uuid.uuid4())
-            event_type = f"{signal.source}.{signal.event_type}" if hasattr(signal, 'source') else action
-            source_signal = str(getattr(signal, 'source', ''))
-            payload_json = json.dumps(payload).replace("'", "''")
-            rag_ctx = getattr(response, 'sources', []) or []
-            rag_arr = "ARRAY[" + ",".join(f"'{s}'" for s in rag_ctx[:5]) + "]" if rag_ctx else "NULL"
-
-            sql = (
-                f"INSERT INTO aegis_cognition "
-                f"(id, agent_id, event_type, priority, payload, rag_context, source_signal, resolved) "
-                f"VALUES ('{cognition_id}', '{agent_name}', '{event_type[:100]}', {priority}, "
-                f"'{payload_json}'::jsonb, {rag_arr}, '{source_signal[:100]}', FALSE) "
-                f"ON CONFLICT DO NOTHING;"
-            )
-            subprocess.run(
-                ["podman", "exec", "hookprobe-postgres", "psql", "-U", "hookprobe", "-d", "hookprobe", "-c", sql],
-                capture_output=True, timeout=5
-            )
-            logger.info(
-                "Blackboard WRITE: agent=%s event=%s priority=%d confidence=%.2f",
-                agent_name, event_type[:50], priority, confidence,
-            )
-
-        except Exception as e:
-            logger.debug(f"Blackboard write failed (non-critical): {e}")
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+        return ''
 
     def _trigger_scribe(self, signal: StandardSignal, responses: List[AgentResponse]):
         """Trigger Content Scribe for high-value events."""
