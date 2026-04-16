@@ -64,25 +64,15 @@ MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 # Feature toggle for gradual rollout
 SENTINEL_ENABLED = os.environ.get('SENTINEL_ENABLED', 'true').lower() == 'true'
 
-# Trusted infrastructure IPs — excluded from suspicious/malicious classification.
-# Only RFC-1918/loopback ranges. Public OCI CIDRs are NOT trusted because
-# attackers can run tooling from OCI free-tier instances.
+# Trusted networks — canonical list in hydra/trusted_networks.py. Previously
+# this file kept its own RFC-1918-only list while the inspector had a broader
+# one, causing SENTINEL to malicious-label IPs the inspector ignored (Anthropic
+# SSH, Vodafone Romania, Mitel). Both services now import the same module.
 import ipaddress as _ipaddr
-
-TRUSTED_NETWORKS = [
-    _ipaddr.ip_network('10.0.0.0/8'),       # RFC-1918
-    _ipaddr.ip_network('172.16.0.0/12'),     # RFC-1918
-    _ipaddr.ip_network('192.168.0.0/16'),    # RFC-1918
-    _ipaddr.ip_network('127.0.0.0/8'),       # Loopback
-]
-
-def _is_trusted_ip(ip_str: str) -> bool:
-    """Check if an IP is in the trusted infrastructure list."""
-    try:
-        addr = _ipaddr.ip_address(ip_str)
-        return any(addr in net for net in TRUSTED_NETWORKS)
-    except (ValueError, TypeError):
-        return False
+try:
+    from .trusted_networks import TRUSTED_NETWORKS, is_trusted as _is_trusted_ip  # type: ignore[import]
+except ImportError:
+    from hydra.trusted_networks import TRUSTED_NETWORKS, is_trusted as _is_trusted_ip  # type: ignore[import]
 
 
 def _safe_ip(ip_str: str) -> Optional[str]:
