@@ -1586,7 +1586,7 @@ def auto_label_by_consensus() -> dict:
             s.verdict AS sentinel_verdict,
             v.anomaly_score,
             v.verdict AS anomaly_verdict,
-            v.timestamp,
+            v.latest_ts,
             bl.bl_hits,
             r.rdap_type
         FROM (
@@ -1599,7 +1599,7 @@ def auto_label_by_consensus() -> dict:
         JOIN (
             SELECT src_ip, argMax(anomaly_score, timestamp) AS anomaly_score,
                    argMax(verdict, timestamp) AS verdict,
-                   max(timestamp) AS timestamp
+                   max(timestamp) AS latest_ts
             FROM {CH_DB}.hydra_verdicts
             WHERE timestamp >= now() - INTERVAL 1 HOUR
               AND operator_decision = ''
