@@ -227,7 +227,14 @@ def flush_events():
         if result is not None:
             logger.info(f"Flushed {len(rows)} events to ClickHouse")
         else:
-            logger.warning(f"Failed to flush {len(rows)} events")
+            # ch_query() already logs the ClickHouse error body on HTTPError
+            # (see HTTPError handler above). Re-queue the batch so it isn't lost
+            # on transient failures.
+            logger.warning(
+                f"Failed to flush {len(rows)} events — see ClickHouse error body above. "
+                f"Re-queuing batch for next flush."
+            )
+            event_buffer.extend(events)
 
     # Check for alertable conditions
     check_alerts()
