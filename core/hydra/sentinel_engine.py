@@ -532,6 +532,7 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
 
     for ip, stats in ip_data.items():
         evidence = [0.0] * N_EVIDENCE
+        _result_z_scores: List[float] = []  # Populated when profile exists
 
         # Feature 0: Isolation Forest anomaly score from anomaly detector
         evidence[0] = anomaly_scores.get(ip, 0.0)
@@ -566,6 +567,10 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
             evidence[4] = _clamp_z(z_scores[1])  # event_rate Z
             evidence[5] = _clamp_z(z_scores[2])  # unique_ports Z
             evidence[6] = _clamp_z(z_scores[5])  # syn_ratio Z
+            # Stash for the sentinel_evidence INSERT below. Previously the
+            # computed z_scores were discarded; the schema has a z_scores
+            # Array(Float32) column that was always defaulting to [].
+            _result_z_scores = z_scores
 
             # Feature 9: Diurnal anomaly
             evidence[9] = _diurnal_anomaly_from_profile(profile, now_hour)
@@ -630,6 +635,7 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
             'rdap_type': rdap.get('rdap_type', 'unknown'),
             'cve_relevance': evidence[7],
             'profile_deviation': evidence[14],
+            'z_scores': (_result_z_scores if profile else []),
         })
 
     # Enrich with temporal signals (drift, campaigns, intents)
@@ -659,7 +665,13 @@ def _load_anomaly_scores(ips: List[str], window_seconds: int = 3600) -> Dict[str
     """Load most recent Isolation Forest anomaly scores per IP from hydra_verdicts."""
     if not ips:
         return {}
-    ip_list = ','.join(f"toIPv4('{_safe_ip(ip) or ip}')" for ip in ips[:500])
+    # Previously used `_safe_ip(ip) or ip` which would silently pass an
+    # invalid IP through to the SQL when _safe_ip returned None. Now we
+    # strictly drop anything that fails validation.
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
     query = f"""
         SELECT
             IPv4NumToString(src_ip) AS ip,
@@ -690,8 +702,13 @@ def _load_rdap_batch(ips: List[str]) -> Dict[str, dict]:
     if not ips:
         return {}
 
-    # Build IN clause with IP strings
-    ip_list = ','.join(f"toIPv4('{ip}')" for ip in ips[:500])
+    # Defense-in-depth: validate each IP before interpolating. Callers pass
+    # IPs from IPv4NumToString output (already well-formed), but the safety
+    # check stays consistent with _load_anomaly_scores and line 672.
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
     query = f"""
         SELECT
             ip,
@@ -720,7 +737,10 @@ def _load_profile_batch(ips: List[str]) -> Dict[str, dict]:
     if not ips:
         return {}
 
-    ip_list = ','.join(f"toIPv4('{ip}')" for ip in ips[:500])
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
     query = f"""
         SELECT
             ip,
@@ -837,7 +857,10 @@ def _load_verdict_history(ips: List[str]) -> Dict[str, float]:
     if not ips:
         return {}
 
-    ip_list = ','.join(f"toIPv4('{ip}')" for ip in ips[:500])
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
     query = f"""
         SELECT
             src_ip AS ip,
@@ -869,7 +892,10 @@ def _load_temporal_batch(ips: List[str]) -> Dict[str, dict]:
     if not ips:
         return {}
 
-    ip_list = ','.join(f"toIPv4('{ip}')" for ip in ips[:500])
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
     query = f"""
         SELECT
             ip,
@@ -1424,6 +1450,10 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
 
         # Build evidence array string
         ev_str = '[' + ','.join(f'{v:.6f}' for v in evidence) + ']'
+        # Z-scores array — previously dropped, schema column defaulted to [].
+        # Dashboard/analytics queries filtering on z_scores now see real data.
+        z_vec = item.get('z_scores') or []
+        z_str = '[' + ','.join(f'{v:.6f}' for v in z_vec if math.isfinite(v)) + ']'
 
         rows.append(
             f"('{now}', toIPv4('{safe}'), "
@@ -1434,7 +1464,8 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
             f"'{result['verdict']}', "
             f"{result['confidence']:.4f}, "
             f"{item.get('profile_deviation', 0):.6f}, "
-            f"{item.get('cve_relevance', 0):.6f})"
+            f"{item.get('cve_relevance', 0):.6f}, "
+            f"{z_str})"
         )
 
     # Insert in batches
@@ -1442,7 +1473,8 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     query = (
         f"INSERT INTO {CH_DB}.sentinel_evidence "
         "(timestamp, src_ip, if_score, bayes_score, sentinel_score, "
-        "evidence_vector, verdict, confidence, profile_deviation, cve_relevance)"
+        "evidence_vector, verdict, confidence, profile_deviation, "
+        "cve_relevance, z_scores)"
     )
 
     for i in range(0, len(rows), 100):
