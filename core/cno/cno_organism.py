@@ -139,6 +139,17 @@ class HYDRABridge:
         self._siem = siem
         self._sia_active = sia_active  # Phase 11: flag for SIA routing
         self._last_poll = time.time()
+        # Watermark cursors — prevent re-evaluating the same row on every
+        # 10 s cycle. The previous lookback-window approach fetched the last
+        # 15 s of verdicts on a 10 s cycle, so malicious IPs that lingered in
+        # the window for longer than one cycle were submitted to Multi-RAG
+        # repeatedly (observed: same IP bridged 8x in 3s). Cursor stores the
+        # MAX(timestamp) actually seen on this service; we only fetch rows
+        # strictly newer than it. Deduped further by (src_ip, ts_second)
+        # inside the cycle via _seen_this_cycle.
+        self._verdicts_cursor_ms: int = 0  # ms since epoch
+        self._velocities_cursor_ms: int = 0
+        self._flows_cursor_ms: int = 0
         self._stats = {
             'verdicts_bridged': 0,
             'velocities_bridged': 0,
@@ -166,31 +177,62 @@ class HYDRABridge:
         return cycle_stats
 
     def _bridge_verdicts(self) -> int:
-        """Bridge recent HYDRA verdicts into Synaptic Controller."""
+        """Bridge recent HYDRA verdicts into Synaptic Controller.
+
+        Watermarked: only rows with timestamp > last-seen cursor. On first
+        call the cursor is 0 so we fall back to the lookback window; on
+        subsequent calls only genuinely new rows are fetched. Additionally
+        deduped within a cycle by (src_ip, timestamp_ms) so a single verdict
+        row never fires Multi-RAG twice.
+        """
+        # SELECT timestamp as epoch ms so we can update the cursor cleanly.
+        # Fall back to lookback window on cold start (cursor == 0).
+        if self._verdicts_cursor_ms > 0:
+            where = f"timestamp > fromUnixTimestamp64Milli({self._verdicts_cursor_ms})"
+        else:
+            where = f"timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND"
         query = (
-            f"SELECT src_ip, anomaly_score, verdict, action_taken "
+            f"SELECT src_ip, anomaly_score, verdict, action_taken, "
+            f"toUnixTimestamp64Milli(timestamp) AS ts_ms "
             f"FROM {CH_DB}.hydra_verdicts "
-            f"WHERE timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
+            f"WHERE {where} "
             f"AND verdict IN ('suspicious', 'malicious') "
-            f"ORDER BY anomaly_score DESC "
-            f"LIMIT 50"
+            f"ORDER BY timestamp ASC, anomaly_score DESC "
+            f"LIMIT 200"
         )
         result = _ch_query(query)
         if not result:
             return 0
 
         count = 0
+        seen_this_cycle: set = set()
+        max_ts_ms = self._verdicts_cursor_ms
         for line in result.strip().split('\n'):
             if not line.strip():
                 continue
             parts = line.split('\t')
-            if len(parts) < 4:
+            if len(parts) < 5:
                 continue
 
             src_ip = parts[0]
             score = float(parts[1] or 0)
             verdict = parts[2]
             action = parts[3]
+            try:
+                ts_ms = int(parts[4])
+            except (ValueError, TypeError):
+                ts_ms = 0
+
+            # Advance cursor to the latest row we see, regardless of dedup.
+            if ts_ms > max_ts_ms:
+                max_ts_ms = ts_ms
+
+            # Dedup within this cycle — a single row shouldn't be bridged
+            # twice even if it matches multiple routing rules.
+            dedup_key = (src_ip, ts_ms)
+            if dedup_key in seen_this_cycle:
+                continue
+            seen_this_cycle.add(dedup_key)
 
             # Route based on severity
             if score >= 0.95:
@@ -260,6 +302,10 @@ class HYDRABridge:
                 )
 
             count += 1
+
+        # Advance cursor so the next cycle only picks up newer rows.
+        if max_ts_ms > self._verdicts_cursor_ms:
+            self._verdicts_cursor_ms = max_ts_ms
 
         self._stats['verdicts_bridged'] += count
         return count

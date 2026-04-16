@@ -716,19 +716,51 @@ class GuardianAgent:
                 pass
 
     def _collect_guardian_telemetry(self) -> dict:
-        """Collect telemetry dict for MSSP heartbeat."""
-        if not self.metrics_history:
-            return {}
-        latest = self.metrics_history[-1]
-        return {
-            'system': {
-                'hostname': os.uname().nodename,
-                'osName': 'Linux',
-                'kernelVersion': os.uname().release,
-                'cpu': {'percent': latest.network_stats.get('cpu_percent', 0), 'count': os.cpu_count()},
-                'memory': {'percent': latest.network_stats.get('memory_percent', 0)},
+        """Collect telemetry dict for MSSP heartbeat.
+
+        Previously returned a hand-crafted minimal dict containing only the
+        `system` block. The shared TelemetryCollector already produces the
+        full {system, network, security} shape that heartbeat.ts expects —
+        omitting network/security meant the dashboard's QSecBit components
+        (firewall / patchStatus / authIntegrity / networkExposure) always
+        defaulted to zero for Guardian nodes.
+        """
+        try:
+            from shared.mssp.telemetry_collector import TelemetryCollector
+        except ImportError:
+            # Shared module not on sys.path (truncated edge install) —
+            # fall back to the minimal legacy shape so heartbeats still
+            # succeed.
+            if not self.metrics_history:
+                return {}
+            latest = self.metrics_history[-1]
+            return {
+                'system': {
+                    'hostname': os.uname().nodename,
+                    'osName': 'Linux',
+                    'kernelVersion': os.uname().release,
+                    'cpu': {
+                        'percent': latest.network_stats.get('cpu_percent', 0),
+                        'count': os.cpu_count(),
+                    },
+                    'memory': {'percent': latest.network_stats.get('memory_percent', 0)},
+                },
             }
-        }
+
+        telemetry = TelemetryCollector.collect_all()
+        # Fold in Guardian-specific in-memory measurements so we don't
+        # re-read /proc twice per heartbeat. The shared collector has
+        # already populated system/network/security from /proc — we just
+        # enrich, never overwrite.
+        if self.metrics_history:
+            latest = self.metrics_history[-1]
+            sys_block = telemetry.setdefault('system', {})
+            cpu = sys_block.setdefault('cpu', {})
+            cpu.setdefault('percent', latest.network_stats.get('cpu_percent', 0))
+            cpu.setdefault('count', os.cpu_count())
+            mem = sys_block.setdefault('memory', {})
+            mem.setdefault('percent', latest.network_stats.get('memory_percent', 0))
+        return telemetry
 
     # =========================================================================
     # DAEMON MODE
