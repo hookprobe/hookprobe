@@ -66,19 +66,28 @@ DOH_RESOLVER_IPS = {
     '208.67.222.222', '208.67.220.220',  # OpenDNS
 }
 
-# Trusted networks - never classify as threats
-# These are known legitimate sources that should not trigger alerts
-TRUSTED_NETWORKS = [
-    ipaddress.ip_network('160.79.104.0/23'),    # Anthropic (Claude Code SSH)
-    ipaddress.ip_network('213.233.111.0/24'),    # Vodafone Romania (owner ISP - Bucharest)
-    ipaddress.ip_network('46.97.153.0/24'),      # Vodafone Romania (owner ISP - Giurgiu)
-    ipaddress.ip_network('209.249.57.0/24'),     # Mitel Networks
-    ipaddress.ip_network('169.254.0.0/16'),      # Link-local / cloud metadata
-    ipaddress.ip_network('10.0.0.0/8'),          # Private RFC1918
-    ipaddress.ip_network('172.16.0.0/12'),       # Private RFC1918
-    ipaddress.ip_network('192.168.0.0/16'),      # Private RFC1918
-    ipaddress.ip_network('127.0.0.0/8'),         # Loopback
-]
+# Trusted networks — imported from the canonical module shared with SENTINEL
+# and other threat-scoring services. See hydra/trusted_networks.py.
+try:
+    from hydra.trusted_networks import TRUSTED_NETWORKS  # type: ignore[import]
+except ImportError:
+    # Container may not have sibling hydra package on sys.path; try core.*
+    try:
+        from core.hydra.trusted_networks import TRUSTED_NETWORKS  # type: ignore[import]
+    except ImportError:
+        # Last-resort inline fallback — keep in sync with trusted_networks.py.
+        # Used only if the shared module isn't on PYTHONPATH (dev/test).
+        TRUSTED_NETWORKS = [
+            ipaddress.ip_network('160.79.104.0/23'),
+            ipaddress.ip_network('213.233.111.0/24'),
+            ipaddress.ip_network('46.97.153.0/24'),
+            ipaddress.ip_network('209.249.57.0/24'),
+            ipaddress.ip_network('169.254.0.0/16'),
+            ipaddress.ip_network('10.0.0.0/8'),
+            ipaddress.ip_network('172.16.0.0/12'),
+            ipaddress.ip_network('192.168.0.0/16'),
+            ipaddress.ip_network('127.0.0.0/8'),
+        ]
 
 # Known infrastructure IPs (CDN, repos, cloud services) - never flag as threats
 TRUSTED_IPS = set()
