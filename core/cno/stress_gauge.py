@@ -58,6 +58,11 @@ THRESHOLD_FIGHT = 0.60        # 0.35 - 0.60 = FIGHT
 HYSTERESIS_SECONDS = 30.0     # Min time in a state before transition
 RECOVERY_MAX_SECONDS = 300.0  # Max 5 min in RECOVERY before auto-transition to CALM
 GAUGE_INTERVAL_S = 5.0        # Compute stress every 5 seconds
+# How often to write a cno_stress_history row even when the organism stayed
+# in the same state. Previously only transition rows were logged, so a 12-hour
+# stretch of CALM produced zero rows and the watchdog (cno-watchdog.sh) could
+# not distinguish "healthy but quiet" from "StressGauge dead".
+HEARTBEAT_INTERVAL_S = float(os.environ.get('CNO_STRESS_HEARTBEAT_S', '60'))
 HISTORY_WINDOW = 60           # Keep 60 samples (5 min at 5s intervals)
 
 
@@ -327,6 +332,17 @@ class StressGauge:
     def _log_transition(self, old: StressState, new: StressState,
                         score: float) -> None:
         """Log stress transition to ClickHouse."""
+        self._write_stress_row(old, new, score)
+
+    def _log_heartbeat(self, state: StressState, score: float) -> None:
+        """Log a heartbeat row (same state on both sides) so downstream
+        watchdogs and timeline displays can see liveness during long
+        CALM stretches. Called from the gauge loop on HEARTBEAT_INTERVAL_S.
+        """
+        self._write_stress_row(state, state, score)
+
+    def _write_stress_row(self, old: StressState, new: StressState,
+                          score: float) -> None:
         try:
             import json
             signals_json = json.dumps(self._signals)
@@ -346,12 +362,25 @@ class StressGauge:
 
     def _gauge_loop(self) -> None:
         """Background loop that periodically evaluates stress."""
-        logger.info("StressGauge loop started (interval=%.1fs)", GAUGE_INTERVAL_S)
+        logger.info(
+            "StressGauge loop started (interval=%.1fs, heartbeat=%.1fs)",
+            GAUGE_INTERVAL_S, HEARTBEAT_INTERVAL_S,
+        )
+        last_heartbeat = 0.0
         while self._running:
             try:
                 state, score = self.evaluate()
                 logger.debug("Stress: %s (%.3f) signals=%s",
                              state.value, score, self._signals)
+
+                # Periodic heartbeat write so cno_stress_history is never
+                # silent during long CALM stretches. Transitions are still
+                # logged via _log_transition from evaluate(); the heartbeat
+                # fires on top of that at a coarser cadence.
+                now = time.monotonic()
+                if now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                    self._log_heartbeat(state, score)
+                    last_heartbeat = now
             except Exception as e:
                 logger.error("Stress gauge cycle failed: %s", e)
 
