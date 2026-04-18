@@ -200,6 +200,14 @@ def flush_events():
     events = event_buffer[:MAX_BATCH_SIZE]
     event_buffer = event_buffer[MAX_BATCH_SIZE:]
 
+    # Ch 22 §6.2 readiness tick — we got events, we're ingesting.
+    try:
+        if "_health_reporter" in globals() and _health_reporter is not None:
+            _health_reporter.bump_ingest(len(events))
+            _health_reporter.set_backlog(len(event_buffer))
+    except NameError:
+        pass
+
     now = datetime.now(timezone.utc)
 
     # Build batch insert using POST body for data (avoids URL length limits)
@@ -320,6 +328,13 @@ def run_ringbuf_consumer():
     if not info:
         logger.warning("Cannot get info for events map")
         return False
+
+    # Ch 22 §6.2 — ringbuf attached means readiness green.
+    try:
+        if "_health_reporter" in globals() and _health_reporter is not None:
+            _health_reporter.set_model_loaded(True)
+    except NameError:
+        pass
 
     ringbuf_size = info['max_entries']  # Size in bytes
     page_size = os.sysconf('SC_PAGE_SIZE')
@@ -597,6 +612,19 @@ def main():
 
     if not CH_PASSWORD:
         logger.warning("CLICKHOUSE_PASSWORD not set, ClickHouse logging disabled")
+
+    # Ch 22 §6.2 non-negotiable — per-service readiness endpoint.
+    # Consumer's "model" is the XDP ringbuf + CH sink; both must be up.
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        global _health_reporter
+        _health_reporter = HealthReporter(service="hydra-consumer")
+        start_health_server(_health_reporter,
+                             port=int(os.environ.get("HEALTH_PORT", "9300")))
+        # Consumer doesn't load an ML model; readiness is "ringbuf attached".
+        # We flip model_loaded=True after the ringbuf consumer starts.
+    except Exception as e:
+        logger.warning("health module unavailable: %s", e)
 
     # Try RINGBUF mmap first, fall back to poll mode
     if not run_ringbuf_consumer():

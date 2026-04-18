@@ -886,9 +886,23 @@ def main():
         logger.error("CLICKHOUSE_PASSWORD not set")
         sys.exit(1)
 
+    # Ch 22 §6.2 — per-service readiness endpoint
+    _health = None
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-predictor")
+        start_health_server(_health,
+                             port=int(os.environ.get("HEALTH_PORT", "9303")))
+    except Exception as e:
+        logger.warning("health module unavailable: %s", e)
+
     # Initialize tables
     ensure_tables()
     logger.info("Tables verified")
+    if _health:
+        # Predictor's "model" is the pattern + risk-velocity ensemble; no
+        # single artifact to load — green as soon as tables are verified.
+        _health.set_model_loaded(True)
 
     # Initialize Risk Velocity + Flash-RAG engine
     try:
@@ -947,6 +961,8 @@ def main():
             break
 
         cycle_count += 1
+        if _health:
+            _health.bump_ingest()
 
         try:
             # Phase 2: Prediction (every cycle)
