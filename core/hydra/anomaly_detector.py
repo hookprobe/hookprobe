@@ -852,8 +852,20 @@ def main():
         logger.error("CLICKHOUSE_PASSWORD not set")
         sys.exit(1)
 
+    # Ch 22 §6.2 — per-service readiness endpoint
+    _health = None
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-anomaly")
+        start_health_server(_health,
+                             port=int(os.environ.get("HEALTH_PORT", "9301")))
+    except Exception as e:
+        logger.warning("health module unavailable: %s", e)
+
     # Try to load existing model
     forest, scaler, meta = load_model()
+    if _health and forest is not None:
+        _health.set_model_loaded(True)
 
     if forest is None:
         logger.info(f"No trained model found. Collecting baseline ({BASELINE_HOURS}h)...")
@@ -894,6 +906,8 @@ def main():
                 if new_forest:
                     forest = new_forest
                     scaler = new_scaler
+                    if _health:
+                        _health.set_model_loaded(True)
                     logger.info("Retrain complete")
                 else:
                     logger.warning("Retrain failed — keeping existing model, "
@@ -902,6 +916,10 @@ def main():
             # Run detection if model is available
             if forest and scaler:
                 detect_cycle(forest, scaler)
+                if _health:
+                    _health.bump_ingest()
+                    if forest is not None:
+                        _health.set_model_loaded(True)
 
         except Exception as e:
             logger.error(f"Detection cycle failed: {e}")

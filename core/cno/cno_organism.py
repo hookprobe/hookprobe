@@ -469,26 +469,67 @@ class HYDRABridge:
 # ============================================================================
 
 class HealthHandler(http.server.BaseHTTPRequestHandler):
-    """Minimal health endpoint for container orchestration."""
+    """Minimal health endpoint for container orchestration.
+
+    Ch 22 §5 + 22 §2: `/status` exposes the full organism snapshot (active
+    IPs, stress, emotion, tactics) — previously unauthenticated. A Bearer
+    token is now required when `HOOKPROBE_CNO_BEARER` is set. `/health`
+    stays open for Kubernetes / podman readiness probes — it only returns
+    a minimal up/down signal."""
 
     organism = None  # Set by CNOOrganism before starting
 
+    @staticmethod
+    def _bearer_required():
+        return os.environ.get("HOOKPROBE_CNO_BEARER", "").strip()
+
+    def _check_bearer(self) -> bool:
+        expected = self._bearer_required()
+        if not expected:
+            # No token configured. In production this is a misconfig — the
+            # caller gets 500 so monitoring catches it. The unauthed open
+            # state is never reached.
+            return False
+        sent = self.headers.get("Authorization", "").strip()
+        if not sent.startswith("Bearer "):
+            return False
+        token = sent[len("Bearer "):].strip()
+        # Constant-time equality to avoid timing side channel.
+        import hmac
+        return hmac.compare_digest(token, expected)
+
     def do_GET(self):
         if self.path == '/health':
+            # Minimal readiness — always open, no secrets, no internal state.
             status = self.organism.get_health() if self.organism else {}
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(status).encode())
-        elif self.path == '/status':
+            return
+        if self.path == '/status':
+            # Sensitive snapshot — Bearer-gated.
+            if not self._bearer_required():
+                self.send_response(500)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(
+                    b"HOOKPROBE_CNO_BEARER not configured; /status refuses to serve"
+                )
+                return
+            if not self._check_bearer():
+                self.send_response(401)
+                self.send_header('WWW-Authenticate', 'Bearer realm="cno-status"')
+                self.end_headers()
+                return
             status = self.organism.get_full_status() if self.organism else {}
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(status, default=str).encode())
-        else:
-            self.send_response(404)
-            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def log_message(self, format, *args):
         pass  # Suppress access logs
