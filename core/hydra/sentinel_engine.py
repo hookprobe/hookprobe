@@ -1109,9 +1109,17 @@ class SentinelEngine:
         """
         Train the Bayes model from operator-labeled verdicts.
 
+        Ch 22 §4 fix: historical training pulled ONLY positive labels
+        (operator_decision IN confirm/auto_confirm) → precision=0, recall=0,
+        f1=0 in live meta-regression. We now UNION in auto-labeled BENIGN
+        rows from the trusted-network allowlist so the Bayesian head sees
+        both classes. Bounded to 100 benign rows per training cycle to keep
+        the class balance tunable via MIN_TRAINING_DECISIONS + manual
+        operator feedback primacy.
+
         Returns training statistics.
         """
-        # Load operator decisions
+        # Load operator decisions + synthesize auto-benign from trusted IPs
         query = f"""
             SELECT
                 src_ip AS ip,
@@ -1124,7 +1132,28 @@ class SentinelEngine:
                                         'auto_confirm', 'auto_false_positive',
                                         'auto_fp')
               AND timestamp >= now() - INTERVAL 90 DAY
-            ORDER BY timestamp
+
+            UNION ALL
+
+            -- Ch 22 §4 benign augmentation: IPs that are in the trusted-
+            -- network allowlist (per core/hydra/trusted_networks.py) AND
+            -- received verdict='benign' within the last 24 h get promoted
+            -- to the training set with a synthetic 'auto_label_benign'
+            -- decision. Capped at 100 rows per cycle so operator feedback
+            -- keeps dominating as real labels accumulate.
+            SELECT
+                src_ip AS ip,
+                anomaly_score,
+                verdict,
+                'auto_label_benign' AS operator_decision,
+                timestamp
+            FROM {CH_DB}.hydra_verdicts
+            WHERE verdict = 'benign'
+              AND timestamp >= now() - INTERVAL 24 HOUR
+            ORDER BY timestamp DESC
+            LIMIT 100
+
+            FORMAT JSONEachRow
         """
         result = ch_query(query)
         if not result:
@@ -1132,6 +1161,7 @@ class SentinelEngine:
 
         # Parse decisions: keep most recent decision + its timestamp per IP
         labeled_ips: Dict[str, Tuple[bool, str]] = {}  # ip -> (is_tp, timestamp)
+        benign_auto_count = 0
         for line in result.strip().split('\n'):
             if not line:
                 continue
@@ -1140,7 +1170,23 @@ class SentinelEngine:
                 ip = row['ip']
                 decision = row['operator_decision']
                 ts = str(row.get('timestamp', ''))
-                labeled_ips[ip] = (decision in ('confirm', 'auto_confirm'), ts)
+                is_tp = decision in ('confirm', 'auto_confirm')
+                # auto_label_benign is a strong negative. Apply only when
+                # the IP doesn't already have a real operator decision —
+                # operator feedback ALWAYS wins over auto-labels.
+                if decision == 'auto_label_benign':
+                    if ip in labeled_ips:
+                        continue  # respect existing operator label
+                    # Filter to trusted-network IPs only (defense in depth)
+                    try:
+                        from trusted_networks import is_trusted
+                        if not is_trusted(ip):
+                            continue
+                    except ImportError:
+                        # If module unavailable, skip — never poison
+                        continue
+                    benign_auto_count += 1
+                labeled_ips[ip] = (is_tp, ts)
             except (json.JSONDecodeError, KeyError):
                 continue
 
@@ -1148,6 +1194,7 @@ class SentinelEngine:
             return {
                 'status': 'insufficient_data',
                 'samples': len(labeled_ips),
+                'auto_benign': benign_auto_count,
                 'required': MIN_TRAINING_DECISIONS,
             }
 
@@ -1723,9 +1770,26 @@ def main():
         logger.error("CLICKHOUSE_PASSWORD not set")
         sys.exit(1)
 
+    # Ch 22 §6.2 — per-service readiness endpoint (exposed even when disabled
+    # so operators can distinguish "service down" from "feature toggled off").
+    _health = None
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-sentinel")
+        start_health_server(_health,
+                             port=int(os.environ.get("HEALTH_PORT", "9302")))
+    except Exception as e:
+        logger.warning("health module unavailable: %s", e)
+
     if not SENTINEL_ENABLED:
         logger.info("SENTINEL is disabled via SENTINEL_ENABLED=false. Sleeping...")
+        if _health:
+            # Not "unhealthy" — just not doing work. Flip model_loaded so
+            # readiness stays green; operators use metrics to distinguish.
+            _health.set_model_loaded(True)
         while running:
+            if _health:
+                _health.bump_ingest()  # idle heartbeat
             time.sleep(60)
         return
 
@@ -1735,6 +1799,8 @@ def main():
     # Try to load existing model
     if engine.load_from_ch():
         logger.info(f"Loaded existing model v{engine.version}")
+        if _health:
+            _health.set_model_loaded(True)
     else:
         logger.info("No existing model found — starting with heuristics only")
 
@@ -1766,6 +1832,10 @@ def main():
         try:
             # Score
             result = scoring_cycle(engine)
+            if _health:
+                _health.bump_ingest(result.get('scored', 0) or 1)
+                if engine.version > 0:
+                    _health.set_model_loaded(True)
             if result['scored'] > 0:
                 v = result.get('verdicts', {})
                 vc = result.get('verdict_count', 0)
