@@ -67,6 +67,15 @@ VALENCE_DECAY = 0.025          # Valence drifts toward 0 per cycle (neutral)
 AROUSAL_DECAY = 0.025          # Arousal decays toward 0 per cycle
 EMOTION_HYSTERESIS_S = 20.0    # Min dwell time before emotion transition
 EMOTION_EVAL_INTERVAL_S = 5.0  # Evaluate every 5 seconds
+# Ch 24 §P3 G9 — heartbeat row to cno_emotion_log so the table reflects
+# liveness during long stable periods. Mirrors stress_gauge's pattern
+# (see stress_gauge.py:HEARTBEAT_INTERVAL_S). Without this, an organism
+# locked in SERENE for hours produces zero emotion_log rows and the
+# watchdog can't distinguish "healthy but quiet" from "EmotionEngine
+# thread dead".
+EMOTION_HEARTBEAT_INTERVAL_S = float(
+    os.environ.get('CNO_EMOTION_HEARTBEAT_S', '60')
+)
 
 
 class EmotionEngine:
@@ -100,7 +109,13 @@ class EmotionEngine:
         self._stats = {
             'evaluations': 0,
             'transitions': 0,
+            'heartbeats': 0,
         }
+        # Last heartbeat timestamp (monotonic). Initialised in the past
+        # so the first evaluate() after construction emits one row,
+        # giving the watchdog an immediate liveness signal without
+        # waiting a full HEARTBEAT_INTERVAL_S.
+        self._last_heartbeat_at = time.monotonic() - EMOTION_HEARTBEAT_INTERVAL_S
 
         logger.info("EmotionEngine initialized (valence=%.1f, arousal=%.1f)",
                      self._valence, self._arousal)
@@ -308,6 +323,10 @@ class EmotionEngine:
 
             # Log transition
             self._log_transition(old, candidate)
+            # Reset heartbeat clock — a transition row already proves
+            # liveness so we don't need a separate heartbeat for another
+            # full interval.
+            self._last_heartbeat_at = now
 
             # Notify callback
             if self._on_change:
@@ -315,11 +334,29 @@ class EmotionEngine:
                     self._on_change(old, candidate, self._valence, self._arousal)
                 except Exception as e:
                     logger.error("Emotion change callback failed: %s", e)
+        elif now - self._last_heartbeat_at >= EMOTION_HEARTBEAT_INTERVAL_S:
+            # Ch 24 §P3 G9 — heartbeat write so cno_emotion_log isn't
+            # silent during stable periods. Same row schema as a
+            # transition; trigger_event='heartbeat' makes the two
+            # distinguishable downstream.
+            self._log_heartbeat(self._emotion)
+            self._last_heartbeat_at = now
+            self._stats['heartbeats'] += 1
 
         return self._emotion, self._valence, self._arousal
 
     def _log_transition(self, old: EmotionState, new: EmotionState) -> None:
         """Log emotion transition to ClickHouse."""
+        self._write_emotion_row(old, new, "emotion_transition")
+
+    def _log_heartbeat(self, current: EmotionState) -> None:
+        """Periodic liveness row — same emotion in old + new fields,
+        trigger_event='heartbeat' for downstream filtering."""
+        self._write_emotion_row(current, current, "heartbeat")
+
+    def _write_emotion_row(
+        self, old: EmotionState, new: EmotionState, trigger: str,
+    ) -> None:
         try:
             import json
             actions = self.get_camouflage_profile().get('techniques', [])
@@ -330,11 +367,11 @@ class EmotionEngine:
                 f"trigger_event, camouflage_actions) "
                 f"VALUES (now64(3), '{old.value}', '{new.value}', "
                 f"{self._valence}, {self._arousal}, "
-                f"'emotion_transition', '{_ch_escape(actions_json)}')"
+                f"'{trigger}', '{_ch_escape(actions_json)}')"
             )
             _ch_post(query)
         except Exception as e:
-            logger.debug("Emotion log failed: %s", e)
+            logger.debug("Emotion log failed (%s): %s", trigger, e)
 
     # ------------------------------------------------------------------
     # Camouflage Profile (what the Adaptive Camouflage system should do)
