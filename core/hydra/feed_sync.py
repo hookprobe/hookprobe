@@ -22,6 +22,7 @@ Architecture:
 """
 
 import os
+import threading
 import sys
 import time
 import json
@@ -555,6 +556,47 @@ def sync_all_feeds() -> dict:
     return summary
 
 
+def _start_peer_transport_consumer():
+    """Ch 4a/b §P2 — bridge the IoCs table to XDP within ~5s.
+
+    Runs the peer-transport consumer in a daemon thread inside the
+    feed container (which has CAP_BPF + SYS_ADMIN). The producer
+    (qsecbit, in another container) INSERTs to iocs; this loop polls
+    the table every 5s and pushes any new IPs to the XDP blocklist
+    map. Closes the gap where self-detected IoCs sat in the table
+    forever without ever reaching the kernel filter.
+    """
+    try:
+        # Add core/ to sys.path so the cno.peer_transport import
+        # resolves when running inside the rootless ids-hydra-feed
+        # container (image WORKDIR is /app; submodule sources land
+        # at /app/core/ via inject-neural-kernel.sh).
+        import sys as _sys
+        if "/app" not in _sys.path:
+            _sys.path.insert(0, "/app")
+        from cno.peer_transport import get_peer_transport
+        # Reuse the small JSON-parser query helper from this module.
+        def _ch_query_json(sql):
+            raw = ch_query(sql)
+            if not raw:
+                return []
+            return [
+                __import__("json").loads(line)
+                for line in raw.strip().splitlines() if line
+            ]
+        transport = get_peer_transport(ch_insert=lambda *_a, **_kw: True)
+        threading.Thread(
+            target=transport.watch_iocs_loop,
+            args=(_ch_query_json,),
+            kwargs={"poll_interval_s": float(os.environ.get("PEER_POLL_S", "5.0"))},
+            daemon=True,
+            name="peer-iocs-watcher",
+        ).start()
+        logger.info("peer_transport iocs-watcher thread started")
+    except Exception as e:
+        logger.warning("peer_transport startup failed: %s", e)
+
+
 def main():
     logger.info("HYDRA Feed Sync starting...")
     logger.info(f"XDP interface: {XDP_INTERFACE}")
@@ -564,6 +606,11 @@ def main():
 
     if not CH_PASSWORD:
         logger.warning("CLICKHOUSE_PASSWORD not set, ClickHouse logging disabled")
+
+    # Ch 4a/b §P2 — start the iocs→XDP consumer thread before kicking
+    # off the feed sync. This lets node-A IoCs reach the kernel filter
+    # in seconds rather than waiting for the next hourly feed cycle.
+    _start_peer_transport_consumer()
 
     # Initial sync
     sync_all_feeds()
