@@ -541,15 +541,19 @@ class QSecBitEngine:
         """Store the calculated score in ClickHouse using parameterized queries."""
         timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
+        # Ch 24 §P1 G4 — node_id is empty for global Python-engine scores;
+        # per-node scores are written by the dashboard heartbeat handler
+        # using the same table. Both coexist; downstream queries filter
+        # `WHERE node_id = ?` for per-node, `WHERE node_id = ''` for global.
         insert_sql = """
             INSERT INTO qsecbit_scores (
-                timestamp, vrf, site_id, score, status,
+                timestamp, vrf, site_id, node_id, score, status,
                 threat_score, network_score, detection_score, response_score,
                 critical_alerts, high_alerts, medium_alerts, low_alerts,
                 high_rate_ips, blocked_threats, active_incidents,
                 score_delta, trend
             ) VALUES (
-                {p_timestamp:String}, {p_vrf:String}, {p_site_id:String},
+                {p_timestamp:String}, {p_vrf:String}, {p_site_id:String}, {p_node_id:String},
                 {p_score:UInt8}, {p_status:String},
                 {p_threat:UInt8}, {p_network:UInt8}, {p_detection:UInt8}, {p_response:UInt8},
                 {p_critical:UInt32}, {p_high:UInt32}, {p_medium:UInt32}, {p_low:UInt32},
@@ -562,6 +566,7 @@ class QSecBitEngine:
             'p_timestamp': timestamp,
             'p_vrf': self.vrf or 'unknown',
             'p_site_id': self.site_id or '',
+            'p_node_id': '',  # Python engine writes global rows only.
             'p_score': score_data['score'],
             'p_status': score_data['status'],
             'p_threat': score_data['components']['threat'],

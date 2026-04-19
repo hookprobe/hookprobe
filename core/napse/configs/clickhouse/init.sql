@@ -223,7 +223,11 @@ CREATE TABLE IF NOT EXISTS hookprobe_ids.qsecbit_scores (
     trend Enum8('improving' = 1, 'stable' = 2, 'degrading' = 3) DEFAULT 'stable',
     score_delta Int16 DEFAULT 0,
     vrf String DEFAULT 'unknown',
-    site_id String DEFAULT ''
+    site_id String DEFAULT '',
+    -- Ch 24 §P1 G4 — per-node attribution. Empty string means a global
+    -- (site-or-VRF level) score from the Python engine; UUID means a
+    -- per-node v2 score written by the dashboard heartbeat handler.
+    node_id String DEFAULT ''
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY timestamp
