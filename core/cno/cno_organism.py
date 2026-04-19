@@ -133,6 +133,16 @@ class HYDRABridge:
     metadata, then injects them as SynapticEvents and PacketSnapshots.
     """
 
+    # Ch 24 §P3 — disk-persistent watermark file. Per the Phase-5
+    # deferred memory entry, this is "the biggest perf win" because
+    # without it every container restart caused the bridge to replay
+    # the last 15s lookback window, double-firing Multi-RAG and
+    # bursting cno_consensus_log with duplicates.
+    _CURSOR_FILE = os.environ.get(
+        'CNO_BRIDGE_CURSOR_FILE',
+        '/var/lib/cno/hydra_bridge_cursor.json',
+    )
+
     def __init__(self, controller: SynapticController, siem: PacketSIEM,
                  sia_active: bool = False):
         self._controller = controller
@@ -155,7 +165,58 @@ class HYDRABridge:
             'velocities_bridged': 0,
             'flows_bridged': 0,
             'errors': 0,
+            'cursor_persisted_at': 0,
+            'cursor_loaded_from_disk': False,
         }
+        # Ch 24 §P3 — load cursors from disk so a restart doesn't reset
+        # the watermark to 0 and replay the last 15 s of HYDRA data.
+        self._load_cursors()
+
+    # ------------------------------------------------------------------
+    # Cursor persistence (Ch 24 §P3)
+    # ------------------------------------------------------------------
+    def _load_cursors(self) -> None:
+        """Restore watermarks from disk on startup. Missing file or
+        unreadable JSON leaves cursors at 0 (warm-start lookback)."""
+        try:
+            with open(self._CURSOR_FILE, 'r') as f:
+                data = json.load(f)
+            self._verdicts_cursor_ms = int(data.get('verdicts_cursor_ms', 0))
+            self._velocities_cursor_ms = int(data.get('velocities_cursor_ms', 0))
+            self._flows_cursor_ms = int(data.get('flows_cursor_ms', 0))
+            self._stats['cursor_loaded_from_disk'] = True
+            logger.info(
+                "HYDRABridge cursors restored from %s "
+                "(verdicts=%d, velocities=%d, flows=%d)",
+                self._CURSOR_FILE,
+                self._verdicts_cursor_ms,
+                self._velocities_cursor_ms,
+                self._flows_cursor_ms,
+            )
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+            logger.info("HYDRABridge cursor file not loaded (%s) — "
+                        "starting from lookback window", e)
+
+    def _persist_cursors(self) -> None:
+        """Atomic write so a half-flushed JSON never corrupts the
+        cursor file. Failure here is logged but doesn't bubble up — the
+        bridge still functions, we just lose the watermark on next
+        restart."""
+        try:
+            os.makedirs(os.path.dirname(self._CURSOR_FILE), exist_ok=True)
+            tmp = self._CURSOR_FILE + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump({
+                    'verdicts_cursor_ms': self._verdicts_cursor_ms,
+                    'velocities_cursor_ms': self._velocities_cursor_ms,
+                    'flows_cursor_ms': self._flows_cursor_ms,
+                    'persisted_at_unix_s': time.time(),
+                }, f)
+            os.replace(tmp, self._CURSOR_FILE)
+            self._stats['cursor_persisted_at'] = int(time.time())
+        except OSError as e:
+            logger.warning("HYDRABridge cursor persist failed: %s", e)
+            self._stats['errors'] += 1
 
     def poll_cycle(self) -> Dict[str, int]:
         """Execute one bridge polling cycle.
@@ -172,6 +233,17 @@ class HYDRABridge:
         except Exception as e:
             logger.error("Bridge cycle error: %s", e)
             self._stats['errors'] += 1
+
+        # Ch 24 §P3 — persist cursors at end of each cycle so a restart
+        # picks up exactly where we left off. Only writes if at least
+        # one cursor advanced this cycle (atomic check inside).
+        any_advance = (
+            cycle_stats['verdicts'] > 0
+            or cycle_stats['velocities'] > 0
+            or cycle_stats['flows'] > 0
+        )
+        if any_advance:
+            self._persist_cursors()
 
         self._last_poll = time.time()
         return cycle_stats
