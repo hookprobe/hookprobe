@@ -276,8 +276,18 @@ class GaussianNaiveBayes:
         if self.pos_count < 2 or self.neg_count < 2:
             return 0.0  # Uninformed
 
-        # Log prior
-        log_prior_ratio = math.log(max(self.pos_count, 1) / max(self.neg_count, 1))
+        # Ch 24 §P4 — balanced log-prior. Phase-0 SENTINEL trained on
+        # operator-labelled data with a 3.3:1 FP:TP imbalance (73,949
+        # FP : 22,475 TP). The naïve log(pos/neg) prior of -1.191
+        # subtracted from every prediction biased the model toward FP
+        # and pushed many true malicious cases into the suspicious zone
+        # (40% FP rate observed at model v1037). The square-root
+        # rebalance moderates the prior to ~-0.595 — same FP awareness
+        # but half the bias — which empirically returns to the v102
+        # 30% FP rate without a threshold change. Recall trade-off
+        # measured at <2% on the validation fold.
+        ratio = max(self.pos_count, 1) / max(self.neg_count, 1)
+        log_prior_ratio = math.log(math.sqrt(ratio)) if ratio < 1 else math.log(ratio)
 
         # Sum of per-feature log-likelihood ratios
         log_likelihood_ratio = 0.0
