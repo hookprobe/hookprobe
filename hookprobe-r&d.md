@@ -1,5 +1,5 @@
 # hookprobe xSOC R&D expenditure
-![hookprobe r&d](images/hookprobe-r&d.png)
+![hookprobe r&d](assets/hookprobe-r&d.png)
 
 **Past Expenditure (13,270 € over 24 months):**  
 In the past two years, our investment has focused on foundational technology costs, which include initial research and development, software procurement, and workforce training. These resources enabled us to explore the application of AI-driven insights in our product line, laying the groundwork for future AI-driven solutions.
