@@ -33,6 +33,15 @@ try:
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
+
+# Ch 4a/b §P2 — event-driven peer-IoC publish. Singleton: lazily started
+# on first IoC creation. Loopback for single-node deploys; gossips when
+# peers are connected. Failure here must NOT block IoC creation.
+try:
+    from cno.peer_transport import get_peer_transport
+    _HAS_PEER_TRANSPORT = True
+except ImportError:
+    _HAS_PEER_TRANSPORT = False
     print("Warning: requests library not installed")
 
 logging.basicConfig(
@@ -752,6 +761,21 @@ def auto_create_iocs(engine: QSecBitEngine):
 
             if engine._insert_clickhouse(insert_sql, params):
                 logger.info(f"Created IoC: {ip} (risk: {risk}, intents: {intents})")
+                # Ch 4a §P2 — event-driven publish so node B's XDP gets
+                # this entry within seconds rather than waiting for the
+                # next 5-min federation cycle. No-op when peer transport
+                # is unavailable; never blocks IoC creation.
+                if _HAS_PEER_TRANSPORT:
+                    try:
+                        get_peer_transport(
+                            ch_insert=engine._insert_clickhouse,
+                        ).publish({
+                            "type": "ip", "value": ip,
+                            "confidence": confidence, "risk": risk,
+                            "threat_type": "suspicious_activity",
+                        })
+                    except Exception:
+                        pass
 
     # Generate IoCs from SENTINEL malicious verdicts (calibrated ML)
     sentinel_query = """
@@ -802,6 +826,15 @@ def auto_create_iocs(engine: QSecBitEngine):
             }
             if engine._insert_clickhouse(insert_sql, params):
                 logger.info(f"Created IoC from SENTINEL: {ip} (score: {score:.2f})")
+                if _HAS_PEER_TRANSPORT:
+                    try:
+                        get_peer_transport(ch_insert=engine._insert_clickhouse).publish({
+                            "type": "ip", "value": ip,
+                            "confidence": confidence, "risk": risk,
+                            "threat_type": "sentinel_malicious",
+                        })
+                    except Exception:
+                        pass
 
     # Generate IoCs from high-volume XDP-blocked IPs
     xdp_query = """
@@ -852,6 +885,15 @@ def auto_create_iocs(engine: QSecBitEngine):
             }
             if engine._insert_clickhouse(insert_sql, params):
                 logger.info(f"Created IoC from XDP: {ip} (blocks: {blocks})")
+                if _HAS_PEER_TRANSPORT:
+                    try:
+                        get_peer_transport(ch_insert=engine._insert_clickhouse).publish({
+                            "type": "ip", "value": ip,
+                            "confidence": confidence, "risk": risk,
+                            "threat_type": "xdp_blocked",
+                        })
+                    except Exception:
+                        pass
 
 
 def auto_create_incidents_from_campaigns(engine: QSecBitEngine):
