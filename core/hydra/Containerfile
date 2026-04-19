@@ -1,7 +1,7 @@
 FROM docker.io/library/python:3.12-slim
 
 LABEL description="HookProbe HYDRA Feed Sync + Event Consumer + ML + Neural-Kernel"
-LABEL version="3.2.0"
+LABEL version="3.3.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
@@ -12,14 +12,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Create model persistence directory
-RUN mkdir -p /app/models
+# Create model persistence directory + the shared-module namespace tree
+# so `from core.common.health import ...` resolves inside the container.
+# Ch 24 §P0 fix: previously the import fell into try/except and
+# _health stayed None → no /healthz server bound on HEALTH_PORT →
+# Docker healthcheck probes failed → 4 containers reported unhealthy
+# while running fine. See: compose.hydra-{anomaly,consumer,...}.healthcheck
+# and core/hydra/anomaly_detector.py:862.
+RUN mkdir -p /app/models /app/core/common && \
+    touch /app/core/__init__.py /app/core/common/__init__.py
 
+# Build context is core/ (parent of hydra/) so we can reach common/.
 # Core HYDRA pipeline
-COPY bpf_map_ops.py feed_sync.py event_consumer.py feature_extractor.py anomaly_detector.py rdap_enricher.py baseline_profiler.py cve_enricher.py temporal_memory.py sentinel_engine.py sentinel_lifecycle.py predictor_engine.py ./
+COPY hydra/bpf_map_ops.py hydra/feed_sync.py hydra/event_consumer.py \
+     hydra/feature_extractor.py hydra/anomaly_detector.py \
+     hydra/rdap_enricher.py hydra/baseline_profiler.py hydra/cve_enricher.py \
+     hydra/temporal_memory.py hydra/sentinel_engine.py \
+     hydra/sentinel_lifecycle.py hydra/predictor_engine.py ./
+
+# Phase 2 canonical source — `from hydra.trusted_networks import ...`.
+# Keep both flat and namespaced paths so old + new imports work.
+RUN mkdir -p /app/hydra && touch /app/hydra/__init__.py
+COPY hydra/trusted_networks.py /app/hydra/trusted_networks.py
+COPY hydra/trusted_networks.py /app/trusted_networks.py
 
 # Neural-Kernel: Risk Velocity + Cognitive Defense Loop
-COPY risk_velocity.py cognitive_defense.py ./
+COPY hydra/risk_velocity.py hydra/cognitive_defense.py ./
+
+# Shared readiness helper (canonical location preserved so imports
+# match the source tree).
+COPY common/health.py /app/core/common/health.py
 
 # Default: run feed_sync (override in compose for other daemons)
 CMD ["python3", "-u", "feed_sync.py"]
