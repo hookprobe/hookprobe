@@ -677,9 +677,16 @@ class CNOOrganism:
             pass
 
         # === Tier-gated components ===
+        # Ch 25 §P5 — wire the deep-analysis callback so the metacognitive
+        # router (Phase 21) actually has a destination for uncertain
+        # verdicts. Previously this was None which silently dropped the
+        # router's escalation signal on the floor.
         self._multi_rag = (
-            MultiRAGConsensus(on_verdict=self._on_rag_verdict_with_episode,
-                              npu_bridge=NPUBridge() if _has('npu') else None)
+            MultiRAGConsensus(
+                on_verdict=self._on_rag_verdict_with_episode,
+                npu_bridge=NPUBridge() if _has('npu') else None,
+                on_deep_analysis=self._on_deep_analysis_requested,
+            )
             if _has('multi_rag') else None
         )
         # Phase 23: plug psychology silo reference into predictive coder
@@ -835,6 +842,58 @@ class CNOOrganism:
                 return float(val) if val else 0.0
         except Exception:
             return 0.0
+
+    def _on_deep_analysis_requested(self, verdict: Dict[str, Any]) -> None:
+        """Ch 25 §P5 — metacognitive router escalation handler.
+
+        The Phase 21 router (multi_rag_consensus.py) calls this when
+        the consensus is ambivalent (silo scores cluster around
+        threshold, no single silo has high confidence). Previously
+        this was wired to None, so escalations were silently dropped.
+
+        For the Phase 6 SEED, "deep analysis" means three things:
+            (a) Tag the action so Alexandria's Warden + Gatekeeper
+                see a `metacog_escalated` flag and require quorum
+                instead of single-panelist approval.
+            (b) Bump the episodic-memory entry for this verdict
+                with a `metacog_uncertain` annotation so Phase 25
+                sleep replay weights it heavier in the next cycle.
+            (c) Push a synaptic event so the dashboard sees it as
+                a distinct event class (not a regular verdict).
+        Full LLM re-analysis is deferred to Phase 7 — this seed
+        records the decision point so we can measure escalation
+        frequency before paying for compute.
+        """
+        ip = verdict.get('src_ip', '?')
+        score = float(verdict.get('consensus_score', 0))
+        logger.info(
+            "METACOG ESCALATE: %s score=%.3f → deep-analysis queue",
+            ip, score,
+        )
+        # (b) annotate the open episode if any
+        if self._episodic_memory:
+            try:
+                self._episodic_memory.annotate(ip, "metacog_uncertain")
+            except (AttributeError, Exception):
+                # annotate() may not exist in older versions — best-effort
+                pass
+        # (c) emit a synaptic event so it shows up in cno_synaptic_log
+        if self._controller:
+            try:
+                self._controller.submit_upward(
+                    source_layer=BrainLayer.NEOCORTEX,
+                    route=SynapticRoute.MULTI_RAG,
+                    event_type="metacog.escalation",
+                    priority=3,
+                    source_ip=ip,
+                    payload={
+                        "consensus_score": score,
+                        "verdict": verdict.get('verdict', '?'),
+                        "action": verdict.get('action', '?'),
+                    },
+                )
+            except Exception as e:
+                logger.debug("Metacog synaptic emit failed: %s", e)
 
     def _on_episode_closed(self, episode: Dict[str, Any]) -> None:
         """Phase 22 callback: episode resolved with outcome.
