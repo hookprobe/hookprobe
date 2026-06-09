@@ -11,9 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Phase 12: AEGIS Orchestrator depends on pydantic for signal validation.
 # Install BEFORE apt packages so DNS failure in apt doesn't block pip
 # (pip uses its own resolver). Use --break-system-packages for slim images.
-RUN pip install --no-cache-dir --break-system-packages pydantic || \
-    pip install --no-cache-dir pydantic || \
-    echo "WARN: pydantic install failed"
+#
+# numpy: required by core/brain/inference_bridge.py — without it the NPU
+# bridge silently falls back to CPU heuristics ("Failed to initialize
+# inference engine: No module named 'numpy'"), disabling Phase 21–25 NPU
+# inference. Pinned to <2.0 because aarch64 wheels for 2.x weren't on
+# PyPI when this image's Python 3.12-slim base was cut.
+RUN pip install --no-cache-dir --break-system-packages 'pydantic' 'numpy<2.0' || \
+    pip install --no-cache-dir 'pydantic' 'numpy<2.0' || \
+    echo "WARN: pip install failed"
 
 WORKDIR /app
 
