@@ -43,5 +43,12 @@ COPY hydra/risk_velocity.py hydra/cognitive_defense.py ./
 # match the source tree).
 COPY common/health.py /app/core/common/health.py
 
+# Agency shim — required by feed_sync.py and rdap_enricher.py for the
+# gated-action contract (see core/agency_shim.py docstring). Added
+# 2026-06-09 after a rebuild surfaced `ModuleNotFoundError: No module
+# named 'core.agency_shim'` in hydra-feed and hydra-enricher. The
+# import sites are at feed_sync.py:44 and rdap_enricher.py:47.
+COPY agency_shim.py /app/core/agency_shim.py
+
 # Default: run feed_sync (override in compose for other daemons)
 CMD ["python3", "-u", "feed_sync.py"]
