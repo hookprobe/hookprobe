@@ -399,6 +399,57 @@ class QSecBitEngine:
             'active_iocs': active_iocs
         }
 
+    def calculate_cti_accuracy(self, hours: int = 4) -> Dict[str, Any]:
+        """
+        Observability metric: how much the CTI enrichment layer is
+        agreeing / disagreeing with SENTINEL over the last `hours` window.
+
+        Not mixed into the composite score (yet) — the qsecbit_scores schema
+        doesn't carry a cti column and doing a schema migration mid-session
+        is bigger scope than an observability metric warrants. This surfaces
+        in the metrics block so the dashboard can show a "CTI agreement
+        %" tile and operators can spot-check whether external CTI is
+        adding signal or noise.
+
+        Returns:
+            coverage_pct       — % of verdicts with any CTI match (GreyNoise or Shodan)
+            agreement_pct      — of covered verdicts, how many SENTINEL & CTI agreed
+            downgrades         — raw count of sentinel=malicious → effective=benign
+            escalations        — raw count of sentinel=suspicious → effective=malicious
+        """
+        query = """
+            SELECT
+                countIf(enrichment_reason != 'sentinel_unchanged') AS covered,
+                count() AS total,
+                countIf(
+                    sentinel_verdict = effective_verdict
+                    AND enrichment_reason != 'sentinel_unchanged'
+                ) AS agreed,
+                countIf(enrichment_reason = 'greynoise_benign_or_riot'
+                    AND sentinel_verdict IN ('malicious','suspicious')) AS downgrades,
+                countIf(enrichment_reason IN
+                    ('greynoise_malicious_escalation','shodan_compromised_infrastructure',
+                     'cti_cross_source_high_confidence')
+                    AND sentinel_verdict != 'malicious') AS escalations
+            FROM hydra_verdicts_enriched
+            WHERE timestamp >= now() - INTERVAL {p_hours:UInt16} HOUR
+        """
+        rows = self._query_clickhouse(query, {'p_hours': hours})
+        if not rows:
+            return {'coverage_pct': 0, 'agreement_pct': 0, 'downgrades': 0, 'escalations': 0}
+        r = rows[0]
+        total = int(r.get('total', 0) or 0)
+        covered = int(r.get('covered', 0) or 0)
+        agreed = int(r.get('agreed', 0) or 0)
+        coverage_pct = round(100.0 * covered / total, 1) if total else 0.0
+        agreement_pct = round(100.0 * agreed / covered, 1) if covered else 0.0
+        return {
+            'coverage_pct': coverage_pct,
+            'agreement_pct': agreement_pct,
+            'downgrades': int(r.get('downgrades', 0) or 0),
+            'escalations': int(r.get('escalations', 0) or 0),
+        }
+
     def calculate_overall_score(self) -> Dict[str, Any]:
         """Calculate the overall QSECBIT score."""
 
@@ -407,6 +458,7 @@ class QSecBitEngine:
         network_score, network_metrics = self.calculate_network_score(hours=1)
         detection_score, detection_metrics = self.calculate_detection_score(hours=1)
         response_score, response_metrics = self.calculate_response_score(hours=24)
+        cti_metrics = self.calculate_cti_accuracy(hours=4)
 
         # Weighted average
         overall = int(
@@ -453,6 +505,11 @@ class QSecBitEngine:
                 'high_rate_ips': network_metrics.get('high_rate_ips', 0),
                 'blocked_threats': response_metrics.get('blocked_iocs', 0),
                 'active_incidents': response_metrics.get('open_incidents', 0),
+                # CTI-enrichment observability — not mixed into composite yet
+                'cti_coverage_pct':   cti_metrics['coverage_pct'],
+                'cti_agreement_pct':  cti_metrics['agreement_pct'],
+                'cti_downgrades':     cti_metrics['downgrades'],
+                'cti_escalations':    cti_metrics['escalations'],
             },
             'trend': trend,
             'score_delta': score_delta,

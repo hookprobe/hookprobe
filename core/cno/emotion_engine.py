@@ -369,9 +369,15 @@ class EmotionEngine:
                 f"{self._valence}, {self._arousal}, "
                 f"'{trigger}', '{_ch_escape(actions_json)}')"
             )
+            # _ch_post returns False on any failure and now logs the cause
+            # itself; we no longer need to inspect the return here.
             _ch_post(query)
         except Exception as e:
-            logger.debug("Emotion log failed (%s): %s", trigger, e)
+            # Was logger.debug — silently lost ~10 days of emotion writes
+            # (cno_emotion_log went stale 2026-04-23 → 2026-05-03 with no
+            # visibility). Surface at WARNING so the next failure mode is
+            # diagnosable from container logs.
+            logger.warning("Emotion log failed (trigger=%s): %s", trigger, e)
 
     # ------------------------------------------------------------------
     # Camouflage Profile (what the Adaptive Camouflage system should do)
@@ -462,7 +468,19 @@ def _ch_escape(s: str) -> str:
              .replace('\t', '\\t').replace('\0', ''))
 
 
+_CH_POST_FAILURES = 0  # module-level counter, surfaced via /status
+
+
 def _ch_post(query: str) -> bool:
+    """POST a query to ClickHouse. Returns True on HTTP 200.
+
+    Failure modes (network blip, auth drop, schema mismatch) used to be
+    silently swallowed — that's how cno_emotion_log went 10 days stale
+    while the container reported "healthy". We now log the first 200 chars
+    of the query and the exception at WARNING so failures are diagnosable
+    in container logs.
+    """
+    global _CH_POST_FAILURES
     try:
         url = f"http://{CH_HOST}:{CH_PORT}/"
         data = query.encode('utf-8')
@@ -471,6 +489,24 @@ def _ch_post(query: str) -> bool:
         req.add_header('X-ClickHouse-Key', CH_PASSWORD)
         req.add_header('X-ClickHouse-Database', CH_DB)
         with urlopen(req, timeout=5) as resp:
-            return resp.status == 200
-    except Exception:
+            if resp.status == 200:
+                return True
+            _CH_POST_FAILURES += 1
+            body = resp.read(500).decode('utf-8', errors='replace')
+            logger.warning(
+                "ClickHouse rejected emotion write: status=%d body=%r query=%r",
+                resp.status, body, query[:200],
+            )
+            return False
+    except Exception as e:
+        _CH_POST_FAILURES += 1
+        logger.warning(
+            "ClickHouse POST raised %s: %s | query=%r",
+            type(e).__name__, e, query[:200],
+        )
         return False
+
+
+def get_ch_post_failures() -> int:
+    """Read the module-level failure counter. Exposed for /status payload."""
+    return _CH_POST_FAILURES
