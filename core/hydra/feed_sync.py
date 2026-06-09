@@ -416,6 +416,12 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
 
     try:
         # Read active autonomous blocks (not yet expired) across all sources.
+        # NB: this module's ch_query() does NOT append a format, so the result
+        # defaults to TabSeparated. We parse rows as JSON below, so the query
+        # must request JSONEachRow explicitly — without it every row fails to
+        # parse and the sync silently returns zero cognitive blocks (the bug
+        # that kept ml/aegis/neural_kernel blocks from ever reaching XDP via
+        # feed_sync; the CNO's direct BPF writes were the only path working).
         query = f"""
             SELECT
                 IPv4NumToString(src_ip) AS ip,
@@ -426,6 +432,7 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
             WHERE source IN ({sources_sql})
               AND auto_expired = 0
               AND timestamp >= now() - INTERVAL 24 HOUR
+            FORMAT JSONEachRow
         """
         result = ch_query(query)
         if result:
@@ -452,7 +459,7 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
                             f"WHERE src_ip = IPv4StringToNum('{ip}') "
                             f"AND source = '{src}' AND auto_expired = 0"
                         )
-                        ch_query(expire_query, fmt='')
+                        ch_query(expire_query)  # this module's ch_query has no fmt kwarg
                         expired_count += 1
                     else:
                         # Still active — add to blocklist
@@ -538,9 +545,22 @@ def sync_all_feeds() -> dict:
         except ValueError:
             pass
 
-    # Merge cognitive defense blocks from Neural-Kernel
+    # Merge autonomous-defense blocks (ml/aegis/neural_kernel/cno_organism).
+    # Apply the SAME trusted-network overlap filter as the external feeds, so
+    # an autonomous block on an internal/trusted IP (e.g. an anomaly-detector
+    # false positive on an RFC1918 host) never reaches the XDP blocklist.
     cognitive_cidrs, cognitive_expired = sync_cognitive_blocks()
-    safe_cidrs.update(cognitive_cidrs)
+    cognitive_safe = 0
+    for cidr in cognitive_cidrs:
+        try:
+            block_net = ipaddress.ip_network(cidr, strict=False)
+            if any(block_net.overlaps(t) for t in trusted_nets):
+                logger.warning("Skipping cognitive block %s — overlaps a trusted network", cidr)
+                continue
+            safe_cidrs.add(cidr)
+            cognitive_safe += 1
+        except ValueError:
+            pass
 
     # Update XDP maps
     blocklist_count = update_xdp_map_batch('blocklist', safe_cidrs, value=1)
@@ -552,13 +572,14 @@ def sync_all_feeds() -> dict:
         'total_cidrs': len(safe_cidrs),
         'blocklist_loaded': blocklist_count,
         'allowlist_loaded': allowlist_count,
-        'cognitive_blocks': len(cognitive_cidrs),
+        'cognitive_blocks': cognitive_safe,
+        'cognitive_found': len(cognitive_cidrs),
         'cognitive_expired': cognitive_expired,
         'feeds': feed_results,
     }
 
     logger.info(f"Sync complete: {len(safe_cidrs)} blocklist CIDRs "
-               f"({len(cognitive_cidrs)} cognitive), "
+               f"({cognitive_safe}/{len(cognitive_cidrs)} cognitive pushed), "
                f"{allowlist_count} allowlist entries, "
                f"{blocklist_count} pushed to XDP"
                + (f", {cognitive_expired} expired" if cognitive_expired else ""))
