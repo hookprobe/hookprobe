@@ -146,6 +146,33 @@ def ch_insert(query: str, data: str = '') -> bool:
         return False
 
 
+def ch_command(query: str) -> bool:
+    """Execute a ClickHouse DDL/mutation (ALTER ... UPDATE, etc.) via POST.
+
+    Surfaces the HTTP error body so mutation failures (e.g. error 252,
+    "Too many mutations") are diagnosable rather than a bare HTTPError name.
+    Mutations are async by default; keep the count per cycle small.
+    """
+    if not CH_PASSWORD:
+        return False
+
+    url = f"http://{CH_HOST}:{CH_PORT}/"
+    req = Request(url, data=query.encode('utf-8'))
+    req.add_header('X-ClickHouse-User', CH_USER)
+    req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+    try:
+        with urlopen(req, timeout=30) as resp:
+            resp.read()
+        return True
+    except HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')[:500]
+        logger.error("ClickHouse mutation error: %s - %s", e.code, body)
+        return False
+    except Exception as e:
+        logger.error("ClickHouse mutation error: %s", type(e).__name__)
+        return False
+
+
 # ============================================================================
 # RDAP TYPE SCORING
 # ============================================================================
@@ -1701,9 +1728,15 @@ def auto_label_by_consensus() -> dict:
     if not result:
         return {'labeled': 0, 'confirms': 0, 'fps': 0}
 
-    confirms = 0
-    fps = 0
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+    # Collect IPs per decision so we can issue ONE batched mutation per
+    # decision type instead of one ALTER UPDATE per IP. ClickHouse mutations
+    # are async and accumulate against number_of_mutations_to_throw (~1000);
+    # per-IP mutations (~37/hour) eventually trip that limit and every cycle
+    # throws HTTPError 252. Batching cuts this to <=2 mutations/cycle.
+    confirm_ips: List[str] = []
+    fp_ips: List[str] = []
 
     for line in result.strip().split('\n'):
         if not line:
@@ -1744,23 +1777,38 @@ def auto_label_by_consensus() -> dict:
                     rdap_type in ('cdn', 'isp', 'education', 'government')):
                 decision = 'auto_false_positive'
 
-            if decision:
-                update_q = (
-                    f"ALTER TABLE {CH_DB}.hydra_verdicts UPDATE "
-                    f"operator_decision = '{decision}', "
-                    f"operator_decided_at = '{now}' "
-                    f"WHERE src_ip = toIPv4('{safe}') "
-                    f"AND operator_decision = '' "
-                    f"AND timestamp >= now() - INTERVAL 1 HOUR"
-                )
-                ch_query(update_q, fmt='')
-                if decision == 'auto_confirm':
-                    confirms += 1
-                else:
-                    fps += 1
+            if decision == 'auto_confirm':
+                confirm_ips.append(safe)
+            elif decision == 'auto_false_positive':
+                fp_ips.append(safe)
 
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             continue
+
+    def _batch_label(ips: List[str], decision: str) -> int:
+        """Apply one ALTER UPDATE for all IPs sharing a decision."""
+        if not ips:
+            return 0
+        labeled = 0
+        # Cap IPs per IN() clause to keep the query a sane size; each chunk
+        # is still a single mutation (chunks are rare — usually one).
+        for i in range(0, len(ips), 500):
+            chunk = ips[i:i + 500]
+            in_list = ', '.join(f"toIPv4('{ip}')" for ip in chunk)
+            update_q = (
+                f"ALTER TABLE {CH_DB}.hydra_verdicts UPDATE "
+                f"operator_decision = '{decision}', "
+                f"operator_decided_at = '{now}' "
+                f"WHERE src_ip IN ({in_list}) "
+                f"AND operator_decision = '' "
+                f"AND timestamp >= now() - INTERVAL 1 HOUR"
+            )
+            if ch_command(update_q):
+                labeled += len(chunk)
+        return labeled
+
+    confirms = _batch_label(confirm_ips, 'auto_confirm')
+    fps = _batch_label(fp_ips, 'auto_false_positive')
 
     return {'labeled': confirms + fps, 'confirms': confirms, 'fps': fps}
 
