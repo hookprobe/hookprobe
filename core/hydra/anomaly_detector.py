@@ -88,6 +88,33 @@ PREDICTIVE_CONSENSUS = os.environ.get('PREDICTIVE_CONSENSUS', '1') == '1'
 PREDICTIVE_WINDOW = int(os.environ.get('PREDICTIVE_WINDOW', '3600'))  # 1h
 PREDICTIVE_MALICIOUS_CONF = float(os.environ.get('PREDICTIVE_MALICIOUS_CONF', '0.8'))
 
+# Trusted-network veto. The Isolation Forest was trained mostly on internal
+# traffic, so it readily flags RFC1918 / known-trusted hosts (e.g. the mesh
+# client pool on 10.0.x) as anomalous — producing block requests for internal
+# IPs. We never classify a trusted IP as malicious/suspicious and never block
+# it. Reuse the canonical allowlist (core/hydra/trusted_networks.py); fall back
+# to RFC1918 detection if the module is unavailable.
+try:
+    from trusted_networks import is_trusted as _is_trusted_net
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import is_trusted as _is_trusted_net
+    except ImportError:
+        _is_trusted_net = None
+
+
+def _is_trusted_ip(ip: str) -> bool:
+    """True if ip is internal/RFC1918 or in the trusted allowlist."""
+    if _is_trusted_net is not None:
+        try:
+            return bool(_is_trusted_net(ip))
+        except Exception:
+            pass
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
 # Minimum training samples before model is usable
 MIN_TRAINING_SAMPLES = int(os.environ.get('MIN_TRAINING_SAMPLES', '100'))
 
@@ -970,7 +997,20 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     thresh_suspicious = _adaptive_suspicious if _adaptive_suspicious is not None else SCORE_SUSPICIOUS
     thresh_malicious = _adaptive_malicious if _adaptive_malicious is not None else SCORE_MALICIOUS
 
+    n_trusted = 0
     for ip, score in zip(ips, scores):
+        # Trusted-network veto: internal/RFC1918 and allowlisted IPs are never
+        # flagged or blocked, regardless of anomaly score. Record a benign
+        # verdict for visibility, then move on (no consensus/predictive/block).
+        if _is_trusted_ip(ip):
+            n_trusted += 1
+            verdicts.append({
+                'timestamp': now, 'ip': ip, 'anomaly_score': score,
+                'model_scores': [score], 'verdict': 'benign', 'action': 'none',
+            })
+            consecutive_malicious.pop(ip, None)
+            continue
+
         # Isolation Forest verdict using calibrated thresholds
         if score > thresh_malicious:
             iso_verdict = 'malicious'
@@ -1030,7 +1070,8 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     logger.info(f"Scored {len(ips)} IPs: "
                 f"{n_malicious} malicious, {n_suspicious} suspicious, "
                 f"{n_benign} benign "
-                f"(SENTINEL: {len(sentinel_verdicts)} evidence, {n_vetoed} vetoed; "
+                f"(trusted-vetoed: {n_trusted}; "
+                f"SENTINEL: {len(sentinel_verdicts)} evidence, {n_vetoed} vetoed; "
                 f"predictive: {len(predictive_ips)} open, {n_predicted} raised)")
 
     return written
