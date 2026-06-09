@@ -389,11 +389,18 @@ def log_feed_sync(feed_name: str, feed_url: str, entries_count: int,
 # NEURAL-KERNEL: Cognitive Defense Block Sync
 # ============================================================================
 
-def sync_cognitive_blocks() -> Tuple[Set[str], int]:
-    """Read active cognitive defense blocks from ClickHouse and convert to CIDRs.
+# Autonomous block producers whose hydra_blocks entries this function pushes
+# to the XDP LPM_TRIE blocklist. Previously only 'neural_kernel' was synced,
+# so the anomaly_detector ('ml') and AEGIS ('aegis') block paths wrote rows
+# that nothing ever enforced — a silent dead-end in the autonomous loop.
+COGNITIVE_BLOCK_SOURCES = ('neural_kernel', 'ml', 'aegis', 'cno_organism')
 
-    The Neural-Kernel's ActionEnforcer writes blocks to hydra_blocks with
-    source='neural_kernel'. This function reads those blocks and converts
+
+def sync_cognitive_blocks() -> Tuple[Set[str], int]:
+    """Read active autonomous-defense blocks from ClickHouse and convert to CIDRs.
+
+    Producers write blocks to hydra_blocks with a source tag (neural_kernel,
+    ml, aegis, cno_organism). This function reads all of them and converts
     them to /32 CIDRs for XDP LPM_TRIE enforcement.
 
     Also cleans up expired blocks (auto_expired=1 or past TTL).
@@ -405,16 +412,18 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
 
     cognitive_cidrs: Set[str] = set()
     expired_count = 0
+    sources_sql = ', '.join(f"'{s}'" for s in COGNITIVE_BLOCK_SOURCES)
 
     try:
-        # Read active cognitive blocks (not yet expired)
+        # Read active autonomous blocks (not yet expired) across all sources.
         query = f"""
             SELECT
                 IPv4NumToString(src_ip) AS ip,
+                source,
                 duration_seconds,
                 toUnixTimestamp(timestamp) AS created_ts
             FROM {CH_DB}.hydra_blocks
-            WHERE source = 'neural_kernel'
+            WHERE source IN ({sources_sql})
               AND auto_expired = 0
               AND timestamp >= now() - INTERVAL 24 HOUR
         """
@@ -427,20 +436,21 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
                 try:
                     row = json.loads(line)
                     ip = row.get('ip', '')
+                    src = str(row.get('source', '')) or 'neural_kernel'
                     duration = int(row.get('duration_seconds', 3600))
                     created = float(row.get('created_ts', 0))
 
-                    if not ip:
+                    if not ip or src not in COGNITIVE_BLOCK_SOURCES:
                         continue
 
                     # Check TTL expiry
                     if created > 0 and (now_unix - created) > duration:
-                        # TTL expired — mark as expired
+                        # TTL expired — mark as expired (match the row's source)
                         expire_query = (
                             f"ALTER TABLE {CH_DB}.hydra_blocks "
                             f"UPDATE auto_expired = 1 "
                             f"WHERE src_ip = IPv4StringToNum('{ip}') "
-                            f"AND source = 'neural_kernel' AND auto_expired = 0"
+                            f"AND source = '{src}' AND auto_expired = 0"
                         )
                         ch_query(expire_query, fmt='')
                         expired_count += 1

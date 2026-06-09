@@ -101,6 +101,17 @@ class AegisClient:
             )
             self.tool_executor = ToolExecutor(memory=self.memory)
 
+            # Wire real enforcement implementations (block_ip, unblock_ip,
+            # rate_limit, sentinel_query_verdict) so agent decisions take
+            # effect via the hydra_blocks → feed_sync → XDP path instead of
+            # returning NotImplementedError. Best-effort: a missing IDS
+            # ClickHouse just leaves the tools fail-soft.
+            try:
+                from .tool_implementations import register_default_implementations
+                register_default_implementations()
+            except Exception as e:
+                logger.debug("Tool implementation registration: %s", e)
+
             from .orchestrator import AegisOrchestrator
             self.orchestrator = AegisOrchestrator(
                 registry=self.registry,
