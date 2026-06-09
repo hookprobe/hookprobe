@@ -62,6 +62,32 @@ DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK_URL', '')
 # Detection interval (seconds) — how often to score new features
 DETECT_INTERVAL = int(os.environ.get('DETECT_INTERVAL', '300'))  # 5 minutes
 
+# Multi-model consensus: the Isolation Forest is one voter. SENTINEL evidence
+# (Bayes + profile-deviation + CVE ensemble, written by sentinel_engine.py to
+# the sentinel_evidence table) is a second, independent voter. Blocking now
+# requires corroboration — an IF 'malicious' is downgraded to 'suspicious'
+# when SENTINEL confidently calls the IP benign, which closes the long-standing
+# gap where IF false positives could escalate to a block on their own.
+SENTINEL_CONSENSUS = os.environ.get('SENTINEL_CONSENSUS', '1') == '1'
+# How far back to consider a SENTINEL verdict authoritative for an IP. SENTINEL
+# runs on its own ~300s cadence; widen the window so evidence overlaps the
+# detection window even when the two cycles are out of phase.
+SENTINEL_WINDOW = int(os.environ.get('SENTINEL_WINDOW', str(max(DETECT_INTERVAL * 3, 900))))
+# Minimum SENTINEL confidence for a benign verdict to veto an IF malicious
+# verdict (drop to suspicious) or for a malicious verdict to corroborate.
+SENTINEL_VETO_CONF = float(os.environ.get('SENTINEL_VETO_CONF', '0.6'))
+
+# Predictive alerts (predictor_engine.py → predictive_alerts) are forward-
+# looking attack forecasts. They were previously written and never read by
+# any detector. We now consume open high-severity predictions to PRE-EMPT
+# the predicted attack: an IP named in a prediction has its suspicion raised
+# one level. Predictions never auto-block on their own (they are lower
+# confidence than observed evidence) — benign→suspicious surfaces the IP,
+# and suspicious→malicious only for high-confidence 'critical' forecasts.
+PREDICTIVE_CONSENSUS = os.environ.get('PREDICTIVE_CONSENSUS', '1') == '1'
+PREDICTIVE_WINDOW = int(os.environ.get('PREDICTIVE_WINDOW', '3600'))  # 1h
+PREDICTIVE_MALICIOUS_CONF = float(os.environ.get('PREDICTIVE_MALICIOUS_CONF', '0.8'))
+
 # Minimum training samples before model is usable
 MIN_TRAINING_SAMPLES = int(os.environ.get('MIN_TRAINING_SAMPLES', '100'))
 
@@ -687,6 +713,141 @@ def determine_action(ip: str, verdict: str) -> str:
         return 'none'
 
 
+def load_sentinel_verdicts(window_seconds: int) -> Dict[str, Tuple[str, float, float]]:
+    """Load the latest SENTINEL evidence verdict per IP within the window.
+
+    Returns {ip: (verdict, confidence, sentinel_score)}. SENTINEL is the
+    Bayes + profile + CVE ensemble (sentinel_engine.py); it is an independent
+    voter to the Isolation Forest. Returns an empty dict on any error so the
+    detector degrades gracefully to IF-only scoring.
+    """
+    if not SENTINEL_CONSENSUS:
+        return {}
+    query = (
+        "SELECT IPv4NumToString(src_ip) AS ip, "
+        "argMax(verdict, timestamp) AS v, "
+        "argMax(confidence, timestamp) AS conf, "
+        "argMax(sentinel_score, timestamp) AS sscore "
+        f"FROM {CH_DB}.sentinel_evidence "
+        f"WHERE timestamp > now() - INTERVAL {int(window_seconds)} SECOND "
+        "GROUP BY src_ip"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return {}
+    out: Dict[str, Tuple[str, float, float]] = {}
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            out[row['ip']] = (
+                str(row.get('v', 'unknown')),
+                float(row.get('conf', 0.0) or 0.0),
+                float(row.get('sscore', 0.0) or 0.0),
+            )
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+def consensus_verdict(
+    iso_verdict: str,
+    sentinel: Optional[Tuple[str, float, float]],
+) -> Tuple[str, str]:
+    """Combine the Isolation Forest verdict with SENTINEL evidence.
+
+    Returns (final_verdict, agreement) where agreement is one of
+    'if_only' (no SENTINEL evidence), 'confirmed' (both agree malicious),
+    'vetoed' (SENTINEL benign overrode IF), 'raised' (SENTINEL escalated a
+    benign IF), or 'concur'. The guiding rule: a block must be corroborated —
+    IF malicious alone is NOT enough when SENTINEL confidently says benign.
+    """
+    if not sentinel:
+        return iso_verdict, 'if_only'
+
+    s_verdict, s_conf, _ = sentinel
+
+    # SENTINEL confidently benign → veto an IF escalation (prevents FP blocks).
+    if s_verdict == 'benign' and s_conf >= SENTINEL_VETO_CONF:
+        if iso_verdict == 'malicious':
+            return 'suspicious', 'vetoed'
+        if iso_verdict == 'suspicious':
+            return 'benign', 'vetoed'
+        return iso_verdict, 'concur'
+
+    # SENTINEL confidently malicious.
+    if s_verdict == 'malicious' and s_conf >= SENTINEL_VETO_CONF:
+        if iso_verdict == 'malicious':
+            return 'malicious', 'confirmed'
+        if iso_verdict == 'benign':
+            # Raise to suspicious (alert), but don't auto-block on SENTINEL alone.
+            return 'suspicious', 'raised'
+        return 'malicious', 'raised'
+
+    # SENTINEL suspicious or low-confidence → nudge but defer to IF.
+    if s_verdict == 'suspicious' and iso_verdict == 'benign':
+        return 'suspicious', 'raised'
+
+    return iso_verdict, 'concur'
+
+
+def load_predictive_ips(window_seconds: int) -> Dict[str, Tuple[str, float]]:
+    """Load IPs named in open predictive_alerts within the window.
+
+    Returns {ip: (severity, confidence)} keeping the highest-confidence
+    alert per IP. Returns {} on any error so detection degrades gracefully.
+    """
+    if not PREDICTIVE_CONSENSUS:
+        return {}
+    # Unnest involved_ips and keep the strongest open alert per IP.
+    query = (
+        "SELECT IPv4NumToString(ip) AS ip, "
+        "argMax(severity, confidence) AS sev, "
+        "max(confidence) AS conf "
+        "FROM (SELECT arrayJoin(involved_ips) AS ip, severity, confidence "
+        f"      FROM {CH_DB}.predictive_alerts "
+        f"      WHERE status = 'open' "
+        f"        AND created_at > now() - INTERVAL {int(window_seconds)} SECOND "
+        "        AND severity IN ('high', 'critical')) "
+        "GROUP BY ip"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return {}
+    out: Dict[str, Tuple[str, float]] = {}
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            out[row['ip']] = (
+                str(row.get('sev', 'high')),
+                float(row.get('conf', 0.0) or 0.0),
+            )
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+def apply_predictive(verdict: str, prediction: Optional[Tuple[str, float]]) -> Tuple[str, bool]:
+    """Raise suspicion one level for IPs named in an open prediction.
+
+    Returns (verdict, raised). Never auto-blocks on a prediction alone:
+    benign→suspicious always; suspicious→malicious only for a high-confidence
+    'critical' forecast.
+    """
+    if not prediction:
+        return verdict, False
+    severity, confidence = prediction
+    if verdict == 'benign':
+        return 'suspicious', True
+    if (verdict == 'suspicious' and severity == 'critical'
+            and confidence >= PREDICTIVE_MALICIOUS_CONF):
+        return 'malicious', True
+    return verdict, False
+
+
 def write_block_request(ip: str, reason: str) -> None:
     """Write a block request to hydra_blocks for nftables-sync to pick up."""
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -793,40 +954,71 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     # Score
     scores = forest.score_samples(scaled)
 
+    # Second voter: latest SENTINEL evidence per IP (graceful empty on error).
+    sentinel_verdicts = load_sentinel_verdicts(SENTINEL_WINDOW)
+    # Forward-looking input: open high-severity predictive alerts per IP.
+    predictive_ips = load_predictive_ips(PREDICTIVE_WINDOW)
+
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     verdicts = []
     n_suspicious = 0
     n_malicious = 0
+    n_vetoed = 0
+    n_predicted = 0
 
     # Use adaptive thresholds if available, otherwise fixed defaults
     thresh_suspicious = _adaptive_suspicious if _adaptive_suspicious is not None else SCORE_SUSPICIOUS
     thresh_malicious = _adaptive_malicious if _adaptive_malicious is not None else SCORE_MALICIOUS
 
     for ip, score in zip(ips, scores):
-        # Classify using calibrated thresholds
+        # Isolation Forest verdict using calibrated thresholds
         if score > thresh_malicious:
-            verdict = 'malicious'
-            n_malicious += 1
+            iso_verdict = 'malicious'
         elif score > thresh_suspicious:
-            verdict = 'suspicious'
-            n_suspicious += 1
+            iso_verdict = 'suspicious'
         else:
-            verdict = 'benign'
+            iso_verdict = 'benign'
+
+        # Multi-model consensus with SENTINEL evidence. A block must be
+        # corroborated; a confident SENTINEL benign verdict vetoes an IF FP.
+        sentinel = sentinel_verdicts.get(ip)
+        verdict, agreement = consensus_verdict(iso_verdict, sentinel)
+
+        # Pre-empt forecast attacks: raise suspicion for predicted IPs.
+        # Skip when SENTINEL vetoed (confident benign beats a forecast).
+        if agreement != 'vetoed':
+            verdict, raised = apply_predictive(verdict, predictive_ips.get(ip))
+            if raised:
+                n_predicted += 1
+
+        if agreement == 'vetoed':
+            n_vetoed += 1
+        if verdict == 'malicious':
+            n_malicious += 1
+        elif verdict == 'suspicious':
+            n_suspicious += 1
 
         action = determine_action(ip, verdict)
+
+        # Record both model scores so the verdict row reflects the ensemble.
+        model_scores = [score]
+        if sentinel is not None:
+            model_scores.append(sentinel[2])  # SENTINEL ensemble score
 
         verdicts.append({
             'timestamp': now,
             'ip': ip,
             'anomaly_score': score,
-            'model_scores': [score],  # Single model for now
+            'model_scores': model_scores,
             'verdict': verdict,
             'action': action,
         })
 
         # Auto-block on escalation
         if action == 'block':
-            write_block_request(ip, 'ml_anomaly_escalation')
+            reason = ('ml_consensus_escalation' if agreement == 'confirmed'
+                      else 'ml_anomaly_escalation')
+            write_block_request(ip, reason)
             send_discord_alert(ip, score, verdict, action)
         elif action == 'throttle':
             send_discord_alert(ip, score, verdict, action)
@@ -837,7 +1029,9 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     n_benign = len(ips) - n_malicious - n_suspicious
     logger.info(f"Scored {len(ips)} IPs: "
                 f"{n_malicious} malicious, {n_suspicious} suspicious, "
-                f"{n_benign} benign")
+                f"{n_benign} benign "
+                f"(SENTINEL: {len(sentinel_verdicts)} evidence, {n_vetoed} vetoed; "
+                f"predictive: {len(predictive_ips)} open, {n_predicted} raised)")
 
     return written
 
