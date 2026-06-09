@@ -33,6 +33,10 @@ COPY multi_rag_consensus.py emotion_engine.py adaptive_camouflage.py ./cno/
 COPY session_analyzer.py app_tracker.py ./cno/
 COPY bloom_sharing.py federated_sync.py npu_bridge.py fec_codec.py ./cno/
 COPY activation.py transport_mapper.py cno_aegis_bridge.py python_tarpit.py ./cno/
+# Phase 22-25 cognitive subsystems — were omitted from the image, so
+# cno_organism.py hit ImportError and left episodic memory / global workspace /
+# predictive coder / outcome observer / sleep cycle permanently dormant.
+COPY episodic_memory.py global_workspace.py predictive_coder.py outcome_observer.py sleep_cycle.py ./cno/
 
 # Entry point: runs cno/__main__.py which fires cno_organism.main()
 CMD ["python3", "-u", "-m", "cno"]
