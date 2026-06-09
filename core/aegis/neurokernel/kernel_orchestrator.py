@@ -290,8 +290,7 @@ class KernelOrchestrator:
 
             # Rate limit check
             if not self._check_rate_limit():
-                logger.warning("Deploy rate limit exceeded — skipping %s",
-                               match.template_name)
+                self._log_rate_limited(match.template_name)
                 return None
 
             # Duplicate check
@@ -331,7 +330,7 @@ class KernelOrchestrator:
             return None
 
         if not self._check_rate_limit():
-            logger.warning("Deploy rate limit exceeded — skipping novel threat")
+            self._log_rate_limited("novel threat")
             return None
 
         # Build threat description from signal if not provided
@@ -657,6 +656,21 @@ class KernelOrchestrator:
     # ------------------------------------------------------------------
     # Internal: Helpers
     # ------------------------------------------------------------------
+
+    def _log_rate_limited(self, what: str) -> None:
+        """Log deploy-rate-limit hits at most once per 60s with a suppressed
+        count. Under malicious-heavy load the orchestrator is asked to deploy
+        for every verdict and rejects most — without throttling this WARNING
+        floods the log many times per second and masks real events."""
+        now = time.time()
+        last = getattr(self, '_rl_log_last', 0.0)
+        self._rl_log_suppressed = getattr(self, '_rl_log_suppressed', 0) + 1
+        if now - last >= 60.0:
+            n = self._rl_log_suppressed
+            logger.warning("Deploy rate limit exceeded (%d in last 60s, e.g. %s)",
+                           n, what)
+            self._rl_log_last = now
+            self._rl_log_suppressed = 0
 
     def _check_rate_limit(self) -> bool:
         """Check if deploy rate limit allows another deployment."""
