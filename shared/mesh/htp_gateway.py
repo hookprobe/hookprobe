@@ -46,6 +46,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+# Mesh threat telemetry (async ClickHouse export + replay tracking). No-op
+# unless MESH_CLICKHOUSE_URL is set. Works whether run as a module or script.
+try:
+    from .mesh_telemetry import get_telemetry
+except ImportError:  # pragma: no cover - script-mode fallback
+    from mesh_telemetry import get_telemetry
+
 logger = logging.getLogger("mesh.gateway")
 
 # ============================================================
@@ -251,6 +258,9 @@ class HTPVPNGateway:
         self.started_at: float = 0
         self.total_sessions: int = 0
 
+        # Threat telemetry (auth failures, rate-limit trips, replay signals).
+        self._telemetry = get_telemetry()
+
     # =========================================================================
     # CRYPTOGRAPHIC HELPERS
     # =========================================================================
@@ -319,11 +329,14 @@ class HTPVPNGateway:
         self._attest_failures[ip] = failures
         return len(failures) >= ATTEST_MAX_FAILURES
 
-    def _record_attest_failure(self, ip: str):
+    def _record_attest_failure(self, ip: str, node_id: str = "", detail: str = ""):
         """Record a failed ATTEST attempt."""
         if ip not in self._attest_failures:
             self._attest_failures[ip] = []
         self._attest_failures[ip].append(time.time())
+        n_fail = len(self._attest_failures[ip])
+        self._telemetry.record("attest_fail", ip, node_id,
+                               detail or f"attest failure #{n_fail}")
 
     # =========================================================================
     # LIFECYCLE
@@ -371,6 +384,12 @@ class HTPVPNGateway:
             return
         self._running = False
         logger.info("Stopping HTP Gateway...")
+
+        # Flush threat telemetry before teardown
+        try:
+            self._telemetry.stop()
+        except Exception:
+            pass
 
         # Send CLOSE to all clients
         for session in list(self.sessions.values()):
@@ -615,6 +634,8 @@ class HTPVPNGateway:
         times = [t for t in times if now - t < 60]
         if len(times) >= self._hello_rate_limit:
             logger.warning("HELLO rate limit exceeded from %s (%d/60s)", src_ip, len(times))
+            self._telemetry.record("hello_rate_limit", src_ip, "",
+                                   f"{len(times)} HELLOs/60s")
             return
         times.append(now)
         self._hello_times[src_ip] = times
@@ -623,6 +644,13 @@ class HTPVPNGateway:
             ">HB32s32sQ", data[:75]
         )
         node_id = node_id_raw.rstrip(b"\x00").decode("utf-8", errors="replace")
+
+        # Replay detection (observe-only): a fresh HELLO carries a fresh nonce.
+        # A nonce reused within the window is a replay/spoofing signal — record
+        # it for downstream correlation but don't drop (UDP retransmits reuse it).
+        if self._telemetry.check_replay(client_nonce):
+            self._telemetry.record("replay_suspected", src_ip, node_id,
+                                   "HELLO nonce reused within replay window")
 
         # Check capacity
         with self._lock:
@@ -671,6 +699,8 @@ class HTPVPNGateway:
         src_ip = addr[0]
         if self._is_attest_blocked(src_ip):
             logger.warning("ATTEST blocked (rate limited) from %s", src_ip)
+            self._telemetry.record("attest_blocked", src_ip, "",
+                                   f">={ATTEST_MAX_FAILURES} failures in {ATTEST_BLOCK_DURATION}s")
             return
 
         version, ptype, received_mac, flow_token = struct.unpack(">HB32sQ", data[:43])
@@ -950,6 +980,9 @@ class HTPVPNGateway:
         proof = self._decrypt_packet(payload, new_key)
         if not proof or proof != session.rekey_pending_nonce:
             logger.warning("REKEY_ACK verification failed from %s", session.node_id)
+            rekey_ip = session.client_addr[0] if session.client_addr else ""
+            self._telemetry.record("rekey_fail", rekey_ip, session.node_id,
+                                   "REKEY_ACK proof verification failed")
             session.rekey_pending_nonce = None
             return
 
