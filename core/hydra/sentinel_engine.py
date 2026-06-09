@@ -1189,9 +1189,11 @@ class SentinelEngine:
               AND timestamp >= now() - INTERVAL 24 HOUR
             ORDER BY timestamp DESC
             LIMIT 100
-
-            FORMAT JSONEachRow
         """
+        # NB: do NOT embed `FORMAT ...` here — ch_query() appends the format,
+        # and a doubled FORMAT clause is a ClickHouse syntax error (Code 62)
+        # that silently froze retraining (model stuck, "Initial training:
+        # no_data"). Let ch_query own the format.
         result = ch_query(query)
         if not result:
             return {'status': 'no_data', 'samples': 0}
