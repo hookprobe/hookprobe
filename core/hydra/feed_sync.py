@@ -628,6 +628,74 @@ def _start_peer_transport_consumer():
         logger.warning("peer_transport startup failed: %s", e)
 
 
+def _build_trusted_nets() -> Set:
+    """Build the set of trusted ip_network objects from TRUSTED_CIDRS."""
+    nets = set()
+    for cidr in TRUSTED_CIDRS:
+        try:
+            nets.add(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            pass
+    return nets
+
+
+def cognitive_sync_once() -> int:
+    """Ch 28 Q1 — fast path: push autonomous-defense (cognitive) blocks to XDP
+    without waiting for the hourly full feed sync.
+
+    The ML/anomaly/AEGIS/CNO detectors write blocks to hydra_blocks, but those
+    only reached the XDP blocklist once per SYNC_INTERVAL (default 3600s) via
+    sync_all_feeds(). That gave a worst-case ~1h detect→enforce tail for every
+    block that did not go through the CNO's own direct BPF write. This applies
+    the SAME trusted-overlap safety filter as the full sync, then pushes just
+    the cognitive CIDRs (LPM_TRIE updates are additive, so feed CIDRs already in
+    the map are untouched). Returns count pushed to XDP.
+    """
+    cognitive_cidrs, _expired = sync_cognitive_blocks()
+    if not cognitive_cidrs:
+        return 0
+    trusted_nets = _build_trusted_nets()
+    safe = set()
+    for cidr in cognitive_cidrs:
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+            if any(net.overlaps(t) for t in trusted_nets):
+                logger.warning("Skipping cognitive block %s — overlaps a trusted network", cidr)
+                continue
+            safe.add(cidr)
+        except ValueError:
+            pass
+    if not safe:
+        return 0
+    return update_xdp_map_batch('blocklist', safe, value=1)
+
+
+def _start_cognitive_sync_consumer():
+    """Run cognitive_sync_once() on a fast loop in a daemon thread.
+
+    Mirrors _start_peer_transport_consumer(): the feed container holds
+    CAP_BPF + SYS_ADMIN, so it can write the XDP map. Interval is bounded
+    to a 15s floor to avoid hammering ClickHouse.
+    """
+    interval = max(15, int(os.environ.get('COGNITIVE_SYNC_INTERVAL', '60')))
+
+    def _loop():
+        while running:
+            for _ in range(interval):
+                if not running:
+                    return
+                time.sleep(1)
+            try:
+                n = cognitive_sync_once()
+                if n:
+                    logger.info("cognitive fast-sync: %d block(s) pushed to XDP", n)
+            except Exception as e:
+                logger.warning("cognitive fast-sync error: %s", e)
+
+    threading.Thread(target=_loop, daemon=True, name="cognitive-fast-sync").start()
+    logger.info("cognitive fast-sync thread started (interval=%ds)", interval)
+
+
 def main():
     logger.info("HYDRA Feed Sync starting...")
     logger.info(f"XDP interface: {XDP_INTERFACE}")
@@ -642,6 +710,11 @@ def main():
     # off the feed sync. This lets node-A IoCs reach the kernel filter
     # in seconds rather than waiting for the next hourly feed cycle.
     _start_peer_transport_consumer()
+
+    # Ch 28 Q1 — fast cognitive-block sync (every COGNITIVE_SYNC_INTERVAL,
+    # default 60s) so ML/anomaly/AEGIS/CNO blocks reach XDP in ≤60s instead
+    # of waiting up to a full SYNC_INTERVAL (3600s).
+    _start_cognitive_sync_consumer()
 
     # Initial sync
     sync_all_feeds()

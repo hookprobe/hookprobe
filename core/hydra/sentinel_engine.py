@@ -563,6 +563,9 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
     # Step 5: Load historical verdict ratios
     verdict_data = _load_verdict_history(list(ip_data.keys()))
 
+    # Step 5.5: Load bytes ratio (evidence[19]) from napse_flows (Ch 28 Q2)
+    bytes_ratios = _load_bytes_ratio_batch(list(ip_data.keys()), window_seconds)
+
     # Step 6: Build evidence vectors
     now_hour = datetime.now(timezone.utc).hour
     results = []
@@ -656,8 +659,11 @@ def collect_evidence_batch(window_seconds: int) -> List[dict]:
         # Feature 18: Port entropy
         evidence[18] = stats['port_entropy']
 
-        # Feature 19: Bytes ratio (not available from hydra_events, use 0)
-        evidence[19] = 0.0
+        # Feature 19: Bytes ratio (outbound/total) from napse_flows.
+        # hydra_events carries no byte counts, so this was hardcoded 0.0 —
+        # one quarter of the reputation block was dead. napse_flows has
+        # bytes_orig/bytes_resp, so we enrich from there (Ch 28 Q2).
+        evidence[19] = bytes_ratios.get(ip, 0.0)
 
         # Sanitize: replace NaN/Inf with 0
         for i in range(N_EVIDENCE):
@@ -732,6 +738,49 @@ def _load_anomaly_scores(ips: List[str], window_seconds: int = 3600) -> Dict[str
         except (json.JSONDecodeError, KeyError, ValueError):
             continue
     return scores
+
+
+def _load_bytes_ratio_batch(ips: List[str], window_seconds: int = 3600) -> Dict[str, float]:
+    """Load per-IP outbound byte ratio from napse_flows (Ch 28 Q2 — evidence[19]).
+
+    bytes_ratio = bytes_orig / (bytes_orig + bytes_resp). A source that sends
+    far more than it receives (high ratio) looks like exfiltration / scanning /
+    flooding; a balanced ratio looks like a normal request/response session.
+    hydra_events has no byte counts, so this enrichment comes from napse_flows.
+    """
+    if not ips:
+        return {}
+    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
+    if not safe_ips:
+        return {}
+    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
+    query = f"""
+        SELECT
+            IPv4NumToString(src_ip) AS ip,
+            sum(bytes_orig) AS b_out,
+            sum(bytes_orig + bytes_resp) AS b_total
+        FROM {CH_DB}.napse_flows
+        WHERE src_ip IN ({ip_list})
+          AND timestamp >= now() - INTERVAL {max(window_seconds, 300)} SECOND
+        GROUP BY src_ip
+        HAVING b_total > 0
+    """
+    result = ch_query(query)
+    if not result:
+        return {}
+    ratios: Dict[str, float] = {}
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            b_out = float(row.get('b_out') or 0)
+            b_total = float(row.get('b_total') or 0)
+            if b_total > 0:
+                ratios[row['ip']] = max(0.0, min(1.0, b_out / b_total))
+        except (json.JSONDecodeError, KeyError, ValueError, ZeroDivisionError):
+            continue
+    return ratios
 
 
 def _load_rdap_batch(ips: List[str]) -> Dict[str, dict]:
