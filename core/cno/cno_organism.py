@@ -1531,6 +1531,14 @@ class CNOOrganism:
         self._controller.start()
         if self._federated:
             self._federated.start()
+        # StreamingRAG was instantiated but never started — its background
+        # drain loop (which sets running=True and embeds buffered events)
+        # only runs after .start(). Without this it sat running:False, 0 events.
+        if getattr(self, '_streaming_rag', None):
+            try:
+                self._streaming_rag.start()
+            except Exception as e:
+                logger.warning("StreamingRAG start failed: %s", e)
         self._start_health_server()
 
         # Activate dormant components progressively (Fortress+ only)

@@ -98,13 +98,21 @@ class OutcomeObserver:
         Returns per-outcome counts for this observation pass.
         """
         now = time.time()
-        # Query the BPF blocklist additions in last 15 min from synaptic log
+        # Autonomous-defense blocks from hydra_blocks (ml/neural_kernel/aegis/
+        # cno_organism). cno_synaptic_log bpf_write rows do NOT record the
+        # blocked IP (source_ip is empty, and the IP is absent from the details
+        # JSON), so the prior query here returned nothing — the observer (and
+        # therefore the SSOL ledger) never fired. hydra_blocks carries the real
+        # src_ip (IPv4), the decider in `source`, and the block timestamp; it is
+        # also higher-volume, making it the authoritative block-decision source.
+        # We label the DECISION regardless of auto_expired (enforcement success
+        # is a separate concern; weak labels derive from independent evidence).
         query = (
-            f"SELECT source_ip, timestamp AS ts FROM {CH_DB}.cno_synaptic_log "
-            f"WHERE event_type = 'bpf_write' "
-            f"AND timestamp >= now() - INTERVAL 15 MINUTE "
+            f"SELECT IPv4NumToString(src_ip) AS ip, source, toString(timestamp) AS ts "
+            f"FROM {CH_DB}.hydra_blocks "
+            f"WHERE timestamp >= now() - INTERVAL 15 MINUTE "
             f"AND timestamp <  now() - INTERVAL 10 MINUTE "
-            f"AND source_ip != '' ORDER BY ts DESC LIMIT 100"
+            f"ORDER BY timestamp DESC LIMIT 100"
         )
         result = _ch_query(query)
         if not result:
@@ -121,9 +129,11 @@ class OutcomeObserver:
             if not line.strip():
                 continue
             parts = line.split('\t')
-            if len(parts) < 2:
+            if len(parts) < 3:
                 continue
             src_ip = parts[0].strip()
+            decider = (parts[1].strip() or 'unknown')
+            block_ts = parts[2]
             if not src_ip:
                 continue
 
@@ -136,7 +146,7 @@ class OutcomeObserver:
                 self._recently_observed[src_ip] = now
 
             try:
-                outcome = self._measure_outcome(src_ip, parts[1])
+                outcome = self._measure_outcome(src_ip, block_ts)
                 pass_counts[outcome] = pass_counts.get(outcome, 0) + 1
                 with self._lock:
                     self._stats[outcome] = self._stats.get(outcome, 0) + 1
@@ -148,7 +158,7 @@ class OutcomeObserver:
                 # SSOL (Ch 28 Sprint 1) — turn this reconciled block into a
                 # weak, confidence-scored ground-truth label for the trainers.
                 if SSOL_LEDGER_ENABLED:
-                    self._write_outcome_ledger(src_ip, outcome)
+                    self._write_outcome_ledger(src_ip, outcome, decider)
 
             except Exception as e:
                 logger.debug("Outcome observation error for %s: %s",
@@ -237,7 +247,7 @@ class OutcomeObserver:
         except Exception as e:
             logger.debug("Emotion stimulus error: %s", e)
 
-    def _write_outcome_ledger(self, src_ip: str, outcome: str) -> None:
+    def _write_outcome_ledger(self, src_ip: str, outcome: str, decider: str = 'unknown') -> None:
         """Derive a weak, confidence-scored label for a reconciled block and
         persist it to cno_outcome_ledger (SSOL keystone, Ch 28 Sprint 1).
 
@@ -302,10 +312,11 @@ class OutcomeObserver:
 
         evidence = f'{why};outcome={outcome};rdap={rdap_type}'
 
+        safe_decider = decider if re.match(r'^[A-Za-z0-9_]+$', decider or '') else 'unknown'
         insert = (
             f"INSERT INTO {CH_DB}.cno_outcome_ledger "
             f"(src_ip, action, decider, pre_score, weak_label, label_conf, evidence) "
-            f"VALUES ('{_esc(src_ip)}', 'block', 'cno_reflex', "
+            f"VALUES ('{_esc(src_ip)}', 'block', '{safe_decider}', "
             f"{last_score:.6f}, '{label}', {conf:.3f}, '{_esc(evidence)}')"
         )
         if _ch_query(insert) is not None:

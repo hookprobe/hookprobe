@@ -332,8 +332,14 @@ class _CPUClassifier:
 
                 data = model_path.read_bytes()
                 if sig_path.exists():
-                    expected_sig = sig_path.read_bytes()
-                    computed_sig = hmac.new(key, data, hashlib.sha256).digest()
+                    # The signer (anomaly_detector) writes the HMAC as a HEX
+                    # STRING (hexdigest()+write_text()). This reader previously
+                    # compared raw 32 bytes (.digest()) against the 64-char hex
+                    # file → never matched → every model was rejected and the
+                    # CNO classify path fell back to the uninformed 0.5 prior.
+                    # Align to hex-text to match the authoritative loader.
+                    expected_sig = sig_path.read_text().strip()
+                    computed_sig = hmac.new(key, data, hashlib.sha256).hexdigest()
                     if not hmac.compare_digest(computed_sig, expected_sig):
                         logger.error("Model signature mismatch — refusing to load")
                         return
