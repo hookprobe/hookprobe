@@ -73,12 +73,15 @@ class StressGauge:
     Notifies the SynapticController when state transitions occur.
     """
 
-    # Signal weights (must sum to 1.0)
-    WEIGHT_XDP_DROP_RATE = 0.30
-    WEIGHT_ACTIVE_INCIDENTS = 0.25
-    WEIGHT_RISK_VELOCITY = 0.20
-    WEIGHT_CPU_LOAD = 0.15
-    WEIGHT_ANOMALY_DIST = 0.10
+    # Signal weights (must sum to 1.0). 2026-06-10: QSecBit added as a node-
+    # posture anchor (it produced 116 scores/hr that NOTHING consumed); the
+    # other five rebalanced down proportionally to make room.
+    WEIGHT_XDP_DROP_RATE = 0.28
+    WEIGHT_ACTIVE_INCIDENTS = 0.23
+    WEIGHT_RISK_VELOCITY = 0.19
+    WEIGHT_CPU_LOAD = 0.14
+    WEIGHT_ANOMALY_DIST = 0.09
+    WEIGHT_QSECBIT = 0.07
 
     def __init__(self, on_state_change=None):
         """Initialize the stress gauge.
@@ -246,6 +249,28 @@ class StressGauge:
             logger.debug("Anomaly distribution query failed: %s", e)
         return 0.0
 
+    def _collect_qsecbit_signal(self) -> float:
+        """QSecBit composite security posture as a stress signal (0.0-1.0).
+
+        qsecbit_scores.score is 0-100 (100 = fully protected). We invert: a low
+        posture = high stress. This gives the gauge a node-health anchor that is
+        independent of raw packet rates — a node can be quiet yet degraded (open
+        incidents, patch debt). qsecbit_scores had 116 rows/hr that nothing
+        consumed; this wires it into the organism's felt state. No feedback loop:
+        qsecbit_engine reads verdicts/iocs/flows, never the stress gauge.
+        """
+        try:
+            result = _ch_query(
+                f"SELECT score FROM {CH_DB}.qsecbit_scores "
+                f"ORDER BY timestamp DESC LIMIT 1"
+            )
+            if result and result.strip():
+                score = float(result.strip().split('\t')[0] or 70)
+                return max(0.0, min(1.0, (70.0 - score) / 70.0))
+        except Exception as e:
+            logger.debug("QSecBit signal query failed: %s", e)
+        return 0.0
+
     # ------------------------------------------------------------------
     # Composite Score & State Transition
     # ------------------------------------------------------------------
@@ -257,13 +282,15 @@ class StressGauge:
         self._signals['risk_velocity'] = self._collect_risk_velocity()
         self._signals['cpu_load'] = self._collect_cpu_load()
         self._signals['anomaly_dist'] = self._collect_anomaly_distribution()
+        self._signals['qsecbit'] = self._collect_qsecbit_signal()
 
         score = (
             self._signals['xdp_drop_rate'] * self.WEIGHT_XDP_DROP_RATE +
             self._signals['active_incidents'] * self.WEIGHT_ACTIVE_INCIDENTS +
             self._signals['risk_velocity'] * self.WEIGHT_RISK_VELOCITY +
             self._signals['cpu_load'] * self.WEIGHT_CPU_LOAD +
-            self._signals['anomaly_dist'] * self.WEIGHT_ANOMALY_DIST
+            self._signals['anomaly_dist'] * self.WEIGHT_ANOMALY_DIST +
+            self._signals['qsecbit'] * self.WEIGHT_QSECBIT
         )
 
         self._composite_score = round(score, 4)

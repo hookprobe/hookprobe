@@ -1105,8 +1105,14 @@ def main():
     persisted = persist_profiles()
     logger.info(f"Persisted {persisted} profiles to ClickHouse")
 
-    # Try training meta-regression
-    train_meta_regression()
+    # logistic_meta training DISABLED 2026-06-10 (consolidation): it trained
+    # hourly but produced F1=0 every version (degenerate — a profile-cache miss
+    # gave all-zero feature vectors) AND its output (get_meta_prediction) is
+    # consumed by NOTHING. The LogisticRegression class is kept for a future,
+    # properly-wired Pillar C stacker trained on the SSOL ledger's both-class
+    # labels. Re-enable via META_REGRESSION=1.
+    if os.environ.get('META_REGRESSION', '0') == '1':
+        train_meta_regression()
 
     cycle_count = 0
 
@@ -1137,8 +1143,8 @@ def main():
                 # Re-enrich with RDAP (new IPs may have been queried)
                 enrich_profiles_with_rdap()
 
-            # Retrain meta-regression every 12 cycles (1 hour at 5-min intervals)
-            if cycle_count % 12 == 0:
+            # Retrain meta-regression every 12 cycles (1h) — DISABLED (see above)
+            if cycle_count % 12 == 0 and os.environ.get('META_REGRESSION', '0') == '1':
                 train_meta_regression()
 
         except Exception as e:
