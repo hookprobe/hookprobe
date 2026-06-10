@@ -51,6 +51,12 @@ ASN_PIVOT_CHECK = True       # Check for attacker pivoting within same ASN
 SSOL_LEDGER_ENABLED = os.environ.get('SSOL_LEDGER_ENABLED', 'true').lower() == 'true'
 SCAN_FANOUT_PORTS = 15       # unique dst ports/hr that look like scanning
 _BENIGN_RDAP = ('isp', 'cdn', 'edu', 'gov')
+# A.5 (Sprint 2) — also reconcile a sample of ALLOWED IPs each cycle. Blocks
+# are malicious-by-construction, so blocks-only labeling can never produce the
+# BENIGN outcome-labels Gate A needs (the ledger was 100% malicious). Sampling
+# the highest-scoring benign/suspicious verdicts (the ambiguous band) yields
+# both correct-allows (BENIGN) and missed-attacks (FALSE NEGATIVE → malicious).
+ALLOW_SAMPLE_LIMIT = int(os.environ.get('SSOL_ALLOW_SAMPLE', '50'))
 
 
 class OutcomeObserver:
@@ -115,8 +121,6 @@ class OutcomeObserver:
             f"ORDER BY timestamp DESC LIMIT 100"
         )
         result = _ch_query(query)
-        if not result:
-            return {}
 
         pass_counts = {
             'block_success': 0,
@@ -125,7 +129,7 @@ class OutcomeObserver:
             'possible_evasion': 0,
         }
 
-        for line in result.strip().split('\n'):
+        for line in (result.strip().split('\n') if result else []):
             if not line.strip():
                 continue
             parts = line.split('\t')
@@ -166,6 +170,14 @@ class OutcomeObserver:
                 with self._lock:
                     self._stats['errors'] += 1
 
+        # A.5 — reconcile a sample of ALLOWS every cycle (runs even when there
+        # were no blocks). This is what gives the ledger its BENIGN labels.
+        if SSOL_LEDGER_ENABLED:
+            try:
+                self.reconcile_allows(now)
+            except Exception as e:
+                logger.debug("Allow reconciliation error: %s", e)
+
         # Prune recently_observed dict
         with self._lock:
             cutoff = now - OBSERVATION_WINDOW_S * 2
@@ -180,6 +192,50 @@ class OutcomeObserver:
                 ", ".join(f"{k}={v}" for k, v in pass_counts.items() if v > 0))
 
         return pass_counts
+
+    def reconcile_allows(self, now: float) -> None:
+        """A.5 — sample high-risk ALLOWED IPs (scored benign/suspicious, not
+        blocked) and write a weak outcome-label for each.
+
+        Blocks are malicious-by-construction, so blocks-only labeling can never
+        produce benign outcome-labels — the ledger was 100% malicious and Gate A
+        (both classes) was unreachable. We bias the sample toward the highest-
+        scoring benign/suspicious verdicts (the ambiguous band) because that is
+        where both correct-allows (→ BENIGN) and missed attacks (→ FALSE
+        NEGATIVE / malicious) hide. Shares the _recently_observed dedup with the
+        block path so an IP is never double-labelled in a cycle.
+        """
+        query = (
+            f"SELECT IPv4NumToString(src_ip) AS ip "
+            f"FROM {CH_DB}.hydra_verdicts "
+            f"WHERE timestamp >= now() - INTERVAL 15 MINUTE "
+            f"AND timestamp <  now() - INTERVAL 10 MINUTE "
+            f"AND verdict IN ('benign', 'suspicious') "
+            f"ORDER BY anomaly_score DESC LIMIT {ALLOW_SAMPLE_LIMIT}"
+        )
+        result = _ch_query(query)
+        if not result:
+            return
+
+        reconciled = 0
+        for line in result.strip().split('\n'):
+            ip = line.split('\t')[0].strip() if line.strip() else ''
+            if not ip:
+                continue
+            with self._lock:
+                last = self._recently_observed.get(ip)
+                if last is not None and now - last < OBSERVATION_WINDOW_S:
+                    continue
+                self._recently_observed[ip] = now
+            try:
+                self._write_outcome_ledger(ip, 'allow_reconcile', 'anomaly_ml',
+                                           action='allow')
+                reconciled += 1
+            except Exception as e:
+                logger.debug("Allow reconcile error for %s: %s", ip, e)
+
+        if reconciled:
+            logger.info("ALLOW RECONCILE: labelled %d allows", reconciled)
 
     def _measure_outcome(self, src_ip: str, block_ts: str) -> str:
         """Query pre/post packet rates and classify outcome."""
@@ -247,9 +303,10 @@ class OutcomeObserver:
         except Exception as e:
             logger.debug("Emotion stimulus error: %s", e)
 
-    def _write_outcome_ledger(self, src_ip: str, outcome: str, decider: str = 'unknown') -> None:
-        """Derive a weak, confidence-scored label for a reconciled block and
-        persist it to cno_outcome_ledger (SSOL keystone, Ch 28 Sprint 1).
+    def _write_outcome_ledger(self, src_ip: str, outcome: str, decider: str = 'unknown',
+                              action: str = 'block') -> None:
+        """Derive a weak, confidence-scored label for a reconciled block OR allow
+        and persist it to cno_outcome_ledger (SSOL keystone, Ch 28 Sprint 1).
 
         Evidence is observable signal, NOT a human verdict:
           - threat-feed / IoC membership and historical malicious verdicts
@@ -295,28 +352,37 @@ class OutcomeObserver:
         rdap_type = (rrow[0].strip() if rrow and rrow[0] else 'unknown')
         benign_rdap = rdap_type in _BENIGN_RDAP
 
-        # Classify
-        if feed_hits > 0 or hist_mal > 0:
-            label, conf, why = 'malicious', 0.9, f'feed={feed_hits},histmal={hist_mal}'
+        # Classify (same evidence for blocks and allows). The benign branch is
+        # action-aware: for a BLOCK we only call it benign with positive RDAP
+        # corroboration (conservative — don't rubber-stamp a block as an FP); for
+        # an ALLOW, the ABSENCE of any adverse signal is itself the benign signal
+        # (the system was right to let it through) — this is what finally yields
+        # the BENIGN labels Gate A needs.
+        adverse = (feed_hits > 0 or hist_mal > 0)
+        if adverse:
+            # block: justified. allow: a FALSE NEGATIVE — we let a known-bad IP in.
+            why = f'feed={feed_hits},histmal={hist_mal}'
+            label, conf, why = 'malicious', 0.9, (f'FN_{why}' if action == 'allow' else why)
         elif op_fp > 0:
             label, conf, why = 'benign', 0.85, 'operator_fp'
         elif ports >= SCAN_FANOUT_PORTS and not benign_rdap:
             label, conf, why = 'malicious', 0.6, f'scan_fanout ports={ports}'
-        elif benign_rdap and feed_hits == 0 and hist_mal == 0 and ports < SCAN_FANOUT_PORTS:
-            # Quiet consumer/CDN/edu/gov source with no adverse signal — a
-            # benign source we likely blocked in error. NOT applied when the
-            # source shows scan-like fan-out (40 ports from an ISP is not quiet).
+        elif benign_rdap and ports < SCAN_FANOUT_PORTS:
             label, conf, why = 'benign', 0.5, f'benign_rdap={rdap_type}'
+        elif action == 'allow' and ports < SCAN_FANOUT_PORTS:
+            # A reconciled allow with no adverse signal — correctly allowed.
+            label, conf, why = 'benign', 0.4, 'allow_no_adverse_signal'
         else:
             label, conf, why = 'ambiguous', 0.3, 'insufficient_signal'
 
         evidence = f'{why};outcome={outcome};rdap={rdap_type}'
 
         safe_decider = decider if re.match(r'^[A-Za-z0-9_]+$', decider or '') else 'unknown'
+        safe_action = action if action in ('block', 'allow', 'quarantine') else 'block'
         insert = (
             f"INSERT INTO {CH_DB}.cno_outcome_ledger "
             f"(src_ip, action, decider, pre_score, weak_label, label_conf, evidence) "
-            f"VALUES ('{_esc(src_ip)}', 'block', '{safe_decider}', "
+            f"VALUES ('{_esc(src_ip)}', '{safe_action}', '{safe_decider}', "
             f"{last_score:.6f}, '{label}', {conf:.3f}, '{_esc(evidence)}')"
         )
         if _ch_query(insert) is not None:
