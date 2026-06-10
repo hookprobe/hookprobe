@@ -50,5 +50,13 @@ COPY common/health.py /app/core/common/health.py
 # import sites are at feed_sync.py:44 and rdap_enricher.py:47.
 COPY agency_shim.py /app/core/agency_shim.py
 
+# Peer transport — feed_sync.py's iocs→XDP watcher does
+# `from cno.peer_transport import get_peer_transport`. Baked in 2026-06-10 so
+# the inject-neural-kernel.sh boot step (which side-loaded this and timed out
+# >120s) can be retired. This was the last un-baked module; without it the
+# feed logged "peer_transport startup failed: No module named 'cno'".
+RUN mkdir -p /app/cno && touch /app/cno/__init__.py
+COPY cno/peer_transport.py /app/cno/peer_transport.py
+
 # Default: run feed_sync (override in compose for other daemons)
 CMD ["python3", "-u", "feed_sync.py"]
