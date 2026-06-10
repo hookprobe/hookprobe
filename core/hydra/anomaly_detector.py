@@ -857,6 +857,46 @@ def load_predictive_ips(window_seconds: int) -> Dict[str, Tuple[str, float]]:
     return out
 
 
+def load_cno_benign_vetoes(window_seconds: int) -> set:
+    """The 'one self' seam (SSOL C4): CNO's LEARNED outcome knowledge steers
+    HYDRA's verdict.
+
+    Returns the set of IPs the organism's outcome ledger recently labelled
+    BENIGN (via A.5 allow-reconciliation — correctly-allowed sources, RDAP-
+    corroborated CDNs/ISPs, operator FPs). This is the brain influencing the
+    body — but VETO-ONLY (it can only DOWNGRADE a verdict, never amplify), so
+    there is no oscillation: the benign label is an independent outcome signal,
+    not a re-read of the current score. A vetoed IP that is actually attacking
+    still re-escalates (the malicious evidence overrides on the next ledger
+    pass). Gated by CNO_OUTCOME_VETO env (default on); '' on error → IF-only.
+    """
+    if os.environ.get('CNO_OUTCOME_VETO', '1') != '1':
+        return set()
+    query = (
+        "SELECT DISTINCT src_ip "
+        f"FROM {CH_DB}.cno_outcome_ledger "
+        f"WHERE weak_label = 'benign' AND label_conf >= 0.5 "
+        f"AND ts > now() - INTERVAL {int(window_seconds)} SECOND "
+        # exclude any IP the ledger ALSO flagged malicious in the window
+        f"AND src_ip NOT IN ("
+        f"  SELECT src_ip FROM {CH_DB}.cno_outcome_ledger "
+        f"  WHERE weak_label = 'malicious' "
+        f"  AND ts > now() - INTERVAL {int(window_seconds)} SECOND)"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return set()
+    out = set()
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            out.add(json.loads(line)['src_ip'])
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
 def apply_predictive(verdict: str, prediction: Optional[Tuple[str, float]]) -> Tuple[str, bool]:
     """Raise suspicion one level for IPs named in an open prediction.
 
@@ -985,6 +1025,8 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     sentinel_verdicts = load_sentinel_verdicts(SENTINEL_WINDOW)
     # Forward-looking input: open high-severity predictive alerts per IP.
     predictive_ips = load_predictive_ips(PREDICTIVE_WINDOW)
+    # 'One self': IPs the CNO outcome-ledger recently confirmed benign (6h).
+    cno_benign = load_cno_benign_vetoes(21600)
 
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     verdicts = []
@@ -992,6 +1034,7 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
     n_malicious = 0
     n_vetoed = 0
     n_predicted = 0
+    n_cno_veto = 0
 
     # Use adaptive thresholds if available, otherwise fixed defaults
     thresh_suspicious = _adaptive_suspicious if _adaptive_suspicious is not None else SCORE_SUSPICIOUS
@@ -1031,7 +1074,17 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
             if raised:
                 n_predicted += 1
 
-        if agreement == 'vetoed':
+        # 'One self' (SSOL C4): the organism's LEARNED outcome knowledge steers
+        # the verdict. An IP the CNO outcome-ledger confirmed benign downgrades
+        # one level — benign-only, so it can only cut false positives, never
+        # amplify (no oscillation). The escalation counter still re-escalates a
+        # genuinely-attacking IP on later cycles.
+        if ip in cno_benign and verdict in ('malicious', 'suspicious'):
+            verdict = 'suspicious' if verdict == 'malicious' else 'benign'
+            agreement = 'cno_outcome_veto'
+            n_cno_veto += 1
+
+        if agreement in ('vetoed', 'cno_outcome_veto'):
             n_vetoed += 1
         if verdict == 'malicious':
             n_malicious += 1
@@ -1072,7 +1125,8 @@ def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
                 f"{n_benign} benign "
                 f"(trusted-vetoed: {n_trusted}; "
                 f"SENTINEL: {len(sentinel_verdicts)} evidence, {n_vetoed} vetoed; "
-                f"predictive: {len(predictive_ips)} open, {n_predicted} raised)")
+                f"predictive: {len(predictive_ips)} open, {n_predicted} raised; "
+                f"CNO-outcome: {len(cno_benign)} benign, {n_cno_veto} vetoed)")
 
     return written
 
