@@ -20,6 +20,7 @@ License: Proprietary
 Version: 23.0.0
 """
 
+import ipaddress
 import logging
 import os
 import re
@@ -45,6 +46,11 @@ RATE_DROP_SUCCESS = 0.80     # >80% drop = block worked
 RATE_DROP_PARTIAL = 0.40     # >40% drop = partial success
 OBSERVATION_WINDOW_S = 600   # Observe 10 min post-block
 ASN_PIVOT_CHECK = True       # Check for attacker pivoting within same ASN
+
+# SSOL (Ch 28 Sprint 1) — write weak ground-truth labels to cno_outcome_ledger
+SSOL_LEDGER_ENABLED = os.environ.get('SSOL_LEDGER_ENABLED', 'true').lower() == 'true'
+SCAN_FANOUT_PORTS = 15       # unique dst ports/hr that look like scanning
+_BENIGN_RDAP = ('isp', 'cdn', 'edu', 'gov')
 
 
 class OutcomeObserver:
@@ -79,6 +85,10 @@ class OutcomeObserver:
             'possible_evasion': 0,
             'no_data': 0,
             'errors': 0,
+            'ledger_written': 0,
+            'ledger_malicious': 0,
+            'ledger_benign': 0,
+            'ledger_ambiguous': 0,
         }
 
     def observe_recent_blocks(self) -> Dict[str, int]:
@@ -134,6 +144,11 @@ class OutcomeObserver:
 
                 # Feed emotional stimulus
                 self._feed_emotion_stimulus(outcome, src_ip)
+
+                # SSOL (Ch 28 Sprint 1) — turn this reconciled block into a
+                # weak, confidence-scored ground-truth label for the trainers.
+                if SSOL_LEDGER_ENABLED:
+                    self._write_outcome_ledger(src_ip, outcome)
 
             except Exception as e:
                 logger.debug("Outcome observation error for %s: %s",
@@ -222,6 +237,82 @@ class OutcomeObserver:
         except Exception as e:
             logger.debug("Emotion stimulus error: %s", e)
 
+    def _write_outcome_ledger(self, src_ip: str, outcome: str) -> None:
+        """Derive a weak, confidence-scored label for a reconciled block and
+        persist it to cno_outcome_ledger (SSOL keystone, Ch 28 Sprint 1).
+
+        Evidence is observable signal, NOT a human verdict:
+          - threat-feed / IoC membership and historical malicious verdicts
+            → strong malicious
+          - operator false-positive override → strong benign (human ground truth)
+          - high unique-port fan-out from a non-ISP/CDN source → scan → malicious
+          - quiet ISP/CDN/edu/gov source with no feed/verdict history → benign
+          - otherwise ambiguous
+        Operator labels stay the high-weight anchor downstream; these weak
+        labels enter training at conf-scaled weight.
+        """
+        if not _valid_ip(src_ip):
+            return
+
+        ipq = f"toIPv4('{src_ip}')"
+
+        # Evidence 1 — verdict history: latest score, malicious count, operator FP
+        vrow = _ch_row(
+            f"SELECT argMax(anomaly_score, timestamp), "
+            f"countIf(verdict = 'malicious'), "
+            f"countIf(operator_decision = 'false_positive') "
+            f"FROM {CH_DB}.hydra_verdicts "
+            f"WHERE src_ip = {ipq} AND timestamp >= now() - INTERVAL 7 DAY"
+        )
+        last_score = _to_float(vrow[0]) if len(vrow) > 0 else 0.0
+        hist_mal = _to_int(vrow[1]) if len(vrow) > 1 else 0
+        op_fp = _to_int(vrow[2]) if len(vrow) > 2 else 0
+
+        # Evidence 2 — recent events: feed membership, volume, port fan-out
+        erow = _ch_row(
+            f"SELECT countIf(feed_source != ''), count(), uniq(dst_port) "
+            f"FROM {CH_DB}.hydra_events "
+            f"WHERE src_ip = {ipq} AND timestamp >= now() - INTERVAL 1 HOUR"
+        )
+        feed_hits = _to_int(erow[0]) if len(erow) > 0 else 0
+        ports = _to_int(erow[2]) if len(erow) > 2 else 0
+
+        # Evidence 3 — RDAP class
+        rrow = _ch_row(
+            f"SELECT rdap_type FROM {CH_DB}.rdap_cache FINAL "
+            f"WHERE ip = {ipq} LIMIT 1"
+        )
+        rdap_type = (rrow[0].strip() if rrow and rrow[0] else 'unknown')
+        benign_rdap = rdap_type in _BENIGN_RDAP
+
+        # Classify
+        if feed_hits > 0 or hist_mal > 0:
+            label, conf, why = 'malicious', 0.9, f'feed={feed_hits},histmal={hist_mal}'
+        elif op_fp > 0:
+            label, conf, why = 'benign', 0.85, 'operator_fp'
+        elif ports >= SCAN_FANOUT_PORTS and not benign_rdap:
+            label, conf, why = 'malicious', 0.6, f'scan_fanout ports={ports}'
+        elif benign_rdap and feed_hits == 0 and hist_mal == 0 and ports < SCAN_FANOUT_PORTS:
+            # Quiet consumer/CDN/edu/gov source with no adverse signal — a
+            # benign source we likely blocked in error. NOT applied when the
+            # source shows scan-like fan-out (40 ports from an ISP is not quiet).
+            label, conf, why = 'benign', 0.5, f'benign_rdap={rdap_type}'
+        else:
+            label, conf, why = 'ambiguous', 0.3, 'insufficient_signal'
+
+        evidence = f'{why};outcome={outcome};rdap={rdap_type}'
+
+        insert = (
+            f"INSERT INTO {CH_DB}.cno_outcome_ledger "
+            f"(src_ip, action, decider, pre_score, weak_label, label_conf, evidence) "
+            f"VALUES ('{_esc(src_ip)}', 'block', 'cno_reflex', "
+            f"{last_score:.6f}, '{label}', {conf:.3f}, '{_esc(evidence)}')"
+        )
+        if _ch_query(insert) is not None:
+            with self._lock:
+                self._stats['ledger_written'] += 1
+                self._stats[f'ledger_{label}'] = self._stats.get(f'ledger_{label}', 0) + 1
+
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             return dict(self._stats)
@@ -233,6 +324,45 @@ class OutcomeObserver:
 
 def _esc(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+
+
+def _valid_ip(s: str) -> bool:
+    """Strict IPv4/IPv6 validation before interpolating into SQL."""
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _to_int(s: Any) -> int:
+    try:
+        return int(float(str(s).strip()))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _to_float(s: Any) -> float:
+    try:
+        return float(str(s).strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _ch_row(query: str) -> List[str]:
+    """Run a single-row query, return its tab-separated columns as a list.
+
+    The module's _ch_query() returns TabSeparated (no FORMAT appended), so a
+    one-row aggregate SELECT comes back as 'c1\\tc2\\tc3'. Returns [] on error
+    or empty result.
+    """
+    raw = _ch_query(query)
+    if not raw:
+        return []
+    first = raw.strip().split('\n')[0] if raw.strip() else ''
+    if not first:
+        return []
+    return first.split('\t')
 
 
 def _ch_query(query: str) -> Optional[str]:
