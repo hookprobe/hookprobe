@@ -95,8 +95,11 @@ REFLEX_SCORE = float(os.environ.get('REFLEX_SCORE', '0.95'))        # Near-certa
 REASON_VELOCITY = float(os.environ.get('REASON_VELOCITY', '0.10'))  # Elevated risk
 REASON_SCORE = float(os.environ.get('REASON_SCORE', '0.70'))        # Suspicious
 
-# LLM rate limiting — free tier is 16 req/min. Cap at 8 to leave headroom.
+# LLM rate limiting — free tier is 16 req/min. Default 12 leaves headroom
+# while cutting the heuristic-fallback rate (was a hardcoded 8). Raise via
+# LLM_MAX_PER_MIN with a paid key; keep <=16 on the free tier to avoid 429s.
 MAX_LLM_CALLS_PER_CYCLE = int(os.environ.get('MAX_LLM_CALLS', '3'))
+LLM_MAX_PER_MIN = int(os.environ.get('LLM_MAX_PER_MIN', '12'))
 LLM_TIMEOUT = int(os.environ.get('LLM_TIMEOUT', '20'))
 
 # Phase 10: LLM response cache — avoid re-analyzing the same IP within 5 min
@@ -136,7 +139,7 @@ def call_openrouter(prompt: str, system_prompt: str = '',
         if now - _LLM_MINUTE_RESET > 60:
             _LLM_CALLS_THIS_MINUTE = 0
             _LLM_MINUTE_RESET = now
-        if _LLM_CALLS_THIS_MINUTE >= 8:
+        if _LLM_CALLS_THIS_MINUTE >= LLM_MAX_PER_MIN:
             logger.debug("LLM rate limit: %d calls this minute, skipping",
                          _LLM_CALLS_THIS_MINUTE)
             return None
