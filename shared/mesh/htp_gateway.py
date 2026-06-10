@@ -28,6 +28,7 @@ License: AGPL-3.0
 """
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import hmac
@@ -417,30 +418,62 @@ class HTPVPNGateway:
     # =========================================================================
 
     def _create_tun(self) -> bool:
-        """Create TUN device for routing client traffic."""
-        try:
-            self.tun_fd = os.open("/dev/net/tun", os.O_RDWR)
-            ifr = struct.pack("16sH", TUN_DEVICE_NAME.encode(), IFF_TUN | IFF_NO_PI)
-            fcntl.ioctl(self.tun_fd, TUNSETIFF, ifr)
+        """Create TUN device for routing client traffic.
 
-            subprocess.run(
-                ["ip", "addr", "add", f"{TUN_GATEWAY_IP}/24", "dev", TUN_DEVICE_NAME],
-                check=True, capture_output=True
-            )
-            subprocess.run(
-                ["ip", "link", "set", TUN_DEVICE_NAME, "mtu", str(TUN_MTU)],
-                check=True, capture_output=True
-            )
-            subprocess.run(
-                ["ip", "link", "set", TUN_DEVICE_NAME, "up"],
-                check=True, capture_output=True
-            )
+        Idempotent: a prior gateway killed with SIGKILL never runs
+        _destroy_tun(), leaving the htp-gw device behind (confirmed live: the
+        device persists UP with no owning process). A plain TUNSETIFF on the
+        next boot then fails with EBUSY (Errno 16) and the whole gateway dies.
+        We retry once, flushing the stale device first. Deleting it is safe —
+        cleanup() kills HTP_PID on exit, so no live gateway can own it.
+        """
+        for attempt in (1, 2):
+            try:
+                if attempt == 2:
+                    subprocess.run(
+                        ["ip", "link", "delete", TUN_DEVICE_NAME],
+                        capture_output=True, timeout=5
+                    )
+                self.tun_fd = os.open("/dev/net/tun", os.O_RDWR)
+                ifr = struct.pack("16sH", TUN_DEVICE_NAME.encode(), IFF_TUN | IFF_NO_PI)
+                try:
+                    fcntl.ioctl(self.tun_fd, TUNSETIFF, ifr)
+                except OSError as e:
+                    os.close(self.tun_fd)
+                    self.tun_fd = None
+                    if e.errno == errno.EBUSY and attempt == 1:
+                        logger.warning(
+                            "TUN %s busy (stale device) — flushing and retrying",
+                            TUN_DEVICE_NAME)
+                        continue
+                    raise
 
-            logger.info("TUN device %s created (%s/24)", TUN_DEVICE_NAME, TUN_GATEWAY_IP)
-            return True
-        except Exception as e:
-            logger.error("Failed to create TUN device: %s", e)
-            return False
+                # The address may already be present if a half-configured
+                # device was reused; tolerate "exists" rather than aborting.
+                subprocess.run(
+                    ["ip", "addr", "add", f"{TUN_GATEWAY_IP}/24", "dev", TUN_DEVICE_NAME],
+                    capture_output=True
+                )
+                subprocess.run(
+                    ["ip", "link", "set", TUN_DEVICE_NAME, "mtu", str(TUN_MTU)],
+                    check=True, capture_output=True
+                )
+                subprocess.run(
+                    ["ip", "link", "set", TUN_DEVICE_NAME, "up"],
+                    check=True, capture_output=True
+                )
+
+                logger.info("TUN device %s created (%s/24)", TUN_DEVICE_NAME, TUN_GATEWAY_IP)
+                return True
+            except Exception as e:
+                logger.error("Failed to create TUN device (attempt %d): %s", attempt, e)
+                if self.tun_fd is not None:
+                    try:
+                        os.close(self.tun_fd)
+                    except OSError:
+                        pass
+                    self.tun_fd = None
+        return False
 
     def _destroy_tun(self):
         """Destroy TUN device."""
