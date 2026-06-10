@@ -54,6 +54,14 @@ CALM_SERENE_DWELL_S = 1800    # 30 min of CALM+SERENE before sleep
 DEFAULT_LOW_TRAFFIC_START_HOUR = 2    # 02:00 UTC
 DEFAULT_LOW_TRAFFIC_END_HOUR = 5      # 05:00 UTC
 MIN_INTERVAL_BETWEEN_SLEEPS_S = 18000  # At least 5 hours between sleeps
+# 2026-06-10: on a live sensor that sees constant background-scan traffic,
+# stress/emotion flip out of CALM+SERENE often enough that the old "continuous
+# dwell" never completed → sleep fired only twice ever (last 2026-04-16).
+# (1) tolerate brief blips so a single alert snapshot doesn't wipe accrued
+#     dwell; (2) FORCE a consolidation if it's been too long regardless of
+#     stress/hour — memory MUST consolidate or it plateaus and grows unbounded.
+DWELL_BLIP_TOLERANCE_S = 300        # ≤5 min out of CALM+SERENE keeps the dwell
+FORCE_SLEEP_INTERVAL_S = 604800     # 7 days — hard backstop for consolidation
 
 # Sleep activities
 REPLAY_BATCH_SIZE = 50              # Episodes to replay per cycle
@@ -91,7 +99,9 @@ class SleepCycle:
 
         self._lock = threading.Lock()
         self._calm_serene_start_ts: Optional[float] = None
+        self._last_calm_serene_ts: Optional[float] = None   # blip tolerance
         self._last_sleep_ts = 0.0
+        self._started_ts = time.time()                      # forced-sleep anchor
         self._sleeping = False
 
         self._stats = {
@@ -135,9 +145,17 @@ class SleepCycle:
         return self._execute_sleep_cycle()
 
     def _check_trigger_conditions(self, now: float) -> bool:
-        """Trigger conditions: CALM+SERENE dwell + low-traffic hour."""
+        """Trigger conditions: CALM+SERENE dwell + low-traffic hour, with brief-
+        blip tolerance; OR a forced consolidation if it's been too long."""
         if not self._workspace:
             return False
+
+        # (2) Forced backstop — memory must consolidate even if the sensor
+        # never sustains CALM+SERENE. Anchor to the last real sleep, or to
+        # process start if it has never slept this run.
+        anchor = self._last_sleep_ts or self._started_ts
+        if (now - anchor) > FORCE_SLEEP_INTERVAL_S:
+            return True
 
         snap = self._workspace.snapshot()
         is_calm_serene = (
@@ -145,14 +163,23 @@ class SleepCycle:
             and snap.current_emotion == 'serene'
         )
 
-        # Track CALM+SERENE dwell time
+        # Track CALM+SERENE dwell time, tolerating brief blips.
         if is_calm_serene:
             if self._calm_serene_start_ts is None:
                 self._calm_serene_start_ts = now
+            self._last_calm_serene_ts = now
             dwell = now - self._calm_serene_start_ts
         else:
-            self._calm_serene_start_ts = None
-            return False
+            # (1) A single alert/vigilant snapshot from background scans no
+            # longer wipes accrued dwell — only reset if we've been OUT of
+            # CALM+SERENE for longer than the tolerance window.
+            last_cs = self._last_calm_serene_ts
+            if (last_cs is None
+                    or (now - last_cs) > DWELL_BLIP_TOLERANCE_S
+                    or self._calm_serene_start_ts is None):
+                self._calm_serene_start_ts = None
+                return False
+            dwell = now - self._calm_serene_start_ts
 
         if dwell < CALM_SERENE_DWELL_S:
             return False
