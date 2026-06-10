@@ -731,9 +731,12 @@ class ActionEnforcer:
         success = ch_insert(query, data)
 
         if success:
-            # Track TTL for expiry (with capacity limit)
+            # Track TTL for expiry (with capacity limit). ttl <= 0 means
+            # PERMANENT (types.py:199) — use a far-future expiry so the block
+            # is never released by _expire_blocks. Previously `time.time() + 0`
+            # expired permanent hardblocks on the very next cleanup pass.
             import time
-            self._active_blocks[ip] = time.time() + ttl
+            self._active_blocks[ip] = (float('inf') if ttl <= 0 else time.time() + ttl)
             # Evict oldest blocks if capacity exceeded (DDoS protection)
             if len(self._active_blocks) > self._MAX_ACTIVE_BLOCKS:
                 oldest_ip = min(self._active_blocks, key=self._active_blocks.get)

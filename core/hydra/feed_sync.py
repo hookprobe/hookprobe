@@ -450,8 +450,13 @@ def sync_cognitive_blocks() -> Tuple[Set[str], int]:
                     if not ip or src not in COGNITIVE_BLOCK_SOURCES:
                         continue
 
-                    # Check TTL expiry
-                    if created > 0 and (now_unix - created) > duration:
+                    # Check TTL expiry. duration <= 0 means PERMANENT
+                    # (types.py:199 / LLM "permanent" hardblocks) — never
+                    # auto-expire it. The previous code treated 0 as
+                    # already-expired, so the organism's most confident blocks
+                    # were marked auto_expired=1 the same cycle and never
+                    # reached XDP. The 24h read window above bounds re-pushing.
+                    if duration > 0 and created > 0 and (now_unix - created) > duration:
                         # TTL expired — mark as expired (match the row's source)
                         expire_query = (
                             f"ALTER TABLE {CH_DB}.hydra_blocks "
