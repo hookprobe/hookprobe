@@ -44,7 +44,7 @@ jobs:
           cache: 'pip'
 
       - name: Install test dependencies
-        run: pip install pytest numpy scipy cryptography
+        run: pip install pytest numpy scipy cryptography psutil
 
       - name: Run engine unit gate (no live services)
         run: python -m pytest tests/ -m "not integration and not product" -q
@@ -69,7 +69,7 @@ jobs:
           cache: 'pip'
 
       - name: Install test dependencies
-        run: pip install pytest numpy scipy cryptography
+        run: pip install pytest numpy scipy cryptography psutil
 
       - name: Run integration + product lanes (non-gating)
         run: python -m pytest tests/ -m "integration or product" -q || true
