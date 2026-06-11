@@ -2598,6 +2598,13 @@ four plain service listeners are env-overridable for multi-homed hosts
 clear-text-logging alert on `core/hydra/anomaly_detector.py` was a false
 positive (log emits only `len()` counts; CH auth goes via headers).
 
+> **Expect re-flags**: CodeQL traces the intentional `0.0.0.0` default
+> literal through `os.environ.get()`, so any edit that shifts these lines
+> opens NEW alert numbers for the same sites (seen 2026-06-11: #947-#950
+> re-flagged the four hardened listeners). Dismiss as won't-fix citing the
+> env override + this section — do not "fix" by changing the default,
+> which would break the services.
+
 ### Debugging CI Failures
 
 ```bash
