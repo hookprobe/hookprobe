@@ -1329,6 +1329,26 @@ class SentinelEngine:
         self.version += 1
         self.last_trained = datetime.now(timezone.utc).isoformat()
 
+        # Real in-sample metrics (was hardcoded 0,0,0,0 in _persist_model_state
+        # for all 1199+ versions — blinded the dashboard AND the B2 quality
+        # gate). Confusion matrix at the 0.5 decision threshold on the
+        # calibrated score, over the calibration set.
+        cm_tp = cm_fp = cm_fn = cm_tn = 0
+        for s, l in zip(scores_for_cal, labels_for_cal):
+            pred = 1 if calibrator.calibrate(s) >= 0.5 else 0
+            if l == 1 and pred == 1:
+                cm_tp += 1
+            elif l == 0 and pred == 1:
+                cm_fp += 1
+            elif l == 1 and pred == 0:
+                cm_fn += 1
+            else:
+                cm_tn += 1
+        precision = cm_tp / (cm_tp + cm_fp) if (cm_tp + cm_fp) > 0 else 0.0
+        recall = cm_tp / (cm_tp + cm_fn) if (cm_tp + cm_fn) > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        fpr = cm_fp / (cm_fp + cm_tn) if (cm_fp + cm_tn) > 0 else 0.0
+
         stats = {
             'status': 'trained',
             'version': self.version,
@@ -1336,6 +1356,10 @@ class SentinelEngine:
             'true_positives': tp,
             'false_positives': fp,
             'n_features': N_EVIDENCE,
+            'precision': round(precision, 4),
+            'recall': round(recall, 4),
+            'f1_score': round(f1, 4),
+            'false_positive_rate': round(fpr, 4),
         }
 
         # Persist model state to ClickHouse
@@ -1375,7 +1399,9 @@ class SentinelEngine:
         )
         data = (
             f"('sentinel_gnb', {self.version}, {stats.get('samples', 0)}, "
-            f"'{safe_json}', 0, 0, 0, 0, '{safe_importance}')"
+            f"'{safe_json}', {stats.get('precision', 0)}, {stats.get('recall', 0)}, "
+            f"{stats.get('f1_score', 0)}, {stats.get('false_positive_rate', 0)}, "
+            f"'{safe_importance}')"
         )
         ch_insert(query, data)
 
