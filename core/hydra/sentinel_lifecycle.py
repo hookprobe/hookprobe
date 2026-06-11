@@ -309,6 +309,69 @@ def compute_metrics(decisions: List[Tuple[str, str, float]]) -> dict:
 # LIFECYCLE MANAGER
 # ============================================================================
 
+class OutcomeQualityGate:
+    """SSOL B2 — outcome-grounded model quality gate (OBSERVE-first).
+
+    The lifecycle's promote/rollback was keyed to human operator labels that
+    stopped 53 days ago, so a regressed/confirmation-biased model could never
+    be caught. This gate measures conf-weighted PRECISION of the live model
+    against the SSOL outcome ledger (cno_outcome_ledger, both classes via A.5):
+    "when the model flags an IP malicious, how often does the network's own
+    outcome confirm it?" Low precision = over-flagging benign sources.
+
+    OBSERVE mode (default): only LOGS the rollback it WOULD trigger — zero
+    enforcement risk. Set QUALITY_GATE_ENFORCE=1 to let it drive retrains.
+    """
+    PRECISION_FLOOR = float(os.environ.get('QUALITY_GATE_PRECISION_FLOOR', '0.65'))
+    MIN_ROWS = int(os.environ.get('QUALITY_GATE_MIN_ROWS', '50'))
+    CONF_MIN = float(os.environ.get('QUALITY_GATE_CONF_MIN', '0.4'))
+    ENFORCE = os.environ.get('QUALITY_GATE_ENFORCE', '0') == '1'
+
+    def evaluate(self) -> dict:
+        """Compute outcome-grounded precision; log would-rollback. No side effects in OBSERVE."""
+        query = (
+            "SELECT ol.weak_label AS label, ol.label_conf AS conf, "
+            "se.verdict AS model_verdict "
+            f"FROM {CH_DB}.cno_outcome_ledger ol "
+            "LEFT JOIN (SELECT src_ip, argMax(verdict, timestamp) AS verdict "
+            f"  FROM {CH_DB}.sentinel_evidence "
+            "  WHERE timestamp >= now() - INTERVAL 2 HOUR GROUP BY src_ip) se "
+            "ON toIPv4(ol.src_ip) = se.src_ip "
+            "WHERE ol.ts >= now() - INTERVAL 24 HOUR "
+            "AND ol.weak_label IN ('malicious','benign') "
+            f"AND ol.label_conf >= {self.CONF_MIN} LIMIT 5000"
+        )
+        raw = ch_query(query)
+        tp = fp = 0.0
+        rows = matched = 0
+        for line in (raw.strip().splitlines() if raw else []):
+            try:
+                r = json.loads(line)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            rows += 1
+            mv = str(r.get('model_verdict') or '')
+            if not mv:
+                continue  # model hasn't scored this IP in the window
+            matched += 1
+            conf = float(r.get('conf') or 0)
+            if r.get('label') == 'malicious' and mv == 'malicious':
+                tp += conf
+            elif r.get('label') == 'benign' and mv in ('malicious', 'suspicious'):
+                fp += conf
+        precision = (tp / (tp + fp)) if (tp + fp) > 0 else None
+        would_rollback = (precision is not None and matched >= self.MIN_ROWS
+                          and precision < self.PRECISION_FLOOR)
+        logger.info(
+            "[QUALITY_GATE %s] ledger_rows=%d matched=%d conf_tp=%.1f conf_fp=%.1f "
+            "precision=%s floor=%.2f would_rollback=%s",
+            'ENFORCE' if self.ENFORCE else 'SHADOW', rows, matched, tp, fp,
+            (f"{precision:.3f}" if precision is not None else "n/a"),
+            self.PRECISION_FLOOR, would_rollback)
+        return {'precision': precision, 'matched': matched, 'rows': rows,
+                'would_rollback': would_rollback, 'enforce': self.ENFORCE}
+
+
 class SentinelLifecycle:
     """
     Manages SENTINEL model lifecycle: monitoring, retraining, and promotion.
@@ -341,6 +404,9 @@ class SentinelLifecycle:
         self.cycles = 0
         self.last_retrain = 0.0
         self.last_metrics: dict = {}
+
+        # SSOL B2 — outcome-grounded quality gate (OBSERVE by default)
+        self.quality_gate = OutcomeQualityGate()
 
     def check_cycle(self) -> dict:
         """
@@ -415,6 +481,16 @@ class SentinelLifecycle:
         if metrics.get('total', 0) > 0:
             self._persist_metrics(metrics)
 
+        # Step 6 (SSOL B2): outcome-grounded quality gate. OBSERVE-only unless
+        # QUALITY_GATE_ENFORCE=1 — measures precision vs the outcome ledger and
+        # logs the rollback it WOULD trigger. Wrapped so a gate error never
+        # disrupts the lifecycle.
+        gate = {}
+        try:
+            gate = self.quality_gate.evaluate()
+        except Exception as e:
+            logger.debug("Quality gate error: %s", e)
+
         return {
             'cycle': self.cycles,
             'total_decisions': total_decisions,
@@ -422,6 +498,7 @@ class SentinelLifecycle:
             'metrics': metrics,
             'actions': actions,
             'drift_state': self.drift_detector.to_dict(),
+            'quality_gate': gate,
         }
 
     def _get_decision_info(self) -> dict:
