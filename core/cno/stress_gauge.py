@@ -102,6 +102,7 @@ class StressGauge:
             'risk_velocity': 0.0,
             'cpu_load': 0.0,
             'anomaly_dist': 0.0,
+            'qsecbit': 0.0,   # populated by compute_composite; init avoids KeyError pre-first-cycle
         }
 
         # History for trend analysis
