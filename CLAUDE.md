@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for HookProbe
 
-**Version**: 5.9
-**Last Updated**: 2026-01-07
+**Version**: 6.0
+**Last Updated**: 2026-06-11
 **Purpose**: Comprehensive guide for AI assistants working with the HookProbe codebase
 
 ---
@@ -2566,13 +2566,37 @@ make test-fast                    # Skip slow tests
 | Workflow | File | Purpose |
 |----------|------|---------|
 | **Python Lint** | `python-lint.yml` | Black, flake8, bandit |
-| **App Tests** | `app-tests.yml` | Django, Nginx, addon validation |
+| **App Tests** | `app-tests.yml` | Gating pytest engine-unit lane (`-m "not integration and not product"`) + informational integration lane |
 | **Container Tests** | `container-tests.yml` | Container build/run |
 | **Installation Test** | `installation-test.yml` | Install script validation |
 | **ARM64 Tests** | `arm64-tests.yml` | ARM64 architecture |
 | **Documentation** | `documentation.yml` | Markdown link checking |
 | **Config Validation** | `config-validation.yml` | Config file validation |
 | **CI Status** | `ci-status.yml` | Overall CI health check |
+
+> **App Tests deps are inline, not a requirements file** (updated 2026-06-11):
+> the gate installs exactly `pytest numpy scipy cryptography psutil`. There is
+> no `requirements-test.txt`, so a new module-level third-party import in any
+> code that tests touch (e.g. `shared/dsm/crypto/tpm.py` → `cryptography`,
+> `core/qsecbit/qsecbit.py` → `scipy`) fails COLLECTION and kills the whole
+> gate — and the abort masks any further missing deps behind it. When CI
+> fails with `ModuleNotFoundError`, reproduce with a clean venv installing
+> exactly that list, fix the list in BOTH jobs of `app-tests.yml`, and re-run
+> the full lane locally before pushing (`python -m pytest tests/ -m "not
+> integration and not product" -q` — expect ~945 passed). A mock-assertion
+> failure appearing only alongside import errors is usually cascade
+> pollution, not a real regression.
+
+### Security posture: socket binds (CodeQL, resolved 2026-06-11)
+
+All 15 CodeQL alerts triaged. `0.0.0.0` binds in STUN/NAT-traversal/relay
+sockets are a **protocol requirement** (hole punching must receive on the
+path interface) — dismissed as won't-fix with rationale on each alert. The
+four plain service listeners are env-overridable for multi-homed hosts
+(defaults unchanged): `SENTINEL_BIND_HOST`, `IPFIX_BIND_HOST`,
+`HTP_BIND_HOST`, `DSM_GOSSIP_BIND_HOST` (commit `e5a659c7`). The
+clear-text-logging alert on `core/hydra/anomaly_detector.py` was a false
+positive (log emits only `len()` counts; CH auth goes via headers).
 
 ### Debugging CI Failures
 
