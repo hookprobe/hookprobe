@@ -274,8 +274,6 @@ class OutcomeObserver:
             return 'block_success'
         elif drop_pct > RATE_DROP_PARTIAL:
             return 'block_partial'
-        elif drop_pct > 0:
-            return 'block_ineffective'
         else:
             return 'block_ineffective'
 
@@ -452,5 +450,6 @@ def _ch_query(query: str) -> Optional[str]:
         req.add_header('X-ClickHouse-Database', CH_DB)
         with urlopen(req, timeout=5) as resp:
             return resp.read().decode('utf-8')
-    except Exception:
+    except Exception as e:
+        logger.debug("_ch_query failed: %s", e)
         return None
