@@ -11,14 +11,12 @@ Core capabilities:
   - Diurnal profiles (24-hour event distribution per IP)
   - Z-score computation for anomaly significance
   - RDAP enrichment integration (type, ASN, country from rdap_cache)
-  - Logistic meta-regression on operator feedback (when available)
   - Profile persistence to ClickHouse sentinel_ip_profiles
 
 Data sources:
   - hydra_events: XDP block/alert events (primary)
   - napse_flows: Flow summaries with service classification
   - rdap_cache: IP ownership classification
-  - hydra_verdicts: Operator feedback for meta-regression
 
 Feature vector (12 features per IP per window):
   0: event_count       - Total events in window
@@ -743,255 +741,6 @@ def enrich_profiles_with_rdap() -> int:
 
 
 # ============================================================================
-# LOGISTIC META-REGRESSION (operator feedback)
-# ============================================================================
-
-class LogisticRegression:
-    """
-    Minimal logistic regression for learning feature weights from
-    operator feedback (confirm/false_positive labels).
-
-    Pure Python, no dependencies. Uses gradient descent with L2 regularization.
-    """
-
-    def __init__(self, n_features: int, learning_rate: float = 0.01,
-                 l2_lambda: float = 0.01):
-        self.weights = [0.0] * n_features
-        self.bias = 0.0
-        self.lr = learning_rate
-        self.l2 = l2_lambda
-        self.n_features = n_features
-        self.trained_samples = 0
-
-    @staticmethod
-    def _sigmoid(z: float) -> float:
-        """Numerically stable sigmoid."""
-        if z >= 0:
-            return 1.0 / (1.0 + math.exp(-z))
-        ez = math.exp(z)
-        return ez / (1.0 + ez)
-
-    def predict_proba(self, x: List[float]) -> float:
-        """Predict P(true_positive | features)."""
-        z = self.bias + sum(w * xi for w, xi in zip(self.weights, x))
-        return self._sigmoid(z)
-
-    def fit(self, X: List[List[float]], y: List[int],
-            epochs: int = 100) -> dict:
-        """
-        Train on labeled data.
-
-        X: feature vectors (z-scores from profiles)
-        y: labels (1 = true positive / confirm, 0 = false positive)
-
-        Returns training metrics.
-        """
-        if not X or not y or len(X) != len(y):
-            return {'samples': 0}
-
-        n = len(X)
-        for _ in range(epochs):
-            for i in range(n):
-                pred = self.predict_proba(X[i])
-                error = y[i] - pred
-
-                # Gradient descent with L2 regularization
-                self.bias += self.lr * error
-                for j in range(min(self.n_features, len(X[i]))):
-                    self.weights[j] += self.lr * (
-                        error * X[i][j] - self.l2 * self.weights[j]
-                    )
-
-        self.trained_samples = n
-
-        # Compute metrics on training set
-        tp = fp = fn = tn = 0
-        for i in range(n):
-            pred = 1 if self.predict_proba(X[i]) >= 0.5 else 0
-            if pred == 1 and y[i] == 1:
-                tp += 1
-            elif pred == 1 and y[i] == 0:
-                fp += 1
-            elif pred == 0 and y[i] == 1:
-                fn += 1
-            else:
-                tn += 1
-
-        precision = tp / max(tp + fp, 1)
-        recall = tp / max(tp + fn, 1)
-        f1 = 2 * precision * recall / max(precision + recall, 1e-10)
-
-        return {
-            'samples': n,
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'false_positive_rate': fp / max(fp + tn, 1),
-        }
-
-    def feature_importance(self) -> Dict[str, float]:
-        """Return feature importance as absolute weight magnitude."""
-        return {FEATURE_NAMES[i]: abs(self.weights[i])
-                for i in range(min(self.n_features, len(FEATURE_NAMES)))}
-
-    def to_json(self) -> str:
-        """Serialize model to JSON (NaN-safe)."""
-        weights_safe = [w if math.isfinite(w) else 0.0 for w in self.weights]
-        bias_safe = self.bias if math.isfinite(self.bias) else 0.0
-        return json.dumps({
-            'weights': weights_safe,
-            'bias': bias_safe,
-            'lr': self.lr,
-            'l2': self.l2,
-            'trained_samples': self.trained_samples,
-        })
-
-    @classmethod
-    def from_json(cls, data: str) -> 'LogisticRegression':
-        """Deserialize model from JSON."""
-        d = json.loads(data)
-        model = cls(len(d['weights']), d.get('lr', 0.01), d.get('l2', 0.01))
-        model.weights = [w if isinstance(w, (int, float)) and math.isfinite(w) else 0.0
-                         for w in d['weights']]
-        bias = d.get('bias', 0.0)
-        model.bias = bias if isinstance(bias, (int, float)) and math.isfinite(bias) else 0.0
-        model.trained_samples = d.get('trained_samples', 0)
-        return model
-
-
-# Global meta-regression model
-meta_model: Optional[LogisticRegression] = None
-
-
-def load_training_data_from_verdicts() -> Tuple[List[List[float]], List[int]]:
-    """
-    Load operator-labeled verdicts and compute Z-score feature vectors.
-
-    Returns (X, y) where:
-      X = list of Z-score vectors
-      y = list of labels (1=TP, 0=FP)
-    """
-    query = f"""
-        SELECT
-            IPv4NumToString(v.src_ip) AS ip,
-            v.anomaly_score,
-            v.verdict,
-            v.operator_decision,
-            f.feature_vector
-        FROM {CH_DB}.hydra_verdicts v
-        LEFT JOIN (
-            SELECT src_ip, feature_vector,
-                   row_number() OVER (PARTITION BY src_ip ORDER BY timestamp DESC) AS rn
-            FROM {CH_DB}.hydra_ip_features
-        ) f ON v.src_ip = f.src_ip AND f.rn = 1
-        WHERE v.operator_decision IN ('confirm', 'false_positive')
-        ORDER BY v.timestamp DESC
-        LIMIT 1000
-    """
-
-    result = ch_query(query)
-    if not result:
-        return [], []
-
-    X = []
-    y = []
-    for line in result.strip().split('\n'):
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-            ip = row['ip']
-            decision = row['operator_decision']
-
-            # Label: 1 = confirm (true positive), 0 = false_positive
-            label = 1 if decision == 'confirm' else 0
-
-            # Get Z-scores from profile if available
-            if ip in profiles and profiles[ip].window_count >= 3:
-                prof = profiles[ip]
-                fvec = row.get('feature_vector', [])
-                if fvec and len(fvec) == 24:
-                    # Map 24-feature to our 12-feature space
-                    mapped = [
-                        fvec[0],   # pps
-                        fvec[1],   # bps
-                        fvec[2],   # unique_dst_ports
-                        fvec[3],   # unique_dst_ips
-                        fvec[4],   # syn_ratio
-                        fvec[5],   # rst_ratio
-                        fvec[6],   # avg_pkt_size
-                        0.0, 0.0, 0.0,  # flow features (unavailable)
-                        fvec[18] if len(fvec) > 18 else 0.0,  # temporal
-                        fvec[19] if len(fvec) > 19 else 0.0,  # temporal
-                    ]
-                    z = prof.z_scores(mapped)
-                else:
-                    z = [0.0] * N_FEATURES
-            else:
-                z = [0.0] * N_FEATURES
-
-            # Guard against NaN from degenerate profiles
-            if any(not math.isfinite(v) for v in z):
-                z = [0.0] * N_FEATURES
-
-            X.append(z)
-            y.append(label)
-
-        except (json.JSONDecodeError, KeyError, ValueError):
-            continue
-
-    return X, y
-
-
-def train_meta_regression() -> Optional[dict]:
-    """Train the logistic meta-regression if enough labeled data exists."""
-    global meta_model
-
-    X, y = load_training_data_from_verdicts()
-    if len(X) < 10:
-        logger.info(f"Insufficient labeled data for meta-regression "
-                     f"({len(X)} samples, need 10+)")
-        return None
-
-    if meta_model is None:
-        meta_model = LogisticRegression(N_FEATURES)
-
-    metrics = meta_model.fit(X, y, epochs=200)
-    logger.info(f"Meta-regression trained: {metrics}")
-
-    # Save model state to ClickHouse
-    model_json = ch_escape(meta_model.to_json())
-    importance_json = ch_escape(json.dumps(meta_model.feature_importance()))
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-
-    version_query = f"""
-        SELECT max(version) AS v FROM {CH_DB}.sentinel_model_state
-        WHERE model_name = 'logistic_meta'
-    """
-    ver_result = ch_query(version_query, fmt='JSONEachRow')
-    version = 1
-    if ver_result:
-        for line in ver_result.strip().split('\n'):
-            if line:
-                try:
-                    version = int(json.loads(line).get('v') or 0) + 1
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    pass
-
-    ch_insert(
-        f"INSERT INTO {CH_DB}.sentinel_model_state "
-        "(model_name, version, trained_at, training_samples, model_params, "
-        "precision, recall, f1_score, false_positive_rate, feature_importance) VALUES",
-        f"('logistic_meta', {version}, '{now}', {metrics['samples']}, "
-        f"'{model_json}', {metrics['precision']:.6f}, {metrics['recall']:.6f}, "
-        f"{metrics['f1']:.6f}, {metrics['false_positive_rate']:.6f}, "
-        f"'{importance_json}')"
-    )
-
-    return metrics
-
-
-# ============================================================================
 # PUBLIC API (for sentinel_engine.py import)
 # ============================================================================
 
@@ -1006,13 +755,6 @@ def compute_z_scores(ip: str, feature_vector: List[float]) -> List[float]:
     if prof is None or prof.window_count < 3:
         return [0.0] * N_FEATURES
     return prof.z_scores(feature_vector)
-
-
-def get_meta_prediction(z_scores: List[float]) -> float:
-    """Get meta-regression P(TP|evidence) from Z-scores. Returns 0.5 if untrained."""
-    if meta_model is None or meta_model.trained_samples < 10:
-        return 0.5
-    return meta_model.predict_proba(z_scores)
 
 
 def get_profile_summary() -> dict:
@@ -1030,8 +772,6 @@ def get_profile_summary() -> dict:
         'total_profiles': len(profiles),
         'total_windows': total_windows,
         'type_distribution': type_counts,
-        'meta_model_trained': meta_model is not None and meta_model.trained_samples >= 10,
-        'meta_model_samples': meta_model.trained_samples if meta_model else 0,
     }
 
 
@@ -1105,15 +845,6 @@ def main():
     persisted = persist_profiles()
     logger.info(f"Persisted {persisted} profiles to ClickHouse")
 
-    # logistic_meta training DISABLED 2026-06-10 (consolidation): it trained
-    # hourly but produced F1=0 every version (degenerate — a profile-cache miss
-    # gave all-zero feature vectors) AND its output (get_meta_prediction) is
-    # consumed by NOTHING. The LogisticRegression class is kept for a future,
-    # properly-wired Pillar C stacker trained on the SSOL ledger's both-class
-    # labels. Re-enable via META_REGRESSION=1.
-    if os.environ.get('META_REGRESSION', '0') == '1':
-        train_meta_regression()
-
     cycle_count = 0
 
     while running:
@@ -1142,10 +873,6 @@ def main():
 
                 # Re-enrich with RDAP (new IPs may have been queried)
                 enrich_profiles_with_rdap()
-
-            # Retrain meta-regression every 12 cycles (1h) — DISABLED (see above)
-            if cycle_count % 12 == 0 and os.environ.get('META_REGRESSION', '0') == '1':
-                train_meta_regression()
 
         except Exception as e:
             logger.error(f"Profile cycle error: {e}", exc_info=True)

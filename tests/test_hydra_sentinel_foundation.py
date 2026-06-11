@@ -154,30 +154,6 @@ class TestIPProfile:
         assert max_z > 5.0  # Should be highly anomalous
 
 
-class TestLogisticRegression:
-    """Test pure-Python logistic regression."""
-
-    def setup_method(self):
-        from baseline_profiler import LogisticRegression
-        self.LR = LogisticRegression
-
-    def test_initial_prediction(self):
-        lr = self.LR(n_features=3)
-        pred = lr.predict_proba([1.0, 2.0, 3.0])
-        assert abs(pred - 0.5) < 0.01  # Untrained: sigmoid(0) = 0.5
-
-    def test_train_separable_data(self):
-        lr = self.LR(n_features=2, learning_rate=0.1, l2_lambda=0.0)
-        # Simple linearly separable dataset
-        X = [[0.0, 0.0], [0.1, 0.1], [0.2, 0.2],
-             [0.8, 0.8], [0.9, 0.9], [1.0, 1.0]]
-        y = [0, 0, 0, 1, 1, 1]
-        lr.fit(X, y, epochs=200)
-        # Should predict low for [0,0] and high for [1,1]
-        assert lr.predict_proba([0.0, 0.0]) < 0.3
-        assert lr.predict_proba([1.0, 1.0]) > 0.7
-
-
 # ============================================================================
 # CVE ENRICHER TESTS
 # ============================================================================
@@ -498,7 +474,6 @@ class TestModuleImports:
         import baseline_profiler
         assert hasattr(baseline_profiler, 'WelfordAccumulator')
         assert hasattr(baseline_profiler, 'IPProfile')
-        assert hasattr(baseline_profiler, 'LogisticRegression')
 
     def test_import_cve_enricher(self):
         import cve_enricher
