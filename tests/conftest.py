@@ -43,7 +43,6 @@ _INTEGRATION_FILES = {
     "test_mssp_connectivity",
     "test_aegis_full",
     "test_guardian_offline_mode",
-    "test_ai_vs_ai",            # needs /opt/hookprobe/fortress/data
 }
 _PRODUCT_FILES = {
     "test_security_fixes_smoke",  # products/fortress/web Flask app (needs flask)

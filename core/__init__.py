@@ -10,7 +10,6 @@ Submodules:
 - napse: Neural Adaptive Packet Synthesis Engine (AI-native IDS/NSM/IPS)
 - neuro: Neural Resonance Protocol (living cryptography)
 - qsecbit: Quantified Security Metric (universal resilience)
-- ai_vs_ai: AI vs AI threat detection and defense orchestration
 
 Full Documentation: docs/architecture/HOOKPROBE-ARCHITECTURE.md
 """
