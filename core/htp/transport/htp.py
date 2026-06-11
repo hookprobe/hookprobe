@@ -390,7 +390,13 @@ class NeuroStateEvolver:
             delta_W (128 bytes)
         """
         # Compute gradient from TER (simplified: use TER as gradient signal)
-        gradient = hashlib.sha256(ter).digest() + hashlib.sha256(ter + b'\x01').digest()
+        # Need 128 bytes (64 int16 values). TWO sha256 digests = 64 bytes, which
+        # left gradient[64:] empty and crashed the unpack loop at i=64
+        # (struct.error). FOUR digests = 128 bytes.
+        gradient = (hashlib.sha256(ter).digest()
+                    + hashlib.sha256(ter + b'\x01').digest()
+                    + hashlib.sha256(ter + b'\x02').digest()
+                    + hashlib.sha256(ter + b'\x03').digest())
         gradient = gradient[:128]
 
         # Expand qsecbit to 128 bytes for noise injection
