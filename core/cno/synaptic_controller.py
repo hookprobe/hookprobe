@@ -368,6 +368,13 @@ class SynapticController:
         elif "mesh consensus" in reason.lower() or "bft" in reason.lower():
             eviction_class = self.EVICTION_CLASS_PROTECTED
 
+        # SSOL B4 — precision-gated governor. OBSERVE by default (logs only);
+        # only suppresses when B4_GOVERNOR_ENFORCE=1 and rolling FPR is high.
+        # FIGHT-reflex and PROTECTED blocks always bypass.
+        _b4_governor.check_and_update()
+        if not _b4_governor.allow_block(ip, reason, eviction_class):
+            return False
+
         now = time.time()
 
         with self._blocklist_lock:
@@ -955,3 +962,92 @@ def _ch_post(query: str) -> bool:
     except Exception as e:
         logger.debug("ClickHouse POST failed: %s", e)
         return False
+
+
+def _ch_read_one(query: str) -> list:
+    """Run a single-row query, return tab-split columns ([] on error)."""
+    try:
+        req = Request(f"http://{CH_HOST}:{CH_PORT}/", data=query.encode('utf-8'))
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+        req.add_header('X-ClickHouse-Database', CH_DB)
+        with urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode('utf-8')
+    except Exception:
+        return []
+    first = raw.strip().split('\n')[0] if raw and raw.strip() else ''
+    return first.split('\t') if first else []
+
+
+class B4Governor:
+    """SSOL B4 — precision-gated autonomy governor (OBSERVE-first).
+
+    Today's only autonomy ceiling is a static reserved-IP denylist. B4 makes
+    block authority scale with MEASURED precision: it reads the rolling
+    false-positive rate from the SSOL outcome ledger (blocks the network later
+    confirmed benign) and, when FPR climbs, narrows what it will auto-block.
+
+    SAFETY: default is OBSERVE — it computes FPR and LOGS what it WOULD
+    suppress, but suppresses nothing. Only B4_GOVERNOR_ENFORCE=1 lets it act,
+    and even then FIGHT-mode reflex and PROTECTED (mesh/BFT) blocks always
+    bypass. This is the mechanism that makes *more* autonomy safe, introduced
+    without changing live behavior until explicitly armed.
+    """
+    FPR_SUSPEND = float(os.environ.get('B4_FPR_SUSPEND', '0.15'))
+    FPR_WARN = float(os.environ.get('B4_FPR_WARN', '0.05'))
+    MIN_BLOCK_LABELS = int(os.environ.get('B4_MIN_BLOCK_LABELS', '30'))
+    CHECK_INTERVAL_S = 300.0
+    ENFORCE = os.environ.get('B4_GOVERNOR_ENFORCE', '0') == '1'
+
+    def __init__(self):
+        self._fpr = 0.0
+        self._n = 0
+        self._last_check = 0.0
+        self._lock = threading.Lock()
+
+    def check_and_update(self) -> None:
+        now = time.time()
+        if now - self._last_check < self.CHECK_INTERVAL_S:
+            return
+        self._last_check = now
+        # FPR = fraction of recent BLOCK decisions the ledger later called benign.
+        row = _ch_read_one(
+            f"SELECT countIf(weak_label='benign' AND action='block') AS fp, "
+            f"count() AS n FROM {CH_DB}.cno_outcome_ledger "
+            f"WHERE ts >= now() - INTERVAL 4 HOUR AND action='block' AND label_conf >= 0.5"
+        )
+        try:
+            fp = int(row[0]); n = int(row[1]) if len(row) > 1 else 0
+        except (ValueError, IndexError):
+            return
+        with self._lock:
+            self._n = n
+            self._fpr = (fp / n) if n > 0 else 0.0
+        mode = 'ENFORCE' if self.ENFORCE else 'OBSERVE'
+        if n >= self.MIN_BLOCK_LABELS and self._fpr > self.FPR_WARN:
+            logger.warning("[B4 GOVERNOR %s] rolling FPR=%.3f (n=%d) — would %s",
+                           mode, self._fpr, n,
+                           'SUSPEND auto-block' if self._fpr > self.FPR_SUSPEND
+                           else 'tighten low-confidence blocks')
+        else:
+            logger.info("[B4 GOVERNOR %s] FPR=%.3f n=%d (healthy)", mode, self._fpr, n)
+
+    def allow_block(self, ip: str, reason: str, eviction_class: int) -> bool:
+        """Gate a block. Always True in OBSERVE; in ENFORCE, suppress per FPR."""
+        if 'FIGHT mode' in reason or eviction_class >= SynapticController.EVICTION_CLASS_PROTECTED:
+            return True
+        with self._lock:
+            fpr, n = self._fpr, self._n
+        if n < self.MIN_BLOCK_LABELS:
+            return True  # not enough outcome data to judge
+        if not self.ENFORCE:
+            if fpr > self.FPR_SUSPEND:
+                logger.info("[B4 OBSERVE] would SUSPEND block %s (FPR=%.3f)", ip, fpr)
+            return True
+        if fpr > self.FPR_SUSPEND:
+            logger.warning("[B4 ENFORCE] SUSPENDED block %s (FPR=%.3f)", ip, fpr)
+            return False
+        return True
+
+
+_b4_governor = B4Governor()
