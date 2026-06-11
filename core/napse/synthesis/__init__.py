@@ -1,16 +1,14 @@
 """
-NAPSE Event Synthesis Layer (Layer 2)
+NAPSE Event Synthesis Layer — `EventType` / event-bus primitives.
 
-Routes structured events from the capture engine (Mojo Brain,
-Python Inspector, or eBPF) to all HookProbe consumers: QSecBit,
-AEGIS, D2D Bubbles, ClickHouse, Cortex, and mesh propagation.
+NOTE (2026-06-11): the NAPSE-synthesis orchestrator (`napse/main.py`) and its
+writers (clickhouse_shipper, metrics, aegis_bridge, bubble_feed, qsecbit_feed,
+healing_bridge, healing_engine, notice_emitter) were removed — they never ran in
+production (no container entrypoint; the destination napse_alerts/conn/dns/http/
+ssl tables held 0 rows). Only `event_bus.py` remains, because its `EventType`
+enum is still imported by the live `core/qsecbit/detectors/` tree and other
+consumers.
 
 Modules:
-    event_bus       - Central typed event distribution
-    qsecbit_feed    - Direct QSecBit ThreatEvent injection
-    aegis_bridge    - AEGIS StandardSignal emission
-    bubble_feed     - D2D bubble mDNS + connection feed
-    notice_emitter  - Notice event generation
-    clickhouse_shipper - Direct ClickHouse insertion
-    metrics         - Prometheus metrics endpoint
+    event_bus - typed event distribution + EventType (the surviving primitive)
 """
