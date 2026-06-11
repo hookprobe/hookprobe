@@ -1278,6 +1278,37 @@ class SentinelEngine:
             except (json.JSONDecodeError, KeyError):
                 continue
 
+        # F6 (SSOL flywheel close): fold OUTCOME-grounded weak labels from the
+        # cno_outcome_ledger (A.5 produces BOTH classes) into the training set.
+        # This is the "last inch" — the ledger was written + read by B2/B4 but
+        # never reached the trainer. Operator/auto labels keep primacy (we skip
+        # IPs already labeled); conf-gated >=0.5; bounded per cycle to keep the
+        # N+1 evidence collection in check. Consumed rows are marked
+        # fed_to_training=1 after a successful train so each label trains once.
+        ledger_consumed: List[str] = []
+        try:
+            lres = ch_query(
+                "SELECT src_ip AS ip, weak_label, toString(ts) AS ts "
+                f"FROM {CH_DB}.cno_outcome_ledger "
+                "WHERE fed_to_training = 0 AND label_conf >= 0.5 "
+                "AND weak_label IN ('malicious','benign') "
+                "ORDER BY ts DESC LIMIT 300"
+            )
+            for line in (lres.strip().split('\n') if lres else []):
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                    ip = row['ip']
+                    ledger_consumed.append(ip)
+                    if ip in labeled_ips:
+                        continue  # operator/auto label wins over a weak label
+                    labeled_ips[ip] = (row['weak_label'] == 'malicious', str(row.get('ts', '')))
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        except Exception as e:
+            logger.debug("ledger label merge failed: %s", e)
+
         if len(labeled_ips) < MIN_TRAINING_DECISIONS:
             return {
                 'status': 'insufficient_data',
@@ -1292,8 +1323,19 @@ class SentinelEngine:
 
         gnb = GaussianNaiveBayes(N_EVIDENCE)
 
+        # F7 (partial N+1 reduction): pre-fetch RDAP for ALL labeled IPs in
+        # chunked batch queries instead of one _load_rdap_batch([ip]) per IP.
+        # RDAP is IP-keyed (no time window) so this is 100% semantic-neutral and
+        # removes ~1/3 of the per-IP query storm. (The per-IP events query keeps
+        # its ±1h verdict-time window — batching that would change semantics, so
+        # it stays per-IP; a future events-batch is the remaining reliability win.)
+        _all_labeled = list(labeled_ips.keys())
+        rdap_prefetch: Dict[str, dict] = {}
+        for _i in range(0, len(_all_labeled), 500):
+            rdap_prefetch.update(_load_rdap_batch(_all_labeled[_i:_i + 500]))
+
         for ip, (is_tp, verdict_ts) in labeled_ips.items():
-            evidence = _collect_historical_evidence(ip, verdict_ts)
+            evidence = _collect_historical_evidence(ip, verdict_ts, rdap_map=rdap_prefetch)
             if evidence is None:
                 continue
 
@@ -1365,8 +1407,23 @@ class SentinelEngine:
         # Persist model state to ClickHouse
         self._persist_model_state(stats)
 
+        # F6: mark consumed ledger rows so each weak label trains exactly once.
+        # All polled rows are marked (whether or not they entered training —
+        # operator-primacy skips still count as "considered") to avoid re-polling
+        # the same 300 forever. One batched mutation per cycle (cap bounds it).
+        if ledger_consumed:
+            safe = sorted({i for i in ledger_consumed if _safe_ip(i)})
+            if safe:
+                in_clause = ",".join(f"'{i}'" for i in safe)
+                ch_query(
+                    f"ALTER TABLE {CH_DB}.cno_outcome_ledger UPDATE fed_to_training = 1 "
+                    f"WHERE fed_to_training = 0 AND src_ip IN ({in_clause})"
+                )
+                stats['ledger_labels_fed'] = len(safe)
+
         logger.info(f"SENTINEL model trained: v{self.version}, "
-                     f"{gnb.total_samples} samples ({tp} TP, {fp} FP)")
+                     f"{gnb.total_samples} samples ({tp} TP, {fp} FP)"
+                     + (f", +{stats.get('ledger_labels_fed', 0)} ledger labels" if ledger_consumed else ""))
 
         return stats
 
@@ -1463,8 +1520,12 @@ class SentinelEngine:
         return False
 
 
-def _collect_historical_evidence(ip: str, verdict_ts: str = '') -> Optional[List[float]]:
-    """Collect evidence for a single IP from events around its verdict timestamp."""
+def _collect_historical_evidence(ip: str, verdict_ts: str = '',
+                                 rdap_map: Optional[dict] = None) -> Optional[List[float]]:
+    """Collect evidence for a single IP from events around its verdict timestamp.
+
+    rdap_map: optional pre-fetched {ip: rdap_row} (F7 batch) — when provided the
+    per-IP RDAP query is skipped (semantic-neutral; RDAP is IP-keyed)."""
     # Use events in a 2-hour window centered on the verdict timestamp
     # (1 hour before to 1 hour after the operator decision)
     if verdict_ts:
@@ -1512,7 +1573,7 @@ def _collect_historical_evidence(ip: str, verdict_ts: str = '') -> Optional[List
             evidence[18] = float(row.get('port_entropy') or 0)
 
         # RDAP (always available regardless of events)
-        rdap = _load_rdap_batch([ip])
+        rdap = rdap_map if rdap_map is not None else _load_rdap_batch([ip])
         if ip in rdap:
             evidence[1] = rdap_type_score(rdap[ip].get('rdap_type', 'unknown'))
             evidence[2] = min(float(rdap[ip].get('weighted_score') or 0) / 1000.0, 1.0)
