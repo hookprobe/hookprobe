@@ -155,11 +155,16 @@ class PageHinkleyDetector:
         if not math.isfinite(x):
             return False
 
+        # Mean of the PREVIOUS observations (Page-Hinkley uses mean_{N-1}, not
+        # mean_N). The old code incremented count/sum_x first, so self.mean
+        # already included x — systematically underdamping cumsum and making
+        # drift detection less sensitive than the configured delta.
+        prev_mean = (self.sum_x / self.count) if self.count > 0 else 0.0
         self.count += 1
         self.sum_x += x
 
-        # Cumulative deviation from running mean, minus forgiveness
-        self.cumsum += x - self.mean - self.delta
+        # Cumulative deviation from the running mean, minus forgiveness
+        self.cumsum += x - prev_mean - self.delta
         self.min_cumsum = min(self.min_cumsum, self.cumsum)
 
         # Detection: current cumsum far above its historical minimum
@@ -335,7 +340,7 @@ class OutcomeQualityGate:
             f"FROM {CH_DB}.cno_outcome_ledger ol "
             "LEFT JOIN (SELECT src_ip, argMax(verdict, timestamp) AS verdict "
             f"  FROM {CH_DB}.sentinel_evidence "
-            "  WHERE timestamp >= now() - INTERVAL 2 HOUR GROUP BY src_ip) se "
+            "  WHERE timestamp >= now() - INTERVAL 24 HOUR GROUP BY src_ip) se "
             "ON toIPv4(ol.src_ip) = se.src_ip "
             "WHERE ol.ts >= now() - INTERVAL 24 HOUR "
             "AND ol.weak_label IN ('malicious','benign') "
