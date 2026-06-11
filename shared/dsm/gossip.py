@@ -417,7 +417,9 @@ class GossipProtocol:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(('0.0.0.0', GOSSIP_PORT))
+            # All-interfaces default: gossip must reach peers on whichever
+            # network they arrive from; restrict via DSM_GOSSIP_BIND_HOST.
+            sock.bind((os.environ.get('DSM_GOSSIP_BIND_HOST', '0.0.0.0'), GOSSIP_PORT))
             sock.settimeout(1.0)
 
             while self._running.is_set():
