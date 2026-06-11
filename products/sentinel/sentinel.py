@@ -1204,11 +1204,14 @@ def main():
         Thread(target=mssp_heartbeat, daemon=True).start()
         log.info(f"MSSP heartbeat: every {MSSP_HEARTBEAT_INTERVAL}s")
 
-    # UDP validation socket
+    # UDP validation socket. Default bind is all interfaces (sensor nodes
+    # receive from arbitrary mesh peers); operators on multi-homed hosts can
+    # restrict with SENTINEL_BIND_HOST.
+    bind_host = os.environ.get('SENTINEL_BIND_HOST', '0.0.0.0')
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(('0.0.0.0', LISTEN_PORT))
-    log.info(f"Listening on UDP port {LISTEN_PORT}")
+    sock.bind((bind_host, LISTEN_PORT))
+    log.info(f"Listening on UDP {bind_host}:{LISTEN_PORT}")
     log.info("Ready...")
 
     # Graceful shutdown

@@ -570,10 +570,11 @@ class HookProbeTransport:
                 logger.warning(f"[HTP] Failed to initialize NeuroSecurityStack: {e}")
                 self.neuro_stack = None
 
-        # Create UDP socket
+        # Create UDP socket. All-interfaces default: HTP peers connect over
+        # whichever path NAT traversal selected; restrict via HTP_BIND_HOST.
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.socket.bind(('0.0.0.0', listen_port))
+        self.socket.bind((os.environ.get('HTP_BIND_HOST', '0.0.0.0'), listen_port))
         self.socket.setblocking(False)
 
         self.local_address = self.socket.getsockname()
