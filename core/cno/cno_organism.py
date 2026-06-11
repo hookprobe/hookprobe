@@ -600,6 +600,41 @@ class HealthHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(status, default=str).encode())
             return
+        if self.path == '/healthz':
+            # Readiness probe (vs /health liveness): 503 when not healthy, so a
+            # scraper/orchestrator can distinguish "up but not ready". Non-secret.
+            status = self.organism.get_health() if self.organism else {}
+            code = 200 if status.get('status') == 'healthy' else 503
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(status).encode())
+            return
+        if self.path == '/metrics':
+            # Prometheus text — non-sensitive gauges only (the prometheus.yml
+            # cno-pool + monitoring README expect :8900/metrics). The biggest
+            # organism component was previously invisible to the metrics layer.
+            h = self.organism.get_health() if self.organism else {}
+            up = 1 if h.get('status') == 'healthy' else 0
+            uptime = h.get('uptime_s', 0)
+            state = str(h.get('stress', 'unknown')).replace('"', '').replace('\\', '')
+            lines = [
+                '# HELP cno_up CNO organism running (1=healthy)',
+                '# TYPE cno_up gauge',
+                f'cno_up {up}',
+                '# HELP cno_uptime_seconds Seconds since organism start',
+                '# TYPE cno_uptime_seconds gauge',
+                f'cno_uptime_seconds {uptime}',
+                '# HELP cno_stress_state Active stress state (the live label is set to 1)',
+                '# TYPE cno_stress_state gauge',
+                f'cno_stress_state{{state="{state}"}} 1',
+            ]
+            body = ('\n'.join(lines) + '\n').encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; version=0.0.4')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(404)
         self.end_headers()
 
