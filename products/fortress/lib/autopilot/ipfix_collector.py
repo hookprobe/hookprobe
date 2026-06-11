@@ -407,10 +407,13 @@ class IPFIXCollector:
         self._running = True
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', self.port))
+        # All-interfaces default: routers export IPFIX from whichever LAN
+        # they sit on; restrict via IPFIX_BIND_HOST on multi-homed hosts.
+        bind_host = os.environ.get('IPFIX_BIND_HOST', '0.0.0.0')
+        sock.bind((bind_host, self.port))
         sock.setblocking(False)
 
-        logger.info(f"IPFIX collector listening on port {self.port}")
+        logger.info(f"IPFIX collector listening on {bind_host}:{self.port}")
 
         loop = asyncio.get_event_loop()
 
