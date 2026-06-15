@@ -799,13 +799,29 @@ class FortressVPNClient:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(HANDSHAKE_TIMEOUT)
 
-            # Bind to WAN interface so VPN packets don't loop through TUN
-            wan = self.config.wan_interface or _detect_active_wan()
-            try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
-                                wan.encode() + b'\0')
-            except PermissionError:
-                logger.warning("SO_BINDTODEVICE requires root — continuing unbound")
+            # Bind to WAN interface so VPN packets don't loop through TUN.
+            # Re-detect the active WAN on every connect rather than trusting the
+            # value cached at startup: this box runs WAN failover, so the active
+            # interface changes under us. A stale cached device name makes
+            # SO_BINDTODEVICE fail with ENODEV (errno 19), which previously
+            # aborted the whole connect and crash-looped the tunnel silently.
+            wan = _detect_active_wan() or self.config.wan_interface
+            if wan:
+                self.config.wan_interface = wan  # refresh cache (kill-switch rules read it)
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                                    wan.encode() + b'\0')
+                except PermissionError:
+                    logger.warning("SO_BINDTODEVICE requires root — continuing unbound")
+                except OSError as e:
+                    # ENODEV/EADDRNOTAVAIL: the detected device vanished between
+                    # detection and bind (rapid flap). Continue unbound so the
+                    # handshake can still proceed via the default route instead
+                    # of failing the entire connect attempt.
+                    logger.warning("Bind to WAN '%s' failed (%s) — continuing unbound",
+                                   wan, e)
+            else:
+                logger.warning("No active WAN detected — continuing unbound")
 
             self.udp_socket = sock
             logger.info("UDP socket ready: %s → %s:%d (via %s)",
