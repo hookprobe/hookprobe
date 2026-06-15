@@ -75,6 +75,11 @@ COPY --chown=hydra:nogroup core/hydra/ /app/core/hydra/
 # (`from cno.peer_transport import get_peer_transport`, lazy-imported).
 COPY --chown=hydra:nogroup core/cno/ /app/cno/
 
+# Bake the NAPSE SENTINEL-aware QSecBit scorer. The qsecbit-ids service
+# entrypoint runs /app/qsecbit/qsecbit_engine.py; without this COPY the path
+# does not exist in the image and the container crash-loops.
+COPY --chown=hydra:nogroup core/napse/qsecbit/ /app/qsecbit/
+
 # Environment
 ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
