@@ -126,7 +126,7 @@ SETTINGS index_granularity = 8192;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS hookprobe_ids.mv_cno_stress_5m
 ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(timestamp)
+PARTITION BY toYYYYMM(window)
 ORDER BY (window)
 TTL toDateTime(window) + INTERVAL 30 DAY
 AS SELECT
