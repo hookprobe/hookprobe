@@ -54,11 +54,26 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN mkdir -p /app/models /app/data /var/log/hookprobe \
     && chown -R hydra:nogroup /app /var/log/hookprobe
 
-# Copy all HYDRA modules (includes bpf_map_ops.py)
+# Copy all HYDRA modules flat (entrypoints run feed_sync.py/event_consumer.py
+# from WORKDIR /app; flat sibling imports like `from bpf_map_ops import ...`
+# resolve here).
 COPY --chown=hydra:nogroup core/hydra/ /app/
 
 # Copy Brain module (hardware detection + inference bridge)
 COPY --chown=hydra:nogroup core/brain/ /app/brain/
+
+# Bake the `core` package so the absolute imports the HYDRA modules now use
+# (`from core.agency_shim ...`, `from core.common ...`, `from core.hydra ...`)
+# resolve. Without this the agency-gating import at feed_sync.py top level
+# raises ModuleNotFoundError('core') and every service crash-loops.
+COPY --chown=hydra:nogroup core/__init__.py /app/core/__init__.py
+COPY --chown=hydra:nogroup core/agency_shim.py /app/core/agency_shim.py
+COPY --chown=hydra:nogroup core/common/ /app/core/common/
+COPY --chown=hydra:nogroup core/hydra/ /app/core/hydra/
+
+# Bake the `cno` package for the optional Alexandria peer-IoC feed
+# (`from cno.peer_transport import get_peer_transport`, lazy-imported).
+COPY --chown=hydra:nogroup core/cno/ /app/cno/
 
 # Environment
 ENV PYTHONPATH="/app"
