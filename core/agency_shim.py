@@ -49,10 +49,18 @@ if _AGENCY_AVAILABLE:
     agency_gated = _agency_gated    # type: ignore[assignment]
 
 else:
-    # Fallback — provide string constants + a no-op decorator + a context
-    # manager that always approves. Mirrors the alexandria.action enum
-    # values verbatim so callers can move between the two paths without
-    # source changes.
+    # Fallback — Alexandria is not on PYTHONPATH (Sentinel/Guardian tiers,
+    # standalone unit tests, or a Fortress without the agency container).
+    #
+    # Safety posture (fail-closed): an unsupervised organism MUST NOT take
+    # HIGH/CRITICAL blast-radius actions with nobody to veto them. So this
+    # fallback PASSES LOW/MEDIUM actions through unchanged (business as
+    # usual) but DENIES HIGH/CRITICAL actions and returns a neutral value.
+    # Escape hatch: set HOOKPROBE_AGENCY_FAILMODE=open to restore the old
+    # always-approve behavior (e.g. a deliberately-autonomous edge node).
+    #
+    # Mirrors the alexandria.action enum values + DEFAULT_BLAST table
+    # verbatim so callers move between the two paths without source changes.
 
     class ActionKind:  # type: ignore[no-redef]
         BLOCK_IP = "block_ip"
@@ -79,16 +87,67 @@ else:
         HIGH = "high"
         CRITICAL = "critical"
 
+    # Canonical ActionKind -> BlastRadius table (kept in sync with
+    # hookprobe-com alexandria/action.py DEFAULT_BLAST).
+    _BLAST_BY_KIND = {
+        ActionKind.BLOCK_IP: BlastRadius.LOW,
+        ActionKind.BLOCK_CIDR: BlastRadius.HIGH,
+        ActionKind.UNBLOCK_IP: BlastRadius.LOW,
+        ActionKind.RATE_LIMIT: BlastRadius.LOW,
+        ActionKind.QUARANTINE_NODE: BlastRadius.HIGH,
+        ActionKind.QUARANTINE_PROCESS: BlastRadius.MEDIUM,
+        ActionKind.KILL_PROCESS: BlastRadius.CRITICAL,
+        ActionKind.APPLY_PROFILE: BlastRadius.MEDIUM,
+        ActionKind.SCALE_CONTAINER: BlastRadius.MEDIUM,
+        ActionKind.RESTART_CONTAINER: BlastRadius.MEDIUM,
+        ActionKind.PROMOTE_MODEL: BlastRadius.HIGH,
+        ActionKind.FEDERATED_AGGREGATE: BlastRadius.CRITICAL,
+        ActionKind.RETRAIN_MODEL: BlastRadius.MEDIUM,
+        ActionKind.BROADCAST_LESSON: BlastRadius.LOW,
+        ActionKind.PUSH_REPUTATION: BlastRadius.LOW,
+        ActionKind.UPDATE_ALLOWLIST: BlastRadius.MEDIUM,
+    }
+    _DENY_BLAST = {BlastRadius.HIGH, BlastRadius.CRITICAL}
+    _FAILMODE = os.environ.get("HOOKPROBE_AGENCY_FAILMODE", "closed").lower()
+
+    def _unsupervised_denied(kind: Any) -> bool:
+        """True if this action must be blocked because no Agency is present
+        to approve it. Unknown kinds default to LOW (canon) -> allowed."""
+        if _FAILMODE == "open":
+            return False
+        return _BLAST_BY_KIND.get(kind, BlastRadius.LOW) in _DENY_BLAST
+
     def agency_gated(*decorator_args, **decorator_kwargs):  # type: ignore[no-redef]
-        """No-op shim. Returns the wrapped function untouched."""
-        def deco(fn):
-            return fn
-        return deco
+        """Fail-closed shim. LOW/MEDIUM pass through untouched; HIGH/CRITICAL
+        are denied (the wrapped function is not called) when no Agency is
+        present, unless HOOKPROBE_AGENCY_FAILMODE=open."""
+        kind = decorator_kwargs.get("kind")
+        proposer = decorator_kwargs.get("proposer", "?")
+        if not _unsupervised_denied(kind):
+            def deco_passthrough(fn):
+                return fn
+            return deco_passthrough
+
+        def deco_deny(fn):
+            def wrapper(*args, **kwargs):
+                log.warning(
+                    "agency_shim: DENIED %s by %s — HIGH/CRITICAL blast radius "
+                    "with no Agency to approve (set HOOKPROBE_AGENCY_FAILMODE="
+                    "open to override)", kind, proposer,
+                )
+                return None
+            return wrapper
+        return deco_deny
 
     class AgencyGate:  # type: ignore[no-redef]
-        """No-op context manager. Always reports `approved=True`."""
+        """Fail-closed context manager. `approved` is True for LOW/MEDIUM
+        (or when FAILMODE=open), False for HIGH/CRITICAL when no Agency is
+        present."""
         def __init__(self, *args, **kwargs) -> None:
             self.decision = None
+            self._kind = kwargs.get("kind")
+            if self._kind is None and args:
+                self._kind = args[0]
 
         def __enter__(self) -> "AgencyGate":
             return self
@@ -98,11 +157,13 @@ else:
 
         @property
         def approved(self) -> bool:
-            return True
+            return not _unsupervised_denied(self._kind)
 
         @property
         def reasons(self) -> tuple[str, ...]:
-            return ()
+            if self.approved:
+                return ()
+            return ("agency-absent: HIGH/CRITICAL blast radius fail-closed",)
 
 
 def is_agency_available() -> bool:
