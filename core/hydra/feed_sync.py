@@ -603,10 +603,9 @@ def _start_peer_transport_consumer():
     forever without ever reaching the kernel filter.
     """
     try:
-        # Add core/ to sys.path so the cno.peer_transport import
-        # resolves when running inside the rootless ids-hydra-feed
-        # container (image WORKDIR is /app; submodule sources land
-        # at /app/core/ via inject-neural-kernel.sh).
+        # Add /app to sys.path so the cno.peer_transport import resolves
+        # inside the fts-hydra container. Containerfile.hydra bakes the cno
+        # package at /app/cno (and core at /app/core); WORKDIR is /app.
         import sys as _sys
         if "/app" not in _sys.path:
             _sys.path.insert(0, "/app")

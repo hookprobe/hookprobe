@@ -156,42 +156,10 @@ def get_d2d_connection_graph():
     return get_connection_analyzer()
 
 
-# ============================================================
-# INTEGRATION MODULES (Gap Implementations)
-# ============================================================
-
-def get_clickhouse_graph_store():
-    """Get ClickHouse graph storage for AI learning.
-
-    Persists device relationships to ClickHouse for:
-    - Trend analysis over time
-    - AI model training
-    - Grafana dashboards
-    """
-    from .clickhouse_graph import get_clickhouse_store
-    return get_clickhouse_store()
-
-
-def get_n8n_webhook_client():
-    """Get n8n webhook client for automation.
-
-    Sends events to n8n for workflow automation:
-    - Bubble changes
-    - Device joins/leaves
-    - Manual corrections
-    """
-    from .n8n_webhook import get_webhook_client
-    return get_webhook_client()
-
-
-def get_reinforcement_feedback_engine():
-    """Get reinforcement learning feedback engine.
-
-    Learns from user manual corrections to improve
-    automatic bubble assignment over time.
-    """
-    from .reinforcement_feedback import get_feedback_engine
-    return get_feedback_engine()
+# NOTE: the clickhouse_graph / n8n_webhook / reinforcement_feedback factory
+# stubs were removed — those modules migrated to the aiochi-bubble container
+# (shared/aiochi/bubble), reached via the REST shim aiochi_bubble_client. The
+# old local stubs imported deleted files and had zero callers.
 
 
 # ============================================================
@@ -298,10 +266,6 @@ __all__ = [
     'get_ecosystem_bubble_manager',
     'get_policy_resolver',
     'get_d2d_connection_graph',
-    # Integration modules
-    'get_clickhouse_graph_store',
-    'get_n8n_webhook_client',
-    'get_reinforcement_feedback_engine',
     # AI Autopilot - Event-Driven Efficiency (Proprietary)
     'get_efficiency_engine',
     'get_dhcp_sentinel',
