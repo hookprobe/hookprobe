@@ -17,6 +17,8 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
+from pathlib import Path
 import logging
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -314,32 +316,79 @@ class SLAEngine:
             await asyncio.sleep(interval)
 
     async def _evaluate_and_act(self) -> None:
-        """Evaluate current state and take action if needed."""
-        primary_metrics = self._latest_metrics.get(self._primary_interface)
-        primary_prediction = self._latest_predictions.get(self._primary_interface)
+        """Evaluate current state and take action if needed.
 
-        # Calculate health scores
-        primary_health = self._calculate_health(primary_metrics)
+        Two modes:
+          * Actuator mode (failover/failback callbacks wired): the engine
+            drives the switch itself and its state machine is authoritative.
+          * Advisory mode (no callbacks — e.g. Fortress, where wan-failover
+            owns routing and consumes our recommendation file): we do NOT
+            perform the switch, so our state must be reconciled to the REAL
+            active WAN each cycle. Otherwise our state machine drifts from
+            reality (we "fail over" internally while routing never moved) and
+            we advise based on a fiction.
+        """
+        advisory = not (self._on_failover or self._on_failback)
+        if advisory:
+            await self._sync_active_interface()
+        else:
+            primary_metrics = self._latest_metrics.get(self._primary_interface)
+            primary_prediction = self._latest_predictions.get(self._primary_interface)
+            primary_health = self._calculate_health(primary_metrics)
 
-        # Current state handling
-        if self._state == SLAState.PRIMARY_ACTIVE:
-            # Check if failover needed
-            should_failover, reason = self._should_failover(
-                primary_metrics, primary_prediction, primary_health
-            )
+            if self._state == SLAState.PRIMARY_ACTIVE:
+                should_failover, reason = self._should_failover(
+                    primary_metrics, primary_prediction, primary_health
+                )
+                if should_failover:
+                    await self._do_failover(reason)
+            elif self._state == SLAState.BACKUP_ACTIVE:
+                decision = self.failback.evaluate(current_on_backup=True)
+                if decision.should_failback:
+                    await self._do_failback(decision.reason)
 
-            if should_failover:
-                await self._do_failover(reason)
-
-        elif self._state == SLAState.BACKUP_ACTIVE:
-            # Evaluate failback
-            decision = self.failback.evaluate(current_on_backup=True)
-
-            if decision.should_failback:
-                await self._do_failback(decision.reason)
-
-        # Write state file for PBR
+        # Write state file for PBR (recommendation is computed from the
+        # now-reconciled state + latest metrics).
         await self._write_state_file()
+
+    def _actual_active_interface(self) -> Optional[str]:
+        """The WAN actually carrying default traffic: wan-failover's state
+        file (authoritative) then the real default route. None if unknown."""
+        try:
+            for line in Path("/run/fortress/wan-failover.state").read_text().splitlines():
+                if line.startswith("ACTIVE_WAN="):
+                    val = line.split("=", 1)[1].strip().strip('"')
+                    if val == "primary":
+                        return self._primary_interface
+                    if val == "backup":
+                        return self._backup_interface
+        except OSError:
+            pass
+        try:
+            out = subprocess.check_output(
+                ["ip", "-4", "route", "show", "default"], text=True, timeout=5)
+            toks = out.split()
+            if "dev" in toks:
+                dev = toks[toks.index("dev") + 1]
+                if dev in (self._primary_interface, self._backup_interface):
+                    return dev
+        except Exception:
+            pass
+        return None
+
+    async def _sync_active_interface(self) -> None:
+        """Reconcile internal state with the actual active WAN (advisory mode)."""
+        actual = self._actual_active_interface()
+        if not actual:
+            return
+        if actual != self._active_interface:
+            logger.info("Reconciling active interface to actual WAN: %s -> %s",
+                        self._active_interface, actual)
+            self._active_interface = actual
+        if actual == self._primary_interface:
+            await self._set_state(SLAState.PRIMARY_ACTIVE)
+        elif actual == self._backup_interface:
+            await self._set_state(SLAState.BACKUP_ACTIVE)
 
     def _calculate_health(self, metrics: Optional[WANMetrics]) -> float:
         """Calculate health score 0-1 from metrics."""
