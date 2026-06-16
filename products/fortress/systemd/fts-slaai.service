@@ -1,0 +1,32 @@
+[Unit]
+Description=HookProbe Fortress SLA AI — WAN Business-Continuity Engine
+Documentation=https://hookprobe.com/docs/slaai
+After=network-online.target fts-wan-failover.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root: pings WAN targets and reads LTE modem signal (mmcli).
+User=root
+Group=root
+WorkingDirectory=/home/andrei/hookprobe
+Environment=PYTHONPATH=/home/andrei/hookprobe
+# NOTE: wan-failover does NOT yet act on these recommendations — its
+# apply_slaai_recommendation() vocabulary (demote_*/promote_*) does not match
+# the engine's output (failover/failback/hold). So this runs effectively in
+# observe mode: it populates the SLA AI dashboard + time-series DB and writes
+# /run/fortress/slaai-recommendation.json. Wiring the vocabularies together is
+# a Phase 2 follow-up.
+ExecStart=/usr/bin/python3 -u -m shared.slaai.engine -c /etc/hookprobe/slaai.conf
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-slaai
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

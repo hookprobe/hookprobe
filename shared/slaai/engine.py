@@ -19,7 +19,7 @@ import os
 import signal
 import logging
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Dict, Optional, Callable
 from enum import Enum
 
@@ -130,17 +130,17 @@ class SLAEngine:
         self.cost_tracker = CostTracker(database=self.database)
 
         # Setup cost budgets for metered interfaces
-        if self.config.backup and self.config.backup.metered:
+        if self.config.backup_interface and self.config.backup_interface.metered:
             self.cost_tracker.set_budget(
-                self.config.backup.name,
-                daily_mb=self.config.backup.daily_budget_mb,
-                monthly_mb=self.config.backup.monthly_budget_mb,
-                cost_per_gb=self.config.backup.cost_per_gb,
+                self.config.backup_interface.name,
+                daily_mb=self.config.backup_interface.daily_budget_mb,
+                monthly_mb=self.config.backup_interface.monthly_budget_mb,
+                cost_per_gb=self.config.backup_interface.cost_per_gb,
             )
 
         # Failback policy
         failback_policy = FailbackPolicy(
-            min_backup_duration_s=self.config.failback.min_failover_duration_s if self.config.failback else 120,
+            min_backup_duration_s=self.config.failover.min_failover_duration_s if self.config.failover else 120,
             primary_stable_duration_s=self.config.failback.min_primary_stable_s if self.config.failback else 60,
             health_checks_required=self.config.failback.health_checks_required if self.config.failback else 5,
             metered_failback_urgency=self.config.failback.metered_urgency_multiplier if self.config.failback else 1.5,
@@ -159,8 +159,8 @@ class SLAEngine:
         )
 
         # Interface tracking
-        self._primary_interface = self.config.primary.name if self.config.primary else "eth0"
-        self._backup_interface = self.config.backup.name if self.config.backup else "wwan0"
+        self._primary_interface = self.config.primary_interface.name if self.config.primary_interface else "eth0"
+        self._backup_interface = self.config.backup_interface.name if self.config.backup_interface else "wwan0"
         self._active_interface = self._primary_interface
 
         # Set interfaces on failback
@@ -253,8 +253,9 @@ class SLAEngine:
                             metrics.bytes_received,
                         )
 
-                    # Store in database
-                    self.database.store_metrics(metrics)
+                    # Store in database (store_metrics expects a dict — the
+                    # WANMetrics dataclass fields map 1:1 to the DB columns).
+                    self.database.store_metrics(asdict(metrics))
 
                     # Create health check for failback
                     is_healthy = (
