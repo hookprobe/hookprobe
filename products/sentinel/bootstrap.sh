@@ -308,6 +308,7 @@ download_core_modules() {
     log_info "Downloading HookProbe core modules for mesh support..."
 
     # Create core directory structure
+    mkdir -p "$HOOKPROBE_DIR/shared/common"
     mkdir -p "$HOOKPROBE_DIR/shared/mesh"
     mkdir -p "$HOOKPROBE_DIR/shared/dsm"
     mkdir -p "$HOOKPROBE_DIR/core/htp/transport"
@@ -319,17 +320,26 @@ download_core_modules() {
     # Base URL for core modules
     local CORE_RAW="https://raw.githubusercontent.com/hookprobe/hookprobe/main"
 
+    # Download shared common primitives (canonical gossip envelope etc.)
+    log_info "Downloading shared common modules..."
+    local COMMON_FILES=(
+        "shared/common/__init__.py"
+        "shared/common/gossip_envelope.py"
+    )
+    for f in "${COMMON_FILES[@]}"; do
+        curl -sSfL "$CORE_RAW/$f" -o "$HOOKPROBE_DIR/$f" 2>/dev/null || \
+            log_warn "Failed to download $f"
+    done
+
     # Download shared mesh modules
     log_info "Downloading mesh modules..."
     local MESH_FILES=(
         "shared/mesh/__init__.py"
-        "shared/mesh/tunnel.py"
         "shared/mesh/resilient_channel.py"
         "shared/mesh/consciousness.py"
         "shared/mesh/nat_traversal.py"
         "shared/mesh/unified_transport.py"
         "shared/mesh/port_manager.py"
-        "shared/mesh/relay.py"
         "shared/mesh/channel_selector.py"
         "shared/mesh/neuro_encoder.py"
     )

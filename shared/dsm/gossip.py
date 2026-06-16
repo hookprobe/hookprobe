@@ -22,6 +22,43 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# Canonical HMAC gossip envelope (shared with shared/mesh/consciousness.py).
+# Guarded import preserves standalone deployability: minimal targets that ship
+# dsm without shared/common fall back to a byte-identical inline copy that
+# exposes the same OpenedEnvelope attribute interface (.is_envelope/.verified/.body).
+try:
+    from shared.common.gossip_envelope import sign_envelope, open_envelope
+except ImportError:  # pragma: no cover - exercised only in minimal deploys
+    try:
+        from common.gossip_envelope import sign_envelope, open_envelope
+    except ImportError:
+        from dataclasses import dataclass as _dataclass
+
+        @_dataclass
+        class _OpenedEnvelope:
+            is_envelope: bool
+            verified: bool
+            body: Optional[bytes]
+            raw: bytes
+
+        def sign_envelope(key: bytes, body: bytes) -> bytes:
+            mac = hmac.new(key, body, hashlib.sha256).hexdigest()
+            return json.dumps(
+                {"body": body.decode("utf-8"), "mac": mac}
+            ).encode("utf-8")
+
+        def open_envelope(key: bytes, raw: bytes) -> "_OpenedEnvelope":
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except Exception:
+                return _OpenedEnvelope(False, False, None, raw)
+            if isinstance(obj, dict) and "mac" in obj and "body" in obj:
+                body = obj["body"].encode("utf-8")
+                expected = hmac.new(key, body, hashlib.sha256).hexdigest()
+                return _OpenedEnvelope(
+                    True, hmac.compare_digest(str(obj["mac"]), expected), body, raw)
+            return _OpenedEnvelope(False, False, None, raw)
+
 # Constants
 GOSSIP_PORT = 8145
 MAX_HOP_COUNT = 5
@@ -55,26 +92,23 @@ class GossipMessage:
         }
         body = json.dumps(data, sort_keys=True).encode('utf-8')
         if mesh_key:
-            mac = hmac.new(mesh_key, body, hashlib.sha256).hexdigest()
-            envelope = json.dumps({'body': body.decode('utf-8'), 'mac': mac})
-            return envelope.encode('utf-8')
+            # Canonical envelope (single source of truth shared with mesh gossip).
+            return sign_envelope(mesh_key, body)
         return body
 
     @classmethod
     def from_bytes(cls, data: bytes, mesh_key: Optional[bytes] = None) -> 'GossipMessage':
         """Deserialize message from bytes with optional HMAC verification."""
-        raw = data.decode('utf-8')
-        obj = json.loads(raw)
-
-        # If mesh_key is set, require HMAC authentication
+        # If mesh_key is set, require HMAC authentication (strict policy: raise).
         if mesh_key:
-            if 'mac' not in obj or 'body' not in obj:
+            opened = open_envelope(mesh_key, data)
+            if not opened.is_envelope:
                 raise ValueError("Message missing HMAC authentication")
-            body = obj['body'].encode('utf-8')
-            expected_mac = hmac.new(mesh_key, body, hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(obj['mac'], expected_mac):
+            if not opened.verified:
                 raise ValueError("HMAC verification failed - message tampered or wrong key")
-            obj = json.loads(body)
+            obj = json.loads(opened.body)
+        else:
+            obj = json.loads(data.decode('utf-8'))
 
         return cls(
             msg_type=obj['msg_type'],
