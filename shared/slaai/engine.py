@@ -520,10 +520,17 @@ class SLAEngine:
         backup_metrics = self._latest_metrics.get(self._backup_interface)
         primary_prediction = self._latest_predictions.get(self._primary_interface)
 
-        # Determine recommendation
+        # Determine recommendation.
+        # NOTE: the vocabulary must match what wan-failover-pbr.sh's
+        # apply_slaai_recommendation() acts on: demote_primary / promote_primary
+        # / demote_backup / promote_backup / hold (proactive route-metric
+        # nudges). "failback" => promote_primary (restore primary route),
+        # "failover" => demote_primary (proactively demote primary so backup
+        # wins). Emitting failover/failback directly was a no-op (the consumer
+        # ignored those words), so predictive failover never wired through.
         if self._state == SLAState.BACKUP_ACTIVE:
             decision = self.failback.evaluate(current_on_backup=True)
-            recommendation = "failback" if decision.should_failback else "hold"
+            recommendation = "promote_primary" if decision.should_failback else "hold"
             confidence = decision.confidence
             reason = decision.reason
         elif self._state == SLAState.PRIMARY_ACTIVE:
@@ -531,7 +538,7 @@ class SLAEngine:
             should_failover, failover_reason = self._should_failover(
                 primary_metrics, primary_prediction, primary_health
             )
-            recommendation = "failover" if should_failover else "hold"
+            recommendation = "demote_primary" if should_failover else "hold"
             confidence = 0.9 if should_failover else 0.5
             reason = failover_reason if should_failover else "Primary healthy"
         else:
