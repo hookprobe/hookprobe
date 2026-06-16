@@ -56,8 +56,9 @@ errorlog = '/app/logs/error.log'
 loglevel = os.environ.get('LOG_LEVEL', 'info')
 access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
 
-# Security headers
-forwarded_allow_ips = '*'
+# Security: gunicorn is NOT behind a reverse proxy, so do not trust
+# X-Forwarded-For from anyone (prevents per-IP rate-limit/lockout spoofing).
+forwarded_allow_ips = ''
 proxy_protocol = False
 
 # Process naming
@@ -85,31 +86,19 @@ def worker_abort(worker):
 GUNICORN
 fi
 
-# Initialize users.json if not exists
+# Initialize users.json if not exists.
+# SECURITY: never write a hardcoded/known credential to disk. Provision the admin
+# from FORTRESS_ADMIN_PASSWORD (set by install.sh) via models.ensure_admin_exists(),
+# and fail closed if neither users.json nor that env var is present.
 if [ ! -f "${FORTRESS_CONFIG_DIR}/users.json" ]; then
-    log_warn "No users.json found - creating default admin user"
-    if [ -w "${FORTRESS_CONFIG_DIR}" ]; then
-        # Default admin password: hookprobe (must be changed!)
-        # Format: dict keyed by user ID (expected by models.py)
-        cat > "${FORTRESS_CONFIG_DIR}/users.json" << 'EOF'
-{
-  "users": {
-    "admin": {
-      "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X.rN3vyJIg3.5lE7K",
-      "role": "admin",
-      "created_at": "2025-01-01T00:00:00Z",
-      "email": "admin@localhost",
-      "display_name": "Administrator",
-      "is_active": true
-    }
-  },
-  "version": "1.0"
-}
-EOF
-        log_warn "Default admin user created - LOGIN: admin (change password via Web UI)"
-    else
-        log_error "Cannot create users.json - ${FORTRESS_CONFIG_DIR} not writable"
+    if [ -z "${FORTRESS_ADMIN_PASSWORD:-}" ]; then
+        log_error "FATAL: ${FORTRESS_CONFIG_DIR}/users.json is missing and FORTRESS_ADMIN_PASSWORD is not set."
+        log_error "Provision admin credentials via install.sh (or inject FORTRESS_ADMIN_PASSWORD) before starting fts-web."
+        exit 1
     fi
+    log_warn "No users.json found - admin will be provisioned from FORTRESS_ADMIN_PASSWORD on first start"
+    # models.ensure_admin_exists() reads FORTRESS_ADMIN_PASSWORD, enforces the
+    # strong-password policy, and writes users.json with 0640 perms.
 fi
 
 # Create data directory structure
