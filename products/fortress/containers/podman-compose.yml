@@ -432,7 +432,7 @@ services:
     hostname: fts-hydra-feed
     entrypoint: ["python3", "feed_sync.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -458,7 +458,7 @@ services:
     hostname: fts-hydra-consumer
     entrypoint: ["python3", "event_consumer.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -484,7 +484,7 @@ services:
     hostname: fts-hydra-enricher
     entrypoint: ["python3", "rdap_enricher.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -515,7 +515,7 @@ services:
     hostname: fts-hydra-features
     entrypoint: ["python3", "feature_extractor.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -541,7 +541,7 @@ services:
     hostname: fts-hydra-anomaly
     entrypoint: ["python3", "anomaly_detector.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -551,9 +551,9 @@ services:
     volumes:
       - hydra_models:/app/models
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.80
+    # host network: ClickHouse (aiochi-clickhouse) is published on host
+    # 127.0.0.1:8123; bridge containers can't reach a loopback-bound port.
+    network_mode: host
     profiles: ["ids"]
 
   # HYDRA SENTINEL Lifecycle - Model retraining + drift detection
@@ -567,7 +567,7 @@ services:
     hostname: fts-hydra-lifecycle
     entrypoint: ["python3", "sentinel_lifecycle.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -575,9 +575,7 @@ services:
     volumes:
       - hydra_models:/app/models
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.81
+    network_mode: host
     profiles: ["ids"]
 
   # HYDRA Temporal Memory - Behavioral drift + campaign detection
@@ -591,16 +589,14 @@ services:
     hostname: fts-hydra-temporal
     entrypoint: ["python3", "temporal_memory.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
     volumes:
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.82
+    network_mode: host
     profiles: ["ids"]
 
   # HYDRA SENTINEL Baseline Profiler - Per-IP Welford statistics + Z-scores
@@ -614,7 +610,7 @@ services:
     hostname: fts-hydra-sentinel
     entrypoint: ["python3", "baseline_profiler.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -627,9 +623,7 @@ services:
     volumes:
       - hydra_models:/app/models
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.84
+    network_mode: host
     profiles: ["ids"]
 
   # HYDRA CVE Enricher - NVD + CISA KEV integration for false positive discrimination
@@ -643,7 +637,7 @@ services:
     hostname: fts-hydra-cve
     entrypoint: ["python3", "cve_enricher.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -656,9 +650,7 @@ services:
     volumes:
       - hydra_models:/app/models
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.85
+    network_mode: host
     profiles: ["ids"]
 
   # HYDRA SENTINEL Engine - Bayesian ensemble scoring (Naive Bayes + Z-scores + CVE + RDAP)
@@ -672,7 +664,7 @@ services:
     hostname: fts-hydra-sentinel-engine
     entrypoint: ["python3", "sentinel_engine.py"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
@@ -683,9 +675,7 @@ services:
     volumes:
       - hydra_models:/app/models
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.86
+    network_mode: host
     profiles: ["ids"]
 
   # QSECBIT IDS Engine - SENTINEL-aware security scoring
@@ -699,16 +689,15 @@ services:
     hostname: fts-qsecbit-ids
     entrypoint: ["python3", "/app/qsecbit/qsecbit_engine.py", "--auto-incidents"]
     environment:
-      CLICKHOUSE_HOST: fts-clickhouse
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
       CLICKHOUSE_PORT: "8123"
       CLICKHOUSE_DB: hookprobe_ids
       CLICKHOUSE_USER: ids
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
     volumes:
       - /etc/hookprobe:/etc/hookprobe:ro
-    networks:
-      fts-internal:
-        ipv4_address: 172.20.200.83
+    # host network: reaches host-published ClickHouse at 127.0.0.1:8123.
+    network_mode: host
     profiles: ["ids"]
 
 # ============================================================
