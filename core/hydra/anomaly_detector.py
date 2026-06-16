@@ -56,6 +56,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_select as ch_query, ch_insert
 
 DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK_URL', '')
 
@@ -171,77 +172,6 @@ signal.signal(signal.SIGINT, signal_handler)
 # ============================================================================
 # CLICKHOUSE CLIENT
 # ============================================================================
-
-def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API with auth in headers (not URL)."""
-    if not CH_PASSWORD:
-        return None
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({
-            'query': query + (f" FORMAT {fmt}" if fmt else ""),
-        })
-        full_url = f"{url}?{params}"
-
-        req = Request(full_url)
-        # Auth via headers instead of URL params (avoids password in logs)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        with urlopen(req, timeout=30) as resp:
-            return resp.read().decode('utf-8')
-
-    except Exception as e:
-        logger.error(f"ClickHouse query error: {e}")
-        return None
-
-
-def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT with auth in headers (not URL).
-
-    Splits INSERT ... VALUES ... so the VALUES data goes in the POST body
-    (not the URL). ClickHouse treats GET as readonly, and URL-encoded queries
-    exceeding max_uri_size silently fall back to GET, causing Error 164.
-    """
-    if not CH_PASSWORD:
-        return False
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-
-        # Split at VALUES boundary: header in URL param, data in POST body
-        if ' VALUES ' in query and not data:
-            parts = query.split(' VALUES ', 1)
-            url_query = parts[0] + ' VALUES'
-            body = parts[1]
-        else:
-            url_query = query
-            body = data
-
-        params = urlencode({'query': url_query})
-        full_url = f"{url}?{params}"
-
-        req = Request(full_url)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        if body:
-            req.data = body.encode('utf-8')
-            req.add_header('Content-Type', 'text/plain')
-        else:
-            req.data = b''  # Force POST (GET is readonly in ClickHouse)
-
-        with urlopen(req, timeout=30) as resp:
-            resp.read()
-        return True
-
-    except HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='replace')[:500]
-        logger.error(f"ClickHouse insert error: {e} - {error_body}")
-        return False
-    except Exception as e:
-        logger.error(f"ClickHouse insert error: {e}")
-        return False
-
 
 # ============================================================================
 # FEATURE LOADING
