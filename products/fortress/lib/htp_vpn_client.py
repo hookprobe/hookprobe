@@ -1549,6 +1549,21 @@ def main():
                 client.config.kill_switch = cfg.kill_switch
                 client.set_kill_switch(cfg.kill_switch)
 
+            # WAN failover/failback coordination: the UDP socket is bound to a
+            # specific WAN (SO_BINDTODEVICE) and the gateway endpoint route is
+            # pinned via that WAN, so when wan-failover switches the active WAN
+            # the tunnel keeps egressing the OLD (now stale) WAN until it
+            # reconnects. Detect the change and reconnect so connect() re-binds
+            # the socket and re-pins 130.x via the new active WAN.
+            if client.state == VPNState.CONNECTED:
+                active = _detect_active_wan()
+                if (active and client.config.wan_interface
+                        and active != client.config.wan_interface):
+                    logger.warning(
+                        "Active WAN changed %s -> %s — reconnecting VPN over new WAN",
+                        client.config.wan_interface, active)
+                    client.reconnect()
+
             # Auto-reconnect if connected but tunnel died
             if client.state not in (VPNState.STOPPED, VPNState.CONNECTED,
                                      VPNState.CONNECTING):
