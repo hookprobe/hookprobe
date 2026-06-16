@@ -54,7 +54,7 @@ def create_app(config_class=Config):
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=8)
     app.config['SESSION_COOKIE_SECURE'] = True
     app.config['SESSION_COOKIE_HTTPONLY'] = True
-    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'  # admin portal: no cross-site use
 
     # Initialize Flask-Login
     login_manager = LoginManager()

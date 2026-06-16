@@ -247,7 +247,7 @@ services:
       - dnsxai_certs:/etc/hookprobe/certs
     ports:
       - "127.0.0.1:53:5353/udp"  # DNS on localhost (dnsmasq forwards here) - frees 5353 for mDNS
-      - "0.0.0.0:853:853/tcp"    # DoT (DNS over TLS) for Windows/modern clients
+      - "10.200.0.1:853:853/tcp"    # DoT (DNS over TLS) — LAN bridge only, never WAN
       - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
     healthcheck:
       # Check HTTP API health endpoint using Python urllib (always available)
@@ -277,7 +277,7 @@ services:
       - dfs_data:/opt/hookprobe/wireless/data
       - /etc/hookprobe:/etc/hookprobe:ro
     ports:
-      - "0.0.0.0:8050:8050"  # DFS API accessible from LAN
+      - "10.200.0.1:8050:8050"  # DFS API — LAN bridge only, never WAN
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
       interval: 30s
