@@ -59,6 +59,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_query_with_body as ch_query
 
 # XDP interface where hydra program is loaded
 XDP_INTERFACE = os.environ.get('XDP_INTERFACE', 'dummy-mirror')
@@ -330,34 +331,6 @@ def update_allowlist() -> int:
 # ============================================================================
 # CLICKHOUSE LOGGING
 # ============================================================================
-
-def ch_query(query: str, data: str = '') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API with auth in headers (not URL)."""
-    if not CH_PASSWORD:
-        return None
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({'query': query})
-        full_url = f"{url}?{params}"
-
-        req = Request(full_url)
-        # Auth via headers instead of URL params (avoids password in logs)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        if data:
-            req.data = data.encode('utf-8')
-            req.add_header('Content-Type', 'text/plain')
-        else:
-            req.data = b''  # Force POST (GET is readonly in ClickHouse)
-
-        with urlopen(req, timeout=10) as resp:
-            return resp.read().decode('utf-8')
-
-    except Exception as e:
-        logger.error(f"ClickHouse query error: {e}")
-        return None
-
 
 def log_feed_sync(feed_name: str, feed_url: str, entries_count: int,
                    new_entries: int, removed_entries: int,

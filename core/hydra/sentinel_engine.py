@@ -54,6 +54,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_select as ch_query, ch_insert
 
 # Scoring interval (seconds) — floor at 10s to prevent tight loops
 SCORING_INTERVAL = max(int(os.environ.get('SENTINEL_INTERVAL', '300')), 10)
@@ -102,48 +103,6 @@ signal.signal(signal.SIGINT, signal_handler)
 def ch_escape(value: str) -> str:
     """Escape a string for safe use in ClickHouse SQL VALUES."""
     return value.replace('\\', '\\\\').replace("'", "\\'")
-
-
-def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API with auth in headers."""
-    if not CH_PASSWORD:
-        return None
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        full_query = query + (f" FORMAT {fmt}" if fmt else "")
-
-        req = Request(url, data=full_query.encode('utf-8'))
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        with urlopen(req, timeout=30) as resp:
-            return resp.read().decode('utf-8')
-
-    except Exception as e:
-        logger.error("ClickHouse query error: %s", type(e).__name__)
-        return None
-
-
-def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT with auth in headers, body for VALUES data."""
-    if not CH_PASSWORD:
-        return False
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        full_query = query + ' VALUES ' + data if data else query
-
-        req = Request(url, data=full_query.encode('utf-8'))
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-
-        with urlopen(req, timeout=30) as resp:
-            resp.read()
-        return True
-
-    except Exception as e:
-        logger.error("ClickHouse insert error: %s", type(e).__name__)
-        return False
 
 
 def ch_command(query: str) -> bool:

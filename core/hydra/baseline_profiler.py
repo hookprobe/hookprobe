@@ -65,6 +65,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_select as ch_query, ch_insert
 
 # Profiling interval (seconds) — how often to profile new windows
 PROFILE_INTERVAL = int(os.environ.get('PROFILE_INTERVAL', '300'))  # 5 minutes
@@ -110,65 +111,6 @@ signal.signal(signal.SIGINT, signal_handler)
 def ch_escape(value: str) -> str:
     """Escape a string for safe use in ClickHouse SQL VALUES."""
     return value.replace('\\', '\\\\').replace("'", "\\'")
-
-
-def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API with auth in headers."""
-    if not CH_PASSWORD:
-        return None
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({
-            'query': query + (f" FORMAT {fmt}" if fmt else ""),
-        })
-        full_url = f"{url}?{params}"
-
-        req = Request(full_url)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        with urlopen(req, timeout=30) as resp:
-            return resp.read().decode('utf-8')
-
-    except HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')[:500]
-        logger.error(f"ClickHouse query error: {e} - {body}")
-        return None
-    except Exception as e:
-        logger.error(f"ClickHouse query error: {e}")
-        return None
-
-
-def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT with auth in headers."""
-    if not CH_PASSWORD:
-        return False
-
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({'query': query})
-        full_url = f"{url}?{params}"
-
-        req = Request(full_url)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        if data:
-            req.data = data.encode('utf-8')
-            req.add_header('Content-Type', 'text/plain')
-        else:
-            req.data = b''  # Force POST (GET is readonly in ClickHouse)
-
-        with urlopen(req, timeout=30) as resp:
-            resp.read()
-        return True
-
-    except HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')[:500]
-        logger.error(f"ClickHouse insert error: {e} - {body}")
-        return False
-    except Exception as e:
-        logger.error(f"ClickHouse insert error: {e}")
-        return False
 
 
 # ============================================================================

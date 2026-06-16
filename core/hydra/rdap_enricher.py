@@ -61,6 +61,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_query_with_body as ch_query
 
 PG_HOST = os.environ.get('POSTGRES_HOST', '172.30.0.30')
 PG_PORT = os.environ.get('POSTGRES_PORT', '5432')
@@ -196,31 +197,6 @@ def ch_escape(value: str) -> str:
     """
     return value.replace('\\', '\\\\').replace("'", "\\'")
 
-
-def ch_query(query: str, data: str = '') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API with auth in headers (not URL)."""
-    if not CH_PASSWORD:
-        return None
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        params = urlencode({'query': query})
-        full_url = f"{url}?{params}"
-        req = Request(full_url)
-        # Auth via headers instead of URL params (avoids password in logs)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        if data:
-            req.data = data.encode('utf-8')
-            req.add_header('Content-Type', 'text/plain')
-        with urlopen(req, timeout=10) as resp:
-            return resp.read().decode('utf-8')
-    except HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')[:500]
-        logger.error(f"ClickHouse error: {e} - {body}")
-        return None
-    except Exception as e:
-        logger.error(f"ClickHouse error: {e}")
-        return None
 
 # ============================================================================
 # POSTGRESQL CLIENT

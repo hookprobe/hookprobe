@@ -70,6 +70,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_select as ch_query, ch_insert
 
 # Risk velocity thresholds
 VELOCITY_SUSPICIOUS = float(os.environ.get('VELOCITY_SUSPICIOUS', '0.05'))  # per minute
@@ -96,44 +97,6 @@ TREND_NAMES = ['STABLE', 'ACCELERATING', 'DECELERATING', 'SPIKE', 'OSCILLATING']
 # ============================================================================
 # CLICKHOUSE CLIENT
 # ============================================================================
-
-def ch_query(query: str, fmt: str = 'JSONEachRow') -> Optional[str]:
-    """Execute a ClickHouse query via HTTP API."""
-    if not CH_PASSWORD:
-        return None
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        full_query = query + (f" FORMAT {fmt}" if fmt else "")
-        req = Request(url, data=full_query.encode('utf-8'))
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        with urlopen(req, timeout=30) as resp:
-            return resp.read().decode('utf-8')
-    except HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')[:300]
-        logger.error(f"ClickHouse query error: {e} - {body}")
-        return None
-    except Exception as e:
-        logger.error(f"ClickHouse query error: {e}")
-        return None
-
-
-def ch_insert(query: str, data: str = '') -> bool:
-    """Execute a ClickHouse INSERT. VALUES data goes in POST body."""
-    if not CH_PASSWORD:
-        return False
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        req = Request(url, data=(query + (' VALUES ' + data if data else '')).encode('utf-8'))
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        with urlopen(req, timeout=30) as resp:
-            resp.read()
-        return True
-    except Exception as e:
-        logger.error(f"ClickHouse insert error: {e}")
-        return False
-
 
 def parse_rows(result: Optional[str]) -> List[dict]:
     """Parse JSONEachRow result."""
