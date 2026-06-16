@@ -18,9 +18,38 @@ Version: 5.0.0
 
 import numpy as np
 from collections import deque
-from scipy.spatial.distance import mahalanobis
-from scipy.special import expit as logistic
-from scipy.stats import entropy
+# scipy is optional: it provides faster/validated implementations, but importing
+# it eagerly at module load made the ENTIRE core.qsecbit package (and every
+# submodule that goes through __init__, e.g. threat_types) unimportable on hosts
+# without scipy. Fall back to mathematically-equivalent numpy implementations so
+# the module always loads; scipy is used when present.
+try:
+    from scipy.spatial.distance import mahalanobis
+    from scipy.special import expit as logistic
+    from scipy.stats import entropy
+except ImportError:  # pragma: no cover - exercised on scipy-less hosts
+    def mahalanobis(u, v, VI):
+        """sqrt((u-v)^T · VI · (u-v)) — Mahalanobis distance."""
+        delta = np.asarray(u, dtype=float) - np.asarray(v, dtype=float)
+        return float(np.sqrt(delta @ np.asarray(VI, dtype=float) @ delta))
+
+    def logistic(x):
+        """Logistic sigmoid 1/(1+e^-x) (scipy.special.expit equivalent)."""
+        return 1.0 / (1.0 + np.exp(-np.asarray(x, dtype=float)))
+
+    def entropy(pk, base=None):
+        """Shannon entropy of a distribution (scipy.stats.entropy equivalent:
+        normalizes pk, natural log by default)."""
+        pk = np.asarray(pk, dtype=float)
+        s = pk.sum()
+        if s <= 0:
+            return 0.0
+        pk = pk / s
+        nz = pk > 0
+        h = -np.sum(pk[nz] * np.log(pk[nz]))
+        if base is not None:
+            h /= np.log(base)
+        return float(h)
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple, Dict, List, TYPE_CHECKING
