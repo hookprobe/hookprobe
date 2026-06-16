@@ -44,6 +44,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_post as _ch_post, ch_query as _ch_query
 
 # Validate CH_DB is a safe identifier
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
@@ -137,9 +138,13 @@ class StressGauge:
         Normalized: 0% drops = 0.0, >10% drops = 1.0
         """
         try:
+            # xdp_stats has no per-action rows — it carries packets_dropped /
+            # delta_packets counters per interface/interval. (The old
+            # sumIf(..., action='drop') referenced a nonexistent column and
+            # failed silently, so this stress signal was always 0.)
             query = (
                 f"SELECT "
-                f"  sumIf(delta_packets, action='drop') AS drops, "
+                f"  sum(packets_dropped) AS drops, "
                 f"  sum(delta_packets) AS total "
                 f"FROM {CH_DB}.xdp_stats "
                 f"WHERE timestamp > now() - INTERVAL 60 SECOND"
@@ -453,35 +458,4 @@ def _ch_escape(s: str) -> str:
     return (s.replace('\\', '\\\\').replace("'", "\\'")
              .replace('\n', '\\n').replace('\r', '\\r')
              .replace('\t', '\\t').replace('\0', ''))
-
-
-def _ch_query(query: str) -> Optional[str]:
-    """Execute a ClickHouse SELECT and return the result text."""
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        data = query.encode('utf-8')
-        req = Request(url, data=data)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        req.add_header('X-ClickHouse-Database', CH_DB)
-        with urlopen(req, timeout=10) as resp:
-            return resp.read().decode('utf-8')
-    except Exception:
-        return None
-
-
-def _ch_post(query: str) -> bool:
-    """POST an INSERT query to ClickHouse."""
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        data = query.encode('utf-8')
-        req = Request(url, data=data)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        req.add_header('X-ClickHouse-Database', CH_DB)
-        with urlopen(req, timeout=10) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
 
