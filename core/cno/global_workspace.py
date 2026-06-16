@@ -41,6 +41,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_post as _ch_post
 
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
     raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
@@ -288,16 +289,3 @@ def _format_array(arr: list) -> str:
     escaped = ",".join(f"'{_esc(str(s))}'" for s in arr)
     return f"[{escaped}]"
 
-
-def _ch_post(query: str) -> bool:
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        data = query.encode('utf-8')
-        req = Request(url, data=data, method='POST')
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        req.add_header('X-ClickHouse-Database', CH_DB)
-        with urlopen(req, timeout=10) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
