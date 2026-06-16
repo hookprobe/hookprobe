@@ -1,0 +1,21 @@
+[Unit]
+Description=HookProbe Fortress XDP (xdp_hydra on FTS-mirror, monitor mode)
+Documentation=https://hookprobe.com/docs/hydra
+After=network-online.target fortress.service fortress-vlan.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# FTS-mirror is the OVS mirror output (select_all of the FTS bridge). Wait for
+# it to exist, then attach the compiled xdp_hydra program in GENERIC (SKB) mode
+# — FTS-mirror is an OVS internal port (no native XDP), and SKB mode on a
+# read-only mirror copy cannot affect LAN forwarding. xdp_hydra defaults to
+# MONITOR mode (no drops); it emits ringbuf events on blocklist/rate/score
+# hits and exposes XDP stats consumed by fts-hydra-consumer.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip link show FTS-mirror >/dev/null 2>&1 && exit 0; sleep 1; done; echo "FTS-mirror not found"; exit 1'
+ExecStart=/sbin/ip link set dev FTS-mirror xdpgeneric obj /home/andrei/hookprobe/core/napse/kernel/xdp_hydra.o sec xdp_hydra
+ExecStop=-/sbin/ip link set dev FTS-mirror xdpgeneric off
+
+[Install]
+WantedBy=multi-user.target
