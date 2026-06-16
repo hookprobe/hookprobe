@@ -88,6 +88,10 @@ if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
 HEALTH_PORT = int(os.environ.get('CNO_HEALTH_PORT', '8900'))
 BRIDGE_INTERVAL_S = float(os.environ.get('CNO_BRIDGE_INTERVAL', '10'))
 BRIDGE_LOOKBACK_S = int(os.environ.get('CNO_BRIDGE_LOOKBACK', '15'))
+# napse_flows lands ~flow_expiry (300s) late, so the flows bridge is cursor-
+# watermarked rather than lookback-windowed. This bounds the FIRST read after a
+# cold start (cursor == 0) so we don't replay the whole table.
+FLOWS_COLDSTART_LOOKBACK_S = int(os.environ.get('CNO_FLOWS_COLDSTART_LOOKBACK', '600'))
 
 # Risk velocity thresholds (mirrors cognitive_defense.py)
 REFLEX_VELOCITY = float(os.environ.get('REFLEX_VELOCITY', '0.30'))
@@ -492,13 +496,28 @@ class HYDRABridge:
         return count
 
     def _bridge_flows(self) -> int:
-        """Bridge recent NAPSE flows into PacketSIEM working memory."""
+        """Bridge recent NAPSE flows into PacketSIEM working memory.
+
+        Watermarked like _bridge_verdicts: the inspector only writes a flow to
+        napse_flows on expiry (~flow_expiry=300s after its last packet), so the
+        newest rows lag `now()` by 5+ min. A short `now() - INTERVAL` lookback
+        therefore catches ZERO flows. Instead we read every flow newer than the
+        persisted `flows_cursor_ms` and advance the cursor — each flow lands in
+        the SIEM exactly once, whenever it appears, with no over-counting of the
+        per-source counters that drive velocity detection.
+        """
+        if self._flows_cursor_ms > 0:
+            where = f"timestamp > fromUnixTimestamp64Milli({self._flows_cursor_ms})"
+        else:
+            # Cold start: bound the backfill so we don't replay the whole table.
+            where = f"timestamp > now() - INTERVAL {FLOWS_COLDSTART_LOOKBACK_S} SECOND"
         query = (
             f"SELECT src_ip, dst_ip, src_port, dst_port, proto, "
             f"bytes_orig, COALESCE(intent_class, '') AS intent_class, "
-            f"toUnixTimestamp(timestamp) "
+            f"toUnixTimestamp64Milli(timestamp) AS ts_ms "
             f"FROM {CH_DB}.napse_flows "
-            f"WHERE timestamp > now() - INTERVAL {BRIDGE_LOOKBACK_S} SECOND "
+            f"WHERE {where} "
+            f"ORDER BY timestamp ASC "
             f"LIMIT 500"
         )
         result = _ch_query(query)
@@ -506,12 +525,20 @@ class HYDRABridge:
             return 0
 
         count = 0
+        max_ts_ms = self._flows_cursor_ms
         for line in result.strip().split('\n'):
             if not line.strip():
                 continue
             parts = line.split('\t')
             if len(parts) < 8:
                 continue
+
+            try:
+                ts_ms = int(parts[7] or 0)
+            except (ValueError, TypeError):
+                ts_ms = 0
+            if ts_ms > max_ts_ms:
+                max_ts_ms = ts_ms
 
             try:
                 snapshot = PacketSnapshot(
@@ -529,6 +556,10 @@ class HYDRABridge:
                 count += 1
             except (ValueError, IndexError):
                 continue
+
+        # Advance cursor so the next cycle only picks up newer flows.
+        if max_ts_ms > self._flows_cursor_ms:
+            self._flows_cursor_ms = max_ts_ms
 
         self._stats['flows_bridged'] += count
         return count
