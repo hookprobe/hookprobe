@@ -25,6 +25,7 @@ import logging
 import os
 from typing import Optional
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger("hookprobe.clickhouse")
@@ -108,4 +109,89 @@ def ch_post(
         return False
     except Exception as e:
         logger.warning("ClickHouse POST failed: %s | query=%r", e, sql[:200])
+        return False
+
+
+# ---------------------------------------------------------------------------
+# HYDRA-style helpers: query goes in the URL (?query=...), data/VALUES in the
+# POST body. ClickHouse treats GET as read-only and silently downgrades
+# oversized URL-encoded queries to GET (Error 164), so the body is used for
+# bulk VALUES. These reproduce the behavior the core/hydra modules relied on.
+# ---------------------------------------------------------------------------
+
+def _url_request(query: str, body: bytes, database: Optional[str]) -> Request:
+    full_url = f"http://{CH_HOST}:{CH_PORT}/?{urlencode({'query': query})}"
+    req = Request(full_url, data=body)
+    req.add_header("X-ClickHouse-User", CH_USER)
+    req.add_header("X-ClickHouse-Key", CH_PASSWORD)
+    req.add_header("X-ClickHouse-Database", database or CH_DB)
+    if body:
+        req.add_header("Content-Type", "text/plain")
+    return req
+
+
+def ch_select(query: str, fmt: str = "JSONEachRow",
+              timeout: int = 30, database: Optional[str] = None) -> Optional[str]:
+    """Run a SELECT (query in URL, optional FORMAT appended); return text or None."""
+    if not CH_PASSWORD:
+        return None
+    full_query = query + (f" FORMAT {fmt}" if fmt else "")
+    try:
+        with urlopen(_url_request(full_query, b"", database), timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except HTTPError as e:
+        body = ""
+        try:
+            body = e.read(500).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logger.warning("ClickHouse select rejected: status=%s body=%r query=%r",
+                       e.code, body, query[:200])
+        return None
+    except Exception as e:
+        logger.warning("ClickHouse select failed: %s | query=%r", e, query[:200])
+        return None
+
+
+def ch_query_with_body(query: str, data: str = "",
+                       timeout: int = 10, database: Optional[str] = None) -> Optional[str]:
+    """Run a query with the SQL in the URL and optional data in the POST body."""
+    if not CH_PASSWORD:
+        return None
+    try:
+        with urlopen(_url_request(query, data.encode("utf-8") if data else b"", database),
+                     timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except Exception as e:
+        logger.warning("ClickHouse query failed: %s | query=%r", e, query[:200])
+        return None
+
+
+def ch_insert(query: str, data: str = "",
+              timeout: int = 30, database: Optional[str] = None) -> bool:
+    """Run an INSERT. Splits 'INSERT ... VALUES <rows>' so the rows go in the
+    POST body (avoids the URL-size GET downgrade). Returns True on success."""
+    if not CH_PASSWORD:
+        return False
+    if " VALUES " in query and not data:
+        head, _, rows = query.partition(" VALUES ")
+        url_query, body = head + " VALUES", rows
+    else:
+        url_query, body = query, data
+    try:
+        with urlopen(_url_request(url_query, body.encode("utf-8") if body else b"", database),
+                     timeout=timeout) as resp:
+            resp.read()
+        return True
+    except HTTPError as e:
+        body_err = ""
+        try:
+            body_err = e.read(500).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logger.warning("ClickHouse insert rejected: status=%s body=%r query=%r",
+                       e.code, body_err, query[:200])
+        return False
+    except Exception as e:
+        logger.warning("ClickHouse insert failed: %s | query=%r", e, query[:200])
         return False
