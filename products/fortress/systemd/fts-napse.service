@@ -1,0 +1,35 @@
+[Unit]
+Description=HookProbe Fortress NAPSE Packet Inspector (FTS-mirror -> napse_flows)
+Documentation=https://hookprobe.com/docs/napse
+After=network-online.target fortress.service aiochi.service fortress-vlan.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Starts as root to open the AF_PACKET raw socket on FTS-mirror, then the
+# inspector itself drops privileges to nobody (65534) after binding.
+User=root
+Group=root
+WorkingDirectory=/home/andrei/hookprobe
+Environment=PYTHONPATH=/home/andrei/hookprobe
+# napse_flows lives in hookprobe_ids (where CNO/HYDRA read it). Reads the
+# OVS mirror output FTS-mirror (select_all mirror of the FTS bridge) — a
+# read-only pcap, so LAN forwarding is unaffected.
+Environment=CLICKHOUSE_HOST=127.0.0.1
+Environment=CLICKHOUSE_PORT=8123
+Environment=CLICKHOUSE_DB=hookprobe_ids
+Environment=CLICKHOUSE_USER=ids
+Environment=CLICKHOUSE_PASSWORD=hookprobe_ids_2026
+ExecStart=/usr/bin/python3 -u -m core.napse.inspector.packet_inspector --interface FTS-mirror
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-napse
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
