@@ -547,12 +547,16 @@ class FortressVPNClient:
         _run(['conntrack', '-F'], check=False)
 
         if mode == KillSwitchMode.OFF:
-            # All traffic through VPN. No kill switch — falls back to WAN.
-            self._nft_create_vpn_table(mark_host=True, mark_lan=True,
+            # Host traffic via VPN; LAN uses local breakout (direct WAN). LAN
+            # clients run their own VPNs — Fortress must not double-tunnel them
+            # (force-marking LAN to 0x300 black-holed clients without their own
+            # working tunnel, e.g. the Guardian Pi).
+            self._nft_create_vpn_table(mark_host=True, mark_lan=False,
                                        kill_switch=False, ks_forward=False)
         elif mode == KillSwitchMode.HOST:
-            # All traffic through VPN. Kill switch blocks host if VPN drops.
-            self._nft_create_vpn_table(mark_host=True, mark_lan=True,
+            # Host traffic via VPN (kill-switched if it drops); LAN uses local
+            # breakout per the HOST-mode definition.
+            self._nft_create_vpn_table(mark_host=True, mark_lan=False,
                                        kill_switch=True, ks_forward=False)
         elif mode == KillSwitchMode.FULL:
             # ALL traffic (host + LAN) through VPN with kill switch.
