@@ -33,18 +33,28 @@ from dataclasses import dataclass, field
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
+# OSILayer / ThreatSeverity now live in the canonical core.qsecbit package.
+# The legacy monolithic core.threat_detection.LayerThreatDetector was removed
+# (it duplicated core/qsecbit/detectors). Guardian's embedded L2-L7 detector
+# is pending a repoint onto core.qsecbit.unified_engine (alignment Phase 2);
+# until then guardian_agent runs WITHOUT an embedded detector and the
+# guardian-qsecbit service performs L2-L7 detection. This is an explicit,
+# logged state — not a silent failure (see _init below).
+LayerThreatDetector = None  # TODO(align-phase2): repoint to core.qsecbit.unified_engine
 try:
-    from core.threat_detection import LayerThreatDetector, OSILayer, ThreatSeverity
+    from core.qsecbit.threat_types import OSILayer, ThreatSeverity
+except ImportError:
+    OSILayer = None
+    ThreatSeverity = None
+
+try:
     from shared.mobile_security import MobileNetworkProtection, NetworkTrustLevel
 except ImportError:
     try:
-        # Fallback for local imports
-        from .layer_threat_detector import LayerThreatDetector, OSILayer, ThreatSeverity
         from .mobile_network_protection import MobileNetworkProtection, NetworkTrustLevel
     except ImportError:
-        # Last resort fallback
-        LayerThreatDetector = None
         MobileNetworkProtection = None
+        NetworkTrustLevel = None
 
 
 @dataclass
@@ -119,7 +129,13 @@ class GuardianAgent:
             self.threat_detector = LayerThreatDetector(data_dir=data_dir)
         else:
             self.threat_detector = None
-            self._log("Warning: LayerThreatDetector not available")
+            self._log(
+                "NOTICE: embedded LayerThreatDetector is intentionally disabled "
+                "(legacy core.threat_detection removed; repoint to core.qsecbit "
+                "pending — alignment Phase 2). L2-L7 detection is provided by the "
+                "guardian-qsecbit service; guardian_agent local layer_threats "
+                "counters will be empty until the repoint lands."
+            )
 
         if MobileNetworkProtection:
             self.mobile_protection = MobileNetworkProtection(data_dir=data_dir)
