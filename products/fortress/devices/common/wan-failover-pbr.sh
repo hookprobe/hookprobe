@@ -216,16 +216,25 @@ validate_gateway_connectivity() {
         fi
     fi
 
-    # Method 2: Test actual internet connectivity through this gateway
-    # Use source IP binding to force traffic through the specific interface
-    local iface_ip
-    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
-
-    if [ -n "$iface_ip" ]; then
-        # Try to ping external IP through this interface
-        # The -I flag binds to the interface, forcing traffic through its gateway
+    # Method 2: Test actual internet connectivity through this gateway via a
+    # TEMPORARY host route. Required because WAN NICs use dhcp4-overrides
+    # use-routes:false — DHCP assigns an IP but installs NO default route, and
+    # we only add the default AFTER validation passes. Without a temp route,
+    # `ping -I $iface $test_target` has no route to the target and always
+    # fails, so the primary could never recover (circular deadlock: no
+    # internet without a route, no route without passing validation).
+    if is_valid_ipv4 "$gateway"; then
+        local probe_added=0
+        if ip route add "${test_target}/32" via "$gateway" dev "$iface" 2>/dev/null; then
+            probe_added=1
+        fi
+        local reached=1
         if ping -c 2 -W 3 -I "$iface" "$test_target" &>/dev/null; then
-            log_debug "Gateway $gateway validated: can reach $test_target via $iface"
+            reached=0
+        fi
+        [ "$probe_added" = 1 ] && ip route del "${test_target}/32" via "$gateway" dev "$iface" 2>/dev/null
+        if [ "$reached" = 0 ]; then
+            log_debug "Gateway $gateway validated: reached $test_target via temp route through $iface"
             return 0
         fi
     fi
