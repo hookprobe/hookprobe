@@ -39,6 +39,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_query as _ch_query
 
 # Validate CH_DB is a safe identifier (prevents SQL injection via env var)
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
@@ -446,16 +447,3 @@ class SessionAnalyzer:
 # ------------------------------------------------------------------
 # ClickHouse Helper
 # ------------------------------------------------------------------
-
-def _ch_query(query: str) -> Optional[str]:
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        data = query.encode('utf-8')
-        req = Request(url, data=data)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        req.add_header('X-ClickHouse-Database', CH_DB)
-        with urlopen(req, timeout=10) as resp:
-            return resp.read().decode('utf-8')
-    except Exception:
-        return None

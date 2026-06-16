@@ -47,6 +47,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_post as _ch_post
 
 # Validate CH_DB is a safe identifier
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
@@ -469,42 +470,6 @@ def _ch_escape(s: str) -> str:
 
 
 _CH_POST_FAILURES = 0  # module-level counter, surfaced via /status
-
-
-def _ch_post(query: str) -> bool:
-    """POST a query to ClickHouse. Returns True on HTTP 200.
-
-    Failure modes (network blip, auth drop, schema mismatch) used to be
-    silently swallowed — that's how cno_emotion_log went 10 days stale
-    while the container reported "healthy". We now log the first 200 chars
-    of the query and the exception at WARNING so failures are diagnosable
-    in container logs.
-    """
-    global _CH_POST_FAILURES
-    try:
-        url = f"http://{CH_HOST}:{CH_PORT}/"
-        data = query.encode('utf-8')
-        req = Request(url, data=data)
-        req.add_header('X-ClickHouse-User', CH_USER)
-        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
-        req.add_header('X-ClickHouse-Database', CH_DB)
-        with urlopen(req, timeout=5) as resp:
-            if resp.status == 200:
-                return True
-            _CH_POST_FAILURES += 1
-            body = resp.read(500).decode('utf-8', errors='replace')
-            logger.warning(
-                "ClickHouse rejected emotion write: status=%d body=%r query=%r",
-                resp.status, body, query[:200],
-            )
-            return False
-    except Exception as e:
-        _CH_POST_FAILURES += 1
-        logger.warning(
-            "ClickHouse POST raised %s: %s | query=%r",
-            type(e).__name__, e, query[:200],
-        )
-        return False
 
 
 def get_ch_post_failures() -> int:
