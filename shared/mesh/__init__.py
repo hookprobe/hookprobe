@@ -12,9 +12,11 @@ Key Features:
 - Neural resonance encoding for channel authentication
 - Automatic channel switching on blocking detection
 - NAT/CGNAT traversal with STUN/ICE/TURN
-- Emergent relay network for mesh continuity
 - Mesh promotion protocol when cloud coordinator unavailable
-- Tunnel integration (Cloudflare, ngrok, Tailscale) for public FQDN without public IP
+
+Note: Cloudflare/public-FQDN tunnelling lives in products/fortress/lib/
+cloudflare_tunnel.py (the live implementation); the former shared/mesh tunnel.py
+and relay.py were unused duplicates and have been removed.
 """
 
 from .port_manager import PortManager, PortConfig, TransportMode
@@ -45,23 +47,6 @@ from .nat_traversal import (
     NATTraversalManager,
     PeerEndpoint,
     PromotedNode,
-)
-from .relay import (
-    RelayServer,
-    RelayClient,
-    RelayNetwork,
-    RelayNodeInfo,
-    RelayStats,
-)
-from .tunnel import (
-    TunnelProvider,
-    TunnelStatus,
-    RegistrationStatus,
-    TunnelEndpoint,
-    TunnelConfig,
-    TunnelManager,
-    TunnelRegistry,
-    TunnelRegistrationClient,
 )
 
 __all__ = [
@@ -105,21 +90,6 @@ __all__ = [
     'NATTraversalManager',
     'PeerEndpoint',
     'PromotedNode',
-    # Relay
-    'RelayServer',
-    'RelayClient',
-    'RelayNetwork',
-    'RelayNodeInfo',
-    'RelayStats',
-    # Tunnel
-    'TunnelProvider',
-    'TunnelStatus',
-    'RegistrationStatus',
-    'TunnelEndpoint',
-    'TunnelConfig',
-    'TunnelManager',
-    'TunnelRegistry',
-    'TunnelRegistrationClient',
 ]
 
 __version__ = '5.0.0'
