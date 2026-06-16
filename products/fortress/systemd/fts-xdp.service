@@ -14,6 +14,8 @@ RemainAfterExit=yes
 # MONITOR mode (no drops); it emits ringbuf events on blocklist/rate/score
 # hits and exposes XDP stats consumed by fts-hydra-consumer.
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do ip link show FTS-mirror >/dev/null 2>&1 && exit 0; sleep 1; done; echo "FTS-mirror not found"; exit 1'
+# Detach any existing program first — ip link won't replace an attached XDP.
+ExecStartPre=-/sbin/ip link set dev FTS-mirror xdpgeneric off
 ExecStart=/sbin/ip link set dev FTS-mirror xdpgeneric obj /home/andrei/hookprobe/core/napse/kernel/xdp_hydra.o sec xdp_hydra
 ExecStop=-/sbin/ip link set dev FTS-mirror xdpgeneric off
 
