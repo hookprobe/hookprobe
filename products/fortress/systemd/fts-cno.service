@@ -18,7 +18,9 @@ Environment=CLICKHOUSE_HOST=127.0.0.1
 Environment=CLICKHOUSE_PORT=8123
 Environment=CLICKHOUSE_DB=hookprobe_ids
 Environment=CLICKHOUSE_USER=aiochi
-Environment=CLICKHOUSE_PASSWORD=aiochi_secure_password
+# Secret kept out of the unit (systemctl show / git): provisioned by install to
+# /etc/hookprobe/secrets/cno.env (chmod 600, owner = the cno runtime user).
+EnvironmentFile=-/etc/hookprobe/secrets/cno.env
 Environment=CNO_HEALTH_PORT=8900
 Environment=CNO_BRIDGE_INTERVAL=10
 Environment=CNO_BRIDGE_LOOKBACK=900
