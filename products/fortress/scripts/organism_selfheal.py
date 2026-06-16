@@ -55,6 +55,9 @@ HOST_SERVICES = [
     "fts-cno", "fts-slaai", "fts-htp-vpn", "fts-wan-failover",
     "fts-device-lifecycle", "fts-fingerprint-engine", "fts-presence-sensor",
     "fts-host-agent",
+    # Datapath: NAPSE flow inspector + XDP attach on FTS-mirror. fts-xdp is a
+    # oneshot (RemainAfterExit), so is-active reports the attach state.
+    "fts-napse", "fts-xdp",
 ]
 
 # ClickHouse data-freshness signals: table -> (database, ts_column, max_age_s,
@@ -64,6 +67,12 @@ HOST_SERVICES = [
 DATA_FRESHNESS = {
     "cno_emotion_log": ("hookprobe_ids", "timestamp", 600, "systemd:fts-cno"),  # CNO heartbeat ~60s
     "zeek_connections": ("aiochi", "ts", 1200, "aiochi-logshipper"),            # continuous NSM capture
+    # NAPSE flows land on flow expiry (~300s) — newest row routinely 300-330s
+    # old; 900s tolerates quiet gaps with no expiring flows before flagging.
+    "napse_flows": ("hookprobe_ids", "timestamp", 900, "systemd:fts-napse"),
+    # XDP stats flush ~10s. Stale-despite-consumer-up means the program
+    # detached from FTS-mirror, so re-attach (fts-xdp is idempotent).
+    "xdp_stats": ("hookprobe_ids", "timestamp", 300, "systemd:fts-xdp"),
 }
 
 # HTTP health endpoints (warn-only; container/service checks do the healing).
