@@ -696,8 +696,21 @@ def main():
     # Initial sync
     sync_all_feeds()
 
+    # Per-service readiness (Ch 22 §6.2) — expose /healthz so the watchdog and
+    # dashboards see real readiness, not just process-alive.
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-feed", stale_threshold_s=7200)
+        _health.set_model_loaded(True)  # no ML model to gate readiness on
+        start_health_server(_health, port=int(os.environ.get("HEALTH_PORT", "9304")))
+    except Exception as _e:
+        _health = None
+        logger.warning("health server start failed: %s", _e)
+
     # Periodic sync loop
     while running:
+        if _health:
+            _health.bump_ingest()
         for _ in range(SYNC_INTERVAL):
             if not running:
                 break

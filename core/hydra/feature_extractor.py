@@ -770,7 +770,19 @@ def main():
         logger.error("CLICKHOUSE_PASSWORD not set")
         sys.exit(1)
 
+    # Per-service readiness (Ch 22 §6.2) — expose /healthz.
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-features", stale_threshold_s=900)
+        _health.set_model_loaded(True)  # no ML model to gate readiness on
+        start_health_server(_health, port=int(os.environ.get("HEALTH_PORT", "9306")))
+    except Exception as _e:
+        _health = None
+        logger.warning("health server start failed: %s", _e)
+
     while running:
+        if _health:
+            _health.bump_ingest()
         try:
             extract_cycle()
         except Exception as e:

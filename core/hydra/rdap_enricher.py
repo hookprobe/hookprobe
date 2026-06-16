@@ -761,11 +761,23 @@ def main():
     sampling_thread = threading.Thread(target=sampling_controller, daemon=True)
     sampling_thread.start()
 
+    # Per-service readiness (Ch 22 §6.2) — expose /healthz.
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-enricher", stale_threshold_s=600)
+        _health.set_model_loaded(True)  # no ML model to gate readiness on
+        start_health_server(_health, port=int(os.environ.get("HEALTH_PORT", "9305")))
+    except Exception as _e:
+        _health = None
+        logger.warning("health server start failed: %s", _e)
+
     # Main enrichment loop
     cycle_count = 0
     total_enriched = 0
 
     while not shutdown_event.is_set():
+        if _health:
+            _health.bump_ingest()
         try:
             enriched = enrichment_cycle()
             total_enriched += enriched

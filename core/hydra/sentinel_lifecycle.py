@@ -822,8 +822,20 @@ def main():
     except Exception as e:
         logger.error(f"Initial check failed: {e}", exc_info=True)
 
+    # Per-service readiness (Ch 22 §6.2) — expose /healthz.
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-lifecycle", stale_threshold_s=900)
+        _health.set_model_loaded(True)  # no ML model to gate readiness on
+        start_health_server(_health, port=int(os.environ.get("HEALTH_PORT", "9307")))
+    except Exception as _e:
+        _health = None
+        logger.warning("health server start failed: %s", _e)
+
     # Main loop
     while running:
+        if _health:
+            _health.bump_ingest()
         for _ in range(CHECK_INTERVAL):
             if not running:
                 break
