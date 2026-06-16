@@ -69,6 +69,39 @@ from .unified_transport import UnifiedTransport, MeshPacket, PacketType, Transpo
 from .neuro_encoder import NeuroResonanceEncoder, ResonanceState, TERSnapshot
 from .channel_selector import ChannelSelector, SelectionStrategy
 
+# Canonical HMAC gossip envelope (single source of truth shared with DSM gossip).
+# Guarded import keeps the byte format authoritative while preserving the
+# lenient verify policy below; inline fallback covers minimal deploys.
+try:
+    from shared.common.gossip_envelope import sign_envelope, open_envelope
+except ImportError:
+    try:
+        from common.gossip_envelope import sign_envelope, open_envelope
+    except ImportError:
+        import hmac as _hmac
+
+        def sign_envelope(key: bytes, body: bytes) -> bytes:
+            mac = _hmac.new(key, body, hashlib.sha256).hexdigest()
+            return json.dumps({"body": body.decode("utf-8"), "mac": mac}).encode("utf-8")
+
+        class _Opened:
+            __slots__ = ("is_envelope", "verified", "body", "raw")
+
+            def __init__(self, is_envelope, verified, body, raw):
+                self.is_envelope, self.verified, self.body, self.raw = (
+                    is_envelope, verified, body, raw)
+
+        def open_envelope(key: bytes, raw: bytes):
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except Exception:
+                return _Opened(False, False, None, raw)
+            if isinstance(obj, dict) and "mac" in obj and "body" in obj:
+                body = obj["body"].encode("utf-8")
+                expected = _hmac.new(key, body, hashlib.sha256).hexdigest()
+                return _Opened(True, _hmac.compare_digest(str(obj["mac"]), expected), body, raw)
+            return _Opened(False, False, None, raw)
+
 # Try to import DSM components
 try:
     import sys
@@ -936,32 +969,21 @@ class MeshConsciousness:
                     self.logger.debug(f"Gossip failed to {peer_id.hex()[:8]}: {e}")
 
     def _sign_gossip(self, payload: bytes) -> bytes:
-        """Sign gossip payload with HMAC-SHA256 (DSM-compatible envelope)."""
-        import hashlib, hmac, json as _json
-        body_str = payload.decode("utf-8", errors="replace")
-        mac = hmac.new(self._gossip_key, payload, hashlib.sha256).hexdigest()
-        return _json.dumps({"body": body_str, "mac": mac}).encode("utf-8")
+        """Sign gossip payload with HMAC-SHA256 (canonical DSM-compatible envelope)."""
+        return sign_envelope(self._gossip_key, payload)
 
     def _verify_gossip(self, raw: bytes) -> Optional[bytes]:
-        """Verify and unwrap signed gossip. Returns payload or None."""
-        import hashlib, hmac, json as _json
-        try:
-            envelope = _json.loads(raw.decode("utf-8"))
-            if "mac" in envelope and "body" in envelope:
-                body = envelope["body"].encode("utf-8")
-                expected = hmac.new(
-                    self._gossip_key, body, hashlib.sha256,
-                ).hexdigest()
-                if hmac.compare_digest(envelope["mac"], expected):
-                    return body
-                self.logger.warning("Gossip HMAC verification failed")
-                return None
-            # Unsigned gossip — accept with warning (backwards compat, reject in v6)
-            self.logger.warning("Unsigned gossip accepted (backwards compat — will be rejected in v6)")
-            return raw
-        except Exception:
-            # Not JSON envelope — treat as raw unsigned gossip
-            return raw
+        """Verify and unwrap signed gossip. Returns payload or None (lenient policy:
+        accept unsigned for backwards compat — to be rejected in v6)."""
+        opened = open_envelope(self._gossip_key, raw)
+        if opened.is_envelope:
+            if opened.verified:
+                return opened.body
+            self.logger.warning("Gossip HMAC verification failed")
+            return None
+        # Unsigned / non-envelope gossip — accept with warning (backwards compat).
+        self.logger.warning("Unsigned gossip accepted (backwards compat — will be rejected in v6)")
+        return raw
 
     def _handle_incoming_packet(
         self, peer_info: PeerNode, packet: MeshPacket,
