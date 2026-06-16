@@ -40,16 +40,16 @@
 | **Fortress network setup** | OVS VLAN, DHCP, NAT | `products/fortress/devices/common/ovs-post-setup.sh` |
 | **Fortress containers** | Podman compose | `products/fortress/containers/podman-compose.yml` |
 | **Device Groups (UI)** | Manual device organization | `products/fortress/web/modules/bubbles/views.py` |
-| **D2D Bubble Algorithm** | Automatic relationship detection | `products/fortress/lib/ecosystem_bubble.py` |
+| **D2D Bubble Algorithm** | Automatic relationship detection | `shared/aiochi/bubble/ecosystem_bubble.py` |
 | **Device Fingerprinting (ML)** | 99% accuracy classifier | `products/fortress/lib/ml_fingerprint_classifier.py` |
 | **Behavioral Clustering** | DBSCAN D2D bubbles | `products/fortress/lib/behavior_clustering.py` |
 | **Multi-Modal Presence** | mDNS, BLE, spatial | `products/fortress/lib/presence_sensor.py` |
 | **mDNS Query/Response Pairing** | Device discovery tracking | `products/fortress/lib/presence_sensor.py` |
-| **D2D Connection Graph** | NAPSE-based device affinity | `products/fortress/lib/connection_graph.py` |
-| **Temporal Affinity Scoring** | Wake/sleep correlation | `products/fortress/lib/connection_graph.py` |
-| **ClickHouse Graph Storage** | Device relationship persistence | `products/fortress/lib/clickhouse_graph.py` |
-| **n8n Bubble Webhooks** | Workflow automation | `products/fortress/lib/n8n_webhook.py` |
-| **Reinforcement Learning** | Learn from corrections | `products/fortress/lib/reinforcement_feedback.py` |
+| **D2D Connection Graph** | NAPSE-based device affinity | `shared/aiochi/bubble/connection_graph.py` |
+| **Temporal Affinity Scoring** | Wake/sleep correlation | `shared/aiochi/bubble/connection_graph.py` |
+| **ClickHouse Graph Storage** | Device relationship persistence | `shared/aiochi/bubble/clickhouse_graph.py` |
+| **n8n Bubble Webhooks** | Workflow automation | `shared/aiochi/bubble/n8n_webhook.py` |
+| **Reinforcement Learning** | Learn from corrections | `shared/aiochi/bubble/reinforcement_feedback.py` |
 | **AI Autopilot (Efficiency)** | Event-driven device detection | `products/fortress/lib/autopilot/` |
 | **DHCP Sentinel** | Low-power new device trigger | `products/fortress/lib/autopilot/dhcp_sentinel.py` |
 | **OVS MAC Watcher** | Unknown device detection | `products/fortress/lib/autopilot/mac_watcher.py` |
@@ -215,14 +215,14 @@ These directories contain proprietary innovations. Commercial license required f
 | **DSM Consensus** | `shared/dsm/` | Proprietary |
 | **SLA AI Business Continuity** | `shared/slaai/` | Proprietary |
 | **AIOCHI (AI Eyes) Cognitive Layer** | `shared/aiochi/` | Proprietary |
-| **Ecosystem Bubble (Atmospheric Presence)** | `products/fortress/lib/ecosystem_bubble.py` | Proprietary |
+| **Ecosystem Bubble (Atmospheric Presence)** | `shared/aiochi/bubble/ecosystem_bubble.py` | Proprietary |
 | **ML Fingerprint Classifier** | `products/fortress/lib/ml_fingerprint_classifier.py` | Proprietary |
 | **Behavioral Clustering Engine** | `products/fortress/lib/behavior_clustering.py` | Proprietary |
 | **Presence Sensor (Multi-Modal)** | `products/fortress/lib/presence_sensor.py` | Proprietary |
-| **D2D Connection Graph** | `products/fortress/lib/connection_graph.py` | Proprietary |
-| **ClickHouse Graph Storage** | `products/fortress/lib/clickhouse_graph.py` | Proprietary |
-| **n8n Webhook Integration** | `products/fortress/lib/n8n_webhook.py` | Proprietary |
-| **Reinforcement Learning Feedback** | `products/fortress/lib/reinforcement_feedback.py` | Proprietary |
+| **D2D Connection Graph** | `shared/aiochi/bubble/connection_graph.py` | Proprietary |
+| **ClickHouse Graph Storage** | `shared/aiochi/bubble/clickhouse_graph.py` | Proprietary |
+| **n8n Webhook Integration** | `shared/aiochi/bubble/n8n_webhook.py` | Proprietary |
+| **Reinforcement Learning Feedback** | `shared/aiochi/bubble/reinforcement_feedback.py` | Proprietary |
 | **AI Autopilot (Efficiency Engine)** | `products/fortress/lib/autopilot/` | Proprietary |
 
 ### Usage Guidelines
