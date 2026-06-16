@@ -4827,6 +4827,11 @@ ExecStartPre=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
 #   - n8n, clickhouse (automation/analytics)
 #   - napse, xdp-protection (IDS)
 #   - lstm-trainer (ML training)
+# Boot resilience: an unclean reboot can leave core containers in 'Created'
+# state with broken overlay mounts, so 'podman-compose up' fails (exit 125).
+# Force-remove any core container that exists but is NOT running so the up
+# below recreates it fresh. Running containers are left untouched.
+ExecStartPre=/bin/bash -c 'for c in fts-postgres fts-redis fts-web fts-qsecbit fts-dnsxai fts-dfs fts-cloudflared; do if podman container exists "\$c"; then st=\$(podman inspect -f "{{.State.Status}}" "\$c" 2>/dev/null); if [ "\$st" != "running" ]; then echo "[FTS] removing stale \$c (\$st)"; podman rm -f "\$c" 2>/dev/null || true; fi; fi; done; true'
 ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
   CORE="postgres redis web qsecbit-agent dnsxai dfs-intelligence" && \\
   if [ "\${INSTALL_CLOUDFLARE_TUNNEL:-}" = "true" ]; then CORE="\$CORE cloudflared"; fi && \\
