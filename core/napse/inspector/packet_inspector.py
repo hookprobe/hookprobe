@@ -31,7 +31,7 @@ import argparse
 import ipaddress
 import base64
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Tuple, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -816,7 +816,7 @@ class PacketInspector:
 
     def flush_stats(self):
         """Flush traffic statistics to xdp_stats table."""
-        now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
         delta_packets = self.stats['total_packets'] - self.prev_stats['total_packets']
         delta_bytes = self.stats['total_bytes'] - self.prev_stats['total_bytes']
@@ -906,7 +906,7 @@ class PacketInspector:
                                    flow.src_port, flow.dst_port)
 
                 rows.append([
-                    datetime.utcfromtimestamp(flow.start_time).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
+                    datetime.fromtimestamp(flow.start_time, timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
                     cid,
                     flow.src_ip, flow.dst_ip, flow.src_port, flow.dst_port,
                     flow.proto, flow.service, round(duration, 3),
@@ -1028,7 +1028,7 @@ class PacketInspector:
                         intent_class, confidence, severity, attack_subtype = result
                         cid = community_id(pkt['proto'], pkt['src_ip'], pkt['dst_ip'],
                                            pkt['src_port'], pkt['dst_port'])
-                        ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                        ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                         self.pending_intents.append([
                             ts, pkt['src_ip'], pkt['dst_ip'],
                             pkt['src_port'], pkt['dst_port'], pkt['proto'],
