@@ -384,12 +384,18 @@ class MetricsCollector:
 
         for target in targets:
             try:
-                # Use source IP binding to trigger proper routing
+                # Bind to the INTERFACE NAME, not the source IP. Under the
+                # Fortress PBR/dual-WAN setup, source-IP binding (-I <addr>)
+                # routes via the main-table default and is dropped (observed:
+                # 100% loss on both WANs even when the links are healthy),
+                # whereas interface binding (-I <ifname>) egresses on the
+                # device and works. This is what made slaAI see every WAN as
+                # down and emit garbage recommendations.
                 result = await asyncio.create_subprocess_exec(
                     "ping",
                     "-c", str(count),
                     "-W", str(self.ping_timeout),
-                    "-I", source_ip,
+                    "-I", interface,
                     "-q",  # Quiet mode
                     target,
                     stdout=asyncio.subprocess.PIPE,
