@@ -1194,7 +1194,10 @@ class FortressVPNClient:
 
                 elif ptype == PKT_CLOSE:
                     logger.warning("Gateway sent CLOSE")
+                    # Stop worker threads AND flip state out of CONNECTED so the
+                    # supervisor loop's auto-reconnect guard (main()) actually fires.
                     self._running = False
+                    self._set_state(VPNState.RECONNECTING)
 
             except socket.timeout:
                 continue
@@ -1230,7 +1233,12 @@ class FortressVPNClient:
                     silence = time.time() - self.last_keepalive
                     if silence > KEEPALIVE_INTERVAL * 3:
                         logger.warning("No keepalive for %.0fs — reconnecting", silence)
+                        # Stop worker threads AND flip state out of CONNECTED so the
+                        # supervisor loop's auto-reconnect guard (main()) actually fires.
+                        # Without the state change the daemon stays "CONNECTED" with
+                        # dead threads and never re-dials (zombie tunnel).
                         self._running = False
+                        self._set_state(VPNState.RECONNECTING)
 
             except Exception as e:
                 if self._running:
