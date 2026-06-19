@@ -26,65 +26,11 @@ log_info "Starting HookProbe Fortress Web Container"
 : "${FORTRESS_CONFIG_DIR:=/etc/hookprobe}"
 : "${FORTRESS_DATA_DIR:=/app/data}"
 
-# Create gunicorn config if not exists
-if [ ! -f /app/gunicorn.conf.py ]; then
-    log_info "Creating gunicorn configuration..."
-    cat > /app/gunicorn.conf.py << 'GUNICORN'
-# Gunicorn configuration for Fortress Web
-import os
-import multiprocessing
-
-# Server socket
-bind = os.environ.get('GUNICORN_BIND', '0.0.0.0:8443')
-
-# Worker processes
-workers = int(os.environ.get('GUNICORN_WORKERS', min(2, multiprocessing.cpu_count())))
-threads = int(os.environ.get('GUNICORN_THREADS', 4))
-worker_class = 'sync'
-worker_connections = 1000
-timeout = 120
-keepalive = 2
-
-# SSL/TLS
-certfile = '/app/certs/cert.pem'
-keyfile = '/app/certs/key.pem'
-ssl_version = 'TLSv1_2'
-
-# Logging
-accesslog = '/app/logs/access.log'
-errorlog = '/app/logs/error.log'
-loglevel = os.environ.get('LOG_LEVEL', 'info')
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
-
-# Security: gunicorn is NOT behind a reverse proxy, so do not trust
-# X-Forwarded-For from anyone (prevents per-IP rate-limit/lockout spoofing).
-forwarded_allow_ips = ''
-proxy_protocol = False
-
-# Process naming
-proc_name = 'fts-web'
-
-# Limits
-limit_request_line = 4094
-limit_request_fields = 100
-limit_request_field_size = 8190
-
-# Preload app
-preload_app = True
-
-def on_starting(server):
-    print("Fortress Web - Starting...")
-
-def on_reload(server):
-    print("Fortress Web - Reloading...")
-
-def worker_int(worker):
-    print(f"Worker {worker.pid} received SIGINT")
-
-def worker_abort(worker):
-    print(f"Worker {worker.pid} received SIGABRT")
-GUNICORN
-fi
+# Gunicorn config: the image ships products/fortress/web/gunicorn.conf.py at
+# /app/gunicorn.conf.py (the CMD points at it). Do NOT regenerate it here — a
+# heredoc guarded by `[ ! -f ]` never fired (the file always exists from the
+# image build), which silently shadowed the security settings. Single source of
+# truth is the committed file.
 
 # Initialize users.json if not exists.
 # SECURITY: never write a hardcoded/known credential to disk. Provision the admin

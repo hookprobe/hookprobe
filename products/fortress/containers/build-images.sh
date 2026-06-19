@@ -152,10 +152,13 @@ fi
 cd "$ROOT_DIR"
 
 echo "=== Building fts-web ==="
+# Context MUST be repo root (.) — Containerfile.web COPYs products/fortress/web,
+# products/fortress/lib, core/aegis and shared/aiochi, which only resolve from
+# the repo root (matches every other build below).
 podman build $NO_CACHE \
     -f products/fortress/containers/Containerfile.web \
     -t localhost/fts-web:latest \
-    products/fortress/
+    .
 
 echo ""
 echo "=== Building fts-dnsxai ==="

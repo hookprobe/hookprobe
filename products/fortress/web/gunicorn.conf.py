@@ -46,6 +46,12 @@ group = None
 tmp_upload_dir = None
 
 # Security
+# gunicorn is NOT behind a reverse proxy, so do not trust X-Forwarded-For from
+# anyone (an empty allow-list prevents source-IP spoofing that would bypass the
+# per-IP login rate-limit/lockout). This is the single effective gunicorn config
+# (the image always ships this file; the entrypoint no longer generates one).
+forwarded_allow_ips = ""
+proxy_protocol = False
 limit_request_line = 4094
 limit_request_fields = 100
 limit_request_field_size = 8190
