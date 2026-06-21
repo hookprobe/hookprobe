@@ -213,9 +213,14 @@ class TransportMapper:
         self._last_rebuild = time.time()
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        # Emit events for new nodes (topology change)
+        # Emit events for new nodes (topology change). Look the node up via
+        # .get() — the MAX_NODES cap above can del() a just-discovered node in
+        # the same rebuild, and `self._nodes[ip]` then raised KeyError(ip) that
+        # bubbled to the organism main loop ("Main loop error: '<ip>'") and
+        # aborted the rest of that cycle. Skip capped-away nodes instead.
         for ip in list(new_nodes)[:5]:  # Limit event emission
-            if self._submit:
+            node = self._nodes.get(ip)
+            if self._submit and node is not None:
                 self._submit(
                     source_layer=BrainLayer.CEREBELLUM,
                     route=SynapticRoute.TEMPORAL_MEMORY,
@@ -223,7 +228,7 @@ class TransportMapper:
                     priority=7,
                     source_ip=ip,
                     payload={
-                        'is_internal': self._nodes[ip].is_internal,
+                        'is_internal': node.is_internal,
                     },
                 )
 
