@@ -41,6 +41,26 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# Canonical trusted-network allowlist (core/hydra/trusted_networks.py). This
+# path pushes IoCs straight to the XDP blocklist, bypassing feed_sync's own
+# trusted-overlap filter — so without this guard a SENTINEL false-positive on
+# a trusted IP (e.g. the upstream DNS resolver 1.1.1.1) gets kernel-blocked
+# here even though every other layer treats it as benign. Fail-open to a
+# private-IP check if the module isn't importable in this container.
+try:
+    from hydra.trusted_networks import is_trusted as _is_trusted_ip  # type: ignore[import]
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import is_trusted as _is_trusted_ip  # type: ignore[import]
+    except ImportError:
+        import ipaddress as _ipaddress
+
+        def _is_trusted_ip(ip_str: str) -> bool:
+            try:
+                return _ipaddress.ip_address(ip_str).is_private
+            except ValueError:
+                return False
+
 ENVELOPE_VERSION = 1
 INBOX_SIZE = int(os.environ.get("PEER_INBOX_SIZE", "1024"))
 DEFAULT_PEER_ID = os.environ.get("HOOKPROBE_NODE_ID", "central-ids-01")
@@ -165,6 +185,16 @@ class PeerTransport:
         # Only IPs reach the XDP blocklist (the only LPM_TRIE map we
         # update from this path). Other IoC types still get persisted
         # for the panelist to consult, but skip the BPF update.
+        if ioc_type == "ip" and ip and _is_trusted_ip(ip):
+            # Never blocklist a trusted IP (upstream DNS resolvers, owner ISP,
+            # RFC1918, etc.). A SENTINEL/anomaly false positive must not reach
+            # the kernel filter here. Skip both the BPF update and the persist.
+            logger.info(
+                "peer_transport: skipping trusted IP %s (not blocklisted)", ip,
+            )
+            self._stats.received += 1
+            return
+
         if ioc_type == "ip" and ip:
             cidr = f"{ip}/32"
             try:

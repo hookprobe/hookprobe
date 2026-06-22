@@ -92,6 +92,17 @@ TRUSTED_CIDRS = [
     '104.24.0.0/14',
     '172.64.0.0/13',
     '131.0.72.0/22',
+    # Public DNS resolvers (upstream resolvers — the node queries these, so it
+    # sees response traffic). These RESOLVER anycast ranges are NOT covered by
+    # the Cloudflare CDN ranges above; without them the resolver IPs get
+    # XDP-blocked once SENTINEL false-flags them. Keep in sync with
+    # core/hydra/trusted_networks.py.
+    '1.1.1.0/24',        # Cloudflare DNS
+    '1.0.0.0/24',        # Cloudflare DNS
+    '9.9.9.0/24',        # Quad9
+    '149.112.112.0/24',  # Quad9 secondary
+    '208.67.222.0/24',   # OpenDNS
+    '208.67.220.0/24',   # OpenDNS
     # OCI metadata + internal
     '169.254.0.0/16',
     # RFC1918 private

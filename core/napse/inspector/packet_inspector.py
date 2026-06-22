@@ -83,6 +83,15 @@ except ImportError:
             ipaddress.ip_network('46.97.153.0/24'),
             ipaddress.ip_network('209.249.57.0/24'),
             ipaddress.ip_network('169.254.0.0/16'),
+            # Public DNS resolvers (upstream — we see response traffic)
+            ipaddress.ip_network('1.1.1.0/24'),
+            ipaddress.ip_network('1.0.0.0/24'),
+            ipaddress.ip_network('8.8.8.0/24'),
+            ipaddress.ip_network('8.8.4.0/24'),
+            ipaddress.ip_network('9.9.9.0/24'),
+            ipaddress.ip_network('149.112.112.0/24'),
+            ipaddress.ip_network('208.67.222.0/24'),
+            ipaddress.ip_network('208.67.220.0/24'),
             ipaddress.ip_network('10.0.0.0/8'),
             ipaddress.ip_network('172.16.0.0/12'),
             ipaddress.ip_network('192.168.0.0/16'),
@@ -145,6 +154,9 @@ def is_trusted_source(ip_str: str) -> bool:
         if addr in TRUSTED_IPS:
             return True
         if addr in SENTINEL_BENIGN_IPS:
+            return True
+        # Public DoH/DNS resolvers we query upstream — never a threat source.
+        if ip_str in DOH_RESOLVER_IPS:
             return True
         return any(addr in net for net in TRUSTED_NETWORKS)
     except ValueError:

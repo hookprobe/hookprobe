@@ -30,6 +30,21 @@ TRUSTED_NETWORKS: List[IPNetwork] = [
     ipaddress.ip_network('209.249.57.0/24'),    # Mitel Networks
     # Cloud/infra
     ipaddress.ip_network('169.254.0.0/16'),     # Link-local / OCI metadata
+    # Public DNS resolvers — the edge node uses these as upstream DNS, so the
+    # inspector sees the high-volume RESPONSE traffic (src = resolver IP) and
+    # threat-scorers (SENTINEL/anomaly) were flagging it as beaconing/exfil.
+    # These anycast ranges serve only the public resolver, never originate
+    # attacks, and must never be classified as a threat. NOTE: these are the
+    # RESOLVER anycast ranges — distinct from Cloudflare's CDN ranges in
+    # feed_sync.TRUSTED_CIDRS (104.16.0.0/13 etc.), which do NOT cover 1.1.1.1.
+    ipaddress.ip_network('1.1.1.0/24'),          # Cloudflare DNS (1.1.1.1 / 1.0.0.1 secondary)
+    ipaddress.ip_network('1.0.0.0/24'),          # Cloudflare DNS (1.0.0.1)
+    ipaddress.ip_network('8.8.8.0/24'),          # Google Public DNS (8.8.8.8)
+    ipaddress.ip_network('8.8.4.0/24'),          # Google Public DNS (8.8.4.4)
+    ipaddress.ip_network('9.9.9.0/24'),          # Quad9 (9.9.9.9)
+    ipaddress.ip_network('149.112.112.0/24'),    # Quad9 secondary
+    ipaddress.ip_network('208.67.222.0/24'),     # OpenDNS (208.67.222.222)
+    ipaddress.ip_network('208.67.220.0/24'),     # OpenDNS (208.67.220.220)
     # RFC-1918
     ipaddress.ip_network('10.0.0.0/8'),
     ipaddress.ip_network('172.16.0.0/12'),
