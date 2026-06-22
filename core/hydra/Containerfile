@@ -39,9 +39,15 @@ COPY hydra/trusted_networks.py /app/trusted_networks.py
 # Neural-Kernel: Risk Velocity + Cognitive Defense Loop
 COPY hydra/risk_velocity.py hydra/cognitive_defense.py ./
 
-# Shared readiness helper (canonical location preserved so imports
-# match the source tree).
+# Shared readiness helper + canonical ClickHouse client (canonical
+# location preserved so imports match the source tree). clickhouse.py
+# added 2026-06-22 — the 2026-04 refactor moved per-module CH helpers
+# into core.common.clickhouse, but only health.py was being baked in, so
+# feed_sync/event_consumer/rdap_enricher/baseline_profiler/feature_extractor
+# all crashed with `ModuleNotFoundError: No module named
+# 'core.common.clickhouse'` on the first rebuild after the refactor.
 COPY common/health.py /app/core/common/health.py
+COPY common/clickhouse.py /app/core/common/clickhouse.py
 
 # Agency shim — required by feed_sync.py and rdap_enricher.py for the
 # gated-action contract (see core/agency_shim.py docstring). Added
