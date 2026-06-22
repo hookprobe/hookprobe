@@ -173,10 +173,23 @@ def ch_insert(query: str, data: str = "",
     POST body (avoids the URL-size GET downgrade). Returns True on success."""
     if not CH_PASSWORD:
         return False
-    if " VALUES " in query and not data:
+    if data:
+        # Caller passed the row tuples separately, e.g.
+        #   ch_insert("INSERT INTO t (cols)", "('a'),('b')")
+        # ClickHouse needs the VALUES keyword between the column list and the
+        # body rows; without it the body parses as a syntax error at the first
+        # '('. Append " VALUES" unless the caller already supplied it. (This was
+        # the 2026-04 refactor regression that broke every engine INSERT.)
+        head = query.rstrip()
+        url_query = head if head.upper().endswith("VALUES") else head + " VALUES"
+        body = data
+    elif " VALUES " in query:
+        # Single-string form: "INSERT ... VALUES <rows>" — split so the rows go
+        # in the POST body (avoids the URL-size GET downgrade).
         head, _, rows = query.partition(" VALUES ")
         url_query, body = head + " VALUES", rows
     else:
+        # DDL / command with no rows (ALTER, OPTIMIZE, TRUNCATE, ...).
         url_query, body = query, data
     try:
         with urlopen(_url_request(url_query, body.encode("utf-8") if body else b"", database),
