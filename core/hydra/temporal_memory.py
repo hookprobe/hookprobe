@@ -635,13 +635,28 @@ class CampaignGraph:
 
     def load_operator_feedback(self):
         """
-        Load confirmed malicious IPs from operator verdicts and propagate.
+        Load confirmed-malicious anchor IPs and propagate reputation through the
+        co-occurrence graph.
+
+        Fix 2026-06-24: the seed was `operator_decision = 'confirm'` only — but
+        this is an AUTONOMOUS deployment with ZERO manual confirms (decisions are
+        '' / auto_false_positive / auto_confirm), so there were never any seeds
+        and campaign_reputation was 0 for everyone despite a healthy graph (22
+        campaigns, 473 clustered IPs). Seed from the real confirmed-threat
+        anchors: auto-confirmations + XDP kernel blocks (both appear in
+        hydra_events so they're nodes in the recent co-occurrence graph).
         """
         query = f"""
-            SELECT DISTINCT src_ip AS ip
-            FROM {CH_DB}.hydra_verdicts
-            WHERE operator_decision = 'confirm'
-              AND timestamp >= now() - INTERVAL 7 DAY
+            SELECT DISTINCT ip FROM (
+                SELECT src_ip AS ip
+                FROM {CH_DB}.hydra_verdicts
+                WHERE operator_decision IN ('confirm', 'auto_confirm')
+                  AND timestamp >= now() - INTERVAL 7 DAY
+                UNION DISTINCT
+                SELECT src_ip AS ip
+                FROM {CH_DB}.hydra_blocks
+                WHERE timestamp >= now() - INTERVAL 7 DAY
+            )
         """
         result = ch_query(query)
         if not result:
