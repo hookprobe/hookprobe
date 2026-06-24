@@ -560,7 +560,7 @@ class SynapticController:
                         # would render as an anonymous "(empty label)" in
                         # the dashboard's High-Priority Memory Sectors list.
                         'source_layer': 'brainstem',
-                        'route': f'bpf_{write.map_name}',
+                        'route': SynapticRoute.for_bpf_map(write.map_name),
                         'map_name': write.map_name,
                         'operation': write.operation,
                         'reason': write.reason,

@@ -66,8 +66,31 @@ class SynapticRoute(str, Enum):
     BASELINE_UPDATE = "baseline_update"       # Update Welford profile
     SIEM_INGEST = "siem_ingest"              # Ingest into Packet SIEM
 
+    # Brainstem BPF map-write confirmations (route = bpf_<map_name>). These are
+    # the kernel-write AUDIT rows, distinct from the XDP_* routing INTENTS above:
+    # a block decision routes downward as XDP_BLOCKLIST, then the actual map
+    # write is audited as BPF_BLOCKLIST. Feed/agency pushes write the maps
+    # directly, so these fire far more often than the XDP_* intents. Codified
+    # here (was an ad-hoc f'bpf_{map}' string) so the enum is the single source
+    # of truth for every route in cno_synaptic_log.
+    BPF_BLOCKLIST = "bpf_blocklist"
+    BPF_ALLOWLIST = "bpf_allowlist"
+    BPF_STRESS_LEVEL = "bpf_stress_level"
+    BPF_CAMO_CONFIG = "bpf_camo_config"
+
     # Content pipeline
     SCRIBE = "scribe"                        # AEGIS SCRIBE agent for blog generation
+
+    @classmethod
+    def for_bpf_map(cls, map_name: str) -> str:
+        """Canonical route string for a BPF map-write audit. Known maps resolve
+        to a dedicated enum member; unknown maps fall back to the same
+        'bpf_<map>' scheme so the naming stays consistent. Returns the route
+        string (cno_synaptic_log.route is a plain String column)."""
+        try:
+            return cls[f"BPF_{map_name.upper()}"].value
+        except KeyError:
+            return f"bpf_{map_name}"
 
 
 # ------------------------------------------------------------------
