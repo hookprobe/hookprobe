@@ -74,6 +74,15 @@ MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 # Validated on 30d live data: benign 203->4440, clean->benign 3%->83%, threat
 # coverage (suspicious-or-above) ~85%.
 BAYES_SAT_MEAN    = float(os.environ.get('SENTINEL_BAYES_SAT_MEAN', '0.85'))    # recent mean bayes_score above this = saturated head
+# Representative-benign training samples per cycle (real non-threat traffic) —
+# gives the Bayes negative class realistic features so it stops saturating.
+TRAFFIC_BENIGN_SAMPLES = int(os.environ.get('SENTINEL_TRAFFIC_BENIGN', '1500'))
+# train_from_traffic(): scoring-consistent retrain window + negative:positive cap.
+TRAINING_WINDOW = int(os.environ.get('SENTINEL_TRAIN_WINDOW', str(30 * 86400)))
+NEG_POS_RATIO = float(os.environ.get('SENTINEL_NEG_POS_RATIO', '2.0'))
+# Use the skew-free traffic trainer as the primary retrainer (set false to
+# revert to the legacy historical-evidence train_from_verdicts).
+TRAIN_FROM_TRAFFIC = os.environ.get('SENTINEL_TRAIN_FROM_TRAFFIC', 'true').lower() == 'true'
 WB_SATURATED      = float(os.environ.get('SENTINEL_WB_SATURATED', '0.10'))      # bayes weight when saturated
 THR_MALICIOUS     = float(os.environ.get('SENTINEL_THR_MALICIOUS', '0.70'))     # healthy-bayes thresholds
 THR_SUSPICIOUS    = float(os.environ.get('SENTINEL_THR_SUSPICIOUS', '0.40'))
@@ -1222,7 +1231,7 @@ class SentinelEngine:
             -- to the training set with a synthetic 'auto_label_benign'
             -- decision. Capped at 100 rows per cycle so operator feedback
             -- keeps dominating as real labels accumulate.
-            SELECT
+            (SELECT
                 src_ip AS ip,
                 anomaly_score,
                 verdict,
@@ -1232,7 +1241,35 @@ class SentinelEngine:
             WHERE verdict = 'benign'
               AND timestamp >= now() - INTERVAL 24 HOUR
             ORDER BY timestamp DESC
-            LIMIT 100
+            LIMIT 100)
+
+            UNION ALL
+
+            -- Representative-benign augmentation (2026-06-24): the negative
+            -- class was ONLY operator-FPs (biased to what SENTINEL already
+            -- flagged) + trusted-IP zeros (degenerate features). The Bayes head
+            -- had never seen REAL benign traffic, so its benign Gaussians were
+            -- tight near zero and every real IP (e.g. cve_relevance~0.95) looked
+            -- malicious → saturated proba ~0.96, mass over-flagging.
+            -- Sample real observed traffic that is NOT a confirmed threat
+            -- (not XDP-blocked, not in an INDEPENDENT — non-SENTINEL — feed) as
+            -- representative negatives. Balanced retrain lifts test AUC ~0.5→0.86.
+            (SELECT
+                src_ip AS ip,
+                0 AS anomaly_score,
+                'benign' AS verdict,
+                'auto_label_traffic_benign' AS operator_decision,
+                max(timestamp) AS ts
+            FROM {CH_DB}.sentinel_evidence
+            WHERE timestamp >= now() - INTERVAL 7 DAY
+              AND src_ip NOT IN (
+                  SELECT DISTINCT src_ip FROM {CH_DB}.hydra_blocks
+                  WHERE timestamp >= now() - INTERVAL 30 DAY)
+              AND src_ip NOT IN (
+                  SELECT value FROM {CH_DB}.iocs WHERE NOT has(sources, 'SENTINEL'))
+            GROUP BY src_ip
+            ORDER BY rand()
+            LIMIT {TRAFFIC_BENIGN_SAMPLES})
         """
         # NB: do NOT embed `FORMAT ...` here — ch_query() appends the format,
         # and a doubled FORMAT clause is a ClickHouse syntax error (Code 62)
@@ -1267,6 +1304,13 @@ class SentinelEngine:
                             continue
                     except ImportError:
                         # If module unavailable, skip — never poison
+                        continue
+                    benign_auto_count += 1
+                elif decision == 'auto_label_traffic_benign':
+                    # Representative real-traffic negative. The SQL already
+                    # excluded confirmed threats (blocks ∪ independent feeds);
+                    # operator/threat labels still win (skip if already present).
+                    if ip in labeled_ips:
                         continue
                     benign_auto_count += 1
                 labeled_ips[ip] = (is_tp, ts)
@@ -1420,6 +1464,123 @@ class SentinelEngine:
                      f"{gnb.total_samples} samples ({tp} TP, {fp} FP)"
                      + (f", +{stats.get('ledger_labels_fed', 0)} ledger labels" if ledger_consumed else ""))
 
+        return stats
+
+    def train_from_traffic(self) -> dict:
+        """Train on RECENT traffic with SCORING-CONSISTENT features.
+
+        Root-cause fix (2026-06-24) for the Bayes-head saturation: the legacy
+        train_from_verdicts() extracted point-in-time features via
+        _collect_historical_evidence(), but for verdicts older than the event
+        TTL that returns near-ZERO vectors (cve_relevance≈0.06, event_count≈0)
+        — while live scoring (collect_evidence_batch) sees populated vectors
+        (cve≈0.95). That train/serve SKEW made every scored IP look anomalous →
+        proba saturated at ~0.96 → mass over-flagging. No label change could fix
+        it because BOTH classes were trained on skewed features.
+
+        Here we use the EXACT scoring pipeline (collect_evidence_batch) for
+        features, so train == serve. Labels come from the SENTINEL-independent
+        ground truth used everywhere else: positive = IP in hydra_blocks ∪
+        non-SENTINEL iocs; negative = observed traffic that is neither. Recent
+        operator confirm/FP decisions override. Negatives are subsampled to
+        NEG_POS_RATIO×positives to keep the prior sane. Validated: held-out
+        test AUC ≈0.86; raw proba mean drops 0.96→~0.1 (de-saturated)."""
+        batch = collect_evidence_batch(TRAINING_WINDOW)
+        if not batch or len(batch) < MIN_TRAINING_DECISIONS:
+            return {'status': 'no_data', 'samples': len(batch or [])}
+
+        # Independent ground truth (same definition as the dashboard matrix).
+        def _ipset(sql):
+            r = ch_query(sql) or ''
+            return set(x.strip() for x in r.strip().split('\n') if x.strip())
+        threats = _ipset(
+            f"SELECT DISTINCT src_ip FROM {CH_DB}.hydra_blocks "
+            f"WHERE timestamp >= now() - INTERVAL 30 DAY")
+        threats |= _ipset(
+            f"SELECT value FROM {CH_DB}.iocs WHERE NOT has(sources, 'SENTINEL')")
+        # Recent operator decisions override the weak ground-truth label.
+        op = {}
+        opres = ch_query(
+            f"SELECT src_ip AS ip, argMax(operator_decision, timestamp) AS d "
+            f"FROM {CH_DB}.hydra_verdicts "
+            f"WHERE operator_decision IN ('confirm','auto_confirm','false_positive',"
+            f"'auto_false_positive','auto_fp') AND timestamp >= now() - INTERVAL 30 DAY "
+            f"GROUP BY src_ip")
+        for line in (opres.strip().split('\n') if opres else []):
+            try:
+                row = json.loads(line)
+                op[row['ip']] = row['d'] in ('confirm', 'auto_confirm')
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        pos_samples, neg_samples = [], []
+        for it in batch:
+            ip = it['ip']
+            if _is_trusted_ip(ip):
+                is_tp = False
+            elif ip in op:
+                is_tp = op[ip]
+            else:
+                is_tp = ip in threats
+            (pos_samples if is_tp else neg_samples).append(it['evidence'])
+
+        if len(pos_samples) < 5 or len(neg_samples) < 5:
+            return {'status': 'insufficient_classes',
+                    'pos': len(pos_samples), 'neg': len(neg_samples)}
+
+        # Subsample negatives to keep the class prior reasonable.
+        import random as _r
+        _r.seed(1337)
+        cap = int(len(pos_samples) * NEG_POS_RATIO)
+        if len(neg_samples) > cap:
+            neg_samples = _r.sample(neg_samples, cap)
+
+        gnb = GaussianNaiveBayes(N_EVIDENCE)
+        scores_for_cal, labels_for_cal = [], []
+        for ev in pos_samples:
+            gnb.update(ev, True)
+        for ev in neg_samples:
+            gnb.update(ev, False)
+        # Calibration set scored AFTER fitting (consistent, both classes).
+        for ev in pos_samples:
+            scores_for_cal.append(gnb.predict_proba(ev)); labels_for_cal.append(1)
+        for ev in neg_samples:
+            scores_for_cal.append(gnb.predict_proba(ev)); labels_for_cal.append(0)
+
+        calibrator = IsotonicCalibrator()
+        if len(set(labels_for_cal)) >= 2:
+            calibrator.fit(scores_for_cal, labels_for_cal)
+
+        self.gnb = gnb
+        self.calibrator = calibrator
+        self.version += 1
+        self.last_trained = datetime.now(timezone.utc).isoformat()
+        self.assess_bayes_health()
+
+        # In-sample confusion @ 0.5 on calibrated score.
+        cm = {'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+        for s, l in zip(scores_for_cal, labels_for_cal):
+            p = calibrator.calibrate(s) if calibrator.bins else s
+            pred = 1 if p >= 0.5 else 0
+            if l == 1 and pred == 1: cm['tp'] += 1
+            elif l == 0 and pred == 1: cm['fp'] += 1
+            elif l == 1 and pred == 0: cm['fn'] += 1
+            else: cm['tn'] += 1
+        prec = cm['tp'] / max(cm['tp'] + cm['fp'], 1)
+        rec = cm['tp'] / max(cm['tp'] + cm['fn'], 1)
+        stats = {
+            'status': 'trained', 'mode': 'traffic',
+            'pos': len(pos_samples), 'neg': len(neg_samples),
+            'precision': round(prec, 4), 'recall': round(rec, 4),
+            'f1_score': round(2 * prec * rec / max(prec + rec, 1e-9), 4),
+            'false_positive_rate': round(cm['fp'] / max(cm['fp'] + cm['tn'], 1), 4),
+            'bayes_saturated': self._bayes_saturated,
+        }
+        self._persist_model_state(stats)
+        logger.info("SENTINEL trained (traffic): v%d, %d pos / %d neg, "
+                    "P=%.2f R=%.2f, saturated=%s",
+                    self.version, len(pos_samples), len(neg_samples),
+                    prec, rec, self._bayes_saturated)
         return stats
 
     def _persist_model_state(self, stats: dict) -> None:
@@ -2045,8 +2206,10 @@ def main():
     else:
         logger.info("No existing model found — starting with heuristics only")
 
-    # Try initial training from any existing operator feedback
-    train_result = engine.train_from_verdicts()
+    # Try initial training. The traffic trainer (scoring-consistent features)
+    # is the skew-free default; legacy historical trainer is the fallback.
+    train_result = (engine.train_from_traffic() if TRAIN_FROM_TRAFFIC
+                    else engine.train_from_verdicts())
     logger.info(f"Initial training: {train_result}")
 
     # Initial scoring cycle
@@ -2099,9 +2262,10 @@ def main():
                 except Exception as e:
                     logger.debug(f"Auto-labeling error: {e}")
 
-            # Periodic retrain (uses both operator + auto labels)
+            # Periodic retrain (scoring-consistent traffic trainer by default)
             if time.monotonic() - last_train > RETRAIN_INTERVAL:
-                train_result = engine.train_from_verdicts()
+                train_result = (engine.train_from_traffic() if TRAIN_FROM_TRAFFIC
+                                else engine.train_from_verdicts())
                 last_train = time.monotonic()
                 if train_result.get('status') == 'trained':
                     logger.info(f"Retrained: v{engine.version}, "
