@@ -732,6 +732,20 @@ def main():
     # Initial sync
     sync_all_feeds()
 
+    # Persist XDP enforce mode across reboots. sw_config[0] is in-kernel BPF
+    # state lost on reboot; setup-vrf reloads xdp_synwall in its MONITOR default,
+    # so without this the enforce posture silently reverts to observe. Gated by
+    # SYNWALL_ENFORCE (set in the IDS compose) so the posture is explicit and
+    # revertible. Armed AFTER the initial sync so sw_blocklist/sw_allowlist are
+    # populated first — never enforce against empty maps (would drop nothing and
+    # could drop trusted traffic before the allowlist lands).
+    if os.environ.get('SYNWALL_ENFORCE', '0') == '1':
+        try:
+            ok = get_bpf_ops().update_config('sw_config', 0, 1)
+            logger.info("XDP enforce mode ARMED on xdp_synwall (sw_config[0]=1): %s", ok)
+        except Exception as e:
+            logger.warning("Failed to arm XDP enforce mode: %s", e)
+
     # Per-service readiness (Ch 22 §6.2) — expose /healthz so the watchdog and
     # dashboards see real readiness, not just process-alive.
     try:
