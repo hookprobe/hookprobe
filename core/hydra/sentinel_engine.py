@@ -80,6 +80,9 @@ TRAFFIC_BENIGN_SAMPLES = int(os.environ.get('SENTINEL_TRAFFIC_BENIGN', '1500'))
 # train_from_traffic(): scoring-consistent retrain window + negative:positive cap.
 TRAINING_WINDOW = int(os.environ.get('SENTINEL_TRAIN_WINDOW', str(30 * 86400)))
 NEG_POS_RATIO = float(os.environ.get('SENTINEL_NEG_POS_RATIO', '2.0'))
+# Temporal-signal lookback for _load_temporal_batch (the engine re-evaluates IPs
+# over days, so a 1h window matched almost nothing). Same at train + serve.
+TEMPORAL_LOOKBACK_H = int(os.environ.get('SENTINEL_TEMPORAL_LOOKBACK_H', '168'))
 # Use the skew-free traffic trainer as the primary retrainer (set false to
 # revert to the legacy historical-evidence train_from_verdicts).
 TRAIN_FROM_TRAFFIC = os.environ.get('SENTINEL_TRAIN_FROM_TRAFFIC', 'true').lower() == 'true'
@@ -468,6 +471,13 @@ EVIDENCE_NAMES = [
     'ip_age_days',        # 17: Days since first seen (log-normalized)
     'dst_port_entropy',   # 18: Destination port entropy
     'bytes_ratio',        # 19: Bytes ratio (outbound/total)
+    # NOTE (2026-06-24): adding temporal drift/intent_entropy as GNB features
+    # was tested (robust 8-seed A/B) and gave NO lift (-0.012, within noise) —
+    # the existing 20 features already capture the available separable signal.
+    # The recall ceiling is structural (threats are XDP-blocked before they
+    # generate distinctive behavioural data), not feature-poverty. The temporal
+    # LOADER bug below was fixed regardless (it had silently killed the
+    # heuristic's temporal boost too).
 ]
 N_EVIDENCE = len(EVIDENCE_NAMES)
 
@@ -960,40 +970,45 @@ def _load_verdict_history(ips: List[str]) -> Dict[str, float]:
 
 
 def _load_temporal_batch(ips: List[str]) -> Dict[str, dict]:
-    """Load latest temporal signals (drift, campaigns, intents) per IP."""
+    """Load latest temporal signals (drift, campaigns, intents) per IP.
+
+    Two bugs fixed 2026-06-24 that had silently killed the temporal boost (in
+    BOTH the heuristic and, once added, the GNB features):
+      - `ips[:500]` only ever queried the first 500 of ~7k batch IPs → chunk all.
+      - `INTERVAL 1 HOUR` matched ~53 IPs (the temporal engine re-evaluates IPs
+        over days, not hourly) → widen to TEMPORAL_LOOKBACK_H (default 7d).
+    Same window at train and serve (both go through collect_evidence_batch) so
+    no train/serve skew."""
     if not ips:
         return {}
-
-    safe_ips = [s for s in (_safe_ip(ip) for ip in ips[:500]) if s]
-    if not safe_ips:
-        return {}
-    ip_list = ','.join(f"toIPv4('{s}')" for s in safe_ips)
-    query = f"""
-        SELECT
-            ip,
-            argMax(drift_score, timestamp) AS drift_score,
-            argMax(diurnal_anomaly, timestamp) AS diurnal_anomaly,
-            argMax(intent_entropy, timestamp) AS intent_entropy,
-            argMax(campaign_id, timestamp) AS campaign_id,
-            argMax(campaign_reputation, timestamp) AS campaign_reputation
-        FROM {CH_DB}.sentinel_temporal
-        WHERE ip IN ({ip_list})
-          AND timestamp >= now() - INTERVAL 1 HOUR
-        GROUP BY ip
-    """
-    result = ch_query(query)
-    if not result:
-        return {}
-
-    temporal = {}
-    for line in result.strip().split('\n'):
-        if not line:
+    temporal: Dict[str, dict] = {}
+    for start in range(0, len(ips), 500):
+        chunk = [s for s in (_safe_ip(ip) for ip in ips[start:start + 500]) if s]
+        if not chunk:
             continue
-        try:
-            row = json.loads(line)
-            temporal[row['ip']] = row
-        except (json.JSONDecodeError, KeyError):
-            continue
+        ip_list = ','.join(f"toIPv4('{s}')" for s in chunk)
+        query = f"""
+            SELECT
+                ip,
+                argMax(drift_score, timestamp) AS drift_score,
+                argMax(diurnal_anomaly, timestamp) AS diurnal_anomaly,
+                argMax(intent_entropy, timestamp) AS intent_entropy,
+                argMax(campaign_id, timestamp) AS campaign_id,
+                argMax(campaign_reputation, timestamp) AS campaign_reputation
+            FROM {CH_DB}.sentinel_temporal
+            WHERE ip IN ({ip_list})
+              AND timestamp >= now() - INTERVAL {TEMPORAL_LOOKBACK_H} HOUR
+            GROUP BY ip
+        """
+        result = ch_query(query)
+        for line in (result.strip().split('\n') if result else []):
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                temporal[row['ip']] = row
+            except (json.JSONDecodeError, KeyError):
+                continue
     return temporal
 
 
