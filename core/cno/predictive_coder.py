@@ -40,7 +40,7 @@ CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
 CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
-from core.common.clickhouse import ch_post as _ch_post
+from core.common.clickhouse import ch_post as _ch_post, ch_query as _ch_query
 
 if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
     raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
@@ -88,8 +88,59 @@ class PredictiveCoder:
             'errors': 0,
         }
 
-        # Capture initial weights for drift magnitude calculation
+        # Capture the hardcoded defaults first (so drift_magnitude stays
+        # "distance from defaults"), THEN restore the last learned weights so
+        # online learning survives a restart — closing the learn->apply loop.
+        # Without this, every restart reverts the consensus weights to the
+        # compiled-in defaults and discards all accumulated drift.
         self._initial_weights = self._snapshot_weights()
+        self._weights_reloaded = self._load_weights_from_history()
+
+    def _load_weights_from_history(self) -> bool:
+        """Restore the most-recent persisted silo weights from
+        cno_weight_history onto the consensus module. Validates sum~=1.0 and
+        per-silo bounds [WEIGHT_MIN, WEIGHT_MAX] before applying; on any problem
+        (no history, bad data, CH down) it leaves the hardcoded defaults intact
+        and returns False — fail-safe."""
+        if not self._consensus_mod or not hasattr(self._consensus_mod, 'WEIGHT_GLOBAL'):
+            return False
+        try:
+            resp = _ch_query(
+                f"SELECT weight_global, weight_local, weight_psychology "
+                f"FROM {CH_DB}.cno_weight_history ORDER BY timestamp DESC LIMIT 1 "
+                f"FORMAT TabSeparated"
+            )
+            if not resp or not resp.strip():
+                logger.info("PREDICTIVE_CODER: no weight history yet — using defaults")
+                return False
+            parts = resp.strip().split('\t')
+            if len(parts) < 3:
+                return False
+            wg, wl, wp = float(parts[0]), float(parts[1]), float(parts[2])
+            total = wg + wl + wp
+            if not (0.90 <= total <= 1.10):
+                logger.warning("PREDICTIVE_CODER: persisted weights sum=%.3f out of range — ignoring", total)
+                return False
+            # Re-normalize defensively, then bounds-check.
+            wg, wl, wp = wg / total, wl / total, wp / total
+            for w in (wg, wl, wp):
+                if not (WEIGHT_MIN - 0.02 <= w <= WEIGHT_MAX + 0.02):
+                    logger.warning("PREDICTIVE_CODER: persisted weight %.3f out of bounds — ignoring", w)
+                    return False
+            setattr(self._consensus_mod, 'WEIGHT_GLOBAL', wg)
+            setattr(self._consensus_mod, 'WEIGHT_LOCAL', wl)
+            setattr(self._consensus_mod, 'WEIGHT_PSYCHOLOGY', wp)
+            logger.info(
+                "PREDICTIVE_CODER: restored learned weights from history: "
+                "G=%.3f L=%.3f P=%.3f (defaults were G=%.3f L=%.3f P=%.3f)",
+                wg, wl, wp,
+                self._initial_weights.get('global', 0),
+                self._initial_weights.get('local', 0),
+                self._initial_weights.get('psychology', 0))
+            return True
+        except Exception as e:
+            logger.warning("PREDICTIVE_CODER: weight reload failed (using defaults): %s", e)
+            return False
 
     def on_episode_closed(self, episode: Dict[str, Any]) -> None:
         """Callback from Phase 22 EpisodicMemory when an episode closes.
@@ -311,5 +362,6 @@ class PredictiveCoder:
                 'initial_weights': self._initial_weights,
                 'drift_magnitude': round(drift, 4),
                 'learning_rate': LEARNING_RATE_ETA,
+                'weights_reloaded_from_history': getattr(self, '_weights_reloaded', False),
             }
 
