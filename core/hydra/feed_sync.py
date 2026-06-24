@@ -313,21 +313,46 @@ def find_map_id(map_name: str) -> Optional[int]:
 # alternative would be N gatekeeper roundtrips per blocklist refresh
 # (typically 50K entries) which would be a startup-killer. Subject is
 # the map name + entry count so audit shows the blast.
+# blocklist/allowlist live as SEPARATE per-program LPM_TRIE instances: the
+# mirror path (xdp_hydra: blocklist/allowlist, used for DETECTION) and the WAN
+# path (xdp_synwall: sw_blocklist/sw_allowlist, used for ENFORCEMENT). They are
+# not pinned-shared. The feed previously populated ONLY the mirror map, so
+# xdp_synwall's maps were empty — arming enforce mode on the WAN would have
+# dropped nothing. Push to BOTH so enforcement is ready when the mode is armed.
+# Populating sw_* is a no-op while xdp_synwall stays in monitor mode → safe now.
+_WAN_MAP_TWIN = {'blocklist': 'sw_blocklist', 'allowlist': 'sw_allowlist'}
+
+
 @_gated_Q(
     kind=_AK_Q.UPDATE_ALLOWLIST,
     proposer="hydra.feed_sync",
     subject_fn=lambda map_name, cidrs, value=1: f"map:{map_name}:n={len(cidrs)}",
 )
 def update_xdp_map_batch(map_name: str, cidrs: Set[str], value: int = 1) -> int:
-    """Update an LPM_TRIE BPF map with a batch of CIDRs.
+    """Update an LPM_TRIE BPF map with a batch of CIDRs (+ its WAN twin).
 
-    Returns count of entries added.
+    Returns count of entries added to the primary (mirror-path) map.
     """
     try:
         ops = get_bpf_ops()
         success, errors = ops.update_lpm_trie_batch(map_name, cidrs, value)
         if errors > 0:
             logger.warning(f"Map '{map_name}': {success} added, {errors} errors")
+
+        # Mirror the same CIDRs to the WAN-path enforcement map. Best-effort:
+        # absent/empty when xdp_synwall isn't loaded, which must NOT break the
+        # primary push.
+        twin = _WAN_MAP_TWIN.get(map_name)
+        if twin and cidrs:
+            try:
+                tw_ok, tw_err = ops.update_lpm_trie_batch(twin, cidrs, value)
+                if tw_ok:
+                    logger.debug(f"Mirrored {tw_ok} CIDRs to WAN map '{twin}'")
+                elif tw_err:
+                    logger.debug(f"WAN map '{twin}': {tw_err} errors (xdp_synwall loaded?)")
+            except Exception as e:
+                logger.debug(f"WAN map '{twin}' update skipped: {e}")
+
         return success
     except Exception as e:
         logger.warning(f"Cannot update BPF map '{map_name}': {e}")
