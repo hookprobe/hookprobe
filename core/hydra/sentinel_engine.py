@@ -62,6 +62,24 @@ SCORING_INTERVAL = max(int(os.environ.get('SENTINEL_INTERVAL', '300')), 10)
 # Minimum operator decisions to train the model
 MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 
+# --- Anti-over-flagging calibration (2026-06-24) -----------------------------
+# The isotonic calibrator, fit on near-all-positive feedback, collapses: it maps
+# even neutral evidence to ~certainty (live: bayes_score ~0.96 for clean AND
+# threat IPs, model_state false_positive_rate=0). In the 0.5/0.5 ensemble that
+# flat bayes adds a ~0.48 constant floor, shoving ~97% of IPs into the
+# suspicious band. We DETECT that saturation (probe the calibration curve at a
+# neutral raw score) and, when degenerate, down-weight bayes so the
+# discriminative heuristic + isolation-forest drive the verdict, with thresholds
+# retuned to the de-flooded score range. All env-tunable + reversible.
+# Validated on 30d live data: benign 203->4440, clean->benign 3%->83%, threat
+# coverage (suspicious-or-above) ~85%.
+BAYES_SAT_PROBE   = float(os.environ.get('SENTINEL_BAYES_SAT_PROBE', '0.80'))   # calibrate(0.5) above this = saturated
+WB_SATURATED      = float(os.environ.get('SENTINEL_WB_SATURATED', '0.10'))      # bayes weight when saturated
+THR_MALICIOUS     = float(os.environ.get('SENTINEL_THR_MALICIOUS', '0.70'))     # healthy-bayes thresholds
+THR_SUSPICIOUS    = float(os.environ.get('SENTINEL_THR_SUSPICIOUS', '0.40'))
+THR_MALICIOUS_DF  = float(os.environ.get('SENTINEL_THR_MALICIOUS_DF', '0.60'))  # de-flooded (saturated/heuristic) thresholds
+THR_SUSPICIOUS_DF = float(os.environ.get('SENTINEL_THR_SUSPICIOUS_DF', '0.45'))
+
 # Feature toggle for gradual rollout
 SENTINEL_ENABLED = os.environ.get('SENTINEL_ENABLED', 'true').lower() == 'true'
 
@@ -1039,35 +1057,54 @@ class SentinelEngine:
         # Heuristic score (rule-based, always available)
         heuristic_score = self._heuristic_score(evidence, temporal)
 
-        # Ensemble — reduce Bayes weight when model is single-class
-        if self.gnb.total_samples >= MIN_TRAINING_DECISIONS and has_both_classes:
+        # Is the calibrated Bayes head saturated? (degenerate calibration maps
+        # neutral evidence to ~certainty → floods the ensemble, over-flags
+        # everything.) Probe the curve at a neutral raw score. Cheap, per-score.
+        bayes_saturated = False
+        try:
+            if self.calibrator.bins:
+                bayes_saturated = self.calibrator.calibrate(0.5) > BAYES_SAT_PROBE
+        except Exception:
+            pass
+
+        # Ensemble — down-weight Bayes when single-class OR saturated, so the
+        # discriminative heuristic + isolation-forest drive the verdict, and
+        # retune thresholds to the de-flooded score range.
+        if (self.gnb.total_samples >= MIN_TRAINING_DECISIONS
+                and has_both_classes and not bayes_saturated):
             sentinel_score = (self.w_bayes * bayes_score +
                               self.w_heuristic * heuristic_score)
+            thr_mal, thr_sus = THR_MALICIOUS, THR_SUSPICIOUS
         elif self.gnb.total_samples >= MIN_TRAINING_DECISIONS:
-            # Single-class model: heavily favour heuristics, bayes is just noise
-            sentinel_score = 0.15 * bayes_score + 0.85 * heuristic_score
+            # Single-class OR saturated calibrator: bayes is non-discriminative
+            # noise — favour heuristics heavily and use de-flooded thresholds.
+            sentinel_score = WB_SATURATED * bayes_score + (1.0 - WB_SATURATED) * heuristic_score
+            thr_mal, thr_sus = THR_MALICIOUS_DF, THR_SUSPICIOUS_DF
         else:
             # Before training: rely entirely on heuristics
             sentinel_score = heuristic_score
+            thr_mal, thr_sus = THR_MALICIOUS_DF, THR_SUSPICIOUS_DF
 
         # Clamp
         sentinel_score = max(0.0, min(1.0, sentinel_score))
 
-        # Verdict
-        if sentinel_score >= 0.7:
+        # Verdict (thresholds match the active scoring regime)
+        if sentinel_score >= thr_mal:
             verdict = 'malicious'
-        elif sentinel_score >= 0.4:
+        elif sentinel_score >= thr_sus:
             verdict = 'suspicious'
         else:
             verdict = 'benign'
 
         # Confidence: how far from the decision boundary
+        _mal_span = max(1.0 - thr_mal, 1e-6)
+        _sus_span = max(thr_mal - thr_sus, 1e-6)
         if verdict == 'malicious':
-            confidence = min(1.0, (sentinel_score - 0.7) / 0.3 * 0.5 + 0.5)
+            confidence = min(1.0, (sentinel_score - thr_mal) / _mal_span * 0.5 + 0.5)
         elif verdict == 'suspicious':
-            confidence = 0.3 + (sentinel_score - 0.4) / 0.3 * 0.2
+            confidence = 0.3 + (sentinel_score - thr_sus) / _sus_span * 0.2
         else:
-            confidence = min(1.0, (0.4 - sentinel_score) / 0.4 * 0.5 + 0.5)
+            confidence = min(1.0, (thr_sus - sentinel_score) / max(thr_sus, 1e-6) * 0.5 + 0.5)
 
         return {
             'sentinel_score': round(sentinel_score, 6),
