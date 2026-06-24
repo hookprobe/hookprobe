@@ -411,6 +411,14 @@ def run_ringbuf_consumer():
                     for i in range(7):
                         curr.append(ops.read_percpu_u64('hydra_stats', i))
                     prev_stats = curr
+                    # Ch 22 §6.2 — the stats-poll loop is itself liveness. We
+                    # write an xdp_stats row every poll even when the RINGBUF is
+                    # quiet (monitor-mode XDP = no drop events to consume), so
+                    # count a successful poll as ingest. Without this the
+                    # consumer false-503s after HP_HEALTH_STALE_S of zero drops
+                    # while it is fully healthy and writing ClickHouse.
+                    if "_health_reporter" in globals() and _health_reporter is not None:
+                        _health_reporter.bump_ingest(0)
                 except Exception as e:
                     logger.debug(f"XDP stats poll error: {e}")
                 stats_poll_count += 1
