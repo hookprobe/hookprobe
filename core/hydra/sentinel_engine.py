@@ -73,7 +73,7 @@ MIN_TRAINING_DECISIONS = int(os.environ.get('SENTINEL_MIN_TRAINING', '10'))
 # retuned to the de-flooded score range. All env-tunable + reversible.
 # Validated on 30d live data: benign 203->4440, clean->benign 3%->83%, threat
 # coverage (suspicious-or-above) ~85%.
-BAYES_SAT_PROBE   = float(os.environ.get('SENTINEL_BAYES_SAT_PROBE', '0.80'))   # calibrate(0.5) above this = saturated
+BAYES_SAT_MEAN    = float(os.environ.get('SENTINEL_BAYES_SAT_MEAN', '0.85'))    # recent mean bayes_score above this = saturated head
 WB_SATURATED      = float(os.environ.get('SENTINEL_WB_SATURATED', '0.10'))      # bayes weight when saturated
 THR_MALICIOUS     = float(os.environ.get('SENTINEL_THR_MALICIOUS', '0.70'))     # healthy-bayes thresholds
 THR_SUSPICIOUS    = float(os.environ.get('SENTINEL_THR_SUSPICIOUS', '0.40'))
@@ -1010,6 +1010,10 @@ class SentinelEngine:
         self.calibrator = IsotonicCalibrator()
         self.version = 0
         self.last_trained = ''
+        # True when the Bayes head is non-discriminative (saturated high) —
+        # set by assess_bayes_health() from its own recent output. Down-weights
+        # bayes in the ensemble (see predict()).
+        self._bayes_saturated = False
 
         # Ensemble weights (defaults, updated by training)
         self.w_bayes = 0.5
@@ -1057,15 +1061,10 @@ class SentinelEngine:
         # Heuristic score (rule-based, always available)
         heuristic_score = self._heuristic_score(evidence, temporal)
 
-        # Is the calibrated Bayes head saturated? (degenerate calibration maps
-        # neutral evidence to ~certainty → floods the ensemble, over-flags
-        # everything.) Probe the curve at a neutral raw score. Cheap, per-score.
-        bayes_saturated = False
-        try:
-            if self.calibrator.bins:
-                bayes_saturated = self.calibrator.calibrate(0.5) > BAYES_SAT_PROBE
-        except Exception:
-            pass
+        # Bayes head saturated? (set once per load by assess_bayes_health from
+        # the head's own recent output mean — see that method for why a
+        # per-score calibrator probe is the WRONG signal.)
+        bayes_saturated = self._bayes_saturated
 
         # Ensemble — down-weight Bayes when single-class OR saturated, so the
         # discriminative heuristic + isolation-forest drive the verdict, and
@@ -1510,10 +1509,56 @@ class SentinelEngine:
                     self.w_heuristic = loaded.w_heuristic
                     logger.info(f"Loaded SENTINEL model v{self.version} "
                                  f"({self.gnb.total_samples} samples)")
+                    self.assess_bayes_health()
                     return True
             except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 continue
         return False
+
+    def assess_bayes_health(self) -> None:
+        """Decide whether the Bayes head is non-discriminative (saturated high)
+        by measuring its OWN recent output mean from sentinel_evidence.
+
+        Why not probe the calibrator? The calibrator is monotonic and fine
+        (calibrate(0.5)~0.31). The collapse is upstream: the GNB emits high RAW
+        scores for almost every IP (clean and threat alike), which the
+        calibrator faithfully maps to ~0.96. A healthy, discriminative head has
+        a balanced mean (~0.3-0.5); a mean above BAYES_SAT_MEAN means it's
+        calling nearly everyone malicious → its signal is noise and must be
+        down-weighted. Self-heals: once a retrain spreads the outputs, the mean
+        drops and full weight is restored on the next load."""
+        try:
+            # LATEST score per IP — the current model's per-IP behaviour (what
+            # the verdict population reflects). A raw avg over all rows is
+            # polluted by trusted-IP zeros + stale low-bayes history (0.10 vs
+            # the real 0.96), so it would miss the saturation.
+            row = ch_query(
+                f"SELECT avg(b) AS m, count() AS n FROM ("
+                f" SELECT src_ip, argMax(bayes_score, timestamp) AS b "
+                f" FROM {CH_DB}.sentinel_evidence "
+                f" WHERE timestamp >= now() - INTERVAL 7 DAY "
+                f" GROUP BY src_ip)"
+            )
+            mean_b, n = None, 0
+            for line in (row or '').strip().split('\n'):
+                if line:
+                    d = json.loads(line)
+                    mean_b = float(d.get('m') or 0.0)
+                    n = int(d.get('n') or 0)
+                    break
+            # Need a meaningful sample before trusting the verdict either way.
+            if n >= 100 and mean_b is not None:
+                self._bayes_saturated = mean_b > BAYES_SAT_MEAN
+                logger.info(
+                    "Bayes health: recent mean=%.3f over %d → %s",
+                    mean_b, n,
+                    "SATURATED (down-weighting bayes, de-flooded thresholds)"
+                    if self._bayes_saturated else "healthy")
+            else:
+                self._bayes_saturated = False
+        except Exception as e:
+            logger.warning("assess_bayes_health failed (assuming healthy): %s", e)
+            self._bayes_saturated = False
 
 
 def _collect_historical_evidence(ip: str, verdict_ts: str = '',
@@ -1630,6 +1675,10 @@ def scoring_cycle(engine: SentinelEngine) -> dict:
     3. Write results to sentinel_evidence
     4. Return summary statistics
     """
+    # Re-check Bayes-head health each cycle so the down-weighting self-heals
+    # once a retrain spreads the outputs (no restart needed).
+    engine.assess_bayes_health()
+
     evidence_batch = collect_evidence_batch(SCORING_INTERVAL)
     if not evidence_batch:
         return {'scored': 0}
