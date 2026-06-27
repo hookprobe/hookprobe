@@ -70,6 +70,94 @@ CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
 CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
 CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
 
+# ----------------------------------------------------------------------------
+# Enforcement allowlist guard
+# ----------------------------------------------------------------------------
+# The Neural-Kernel was blackholing IPs it should never touch: the operator's
+# own live SSH session, public DNS resolvers (1.1.1.1), and RFC-1918 hosts.
+# A `cognitive_throttle` that drops the management SSH session looks exactly
+# like "SSH is down" (XDP drops the packets in-kernel before sshd sees them).
+#
+# Two-layer exemption, checked BEFORE any block/throttle reaches hydra_blocks:
+#   1. Canonical trusted-network allowlist (core/hydra/trusted_networks.py) —
+#      same source SENTINEL/anomaly already honour.
+#   2. Live SSH-session guard — any IP with an ESTABLISHED connection to local
+#      port 22 is exempt. Management IPs are dynamic (Vodafone DHCP) and will
+#      never be in a static allowlist, so the allowlist alone can't protect
+#      them. The predictor container runs host-networked, so /proc/net/tcp[6]
+#      shows the host's real sshd peers.
+import ipaddress as _ipaddress
+
+try:
+    from trusted_networks import is_trusted as _is_trusted_net
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import is_trusted as _is_trusted_net
+    except ImportError:
+        _is_trusted_net = None
+
+
+def _hex_to_ip(hex_addr: str, ipv6: bool):
+    """Decode a /proc/net/tcp[6] address field (little-endian hex) to an IP.
+
+    IPv4-mapped IPv6 peers (::ffff:a.b.c.d) collapse to their dotted IPv4 so
+    they match the dotted-quad IPs the enforcer works with.
+    """
+    try:
+        raw = bytes.fromhex(hex_addr)
+        if ipv6:
+            # 4 little-endian 32-bit words → network byte order
+            raw = b''.join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+            addr = _ipaddress.IPv6Address(raw)
+            return str(addr.ipv4_mapped or addr)
+        return str(_ipaddress.IPv4Address(raw[::-1]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _ssh_peer_ips() -> set:
+    """Remote IPs with an ESTABLISHED connection to local TCP port 22.
+
+    Parses /proc/net/tcp (st '01' = ESTABLISHED, local port 0x16 = 22). Best
+    effort: any read/parse error yields a smaller set, never an exception — a
+    miss only means we fall back to the allowlist for that IP.
+    """
+    peers: set = set()
+    for path, ipv6 in (('/proc/net/tcp', False), ('/proc/net/tcp6', True)):
+        try:
+            with open(path) as fh:
+                next(fh, None)  # skip header
+                for line in fh:
+                    cols = line.split()
+                    if len(cols) < 4 or cols[3] != '01':  # ESTABLISHED only
+                        continue
+                    local, remote = cols[1], cols[2]
+                    try:
+                        if int(local.rsplit(':', 1)[1], 16) != 22:
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+                    ip = _hex_to_ip(remote.rsplit(':', 1)[0], ipv6)
+                    if ip:
+                        peers.add(ip)
+        except (OSError, StopIteration):
+            continue
+    return peers
+
+
+def _is_enforcement_exempt(ip: str, ssh_peers: set) -> Optional[str]:
+    """Return a reason string if `ip` must NOT be blocked/throttled, else None."""
+    if ip in ssh_peers:
+        return 'live SSH session'
+    if _is_trusted_net is not None:
+        try:
+            if _is_trusted_net(ip):
+                return 'trusted network'
+        except Exception:
+            pass
+    return None
+
+
 # OpenRouter configuration
 # Phase 10: Updated model defaults to working free-tier models (April 2026).
 # Previous defaults (deepseek-r1t2-chimera, nemotron-3-nano) returned 404.
@@ -675,11 +763,32 @@ class ActionEnforcer:
         enforced = 0
         now_ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
+        # Snapshot live SSH peers once per batch (one /proc read, not per-action)
+        # so a single cycle can't drop the operator's own session.
+        ssh_peers = _ssh_peer_ips()
+
         for action in actions:
             act = action.get('action', 'monitor')
             ip = action.get('ip', '')
             if not ip:
                 continue
+
+            # Allowlist + live-SSH guard: never blackhole trusted infra or the
+            # management session. Downgrade to an audit verdict so the decision
+            # is still visible on the dashboard, but nothing reaches XDP.
+            if act in ('block_ip', 'block_subnet', 'throttle'):
+                exempt = _is_enforcement_exempt(ip, ssh_peers)
+                if exempt:
+                    logger.warning(
+                        f"SUPPRESSED {act} for {ip} — {exempt} "
+                        f"(allowlist/SSH guard, no XDP enforcement)")
+                    try:
+                        self._write_verdict(action, now_ts,
+                                            action_taken=f'suppressed:{exempt}')
+                    except Exception as e:
+                        logger.error(f"Verdict write failed for {ip}: {e}")
+                    enforced += 1
+                    continue
 
             try:
                 if act in ('block_ip', 'block_subnet'):
