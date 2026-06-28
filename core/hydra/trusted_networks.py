@@ -27,6 +27,9 @@ TRUSTED_NETWORKS: List[IPNetwork] = [
     ipaddress.ip_network('160.79.104.0/23'),    # Anthropic (Claude Code SSH egress)
     ipaddress.ip_network('213.233.111.0/24'),   # Vodafone Romania (owner ISP — Bucharest)
     ipaddress.ip_network('46.97.153.0/24'),     # Vodafone Romania (owner ISP — Giurgiu)
+    ipaddress.ip_network('84.232.173.0/24'),    # RCS&RDS / Digi Romania (owner ISP — *.rdsnet.ro)
+    ipaddress.ip_network('213.233.110.0/24'),   # xnet.ro (owner ISP — *.xnet.ro broadband)
+    ipaddress.ip_network('132.145.236.0/24'),   # Oracle Cloud (OCI mgmt jump host — accepted SSH)
     ipaddress.ip_network('209.249.57.0/24'),    # Mitel Networks
     # Cloud/infra
     ipaddress.ip_network('169.254.0.0/16'),     # Link-local / OCI metadata
