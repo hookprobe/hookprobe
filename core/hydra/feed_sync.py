@@ -127,6 +127,23 @@ TRUSTED_CIDRS = [
     '8.8.4.0/24',
 ]
 
+# Anti-drift union: fold in the CANONICAL allowlist (core/hydra/trusted_networks.py,
+# the single source of truth shared with cognitive-defense / SENTINEL / anomaly).
+# Maintaining this list separately is exactly what drifted on 2026-06-28 and let
+# xdp_synwall ENFORCE XDP-drop the operator's own SSH. Anything added to
+# trusted_networks.py now flows here automatically. The hardcoded list above stays
+# as the base + fallback (feed-specific Cloudflare CDN / Ubuntu mirrors live only
+# here), so an import failure can never empty the allowlist and re-lock admin.
+try:
+    from trusted_networks import TRUSTED_NETWORKS as _CANON_NETS
+    TRUSTED_CIDRS = sorted(set(TRUSTED_CIDRS) | {str(n) for n in _CANON_NETS})
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import TRUSTED_NETWORKS as _CANON_NETS
+        TRUSTED_CIDRS = sorted(set(TRUSTED_CIDRS) | {str(n) for n in _CANON_NETS})
+    except ImportError:
+        pass  # keep the hardcoded list as-is — never leave the allowlist empty
+
 # Feed definitions
 FEEDS = [
     {
