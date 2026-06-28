@@ -486,15 +486,15 @@ int xdp_synwall_filter(struct xdp_md *ctx)
     }
 
     /* ---- SSH management lifeline ----
-     * Never XDP-drop inbound SSH (dst port 22). Blocklist/RPF/SYN-rate checks
-     * below still EMIT events (full visibility) but cannot blackhole port 22:
-     * a threat-feed false-positive on the operator's dynamic ISP IP must never
-     * lock admin out of the box. sshd (pubkey-only auth) + the host nft
-     * new-connection rate limit remain the real SSH controls. Demoting to
-     * monitor for this packet leaves enforcement fully intact on every other
-     * port (web/services still drop blocklisted/spoofed sources). */
-    if (dst_port == 22)
-        enforce = 0;
+     * For inbound SSH (dst port 22) we still DROP known-bad sources via the
+     * blocklist (STEP 3) so scanners don't even reach sshd — but we exempt SSH
+     * from the heuristic RPF (STEP 4) and SYN-rate (STEP 5) checks, which can
+     * false-positive on legit admin traffic and would blackhole the operator.
+     * The operator's own source ranges are in sw_allowlist (STEP 1, checked
+     * before the blocklist), so a threat-feed false-positive on a dynamic ISP
+     * IP can never lock admin out. sshd is pubkey-only and the host nft
+     * new-conn rate limit is the SSH brute-force control. */
+    int ssh_lenient = (dst_port == 22);
 
     /* ---- STEP 1: Allowlist (trusted IPs bypass everything) ---- */
     struct lpm_key lpm = { .prefixlen = 32, .addr = src_ip };
@@ -542,7 +542,7 @@ int xdp_synwall_filter(struct xdp_md *ctx)
                    iph->protocol, SYNWALL_EVENT_RPF_FAIL,
                    reason, tcp_flags, 0);
 
-        if (enforce) {
+        if (enforce && !ssh_lenient) {
             inc_stat(STAT_DROPPED);
             return XDP_DROP;
         }
@@ -560,7 +560,7 @@ int xdp_synwall_filter(struct xdp_md *ctx)
                        IPPROTO_TCP, SYNWALL_EVENT_SYN_FLOOD,
                        REASON_SYN_RATE, tcp_flags, syn_rate);
 
-            if (enforce) {
+            if (enforce && !ssh_lenient) {
                 inc_stat(STAT_DROPPED);
                 return XDP_DROP;
             }
