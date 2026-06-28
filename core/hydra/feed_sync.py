@@ -72,6 +72,14 @@ TRUSTED_CIDRS = [
     # Owner's ISP (Vodafone Romania)
     '213.233.111.0/24',
     '46.97.153.0/24',
+    # Owner's ISPs — added 2026-06-28: these were in a threat feed and got pushed
+    # to sw_blocklist, so xdp_synwall ENFORCE mode XDP-dropped the operator's own
+    # SSH from these dynamic IPs (timed out with no sshd/nft trace). Allowlist is
+    # checked before the blocklist in xdp_synwall, so this bypasses the drop.
+    # Keep in sync with core/hydra/trusted_networks.py.
+    '84.232.173.0/24',   # RCS&RDS / Digi Romania (*.rdsnet.ro)
+    '213.233.110.0/24',  # xnet.ro broadband (*.xnet.ro)
+    '132.145.236.0/24',  # Oracle Cloud (OCI mgmt jump host)
     # Anthropic (Claude Code SSH)
     '160.79.104.0/23',
     # Mitel Networks
