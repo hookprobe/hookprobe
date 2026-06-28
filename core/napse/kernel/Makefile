@@ -10,7 +10,10 @@ CLANG ?= clang
 LLC ?= llc
 ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 
-BPF_CFLAGS := -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
+# -g is REQUIRED: it emits the .BTF section. Without it `ip link set ... xdp obj`
+# rejects the object ("BTF is required, but is missing or corrupted") and the
+# WAN comes up with no synwall at boot. Do not drop -g.
+BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) \
     -Wall -Werror \
     -I/usr/include/$(shell uname -m)-linux-gnu
 
