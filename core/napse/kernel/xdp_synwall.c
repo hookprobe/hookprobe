@@ -485,6 +485,17 @@ int xdp_synwall_filter(struct xdp_md *ctx)
         }
     }
 
+    /* ---- SSH management lifeline ----
+     * Never XDP-drop inbound SSH (dst port 22). Blocklist/RPF/SYN-rate checks
+     * below still EMIT events (full visibility) but cannot blackhole port 22:
+     * a threat-feed false-positive on the operator's dynamic ISP IP must never
+     * lock admin out of the box. sshd (pubkey-only auth) + the host nft
+     * new-connection rate limit remain the real SSH controls. Demoting to
+     * monitor for this packet leaves enforcement fully intact on every other
+     * port (web/services still drop blocklisted/spoofed sources). */
+    if (dst_port == 22)
+        enforce = 0;
+
     /* ---- STEP 1: Allowlist (trusted IPs bypass everything) ---- */
     struct lpm_key lpm = { .prefixlen = 32, .addr = src_ip };
     __u8 *allowed = bpf_map_lookup_elem(&sw_allowlist, &lpm);
