@@ -1742,6 +1742,19 @@ setup_network() {
     log_info "  Mirror:   Traffic mirroring to QSecBit enabled"
     log_info "  sFlow:    Flow export to 127.0.0.1:6343"
     log_info "  IPFIX:    Flow export to 127.0.0.1:4739"
+
+    # Optional direct-fiber WAN: PPPoE + IPv6-PD + LAN RA + WAN firewall.
+    # Activated only when the operator has dropped /etc/hookprobe/wan-pppoe.conf
+    # (holds ISP credentials; see devices/common/wan-pppoe.conf.example). This
+    # replaces the default DHCP-on-NIC WAN with PPPoE on ppp0. No-op otherwise,
+    # so the default install path is unaffected.
+    local pppoe_conf="/etc/hookprobe/wan-pppoe.conf"
+    local pppoe_setup="${DEVICES_DIR}/common/wan-pppoe-setup.sh"
+    if [ -f "$pppoe_conf" ] && [ -f "$pppoe_setup" ]; then
+        log_info "Direct-fiber WAN config found - setting up PPPoE + IPv6-PD..."
+        chmod +x "$pppoe_setup"
+        "$pppoe_setup" "$pppoe_conf" || log_warn "PPPoE/IPv6 WAN setup had issues (see wan-pppoe-setup logs)"
+    fi
 }
 
 # Validate network setup and report issues
@@ -2641,6 +2654,15 @@ install_vlan_service() {
         log_warn "  ovs-post-setup.sh not found at $ovs_post_src"
         return 1
     fi
+
+    # Install direct-fiber WAN (PPPoE + IPv6-PD) setup script + config example
+    for f in wan-pppoe-setup.sh wan-pppoe.conf.example; do
+        if [ -f "${DEVICES_DIR}/common/$f" ]; then
+            cp "${DEVICES_DIR}/common/$f" "$install_base/$f"
+            [ "${f##*.}" = "sh" ] && chmod +x "$install_base/$f"
+            log_info "  Installed: $f"
+        fi
+    done
 
     # Install WAN path selector (dual-path AF_XDP/TC-BPF monitoring)
     local wan_path_src="${DEVICES_DIR}/common/wan-path-selector.sh"
