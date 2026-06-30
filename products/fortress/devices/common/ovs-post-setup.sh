@@ -316,6 +316,17 @@ configure_openflow() {
     # Required for device discovery, AirPlay, HomeKit, smart home protocols
     ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL"
 
+    # Priority 900/899: RA-Guard. Only the Fortress itself (LOCAL port, where
+    # dnsmasq emits Router Advertisements) may advertise routes. Apple HomePod /
+    # Apple TV act as Thread/HomeKit border routers and emit RAs; a rogue or
+    # misconfigured device can too. Such RAs pollute LAN clients' default route
+    # and prefix list (clients may pick the wrong router or a stale prefix).
+    # Drop RA (ICMPv6 type 134) and Redirect (137) ingressing from any client
+    # port; allow only from LOCAL. Sits above the priority=700 IPv6 NORMAL rule.
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,icmp6,icmpv6_type=134,in_port=LOCAL,actions=NORMAL"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=899,icmp6,icmpv6_type=134,actions=drop"
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=899,icmp6,icmpv6_type=137,actions=drop"
+
     # Priority 700: Allow IPv6 multicast (essential for HomeKit, HomePod, AirPlay)
     # IPv6 multicast uses Ethernet addresses starting with 33:33:xx:xx:xx:xx
     # This covers ff02::fb (mDNS), ff02::1 (all-nodes), ff02::2 (all-routers)
