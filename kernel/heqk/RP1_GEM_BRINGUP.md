@@ -138,3 +138,32 @@ the `:4444` DROP work on metal. `poll_rx` copies the whole buffer when `desc_len
 Kept: DMACFG=0x40200710 (clean 3-frame datapath) + the recycle write-discipline
 hardening. Deferred: exact hardware length is a metadata-only gap; revisit under the
 K1 non-cacheable-descriptor rework if it ever matters (it does not for correctness).
+
+## #1 (w1=0) — ACTUALLY FIXED (2026-07-21), via the Linux oracle
+Earlier "closed as a quirk" was WRONG. Booting the mainline `macb` driver
+(hookprobe-edge 6.12.94, extracted from ~/hookprobe-os and run on THIS CM5)
+proved w1 IS writable here: end0 obtained a DHCP lease (10.200.0.6) with
+rx_length_errors=0. Reading the exact kernel source + iterating on metal gave the
+COMPLETE recipe (all four required, matching mainline macb exactly):
+
+1. **DMACFG = 0x70200710** — ADDR64(30) | RXEXT(28) | TXEXT(29) | RXBMS(9:8=3) |
+   TXPBMS(10) | RXBS(2048/64) | FBLDO(16). RXEXT/TXEXT put the GEM in extended-BD
+   mode (this PTP-capable GEM registers a gem-ptp-timer, so macb uses it).
+2. **6-word (24-byte) descriptors** — {addr_lo, ctrl} + {addr_hi, resvd} + {ts_1,
+   ts_2}. Extended-BD widens the descriptor; the ring stride MUST match.
+3. **Non-cacheable descriptor ring** — matches macb's dma_alloc_coherent. HEQK maps
+   a Normal-NC alias (mmu_cm5 GB257, MAIR attr2=0x44) and touches descriptors ONLY
+   through it, so the GEM's status writeback is coherent (no cache-clean clobber).
+4. **NCFGR DBW128 (bits22:21=2)** — the RP1 GEM is a 128-bit AXI4 master;
+   macb_init_hw() sets it from DCFG1. THE final key: DBW=0 (32-bit) let the narrow
+   16-byte ring work but broke the WIDE extended descriptor DMA (1 frame, w1=0).
+   With DBW128: NCFGR=0x00580412.
+
+VERIFIED ON METAL: `w1=0x0000c072` on a 114B frame = EOF|SOF|len(114) — exact
+match; also 218/64/94. **3 frames RX'd**, real per-frame lengths, no fallback.
+**P7a inline IPS enforcement live**: benign UDP->:53 FORWARDED on the wire
+(tx_ctrl=0xc000802a, HW USED set), threat UDP->:4444 DROPPED (not forwarded).
+
+Credit: the user's insistence on booting Linux to OBSERVE (not guess) is what
+turned a 5th failed guess into the exact fix. The 16-byte "cosmetic quirk"
+framing was a dead end; DBW + extended-BD + NC descriptors is the real answer.
