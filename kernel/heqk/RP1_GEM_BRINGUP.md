@@ -71,10 +71,17 @@ corruption; the DTB gave the exact constant.
 - ✓ PHY alive over MDIO at **addr 0**: ID 0x600d84a2 (Broadcom BCM54210).
 - ✓ **PHY LINK UP**: BMSR(reg1)=0x796d bit2=1, autoneg complete, gigabit partner.
   Cable is on the correct end0 port (the RJ45 nearest the USB-C).
-- ✗ **BLOCKER**: MAC receives nothing (RSR=0) and eth_cfg.STATUS RGMII-link=0
-  despite the PHY link being up → RGMII data path PHY→MAC not delivering.
-  Suspects (research in flight): rgmii-id internal delay not set on the BCM54210
-  (RX/TX skew), MAC not in gigabit mode (NCFGR GBE), or RP1 eth_cfg speed setting.
+- ✓ **RGMII/gigabit FIXED** (gigabit mode + rgmii-id delays + eth_cfg override):
+  auxstat speed_code=7 (1000/full), gigabit=true, and **RSR went 0 → 0x1 → 0x5**
+  (BNA + OVR). The MAC now RECEIVES frames — they reach the DMA engine.
+- ✗ **NEW BLOCKER (predicted): DMA can't land frames — RSR.BNA (buffer not
+  available) + OVR (overrun).** The BCM2712 PCIe RC2 (RP1's, pcie@1000120000 →
+  0x1000120000) INBOUND window/ATU that maps PCIe bus 0x10_00000000 → system
+  RAM 0x0 is NOT programmed. Firmware sets the OUTBOUND window (MMIO/UART work)
+  but not inbound (RP1→RAM DMA), so the GEM's descriptor/buffer DMA fails → BNA.
+  FIX: program the brcmstb RC2 inbound BAR (PCIE_MISC_RC_BAR*) for the 64 GiB
+  dma-range. RC2 is already link-trained by firmware (pciex4_reset=0) — only the
+  inbound window is missing, not the full link bring-up.
 
 ## MDIO helpers implemented (arch/gem.rs)
 phy_read/phy_write via GEM MAN (0x034) + NSR IDLE poll; NCR.MPE + NCFGR MDC/128.
