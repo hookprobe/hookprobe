@@ -119,16 +119,14 @@ impl hal::Mmu for Mmu {
         let free_start = align_up(unsafe { addr_of!(__stack_top) as usize }, PAGE);
         FRAME_NEXT.store(free_start, Ordering::Relaxed);
 
-        // Identity map: GB0 = device (MMIO), GB1 = normal RAM. BOTH EL1-only —
-        // making kernel RAM EL0-accessible breaks privileged access at EL1.
-        // EL0 user code/stack get their OWN pages via `map_user_page` (P3).
+        // Identity map: GB0 = device (MMIO), GB1 = normal RAM — both EL1-only.
+        // GB1 is built with W^X (P7b): kernel `.text` RO+X, all other RAM RW+PXN.
         let l1 = l1_ptr();
         unsafe {
-            // Device/MMIO must never be executable (PXN|UXN) — nothing runs from
-            // it, and leaving it executable is a needless code-exec surface.
+            // Device/MMIO must never be executable (PXN|UXN).
             write_volatile(l1.add(0), block_desc(0, ATTR_DEVICE, 0, AP_RW_EL1) | PXN | UXN);
-            write_volatile(l1.add(1), block_desc(RAM_BASE, ATTR_NORMAL, SH_IS, AP_RW_EL1));
         }
+        self.build_wx_ram(RAM_BASE, 1); // GB1 (L1 slot 1) = W^X RAM
     }
 
     fn enable(&self) {
@@ -155,7 +153,9 @@ impl hal::Mmu for Mmu {
             core::arch::asm!("isb");
             let mut sctlr: u64;
             core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr);
-            sctlr |= (1 << 0) | (1 << 2) | (1 << 12); // M | C | I
+            // M | C | I, plus WXN (bit 19): any writable page is forced execute-
+            // never — the hardware W^X backstop on top of the per-page PXN (P7b).
+            sctlr |= (1 << 0) | (1 << 2) | (1 << 12) | (1 << 19);
             core::arch::asm!("msr sctlr_el1, {}", in(reg) sctlr);
             core::arch::asm!("isb");
         }
@@ -178,6 +178,77 @@ impl hal::Mmu for Mmu {
 }
 
 impl Mmu {
+    /// P7b — build one 1 GiB RAM region (`gb_base`, installed at L1 slot `l1_idx`)
+    /// as an L2 table of 2 MiB Normal RW+PXN blocks, EXCEPT the 2 MiB block that
+    /// holds the kernel image, which becomes an L3 table with **W^X**: pages in
+    /// `[__text_start,__text_end)` are RO+X (EL1 code), everything else RW+PXN.
+    /// Built with the MMU off (identity), so there is no break-before-make.
+    fn build_wx_ram(&self, gb_base: usize, l1_idx: usize) {
+        extern "C" {
+            static __text_start: u8;
+            static __text_end: u8;
+        }
+        let text_start = unsafe { addr_of!(__text_start) as usize };
+        let text_end = unsafe { addr_of!(__text_end) as usize };
+        const M2: usize = 2 << 20; // 2 MiB
+        let l2 = self.alloc_frame_raw();
+        if l2 == 0 {
+            return;
+        }
+        // Which 2 MiB block within this GB holds the kernel .text.
+        let kern_blk = (text_start - gb_base) / M2;
+        for b in 0..512usize {
+            let base = gb_base + b * M2;
+            if b == kern_blk {
+                let l3 = self.alloc_frame_raw();
+                if l3 == 0 {
+                    return;
+                }
+                for p in 0..512usize {
+                    let va = base + p * PAGE;
+                    // Kernel .text: RO + EL1-executable (UXN, not PXN). Else RW + non-exec.
+                    let (ap, xn) = if va >= text_start && va < text_end {
+                        (AP_RO_EL1, UXN)
+                    } else {
+                        (AP_RW_EL1, UXN | PXN)
+                    };
+                    let desc =
+                        (va as u64 & ADDR_MASK) | (ATTR_NORMAL << 2) | AF | SH_IS | ap | xn | PAGE_DESC;
+                    unsafe { write_volatile((l3 as *mut u64).add(p), desc) };
+                }
+                unsafe { write_volatile((l2 as *mut u64).add(b), l3 as u64 | VALID | TABLE) };
+            } else {
+                // Plain RAM: 2 MiB Normal RW + non-executable block.
+                let desc = block_desc(base, ATTR_NORMAL, SH_IS, AP_RW_EL1) | PXN | UXN;
+                unsafe { write_volatile((l2 as *mut u64).add(b), desc) };
+            }
+        }
+        unsafe { write_volatile(l1_ptr().add(l1_idx), l2 as u64 | VALID | TABLE) };
+    }
+
+    /// Read back the L3 page descriptor for a VA (for W^X proof). Returns the raw
+    /// descriptor, or 0 if not L3-mapped. AP bits [7:6], PXN bit 53, UXN bit 54.
+    pub fn page_desc(&self, va: usize) -> u64 {
+        let i1 = (va >> 30) & 0x1FF;
+        let i2 = (va >> 21) & 0x1FF;
+        let i3 = (va >> 12) & 0x1FF;
+        let l1 = l1_ptr();
+        let e1 = unsafe { read_volatile(l1.add(i1)) };
+        if e1 & VALID == 0 || e1 & TABLE == 0 {
+            return 0;
+        }
+        let l2 = (e1 & ADDR_MASK) as *const u64;
+        let e2 = unsafe { read_volatile(l2.add(i2)) };
+        if e2 & VALID == 0 {
+            return 0;
+        }
+        if e2 & TABLE == 0 {
+            return e2; // 2 MiB block — AP/PXN bits are in the same positions as a page
+        }
+        let l3 = (e2 & ADDR_MASK) as *const u64;
+        unsafe { read_volatile(l3.add(i3)) }
+    }
+
     /// Common page mapper (4 KiB, L3), with explicit access permission + XN.
     /// `uxn` = non-executable at EL0, `pxn` = non-executable at EL1.
     fn map(&self, va: usize, pa: usize, attr: u64, ap: u64, uxn: bool, pxn: bool) -> bool {

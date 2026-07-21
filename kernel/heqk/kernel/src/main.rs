@@ -449,6 +449,27 @@ pub extern "C" fn kmain() -> ! {
         kprint!(" mmu: FAIL\n");
         arch_aarch64::semihosting::exit(1);
     }
+    // --- P7b: W^X proof — read back the page descriptors ---------------------
+    // Kernel .text must be RO(AP=0b10)+executable(PXN=0); data/stack RW(AP=0b00)+
+    // PXN=1. SCTLR.WXN is on (writable ⇒ execute-never), so the mere fact that the
+    // kernel is executing here already proves .text is a valid RO+X mapping.
+    extern "C" {
+        static __text_start: u8;
+    }
+    let text_va = unsafe { core::ptr::addr_of!(__text_start) as usize };
+    let data_va = core::ptr::addr_of!(text_va) as usize; // a stack address (RW data)
+    let td = mmu.page_desc(text_va);
+    let dd = mmu.page_desc(data_va);
+    let ap = |d: u64| (d >> 6) & 3;
+    let pxn = |d: u64| (d >> 53) & 1;
+    let wx_ok = ap(td) == 0b10 && pxn(td) == 0 && ap(dd) == 0b00 && pxn(dd) == 1;
+    kprint!(
+        " wx : .text {:#x} AP={:#b} PXN={} | data {:#x} AP={:#b} PXN={}\n",
+        text_va, ap(td), pxn(td), data_va, ap(dd), pxn(dd)
+    );
+    kprint!(" [P7b] W^X {} (kernel .text RO+X, data RW+PXN, SCTLR.WXN on)\n",
+        if wx_ok { "PASS" } else { "FAIL" });
+
     // Frame allocator now has a free list: free then re-alloc returns the frame.
     let f1 = mmu.alloc_frame();
     mmu.free_frame(f1);
