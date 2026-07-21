@@ -305,6 +305,17 @@ impl Mmu {
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RW_EL0, true, true)
     }
 
+    /// Map an EL0 RO+X code page into a specific address space.
+    pub fn map_user_code_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RO_EL0, false, true)
+    }
+
+    /// Map an EL0 device-MMIO window into a specific address space (a driver's
+    /// capability to touch exactly one device — Device memory, EL0 RW, non-exec).
+    pub fn map_user_device_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        self.map_in_root(l1_root as *mut u64, va, pa, ATTR_DEVICE, AP_RW_EL0, true, true)
+    }
+
     /// The kernel/global address-space L1 root (ASID 0).
     pub fn kernel_l1(&self) -> usize {
         l1_ptr() as usize
@@ -313,11 +324,21 @@ impl Mmu {
     /// Switch the active address space: `TTBR0_EL1 = l1_root | (asid << 48)`,
     /// then `isb`. No TLB flush — the ASID tag keeps the two spaces' entries apart.
     pub fn switch_ttbr0(&self, l1_root: usize, asid: u16) {
-        let ttbr0 = l1_root as u64 | ((asid as u64) << 48);
+        self.set_ttbr0_raw(l1_root as u64 | ((asid as u64) << 48));
+    }
+
+    /// Write a raw TTBR0_EL1 value (root | ASID<<48) + `isb`. The scheduler uses
+    /// this to enter each thread's address space on context switch.
+    pub fn set_ttbr0_raw(&self, ttbr0: u64) {
         unsafe {
             core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr0);
             core::arch::asm!("isb");
         }
+    }
+
+    /// The kernel/global address space's TTBR0 value (kernel L1 | ASID 0).
+    pub fn kernel_ttbr0(&self) -> u64 {
+        l1_ptr() as u64
     }
 
     /// User CODE page: EL0 read-only + EL0-executable (**W^X**), EL1-non-exec

@@ -14,6 +14,9 @@ static mut SP: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut PRIO: [u8; MAX_THREADS] = [0; MAX_THREADS];
 static mut ALIVE: [bool; MAX_THREADS] = [false; MAX_THREADS];
 static mut BLOCKED: [bool; MAX_THREADS] = [false; MAX_THREADS]; // waiting on IPC
+// P7c step 3 — per-thread address space: raw TTBR0 value (page-table root | ASID
+// << 48). 0 = the kernel/identity space (the arch switches to its own default).
+static mut TTBR0: [u64; MAX_THREADS] = [0; MAX_THREADS];
 static mut NUM: usize = 0;
 static mut CUR: usize = 0;
 
@@ -27,8 +30,15 @@ pub fn init() {
     }
 }
 
-/// Register a runnable thread by initial stack pointer + priority. Before IRQs on.
+/// Register a runnable thread by initial stack pointer + priority (kernel address
+/// space). Before IRQs on.
 pub fn spawn(sp: usize, prio: u8) {
+    spawn_as(sp, prio, 0);
+}
+
+/// Register a runnable thread that runs in a specific address space (raw TTBR0 =
+/// root | ASID<<48; 0 = kernel space). Used for isolated EL0 driver servers.
+pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) {
     unsafe {
         let n = addr_of!(NUM).read();
         if n >= MAX_THREADS {
@@ -37,7 +47,16 @@ pub fn spawn(sp: usize, prio: u8) {
         addr_of_mut!(SP).cast::<usize>().add(n).write(sp);
         addr_of_mut!(PRIO).cast::<u8>().add(n).write(prio);
         addr_of_mut!(ALIVE).cast::<bool>().add(n).write(true);
+        addr_of_mut!(TTBR0).cast::<u64>().add(n).write(ttbr0);
         addr_of_mut!(NUM).write(n + 1);
+    }
+}
+
+/// The TTBR0 (address space) of the currently-running thread (0 = kernel space).
+pub fn current_ttbr0() -> u64 {
+    unsafe {
+        let cur = addr_of!(CUR).read();
+        addr_of!(TTBR0).cast::<u64>().add(cur).read()
     }
 }
 

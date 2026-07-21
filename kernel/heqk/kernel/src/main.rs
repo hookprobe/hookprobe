@@ -649,17 +649,25 @@ fn el0_preempt_spawn() {
         core::ptr::write_volatile(cnt as *mut u64, 0);
     }
     arch_aarch64::mmu::sync_instruction_cache(code, len);
-    const ECODE_VA: usize = 0xD300_0000;
-    const ESTACK_VA: usize = 0xD300_1000;
-    const ECNT_VA: usize = 0xD300_2000;
-    mmu.map_user_code_page(ECODE_VA, code);
-    mmu.map_user_data_page(ESTACK_VA, stack);
-    mmu.map_user_data_page(ECNT_VA, cnt);
-    EL0_CNT_PA.store(cnt, Ordering::SeqCst);
+    // Run the EL0 task in its OWN address space (its own ASID) — full isolation:
+    // its pages exist only in this AS, in GB2 (unmapped in the kernel L1, so this
+    // AS gets its own tables). The scheduler switches TTBR0 to this AS to run it.
+    let (l1, asid) = mmu.new_addr_space();
+    if l1 == 0 {
+        return;
+    }
+    const ECODE_VA: usize = 0x8200_0000;
+    const ESTACK_VA: usize = 0x8200_1000;
+    const ECNT_VA: usize = 0x8200_2000;
+    mmu.map_user_code_in(l1, ECODE_VA, code);
+    mmu.map_user_data_in(l1, ESTACK_VA, stack);
+    mmu.map_user_data_in(l1, ECNT_VA, cnt);
+    EL0_CNT_PA.store(cnt, Ordering::SeqCst); // kernel reads the counter via its physical frame
     let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + 0x4000 };
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ECODE_VA, ESTACK_VA + 0x1000, ECNT_VA);
-    scheduler::spawn(sp, 1); // low prio: runs once the finite kernel workers are done
-    kprint!(" [P7c] EL0 task spawned (uncooperative loop @EL0, IRQs on) — must be preempted\n");
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    scheduler::spawn_as(sp, 1, ttbr0); // low prio, in its own address space (ASID)
+    kprint!(" [P7c] EL0 task spawned in its OWN address space (asid={}) — preemptible + isolated\n", asid);
 }
 
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
@@ -673,6 +681,15 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
         arch_aarch64::GenericTimer.rearm();
         let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
         let next = scheduler::on_tick(sp);
+        // P7c step 3: enter the next thread's address space (its own ASID for an
+        // isolated EL0 driver server; the kernel/identity space otherwise). CM5
+        // threads are all kernel-space, so this is QEMU-only for now.
+        #[cfg(not(feature = "cm5"))]
+        {
+            let mmu = arch_aarch64::Mmu;
+            let t = scheduler::current_ttbr0();
+            mmu.set_ttbr0_raw(if t != 0 { t } else { mmu.kernel_ttbr0() });
+        }
         gic.eoi(intid);
         if scheduler::alive_workers() == 0 || n >= RUN_TICKS {
             #[cfg(not(feature = "cm5"))]
