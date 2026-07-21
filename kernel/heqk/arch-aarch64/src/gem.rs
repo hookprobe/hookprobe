@@ -582,6 +582,20 @@ pub fn rxring_pa() -> usize {
 pub const RX_NDESC: usize = NRX;
 pub const RX_DESC_STRIDE: usize = DESC_SZ;
 
+/// P7c step 3b stage 4 — read the frame in RX buffer `i` into `out` (invalidate
+/// first; the buffer is cacheable). No recycle — the EL0 driver located the frame
+/// at descriptor `i`; the kernel packet-engine reads it here to run the verdict.
+pub fn peek_rx_frame(i: usize, out: &mut [u8]) -> usize {
+    let i = i % NRX;
+    let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
+    let n = out.len().min(RXBUF);
+    dc_ivac(bufpa, n);
+    for k in 0..n {
+        out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
+    }
+    n
+}
+
 /// Physical base of the TX descriptor ring (== TXRING). P7c step 3b stage 3.
 pub fn txring_pa() -> usize {
     unsafe { core::ptr::addr_of!(TXRING.desc) as usize }

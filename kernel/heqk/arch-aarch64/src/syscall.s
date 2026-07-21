@@ -197,6 +197,42 @@ gem_tx_stub:
 9:  b    9b
 gem_tx_stub_end:
 
+// -------- P7c step 3b stage 4: EL0 RX driver delivers a frame to the kernel ---
+// Like gem_rx_stub, but reports (descriptor_index << 16) | frame_len so the
+// kernel packet-engine can read that RX buffer and run the IDS verdict — closing
+// the loop: isolated EL0 driver -> frame -> kernel detection/enforcement.
+.global gem_ids_stub
+.global gem_ids_stub_end
+gem_ids_stub:
+    movz x1, #0x4000, lsl #16
+    movk x1, #0x0001, lsl #32
+    add  x1, x1, #0x3000          // URING_VA (granted NC descriptor ring)
+    mov  x4, xzr
+0:  mov  x2, xzr                  // descriptor index
+    mov  x5, #24
+1:  mul  x6, x2, x5
+    add  x7, x1, x6
+    ldr  w3, [x7]                 // desc[i].word0
+    tbnz w3, #0, 2f               // USED?
+    add  x2, x2, #1
+    cmp  x2, #8
+    b.lo 1b
+    add  x4, x4, #1
+    movz x9, #0x0400, lsl #16     // ~1s spin bound
+    cmp  x4, x9
+    b.lo 0b
+    mov  x0, xzr                  // timeout -> 0
+    b    3f
+2:  ldr  w0, [x7, #4]            // desc[i].word1
+    and  w0, w0, #0x3fff          // frame length
+    orr  w0, w0, w2, lsl #16      // (index << 16) | len
+3:  mov  x8, #7                   // SYS_DRIVER_REPORT (index+len)
+    svc  #0
+    mov  x8, #6                   // SYS_EXIT_USER
+    svc  #0
+9:  b    9b
+gem_ids_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME

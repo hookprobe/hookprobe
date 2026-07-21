@@ -176,6 +176,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
     cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
+    cm5_gem_el0_ids(); // stage 4: EL0 driver delivers a frame -> kernel IDS verdict
 
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
@@ -303,6 +304,62 @@ fn cm5_gem_el0_tx_probe() {
         w1, used);
     kprint!(" [P7c] {} — GEM TX driven from an ISOLATED EL0 driver (stage 3: armed + kicked + completed)\n",
         if used { "PASS" } else { "FAIL" });
+}
+
+/// P7c step 3b (stage 4) — close the loop: the isolated EL0 RX driver locates a
+/// received frame and reports (descriptor index | length); the kernel packet-
+/// engine reads that buffer and runs the signed BPF verdict. This is the end-to-
+/// end IDS/IPS with the driver isolated at EL0 (the detection engine stays in the
+/// trusted kernel). Fault-restart + a preemptible-in-own-ASID driver are next.
+#[cfg(feature = "cm5")]
+fn cm5_gem_el0_ids() {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static gem_ids_stub: u8;
+        static gem_ids_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(gem_ids_stub) as usize;
+    let len = core::ptr::addr_of!(gem_ids_stub_end) as usize - src;
+    let code_pa = mmu_cm5::el0_code_pa();
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code_pa as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let uring = mmu_cm5::USER_VA_BASE + 0x3000;
+    mmu_cm5::map_user_code(ucode, code_pa);
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa());
+    DRIVER_REPORT.store(0, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+    let report = DRIVER_REPORT.load(Ordering::Relaxed);
+    let idx = ((report >> 16) & 0xff) as usize;
+    let flen = (report & 0x3fff) as usize;
+    if flen < 14 {
+        kprint!(" [P7c] EL0 IDS: no frame delivered by the driver — FAIL\n");
+        return;
+    }
+    // The kernel packet engine runs the signed BPF verdict on the frame the
+    // isolated EL0 driver delivered.
+    let mut buf = [0u8; 1600];
+    let n = flen.min(buf.len());
+    arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
+    struct Pool([u8; packet::FRAME_SZ * 8]);
+    static mut IDSPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
+    let pool = core::ptr::addr_of_mut!(IDSPOOL) as usize;
+    let verdict = if packet::produce_raw(pool, &buf[..n]) {
+        packet::consume_one(pool)
+    } else {
+        None
+    };
+    match verdict {
+        Some((port, v)) => kprint!(
+            " [P7c] EL0 IDS: driver delivered desc {} ({}B, et={:02x}{:02x}) -> kernel verdict {} (dst_port={})\n",
+            idx, n, buf[12], buf[13], if v == packet::DROP { "DROP" } else { "PASS" }, port),
+        None => kprint!(" [P7c] EL0 IDS: classify failed\n"),
+    }
+    kprint!(" [P7c] {} — end-to-end: ISOLATED EL0 driver -> frame -> kernel IDS verdict (stage 4)\n",
+        if verdict.is_some() { "PASS" } else { "FAIL" });
 }
 
 /// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable
