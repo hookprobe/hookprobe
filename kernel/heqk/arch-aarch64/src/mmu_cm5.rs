@@ -20,12 +20,19 @@ const PXN: u64 = 1 << 53; // privileged execute-never
 const UXN: u64 = 1 << 54; // unprivileged execute-never
 const ATTR_DEVICE: u64 = 0 << 2; // MAIR index 0 = Device-nGnRnE
 const ATTR_NORMAL: u64 = 1 << 2; // MAIR index 1 = Normal WB cacheable
+const ATTR_NC: u64 = 2 << 2; // MAIR index 2 = Normal Non-Cacheable
 
 const GB: u64 = 1 << 30;
 const NORMAL_GBS: u64 = 4; // GB 0..3 = RAM
 /// Unused VA (GB 256 = 256 GiB) aliased onto physical GB0 for the VA!=PA proof.
 pub const ALIAS_GB: u64 = 256;
 pub const ALIAS_VA: usize = (ALIAS_GB * GB) as usize;
+/// GB 257 aliases physical GB0 as Normal **Non-Cacheable** — a coherent-DMA
+/// window for the GEM descriptor rings (matching Linux's dma_alloc_coherent).
+/// Descriptor bytes are accessed ONLY through this alias so the CPU never caches
+/// them; the GEM's status writeback is then always visible (no clean-clobber).
+pub const NC_ALIAS_GB: u64 = 257;
+pub const NC_ALIAS_VA: usize = (NC_ALIAS_GB * GB) as usize;
 
 #[repr(align(4096))]
 struct Table([u64; 512]);
@@ -39,6 +46,11 @@ fn normal_block(pa: u64) -> u64 {
 fn device_block(pa: u64) -> u64 {
     // MMIO is never executable (PXN|UXN).
     pa | AF | AP_RW_EL1 | ATTR_DEVICE | BLOCK | VALID | PXN | UXN
+}
+#[inline]
+fn normal_nc_block(pa: u64) -> u64 {
+    // Normal Non-Cacheable, data-only (PXN|UXN) — the DMA-coherent descriptor window.
+    pa | AF | SH_IS | AP_RW_EL1 | ATTR_NC | BLOCK | VALID | PXN | UXN
 }
 
 /// Build the identity table, program MAIR/TCR/TTBR0, and enable the MMU +
@@ -54,10 +66,13 @@ pub fn enable_identity() {
         }
         // Alias GB256 -> physical GB0 as Normal memory (VA!=PA, same bytes).
         core::ptr::write_volatile(l1.add(ALIAS_GB as usize), normal_block(0));
+        // Alias GB257 -> physical GB0 as Normal Non-Cacheable (GEM descriptor window).
+        core::ptr::write_volatile(l1.add(NC_ALIAS_GB as usize), normal_nc_block(0));
     }
 
-    // MAIR: attr0 = Device-nGnRnE (0x00), attr1 = Normal WB RW-alloc (0xFF).
-    let mair: u64 = (0xFF << 8) | 0x00;
+    // MAIR: attr0 = Device-nGnRnE (0x00), attr1 = Normal WB RW-alloc (0xFF),
+    // attr2 = Normal Non-Cacheable (0x44).
+    let mair: u64 = (0x44 << 16) | (0xFF << 8) | 0x00;
 
     // TCR_EL1: T0SZ=25 (39-bit VA), 4 KiB granule, inner-shareable WB walks,
     // TTBR1 disabled, IPS=40-bit PA.

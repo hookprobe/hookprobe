@@ -89,6 +89,16 @@ const RSR_REC: u32 = 1 << 1; // frame received
 /// The DMA bus-address offset: GEM bus address = CPU physical + this.
 const DMA_BUS_OFFSET: u64 = 0x10_0000_0000;
 
+/// Non-Cacheable alias base (mmu_cm5 GB257 → physical GB0). Descriptor rings live
+/// physically in low RAM but are accessed ONLY through this NC window, so the CPU
+/// never caches them and the GEM's status writeback (word1) is always coherent —
+/// matching Linux's dma_alloc_coherent. `nc_desc(phys) = phys + NC_VA`.
+const NC_VA: usize = crate::mmu_cm5::NC_ALIAS_VA;
+#[inline]
+fn nc_desc(phys: usize) -> *mut u32 {
+    (phys + NC_VA) as *mut u32
+}
+
 /// BCM2712 PCIe RC2 (the RP1 x4 link) register base — a SoC block, directly
 /// CPU-addressable (not through the RP1 window). We program its INBOUND window
 /// so RP1/GEM DMA can reach system RAM (firmware only set the outbound window).
@@ -179,6 +189,19 @@ fn dc_cvac(addr: usize, len: usize) {
     let end = addr + len;
     while a < end {
         unsafe { core::arch::asm!("dc cvac, {}", in(reg) a) };
+        a += 64;
+    }
+    unsafe { core::arch::asm!("dsb sy") };
+}
+/// Clean+Invalidate a range — used ONCE on the descriptor region before we switch
+/// to Non-Cacheable-alias access, so no stale cacheable copy of those bytes
+/// survives (avoids a mismatched-attributes hazard).
+#[inline]
+fn dc_civac(addr: usize, len: usize) {
+    let mut a = addr & !63;
+    let end = addr + len;
+    while a < end {
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a) };
         a += 64;
     }
     unsafe { core::arch::asm!("dsb sy") };
@@ -376,28 +399,31 @@ pub fn rx_init() -> (usize, u16, u32) {
     let spd_ovr = if is_gig { 2 } else { 1 };
     w(ETH_CFG, 0x14, (clkgen & !0x3) | (1 << 3) | spd_ovr);
 
-    let ring = core::ptr::addr_of_mut!(RXRING) as usize;
-    // Build the RX ring: each descriptor points at its buffer (bus addr =
-    // cpu_phys + 0x10_0000_0000), HW-owned (USED=0); last has WRAP.
-    unsafe {
-        let rr = &mut *core::ptr::addr_of_mut!(RXRING);
-        for i in 0..NRX {
-            let bufpa = rr.buf[i].as_ptr() as u64; // cpu phys (identity)
-            let bus = bufpa + DMA_BUS_OFFSET;
-            let mut w0 = (bus as u32) & !0x3; // low addr; USED=0 (hw-owned)
-            if i == NRX - 1 {
-                w0 |= RXD_WRAP;
-            }
-            rr.desc[i][0] = w0;
-            rr.desc[i][1] = 0; // ctrl/status — GEM fills len/SOF/EOF here on RX
-            rr.desc[i][2] = (bus >> 32) as u32; // addr high (= 0x10)
-            rr.desc[i][3] = 0; // resvd
-            rr.desc[i][4] = 0; // ts_1 (PTP)
-            rr.desc[i][5] = 0; // ts_2 (PTP)
+    // Descriptor ring physical base (for RBQP); == addr_of!(RXRING.desc[0]).
+    let ring = unsafe { core::ptr::addr_of!(RXRING.desc) as usize };
+    // Drop any cacheable copy of the descriptor region, then build the ring ONLY
+    // through the Non-Cacheable alias (coherent with the GEM — no clean-clobber of
+    // the status word). Buffers stay cacheable (invalidated before reading).
+    dc_civac(ring, NRX * DESC_SZ);
+    for i in 0..NRX {
+        let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as u64 };
+        let bus = bufpa + DMA_BUS_OFFSET;
+        let mut w0 = (bus as u32) & !0x3; // low addr; USED=0 (hw-owned)
+        if i == NRX - 1 {
+            w0 |= RXD_WRAP;
+        }
+        let dphys = unsafe { core::ptr::addr_of!(RXRING.desc[i]) as usize };
+        let d = nc_desc(dphys); // Non-Cacheable alias pointer
+        unsafe {
+            write_volatile(d.add(0), w0);
+            write_volatile(d.add(1), 0); // ctrl/status — GEM fills len/SOF/EOF on RX
+            write_volatile(d.add(2), (bus >> 32) as u32); // addr high (= 0x10)
+            write_volatile(d.add(3), 0); // resvd
+            write_volatile(d.add(4), 0); // ts_1 (PTP)
+            write_volatile(d.add(5), 0); // ts_2 (PTP)
         }
     }
-    // Publish descriptors to DRAM (non-coherent DMA reads them).
-    dc_cvac(ring, core::mem::size_of::<RxRing>()); // clean: device reads these
+    unsafe { core::arch::asm!("dsb sy") }; // ensure the ring is in DRAM before RE
 
     // Quiesce, mask IRQs (polled), configure DMA64 + RX buffer size, ring base.
     w(GEM, NCR, 0);
@@ -431,62 +457,42 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     // Rotating consumer index across calls.
     static mut IDX: usize = 0;
     let i = unsafe { IDX % NRX };
-    let dptr = unsafe { core::ptr::addr_of_mut!(RXRING.desc[i]) as usize };
-    // Invalidate the descriptor line so we see HW's write to the USED bit.
-    dc_ivac(dptr, DESC_SZ);
-    let w0 = unsafe { read_volatile(dptr as *const u32) };
+    let dphys = unsafe { core::ptr::addr_of!(RXRING.desc[i]) as usize };
+    let dptr = nc_desc(dphys); // Non-Cacheable alias — coherent with the GEM, no cache maintenance
+    let w0 = unsafe { read_volatile(dptr.add(0)) };
     if w0 & RXD_USED == 0 {
         return None; // still HW-owned: no frame yet
     }
-    // The GEM writes the status word (ctrl/w1) BEFORE setting USED (w0), so once
-    // USED is seen the length/SOF/EOF is already committed. A short bounded
-    // re-read covers any residual PCIe/UBUS write-visibility skew; with the
-    // DMACFG full-store-and-forward fix (RXBMS|TXPBMS), ctrl is populated on the
-    // first read in practice (previously it stayed 0 — the RP1 GEM bug).
-    let mut ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
-    let mut spins = 0u32;
-    while ctrl == 0 && spins < 1024 {
-        dc_ivac(dptr, DESC_SZ);
-        ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
-        spins += 1;
-    }
-    let w2 = unsafe { read_volatile((dptr + 8) as *const u32) };
-    let w3 = unsafe { read_volatile((dptr + 12) as *const u32) };
+    // NC memory is coherent: once USED is seen, the status word (word1: len/SOF/EOF)
+    // written by the GEM before it set USED is already visible — no spin, no clobber.
+    let ctrl = unsafe { read_volatile(dptr.add(1)) };
+    let w2 = unsafe { read_volatile(dptr.add(2)) };
+    let w3 = unsafe { read_volatile(dptr.add(3)) };
     let desc_len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
     // Copy exactly the received frame (bounded by `out` and the buffer). Fall
-    // back to the whole buffer only if the length is still unreported (ctrl==0),
-    // in which case the parser self-bounds via the IP header's own total_len.
+    // back to the whole buffer only if the length is unreported (ctrl==0).
     let copy_n = if desc_len > 0 {
         desc_len.min(out.len()).min(RXBUF)
     } else {
         out.len().min(RXBUF)
     };
-    dc_ivac(bufpa, copy_n); // invalidate the bytes we're about to read from DRAM
+    dc_ivac(bufpa, copy_n); // buffers stay cacheable — invalidate before reading DMA'd data
     for k in 0..copy_n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
     let len = copy_n;
-    // Recycle: hand the descriptor back to the GEM by clearing USED in word0
-    // ONLY — never rewrite the status word (word1). The GEM overwrites word1 on
-    // the next RX; writing 0 here is the documented Cadence macb RX clobber
-    // (Linux "net: macb: fix dropped RX frames due to a race"). Because four
-    // 16-byte descriptors share one 64-byte cache line, a plain clean of this
-    // descriptor writes back the STALE cached copies of its neighbours,
-    // squashing a neighbour's just-written status in DRAM (audit finding B-4).
-    // So invalidate the line FIRST: the write-allocate then reloads FRESH
-    // neighbours, and the clean publishes those (not stale zeros). This is the
-    // in-place cacheable-descriptor discipline; a non-cacheable ring (K1) would
-    // make the dance unnecessary but is not required to be correct.
+    // Recycle: clear USED in word0 through the NC alias — the write goes straight
+    // to DRAM (coherent), so there is no cache clean and no false-sharing clobber
+    // of a neighbour's status. Leave word1 for the GEM to overwrite next RX.
     unsafe {
         let bus = bufpa as u64 + DMA_BUS_OFFSET;
         let mut nw0 = (bus as u32) & !0x3; // USED=0 (hw-owned)
         if i == NRX - 1 {
             nw0 |= RXD_WRAP;
         }
-        dc_ivac(dptr, DESC_SZ); // drop the stale line so the clean won't write stale neighbours
-        write_volatile(dptr as *mut u32, nw0); // clear USED; leave word1 for the GEM
-        dc_cvac(dptr, DESC_SZ); // publish word0 + freshly-reloaded neighbours
+        write_volatile(dptr.add(0), nw0);
+        core::arch::asm!("dsb sy"); // ensure the re-arm reaches DRAM before the GEM re-reads
         IDX = IDX.wrapping_add(1);
     }
     Some((len, w0, ctrl, w2, w3))
@@ -496,19 +502,20 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
 /// at our single-descriptor TX ring and mark it USED (idle, nothing to send) so
 /// a stray TSTART can't transmit garbage. Call once after rx_init.
 pub fn tx_init() {
+    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize }; // physical ring base (for TBQP)
+    dc_civac(dphys, NTX * DESC_SZ); // drop cacheable copies; access via NC alias hereafter
+    let bus = unsafe { core::ptr::addr_of!(TXRING.buf[0]) as u64 } + DMA_BUS_OFFSET;
+    let d = nc_desc(dphys);
     unsafe {
-        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
-        let bus = tr.buf[0].as_ptr() as u64 + DMA_BUS_OFFSET;
-        tr.desc[0][0] = bus as u32;
-        tr.desc[0][1] = TXD_USED | TXD_WRAP; // USED=1 (idle) + WRAP (only descriptor)
-        tr.desc[0][2] = (bus >> 32) as u32; // addr high (= 0x10)
-        tr.desc[0][3] = 0; // resvd
-        tr.desc[0][4] = 0; // ts_1 (PTP)
-        tr.desc[0][5] = 0; // ts_2 (PTP)
+        write_volatile(d.add(0), bus as u32);
+        write_volatile(d.add(1), TXD_USED | TXD_WRAP); // USED=1 (idle) + WRAP (only descriptor)
+        write_volatile(d.add(2), (bus >> 32) as u32); // addr high (= 0x10)
+        write_volatile(d.add(3), 0); // resvd
+        write_volatile(d.add(4), 0); // ts_1 (PTP)
+        write_volatile(d.add(5), 0); // ts_2 (PTP)
+        core::arch::asm!("dsb sy");
     }
-    let ring = core::ptr::addr_of!(TXRING) as usize;
-    dc_cvac(ring, core::mem::size_of::<TxRing>());
-    let ringbus = ring as u64 + DMA_BUS_OFFSET;
+    let ringbus = dphys as u64 + DMA_BUS_OFFSET;
     w(GEM, TBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, TBQP, ringbus as u32);
 }
@@ -520,32 +527,30 @@ pub fn tx_init() {
 /// so the verdict now acts on the wire instead of only being logged.
 pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     let n = bytes.len().min(TXBUF);
-    let (bufpa, dptr) = unsafe {
+    let bufpa = unsafe {
         let tr = &mut *core::ptr::addr_of_mut!(TXRING);
         for k in 0..n {
             tr.buf[0][k] = bytes[k];
         }
-        (
-            tr.buf[0].as_ptr() as usize,
-            core::ptr::addr_of_mut!(tr.desc[0]) as usize,
-        )
+        tr.buf[0].as_ptr() as usize
     };
-    dc_cvac(bufpa, n); // publish the frame bytes for the device to read
+    dc_cvac(bufpa, n); // TX buffer is cacheable — clean so the device reads the frame
+    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc[0]) as usize };
+    let d = nc_desc(dphys); // NC alias — coherent, no descriptor cache maintenance
     let bus = bufpa as u64 + DMA_BUS_OFFSET;
     unsafe {
-        write_volatile(dptr as *mut u32, bus as u32); // word0 addr_lo
-        write_volatile((dptr + 8) as *mut u32, (bus >> 32) as u32); // word2 addr_hi
+        write_volatile(d.add(0), bus as u32); // word0 addr_lo
+        write_volatile(d.add(2), (bus >> 32) as u32); // word2 addr_hi
         // word1: length | LAST | WRAP, USED=0 — hand the descriptor to HW. The GEM
         // auto-pads to the 60B minimum and appends the FCS (NOCRC not set).
-        write_volatile((dptr + 4) as *mut u32, (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
+        write_volatile(d.add(1), (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
+        core::arch::asm!("dsb sy"); // ensure the armed descriptor is in DRAM before TSTART
     }
-    dc_cvac(dptr, DESC_SZ); // publish the descriptor
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
     loop {
-        dc_ivac(dptr, DESC_SZ);
-        let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+        let ctrl = unsafe { read_volatile(d.add(1)) };
         if ctrl & TXD_USED != 0 {
             return Some(ctrl);
         }
