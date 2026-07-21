@@ -86,3 +86,32 @@ corruption; the DTB gave the exact constant.
 ## MDIO helpers implemented (arch/gem.rs)
 phy_read/phy_write via GEM MAN (0x034) + NSR IDLE poll; NCR.MPE + NCFGR MDC/128.
 diagnose()/gpio_dump()/phy_link() give PHY ID, GPIO regs, BMCR/BMSR/ANLPAR.
+
+## Metal validation (2026-07-21) — descriptor-length quirk #1 REMAINS OPEN
+Consolidated audit image booted clean on metal. Results:
+- ✓ Secure boot (ed25519 AND SLH-DSA), measured boot (4 events, PCRs reproduce),
+  attestation quote — all on metal. [P7a] MMU PASS, [P7b] preemptive scheduler PASS.
+- ✓ [P8] datapath: 3 real frames (incl. IPv6 `et=86dd` MLD to 33:33:.. and ARP
+  `et=0806`) → parser → BPF verdict PASS on the microkernel. RSR=0x2 (REC, no
+  BNA/OVR — inbound window holds).
+- ✓ [P8] **#2 IPS DROP demo CONFIRMED on metal**: injected UDP→:4444 → `DROP
+  (threat blocked!)`, alongside PASS on live traffic.
+- ✓ New IPv6 parser path exercised on metal (the `et=86dd` frame PASSes correctly
+  — MLD, no L4 port).
+- ✗ **#1 NOT resolved.** Every RX descriptor still reads `w1=0x00000000` (the
+  status/length word) even with the poll-until-non-zero loop, on SINGLE frames
+  polled sequentially. This **disproves the PCIe-write-ordering hypothesis**
+  (commit dff93d6) — and rules out the cache-line false-sharing theory too (that
+  needs concurrent neighbor writes; here it's one frame at a time). `w2=0x10`
+  (addr-hi) reads correctly, so descriptor offsets are right; the GEM simply is
+  not writing the length/SOF/EOF word in this RP1 config. Datapath is fully
+  functional via the whole-buffer copy + parser self-bounding (IP total_len), so
+  this is a metadata gap, not a data gap.
+  - Consequence: the 100k-spin w1 poll in `poll_rx` is now dead latency (spins,
+    then falls back to copy_n). REMOVE/replace it in the next descriptor-ring
+    rework (folds into the K1 block-splitting pass that also moves the ring to
+    non-cacheable memory). Not worth a standalone flash (connector wear).
+  - Next root-cause suspects to check: DMACFG=0x00020704 — verify ADDR64 (bit30)
+    and RX buffer-size (RXBS) fields; whether RP1 GEM needs GEM-specific RX
+    descriptor writeback enabled; whether length lives in a GEM RXUBR/queue
+    status reg rather than the descriptor on this IP revision.
