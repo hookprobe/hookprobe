@@ -20,6 +20,7 @@ mod attest;
 mod attest_keys;
 mod measure;
 mod mmu;
+mod rng;
 mod rollback;
 mod trusted_keys;
 

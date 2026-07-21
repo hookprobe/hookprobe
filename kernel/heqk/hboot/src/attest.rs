@@ -11,7 +11,9 @@
 //! work — it would make the AK non-extractable and per-device.
 
 use crate::attest_keys;
+use crate::puthex;
 use crate::puts;
+use crate::rng;
 use boot_abi::*;
 use ed25519_compact::{SecretKey as EdSecretKey, Signature as EdSignature};
 use fips205::slh_dsa_sha2_128f;
@@ -42,9 +44,18 @@ impl CryptoRng for ZeroRng {}
 /// Build and sign the attestation quote, writing it to ATTEST_QUOTE_ADDR.
 /// Returns the ed25519 signature (for a short console echo).
 pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] {
+    // Fresh per-boot nonce from the BCM2712 hardware TRNG — replaces the
+    // compile-time-constant CHALLENGE_NONCE that made quotes replayable (B-2).
+    let (nonce, trng_words) = rng::hw_nonce();
+    puts(" attest : nonce (hw-trng words=");
+    puthex(trng_words as u64);
+    puts(", ");
+    puthex(u32::from_le_bytes([nonce[0], nonce[1], nonce[2], nonce[3]]) as u64);
+    puts("...)\n");
+
     // Body = nonce || svn || PCR0..3.
     let mut body = [0u8; QUOTE_BODY_LEN];
-    body[..32].copy_from_slice(&CHALLENGE_NONCE);
+    body[..32].copy_from_slice(&nonce);
     body[32..40].copy_from_slice(&svn.to_le_bytes());
     for i in 0..NUM_PCR {
         body[40 + 32 * i..40 + 32 * (i + 1)].copy_from_slice(&pcr[i]);
@@ -73,7 +84,7 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
             q,
             AttestQuote {
                 magic: ATTEST_QUOTE_MAGIC,
-                nonce: CHALLENGE_NONCE,
+                nonce,
                 svn,
                 pcr: *pcr,
                 ed25519_sig: ed_bytes,
