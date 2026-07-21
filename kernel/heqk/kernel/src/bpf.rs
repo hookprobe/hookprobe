@@ -41,6 +41,26 @@ pub const THREAT_RULE: [u64; 9] = [
     insn(0x95, 0, 0, 0, 0),    // EXIT
 ];
 
+// --- P8 verifier test vectors: adversarial "third-party" rules ---------------
+/// UNSAFE: loads from an arbitrary (scalar) address, not the packet. A runtime
+/// bounds check might catch some of these; the STATIC verifier rejects it flat.
+pub const EVIL_WILD_LOAD: [u64; 3] = [
+    insn(0xb7, 2, 0, 0, 0x41414141), // R2 = 0x41414141 (a scalar)
+    insn(0x71, 3, 2, 0, 0),          // R3 = *(u8*)(R2+0)  — load from arbitrary addr
+    insn(0x95, 0, 0, 0, 0),          // EXIT
+];
+/// UNSAFE: a backward jump — a loop that could run forever.
+pub const EVIL_LOOP: [u64; 3] = [
+    insn(0xb7, 0, 0, 0, 1),  // R0 = 1
+    insn(0x55, 0, 0, -1, 5), // if R0 != 5 goto -1  (BACKWARD)
+    insn(0x95, 0, 0, 0, 0),  // EXIT
+];
+/// UNSAFE: EXITs without ever setting R0 — returns an uninitialized verdict.
+pub const EVIL_NO_VERDICT: [u64; 2] = [
+    insn(0x71, 2, 1, 0, 0), // R2 = *(u8*)(R1+0)
+    insn(0x95, 0, 0, 0, 0), // EXIT — R0 never written
+];
+
 /// Static verifier — gate a program before it runs (v1: signed first-party, so
 /// this is a safety net; a full PREVAIL-style abstract-interpretation verifier
 /// is for opening the plane to third-party rules). Checks: known opcodes, valid
@@ -76,6 +96,159 @@ pub fn verify(prog: &[u64]) -> bool {
         }
     }
     has_exit
+}
+
+// ---------------------------------------------------------------------------
+// P8 — PREVAIL-style abstract-interpretation verifier for THIRD-PARTY rules.
+//
+// The v1 `verify` above is a structural safety net that trusts the runtime
+// bounds check. To open the plane to UNTRUSTED third-party rules we must PROVE,
+// statically, before a single instruction runs, that the rule is memory-safe.
+// This verifier abstract-interprets the program: each register is tracked as
+// Uninit / Scalar / Pkt{offset-interval}. It proves:
+//   * every load is PACKET-RELATIVE (base is a Pkt pointer) — a load from an
+//     arbitrary/scalar address is REJECTED (the key third-party guarantee),
+//   * no UNINITIALIZED register is ever read,
+//   * control flow is a forward DAG (terminates), no unreachable code.
+// It returns `Ok(min_len)`: the minimum packet length for which every load is
+// in-bounds. The packet engine runs the rule only when `len >= min_len`, so
+// memory safety is a STATIC property — the runtime check becomes defense-in-depth.
+// ---------------------------------------------------------------------------
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Abs {
+    Uninit,
+    Scalar,                    // a value of unknown magnitude — NOT a valid load base
+    Pkt { lo: i64, hi: i64 },  // packet base + byte offset in [lo, hi]
+}
+
+fn join(a: Abs, b: Abs) -> Abs {
+    match (a, b) {
+        (Abs::Uninit, Abs::Uninit) => Abs::Uninit,
+        // Init on one path, uninit on another ⇒ treat as uninit (reading is unsafe).
+        (Abs::Uninit, _) | (_, Abs::Uninit) => Abs::Uninit,
+        (Abs::Pkt { lo: l1, hi: h1 }, Abs::Pkt { lo: l2, hi: h2 }) => {
+            Abs::Pkt { lo: l1.min(l2), hi: h1.max(h2) }
+        }
+        // Any mix of Pkt/Scalar loses pointer-ness ⇒ Scalar (loads from it rejected).
+        _ => Abs::Scalar,
+    }
+}
+
+/// Merge `src` state into `in_st[pc]`, marking progress. Returns Err on a
+/// register-count issue (shouldn't happen — guarded earlier).
+fn merge_into(slot: &mut Option<[Abs; 11]>, src: &[Abs; 11]) {
+    match slot {
+        None => *slot = Some(*src),
+        Some(cur) => {
+            for i in 0..11 {
+                cur[i] = join(cur[i], src[i]);
+            }
+        }
+    }
+}
+
+pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
+    let n = prog.len();
+    if n == 0 {
+        return Err("empty program");
+    }
+    // Entry state: R1 = packet pointer at offset 0; everything else uninitialized.
+    let mut entry = [Abs::Uninit; 11];
+    entry[1] = Abs::Pkt { lo: 0, hi: 0 };
+    let mut in_st: Vec<Option<[Abs; 11]>> = vec![None; n];
+    in_st[0] = Some(entry);
+
+    let mut min_len: u64 = 0;
+    let mut has_exit = false;
+
+    for pc in 0..n {
+        let st = match in_st[pc] {
+            Some(s) => s,
+            None => return Err("unreachable code"), // dead code ⇒ reject (PREVAIL policy)
+        };
+        let ins = prog[pc];
+        let op = (ins & 0xff) as u8;
+        let dst = ((ins >> 8) & 0xf) as usize;
+        let src = ((ins >> 12) & 0xf) as usize;
+        let off = ((ins >> 16) & 0xffff) as u16 as i16;
+        if dst >= 11 || src >= 11 {
+            return Err("register out of range");
+        }
+        let mut out = st;
+
+        match op {
+            0x71 => {
+                // LDX_B dst = *(u8*)(src+off): src MUST be a packet pointer, and
+                // the accessed byte offset must be non-negative + bounded.
+                match st[src] {
+                    Abs::Pkt { lo, hi } => {
+                        let alo = lo + off as i64;
+                        let ahi = hi + off as i64;
+                        if alo < 0 {
+                            return Err("load below packet start");
+                        }
+                        let need = (ahi as u64).saturating_add(1);
+                        if need > min_len {
+                            min_len = need;
+                        }
+                        out[dst] = Abs::Scalar; // a loaded byte is a scalar in [0,255]
+                    }
+                    Abs::Uninit => return Err("load base uninitialized"),
+                    Abs::Scalar => return Err("load from non-packet (scalar) address"),
+                }
+            }
+            0x67 => {
+                if st[dst] == Abs::Uninit {
+                    return Err("LSH of uninitialized register");
+                }
+                out[dst] = Abs::Scalar;
+            }
+            0x4f => {
+                if st[dst] == Abs::Uninit || st[src] == Abs::Uninit {
+                    return Err("OR of uninitialized register");
+                }
+                out[dst] = Abs::Scalar;
+            }
+            0xb7 => out[dst] = Abs::Scalar, // MOV64_K: dst = imm (a scalar)
+            0x55 => {
+                // JNE_K: reads dst; forward-only branch to a valid target.
+                if st[dst] == Abs::Uninit {
+                    return Err("JNE on uninitialized register");
+                }
+                if off < 0 {
+                    return Err("backward jump (would not terminate)");
+                }
+                let target = pc as i64 + 1 + off as i64;
+                if target < 0 || target as usize >= n {
+                    return Err("jump target out of range");
+                }
+                merge_into(&mut in_st[target as usize], &out);
+            }
+            0x95 => {
+                // EXIT: returns R0 — it must be initialized (a real verdict).
+                if st[0] == Abs::Uninit {
+                    return Err("EXIT with uninitialized R0 (no verdict)");
+                }
+                has_exit = true;
+                continue; // no fall-through successor
+            }
+            _ => return Err("unknown opcode"),
+        }
+
+        // Fall-through to pc+1 (all ops except EXIT).
+        if pc + 1 < n {
+            merge_into(&mut in_st[pc + 1], &out);
+        }
+    }
+
+    if !has_exit {
+        return Err("no reachable EXIT");
+    }
+    Ok(min_len)
 }
 
 /// Execute `prog` against the packet `[pkt, pkt+len)`. R1 = packet pointer.

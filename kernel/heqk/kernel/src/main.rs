@@ -926,6 +926,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P7d B-2: runtime attestation service — verifier-supplied freshness ---
     attest_challenge_demo();
 
+    // --- P8: PREVAIL-style verifier gating untrusted third-party BPF rules ---
+    p8_verifier_demo();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1016,6 +1019,37 @@ fn attest_challenge_demo() {
         s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);
     kprint!(" [P7d-B2] {} — verifier-supplied per-request freshness (distinct nonces -> distinct valid sigs; cross-replay rejected)\n",
         if pass { "PASS" } else { "FAIL" });
+}
+
+/// P8 — prove the PREVAIL-style verifier accepts the safe signed rule (computing
+/// its minimum packet length) and STATICALLY rejects adversarial third-party
+/// rules (wild load, backward-jump loop, missing verdict) before they ever run.
+#[cfg(not(feature = "cm5"))]
+fn p8_verifier_demo() {
+    use bpf::{verify_prevail, EVIL_LOOP, EVIL_NO_VERDICT, EVIL_WILD_LOAD, THREAT_RULE};
+    kprint!("\n [P8] PREVAIL-style verifier — gating untrusted third-party BPF rules\n");
+    match verify_prevail(&THREAT_RULE) {
+        Ok(min) => kprint!(" [P8] signed THREAT_RULE: SAFE (proven min packet len = {})\n", min),
+        Err(e) => kprint!(" [P8] signed THREAT_RULE: REJECTED ({}) <- BUG\n", e),
+    }
+    let evils: [(&str, &[u64]); 3] = [
+        ("wild load (arbitrary address)", &EVIL_WILD_LOAD),
+        ("backward-jump loop", &EVIL_LOOP),
+        ("no verdict (uninit R0)", &EVIL_NO_VERDICT),
+    ];
+    let mut all_rejected = true;
+    for (name, prog) in evils {
+        match verify_prevail(prog) {
+            Ok(_) => {
+                kprint!(" [P8] third-party '{}': ACCEPTED <- BUG\n", name);
+                all_rejected = false;
+            }
+            Err(e) => kprint!(" [P8] third-party '{}': REJECTED ({})\n", name, e),
+        }
+    }
+    let good = verify_prevail(&THREAT_RULE).is_ok();
+    kprint!(" [P8] {} — accepts the safe rule, statically rejects every unsafe third-party rule\n",
+        if good && all_rejected { "PASS" } else { "FAIL" });
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)
