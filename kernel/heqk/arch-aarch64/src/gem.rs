@@ -114,6 +114,38 @@ pub fn phy_read(phy: u32, reg: u32) -> u16 {
     (r(GEM, MAN) & 0xffff) as u16
 }
 
+/// Write a PHY register via MAN.
+pub fn phy_write(phy: u32, reg: u32, val: u16) {
+    let cmd = (0b01 << 30) | (0b01 << 28) | ((phy & 0x1f) << 23) | ((reg & 0x1f) << 18) | (0b10 << 16) | (val as u32);
+    w(GEM, MAN, cmd);
+    let mut s = 0u32;
+    while r(GEM, NSR) & NSR_IDLE == 0 {
+        s += 1;
+        if s > 1_000_000 {
+            return;
+        }
+    }
+}
+
+/// Kick auto-negotiation and read PHY link state. Returns (bmcr, bmsr, anlpar)
+/// where BMSR bit2 = link up (read twice to clear the latch), ANLPAR = partner
+/// abilities. Enables MPE first. `phy` = MDIO address.
+pub fn phy_link(phy: u32) -> (u16, u16, u16) {
+    w(GEM, NCFGR, NCFGR_MDC_DIV128);
+    w(GEM, NCR, NCR_MPE);
+    // BMCR reg0: enable + restart auto-negotiation (bit12 | bit9).
+    phy_write(phy, 0, 1 << 12 | 1 << 9);
+    // Give autoneg time.
+    for _ in 0..800_000_000u32 {
+        core::hint::spin_loop();
+    }
+    let bmcr = phy_read(phy, 0);
+    let _ = phy_read(phy, 1); // first read clears the latched-low link bit
+    let bmsr = phy_read(phy, 1);
+    let anlpar = phy_read(phy, 5);
+    (bmcr, bmsr, anlpar)
+}
+
 /// Read the RP1 eth_cfg STATUS: RGMII link (bit0), speed (bits2:1), duplex (bit3).
 pub fn link_status() -> u32 {
     r(ETH_CFG, 0x04)

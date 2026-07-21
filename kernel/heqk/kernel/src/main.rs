@@ -221,6 +221,11 @@ fn cm5_gem_rx_demo() {
     let (ctrl, pad, out, oe, rin) = arch_aarch64::gem::gpio_dump();
     kprint!(" [P8] gpio32: CTRL={:#x} PAD={:#x} RIO_OUT={:#x} RIO_OE={:#x} RIO_IN={:#x}\n",
         ctrl, pad, out, oe, rin);
+    // PHY link check: kick auto-neg, read BMSR (bit2 = link). No link here but
+    // MDIO alive => cable likely on the OTHER RJ45 (RTL8168), not end0.
+    let (bmcr, bmsr, anlpar) = arch_aarch64::gem::phy_link(0);
+    kprint!(" [P8] PHY reg0(BMCR)={:#06x} reg1(BMSR)={:#06x} (link={}) reg5(ANLPAR)={:#06x}\n",
+        bmcr, bmsr, (bmsr >> 2) & 1, anlpar);
     // Give the PHY up to ~3 s to auto-negotiate a link after reset-release.
     let link = arch_aarch64::gem::wait_link(3000);
     kprint!(" [P8] after PHY reset: eth_cfg.STATUS={:#x} link={} speed={}\n",
