@@ -70,7 +70,8 @@ extern "C" {
 #[no_mangle]
 pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts("\n+------------------------------------------+\n");
-    puts("| HBoot v0 — HEQK boot manager (EL2)       |\n");
+    puts("| HBoot v1 — HEQK boot manager (EL2)       |\n");
+    puts("| hybrid secure boot: ed25519 + SLH-DSA    |\n");
     puts("+------------------------------------------+\n");
     puts(" dtb : ");
     puthex(dtb_pa);

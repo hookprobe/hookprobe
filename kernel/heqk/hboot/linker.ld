@@ -21,11 +21,16 @@ SECTIONS
         __bss_end = .;
     }
 
-    . = ALIGN(16);
-    . = . + 0x10000;             /* 64 KiB stack */
-    __stack_top = .;
+    /* HBoot text+data+bss must stay below 0x400000: the EEPROM loads the whole
+       combined image flat at 0x200000, so the payload (header+kernel) lands at
+       0x200000 + HBOOT_PAYLOAD_OFFSET = 0x400000 in RAM. */
+    ASSERT(. <= 0x400000, "HBoot code+bss collides with the payload image in RAM")
 
-    ASSERT(. <= 0x400000, "HBoot exceeds the 2 MiB slot before the payload")
+    /* Stack grows DOWN from 0x800000 — free RAM above the loaded combined image
+       (~0x41A000 end) and below the kernel load address (0x1000000). ~4 MiB of
+       headroom: ed25519 + SLH-DSA verify are stack-hungry, and with the MMU off
+       there is no guard page, so a too-small stack silently corrupts memory. */
+    __stack_top = 0x800000;
 
     /DISCARD/ : { *(.comment) *(.note .note.*) *(.eh_frame*) }
 }
