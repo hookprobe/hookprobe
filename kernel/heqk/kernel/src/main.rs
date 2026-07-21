@@ -232,10 +232,10 @@ fn cm5_gem_rx_demo() {
     let mut buf = [0u8; 1600];
     let mut got = 0u32;
     for tick in 0..500u32 {
-        if let Some((n, w0, w1)) = arch_aarch64::gem::poll_rx(&mut buf) {
+        if let Some((n, w1, w2, w3)) = arch_aarch64::gem::poll_rx(&mut buf) {
             let n = n.min(buf.len());
-            kprint!(" [P8] RX desc w0={:#010x} w1={:#010x} len={} buf[0..8]={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\n",
-                w0, w1, n, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+            kprint!(" [P8] RX len={} w1={:#010x} w2={:#010x} w3={:#010x} buf[0..14]={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}{:02x}{:02x} et={:02x}{:02x}\n",
+                n, w1, w2, w3, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13]);
             if packet::produce_raw(pool, &buf[..n]) {
                 if let Some((port, verdict)) = packet::consume_one(pool) {
                     kprint!(" [P8] IDS verdict: dst_port={} -> {}\n", port,

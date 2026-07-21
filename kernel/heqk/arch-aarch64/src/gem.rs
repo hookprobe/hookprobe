@@ -113,12 +113,26 @@ fn r(base: usize, off: usize) -> u32 {
 fn w(base: usize, off: usize, v: u32) {
     unsafe { write_volatile((base + off) as *mut u32, v) };
 }
+/// Invalidate (only) a range — use BEFORE reading device-DMA'd data so the CPU
+/// fetches fresh from DRAM. NOT clean+invalidate: the "clean" would push the
+/// CPU's stale copy back over the device's write.
 #[inline]
-fn dc_civac(addr: usize, len: usize) {
+fn dc_ivac(addr: usize, len: usize) {
     let mut a = addr & !63;
     let end = addr + len;
     while a < end {
-        unsafe { core::arch::asm!("dc civac, {}", in(reg) a) };
+        unsafe { core::arch::asm!("dc ivac, {}", in(reg) a) };
+        a += 64;
+    }
+    unsafe { core::arch::asm!("dsb sy") };
+}
+/// Clean (only) a range — use AFTER writing descriptors so the device sees them.
+#[inline]
+fn dc_cvac(addr: usize, len: usize) {
+    let mut a = addr & !63;
+    let end = addr + len;
+    while a < end {
+        unsafe { core::arch::asm!("dc cvac, {}", in(reg) a) };
         a += 64;
     }
     unsafe { core::arch::asm!("dsb sy") };
@@ -335,7 +349,7 @@ pub fn rx_init() -> (usize, u16, u32) {
         }
     }
     // Publish descriptors to DRAM (non-coherent DMA reads them).
-    dc_civac(ring, core::mem::size_of::<RxRing>());
+    dc_cvac(ring, core::mem::size_of::<RxRing>()) // clean: device reads these;
 
     // Quiesce, mask IRQs (polled), configure DMA64 + RX buffer size, ring base.
     w(GEM, NCR, 0);
@@ -358,23 +372,25 @@ pub fn rx_init() -> (usize, u16, u32) {
     (ring, auxstat, link_status())
 }
 
-/// Poll the RX ring once. Returns Some((len, w0, w1)) with the raw descriptor
-/// words for diagnosis, and fills `out` with the frame. None = nothing yet.
-pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32)> {
+/// Poll the RX ring once. Returns Some((len, w1, w2, w3)) with the raw upper
+/// descriptor words for diagnosis, and fills `out` with the frame. None = none.
+pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     // Rotating consumer index across calls.
     static mut IDX: usize = 0;
     let i = unsafe { IDX % NRX };
     let dptr = unsafe { core::ptr::addr_of_mut!(RXRING.desc[i]) as usize };
     // Invalidate the descriptor line so we see HW's write to the USED bit.
-    dc_civac(dptr, 16);
+    dc_ivac(dptr, 16);
     let w0 = unsafe { read_volatile(dptr as *const u32) };
     if w0 & RXD_USED == 0 {
         return None; // still HW-owned: no frame yet
     }
     let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+    let w2 = unsafe { read_volatile((dptr + 8) as *const u32) };
+    let w3 = unsafe { read_volatile((dptr + 12) as *const u32) };
     let len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
-    dc_civac(bufpa, RXBUF); // invalidate the WHOLE buffer before reading DMA'd data
+    dc_ivac(bufpa, RXBUF); // invalidate the WHOLE buffer before reading DMA'd data
     let n = len.min(out.len()).min(RXBUF);
     for k in 0..n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
@@ -396,8 +412,8 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32)> {
         write_volatile(dptr as *mut u32, nw0);
         IDX = IDX.wrapping_add(1);
     }
-    dc_civac(dptr, 16);
-    Some((len, w0, ctrl))
+    dc_cvac(dptr, 16);
+    Some((len, ctrl, w2, w3))
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
