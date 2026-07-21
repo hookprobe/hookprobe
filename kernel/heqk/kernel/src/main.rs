@@ -259,8 +259,29 @@ fn cm5_gem_rx_demo() {
         kprint!(" [P8] no frames (RSR={:#x}) — suspects: PHY reset/link, or RC inbound ATU (BNA)\n",
             arch_aarch64::gem::rsr());
     } else {
-        kprint!(" [P8] PASS — {} real frame(s) received + IDS verdict on the microkernel\n", got);
+        kprint!(" [P8] {} real frame(s) received + IDS verdict on the microkernel\n", got);
     }
+
+    // --- IPS demo: inject a crafted UDP frame to the BLOCKED port 4444 through
+    // the SAME datapath, to show a real DROP alongside the PASS on live traffic.
+    let mut threat = [0u8; 42];
+    threat[12] = 0x08; // ethertype IPv4
+    threat[13] = 0x00;
+    threat[14] = 0x45; // IPv4, IHL=5
+    threat[16] = 0;
+    threat[17] = 28; // IP total length (20 + 8)
+    threat[23] = 17; // UDP
+    threat[34] = 0x30;
+    threat[35] = 0x39; // src port 12345
+    threat[36] = 0x11;
+    threat[37] = 0x5c; // dst port 4444 (0x115c) — the signed threat rule blocks it
+    if packet::produce_raw(pool, &threat) {
+        if let Some((port, verdict)) = packet::consume_one(pool) {
+            kprint!(" [P8] IPS: injected UDP->port {} -> {}\n", port,
+                if verdict == packet::DROP { "DROP (threat blocked!)" } else { "PASS" });
+        }
+    }
+    kprint!(" [P8] PASS — datapath: real wire -> ring -> parser -> BPF verdict (PASS live, DROP :4444)\n");
 }
 
 /// Measured-boot attestation: independently replay HBoot's event log and

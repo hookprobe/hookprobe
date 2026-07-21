@@ -385,7 +385,17 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     if w0 & RXD_USED == 0 {
         return None; // still HW-owned: no frame yet
     }
-    let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+    // PCIe write-ordering: the GEM writes the status word (w1) then the USED bit
+    // (w0), but they can land out of order across the PCIe/UBUS fabric — so w1
+    // may be stale when we first see USED. Re-invalidate + re-read until the
+    // status (SOF/EOF/len) is non-zero, bounded so a genuine 0 can't hang us.
+    let mut ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+    let mut spins = 0u32;
+    while ctrl == 0 && spins < 100_000 {
+        dc_ivac(dptr, 16);
+        ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+        spins += 1;
+    }
     let w2 = unsafe { read_volatile((dptr + 8) as *const u32) };
     let w3 = unsafe { read_volatile((dptr + 12) as *const u32) };
     let desc_len = (ctrl & RXD_FRMLEN) as usize;
