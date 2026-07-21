@@ -349,7 +349,7 @@ pub fn rx_init() -> (usize, u16, u32) {
         }
     }
     // Publish descriptors to DRAM (non-coherent DMA reads them).
-    dc_cvac(ring, core::mem::size_of::<RxRing>()) // clean: device reads these;
+    dc_cvac(ring, core::mem::size_of::<RxRing>()); // clean: device reads these
 
     // Quiesce, mask IRQs (polled), configure DMA64 + RX buffer size, ring base.
     w(GEM, NCR, 0);
