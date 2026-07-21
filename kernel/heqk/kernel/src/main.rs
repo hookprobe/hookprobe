@@ -771,12 +771,17 @@ fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
 #[cfg(feature = "hboot")]
 fn cm5_el2_isolation_test() {
     let sentinel: u64 = 0xDEAD_BEEF_CAFE_F00D;
-    let mut val: u64 = sentinel;
+    let val: u64;
     kprint!(" [P7e] EL1 probing HBoot EL2 region @0x200000 (expect EL2 trap 'X'): ");
     unsafe {
+        // Set the sentinel INSIDE the asm (before the ldr) so it's guaranteed to
+        // execute; if the ldr faults, EL2 skips it (ELR+=4) and `v` stays the
+        // sentinel — a reliable "the load never completed" signal.
         core::arch::asm!(
+            "mov {v}, {sent}",
             "ldr {v}, [{a}]",
-            v = inout(reg) val,
+            v = out(reg) val,
+            sent = in(reg) sentinel,
             a = in(reg) 0x0020_0000usize,
             options(nostack),
         );
