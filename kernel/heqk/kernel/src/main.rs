@@ -162,8 +162,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
 /// a spin cap lets the boot proceed to reboot instead of hanging.
 #[cfg(feature = "cm5")]
 fn cm5_scheduler_demo() {
-    kprint!(" [P7b] scheduler on metal: GIC-400 + generic timer + 3 priority workers\n");
+    kprint!(" [P7b] a: enter scheduler demo\n");
     scheduler::init();
+    kprint!(" [P7b] b: scheduler init\n");
     let entries = [
         thread_hi as *const () as usize,
         thread_mid as *const () as usize,
@@ -174,12 +175,14 @@ fn cm5_scheduler_demo() {
         let sp = arch_aarch64::thread::make_thread(stack_top(i), entries[i], 0);
         scheduler::spawn(sp, prios[i]);
     }
+    kprint!(" [P7b] c: 3 workers spawned\n");
     let gic = arch_aarch64::Gic;
     gic.init();
+    kprint!(" [P7b] d: GIC-400 init\n");
     gic.enable(arch_aarch64::timer::TIMER_INTID);
+    kprint!(" [P7b] e: timer INTID {} enabled in GIC\n", arch_aarch64::timer::TIMER_INTID);
     arch_aarch64::GenericTimer.start(TICK_HZ);
-    kprint!(" [P7b] {} Hz tick armed (GIC INTID {}); IRQs on\n",
-        TICK_HZ, arch_aarch64::timer::TIMER_INTID);
+    kprint!(" [P7b] f: {} Hz timer armed; enabling IRQs\n", TICK_HZ);
     arch_aarch64::enable_irqs();
 
     // Idle until the scheduler finishes, with a bounded backstop.
