@@ -173,7 +173,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_gem_rx_demo();
 
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
-    cm5_gem_el0_probe();
+    cm5_gem_el0_probe(); // stage 1: register probe
+    cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
 
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
@@ -221,6 +222,45 @@ fn cm5_gem_el0_probe() {
     kprint!(" [P7c] EL0 driver read GEM NCFGR={:#010x} (kernel sees {:#010x}) — {}\n",
         el0, kern, if ok { "MATCH" } else { "MISMATCH" });
     kprint!(" [P7c] {} — real GEM reachable from an ISOLATED EL0 driver on metal (stage 1)\n",
+        if ok { "PASS" } else { "FAIL" });
+}
+
+/// P7c step 3b (stage 2) — the RX hot path at EL0. The GEM keeps receiving (the
+/// kernel did the privileged one-time `rx_init`); here an EL0 driver is granted
+/// ONLY a Normal-NC window onto the descriptor ring and polls it for a received
+/// frame, reporting the hardware status word (word1 = EOF|SOF|len). This isolates
+/// the part that touches attacker-controlled packet data — a compromise of the
+/// RX path is contained to EL0 + the ring window.
+#[cfg(feature = "cm5")]
+fn cm5_gem_el0_rx_probe() {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static gem_rx_stub: u8;
+        static gem_rx_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(gem_rx_stub) as usize;
+    let len = core::ptr::addr_of!(gem_rx_stub_end) as usize - src;
+    let code_pa = mmu_cm5::el0_code_pa();
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code_pa as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let uring = mmu_cm5::USER_VA_BASE + 0x3000;
+    mmu_cm5::map_user_code(ucode, code_pa);
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa()); // the ONLY new grant: the RX ring (NC)
+    kprint!(" [P7c] EL0 RX driver: granted NC ring window @{:#x}->{:#x} ({} desc x {}B), nothing else\n",
+        uring, arch_aarch64::gem::rxring_pa(), arch_aarch64::gem::RX_NDESC, arch_aarch64::gem::RX_DESC_STRIDE);
+    DRIVER_REPORT.store(0, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+    let w1 = DRIVER_REPORT.load(Ordering::Relaxed);
+    let len_field = w1 & 0x3fff;
+    let sof_eof = (w1 & 0xC000) == 0xC000;
+    let ok = sof_eof && (42..=1600).contains(&len_field);
+    kprint!(" [P7c] EL0 RX driver polled the ring: w1={:#010x} (EOF|SOF={}, len={}) — {}\n",
+        w1, sof_eof, len_field, if ok { "REAL FRAME" } else { "none/invalid" });
+    kprint!(" [P7c] {} — GEM RX hot path ISOLATED at EL0 (stage 2: only the descriptor ring granted)\n",
         if ok { "PASS" } else { "FAIL" });
 }
 

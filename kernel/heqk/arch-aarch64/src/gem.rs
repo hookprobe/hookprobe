@@ -570,3 +570,14 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
 pub fn rsr() -> u32 {
     r(GEM, RSR)
 }
+
+/// Physical base of the RX descriptor ring (== RXRING, page-aligned). An EL0 RX
+/// driver server is granted a Normal-NC window onto this page to poll descriptors
+/// coherently (no cache ops, which EL0 can't do). P7c step 3b stage 2.
+pub fn rxring_pa() -> usize {
+    unsafe { core::ptr::addr_of!(RXRING.desc) as usize }
+}
+/// Number of RX descriptors and the descriptor stride (bytes), for an EL0 driver
+/// that walks the ring.
+pub const RX_NDESC: usize = NRX;
+pub const RX_DESC_STRIDE: usize = DESC_SZ;

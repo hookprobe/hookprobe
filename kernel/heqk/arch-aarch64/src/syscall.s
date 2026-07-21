@@ -129,6 +129,42 @@ gem_probe_stub:
 1:  b   1b
 gem_probe_stub_end:
 
+// -------- P7c step 3b stage 2: EL0 GEM RX driver (poll the descriptor ring) --
+// The RX hot path — the part that touches attacker-controlled packet data — runs
+// isolated at EL0, granted ONLY a Normal-NC window onto the descriptor ring
+// (0x1_4000_3000). It scans the 8 x 24-byte descriptors for a received frame
+// (word0 USED bit) and reports that descriptor's status word (word1 = EOF|SOF|
+// len), then exits. The kernel did the privileged one-time bring-up.
+.global gem_rx_stub
+.global gem_rx_stub_end
+gem_rx_stub:
+    movz x1, #0x4000, lsl #16     // x1 = 0x0000_0000_4000_0000
+    movk x1, #0x0001, lsl #32     // x1 = 0x0000_0001_4000_0000 (GB5 base)
+    add  x1, x1, #0x3000          // URING_VA = 0x1_4000_3000 (granted NC ring)
+    mov  x4, xzr                  // outer wait counter
+0:  mov  x2, xzr                  // descriptor index
+    mov  x5, #24                  // descriptor stride
+1:  mul  x6, x2, x5
+    add  x7, x1, x6               // &desc[i]
+    ldr  w3, [x7]                 // desc[i].word0
+    tbnz w3, #0, 2f               // USED (bit0) set -> frame received
+    add  x2, x2, #1
+    cmp  x2, #8                   // NRX
+    b.lo 1b
+    add  x4, x4, #1               // no frame this pass; bounded spin + retry
+    movz x9, #0x0400, lsl #16     // 0x400_0000 bound (~a second, to catch live traffic)
+    cmp  x4, x9
+    b.lo 0b
+    mov  x0, xzr                  // timeout -> report 0
+    b    3f
+2:  ldr  w0, [x7, #4]            // desc[i].word1 (status/len) -> report it
+3:  mov  x8, #7                   // SYS_DRIVER_REPORT
+    svc  #0
+    mov  x8, #6                   // SYS_EXIT_USER
+    svc  #0
+9:  b    9b
+gem_rx_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME

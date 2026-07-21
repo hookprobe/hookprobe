@@ -92,6 +92,11 @@ pub fn map_user_data(va: usize, pa: usize) {
 pub fn map_user_device(va: usize, pa: usize) {
     write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_DEVICE, PXN | UXN));
 }
+/// Map an EL0 Normal-Non-Cacheable window (a driver's coherent view of the DMA
+/// descriptor ring — EL0 can't do cache maintenance, so NC keeps it coherent).
+pub fn map_user_nc(va: usize, pa: usize) {
+    write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_NC, PXN | UXN));
+}
 fn write_user_l3(va: usize, desc: u64) {
     let l3 = addr_of_mut!(L3_USER) as *mut u64;
     unsafe {
