@@ -8,3 +8,4 @@ hal = { path = "../hal" }
 
 [features]
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
+hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up

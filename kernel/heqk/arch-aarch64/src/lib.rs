@@ -27,8 +27,10 @@ pub use uart::Pl011;
 // entry/resume glue.
 #[cfg(not(feature = "cm5"))]
 global_asm!(include_str!("boot.s"));
-#[cfg(feature = "cm5")]
-global_asm!(include_str!("boot_cm5.s")); // adds an early dependency-free UART marker
+#[cfg(all(feature = "cm5", not(feature = "hboot")))]
+global_asm!(include_str!("boot_cm5.s")); // firmware-direct: own console bring-up
+#[cfg(feature = "hboot")]
+global_asm!(include_str!("boot_hboot.s")); // launched by HBoot: minimal EL1 entry
 global_asm!(include_str!("vectors.s"));
 global_asm!(include_str!("syscall.s"));
 

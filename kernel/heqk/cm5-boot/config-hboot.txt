@@ -1,0 +1,9 @@
+# HEQK platform cold boot via HBoot (heqk-boot). EEPROM loads the combined
+# image; HBoot verifies+measures the embedded kernel, then launches it at EL1.
+arm_64bit=1
+enable_uart=1
+pciex4_reset=0
+enable_rp1_uart=1
+kernel=hboot8.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+os_check=0

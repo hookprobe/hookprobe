@@ -34,5 +34,6 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "arch-aarch64",
+ "boot-abi",
  "hal",
 ]

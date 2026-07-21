@@ -51,10 +51,10 @@ static TICKS: AtomicU32 = AtomicU32::new(0);
 /// bring-up steps once serial is confirmed.
 #[cfg(feature = "cm5")]
 #[no_mangle]
-pub extern "C" fn kmain() -> ! {
+pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     let console = arch_aarch64::console();
-    // Console is ALREADY UP: the boot stub owns bring-up (clock/pinmux/PL011
-    // with barrier discipline); init() is a deliberate no-op on cm5.
+    // Console is ALREADY UP: firmware-direct boot stub or HBoot owns bring-up
+    // (clock/pinmux/PL011 with barrier discipline); init() is a no-op on cm5.
     console.init();
     let el = arch_aarch64::current_el();
     let midr: u64;
@@ -65,26 +65,48 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" boot: running at EL{}\n", el);
     kprint!(" cpu : MIDR_EL1={:#010x} (part {:#05x}; 0xd0b=Cortex-A76)\n", midr, (midr >> 4) & 0xfff);
     kprint!(" uart: RP1 UART0 @ 0x1C00030000 (bootloader window, GPIO14/15 header)\n");
-    // BootDebug breadcrumbs (written by the stub at 0x3FFF0000): print the
-    // pre-touch vs post-init register ground truth for the record.
-    let bd = 0x3FFF_0000usize as *const u64;
-    unsafe {
-        kprint!(
-            " bootdbg: magic={:#018x} step={} el={} sctlr={:#x}\n",
-            read_volatile(bd), read_volatile(bd.add(1)), read_volatile(bd.add(2)), read_volatile(bd.add(3))
-        );
-        kprint!(
-            " pre : FR={:#x} IBRD={} FBRD={} LCR={:#x} CR={:#x} IMSC={:#x} CLK={:#x} G14={:#x} PAD14={:#x}\n",
-            read_volatile(bd.add(8)), read_volatile(bd.add(9)), read_volatile(bd.add(10)),
-            read_volatile(bd.add(11)), read_volatile(bd.add(12)), read_volatile(bd.add(13)),
-            read_volatile(bd.add(16)), read_volatile(bd.add(19)), read_volatile(bd.add(21))
-        );
-        kprint!(
-            " post: FR={:#x} IBRD={} FBRD={} LCR={:#x} CR={:#x} CLK={:#x} G14={:#x}\n",
-            read_volatile(bd.add(24)), read_volatile(bd.add(25)), read_volatile(bd.add(26)),
-            read_volatile(bd.add(27)), read_volatile(bd.add(28)), read_volatile(bd.add(29)),
-            read_volatile(bd.add(30))
-        );
+
+    // Launched by HBoot: validate + report the typed handoff (the kernel
+    // never parses a DTB — HBoot did, and passed this struct).
+    #[cfg(feature = "hboot")]
+    {
+        use boot_abi::{BootInfo, BOOTINFO_MAGIC};
+        let bi = unsafe { &*(bootinfo_pa as *const BootInfo) };
+        if bi.magic == BOOTINFO_MAGIC {
+            kprint!(" hboot: BootInfo v{} @ {:#x} — verified handoff\n", bi.version, bootinfo_pa);
+            kprint!(" hboot: kernel {:#x} ({} bytes), dtb {:#x}, el2_gate={}\n",
+                bi.kernel_pa, bi.kernel_size, bi.dtb_pa, bi.el2_gate);
+            kprint!(" hboot: measured sha256=");
+            for b in &bi.kernel_hash { kprint!("{:02x}", b); }
+            kprint!("\n");
+        } else {
+            kprint!(" hboot: BAD BootInfo magic {:#x} @ {:#x}\n", bi.magic, bootinfo_pa);
+        }
+    }
+
+    // Firmware-direct boot: print the BootDebug breadcrumbs the stub left.
+    #[cfg(not(feature = "hboot"))]
+    {
+        let _ = bootinfo_pa;
+        let bd = 0x3FFF_0000usize as *const u64;
+        unsafe {
+            kprint!(
+                " bootdbg: magic={:#018x} step={} el={} sctlr={:#x}\n",
+                read_volatile(bd), read_volatile(bd.add(1)), read_volatile(bd.add(2)), read_volatile(bd.add(3))
+            );
+            kprint!(
+                " pre : FR={:#x} IBRD={} FBRD={} LCR={:#x} CR={:#x} IMSC={:#x} CLK={:#x} G14={:#x} PAD14={:#x}\n",
+                read_volatile(bd.add(8)), read_volatile(bd.add(9)), read_volatile(bd.add(10)),
+                read_volatile(bd.add(11)), read_volatile(bd.add(12)), read_volatile(bd.add(13)),
+                read_volatile(bd.add(16)), read_volatile(bd.add(19)), read_volatile(bd.add(21))
+            );
+            kprint!(
+                " post: FR={:#x} IBRD={} FBRD={} LCR={:#x} CR={:#x} CLK={:#x} G14={:#x}\n",
+                read_volatile(bd.add(24)), read_volatile(bd.add(25)), read_volatile(bd.add(26)),
+                read_volatile(bd.add(27)), read_volatile(bd.add(28)), read_volatile(bd.add(29)),
+                read_volatile(bd.add(30))
+            );
+        }
     }
     kprint!(" RUST OK\n");
     kprint!(" [CM5-BOOT] PASS — HEQK boots and prints on real hardware\n");

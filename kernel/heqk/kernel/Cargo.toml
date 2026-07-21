@@ -7,11 +7,15 @@ edition = "2021"
 hal          = { path = "../hal" }
 arch-aarch64 = { path = "../arch-aarch64" }
 abi          = { path = "../abi" }
+boot-abi     = { path = "../boot-abi" }
 
 [features]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
+# Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
+# already up, consume the typed BootInfo handoff.
+hboot = ["cm5", "arch-aarch64/hboot"]
 
 [[bin]]
 name = "kernel"
