@@ -211,27 +211,15 @@ fn cm5_gem_rx_demo() {
     let (ncfgr, dmacfg, status) = arch_aarch64::gem::probe();
     kprint!(" [P8] GEM reachable: NCFGR={:#010x} DMACFG={:#010x} eth_cfg.STATUS={:#x}\n",
         ncfgr, dmacfg, status);
-    kprint!(" [P8] link={} speed={} duplex={}\n",
-        status & 1, (status >> 1) & 3, (status >> 3) & 1);
-    let ring = arch_aarch64::gem::rx_init();
-    // Diagnose the PHY over MDIO: a valid Broadcom ID = PHY alive/out-of-reset;
-    // 0xffffffff = held in reset / absent. Also the reset-pin level.
-    let (id0, id1, rst) = arch_aarch64::gem::diagnose();
-    kprint!(" [P8] PHY id@addr0={:#010x} id@addr1={:#010x} ETH_RST_N pin={}\n", id0, id1, rst);
-    let (ctrl, pad, out, oe, rin) = arch_aarch64::gem::gpio_dump();
-    kprint!(" [P8] gpio32: CTRL={:#x} PAD={:#x} RIO_OUT={:#x} RIO_OE={:#x} RIO_IN={:#x}\n",
-        ctrl, pad, out, oe, rin);
-    // PHY link check: kick auto-neg, read BMSR (bit2 = link). No link here but
-    // MDIO alive => cable likely on the OTHER RJ45 (RTL8168), not end0.
-    let (bmcr, bmsr, anlpar) = arch_aarch64::gem::phy_link(0);
-    kprint!(" [P8] PHY reg0(BMCR)={:#06x} reg1(BMSR)={:#06x} (link={}) reg5(ANLPAR)={:#06x}\n",
-        bmcr, bmsr, (bmsr >> 2) & 1, anlpar);
-    // Give the PHY up to ~3 s to auto-negotiate a link after reset-release.
-    let link = arch_aarch64::gem::wait_link(3000);
-    kprint!(" [P8] after PHY reset: eth_cfg.STATUS={:#x} link={} speed={}\n",
-        link, link & 1, (link >> 1) & 3);
-    kprint!(" [P8] RX ring @ {:#x} (bus {:#x}); RE on; polling ~5 s\n",
-        ring, ring as u64 + 0x10_0000_0000);
+    // Full bring-up: PHY reset + rgmii-id delays + autoneg + speed, MAC gigabit,
+    // RP1 speed override, RX ring armed.
+    let (ring, auxstat, ethst) = arch_aarch64::gem::rx_init();
+    let sc = (auxstat >> 8) & 7;
+    kprint!(" [P8] PHY id@0={:#010x} auxstat={:#06x} speed_code={} (7=1G/full 5=100/full)\n",
+        ((arch_aarch64::gem::phy_read(0, 2) as u32) << 16) | arch_aarch64::gem::phy_read(0, 3) as u32,
+        auxstat, sc);
+    kprint!(" [P8] eth_cfg.STATUS={:#x}; RX ring @ {:#x}; RE + gigabit={} on; polling ~5 s\n",
+        ethst, ring, sc >= 6);
 
     #[repr(align(4096))]
     struct Pool([u8; packet::FRAME_SZ * 8]);

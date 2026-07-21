@@ -45,7 +45,9 @@ const NCR_RE: u32 = 1 << 2; // receive enable
 const NCR_TE: u32 = 1 << 3; // transmit enable
 const NCR_MPE: u32 = 1 << 4; // MDIO enable
 // NCFGR bits
+const NCFGR_FD: u32 = 1 << 1; // full duplex
 const NCFGR_CAF: u32 = 1 << 4; // copy-all-frames (promiscuous)
+const NCFGR_GBE: u32 = 1 << 10; // gigabit mode (DDR RX sampling) — REQUIRED for 1G RX
 const NCFGR_MDC_DIV128: u32 = 6 << 18; // GEM_CLK: pclk/128 (~1.5 MHz MDC @200 MHz)
 // DMACFG bits
 const DMACFG_ADDR64: u32 = 1 << 30;
@@ -146,6 +148,21 @@ pub fn phy_link(phy: u32) -> (u16, u16, u16) {
     (bmcr, bmsr, anlpar)
 }
 
+/// Configure the BCM54210 RGMII internal delays for "rgmii-id" (RX+TX delay in
+/// the PHY). RX via AUXCTL (reg 0x18, shadow MISC 0x07, RGMII_SKEW_EN bit8); TX
+/// via SHD (reg 0x1c, shadow 0x03 = CLK_CTL, GTXCLK_EN bit9). RMW-preserving,
+/// exactly as Linux bcm54xx_config_clock_delay().
+pub fn phy_rgmii_id(phy: u32) {
+    // RX delay: read MISC shadow, OR in WREN|SKEW_EN, write back (bits[2:0]=0x07).
+    phy_write(phy, 0x18, 0x7007); // select MISC shadow for read
+    let misc = phy_read(phy, 0x18) as u32;
+    phy_write(phy, 0x18, (0x07 | misc | 0x8000 | 0x0100) as u16);
+    // TX delay: read CLK_CTL shadow 0x03, OR in GTXCLK_EN, write back.
+    phy_write(phy, 0x1c, 0x03 << 10); // select shadow 3 for read (WRITE bit clear)
+    let shd = (phy_read(phy, 0x1c) & 0x3ff) as u32;
+    phy_write(phy, 0x1c, (0x8000 | (0x03 << 10) | ((shd | 0x0200) & 0x3ff)) as u16);
+}
+
 /// Read the RP1 eth_cfg STATUS: RGMII link (bit0), speed (bits2:1), duplex (bit3).
 pub fn link_status() -> u32 {
     r(ETH_CFG, 0x04)
@@ -237,10 +254,37 @@ fn enable_clocks() {
     }
 }
 
-/// Bring up polled RX. Returns the ring base (cpu phys) for diagnostics.
-pub fn rx_init() -> usize {
+/// Bring up polled RX end to end. Returns (ring, phy_auxstatus, eth_cfg_status).
+/// Configures the PHY (reset, rgmii-id delays, autoneg), reads the negotiated
+/// speed, sets the MAC to gigabit if needed, forces the RP1 speed override, and
+/// arms the RX ring.
+pub fn rx_init() -> (usize, u16, u32) {
     enable_clocks();
     phy_reset();
+
+    // Bring MDIO up (MPE + MDC), set the rgmii-id delays, then kick auto-neg.
+    w(GEM, NCFGR, NCFGR_MDC_DIV128);
+    w(GEM, NCR, NCR_MPE);
+    phy_rgmii_id(0);
+    phy_write(0, 0, (1 << 12) | (1 << 9)); // BMCR: autoneg enable + restart
+    // Wait for link (PHY BMSR reg1 bit2) up to ~3 s.
+    let mut auxstat = 0u16;
+    for _ in 0..3000 {
+        if phy_read(0, 1) & (1 << 2) != 0 {
+            auxstat = phy_read(0, 0x19); // aux status: speed in bits[10:8]
+            break;
+        }
+        for _ in 0..400_000u32 {
+            core::hint::spin_loop();
+        }
+    }
+    let speed_code = (auxstat >> 8) & 0x7; // 7=1000/full, 5=100/full, ...
+    let is_gig = speed_code >= 6; // 110/111 = 1000
+    // RP1 eth_cfg CLKGEN (0x14): force MAC-side speed (BCM54210 sends no RGMII
+    // in-band status). SPEED_OVERRIDE_EN=bit3, SPEED_OVERRIDE[1:0]: 2=1G,1=100.
+    let clkgen = r(ETH_CFG, 0x14);
+    let spd_ovr = if is_gig { 2 } else { 1 };
+    w(ETH_CFG, 0x14, (clkgen & !0x3) | (1 << 3) | spd_ovr);
 
     let ring = core::ptr::addr_of_mut!(RXRING) as usize;
     // Build the RX ring: each descriptor points at its buffer (bus addr =
@@ -273,10 +317,15 @@ pub fn rx_init() -> usize {
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
-    // Promiscuous + accept broadcast (NBC=0), MDC divider, then enable RX.
-    w(GEM, NCFGR, NCFGR_CAF | NCFGR_MDC_DIV128);
+    // MAC: promiscuous + broadcast, MDC divider, full-duplex, and GIGABIT mode
+    // if the link negotiated 1G (required — 1000BASE-T RX is DDR-sampled).
+    let mut ncfgr = NCFGR_CAF | NCFGR_MDC_DIV128 | NCFGR_FD;
+    if is_gig {
+        ncfgr |= NCFGR_GBE;
+    }
+    w(GEM, NCFGR, ncfgr);
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
-    ring
+    (ring, auxstat, link_status())
 }
 
 /// Poll the RX ring once. If a frame is ready, copy up to `out.len()` bytes into
