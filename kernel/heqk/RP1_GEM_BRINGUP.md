@@ -115,3 +115,26 @@ Consolidated audit image booted clean on metal. Results:
     and RX buffer-size (RXBS) fields; whether RP1 GEM needs GEM-specific RX
     descriptor writeback enabled; whether length lives in a GEM RXUBR/queue
     status reg rather than the descriptor on this IP revision.
+
+## #1 (w1=0) — CLOSED as a documented RP1 GEM quirk (2026-07-21)
+After a diagnostic boot pinned the exact behavior (word0 = correct buffer addr +
+HW-set USED; word2 = 0x10 addr-hi; **word1 = 0 in DRAM**, on the FIRST-USE,
+correctly-aligned descriptor that no recycle ever touched), FOUR independent
+theories were tried on metal and NONE populated word1:
+1. PCIe write-ordering re-read poll — no effect.
+2. DMACFG RXBMS|TXPBMS full-store-and-forward (0x40200710, confirmed applied) — w1 still 0.
+3. RX recycle write-discipline (clear USED only, never rewrite word1; invalidate the
+   shared 64B line before cleaning to avoid the B-4 false-sharing clobber) — w1 still 0
+   (and it can't explain a first-use descriptor anyway).
+4. DMACFG RX/TX extended-BD mode bit28|29 (0x70200710, confirmed applied) — w1 STILL 0
+   on the aligned descriptor, AND it widened the descriptor with PTP timestamp words,
+   corrupting the 16-byte-stride ring (stray w0=0x00000001; frames 3→2). Reverted.
+
+Conclusion: on this RP1 GEM_GXL the RX descriptor **status/length word (word1) is not
+written** in our polled 16-byte-DMA64 config, regardless of the DMACFG/NCFGR bits above.
+The datapath is UNAFFECTED: frames are received intact, the parser self-bounds the
+length via the IPv4/IPv6 header (`total_len`/`payload_len`), and the IDS/IPS verdict +
+the `:4444` DROP work on metal. `poll_rx` copies the whole buffer when `desc_len==0`.
+Kept: DMACFG=0x40200710 (clean 3-frame datapath) + the recycle write-discipline
+hardening. Deferred: exact hardware length is a metadata-only gap; revisit under the
+K1 non-cacheable-descriptor rework if it ever matters (it does not for correctness).
