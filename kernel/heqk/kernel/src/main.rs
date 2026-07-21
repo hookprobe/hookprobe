@@ -20,7 +20,7 @@ mod telemetry;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use hal::{Console, IrqController, Mmu, Timer};
 
 /// Formatted print to the early console (arch seam).
@@ -44,6 +44,8 @@ fn stack_top(i: usize) -> usize {
 }
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
+/// Set by the timer IRQ when the on-metal scheduler demo completes (cm5).
+static SCHED_DONE: AtomicBool = AtomicBool::new(false);
 
 /// CM5 / BCM2712 first-boot entry: prove HEQK boots and prints on real silicon
 /// via the on-SoC debug UART. MMU stays OFF (the UART is at a 40-bit PA that the
@@ -140,15 +142,57 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     kprint!(" mmu : cached RAM r/w {} [P7a]\n", if rt == magic { "PASS" } else { "FAIL" });
 
     kprint!(" [CM5-BOOT] PASS — HEQK boots, MMU on, prints on real hardware\n");
-    kprint!(" halting; next: GIC-400 @0x107FFF9000, generic timer, then RP1\n");
+
+    // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
+    cm5_scheduler_demo();
+
+    kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
     // the EL2 gate performs the PM reset (EL1 writes to the PM block are
-    // silently ignored; EL2 is the proven path). Tryboot is spent, so this
-    // reboots into Linux: the bench self-recovers with no human touch.
+    // silently ignored; EL2 is the proven path). The bench self-recovers.
     for _ in 0..200_000_000u64 {
         core::hint::spin_loop();
     }
     unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+}
+
+/// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable
+/// IRQs, and let the round-robin/priority scheduler preempt them on real
+/// hardware. Bounded: if timer IRQs never arrive (routing not as expected),
+/// a spin cap lets the boot proceed to reboot instead of hanging.
+#[cfg(feature = "cm5")]
+fn cm5_scheduler_demo() {
+    kprint!(" [P7b] scheduler on metal: GIC-400 + generic timer + 3 priority workers\n");
+    scheduler::init();
+    let entries = [
+        thread_hi as *const () as usize,
+        thread_mid as *const () as usize,
+        thread_lo as *const () as usize,
+    ];
+    let prios: [u8; 3] = [3, 2, 1];
+    for i in 0..3 {
+        let sp = arch_aarch64::thread::make_thread(stack_top(i), entries[i], 0);
+        scheduler::spawn(sp, prios[i]);
+    }
+    let gic = arch_aarch64::Gic;
+    gic.init();
+    gic.enable(arch_aarch64::timer::TIMER_INTID);
+    arch_aarch64::GenericTimer.start(TICK_HZ);
+    kprint!(" [P7b] {} Hz tick armed (GIC INTID {}); IRQs on\n",
+        TICK_HZ, arch_aarch64::timer::TIMER_INTID);
+    arch_aarch64::enable_irqs();
+
+    // Idle until the scheduler finishes, with a bounded backstop.
+    let mut guard: u64 = 0;
+    while !SCHED_DONE.load(Ordering::SeqCst) {
+        unsafe { core::arch::asm!("wfe") };
+        guard += 1;
+        if guard > 200_000_000 {
+            kprint!(" [P7b] WARN: no timer IRQs (GIC/timer routing?) — continuing\n");
+            break;
+        }
+    }
+    arch_aarch64::disable_irqs();
 }
 
 /// Measured-boot attestation: independently replay HBoot's event log and
@@ -198,6 +242,43 @@ fn attest_replay(bi: &boot_abi::BootInfo) {
         for b in &pcr[i] { kprint!("{:02x}", b); }
         kprint!("\n");
     }
+    // Forward the AK-signed attestation quote to a remote verifier: dump the
+    // full quote block as hex between markers so the host can extract + verify.
+    attest_dump_quote(bi);
+}
+
+/// Emit the AK-signed attestation quote (nonce||svn||PCRs||ed25519||SLH-DSA)
+/// as hex between BEGIN/END markers. A host verifier reproduces the challenge,
+/// checks both AK signatures, and validates the PCRs — remote attestation.
+#[cfg(feature = "hboot")]
+fn attest_dump_quote(bi: &boot_abi::BootInfo) {
+    use boot_abi::{AttestQuote, ATTEST_QUOTE_MAGIC};
+    let q = bi.quote_pa as *const AttestQuote;
+    let magic = unsafe { read_volatile(core::ptr::addr_of!((*q).magic)) };
+    if magic != ATTEST_QUOTE_MAGIC {
+        kprint!(" attest: no quote (magic {:#x})\n", magic);
+        return;
+    }
+    let bytes = bi.quote_pa as *const u8;
+    // Quote block = magic(8) + body(nonce 32+svn 8+pcr 128) + ed(64) + slh(7856).
+    // Skip the leading magic; emit exactly the fields the verifier expects.
+    let total = core::mem::size_of::<AttestQuote>();
+    kprint!(" attest: AK-signed quote (hybrid, quantum-safe) follows\n");
+    kprint!("---HEQK-QUOTE-BEGIN---\n");
+    // Emit from offset 8 (skip magic) to end: nonce||svn||pcr||ed_sig||slh_sig.
+    let mut col = 0;
+    for off in 8..total {
+        let b = unsafe { read_volatile(bytes.add(off)) };
+        kprint!("{:02x}", b);
+        col += 1;
+        if col % 64 == 0 {
+            kprint!("\n");
+        }
+    }
+    if col % 64 != 0 {
+        kprint!("\n");
+    }
+    kprint!("---HEQK-QUOTE-END---\n");
 }
 
 #[cfg(not(feature = "cm5"))]
@@ -350,9 +431,18 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
         let next = scheduler::on_tick(sp);
         gic.eoi(intid);
         if scheduler::alive_workers() == 0 || n >= RUN_TICKS {
-            kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
-            kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV GREEN\n");
-            arch_aarch64::semihosting::exit(0);
+            #[cfg(not(feature = "cm5"))]
+            {
+                kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV GREEN\n");
+                arch_aarch64::semihosting::exit(0);
+            }
+            // On real silicon there is no semihosting exit: signal the idle
+            // loop to stop and reboot cleanly via HBoot's EL2 gate.
+            #[cfg(feature = "cm5")]
+            if !SCHED_DONE.swap(true, Ordering::SeqCst) {
+                kprint!("\n [P7b] PASS preemptive scheduler on metal ({} ticks, context switch verified)\n", n);
+            }
         }
         next
     } else {

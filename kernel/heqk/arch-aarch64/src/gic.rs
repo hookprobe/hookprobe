@@ -1,10 +1,17 @@
-//! GICv2 (ARM Generic Interrupt Controller) — the QEMU `virt` default.
-//! Distributor at 0x0800_0000, CPU interface at 0x0801_0000.
+//! GICv2 (ARM Generic Interrupt Controller). QEMU `virt`: GICD 0x0800_0000 /
+//! GICC 0x0801_0000. CM5/BCM2712 GIC-400 (also GICv2): GICD 0x10_7FFF_9000 /
+//! GICC 0x10_7FFF_A000 — same register layout, different base (Device-mapped).
 
 use core::ptr::{read_volatile, write_volatile};
 
-const GICD: usize = 0x0800_0000; // Distributor
-const GICC: usize = 0x0801_0000; // CPU interface
+#[cfg(not(feature = "cm5"))]
+const GICD: usize = 0x0800_0000; // QEMU virt Distributor
+#[cfg(not(feature = "cm5"))]
+const GICC: usize = 0x0801_0000; // QEMU virt CPU interface
+#[cfg(feature = "cm5")]
+const GICD: usize = 0x10_7FFF_9000; // BCM2712 GIC-400 Distributor
+#[cfg(feature = "cm5")]
+const GICC: usize = 0x10_7FFF_A000; // BCM2712 GIC-400 CPU interface
 
 const GICD_CTLR: usize = GICD + 0x000;
 const GICD_ISENABLER: usize = GICD + 0x100; // one bit per intid

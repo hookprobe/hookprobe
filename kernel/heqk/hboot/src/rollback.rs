@@ -1,20 +1,70 @@
-//! Anti-rollback security-version floor.
+//! Anti-rollback: a security-version floor with a pluggable persistence
+//! backend (the `SecureCounter` abstraction).
 //!
-//! HBoot refuses to boot any image whose signed `svn` is below `MIN_SVN`. The
-//! floor is embedded in HBoot itself — HBoot is already the root of trust, so
-//! an attacker who could rewrite this value has already defeated secure boot.
+//! The EFFECTIVE floor HBoot enforces is `max(COMPILE_FLOOR, hardware_floor())`.
+//! A validly-signed image whose `svn` is below the effective floor is refused
+//! (rollback protection); because `svn` is bound into the signed message, the
+//! version cannot be edited to slip past.
 //!
-//! To advance the floor, bump `MIN_SVN`, rebuild + reflash HBoot, and ship
-//! images at the new `svn`. Old validly-signed images (lower svn) then refuse
-//! to boot — that is the anti-rollback guarantee.
+//! Backends, honestly stated:
+//!  - **compile-time** (active now): `COMPILE_FLOOR` baked into HBoot, the root
+//!    of trust. Advancing it = bump + rebuild + reflash HBoot.
+//!  - **BCM2712 OTP fuses** (hardware monotonic): would make the floor a true
+//!    one-way hardware counter. Writing OTP is IRREVERSIBLE and VPU-mediated —
+//!    `provision_otp_floor` below is the (deliberately unused) write path; it
+//!    must be an explicit operator action, never automatic. Reading is safe.
+//!  - **eMMC RPMB** (replay-protected block): needs an SDHCI driver HBoot does
+//!    not yet have — a separate project.
 //!
-//! Limitation (documented on purpose): this floor is a COMPILE-TIME constant,
-//! not a hardware monotonic counter, so advancing it is a manual reflash rather
-//! than an automatic per-boot latch. When HBoot grows a secure-storage driver
-//! (eMMC RPMB or BCM2712 OTP/eFuse), only the SOURCE of this value changes —
-//! the header `svn`, the signature binding, and the `svn >= floor` comparison
-//! all stay exactly as they are.
+//! Until OTP/RPMB is provisioned, `hardware_floor()` returns 0, so the effective
+//! floor equals the compile-time floor. The abstraction is what lets the
+//! hardware backend drop in later without touching the header, the signature
+//! binding, or the `svn >= floor` comparison.
 
-/// Minimum acceptable security version number. Bump when shipping a release
-/// that fixes a vulnerability you never want an attacker to roll back past.
-pub const MIN_SVN: u64 = 1;
+/// Compile-time floor (root of trust). Bump for a release that fixes a
+/// vulnerability you never want rolled back past.
+pub const COMPILE_FLOOR: u64 = 1;
+
+/// Back-compat alias used elsewhere in HBoot.
+pub const MIN_SVN: u64 = COMPILE_FLOOR;
+
+/// A persistent, monotonic security-version floor.
+pub trait SecureCounter {
+    /// Current hardware floor (0 if not provisioned / backend unavailable).
+    fn floor(&self) -> u64;
+    /// Whether this backend is a real hardware monotonic store.
+    fn is_hardware(&self) -> bool;
+    /// Short label for logging.
+    fn name(&self) -> &'static str;
+}
+
+/// The not-yet-provisioned backend: no hardware store wired, floor = 0. Honest
+/// placeholder that keeps the effective floor at the compile-time value.
+pub struct Unprovisioned;
+impl SecureCounter for Unprovisioned {
+    fn floor(&self) -> u64 {
+        0
+    }
+    fn is_hardware(&self) -> bool {
+        false
+    }
+    fn name(&self) -> &'static str {
+        "unprovisioned (OTP/RPMB pending)"
+    }
+}
+
+/// The active backend. Swap for an `OtpCounter` / `RpmbCounter` when a hardware
+/// store is wired — nothing else in the boot path changes.
+pub fn backend() -> impl SecureCounter {
+    Unprovisioned
+}
+
+/// Effective anti-rollback floor = max(compile-time, hardware).
+pub fn effective_floor() -> u64 {
+    let hw = backend().floor();
+    if hw > COMPILE_FLOOR {
+        hw
+    } else {
+        COMPILE_FLOOR
+    }
+}

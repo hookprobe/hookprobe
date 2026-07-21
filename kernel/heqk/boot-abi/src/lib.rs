@@ -45,6 +45,37 @@ pub struct MeasureEvent {
     pub digest: [u8; 32],
 }
 
+// -------------------- Remote attestation quote -----------------------------
+/// Reserved page for the attestation quote (below the measure log).
+pub const ATTEST_QUOTE_ADDR: usize = 0x3FFC_0000;
+/// Verifier challenge nonce (fixed for the demo; a real deployment injects a
+/// fresh per-request nonce over a channel). Must match heqk-sign.
+pub const CHALLENGE_NONCE: [u8; 32] = *b"HEQK-attestation-demo-nonce-0001";
+/// AK SLH-DSA signature length (FIPS 205 SHA2-128s) — same as boot sigs.
+pub const AK_SLHDSA_SIG_LEN: usize = SLHDSA_SIG_LEN;
+/// Context string bound into the AK signatures (must match heqk-sign).
+pub const AK_SIG_CTX: &[u8] = b"HEQK-ATTEST-v1";
+
+/// Quote body length: nonce(32) + svn(8) + PCR0..3(32*NUM_PCR).
+pub const QUOTE_BODY_LEN: usize = 32 + 8 + 32 * NUM_PCR;
+
+/// The attestation quote HBoot writes at ATTEST_QUOTE_ADDR. `nonce||svn||pcr`
+/// is the signed body; both AK signatures cover exactly those bytes. A remote
+/// verifier checks both signatures against the AK public keys, the nonce for
+/// freshness, and the PCRs against known-good — proving the exact software
+/// state, cryptographically, quantum-safely.
+#[repr(C)]
+pub struct AttestQuote {
+    pub magic: u64, // ATTEST_QUOTE_MAGIC
+    pub nonce: [u8; 32],
+    pub svn: u64,
+    pub pcr: [[u8; 32]; NUM_PCR],
+    pub ed25519_sig: [u8; ED25519_SIG_LEN],
+    pub slhdsa_sig: [u8; AK_SLHDSA_SIG_LEN],
+}
+/// "HEQKQOT1" little-endian.
+pub const ATTEST_QUOTE_MAGIC: u64 = 0x31_54_4f_51_4b_51_45_48;
+
 /// Header of the event log at MEASURE_LOG_ADDR; `count` MeasureEvents follow it
 /// contiguously. `pcr` holds the final accumulator values a verifier must be
 /// able to reproduce by replaying the events (that replay is the integrity
@@ -81,6 +112,7 @@ pub struct BootInfo {
     pub svn_floor: u64,    // the anti-rollback floor HBoot enforced
     pub measure_log_pa: u64, // MEASURE_LOG_ADDR (measured-boot event log)
     pub measure_count: u64,  // number of events in the log
+    pub quote_pa: u64,       // ATTEST_QUOTE_ADDR (AK-signed attestation quote)
 }
 
 /// BootInfo.verify_flags bits.

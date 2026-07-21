@@ -16,11 +16,14 @@ use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
 use fips205::slh_dsa_sha2_128s;
 use fips205::traits::{SerDes, Verifier};
 
+mod attest;
+mod attest_keys;
 mod measure;
 mod rollback;
 mod trusted_keys;
 
 use boot_abi::sha256;
+use rollback::SecureCounter;
 
 extern "C" {
     static __hboot_load_end: u8;
@@ -119,11 +122,14 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts(" bytes, load ");
     puthex(load_pa);
     puts("\n");
+    let floor = rollback::effective_floor();
     puts(" svn    : image=");
     puthex(svn);
     puts(" floor=");
-    puthex(rollback::MIN_SVN);
-    puts("\n");
+    puthex(floor);
+    puts(" (");
+    puts(rollback::backend().name());
+    puts(")\n");
 
     // MEASURE: SHA-256 over the payload body. Verification binds to THIS
     // recomputed hash, never the header's stored copy — so a tampered payload
@@ -171,7 +177,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // ANTI-ROLLBACK: refuse a validly-signed but downlevel image. The floor is
     // embedded in HBoot (root of trust). Because svn is bound into the signed
     // message, this comparison cannot be bypassed by editing the header.
-    if svn < rollback::MIN_SVN {
+    if svn < floor {
         puts(" secure boot: FAIL — image svn below anti-rollback floor, refusing\n");
         unsafe { park() }
     }
@@ -183,7 +189,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     m.extend(PCR_KERNEL, EV_KERNEL, &computed);
     let mut cfg = [0u8; 40];
     cfg[..8].copy_from_slice(&svn.to_le_bytes());
-    cfg[8..16].copy_from_slice(&rollback::MIN_SVN.to_le_bytes());
+    cfg[8..16].copy_from_slice(&floor.to_le_bytes());
     cfg[16..24].copy_from_slice(&load_pa.to_le_bytes());
     cfg[24..32].copy_from_slice(&(entry_off).to_le_bytes());
     cfg[32..40].copy_from_slice(&(VERIFY_ED25519 | VERIFY_SLHDSA).to_le_bytes());
@@ -193,6 +199,14 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts(" measure: PCR1 (kernel) + PCR2 (config) extended, ");
     puthex(m.count());
     puts(" events logged\n");
+
+    // REMOTE ATTESTATION: sign nonce||svn||PCRs with the device AK (hybrid,
+    // quantum-safe) so an off-device verifier can attest the exact boot state.
+    let pcrs = [m.pcr(0), m.pcr(1), m.pcr(2), m.pcr(3)];
+    let _ak_ed = attest::emit_quote(svn, &pcrs);
+    puts(" attest : AK-signed quote (ed25519 + SLH-DSA) @ ");
+    puthex(ATTEST_QUOTE_ADDR as u64);
+    puts("\n");
 
     // Relocate the payload to its link address.
     unsafe {
@@ -215,9 +229,10 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 el2_gate: 1,
                 verify_flags: VERIFY_ED25519 | VERIFY_SLHDSA,
                 svn,
-                svn_floor: rollback::MIN_SVN,
+                svn_floor: floor,
                 measure_log_pa: MEASURE_LOG_ADDR as u64,
                 measure_count: m.count(),
+                quote_pa: ATTEST_QUOTE_ADDR as u64,
             },
         );
     }
