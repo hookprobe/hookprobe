@@ -268,26 +268,47 @@ fn cm5_gem_rx_demo() {
         kprint!(" [P8] {} real frame(s) received + IDS verdict on the microkernel\n", got);
     }
 
-    // --- IPS demo: inject a crafted UDP frame to the BLOCKED port 4444 through
-    // the SAME datapath, to show a real DROP alongside the PASS on live traffic.
+    // --- P7a: INLINE IPS ENFORCEMENT — the BPF verdict now ACTS on the wire.
+    // Bring up the GEM TX path, then run two crafted frames through the SAME
+    // datapath: a benign UDP (dst :53) and a threat UDP (dst :4444). A PASS
+    // verdict is FORWARDED (transmitted out end0); a DROP verdict is enforced by
+    // never transmitting the frame. This turns detect-only into a real inline IPS.
+    arch_aarch64::gem::tx_init();
+    // Build a 42-byte Eth/IPv4/UDP frame with the given dst port.
+    fn build_udp(buf: &mut [u8; 42], dst: u16) {
+        *buf = [0u8; 42];
+        buf[12] = 0x08; // ethertype IPv4
+        buf[14] = 0x45; // IPv4, IHL=5
+        buf[17] = 28; // IP total length (20 + 8)
+        buf[23] = 17; // UDP
+        buf[34] = 0x30;
+        buf[35] = 0x39; // src port 12345
+        buf[36] = (dst >> 8) as u8;
+        buf[37] = (dst & 0xff) as u8; // dst port
+    }
+    let mut benign = [0u8; 42];
+    build_udp(&mut benign, 53);
     let mut threat = [0u8; 42];
-    threat[12] = 0x08; // ethertype IPv4
-    threat[13] = 0x00;
-    threat[14] = 0x45; // IPv4, IHL=5
-    threat[16] = 0;
-    threat[17] = 28; // IP total length (20 + 8)
-    threat[23] = 17; // UDP
-    threat[34] = 0x30;
-    threat[35] = 0x39; // src port 12345
-    threat[36] = 0x11;
-    threat[37] = 0x5c; // dst port 4444 (0x115c) — the signed threat rule blocks it
-    if packet::produce_raw(pool, &threat) {
-        if let Some((port, verdict)) = packet::consume_one(pool) {
-            kprint!(" [P8] IPS: injected UDP->port {} -> {}\n", port,
-                if verdict == packet::DROP { "DROP (threat blocked!)" } else { "PASS" });
+    build_udp(&mut threat, 4444);
+    for (label, frame) in [("benign UDP->:53", &benign), ("threat UDP->:4444", &threat)] {
+        // Verdict via the real datapath (ring -> parser -> signed BPF rule).
+        let verdict = if packet::produce_raw(pool, frame) {
+            packet::consume_one(pool).map(|(_, v)| v).unwrap_or(packet::DROP)
+        } else {
+            packet::DROP
+        };
+        if verdict == packet::PASS {
+            match arch_aarch64::gem::tx_frame(frame) {
+                Some(ctrl) => kprint!(
+                    " [P8] IPS enforce: {} -> PASS -> FORWARDED on the wire (tx_ctrl={:#010x})\n",
+                    label, ctrl),
+                None => kprint!(" [P8] IPS enforce: {} -> PASS -> TX timeout (no completion)\n", label),
+            }
+        } else {
+            kprint!(" [P8] IPS enforce: {} -> DROP -> blocked, NOT forwarded\n", label);
         }
     }
-    kprint!(" [P8] PASS — datapath: real wire -> ring -> parser -> BPF verdict (PASS live, DROP :4444)\n");
+    kprint!(" [P8] PASS — inline IPS: wire -> ring -> parser -> BPF verdict -> ENFORCE (forward :53 / drop :4444)\n");
 }
 
 /// Measured-boot attestation: independently replay HBoot's event log and

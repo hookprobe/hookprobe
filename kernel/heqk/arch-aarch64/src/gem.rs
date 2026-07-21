@@ -35,15 +35,19 @@ const NCR: usize = 0x000; // Network Control
 const NCFGR: usize = 0x004; // Network Config
 const NSR: usize = 0x008; // Network Status
 const DMACFG: usize = 0x010; // DMA Config (GEM)
+const TSR: usize = 0x014; // Transmit Status
 const RBQP: usize = 0x018; // RX buffer queue base (low)
+const TBQP: usize = 0x01c; // TX buffer queue base (low)
 const RSR: usize = 0x020; // Receive Status
 const IDR: usize = 0x02c; // Interrupt Disable (mask all)
+const TBQPH: usize = 0x4c8; // TX buffer queue base (high, 64-bit)
 const RBQPH: usize = 0x4d4; // RX buffer queue base (high, 64-bit)
 
 // NCR bits
 const NCR_RE: u32 = 1 << 2; // receive enable
 const NCR_TE: u32 = 1 << 3; // transmit enable
 const NCR_MPE: u32 = 1 << 4; // MDIO enable
+const NCR_TSTART: u32 = 1 << 9; // start transmission (kick the TX DMA)
 // NCFGR bits
 const NCFGR_FD: u32 = 1 << 1; // full duplex
 const NCFGR_CAF: u32 = 1 << 4; // copy-all-frames (promiscuous)
@@ -69,6 +73,10 @@ const RXD_USED: u32 = 1 << 0; // 0 = HW-owned; HW sets 1 after writing a frame
 const RXD_WRAP: u32 = 1 << 1; // last descriptor
 // RX descriptor word1 (ctrl/status) fields
 const RXD_FRMLEN: u32 = 0x3fff; // GEM: 14-bit frame length (RP1 sets JUMBO caps)
+// TX descriptor word1 (ctrl) bits
+const TXD_USED: u32 = 1 << 31; // HW sets after transmit; SW clears to arm
+const TXD_WRAP: u32 = 1 << 30; // last descriptor in the ring
+const TXD_LAST: u32 = 1 << 15; // last buffer of the frame
 // RSR bits
 const RSR_BNA: u32 = 1 << 0; // buffer not available (DMA target unreachable)
 const RSR_REC: u32 = 1 << 1; // frame received
@@ -116,6 +124,20 @@ struct RxRing {
 static mut RXRING: RxRing = RxRing {
     desc: [[0; 4]; NRX],
     buf: [[0; RXBUF]; NRX],
+};
+
+const NTX: usize = 1; // single-descriptor synchronous TX (send-one, poll-complete)
+const TXBUF: usize = 2048;
+
+/// TX ring + buffer, page-aligned, in kernel RAM (identity-mapped: VA == PA).
+#[repr(C, align(4096))]
+struct TxRing {
+    desc: [[u32; 4]; NTX], // 16-byte DMA64 descriptors
+    buf: [[u8; TXBUF]; NTX],
+}
+static mut TXRING: TxRing = TxRing {
+    desc: [[0; 4]; NTX],
+    buf: [[0; TXBUF]; NTX],
 };
 
 #[inline]
@@ -451,6 +473,68 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
         IDX = IDX.wrapping_add(1);
     }
     Some((len, w0, ctrl, w2, w3))
+}
+
+/// Arm the TX ring. NCR.TE is already enabled by rx_init; here we point the GEM
+/// at our single-descriptor TX ring and mark it USED (idle, nothing to send) so
+/// a stray TSTART can't transmit garbage. Call once after rx_init.
+pub fn tx_init() {
+    unsafe {
+        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
+        let bus = tr.buf[0].as_ptr() as u64 + DMA_BUS_OFFSET;
+        tr.desc[0][0] = bus as u32;
+        tr.desc[0][1] = TXD_USED | TXD_WRAP; // USED=1 (idle) + WRAP (only descriptor)
+        tr.desc[0][2] = (bus >> 32) as u32; // addr high (= 0x10)
+        tr.desc[0][3] = 0;
+    }
+    let ring = core::ptr::addr_of!(TXRING) as usize;
+    dc_cvac(ring, core::mem::size_of::<TxRing>());
+    let ringbus = ring as u64 + DMA_BUS_OFFSET;
+    w(GEM, TBQPH, (ringbus >> 32) as u32); // high FIRST
+    w(GEM, TBQP, ringbus as u32);
+}
+
+/// Transmit one frame out end0 (synchronous: kick TSTART, poll TX completion).
+/// Returns Some(tx_ctrl) — the completed descriptor status word (USED set) — or
+/// None on timeout. This is the IPS enforcement primitive: the datapath calls it
+/// ONLY for frames whose BPF verdict is PASS; a DROP frame is simply never sent,
+/// so the verdict now acts on the wire instead of only being logged.
+pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
+    let n = bytes.len().min(TXBUF);
+    let (bufpa, dptr) = unsafe {
+        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
+        for k in 0..n {
+            tr.buf[0][k] = bytes[k];
+        }
+        (
+            tr.buf[0].as_ptr() as usize,
+            core::ptr::addr_of_mut!(tr.desc[0]) as usize,
+        )
+    };
+    dc_cvac(bufpa, n); // publish the frame bytes for the device to read
+    let bus = bufpa as u64 + DMA_BUS_OFFSET;
+    unsafe {
+        write_volatile(dptr as *mut u32, bus as u32); // word0 addr_lo
+        write_volatile((dptr + 8) as *mut u32, (bus >> 32) as u32); // word2 addr_hi
+        // word1: length | LAST | WRAP, USED=0 — hand the descriptor to HW. The GEM
+        // auto-pads to the 60B minimum and appends the FCS (NOCRC not set).
+        write_volatile((dptr + 4) as *mut u32, (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
+    }
+    dc_cvac(dptr, 16); // publish the descriptor
+    w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
+    // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
+    let mut spins = 0u32;
+    loop {
+        dc_ivac(dptr, 16);
+        let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
+        if ctrl & TXD_USED != 0 {
+            return Some(ctrl);
+        }
+        spins += 1;
+        if spins >= 500_000 {
+            return None;
+        }
+    }
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
