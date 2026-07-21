@@ -182,17 +182,25 @@ park:
     b       82b
 .endm
 
+// Save EL1's GP regs (x9-x13) on the EL2 stack FIRST — before `mrs esr`
+// clobbers x10 — so a CONTAINED fault (el1_blocked, which returns to EL1) leaves
+// EL1 state intact. Reset paths (HVC/other-fault) don't return, so their
+// unbalanced SP is irrelevant (the SoC resets). Nested hole-faults balance
+// push/pop each time.
 lower64_sync_gate:
+    stp     x9,  x10, [sp, #-48]!
+    stp     x11, x12, [sp, #16]
+    str     x13,      [sp, #32]
     mrs     x10, esr_el2
     lsr     x10, x10, #26
     cmp     x10, #0x16              // HVC64 -> reboot
     b.eq    reset_platform
-    cmp     x10, #0x24              // Data Abort from EL1 -> stage-2 isolation trap (P7e)
+    cmp     x10, #0x24              // Data Abort from EL1 -> maybe isolation trap
     b.eq    el1_blocked
     movz    x9, #0x0000
     movk    x9, #0x0003, lsl #16
     movk    x9, #0x001c, lsl #32
-    mov     w11, #0x3f              // '?' = other EL1 fault; self-recover
+    mov     w11, #0x3f              // '?' = other EL1 fault; fail-closed reset
 91: ldr     w12, [x9, #0x18]
     tbnz    w12, #5, 91b
     strb    w11, [x9]
@@ -200,18 +208,16 @@ lower64_sync_gate:
 
 // P7e: EL1 data abort. FAIL-CLOSED by default: only a fault whose FAR is inside
 // the protected HBoot region [0x200000,0x800000) is a "blocked-from-EL2" event
-// we contain (mark 'X', skip the faulting instruction, return to EL1). ANY other
-// EL1 data abort is a real kernel fault and must NOT be silently skipped — fall
-// through to reset, exactly as before P7e. This avoids masking wild pointers /
-// memory corruption while still demonstrating + surviving the isolation trap.
+// we contain (mark 'X', skip the faulting instruction, restore regs, return to
+// EL1). ANY other EL1 data abort is a real kernel fault -> reset, as before P7e.
 el1_blocked:
-    mrs     x10, far_el2
+    mrs     x10, far_el2            // (x9-x13 already saved by lower64_sync_gate)
     movz    x13, #0x0020, lsl #16   // 0x00200000 = HOLE_LO
     cmp     x10, x13
-    b.lo    el1_fault_reset         // FAR < 0x200000 -> not the EL2 region
+    b.lo    el1_blk_reset           // FAR < 0x200000 -> not the EL2 region
     movz    x13, #0x0080, lsl #16   // 0x00800000 = HOLE_HI
     cmp     x10, x13
-    b.hs    el1_fault_reset         // FAR >= 0x800000 -> not the EL2 region
+    b.hs    el1_blk_reset           // FAR >= 0x800000 -> not the EL2 region
     movz    x9, #0x0000
     movk    x9, #0x0003, lsl #16
     movk    x9, #0x001c, lsl #32
@@ -222,7 +228,17 @@ el1_blocked:
     mrs     x10, elr_el2
     add     x10, x10, #4            // skip the faulting load
     msr     elr_el2, x10
+    ldr     x13,      [sp, #32]     // restore EL1's registers + return
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
     eret
+
+// FAR outside the protected region -> real EL1 fault. Restore SP + fail-closed.
+el1_blk_reset:
+    ldr     x13,      [sp, #32]
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
+    b       el1_fault_reset
 
 // Any EL1 data abort OUTSIDE the protected region -> fail-closed reset.
 el1_fault_reset:
