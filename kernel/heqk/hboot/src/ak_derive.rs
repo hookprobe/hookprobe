@@ -37,10 +37,13 @@ pub struct DerivedAk {
 }
 
 impl DerivedAk {
-    /// Zero the private key material after signing (defense in depth).
+    /// Zero the private key material after signing (defense in depth). Volatile
+    /// per-byte so the wipe can't be dead-store-eliminated.
     pub fn zeroize(&mut self) {
-        self.ed_sk = [0u8; 64];
-        self.slh_sk = [0u8; 64];
+        for b in self.ed_sk.iter_mut().chain(self.slh_sk.iter_mut()) {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         unsafe { core::arch::asm!("dsb sy") };
     }
 }
@@ -118,14 +121,36 @@ fn software_ak() -> DerivedAk {
     }
 }
 
-/// Derive the per-device AK from a 256-bit OTP secret (already read back).
-fn derive_from_secret(secret_words: &[u32; 8]) -> DerivedAk {
+/// Minimum set-bit count an OTP secret must have to be trusted as hardware
+/// entropy. A 256-bit TRNG secret expects ~128 set bits; a PARTIAL fuse burn
+/// (a common failure mode) can leave only a few bits set, which would yield a
+/// brute-forceable "hardware" AK. Below this floor we refuse it and fall back to
+/// the software AK rather than mint a weak key.
+const MIN_SECRET_BITS: u32 = 96;
+
+fn popcount8(words: &[u32; 8]) -> u32 {
+    words.iter().map(|w| w.count_ones()).sum()
+}
+
+/// Best-effort in-place wipe of on-stack secret material (defense in depth;
+/// these live in HBoot's EL2 stack, already inside the stage-2 hole).
+fn wipe(buf: &mut [u8]) {
+    for b in buf.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Derive the per-device AK from a 256-bit OTP secret (already validated).
+/// Returns None if SLH-DSA keygen fails (preserving the fail-safe contract).
+/// Zeroizes the secret + intermediate seeds before returning.
+fn derive_from_secret(secret_words: &[u32; 8]) -> Option<DerivedAk> {
     let mut secret = [0u8; 32];
     for i in 0..8 {
         secret[i * 4..i * 4 + 4].copy_from_slice(&secret_words[i].to_le_bytes());
     }
-    let ed_seed = derive32(b"HEQK-AK-ed25519-v1", &secret);
-    let slh_seed = derive32(b"HEQK-AK-slhdsa-v1", &secret);
+    let mut ed_seed = derive32(b"HEQK-AK-ed25519-v1", &secret);
+    let mut slh_seed = derive32(b"HEQK-AK-slhdsa-v1", &secret);
 
     // ed25519 keypair from the derived seed.
     let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(ed_seed));
@@ -136,11 +161,21 @@ fn derive_from_secret(secret_words: &[u32; 8]) -> DerivedAk {
 
     // Deterministic per-device SLH-DSA-128f keypair (keygen is cheap for 128f).
     let mut drng = SeedRng::new(&slh_seed);
-    let (pk, sk) = slh_dsa_sha2_128f::try_keygen_with_rng(&mut drng).expect("per-device slh keygen");
-    let slh_sk = sk.into_bytes();
-    let slh_pk = pk.into_bytes();
+    let keys = slh_dsa_sha2_128f::try_keygen_with_rng(&mut drng);
 
-    DerivedAk { ed_sk, ed_pk, slh_sk, slh_pk, hw_bound: true }
+    // Scrub the OTP secret + seeds off the stack regardless of the outcome.
+    wipe(&mut secret);
+    wipe(&mut ed_seed);
+    wipe(&mut slh_seed);
+
+    let (pk, sk) = keys.ok()?; // keygen failure -> None -> software AK fallback
+    Some(DerivedAk {
+        ed_sk,
+        ed_pk,
+        slh_sk: sk.into_bytes(),
+        slh_pk: pk.into_bytes(),
+        hw_bound: true,
+    })
 }
 
 /// Provision (once) + derive the AK. Reads customer OTP; if blank, burns a
@@ -150,9 +185,16 @@ fn derive_from_secret(secret_words: &[u32; 8]) -> DerivedAk {
 pub fn provision_and_derive() -> DerivedAk {
     let existing = mailbox::get_customer_otp();
     let secret = match existing {
-        Some(w) if w.iter().any(|&x| x != 0) => {
+        // Already provisioned: trust it ONLY if it carries real entropy (guards
+        // against a prior partial burn permanently pinning a weak secret).
+        Some(w) if popcount8(&w) >= MIN_SECRET_BITS => {
             puts(" ak     : customer OTP already provisioned -> deriving per-device AK\n");
             w
+        }
+        Some(w) if w.iter().any(|&x| x != 0) => {
+            // Non-blank but low-entropy (partial burn) — never derive a weak AK.
+            puts(" ak     : customer OTP low-entropy (partial burn) -> software AK fallback\n");
+            return software_ak();
         }
         Some(_) => {
             // Blank region -> burn a fresh on-device TRNG secret, ONCE.
@@ -164,18 +206,19 @@ pub fn provision_and_derive() -> DerivedAk {
                 *x = u32::from_le_bytes(b);
             }
             let reported = mailbox::set_customer_otp(&w);
-            // Ground truth: read back and derive from what is ACTUALLY in OTP.
+            // Ground truth: read back. Require FULL fidelity (read-back == written)
+            // AND real entropy — a partial burn must NOT yield a hardware AK.
             match mailbox::get_customer_otp() {
-                Some(rb) if rb.iter().any(|&x| x != 0) => {
+                Some(rb) if rb == w && popcount8(&rb) >= MIN_SECRET_BITS => {
                     puts(if reported {
-                        " ak     : OTP burn OK (firmware ack + read-back non-blank)\n"
+                        " ak     : OTP burn OK (firmware ack + read-back verified)\n"
                     } else {
-                        " ak     : OTP read-back non-blank (deriving from actual contents)\n"
+                        " ak     : OTP read-back verified (deriving from actual contents)\n"
                     });
                     rb
                 }
                 _ => {
-                    puts(" ak     : OTP burn did NOT take (still blank) -> software AK fallback\n");
+                    puts(" ak     : OTP burn incomplete/mismatched -> software AK fallback\n");
                     return software_ak();
                 }
             }
@@ -185,9 +228,16 @@ pub fn provision_and_derive() -> DerivedAk {
             return software_ak();
         }
     };
-    let ak = derive_from_secret(&secret);
-    puts(" ak     : per-device AK derived (hw-bound). ak_ed_pk=");
-    puthex(u32::from_le_bytes([ak.ed_pk[0], ak.ed_pk[1], ak.ed_pk[2], ak.ed_pk[3]]) as u64);
-    puts("...\n");
-    ak
+    match derive_from_secret(&secret) {
+        Some(ak) => {
+            puts(" ak     : per-device AK derived (hw-bound). ak_ed_pk=");
+            puthex(u32::from_le_bytes([ak.ed_pk[0], ak.ed_pk[1], ak.ed_pk[2], ak.ed_pk[3]]) as u64);
+            puts("...\n");
+            ak
+        }
+        None => {
+            puts(" ak     : per-device keygen failed -> software AK fallback\n");
+            software_ak()
+        }
+    }
 }

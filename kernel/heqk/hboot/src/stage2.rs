@@ -25,7 +25,12 @@ const GB: u64 = 1 << 30;
 const M2: u64 = 2 << 20; // 2 MiB
 
 // Stage-2 leaf descriptor lower attributes (bits[1:0]=0b01 = block).
-const S2_NORMAL: u64 = 0x7C1; // block | MemAttr=0xF(WB) | S2AP=0b11(RW) | SH=IS | AF
+// MemAttr[5:2] is DIRECT-encoded in stage-2 (not MAIR-indexed): 0xF = Normal
+// Inner+Outer WB (bits 2..5 = 0x3C), 0x0 = Device-nGnRnE.  NOTE: 0x7C1 (an
+// earlier value) has MemAttr=0x0 → Device, which — with no FEAT_S2FWB on A76,
+// so stage-1∩stage-2 = most-restrictive — would mis-map all EL1 DRAM as Device
+// and break atomics/instruction-fetch. Normal-WB MUST be 0x7FD.
+const S2_NORMAL: u64 = 0x7FD; // block | MemAttr=0xF(WB) | S2AP=0b11(RW) | SH=IS | AF
 const S2_DEVICE: u64 = (1 << 54) | 0x4C1; // XN | block | MemAttr=0x0(Device-nGnRnE) | S2AP=RW | AF
 const TABLE: u64 = 0b11;
 

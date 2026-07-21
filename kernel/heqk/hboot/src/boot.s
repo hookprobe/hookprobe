@@ -198,14 +198,24 @@ lower64_sync_gate:
     strb    w11, [x9]
     b       reset_platform
 
-// P7e: EL1 touched HBoot's EL2 region -> stage-2 fault trapped here. Mark it
-// ('X'), skip the faulting instruction (ELR+=4), and return to EL1 so the
-// kernel survives + confirms it was blocked. Proves EL1 is walled off from EL2.
+// P7e: EL1 data abort. FAIL-CLOSED by default: only a fault whose FAR is inside
+// the protected HBoot region [0x200000,0x800000) is a "blocked-from-EL2" event
+// we contain (mark 'X', skip the faulting instruction, return to EL1). ANY other
+// EL1 data abort is a real kernel fault and must NOT be silently skipped — fall
+// through to reset, exactly as before P7e. This avoids masking wild pointers /
+// memory corruption while still demonstrating + surviving the isolation trap.
 el1_blocked:
+    mrs     x10, far_el2
+    movz    x13, #0x0020, lsl #16   // 0x00200000 = HOLE_LO
+    cmp     x10, x13
+    b.lo    el1_fault_reset         // FAR < 0x200000 -> not the EL2 region
+    movz    x13, #0x0080, lsl #16   // 0x00800000 = HOLE_HI
+    cmp     x10, x13
+    b.hs    el1_fault_reset         // FAR >= 0x800000 -> not the EL2 region
     movz    x9, #0x0000
     movk    x9, #0x0003, lsl #16
     movk    x9, #0x001c, lsl #32
-    mov     w11, #0x58              // 'X' = EL1 blocked from EL2 region
+    mov     w11, #0x58              // 'X' = EL1 blocked from HBoot EL2 region
 92: ldr     w12, [x9, #0x18]
     tbnz    w12, #5, 92b
     strb    w11, [x9]
@@ -213,6 +223,17 @@ el1_blocked:
     add     x10, x10, #4            // skip the faulting load
     msr     elr_el2, x10
     eret
+
+// Any EL1 data abort OUTSIDE the protected region -> fail-closed reset.
+el1_fault_reset:
+    movz    x9, #0x0000
+    movk    x9, #0x0003, lsl #16
+    movk    x9, #0x001c, lsl #32
+    mov     w11, #0x3f              // '?' = EL1 fault; reset
+93: ldr     w12, [x9, #0x18]
+    tbnz    w12, #5, 93b
+    strb    w11, [x9]
+    b       reset_platform
 
     .balign 0x800
 .global __hboot_vectors

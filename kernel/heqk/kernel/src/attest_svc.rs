@@ -64,13 +64,10 @@ impl Attestor {
     }
 }
 
-/// The device AK ed25519 PUBLIC key (public — safe to embed). Used for the
-/// on-device half of the cert-chain check; the remote verifier additionally
-/// checks the SLH-DSA half (quantum-safe). Matches ~/heqk-sign/keys/ak_ed.pk.
-pub const AK_ED_PK: [u8; 32] = [
-    0x42, 0xa2, 0x00, 0x58, 0x55, 0xd2, 0x93, 0xc6, 0xfe, 0xec, 0x3d, 0xfd, 0xb7, 0xbc, 0xcf, 0x26,
-    0x94, 0x9e, 0x0c, 0xd5, 0xa4, 0xdd, 0xe5, 0x7e, 0x56, 0x2f, 0x44, 0x77, 0x67, 0x2e, 0x42, 0xaf,
-];
+// Note: the on-device cert check anchors to the PER-DEVICE AK pubkey HBoot
+// publishes in `AttestEphemeral.ak_ed_pk` (a hardware-bound AK differs per
+// device), so there is no embedded AK pubkey constant here — the remote
+// verifier is what enrolls (TOFU) and anchors trust in that per-device key.
 
 /// Verify the AK's ed25519 signature over the ephemeral-key certificate
 /// (`EPH_CERT_CTX || eph_pk || svn || PCRs`) against the device AK public key —

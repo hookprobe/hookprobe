@@ -30,10 +30,13 @@ const CHAN: u32 = 8; // property channel
 const RESP_OK: u32 = 0x8000_0000;
 const POLL_MAX: u32 = 4_000_000;
 
-/// 16-byte-aligned request/response buffer in HBoot's low-1 GB RAM.
-#[repr(align(16))]
-struct MboxBuf([u32; 40]);
-static mut MBOX_BUF: MboxBuf = MboxBuf([0; 40]);
+/// Request/response buffer in HBoot's low-1 GB RAM. CACHE-LINE aligned + padded
+/// to a whole number of 64-byte lines so the post-transaction `ivac` (which
+/// invalidates by cache line, without clean) can never discard a dirty line
+/// shared with a neighboring static — it owns its lines outright.
+#[repr(align(64))]
+struct MboxBuf([u32; 48]); // 192 B = 3 cache lines
+static mut MBOX_BUF: MboxBuf = MboxBuf([0; 48]);
 
 #[inline(always)]
 unsafe fn r(off: usize) -> u32 {
@@ -75,6 +78,13 @@ unsafe fn ivac(base: usize, len: usize) {
 unsafe fn transact(nwords: usize) -> bool {
     let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
     let phys = buf as usize;
+    // The VC pointer is 32-bit; both candidates require the buffer in the low
+    // 1 GB. If HBoot were ever linked ≥1 GB the mask would silently truncate to
+    // a DIFFERENT physical page — on a SET that means a garbage/irreversible
+    // burn. Refuse rather than risk it.
+    if phys >= 0x4000_0000 {
+        return false;
+    }
     let candidates = [0xC000_0000u32 | (phys as u32 & 0x3FFF_FFFF), phys as u32];
     for &vcaddr in &candidates {
         cvac(phys, nwords * 4);
@@ -185,8 +195,12 @@ pub fn set_customer_otp(words: &[u32; 8]) -> bool {
 }
 
 /// SET_USER_OTP (0x00038024) block 3 = 16 words / 512 bits — BURN (IRREVERSIBLE).
-/// Used ONLY by the deliberate anti-rollback `advance_floor`; never on the boot
-/// path. Constrained to block 3; returns true iff the firmware acks success.
+/// INVARIANT: block 3 is HEQK's **anti-rollback thermometer counter**, NOT an
+/// RPi device private key. HEQK does not use RPi secure boot, so this region is
+/// repurposed; never store key material here (a key's ~256 set bits would read
+/// as a huge rollback floor and brick boot). Used ONLY by the deliberate
+/// `rollback::advance_floor`; never on the boot path. Returns true iff the
+/// firmware acks success.
 pub fn set_device_otp(words: &[u32; 16]) -> bool {
     unsafe {
         let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
@@ -203,8 +217,10 @@ pub fn set_device_otp(words: &[u32; 16]) -> bool {
     }
 }
 
-/// GET_USER_OTP (0x00030024) block 3 = device private key (16 words / 512 bits).
-/// None if unreadable/locked. All-zero words = a blank (unprovisioned) region.
+/// GET_USER_OTP (0x00030024) block 3 = 16 words / 512 bits. In HEQK this region
+/// is the **anti-rollback thermometer counter** (see `set_device_otp`), read by
+/// `rollback::OtpCounter` as a popcount — NOT a device key. None if
+/// unreadable/locked; all-zero = a blank (floor 0) region.
 pub fn otp_device_key() -> Option<[u32; 16]> {
     unsafe {
         let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;

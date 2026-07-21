@@ -55,8 +55,17 @@ pub fn ak_slh_sk() -> &'static [u8; 64] {
 /// is AK-certified but distinct, so runtime attestation continues to work.
 pub fn scrub() {
     unsafe {
-        core::ptr::write_bytes(core::ptr::addr_of_mut!(AK_ED25519_SK) as *mut u8, 0, 64);
-        core::ptr::write_bytes(core::ptr::addr_of_mut!(AK_SLHDSA_SK) as *mut u8, 0, 64);
+        // Per-byte VOLATILE writes so the compiler cannot dead-store-eliminate
+        // the wipe (the statics are never read again). Do NOT rely on the
+        // trailing `dsb`'s incidental memory-clobber for this — `dsb` is an
+        // architectural barrier, not a compiler one.
+        let ed = core::ptr::addr_of_mut!(AK_ED25519_SK) as *mut u8;
+        let slh = core::ptr::addr_of_mut!(AK_SLHDSA_SK) as *mut u8;
+        for i in 0..64 {
+            core::ptr::write_volatile(ed.add(i), 0);
+            core::ptr::write_volatile(slh.add(i), 0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         core::arch::asm!("dsb sy");
     }
 }

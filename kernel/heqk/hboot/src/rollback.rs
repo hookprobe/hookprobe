@@ -68,7 +68,14 @@ impl SecureCounter for OtpCounter {
         match crate::mailbox::otp_device_key() {
             // Sum of set bits across the 16 words = the thermometer level.
             Some(words) => words.iter().map(|w| u64::from(w.count_ones())).sum(),
-            None => 0, // unreadable → fail safe to the compile-time floor
+            // Unreadable → 0, which collapses `effective_floor` to COMPILE_FLOOR.
+            // SAFE ONLY while the hardware floor is unadvanced (block 3 blank ⇒
+            // real floor is 0 anyway). ⚠️ Before `advance_floor` is ever used in
+            // production this MUST become fail-CLOSED (refuse boot / retain a
+            // last-known-good floor): otherwise an attacker who can force one
+            // mailbox read to fail would drop an advanced floor back to the
+            // compile floor and boot a rolled-back-but-signed image.
+            None => 0,
         }
     }
     fn is_hardware(&self) -> bool {
