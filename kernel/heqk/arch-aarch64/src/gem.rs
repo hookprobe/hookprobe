@@ -22,9 +22,10 @@ const RP1_CLK: usize = 0x1C00_018000; // RP1 clock controller
 // RP1 GPIO banks are 0x4000 apart: IO_BANKn @ 0xd0000+n*0x4000, SYS_RIOn @
 // 0xe0000+n*0x4000, PADS_BANKn @ 0xf0000+n*0x4000. ETH_RST_N = GPIO32 = bank1
 // index 4. RIO has atomic aliases: +0x1000 XOR, +0x2000 SET, +0x3000 CLR.
-const RP1_IO_BANK1: usize = 0x1C00_d4000;
-const RP1_RIO1: usize = 0x1C00_e4000;
-const RP1_PADS1: usize = 0x1C00_f4000;
+// (window base 0x1C_0000_0000 + RP1 internal offset; note the 10-hex-digit form)
+const RP1_IO_BANK1: usize = 0x1C_000D_4000;
+const RP1_RIO1: usize = 0x1C_000E_4000;
+const RP1_PADS1: usize = 0x1C_000F_4000;
 const ETH_RST_IDX: usize = 4; // GPIO32 within bank1
 const RIO_SET: usize = 0x2000; // atomic set-bits alias
 const RIO_CLR: usize = 0x3000; // atomic clear-bits alias
