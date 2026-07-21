@@ -302,10 +302,17 @@ fn attest_replay(bi: &boot_abi::BootInfo) {
         kprint!(" attest: BAD measure-log magic {:#x}\n", magic);
         return;
     }
-    // Replay: fold each event into a fresh PCR bank.
+    // Replay: fold each event into a fresh PCR bank. Clamp the log-supplied
+    // `count` to what physically fits in the 64 KiB log region (0x3FFD_0000..
+    // 0x3FFE_0000) so a corrupted/oversized count can't walk `events.add(i)`
+    // off the page into an OOB read.
+    const LOG_REGION: usize = boot_abi::BOOTINFO_ADDR - boot_abi::MEASURE_LOG_ADDR;
+    let max_events =
+        (LOG_REGION - core::mem::size_of::<MeasureLog>()) / core::mem::size_of::<MeasureEvent>();
+    let count = (count as usize).min(max_events);
     let events = (bi.measure_log_pa as usize + core::mem::size_of::<MeasureLog>()) as *const MeasureEvent;
     let mut pcr = [[0u8; 32]; NUM_PCR];
-    for i in 0..count as usize {
+    for i in 0..count {
         let ev = unsafe { read_volatile(events.add(i)) };
         let idx = ev.pcr as usize;
         if idx >= NUM_PCR {

@@ -408,7 +408,10 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     for k in 0..copy_n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
-    let len = if desc_len > 0 { desc_len } else { copy_n };
+    // Report at most the bytes actually placed in `out`: `desc_len` is device-
+    // controlled (up to RXD_FRMLEN=16383) and must never exceed `copy_n`, or a
+    // caller slicing `out[..len]` would read past the buffer.
+    let len = if desc_len > 0 { desc_len.min(copy_n) } else { copy_n };
     // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish.
     unsafe {
         let bus = bufpa as u64 + DMA_BUS_OFFSET;

@@ -14,10 +14,14 @@
 
 pub const ETH_HLEN: usize = 14;
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
-pub const ETHERTYPE_VLAN: u16 = 0x8100;
+pub const ETHERTYPE_VLAN: u16 = 0x8100; // 802.1Q
+pub const ETHERTYPE_QINQ: u16 = 0x88a8; // 802.1ad (stacked/service tag)
 pub const ETHERTYPE_ARP: u16 = 0x0806;
+pub const ETHERTYPE_IPV6: u16 = 0x86dd;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
+const MAX_VLAN_TAGS: usize = 3; // bound stacked-tag unwrap
+const MAX_V6_EXT: usize = 8; // bound IPv6 extension-header walk
 
 /// Validated view of a parsed frame. All offsets are within the frame length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,13 +51,15 @@ fn be16(b: &[u8], off: usize) -> Option<u16> {
 /// A `Some` guarantees every field it reports is in-bounds of `frame`.
 pub fn parse(frame: &[u8]) -> Option<PacketMeta> {
     // --- Ethernet ---
-    let ethertype = be16(frame, 12)?; // also checks len >= 14
+    let mut et = be16(frame, 12)?; // also checks len >= 14
     let mut l3_off = ETH_HLEN;
-    let mut et = ethertype;
-    // One optional 802.1Q VLAN tag.
-    if et == ETHERTYPE_VLAN {
-        et = be16(frame, 16)?; // inner ethertype after the 4-byte tag
-        l3_off = ETH_HLEN + 4;
+    // Unwrap up to MAX_VLAN_TAGS stacked 802.1Q / 802.1ad (QinQ) tags. A single
+    // tag is the common case; stacking must not let an L4 threat slip the rule.
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = be16(frame, l3_off + 2)?; // inner ethertype after the 4-byte tag (2B TCI)
+        l3_off += 4;
+        tags += 1;
     }
 
     let mut meta = PacketMeta {
@@ -65,11 +71,32 @@ pub fn parse(frame: &[u8]) -> Option<PacketMeta> {
         payload_off: frame.len(),
     };
 
-    if et != ETHERTYPE_IPV4 {
-        return Some(meta); // non-IPv4 (ARP, IPv6, …): valid frame, no L4 ports
-    }
+    // Locate the L4 header for IPv4 and IPv6 alike; everything else (ARP, still-
+    // tagged after the cap, unknown L3) carries no port threat and PASSes.
+    let (ip_proto, l4_off, ip_end) = match et {
+        ETHERTYPE_IPV4 => parse_ipv4(frame, l3_off)?,
+        ETHERTYPE_IPV6 => parse_ipv6(frame, l3_off)?,
+        _ => return Some(meta),
+    };
+    meta.ip_proto = ip_proto;
+    meta.payload_off = ip_end;
 
-    // --- IPv4 ---
+    // --- TCP / UDP ports (both put src@0, dst@2) ---
+    if ip_proto == IPPROTO_TCP || ip_proto == IPPROTO_UDP {
+        // Need at least 4 bytes of L4 header, and they must be within the datagram.
+        if l4_off + 4 > ip_end {
+            return None;
+        }
+        meta.src_port = be16(frame, l4_off)?;
+        meta.dst_port = be16(frame, l4_off + 2)?;
+        meta.l4_off = l4_off;
+    }
+    Some(meta)
+}
+
+/// IPv4 header at `l3_off` → (proto, L4 offset, datagram end). `None` on any
+/// truncation or inconsistency; a `Some` guarantees `ip_end <= frame.len()`.
+fn parse_ipv4(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
     let vihl = *frame.get(l3_off)?;
     if vihl >> 4 != 4 {
         return None; // not IPv4 despite the ethertype
@@ -87,20 +114,47 @@ pub fn parse(frame: &[u8]) -> Option<PacketMeta> {
         return None;
     }
     let ip_proto = *frame.get(l3_off + 9)?;
-    let l4_off = l3_off + ihl;
-    let ip_end = l3_off + total_len; // L4 data ends here, not at frame.len()
-    meta.ip_proto = ip_proto;
-    meta.payload_off = ip_end;
+    Some((ip_proto, l3_off + ihl, l3_off + total_len))
+}
 
-    // --- TCP / UDP ports (both put src@0, dst@2) ---
-    if ip_proto == IPPROTO_TCP || ip_proto == IPPROTO_UDP {
-        // Need at least 4 bytes of L4 header, and they must be within the IP datagram.
-        if l4_off + 4 > ip_end {
-            return None;
-        }
-        meta.src_port = be16(frame, l4_off)?;
-        meta.dst_port = be16(frame, l4_off + 2)?;
-        meta.l4_off = l4_off;
+/// IPv6 header at `l3_off`, walking the extension-header chain (bounded) to the
+/// L4 header → (proto, L4 offset, datagram end). Encrypted/opaque next-headers
+/// (ESP, AH, ICMPv6, …) return with a non-TCP/UDP proto so the caller PASSes
+/// (no port to inspect); a malformed/over-long chain fails closed to `None`.
+fn parse_ipv6(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
+    let ver = *frame.get(l3_off)?;
+    if ver >> 4 != 6 {
+        return None; // not IPv6 despite the ethertype
     }
-    Some(meta)
+    let payload_len = be16(frame, l3_off + 4)? as usize;
+    let ip_end = l3_off + 40 + payload_len; // fixed 40-byte base header
+    if ip_end > frame.len() {
+        return None;
+    }
+    let mut next = *frame.get(l3_off + 6)?; // Next Header
+    let mut off = l3_off + 40;
+    for _ in 0..MAX_V6_EXT {
+        match next {
+            IPPROTO_TCP | IPPROTO_UDP => return Some((next, off, ip_end)),
+            // Hop-by-Hop(0), Routing(43), Dest-Options(60): [next(0), hdr_ext_len(1)];
+            // length is (hdr_ext_len + 1) * 8 bytes.
+            0 | 43 | 60 => {
+                let nh = *frame.get(off)?;
+                let hlen = (*frame.get(off + 1)? as usize + 1) * 8;
+                next = nh;
+                off += hlen;
+            }
+            // Fragment(44): fixed 8 bytes; next-header at +0.
+            44 => {
+                next = *frame.get(off)?;
+                off += 8;
+            }
+            // ESP(50)/AH(51)/ICMPv6(58)/unknown: opaque to us, no L4 ports here.
+            _ => return Some((next, off, ip_end)),
+        }
+        if off > ip_end {
+            return None; // extension chain ran past the datagram
+        }
+    }
+    None // chain too long -> fail closed
 }
