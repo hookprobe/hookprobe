@@ -24,6 +24,7 @@ mod measure;
 mod mmu;
 mod rng;
 mod rollback;
+mod stage2;
 mod trusted_keys;
 
 use boot_abi::sha256;
@@ -294,6 +295,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // EL1 before enabling its own MMU. (I-cache is invalidated in the launch.)
     mmu::clean_dcache_range(load_pa as usize, size as usize);
     mmu::clean_dcache_range(ATTEST_EPH_ADDR, 0x0005_0000); // eph-cert..quote..log..bootinfo..bootdebug
+
+    // P7e: install stage-2 isolation (EL1 walled off from HBoot's EL2 region).
+    // Programs VTCR/VTTBR; HCR_EL2.VM is flipped in hboot_launch_el1 before eret.
+    stage2::enable();
+    puts(" stage2 : EL1<->EL2 isolation armed (HBoot region 0x200000..0x800000 hidden)\n");
 
     puts(" launch : EL1 entry ");
     puthex(load_pa + entry_off);

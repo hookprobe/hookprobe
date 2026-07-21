@@ -115,6 +115,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
             kprint!("\n");
             attest_replay(bi);
             cm5_attest_challenge(bi);
+            cm5_el2_isolation_test();
         } else {
             kprint!(" hboot: BAD BootInfo magic {:#x} @ {:#x}\n", bi.magic, bootinfo_pa);
         }
@@ -760,6 +761,31 @@ fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
         dump_hex(p);
     }
     kprint!("\n---HEQK-EPH-END---\n");
+}
+
+/// P7e (B-3): prove EL1 is walled off from HBoot's resident EL2 region by
+/// stage-2 translation. EL1 tries to read HBoot's code at 0x200000; under
+/// isolation the access takes a stage-2 fault to EL2, which marks it ('X') and
+/// skips the load — so our sentinel survives (the read returned nothing). If
+/// isolation were absent, `val` would hold HBoot's actual bytes.
+#[cfg(feature = "hboot")]
+fn cm5_el2_isolation_test() {
+    let sentinel: u64 = 0xDEAD_BEEF_CAFE_F00D;
+    let mut val: u64 = sentinel;
+    kprint!(" [P7e] EL1 probing HBoot EL2 region @0x200000 (expect EL2 trap 'X'): ");
+    unsafe {
+        core::arch::asm!(
+            "ldr {v}, [{a}]",
+            v = inout(reg) val,
+            a = in(reg) 0x0020_0000usize,
+            options(nostack),
+        );
+    }
+    if val == sentinel {
+        kprint!("\n [P7e] PASS — EL1 blocked from HBoot EL2 region (stage-2 isolation, B-3)\n");
+    } else {
+        kprint!("\n [P7e] FAIL — EL1 read HBoot memory: {:#018x}\n", val);
+    }
 }
 
 #[cfg(not(feature = "cm5"))]

@@ -116,7 +116,9 @@ hboot_launch_el1:
     mov     x4, x0                  // entry
     mov     x5, x1                  // bootinfo
     mov     x0, #(1 << 31)          // HCR_EL2.RW = EL1 is AArch64
+    orr     x0, x0, #(1 << 0)       // HCR_EL2.VM = enable stage-2 for EL1&0 (P7e)
     msr     hcr_el2, x0
+    isb                             // stage-2 now active for lower ELs
     // Let EL1 use the physical counter + timer without trapping to EL2:
     // CNTHCTL_EL2.EL1PCTEN(bit0) | EL1PCEN(bit1). Without this the kernel's
     // CNTP_* access (P7b timer) traps to EL2 and stalls.
@@ -183,16 +185,34 @@ park:
 lower64_sync_gate:
     mrs     x10, esr_el2
     lsr     x10, x10, #26
-    cmp     x10, #0x16              // HVC64
+    cmp     x10, #0x16              // HVC64 -> reboot
     b.eq    reset_platform
+    cmp     x10, #0x24              // Data Abort from EL1 -> stage-2 isolation trap (P7e)
+    b.eq    el1_blocked
     movz    x9, #0x0000
     movk    x9, #0x0003, lsl #16
     movk    x9, #0x001c, lsl #32
-    mov     w11, #0x3f              // '?' = EL1 fault; self-recover
+    mov     w11, #0x3f              // '?' = other EL1 fault; self-recover
 91: ldr     w12, [x9, #0x18]
     tbnz    w12, #5, 91b
     strb    w11, [x9]
     b       reset_platform
+
+// P7e: EL1 touched HBoot's EL2 region -> stage-2 fault trapped here. Mark it
+// ('X'), skip the faulting instruction (ELR+=4), and return to EL1 so the
+// kernel survives + confirms it was blocked. Proves EL1 is walled off from EL2.
+el1_blocked:
+    movz    x9, #0x0000
+    movk    x9, #0x0003, lsl #16
+    movk    x9, #0x001c, lsl #32
+    mov     w11, #0x58              // 'X' = EL1 blocked from EL2 region
+92: ldr     w12, [x9, #0x18]
+    tbnz    w12, #5, 92b
+    strb    w11, [x9]
+    mrs     x10, elr_el2
+    add     x10, x10, #4            // skip the faulting load
+    msr     elr_el2, x10
+    eret
 
     .balign 0x800
 .global __hboot_vectors
