@@ -14,6 +14,30 @@ use crate::attest_keys;
 use crate::puts;
 use boot_abi::*;
 use ed25519_compact::{SecretKey as EdSecretKey, Signature as EdSignature};
+use fips205::slh_dsa_sha2_128f;
+use fips205::traits::{SerDes, Signer};
+use rand_core::{CryptoRng, RngCore};
+
+/// Deterministic zero-RNG (used with hedged=false — not consumed for entropy).
+struct ZeroRng;
+impl RngCore for ZeroRng {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        for b in dest.iter_mut() {
+            *b = 0;
+        }
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+impl CryptoRng for ZeroRng {}
 
 /// Build and sign the attestation quote, writing it to ATTEST_QUOTE_ADDR.
 /// Returns the ed25519 signature (for a short console echo).
@@ -33,12 +57,14 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
     let mut ed_bytes = [0u8; ED25519_SIG_LEN];
     ed_bytes.copy_from_slice(ed_sig.as_ref());
 
-    // Post-quantum AK signature: DEFERRED. The on-device fips205 SLH-DSA-128s
-    // *signer* stalls at EL2 (the verifier is fine); left zero-filled until the
-    // signer perf/path is resolved. Secure boot stays fully hybrid QS — only
-    // the attestation quote's PQ half is pending. Verifier treats zero as
-    // "PQ quote not present".
-    let slh_sig = [0u8; AK_SLHDSA_SIG_LEN];
+    // Post-quantum AK signature: SLH-DSA-SHA2-128f (fast-sign, quantum-safe).
+    // The 'f' variant signs in seconds even with software SHA-256 on bare metal
+    // (128s was minutes). Deterministic: zero-RNG + hedged=false.
+    puts(" attest : signing quote (SLH-DSA-128f, quantum-safe)...\n");
+    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(&attest_keys::AK_SLHDSA_SK).unwrap();
+    let slh_sig = slh_sk
+        .try_sign_with_rng(&mut ZeroRng, &body, AK_SIG_CTX, false)
+        .expect("ak slh sign");
 
     // Publish the quote for the kernel to forward to a verifier.
     let q = ATTEST_QUOTE_ADDR as *mut AttestQuote;

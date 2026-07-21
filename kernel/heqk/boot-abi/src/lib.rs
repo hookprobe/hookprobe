@@ -51,8 +51,11 @@ pub const ATTEST_QUOTE_ADDR: usize = 0x3FFC_0000;
 /// Verifier challenge nonce (fixed for the demo; a real deployment injects a
 /// fresh per-request nonce over a channel). Must match heqk-sign.
 pub const CHALLENGE_NONCE: [u8; 32] = *b"HEQK-attestation-demo-nonce-0001";
-/// AK SLH-DSA signature length (FIPS 205 SHA2-128s) — same as boot sigs.
-pub const AK_SLHDSA_SIG_LEN: usize = SLHDSA_SIG_LEN;
+/// AK SLH-DSA signature length. The AK uses the FAST-signing FIPS 205 variant
+/// (SHA2-128f) because the quote is signed ON-DEVICE: 128s (slow-sign) is
+/// unusable with software SHA-256 on bare metal, 128f signs in seconds. Same
+/// 128-bit quantum security; larger signature (fine for once-per-boot).
+pub const AK_SLHDSA_SIG_LEN: usize = 17088;
 /// Context string bound into the AK signatures (must match heqk-sign).
 pub const AK_SIG_CTX: &[u8] = b"HEQK-ATTEST-v1";
 
