@@ -2,16 +2,22 @@
 #![no_main]
 //! HBoot — the HEQK boot manager (Phase 1 of the HookProbe boot architecture).
 //!
-//! Scope, deliberately small: console (owned by the stub), payload
-//! verification (SHA-256 now, ed25519 slot reserved), measurement, relocation,
-//! typed BootInfo handoff, EL1 launch. HBoot stays resident at EL2 as the
-//! reboot/fault gate (`hvc #0`). No shell, no menus, no policy.
+//! Scope, deliberately small: console (owned by the stub), HYBRID secure-boot
+//! verification (measure with SHA-256, then require BOTH an ed25519 AND an
+//! SLH-DSA / FIPS-205 signature — quantum-safe: breaking boot needs breaking
+//! classical ECC AND post-quantum), relocation, typed BootInfo handoff, EL1
+//! launch. HBoot stays resident at EL2 as the reboot/fault gate (`hvc #0`).
+//! No shell, no menus, no policy.
 
 use boot_abi::*;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
+use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
+use fips205::slh_dsa_sha2_128s;
+use fips205::traits::{SerDes, Verifier};
 
 mod sha256;
+mod trusted_keys;
 
 core::arch::global_asm!(include_str!("boot.s"));
 
@@ -96,20 +102,44 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthex(load_pa);
     puts("\n");
 
-    // Verify: SHA-256 over the payload body vs the header's hash.
+    // MEASURE: SHA-256 over the payload body. Verification binds to THIS
+    // recomputed hash, never the header's stored copy — so a tampered payload
+    // fails even if the attacker also rewrites the stored hash.
     let body = (IMAGE_BASE + HBOOT_PAYLOAD_OFFSET + core::mem::size_of::<PayloadHeader>()) as *const u8;
     let computed = sha256::digest(unsafe { core::slice::from_raw_parts(body, size as usize) });
-    let expected: [u8; 32] = unsafe { read_volatile(core::ptr::addr_of!((*hdr).sha256)) };
     puts(" measure: sha256=");
     puthash(&computed);
     puts("\n");
-    if computed != expected {
-        puts(" verify : FAIL — expected ");
-        puthash(&expected);
-        puts("\n refusing to boot\n");
+
+    // HYBRID VERIFY: both signatures over the recomputed hash, with the
+    // trusted public keys embedded in HBoot (never taken from the image).
+    let ed_sig_bytes: [u8; ED25519_SIG_LEN] =
+        unsafe { read_volatile(core::ptr::addr_of!((*hdr).ed25519_sig)) };
+    let pq_sig_bytes: [u8; SLHDSA_SIG_LEN] =
+        unsafe { read_volatile(core::ptr::addr_of!((*hdr).slhdsa_sig)) };
+
+    // Classical: ed25519.
+    let ed_ok = (|| {
+        let pk = EdPublicKey::from_slice(&trusted_keys::ED25519_PUBKEY).ok()?;
+        let sig = EdSignature::from_slice(&ed_sig_bytes).ok()?;
+        pk.verify(computed, &sig).ok()
+    })()
+    .is_some();
+    puts(if ed_ok { " verify : ed25519  OK\n" } else { " verify : ed25519  FAIL\n" });
+
+    // Post-quantum: SLH-DSA-SHA2-128s (FIPS 205) — hash-based, quantum-safe.
+    let pq_ok = match slh_dsa_sha2_128s::PublicKey::try_from_bytes(&trusted_keys::SLHDSA_PUBKEY) {
+        Ok(pk) => pk.verify(&computed, &pq_sig_bytes, SIG_CTX),
+        Err(_) => false,
+    };
+    puts(if pq_ok { " verify : SLH-DSA OK (quantum-safe)\n" } else { " verify : SLH-DSA FAIL\n" });
+
+    // BOTH required. Either failing = refuse to boot.
+    if !ed_ok || !pq_ok {
+        puts(" secure boot: FAIL — hybrid signature invalid, refusing to boot\n");
         unsafe { park() }
     }
-    puts(" verify : OK (sig slot: v1/ed25519 pending)\n");
+    puts(" secure boot: PASS (ed25519 AND SLH-DSA)\n");
 
     // Relocate the payload to its link address.
     unsafe {
@@ -123,13 +153,14 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             bi,
             BootInfo {
                 magic: BOOTINFO_MAGIC,
-                version: 1,
+                version: 2,
                 dtb_pa,
                 kernel_pa: load_pa,
                 kernel_size: size,
                 kernel_hash: computed,
-                hboot_version: 0,
+                hboot_version: 1,
                 el2_gate: 1,
+                verify_flags: VERIFY_ED25519 | VERIFY_SLHDSA,
             },
         );
     }

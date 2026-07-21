@@ -5,6 +5,12 @@ edition = "2021"
 
 [dependencies]
 boot-abi = { path = "../boot-abi" }
+# HYBRID secure boot — both must verify:
+# ed25519 (classical, RFC 8032) + SLH-DSA-SHA2-128s (post-quantum, FIPS 205).
+# default-features=false drops std + the RNG (getrandom); verification needs
+# neither, and this is bare metal.
+ed25519-compact = { version = "2", default-features = false }
+fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2_128s"] }
 
 [[bin]]
 name = "hboot"

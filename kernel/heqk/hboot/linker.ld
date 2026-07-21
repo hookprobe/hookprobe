@@ -1,5 +1,5 @@
 /* HBoot — HEQK boot manager. Loaded by the EEPROM bootloader at 0x200000.
-   Must fit below the payload header at 0x200000 + 0x40000 (256 KiB). */
+   Must fit below the payload header at 0x200000 + 0x200000 (2 MiB). */
 ENTRY(_start)
 
 SECTIONS
@@ -25,7 +25,7 @@ SECTIONS
     . = . + 0x10000;             /* 64 KiB stack */
     __stack_top = .;
 
-    ASSERT(. <= 0x240000, "HBoot exceeds the 256 KiB slot before the payload")
+    ASSERT(. <= 0x400000, "HBoot exceeds the 2 MiB slot before the payload")
 
     /DISCARD/ : { *(.comment) *(.note .note.*) *(.eh_frame*) }
 }

@@ -14,8 +14,8 @@ pub const HBOOT_ENTRY_MAGIC: u64 = 0x544f4248;
 /// crumb page at 0x3FFF0000).
 pub const BOOTINFO_ADDR: usize = 0x3FFE_0000;
 
-/// Payload header magic "HQKPLD1\0" little-endian.
-pub const PAYLOAD_MAGIC: u64 = 0x00_31444c_504b_5148;
+/// Payload header magic "HQKPLD2\0" little-endian (v2 = hybrid signatures).
+pub const PAYLOAD_MAGIC: u64 = 0x00_32444c_504b_5148;
 
 /// Handed to the kernel in x0. Extend by APPENDING fields only; bump
 /// `version` when you do.
@@ -30,23 +30,40 @@ pub struct BootInfo {
     pub kernel_hash: [u8; 32], // SHA-256 measurement HBoot computed
     pub hboot_version: u64,
     pub el2_gate: u64,     // nonzero => `hvc #0` reboot gate is resident
+    pub verify_flags: u64, // bit0 = ed25519 verified, bit1 = SLH-DSA verified
 }
 
-/// Header prepended to the kernel payload inside the combined image.
-/// Located at HBOOT_PAYLOAD_OFFSET from the image base (0x200000 in RAM).
+/// BootInfo.verify_flags bits.
+pub const VERIFY_ED25519: u64 = 1 << 0;
+pub const VERIFY_SLHDSA: u64 = 1 << 1;
+
+/// SLH-DSA-SHA2-128s (FIPS 205) sizes.
+pub const SLHDSA_SIG_LEN: usize = 7856;
+pub const PUBKEY_LEN: usize = 32;
+pub const ED25519_SIG_LEN: usize = 64;
+
+/// Context string bound into both signatures (must match heqk-sign).
+pub const SIG_CTX: &[u8] = b"HEQK-BOOT-v1";
+
+/// HBoot v1 header: HYBRID secure boot. Both signatures are over the 32-byte
+/// SHA-256 of the payload; HBoot requires BOTH to verify (breaking secure boot
+/// requires breaking classical ECC AND post-quantum SLH-DSA). Prepended to the
+/// kernel payload inside the combined image at HBOOT_PAYLOAD_OFFSET.
 #[repr(C)]
 pub struct PayloadHeader {
     pub magic: u64,        // PAYLOAD_MAGIC
     pub size: u64,         // payload bytes following this header
     pub entry_offset: u64, // entry point offset inside the payload (0)
     pub load_pa: u64,      // where the payload must be relocated (0x1000000)
-    pub sha256: [u8; 32],  // integrity hash of the payload
-    pub sig: [u8; 64],     // ed25519 signature slot (v1; zero in v0)
+    pub sha256: [u8; 32],  // measurement (informational; verify binds to recompute)
+    pub ed25519_sig: [u8; ED25519_SIG_LEN], // classical signature
+    pub slhdsa_sig: [u8; SLHDSA_SIG_LEN],   // post-quantum signature (FIPS 205)
 }
 
 /// The payload header sits at this offset inside the combined hboot8.img
-/// (HBoot's binary is padded to this boundary by mkimage-hboot.sh).
-pub const HBOOT_PAYLOAD_OFFSET: usize = 0x40000; // 256 KiB
+/// (HBoot's binary is padded to this boundary by mkimage-hboot.sh). 2 MiB
+/// gives room for the PQ crypto (SLH-DSA/SHA3) in a debug build.
+pub const HBOOT_PAYLOAD_OFFSET: usize = 0x200000; // 2 MiB
 
 /// Physical load/link address of the kernel payload.
 pub const KERNEL_LOAD_PA: usize = 0x0100_0000; // 16 MiB
