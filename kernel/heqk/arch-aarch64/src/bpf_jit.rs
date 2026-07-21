@@ -13,11 +13,13 @@
 /// Compile the signed threat rule to native code. Returns the entry VA (as a
 /// usize to be transmuted to `extern "C" fn(*const u8) -> u64`), or None.
 pub fn compile_threat_rule() -> Option<usize> {
-    // Pre-encoded ARM64 for: R0 = (port==4444) ? DROP(2) : PASS(1)
-    //   0 mov  x1, x0          ; R1 = packet pointer (AAPCS arg0)
-    //   1 ldrb w2, [x1, #0]    ; R2 = pkt[0] (high byte)
+    // Pre-encoded ARM64 for: R0 = (dst_port==4444) ? DROP(2) : PASS(1). R1 (arg0)
+    // points at the L4 header (parser-located), so dst-port is at offset 2..4 —
+    // matching the interpreter's THREAT_RULE.
+    //   0 mov  x1, x0          ; R1 = L4 header pointer (AAPCS arg0)
+    //   1 ldrb w2, [x1, #2]    ; R2 = l4[2] (dst-port high byte)
     //   2 lsl  x2, x2, #8
-    //   3 ldrb w3, [x1, #1]    ; R3 = pkt[1] (low byte)
+    //   3 ldrb w3, [x1, #3]    ; R3 = l4[3] (dst-port low byte)
     //   4 orr  x2, x2, x3      ; R2 = dst_port (big-endian)
     //   5 movz w9, #4444
     //   6 cmp  x2, x9
@@ -27,7 +29,7 @@ pub fn compile_threat_rule() -> Option<usize> {
     //  10 movz x0, #1          ; PASS
     //  11 ret
     const CODE: [u32; 12] = [
-        0xAA0003E1, 0x39400022, 0xD378DC42, 0x39400423, 0xAA030042, 0x52822B89,
+        0xAA0003E1, 0x39400822, 0xD378DC42, 0x39400C23, 0xAA030042, 0x52822B89,
         0xEB09005F, 0x54000061, 0xD2800040, 0xD65F03C0, 0xD2800020, 0xD65F03C0,
     ];
 

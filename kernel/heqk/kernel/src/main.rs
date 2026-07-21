@@ -13,6 +13,7 @@ mod bpf;
 mod caps;
 mod heap;
 mod ipc;
+mod net;
 mod packet;
 mod scheduler;
 mod telemetry;
@@ -738,7 +739,7 @@ fn p6_ai_runtime() -> bool {
     kprint!("   rule = {} BPF instructions (LDX/LSH/OR/JNE/MOV/EXIT), interpreted\n", bpf::THREAT_RULE.len());
     let mut ok = true;
     for &(port, expect) in &[(4444u16, "DROP"), (80u16, "PASS"), (443u16, "PASS")] {
-        let pkt = [(port >> 8) as u8, (port & 0xff) as u8, 0u8, 0u8];
+        let pkt = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8]; // L4 hdr: dst-port at 2..4
         let v = bpf::run(&bpf::THREAT_RULE, pkt.as_ptr(), pkt.len());
         let vs = match v {
             bpf::DROP => "DROP",
@@ -791,7 +792,7 @@ fn p6b_demo() -> bool {
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(code_va) };
             let mut jit_ok = true;
             for &port in &[4444u16, 80u16, 443u16] {
-                let pkt = [(port >> 8) as u8, (port & 0xff) as u8, 0u8, 0u8];
+                let pkt = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8]; // L4 hdr: dst-port at 2..4
                 let jv = f(pkt.as_ptr());
                 let iv = bpf::run(&bpf::THREAT_RULE, pkt.as_ptr(), pkt.len());
                 if jv != iv {

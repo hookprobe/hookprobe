@@ -26,12 +26,13 @@ const fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> u64 {
 // Opcodes used (RFC 9669 encoding):
 //   0x71 LDX_B (dst = *(u8*)(src+off))   0x67 LSH64_K   0x4f OR64_X
 //   0xb7 MOV64_K   0x55 JNE_K   0x95 EXIT
-/// The signed first-party threat rule: DROP if the packet's big-endian
-/// dst-port field (bytes 0..2) equals 4444, else PASS.
+/// The signed first-party threat rule. R1 points at the **L4 (TCP/UDP) header**
+/// (the parser in `net.rs` locates it); the dst port is the big-endian field at
+/// L4 offset 2..4 (src port is 0..2). DROP if dst-port == 4444, else PASS.
 pub const THREAT_RULE: [u64; 9] = [
-    insn(0x71, 2, 1, 0, 0),    // R2 = *(u8*)(R1+0)   high byte
+    insn(0x71, 2, 1, 2, 0),    // R2 = *(u8*)(R1+2)   dst-port high byte
     insn(0x67, 2, 0, 0, 8),    // R2 <<= 8
-    insn(0x71, 3, 1, 1, 0),    // R3 = *(u8*)(R1+1)   low byte
+    insn(0x71, 3, 1, 3, 0),    // R3 = *(u8*)(R1+3)   dst-port low byte
     insn(0x4f, 2, 3, 0, 0),    // R2 |= R3            (R2 = dst_port)
     insn(0x55, 2, 0, 2, 4444), // if R2 != 4444 goto +2
     insn(0xb7, 0, 0, 0, 2),    // R0 = DROP

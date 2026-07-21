@@ -8,7 +8,7 @@
 //! ZEROCOPY_IPC_RING.md. The verdict here is a native stand-in for the JIT'd
 //! RFC 9669 BPF program (that's the AI Runtime, P6); the datapath is the point.
 
-use core::ptr::{addr_of_mut, read_volatile, write_volatile};
+use core::ptr::{addr_of_mut, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 const RING_SIZE: u32 = 8; // power of two
@@ -37,10 +37,6 @@ fn frame_ptr(pool_base: usize, frame: usize) -> usize {
     pool_base + frame * FRAME_SZ
 }
 
-fn read_port(p: *const u8) -> u16 {
-    unsafe { ((read_volatile(p) as u16) << 8) | (read_volatile(p.add(1)) as u16) }
-}
-
 /// NIC-side: "receive" packet `idx` by writing its bytes into a pool frame (the
 /// DMA-equivalent write — the only data move), then publish a descriptor.
 /// Returns false if the ring is full (backpressure).
@@ -52,19 +48,19 @@ pub fn produce(pool_base: usize, idx: usize) -> bool {
     }
     let frame = (h as usize) % POOL;
     let p = frame_ptr(pool_base, frame) as *mut u8;
-    // Minimal packet: bytes[0..2] = dst_port (big-endian); byte[2] = a payload id.
+    // A REAL Ethernet/IPv4/UDP frame with the dst port at its true L4 offset, so
+    // the datapath exercises the parser + L4-offset rule end to end.
     let port: u16 = if idx % 2 == 0 { BLOCKED_PORT } else { 80 };
-    unsafe {
-        write_volatile(p.add(0), (port >> 8) as u8);
-        write_volatile(p.add(1), (port & 0xff) as u8);
-        write_volatile(p.add(2), idx as u8);
-    }
+    let flen = {
+        let buf = unsafe { core::slice::from_raw_parts_mut(p, FRAME_SZ) };
+        build_udp_frame(buf, port)
+    };
     let slot = (h % RING_SIZE) as usize;
     unsafe {
         addr_of_mut!(DESCS)
             .cast::<Desc>()
             .add(slot)
-            .write(Desc { frame: frame as u32, len: 64, verdict: 0 });
+            .write(Desc { frame: frame as u32, len: flen as u16, verdict: 0 });
     }
     HEAD.store(h.wrapping_add(1), Ordering::Release); // publish (release)
     true
@@ -109,11 +105,10 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
     let dp = unsafe { addr_of_mut!(DESCS).cast::<Desc>().add(slot) };
     let mut d = unsafe { dp.read() };
     let p = frame_ptr(pool_base, d.frame as usize) as *const u8;
-    let verdict = verdict_bpf(p, d.len); // reads the packet in place — zero copy
-    // Only read the port field if the packet is actually long enough; else a
-    // short/zero-length packet would return stale bytes from a prior packet
-    // that reused this pool frame (cross-packet info leak into the verdict).
-    let port = if d.len >= 2 { read_port(p) } else { 0 };
+    // Parse + classify in place (zero copy): one parse yields both the real
+    // L4 dst-port and the verdict.
+    let frame = unsafe { core::slice::from_raw_parts(p, d.len as usize) };
+    let (port, verdict) = classify(frame);
     if verdict == DROP {
         crate::telemetry::emit(crate::telemetry::Event::PacketDrop);
     }
@@ -123,12 +118,47 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
     Some((port, verdict))
 }
 
-/// The verdict IS the AI Runtime (P6): the RFC 9669 BPF VM runs the signed
-/// threat rule against the packet in place. INVALID (sandbox violation) fails
-/// safe to DROP.
-fn verdict_bpf(pkt: *const u8, len: u16) -> u16 {
-    match crate::bpf::run(&crate::bpf::THREAT_RULE, pkt, len as usize) {
-        crate::bpf::PASS => PASS,
-        _ => DROP, // DROP or INVALID -> fail-safe
+/// The verdict IS the AI Runtime (P6): parse the frame (Ethernet/IPv4/L4, all
+/// bounds-checked in `net.rs`), then run the signed threat rule against the
+/// located L4 header in place. Returns (dst_port, verdict). Malformed/truncated
+/// frames fail safe to DROP; non-TCP/UDP frames (ARP, ICMP, …) carry no port
+/// threat and PASS.
+fn classify(frame: &[u8]) -> (u16, u16) {
+    match crate::net::parse(frame) {
+        Some(m) if m.has_l4_ports() => {
+            // Run the rule on a normalized L4 view: R1 = L4 header, so the rule
+            // reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
+            let l4 = &frame[m.l4_off..];
+            let v = match crate::bpf::run(&crate::bpf::THREAT_RULE, l4.as_ptr(), l4.len()) {
+                crate::bpf::PASS => PASS,
+                _ => DROP, // DROP or INVALID (sandbox) -> fail-safe
+            };
+            (m.dst_port, v)
+        }
+        Some(m) => (m.dst_port, PASS), // valid non-port traffic (ARP/ICMP/…)
+        None => (0, DROP),             // malformed/truncated -> fail-closed
     }
+}
+
+/// Build a minimal real Ethernet/IPv4/UDP frame with `dst_port` into `buf`,
+/// returning the frame length. Used by the synthetic producer so the P5 test
+/// exercises the real parser + L4-offset rule (not a hand-placed port at 0..1).
+fn build_udp_frame(buf: &mut [u8], dst_port: u16) -> usize {
+    const N: usize = 14 + 20 + 8; // eth + ipv4(IHL=5) + udp
+    for b in buf.iter_mut().take(N) {
+        *b = 0;
+    }
+    buf[12] = 0x08; // ethertype IPv4
+    buf[13] = 0x00;
+    buf[14] = 0x45; // IPv4, IHL=5
+    let total = 20 + 8; // IP total length
+    buf[16] = (total >> 8) as u8;
+    buf[17] = (total & 0xff) as u8;
+    buf[23] = 17; // protocol = UDP
+    // UDP header at offset 34: src(0..2)=1234, dst(2..4)=dst_port.
+    buf[34] = 0x04;
+    buf[35] = 0xd2; // src port 1234
+    buf[36] = (dst_port >> 8) as u8;
+    buf[37] = (dst_port & 0xff) as u8;
+    N
 }
