@@ -166,6 +166,35 @@ qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 ### P7 — CM5 bringup (the driver boss fight)
 - Implement `Hal` for the board + the **RP1 stack**: PCIe RC (or lean on `pciex4_reset=0` firmware config first), RP1's custom 64-source interrupt controller, **MACB/GEM Ethernet**, **DWC2/xHCI USB**; early console on the **BCM2712-side debug UART** (not behind RP1). Cross-reference the shared hardware recon in `~/hookprobe-bsd/drivers/DOSSIERS.md`.
 - **Gate P7:** the P5 north-star packet path runs on **CM5 metal** via RP1, on the shared HIL rig.
+- **✅ GREEN (2026-07-21) — north-star on metal.** A real Ethernet frame on the CM5's RP1 Gigabit MAC (`end0`) flows **wire → GEM RX DMA → Packet Engine ring → BPF verdict** on the microkernel, plus a live **DROP** of an injected UDP→:4444 threat frame alongside `PASS` on real traffic. Getting there required, on metal: PHY reset (RP1 GPIO32), RGMII-id gigabit bring-up, the **BCM2712 PCIe RC inbound DMA window** (firmware sets outbound only → the missing piece behind BNA), non-coherent cache discipline, and a PCIe write-ordering poll for the descriptor status word. Console is the RP1 UART via the firmware outbound window. See `RP1_GEM_BRINGUP.md`.
+
+### P7-SEC — Quantum-safe secure boot + attestation (emergent workstream, not in the original P0–P7 ladder)
+Bringing the kernel up on real hardware forced a trust-chain that QEMU never needed. Built and on metal:
+- **HBoot** — an EL2-resident boot manager (`heqk-boot`) that firmware loads; it verifies, measures, and launches the EL1 kernel. Four crates: `boot-abi`, `hboot`, `kernel`, `heqk-services`.
+- **Hybrid quantum-safe secure boot** — ed25519 **AND** SLH-DSA (FIPS-205) over the payload; geometry-pinned so a malicious image can't redirect the load; **anti-rollback SVN floor**.
+- **Measured boot** (TPM-style PCR chain) + **remote attestation** (device AK signs `nonce‖svn‖PCRs`), replayed/verified by the kernel.
+- **Round-2 security audit (2026-07-21, `SECURITY_AUDIT.md`):** 4-agent adversarial review of the full tree incl. the new driver/DMA/boot surface. Enforcement spine verified sound; 4 fixes landed (IPv6/QinQ IDS-evasion, IPC TOCTOU, 2 OOB-read gaps); 9 items triaged to the backlog below with explicit fix paths.
+- **Honest residual:** attestation is **demo-grade** until the AK is hardware-bound — the AK is currently a software constant compiled into the image (forgeable) and the nonce is fixed (replayable). Do not represent quotes as authenticity proofs until B-1/B-2 (below) are closed.
+
+---
+
+## 5a. Next-phase integration roadmap (post-metal north-star)
+
+The north-star proves the datapath on metal; the product (a **fast IDS/IPS** users trust) needs the phases below. They are ordered by dependency, and three of them are gated on two **keystone efforts** that unlock multiple findings at once:
+
+- **Keystone K1 — kernel-page block-splitting** (replace the coarse 1 GiB identity blocks with per-page mappings). Unlocks: **W^X at EL1** (B-5), **non-cacheable GEM descriptor ring** (B-4, the line-rate RX-loss fix), the JIT W^X residual, and **per-AS ASIDs**. This is the single highest-leverage internal change.
+- **Keystone K2 — BCM2712 OTP + eMMC RPMB drivers.** Unlocks: **hardware-bound AK** (B-1) → real attestation, **hardware anti-rollback counter** (B-8), and the measured-boot CRTM anchor (B-7). Turns attestation from demo-grade into a genuine authenticity proof.
+
+**Phase ordering (each gated on a runnable/metal test):**
+1. **P7a — IPS inline enforcement.** Today the datapath produces a *verdict*; an IPS must *act*. Add GEM **TX** + a drop/reinject decision so a DROP is enforced on the wire, not just logged. Gate: an injected threat frame is dropped inline; a benign frame is forwarded, on metal.
+2. **P7b — K1 (block-splitting) + the W^X/NC-descriptor/ASID cluster.** Land B-4 (NC descriptor ring → line-rate RX integrity), B-5 (W^X), and per-AS ASIDs together. Gate: sustained gigabit RX with zero descriptor-loss under load; `SCTLR.WXN` on; a data-abort on a write to kernel `.text`.
+3. **P7c — EL0 driver isolation for GEM.** Migrate the in-kernel GEM driver to a capability-bounded **EL0 driver server** (the `DRV` gate already proved the mechanism), requiring **EL0-as-scheduled-TCB** (closes B-6, the EL0-preemption/availability gap). Gate: GEM runs at EL0 with only its MMIO+DMA caps; a driver fault is contained; RX throughput holds.
+4. **P7d — K2 (OTP/RPMB) → real attestation & anti-rollback.** Close B-1/B-2/B-7/B-8. Gate: a quote signed by a per-device OTP-derived AK with a verifier-supplied fresh nonce; a rollback to an older signed bundle is refused by hardware state.
+5. **P7e — EL1↔EL2 isolation** (B-3): stage-2 from EL2 excluding the HBoot region, or scrub+lock before `eret`. Gate: EL1 cannot write HBoot's EL2 code/keys.
+6. **P8 — detection plane at scale.** PREVAIL-style BPF **verifier** for third-party rules, JIT on the metal datapath, QSecBit scoring of live traffic + capability telemetry, adaptive-NAPI. Gate: the same HookProbe rules that run on the Linux/FreeBSD tracks run here unchanged, scoring live gigabit traffic.
+7. **P9 — 2nd interface (RTL8111H / `eth1`).** Requires a **BCM2712 external PCIe RC1 bring-up** layer (train the link, ECAM, BARs) — see `RP1_ETH2_RTL8111.md`. Gate: the datapath runs on both ports.
+
+Full finding-by-finding backlog with fix paths: `SECURITY_AUDIT.md` (Round 2). Keystones K1 and K2 are the critical path — everything user-visible about speed and trust flows through them.
 
 ---
 
