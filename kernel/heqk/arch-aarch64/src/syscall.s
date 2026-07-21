@@ -165,6 +165,38 @@ gem_rx_stub:
 9:  b    9b
 gem_rx_stub_end:
 
+// -------- P7c step 3b stage 3: EL0 GEM TX driver (launch a transmit) ---------
+// The kernel pre-filled the TX buffer + set the descriptor address. This EL0
+// driver, granted the TX-ring NC window (0x1_4000_4000) + the GEM register window
+// (0x1_4000_2000), ARMS the descriptor (word1 = len|LAST|WRAP), kicks TSTART
+// (NCR = RE|TE|MPE|TSTART = 0x21c), and polls word1 for USED (bit31 = transmitted).
+.global gem_tx_stub
+.global gem_tx_stub_end
+gem_tx_stub:
+    movz x1, #0x4000, lsl #16     // x1 = 0x1_4000_0000 (GB5 base)
+    movk x1, #0x0001, lsl #32
+    add  x2, x1, #0x4000          // x2 = UTXVA (TX ring desc, NC)
+    add  x3, x1, #0x2000          // x3 = UDEV_VA (GEM registers)
+    movz w4, #0x8040              // word1 = len(0x40) | LAST(0x8000)
+    movk w4, #0x4000, lsl #16     //       | WRAP(0x40000000) = 0x40008040
+    str  w4, [x2, #4]             // arm desc[0].word1 (USED=0 -> hand to HW)
+    dsb  sy
+    movz w5, #0x021c              // NCR = RE|TE|MPE|TSTART
+    str  w5, [x3]                 // kick the TX DMA (GEM+0 = NCR)
+    mov  x6, xzr                  // completion poll (bounded)
+1:  ldr  w0, [x2, #4]            // desc[0].word1
+    tbnz w0, #31, 2f             // USED (bit31) set -> transmit complete
+    add  x6, x6, #1
+    movz x7, #0x0040, lsl #16     // 0x40_0000 bound
+    cmp  x6, x7
+    b.lo 1b
+2:  mov  x8, #7                   // SYS_DRIVER_REPORT (report final word1)
+    svc  #0
+    mov  x8, #6                   // SYS_EXIT_USER
+    svc  #0
+9:  b    9b
+gem_tx_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME

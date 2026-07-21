@@ -581,3 +581,46 @@ pub fn rxring_pa() -> usize {
 /// that walks the ring.
 pub const RX_NDESC: usize = NRX;
 pub const RX_DESC_STRIDE: usize = DESC_SZ;
+
+/// Physical base of the TX descriptor ring (== TXRING). P7c step 3b stage 3.
+pub fn txring_pa() -> usize {
+    unsafe { core::ptr::addr_of!(TXRING.desc) as usize }
+}
+/// Byte offset of the TX data buffer within the TX ring window (desc + buf).
+pub fn tx_buf_offset() -> usize {
+    unsafe {
+        core::ptr::addr_of!(TXRING.buf) as usize - core::ptr::addr_of!(TXRING.desc) as usize
+    }
+}
+
+/// P7c step 3b stage 3 — prepare a TX for an EL0 driver to launch: fill the TX
+/// buffer with a `len`-byte broadcast marker frame (cleaned to DRAM for the GEM),
+/// and set the descriptor's address words, leaving word1 IDLE so the EL0 driver
+/// arms + kicks it. The kernel does the privileged buffer/address setup; the EL0
+/// driver does the descriptor-arm + TSTART kick + completion poll.
+pub fn tx_prep_el0(len: usize) {
+    let n = len.min(TXBUF);
+    let bufpa = unsafe {
+        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
+        for k in 0..n {
+            tr.buf[0][k] = 0xaa; // marker payload
+        }
+        for k in 0..6 {
+            tr.buf[0][k] = 0xff; // broadcast dst MAC (a benign, real-shaped frame)
+        }
+        tr.buf[0].as_ptr() as usize
+    };
+    dc_cvac(bufpa, n); // TX buffer is cacheable — publish it to DRAM for the GEM
+    let bus = bufpa as u64 + DMA_BUS_OFFSET;
+    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc[0]) as usize };
+    let d = nc_desc(dphys); // NC alias — coherent with the EL0 driver's NC window
+    unsafe {
+        write_volatile(d.add(0), bus as u32); // word0 addr_lo (USED=0)
+        write_volatile(d.add(1), TXD_USED | TXD_WRAP); // word1 IDLE (EL0 arms it)
+        write_volatile(d.add(2), (bus >> 32) as u32); // word2 addr_hi
+        write_volatile(d.add(3), 0);
+        write_volatile(d.add(4), 0);
+        write_volatile(d.add(5), 0);
+        core::arch::asm!("dsb sy");
+    }
+}

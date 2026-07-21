@@ -175,6 +175,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
+    cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
 
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
@@ -262,6 +263,46 @@ fn cm5_gem_el0_rx_probe() {
         w1, sof_eof, len_field, if ok { "REAL FRAME" } else { "none/invalid" });
     kprint!(" [P7c] {} — GEM RX hot path ISOLATED at EL0 (stage 2: only the descriptor ring granted)\n",
         if ok { "PASS" } else { "FAIL" });
+}
+
+/// P7c step 3b (stage 3) — TX from EL0. The kernel pre-fills the TX buffer + sets
+/// the descriptor address (privileged); the EL0 driver, granted the TX-ring NC
+/// window + the GEM register window, ARMS the descriptor (word1 = len|LAST|WRAP),
+/// kicks TSTART, and polls word1 for USED (bit31 = transmitted). Proves the TX
+/// launch path runs from an isolated EL0 driver.
+#[cfg(feature = "cm5")]
+fn cm5_gem_el0_tx_probe() {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    arch_aarch64::gem::tx_prep_el0(64); // kernel: fill TX buffer + descriptor address
+    extern "C" {
+        static gem_tx_stub: u8;
+        static gem_tx_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(gem_tx_stub) as usize;
+    let len = core::ptr::addr_of!(gem_tx_stub_end) as usize - src;
+    let code_pa = mmu_cm5::el0_code_pa();
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code_pa as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let udev = mmu_cm5::USER_VA_BASE + 0x2000;
+    let utx = mmu_cm5::USER_VA_BASE + 0x4000;
+    const GEM_PHYS: usize = 0x1C00_100000;
+    mmu_cm5::map_user_code(ucode, code_pa);
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_device(udev, GEM_PHYS); // GEM registers (to kick NCR.TSTART)
+    mmu_cm5::map_user_nc(utx, arch_aarch64::gem::txring_pa()); // the TX ring (NC)
+    kprint!(" [P7c] EL0 TX driver: granted TX-ring NC @{:#x}->{:#x} + GEM-reg window @{:#x}\n",
+        utx, arch_aarch64::gem::txring_pa(), udev);
+    DRIVER_REPORT.store(0, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+    let w1 = DRIVER_REPORT.load(Ordering::Relaxed);
+    let used = (w1 >> 31) & 1 == 1;
+    kprint!(" [P7c] EL0 TX driver launched a transmit: final word1={:#010x} (USED/complete={})\n",
+        w1, used);
+    kprint!(" [P7c] {} — GEM TX driven from an ISOLATED EL0 driver (stage 3: armed + kicked + completed)\n",
+        if used { "PASS" } else { "FAIL" });
 }
 
 /// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable
