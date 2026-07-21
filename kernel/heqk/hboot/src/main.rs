@@ -35,7 +35,7 @@ core::arch::global_asm!(include_str!("boot.s"));
 const UART: usize = 0x1C_0003_0000;
 const IMAGE_BASE: usize = 0x20_0000;
 
-fn putc(b: u8) {
+pub(crate) fn putc(b: u8) {
     unsafe {
         let mut spins = 0u32;
         while read_volatile((UART + 0x18) as *const u32) & (1 << 5) != 0 {
@@ -48,7 +48,7 @@ fn putc(b: u8) {
     }
 }
 
-fn puts(s: &str) {
+pub(crate) fn puts(s: &str) {
     for b in s.bytes() {
         if b == b'\n' {
             putc(b'\r');

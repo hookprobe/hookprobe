@@ -11,9 +11,6 @@ boot-abi = { path = "../boot-abi" }
 # neither, and this is bare metal.
 ed25519-compact = { version = "2", default-features = false }
 fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2_128s"] }
-# For AK SLH-DSA signing on bare metal: try_sign_with_rng + a deterministic
-# zero-RNG (hedged=false doesn't consume it), avoiding getrandom.
-rand_core = { version = "0.6", default-features = false }
 
 [[bin]]
 name = "hboot"

@@ -100,7 +100,6 @@ dependencies = [
  "boot-abi",
  "ed25519-compact",
  "fips205",
- "rand_core",
 ]
 
 [[package]]
