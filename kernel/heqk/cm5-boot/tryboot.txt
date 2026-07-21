@@ -1,0 +1,14 @@
+# HEQK one-shot boot config (tryboot.txt) — used ONLY when Linux issues
+# `reboot "0 tryboot"`. A plain power-cycle always returns to config.txt (Linux).
+arm_64bit=1
+enable_uart=1
+# Keep the RP1 PCIe window alive at OS entry (bare-metal needs this or all
+# RP1 access incl. the GPIO-header UART hangs).
+pciex4_reset=0
+# EEPROM 2024-07-30+: firmware fully brings up RP1 and initializes UART0 on
+# GPIO14/15 @115200 BEFORE starting the ARM cores, and (2025-07+) mirrors its
+# own boot messages there — bare-metal earlycon on the header, officially.
+enable_rp1_uart=1
+kernel=heqk8.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+os_check=0

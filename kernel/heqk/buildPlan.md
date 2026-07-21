@@ -1,0 +1,195 @@
+# HookProbe Microkernel — Build Plan (deep-fixed, concrete)
+
+**How to actually build the custom Rust aarch64 microkernel: toolchain, workspace, the design commitments to bake in from day one, and a QEMU-first P0→P7 roadmap where every phase is gated on a runnable test — grounded in how seL4, L4, Redox, and the rust-raspberrypi tutorials were actually built.**
+
+Status: **authoritative build plan**, supersedes the earlier seL4-vs-from-scratch (Track A/B) framing — that decision is **made: custom Rust kernel** (see `ARCHITECTURE.md` §0, and the "OS is the sensor" justification in §6). This document is the *engineering* companion to `ARCHITECTURE.md` (the *what*); here is the *how*. Sources are cited inline; `VERIFY` = confirm against your exact QEMU/toolchain build before trusting.
+
+---
+
+## 1. The approach in one page (the load-bearing calls, from proven kernels)
+
+Six principles, each learned the hard way by a real kernel, that determine success before you write a line:
+
+1. **QEMU `virt` first, always.** Build the entire core against clean, documented hardware (PL011 UART, GIC, generic timer, virtio) with a sub-second edit-compile-boot loop. The `rust-raspberrypi-OS-tutorials` prove this progression (tutorials 01–16 are QEMU-runnable). CM5/RP1 is a *later HAL+driver effort against a finished kernel* — never a simultaneous core+hardware bringup (`ARCHITECTURE.md` §2).
+2. **HAL trait boundary from commit one.** The `kernel` crate contains **zero `cfg(target_arch)`**; all arch code lives behind traits in `hal`, implemented by `arch-aarch64` (Redox's `src/arch/` split is the model). A second arch (x86_64/N100) becomes additive, not a rewrite.
+3. **IPC register-only fast-path is designed first, not last.** Liedtke's SOSP'93 lesson ("Improving IPC by Kernel Design," 20× over Mach) still governs: *IPC is the make-or-break*. seL4's fastpath is ~468 cycles one-way (Skylake; `VERIFY` arm64 numbers on [seL4 performance](https://sel4.systems/performance.html)). Design the `Call`/`ReplyRecv` register-only path before the slow path; everything else can be slow.
+4. **No dynamic allocation in the kernel — ever.** Adopt seL4's **untyped→retype** model: memory starts as Untyped capabilities, userspace carves typed objects, the kernel never `malloc`s. This gives bounded kernel memory, no in-kernel OOM, and is the property that makes isolation tractable. Retrofitting this is agony — bake it in at P2.
+5. **Drivers, stacks, filesystems are userspace.** Only the GIC, the timer, and a minimal early UART live in the kernel. Everything else is a capability-bounded, restartable userspace server (this is the whole microkernel thesis and the fault-isolation story).
+6. **Right-size for edge, not the datacenter.** Adaptive NAPI data plane, 2 MiB hugepages, 1–2.5 GbE target (`ARCHITECTURE.md` §5) — not spin-poll-forever / 1 GiB / 100 GbE.
+
+---
+
+## 2. Project setup (the concrete "how you start typing")
+
+### Toolchain
+- **Target:** `aarch64-unknown-none-softfloat` (built-in Tier-2). **Softfloat, not hardfloat** — a kernel must not clobber FP/SIMD registers before saving them on trap/switch; rustc's own docs say prefer `-softfloat` for kernels ([rustc platform-support](https://doc.rust-lang.org/beta/rustc/platform-support/aarch64-unknown-none.html)). The rpi tutorials use it.
+- **Nightly, pinned.** `rust-toolchain.toml`:
+  ```toml
+  [toolchain]
+  channel   = "nightly-2026-07-01"   # pin; bump deliberately
+  components = ["rust-src", "llvm-tools"]
+  targets   = ["aarch64-unknown-none-softfloat"]
+  ```
+- **`build-std`** (`.cargo/config.toml`) to get `core`+`alloc` for a target without prebuilt std:
+  ```toml
+  [unstable]
+  build-std = ["core", "alloc", "compiler_builtins"]
+  build-std-features = ["compiler-builtins-mem"]   # provides memcpy/memset
+  [build]
+  target = "aarch64-unknown-none-softfloat"
+  ```
+- Built-in target beats a custom JSON spec (since rustc ships `rust-std` for these); only write a `.json` if you must change code-model/features.
+
+### Workspace layout (HAL-abstracted — Redox / rpi-tutorials pattern)
+```
+/Cargo.toml          # [workspace]
+/kernel      # arch-neutral: scheduler, IPC, capabilities, VM policy, sensor taps. NO cfg(target_arch)
+/hal         # traits + types: Mmu, Timer, IrqController, Console, context_switch, early_init
+/arch-aarch64# impls hal: boot.S stub, EL1 vectors, GIC, generic timer, MMU, aarch64-cpu regs
+/arch-x86_64 # (P-later) impls hal for N100
+/abi         # #![no_std] shared syscall numbers + trap-frame/cap structs — used by kernel AND userspace
+/user/*      # userspace servers: root task, PCI server, virtio-net driver, IDS sidecar
+```
+Keep `abi` tiny and stable — it is the contract between ring 0 and ring 3 and between arches.
+
+### Crates (every dep is TCB — keep it minimal, MIT/Apache only, no GPL)
+| Crate | Role | License |
+|---|---|---|
+| `aarch64-cpu` (was `cortex-a`) | typed system-register access (`SCTLR_EL1`, `VBAR_EL1`, barriers, `wfe`) | Apache/MIT |
+| `tock-registers` | MMIO register-field DSL (`register_bitfields!`) | Apache/MIT |
+| `spin` / `spinning_top` | `no_std` spinlock / `Once` | MIT |
+| `buddy_system_allocator` | frame + heap allocator (used by rCore/reL4) — *for userspace & the pre-retype boot heap only* | MIT |
+| `fdt` | parse the DTB QEMU passes in `x0` (discover RAM/UART/GIC) | MIT/Apache |
+| `bitflags` | page-table / permission flag types | MIT/Apache |
+| (optional) `aarch64-rt` (Google) | startup + exception vectors if you don't hand-roll boot asm | Apache/MIT |
+**Avoid in-kernel:** anything pulling `std`, heavy `syn`/proc-macro chains, allocating `log` backends, async runtimes, serde/hashbrown unless unavoidable.
+
+### QEMU dev loop
+```
+qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+  -serial mon:stdio -semihosting \
+  -kernel target/aarch64-unknown-none-softfloat/debug/kernel
+```
+- `-M virt`: PL011 UART @ `0x0900_0000`, GICv2 by default (`-machine gic-version=3` for v3), DTB at RAM base. `-kernel` loads the ELF at **`0x4008_0000`** (`VERIFY` on your QEMU via the generated DTB / `-d int`) and enters at EL1 (or EL2 with `-machine virtualization=on`).
+- **Exit-from-code for tests:** aarch64 `virt` has **no** `isa-debug-exit` (that's x86-only — phil-opp's `0xf4` trick does not port). Use **ARM semihosting `SYS_EXIT`** (`hlt #0xf000`, `x0=0x18`) with `-semihosting`, or **PSCI `SYSTEM_OFF`** (`hvc`/`smc`, supported by `virt`). `VERIFY` the exact semihosting parameter block against the spec — it's easy to get subtly wrong.
+- **Test harness:** `#![feature(custom_test_frameworks)]`, `#![test_runner(crate::test_runner)]`, `#![reexport_test_harness_main="test_main"]`; the runner iterates `&[&dyn Fn()]`, prints over PL011, then semihosting-exits with pass/fail. Wire `[target.aarch64-unknown-none-softfloat] runner = "qemu-system-aarch64 -M virt -cpu cortex-a72 -semihosting -nographic -kernel"` so `cargo test` boots each test binary. (phil-opp's [Testing chapter](https://os.phil-opp.com/testing/) — take the *methodology*, swap the x86 exit for semihosting.)
+- **Debug:** add `-s -S`, then `gdb-multiarch kernel -ex 'target remote :1234'`.
+
+---
+
+## 3. Reference kernels — study, don't fork (what to take from each)
+| Project | License | Take exactly this |
+|---|---|---|
+| **rust-raspberrypi-OS-tutorials** | Apache/MIT | **Most relevant.** aarch64 boot, EL-drop, exception vectors, MMU, `tock-registers` MMIO style; QEMU-runnable progression 01→16 |
+| **Redox kernel** | MIT | arch-neutral core + `src/arch/{aarch64,x86_64}` module split; real Rust microkernel <40k LoC |
+| **seL4 (+ reL4 / rust-sel4)** | GPLv2 / MIT | the object model (TCB/Endpoint/Notification/CNode/Untyped/VSpace), IPC fastpath design, untyped/retype, CDT revoke. reL4 shows these *in Rust* (`VERIFY` maintenance) |
+| **phil-opp blog_os** | Apache/MIT | the `no_std` + `custom_test_frameworks` **testing methodology** (its arch code is x86-only) |
+| **Hermit** | Apache/MIT | clean nightly/build-std tooling & boot path (it's a unikernel, not a microkernel model) |
+| **Theseus** | MIT | idea only: enforce isolation via Rust types (research-grade) |
+
+---
+
+## 4. Design commitments to bake in from day one (cheap now, agony to retrofit)
+- **Untyped→retype allocation** — kernel never allocates; userspace policy (§1.4). Decide the Untyped/Retype API at P2.
+- **Register-only IPC fastpath** — `Call`/`ReplyRecv`, reply cap in the receiver TCB; design before the slow path (§1.3).
+- **Non-preemptible, bounded syscalls** — classic L4/seL4: short syscalls, long ops made restartable/incremental → no in-kernel locks, simple reasoning. Decide at P1.
+- **ASID-tagged address spaces** — set `TCR_EL1.AS`/`A1`, write ASID+base into `TTBR0_EL1` per switch to avoid full TLB flushes; barrier discipline (`dsb ish; isb; tlbi`) after every mapping change. Bake into the MMU/HAL at P0.
+- **Capabilities in CNodes** — caps stored in kernel CNode slots, named by CSpace index, never in user memory (`CAPABILITY_MODEL.md`).
+- **"OS is the sensor" taps** — reserve, from P2, an event hook on capability invoke / retype / revoke / IPC / scheduling-anomaly that P6 pipes to QSecBit. It's a design seam, not a feature to bolt on later (`ARCHITECTURE.md` §6).
+
+---
+
+## 5. The roadmap — P0→P7, each phase gated on a runnable test
+
+### P0 — Skeleton (QEMU virt)
+- **Boot stub** (`arch-aarch64/boot.S`, minimal asm): land from firmware (QEMU `virt` drops you in **EL2** on the boot CPU), **EL2→EL1 drop** — `HCR_EL2.RW=1` (EL1 is AArch64), `SPSR_EL2.M=0b0101` (EL1h) + DAIF masked, `ELR_EL2`=EL1 entry, set `SP_EL1`, `eret`. Zero `.bss`, set SP, call Rust `kmain`.
+- **PL011 UART** console (via HAL `Console`); `#[panic_handler]` prints + halts.
+- **Exception vectors:** 2 KB-aligned, 16 entries × 0x80 bytes (Sync/IRQ/FIQ/SError × 4 EL/SP combos), base → `VBAR_EL1`. Catch faults and print (never silent-reset).
+- **Physical page allocator** (bitmap/buddy over the DTB-reported RAM map).
+- **MMU enable:** `MAIR_EL1` (idx0 Device-nGnRnE, idx1 Normal-WB), `TCR_EL1` (T0SZ/T1SZ, 4 KB granule, cacheable inner-shareable walks, IPS from `ID_AA64MMFR0_EL1`), build tables, `TTBR0/TTBR1_EL1`, `dsb ish; isb`, `SCTLR_EL1.M=1`, `isb`. Kernel heap (`buddy_system_allocator`) as the pre-retype boot heap only.
+- **Gate P0:** boots on QEMU, prints from Rust `kmain`, a deliberate bad access is *caught and reported* by the vectors. `cargo test` runs one semihosting-exit test green.
+- **✅ GREEN (2026-07-20).** Workspace scaffolded (`kernel`/`hal`/`arch-aarch64`/`abi`, HAL boundary enforced); Rust nightly 1.99 + `aarch64-unknown-none-softfloat`. Boots on `qemu-system-aarch64 -M virt` (QEMU 8.2.2): banner + `hello from EL1` over PL011; `brk #0` self-test traps to `VBAR_EL1` (`ESR_EL1` EC=0x3c Breakpoint) → reported → clean exit. **EL2→EL1 drop verified** via `virtualization=on` (CPU starts EL2, still lands EL1). `cargo run` is the one-command loop. Repro: `HACKING.md`. *(bss zeroing + stack + vectors done; full MMU/phys-allocator/heap is the remainder of P0 → rolls into P1.)*
+
+### P1 — Execution
+- **TCB** struct; **context switch** saving callee-saved `x19–x28`, `x29`(FP), `x30`(LR), `SP` (lazy FP/SIMD via `CPACR_EL1` trap).
+- **Preemptive priority scheduler** on the **generic timer**: read `CNTFRQ_EL0`, arm `CNTP_TVAL_EL0`, enable `CNTP_CTL_EL0`; timer fires as **PPI INTID 30** (`VERIFY`) through the GIC. **GIC init** (v2 default on `virt`: `GICD_CTLR` + `GICC_CTLR`/`GICC_PMR`/`GICC_IAR`/`GICC_EOIR`; v3: redistributor + `ICC_*_EL1` sysregs). Thread pinning API.
+- **Gate P1:** two threads round-robin under timer preemption; pin works; scheduler tick verified in a test.
+- **✅ GREEN (2026-07-20).** Kernel heap (zero-dep bump allocator; `Vec`/`alloc` working). **GICv2** brought up (distributor + CPU interface); **ARM generic timer** armed at 100 Hz (EL1 physical, PPI 14 → INTID 30). Full **trap-frame context switch** in `vectors.s` `irq_entry` (saves x0–x30 + ELR + SPSR, switches SP, restores, `eret`). **Round-robin preemptive scheduler** (`kernel/scheduler.rs`, arch-neutral, opaque `sp`; arch builds frames in `thread.rs`). 3 worker threads + idle interleave under timer preemption with **per-thread counters advancing across switches** (`A0 B0 C0 C1 A1 B1 …`) — proves context save/restore. Boots + runs on QEMU 8.2.2; repro in `HACKING.md`. **Honest scope:** scheduler is round-robin (priority is a small extension, not yet done); **MMU/paging still OFF** (running identity-mapped physical) → that's **P1b** next; thread "pinning" is trivial until SMP.
+
+### P2 — Capabilities
+- **CNode** (cap table), **Untyped**, `Untyped_Retype` → TCB/Endpoint/Notification/CNode/Frame/PageTable; **CSpace** resolution (guarded radix walk); **CDT** (mapping database) so `Revoke` recursively deletes derived caps with no GC pause. Add the **sensor tap** on retype/revoke here.
+- **Gate P2:** retype an Untyped into objects; revoke a subtree and prove all derived caps vanish synchronously (test).
+- **✅ GREEN (2026-07-20).** `kernel/caps.rs` (arch-neutral — capabilities need no HAL): `CapSpace` with untyped→retype into CNode/Endpoint/Frame/Tcb/sub-Untyped, a capability derivation tree, and synchronous recursive `revoke`. Self-test proves: derivation tree renders (8 caps), type-safety rejects retyping a non-Untyped and using an Endpoint as a Frame, `revoke(sub)` deletes a subtree (8→6), `revoke(root)` deletes all derived + reclaims memory (6→1). `[P2] PASS`.
+- **P1b ✅ GREEN (2026-07-20).** `arch-aarch64/mmu.rs`: 4 KiB-granule stage-1 MMU (MAIR/TCR/TTBR0/SCTLR, identity 1 GiB blocks — GB0 device, GB1 normal), physical frame allocator, fine-grained `map_page`. Proof: MMU on, fresh frame mapped at a high VA, r/w verified, VA≠PA; preemption still works with MMU+caches on. `[P1b] PASS`.
+
+### P3 — Userspace
+- **SVC syscall boundary:** `svc #imm` → EL1 Sync vector; decode `ESR_EL1` (`EC=0x15`), save trap frame (x0–x30, `SP_EL0`, `ELR_EL1`, `SPSR_EL1`); args x0–x7, number in x8; `eret` back to EL0. Narrow, validated API (`ipc_send/recv`, `cap_*`, `yield`).
+- **Root task** at EL0 holding all initial caps (the primordial manager).
+- **Gate P3:** root task runs at EL0, invokes a cap via SVC, a fault in it is contained (kernel survives).
+- **✅ GREEN (2026-07-20).** EL0 entry + kernel-resume glue (`arch-aarch64/syscall.s`, setjmp/longjmp-style), `lower_sync_entry` vector servicing SVC + containing faults, and a per-page **user address space** (dedicated EL0 code+stack pages via `map_user_page`; **kernel RAM stays EL1-only** — real isolation, learned after a first attempt that made kernel RAM EL0-accessible and broke privileged access). A position-independent user program runs at EL0, makes 3 syscalls (incl. a return-value round-trip), then a data abort (`EC=0x24`) is caught by the kernel, which contains it and resumes. `[P3] PASS`.
+- **P0–P3 gap-closure (2026-07-20).** Hardened after audit: **priority scheduler** (was round-robin) + **thread lifecycle/exit** (`kernel/scheduler.rs`); capabilities now **backed by real reserved physical frames** (a Frame cap's memory is write/read-verified) instead of nominal addresses; and P3 now does a **genuine capability invocation from EL0** (`SYS_CAP_IDENTIFY` resolves a CPtr in the root task's CSpace — meeting the gate's "invoke a cap via SVC" wording) with a real **root-task CSpace**. Deliberately deferred (named, not faked): SMP, DTB-sized RAM, frame/heap free-lists, real per-AS ASIDs + W^X + kernel-page block-splitting, nested CSpaces + Grant/mint delegation, FP/SIMD lazy save, EL0 tasks as scheduled TCBs.
+
+- **Gate P4 (revised): synchronous IPC rendezvous over an Endpoint.** *(The zero-copy ring moves to P5, where it is the north-star datapath.)*
+- **✅ GREEN (2026-07-20).** `kernel/ipc.rs` + scheduler **block/unblock** states: a consumer thread `recv()`s and blocks; a lower-priority producer `send(0xBEEF)`s, deposits the message and unblocks the consumer, which resumes and receives `0xbeef`. Critical sections mask IRQs (single-core atomic check-and-block). `[P4] PASS`. IPC + the priority-scheduler demo run in one scheduler episode.
+
+- **Gate P5: Packet Engine — zero-copy ring + in-place verdict** *(the north-star datapath; real NIC wire is P5b, the RFC 9669 BPF VM is P6/AI Runtime).*
+- **✅ GREEN (2026-07-20).** `kernel/packet.rs`: an SPSC descriptor ring (Region B) over a frame pool (Region C, real reserved physical), release/acquire indices (Region A). Producer writes a packet into a pool frame (the DMA-equivalent) and publishes a descriptor; the consumer acquires it and runs a verdict **against the payload in place — no copy** — dropping a blocked dst-port. 10 synthetic packets (ring wraps) → 5 DROP / 5 PASS. `[P5] PASS`. This is the datapath the whole product exists to run.
+- **Rename → HEQK Core (Hardened Edge Quantum-safe Kernel), folder `~/heqk`.** Subsystem architecture in `HEQK_SUBSYSTEMS.md`: Scheduler + Capability Model (built), Security Framework (partial), Packet Engine (P5, built), Telemetry Bus + AI Runtime (P6), and a new **PQC** subsystem (ML-KEM/ML-DSA) for quantum-safe signing/attestation.
+
+- **Gate P5b: real wire — virtio-net RX into the ring.**
+- **✅ GREEN (2026-07-20).** `arch-aarch64/virtio.rs`: a minimal **virtio-net (virtio-mmio v2)** driver — device discovery, feature negotiation (MAC + VERSION_1), split-virtqueue RX/TX setup, RX-buffer posting. It **ARPs the gateway (10.0.2.2) and receives the real ARP reply** (64 B, ethertype 0x0806), which is pushed through the Packet Engine ring (`produce_raw`) and gets a verdict. `[P5b] PASS`. Requires QEMU `-global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0` (wired into `.cargo/config.toml` + `validate.sh`). *Debugging note: it silently failed until we forced virtio-mmio v2 — QEMU defaults to legacy (v1), whose register layout differs.*
+- **P0–P5 gap-closure (round 2, 2026-07-20).** **Frame allocator now has a free list** (`free_frame` + LIFO reuse — proven: free then re-alloc returns the same frame) — the bump-only allocator is closed. Still deliberately deferred (named, not faked): SMP/secondary cores, DTB-sized RAM (hardcoded 512 MiB matches the `-m` flag), full W^X + per-AS ASIDs + kernel-page block-splitting, nested CSpaces + Grant/mint, FP/SIMD lazy save, EL0 tasks as scheduled TCBs. These are later-phase, not shortcuts in what's claimed green.
+
+- **Gate P6: AI Runtime — RFC 9669 BPF VM as the verdict.**
+- **✅ GREEN (2026-07-20).** `kernel/bpf.rs`: a small **RFC 9669 BPF interpreter** (64-bit regs; LDX/LSH/OR/JNE/MOV/EXIT subset) runs a **signed first-party threat rule** as real bytecode — DROP if the dst-port field == 4444. It replaces P5's native stand-in: **the Packet Engine's verdict IS this VM** (P5/P5b run it on every packet). A **runtime bounds check** (Layer-2 software sandbox) rejects an out-of-bounds load on a truncated packet, and a step limit guarantees termination. `[P6] PASS`. The moat: the same bytecode runs on the Linux/FreeBSD/QNX HookProbe substrates. **P6b (next):** a JIT (native codegen), a PREVAIL-style verifier for third-party rules, QSecBit scoring, and the "OS is the sensor" telemetry taps.
+- **Gate P6b: BPF verifier + JIT + self-heal + telemetry.**
+- **✅ GREEN (2026-07-20).** (1) **Static verifier** (`bpf.rs::verify`): known-opcodes, valid-registers, **no backward jumps** (termination), reachable EXIT — accepts the signed rule, rejects a looping one. (2) **JIT** (`arch-aarch64/bpf_jit.rs`): compiles the rule to native ARM64, **W^X-locked** (RO+exec via `map_code_page`), and its verdicts **match the interpreter**. (3) **Self-heal supervisor** (`main.rs`): HAM-style restart-on-fault — a flaky component faults twice, the supervisor restarts it, it recovers. (4) **Telemetry Bus + QSecBit-lite** (`kernel/telemetry.rs`): cap-revoke/fault/packet-drop/self-heal events emitted from the TCB, summed into a threat score (33) — "the OS is the sensor." `[P6b] PASS`.
+- **Enhanced healing (two layers):** *runtime* — the kernel self-heals via the P6b supervisor + telemetry; *build-time* — `validate.sh` now auto-prints a **HEAL block** (first failing gate + captured exception/`FAR_EL1` or hang tail) so the `kernel-validator` agent diagnoses immediately.
+- **Gate DRV: driver isolation — an EL0 driver server drives device MMIO via a capability.**
+- **✅ GREEN (2026-07-20).** A position-independent driver runs at **EL0** with *only* a capability-granted device-MMIO window (`map_user_device_page`: the NIC's virtio-mmio page, Device memory, UXN+PXN) — it reads the NIC's DeviceID register (=1), reports it via syscall, and exits. **No kernel access**: a compromise is contained to EL0 + that one device. `[DRV] PASS`. *This proves the isolation mechanism; migrating the full virtio-net driver (DMA + virtqueues + IRQ) into a user-space server is the larger staged effort.*
+
+- **Security audit + hardening (2026-07-20, `SECURITY_AUDIT.md`).** Adversarial review of all kernel source, 5 findings, 4 fixed + 1 partially-mitigated/deferred: **(HIGH)** untrusted virtio `id`/`len` now bounded (no OOB read); **(HIGH)** user pages now **UXN+PXN** (no exec-stack, no EL1 execution of user memory) — code RO+exec (W^X), data/device RW+non-exec; **(MED)** kernel faults now `exit(1)` (a crash can't fake success); **(LOW)** BPF verifier off-by-one fixed + **verify-before-run** enforced. **Deferred (named):** full W^X for kernel text + JIT needs kernel-page **block-splitting** (same item that gates per-AS ASIDs).
+- **Continuous V&V:** every gate above is re-proven on each run by `./validate.sh` (the kernel-validator) against the `LIFECYCLE.md` V-model; the `kernel-validator` agent heals regressions and implements the next PLANNED phase.
+
+### P4 — Communication
+- **Register-only fastpath IPC** (`Call`/`ReplyRecv`, reply cap in receiver TCB) + the **zero-copy shared-memory ring** primitive (`ZEROCOPY_IPC_RING.md`: hugepage Frame caps mapped into two VSpaces, SPSC, release/acquire, cache-line-isolated + cached indices, batch publish, adaptive-NAPI wakeup via Notification).
+- **Gate P4:** measure control IPC round-trip cycles (compare to the seL4 fastpath bar); a ring passes data zero-copy between two userspace components; DMA (virtio) confined by mapping.
+
+### P5 — First driver (**the north star**)
+- **Userspace virtio-net driver** on QEMU (virtqueue split-ring; the design mirror for the packet ring).
+- **Gate P5 (north star):** **one packet: wire → ring → a BPF DROP/PASS verdict, entirely in userspace.** Everything before this is scaffolding; this proves the whole thesis on clean hardware.
+
+### P6 — Detection
+- **RFC 9669 BPF VM + verifier + JIT (ARM64 backend)** in the IDS sidecar (`BPF_THREAT_PLANE.md`: v1 signed-first-party rules, verifier deferred; W^X via RW→RX cap remap; constant-blinding + retpolines). Wire the **"OS is the sensor"** taps (P2 hooks) → event schema → **QSecBit**.
+- **Gate P6:** the *same* HookProbe BPF rules that run on the Linux/FreeBSD/QNX tracks run here unchanged (parity); QSecBit scores live QEMU traffic + capability-telemetry.
+
+### P7 — CM5 bringup (the driver boss fight)
+- Implement `Hal` for the board + the **RP1 stack**: PCIe RC (or lean on `pciex4_reset=0` firmware config first), RP1's custom 64-source interrupt controller, **MACB/GEM Ethernet**, **DWC2/xHCI USB**; early console on the **BCM2712-side debug UART** (not behind RP1). Cross-reference the shared hardware recon in `~/hookprobe-bsd/drivers/DOSSIERS.md`.
+- **Gate P7:** the P5 north-star packet path runs on **CM5 metal** via RP1, on the shared HIL rig.
+
+---
+
+## 6. Honest risk ledger & timeline
+| Risk | Severity | Mitigation |
+|---|---|---|
+| **RP1 is the boss fight** (PCIe-endpoint peripherals, custom IRQ ctrl, bleeding-edge even in Linux) | **Highest, P7** | Kernel 100% gated on QEMU first; `pciex4_reset=0` + BCM2712 debug UART; RP1 = HAL+driver project vs a finished kernel |
+| **IPC fastpath under-designed** | High | Design it first (P4 not last); measure cycles vs seL4 bar |
+| Custom (unverified) TCB vs seL4's proof | High (accepted) | Rust removes the memory-safety bug class; mandatory TCB security audit (budget line); the "OS is the sensor" feature is why custom is chosen (`ARCHITECTURE.md` §6) |
+| BPF verifier soundness (a bug = escape) | High | v1 signed-first-party, no verifier; PREVAIL-style v2 only for third-party, audited |
+| Scope explosion (it's an OS) | High | Ruthless P0→P7 gating; the P5 north-star is the only thing that matters until green |
+| `VERIFY` items (semihosting exit block, timer PPI, QEMU load addr, GIC version) | Low-Med | Confirm each against the generated DTB / QEMU `-d int` on first boot |
+
+**Timeline (plan the budget on this):** **P0–P5 on QEMU is a focused solo effort measured in months.** **P7 (RP1) + a hardened detection plane is where the multi-year, driver-side weight sits.** Keep the Linux/NanoBSD + FreeBSD tracks shipping in parallel so this endgame is funded while it matures.
+
+---
+
+## 7. Immediate next actions (the first week)
+1. **Scaffold the workspace** (§2): `kernel` / `hal` / `arch-aarch64` / `abi`; `rust-toolchain.toml` + `.cargo/config.toml` with `build-std`; a linker script placing the image at `0x4008_0000`.
+2. **P0 boot stub → PL011 "hello from EL1"** on QEMU; confirm the EL2→EL1 drop and that `-serial mon:stdio` shows output. First green.
+3. **Wire the semihosting-exit test runner** so `cargo test` is a one-command QEMU gate from day one (this discipline is what keeps P0→P7 honest).
+4. **Clone the `rust-raspberrypi-OS-tutorials`** locally as the aarch64 boot/MMU/exception reference (study, don't fork); keep the seL4 manual open for the P2 object model.
+5. **Stub the `Hal` trait** with every method P0–P4 will need, so the arch boundary is enforced before it's tempting to shortcut it.
+
+---
+
+*This is the deep-fixed plan: the committed custom-Rust-kernel path, made concrete with the real toolchain, the reference kernels' actual structure, the seL4/L4 design lessons baked in, and a QEMU-first ladder where each rung is a runnable test. `ARCHITECTURE.md` is the what; this is the how; the P5 north-star packet is the proof.*

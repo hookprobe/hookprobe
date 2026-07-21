@@ -1,0 +1,19 @@
+# HEQK Core — CM5 boot. kernel= MUST match the filename flash-cm5.sh copies
+# (heqk8.img); pointing at kernel_2712.img loads the Linux image's leftover
+# kernel of that name instead of HEQK. Header matches real Pi kernels
+# (text_offset=0, valid flags); kernel_address pins the load to 0x80000.
+[all]
+arm_64bit=1
+enable_uart=1
+disable_overscan=1
+# CRITICAL for bare metal: keep the firmware's RP1 PCIe window alive at OS
+# entry. Without this the firmware resets the PCIe x4 RC before starting the
+# kernel and any access to RP1 (0x1F_xxxx_xxxx — incl. the GPIO-header UART
+# the FTDI is wired to) hangs.
+pciex4_reset=0
+
+[cm5]
+kernel=heqk8.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+kernel_address=0x80000
+os_check=0

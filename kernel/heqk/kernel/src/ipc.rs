@@ -1,0 +1,67 @@
+//! P4 — synchronous IPC over an Endpoint (register-passed message word).
+//!
+//! The rendezvous: whichever side arrives first blocks (via the scheduler); the
+//! second side finds the waiter, hands over the message, and unblocks it. Single
+//! endpoint for the demo (conceptually the Endpoint cap in the root CSpace);
+//! multi-endpoint keyed by CPtr is the generalization. Critical sections mask
+//! IRQs (single core) so the check-and-block is atomic against preemption.
+
+use crate::scheduler;
+use core::ptr::{addr_of, addr_of_mut};
+
+static mut RECV_WAITER: Option<usize> = None;
+static mut SEND_WAITER: Option<usize> = None;
+static mut MSG: u64 = 0;
+
+#[inline]
+fn wait_until_runnable() {
+    let me = scheduler::current_tid();
+    while scheduler::is_blocked(me) {
+        unsafe { core::arch::asm!("wfe") };
+    }
+}
+
+/// Receive a message word (blocks until a sender rendezvous).
+pub fn recv() -> u64 {
+    arch_aarch64::disable_irqs();
+    if let Some(sender) = unsafe { addr_of!(SEND_WAITER).read() } {
+        // A sender is already waiting: take its message, wake it.
+        let m = unsafe { addr_of!(MSG).read() };
+        unsafe { addr_of_mut!(SEND_WAITER).write(None) };
+        scheduler::unblock(sender);
+        arch_aarch64::enable_irqs();
+        m
+    } else {
+        // No sender yet: register as receiver and block.
+        unsafe { addr_of_mut!(RECV_WAITER).write(Some(scheduler::current_tid())) };
+        scheduler::block_current();
+        arch_aarch64::enable_irqs();
+        wait_until_runnable();
+        // Woken by a sender that wrote MSG.
+        arch_aarch64::disable_irqs();
+        let m = unsafe { addr_of!(MSG).read() };
+        unsafe { addr_of_mut!(RECV_WAITER).write(None) };
+        arch_aarch64::enable_irqs();
+        m
+    }
+}
+
+/// Send a message word (rendezvous with a receiver; blocks if none waiting).
+pub fn send(msg: u64) {
+    arch_aarch64::disable_irqs();
+    if let Some(receiver) = unsafe { addr_of!(RECV_WAITER).read() } {
+        // A receiver is waiting: deliver and wake it.
+        unsafe { addr_of_mut!(MSG).write(msg) };
+        scheduler::unblock(receiver);
+        arch_aarch64::enable_irqs();
+    } else {
+        // No receiver yet: park the message and block until one takes it.
+        unsafe {
+            addr_of_mut!(MSG).write(msg);
+            addr_of_mut!(SEND_WAITER).write(Some(scheduler::current_tid()));
+        }
+        scheduler::block_current();
+        arch_aarch64::enable_irqs();
+        wait_until_runnable();
+    }
+}

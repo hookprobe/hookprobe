@@ -1,0 +1,10 @@
+[package]
+name = "arch-aarch64"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hal = { path = "../hal" }
+
+[features]
+cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt

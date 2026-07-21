@@ -1,0 +1,18 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hal          = { path = "../hal" }
+arch-aarch64 = { path = "../arch-aarch64" }
+abi          = { path = "../abi" }
+
+[features]
+# Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
+# addresses + linker load address, and boots a minimal serial "hello" first.
+cm5 = ["arch-aarch64/cm5"]
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
