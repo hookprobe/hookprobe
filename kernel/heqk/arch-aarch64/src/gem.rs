@@ -63,6 +63,34 @@ const RSR_REC: u32 = 1 << 1; // frame received
 /// The DMA bus-address offset: GEM bus address = CPU physical + this.
 const DMA_BUS_OFFSET: u64 = 0x10_0000_0000;
 
+/// BCM2712 PCIe RC2 (the RP1 x4 link) register base — a SoC block, directly
+/// CPU-addressable (not through the RP1 window). We program its INBOUND window
+/// so RP1/GEM DMA can reach system RAM (firmware only set the outbound window).
+const PCIE_RC: usize = 0x10_0012_0000;
+
+/// Program the brcmstb (BCM7712 path) inbound DMA window: map PCIe bus
+/// 0x10_0000_0000 (64 GiB) → system RAM 0x0, via RC_BAR1 + UBUS_BAR1 remap +
+/// SCB_ACCESS_EN. Confirmed vs Linux pcie-brcmstb.c. Returns the pre-write
+/// (RC_BAR1_LO, UBUS_REMAP_LO) so we can see if firmware already set it.
+pub fn pcie_inbound_window() -> (u32, u32) {
+    let rd = |off: usize| unsafe { read_volatile((PCIE_RC + off) as *const u32) };
+    let wr = |off: usize, v: u32| unsafe { write_volatile((PCIE_RC + off) as *mut u32, v) };
+    let bar1_lo_before = rd(0x402c);
+    let ubus_lo_before = rd(0x40ac);
+    // SCB_ACCESS_EN (global inbound gate) — RMW.
+    wr(0x4008, rd(0x4008) | 0x1000);
+    // RC_BAR1: bus addr 0x10_0000_0000, size field 0x15 (2^36 = 64 GiB). HI first.
+    wr(0x4030, 0x0000_0010);
+    wr(0x402c, 0x0000_0015);
+    // UBUS_BAR1 remap: system target 0x0 + ACCESS_EN(bit0). HI first, LO arms it.
+    wr(0x40b0, 0x0000_0000);
+    wr(0x40ac, 0x0000_0001);
+    // Defensive: make a stray inbound error return data, not wedge the bridge.
+    wr(0x40a4, rd(0x40a4) | (1 << 13) | (1 << 19));
+    wr(0x4170, 0xffff_ffff);
+    (bar1_lo_before, ubus_lo_before)
+}
+
 const NRX: usize = 8;
 const RXBUF: usize = 2048;
 
@@ -260,6 +288,8 @@ fn enable_clocks() {
 /// arms the RX ring.
 pub fn rx_init() -> (usize, u16, u32) {
     enable_clocks();
+    // Open the PCIe inbound DMA window BEFORE the GEM starts DMAing.
+    pcie_inbound_window();
     phy_reset();
 
     // Bring MDIO up (MPE + MDC), set the rgmii-id delays, then kick auto-neg.

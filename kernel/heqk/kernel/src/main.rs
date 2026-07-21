@@ -211,8 +211,11 @@ fn cm5_gem_rx_demo() {
     let (ncfgr, dmacfg, status) = arch_aarch64::gem::probe();
     kprint!(" [P8] GEM reachable: NCFGR={:#010x} DMACFG={:#010x} eth_cfg.STATUS={:#x}\n",
         ncfgr, dmacfg, status);
-    // Full bring-up: PHY reset + rgmii-id delays + autoneg + speed, MAC gigabit,
-    // RP1 speed override, RX ring armed.
+    // Full bring-up: PCIe inbound DMA window + PHY reset + rgmii-id delays +
+    // autoneg + speed, MAC gigabit, RP1 speed override, RX ring armed.
+    let (rc_bar1_before, ubus_before) = arch_aarch64::gem::pcie_inbound_window();
+    kprint!(" [P8] PCIe inbound win: RC_BAR1_LO was {:#x} UBUS_REMAP_LO was {:#x} (now 0x15/0x1)\n",
+        rc_bar1_before, ubus_before);
     let (ring, auxstat, ethst) = arch_aarch64::gem::rx_init();
     let sc = (auxstat >> 8) & 7;
     kprint!(" [P8] PHY id@0={:#010x} auxstat={:#06x} speed_code={} (7=1G/full 5=100/full)\n",
