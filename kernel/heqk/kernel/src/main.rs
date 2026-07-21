@@ -218,6 +218,9 @@ fn cm5_gem_rx_demo() {
     // 0xffffffff = held in reset / absent. Also the reset-pin level.
     let (id0, id1, rst) = arch_aarch64::gem::diagnose();
     kprint!(" [P8] PHY id@addr0={:#010x} id@addr1={:#010x} ETH_RST_N pin={}\n", id0, id1, rst);
+    let (ctrl, pad, out, oe, rin) = arch_aarch64::gem::gpio_dump();
+    kprint!(" [P8] gpio32: CTRL={:#x} PAD={:#x} RIO_OUT={:#x} RIO_OE={:#x} RIO_IN={:#x}\n",
+        ctrl, pad, out, oe, rin);
     // Give the PHY up to ~3 s to auto-negotiate a link after reset-release.
     let link = arch_aarch64::gem::wait_link(3000);
     kprint!(" [P8] after PHY reset: eth_cfg.STATUS={:#x} link={} speed={}\n",

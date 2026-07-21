@@ -149,16 +149,32 @@ fn phy_reset() {
         let v = read_volatile(pad);
         write_volatile(pad, (v & !0x80) | 0x40);
         // Route the pad to software GPIO: IO_BANK1 GPIO32_CTRL funcsel = 5.
-        write_volatile((RP1_IO_BANK1 + 8 * ETH_RST_IDX + 4) as *mut u32, 5);
-        // Output-enable the pin (RIO OE at offset 0x04, atomic SET).
-        write_volatile((RP1_RIO1 + RIO_SET + 0x04) as *mut u32, bit);
-        // Drive LOW = assert reset (active-low): RIO OUT (0x00) atomic CLR.
-        write_volatile((RP1_RIO1 + RIO_CLR + 0x00) as *mut u32, bit);
+        let ctrl = (RP1_IO_BANK1 + 8 * ETH_RST_IDX + 4) as *mut u32;
+        write_volatile(ctrl, (read_volatile(ctrl) & !0x1f) | 5);
+        // Normal read-modify-write on RIO OUT(0x00)/OE(0x04) (not atomic alias).
+        let out = RP1_RIO1 as *mut u32;
+        let oe = (RP1_RIO1 + 0x04) as *mut u32;
+        write_volatile(oe, read_volatile(oe) | bit); // output enable
+        write_volatile(out, read_volatile(out) & !bit); // LOW = reset asserted
         for _ in 0..3_000_000u32 {
             core::hint::spin_loop();
         } // ≥5 ms
-        // Drive HIGH = release reset: RIO OUT atomic SET.
-        write_volatile((RP1_RIO1 + RIO_SET + 0x00) as *mut u32, bit);
+        write_volatile(out, read_volatile(out) | bit); // HIGH = reset released
+        let _ = (RIO_SET, RIO_CLR);
+    }
+}
+
+/// Dump the ETH_RST_N GPIO register state (CTRL, PAD, RIO OUT/OE/IN) so we can
+/// see exactly what landed. Returns (ctrl, pad, rio_out, rio_oe, rio_in).
+pub fn gpio_dump() -> (u32, u32, u32, u32, u32) {
+    unsafe {
+        (
+            read_volatile((RP1_IO_BANK1 + 8 * ETH_RST_IDX + 4) as *const u32),
+            read_volatile((RP1_PADS1 + 4 + 4 * ETH_RST_IDX) as *const u32),
+            read_volatile(RP1_RIO1 as *const u32),
+            read_volatile((RP1_RIO1 + 0x04) as *const u32),
+            read_volatile((RP1_RIO1 + 0x08) as *const u32),
+        )
     }
 }
 
