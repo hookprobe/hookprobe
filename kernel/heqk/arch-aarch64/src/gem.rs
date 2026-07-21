@@ -51,11 +51,18 @@ const NCFGR_GBE: u32 = 1 << 10; // gigabit mode (DDR RX sampling) — REQUIRED f
 const NCFGR_MDC_DIV128: u32 = 6 << 18; // GEM_CLK: pclk/128 (~1.5 MHz MDC @200 MHz)
 // DMACFG bits
 const DMACFG_ADDR64: u32 = 1 << 30;
+// RP1's GEM_GXL is FULL store-and-forward ONLY (partial SF not implemented), which
+// requires the packet-buffer memory-size fields to select the full addressable
+// space — else HW receives the frame + sets USED but writes a ZERO ctrl/status
+// word (no length). Both Linux macb_configure_dma() and U-Boot set these
+// unconditionally. Omitting them is the RP1 GEM descriptor-length ("w1=0") bug.
+const DMACFG_RXBMS: u32 = 3 << 8; // RX packet buffer: full configured size
+const DMACFG_TXPBMS: u32 = 1 << 10; // TX packet buffer: full size
 // RX descriptor word0 flags (in the low bits of the buffer address)
 const RXD_USED: u32 = 1 << 0; // 0 = HW-owned; HW sets 1 after writing a frame
 const RXD_WRAP: u32 = 1 << 1; // last descriptor
 // RX descriptor word1 (ctrl/status) fields
-const RXD_FRMLEN: u32 = 0x3fff; // GEM: 14-bit frame length
+const RXD_FRMLEN: u32 = 0x3fff; // GEM: 14-bit frame length (RP1 sets JUMBO caps)
 // RSR bits
 const RSR_BNA: u32 = 1 << 0; // buffer not available (DMA target unreachable)
 const RSR_REC: u32 = 1 << 1; // frame received
@@ -357,7 +364,8 @@ pub fn rx_init() -> (usize, u16, u32) {
     let _ = r(GEM, RSR);
     w(GEM, RSR, RSR_BNA | RSR_REC); // clear sticky status
     let rxbs = (RXBUF / 64) as u32; // RX buffer size in 64-byte units
-    w(GEM, DMACFG, DMACFG_ADDR64 | (rxbs << 16) | 0x10 /*burst*/);
+    // ADDR64 + full-SF buffer sizing (RXBMS|TXPBMS, mandatory on RP1) + INCR16 burst.
+    w(GEM, DMACFG, DMACFG_ADDR64 | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
@@ -385,13 +393,14 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     if w0 & RXD_USED == 0 {
         return None; // still HW-owned: no frame yet
     }
-    // PCIe write-ordering: the GEM writes the status word (w1) then the USED bit
-    // (w0), but they can land out of order across the PCIe/UBUS fabric — so w1
-    // may be stale when we first see USED. Re-invalidate + re-read until the
-    // status (SOF/EOF/len) is non-zero, bounded so a genuine 0 can't hang us.
+    // The GEM writes the status word (ctrl/w1) BEFORE setting USED (w0), so once
+    // USED is seen the length/SOF/EOF is already committed. A short bounded
+    // re-read covers any residual PCIe/UBUS write-visibility skew; with the
+    // DMACFG full-store-and-forward fix (RXBMS|TXPBMS), ctrl is populated on the
+    // first read in practice (previously it stayed 0 — the RP1 GEM bug).
     let mut ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
     let mut spins = 0u32;
-    while ctrl == 0 && spins < 100_000 {
+    while ctrl == 0 && spins < 1024 {
         dc_ivac(dptr, 16);
         ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
         spins += 1;
@@ -400,19 +409,24 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     let w3 = unsafe { read_volatile((dptr + 12) as *const u32) };
     let desc_len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
-    dc_ivac(bufpa, RXBUF); // invalidate the WHOLE buffer before reading DMA'd data
-    // Copy the whole available buffer: this GEM leaves the descriptor length
-    // (w1) at 0, but the frame data is complete — the parser self-bounds via the
-    // IP header's own total_len, so it needs the bytes, not the descriptor len.
-    let copy_n = out.len().min(RXBUF);
+    // Copy exactly the received frame (bounded by `out` and the buffer). Fall
+    // back to the whole buffer only if the length is still unreported (ctrl==0),
+    // in which case the parser self-bounds via the IP header's own total_len.
+    let copy_n = if desc_len > 0 {
+        desc_len.min(out.len()).min(RXBUF)
+    } else {
+        out.len().min(RXBUF)
+    };
+    dc_ivac(bufpa, copy_n); // invalidate the bytes we're about to read from DRAM
     for k in 0..copy_n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
-    // Report at most the bytes actually placed in `out`: `desc_len` is device-
-    // controlled (up to RXD_FRMLEN=16383) and must never exceed `copy_n`, or a
-    // caller slicing `out[..len]` would read past the buffer.
-    let len = if desc_len > 0 { desc_len.min(copy_n) } else { copy_n };
-    // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish.
+    let len = copy_n;
+    // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish. Publish
+    // the cleared status word to DRAM BEFORE re-arming word0's USED-clear (which
+    // re-enables reception): if the GEM saw USED-clear first, a frame landing in
+    // that window would have its freshly-written ctrl clobbered by this zero.
+    // dc_cvac ends in `dsb`, so it orders the two publishes.
     unsafe {
         let bus = bufpa as u64 + DMA_BUS_OFFSET;
         let mut nw0 = (bus as u32) & !0x3;
@@ -420,10 +434,11 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
             nw0 |= RXD_WRAP;
         }
         write_volatile((dptr + 4) as *mut u32, 0);
+        dc_cvac(dptr, 16);
         write_volatile(dptr as *mut u32, nw0);
+        dc_cvac(dptr, 16);
         IDX = IDX.wrapping_add(1);
     }
-    dc_cvac(dptr, 16);
     Some((len, ctrl, w2, w3))
 }
 
