@@ -12,6 +12,9 @@ SECTIONS
     }
     .rodata : { *(.rodata .rodata.*) }
     .data   : { *(.data .data.*) }
+    /* End of the LOADED image (text+rodata+data); bss is NOLOAD and not part
+       of the file, so HBoot self-measurement covers [0x200000, __hboot_load_end). */
+    __hboot_load_end = .;
 
     .bss (NOLOAD) : ALIGN(16) {
         __bss_start = .;

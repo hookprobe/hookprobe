@@ -1,4 +1,5 @@
-//! Minimal SHA-256 (FIPS 180-4), no_std, no allocation. Sized for boot-time
+//! Minimal SHA-256 (FIPS 180-4), no_std, shared by HBoot + kernel for boot
+//! measurement. NIST-vector tested. Not constant-time — boot-measurement use.
 //! payload measurement; replaced by a vetted crypto crate alongside the
 //! ed25519 verification in HBoot v1.
 

@@ -4,6 +4,8 @@
 //! owns platform discovery and hands over this structure (the seed of the
 //! Phase-2 HEQK Object Model).
 
+pub mod sha256;
+
 /// "HBOTINF1" little-endian.
 pub const BOOTINFO_MAGIC: u64 = 0x31464e49_544f4248;
 
@@ -13,6 +15,50 @@ pub const HBOOT_ENTRY_MAGIC: u64 = 0x544f4248;
 /// Fixed physical address of the BootInfo page (one page below the BootDebug
 /// crumb page at 0x3FFF0000).
 pub const BOOTINFO_ADDR: usize = 0x3FFE_0000;
+
+// -------------------- Measured boot / attestation --------------------------
+/// Reserved page for the measured-boot event log (one page below BootInfo).
+pub const MEASURE_LOG_ADDR: usize = 0x3FFD_0000;
+/// "HEQKMLG1" little-endian (H E Q K M L G 1).
+pub const MEASURE_LOG_MAGIC: u64 = 0x31_47_4c_4d_4b_51_45_48;
+/// Number of measurement registers (PCR-like accumulators).
+pub const NUM_PCR: usize = 4;
+
+/// Measurement register assignment (which PCR each measurement extends):
+pub const PCR_FIRMWARE: u32 = 0; // HBoot self-measurement (recorded baseline)
+pub const PCR_KERNEL: u32 = 1; // the launched kernel payload
+pub const PCR_CONFIG: u32 = 2; // boot configuration (svn/floor/addrs/verify)
+pub const PCR_SERVICES: u32 = 3; // reserved: kernel extends with EL0 services
+
+/// Event kinds recorded in the log.
+pub const EV_HBOOT_SELF: u32 = 1;
+pub const EV_KERNEL: u32 = 2;
+pub const EV_CONFIG: u32 = 3;
+pub const EV_VERIFY: u32 = 4;
+
+/// One measured-boot event: `pcr` was extended with `digest` (kind is a label).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MeasureEvent {
+    pub pcr: u32,
+    pub kind: u32,
+    pub digest: [u8; 32],
+}
+
+/// Header of the event log at MEASURE_LOG_ADDR; `count` MeasureEvents follow it
+/// contiguously. `pcr` holds the final accumulator values a verifier must be
+/// able to reproduce by replaying the events (that replay is the integrity
+/// check — the log is tamper-evident because each PCR folds order-dependently).
+#[repr(C)]
+pub struct MeasureLog {
+    pub magic: u64,
+    pub version: u32,
+    pub num_pcr: u32,
+    pub count: u32,
+    pub _pad: u32,
+    pub pcr: [[u8; 32]; NUM_PCR],
+    // MeasureEvent[count] immediately follows.
+}
 
 /// Payload header magic "HQKPLD3\0" little-endian (v3 = hybrid sigs + SVN).
 pub const PAYLOAD_MAGIC: u64 = 0x00_33444c_504b_5148;
@@ -33,6 +79,8 @@ pub struct BootInfo {
     pub verify_flags: u64, // bit0 = ed25519 verified, bit1 = SLH-DSA verified
     pub svn: u64,          // security version number of the booted image
     pub svn_floor: u64,    // the anti-rollback floor HBoot enforced
+    pub measure_log_pa: u64, // MEASURE_LOG_ADDR (measured-boot event log)
+    pub measure_count: u64,  // number of events in the log
 }
 
 /// BootInfo.verify_flags bits.

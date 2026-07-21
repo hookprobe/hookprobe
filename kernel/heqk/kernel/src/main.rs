@@ -81,6 +81,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
             kprint!(" hboot: measured sha256=");
             for b in &bi.kernel_hash { kprint!("{:02x}", b); }
             kprint!("\n");
+            attest_replay(bi);
         } else {
             kprint!(" hboot: BAD BootInfo magic {:#x} @ {:#x}\n", bi.magic, bootinfo_pa);
         }
@@ -148,6 +149,55 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
         core::hint::spin_loop();
     }
     unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+}
+
+/// Measured-boot attestation: independently replay HBoot's event log and
+/// confirm it reproduces the PCR values HBoot published. A mismatch means the
+/// log was tampered with (or truncated) after HBoot wrote it. This is the
+/// integrity check a local/remote attestation verifier performs.
+#[cfg(feature = "hboot")]
+fn attest_replay(bi: &boot_abi::BootInfo) {
+    use boot_abi::{sha256, MeasureEvent, MeasureLog, MEASURE_LOG_MAGIC, NUM_PCR};
+    let log = bi.measure_log_pa as *const MeasureLog;
+    let (magic, count) = unsafe {
+        (
+            read_volatile(core::ptr::addr_of!((*log).magic)),
+            read_volatile(core::ptr::addr_of!((*log).count)),
+        )
+    };
+    if magic != MEASURE_LOG_MAGIC {
+        kprint!(" attest: BAD measure-log magic {:#x}\n", magic);
+        return;
+    }
+    // Replay: fold each event into a fresh PCR bank.
+    let events = (bi.measure_log_pa as usize + core::mem::size_of::<MeasureLog>()) as *const MeasureEvent;
+    let mut pcr = [[0u8; 32]; NUM_PCR];
+    for i in 0..count as usize {
+        let ev = unsafe { read_volatile(events.add(i)) };
+        let idx = ev.pcr as usize;
+        if idx >= NUM_PCR {
+            continue;
+        }
+        let mut buf = [0u8; 64];
+        buf[..32].copy_from_slice(&pcr[idx]);
+        buf[32..].copy_from_slice(&ev.digest);
+        pcr[idx] = sha256::digest(&buf);
+    }
+    // Compare replayed PCRs against HBoot's published values in the log.
+    let mut ok = true;
+    for i in 0..NUM_PCR {
+        let published = unsafe { read_volatile(core::ptr::addr_of!((*log).pcr[i])) };
+        if published != pcr[i] {
+            ok = false;
+        }
+    }
+    kprint!(" attest: replayed {} events -> log {}\n", count,
+        if ok { "VERIFIED (PCRs reproduce)" } else { "MISMATCH — tampered!" });
+    for i in 0..NUM_PCR {
+        kprint!("   PCR{}=", i);
+        for b in &pcr[i] { kprint!("{:02x}", b); }
+        kprint!("\n");
+    }
 }
 
 #[cfg(not(feature = "cm5"))]

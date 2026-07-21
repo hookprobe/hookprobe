@@ -16,9 +16,15 @@ use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
 use fips205::slh_dsa_sha2_128s;
 use fips205::traits::{SerDes, Verifier};
 
+mod measure;
 mod rollback;
-mod sha256;
 mod trusted_keys;
+
+use boot_abi::sha256;
+
+extern "C" {
+    static __hboot_load_end: u8;
+}
 
 core::arch::global_asm!(include_str!("boot.s"));
 
@@ -76,6 +82,15 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts("+------------------------------------------+\n");
     puts(" dtb : ");
     puthex(dtb_pa);
+    puts("\n");
+
+    // MEASURED BOOT: start the chain by self-measuring HBoot's loaded image
+    // (PCR0). Recorded baseline — see measure.rs on the CRTM/OTP anchor.
+    let mut m = measure::Measurements::init();
+    let hboot_end = unsafe { core::ptr::addr_of!(__hboot_load_end) as usize };
+    let hboot_self = m.measure_region(PCR_FIRMWARE, EV_HBOOT_SELF, IMAGE_BASE, hboot_end - IMAGE_BASE);
+    puts(" measure: PCR0 (hboot self) extended, sha256=");
+    puthash(&hboot_self);
     puts("\n");
 
     // Locate and validate the payload header.
@@ -162,6 +177,23 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     }
     puts(" secure boot: PASS (ed25519 AND SLH-DSA, svn OK)\n");
 
+    // MEASURE the launched software into the attestation chain:
+    //   PCR1 = the kernel payload (its measured identity — reuse `computed`)
+    //   PCR2 = the boot configuration (svn, floor, load addr, verify result)
+    m.extend(PCR_KERNEL, EV_KERNEL, &computed);
+    let mut cfg = [0u8; 40];
+    cfg[..8].copy_from_slice(&svn.to_le_bytes());
+    cfg[8..16].copy_from_slice(&rollback::MIN_SVN.to_le_bytes());
+    cfg[16..24].copy_from_slice(&load_pa.to_le_bytes());
+    cfg[24..32].copy_from_slice(&(entry_off).to_le_bytes());
+    cfg[32..40].copy_from_slice(&(VERIFY_ED25519 | VERIFY_SLHDSA).to_le_bytes());
+    let cfg_hash = sha256::digest(&cfg);
+    m.extend(PCR_CONFIG, EV_CONFIG, &cfg_hash);
+    m.extend(PCR_CONFIG, EV_VERIFY, &computed); // bind verified-identity into config PCR
+    puts(" measure: PCR1 (kernel) + PCR2 (config) extended, ");
+    puthex(m.count());
+    puts(" events logged\n");
+
     // Relocate the payload to its link address.
     unsafe {
         core::ptr::copy_nonoverlapping(body, load_pa as *mut u8, size as usize);
@@ -174,7 +206,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             bi,
             BootInfo {
                 magic: BOOTINFO_MAGIC,
-                version: 3,
+                version: 4,
                 dtb_pa,
                 kernel_pa: load_pa,
                 kernel_size: size,
@@ -184,6 +216,8 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 verify_flags: VERIFY_ED25519 | VERIFY_SLHDSA,
                 svn,
                 svn_floor: rollback::MIN_SVN,
+                measure_log_pa: MEASURE_LOG_ADDR as u64,
+                measure_count: m.count(),
             },
         );
     }
