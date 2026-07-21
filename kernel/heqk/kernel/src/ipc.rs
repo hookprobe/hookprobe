@@ -11,7 +11,13 @@ use core::ptr::{addr_of, addr_of_mut};
 
 static mut RECV_WAITER: Option<usize> = None;
 static mut SEND_WAITER: Option<usize> = None;
-static mut MSG: u64 = 0;
+// Two distinct slots, not one shared `MSG`: `SEND_MSG` is the word a *waiting
+// sender* parked; `DELIVERED` is the word handed to a *woken receiver*. Sharing
+// one slot let a second sender (taking the no-receiver branch after the first
+// delivery cleared RECV_WAITER) overwrite a message the woken receiver had not
+// yet read. Separating them makes delivery a private handoff.
+static mut SEND_MSG: u64 = 0;
+static mut DELIVERED: Option<u64> = None;
 
 #[inline]
 fn wait_until_runnable() {
@@ -25,8 +31,8 @@ fn wait_until_runnable() {
 pub fn recv() -> u64 {
     arch_aarch64::disable_irqs();
     if let Some(sender) = unsafe { addr_of!(SEND_WAITER).read() } {
-        // A sender is already waiting: take its message, wake it.
-        let m = unsafe { addr_of!(MSG).read() };
+        // A sender is already waiting: take its parked message, wake it.
+        let m = unsafe { addr_of!(SEND_MSG).read() };
         unsafe { addr_of_mut!(SEND_WAITER).write(None) };
         scheduler::unblock(sender);
         arch_aarch64::enable_irqs();
@@ -42,10 +48,13 @@ pub fn recv() -> u64 {
         scheduler::block_current();
         arch_aarch64::enable_irqs();
         wait_until_runnable();
-        // Woken by a sender that wrote MSG.
+        // Woken by a sender that handed us a private DELIVERED word.
         arch_aarch64::disable_irqs();
-        let m = unsafe { addr_of!(MSG).read() };
-        unsafe { addr_of_mut!(RECV_WAITER).write(None) };
+        let m = unsafe { addr_of!(DELIVERED).read() }.unwrap_or(0);
+        unsafe {
+            addr_of_mut!(DELIVERED).write(None);
+            addr_of_mut!(RECV_WAITER).write(None);
+        }
         arch_aarch64::enable_irqs();
         m
     }
@@ -59,7 +68,7 @@ pub fn send(msg: u64) {
         // delivery (so a second sender can't re-deliver to an already-woken
         // receiver and clobber this message), and wake it.
         unsafe {
-            addr_of_mut!(MSG).write(msg);
+            addr_of_mut!(DELIVERED).write(Some(msg));
             addr_of_mut!(RECV_WAITER).write(None);
         }
         scheduler::unblock(receiver);
@@ -74,7 +83,7 @@ pub fn send(msg: u64) {
             return; // endpoint busy: drop rather than corrupt the waiter slot
         }
         unsafe {
-            addr_of_mut!(MSG).write(msg);
+            addr_of_mut!(SEND_MSG).write(msg);
             addr_of_mut!(SEND_WAITER).write(Some(scheduler::current_tid()));
         }
         scheduler::block_current();
