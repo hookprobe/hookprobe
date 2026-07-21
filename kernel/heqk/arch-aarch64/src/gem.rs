@@ -62,12 +62,17 @@ const DMACFG_ADDR64: u32 = 1 << 30;
 // unconditionally. Omitting them is the RP1 GEM descriptor-length ("w1=0") bug.
 const DMACFG_RXBMS: u32 = 3 << 8; // RX packet buffer: full configured size
 const DMACFG_TXPBMS: u32 = 1 << 10; // TX packet buffer: full size
-// NOTE: RX/TX Buffer-Descriptor EXTENDED mode (DMACFG bit28/bit29) was tried on
-// metal as a candidate cure for the "w1=0" quirk (theory: it gates the word1
-// status writeback under ADDR64). It did NOT populate word1 even on a correctly-
-// aligned descriptor, AND it WIDENS the descriptor with PTP timestamp words —
-// which corrupts this 16-byte-stride ring (a stray word0=0x00000001 appeared and
-// frames dropped 3→2). So it is deliberately NOT set. See RP1_GEM_BRINGUP.md.
+// RX/TX Buffer-Descriptor EXTENDED mode (DMACFG bit28/bit29). The RP1 GEM has PTP
+// hardware-timestamping capability (HW_DMA_CAP_PTP), and — proven by booting the
+// mainline `macb` driver on this exact silicon (DHCP lease obtained, rx_length_
+// errors=0) — it only writes the RX status/length word (word1) when extended-BD
+// mode is on AND the descriptors are the WIDE 6-word (24-byte) format: base
+// {addr,ctrl} + 64b {addrh,resvd} + ptp {ts_1,ts_2}. Linux's macb_configure_dma()
+// sets RXEXT|TXEXT whenever HW_DMA_CAP_PTP. Setting these bits with a 16-byte ring
+// (our earlier attempt) corrupts the ring — the descriptor MUST be 6 words wide
+// (see DESC_WORDS / RxRing below). THIS is the real w1=0 fix.
+const DMACFG_RXEXT: u32 = 1 << 28;
+const DMACFG_TXEXT: u32 = 1 << 29;
 // RX descriptor word0 flags (in the low bits of the buffer address)
 const RXD_USED: u32 = 1 << 0; // 0 = HW-owned; HW sets 1 after writing a frame
 const RXD_WRAP: u32 = 1 << 1; // last descriptor
@@ -114,15 +119,21 @@ pub fn pcie_inbound_window() -> (u32, u32) {
 
 const NRX: usize = 8;
 const RXBUF: usize = 2048;
+// Extended-BD descriptor = 6 u32 words / 24 bytes: {addr_lo, ctrl} + {addr_hi,
+// resvd} (DMA64) + {ts_1, ts_2} (PTP). RXEXT/TXEXT in DMACFG make the GEM use this
+// wide format; the ring stride MUST match or the status writeback lands off. word0
+// = addr_lo(+USED/WRAP), word1 = ctrl/status(len,SOF,EOF), word2 = addr_hi.
+const DESC_W: usize = 6;
+const DESC_SZ: usize = DESC_W * 4; // 24 bytes
 
 /// RX ring + buffers, page-aligned, in kernel RAM (identity-mapped: VA == PA).
 #[repr(C, align(4096))]
 struct RxRing {
-    desc: [[u32; 4]; NRX], // 16-byte DMA64 descriptors
+    desc: [[u32; DESC_W]; NRX], // 24-byte extended DMA64+PTP descriptors
     buf: [[u8; RXBUF]; NRX],
 }
 static mut RXRING: RxRing = RxRing {
-    desc: [[0; 4]; NRX],
+    desc: [[0; DESC_W]; NRX],
     buf: [[0; RXBUF]; NRX],
 };
 
@@ -132,11 +143,11 @@ const TXBUF: usize = 2048;
 /// TX ring + buffer, page-aligned, in kernel RAM (identity-mapped: VA == PA).
 #[repr(C, align(4096))]
 struct TxRing {
-    desc: [[u32; 4]; NTX], // 16-byte DMA64 descriptors
+    desc: [[u32; DESC_W]; NTX], // 24-byte extended DMA64+PTP descriptors
     buf: [[u8; TXBUF]; NTX],
 }
 static mut TXRING: TxRing = TxRing {
-    desc: [[0; 4]; NTX],
+    desc: [[0; DESC_W]; NTX],
     buf: [[0; TXBUF]; NTX],
 };
 
@@ -378,9 +389,11 @@ pub fn rx_init() -> (usize, u16, u32) {
                 w0 |= RXD_WRAP;
             }
             rr.desc[i][0] = w0;
-            rr.desc[i][1] = 0;
+            rr.desc[i][1] = 0; // ctrl/status — GEM fills len/SOF/EOF here on RX
             rr.desc[i][2] = (bus >> 32) as u32; // addr high (= 0x10)
-            rr.desc[i][3] = 0;
+            rr.desc[i][3] = 0; // resvd
+            rr.desc[i][4] = 0; // ts_1 (PTP)
+            rr.desc[i][5] = 0; // ts_2 (PTP)
         }
     }
     // Publish descriptors to DRAM (non-coherent DMA reads them).
@@ -392,8 +405,12 @@ pub fn rx_init() -> (usize, u16, u32) {
     let _ = r(GEM, RSR);
     w(GEM, RSR, RSR_BNA | RSR_REC); // clear sticky status
     let rxbs = (RXBUF / 64) as u32; // RX buffer size in 64-byte units
-    // ADDR64 + full-SF buffer sizing (RXBMS|TXPBMS) + INCR16 burst => 0x40200710.
-    w(GEM, DMACFG, DMACFG_ADDR64 | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
+    // ADDR64 + RX/TX extended-BD mode (6-word descriptors, required for the word1
+    // status writeback on this PTP-capable GEM) + full-SF buffer sizing + INCR16
+    // burst => 0x70200710. Matches the mainline macb config that works on metal.
+    w(GEM, DMACFG,
+        DMACFG_ADDR64 | DMACFG_RXEXT | DMACFG_TXEXT
+            | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
@@ -416,7 +433,7 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     let i = unsafe { IDX % NRX };
     let dptr = unsafe { core::ptr::addr_of_mut!(RXRING.desc[i]) as usize };
     // Invalidate the descriptor line so we see HW's write to the USED bit.
-    dc_ivac(dptr, 16);
+    dc_ivac(dptr, DESC_SZ);
     let w0 = unsafe { read_volatile(dptr as *const u32) };
     if w0 & RXD_USED == 0 {
         return None; // still HW-owned: no frame yet
@@ -429,7 +446,7 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     let mut ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
     let mut spins = 0u32;
     while ctrl == 0 && spins < 1024 {
-        dc_ivac(dptr, 16);
+        dc_ivac(dptr, DESC_SZ);
         ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
         spins += 1;
     }
@@ -467,9 +484,9 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
         if i == NRX - 1 {
             nw0 |= RXD_WRAP;
         }
-        dc_ivac(dptr, 16); // drop the stale line so the clean won't write stale neighbours
+        dc_ivac(dptr, DESC_SZ); // drop the stale line so the clean won't write stale neighbours
         write_volatile(dptr as *mut u32, nw0); // clear USED; leave word1 for the GEM
-        dc_cvac(dptr, 16); // publish word0 + freshly-reloaded neighbours
+        dc_cvac(dptr, DESC_SZ); // publish word0 + freshly-reloaded neighbours
         IDX = IDX.wrapping_add(1);
     }
     Some((len, w0, ctrl, w2, w3))
@@ -485,7 +502,9 @@ pub fn tx_init() {
         tr.desc[0][0] = bus as u32;
         tr.desc[0][1] = TXD_USED | TXD_WRAP; // USED=1 (idle) + WRAP (only descriptor)
         tr.desc[0][2] = (bus >> 32) as u32; // addr high (= 0x10)
-        tr.desc[0][3] = 0;
+        tr.desc[0][3] = 0; // resvd
+        tr.desc[0][4] = 0; // ts_1 (PTP)
+        tr.desc[0][5] = 0; // ts_2 (PTP)
     }
     let ring = core::ptr::addr_of!(TXRING) as usize;
     dc_cvac(ring, core::mem::size_of::<TxRing>());
@@ -520,12 +539,12 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         // auto-pads to the 60B minimum and appends the FCS (NOCRC not set).
         write_volatile((dptr + 4) as *mut u32, (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
     }
-    dc_cvac(dptr, 16); // publish the descriptor
+    dc_cvac(dptr, DESC_SZ); // publish the descriptor
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
     loop {
-        dc_ivac(dptr, 16);
+        dc_ivac(dptr, DESC_SZ);
         let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
         if ctrl & TXD_USED != 0 {
             return Some(ctrl);
