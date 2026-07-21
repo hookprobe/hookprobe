@@ -172,6 +172,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
     cm5_gem_rx_demo();
 
+    // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
+    cm5_gem_el0_probe();
+
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
     // the EL2 gate performs the PM reset (EL1 writes to the PM block are
@@ -180,6 +183,45 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
         core::hint::spin_loop();
     }
     unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+}
+
+/// P7c step 3b (stage 1) — run a minimal driver at EL0, granted ONLY the GEM MMIO
+/// page as a capability (mapped into the GB5 user window). It reads GEM NCFGR
+/// through that window and reports it; the kernel compares to its own read. This
+/// proves the REAL GEM is reachable from an ISOLATED EL0 driver on metal — the
+/// foundation for migrating the whole GEM driver to a capability-bounded EL0
+/// server (RX/TX + IPC to the packet engine are the next stages).
+#[cfg(feature = "cm5")]
+fn cm5_gem_el0_probe() {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static gem_probe_stub: u8;
+        static gem_probe_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(gem_probe_stub) as usize;
+    let len = core::ptr::addr_of!(gem_probe_stub_end) as usize - src;
+    let code_pa = mmu_cm5::el0_code_pa();
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code_pa as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+    const GEM_PHYS: usize = 0x1C00_100000; // the GEM MMIO page (Device)
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let udev = mmu_cm5::USER_VA_BASE + 0x2000;
+    mmu_cm5::map_user_code(ucode, code_pa);
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_device(udev, GEM_PHYS); // the ONLY hardware granted
+    kprint!(" [P7c] EL0 GEM driver: code@{:#x} stack@{:#x} GEM-window@{:#x}->{:#x} (nothing else granted)\n",
+        ucode, ustack, udev, GEM_PHYS);
+    DRIVER_REPORT.store(0, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+    let el0 = DRIVER_REPORT.load(Ordering::Relaxed);
+    let kern = arch_aarch64::gem::probe().0; // kernel-side GEM NCFGR
+    let ok = el0 == kern && el0 != 0;
+    kprint!(" [P7c] EL0 driver read GEM NCFGR={:#010x} (kernel sees {:#010x}) — {}\n",
+        el0, kern, if ok { "MATCH" } else { "MISMATCH" });
+    kprint!(" [P7c] {} — real GEM reachable from an ISOLATED EL0 driver on metal (stage 1)\n",
+        if ok { "PASS" } else { "FAIL" });
 }
 
 /// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable

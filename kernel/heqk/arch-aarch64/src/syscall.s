@@ -110,6 +110,25 @@ el0_loop_stub:                       // x0 = counter VA (EL0-mapped RW)
     b       1b
 el0_loop_stub_end:
 
+// -------- P7c step 3b: isolated EL0 GEM driver (register probe) --------------
+// Runs at EL0 granted ONLY the GEM MMIO page (mapped at the GB5 user window
+// 0x1_4000_2000). Reads GEM NCFGR (offset 0x004) through that capability and
+// reports it, then exits — proving the REAL GEM is reachable from an isolated
+// EL0 driver on metal. enter_user scrubs x0-x30, so it builds the VA itself.
+.global gem_probe_stub
+.global gem_probe_stub_end
+gem_probe_stub:
+    movz x1, #0x4000, lsl #16    // x1 = 0x0000_0000_4000_0000
+    movk x1, #0x0001, lsl #32    // x1 = 0x0000_0001_4000_0000 (GB5 base)
+    add  x1, x1, #0x2000         // UDEV_VA = 0x1_4000_2000 (granted GEM window)
+    ldr  w0, [x1, #4]            // GEM NCFGR (offset 0x004) via the capability
+    mov  x8, #7                  // SYS_DRIVER_REPORT (report the read value)
+    svc  #0
+    mov  x8, #6                  // SYS_EXIT_USER (contained return to the kernel)
+    svc  #0
+1:  b   1b
+gem_probe_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME

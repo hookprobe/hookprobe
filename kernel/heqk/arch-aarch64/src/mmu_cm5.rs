@@ -18,7 +18,9 @@ const PAGE: u64 = 0b11; // L3 page descriptor (VALID | bit1)
 const AF: u64 = 1 << 10; // access flag (fault if 0)
 const SH_IS: u64 = 0b11 << 8; // inner shareable (normal memory)
 const AP_RW_EL1: u64 = 0b00 << 6; // EL1 read/write
+const AP_RW_EL0: u64 = 0b01 << 6; // EL0+EL1 read/write
 const AP_RO_EL1: u64 = 0b10 << 6; // EL1 read-only (+ executable when !PXN)
+const AP_RO_EL0: u64 = 0b11 << 6; // EL0+EL1 read-only (+ EL0-executable when !UXN)
 const PXN: u64 = 1 << 53; // privileged execute-never
 const UXN: u64 = 1 << 54; // unprivileged execute-never
 const ATTR_DEVICE: u64 = 0 << 2; // MAIR index 0 = Device-nGnRnE
@@ -45,6 +47,61 @@ static mut L1: Table = Table([0; 512]);
 // kernel's 2 MiB block which uses an L3 table (per-page: .text RO+X, rest RW+PXN).
 static mut L2_GB0: Table = Table([0; 512]);
 static mut L3_KERN: Table = Table([0; 512]);
+
+// P7c step 3b — EL0 user window at GB5 (0x1_4000_0000), an unused-on-CM5 GB. Its
+// first 2 MiB block is L3-mapped so an isolated EL0 driver gets code/stack/device
+// pages there. L2_USER[0] -> L3_USER; the driver's pages fill L3_USER slots.
+pub const USER_GB: u64 = 5;
+pub const USER_VA_BASE: usize = (USER_GB * GB) as usize; // 0x1_4000_0000
+static mut L2_USER: Table = Table([0; 512]);
+static mut L3_USER: Table = Table([0; 512]);
+// EL0 driver code + stack live in these Normal-RAM frames (also visible via the
+// GB0 identity map as RW+PXN — same cacheable type, so no attribute mismatch).
+#[repr(align(4096))]
+struct Page([u8; 4096]);
+static mut EL0_CODE: Page = Page([0; 4096]);
+static mut EL0_STACK: Page = Page([0; 4096]);
+
+/// Physical address of the EL0 driver code frame (kernel copies the stub here).
+pub fn el0_code_pa() -> usize {
+    addr_of_mut!(EL0_CODE) as usize
+}
+/// Physical address of the EL0 driver stack frame.
+pub fn el0_stack_pa() -> usize {
+    addr_of_mut!(EL0_STACK) as usize
+}
+
+#[inline]
+fn user_page(pa: u64, ap: u64, attr: u64, xn: u64) -> u64 {
+    pa | AF | SH_IS | ap | attr | PAGE | xn
+}
+/// L3 index of a VA within the GB5 user window's first 2 MiB block.
+#[inline]
+fn user_l3_idx(va: usize) -> usize {
+    (va >> 12) & 0x1FF
+}
+/// Map an EL0 RO+X code page at `va` (in the GB5 user window) → phys `pa`.
+pub fn map_user_code(va: usize, pa: usize) {
+    write_user_l3(va, user_page(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN)); // EL0 exec, EL1 non-exec
+}
+/// Map an EL0 RW data/stack page.
+pub fn map_user_data(va: usize, pa: usize) {
+    write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_NORMAL, PXN | UXN));
+}
+/// Map an EL0 device-MMIO window (a driver's capability to touch one device).
+pub fn map_user_device(va: usize, pa: usize) {
+    write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_DEVICE, PXN | UXN));
+}
+fn write_user_l3(va: usize, desc: u64) {
+    let l3 = addr_of_mut!(L3_USER) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(l3.add(user_l3_idx(va)), desc);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) as u64);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+}
 
 #[inline]
 fn normal_block(pa: u64) -> u64 {
@@ -149,6 +206,13 @@ pub fn enable_identity() {
         // non-exec). Alias GB257 -> Normal Non-Cacheable (GEM descriptor window).
         core::ptr::write_volatile(l1.add(ALIAS_GB as usize), normal_block(0));
         core::ptr::write_volatile(l1.add(NC_ALIAS_GB as usize), normal_nc_block(0));
+        // GB5 = the EL0 user window: L1[5] -> L2_USER -> L3_USER (both empty now;
+        // an EL0 driver's pages are filled into L3_USER at run time). Overwrites
+        // the (unused) GB5 device block before the MMU turns on — no BBM needed.
+        let l2u = addr_of_mut!(L2_USER) as *mut u64;
+        let l3u = addr_of_mut!(L3_USER) as *mut u64;
+        core::ptr::write_volatile(l2u.add(0), (l3u as u64) | TABLE);
+        core::ptr::write_volatile(l1.add(USER_GB as usize), (l2u as u64) | TABLE);
     }
     build_wx_gb0(); // GB0 = W^X map (kernel .text RO+X, rest RW+PXN); writes L1[0]
 
