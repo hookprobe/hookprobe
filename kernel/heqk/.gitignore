@@ -1,2 +1,3 @@
 /target
 **/*.rs.bk
+/cm5-boot/linux-boot-backup/
