@@ -388,19 +388,17 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
     let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
     let w2 = unsafe { read_volatile((dptr + 8) as *const u32) };
     let w3 = unsafe { read_volatile((dptr + 12) as *const u32) };
-    let len = (ctrl & RXD_FRMLEN) as usize;
+    let desc_len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
     dc_ivac(bufpa, RXBUF); // invalidate the WHOLE buffer before reading DMA'd data
-    let n = len.min(out.len()).min(RXBUF);
-    for k in 0..n {
+    // Copy the whole available buffer: this GEM leaves the descriptor length
+    // (w1) at 0, but the frame data is complete — the parser self-bounds via the
+    // IP header's own total_len, so it needs the bytes, not the descriptor len.
+    let copy_n = out.len().min(RXBUF);
+    for k in 0..copy_n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
-    // Also surface the first bytes even if len==0 (diagnosis).
-    if n == 0 {
-        for k in 0..out.len().min(16) {
-            out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
-        }
-    }
+    let len = if desc_len > 0 { desc_len } else { copy_n };
     // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish.
     unsafe {
         let bus = bufpa as u64 + DMA_BUS_OFFSET;
