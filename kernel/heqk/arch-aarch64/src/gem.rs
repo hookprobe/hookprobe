@@ -58,6 +58,14 @@ const DMACFG_ADDR64: u32 = 1 << 30;
 // unconditionally. Omitting them is the RP1 GEM descriptor-length ("w1=0") bug.
 const DMACFG_RXBMS: u32 = 3 << 8; // RX packet buffer: full configured size
 const DMACFG_TXPBMS: u32 = 1 << 10; // TX packet buffer: full size
+// RX/TX Buffer-Descriptor EXTENDED mode. With ADDR64=1 the descriptor footprint
+// widens to 4 words, but the DMA status-formatter only routes the RX status onto
+// the UPPER AXI write-data lanes (word1) when RX_BD_EXTENDED_MODE is set. ADDR64
+// without RXEXT ⇒ HW writes word0 (addr+USED) correctly but leaves word1 (SOF/
+// EOF/len) zeroed — precisely the metal symptom. TXEXT avoids the matching TX
+// stall. THIS is the descriptor-length ("w1=0") root cause on the RP1 GEM.
+const DMACFG_RXEXT: u32 = 1 << 28;
+const DMACFG_TXEXT: u32 = 1 << 29;
 // RX descriptor word0 flags (in the low bits of the buffer address)
 const RXD_USED: u32 = 1 << 0; // 0 = HW-owned; HW sets 1 after writing a frame
 const RXD_WRAP: u32 = 1 << 1; // last descriptor
@@ -364,8 +372,12 @@ pub fn rx_init() -> (usize, u16, u32) {
     let _ = r(GEM, RSR);
     w(GEM, RSR, RSR_BNA | RSR_REC); // clear sticky status
     let rxbs = (RXBUF / 64) as u32; // RX buffer size in 64-byte units
-    // ADDR64 + full-SF buffer sizing (RXBMS|TXPBMS, mandatory on RP1) + INCR16 burst.
-    w(GEM, DMACFG, DMACFG_ADDR64 | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
+    // ADDR64 + RX/TX extended-BD mode (required for the word1 status writeback
+    // under ADDR64) + full-SF buffer sizing (RXBMS|TXPBMS) + INCR16 burst.
+    // => 0x70200710.
+    w(GEM, DMACFG,
+        DMACFG_ADDR64 | DMACFG_RXEXT | DMACFG_TXEXT
+            | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
@@ -422,21 +434,26 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
     let len = copy_n;
-    // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish. Publish
-    // the cleared status word to DRAM BEFORE re-arming word0's USED-clear (which
-    // re-enables reception): if the GEM saw USED-clear first, a frame landing in
-    // that window would have its freshly-written ctrl clobbered by this zero.
-    // dc_cvac ends in `dsb`, so it orders the two publishes.
+    // Recycle: hand the descriptor back to the GEM by clearing USED in word0
+    // ONLY — never rewrite the status word (word1). The GEM overwrites word1 on
+    // the next RX; writing 0 here is the documented Cadence macb RX clobber
+    // (Linux "net: macb: fix dropped RX frames due to a race"). Because four
+    // 16-byte descriptors share one 64-byte cache line, a plain clean of this
+    // descriptor writes back the STALE cached copies of its neighbours,
+    // squashing a neighbour's just-written status in DRAM (audit finding B-4).
+    // So invalidate the line FIRST: the write-allocate then reloads FRESH
+    // neighbours, and the clean publishes those (not stale zeros). This is the
+    // in-place cacheable-descriptor discipline; a non-cacheable ring (K1) would
+    // make the dance unnecessary but is not required to be correct.
     unsafe {
         let bus = bufpa as u64 + DMA_BUS_OFFSET;
-        let mut nw0 = (bus as u32) & !0x3;
+        let mut nw0 = (bus as u32) & !0x3; // USED=0 (hw-owned)
         if i == NRX - 1 {
             nw0 |= RXD_WRAP;
         }
-        write_volatile((dptr + 4) as *mut u32, 0);
-        dc_cvac(dptr, 16);
-        write_volatile(dptr as *mut u32, nw0);
-        dc_cvac(dptr, 16);
+        dc_ivac(dptr, 16); // drop the stale line so the clean won't write stale neighbours
+        write_volatile(dptr as *mut u32, nw0); // clear USED; leave word1 for the GEM
+        dc_cvac(dptr, 16); // publish word0 + freshly-reloaded neighbours
         IDX = IDX.wrapping_add(1);
     }
     Some((len, w0, ctrl, w2, w3))
