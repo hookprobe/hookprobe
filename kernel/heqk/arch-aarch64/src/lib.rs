@@ -10,6 +10,8 @@ use core::fmt::{self, Write};
 mod uart;
 mod exception;
 pub mod bpf_jit;
+#[cfg(feature = "cm5")]
+pub mod gem;
 pub mod gic;
 pub mod mmu;
 #[cfg(feature = "cm5")]

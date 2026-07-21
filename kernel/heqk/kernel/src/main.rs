@@ -147,6 +147,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
     cm5_scheduler_demo();
 
+    // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
+    cm5_gem_rx_demo();
+
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
     // the EL2 gate performs the PM reset (EL1 writes to the PM block are
@@ -197,6 +200,61 @@ fn cm5_scheduler_demo() {
         }
     }
     arch_aarch64::disable_irqs();
+}
+
+/// P8: RP1 GEM Ethernet polled-RX first light. Probe reachability + link, arm an
+/// RX ring, poll for real frames, and run each through the Packet Engine for an
+/// IDS verdict — the north-star: a real packet judged on the microkernel.
+#[cfg(feature = "cm5")]
+fn cm5_gem_rx_demo() {
+    kprint!(" [P8] RP1 GEM Ethernet — polled RX first light\n");
+    let (ncfgr, dmacfg, status) = arch_aarch64::gem::probe();
+    kprint!(" [P8] GEM reachable: NCFGR={:#010x} DMACFG={:#010x} eth_cfg.STATUS={:#x}\n",
+        ncfgr, dmacfg, status);
+    kprint!(" [P8] link={} speed={} duplex={}\n",
+        status & 1, (status >> 1) & 3, (status >> 3) & 1);
+    let ring = arch_aarch64::gem::rx_init();
+    kprint!(" [P8] RX ring @ {:#x} (bus {:#x}); RE on; polling ~5 s\n",
+        ring, ring as u64 + 0x10_0000_0000);
+
+    #[repr(align(4096))]
+    struct Pool([u8; packet::FRAME_SZ * 8]);
+    static mut POOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
+    let pool = core::ptr::addr_of_mut!(POOL) as usize;
+
+    let mut buf = [0u8; 1600];
+    let mut got = 0u32;
+    for tick in 0..500u32 {
+        if let Some(n) = arch_aarch64::gem::poll_rx(&mut buf) {
+            let n = n.min(buf.len());
+            kprint!(" [P8] RX {} bytes: {:02x}{:02x}..{:02x}{:02x} ethertype={:04x}\n",
+                n, buf[0], buf[1], buf[12], buf[13],
+                ((buf.get(12).copied().unwrap_or(0) as u16) << 8) | buf.get(13).copied().unwrap_or(0) as u16);
+            if packet::produce_raw(pool, &buf[..n]) {
+                if let Some((port, verdict)) = packet::consume_one(pool) {
+                    kprint!(" [P8] IDS verdict: dst_port={} -> {}\n", port,
+                        if verdict == packet::DROP { "DROP" } else { "PASS" });
+                }
+            }
+            got += 1;
+            if got >= 3 {
+                break;
+            }
+        }
+        for _ in 0..2_000_000u32 {
+            core::hint::spin_loop();
+        }
+        if tick % 100 == 99 {
+            kprint!(" [P8] ... waiting, RSR={:#x} (bit0=BNA bit1=REC bit2=OVR)\n",
+                arch_aarch64::gem::rsr());
+        }
+    }
+    if got == 0 {
+        kprint!(" [P8] no frames (RSR={:#x}) — suspects: PHY reset/link, or RC inbound ATU (BNA)\n",
+            arch_aarch64::gem::rsr());
+    } else {
+        kprint!(" [P8] PASS — {} real frame(s) received + IDS verdict on the microkernel\n", got);
+    }
 }
 
 /// Measured-boot attestation: independently replay HBoot's event log and
