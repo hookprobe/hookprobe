@@ -710,8 +710,10 @@ fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
         kprint!(" [P7d-B2] BAD ephemeral magic {:#x}\n", e.magic);
         return;
     }
-    // On-device chain check: is this boot's ephemeral key genuinely AK-certified?
-    let cert_ok = attest_svc::verify_cert_ed(&attest_svc::AK_ED_PK, e);
+    // On-device chain check: is this boot's ephemeral key genuinely certified by
+    // the (published, per-device) AK? Uses the AK pubkey HBoot handed down, so a
+    // hardware-bound per-device AK verifies against its own key, not a constant.
+    let cert_ok = attest_svc::verify_cert_ed(&e.ak_ed_pk, e);
     let att = match attest_svc::Attestor::from_sk(&e.eph_ed_sk) {
         Some(a) => a,
         None => {
@@ -725,9 +727,11 @@ fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
     let s1 = att.respond(&n1);
     let s2 = att.respond(&n2);
     let fresh = attest_svc::self_test(&att);
-    kprint!(" [P7d-B2] device_id(serial)={:#018x}, OTP-key={}, ephemeral AK-cert (ed25519 on-device) {}\n",
+    kprint!(" [P7d-B1] device_id(serial)={:#018x}, AK={} (ak_ed_pk {:02x}{:02x}..)\n",
         e.device_id,
-        if e.otp_provisioned != 0 { "provisioned" } else { "blank" },
+        if e.ak_hw_bound != 0 { "HARDWARE-BOUND (OTP-derived, non-extractable)" } else { "software" },
+        e.ak_ed_pk[0], e.ak_ed_pk[1]);
+    kprint!(" [P7d-B2] ephemeral AK-cert (ed25519 on-device) {}\n",
         if cert_ok { "VERIFIED" } else { "FAILED" });
     kprint!(" [P7d-B2] challenge n1 -> {:02x}{:02x}.., n2 -> {:02x}{:02x}.. (fresh nonce -> fresh sig)\n",
         s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);

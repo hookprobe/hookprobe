@@ -16,6 +16,7 @@ use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
 use fips205::slh_dsa_sha2_128s;
 use fips205::traits::{SerDes, Verifier};
 
+mod ak_derive;
 mod attest;
 mod attest_keys;
 mod mailbox;
@@ -223,34 +224,38 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthex(m.count());
     puts(" events logged\n");
 
-    // REMOTE ATTESTATION: sign nonce||svn||PCRs with the device AK (hybrid,
+    // B-1 (extractability): provision (once) + derive the per-device AK bound to
+    // the OTP secret — non-extractable from the image. Burns customer OTP on the
+    // first boot only; idempotent thereafter; falls back to the software AK if
+    // the mailbox/burn does not deliver a secret. MUST run before any AK signing.
+    let mut ak = ak_derive::provision_and_derive();
+
+    // B-1 (identity): this device's unique serial (fail-safe: 0 if unreachable).
+    let device_id = mailbox::board_serial().unwrap_or(0);
+    let otp_provisioned = u64::from(ak.hw_bound);
+    puts(" attest : device_id (board serial)=");
+    puthex(device_id);
+    puts(if ak.hw_bound {
+        " AK=hardware-bound (per-device, OTP-derived)\n"
+    } else {
+        " AK=software (OTP unprovisioned/unreachable)\n"
+    });
+
+    // REMOTE ATTESTATION: sign nonce||svn||PCRs with the (per-device) AK (hybrid,
     // quantum-safe) so an off-device verifier can attest the exact boot state.
     let pcrs = [m.pcr(0), m.pcr(1), m.pcr(2), m.pcr(3)];
-    let _ak_ed = attest::emit_quote(svn, &pcrs);
+    let _ak_ed = attest::emit_quote(svn, &pcrs, &ak);
     puts(" attest : AK-signed quote (ed25519 + SLH-DSA) @ ");
     puthex(ATTEST_QUOTE_ADDR as u64);
     puts("\n");
 
-    // B-1 (identity): read this device's unique serial + OTP provisioning state
-    // over the VideoCore mailbox (fail-safe: device_id=0 if unreachable).
-    let device_id = mailbox::board_serial().unwrap_or(0);
-    let otp_provisioned = match mailbox::otp_device_key() {
-        Some(k) => u64::from(k.iter().any(|&w| w != 0)), // non-blank = a real secret exists
-        None => 0,
-    };
-    puts(" attest : device_id (board serial)=");
-    puthex(device_id);
-    puts(if otp_provisioned != 0 {
-        " OTP-key=provisioned (hw-bound AK available)\n"
-    } else {
-        " OTP-key=blank (per-device identity only; provision to bind AK)\n"
-    });
-
     // B-2: mint a per-boot ephemeral key, AK-certify it (hybrid) binding this
-    // device_id, publish it for the kernel's runtime challenge service, then
-    // SCRUB the device AK from RAM (it never persists post-boot; the kernel only
-    // ever holds the ephemeral key).
-    attest::emit_ephemeral_cert(svn, device_id, otp_provisioned, &pcrs);
+    // device_id, publish it + the per-device AK pubkeys for the kernel's runtime
+    // challenge service, then SCRUB all AK private material from RAM (neither the
+    // derived nor the software AK persists post-boot; the kernel holds only the
+    // ephemeral key).
+    attest::emit_ephemeral_cert(svn, device_id, otp_provisioned, &pcrs, &ak);
+    ak.zeroize();
     attest_keys::scrub();
 
     // Relocate the payload to its link address.

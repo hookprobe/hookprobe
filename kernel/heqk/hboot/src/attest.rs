@@ -43,7 +43,11 @@ impl CryptoRng for ZeroRng {}
 
 /// Build and sign the attestation quote, writing it to ATTEST_QUOTE_ADDR.
 /// Returns the ed25519 signature (for a short console echo).
-pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] {
+pub fn emit_quote(
+    svn: u64,
+    pcr: &[[u8; 32]; NUM_PCR],
+    ak: &crate::ak_derive::DerivedAk,
+) -> [u8; ED25519_SIG_LEN] {
     // Fresh per-boot nonce from the BCM2712 hardware TRNG — replaces the
     // compile-time-constant CHALLENGE_NONCE that made quotes replayable (B-2).
     let (nonce, trng_words) = rng::hw_nonce();
@@ -63,7 +67,7 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
 
     // Classical AK signature.
     puts(" attest : signing quote (ed25519)...\n");
-    let ed_sk = EdSecretKey::from_slice(attest_keys::ak_ed_sk()).unwrap();
+    let ed_sk = EdSecretKey::from_slice(&ak.ed_sk).unwrap();
     let ed_sig: EdSignature = ed_sk.sign(body, None);
     let mut ed_bytes = [0u8; ED25519_SIG_LEN];
     ed_bytes.copy_from_slice(ed_sig.as_ref());
@@ -72,7 +76,7 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
     // The 'f' variant signs in seconds even with software SHA-256 on bare metal
     // (128s was minutes). Deterministic: zero-RNG + hedged=false.
     puts(" attest : signing quote (SLH-DSA-128f, quantum-safe)...\n");
-    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(attest_keys::ak_slh_sk()).unwrap();
+    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(&ak.slh_sk).unwrap();
     let slh_sig = slh_sk
         .try_sign_with_rng(&mut ZeroRng, &body, AK_SIG_CTX, false)
         .expect("ak slh sign");
@@ -106,6 +110,7 @@ pub fn emit_ephemeral_cert(
     device_id: u64,
     otp_provisioned: u64,
     pcr: &[[u8; 32]; NUM_PCR],
+    ak: &crate::ak_derive::DerivedAk,
 ) {
     use ed25519_compact::{KeyPair, Seed};
 
@@ -135,14 +140,14 @@ pub fn emit_ephemeral_cert(
     let mut ed_msg = [0u8; 32 + EPH_CERT_BODY_LEN]; // ctx(15) + body(168) fits
     ed_msg[..clen].copy_from_slice(EPH_CERT_CTX);
     ed_msg[clen..clen + EPH_CERT_BODY_LEN].copy_from_slice(&body);
-    let ed_sk = EdSecretKey::from_slice(attest_keys::ak_ed_sk()).unwrap();
+    let ed_sk = EdSecretKey::from_slice(&ak.ed_sk).unwrap();
     let ed_sig: EdSignature = ed_sk.sign(&ed_msg[..clen + EPH_CERT_BODY_LEN], None);
     let mut cert_ed_sig = [0u8; ED25519_SIG_LEN];
     cert_ed_sig.copy_from_slice(ed_sig.as_ref());
 
     // AK SLH-DSA cert sig over body with ctx=EPH_CERT_CTX (quantum-safe).
     puts(" attest : certifying ephemeral key (AK SLH-DSA, quantum-safe)...\n");
-    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(attest_keys::ak_slh_sk()).unwrap();
+    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(&ak.slh_sk).unwrap();
     let cert_slh_sig = slh_sk
         .try_sign_with_rng(&mut ZeroRng, &body, EPH_CERT_CTX, false)
         .expect("eph cert slh sign");
@@ -160,6 +165,9 @@ pub fn emit_ephemeral_cert(
                 svn,
                 device_id,
                 otp_provisioned,
+                ak_ed_pk: ak.ed_pk,
+                ak_slh_pk: ak.slh_pk,
+                ak_hw_bound: u64::from(ak.hw_bound),
                 pcr: *pcr,
             },
         );

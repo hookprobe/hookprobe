@@ -23,6 +23,21 @@ pub static mut AK_SLHDSA_SK: [u8; 64] = [
     0x22, 0x8b, 0xca, 0x58,
 ];
 
+/// The software AK PUBLIC keys (public — safe to embed). Used as the fallback
+/// AK when OTP is unprovisioned/unreadable. Match ~/heqk-sign/keys/ak_*.pk.
+pub const AK_SLHDSA_PK: [u8; 32] = [
+    0x0c, 0xc5, 0x5a, 0x46, 0x67, 0x5d, 0xb9, 0x74, 0x6b, 0x2e, 0x97, 0x54, 0xb4, 0xd3, 0x20, 0x0f,
+    0xf2, 0x50, 0xce, 0xee, 0x9e, 0xe8, 0x01, 0xb5, 0xfe, 0xad, 0x19, 0x42, 0x22, 0x8b, 0xca, 0x58,
+];
+
+/// The software AK ed25519 public key = the tail 32 bytes of the ed25519 sk
+/// (ed25519-compact secret keys are seed(32)||pubkey(32)).
+pub fn ak_ed_pk() -> [u8; 32] {
+    let mut p = [0u8; 32];
+    p.copy_from_slice(&ak_ed_sk()[32..64]);
+    p
+}
+
 /// Borrow the AK ed25519 private key (single addressable instance).
 #[inline]
 pub fn ak_ed_sk() -> &'static [u8; 64] {

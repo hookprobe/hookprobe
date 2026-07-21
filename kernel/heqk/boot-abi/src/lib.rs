@@ -127,6 +127,9 @@ pub struct AttestEphemeral {
     pub svn: u64,                         // bound into the cert body
     pub device_id: u64,                   // BCM2712 board serial (0 = mailbox unreachable)
     pub otp_provisioned: u64,             // 1 = OTP device-key region non-blank (secret AK possible)
+    pub ak_ed_pk: [u8; 32],               // AK ed25519 pubkey actually used (per-device or software)
+    pub ak_slh_pk: [u8; 32],              // AK SLH-DSA pubkey actually used (for the off-device verifier)
+    pub ak_hw_bound: u64,                 // 1 = AK derived from OTP (non-extractable from image), 0 = software AK
     pub pcr: [[u8; 32]; NUM_PCR],         // bound into the cert body
 }
 

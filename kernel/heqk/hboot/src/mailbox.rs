@@ -139,6 +139,51 @@ pub fn board_serial() -> Option<u64> {
     }
 }
 
+/// GET_USER_OTP (0x00030024) block 1 = customer OTP (8 words / 256 bits).
+/// None if unreadable; Some(words) otherwise (all-zero = blank/unprovisioned).
+pub fn get_customer_otp() -> Option<[u32; 8]> {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // total=17 words=0x44 B; value buffer=11 words=0x2C B; block=1, words=8.
+        let req = [0x44u32, 0, 0x0003_0024, 0x2C, 0, 1, 0, 8];
+        for (i, &v) in req.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(i), v);
+        }
+        for i in 8..17 {
+            core::ptr::write_volatile(buf.add(i), 0);
+        }
+        if !transact(17) {
+            return None;
+        }
+        let mut out = [0u32; 8];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = core::ptr::read_volatile(buf.add(8 + i));
+        }
+        Some(out)
+    }
+}
+
+/// SET_USER_OTP (0x00038024) block 1 = customer OTP — BURN 8 words / 256 bits.
+/// IRREVERSIBLE (one-way fuses). Constrained to the customer region by block=1;
+/// it cannot touch the serial/bootloader/device-key rows. Returns true iff the
+/// firmware reports a success response — the caller MUST additionally read back
+/// (`get_customer_otp`) and derive from the ACTUAL contents, never from intent.
+pub fn set_customer_otp(words: &[u32; 8]) -> bool {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // buf: size, req, tag, valbufsize(44), reqresp, block=1, index=0, words=8, data0..7, end.
+        let hdr = [0x44u32, 0, 0x0003_8024, 0x2C, 0, 1, 0, 8];
+        for (i, &v) in hdr.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(i), v);
+        }
+        for (i, &w) in words.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(8 + i), w);
+        }
+        core::ptr::write_volatile(buf.add(16), 0); // end tag
+        transact(17)
+    }
+}
+
 /// GET_USER_OTP (0x00030024) block 3 = device private key (16 words / 512 bits).
 /// None if unreadable/locked. All-zero words = a blank (unprovisioned) region.
 pub fn otp_device_key() -> Option<[u32; 16]> {
