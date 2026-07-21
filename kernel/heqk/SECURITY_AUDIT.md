@@ -20,3 +20,49 @@ A deep vulnerability audit of the kernel source (a parallel adversarial review o
 **Full W^X for kernel code and the JIT (#3) needs kernel-page block-splitting** — replacing the coarse 1 GiB identity blocks with per-page mappings so kernel *text* is RX, kernel *data* is RW+PXN, and JIT frames have no writable alias. That is the same deferred item that also blocks per-address-space ASIDs, tracked in `buildPlan.md`. It is a real limitation, not a claimed-green gate.
 
 *Method: adversarial source review of all of `kernel/src` + `arch-aarch64/src`, ranked by exploitability, each fix re-validated against the full P0–P6b + DRV gate ladder.*
+
+---
+
+# HEQK Core — Round 2: Deep End-to-End Audit (2026-07-21)
+
+Trigger: after the RP1 GEM datapath reached metal (real Ethernet frame → IDS
+verdict on the microkernel), a **four-agent parallel adversarial review** of the
+whole system — (1) networking/DMA, (2) core kernel primitives, (3) crypto/boot
+chain, (4) MMU/EL2–EL1. Scope now includes the new attack surface: the GEM
+driver, the packet parser facing hostile wire frames, the PCIe inbound DMA
+window, and the quantum-safe boot/attestation chain on metal.
+
+## Fixed this round (QEMU-validated P0–P6b + DRV green; in the metal image)
+| # | Sev | Defect | Fix |
+|---|-----|--------|-----|
+| R2-1 | **MEDIUM** | **IDS evasion** — `net.rs` parsed only single-VLAN IPv4, so IPv6 / QinQ / 802.1ad traffic to a blocked L4 port fell through to `PASS` **without running the threat rule** (`packet.rs` `Some(m) => PASS`). An attacker reached port 4444 simply over IPv6. | `parse()` now unwraps up to 3 stacked VLAN tags and parses IPv6 via a bounded (8) extension-header walk to locate the real L4 header; over-long chains fail closed. Closes the bypass; still `.get()`-safe. |
+| R2-2 | LOW | **OOB read** — `attest_replay` looped `events.add(i)` over a log-supplied `count` with no upper bound; a corrupted count walks off the page. | Clamp `count` to what fits in the 64 KiB log region before iterating. |
+| R2-3 | LOW | **Footgun length** — `gem::poll_rx` returned a device-controlled `desc_len` (up to 16383) that could exceed bytes actually copied; a caller slicing `out[..len]` would read OOB. | Return `desc_len.min(copy_n)`. |
+| R2-4 | MEDIUM | **IPC TOCTOU** — one global `MSG`; a second sender (no-receiver branch, after the first delivery cleared `RECV_WAITER`) overwrote the word a woken receiver had not read → wrong/lost message. | Split into `SEND_MSG` (parked by a waiting sender) and `DELIVERED` (private handoff to a woken receiver). |
+
+## Verified SOUND (adversarially, not merely unreviewed)
+- **Secure-boot enforcement:** hybrid ed25519 **AND** SLH-DSA (no downgrade), verify binds the *recomputed* hash not the header's, SVN bound into the signed message with a correct unsigned floor compare, **geometry pinned** (load_pa/entry_off/size) so a malicious image cannot redirect the payload over HBoot's EL2 code or into unsigned bytes, `mkimage` signs exactly what runs.
+- **Datapath memory-safety vs. hostile input:** `net.rs` parser, `bpf.rs` VM (LDX bounds + register-range + step-limit termination), `packet.rs` SPSC ring, and both DMA RX paths (`gem`, `virtio`) — all bounds-checked, fail-closed, no OOB from a hostile NIC/frame.
+- **EL0→EL1 boundary:** no EL0-supplied pointer is ever dereferenced; registers scrubbed on `eret` to EL0; CPtrs resolve through bounds-checked `slots.get`; capabilities unforgeable (CSpace is kernel-private, EL0 passes only an integer index).
+- **MMU mechanics:** MAIR↔attr-index match, TCR 39-bit sizing, correct barrier/TLBI ordering at enable (CM5 + HBoot regimes), device MMIO is Device-nGnRnE+PXN|UXN, no RAM mapped Device / no MMIO mapped Normal.
+
+## Prioritized backlog — NOT fixed this round (named, not hidden)
+These are either hardware-gated or require the block-splitting epic; bundling them
+into a metal flash carries silent-hang risk that cannot be QEMU-validated, so they
+are deferred to dedicated, individually-validated passes.
+
+| # | Sev | Gap | Why deferred / fix path |
+|---|-----|-----|------------------------|
+| B-1 | **CRITICAL** | **Attestation AK is a software constant in the world-readable image** (extractable from `hboot8.img` @ +0x483f0/+0x48468) → every quote forgeable; identical on every device. | Needs a **per-device hardware secret** (BCM2712 OTP-derived AK) that HBoot cannot leak. Blocked on the OTP driver (already on the "emmc-rpmb / OTP" backlog). Until then, quotes must **not** be represented as authenticity proofs. |
+| B-2 | **CRITICAL** | **Attestation nonce is compile-time constant + deterministic signing** → quotes infinitely replayable, zero freshness. | Needs a **runtime nonce channel** (verifier supplies a fresh random nonce per request) that HBoot does not yet have. |
+| B-3 | **HIGH** | **HBoot's EL2 monitor (code, vectors, key material) is writable from EL1** — no stage-2, so an EL1 bug can tamper the root of trust it is gated by. | Enable EL2 **stage-2** with the HBoot region excluded/RO from EL1 IPA space, OR have HBoot scrub secrets + lock/relocate its code before `eret`. Carve the HBoot GBs out of the EL1 map as unmapped/RO. |
+| B-4 | **HIGH** | **GEM descriptor cache-line false sharing** — 4×16 B descriptors share a 64 B line; `dc_cvac` on recycle writes back a stale cached neighbor over the device's fresh `USED`/length → silent RX loss **at line rate** (not hit by the sequential-poll demo). | Place the descriptor ring in **Non-cacheable** memory (standard for DMA rings) and drop the per-descriptor clean/invalidate. Requires page-granular mapping of the ring page → the block-splitting epic. |
+| B-5 | **MEDIUM** | **No W^X at EL1** — Normal RAM blocks omit PXN and are `AP_RW_EL1`; `SCTLR.WXN` unset → all RAM is RWX (kernel text writable, data/stack executable). | Split the 1 GiB blocks: text→RO+X, everything else→RW+PXN; set `SCTLR_EL1.WXN`. **Block-splitting epic.** |
+| B-6 | **MEDIUM** | **EL0 runs with IRQs masked** (`syscall.s` SPSR=0x80) → an uncooperative EL0 task cannot be preempted and wedges the CPU; defeats availability isolation. | Enter EL0 with IRQs enabled **and** make EL0 tasks first-class scheduler TCBs with a lower-EL IRQ save/switch path (slot 9). The deferred **"EL0-as-scheduled-TCB"** item. |
+| B-7 | MEDIUM | Measured-boot has **no hardware root of trust** (PCRs in plain DRAM, HBoot self-measures unanchored). | OTP CRTM anchor — same hardware dependency as B-1. |
+| B-8 | MEDIUM | **Anti-rollback floor is compile-time only** (no monotonic store) → whole-image rollback to an older validly-signed bundle. | Back the floor with OTP fuses / eMMC RPMB (the `SecureCounter` seam already exists in `rollback.rs`). |
+| B-9 | LOW | JIT/user code-page W^X bypassable via the RW identity alias (QEMU path); `SYS_CAP_IDENTIFY` uses a global CSpace + `rights` unenforced; OOM/`unwrap` are kernel-fatal; recursive `revoke` stack depth; 64 GiB oversized no-IOMMU DMA window. | Assorted; several ride the block-splitting epic or the multi-EL0-task milestone. |
+
+**Read of the whole system:** the enforcement spine (secure-boot AND-gate + geometry pin, memory-safe datapath, EL0 isolation, cap unforgeability) is sound. The concentrated residual risk is (a) attestation is **demo-grade** until the AK is hardware-bound (B-1/B-2), (b) three real hardening items ride the **block-splitting epic** (B-4/B-5, plus the earlier W^X residual), and (c) EL1↔EL2 isolation (B-3). These are the top of the next hardening milestone, in that order.
+
+*Method: 4 parallel adversarial subagents over the full tree; findings ranked by exploitability; the tractable, QEMU-validatable fixes landed and re-gated (P0–P6b + DRV green); the rest triaged with an explicit fix path rather than silently deferred.*
