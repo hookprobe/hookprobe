@@ -325,21 +325,39 @@ park:
     b       82b
 .endm
 
+// Lower-EL sync at EL2 (offset 0x400): EL1's gateway back to EL2. `hvc #0`
+// = intentional reboot request (kmain's end-of-run); anything else is an EL1
+// fault — print '?' and reset anyway, so the bench always self-recovers.
+lower64_sync_handler:
+    mrs     x10, esr_el2
+    lsr     x10, x10, #26
+    cmp     x10, #0x16              // EC 0x16 = HVC from AArch64
+    b.eq    reset_to_linux
+    movz    x9, #0x0000
+    movk    x9, #0x0003, lsl #16
+    movk    x9, #0x001c, lsl #32
+    mov     w11, #0x3f              // '?' = unexpected EL1 fault
+91: ldr     w12, [x9, #0x18]
+    tbnz    w12, #5, 91b
+    strb    w11, [x9]
+    b       reset_to_linux
+
     .balign 0x800
 __early_vectors:
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
-    EARLY_VEC
+    EARLY_VEC                       // 0x000 sync  SP0
+    EARLY_VEC                       // 0x080 irq   SP0
+    EARLY_VEC                       // 0x100 fiq   SP0
+    EARLY_VEC                       // 0x180 serr  SP0
+    EARLY_VEC                       // 0x200 sync  SPx
+    EARLY_VEC                       // 0x280 irq   SPx
+    EARLY_VEC                       // 0x300 fiq   SPx
+    EARLY_VEC                       // 0x380 serr  SPx
+    .balign 0x80                    // 0x400 sync  lower64 -> HVC/fault gate
+    b       lower64_sync_handler
+    EARLY_VEC                       // 0x480 irq   lower64
+    EARLY_VEC                       // 0x500 fiq   lower64
+    EARLY_VEC                       // 0x580 serr  lower64
+    EARLY_VEC                       // 0x600 sync  lower32
+    EARLY_VEC                       // 0x680 irq   lower32
+    EARLY_VEC                       // 0x700 fiq   lower32
+    EARLY_VEC                       // 0x780 serr  lower32

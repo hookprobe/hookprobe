@@ -89,16 +89,14 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" RUST OK\n");
     kprint!(" [CM5-BOOT] PASS — HEQK boots and prints on real hardware\n");
     kprint!(" halting; next: MMU high-PA map, GIC-400 @0x107FFF9000, generic timer, then RP1\n");
-    // After the banner: drain the UART (~2 s), then clean full-SoC reset via
-    // the stub's PROVEN asm path — tryboot is spent, so this reboots into
-    // Linux and the bench self-recovers with no human touch.
-    for _ in 0..2_000_000_000u64 {
+    // After the banner: drain the UART, then request reboot via `hvc #0` —
+    // the EL2 gate performs the PM reset (EL1 writes to the PM block are
+    // silently ignored; EL2 is the proven path). Tryboot is spent, so this
+    // reboots into Linux: the bench self-recovers with no human touch.
+    for _ in 0..200_000_000u64 {
         core::hint::spin_loop();
     }
-    extern "C" {
-        fn reset_to_linux() -> !;
-    }
-    unsafe { reset_to_linux() }
+    unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
 }
 
 #[cfg(not(feature = "cm5"))]
