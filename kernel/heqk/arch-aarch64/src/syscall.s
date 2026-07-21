@@ -96,6 +96,18 @@ driver_stub:
 1:  b       1b
 driver_stub_end:
 
+// -------- P7c step 4b: a CRASHING EL0 driver (fault-restart proof) -----------
+// Faults immediately (writes beyond the 39-bit VA range -> translation fault).
+// The kernel contains it and rebuilds a fresh frame; after a restart budget it
+// kills the TCB. A driver crash is contained AND recovered, box stays up.
+.global el0_fault_stub
+.global el0_fault_stub_end
+el0_fault_stub:
+    movz x2, #0x0100, lsl #32     // x2 = 0x100_0000_0000 (1 TB, beyond the 39-bit VA)
+    str  x2, [x2]                 // data/translation abort -> EL0 fault -> restart
+1:  b    1b
+el0_fault_stub_end:
+
 // -------- P7c: uncooperative EL0 task (preemption proof) ---------------------
 // Runs at EL0 with IRQs ENABLED and makes NO syscalls — it just spins forever
 // incrementing a counter at [x0]. If the box isn't wedged (the scheduler keeps

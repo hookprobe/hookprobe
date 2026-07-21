@@ -46,6 +46,22 @@ fn stack_top(i: usize) -> usize {
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
 
+// P7c step 4b — fault-restart of a scheduled EL0 driver. When a scheduled EL0 TCB
+// faults, the handler rebuilds a fresh frame from these restart params and
+// reschedules, instead of the cooperative resume_kernel longjmp.
+#[cfg(not(feature = "cm5"))]
+static EL0_SCHED_MODE: AtomicBool = AtomicBool::new(false);
+#[cfg(not(feature = "cm5"))]
+static EL0_RS_ENTRY: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "cm5"))]
+static EL0_RS_USP: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "cm5"))]
+static EL0_RS_KSTACK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "cm5"))]
+static EL0_RESTARTS: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(feature = "cm5"))]
+const EL0_MAX_RESTARTS: u32 = 3;
+
 // P7c — physical address of the EL0 preemption-test counter (kernel reads it to
 // prove the uncooperative EL0 task ran), + a dedicated kernel stack for that TCB.
 #[cfg(not(feature = "cm5"))]
@@ -55,6 +71,8 @@ static EL0_CNT_PA: AtomicUsize = AtomicUsize::new(0);
 struct KStack([u8; 0x4000]);
 #[cfg(not(feature = "cm5"))]
 static mut EL0_KSTACK: KStack = KStack([0; 0x4000]);
+#[cfg(not(feature = "cm5"))]
+static mut EL0_FKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the crashing driver TCB
 /// Set by the timer IRQ when the on-metal scheduler demo completes (cm5).
 static SCHED_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -752,6 +770,7 @@ pub extern "C" fn kmain() -> ! {
     }
     kprint!(" sched: {} threads (P4 IPC consumer/producer + P1 priority H/M/L, + idle)\n", NTHREADS);
     el0_preempt_spawn(); // P7c: + one uncooperative EL0 TCB that the timer must preempt
+    el0_fault_spawn(); // P7c 4b: + one crashing EL0 driver TCB that must be contained + restarted
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -850,6 +869,45 @@ fn el0_preempt_spawn() {
     kprint!(" [P7c] EL0 task spawned in its OWN address space (asid={}) — preemptible + isolated\n", asid);
 }
 
+/// P7c step 4b — spawn a CRASHING EL0 driver TCB (faults immediately) in its own
+/// ASID, and arm fault-restart. The kernel contains each crash, rebuilds a fresh
+/// frame, and after a restart budget kills the TCB — a driver crash is contained
+/// AND recovered without taking the kernel down.
+#[cfg(not(feature = "cm5"))]
+fn el0_fault_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    extern "C" {
+        static el0_fault_stub: u8;
+        static el0_fault_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(el0_fault_stub) as usize;
+    let len = core::ptr::addr_of!(el0_fault_stub_end) as usize - src;
+    let (code, stack) = (mmu.alloc_frame(), mmu.alloc_frame());
+    if code == 0 || stack == 0 {
+        return;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code, len);
+    let (l1, asid) = mmu.new_addr_space();
+    if l1 == 0 {
+        return;
+    }
+    const FCODE_VA: usize = 0x8300_0000;
+    const FSTACK_VA: usize = 0x8300_1000;
+    mmu.map_user_code_in(l1, FCODE_VA, code);
+    mmu.map_user_data_in(l1, FSTACK_VA, stack);
+    let kstack_top = unsafe { core::ptr::addr_of!(EL0_FKSTACK) as usize + 0x4000 };
+    // Arm restart params, then spawn a fresh frame from them.
+    EL0_RS_ENTRY.store(FCODE_VA, Ordering::Relaxed);
+    EL0_RS_USP.store(FSTACK_VA + 0x1000, Ordering::Relaxed);
+    EL0_RS_KSTACK.store(kstack_top, Ordering::Relaxed);
+    let sp = arch_aarch64::thread::make_el0_thread(kstack_top, FCODE_VA, FSTACK_VA + 0x1000, 0);
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    scheduler::spawn_as(sp, 2, ttbr0); // higher prio: runs (and crashes) promptly
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // faults now restart/reschedule, not longjmp
+    kprint!(" [P7c] crashing EL0 driver spawned (asid={}) — faults must be contained + restarted\n", asid);
+}
+
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
 /// pointer of the thread to run next.
 #[no_mangle]
@@ -885,6 +943,9 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                 };
                 kprint!(" [P7c] EL0 preempt {}: uncooperative EL0 task ran (counter={}), preempted over {} ticks — box NOT wedged (B-6 closed)\n",
                     if el0_cnt > 0 { "PASS" } else { "FAIL" }, el0_cnt, n);
+                let restarts = EL0_RESTARTS.load(Ordering::Relaxed);
+                kprint!(" [P7c] EL0 fault-restart {}: crashing driver TCB contained + restarted {} times then killed — kernel survived (4b)\n",
+                    if restarts >= EL0_MAX_RESTARTS { "PASS" } else { "FAIL" }, restarts.min(EL0_MAX_RESTARTS));
                 kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c GREEN\n");
                 arch_aarch64::semihosting::exit(0);
@@ -1045,7 +1106,7 @@ fn p3_user_demo() {
 /// syscall and return (asm erets back to EL0). Any other fault -> contain it and
 /// resume the kernel (this call never returns for the fault path).
 #[no_mangle]
-pub extern "C" fn handle_lower_sync(frame: *mut u64) {
+pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     let esr: u64;
     unsafe { core::arch::asm!("mrs {}, esr_el1", out(reg) esr) };
     let ec = (esr >> 26) & 0x3f;
@@ -1056,19 +1117,49 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) {
         let a0 = unsafe { *frame.add(0) };
         let a1 = unsafe { *frame.add(1) };
         if num == SYS_EXIT_USER {
-            unsafe { arch_aarch64::syscall::resume_kernel() }; // EL0 server done -> kernel
+            unsafe { arch_aarch64::syscall::resume_kernel() }; // cooperative EL0 done -> kernel
         }
         let ret = syscall_dispatch(num, a0, a1);
         unsafe { *frame.add(0) = ret };
-    } else {
-        // Fault from EL0 (e.g. data abort EC=0x24). Contain: report, kill the
-        // user context, resume the kernel — the kernel does not go down.
-        let far: u64;
-        unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far) };
-        kprint!("   [EL0 fault] contained: EC={:#04x} FAR={:#x} (kernel survives)\n", ec, far);
-        telemetry::emit(telemetry::Event::Fault); // the OS senses its own fault
-        unsafe { arch_aarch64::syscall::resume_kernel() };
+        return frame as usize; // restore this frame in place, eret back to EL0
     }
+
+    // Fault from EL0 (e.g. data abort EC=0x24).
+    let far: u64;
+    unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far) };
+    kprint!("   [EL0 fault] contained: EC={:#04x} FAR={:#x} (kernel survives)\n", ec, far);
+    telemetry::emit(telemetry::Event::Fault); // the OS senses its own fault
+
+    // P7c step 4b: a *scheduled* EL0 driver TCB — RESTART it (rebuild a fresh
+    // frame) up to a bound, then kill it, and reschedule. A driver crash is
+    // contained AND recovered without taking the kernel down.
+    #[cfg(not(feature = "cm5"))]
+    if EL0_SCHED_MODE.load(Ordering::Relaxed) {
+        let cur = scheduler::current_tid();
+        let n = EL0_RESTARTS.fetch_add(1, Ordering::Relaxed) + 1;
+        let next_sp = if n <= EL0_MAX_RESTARTS {
+            kprint!("   [EL0 fault] restarting the driver TCB (restart #{})\n", n);
+            let sp = arch_aarch64::thread::make_el0_thread(
+                EL0_RS_KSTACK.load(Ordering::Relaxed),
+                EL0_RS_ENTRY.load(Ordering::Relaxed),
+                EL0_RS_USP.load(Ordering::Relaxed),
+                0,
+            );
+            scheduler::set_sp(cur, sp);
+            scheduler::on_tick(sp)
+        } else {
+            kprint!("   [EL0 fault] restart budget exhausted -> killing the driver TCB\n");
+            scheduler::exit_current();
+            scheduler::on_tick(unsafe { *frame.add(33) as usize }) // any sp; cur is dead now
+        };
+        let mmu = arch_aarch64::Mmu;
+        let t = scheduler::current_ttbr0();
+        mmu.set_ttbr0_raw(if t != 0 { t } else { mmu.kernel_ttbr0() });
+        return next_sp;
+    }
+
+    // Cooperative EL0 (P3/DRV, the CM5 stages): longjmp back to the kernel.
+    unsafe { arch_aarch64::syscall::resume_kernel() };
 }
 
 fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {

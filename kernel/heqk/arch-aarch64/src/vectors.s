@@ -124,10 +124,15 @@ lower_sync_entry:
     mrs     x10, spsr_el1
     stp     x30, x9,  [sp, #240]
     str     x10,      [sp, #256]
+    mrs     x11, sp_el0
+    str     x11,      [sp, #264]     // SP_EL0
 
     mov     x0,  sp
-    bl      handle_lower_sync        // SVC: services + returns; fault: resume_kernel (no return)
-
+    bl      handle_lower_sync        // returns the sp to eret from: frame (SVC, in
+    mov     sp,  x0                  // place) or next thread's sp (fault-reschedule).
+                                     // A cooperative-EL0 fault calls resume_kernel (no return).
+    ldr     x11,      [sp, #264]
+    msr     sp_el0,   x11            // SP_EL0 of the context we're eret'ing to
     ldr     x10,      [sp, #256]
     ldp     x30, x9,  [sp, #240]
     msr     elr_el1,  x9

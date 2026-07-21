@@ -52,6 +52,12 @@ pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) {
     }
 }
 
+/// Replace a thread's saved context pointer (used to RESTART a faulted EL0
+/// driver: rebuild a fresh frame and point the thread at it). P7c step 4b.
+pub fn set_sp(tid: usize, sp: usize) {
+    unsafe { addr_of_mut!(SP).cast::<usize>().add(tid).write(sp) };
+}
+
 /// The TTBR0 (address space) of the currently-running thread (0 = kernel space).
 pub fn current_ttbr0() -> u64 {
     unsafe {
