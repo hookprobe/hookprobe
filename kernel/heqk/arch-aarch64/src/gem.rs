@@ -380,9 +380,9 @@ pub fn rx_init() -> (usize, u16, u32) {
     (ring, auxstat, link_status())
 }
 
-/// Poll the RX ring once. Returns Some((len, w1, w2, w3)) with the raw upper
+/// Poll the RX ring once. Returns Some((len, w0, w1, w2, w3)) with the raw
 /// descriptor words for diagnosis, and fills `out` with the frame. None = none.
-pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
+pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     // Rotating consumer index across calls.
     static mut IDX: usize = 0;
     let i = unsafe { IDX % NRX };
@@ -439,7 +439,7 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32)> {
         dc_cvac(dptr, 16);
         IDX = IDX.wrapping_add(1);
     }
-    Some((len, ctrl, w2, w3))
+    Some((len, w0, ctrl, w2, w3))
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
