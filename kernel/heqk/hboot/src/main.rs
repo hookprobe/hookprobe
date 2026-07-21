@@ -19,6 +19,7 @@ use fips205::traits::{SerDes, Verifier};
 mod attest;
 mod attest_keys;
 mod measure;
+mod mmu;
 mod rollback;
 mod trusted_keys;
 
@@ -79,6 +80,9 @@ extern "C" {
 
 #[no_mangle]
 pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
+    // Enable the EL2 MMU + caches FIRST so all crypto below runs cached — the
+    // attestation SLH-DSA sign is minutes uncached, seconds cached.
+    mmu::enable_identity_el2();
     puts("\n+------------------------------------------+\n");
     puts("| HBoot v1 — HEQK boot manager (EL2)       |\n");
     puts("| hybrid secure boot: ed25519 + SLH-DSA    |\n");
@@ -236,6 +240,13 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             },
         );
     }
+
+    // Cache coherency: flush the relocated kernel and the handoff structures
+    // (quote/measure-log/BootInfo, contiguous below 0x40000000) from HBoot's
+    // D-cache to DRAM, so the kernel sees them when it reads non-cacheably at
+    // EL1 before enabling its own MMU. (I-cache is invalidated in the launch.)
+    mmu::clean_dcache_range(load_pa as usize, size as usize);
+    mmu::clean_dcache_range(ATTEST_QUOTE_ADDR, 0x0004_0000); // quote..bootdebug
 
     puts(" launch : EL1 entry ");
     puthex(load_pa + entry_off);
