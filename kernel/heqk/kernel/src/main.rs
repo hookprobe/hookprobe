@@ -737,6 +737,29 @@ fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
         s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);
     kprint!(" [P7d-B2] {} — runtime attestation: AK-certified ephemeral key answers verifier-supplied nonces (B-2)\n",
         if cert_ok && fresh { "PASS" } else { "FAIL" });
+
+    // Export the PUBLIC ephemeral bundle (never the ephemeral secret) for an
+    // off-device verifier: `heqk-sign attest-verify <enroll_dir> <bundle.bin>`
+    // enrolls the per-device AK pubkey (TOFU) + checks the hybrid cert chain.
+    // Layout must match heqk-sign::verify_bundle.
+    fn dump_hex(bytes: &[u8]) {
+        for b in bytes {
+            kprint!("{:02x}", b);
+        }
+    }
+    kprint!("---HEQK-EPH-BEGIN---\n");
+    dump_hex(&e.eph_ed_pk);
+    dump_hex(&e.device_id.to_le_bytes());
+    dump_hex(&e.svn.to_le_bytes());
+    dump_hex(&e.ak_hw_bound.to_le_bytes());
+    dump_hex(&e.ak_ed_pk);
+    dump_hex(&e.ak_slh_pk);
+    dump_hex(&e.cert_ed_sig);
+    dump_hex(&e.cert_slh_sig);
+    for p in &e.pcr {
+        dump_hex(p);
+    }
+    kprint!("\n---HEQK-EPH-END---\n");
 }
 
 #[cfg(not(feature = "cm5"))]
