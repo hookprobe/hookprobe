@@ -93,9 +93,43 @@ fn dc_civac(addr: usize, len: usize) {
     unsafe { core::arch::asm!("dsb sy") };
 }
 
+const MAN: usize = 0x034; // PHY maintenance (MDIO)
+const NSR_IDLE: u32 = 1 << 2; // MDIO idle (transaction complete)
+
+/// Read PHY register `reg` at MDIO address `phy` via the GEM MAN register.
+/// Requires NCR.MPE set + a valid MDC divider (done in rx_init). Returns the
+/// 16-bit value, or 0xFFFF if the bus never idles / PHY absent (held in reset).
+pub fn phy_read(phy: u32, reg: u32) -> u16 {
+    // MAN: SOF=01, op=10(read), phy, reg, TA=10.
+    let cmd = (0b01 << 30) | (0b10 << 28) | ((phy & 0x1f) << 23) | ((reg & 0x1f) << 18) | (0b10 << 16);
+    w(GEM, MAN, cmd);
+    let mut spins = 0u32;
+    while r(GEM, NSR) & NSR_IDLE == 0 {
+        spins += 1;
+        if spins > 1_000_000 {
+            return 0xFFFF;
+        }
+    }
+    (r(GEM, MAN) & 0xffff) as u16
+}
+
 /// Read the RP1 eth_cfg STATUS: RGMII link (bit0), speed (bits2:1), duplex (bit3).
 pub fn link_status() -> u32 {
     r(ETH_CFG, 0x04)
+}
+
+/// Diagnostics: PHY ID at MDIO addr 0 and 1 (reg2/reg3), plus the ETH_RST_N pin
+/// level (RIO_IN bit4 of bank1) so we can see if the reset GPIO actually drove.
+/// Enables MPE + MDC first. Returns (id_at0, id_at1, rst_pin_level).
+pub fn diagnose() -> (u32, u32, u32) {
+    w(GEM, NCFGR, NCFGR_MDC_DIV128);
+    w(GEM, NCR, NCR_MPE);
+    let id0 = ((phy_read(0, 2) as u32) << 16) | phy_read(0, 3) as u32;
+    let id1 = ((phy_read(1, 2) as u32) << 16) | phy_read(1, 3) as u32;
+    // RIO_IN (0x08) bit ETH_RST_IDX = current level of the reset pin.
+    let rin = unsafe { read_volatile((RP1_RIO1 + 0x08) as *const u32) };
+    let rst_level = (rin >> ETH_RST_IDX) & 1;
+    (id0, id1, rst_level)
 }
 
 /// Probe: confirm the GEM block is reachable and report link. Non-destructive.
