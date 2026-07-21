@@ -14,8 +14,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "boot-abi"
+version = "0.1.0"
+
+[[package]]
 name = "hal"
 version = "0.1.0"
+
+[[package]]
+name = "hboot"
+version = "0.1.0"
+dependencies = [
+ "boot-abi",
+]
 
 [[package]]
 name = "kernel"

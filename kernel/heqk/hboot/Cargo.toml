@@ -1,0 +1,11 @@
+[package]
+name = "hboot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+boot-abi = { path = "../boot-abi" }
+
+[[bin]]
+name = "hboot"
+path = "src/main.rs"
