@@ -14,8 +14,8 @@ pub const HBOOT_ENTRY_MAGIC: u64 = 0x544f4248;
 /// crumb page at 0x3FFF0000).
 pub const BOOTINFO_ADDR: usize = 0x3FFE_0000;
 
-/// Payload header magic "HQKPLD2\0" little-endian (v2 = hybrid signatures).
-pub const PAYLOAD_MAGIC: u64 = 0x00_32444c_504b_5148;
+/// Payload header magic "HQKPLD3\0" little-endian (v3 = hybrid sigs + SVN).
+pub const PAYLOAD_MAGIC: u64 = 0x00_33444c_504b_5148;
 
 /// Handed to the kernel in x0. Extend by APPENDING fields only; bump
 /// `version` when you do.
@@ -31,6 +31,8 @@ pub struct BootInfo {
     pub hboot_version: u64,
     pub el2_gate: u64,     // nonzero => `hvc #0` reboot gate is resident
     pub verify_flags: u64, // bit0 = ed25519 verified, bit1 = SLH-DSA verified
+    pub svn: u64,          // security version number of the booted image
+    pub svn_floor: u64,    // the anti-rollback floor HBoot enforced
 }
 
 /// BootInfo.verify_flags bits.
@@ -45,19 +47,33 @@ pub const ED25519_SIG_LEN: usize = 64;
 /// Context string bound into both signatures (must match heqk-sign).
 pub const SIG_CTX: &[u8] = b"HEQK-BOOT-v1";
 
-/// HBoot v1 header: HYBRID secure boot. Both signatures are over the 32-byte
-/// SHA-256 of the payload; HBoot requires BOTH to verify (breaking secure boot
-/// requires breaking classical ECC AND post-quantum SLH-DSA). Prepended to the
-/// kernel payload inside the combined image at HBOOT_PAYLOAD_OFFSET.
+/// HBoot v1 header: HYBRID secure boot + anti-rollback. Both signatures are
+/// over the *signed message* below (which binds the security version `svn`, so
+/// the version cannot be altered without breaking the signatures). HBoot
+/// requires BOTH to verify AND `svn >= floor`. Prepended to the kernel payload
+/// inside the combined image at HBOOT_PAYLOAD_OFFSET.
 #[repr(C)]
 pub struct PayloadHeader {
     pub magic: u64,        // PAYLOAD_MAGIC
     pub size: u64,         // payload bytes following this header
     pub entry_offset: u64, // entry point offset inside the payload (0)
     pub load_pa: u64,      // where the payload must be relocated (0x1000000)
+    pub svn: u64,          // security version number (anti-rollback; signed)
     pub sha256: [u8; 32],  // measurement (informational; verify binds to recompute)
-    pub ed25519_sig: [u8; ED25519_SIG_LEN], // classical signature
-    pub slhdsa_sig: [u8; SLHDSA_SIG_LEN],   // post-quantum signature (FIPS 205)
+    pub ed25519_sig: [u8; ED25519_SIG_LEN], // classical signature over signed_message
+    pub slhdsa_sig: [u8; SLHDSA_SIG_LEN],   // post-quantum signature over signed_message
+}
+
+/// The message both signatures cover: `SHA-256( LE64(svn) || sha256(payload) )`.
+/// Binding the SVN into the signed message is what makes anti-rollback sound —
+/// an attacker cannot raise the version on an old payload without invalidating
+/// both signatures. Signer (heqk-sign) and HBoot MUST compute this identically.
+/// `sha256` here is any correct SHA-256; the 40-byte input is (svn_le, hash).
+pub fn signed_message_input(svn: u64, payload_hash: &[u8; 32]) -> [u8; 40] {
+    let mut buf = [0u8; 40];
+    buf[..8].copy_from_slice(&svn.to_le_bytes());
+    buf[8..].copy_from_slice(payload_hash);
+    buf
 }
 
 /// The payload header sits at this offset inside the combined hboot8.img

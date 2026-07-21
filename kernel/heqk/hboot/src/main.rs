@@ -16,6 +16,7 @@ use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
 use fips205::slh_dsa_sha2_128s;
 use fips205::traits::{SerDes, Verifier};
 
+mod rollback;
 mod sha256;
 mod trusted_keys;
 
@@ -79,12 +80,13 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
 
     // Locate and validate the payload header.
     let hdr = (IMAGE_BASE + HBOOT_PAYLOAD_OFFSET) as *const PayloadHeader;
-    let (magic, size, load_pa, entry_off) = unsafe {
+    let (magic, size, load_pa, entry_off, svn) = unsafe {
         (
             read_volatile(core::ptr::addr_of!((*hdr).magic)),
             read_volatile(core::ptr::addr_of!((*hdr).size)),
             read_volatile(core::ptr::addr_of!((*hdr).load_pa)),
             read_volatile(core::ptr::addr_of!((*hdr).entry_offset)),
+            read_volatile(core::ptr::addr_of!((*hdr).svn)),
         )
     };
     if magic != PAYLOAD_MAGIC {
@@ -102,6 +104,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts(" bytes, load ");
     puthex(load_pa);
     puts("\n");
+    puts(" svn    : image=");
+    puthex(svn);
+    puts(" floor=");
+    puthex(rollback::MIN_SVN);
+    puts("\n");
 
     // MEASURE: SHA-256 over the payload body. Verification binds to THIS
     // recomputed hash, never the header's stored copy — so a tampered payload
@@ -112,8 +119,13 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthash(&computed);
     puts("\n");
 
-    // HYBRID VERIFY: both signatures over the recomputed hash, with the
-    // trusted public keys embedded in HBoot (never taken from the image).
+    // The signed message binds the SVN: SHA-256( LE64(svn) || sha256(payload) ).
+    // Because svn is inside what's signed, an attacker cannot bump the version
+    // on an old payload to clear the floor — that breaks both signatures.
+    let signed = sha256::digest(&signed_message_input(svn, &computed));
+
+    // HYBRID VERIFY: both signatures over `signed`, with the trusted public
+    // keys embedded in HBoot (never taken from the image).
     let ed_sig_bytes: [u8; ED25519_SIG_LEN] =
         unsafe { read_volatile(core::ptr::addr_of!((*hdr).ed25519_sig)) };
     let pq_sig_bytes: [u8; SLHDSA_SIG_LEN] =
@@ -123,24 +135,32 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     let ed_ok = (|| {
         let pk = EdPublicKey::from_slice(&trusted_keys::ED25519_PUBKEY).ok()?;
         let sig = EdSignature::from_slice(&ed_sig_bytes).ok()?;
-        pk.verify(computed, &sig).ok()
+        pk.verify(signed, &sig).ok()
     })()
     .is_some();
     puts(if ed_ok { " verify : ed25519  OK\n" } else { " verify : ed25519  FAIL\n" });
 
     // Post-quantum: SLH-DSA-SHA2-128s (FIPS 205) — hash-based, quantum-safe.
     let pq_ok = match slh_dsa_sha2_128s::PublicKey::try_from_bytes(&trusted_keys::SLHDSA_PUBKEY) {
-        Ok(pk) => pk.verify(&computed, &pq_sig_bytes, SIG_CTX),
+        Ok(pk) => pk.verify(&signed, &pq_sig_bytes, SIG_CTX),
         Err(_) => false,
     };
     puts(if pq_ok { " verify : SLH-DSA OK (quantum-safe)\n" } else { " verify : SLH-DSA FAIL\n" });
 
-    // BOTH required. Either failing = refuse to boot.
+    // BOTH signatures required. Either failing = refuse to boot.
     if !ed_ok || !pq_ok {
         puts(" secure boot: FAIL — hybrid signature invalid, refusing to boot\n");
         unsafe { park() }
     }
-    puts(" secure boot: PASS (ed25519 AND SLH-DSA)\n");
+
+    // ANTI-ROLLBACK: refuse a validly-signed but downlevel image. The floor is
+    // embedded in HBoot (root of trust). Because svn is bound into the signed
+    // message, this comparison cannot be bypassed by editing the header.
+    if svn < rollback::MIN_SVN {
+        puts(" secure boot: FAIL — image svn below anti-rollback floor, refusing\n");
+        unsafe { park() }
+    }
+    puts(" secure boot: PASS (ed25519 AND SLH-DSA, svn OK)\n");
 
     // Relocate the payload to its link address.
     unsafe {
@@ -154,7 +174,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             bi,
             BootInfo {
                 magic: BOOTINFO_MAGIC,
-                version: 2,
+                version: 3,
                 dtb_pa,
                 kernel_pa: load_pa,
                 kernel_size: size,
@@ -162,6 +182,8 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 hboot_version: 1,
                 el2_gate: 1,
                 verify_flags: VERIFY_ED25519 | VERIFY_SLHDSA,
+                svn,
+                svn_floor: rollback::MIN_SVN,
             },
         );
     }

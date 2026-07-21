@@ -76,6 +76,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
             kprint!(" hboot: BootInfo v{} @ {:#x} — verified handoff\n", bi.version, bootinfo_pa);
             kprint!(" hboot: kernel {:#x} ({} bytes), dtb {:#x}, el2_gate={}\n",
                 bi.kernel_pa, bi.kernel_size, bi.dtb_pa, bi.el2_gate);
+            kprint!(" hboot: svn={} (anti-rollback floor {}), verify_flags={:#x}\n",
+                bi.svn, bi.svn_floor, bi.verify_flags);
             kprint!(" hboot: measured sha256=");
             for b in &bi.kernel_hash { kprint!("{:02x}", b); }
             kprint!("\n");
