@@ -31,7 +31,9 @@ __vectors:
     // ---- Sync / Lower EL AArch64 (slot 8): EL0 syscalls + fault containment ----
     .align 7
     b       lower_sync_entry
-    VTENTRY 9                // IRQ    / Lower EL, AArch64
+    // ---- IRQ / Lower EL AArch64 (slot 9): EL0 preemption -> scheduler ----
+    .align 7
+    b       irq_entry                // timer IRQ while at EL0 -> save frame + reschedule
     VTENTRY 10               // FIQ    / Lower EL, AArch64
     VTENTRY 11               // SError / Lower EL, AArch64
     VTENTRY 12               // Sync   / Lower EL, AArch32
@@ -65,11 +67,15 @@ irq_entry:
     mrs     x10, spsr_el1
     stp     x30, x9,  [sp, #240]     // x30, ELR_EL1
     str     x10,      [sp, #256]     // SPSR_EL1
+    mrs     x11, sp_el0
+    str     x11,      [sp, #264]     // SP_EL0 (EL0 threads; harmless for EL1)
 
     mov     x0,  sp
     bl      handle_irq               // returns next thread's sp in x0
     mov     sp,  x0
 
+    ldr     x11,      [sp, #264]
+    msr     sp_el0,   x11            // SP_EL0 of the thread we're resuming
     ldr     x10,      [sp, #256]
     ldp     x30, x9,  [sp, #240]
     msr     elr_el1,  x9

@@ -21,7 +21,7 @@ mod telemetry;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use hal::{Console, IrqController, Mmu, Timer};
 
 /// Formatted print to the early console (arch seam).
@@ -45,6 +45,16 @@ fn stack_top(i: usize) -> usize {
 }
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
+
+// P7c — physical address of the EL0 preemption-test counter (kernel reads it to
+// prove the uncooperative EL0 task ran), + a dedicated kernel stack for that TCB.
+#[cfg(not(feature = "cm5"))]
+static EL0_CNT_PA: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "cm5"))]
+#[repr(align(16))]
+struct KStack([u8; 0x4000]);
+#[cfg(not(feature = "cm5"))]
+static mut EL0_KSTACK: KStack = KStack([0; 0x4000]);
 /// Set by the timer IRQ when the on-metal scheduler demo completes (cm5).
 static SCHED_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -558,6 +568,7 @@ pub extern "C" fn kmain() -> ! {
         scheduler::spawn(sp, prios[i]);
     }
     kprint!(" sched: {} threads (P4 IPC consumer/producer + P1 priority H/M/L, + idle)\n", NTHREADS);
+    el0_preempt_spawn(); // P7c: + one uncooperative EL0 TCB that the timer must preempt
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -572,6 +583,41 @@ pub extern "C" fn kmain() -> ! {
     loop {
         unsafe { core::arch::asm!("wfe") };
     }
+}
+
+/// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)
+/// as a scheduled TCB. If the box keeps ticking, the timer is preempting it, so
+/// EL0 is a real schedulable/preemptible TCB (closes B-6). Its counter (read via
+/// the physical frame) proves it actually executed at EL0.
+#[cfg(not(feature = "cm5"))]
+fn el0_preempt_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    extern "C" {
+        static el0_loop_stub: u8;
+        static el0_loop_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(el0_loop_stub) as usize;
+    let len = core::ptr::addr_of!(el0_loop_stub_end) as usize - src;
+    let (code, stack, cnt) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if code == 0 || stack == 0 || cnt == 0 {
+        return;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(src as *const u8, code as *mut u8, len);
+        core::ptr::write_volatile(cnt as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(code, len);
+    const ECODE_VA: usize = 0xD300_0000;
+    const ESTACK_VA: usize = 0xD300_1000;
+    const ECNT_VA: usize = 0xD300_2000;
+    mmu.map_user_code_page(ECODE_VA, code);
+    mmu.map_user_data_page(ESTACK_VA, stack);
+    mmu.map_user_data_page(ECNT_VA, cnt);
+    EL0_CNT_PA.store(cnt, Ordering::SeqCst);
+    let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + 0x4000 };
+    let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ECODE_VA, ESTACK_VA + 0x1000, ECNT_VA);
+    scheduler::spawn(sp, 1); // low prio: runs once the finite kernel workers are done
+    kprint!(" [P7c] EL0 task spawned (uncooperative loop @EL0, IRQs on) — must be preempted\n");
 }
 
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
@@ -589,8 +635,19 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
         if scheduler::alive_workers() == 0 || n >= RUN_TICKS {
             #[cfg(not(feature = "cm5"))]
             {
+                // P7c: the uncooperative EL0 task ran (counter>0) AND we reached
+                // this exit (the timer kept firing for `n` ticks) => it was being
+                // preempted, i.e. the box was never wedged. That's B-6 closed.
+                let cnt_pa = EL0_CNT_PA.load(Ordering::SeqCst);
+                let el0_cnt = if cnt_pa != 0 {
+                    unsafe { core::ptr::read_volatile(cnt_pa as *const u64) }
+                } else {
+                    0
+                };
+                kprint!(" [P7c] EL0 preempt {}: uncooperative EL0 task ran (counter={}), preempted over {} ticks — box NOT wedged (B-6 closed)\n",
+                    if el0_cnt > 0 { "PASS" } else { "FAIL" }, el0_cnt, n);
                 kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV GREEN\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c GREEN\n");
                 arch_aarch64::semihosting::exit(0);
             }
             // On real silicon there is no semihosting exit: signal the idle

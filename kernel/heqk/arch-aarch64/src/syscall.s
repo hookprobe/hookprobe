@@ -96,6 +96,20 @@ driver_stub:
 1:  b       1b
 driver_stub_end:
 
+// -------- P7c: uncooperative EL0 task (preemption proof) ---------------------
+// Runs at EL0 with IRQs ENABLED and makes NO syscalls — it just spins forever
+// incrementing a counter at [x0]. If the box isn't wedged (the scheduler keeps
+// ticking and other threads run), the timer is preempting it => EL0 is a real
+// scheduled TCB, not a cooperative side-path (closes B-6).
+.global el0_loop_stub
+.global el0_loop_stub_end
+el0_loop_stub:                       // x0 = counter VA (EL0-mapped RW)
+1:  ldr     x1, [x0]
+    add     x1, x1, #1
+    str     x1, [x0]
+    b       1b
+el0_loop_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME
