@@ -553,6 +553,9 @@ pub extern "C" fn kmain() -> ! {
         arch_aarch64::semihosting::exit(1);
     }
 
+    // --- P7c step 2: per-AS ASIDs — address-space isolation + ASID-tagged TLB ---
+    asid_isolation_test();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -583,6 +586,45 @@ pub extern "C" fn kmain() -> ! {
     loop {
         unsafe { core::arch::asm!("wfe") };
     }
+}
+
+/// P7c step 2 — per-AS ASIDs. Prove two address spaces are isolated: map the
+/// SAME VA to DIFFERENT frames in two ASIDs, then switch `TTBR0` between them with
+/// NO TLB flush. Each sees only its own frame — so the ASID tag keeps the two
+/// spaces' TLB entries apart (the foundation for isolated per-driver EL0 servers).
+#[cfg(not(feature = "cm5"))]
+fn asid_isolation_test() {
+    let mmu = arch_aarch64::Mmu;
+    let (l1a, asa) = mmu.new_addr_space();
+    let (l1b, asb) = mmu.new_addr_space();
+    let (fa, fb) = (mmu.alloc_frame(), mmu.alloc_frame());
+    if l1a == 0 || l1b == 0 || fa == 0 || fb == 0 {
+        kprint!(" [P7c-ASID] FAIL: no frames\n");
+        return;
+    }
+    // Same VA in both spaces, in GB2 — a 1 GiB region UNMAPPED in the kernel L1,
+    // so each address space allocates its OWN L2/L3 (no shared table). (GB3 is
+    // already used by the P3/DRV/JIT user maps, so its L2 would be shared.)
+    const VA: usize = 0x8100_0000;
+    let (val_a, val_b) = (0xA5A5_0000_0000_00A1u64, 0x5A5A_0000_0000_00B2u64);
+    unsafe {
+        core::ptr::write_volatile(fa as *mut u64, val_a); // frame A content
+        core::ptr::write_volatile(fb as *mut u64, val_b); // frame B content
+    }
+    mmu.map_user_data_in(l1a, VA, fa); // AS-A: VA -> frame A
+    mmu.map_user_data_in(l1b, VA, fb); // AS-B: VA -> frame B
+    mmu.switch_ttbr0(l1a, asa);
+    let ra = unsafe { core::ptr::read_volatile(VA as *const u64) };
+    mmu.switch_ttbr0(l1b, asb); // switch AS — NO flush; ASID tag must isolate
+    let rb = unsafe { core::ptr::read_volatile(VA as *const u64) };
+    mmu.switch_ttbr0(l1a, asa); // back to A — still no flush
+    let ra2 = unsafe { core::ptr::read_volatile(VA as *const u64) };
+    mmu.switch_ttbr0(mmu.kernel_l1(), 0); // restore the kernel address space
+    let ok = ra == val_a && rb == val_b && ra2 == val_a;
+    kprint!(" [P7c-ASID] VA {:#x}: AS-A(asid={})={:#x} AS-B(asid={})={:#x} A-again={:#x}\n",
+        VA, asa, ra, asb, rb, ra2);
+    kprint!(" [P7c-ASID] {} — per-AS isolation + ASID-tagged TLB (switch with no flush)\n",
+        if ok { "PASS" } else { "FAIL" });
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)

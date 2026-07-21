@@ -7,7 +7,7 @@
 //! 4 KiB mappings (via `map_page`) use the still-free L1 slots (e.g. GB3).
 
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 
 const RAM_BASE: usize = 0x4000_0000;
 const RAM_END: usize = RAM_BASE + 512 * 1024 * 1024; // -m 512M
@@ -36,6 +36,8 @@ struct Table([u64; 512]);
 static mut L1: Table = Table([0; 512]);
 
 static FRAME_NEXT: AtomicUsize = AtomicUsize::new(0);
+// P7c — next ASID to hand out (0 = the kernel/identity address space).
+static NEXT_ASID: AtomicU16 = AtomicU16::new(1);
 // LIFO free list: head PA (0 = empty); each freed frame's first word links to next.
 static FRAME_FREE: AtomicUsize = AtomicUsize::new(0);
 
@@ -249,13 +251,17 @@ impl Mmu {
         unsafe { read_volatile(l3.add(i3)) }
     }
 
-    /// Common page mapper (4 KiB, L3), with explicit access permission + XN.
-    /// `uxn` = non-executable at EL0, `pxn` = non-executable at EL1.
+    /// Common page mapper (4 KiB, L3) into the GLOBAL kernel address space.
     fn map(&self, va: usize, pa: usize, attr: u64, ap: u64, uxn: bool, pxn: bool) -> bool {
+        self.map_in_root(l1_ptr(), va, pa, attr, ap, uxn, pxn)
+    }
+
+    /// Page mapper into an explicit L1 root (a specific address space).
+    /// `uxn` = non-executable at EL0, `pxn` = non-executable at EL1.
+    fn map_in_root(&self, l1: *mut u64, va: usize, pa: usize, attr: u64, ap: u64, uxn: bool, pxn: bool) -> bool {
         let i1 = (va >> 30) & 0x1FF;
         let i2 = (va >> 21) & 0x1FF;
         let i3 = (va >> 12) & 0x1FF;
-        let l1 = l1_ptr();
         let l2 = match self.get_or_create_table(l1, i1) {
             Some(t) => t,
             None => return false,
@@ -274,6 +280,44 @@ impl Mmu {
             core::arch::asm!("isb");
         }
         true
+    }
+
+    /// P7c — create a fresh address space: a new L1 that SHARES the kernel's
+    /// identity/kernel mappings (copied) but has its own user (high-VA) tables,
+    /// tagged with a unique 16-bit ASID. Returns (l1_root_pa, asid). ASID-tagged
+    /// TLB entries mean switching between address spaces needs NO full flush.
+    pub fn new_addr_space(&self) -> (usize, u16) {
+        let l1 = self.alloc_frame_raw();
+        if l1 == 0 {
+            return (0, 0);
+        }
+        let src = l1_ptr();
+        for i in 0..512 {
+            unsafe { write_volatile((l1 as *mut u64).add(i), read_volatile(src.add(i))) };
+        }
+        let asid = (NEXT_ASID.fetch_add(1, Ordering::Relaxed) & 0xFFFF) as u16;
+        (l1, asid)
+    }
+
+    /// Map an EL0 RW data page into a specific address space (its own tables for
+    /// unmapped-in-kernel high VAs; shared kernel tables otherwise).
+    pub fn map_user_data_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RW_EL0, true, true)
+    }
+
+    /// The kernel/global address-space L1 root (ASID 0).
+    pub fn kernel_l1(&self) -> usize {
+        l1_ptr() as usize
+    }
+
+    /// Switch the active address space: `TTBR0_EL1 = l1_root | (asid << 48)`,
+    /// then `isb`. No TLB flush — the ASID tag keeps the two spaces' entries apart.
+    pub fn switch_ttbr0(&self, l1_root: usize, asid: u16) {
+        let ttbr0 = l1_root as u64 | ((asid as u64) << 48);
+        unsafe {
+            core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr0);
+            core::arch::asm!("isb");
+        }
     }
 
     /// User CODE page: EL0 read-only + EL0-executable (**W^X**), EL1-non-exec
