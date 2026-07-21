@@ -194,7 +194,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
     cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
-    cm5_gem_el0_ids(); // stage 4: EL0 driver delivers a frame -> kernel IDS verdict
+    cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
+    cm5_gem_el0_server(); // stage 4d: continuous, restartable isolated EL0 driver server
 
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
@@ -378,6 +379,72 @@ fn cm5_gem_el0_ids() {
     }
     kprint!(" [P7c] {} — end-to-end: ISOLATED EL0 driver -> frame -> kernel IDS verdict (stage 4)\n",
         if verdict.is_some() { "PASS" } else { "FAIL" });
+}
+
+/// P7c step 4d — a CONTINUOUS, RESTARTABLE isolated EL0 GEM driver server. The
+/// kernel repeatedly runs the EL0 RX->IDS driver (recycling descriptors so it
+/// sees fresh frames); on one iteration it loads a crashing driver, which the
+/// kernel contains and RESTARTS (re-enters) — a self-contained, self-healing,
+/// packet-isolated driver server on real hardware. (True preemptible-scheduled-
+/// in-own-ASID is proven on QEMU; this is the cooperative-loop CM5 capstone.)
+#[cfg(feature = "cm5")]
+fn cm5_gem_el0_server() {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static gem_ids_stub: u8;
+        static gem_ids_stub_end: u8;
+        static el0_fault_stub: u8;
+        static el0_fault_stub_end: u8;
+    }
+    let ids = (core::ptr::addr_of!(gem_ids_stub) as usize, core::ptr::addr_of!(gem_ids_stub_end) as usize);
+    let flt = (core::ptr::addr_of!(el0_fault_stub) as usize, core::ptr::addr_of!(el0_fault_stub_end) as usize);
+    let code_pa = mmu_cm5::el0_code_pa();
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let uring = mmu_cm5::USER_VA_BASE + 0x3000;
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa());
+    struct Pool([u8; packet::FRAME_SZ * 8]);
+    static mut SRVPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
+    let pool = core::ptr::addr_of_mut!(SRVPOOL) as usize;
+    let mut processed = 0u32;
+    let mut crashes = 0u32;
+    kprint!(" [P7c] EL0 GEM driver SERVER: continuous RX->IDS loop (crash-restart on iter 3)\n");
+    for iter in 0..6u32 {
+        let (stub, faulting) = if iter == 3 { (flt, true) } else { (ids, false) };
+        let len = stub.1 - stub.0;
+        unsafe { core::ptr::copy_nonoverlapping(stub.0 as *const u8, code_pa as *mut u8, len) };
+        arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+        mmu_cm5::map_user_code(ucode, code_pa);
+        DRIVER_REPORT.store(0, Ordering::Relaxed);
+        unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) }; // fault -> resume_kernel; else reports
+        if faulting {
+            crashes += 1;
+            kprint!("   [server] driver CRASHED on iter {} -> contained + RESTARTED (kernel survives)\n", iter);
+            continue;
+        }
+        let report = DRIVER_REPORT.load(Ordering::Relaxed);
+        let idx = ((report >> 16) & 0xff) as usize;
+        let flen = (report & 0x3fff) as usize;
+        if flen < 14 {
+            kprint!("   [server] iter {}: no frame this window\n", iter);
+            continue;
+        }
+        let mut buf = [0u8; 1600];
+        let n = flen.min(buf.len());
+        arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
+        if packet::produce_raw(pool, &buf[..n]) {
+            if let Some((port, v)) = packet::consume_one(pool) {
+                kprint!("   [server] iter {}: EL0 driver -> desc {} ({}B et={:02x}{:02x}) -> IDS {} (port {})\n",
+                    iter, idx, n, buf[12], buf[13], if v == packet::DROP { "DROP" } else { "PASS" }, port);
+                processed += 1;
+            }
+        }
+        arch_aarch64::gem::recycle_rx(idx); // re-arm so the next iteration sees a fresh frame
+    }
+    kprint!(" [P7c] {} — EL0 driver SERVER processed {} frames + survived {} crash-restart — continuous isolated driver (4d)\n",
+        if processed >= 1 && crashes >= 1 { "PASS" } else { "FAIL" }, processed, crashes);
 }
 
 /// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable

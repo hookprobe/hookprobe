@@ -596,6 +596,24 @@ pub fn peek_rx_frame(i: usize, out: &mut [u8]) -> usize {
     n
 }
 
+/// Re-arm RX descriptor `i` (clear USED, preserve WRAP) so the GEM refills it —
+/// the kernel calls this after the EL0 driver's delivered frame is consumed, so
+/// the continuous driver server sees fresh frames. P7c step 4d.
+pub fn recycle_rx(i: usize) {
+    let i = i % NRX;
+    let dphys = unsafe { core::ptr::addr_of!(RXRING.desc[i]) as usize };
+    let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as u64 };
+    let d = nc_desc(dphys);
+    let mut nw0 = ((bufpa + DMA_BUS_OFFSET) as u32) & !0x3;
+    if i == NRX - 1 {
+        nw0 |= RXD_WRAP;
+    }
+    unsafe {
+        write_volatile(d.add(0), nw0);
+        core::arch::asm!("dsb sy");
+    }
+}
+
 /// Physical base of the TX descriptor ring (== TXRING). P7c step 3b stage 3.
 pub fn txring_pa() -> usize {
     unsafe { core::ptr::addr_of!(TXRING.desc) as usize }
