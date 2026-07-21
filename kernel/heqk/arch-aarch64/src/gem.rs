@@ -53,6 +53,11 @@ const NCFGR_FD: u32 = 1 << 1; // full duplex
 const NCFGR_CAF: u32 = 1 << 4; // copy-all-frames (promiscuous)
 const NCFGR_GBE: u32 = 1 << 10; // gigabit mode (DDR RX sampling) — REQUIRED for 1G RX
 const NCFGR_MDC_DIV128: u32 = 6 << 18; // GEM_CLK: pclk/128 (~1.5 MHz MDC @200 MHz)
+// Data Bus Width (NCFGR bits[22:21]): 0=32b, 1=64b, 2=128b. The RP1 GEM is a
+// 128-bit AXI4 master — macb_init_hw() sets NCFGR |= macb_dbw() = DBW128. Leaving
+// it 0 (32-bit) is a bus-width mismatch the narrow 16-byte descriptors tolerated
+// but the wide extended (24-byte) descriptor DMA + status writeback does not.
+const NCFGR_DBW128: u32 = 2 << 21;
 // DMACFG bits
 const DMACFG_ADDR64: u32 = 1 << 30;
 // RP1's GEM_GXL is FULL store-and-forward ONLY (partial SF not implemented), which
@@ -442,7 +447,7 @@ pub fn rx_init() -> (usize, u16, u32) {
     w(GEM, RBQP, ringbus as u32);
     // MAC: promiscuous + broadcast, MDC divider, full-duplex, and GIGABIT mode
     // if the link negotiated 1G (required — 1000BASE-T RX is DDR-sampled).
-    let mut ncfgr = NCFGR_CAF | NCFGR_MDC_DIV128 | NCFGR_FD;
+    let mut ncfgr = NCFGR_CAF | NCFGR_MDC_DIV128 | NCFGR_FD | NCFGR_DBW128;
     if is_gig {
         ncfgr |= NCFGR_GBE;
     }
