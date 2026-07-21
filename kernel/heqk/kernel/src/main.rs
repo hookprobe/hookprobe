@@ -142,6 +142,18 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     let rt = unsafe { read_volatile(scratch as *const u64) };
     kprint!(" mmu : cached RAM r/w {} [P7a]\n", if rt == magic { "PASS" } else { "FAIL" });
 
+    // --- P7b: W^X proof on metal — read back the page descriptors -------------
+    // The kernel is executing from 0x1000000 under WXN, so .text is already a
+    // proven RO+X mapping; confirm the descriptor bits and that data is RW+PXN.
+    let td = arch_aarch64::mmu_cm5::page_desc(0x0100_0000); // kernel .text (L3 page)
+    let dd = arch_aarch64::mmu_cm5::page_desc(scratch); // data RAM (2 MiB block)
+    let ap = |d: u64| (d >> 6) & 3;
+    let pxn = |d: u64| (d >> 53) & 1;
+    kprint!(" wx : .text AP={:#b} PXN={} | data AP={:#b} PXN={}\n",
+        ap(td), pxn(td), ap(dd), pxn(dd));
+    kprint!(" [P7b] W^X {} (kernel .text RO+X, data RW+PXN, SCTLR.WXN on)\n",
+        if ap(td) == 0b10 && pxn(td) == 0 && ap(dd) == 0 && pxn(dd) == 1 { "PASS" } else { "FAIL" });
+
     kprint!(" [CM5-BOOT] PASS — HEQK boots, MMU on, prints on real hardware\n");
 
     // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
