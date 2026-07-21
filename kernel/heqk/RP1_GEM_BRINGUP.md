@@ -62,8 +62,20 @@ even with RX buffers in low RAM: addrh = `0x10`, addrl = the CPU-physical addres
 RBQP/RBQPH get the same +64 GiB offset. Getting this wrong = silent memory
 corruption; the DTB gave the exact constant.
 
-## Open (RP1 integration research in flight)
-- Whether firmware already enabled the GEM clocks (#12/16/29) or bare-metal must.
-- RP1 reset for the GEM (a SYSCFG/reset bit to deassert)?
-- RGMII mode-select glue in an RP1 SYSCFG register?
-- Broadcom PHY: does it link on its own after reset-deassert, or need MDIO setup?
+## On-metal progress (P8 iterations)
+- ✓ GEM reachable at 0x1C00100000 (NCFGR=0x540000, DMACFG=0x020704 read back).
+- ✓ PHY reset works (ETH_RST_N = RP1 GPIO32 = bank1 idx4; **addresses must be the
+  full 10-hex-digit form 0x1C_000D_4000 / 0E_4000 / 0F_4000** — a dropped digit
+  gave all-zero GPIO reads). Route pad funcsel=5 (sys_rio), pad OD-clear, RIO
+  OE+OUT via normal RMW. Pin goes high, reset released.
+- ✓ PHY alive over MDIO at **addr 0**: ID 0x600d84a2 (Broadcom BCM54210).
+- ✓ **PHY LINK UP**: BMSR(reg1)=0x796d bit2=1, autoneg complete, gigabit partner.
+  Cable is on the correct end0 port (the RJ45 nearest the USB-C).
+- ✗ **BLOCKER**: MAC receives nothing (RSR=0) and eth_cfg.STATUS RGMII-link=0
+  despite the PHY link being up → RGMII data path PHY→MAC not delivering.
+  Suspects (research in flight): rgmii-id internal delay not set on the BCM54210
+  (RX/TX skew), MAC not in gigabit mode (NCFGR GBE), or RP1 eth_cfg speed setting.
+
+## MDIO helpers implemented (arch/gem.rs)
+phy_read/phy_write via GEM MAN (0x034) + NSR IDLE poll; NCR.MPE + NCFGR MDC/128.
+diagnose()/gpio_dump()/phy_link() give PHY ID, GPIO regs, BMCR/BMSR/ANLPAR.
