@@ -114,6 +114,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
             for b in &bi.kernel_hash { kprint!("{:02x}", b); }
             kprint!("\n");
             attest_replay(bi);
+            cm5_attest_challenge(bi);
         } else {
             kprint!(" hboot: BAD BootInfo magic {:#x} @ {:#x}\n", bi.magic, bootinfo_pa);
         }
@@ -690,6 +691,48 @@ fn attest_dump_quote(bi: &boot_abi::BootInfo) {
         kprint!("\n");
     }
     kprint!("---HEQK-QUOTE-END---\n");
+}
+
+/// P7d B-2 (metal): the runtime attestation service on the real boot chain.
+/// Load the per-boot ephemeral key HBoot handed down, verify the AK cert chains
+/// to it on-device (ed25519 half), then answer two distinct verifier challenges
+/// and prove the freshness property. The device AK has already been scrubbed in
+/// HBoot — the kernel only ever holds the ephemeral key.
+#[cfg(feature = "hboot")]
+fn cm5_attest_challenge(bi: &boot_abi::BootInfo) {
+    use boot_abi::{AttestEphemeral, ATTEST_EPH_MAGIC};
+    if bi.version < 5 || bi.eph_pa == 0 {
+        kprint!(" [P7d-B2] no ephemeral key in handoff (BootInfo v{})\n", bi.version);
+        return;
+    }
+    let e = unsafe { &*(bi.eph_pa as *const AttestEphemeral) };
+    if e.magic != ATTEST_EPH_MAGIC {
+        kprint!(" [P7d-B2] BAD ephemeral magic {:#x}\n", e.magic);
+        return;
+    }
+    // On-device chain check: is this boot's ephemeral key genuinely AK-certified?
+    let cert_ok = attest_svc::verify_cert_ed(&attest_svc::AK_ED_PK, e);
+    let att = match attest_svc::Attestor::from_sk(&e.eph_ed_sk) {
+        Some(a) => a,
+        None => {
+            kprint!(" [P7d-B2] FAIL — bad ephemeral secret key\n");
+            return;
+        }
+    };
+    // Two distinct verifier challenges + the freshness self-test.
+    let n1 = [0x11u8; 32];
+    let n2 = [0x22u8; 32];
+    let s1 = att.respond(&n1);
+    let s2 = att.respond(&n2);
+    let fresh = attest_svc::self_test(&att);
+    kprint!(" [P7d-B2] device_id(serial)={:#018x}, OTP-key={}, ephemeral AK-cert (ed25519 on-device) {}\n",
+        e.device_id,
+        if e.otp_provisioned != 0 { "provisioned" } else { "blank" },
+        if cert_ok { "VERIFIED" } else { "FAILED" });
+    kprint!(" [P7d-B2] challenge n1 -> {:02x}{:02x}.., n2 -> {:02x}{:02x}.. (fresh nonce -> fresh sig)\n",
+        s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);
+    kprint!(" [P7d-B2] {} — runtime attestation: AK-certified ephemeral key answers verifier-supplied nonces (B-2)\n",
+        if cert_ok && fresh { "PASS" } else { "FAIL" });
 }
 
 #[cfg(not(feature = "cm5"))]

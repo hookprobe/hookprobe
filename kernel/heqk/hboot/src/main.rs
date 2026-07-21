@@ -18,6 +18,7 @@ use fips205::traits::{SerDes, Verifier};
 
 mod attest;
 mod attest_keys;
+mod mailbox;
 mod measure;
 mod mmu;
 mod rng;
@@ -230,6 +231,28 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthex(ATTEST_QUOTE_ADDR as u64);
     puts("\n");
 
+    // B-1 (identity): read this device's unique serial + OTP provisioning state
+    // over the VideoCore mailbox (fail-safe: device_id=0 if unreachable).
+    let device_id = mailbox::board_serial().unwrap_or(0);
+    let otp_provisioned = match mailbox::otp_device_key() {
+        Some(k) => u64::from(k.iter().any(|&w| w != 0)), // non-blank = a real secret exists
+        None => 0,
+    };
+    puts(" attest : device_id (board serial)=");
+    puthex(device_id);
+    puts(if otp_provisioned != 0 {
+        " OTP-key=provisioned (hw-bound AK available)\n"
+    } else {
+        " OTP-key=blank (per-device identity only; provision to bind AK)\n"
+    });
+
+    // B-2: mint a per-boot ephemeral key, AK-certify it (hybrid) binding this
+    // device_id, publish it for the kernel's runtime challenge service, then
+    // SCRUB the device AK from RAM (it never persists post-boot; the kernel only
+    // ever holds the ephemeral key).
+    attest::emit_ephemeral_cert(svn, device_id, otp_provisioned, &pcrs);
+    attest_keys::scrub();
+
     // Relocate the payload to its link address.
     unsafe {
         core::ptr::copy_nonoverlapping(body, load_pa as *mut u8, size as usize);
@@ -242,7 +265,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             bi,
             BootInfo {
                 magic: BOOTINFO_MAGIC,
-                version: 4,
+                version: 5,
                 dtb_pa,
                 kernel_pa: load_pa,
                 kernel_size: size,
@@ -255,6 +278,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 measure_log_pa: MEASURE_LOG_ADDR as u64,
                 measure_count: m.count(),
                 quote_pa: ATTEST_QUOTE_ADDR as u64,
+                eph_pa: ATTEST_EPH_ADDR as u64,
             },
         );
     }
@@ -264,7 +288,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // D-cache to DRAM, so the kernel sees them when it reads non-cacheably at
     // EL1 before enabling its own MMU. (I-cache is invalidated in the launch.)
     mmu::clean_dcache_range(load_pa as usize, size as usize);
-    mmu::clean_dcache_range(ATTEST_QUOTE_ADDR, 0x0004_0000); // quote..bootdebug
+    mmu::clean_dcache_range(ATTEST_EPH_ADDR, 0x0005_0000); // eph-cert..quote..log..bootinfo..bootdebug
 
     puts(" launch : EL1 entry ");
     puthex(load_pa + entry_off);

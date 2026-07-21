@@ -63,7 +63,7 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
 
     // Classical AK signature.
     puts(" attest : signing quote (ed25519)...\n");
-    let ed_sk = EdSecretKey::from_slice(&attest_keys::AK_ED25519_SK).unwrap();
+    let ed_sk = EdSecretKey::from_slice(attest_keys::ak_ed_sk()).unwrap();
     let ed_sig: EdSignature = ed_sk.sign(body, None);
     let mut ed_bytes = [0u8; ED25519_SIG_LEN];
     ed_bytes.copy_from_slice(ed_sig.as_ref());
@@ -72,7 +72,7 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
     // The 'f' variant signs in seconds even with software SHA-256 on bare metal
     // (128s was minutes). Deterministic: zero-RNG + hedged=false.
     puts(" attest : signing quote (SLH-DSA-128f, quantum-safe)...\n");
-    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(&attest_keys::AK_SLHDSA_SK).unwrap();
+    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(attest_keys::ak_slh_sk()).unwrap();
     let slh_sig = slh_sk
         .try_sign_with_rng(&mut ZeroRng, &body, AK_SIG_CTX, false)
         .expect("ak slh sign");
@@ -93,4 +93,78 @@ pub fn emit_quote(svn: u64, pcr: &[[u8; 32]; NUM_PCR]) -> [u8; ED25519_SIG_LEN] 
         );
     }
     ed_bytes
+}
+
+/// B-2 runtime attestation: mint a per-boot EPHEMERAL ed25519 key (seeded from
+/// the hardware TRNG), hybrid-sign a certificate binding it to (svn, PCRs) with
+/// the device AK, and publish both at ATTEST_EPH_ADDR. The kernel then signs
+/// verifier-supplied challenge nonces with the ephemeral key (per-request
+/// freshness) while the AK stays in HBoot and is scrubbed after this. Call
+/// AFTER `emit_quote` and BEFORE `attest_keys::scrub()`.
+pub fn emit_ephemeral_cert(
+    svn: u64,
+    device_id: u64,
+    otp_provisioned: u64,
+    pcr: &[[u8; 32]; NUM_PCR],
+) {
+    use ed25519_compact::{KeyPair, Seed};
+
+    // Per-boot ephemeral keypair from TRNG entropy (distinct from the AK).
+    let mut seed = [0u8; 32];
+    let _ = rng::fill(&mut seed);
+    let kp = KeyPair::from_seed(Seed::new(seed));
+    let mut eph_pk = [0u8; 32];
+    let mut eph_sk = [0u8; 64];
+    eph_pk.copy_from_slice(kp.pk.as_ref());
+    eph_sk.copy_from_slice(kp.sk.as_ref());
+
+    // Cert body = eph_pk || svn || device_id || PCR0..3 (the verifier + the
+    // kernel reconstruct this exact layout). device_id binds the per-device
+    // identity so a cert can't be replayed device-to-device (B-1 anonymity half).
+    let mut body = [0u8; EPH_CERT_BODY_LEN];
+    body[..32].copy_from_slice(&eph_pk);
+    body[32..40].copy_from_slice(&svn.to_le_bytes());
+    body[40..48].copy_from_slice(&device_id.to_le_bytes());
+    for i in 0..NUM_PCR {
+        body[48 + 32 * i..48 + 32 * (i + 1)].copy_from_slice(&pcr[i]);
+    }
+
+    // AK ed25519 cert sig over EPH_CERT_CTX || body (domain-separated from the quote).
+    puts(" attest : certifying ephemeral key (AK ed25519)...\n");
+    let clen = EPH_CERT_CTX.len();
+    let mut ed_msg = [0u8; 32 + EPH_CERT_BODY_LEN]; // ctx(15) + body(168) fits
+    ed_msg[..clen].copy_from_slice(EPH_CERT_CTX);
+    ed_msg[clen..clen + EPH_CERT_BODY_LEN].copy_from_slice(&body);
+    let ed_sk = EdSecretKey::from_slice(attest_keys::ak_ed_sk()).unwrap();
+    let ed_sig: EdSignature = ed_sk.sign(&ed_msg[..clen + EPH_CERT_BODY_LEN], None);
+    let mut cert_ed_sig = [0u8; ED25519_SIG_LEN];
+    cert_ed_sig.copy_from_slice(ed_sig.as_ref());
+
+    // AK SLH-DSA cert sig over body with ctx=EPH_CERT_CTX (quantum-safe).
+    puts(" attest : certifying ephemeral key (AK SLH-DSA, quantum-safe)...\n");
+    let slh_sk = slh_dsa_sha2_128f::PrivateKey::try_from_bytes(attest_keys::ak_slh_sk()).unwrap();
+    let cert_slh_sig = slh_sk
+        .try_sign_with_rng(&mut ZeroRng, &body, EPH_CERT_CTX, false)
+        .expect("eph cert slh sign");
+
+    let e = ATTEST_EPH_ADDR as *mut AttestEphemeral;
+    unsafe {
+        core::ptr::write(
+            e,
+            AttestEphemeral {
+                magic: ATTEST_EPH_MAGIC,
+                eph_ed_pk: eph_pk,
+                eph_ed_sk: eph_sk,
+                cert_ed_sig,
+                cert_slh_sig,
+                svn,
+                device_id,
+                otp_provisioned,
+                pcr: *pcr,
+            },
+        );
+    }
+    puts(" attest : ephemeral key certified + published @ ");
+    puthex(ATTEST_EPH_ADDR as u64);
+    puts(" (AK then scrubbed)\n");
 }

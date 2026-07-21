@@ -107,8 +107,11 @@ pub const ATTEST_EPH_ADDR: usize = 0x3FFB_0000;
 pub const ATTEST_EPH_MAGIC: u64 = 0x31_48_50_45_4b_51_45_48;
 /// Context string bound into the ephemeral-key certificate (must match heqk-sign).
 pub const EPH_CERT_CTX: &[u8] = b"HEQK-EPHCERT-v1";
-/// Cert body the AK signs = eph_pk(32) || svn(8) || PCR0..3(32*NUM_PCR).
-pub const EPH_CERT_BODY_LEN: usize = 32 + 8 + 32 * NUM_PCR;
+/// Cert body the AK signs = eph_pk(32) || svn(8) || device_id(8) || PCR0..3.
+/// `device_id` is the BCM2712 board serial (per-device identity, read over the
+/// VideoCore mailbox) — binding it means a quote/cert from one device cannot be
+/// presented as another's (closes the anonymity half of B-1).
+pub const EPH_CERT_BODY_LEN: usize = 32 + 8 + 8 + 32 * NUM_PCR;
 /// Context string bound into a runtime challenge response (must match heqk-sign).
 pub const CHALLENGE_CTX: &[u8] = b"HEQK-CHALLENGE-v1";
 
@@ -119,9 +122,11 @@ pub struct AttestEphemeral {
     pub magic: u64,                       // ATTEST_EPH_MAGIC
     pub eph_ed_pk: [u8; 32],              // ephemeral ed25519 public key (this boot)
     pub eph_ed_sk: [u8; 64],             // ephemeral ed25519 secret key (kernel signs challenges)
-    pub cert_ed_sig: [u8; ED25519_SIG_LEN],   // AK ed25519 sig over (eph_pk||svn||PCRs)
-    pub cert_slh_sig: [u8; AK_SLHDSA_SIG_LEN], // AK SLH-DSA sig over the same (quantum-safe)
+    pub cert_ed_sig: [u8; ED25519_SIG_LEN],   // AK ed25519 sig over the cert body
+    pub cert_slh_sig: [u8; AK_SLHDSA_SIG_LEN], // AK SLH-DSA sig over the cert body (quantum-safe)
     pub svn: u64,                         // bound into the cert body
+    pub device_id: u64,                   // BCM2712 board serial (0 = mailbox unreachable)
+    pub otp_provisioned: u64,             // 1 = OTP device-key region non-blank (secret AK possible)
     pub pcr: [[u8; 32]; NUM_PCR],         // bound into the cert body
 }
 

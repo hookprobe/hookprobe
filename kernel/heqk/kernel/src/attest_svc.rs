@@ -64,6 +64,43 @@ impl Attestor {
     }
 }
 
+/// The device AK ed25519 PUBLIC key (public — safe to embed). Used for the
+/// on-device half of the cert-chain check; the remote verifier additionally
+/// checks the SLH-DSA half (quantum-safe). Matches ~/heqk-sign/keys/ak_ed.pk.
+pub const AK_ED_PK: [u8; 32] = [
+    0x42, 0xa2, 0x00, 0x58, 0x55, 0xd2, 0x93, 0xc6, 0xfe, 0xec, 0x3d, 0xfd, 0xb7, 0xbc, 0xcf, 0x26,
+    0x94, 0x9e, 0x0c, 0xd5, 0xa4, 0xdd, 0xe5, 0x7e, 0x56, 0x2f, 0x44, 0x77, 0x67, 0x2e, 0x42, 0xaf,
+];
+
+/// Verify the AK's ed25519 signature over the ephemeral-key certificate
+/// (`EPH_CERT_CTX || eph_pk || svn || PCRs`) against the device AK public key —
+/// the on-device half of the chain (AK certifies this boot's ephemeral key).
+/// The verifier checks the SLH-DSA half off-device for the full quantum-safe
+/// chain. Returns true iff the ephemeral key is genuinely AK-certified.
+pub fn verify_cert_ed(ak_ed_pk: &[u8; 32], e: &boot_abi::AttestEphemeral) -> bool {
+    let pk = match PublicKey::from_slice(ak_ed_pk) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let sig = match Signature::from_slice(&e.cert_ed_sig) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    // Reconstruct EPH_CERT_CTX || (eph_pk || svn || PCRs).
+    let c = boot_abi::EPH_CERT_CTX;
+    let clen = c.len();
+    let mut msg = [0u8; 32 + boot_abi::EPH_CERT_BODY_LEN];
+    msg[..clen].copy_from_slice(c);
+    let b = &mut msg[clen..clen + boot_abi::EPH_CERT_BODY_LEN];
+    b[..32].copy_from_slice(&e.eph_ed_pk);
+    b[32..40].copy_from_slice(&e.svn.to_le_bytes());
+    b[40..48].copy_from_slice(&e.device_id.to_le_bytes());
+    for i in 0..boot_abi::NUM_PCR {
+        b[48 + 32 * i..48 + 32 * (i + 1)].copy_from_slice(&e.pcr[i]);
+    }
+    pk.verify(&msg[..clen + boot_abi::EPH_CERT_BODY_LEN], &sig).is_ok()
+}
+
 /// Verify a challenge response against an ephemeral public key (what a remote
 /// verifier does after checking the AK cert chains to `pk`).
 pub fn verify_response(pk: &PublicKey, nonce: &[u8], sig: &Signature) -> bool {
