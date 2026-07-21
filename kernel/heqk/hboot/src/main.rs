@@ -117,8 +117,25 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         puts(" — refusing to boot\n");
         unsafe { park() }
     }
-    if size == 0 || size > 0x100_0000 {
+    // The payload lives in the combined image below IMAGE_BASE+HBOOT_PAYLOAD_OFFSET;
+    // its body must fit within the ~2 MiB region the EEPROM actually loaded.
+    if size == 0 || size > 0x20_0000 {
         puts(" payload: INSANE SIZE — refusing to boot\n");
+        unsafe { park() }
+    }
+    // SECURE-BOOT: the header's load geometry (load_pa, entry_off) governs WHERE
+    // the verified payload lands and WHERE EL1 execution jumps, but is NOT part
+    // of the signed message. An attacker who can rewrite flash could leave the
+    // signatures intact and redirect the copy over HBoot's own EL2 code/vectors/
+    // page-tables, or jump to unsigned bytes. Pin both to the fixed values every
+    // legitimate image uses — any deviation is refused. (Geometry is constant in
+    // this design; binding it into signed_message_input is the generalization.)
+    if load_pa != KERNEL_LOAD_PA as u64 {
+        puts(" secure boot: FAIL — load_pa != fixed KERNEL_LOAD_PA, refusing\n");
+        unsafe { park() }
+    }
+    if entry_off != 0 || entry_off >= size {
+        puts(" secure boot: FAIL — bad entry_offset, refusing\n");
         unsafe { park() }
     }
     puts(" payload: ");

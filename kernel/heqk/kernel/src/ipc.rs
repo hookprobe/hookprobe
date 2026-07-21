@@ -32,7 +32,12 @@ pub fn recv() -> u64 {
         arch_aarch64::enable_irqs();
         m
     } else {
-        // No sender yet: register as receiver and block.
+        // No sender yet: register as receiver and block. Refuse a second
+        // concurrent receiver rather than overwrite the waiter slot.
+        if unsafe { addr_of!(RECV_WAITER).read() }.is_some() {
+            arch_aarch64::enable_irqs();
+            return 0; // endpoint busy
+        }
         unsafe { addr_of_mut!(RECV_WAITER).write(Some(scheduler::current_tid())) };
         scheduler::block_current();
         arch_aarch64::enable_irqs();
@@ -50,12 +55,24 @@ pub fn recv() -> u64 {
 pub fn send(msg: u64) {
     arch_aarch64::disable_irqs();
     if let Some(receiver) = unsafe { addr_of!(RECV_WAITER).read() } {
-        // A receiver is waiting: deliver and wake it.
-        unsafe { addr_of_mut!(MSG).write(msg) };
+        // A receiver is waiting: deliver, CLEAR the waiter at the moment of
+        // delivery (so a second sender can't re-deliver to an already-woken
+        // receiver and clobber this message), and wake it.
+        unsafe {
+            addr_of_mut!(MSG).write(msg);
+            addr_of_mut!(RECV_WAITER).write(None);
+        }
         scheduler::unblock(receiver);
         arch_aarch64::enable_irqs();
     } else {
-        // No receiver yet: park the message and block until one takes it.
+        // No receiver yet: park the message and block until one takes it. This
+        // single-endpoint rendezvous supports one waiter per side; refuse a
+        // second concurrent sender rather than silently overwrite (lost wakeup).
+        // A multi-waiter queue is the generalization (keyed by Endpoint cap).
+        if unsafe { addr_of!(SEND_WAITER).read() }.is_some() {
+            arch_aarch64::enable_irqs();
+            return; // endpoint busy: drop rather than corrupt the waiter slot
+        }
         unsafe {
             addr_of_mut!(MSG).write(msg);
             addr_of_mut!(SEND_WAITER).write(Some(scheduler::current_tid()));

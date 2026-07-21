@@ -104,6 +104,13 @@ pub fn on_tick(current_sp: usize) -> usize {
                 break;
             }
         }
+        // Fallback: if the chosen thread isn't actually runnable (e.g. `cur`
+        // itself blocked/exited and nothing else was found), resume slot 0 —
+        // the idle thread, which is always alive and never blocks. Prevents
+        // ever returning the SP of a blocked/dead thread.
+        if !runnable(next) {
+            next = 0;
+        }
         addr_of_mut!(CUR).write(next);
         sp.add(next).read()
     }

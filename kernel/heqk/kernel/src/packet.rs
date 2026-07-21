@@ -110,7 +110,10 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
     let mut d = unsafe { dp.read() };
     let p = frame_ptr(pool_base, d.frame as usize) as *const u8;
     let verdict = verdict_bpf(p, d.len); // reads the packet in place — zero copy
-    let port = read_port(p);
+    // Only read the port field if the packet is actually long enough; else a
+    // short/zero-length packet would return stale bytes from a prior packet
+    // that reused this pool frame (cross-packet info leak into the verdict).
+    let port = if d.len >= 2 { read_port(p) } else { 0 };
     if verdict == DROP {
         crate::telemetry::emit(crate::telemetry::Event::PacketDrop);
     }

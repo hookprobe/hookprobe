@@ -124,7 +124,9 @@ impl hal::Mmu for Mmu {
         // EL0 user code/stack get their OWN pages via `map_user_page` (P3).
         let l1 = l1_ptr();
         unsafe {
-            write_volatile(l1.add(0), block_desc(0, ATTR_DEVICE, 0, AP_RW_EL1));
+            // Device/MMIO must never be executable (PXN|UXN) — nothing runs from
+            // it, and leaving it executable is a needless code-exec surface.
+            write_volatile(l1.add(0), block_desc(0, ATTR_DEVICE, 0, AP_RW_EL1) | PXN | UXN);
             write_volatile(l1.add(1), block_desc(RAM_BASE, ATTR_NORMAL, SH_IS, AP_RW_EL1));
         }
     }
@@ -230,8 +232,18 @@ impl Mmu {
 
     /// Return a frame to the allocator's free list (LIFO reuse).
     pub fn free_frame(&self, pa: usize) {
+        // Sanity: only page-aligned frames within the allocator's watermark are
+        // valid to free. Rejecting others turns a double-free / wild-free bug
+        // into a no-op instead of list corruption + later frame aliasing.
+        if pa & (PAGE - 1) != 0 || pa < RAM_BASE || pa >= FRAME_NEXT.load(Ordering::Relaxed) {
+            return;
+        }
         loop {
             let head = FRAME_FREE.load(Ordering::Relaxed);
+            // Reject an obvious double-free (frame already at the list head).
+            if head == pa {
+                return;
+            }
             unsafe { write_volatile(pa as *mut usize, head) };
             if FRAME_FREE
                 .compare_exchange_weak(head, pa, Ordering::AcqRel, Ordering::Relaxed)
@@ -256,6 +268,11 @@ pub fn reserve_region(bytes: usize) -> usize {
             .compare_exchange_weak(cur, cur + n, Ordering::SeqCst, Ordering::Relaxed)
             .is_ok()
         {
+            // Zero before handing out: reserved RAM backs DMA rings and cap
+            // Untypeds; stale contents must not leak to a device or a new cap.
+            for i in 0..(n / 8) {
+                unsafe { write_volatile((cur as *mut u64).add(i), 0) };
+            }
             return cur;
         }
     }

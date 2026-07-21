@@ -20,5 +20,17 @@ pub extern "C" fn rust_exception(idx: u64, esr: u64, elr: u64, far: u64) -> ! {
     let _ = writeln!(u, "\n[EXCEPTION] {} (idx={}) — UNEXPECTED KERNEL FAULT", name, idx);
     let _ = writeln!(u, "  ESR_EL1={:#018x}  EC={:#04x}", esr, ec);
     let _ = writeln!(u, "  ELR_EL1={:#018x}  FAR_EL1={:#018x}", elr, far);
-    semihosting::exit(1) // a kernel fault is a FAILURE, not a success
+    // QEMU: exit with FAILURE so a crash never masquerades as a clean run.
+    #[cfg(not(feature = "cm5"))]
+    semihosting::exit(1);
+    // Real silicon: semihosting is an undefined instruction with no debugger, so
+    // halt safely (mask IRQs, WFE-park) rather than execute into the weeds. A
+    // kernel fault stops the board; it never continues in a corrupt state.
+    #[cfg(feature = "cm5")]
+    {
+        let _ = &semihosting::exit; // keep the import referenced
+        loop {
+            unsafe { core::arch::asm!("msr daifset, #0xf", "wfe") };
+        }
+    }
 }

@@ -83,7 +83,9 @@ pub fn run(prog: &[u64], pkt: *const u8, len: usize) -> u64 {
     let mut r = [0u64; 11];
     r[1] = pkt as u64;
     let pbase = pkt as u64;
-    let pend = pbase + len as u64;
+    // Saturating: an absurd `len` must not wrap `pend` below `pbase` and defeat
+    // the LDX_B bounds check. (Packet path caps len at u16 today; defensive.)
+    let pend = pbase.saturating_add(len as u64);
     let mut pc: usize = 0;
     let mut steps: u32 = 0;
 

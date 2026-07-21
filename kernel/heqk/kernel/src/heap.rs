@@ -29,8 +29,17 @@ unsafe impl GlobalAlloc for Bump {
         let base = REGION.0.get() as *mut u8 as usize;
         let mut cur = self.off.load(Ordering::Relaxed);
         loop {
-            let start = (base + cur + layout.align() - 1) & !(layout.align() - 1);
-            let new_off = start - base + layout.size();
+            // Checked arithmetic: an overflow must return null (GlobalAlloc
+            // contract), never wrap past the exhaustion check into an OOB ptr.
+            let align = layout.align();
+            let start = match base.checked_add(cur).and_then(|x| x.checked_add(align - 1)) {
+                Some(v) => v & !(align - 1),
+                None => return null_mut(),
+            };
+            let new_off = match (start - base).checked_add(layout.size()) {
+                Some(v) => v,
+                None => return null_mut(),
+            };
             if new_off > HEAP_SIZE {
                 return null_mut();
             }

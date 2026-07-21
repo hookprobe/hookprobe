@@ -105,6 +105,11 @@ impl CapSpace {
             if ut.otype != ObjType::Untyped {
                 return Err("not an Untyped cap"); // type safety: can't retype a non-untyped
             }
+            // Reject an out-of-range size BEFORE rounding, so align16() can't
+            // overflow (wrap to a tiny `need` that passes the watermark check).
+            if size > ut.size {
+                return Err("request exceeds untyped");
+            }
             let need = align16(size.max(16));
             if ut.watermark + need > ut.size {
                 return Err("out of untyped memory");

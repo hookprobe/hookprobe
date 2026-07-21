@@ -38,7 +38,11 @@ fn weight(e: Event) -> u32 {
 /// Record a security event from the TCB and update the threat score.
 pub fn emit(e: Event) {
     COUNTS[e as usize].fetch_add(1, Ordering::Relaxed);
-    SCORE.fetch_add(weight(e), Ordering::Relaxed);
+    // Saturating: an event flood must not wrap the monotonic threat score back
+    // through zero (which a detector reads as "all clear").
+    let _ = SCORE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+        Some(s.saturating_add(weight(e)))
+    });
 }
 
 pub fn count(e: Event) -> u32 {

@@ -16,6 +16,8 @@ const BLOCK: u64 = 0b01; // L1 block descriptor (bits[1:0] = 01)
 const AF: u64 = 1 << 10; // access flag (fault if 0)
 const SH_IS: u64 = 0b11 << 8; // inner shareable (normal memory)
 const AP_RW_EL1: u64 = 0b00 << 6; // EL1 read/write
+const PXN: u64 = 1 << 53; // privileged execute-never
+const UXN: u64 = 1 << 54; // unprivileged execute-never
 const ATTR_DEVICE: u64 = 0 << 2; // MAIR index 0 = Device-nGnRnE
 const ATTR_NORMAL: u64 = 1 << 2; // MAIR index 1 = Normal WB cacheable
 
@@ -35,7 +37,8 @@ fn normal_block(pa: u64) -> u64 {
 }
 #[inline]
 fn device_block(pa: u64) -> u64 {
-    pa | AF | AP_RW_EL1 | ATTR_DEVICE | BLOCK | VALID
+    // MMIO is never executable (PXN|UXN).
+    pa | AF | AP_RW_EL1 | ATTR_DEVICE | BLOCK | VALID | PXN | UXN
 }
 
 /// Build the identity table, program MAIR/TCR/TTBR0, and enable the MMU +
