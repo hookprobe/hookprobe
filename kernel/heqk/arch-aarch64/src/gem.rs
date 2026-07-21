@@ -358,9 +358,9 @@ pub fn rx_init() -> (usize, u16, u32) {
     (ring, auxstat, link_status())
 }
 
-/// Poll the RX ring once. If a frame is ready, copy up to `out.len()` bytes into
-/// `out` and recycle the descriptor; returns Some(frame_len). None = nothing yet.
-pub fn poll_rx(out: &mut [u8]) -> Option<usize> {
+/// Poll the RX ring once. Returns Some((len, w0, w1)) with the raw descriptor
+/// words for diagnosis, and fills `out` with the frame. None = nothing yet.
+pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32)> {
     // Rotating consumer index across calls.
     static mut IDX: usize = 0;
     let i = unsafe { IDX % NRX };
@@ -374,10 +374,16 @@ pub fn poll_rx(out: &mut [u8]) -> Option<usize> {
     let ctrl = unsafe { read_volatile((dptr + 4) as *const u32) };
     let len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
-    dc_civac(bufpa, len.min(RXBUF)); // invalidate before reading DMA'd data
+    dc_civac(bufpa, RXBUF); // invalidate the WHOLE buffer before reading DMA'd data
     let n = len.min(out.len()).min(RXBUF);
     for k in 0..n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
+    }
+    // Also surface the first bytes even if len==0 (diagnosis).
+    if n == 0 {
+        for k in 0..out.len().min(16) {
+            out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
+        }
     }
     // Recycle: re-arm the descriptor (USED=0), preserve WRAP, republish.
     unsafe {
@@ -391,7 +397,7 @@ pub fn poll_rx(out: &mut [u8]) -> Option<usize> {
         IDX = IDX.wrapping_add(1);
     }
     dc_civac(dptr, 16);
-    Some(len)
+    Some((len, w0, ctrl))
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
