@@ -16,6 +16,8 @@ pub mod gic;
 pub mod mmu;
 #[cfg(feature = "cm5")]
 pub mod mmu_cm5;
+#[cfg(feature = "cm5")]
+pub mod rtl8111;
 pub mod semihosting;
 pub mod syscall;
 pub mod thread;
