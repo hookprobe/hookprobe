@@ -111,8 +111,35 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
         }
     }
     kprint!(" RUST OK\n");
-    kprint!(" [CM5-BOOT] PASS — HEQK boots and prints on real hardware\n");
-    kprint!(" halting; next: MMU high-PA map, GIC-400 @0x107FFF9000, generic timer, then RP1\n");
+
+    // --- P7a: stage-1 MMU on real silicon --------------------------------
+    // Sample a RAM word BEFORE enabling translation, so we can prove a cached
+    // read through a NON-identity VA returns the same bytes afterwards.
+    let phys_probe = arch_aarch64::mmu_cm5::ALIAS_VA as u64; // aliases PA 0..1G
+    let sample_pa = 0x0100_0000usize; // kernel image start (known live RAM)
+    let before = unsafe { read_volatile(sample_pa as *const u64) };
+    arch_aarch64::mmu_cm5::enable_identity();
+    // If this line prints, the console (RP1 UART @0x1C.., Device-mapped)
+    // survived MMU-on — the peripheral mapping is correct.
+    kprint!(" mmu : enabled={} (39-bit VA, 1GiB blocks; RAM=Normal, periph=Device)\n",
+        arch_aarch64::mmu_cm5::enabled());
+    // VA!=PA proof: read the same physical word through the aliased high VA.
+    let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
+    kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
+        phys_probe as usize + sample_pa, sample_pa,
+        if via_alias == before { "verified" } else { "MISMATCH" },
+        phys_probe as usize + sample_pa != sample_pa);
+    // Cached RAM round-trip through the identity Normal mapping. Scratch is in
+    // free RAM (0x800000..0x1000000: above HBoot's downward stack, below the
+    // kernel image) — NOT 0x200000, where HBoot's EL2 code still lives.
+    let scratch = 0x0090_0000usize;
+    let magic = 0x4845_514b_5637_6100u64; // "HEQKV7a\0"
+    unsafe { write_volatile(scratch as *mut u64, magic) };
+    let rt = unsafe { read_volatile(scratch as *const u64) };
+    kprint!(" mmu : cached RAM r/w {} [P7a]\n", if rt == magic { "PASS" } else { "FAIL" });
+
+    kprint!(" [CM5-BOOT] PASS — HEQK boots, MMU on, prints on real hardware\n");
+    kprint!(" halting; next: GIC-400 @0x107FFF9000, generic timer, then RP1\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
     // the EL2 gate performs the PM reset (EL1 writes to the PM block are
     // silently ignored; EL2 is the proven path). Tryboot is spent, so this
