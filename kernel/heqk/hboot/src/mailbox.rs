@@ -184,6 +184,25 @@ pub fn set_customer_otp(words: &[u32; 8]) -> bool {
     }
 }
 
+/// SET_USER_OTP (0x00038024) block 3 = 16 words / 512 bits — BURN (IRREVERSIBLE).
+/// Used ONLY by the deliberate anti-rollback `advance_floor`; never on the boot
+/// path. Constrained to block 3; returns true iff the firmware acks success.
+pub fn set_device_otp(words: &[u32; 16]) -> bool {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // total=25 words=0x64 B; value buffer=19 words=0x4C B; block=3, words=16.
+        let hdr = [0x64u32, 0, 0x0003_8024, 0x4C, 0, 3, 0, 16];
+        for (i, &v) in hdr.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(i), v);
+        }
+        for (i, &w) in words.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(8 + i), w);
+        }
+        core::ptr::write_volatile(buf.add(24), 0); // end tag
+        transact(25)
+    }
+}
+
 /// GET_USER_OTP (0x00030024) block 3 = device private key (16 words / 512 bits).
 /// None if unreadable/locked. All-zero words = a blank (unprovisioned) region.
 pub fn otp_device_key() -> Option<[u32; 16]> {
