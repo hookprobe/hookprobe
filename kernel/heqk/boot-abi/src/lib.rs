@@ -94,6 +94,37 @@ pub struct MeasureLog {
     // MeasureEvent[count] immediately follows.
 }
 
+// ---------------- Runtime attestation: per-boot ephemeral key (B-2) ----------
+/// Reserved page (below the quote) for the per-boot ephemeral attestation key
+/// + its AK-issued certificate. HBoot mints a fresh ephemeral ed25519 key each
+/// boot (seeded from the hardware TRNG), hybrid-signs a cert binding it to
+/// (svn, PCRs) with the device AK, then SCRUBS the AK private key. The kernel
+/// holds only the ephemeral key and signs verifier-supplied challenge nonces
+/// with it — genuine per-request freshness (closes B-2) without the device AK
+/// ever persisting in RAM or SLH-DSA signing living in the kernel.
+pub const ATTEST_EPH_ADDR: usize = 0x3FFB_0000;
+/// "HEQKEPH1" little-endian.
+pub const ATTEST_EPH_MAGIC: u64 = 0x31_48_50_45_4b_51_45_48;
+/// Context string bound into the ephemeral-key certificate (must match heqk-sign).
+pub const EPH_CERT_CTX: &[u8] = b"HEQK-EPHCERT-v1";
+/// Cert body the AK signs = eph_pk(32) || svn(8) || PCR0..3(32*NUM_PCR).
+pub const EPH_CERT_BODY_LEN: usize = 32 + 8 + 32 * NUM_PCR;
+/// Context string bound into a runtime challenge response (must match heqk-sign).
+pub const CHALLENGE_CTX: &[u8] = b"HEQK-CHALLENGE-v1";
+
+/// Per-boot ephemeral attestation key + AK cert, written by HBoot at
+/// ATTEST_EPH_ADDR and consumed by the kernel's runtime attestation service.
+#[repr(C)]
+pub struct AttestEphemeral {
+    pub magic: u64,                       // ATTEST_EPH_MAGIC
+    pub eph_ed_pk: [u8; 32],              // ephemeral ed25519 public key (this boot)
+    pub eph_ed_sk: [u8; 64],             // ephemeral ed25519 secret key (kernel signs challenges)
+    pub cert_ed_sig: [u8; ED25519_SIG_LEN],   // AK ed25519 sig over (eph_pk||svn||PCRs)
+    pub cert_slh_sig: [u8; AK_SLHDSA_SIG_LEN], // AK SLH-DSA sig over the same (quantum-safe)
+    pub svn: u64,                         // bound into the cert body
+    pub pcr: [[u8; 32]; NUM_PCR],         // bound into the cert body
+}
+
 /// Payload header magic "HQKPLD3\0" little-endian (v3 = hybrid sigs + SVN).
 pub const PAYLOAD_MAGIC: u64 = 0x00_33444c_504b_5148;
 
@@ -116,6 +147,7 @@ pub struct BootInfo {
     pub measure_log_pa: u64, // MEASURE_LOG_ADDR (measured-boot event log)
     pub measure_count: u64,  // number of events in the log
     pub quote_pa: u64,       // ATTEST_QUOTE_ADDR (AK-signed attestation quote)
+    pub eph_pa: u64,         // v5: ATTEST_EPH_ADDR (per-boot ephemeral key + AK cert), 0 if absent
 }
 
 /// BootInfo.verify_flags bits.

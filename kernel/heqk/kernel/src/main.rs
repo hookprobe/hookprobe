@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+mod attest_svc;
 mod bpf;
 mod caps;
 mod heap;
@@ -821,6 +822,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P7c step 2: per-AS ASIDs — address-space isolation + ASID-tagged TLB ---
     asid_isolation_test();
 
+    // --- P7d B-2: runtime attestation service — verifier-supplied freshness ---
+    attest_challenge_demo();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -891,6 +895,26 @@ fn asid_isolation_test() {
         VA, asa, ra, asb, rb, ra2);
     kprint!(" [P7c-ASID] {} — per-AS isolation + ASID-tagged TLB (switch with no flush)\n",
         if ok { "PASS" } else { "FAIL" });
+}
+
+/// P7d B-2 — runtime attestation service: prove the kernel signs a
+/// *verifier-supplied* nonce on demand, so a captured response can't be
+/// replayed against a different challenge. On QEMU a fixed seed stands in for
+/// HBoot's TRNG-seeded ephemeral key; on metal the kernel loads the real
+/// ephemeral key + AK cert HBoot hands down (see `cm5_attest_challenge`).
+#[cfg(not(feature = "cm5"))]
+fn attest_challenge_demo() {
+    let att = attest_svc::Attestor::from_seed(&[0x5a; 32]);
+    // Two distinct verifier challenges + a self-check of the freshness property.
+    let n1 = [0x11u8; 32];
+    let n2 = [0x22u8; 32];
+    let s1 = att.respond(&n1);
+    let s2 = att.respond(&n2);
+    let pass = attest_svc::self_test(&att);
+    kprint!(" [P7d-B2] runtime attest: challenge n1 -> sig {:02x}{:02x}.., n2 -> sig {:02x}{:02x}..\n",
+        s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);
+    kprint!(" [P7d-B2] {} — verifier-supplied per-request freshness (distinct nonces -> distinct valid sigs; cross-replay rejected)\n",
+        if pass { "PASS" } else { "FAIL" });
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)

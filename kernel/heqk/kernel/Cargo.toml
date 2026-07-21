@@ -8,6 +8,10 @@ hal          = { path = "../hal" }
 arch-aarch64 = { path = "../arch-aarch64" }
 abi          = { path = "../abi" }
 boot-abi     = { path = "../boot-abi" }
+# Runtime attestation service (B-2): the kernel signs verifier-supplied
+# challenge nonces with a per-boot EPHEMERAL ed25519 key (fast/small — no
+# SLH-DSA in the kernel; the device AK stays in HBoot). Bare-metal, no std/RNG.
+ed25519-compact = { version = "2", default-features = false }
 
 [features]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral

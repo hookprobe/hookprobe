@@ -119,6 +119,7 @@ dependencies = [
  "abi",
  "arch-aarch64",
  "boot-abi",
+ "ed25519-compact",
  "hal",
 ]
 
