@@ -19,8 +19,15 @@ use core::ptr::{read_volatile, write_volatile};
 const GEM: usize = 0x1C00_100000; // ethernet@100000, 16 KiB
 const ETH_CFG: usize = 0x1C00_104000; // RP1 GEM glue (link status, clkgen)
 const RP1_CLK: usize = 0x1C00_018000; // RP1 clock controller
-const RP1_IO_BANK1: usize = 0x1C00_e0000; // IO_BANK1 (gpio28..) — ETH_RST_N=32
-const RP1_RIO1: usize = 0x1C00_e0000 + 0x1000; // sys_rio for bank1 (best-effort)
+// RP1 GPIO banks are 0x4000 apart: IO_BANKn @ 0xd0000+n*0x4000, SYS_RIOn @
+// 0xe0000+n*0x4000, PADS_BANKn @ 0xf0000+n*0x4000. ETH_RST_N = GPIO32 = bank1
+// index 4. RIO has atomic aliases: +0x1000 XOR, +0x2000 SET, +0x3000 CLR.
+const RP1_IO_BANK1: usize = 0x1C00_d4000;
+const RP1_RIO1: usize = 0x1C00_e4000;
+const RP1_PADS1: usize = 0x1C00_f4000;
+const ETH_RST_IDX: usize = 4; // GPIO32 within bank1
+const RIO_SET: usize = 0x2000; // atomic set-bits alias
+const RIO_CLR: usize = 0x3000; // atomic clear-bits alias
 
 // --- GEM register offsets (Cadence MACB / GEM) --------------------------------
 const NCR: usize = 0x000; // Network Control
@@ -98,29 +105,43 @@ pub fn probe() -> (u32, u32, u32) {
 }
 
 /// Deassert the PHY reset (ETH_RST_N = RP1 GPIO32, active-low): funcsel the pad
-/// to software GPIO, drive it low, hold, then high. Best-effort addresses for
-/// bank1 — if the link never comes up, this is the first thing to verify.
+/// to software GPIO (RIO), enable its output driver, drive low (assert), hold
+/// ≥5 ms, then high (release). Correct bank-1 addresses.
 fn phy_reset() {
-    // IO_BANK1 GPIO32 is offset (32-28)=4 within bank1: CTRL at 8*4+4 = 0x24.
-    let ctrl = RP1_IO_BANK1 + 8 * 4 + 4;
-    unsafe { write_volatile(ctrl as *mut u32, 5) }; // funcsel 5 = SYS_RIO (sw GPIO)
-    // RIO: OE (0x04) output-enable bit4, OUT (0x00) bit4. Drive low then high.
-    let rio_out = RP1_RIO1;
-    let rio_oe = RP1_RIO1 + 0x04;
+    let bit: u32 = 1 << ETH_RST_IDX;
     unsafe {
-        let oe = read_volatile(rio_oe as *const u32) | (1 << 4);
-        write_volatile(rio_oe as *mut u32, oe);
-        let mut o = read_volatile(rio_out as *const u32) & !(1 << 4); // low = in reset
-        write_volatile(rio_out as *mut u32, o);
-        for _ in 0..2_000_000u32 {
+        // Pad: clear OD (output-disable, bit7), set IE (input-enable, bit6).
+        let pad = (RP1_PADS1 + 4 + 4 * ETH_RST_IDX) as *mut u32;
+        let v = read_volatile(pad);
+        write_volatile(pad, (v & !0x80) | 0x40);
+        // Route the pad to software GPIO: IO_BANK1 GPIO32_CTRL funcsel = 5.
+        write_volatile((RP1_IO_BANK1 + 8 * ETH_RST_IDX + 4) as *mut u32, 5);
+        // Output-enable the pin (RIO OE at offset 0x04, atomic SET).
+        write_volatile((RP1_RIO1 + RIO_SET + 0x04) as *mut u32, bit);
+        // Drive LOW = assert reset (active-low): RIO OUT (0x00) atomic CLR.
+        write_volatile((RP1_RIO1 + RIO_CLR + 0x00) as *mut u32, bit);
+        for _ in 0..3_000_000u32 {
             core::hint::spin_loop();
-        } // ~5 ms hold
-        o |= 1 << 4; // high = release reset
-        write_volatile(rio_out as *mut u32, o);
-        for _ in 0..4_000_000u32 {
-            core::hint::spin_loop();
-        } // let the PHY settle
+        } // ≥5 ms
+        // Drive HIGH = release reset: RIO OUT atomic SET.
+        write_volatile((RP1_RIO1 + RIO_SET + 0x00) as *mut u32, bit);
     }
+}
+
+/// Wait up to ~`ms` for the RGMII link (eth_cfg.STATUS bit0). Returns the final
+/// status word. Gives the PHY time to auto-negotiate after reset-release.
+pub fn wait_link(ms: u32) -> u32 {
+    let mut st = 0;
+    for _ in 0..ms {
+        st = link_status();
+        if st & 1 != 0 {
+            return st;
+        }
+        for _ in 0..400_000u32 {
+            core::hint::spin_loop();
+        } // ~1 ms
+    }
+    st
 }
 
 /// Enable the RP1 clk_eth (tx clock). pclk/hclk (clk_sys) is always-on.

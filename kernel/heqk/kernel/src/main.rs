@@ -214,6 +214,10 @@ fn cm5_gem_rx_demo() {
     kprint!(" [P8] link={} speed={} duplex={}\n",
         status & 1, (status >> 1) & 3, (status >> 3) & 1);
     let ring = arch_aarch64::gem::rx_init();
+    // Give the PHY up to ~3 s to auto-negotiate a link after reset-release.
+    let link = arch_aarch64::gem::wait_link(3000);
+    kprint!(" [P8] after PHY reset: eth_cfg.STATUS={:#x} link={} speed={}\n",
+        link, link & 1, (link >> 1) & 3);
     kprint!(" [P8] RX ring @ {:#x} (bus {:#x}); RE on; polling ~5 s\n",
         ring, ring as u64 + 0x10_0000_0000);
 
