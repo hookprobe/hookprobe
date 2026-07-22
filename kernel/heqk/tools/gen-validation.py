@@ -163,9 +163,9 @@ SECTIONS = [
         proves="Wired into live classify: a per-source SYN flood is rate-limited inline while other sources' connection setups pass.",
         env=["metal","qemu"], marker="[P8-synsrc]", gate="P8ss"),
    dict(feat="Threat-feed blocklist — keyed CIDR lookup (helper #2)",
-        sub="signed block set; longest-prefix match; ADR-0005 WAN-tier parity", new=True, phase="P8",
+        sub="signed block set; running in live classify on metal (drop-logic proven on QEMU)", new=True, phase="P8",
         proves="The stateful substrate generalizes beyond a counter to a keyed lookup: frames from a blocked source prefix are dropped inline; clean sources pass.",
-        env=["qemu"], marker="[P8-block]", gate="P8b"),
+        env=["metal","qemu"], marker="[P8-block]", gate="P8b"),
  ]),
  ("L4", "Second interface", "external PCIe — the one hardware blocker", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
