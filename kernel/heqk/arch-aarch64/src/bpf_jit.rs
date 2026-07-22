@@ -151,6 +151,14 @@ fn emit_imm(e: &mut Emit, rd: u32, imm: i32) {
 /// op / too-large program / allocation failure. The program MUST have passed
 /// `bpf::verify_prevail` first (forward-only jumps, packet-relative loads).
 pub fn compile(prog: &[u64]) -> Option<usize> {
+    // The JIT maps its code page via the `Mmu` HAL (QEMU stage-1 tables). On CM5
+    // metal the ACTIVE MMU is `mmu_cm5`, which has no EL1 code-page mapper yet, so
+    // a "compiled" VA would be unmapped/non-executable and calling it faults
+    // (instruction abort). Fall back to the bounds-checked interpreter there —
+    // same verdict, slower. (Wiring a CM5 code-page mapper is the follow-up.)
+    if cfg!(feature = "cm5") {
+        return None;
+    }
     let n = prog.len();
     if n == 0 || n > MAX_INSNS {
         return None;
