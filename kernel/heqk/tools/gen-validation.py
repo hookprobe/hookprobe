@@ -172,11 +172,11 @@ SECTIONS = [
         proves="The verifier that gates every rule is itself checked: each abstract operator over-approximates the concrete semantics; a deliberately-unsound operator is caught by the CI harness, not by prod.",
         env=["qemu"], marker="[P16-verifier]"),
  ]),
- ("L4", "Second interface", "external PCIe — the one hardware blocker", [
+ ("L4", "Second interface", "external PCIe (RTL8111H) — trained + enumerated on metal", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
-        sub="full pcie-brcmstb train sequence: RESCAL, SERDES, refclk-MDIO, PERST", phase="P9",
-        proves="Driver code complete; the RC1 link will not train — down under Linux too, so board/hardware-gated, not a code defect.",
-        env=["block"], marker="RC1 link down"),
+        sub="pcie-brcmstb train: RESCAL, SERDES, refclk-MDIO, DIS_PLL_PD, Gen1, tperst; then enumerate", phase="P9",
+        proves="HEQK trains the external PCIe (RC1 LINK UP, status 0x0003e0bf) and enumerates the RTL8111H at 01:00.0 (vendor/device 0x816810ec) on metal. The long 'won't train' was PHYSICAL — the CM5 was not fully seated in the carrier (Linux failed identically); once reseated it trains. RX datapath (BAR2 MMIO window + ring → IDS, mirrors the GEM) is the remaining step.",
+        env=["metal"], marker="[P9] PASS · RTL8111H found"),
  ]),
 ]
 
@@ -347,7 +347,7 @@ HTML = """<title>HEQK Validation Matrix</title>
       <div class="stat"><div class="n">{n_total}</div><div class="l">features built</div></div>
       <div class="stat m"><div class="n">{n_metal}</div><div class="l">proven on CM5 metal</div></div>
       <div class="stat q"><div class="n">{n_qemu}</div><div class="l">proven under QEMU</div></div>
-      <div class="stat b"><div class="n">{n_block}</div><div class="l">hardware-gated (P9)</div></div>
+      <div class="stat b"><div class="n">{n_block}</div><div class="l">hardware blockers</div></div>
     </div>
     <div class="legend">
       <span class="pill metal">Metal</span> validated on CM5 (BCM2712) hardware
