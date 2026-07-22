@@ -696,6 +696,8 @@ fn cm5_p9_probe() {
     let d = rtl8111::rc1_train();
     kprint!(" [P9] diag: rescal_done={} iddq {:#x}->{:#x} (want ->0) mdio_timeouts={}/8 perst {:#x}->{:#x} (want ->0x4)\n",
         d.rescal_done, d.iddq_before, d.iddq_after, d.mdio_timeouts, d.perst_before, d.perst_after);
+    kprint!(" [P9] CLKREQ empirical: PLL lock with clkreq CLEAR(Linux-safe)={} / clkreq SET(FreeBSD)={} -> using {}\n",
+        d.pll_clear, d.pll_set, if d.pll_set && !d.pll_clear { "SET" } else { "CLEAR" });
     kprint!(" [P9] SERDES PLL_LOCK={} SSC={} (MDIO SSC_STATUS; PLL lock = the PHY-alive proxy — no LTSSM reg on 2712)\n",
         d.pll_lock, d.ssc);
     kprint!(" [P9] RC1 status after train={:#010x} (DL_ACTIVE|PHYLINKUP mask 0x30)\n", d.status);

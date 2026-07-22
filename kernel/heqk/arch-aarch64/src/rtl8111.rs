@@ -99,6 +99,8 @@ pub struct RcDiag {
     pub mdio_timeouts: u32, // # of the 8 refclk MDIO writes that timed out (want 0)
     pub perst_before: u32, // PCIE_CTRL bit2 before (0 = in reset)
     pub perst_after: u32,  // ... after de-assert (want 1)
+    pub pll_clear: bool,   // PLL locked with clkreq CLEARED (Linux "safe")
+    pub pll_set: bool,     // PLL locked with clkreq SET (FreeBSD)
     pub pll_lock: bool,    // SERDES PLL locked (MDIO SSC_STATUS bit11) — PHY alive
     pub ssc: bool,         // SSC active (MDIO SSC_STATUS bit10)
     pub status: u32,       // PCIE_STATUS final (link up iff & 0x30 == 0x30)
@@ -228,12 +230,26 @@ pub fn rc1_train() -> RcDiag {
         rc_w(0x416c, (t2 & !0x3f) | 15);
     }
     rc_w(0x40a0, rc_r(0x40a0) & !(1 << 5));
-    // 7. clkreq-mode "safe" (Linux `brcm_config_clkreq`): CLEAR both CLKREQ_DEBUG
-    // (0x2) and L1SS (0x200000) in HARD_DEBUG (2712 @ 0x4304) — the RC then drives
-    // the 100 MHz refclk UNCONDITIONALLY, ignoring the endpoint's (floating on this
-    // hardwired connector) CLKREQ# pin. Matches the driver exactly now (the old
-    // speculative REFCLK_OVRD bits are dropped — they aren't in the driver).
-    rc_w(0x4304, rc_r(0x4304) & !0x0020_0002);
+    // 7. CLKREQ controversy resolved EMPIRICALLY. Linux `brcm_config_clkreq`
+    // "safe" mode CLEARS CLKREQ_DEBUG(0x2)+L1SS(0x200000) → refclk driven
+    // unconditionally; FreeBSD's 2711 driver SETS CLKREQ_ENABLE(0x2). They do the
+    // OPPOSITE with the same bit. The SERDES PLL locks off the refclk regardless of
+    // PERST, so read PLL lock under BOTH settings (L1SS always cleared) and keep
+    // whichever locks. This one flash tells us which mode actually drives refclk on
+    // this hardwired, floating-CLKREQ# connector.
+    rc_w(0x4304, rc_r(0x4304) & !0x0020_0002); // clkreq CLEAR (Linux "safe")
+    delay_us(50_000);
+    let (pll_clear, _) = serdes_pll_status();
+    rc_w(0x4304, (rc_r(0x4304) & !0x0020_0000) | 0x2); // clkreq SET (FreeBSD), L1SS off
+    delay_us(50_000);
+    let (pll_set, _) = serdes_pll_status();
+    // Keep the mode that locked (prefer Linux "safe"=clear on a tie/neither).
+    let clkreq_set_wins = pll_set && !pll_clear;
+    if clkreq_set_wins {
+        rc_w(0x4304, (rc_r(0x4304) & !0x0020_0000) | 0x2);
+    } else {
+        rc_w(0x4304, rc_r(0x4304) & !0x0020_0002);
+    }
 
     // 7b. Force Gen1 before releasing the endpoint (marginal PHYs train at Gen1).
     force_gen1();
@@ -267,6 +283,8 @@ pub fn rc1_train() -> RcDiag {
         mdio_timeouts,
         perst_before,
         perst_after,
+        pll_clear,
+        pll_set,
         pll_lock,
         ssc,
         status,
