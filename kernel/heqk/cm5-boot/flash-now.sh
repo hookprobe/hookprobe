@@ -30,8 +30,12 @@ echo "== mounted; existing files:"; ls "$MNT" | head
 [ -f "$MNT/config.txt" ] && cp -f "$MNT/config.txt" "$MNT/config.txt.heqk-backup" && echo "== backed up config.txt -> config.txt.heqk-backup"
 cp -f "$HERE/config.txt" "$MNT/config.txt"
 cp -f "$HERE/heqk8.img" "$MNT/heqk8.img"
+# A/B: also stage SLOT B (candidate config + image) so future updates need no
+# extra rpiboot cycle. tryboot.txt boots heqk8-b.img for one `tryboot` boot.
+[ -f "$HERE/tryboot.txt" ]  && cp -f "$HERE/tryboot.txt"  "$MNT/tryboot.txt"
+[ -f "$HERE/heqk8-b.img" ]  && cp -f "$HERE/heqk8-b.img"  "$MNT/heqk8-b.img"
 sync
-echo "== wrote:"; ls -la "$MNT/config.txt" "$MNT/heqk8.img"
+echo "== wrote:"; ls -la "$MNT/config.txt" "$MNT/heqk8.img" "$MNT/heqk8-b.img" 2>/dev/null
 echo "== verify kernel line:"; grep -E 'kernel=|pciex4' "$MNT/config.txt"
 umount "$MNT"; rmdir "$MNT"
 echo "== DONE. Flip the BOOT switch back to eMMC and power-cycle."

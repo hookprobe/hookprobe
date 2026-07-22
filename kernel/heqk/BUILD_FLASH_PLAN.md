@@ -176,10 +176,29 @@ B→A) makes a candidate permanent — with the prior A saved as `heqk8.img.prev
 **ABI.** BootInfo v6 adds `boot_flags` (bit0 `BOOT_FLAG_TRIAL_WDOG`) + `watchdog_secs`;
 the EL2 gate dispatches `hvc #0` = reboot, `hvc #1` = confirm/commit.
 
-**Status.** Watchdog arm/disarm + the `hvc #1` confirm protocol + v6 handoff are
-built and compile for CM5; the confirm state machine is QEMU-validated
-(`[HBoot-AB] PASS`). Tooling: `cm5-boot/ab-update.sh` (stage/commit/status),
-`cm5-boot/tryboot.txt` (slot-B config). Staged for on-metal: an end-to-end
-deliberate-bad-B flash to observe the watchdog reset → SLOT A fallback, and
-wiring an on-device `reboot "0 tryboot"` path (or host-set one-shot) so the
-candidate can be trialed without a Linux userland.
+**Status — METAL-VALIDATED (CM5, 2026-07-22).** The healthy-path A/B protocol is
+proven on silicon over a 5-boot capture (svn 1, `heqk8.img` sha `fdcdcb63…`):
+
+| Evidence | Result |
+|----------|--------|
+| HBoot arms the trial watchdog before launch (`a/b : trial watchdog armed 0xf s`) | **5 / 5 boots** |
+| Kernel confirms via `hvc #1`; HBoot's EL2 gate runs the disarm handler (emits `C`) | **4 / 4 completed boots** |
+| Boot continues past confirm to `halting` (≫ the 15 s window ⇒ watchdog WAS disarmed) | **4 / 4** |
+| `hboot: BootInfo v6 … el2_gate=1` typed handoff on metal | ✅ |
+| Panics / exceptions | **0** |
+
+The leading `C` on `C [HBoot-AB] PASS` is HBoot's EL2 gate character — direct proof
+the `hvc #1` round-tripped EL1 → EL2 gate → watchdog-disarm → `eret` back to EL1.
+A healthy boot reaching the late demos (GEM RX ~5 s poll, EL0 driver server,
+`halting`) is impossible unless the ~15 s watchdog was disarmed — so both arm AND
+disarm are verified on hardware. (Also green same-capture: secure boot ed25519 +
+SLH-DSA, hw-bound AK attestation, EL2 isolation `[P7e]`, `[P8-JIT]`/`[P8-WX]`,
+11-rule/9-JIT plane incl. L7_MQTT.)
+
+Tooling: `cm5-boot/ab-update.sh` (stage/commit/status), `cm5-boot/tryboot.txt`
+(slot-B config); `flash-now.sh` now also stages SLOT B (`heqk8-b.img`).
+
+**One item still staged for metal:** an end-to-end *deliberate-bad-B* flash to
+observe the watchdog reset → SLOT A fallback (the failure path — this capture
+proved the success path), plus wiring an on-device `reboot "0 tryboot"` trigger
+(or a host-set one-shot) so a candidate can be trialed without a Linux userland.
