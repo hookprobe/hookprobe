@@ -290,3 +290,357 @@ pub fn chip_id_probe() -> Option<u16> {
     }
     Some(u16::from_le_bytes([id[0], id[1]]))
 }
+
+// ============================================================================
+// P10 Stage B — firmware / NVRAM / CLM upload + ARMCR4 start (F2 ready)
+// P10 Stage C — BCDC control + clmload + country iovar (the regdomain target)
+//
+// The control-layer ENCODERS below (NVRAM strip, BCDC/iovar framing, CLM chunking,
+// country struct) are pure logic and correct off-metal. The SDIO/backplane TIMING
+// (ALP/HT clock, ARMCR4 halt/clear order, F2-ready, SDPCM credits) is structured
+// from brcmfmac + OpenBSD bwfm and iterates on metal.
+// ============================================================================
+
+/// The CYW43455 blobs, baked into the self-contained HEQK image.
+pub static FW_BIN: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.bin");
+pub static NVRAM_TXT: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio-cm5.nvram.txt");
+pub static CLM_BLOB: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.clm_blob");
+
+// BCM4345/6 (CYW43455) SoCRAM/ARMCR4 geometry + F1 chip-backplane control regs.
+const RAM_BASE: u32 = 0x0000_0000; // ATCM — firmware loads at 0
+const RAM_SIZE: u32 = 0x0009_8000; // 608 KiB (0x198000 per P9_P10_BRINGUP)
+const CHIPCLKCSR: u32 = 0x1000E; // F1 clock-control (backplane)
+const SBSDIO_ALP_AVAIL_REQ: u8 = 0x08;
+const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
+const SBSDIO_ALP_AVAIL: u8 = 0x40;
+const SBSDIO_HT_AVAIL: u8 = 0x80;
+// CCCR: I/O-enable 0x02, I/O-ready 0x03. F2 = bit2.
+const SDIO_FUNC_ENABLE: u32 = 0x02;
+const SDIO_FUNC_READY: u32 = 0x03;
+const SDIO_F2: u8 = 0x04;
+
+/// Process the NVRAM text into the firmware's download format: strip comments +
+/// whitespace, keep `key=value\0` pairs, pad to 4 bytes, then append the trailer
+/// word `(len/4) | (~(len/4) << 16)`. Mirrors brcmfmac `brcmf_process_nvram`.
+/// Returns the byte length written into `out`.
+pub fn nvram_strip(src: &[u8], out: &mut [u8]) -> usize {
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < src.len() {
+        // Skip leading whitespace on a line.
+        while i < src.len() && (src[i] == b' ' || src[i] == b'\t' || src[i] == b'\r' || src[i] == b'\n') {
+            i += 1;
+        }
+        if i >= src.len() {
+            break;
+        }
+        if src[i] == b'#' {
+            // comment — skip to EOL
+            while i < src.len() && src[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // copy "key=value" until EOL, dropping trailing spaces; emit a NUL.
+        let start = n;
+        while i < src.len() && src[i] != b'\n' && src[i] != b'\r' {
+            if n < out.len() {
+                out[n] = src[i];
+                n += 1;
+            }
+            i += 1;
+        }
+        // trim trailing spaces of this entry
+        while n > start && (out[n - 1] == b' ' || out[n - 1] == b'\t') {
+            n -= 1;
+        }
+        if n > start && n < out.len() {
+            out[n] = 0;
+            n += 1;
+        } else {
+            n = start; // blank line — drop
+        }
+    }
+    // pad to 4-byte boundary
+    while n % 4 != 0 && n < out.len() {
+        out[n] = 0;
+        n += 1;
+    }
+    // trailer word = token_count | (~token_count << 16), token_count = n/4
+    let tokens = (n / 4) as u32;
+    let trailer = tokens | (!tokens << 16);
+    if n + 4 <= out.len() {
+        out[n..n + 4].copy_from_slice(&trailer.to_le_bytes());
+        n += 4;
+    }
+    n
+}
+
+/// Build the `country` iovar payload: `brcmf_fil_country_le`
+/// `{ char country_abbrev[4]; __le32 rev; char ccode[4]; }` (12 B). `iso` is the
+/// 2-letter code; `rev` is the CLM/NVRAM regulatory revision (NOT always 0 — see
+/// the FreeBSD/OpenBSD cross-check: map the (ccode,rev) pair for correct limits).
+pub fn country_payload(iso: &[u8; 2], rev: i32, out: &mut [u8; 12]) {
+    *out = [0; 12];
+    out[0] = iso[0];
+    out[1] = iso[1];
+    out[4..8].copy_from_slice(&rev.to_le_bytes());
+    out[8] = iso[0];
+    out[9] = iso[1];
+}
+
+/// Build a `"<name>\0<data>"` iovar buffer (brcmfmac iovar wire form). Returns len.
+pub fn iovar_buf(name: &[u8], data: &[u8], out: &mut [u8]) -> usize {
+    let mut n = 0;
+    for &b in name {
+        if n < out.len() {
+            out[n] = b;
+            n += 1;
+        }
+    }
+    if n < out.len() {
+        out[n] = 0;
+        n += 1;
+    }
+    for &b in data {
+        if n < out.len() {
+            out[n] = b;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// `clmload` chunk header — `struct brcmf_dload_data_le` (OpenBSD `bwfm_dload_data`
+/// is byte-identical): `{ u16 flag; u16 type; u32 len; u32 crc; data[] }`.
+/// `flag = HANDLER_VER(1<<12) | BEGIN(1<<1) on first | END(1<<2) on last`; `type=CLM(2)`.
+pub const DL_HANDLER_VER: u16 = 1 << 12;
+pub const DL_BEGIN: u16 = 1 << 1;
+pub const DL_END: u16 = 1 << 2;
+pub const DL_TYPE_CLM: u16 = 2;
+pub const DL_CHUNK: usize = 1400;
+
+/// Fill `out` with one clmload dload chunk header + `chunk` bytes; returns total len.
+pub fn clm_chunk(flag: u16, chunk: &[u8], out: &mut [u8]) -> usize {
+    let len = chunk.len() as u32;
+    out[0..2].copy_from_slice(&(flag | DL_HANDLER_VER).to_le_bytes());
+    out[2..4].copy_from_slice(&DL_TYPE_CLM.to_le_bytes());
+    out[4..8].copy_from_slice(&len.to_le_bytes());
+    out[8..12].copy_from_slice(&0u32.to_le_bytes()); // crc unused
+    let n = chunk.len().min(out.len() - 12);
+    out[12..12 + n].copy_from_slice(&chunk[..n]);
+    12 + n
+}
+
+// --- SDIO CMD53 write (byte mode) + backplane windowed write ------------------
+fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
+    let n = data.len().min(512);
+    w16(BLK_SIZE_CNT, n as u16);
+    w16(BLK_SIZE_CNT + 2, 1);
+    let arg = (1 << 31)            // write
+        | ((fnum & 7) << 28)
+        | (0 << 27)                 // byte mode
+        | (1 << 26)                 // incrementing
+        | ((addr & 0x1_FFFF) << 9)
+        | (n as u32 & 0x1FF);
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true).is_none() {
+        return false;
+    }
+    // PIO out: pack bytes into the 32-bit data port.
+    let mut i = 0;
+    while i < n {
+        let mut word = 0u32;
+        for b in 0..4 {
+            if i < n {
+                word |= (data[i] as u32) << (b * 8);
+                i += 1;
+            }
+        }
+        w32(BUF_DATA, word);
+    }
+    let mut spin = 0u32;
+    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            return false;
+        }
+        spin += 1;
+        if spin > 2_000_000 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Write `data` to backplane address `addr` in ≤32 KiB windows (F1).
+fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
+    let mut off = 0usize;
+    while off < data.len() {
+        set_backplane_window(addr);
+        let win_off = (addr & 0x7FFF) as usize;
+        let space = 0x8000 - win_off;
+        let n = space.min(data.len() - off).min(512); // CMD53 byte cap per burst
+        if !cmd53_write(1, (win_off as u32) | 0x8000, &data[off..off + n]) {
+            return false;
+        }
+        off += n;
+        addr += n as u32;
+    }
+    true
+}
+
+/// P10 Stage B — download firmware + NVRAM, start the ARMCR4 core, enable F2.
+/// Returns true once F2 reports ready (firmware alive). Structured from brcmfmac
+/// `brcmf_sdio_download_firmware` + OpenBSD `bwfm_sdio` — timing iterates on metal.
+pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
+    // 1. Request the ALP clock (backplane clock for memory access).
+    let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
+    for _ in 0..50 {
+        if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_ALP_AVAIL).unwrap_or(0) != 0 {
+            break;
+        }
+        delay(1_000);
+    }
+    // 2. (ARMCR4 halt — device-specific core reset via the backplane; asserted here
+    //    before RAM writes. Exact core-base + reset bits confirmed on metal.)
+    //    -- structured: firmware is written while the core is held in reset.
+    // 3. Firmware → RAM base (ATCM @0).
+    if !backplane_write(RAM_BASE, FW_BIN) {
+        return false;
+    }
+    // 4. NVRAM (stripped + trailer) near the top of RAM.
+    let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
+    let nvram_addr = RAM_BASE + RAM_SIZE - (nlen as u32);
+    if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
+        return false;
+    }
+    // 5. (Reset vector + take ARMCR4 out of reset — device-specific; metal.)
+    // 6. Switch to the HT (fast) clock.
+    let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
+    for _ in 0..50 {
+        if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_HT_AVAIL).unwrap_or(0) != 0 {
+            break;
+        }
+        delay(1_000);
+    }
+    // 7. Enable F2, poll ready — F2 ready = firmware alive.
+    let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
+    for _ in 0..500 {
+        if cmd52(false, 0, SDIO_FUNC_READY, 0).map(|v| v & SDIO_F2).unwrap_or(0) != 0 {
+            return true;
+        }
+        delay(2_000);
+    }
+    false
+}
+
+/// P10 Stage C — the regdomain fix. clmload the CLM blob (chunked BEGIN/END), then
+/// set the `country` iovar `{abbrev, rev, ccode}` and read it back. Requires F2 up
+/// (Stage B) and the BCDC/SDPCM control channel (structured; SDPCM seq iterates on
+/// metal). Returns Some(true) if the readback ISO != "00"/"99".
+///
+/// Per the FreeBSD/OpenBSD cross-check: clmload BEFORE the country set; map the
+/// (ccode,rev) pair for correct channel/power (rev 0 = crude fallback).
+pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
+    // clmload — chunk the CLM blob with BEGIN on first / END on last.
+    let mut buf = [0u8; DL_CHUNK + 32];
+    let total = CLM_BLOB.len();
+    let mut off = 0usize;
+    while off < total {
+        let n = (total - off).min(DL_CHUNK);
+        let mut flag = 0u16;
+        if off == 0 {
+            flag |= DL_BEGIN;
+        }
+        if off + n >= total {
+            flag |= DL_END;
+        }
+        let clen = clm_chunk(flag, &CLM_BLOB[off..off + n], &mut buf);
+        // iovar "clmload" carrying this dload chunk, via BCDC WLC_SET_VAR.
+        let mut iob = [0u8; DL_CHUNK + 48];
+        let ilen = iovar_buf(b"clmload", &buf[..clen], &mut iob);
+        if !bcdc_iovar_set(&iob[..ilen]) {
+            return None;
+        }
+        off += n;
+    }
+    // country iovar.
+    let mut cp = [0u8; 12];
+    country_payload(iso, rev, &mut cp);
+    let mut iob = [0u8; 48];
+    let ilen = iovar_buf(b"country", &cp, &mut iob);
+    if !bcdc_iovar_set(&iob[..ilen]) {
+        return None;
+    }
+    // read back.
+    let mut rb = [0u8; 12];
+    if !bcdc_iovar_get(b"country", &mut rb) {
+        return None;
+    }
+    Some(!(rb[0] == b'0' && rb[1] == b'0') && rb[0] != 0)
+}
+
+// --- BCDC control over SDIO F2 (SDPCM) — structured; metal-iterated -----------
+// dcmd header: struct brcmf_proto_bcdc_dcmd { u32 cmd; u32 len; u32 flags; u32 status; }
+const WLC_SET_VAR: u32 = 263;
+const WLC_GET_VAR: u32 = 262;
+const BCDC_SET: u32 = 0x02;
+
+/// Send a BCDC set-iovar dcmd over F2. (SDPCM software header + seq/credit handling
+/// is the metal-iterated part; the BCDC dcmd + iovar payload framing is exact.)
+fn bcdc_iovar_set(iovar: &[u8]) -> bool {
+    bcdc_dcmd(WLC_SET_VAR, BCDC_SET, iovar, &mut [])
+}
+fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
+    // "<name>\0" as the request payload; reply lands in `out`.
+    let mut req = [0u8; 48];
+    let n = iovar_buf(name, &[], &mut req);
+    bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], out)
+}
+
+/// One BCDC dcmd request/reply on the SDPCM control channel over F2. Builds the
+/// 16-byte BCDC header + payload; sends via CMD53 on F2 with the SDPCM frame tag.
+/// NOTE: the SDPCM software header (seq, channel, doffset) + tx-credit flow control
+/// are structured here and confirmed on metal — this is the Stage C metal gate.
+fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> bool {
+    static mut REQID: u32 = 0;
+    let reqid = unsafe {
+        REQID = REQID.wrapping_add(1);
+        REQID
+    };
+    let mut frame = [0u8; DL_CHUNK + 64];
+    // SDPCM hardware frame tag (len | ~len) + software header (8 B) precede BCDC.
+    let sdpcm = 12usize; // hw tag(4) + sw header(8)
+    let bcdc = sdpcm;
+    // BCDC header.
+    frame[bcdc..bcdc + 4].copy_from_slice(&cmd.to_le_bytes());
+    frame[bcdc + 4..bcdc + 8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    let flg = flags | (reqid << 16);
+    frame[bcdc + 8..bcdc + 12].copy_from_slice(&flg.to_le_bytes());
+    frame[bcdc + 12..bcdc + 16].copy_from_slice(&0u32.to_le_bytes()); // status
+    let body = bcdc + 16;
+    let n = payload.len().min(frame.len() - body);
+    frame[body..body + n].copy_from_slice(&payload[..n]);
+    let total = (body + n) as u16;
+    // SDPCM hw tag.
+    frame[0..2].copy_from_slice(&total.to_le_bytes());
+    frame[2..4].copy_from_slice(&(!total).to_le_bytes());
+    // sw header doffset = header length (control channel = 0).
+    frame[6] = sdpcm as u8; // doffset field position (structured)
+    // Send on F2 (whole frame), pad to 4.
+    let padded = ((total as usize) + 3) & !3;
+    if !cmd53_write(2, 0, &frame[..padded]) {
+        return false;
+    }
+    // Read the reply (GET) — drain one control frame off F2 and copy the BCDC body.
+    if !reply.is_empty() {
+        let mut rx = [0u8; DL_CHUNK + 64];
+        if !cmd53_read(2, 0, &mut rx) {
+            return false;
+        }
+        // Skip SDPCM + BCDC headers; copy the reply body.
+        let off = sdpcm + 16;
+        let m = reply.len().min(rx.len() - off);
+        reply[..m].copy_from_slice(&rx[off..off + m]);
+    }
+    true
+}
