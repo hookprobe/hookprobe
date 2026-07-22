@@ -177,6 +177,26 @@ Why it's `00`/`99` today: firmware boots with only a built-in world locale; skip
 2. Set the **`country` iovar** with `struct brcmf_fil_country_le { char country_abbrev[4]="GB"; __le32 rev; char ccode[4]="GB"; }` — rev from the CLM/NVRAM `ccode=` line.
 3. **Read back** the `country` iovar → `country_abbrev` must be uppercase ISO, not `00`/`XX`/`99`, and `clmver` non-empty.
 
+### FreeBSD / OpenBSD cross-check (2026-07-22) — confirms the mechanism, cleaner CLM ref
+- **FreeBSD base has NO Broadcom FullMAC driver** (no `bwfm`/`brcmfmac`, any bus) — onboard
+  RPi4/RPi5 WiFi does not work on stock FreeBSD. So FreeBSD is not a working oracle; the
+  transferable references are **OpenBSD `bwfm`** (`sys/dev/ic/bwfm.c`) + the net80211 contract.
+- **CLM-load — mirror OpenBSD `bwfm_process_blob` (cleanest ref, identical wire to Linux):**
+  ≤1400-byte chunks; header `struct { u16 flag; u16 type; u32 len; u32 crc; u8 data[] }`;
+  `flag = HANDLER_VER_1(1<<12) | BEGIN(1<<1) on first | END(1<<2) on last`; `type = CLM(2)`;
+  `crc = 0`; sent as the `"clmload"` iovar. Do CLM-load **before** the country set.
+- **country iovar struct is confirmed** `{ char country_abbrev[4]; __le32 rev; char ccode[4]; }`
+  (same on Linux + the experimental narqo FreeBSD port), sent as the `"country"` iovar via BCDC.
+- **GOTCHA (do it right):** don't just copy the 2-letter ISO into both fields with `rev=0`
+  (the narqo shortcut). Linux `brcmf_translate_country_code()` looks up the firmware-specific
+  `(ccode, rev)` pair from the CLM/NVRAM `cc`/`ccode` map — a wrong pair gives wrong channel/
+  power limits. Parse the CM5 NVRAM/CLM `ccode=`/`regrev=` and send the mapped pair, not the raw ISO.
+- **OpenBSD lesson:** `bwfm` never sets country at all (works at world domain) — the country
+  step is *optional to associate*, *mandatory for correct regulatory* (GB/ETSI 5 GHz, TX power).
+- **Design contract (if we expose a control iface):** model on net80211 `ic_setregdomain(rd,
+  nchans, chans)` — one call taking the ISO ccode (`rd.isocc[2]`) + the channel/power table,
+  applied only while the radio is DOWN.
+
 ### Control protocol (BCDC/CDC over SDIO F2) — codeable off-metal now
 ```
 struct brcmf_proto_bcdc_dcmd { __le32 cmd; __le32 len; __le32 flags; __le32 status; }  // 16 B
