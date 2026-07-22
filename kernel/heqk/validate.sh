@@ -35,6 +35,7 @@ PHASES=(
   "P8l|[P8-l2] PASS|impl|Validation|L2 guard: napse-l2guard parity — malformed-ARP + ARP-spoof dropped at frame level"
   "P8t|[P8-tcp] PASS|impl|Validation|TCP scan detection: NULL/FIN/Xmas/SYN-FIN anomalous-flag scans dropped, normal SYN/ACK pass"
   "P8s|[P8-syn] PASS|impl|Validation|SYN-flood rate-limit: first stateful rule (BPF CALL helper + windowed rate limiter)"
+  "P8ss|[P8-synsrc] PASS|impl|Validation|per-source SYN-flood: live rule keyed by IP source — flood one host, others unaffected"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
 

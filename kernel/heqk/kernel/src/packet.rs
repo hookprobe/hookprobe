@@ -129,6 +129,11 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     if crate::rules::run_l2(frame) == DROP {
         return (0, DROP);
     }
+    // Stateful flow tier (per-source SYN-flood rate-limit) — also on the raw
+    // frame; self-parses IPv4/TCP/SYN and keys the limiter by IP source.
+    if crate::rules::run_flow(frame) == DROP {
+        return (0, DROP);
+    }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
             // Run the signed rule set on a normalized L4 view: R1 = L4 header, so

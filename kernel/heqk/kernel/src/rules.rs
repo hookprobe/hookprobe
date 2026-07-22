@@ -47,6 +47,13 @@ pub static TCP_RULES: &[Rule] = &[
     Rule { id: 204, name: "tcp-syn-fin", prog: &bpf::TCP_SYNFIN, severity: SEV_HIGH },
 ];
 
+/// The signed FLOW corpus — STATEFUL rules on the full L2 frame (R1 = frame),
+/// keyed per-source via the rate-limiter CALL helper. Runs on every frame; each
+/// rule self-parses (IPv4/TCP/…) and PASSes non-matching traffic.
+pub static FLOW_RULES: &[Rule] = &[
+    Rule { id: 301, name: "syn-flood-per-src", prog: &bpf::TCP_SYN_FLOOD_SRC, severity: SEV_HIGH },
+];
+
 const MAX_RULES: usize = 16;
 #[derive(Clone, Copy)]
 struct RState {
@@ -60,9 +67,12 @@ static mut RSTATE_L2: [RState; MAX_RULES] =
     [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
 static mut RSTATE_TCP: [RState; MAX_RULES] =
     [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
+static mut RSTATE_FLOW: [RState; MAX_RULES] =
+    [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
 static NRULES: AtomicUsize = AtomicUsize::new(0);
 static NRULES_L2: AtomicUsize = AtomicUsize::new(0);
 static NRULES_TCP: AtomicUsize = AtomicUsize::new(0);
+static NRULES_FLOW: AtomicUsize = AtomicUsize::new(0);
 
 #[inline]
 fn rstate(state: *mut RState, i: usize) -> RState {
@@ -102,7 +112,9 @@ pub fn init() -> (usize, usize) {
     NRULES_L2.store(L2_RULES.len().min(MAX_RULES), Ordering::Relaxed);
     let (vt, jt) = compile_set(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>());
     NRULES_TCP.store(TCP_RULES.len().min(MAX_RULES), Ordering::Relaxed);
-    (v4 + v2 + vt, j4 + j2 + jt)
+    let (vf, jf) = compile_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>());
+    NRULES_FLOW.store(FLOW_RULES.len().min(MAX_RULES), Ordering::Relaxed);
+    (v4 + v2 + vt + vf, j4 + j2 + jt + jf)
 }
 
 /// Run a rule set against a byte view `pkt` (R1 = pkt start). Returns the packet
@@ -147,6 +159,13 @@ pub fn run_tcp(tcp: &[u8]) -> u16 {
     run_set(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp)
 }
 
+/// Run the STATEFUL flow tier against the raw `frame` (R1 = L2 start) — per-source
+/// SYN-flood rate-limit etc. Runs on every frame; each rule self-parses and
+/// PASSes non-matching traffic.
+pub fn run_flow(frame: &[u8]) -> u16 {
+    run_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame)
+}
+
 /// How many rules are active (verified) across all tiers — for the boot report.
 pub fn active() -> usize {
     let a = (0..NRULES.load(Ordering::Relaxed))
@@ -155,5 +174,7 @@ pub fn active() -> usize {
         .filter(|&i| rstate(addr_of_mut!(RSTATE_L2).cast::<RState>(), i).verified).count();
     let c = (0..NRULES_TCP.load(Ordering::Relaxed))
         .filter(|&i| rstate(addr_of_mut!(RSTATE_TCP).cast::<RState>(), i).verified).count();
-    a + b + c
+    let d = (0..NRULES_FLOW.load(Ordering::Relaxed))
+        .filter(|&i| rstate(addr_of_mut!(RSTATE_FLOW).cast::<RState>(), i).verified).count();
+    a + b + c + d
 }

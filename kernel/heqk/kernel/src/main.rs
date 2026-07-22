@@ -1099,6 +1099,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: SYN-flood rate-limit — first STATEFUL rule (CALL helper) ---
     p8_synflood();
 
+    // --- P8: per-source SYN-flood — the live-datapath rule (keyed by IP src) ---
+    p8_synflood_src();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1470,6 +1473,43 @@ fn p8_synflood() -> bool {
     // ~limit passed, the rest of the burst dropped once the window count crossed.
     let ok = verified && jit_declines && dropped >= 19 && passed <= limit + 1 && passed >= limit - 1;
     kprint!(" [P8-syn] {} — SYN rate under the window limit passes, the flood is rate-limited (stateful)\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8 per-source SYN-flood — the LIVE-datapath rule (`rules::run_flow`, wired into
+/// classify). It self-parses the full frame to the IP source and rate-limits per
+/// source, so a flood from one host is dropped while OTHER sources' connection
+/// setups are unaffected — the property that makes it safe to enforce inline.
+#[cfg(not(feature = "cm5"))]
+fn p8_synflood_src() -> bool {
+    kprint!("\n [P8] per-source SYN-flood — live rule keyed by IP source\n");
+    fn syn_frame(src: [u8; 4]) -> [u8; 54] {
+        let mut f = [0u8; 54];
+        f[12] = 0x08;
+        f[13] = 0x00; // EtherType IPv4
+        f[14] = 0x45; // IHL=5
+        f[23] = 6; // proto TCP
+        f[26..30].copy_from_slice(&src); // IP source
+        f[46] = 0x50; // TCP data offset
+        f[47] = 0x02; // TCP flags = lone SYN
+        f
+    }
+    let a = syn_frame([10, 0, 0, 1]);
+    let b = syn_frame([20, 0, 0, 1]); // a different source (different rate slot)
+    let limit = bpf::SYN_LIMIT as usize;
+    let (mut ap, mut ad) = (0usize, 0usize);
+    for _ in 0..(limit + 20) {
+        match rules::run_flow(&a) {
+            packet::PASS => ap += 1,
+            _ => ad += 1,
+        }
+    }
+    let bp = (0..5).filter(|_| rules::run_flow(&b) == packet::PASS).count();
+    kprint!("   source A flood: {} passed (~limit {}), {} dropped; source B: {}/5 passed (isolated)\n",
+        ap, limit, ad, bp);
+    let ok = ad >= 19 && ap <= limit + 1 && ap >= limit - 1 && bp == 5;
+    kprint!(" [P8-synsrc] {} — per-source SYN flood rate-limited inline; other sources unaffected\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }

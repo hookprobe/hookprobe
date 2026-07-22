@@ -147,6 +147,30 @@ pub const TCP_SYN_FLOOD: [u64; 10] = [
     insn(0x95, 0, 0, 0, 0),          // 9  EXIT (PASS)
 ];
 
+/// PER-SOURCE SYN-flood rate-limit — the live-datapath version. R1 = the full L2
+/// FRAME; it self-parses IPv4 → TCP → lone SYN and keys the rate limiter by the
+/// **IP source address**, so a flood from one host is limited without touching
+/// other sources' connection setups (safe to enforce inline). Assumes standard
+/// framing (14-byte Ethernet, IHL=5, no VLAN); other shapes read a non-SYN byte
+/// and PASS (fail-open, per the ADR-0005 rate-limit contract). Offsets: EtherType
+/// @12, IP proto @23, IP src @26, TCP flags @47 (14+20+13).
+pub const TCP_SYN_FLOOD_SRC: [u64; 14] = [
+    insn(0x69, 2, 1, 12, 0),         // 0  R2 = EtherType (LDX_H @12)
+    insn(0x55, 2, 0, 10, 0x0008),    // 1  if != IPv4 (LE 0x0008) goto 12 (PASS)
+    insn(0x71, 3, 1, 23, 0),         // 2  R3 = IP proto (@23)
+    insn(0x55, 3, 0, 8, 6),          // 3  if != TCP goto 12
+    insn(0x71, 4, 1, 47, 0),         // 4  R4 = TCP flags (@47)
+    insn(0x55, 4, 0, 6, 0x02),       // 5  if != lone SYN goto 12
+    insn(0x61, 1, 1, 26, 0),         // 6  R1 = IP source (@26, LDX_W) -> rate key
+    insn(0xb7, 2, 0, 0, SYN_LIMIT),  // 7  R2 = SYN_LIMIT
+    insn(0x85, 0, 0, 0, 1),          // 8  R0 = syn_rate_over(R1=src, R2=limit)
+    insn(0x15, 0, 0, 2, 0),          // 9  if R0 == 0 goto 12 (under limit -> PASS)
+    insn(0xb7, 0, 0, 0, 2),          // 10 R0 = DROP
+    insn(0x95, 0, 0, 0, 0),          // 11 EXIT (DROP)
+    insn(0xb7, 0, 0, 0, 1),          // 12 R0 = PASS
+    insn(0x95, 0, 0, 0, 0),          // 13 EXIT (PASS)
+];
+
 /// ARP-spoof drop — mirrors `ArpObs::eth_mismatch`: an ARP frame whose payload
 /// sender-MAC (@22, 6 bytes) disagrees with the Ethernet source-MAC (@6) → DROP
 /// (a spoofed sender). Non-ARP → PASS. Compared as 4 bytes (LDX_W) + 2 bytes
