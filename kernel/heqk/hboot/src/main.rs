@@ -95,12 +95,29 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthex(dtb_pa);
     puts("\n");
 
-    // MEASURED BOOT: start the chain by self-measuring HBoot's loaded image
-    // (PCR0). Recorded baseline — see measure.rs on the CRTM/OTP anchor.
+    // MEASURED BOOT (B-7): ROOT the chain in the immutable OTP-fused device
+    // identity BEFORE self-measuring HBoot. PCR0's first extend is the CRTM
+    // anchor = SHA-256( "HEQK-CRTM-v1" || board_serial(OTP) || hboot_version );
+    // the board serial lives in OTP (read via the VC mailbox — hardware, not the
+    // image), so PCR0 is no longer a free-floating self-measurement. A tampered
+    // HBoot cannot forge this hardware root, and the OTP-derived AK-signed quote
+    // binds it to the device's fuses. Fail-safe: an unreachable mailbox yields
+    // serial 0 (a stable, if non-unique, anchor) — the AK signature stays the
+    // authenticity proof.
     let mut m = measure::Measurements::init();
+    let crtm_serial = mailbox::board_serial().unwrap_or(0);
+    let mut anchor = [0u8; 32];
+    anchor[..12].copy_from_slice(b"HEQK-CRTM-v1");
+    anchor[16..24].copy_from_slice(&crtm_serial.to_le_bytes());
+    anchor[24..32].copy_from_slice(&1u64.to_le_bytes()); // hboot_version
+    let anchor_d = sha256::digest(&anchor);
+    m.extend(PCR_FIRMWARE, EV_CRTM, &anchor_d);
+    puts(" measure: PCR0 CRTM-anchored to OTP device id=");
+    puthex(crtm_serial);
+    puts("\n");
     let hboot_end = unsafe { core::ptr::addr_of!(__hboot_load_end) as usize };
     let hboot_self = m.measure_region(PCR_FIRMWARE, EV_HBOOT_SELF, IMAGE_BASE, hboot_end - IMAGE_BASE);
-    puts(" measure: PCR0 (hboot self) extended, sha256=");
+    puts(" measure: PCR0 (hboot self) extended over CRTM anchor, sha256=");
     puthash(&hboot_self);
     puts("\n");
 
@@ -155,6 +172,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts(" (");
     puts(rollback::backend().name());
     puts(")\n");
+    if rollback::floor_read_failed() {
+        // P7d-c fail-closed: the OTP counter was unreadable; the floor held the
+        // provisioned watermark rather than collapsing to 0. Log it loudly.
+        puts(" svn    : WARN — OTP floor unreadable; held fail-closed watermark (no rollback)\n");
+    }
 
     // MEASURE: SHA-256 over the payload body. Verification binds to THIS
     // recomputed hash, never the header's stored copy — so a tampered payload

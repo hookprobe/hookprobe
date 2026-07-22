@@ -35,6 +35,10 @@ pub const EV_HBOOT_SELF: u32 = 1;
 pub const EV_KERNEL: u32 = 2;
 pub const EV_CONFIG: u32 = 3;
 pub const EV_VERIFY: u32 = 4;
+/// B-7 — the CRTM anchor: PCR0's first extend, from the immutable OTP-fused
+/// device identity, so the measurement chain is rooted in hardware (not a
+/// free-floating HBoot self-measurement).
+pub const EV_CRTM: u32 = 5;
 
 /// One measured-boot event: `pcr` was extended with `digest` (kind is a label).
 #[repr(C)]

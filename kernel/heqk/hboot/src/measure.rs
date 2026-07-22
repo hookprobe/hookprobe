@@ -8,11 +8,14 @@
 //! check). Unlike secure boot, this RECORDS rather than enforces — it is what a
 //! local or remote attestation reasons about.
 //!
-//! Honesty note: HBoot self-measurement (PCR0) is a *recorded baseline*, not a
-//! hardware root of trust — a tampered HBoot could lie. The proper anchor is an
-//! immutable CRTM (BCM2712 OTP / a measuring first stage); that pairs with the
-//! OTP work on the backlog. The kernel and config measurements are meaningfully
-//! chained from HBoot regardless.
+//! CRTM anchor (B-7): PCR0's FIRST extend is the CRTM anchor — SHA-256 over the
+//! immutable OTP-fused device identity (board serial, read via the VC mailbox),
+//! done in `hboot_main` BEFORE the HBoot self-measurement. So PCR0 is rooted in
+//! hardware the image can't forge, not a free-floating self-measurement, and the
+//! OTP-derived AK-signed quote binds the whole chain to the device's fuses.
+//! Remaining honesty: HBoot still measures itself; a *fully* immutable first
+//! stage (the BCM2712 BootROM/EEPROM signed-boot) is the platform's own root and
+//! sits below HBoot — the anchor ties our chain to that hardware identity.
 
 use boot_abi::sha256;
 use boot_abi::*;

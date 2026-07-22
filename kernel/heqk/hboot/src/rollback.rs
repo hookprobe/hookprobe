@@ -28,6 +28,38 @@ pub const COMPILE_FLOOR: u64 = 1;
 /// Back-compat alias used elsewhere in HBoot.
 pub const MIN_SVN: u64 = COMPILE_FLOOR;
 
+/// P7d-c FAIL-CLOSED watermark: the highest OTP hardware floor ever provisioned
+/// on the fleet, baked into HBoot. It MUST be bumped to the new level every time
+/// `advance_floor` blows the OTP counter in production (part of the same
+/// deliberate release action). Its purpose: make the OTP read fail-CLOSED. Even
+/// if an attacker forces the VC-mailbox OTP read to fail, `effective_floor()`
+/// can never drop below this watermark — so a forced read-failure can no longer
+/// roll an advanced floor back to the compile floor. 0 until the floor is first
+/// advanced (block 3 blank ⇒ real hardware floor is 0 anyway).
+pub const EXPECTED_MIN_HW_FLOOR: u64 = 0;
+
+use core::sync::atomic::{AtomicBool, Ordering};
+/// Set by `effective_floor()` when the live OTP read could not be completed.
+static FLOOR_READ_FAILED: AtomicBool = AtomicBool::new(false);
+/// Whether the most recent `effective_floor()` failed to read the OTP counter
+/// (a security-relevant condition — the floor fell back to the fail-closed
+/// watermark). HBoot logs it; a stricter policy could refuse to boot.
+pub fn floor_read_failed() -> bool {
+    FLOOR_READ_FAILED.load(Ordering::Relaxed)
+}
+
+/// Read the OTP block-3 thermometer with a bounded retry. Returns None only if
+/// EVERY attempt to reach the VC mailbox fails — distinct from a genuine floor
+/// of 0 (a blank counter reads Some(0)).
+fn read_otp_floor() -> Option<u64> {
+    for _ in 0..3 {
+        if let Some(words) = crate::mailbox::otp_device_key() {
+            return Some(words.iter().map(|w| u64::from(w.count_ones())).sum());
+        }
+    }
+    None
+}
+
 /// A persistent, monotonic security-version floor.
 pub trait SecureCounter {
     /// Current hardware floor (0 if not provisioned / backend unavailable).
@@ -65,18 +97,11 @@ impl SecureCounter for Unprovisioned {
 pub struct OtpCounter;
 impl SecureCounter for OtpCounter {
     fn floor(&self) -> u64 {
-        match crate::mailbox::otp_device_key() {
-            // Sum of set bits across the 16 words = the thermometer level.
-            Some(words) => words.iter().map(|w| u64::from(w.count_ones())).sum(),
-            // Unreadable → 0, which collapses `effective_floor` to COMPILE_FLOOR.
-            // SAFE ONLY while the hardware floor is unadvanced (block 3 blank ⇒
-            // real floor is 0 anyway). ⚠️ Before `advance_floor` is ever used in
-            // production this MUST become fail-CLOSED (refuse boot / retain a
-            // last-known-good floor): otherwise an attacker who can force one
-            // mailbox read to fail would drop an advanced floor back to the
-            // compile floor and boot a rolled-back-but-signed image.
-            None => 0,
-        }
+        // Thermometer level with a bounded retry; unreadable ⇒ 0 here, but the
+        // fail-CLOSED policy lives in `effective_floor` (which clamps to the
+        // EXPECTED_MIN_HW_FLOOR watermark so a forced read-failure cannot roll an
+        // advanced floor back). See P7d-c.
+        read_otp_floor().unwrap_or(0)
     }
     fn is_hardware(&self) -> bool {
         true
@@ -128,12 +153,26 @@ pub fn advance_floor(target: u64) -> Option<u64> {
     Some(after.iter().map(|w| u64::from(w.count_ones())).sum())
 }
 
-/// Effective anti-rollback floor = max(compile-time, hardware).
+/// Effective anti-rollback floor = max(compile floor, fail-closed watermark,
+/// live OTP thermometer). FAIL-CLOSED (P7d-c): if the OTP read cannot be
+/// completed, the floor falls back to `max(COMPILE_FLOOR, EXPECTED_MIN_HW_FLOOR)`
+/// — never to 0 and never below the last provisioned level, so a forced
+/// read-failure can never roll an advanced floor back. Records the read failure
+/// (see `floor_read_failed`) so HBoot can log/escalate it.
 pub fn effective_floor() -> u64 {
-    let hw = backend().floor();
-    if hw > COMPILE_FLOOR {
-        hw
-    } else {
-        COMPILE_FLOOR
+    let base = if COMPILE_FLOOR > EXPECTED_MIN_HW_FLOOR { COMPILE_FLOOR } else { EXPECTED_MIN_HW_FLOOR };
+    match read_otp_floor() {
+        Some(hw) => {
+            FLOOR_READ_FAILED.store(false, Ordering::Relaxed);
+            if hw > base {
+                hw
+            } else {
+                base
+            }
+        }
+        None => {
+            FLOOR_READ_FAILED.store(true, Ordering::Relaxed);
+            base // fail-closed: hold the watermark, never drop to 0
+        }
     }
 }
