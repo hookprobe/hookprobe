@@ -612,6 +612,16 @@ fn cm5_p8_verify() {
             }
             kprint!(" [P8-JIT] {} — THREAT_RULE JIT'd to native ARM64 @ {:#x} (EL1 RO+X), matches interpreter on metal\n",
                 if jit_ok { "PASS" } else { "FAIL" }, va);
+            // B-9: prove W^X — the exec page (GB6) is RO+X and its GB0 identity
+            // alias is now RO (sealed), so the executable code has NO writable
+            // alias anywhere. AP[2] (bit 7) set == read-only.
+            let exec_desc = arch_aarch64::mmu_cm5::page_desc(va);
+            let frame_pa = (exec_desc & 0xFFFF_FFFF_F000) as usize;
+            let alias_desc = arch_aarch64::mmu_cm5::page_desc(frame_pa);
+            let ro = |d: u64| d & (1 << 7) != 0;
+            let wx_ok = ro(exec_desc) && ro(alias_desc);
+            kprint!(" [P8-WX] {} — JIT code RO+X; frame {:#x} alias sealed RO (no writable alias): exec_ro={} alias_ro={} (B-9)\n",
+                if wx_ok { "PASS" } else { "FAIL" }, frame_pa, ro(exec_desc), ro(alias_desc));
         }
         None => kprint!(" [P8-JIT] FAIL — JIT compile returned None on metal\n"),
     }

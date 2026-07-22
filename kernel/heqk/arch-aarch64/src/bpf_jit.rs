@@ -272,7 +272,8 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
 
 #[cfg(feature = "cm5")]
 fn acquire_code_frame() -> usize {
-    crate::mmu_cm5::alloc_frame()
+    // B-9: allocate from the sealed JIT pool (per-page GB0 alias, sealable RO).
+    crate::mmu_cm5::jit_alloc_frame()
 }
 #[cfg(not(feature = "cm5"))]
 fn acquire_code_frame() -> usize {
@@ -281,6 +282,9 @@ fn acquire_code_frame() -> usize {
 
 #[cfg(feature = "cm5")]
 fn publish_exec_page(frame: usize) -> usize {
+    // B-9: seal the writable GB0 identity alias RO before exposing RO+X, so the
+    // executable code has no writable alias anywhere (full W^X on metal).
+    crate::mmu_cm5::jit_seal(frame);
     crate::mmu_cm5::map_kernel_code_page(frame)
 }
 #[cfg(not(feature = "cm5"))]

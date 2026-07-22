@@ -64,6 +64,14 @@ pub const JITCODE_GB: u64 = 6;
 pub const JITCODE_VA_BASE: usize = (JITCODE_GB * GB) as usize; // 0x1_8000_0000
 static mut L2_JIT: Table = Table([0; 512]);
 static mut L3_JIT: Table = Table([0; 512]);
+
+// B-9 close (JIT half): a dedicated, L3-mapped 2 MiB block in GB0 for JIT code
+// FRAMES. Because it's per-page (not a 2 MiB block), each JIT page's writable
+// identity alias can be SEALED read-only after the code is emitted — so no
+// writable alias of executable code survives (full W^X). 896 MiB, its own block.
+const JITPOOL_BASE: u64 = 0x3800_0000;
+const JITPOOL_BLK: usize = (JITPOOL_BASE / M2) as usize; // GB0 2 MiB block index (448)
+static mut L3_JITPOOL: Table = Table([0; 512]);
 // EL0 driver code + stack live in these Normal-RAM frames (also visible via the
 // GB0 identity map as RW+PXN — same cacheable type, so no attribute mismatch).
 #[repr(align(4096))]
@@ -158,6 +166,7 @@ fn build_wx_gb0() {
     let te = unsafe { core::ptr::addr_of!(__text_end) as u64 };
     let l2 = addr_of_mut!(L2_GB0) as *mut u64;
     let l3 = addr_of_mut!(L3_KERN) as *mut u64;
+    let l3j = addr_of_mut!(L3_JITPOOL) as *mut u64;
     let kern_blk = (ts / M2) as usize; // GB0 base = 0
     let blk_base = kern_blk as u64 * M2;
     unsafe {
@@ -167,10 +176,16 @@ fn build_wx_gb0() {
             let desc = if pa >= ts && pa < te { text_page(pa) } else { data_page(pa) };
             core::ptr::write_volatile(l3.add(p as usize), desc);
         }
-        // L2: 2 MiB RW+PXN blocks, except the kernel block -> the L3 table.
+        // L3 for the JIT-pool block: RW+PXN data pages (emit here, then seal RO).
+        for p in 0..512u64 {
+            core::ptr::write_volatile(l3j.add(p as usize), data_page(JITPOOL_BASE + p * 0x1000));
+        }
+        // L2: 2 MiB RW+PXN blocks, except the kernel + JIT-pool blocks -> L3 tables.
         for b in 0..512u64 {
             let desc = if b as usize == kern_blk {
                 (l3 as u64) | TABLE
+            } else if b as usize == JITPOOL_BLK {
+                (l3j as u64) | TABLE
             } else {
                 normal_rw_block(b * M2)
             };
@@ -425,6 +440,42 @@ pub fn map_user_device_in(l1_root: usize, va: usize, pa: usize) -> bool {
 /// Map an EL0 Normal-Non-Cacheable (coherent DMA-ring) window into a specific AS.
 pub fn map_user_nc_in(l1_root: usize, va: usize, pa: usize) -> bool {
     map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_NC, PXN | UXN))
+}
+
+static JITPOOL_NEXT: AtomicUsize = AtomicUsize::new(JITPOOL_BASE as usize);
+
+/// Allocate a zeroed JIT code FRAME from the sealed pool. Its GB0 identity page
+/// starts RW+PXN so the JIT can emit into it; call `jit_seal` after emit to drop
+/// the writable alias. Returns 0 if the pool (512 pages) is exhausted.
+pub fn jit_alloc_frame() -> usize {
+    let f = JITPOOL_NEXT.fetch_add(0x1000, Ordering::Relaxed);
+    if f + 0x1000 > (JITPOOL_BASE + M2) as usize {
+        return 0;
+    }
+    unsafe {
+        let p = f as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(p.add(i), 0);
+        }
+        core::arch::asm!("dsb ish");
+    }
+    f
+}
+
+/// SEAL a JIT code frame (B-9): flip its GB0 identity page from RW+PXN to RO+PXN,
+/// so the ONLY writable path to the code is gone. Combined with the GB6 RO+X exec
+/// mapping, the executable code has NO writable alias anywhere — full W^X.
+pub fn jit_seal(pa: usize) {
+    let idx = (pa >> 12) & 0x1FF;
+    let desc = pa as u64 | AF | SH_IS | AP_RO_EL1 | ATTR_NORMAL | PAGE | PXN | UXN;
+    let l3 = addr_of_mut!(L3_JITPOOL) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(l3.add(idx), desc);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("tlbi vaae1is, {}", in(reg) (pa >> 12) as u64);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
 }
 
 static JIT_VA_NEXT: AtomicUsize = AtomicUsize::new(JITCODE_VA_BASE);

@@ -117,8 +117,13 @@ impl CapSpace {
             (ut.base + ut.watermark, need)
         };
         let dst = self.free_slot().ok_or("no free slot")?;
-        // Bump the untyped watermark (this memory is now spoken for).
-        self.slots[ut_slot].as_mut().unwrap().watermark += need;
+        // Bump the untyped watermark (this memory is now spoken for). Graceful,
+        // not `unwrap` — `ut_slot` was validated above, but never panic in a
+        // runtime cap operation (fail-closed by returning an error instead).
+        match self.slots.get_mut(ut_slot).and_then(|c| c.as_mut()) {
+            Some(ut) => ut.watermark += need,
+            None => return Err("untyped vanished mid-retype"),
+        }
         self.slots[dst] = Some(Cap {
             otype,
             rights: R | W | G,
