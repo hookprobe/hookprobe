@@ -8,7 +8,10 @@ initramfs initramfs_2712 followkernel
 enable_uart=1
 # keep the firmware's RP1 PCIe window alive so the FTDI/RP1 UART console survives
 pciex4_reset=0
-# enable the external PCIe RC1 node so pcie-brcmstb claims + trains the RTL8111H
+# enable the external PCIe RC1 node so pcie-brcmstb claims + trains the RTL8111H.
+# The compat overlay is the piece plain dtparam=pciex1 was missing — it sets
+# pcie1's clkreq-mode/ASPM so the link actually trains on the CM5/Pi5 stack.
+dtoverlay=pciex1-compat-pi5
 dtparam=pciex1
 
 [cm5]
