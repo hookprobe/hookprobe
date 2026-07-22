@@ -1,44 +1,65 @@
-# HEQK Core — Hardened Edge Quantum-safe Kernel
+# HEQK — Hardened Edge Quantum-safe Kernel
 
-**HookProbe's IDS/IPS-native microkernel: capability-secured, zero-copy datapath, quantum-safe (PQC) integrity, purpose-built to run a SOC plus custom VMs/containers — the long-horizon endgame of the HookProbe OS program.** Subsystem map in `HEQK_SUBSYSTEMS.md`.
+**An IDS/IPS-native microkernel.** HEQK is the HookProbe project's capability-secured operating system kernel for edge security appliances: a fully user-space, zero-copy packet datapath, post-quantum boot integrity rooted in hardware fuses, and a threat-detection plane built into the operating system itself — purpose-built to run a SOC alongside customer VMs and containers.
 
-> 📊 **What we build — [validation matrix](#validation-matrix--p0--p17)** (P0→P17, below): every feature in the kernel and where it is proven — on Raspberry Pi CM5 (BCM2712) silicon, under QEMU, or both — plus in-flight residuals and the automation-underlay and assurance roadmaps.
+![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0%20%2F%20commercial-blue)
+![Language: Rust no_std](https://img.shields.io/badge/rust-no__std-orange)
+![Architecture: aarch64](https://img.shields.io/badge/arch-aarch64-informational)
+![Targets: QEMU · Raspberry Pi CM5](https://img.shields.io/badge/targets-QEMU%20%C2%B7%20RPi%20CM5%20(BCM2712)-lightgrey)
 
-Sibling to `~/hookprobe-bsd` (base of record) and `~/hookprobe-qnx` (real-time/uptime benchmark). This track asks: if we design the OS *around* threat detection from scratch, what does it look like — and what should we actually build vs. stand on?
+> 📊 **What we build — [validation matrix](#validation-matrix--p0--p17)** (P0→P17, below): every feature in the kernel and where it is proven — on Raspberry Pi CM5 (BCM2712) silicon, under QEMU, or both — plus in-flight residuals and the automation-underlay and assurance roadmaps. The table is regenerated automatically from a live validation run.
 
----
-
-## Read in this order
-
-1. **`ARCHITECTURE.md`** — **the spine. The clear, committed, custom HookProbe microkernel architecture** (Rust, QEMU-first, CM5/RP1 + N100, HAL trait, adaptive-NAPI data plane, "the OS is the sensor"). Read this first.
-2. **`buildPlan.md`** — the concrete, best-practice build plan for actually writing the kernel — toolchain, workspace, reference kernels, P0→P7 with test gates.
-3. **`CAPABILITY_MODEL.md`** — the object-capability model (untyped→retype, CSpace, badges, Grant, CDT revocation).
-4. **`ZEROCOPY_IPC_RING.md`** — the packet ring fully mapped: 3 memory regions, descriptor/payload split, SPSC + release/acquire, adaptive NAPI, IOMMU-gated DMA, multi-core scale-out.
-5. **`BPF_THREAT_PLANE.md`** — the RFC 9669 BPF VM + JIT + verifier, inside the unprivileged IDS sidecar.
-6. **`RESEARCH_LANDSCAPE.md`** — the deep investigation (seL4, L4/NOVA/Zircon/Redox/Theseus, DPDK/AF_XDP/virtio, Arrakis/FlexNIC/Demikernel, capability theory, VM/container options) — all cited.
-7. **`ARCHITECTURE_BLUEPRINT.md`** — the earlier generic zone blueprint (kept for context; superseded on edge-sizing by `ARCHITECTURE.md`).
+HEQK is the fourth substrate of the HookProbe program, alongside its Linux, FreeBSD, and QNX tracks. This track asks: if we design the OS *around* threat detection from scratch, what does it look like — and what should we actually build versus stand on?
 
 ---
 
-## The thesis in five sentences
+## Design principles
 
-- **The kernel should do almost nothing** — verify capabilities and route messages — because at 100 GbE the per-packet budget is ~20 cycles and a general-purpose kernel's interrupt/context-switch overhead suffocates the CPU (`RESEARCH_LANDSCAPE.md` §2).
-- **The datapath is fully user-space and zero-copy**: NIC DMA → hugepage frame → capability-shared SPSC ring → IDS reads in place → verdict, with the microkernel off the data path entirely (`ZEROCOPY_IPC_RING.md`).
-- **Detection is a standards-pure RFC 9669 BPF plane** (JIT-compiled, sandbox-verified) inside a capability-bounded sidecar, so a breach of the inspection engine cannot even *address* the host runtime (`BPF_THREAT_PLANE.md`, `CAPABILITY_MODEL.md`).
-- **VMs and containers run in Zone 4** (a monitored Linux guest via seL4 libvmm on Arm), inside the inspection plane and unable to starve it — "the SOC watches the apps," formally scheduled.
-- **The moat ports here unchanged** — event schema, BPF ISA, WASI, QSecBit, AEGIS — the same three portability contracts that carry it across the Linux, FreeBSD, and QNX tracks now carry it to a fourth substrate.
+- **The kernel does almost nothing** — verify capabilities and route messages. At 100 GbE the per-packet budget is roughly 20 cycles, and a general-purpose kernel's interrupt and context-switch overhead suffocates the CPU (`RESEARCH_LANDSCAPE.md` §2).
+- **The datapath is fully user-space and zero-copy**: NIC DMA → hugepage frame → capability-shared SPSC ring → IDS reads in place → verdict. The microkernel is off the data path entirely (`ZEROCOPY_IPC_RING.md`).
+- **Detection is a standards-pure RFC 9669 BPF plane** — JIT-compiled, sandbox-verified — inside a capability-bounded sidecar, so a breach of the inspection engine cannot even *address* the host runtime (`BPF_THREAT_PLANE.md`, `CAPABILITY_MODEL.md`).
+- **VMs and containers run inside the inspection plane** (a monitored Linux guest, Zone 4) and cannot starve it — "the SOC watches the apps," formally scheduled.
+- **The moat ports here unchanged** — event schema, BPF ISA, WASI, QSecBit, AEGIS: the same portability contracts that carry HookProbe across its Linux, FreeBSD, and QNX tracks carry it to this fourth substrate.
 
-## The decision (made — no longer relitigated)
+## Why a custom kernel — and not seL4
 
-The build a **custom Rust microkernel from scratch** — not seL4 — is the committed direction. The earlier docs weighed adopting the verified seL4 core (its capability model *is*, point-for-point, the one drafted here, and it took formal-methods researchers ~15 years to prove). That trade-off is real and consciously accepted, for one decisive reason: **the differentiator is "the OS is the sensor"** — instrumenting the capability/IPC layer itself as a tamper-evident telemetry stream into QSecBit — and *that feature requires owning and modifying the kernel*, which verified seL4 cannot provide without voiding its proof. Owning the kernel is what makes the kernel a sensor. Rust removes the memory-safety bug class in lieu of a proof team; a mandatory TCB security audit covers the rest. See `ARCHITECTURE.md` §0 and §6.
+Building a **custom Rust microkernel from scratch** is the committed direction; the alternative was adopting the formally verified seL4 core, whose capability model is, point for point, the one drafted here — and which took formal-methods researchers roughly fifteen years to prove. That trade-off is real and consciously accepted, for one decisive reason: the differentiator is **"the OS is the sensor"** — instrumenting the capability/IPC layer itself as a tamper-evident telemetry stream into QSecBit — and that feature requires owning and modifying the kernel, which verified seL4 cannot permit without voiding its proof. Owning the kernel is what makes the kernel a sensor. Rust removes the memory-safety bug class in lieu of a proof team; a mandatory TCB security audit covers the rest (`ARCHITECTURE.md` §0, §6).
 
-## What's novel (and therefore risky)
+**What is novel is also what is risky:** IDS/IPS on a capability microkernel has no prior art (`RESEARCH_LANDSCAPE.md` §4). Suricata and Snort exist on DPDK/Linux; seL4 has the building blocks; no one has built detection-grade security on a microkernel. The build plan de-risks it with QEMU→metal phase gates, a hardware-in-the-loop rig, and the already-proven shared moat.
 
-**IDS/IPS on a verified capability microkernel has no prior art** (`RESEARCH_LANDSCAPE.md` §4) — Suricata/Snort exist on DPDK/Linux, seL4 has building blocks, but no one has built detection-grade security on a microkernel. The upside and the risk are the same fact. The build plan de-risks it with QEMU→metal gates, the shared HIL rig, and the already-proven shared moat.
+## Status
 
----
+**P0–P8 are live: a preemptive, paged, capability kernel with EL0 userspace, synchronous IPC, a zero-copy Packet Engine fed by real hardware, a verified BPF threat-detection plane (interpreter + W^X JIT), quantum-safe measured boot, and runtime self-healing — proven on Raspberry Pi CM5 silicon and under QEMU.** Every phase gate is validated in a single boot by `./validate.sh`; the [validation matrix](#validation-matrix--p0--p17) below is the authoritative, per-feature record of what is proven where, and is refreshed automatically. A TCB security audit (`SECURITY_AUDIT.md`) has been completed, with all findings fixed. Development follows a safety-style V-model (`LIFECYCLE.md`) with an always-on validator.
 
-*Status: **P0–P6b GREEN on QEMU (2026-07-20) — a real preemptive, paged, capability kernel with userspace, IPC, a zero-copy Packet Engine fed by a real NIC, a BPF threat-detection VM+JIT, and runtime self-healing.** Validated in one boot by `./validate.sh`: P0 boot; P1 **priority** scheduler + lifecycle; P1b MMU + frame allocator + free list; P2 capabilities (real frames); P3 EL0 + SVC + **capability invocation** + fault containment; P4 **synchronous IPC**; P5 **Packet Engine** (zero-copy ring); **P5b real wire** (virtio-net ARP round-trip); **P6 AI Runtime** — an **RFC 9669 BPF VM** as the verdict; **P6b** — a **BPF verifier** + a native **JIT** (W^X) matching the interpreter, a **self-heal supervisor** (HAM-style restart-on-fault), and a **telemetry/QSecBit** bus ("the OS is the sensor" — a threat score aggregated from TCB events). **DRV** — driver isolation: an **EL0 driver server** drives the NIC's MMIO through a capability-granted device window and nothing else (a compromised driver is contained to EL0 + that one device). A **security audit** (`SECURITY_AUDIT.md`) fixed 5 findings incl. two HIGH (untrusted-device OOB read; missing UXN/PXN → exec-stack + EL1-exec-of-user-memory). Subsystem map in `HEQK_SUBSYSTEMS.md`; safety-style V-model (`LIFECYCLE.md`) with an always-on validator + `kernel-validator` agent (dev-time healer) alongside the kernel's runtime self-heal. **Remaining:** P7 (CM5/RP1 metal — needs hardware), the PQC subsystem (ML-KEM/ML-DSA), and the deferred kernel-page block-splitting for full W^X. Build/run/debug in `HACKING.md`.*
+## Getting started
+
+```sh
+./validate.sh        # one-boot QEMU validation of every phase gate
+```
+
+Toolchain setup, QEMU flags, CM5 flashing, and debugging workflows are in [`HACKING.md`](HACKING.md).
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | **The spine.** The committed HookProbe microkernel architecture — Rust, QEMU-first, CM5/RP1 + N100, HAL trait, adaptive-NAPI data plane, "the OS is the sensor." Read this first. |
+| [`buildPlan.md`](buildPlan.md) | The concrete build plan — toolchain, workspace, reference kernels, phases P0→P17 with test gates. |
+| [`CAPABILITY_MODEL.md`](CAPABILITY_MODEL.md) | The object-capability model: untyped→retype, CSpace, badges, Grant, CDT revocation. |
+| [`ZEROCOPY_IPC_RING.md`](ZEROCOPY_IPC_RING.md) | The packet ring, fully mapped: three memory regions, descriptor/payload split, SPSC + release/acquire, adaptive NAPI, IOMMU-gated DMA, multi-core scale-out. |
+| [`BPF_THREAT_PLANE.md`](BPF_THREAT_PLANE.md) | The RFC 9669 BPF VM, JIT, and verifier inside the unprivileged IDS sidecar. |
+| [`RESEARCH_LANDSCAPE.md`](RESEARCH_LANDSCAPE.md) | The deep investigation — seL4, L4/NOVA/Zircon/Redox/Theseus, DPDK/AF_XDP/virtio, Arrakis/FlexNIC/Demikernel, capability theory, VM/container options — all cited. |
+| [`HEQK_SUBSYSTEMS.md`](HEQK_SUBSYSTEMS.md) | Subsystem map of the kernel tree. |
+| [`LIFECYCLE.md`](LIFECYCLE.md) | The safety-style V-model: phase gates, the always-on validator, and the self-healing development loop. |
+| [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) | The TCB security audit — findings and fixes. |
+| [`HACKING.md`](HACKING.md) | Build, run, flash, and debug. |
+| [`ARCHITECTURE_BLUEPRINT.md`](ARCHITECTURE_BLUEPRINT.md) | The earlier generic zone blueprint — kept for context; superseded on edge-sizing by `ARCHITECTURE.md`. |
+
+## Contributing, security, and licensing
+
+- **Contributing** — see [`CONTRIBUTING.md`](CONTRIBUTING.md); HEQK-specific development workflows are in [`HACKING.md`](HACKING.md). All participants are bound by the [`Code of Conduct`](CODE_OF_CONDUCT.md).
+- **Security reports** — please follow the [security policy](SECURITY.md); do not open public issues for vulnerabilities.
+- **License** — dual-licensed: [AGPL-3.0](LICENSE) for open-source use, commercial licensing available for SaaS and embedded redistribution. Details in [`LICENSING.md`](LICENSING.md).
 
 ---
 
