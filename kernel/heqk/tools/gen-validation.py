@@ -150,6 +150,10 @@ SECTIONS = [
         sub="napse-l2guard parity; JIT'd + running on metal (drop-logic proven on QEMU)", new=True, phase="P8",
         proves="Deterministic frame-level enforcement: bad ARP shape (is_malformed) + spoofed sender-MAC (eth_mismatch) dropped before L4.",
         env=["metal","qemu"], marker="[P8-l2]", gate="P8l"),
+   dict(feat="TCP scan detection — NULL / FIN / Xmas / SYN-FIN",
+        sub="stateless anomalous-flag signatures (Nmap/Suricata-style)", new=True, phase="P8",
+        proves="Anomalous TCP flag combinations dropped as scans; normal SYN/ACK pass (no false positives).",
+        env=["qemu"], marker="[P8-tcp]", gate="P8t"),
  ]),
  ("L4", "Second interface", "external PCIe — the one hardware blocker", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
