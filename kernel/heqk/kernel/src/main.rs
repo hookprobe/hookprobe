@@ -190,8 +190,14 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
     cm5_scheduler_demo();
 
+    // --- P8: statically VERIFY the detection rule before running it on live traffic --
+    cm5_p8_verify();
+
     // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
     cm5_gem_rx_demo();
+
+    // --- P9: external PCIe RC1 link + RTL8111H vendor-ID (2nd-interface bring-up) --
+    cm5_p9_probe();
 
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
     cm5_gem_el0_probe(); // stage 1: register probe
@@ -490,6 +496,53 @@ fn cm5_scheduler_demo() {
         }
     }
     arch_aarch64::disable_irqs();
+}
+
+/// P8 (metal): the PREVAIL-style verifier on real silicon — statically prove the
+/// signed THREAT_RULE is memory-safe (before the datapath runs it on live
+/// frames) and confirm adversarial third-party rules are rejected.
+#[cfg(feature = "cm5")]
+fn cm5_p8_verify() {
+    use bpf::{verify_prevail, EVIL_LOOP, EVIL_NO_VERDICT, EVIL_WILD_LOAD, THREAT_RULE};
+    kprint!(" [P8] verifier (metal): ");
+    let safe = match verify_prevail(&THREAT_RULE) {
+        Ok(min) => {
+            kprint!("THREAT_RULE SAFE (min_len={})", min);
+            true
+        }
+        Err(e) => {
+            kprint!("THREAT_RULE REJECTED ({}) <- BUG", e);
+            false
+        }
+    };
+    let rejected = verify_prevail(&EVIL_WILD_LOAD).is_err()
+        && verify_prevail(&EVIL_LOOP).is_err()
+        && verify_prevail(&EVIL_NO_VERDICT).is_err();
+    kprint!("; adversarial rules {}\n", if rejected { "all REJECTED" } else { "ACCEPTED <- BUG" });
+    kprint!(" [P8] {} — rule statically verified before the live datapath runs it\n",
+        if safe && rejected { "PASS" } else { "FAIL" });
+}
+
+/// P9 (metal): probe the BCM2712 external PCIe RC1 (Track A: `dtparam=pciex1` →
+/// firmware trains the link). Report link state; if up, enumerate the RTL8111H
+/// and print its vendor/device + MAC. Fail-safe: reads only if the link is up.
+#[cfg(feature = "cm5")]
+fn cm5_p9_probe() {
+    use arch_aarch64::rtl8111;
+    let status = rtl8111::rc1_status();
+    kprint!(" [P9] PCIe RC1 status={:#010x} (DL_ACTIVE|PHYLINKUP mask 0x30)\n", status);
+    if !rtl8111::rc1_link_up() {
+        kprint!(" [P9] RC1 link NOT up — add 'dtparam=pciex1' to config.txt (Track A) or no device present\n");
+        return;
+    }
+    match rtl8111::enumerate() {
+        Some(mac) => {
+            kprint!(" [P9] PASS — RTL8111H found @01:00.0 (vendor/device 0x816810EC), MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            kprint!(" [P9] next: inbound window + RX ring (rtl8111::pcie_inbound_window/mac_start)\n");
+        }
+        None => kprint!(" [P9] RC1 link up but RTL8111H not found at 01:00.0 (vendor mismatch)\n"),
+    }
 }
 
 /// P8: RP1 GEM Ethernet polled-RX first light. Probe reachability + link, arm an

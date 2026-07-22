@@ -11,6 +11,9 @@ disable_overscan=1
 # kernel and any access to RP1 (0x1F_xxxx_xxxx — incl. the GPIO-header UART
 # the FTDI is wired to) hangs.
 pciex4_reset=0
+# P9 (Track A): enable the external PCIe RC1 so the firmware trains the link to
+# the RTL8111H (eth1) before OS entry — HEQK then only enumerates + inits the MAC.
+dtparam=pciex1
 
 [cm5]
 kernel=heqk8.img
