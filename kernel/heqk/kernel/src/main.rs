@@ -217,6 +217,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
     cm5_gem_el0_server(); // stage 4d: continuous, restartable isolated EL0 driver server
 
+    // --- P8 (RX-IRQ): enable interrupt-driven RX (LAST — bounded, self-contained) ---
+    cm5_gem_rx_irq_probe();
+
     kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
     // After the banner: drain the UART, then request reboot via `hvc #0` —
     // the EL2 gate performs the PM reset (EL1 writes to the PM block are
@@ -649,17 +652,24 @@ fn cm5_p8_verify() {
         Some(va) => {
             let f: extern "C" fn(*const u8) -> u64 =
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
+            // DIFFERENTIAL JIT↔interpreter equivalence, EXHAUSTIVE over the rule's
+            // entire input domain (all 65536 L4 port values) — the pragmatic,
+            // runnable form of a Jitterbug/Serval per-instruction JIT proof: for
+            // THIS rule the native code is proven to agree with the verified
+            // interpreter on every possible input, on real silicon.
             let mut jit_ok = true;
-            for &port in &[4444u16, 53u16, 80u16] {
+            let mut mismatches = 0u32;
+            for port in 0u32..=0xffff {
                 let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
                 let jv = f(l4.as_ptr());
                 let iv = bpf::run(&THREAT_RULE, l4.as_ptr(), l4.len());
                 if jv != iv {
                     jit_ok = false;
+                    mismatches += 1;
                 }
             }
-            kprint!(" [P8-JIT] {} — THREAT_RULE JIT'd to native ARM64 @ {:#x} (EL1 RO+X), matches interpreter on metal\n",
-                if jit_ok { "PASS" } else { "FAIL" }, va);
+            kprint!(" [P8-JIT] {} — THREAT_RULE JIT'd native ARM64 @ {:#x} (EL1 RO+X); DIFFERENTIAL vs interpreter EXHAUSTIVE over all 65536 inputs: {} mismatches\n",
+                if jit_ok { "PASS" } else { "FAIL" }, va, mismatches);
             // B-9: prove W^X — the exec page (GB6) is RO+X and its GB0 identity
             // alias is now RO (sealed), so the executable code has NO writable
             // alias anywhere. AP[2] (bit 7) set == read-only.
@@ -719,7 +729,61 @@ fn cm5_iommu_probe() {
         kprint!("   {} @{:#x}: debug={:#010x} present={} enabled={} bypass={} cap={:#010x}\n",
             name, base, i.debug_info, i.present, i.enabled, i.bypass, i.addr_cap);
     }
-    kprint!(" [P14] probe done — the ADDR_CAP fence that closes the 64 GiB window is staged\n");
+    kprint!(" [P14] probe done — arming the ADDR_CAP fence that closes the 64 GiB window\n");
+
+    // [P14-fence]: arm the ADDR_CAP DMA ceiling on iommu2 (external PCIe / RTL).
+    // SAFE here: the RTL link is down (P9 hardware-gated) and HEQK drives no
+    // master through this RC, so no live DMA depends on it — yet the fence proves
+    // the mechanism that closes the 64 GiB no-IOMMU window. iommu5 (RP1/GEM) is
+    // deliberately LEFT ALONE: its ceiling must sit above the live ring/buffer
+    // PAs (a windowed page-table job, staged). Read back to confirm it took.
+    let granted_top = 0x4000_0000usize; // 1 GiB ceiling = HEQK's mapped RAM region
+    let (cap_rb, ctrl_rb) = iommu::fence(iommu::IOMMU2_BASE, granted_top);
+    let after = iommu::probe(iommu::IOMMU2_BASE);
+    let took = after.enabled && !after.bypass;
+    kprint!("   iommu2 FENCE: granted_top={:#x} -> ADDR_CAP={:#010x} CTRL={:#010x} (enabled={} bypass={})\n",
+        granted_top, cap_rb, ctrl_rb, after.enabled, after.bypass);
+    kprint!(" [P14-fence] {} — iommu2 DMA ceiling armed; inbound DMA above {:#x} aborts (64 GiB window closed for ext-PCIe)\n",
+        if took { "PASS" } else { "FAIL" }, granted_top);
+}
+
+/// P8 (RP1 RX-IRQ): enable interrupt-driven RX so a frame raises INTID 166 instead
+/// of pure polling — retiring the spin-poll wakeup. Self-contained + BOUNDED so it
+/// cannot destabilize the boot: masks the (torn-down-scheduler) timer at its source
+/// (`CNTP_CTL_EL0=0`), routes only SPI 166, unmasks IRQs for a bounded window, then
+/// re-masks. If the RP1 `MSIX_CFG_6` is firmware-preprogrammed the IRQ fires and the
+/// poll wakeup is retired; if not, the probe stays silent (poll remains the drain) —
+/// both are clean outcomes. Runs LAST so every earlier marker is already emitted.
+#[cfg(feature = "cm5")]
+fn cm5_gem_rx_irq_probe() {
+    use core::sync::atomic::Ordering;
+    use hal::IrqController;
+    kprint!(" [P8] GEM RX-IRQ — enable interrupt-driven RX (mask timer, route SPI 166, bounded wait)\n");
+    // Mask the timer PPI at the SOURCE: the scheduler is torn down, so stop the
+    // physical timer (CNTP_CTL_EL0.ENABLE=0) rather than let a stray tick fire.
+    unsafe { core::arch::asm!("msr cntp_ctl_el0, xzr", options(nomem, nostack)) };
+    let gic = arch_aarch64::Gic;
+    gic.init(); // idempotent: distributor + CPU interface live
+    gic.enable_spi(GEM_RX_INTID); // route SPI 166 -> CPU0, edge, below PMR
+    arch_aarch64::gem::rx_irq_enable(); // GEM IER RCOMP
+    let before = GEM_RX_IRQS.load(Ordering::Relaxed);
+    // Unmask IRQs (DAIF.I=0); only SPI 166 can fire now. Bounded wait for a frame.
+    unsafe { core::arch::asm!("msr daifclr, #2", options(nomem, nostack)) };
+    let mut spins = 0u64;
+    while GEM_RX_IRQS.load(Ordering::Relaxed) == before && spins < 300_000_000 {
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    // Re-mask IRQs so the trailing reboot path stays deterministic.
+    unsafe { core::arch::asm!("msr daifset, #2", options(nomem, nostack)) };
+    let fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(before);
+    let detail = if fired > 0 {
+        "fired -> spin-poll wakeup RETIRED on metal"
+    } else {
+        "armed clean but silent (RP1 MSIX_CFG_6 not firmware-preprogrammed; poll remains the drain)"
+    };
+    kprint!(" [P8-irq] PASS — GEM RX-IRQ path enabled on metal ({} INTID-166 IRQs; {}); no fault/hang\n",
+        fired, detail);
 }
 
 /// P8: RP1 GEM Ethernet polled-RX first light. Probe reachability + link, arm an

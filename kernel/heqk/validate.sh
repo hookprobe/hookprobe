@@ -63,7 +63,7 @@ echo -n "[P16]   verifier soundness harness ... "
 VH="$(mktemp)"
 if rustc --edition 2021 -O tools/verifier-harness.rs -o "$VH" >/tmp/hp_vh_build.log 2>&1; then
   if "$VH" >/tmp/hp_vh.log 2>&1; then
-    echo "PASS (abstract operators sound; injected unsoundness caught)"
+    echo "PASS (operators PROVEN SOUND exhaustively over reduced width + sampled on reachable domain; injected unsoundness caught)"
   else
     echo "FAIL — verifier operator UNSOUND:"; sed 's/^/    /' /tmp/hp_vh.log
     rm -f "$VH"; exit 2
