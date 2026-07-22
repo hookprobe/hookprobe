@@ -18,7 +18,7 @@ jobs:
   update-readme:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Regenerate README matrix section
         run: python3 tools/gen-readme-matrix.py
