@@ -52,6 +52,7 @@ pub static TCP_RULES: &[Rule] = &[
 /// rule self-parses (IPv4/TCP/…) and PASSes non-matching traffic.
 pub static FLOW_RULES: &[Rule] = &[
     Rule { id: 301, name: "syn-flood-per-src", prog: &bpf::TCP_SYN_FLOOD_SRC, severity: SEV_HIGH },
+    Rule { id: 302, name: "ip-blocklist", prog: &bpf::IP_BLOCKLIST, severity: SEV_HIGH },
 ];
 
 const MAX_RULES: usize = 16;

@@ -171,6 +171,24 @@ pub const TCP_SYN_FLOOD_SRC: [u64; 14] = [
     insn(0x95, 0, 0, 0, 0),          // 13 EXIT (PASS)
 ];
 
+/// Threat-feed BLOCKLIST — the second stateful rule (helper #2, a keyed lookup).
+/// R1 = the full L2 frame; parses IPv4 and DROPs if the IP source matches any
+/// blocked CIDR prefix (`blocklist::ip_blocked`). Non-IPv4 / unlisted → PASS.
+/// Mirrors HookProbe's WAN threat-feed blocklist (ADR-0005). EtherType @12, IP
+/// src @26. Sets R2=0 as a dummy arg (the verifier requires both arg regs init).
+pub const IP_BLOCKLIST: [u64; 10] = [
+    insn(0x69, 2, 1, 12, 0),      // 0  R2 = EtherType (LDX_H @12)
+    insn(0x55, 2, 0, 6, 0x0008),  // 1  if != IPv4 goto 8 (PASS)
+    insn(0x61, 1, 1, 26, 0),      // 2  R1 = IP source (@26, LDX_W)
+    insn(0xb7, 2, 0, 0, 0),       // 3  R2 = 0 (dummy arg)
+    insn(0x85, 0, 0, 0, 2),       // 4  R0 = ip_blocked(R1)
+    insn(0x15, 0, 0, 2, 0),       // 5  if R0 == 0 goto 8 (not blocked -> PASS)
+    insn(0xb7, 0, 0, 0, 2),       // 6  R0 = DROP
+    insn(0x95, 0, 0, 0, 0),       // 7  EXIT (DROP)
+    insn(0xb7, 0, 0, 0, 1),       // 8  R0 = PASS
+    insn(0x95, 0, 0, 0, 0),       // 9  EXIT (PASS)
+];
+
 /// ARP-spoof drop — mirrors `ArpObs::eth_mismatch`: an ARP frame whose payload
 /// sender-MAC (@22, 6 bytes) disagrees with the Ethernet source-MAC (@6) → DROP
 /// (a spoofed sender). Non-ARP → PASS. Compared as 4 bytes (LDX_W) + 2 bytes

@@ -10,6 +10,7 @@
 extern crate alloc;
 
 mod attest_svc;
+mod blocklist;
 mod bpf;
 mod caps;
 mod heap;
@@ -1102,6 +1103,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: per-source SYN-flood — the live-datapath rule (keyed by IP src) ---
     p8_synflood_src();
 
+    // --- P8: threat-feed blocklist — helper #2 (keyed CIDR lookup), live rule ---
+    p8_blocklist();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1510,6 +1514,39 @@ fn p8_synflood_src() -> bool {
         ap, limit, ad, bp);
     let ok = ad >= 19 && ap <= limit + 1 && ap >= limit - 1 && bp == 5;
     kprint!(" [P8-synsrc] {} — per-source SYN flood rate-limited inline; other sources unaffected\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8 threat-feed blocklist: the signed IP_BLOCKLIST rule (helper #2, a keyed
+/// lookup) DROPs frames from a blocked CIDR prefix and PASSes everything else —
+/// the WAN threat-feed enforcement, live in classify.
+#[cfg(not(feature = "cm5"))]
+fn p8_blocklist() -> bool {
+    kprint!("\n [P8] threat-feed blocklist — helper #2 (keyed CIDR lookup), live rule\n");
+    fn ipv4_frame(src: [u8; 4]) -> [u8; 34] {
+        let mut f = [0u8; 34];
+        f[12] = 0x08;
+        f[13] = 0x00; // EtherType IPv4
+        f[14] = 0x45; // IHL=5
+        f[26..30].copy_from_slice(&src); // IP source
+        f
+    }
+    let cases: [([u8; 4], u16, &str); 3] = [
+        ([192, 0, 2, 5], packet::DROP, "192.0.2.5 (in blocked /24)"),
+        ([8, 8, 8, 8], packet::PASS, "8.8.8.8 (clean)"),
+        ([10, 66, 66, 200], packet::DROP, "10.66.66.200 (C2 subnet)"),
+    ];
+    let mut ok = true;
+    for (src, want, name) in cases {
+        let f = ipv4_frame(src);
+        let v = rules::run_flow(&f);
+        let good = v == want;
+        ok &= good;
+        kprint!("   blocklist: {} -> {} [{}]\n",
+            name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+    }
+    kprint!(" [P8-block] {} — blocked source prefixes dropped, clean sources pass (threat-feed parity)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
