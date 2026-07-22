@@ -61,6 +61,23 @@ pub const EVIL_NO_VERDICT: [u64; 2] = [
     insn(0x95, 0, 0, 0, 0), // EXIT — R0 never written
 ];
 
+/// A realistic rule exercising the EXPANDED ISA: walk to the Ethernet EtherType
+/// via pointer arithmetic (MOV_X + ADD_K), read it with a 16-bit load (LDX_H),
+/// read the first 4 bytes with a 32-bit load (LDX_W), and DROP IPv4 frames
+/// (EtherType 0x0800 → little-endian 0x0008) via JEQ. The verifier proves it
+/// needs min_len = 14 (offset 12 + 2-byte load). R1 = packet start (L2).
+pub const PARSE_RULE: [u64; 9] = [
+    insn(0xbf, 2, 1, 0, 0),      // R2 = R1               (MOV64_X)
+    insn(0x07, 2, 0, 0, 12),     // R2 += 12              (-> EtherType)
+    insn(0x69, 3, 2, 0, 0),      // R3 = *(u16*)(R2+0)    EtherType (LE)
+    insn(0x61, 4, 1, 0, 0),      // R4 = *(u32*)(R1+0)    first 4 bytes
+    insn(0xb7, 0, 0, 0, 1),      // R0 = PASS
+    insn(0x15, 3, 0, 1, 0x0008), // if R3 == 0x0008 (IPv4) goto +1
+    insn(0x95, 0, 0, 0, 0),      // EXIT (non-IPv4 -> PASS)
+    insn(0xb7, 0, 0, 0, 2),      // R0 = DROP
+    insn(0x95, 0, 0, 0, 0),      // EXIT
+];
+
 /// Static verifier — gate a program before it runs (v1: signed first-party, so
 /// this is a safety net; a full PREVAIL-style abstract-interpretation verifier
 /// is for opening the plane to third-party rules). Checks: known opcodes, valid
@@ -121,8 +138,15 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, PartialEq)]
 enum Abs {
     Uninit,
-    Scalar,                    // a value of unknown magnitude — NOT a valid load base
-    Pkt { lo: i64, hi: i64 },  // packet base + byte offset in [lo, hi]
+    Scalar { lo: i64, hi: i64 }, // value interval — NOT a valid load base
+    Pkt { lo: i64, hi: i64 },    // packet base + byte offset in [lo, hi]
+}
+/// A scalar of fully-unknown value (loads from it rejected; adding it to a
+/// pointer makes the pointer offset unbounded ⇒ its loads rejected too).
+const S_TOP: Abs = Abs::Scalar { lo: i64::MIN, hi: i64::MAX };
+#[inline]
+fn sat_add(a: i64, b: i64) -> i64 {
+    a.saturating_add(b)
 }
 
 fn join(a: Abs, b: Abs) -> Abs {
@@ -133,8 +157,11 @@ fn join(a: Abs, b: Abs) -> Abs {
         (Abs::Pkt { lo: l1, hi: h1 }, Abs::Pkt { lo: l2, hi: h2 }) => {
             Abs::Pkt { lo: l1.min(l2), hi: h1.max(h2) }
         }
-        // Any mix of Pkt/Scalar loses pointer-ness ⇒ Scalar (loads from it rejected).
-        _ => Abs::Scalar,
+        (Abs::Scalar { lo: l1, hi: h1 }, Abs::Scalar { lo: l2, hi: h2 }) => {
+            Abs::Scalar { lo: l1.min(l2), hi: h1.max(h2) }
+        }
+        // Any mix of Pkt/Scalar loses pointer-ness ⇒ unknown scalar.
+        _ => S_TOP,
     }
 }
 
@@ -178,46 +205,100 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
         if dst >= 11 || src >= 11 {
             return Err("register out of range");
         }
+        let imm = ((ins >> 32) & 0xffff_ffff) as u32 as i32 as i64;
         let mut out = st;
 
         match op {
-            0x71 => {
-                // LDX_B dst = *(u8*)(src+off): src MUST be a packet pointer, and
-                // the accessed byte offset must be non-negative + bounded.
+            // LDX_B/H/W dst = *(uW*)(src+off): src MUST be a packet pointer; the
+            // accessed range [off, off+W) must be non-negative + statically bounded.
+            0x71 | 0x69 | 0x61 => {
+                let w: i64 = match op {
+                    0x71 => 1,
+                    0x69 => 2,
+                    _ => 4,
+                };
                 match st[src] {
                     Abs::Pkt { lo, hi } => {
-                        let alo = lo + off as i64;
-                        let ahi = hi + off as i64;
-                        if alo < 0 {
+                        if sat_add(lo, off as i64) < 0 {
                             return Err("load below packet start");
                         }
-                        let need = (ahi as u64).saturating_add(1);
-                        if need > min_len {
-                            min_len = need;
+                        let need_i = sat_add(sat_add(hi, off as i64), w);
+                        if need_i < 0 || need_i > 65536 {
+                            return Err("load offset unbounded / exceeds max packet");
                         }
-                        out[dst] = Abs::Scalar; // a loaded byte is a scalar in [0,255]
+                        if need_i as u64 > min_len {
+                            min_len = need_i as u64;
+                        }
+                        let maxv = if w >= 8 { i64::MAX } else { (1i64 << (8 * w)) - 1 };
+                        out[dst] = Abs::Scalar { lo: 0, hi: maxv };
                     }
                     Abs::Uninit => return Err("load base uninitialized"),
-                    Abs::Scalar => return Err("load from non-packet (scalar) address"),
+                    Abs::Scalar { .. } => return Err("load from non-packet (scalar) address"),
                 }
+            }
+            0xb7 => out[dst] = Abs::Scalar { lo: imm, hi: imm }, // MOV64_K
+            0xbf => {
+                // MOV64_X: reg copy — propagates the abstract value (incl. Pkt-ness).
+                if st[src] == Abs::Uninit {
+                    return Err("MOV from uninitialized register");
+                }
+                out[dst] = st[src];
+            }
+            0x07 => {
+                // ADD64_K: pointer OR scalar arithmetic with a constant.
+                out[dst] = match st[dst] {
+                    Abs::Pkt { lo, hi } => Abs::Pkt { lo: sat_add(lo, imm), hi: sat_add(hi, imm) },
+                    Abs::Scalar { lo, hi } => {
+                        Abs::Scalar { lo: sat_add(lo, imm), hi: sat_add(hi, imm) }
+                    }
+                    Abs::Uninit => return Err("ADD to uninitialized register"),
+                };
+            }
+            0x0f => {
+                // ADD64_X: pointer+scalar (widen the offset by the scalar interval).
+                out[dst] = match (st[dst], st[src]) {
+                    (Abs::Uninit, _) | (_, Abs::Uninit) => {
+                        return Err("ADD of uninitialized register")
+                    }
+                    (Abs::Pkt { lo, hi }, Abs::Scalar { lo: a, hi: b }) => {
+                        Abs::Pkt { lo: sat_add(lo, a), hi: sat_add(hi, b) }
+                    }
+                    (Abs::Scalar { lo, hi }, Abs::Scalar { lo: a, hi: b }) => {
+                        Abs::Scalar { lo: sat_add(lo, a), hi: sat_add(hi, b) }
+                    }
+                    _ => return Err("ADD yields a non-scalar (pointer+pointer?)"),
+                };
+            }
+            0x57 => {
+                // AND64_K masking: x & m (m>=0) ∈ [0, m].
+                if st[dst] == Abs::Uninit {
+                    return Err("AND of uninitialized register");
+                }
+                out[dst] = if imm >= 0 {
+                    Abs::Scalar { lo: 0, hi: imm }
+                } else {
+                    S_TOP
+                };
             }
             0x67 => {
                 if st[dst] == Abs::Uninit {
                     return Err("LSH of uninitialized register");
                 }
-                out[dst] = Abs::Scalar;
+                out[dst] = S_TOP;
             }
             0x4f => {
                 if st[dst] == Abs::Uninit || st[src] == Abs::Uninit {
                     return Err("OR of uninitialized register");
                 }
-                out[dst] = Abs::Scalar;
+                out[dst] = S_TOP;
             }
-            0xb7 => out[dst] = Abs::Scalar, // MOV64_K: dst = imm (a scalar)
-            0x55 => {
-                // JNE_K: reads dst; forward-only branch to a valid target.
+            // Conditional jumps (forward-only, no loops): JEQ/JGT/JGE/JSET/JNE, K + X.
+            0x15 | 0x25 | 0x35 | 0x45 | 0x55 | 0x1d | 0x2d | 0x3d | 0x4d | 0x5d => {
                 if st[dst] == Abs::Uninit {
-                    return Err("JNE on uninitialized register");
+                    return Err("jump on uninitialized register");
+                }
+                if op & 0x08 != 0 && st[src] == Abs::Uninit {
+                    return Err("jump on uninitialized src register");
                 }
                 if off < 0 {
                     return Err("backward jump (would not terminate)");
@@ -279,20 +360,44 @@ pub fn run(prog: &[u64], pkt: *const u8, len: usize) -> u64 {
         }
 
         match op {
-            0x71 => {
-                // LDX_B: dst = *(u8*)(src + off), with a runtime bounds check.
+            // LDX_B/H/W: dst = *(uW*)(src+off), runtime bounds check + byte-assembled
+            // (little-endian, native — avoids misaligned-read UB on odd offsets).
+            0x71 | 0x69 | 0x61 => {
+                let w = match op {
+                    0x71 => 1u64,
+                    0x69 => 2,
+                    _ => 4,
+                };
                 let addr = r[src].wrapping_add(off as i64 as u64);
-                if addr < pbase || addr >= pend {
-                    return INVALID; // out-of-bounds load — the software sandbox
+                let end = addr.wrapping_add(w);
+                if addr < pbase || end > pend || end < addr {
+                    return INVALID; // OOB / wrap — the software sandbox
                 }
-                r[dst] = unsafe { read_volatile(addr as *const u8) } as u64;
+                let mut v = 0u64;
+                for k in 0..w {
+                    v |= (unsafe { read_volatile((addr + k) as *const u8) } as u64) << (8 * k);
+                }
+                r[dst] = v;
             }
+            0xbf => r[dst] = r[src],                                 // MOV64_X
+            0x07 => r[dst] = r[dst].wrapping_add(imm as i64 as u64), // ADD64_K
+            0x0f => r[dst] = r[dst].wrapping_add(r[src]),            // ADD64_X
+            0x57 => r[dst] &= imm as i64 as u64,                     // AND64_K
             0x67 => r[dst] = r[dst].wrapping_shl((imm as u32) & 63), // LSH64_K
             0x4f => r[dst] |= r[src],                                // OR64_X
             0xb7 => r[dst] = imm as i64 as u64,                      // MOV64_K
-            0x55 => {
-                // JNE_K: branch is relative to the next instruction.
-                if r[dst] != (imm as i64 as u64) {
+            // Conditional jumps (branch relative to next instruction): K + X.
+            0x15 | 0x1d | 0x25 | 0x2d | 0x35 | 0x3d | 0x45 | 0x4d | 0x55 | 0x5d => {
+                let a = r[dst];
+                let b = if op & 0x08 != 0 { r[src] } else { imm as i64 as u64 };
+                let take = match op & 0xf0 {
+                    0x10 => a == b, // JEQ
+                    0x20 => a > b,  // JGT (unsigned)
+                    0x30 => a >= b, // JGE (unsigned)
+                    0x40 => (a & b) != 0, // JSET
+                    _ => a != b,    // JNE (0x50)
+                };
+                if take {
                     pc = (pc as i64 + off as i64) as usize;
                 }
             }

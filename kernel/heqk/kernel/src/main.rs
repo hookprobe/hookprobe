@@ -1100,9 +1100,25 @@ fn p8_verifier_demo() {
             Err(e) => kprint!(" [P8] third-party '{}': REJECTED ({})\n", name, e),
         }
     }
+    // Expanded ISA: a real rule (pointer-arith + multi-byte loads + JEQ) — verify + run.
+    let parse_ok = match verify_prevail(&bpf::PARSE_RULE) {
+        Ok(min) => {
+            let mut frame = [0u8; 14];
+            frame[12] = 0x08; // EtherType 0x0800 (IPv4, big-endian on the wire)
+            frame[13] = 0x00;
+            let v = bpf::run(&bpf::PARSE_RULE, frame.as_ptr(), frame.len());
+            kprint!(" [P8] PARSE_RULE (ptr-arith+LDX_H/W+JEQ): SAFE (min_len={}); IPv4 frame -> {}\n",
+                min, if v == bpf::DROP { "DROP" } else if v == bpf::PASS { "PASS" } else { "INVALID" });
+            min == 14 && v == bpf::DROP
+        }
+        Err(e) => {
+            kprint!(" [P8] PARSE_RULE REJECTED ({}) <- BUG\n", e);
+            false
+        }
+    };
     let good = verify_prevail(&THREAT_RULE).is_ok();
-    kprint!(" [P8] {} — accepts the safe rule, statically rejects every unsafe third-party rule\n",
-        if good && all_rejected { "PASS" } else { "FAIL" });
+    kprint!(" [P8] {} — accepts safe rules (incl. expanded ISA), statically rejects every unsafe one\n",
+        if good && all_rejected && parse_ok { "PASS" } else { "FAIL" });
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)
