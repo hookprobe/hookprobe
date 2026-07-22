@@ -132,6 +132,18 @@ PHY firmware `rtl8168h-2.fw` + ephy/OCP tuning are OPTIONAL (basic autoneg works
 5. PERST# — RETIRED (internal `0x4064` bit2).
 6. RTL MAC init — LOW (self-negotiating PHY, no blob, simpler than the GEM).
 
+### P9 METAL FINDINGS (2026-07-22) — board = Waveshare CM5-DUAL-ETH-MINI
+- **2nd NIC confirmed: Realtek RTL8111H-CG, `0x10EC:0x8168`, r8169**, wired DIRECTLY
+  (no PCIe switch) to **pcie1/RC1 @ `0x10_0011_0000`**, enumerating at `01:00.0`.
+  `rtl8111.rs` (RC base, vendor-ID, direct enumeration) is CORRECT.
+- **The config route is EXHAUSTED — RC1 link will not stay trained for a bare-metal OS:**
+  `dtparam=pciex1` (node enabled) + **`PCIE_PROBE=1`** (flashed into the CM5 EEPROM via
+  `usbboot/recovery5`) + **`pciex1_reset=0`** all tested on metal — RC1 `PCIE_STATUS`
+  stays `0x0001e08f` (RC-mode bit7 set, DL_ACTIVE|PHYLINKUP=0). The firmware trains RC2
+  (RP1, essential) but NOT RC1 for a NIC. ⇒ **Path B (HEQK trains RC1) is required.**
+- Everything else stays healthy across all these boots (secure boot PASS, P8 verify+run
+  PASS, EL0 driver server + crash-restart) — the EEPROM/config changes are safe.
+
 ### P9 off-metal vs on-metal
 - **Prepared off-metal (this repo):** `arch-aarch64/src/rtl8111.rs` — register/descriptor
   constants, config-space index/data helpers, inbound-window (reused), and the MAC-init
