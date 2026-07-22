@@ -34,6 +34,7 @@ PHASES=(
   "P8n|[P8-napi] PASS|impl|Validation|adaptive NAPI: poll-budget grows under load, idles+re-arms when quiet (spin-poll retired)"
   "P8l|[P8-l2] PASS|impl|Validation|L2 guard: napse-l2guard parity — malformed-ARP + ARP-spoof dropped at frame level"
   "P8t|[P8-tcp] PASS|impl|Validation|TCP scan detection: NULL/FIN/Xmas/SYN-FIN anomalous-flag scans dropped, normal SYN/ACK pass"
+  "P8s|[P8-syn] PASS|impl|Validation|SYN-flood rate-limit: first stateful rule (BPF CALL helper + windowed rate limiter)"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
 

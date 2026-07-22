@@ -124,6 +124,29 @@ pub const TCP_SYNFIN: [u64; 6] = [
     insn(0x95, 0, 0, 0, 0),      // EXIT
 ];
 
+/// SYN-flood rate-limit threshold (lone SYNs per ~1 s window). Tunable per policy.
+pub const SYN_LIMIT: i32 = 32;
+
+/// SYN-flood — the first STATEFUL rule (uses the `CALL` helper + the kernel rate
+/// limiter). A lone SYN (`flags==0x02`) bumps a windowed counter; once the rate
+/// exceeds `SYN_LIMIT` in the window it DROPs, otherwise PASS. Non-SYN → PASS.
+/// R1 = TCP header. NB (v1): the key is a global bucket, so this proves the
+/// stateful primitive but is NOT wired into the live datapath — per-source keying
+/// (needs the IP src, i.e. run on the full frame) is the follow-up before it can
+/// enforce inline without false-positiving legitimate connection setups.
+pub const TCP_SYN_FLOOD: [u64; 10] = [
+    insn(0x71, 2, 1, 13, 0),         // 0  R2 = TCP flags
+    insn(0x55, 2, 0, 6, 0x02),       // 1  if flags != SYN goto 8 (PASS)
+    insn(0xb7, 1, 0, 0, 0),          // 2  R1 = 0        (rate key: global bucket v1)
+    insn(0xb7, 2, 0, 0, SYN_LIMIT),  // 3  R2 = SYN_LIMIT
+    insn(0x85, 0, 0, 0, 1),          // 4  R0 = call helper#1 syn_rate_over(R1,R2)
+    insn(0x15, 0, 0, 2, 0),          // 5  if R0 == 0 goto 8 (under limit -> PASS)
+    insn(0xb7, 0, 0, 0, 2),          // 6  R0 = DROP
+    insn(0x95, 0, 0, 0, 0),          // 7  EXIT (DROP)
+    insn(0xb7, 0, 0, 0, 1),          // 8  R0 = PASS  (not-SYN or under-limit)
+    insn(0x95, 0, 0, 0, 0),          // 9  EXIT (PASS)
+];
+
 /// ARP-spoof drop — mirrors `ArpObs::eth_mismatch`: an ARP frame whose payload
 /// sender-MAC (@22, 6 bytes) disagrees with the Ethernet source-MAC (@6) → DROP
 /// (a spoofed sender). Non-ARP → PASS. Compared as 4 bytes (LDX_W) + 2 bytes
@@ -412,6 +435,21 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                 }
                 merge_into(&mut in_st[target as usize], &out);
             }
+            0x85 => {
+                // CALL helper: R0 = helper(imm)(R1, R2). The helper id must be a
+                // known, signed helper; args R1/R2 must be initialized; R0 becomes
+                // a scalar result and R1..R5 are clobbered (caller-saved ABI).
+                if (imm as u32) == 0 || (imm as u32) > crate::ratelimit::MAX_HELPER_ID {
+                    return Err("CALL to unknown helper id");
+                }
+                if st[1] == Abs::Uninit || st[2] == Abs::Uninit {
+                    return Err("CALL with uninitialized argument register");
+                }
+                out[0] = Abs::Scalar { lo: 0, hi: 1 };
+                for k in 1..=5 {
+                    out[k] = Abs::Uninit; // args clobbered by the call
+                }
+            }
             0x95 => {
                 // EXIT: returns R0 — it must be initialized (a real verdict).
                 if st[0] == Abs::Uninit {
@@ -503,6 +541,11 @@ pub fn run(prog: &[u64], pkt: *const u8, len: usize) -> u64 {
                 if take {
                     pc = (pc as i64 + off as i64) as usize;
                 }
+            }
+            0x85 => {
+                // CALL helper: R0 = helper(imm)(R1, R2). (Args clobbered per ABI;
+                // the verifier forbids reading them after, so we needn't scrub.)
+                r[0] = crate::ratelimit::call_helper(imm as u32, r[1], r[2]);
             }
             0x95 => return r[0], // EXIT
             _ => return INVALID, // unknown opcode

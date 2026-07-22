@@ -17,6 +17,7 @@ mod ipc;
 mod napi;
 mod net;
 mod packet;
+mod ratelimit;
 mod rules;
 mod scheduler;
 mod telemetry;
@@ -1095,6 +1096,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: TCP scan detection — stateless anomalous-flag signatures ---
     p8_tcpscan();
 
+    // --- P8: SYN-flood rate-limit — first STATEFUL rule (CALL helper) ---
+    p8_synflood();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1429,6 +1433,43 @@ fn p8_tcpscan() -> bool {
             flags, name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
     }
     kprint!(" [P8-tcp] {} — NULL/FIN/Xmas/SYN-FIN scans dropped, normal SYN/ACK pass\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8 SYN-flood — the first STATEFUL detection: the signed TCP_SYN_FLOOD rule
+/// consults a kernel rate limiter via a BPF CALL helper. A lone SYN under the
+/// windowed limit passes; a sustained flood (limit+ SYNs in one window) is
+/// dropped. Proves the stateful primitive (verifier admits CALL; interpreter runs
+/// it; the JIT correctly declines it). v1 is a global bucket, tested standalone —
+/// not yet wired into the live datapath (per-source keying is the follow-up).
+#[cfg(not(feature = "cm5"))]
+fn p8_synflood() -> bool {
+    kprint!("\n [P8] SYN-flood rate-limit — first STATEFUL rule (BPF CALL helper + rate limiter)\n");
+    // The verifier must ADMIT the stateful rule (known helper, args init).
+    let verified = bpf::verify_prevail(&bpf::TCP_SYN_FLOOD).is_ok();
+    // The JIT must DECLINE it (CALL unsupported) -> interpreter path.
+    let jit_declines = arch_aarch64::bpf_jit::compile(&bpf::TCP_SYN_FLOOD).is_none();
+    kprint!("   verifier admits CALL rule: {}; JIT declines (interp-only): {}\n",
+        if verified { "yes" } else { "NO" }, if jit_declines { "yes" } else { "NO" });
+
+    let mut syn = [0u8; 20];
+    syn[12] = 0x50;
+    syn[13] = 0x02; // lone SYN
+    let limit = bpf::SYN_LIMIT as usize;
+    let mut passed = 0usize;
+    let mut dropped = 0usize;
+    for _ in 0..(limit + 20) {
+        match bpf::run(&bpf::TCP_SYN_FLOOD, syn.as_ptr(), syn.len()) {
+            bpf::PASS => passed += 1,
+            _ => dropped += 1,
+        }
+    }
+    kprint!("   burst of {} lone SYNs -> {} passed (~limit {}), {} dropped (flood)\n",
+        limit + 20, passed, limit, dropped);
+    // ~limit passed, the rest of the burst dropped once the window count crossed.
+    let ok = verified && jit_declines && dropped >= 19 && passed <= limit + 1 && passed >= limit - 1;
+    kprint!(" [P8-syn] {} — SYN rate under the window limit passes, the flood is rate-limited (stateful)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
