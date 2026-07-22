@@ -2,3 +2,6 @@
 **/*.rs.bk
 /cm5-boot/linux-boot-backup/
 cm5-boot/hboot8-demo.img
+/firmware/brcm/*.bin
+/firmware/brcm/*.clm_blob
+/firmware/brcm/*.nvram.txt
