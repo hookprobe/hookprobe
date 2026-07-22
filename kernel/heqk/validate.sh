@@ -38,6 +38,7 @@ PHASES=(
   "P8ss|[P8-synsrc] PASS|impl|Validation|per-source SYN-flood: live rule keyed by IP source — flood one host, others unaffected"
   "P8b|[P8-block] PASS|impl|Validation|threat-feed blocklist: helper #2 (keyed CIDR lookup) drops blocked source prefixes, clean sources pass"
   "P8soar|[P8-soar] PASS|impl|Validation|SOAR event-ring: async non-blocking telemetry exfiltration (verdict engine -> SPSC ring -> EL0 exporter)"
+  "P8l7|[P8-l7] PASS|impl|Validation|L7 deep-packet signature: helper #3 payload_match — MQTT CONNECT flagged in the verified fast-path before EL0 services"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
 

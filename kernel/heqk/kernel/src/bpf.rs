@@ -263,6 +263,25 @@ pub const VAR_OFFSET_RULE: [u64; 9] = [
     insn(0x95, 0, 0, 0, 0),    // 8 EXIT
 ];
 
+/// L7 MQTT detection (R1 = TCP header). Detects an MQTT CONNECT by matching the
+/// "MQTT" protocol-name string in the TCP payload (payload @ +20, name @ +24) via
+/// helper #3 `payload_match` — L7 inspection in the verified fast-path, before the
+/// EL0 automation services see the packet. Touch-loads the last pattern byte @27
+/// first (min_len=28) so the helper's compare is proven in-bounds.
+pub const L7_MQTT: [u64; 11] = [
+    insn(0x71, 2, 1, 27, 0),   // 0  R2 = *(u8*)(R1+27)  touch (bounds the @24..28 match)
+    insn(0xbf, 3, 1, 0, 0),    // 1  R3 = R1             (packet ptr copy)
+    insn(0x07, 3, 0, 0, 24),   // 2  R3 += 24            -> "MQTT" location (TCP payload+4)
+    insn(0xbf, 1, 3, 0, 0),    // 3  R1 = R3             arg1 = ptr
+    insn(0xb7, 2, 0, 0, 0),    // 4  R2 = 0              arg2 = pattern id (MQTT)
+    insn(0x85, 0, 0, 0, 3),    // 5  R0 = payload_match(R1, R2)  helper #3
+    insn(0x15, 0, 0, 2, 0),    // 6  if R0 == 0 goto 9 (not MQTT -> PASS)
+    insn(0xb7, 0, 0, 0, 2),    // 7  R0 = DROP           (MQTT CONNECT flagged)
+    insn(0x95, 0, 0, 0, 0),    // 8  EXIT (DROP)
+    insn(0xb7, 0, 0, 0, 1),    // 9  R0 = PASS
+    insn(0x95, 0, 0, 0, 0),    // 10 EXIT (PASS)
+];
+
 /// Static verifier — gate a program before it runs (v1: signed first-party, so
 /// this is a safety net; a full PREVAIL-style abstract-interpretation verifier
 /// is for opening the plane to third-party rules). Checks: known opcodes, valid

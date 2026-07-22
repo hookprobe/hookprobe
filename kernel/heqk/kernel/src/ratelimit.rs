@@ -58,6 +58,7 @@ pub fn call_helper(id: u32, r1: u64, r2: u64) -> u64 {
     match id {
         HELPER_SYN_RATE_OVER => syn_rate_over(r1, r2),
         HELPER_IP_BLOCKED => crate::blocklist::ip_blocked(r1),
+        HELPER_PAYLOAD_MATCH => crate::l7::payload_match(r1, r2),
         _ => 0,
     }
 }
@@ -66,5 +67,7 @@ pub fn call_helper(id: u32, r1: u64, r2: u64) -> u64 {
 pub const HELPER_SYN_RATE_OVER: u32 = 1;
 /// Helper id: `R0 = ip_blocked(R1=IP source)` — threat-feed blocklist lookup.
 pub const HELPER_IP_BLOCKED: u32 = 2;
+/// Helper id: `R0 = payload_match(R1=ptr, R2=pattern_id)` — L7 signature match.
+pub const HELPER_PAYLOAD_MATCH: u32 = 3;
 /// Highest valid helper id (the verifier bounds `CALL imm` by this).
-pub const MAX_HELPER_ID: u32 = 2;
+pub const MAX_HELPER_ID: u32 = 3;

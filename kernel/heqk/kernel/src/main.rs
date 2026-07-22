@@ -15,6 +15,7 @@ mod blocklist;
 mod bpf;
 mod caps;
 mod events;
+mod l7;
 mod heap;
 mod ipc;
 mod napi;
@@ -1154,6 +1155,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/SOAR: async event-ring — the non-blocking telemetry exfiltration path
     p8_soar();
 
+    // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
+    p8_l7();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1627,6 +1631,38 @@ fn p8_soar() -> bool {
     let ok = n >= 2 && batch[..n].iter().all(|e| e.verdict == packet::DROP as u8);
     kprint!(" [P8-soar] {} — {} threat events exported async ({} overruns, wire never stalled)\n",
         if ok { "PASS" } else { "FAIL" }, n, events::overruns());
+    ok
+}
+
+/// P8/L7: deep-packet signature matching in the VERIFIED fast-path. A signed rule
+/// (L7_MQTT) touch-loads the last pattern byte (verifier bounds it, min_len=28)
+/// then CALLs helper #3 `payload_match` — so an MQTT CONNECT is flagged in-kernel
+/// before the EL0 automation services (P17) ever see it. Proves L7 detection is
+/// verifier-admissible and behaves: MQTT segment ⇒ DROP, non-MQTT ⇒ PASS.
+#[cfg(not(feature = "cm5"))]
+fn p8_l7() -> bool {
+    kprint!("\n [P8] L7 detection — MQTT signature match in the verified fast-path (helper #3)\n");
+    // R1 = TCP header; 20-byte header, payload @+20, MQTT protocol name @+24.
+    fn tcp_seg(mqtt: bool) -> [u8; 28] {
+        let mut s = [0u8; 28];
+        s[12] = 0x50; // TCP data offset = 5 words (20-byte header)
+        if mqtt {
+            s[24] = b'M'; s[25] = b'Q'; s[26] = b'T'; s[27] = b'T';
+        }
+        s
+    }
+    let mq = tcp_seg(true);
+    let other = tcp_seg(false);
+    let verified = bpf::verify_prevail(&bpf::L7_MQTT).is_ok();
+    let vm = bpf::run(&bpf::L7_MQTT, mq.as_ptr(), mq.len());
+    let vo = bpf::run(&bpf::L7_MQTT, other.as_ptr(), other.len());
+    let ok = verified && vm == bpf::DROP && vo == bpf::PASS;
+    kprint!("   verifier admits L7 rule: {}; MQTT CONNECT -> {}; non-MQTT -> {}\n",
+        if verified { "yes" } else { "NO" },
+        if vm == bpf::DROP { "DROP" } else { "PASS" },
+        if vo == bpf::PASS { "PASS" } else { "DROP" });
+    kprint!(" [P8-l7] {} — L7 MQTT signature caught in-kernel before EL0 automation services\n",
+        if ok { "PASS" } else { "FAIL" });
     ok
 }
 
