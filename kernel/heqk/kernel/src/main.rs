@@ -1092,6 +1092,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: L2 guard — napse-l2guard parity (malformed-ARP / ARP-spoof) ---
     p8_l2guard();
 
+    // --- P8: TCP scan detection — stateless anomalous-flag signatures ---
+    p8_tcpscan();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1392,6 +1395,40 @@ fn p8_l2guard() -> bool {
             name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
     }
     kprint!(" [P8-l2] {} — malformed/spoofed ARP dropped at L2, legit frames pass (napse-l2guard parity)\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8 TCP scan detection: the signed TCP-flag tier drops stateless anomalous-flag
+/// scans (NULL / FIN / Xmas / SYN-FIN — Nmap/Suricata signatures) while normal
+/// SYN and ACK segments pass. R1 = the TCP header; flags at offset 13.
+#[cfg(not(feature = "cm5"))]
+fn p8_tcpscan() -> bool {
+    kprint!("\n [P8] TCP scan detection — anomalous-flag signatures (Nmap/Suricata-style)\n");
+    fn tcp_hdr(flags: u8) -> [u8; 20] {
+        let mut t = [0u8; 20];
+        t[12] = 0x50; // data offset = 5 words (20-byte header)
+        t[13] = flags; // TCP flags byte
+        t
+    }
+    let cases: [(u8, u16, &str); 6] = [
+        (0x00, packet::DROP, "NULL scan (no flags)"),
+        (0x01, packet::DROP, "FIN scan"),
+        (0x29, packet::DROP, "Xmas scan (FIN|PSH|URG)"),
+        (0x03, packet::DROP, "SYN+FIN (illegal)"),
+        (0x02, packet::PASS, "normal SYN"),
+        (0x10, packet::PASS, "normal ACK"),
+    ];
+    let mut ok = true;
+    for (flags, want, name) in cases {
+        let t = tcp_hdr(flags);
+        let v = rules::run_tcp(&t);
+        let good = v == want;
+        ok &= good;
+        kprint!("   TCP flags {:#04x}: {} -> {} [{}]\n",
+            flags, name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+    }
+    kprint!(" [P8-tcp] {} — NULL/FIN/Xmas/SYN-FIN scans dropped, normal SYN/ACK pass\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }

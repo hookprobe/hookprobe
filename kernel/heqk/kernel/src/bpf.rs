@@ -91,6 +91,39 @@ pub const ARP_MALFORMED: [u64; 16] = [
     insn(0x95, 0, 0, 0, 0),       // 15 EXIT (DROP)
 ];
 
+// --- TCP scan tier: stateless anomalous-flag detection (Nmap/Suricata-style).
+// R1 = the TCP header; the flags byte is at TCP offset 13 (FIN=0x01 SYN=0x02
+// RST=0x04 PSH=0x08 ACK=0x10 URG=0x20). These run ONLY on TCP (classify gates on
+// ip_proto). A normal SYN(0x02)/ACK(0x10)/PSH-ACK(0x18) never matches, so there
+// are no false positives on legitimate traffic.
+
+/// Build a "DROP iff flags == `flags`" TCP rule (R1 = TCP header, flags @13).
+pub const fn tcp_flag_eq_rule(flags: i32) -> [u64; 5] {
+    [
+        insn(0x71, 2, 1, 13, 0),     // R2 = *(u8*)(R1+13)  TCP flags
+        insn(0xb7, 0, 0, 0, 1),      // R0 = PASS
+        insn(0x55, 2, 0, 1, flags),  // if flags != `flags` goto EXIT (PASS)
+        insn(0xb7, 0, 0, 0, 2),      // R0 = DROP
+        insn(0x95, 0, 0, 0, 0),      // EXIT
+    ]
+}
+/// NULL scan — no flags set (illegal). Nmap `-sN`.
+pub const TCP_NULL_SCAN: [u64; 5] = tcp_flag_eq_rule(0x00);
+/// FIN scan — lone FIN with no connection. Nmap `-sF`.
+pub const TCP_FIN_SCAN: [u64; 5] = tcp_flag_eq_rule(0x01);
+/// Xmas scan — FIN|PSH|URG lit up "like a Christmas tree". Nmap `-sX`.
+pub const TCP_XMAS_SCAN: [u64; 5] = tcp_flag_eq_rule(0x29);
+/// SYN+FIN — an illegal combination (open+close at once); scanner/IDS-evasion.
+/// DROP iff BOTH the SYN(0x02) and FIN(0x01) bits are set: (flags & 0x03) == 0x03.
+pub const TCP_SYNFIN: [u64; 6] = [
+    insn(0x71, 2, 1, 13, 0),     // R2 = TCP flags
+    insn(0x57, 2, 0, 0, 0x03),   // R2 &= (SYN|FIN)
+    insn(0xb7, 0, 0, 0, 1),      // R0 = PASS
+    insn(0x55, 2, 0, 1, 0x03),   // if (flags & 3) != 3 goto EXIT (PASS)
+    insn(0xb7, 0, 0, 0, 2),      // R0 = DROP
+    insn(0x95, 0, 0, 0, 0),      // EXIT
+];
+
 /// ARP-spoof drop — mirrors `ArpObs::eth_mismatch`: an ARP frame whose payload
 /// sender-MAC (@22, 6 bytes) disagrees with the Ethernet source-MAC (@6) → DROP
 /// (a spoofed sender). Non-ARP → PASS. Compared as 4 bytes (LDX_W) + 2 bytes

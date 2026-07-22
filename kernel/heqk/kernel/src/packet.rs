@@ -131,11 +131,14 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
-            // Run the whole signed rule set on a normalized L4 view: R1 = L4
-            // header, so each rule reads dst-port at a fixed offset regardless of
-            // eth/VLAN/IHL. The registry JITs each rule (interpreter fallback) and
-            // scores a hit into QSecBit on a DROP — P8 detection plane.
+            // Run the signed rule set on a normalized L4 view: R1 = L4 header, so
+            // each rule reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
             let l4 = &frame[m.l4_off..];
+            // TCP-flag scan tier (NULL/FIN/Xmas/SYN-FIN) — TCP only.
+            if m.ip_proto == crate::net::IPPROTO_TCP && crate::rules::run_tcp(l4) == DROP {
+                return (m.dst_port, DROP);
+            }
+            // Port/threat rules (TCP + UDP). A DROP scores a QSecBit hit.
             let v = crate::rules::run_l4(l4);
             (m.dst_port, v)
         }
