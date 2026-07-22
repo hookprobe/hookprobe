@@ -117,7 +117,16 @@ history — CVE-2020-8835 / 2021-3490 / 2021-31440) and Windows (PREVAIL verifie
 eBPF (`ubpf`/`generic-ebpf`) has **no verifier at all**; QNX is certified-not-proven
 with no BPF. HEQK can occupy the empty quadrant.
 
-Ranked (leverage-per-effort):
+Ranked (leverage-per-effort). **✅ = landed 2026-07-22.**
+
+- ✅ **tnum domain (item 2) — LANDED** (`absdom.rs`): sound-and-optimal tnum
+  and/or/xor/lshift/add (CGO'22), Agni-checked in the harness (all SOUND; injected
+  unsound tnum_and caught). HEQK now has the bitwise precision PREVAIL/Windows lack.
+  _Staged next:_ wire tnum into `verify_prevail`'s per-register state to tighten
+  AND_K/OR/LSH on the live datapath.
+- ✅ **Mandatory JIT constant blinding (item 5) — LANDED** (`bpf_jit.rs`): every
+  MOV64_K immediate XOR-split with a per-compile key — attacker-chosen gadget
+  constants never appear verbatim; JIT still == interpreter.
 
 1. **Agni-style SMT soundness CI** (replace the sampling harness). Encode each
    `absdom.rs` operator's γ-soundness as a bit-vector SMT query, run Z3 in CI —
