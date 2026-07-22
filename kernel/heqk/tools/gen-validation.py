@@ -147,9 +147,9 @@ SECTIONS = [
         proves="Poll-budget peaks under a burst, re-arms the IRQ when quiet; spin-poll retired.",
         env=["qemu"], marker="[P8-napi]", gate="P8n"),
    dict(feat="L2 guard — malformed-ARP + ARP-spoof drop",
-        sub="parity with HookProbe napse-l2guard (same field offsets)", new=True, phase="P8",
+        sub="napse-l2guard parity; JIT'd + running on metal (drop-logic proven on QEMU)", new=True, phase="P8",
         proves="Deterministic frame-level enforcement: bad ARP shape (is_malformed) + spoofed sender-MAC (eth_mismatch) dropped before L4.",
-        env=["qemu"], marker="[P8-l2]", gate="P8l"),
+        env=["metal","qemu"], marker="[P8-l2]", gate="P8l"),
  ]),
  ("L4", "Second interface", "external PCIe — the one hardware blocker", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
