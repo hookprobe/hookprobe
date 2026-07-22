@@ -99,6 +99,8 @@ pub struct RcDiag {
     pub mdio_timeouts: u32, // # of the 8 refclk MDIO writes that timed out (want 0)
     pub perst_before: u32, // PCIE_CTRL bit2 before (0 = in reset)
     pub perst_after: u32,  // ... after de-assert (want 1)
+    pub pll_lock: bool,    // SERDES PLL locked (MDIO SSC_STATUS bit11) — PHY alive
+    pub ssc: bool,         // SSC active (MDIO SSC_STATUS bit10)
     pub status: u32,       // PCIE_STATUS final (link up iff & 0x30 == 0x30)
 }
 
@@ -115,6 +117,51 @@ fn mdio_write_ok(regad: u32, data: u16) -> bool {
         }
     }
     true
+}
+
+/// One RC1 SERDES MDIO READ (port 0): ADDR word carries CMD_READ (1<<20); poll
+/// RD_DATA (0x1108) for the DONE flag (bit31), value in the low 31 bits. Mirrors
+/// Linux `brcm_pcie_mdio_read`. Returns None on timeout.
+fn mdio_read(regad: u32) -> Option<u16> {
+    rc_w(0x1100, regad | 0x0010_0000); // MDIO_CMD_READ (1) in the CMD field (bits 20+)
+    let _ = rc_r(0x1100); // posted-flush
+    let mut spin = 0u32;
+    loop {
+        let v = rc_r(0x1108); // RC_DL_MDIO_RD_DATA
+        if v & 0x8000_0000 != 0 {
+            return Some((v & 0xffff) as u16);
+        }
+        spin += 1;
+        if spin >= 200_000 {
+            return None;
+        }
+    }
+}
+
+/// Read the SERDES **PLL-lock** (+ SSC) status via MDIO — the only "PHY alive"
+/// signal the BCM2712 exposes (there is NO memory-mapped LTSSM state register).
+/// Pages in the SSC/status MDIO block (SET_ADDR 0x1f = 0x1100), then reads
+/// SSC_STATUS (offset 0x1): PLL_LOCK = bit11 (0x800), SSC = bit10 (0x400).
+/// pll_lock=false ⇒ the SerDes PLL never locked ⇒ refclk/PLL problem (RC side);
+/// pll_lock=true but link down ⇒ failure is downstream (endpoint/analog/board).
+fn serdes_pll_status() -> (bool, bool) {
+    mdio_write(0x1f, 0x1100); // SET_ADDR_OFFSET = SSC_REGS_ADDR
+    match mdio_read(0x1) {
+        // SSC_STATUS_OFFSET
+        Some(s) => (s & 0x800 != 0, s & 0x400 != 0),
+        None => (false, false),
+    }
+}
+
+/// Force the RC1 link to **Gen1** before training (many marginal PHYs only train
+/// at Gen1). Writes SLS/TLS = 1 (low 4 bits) into LNKCAP + LNKCTL2 in the RC cap
+/// block (BRCM_PCIE_CAP_REGS 0x00ac; LNKCAP +0x0c, LNKCTL2 +0x30) — the rpi-6.6.y
+/// `brcm_pcie_set_gen` path.
+fn force_gen1() {
+    let lnkcap = rc_r(0x00b8); // 0x00ac + PCI_EXP_LNKCAP(0x0c)
+    rc_w(0x00b8, (lnkcap & !0xf) | 1);
+    let lnkctl2 = rc_r(0x00dc); // 0x00ac + PCI_EXP_LNKCTL2(0x30)
+    rc_w(0x00dc, (lnkctl2 & !0xf) | 1);
 }
 
 /// Train the RC1 link (full sequence incl. RESCAL), with per-stage read-back
@@ -163,7 +210,10 @@ pub fn rc1_train() -> RcDiag {
         }
     }
     delay_us(150);
-    rc_w(0x184c, (rc_r(0x184c) & !0xff) | 0x12); // PM_CLK_PERIOD
+    // PM_CLK_PERIOD (0x12 = 18.52 ns @54 MHz) AND disable PLL power-down
+    // (DIS_PLL_PD, bit22 0x400000) — a BCM2712 requirement: without it the SERDES
+    // PLL can stay powered down and never lock (PHYLINKUP=0). Was missing before.
+    rc_w(0x184c, (rc_r(0x184c) & !0xff) | 0x12 | 0x0040_0000);
     // UBUS/AXI error suppression + timeouts.
     rc_w(0x40a4, rc_r(0x40a4) | (1 << 13) | (1 << 19));
     rc_w(0x4170, 0xffff_ffff);
@@ -178,17 +228,29 @@ pub fn rc1_train() -> RcDiag {
         rc_w(0x416c, (t2 & !0x3f) | 15);
     }
     rc_w(0x40a0, rc_r(0x40a0) & !(1 << 5));
-    // 7. Force the RC to DRIVE the 100 MHz refclk to the endpoint UNCONDITIONALLY:
-    // set REFCLK_OVRD_OUT(0x100000)|REFCLK_OVRD_ENABLE(0x10000), clear L1SS(0x200000)
-    // + CLKREQ_DEBUG(0x2). On this hardwired connector the RTL can't assert CLKREQ#
-    // until it's clocked, so a CLKREQ#-gated refclk leaves its PLL unlocked
-    // (PHYLINKUP=0). Driving refclk unconditionally breaks that chicken-and-egg.
-    rc_w(0x4304, (rc_r(0x4304) & !0x0020_0002) | 0x0011_0000);
-    // 8. de-assert PERST# (PERSTB bit2 = 1 => endpoint out of reset).
+    // 7. clkreq-mode "safe" (Linux `brcm_config_clkreq`): CLEAR both CLKREQ_DEBUG
+    // (0x2) and L1SS (0x200000) in HARD_DEBUG (2712 @ 0x4304) — the RC then drives
+    // the 100 MHz refclk UNCONDITIONALLY, ignoring the endpoint's (floating on this
+    // hardwired connector) CLKREQ# pin. Matches the driver exactly now (the old
+    // speculative REFCLK_OVRD bits are dropped — they aren't in the driver).
+    rc_w(0x4304, rc_r(0x4304) & !0x0020_0002);
+
+    // 7b. Force Gen1 before releasing the endpoint (marginal PHYs train at Gen1).
+    force_gen1();
+
+    // 8. PERST# with a settle window (Linux tperst_clk_ms). Hold PERST# externally
+    // LOW (HARD_DEBUG PERST_ASSERT bit3 = 0x8) while the internal reset releases,
+    // so the SERDES PLL pre-generates a STABLE refclk BEFORE the endpoint leaves
+    // reset — then read PLL lock, then release PERST# to the endpoint.
+    rc_w(0x4304, rc_r(0x4304) | 0x8); // PERST_ASSERT: force PERST# output low
     let perst_before = rc_r(0x4064) & 0x4;
-    rc_w(0x4064, rc_r(0x4064) | 0x4);
+    rc_w(0x4064, rc_r(0x4064) | 0x4); // internal PERSTB de-assert (bit2 = 1)
     let perst_after = rc_r(0x4064) & 0x4;
-    // 9. CEM 100ms after PERST, then poll link up to +100ms.
+    delay_us(200_000); // 200 ms: let the PLL lock on the now-stable refclk
+    // DECISIVE DIAGNOSTIC: did the SERDES PLL lock? (read before endpoint release)
+    let (pll_lock, ssc) = serdes_pll_status();
+    rc_w(0x4304, rc_r(0x4304) & !0x8); // release PERST# to the endpoint
+    // 9. CEM 100 ms after PERST# release, then poll link up to +100 ms.
     delay_us(100_000);
     let mut status = rc_r(0x4068);
     for _ in 0..20 {
@@ -205,6 +267,8 @@ pub fn rc1_train() -> RcDiag {
         mdio_timeouts,
         perst_before,
         perst_after,
+        pll_lock,
+        ssc,
         status,
     }
 }

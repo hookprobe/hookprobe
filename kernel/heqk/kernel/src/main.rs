@@ -696,9 +696,15 @@ fn cm5_p9_probe() {
     let d = rtl8111::rc1_train();
     kprint!(" [P9] diag: rescal_done={} iddq {:#x}->{:#x} (want ->0) mdio_timeouts={}/8 perst {:#x}->{:#x} (want ->0x4)\n",
         d.rescal_done, d.iddq_before, d.iddq_after, d.mdio_timeouts, d.perst_before, d.perst_after);
+    kprint!(" [P9] SERDES PLL_LOCK={} SSC={} (MDIO SSC_STATUS; PLL lock = the PHY-alive proxy — no LTSSM reg on 2712)\n",
+        d.pll_lock, d.ssc);
     kprint!(" [P9] RC1 status after train={:#010x} (DL_ACTIVE|PHYLINKUP mask 0x30)\n", d.status);
     if d.status & 0x30 != 0x30 {
-        kprint!(" [P9] RC1 link still down — diagnostics above pinpoint the failing stage\n");
+        if d.pll_lock {
+            kprint!(" [P9] RC1 link down but SERDES PLL LOCKED -> refclk/PLL OK; failure is DOWNSTREAM (endpoint/analog/board/lane) not RC clocking\n");
+        } else {
+            kprint!(" [P9] RC1 link down AND PLL UNLOCKED -> refclk/PLL never came up (RC-side); focus here (DIS_PLL_PD / refclk MDIO / SERDES)\n");
+        }
         return;
     }
     kprint!(" [P9] RC1 LINK UP (DL_ACTIVE|PHYLINKUP) — HEQK trained the external PCIe!\n");

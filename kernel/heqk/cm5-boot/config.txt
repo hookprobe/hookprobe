@@ -20,8 +20,9 @@ pciex1_reset=0
 # P9 (schematic-guided, 2026-07-22): the Waveshare board has NO PCIe reset/power
 # GPIO (traced: PERST#=SoC-internal, RTL power always-on). Remaining software
 # knobs before declaring a hardware fault:
-#  - the RTL8111H is a Gen2 part; don't let RC1 negotiate Gen3.
-dtparam=pciex1_gen=2
+#  - force Gen1 for training (marginal PHYs only train at Gen1; HEQK also
+#    writes LNKCAP/LNKCTL2 SLS=1 in rc1_train). RTL8111H can up-speed later.
+dtparam=pciex1_gen=1
 #  - give a slow-to-present endpoint more PERST#->refclk settle time.
 dtparam=pcie_tperst_clk_ms=100
 
