@@ -784,13 +784,28 @@ fn cm5_p9_rx() {
 /// assumed up here; SDHCI/DDR50 timing iterates on metal (like rtl8111 did).
 #[cfg(feature = "cm5")]
 fn cm5_p10_probe() {
+    use arch_aarch64::cyw43;
     kprint!(" [P10] CYW43455 WiFi (SDIO) — Stage A: SDHCI init + chip-ID read @ SI_ENUM_BASE\n");
-    match arch_aarch64::cyw43::chip_id_probe() {
-        Some(id) => kprint!(
-            " [P10-A] {} — SDIO link up; chip common-core ID = {:#06x} (want 0x4345 = BCM4345/6 / CYW43455)\n",
-            if id == 0x4345 { "PASS" } else { "MISMATCH" }, id),
-        None => kprint!(
-            " [P10-A] SILENT — SDIO init did not complete (WL_ON/clk_emmc2 rail or DDR50 timing — iterate on metal)\n"),
+    match cyw43::chip_id_probe() {
+        Some(0x4345) => {
+            kprint!(" [P10-A] PASS — SDIO link up; chip ID 0x4345 (BCM4345/6 / CYW43455)\n");
+            // Stage B: firmware + NVRAM upload, start ARMCR4, enable F2.
+            static mut NVSCRATCH: [u8; 4096] = [0; 4096];
+            let f2 = cyw43::firmware_upload(unsafe { &mut NVSCRATCH });
+            kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {}\n",
+                if f2 { "PASS" } else { "SILENT" }, cyw43::FW_BIN.len(),
+                if f2 { "ready (firmware alive)" } else { "not ready — clock/ARMCR4 timing iterates on metal" });
+            if f2 {
+                // Stage C: the regdomain backlog target — clmload + country iovar.
+                match cyw43::set_regdomain(b"GB", 0) {
+                    Some(true) => kprint!(" [P10-C] PASS — clmload + country iovar set; regdomain readback is a real ISO (not 00/99)\n"),
+                    Some(false) => kprint!(" [P10-C] country readback still 00/99 — map the (ccode,rev) pair vs the CLM\n"),
+                    None => kprint!(" [P10-C] SILENT — BCDC/SDPCM control path (seq/credits) iterates on metal\n"),
+                }
+            }
+        }
+        Some(id) => kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id),
+        None => kprint!(" [P10-A] SILENT — SDIO init did not complete (WL_ON/clk_emmc2 rail or DDR50 timing — iterate on metal)\n"),
     }
 }
 
