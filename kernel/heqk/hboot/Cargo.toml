@@ -14,7 +14,7 @@ ed25519-compact = { version = "2", default-features = false }
 # on-device (fast-sign variant; 128s sign is unusable in bare-metal software).
 fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2_128s", "slh_dsa_sha2_128f"] }
 # ZeroRng for deterministic AK signing (hedged=false), avoiding getrandom.
-rand_core = { version = "0.6", default-features = false }
+rand_core = { version = "0.10", default-features = false }
 
 [[bin]]
 name = "hboot"
