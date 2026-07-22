@@ -137,6 +137,9 @@ fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8]) -> u16 {
         };
         if v != bpf::PASS {
             telemetry::emit_rule_hit(rules[i].severity);
+            // SOAR: async, non-blocking event export ("the OS is the sensor" can
+            // report). The header only — never the payload.
+            crate::events::push_hit(rules[i].id, rules[i].severity as u8, crate::packet::DROP as u8, 0);
             return crate::packet::DROP;
         }
     }

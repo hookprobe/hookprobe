@@ -14,6 +14,7 @@ mod attest_svc;
 mod blocklist;
 mod bpf;
 mod caps;
+mod events;
 mod heap;
 mod ipc;
 mod napi;
@@ -1150,6 +1151,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: threat-feed blocklist — helper #2 (keyed CIDR lookup), live rule ---
     p8_blocklist();
 
+    // --- P8/SOAR: async event-ring — the non-blocking telemetry exfiltration path
+    p8_soar();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1596,6 +1600,33 @@ fn p8_blocklist() -> bool {
     }
     kprint!(" [P8-block] {} — blocked source prefixes dropped, clean sources pass (threat-feed parity)\n",
         if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8/SOAR: the async, non-blocking telemetry exfiltration path. Each rule DROP in
+/// the verdict engine (TCB) pushed a fixed-size event HEADER into the SPSC event
+/// ring; here the "EL0 Telemetry Exporter" DRAINs it — proving the OS-as-sensor
+/// can report to a SIEM without stalling the datapath (full ring ⇒ counted
+/// overrun, never block). Wakeup would be a batched P12 Notification.
+#[cfg(not(feature = "cm5"))]
+fn p8_soar() -> bool {
+    kprint!("\n [P8] SOAR event-ring — async telemetry exfiltration (non-blocking)\n");
+    // Trigger two fresh threat drops (each pushes an event header in the TCB).
+    for &port in &[4444u16, 23u16] {
+        let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
+        let _ = rules::run_l4(&l4);
+    }
+    // The exporter drains the ring (zero-copy read of the headers, never payload).
+    let mut batch = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+    let n = events::drain(&mut batch);
+    for ev in &batch[..n] {
+        kprint!("   event: rule {} sev {} verdict {} @ts {}\n",
+            ev.rule_id, ev.severity, if ev.verdict == packet::DROP as u8 { "DROP" } else { "PASS" }, ev.ts);
+    }
+    // At least the two fresh drops must have been exported; ring never blocked.
+    let ok = n >= 2 && batch[..n].iter().all(|e| e.verdict == packet::DROP as u8);
+    kprint!(" [P8-soar] {} — {} threat events exported async ({} overruns, wire never stalled)\n",
+        if ok { "PASS" } else { "FAIL" }, n, events::overruns());
     ok
 }
 
