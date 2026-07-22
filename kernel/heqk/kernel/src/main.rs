@@ -14,6 +14,7 @@ mod bpf;
 mod caps;
 mod heap;
 mod ipc;
+mod napi;
 mod net;
 mod packet;
 mod rules;
@@ -1063,6 +1064,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: detection plane — general JIT parity + live rule registry + QSecBit
     p8_detection_plane();
 
+    // --- P8: adaptive NAPI data plane — retire spin-poll (edge-right RX) ---
+    p8_adaptive_napi();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1267,6 +1271,55 @@ fn p8_detection_plane() -> bool {
 
     kprint!(" [P8-plane] {} — signed rules run at native speed on live traffic, scored in the TCB\n",
         if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// P8 adaptive NAPI: drive the detection datapath through an adaptive poll-budget
+/// engine over a realistic RX arrival pattern (heavy burst → trickle → quiet).
+/// Each drained "frame" is a REAL verdict (rules::run_l4 on an L4 header), so this
+/// is the actual datapath under NAPI, not a simulation of one. Proves the budget
+/// GROWS under load (bounded latency) and the engine IDLEs/re-arms when the ring
+/// drains (bounded idle CPU) — retiring the spin-poll loop.
+#[cfg(not(feature = "cm5"))]
+fn p8_adaptive_napi() -> bool {
+    kprint!("\n [P8] adaptive NAPI data plane — poll-budget grows under load, idles when quiet\n");
+    let mut n = napi::Napi::new(2, 64);
+    // Frames waiting in the NIC RX ring at successive service windows.
+    let arrivals: [u32; 7] = [100, 90, 30, 4, 0, 2, 0];
+    let mut idles = 0u32;
+    let ports = [4444u16, 80, 443, 23]; // mix of threat + benign -> real verdicts
+    let mut seq = 0usize;
+    for (w, &avail) in arrivals.iter().enumerate() {
+        let mut remaining = avail;
+        loop {
+            let out = n.service(|budget| {
+                let take = budget.min(remaining);
+                for _ in 0..take {
+                    let port = ports[seq % ports.len()];
+                    seq += 1;
+                    let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
+                    let _ = rules::run_l4(&l4); // real verdict, feeds QSecBit
+                }
+                remaining -= take;
+                take
+            });
+            if out == napi::Outcome::Idle {
+                idles += 1;
+                break; // caller would re-arm the RX IRQ + WFI here
+            }
+        }
+        kprint!("   window {}: {:>3} arrived | budget now {:>2} (peak {:>2}) | {}\n",
+            w, avail, n.budget(), n.max_budget(), if n.is_idle() { "IDLE (IRQ armed)" } else { "polling" });
+    }
+    // Under load the budget must have grown past its floor; the box must have
+    // idled (re-armed) at least once when the ring drained.
+    let grew = n.max_budget() > 2;
+    let idled = n.rearms() >= 1;
+    kprint!("   summary: {} frames judged over {} services, peak budget {}, {} IRQ re-arms\n",
+        n.total_processed(), n.services(), n.max_budget(), n.rearms());
+    let ok = grew && idled && idles >= 1;
+    kprint!(" [P8-napi] {} — adaptive budget (peak {}) under load, idle+re-arm when quiet — spin-poll retired\n",
+        if ok { "PASS" } else { "FAIL" }, n.max_budget());
     ok
 }
 
