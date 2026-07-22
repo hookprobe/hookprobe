@@ -61,6 +61,56 @@ pub const fn port_block_rule(port: i32) -> [u64; 9] {
 pub const BLOCK_TELNET: [u64; 9] = port_block_rule(23);
 pub const BLOCK_BACKDOOR: [u64; 9] = port_block_rule(31337);
 
+// --- L2 tier: parity with HookProbe `napse-l2guard` (Ring-0 malformed-frame /
+// malformed-ARP / ARP-spoof drop). These rules take R1 = the L2 FRAME start and
+// mirror `dpi::ArpObs::is_malformed` / `eth_mismatch` field-for-field. Values are
+// little-endian (HEQK's LDX_H/W assemble bytes LE); wire fields are big-endian,
+// so 16-bit constants are byte-swapped (ARP EtherType 0x0806 -> 0x0608, etc.).
+
+/// Malformed-ARP drop — mirrors `ArpObs::is_malformed`: a frame that IS ARP but
+/// whose fixed header isn't the standard Ethernet/IPv4 shape (htype=1, ptype=
+/// 0x0800, hlen=6, plen=4) or isn't a complete 42-byte packet → DROP. Non-ARP →
+/// PASS. Ethernet@0, EtherType@12; ARP header@14 (htype,ptype,hlen,plen); the
+/// LDX_W@38 forces the verifier's min_len to 42 (the "complete body" check).
+pub const ARP_MALFORMED: [u64; 16] = [
+    insn(0x69, 2, 1, 12, 0),      // 0  R2 = *(u16*)(R1+12)  EtherType
+    insn(0xb7, 0, 0, 0, 1),       // 1  R0 = PASS
+    insn(0x55, 2, 0, 10, 0x0608), // 2  if R2 != ARP goto 13 (PASS EXIT)
+    insn(0x61, 6, 1, 38, 0),      // 3  R6 = *(u32*)(R1+38)  target_ip -> min_len=42
+    insn(0x69, 3, 1, 14, 0),      // 4  R3 = *(u16*)(R1+14)  htype
+    insn(0x55, 3, 0, 8, 0x0100),  // 5  if htype != 1 goto 14 (DROP)
+    insn(0x69, 4, 1, 16, 0),      // 6  R4 = *(u16*)(R1+16)  ptype
+    insn(0x55, 4, 0, 6, 0x0008),  // 7  if ptype != 0x0800 goto 14
+    insn(0x71, 5, 1, 18, 0),      // 8  R5 = *(u8*)(R1+18)   hlen
+    insn(0x55, 5, 0, 4, 6),       // 9  if hlen != 6 goto 14
+    insn(0x71, 7, 1, 19, 0),      // 10 R7 = *(u8*)(R1+19)   plen
+    insn(0x55, 7, 0, 2, 4),       // 11 if plen != 4 goto 14
+    insn(0xb7, 0, 0, 0, 1),       // 12 R0 = PASS (well-formed ARP)
+    insn(0x95, 0, 0, 0, 0),       // 13 EXIT (PASS)
+    insn(0xb7, 0, 0, 0, 2),       // 14 R0 = DROP
+    insn(0x95, 0, 0, 0, 0),       // 15 EXIT (DROP)
+];
+
+/// ARP-spoof drop — mirrors `ArpObs::eth_mismatch`: an ARP frame whose payload
+/// sender-MAC (@22, 6 bytes) disagrees with the Ethernet source-MAC (@6) → DROP
+/// (a spoofed sender). Non-ARP → PASS. Compared as 4 bytes (LDX_W) + 2 bytes
+/// (LDX_H); byte order is irrelevant since both sides use the same widths.
+pub const ARP_SPOOF: [u64; 13] = [
+    insn(0x69, 2, 1, 12, 0),      // 0  R2 = EtherType
+    insn(0xb7, 0, 0, 0, 1),       // 1  R0 = PASS
+    insn(0x55, 2, 0, 7, 0x0608),  // 2  if not ARP goto 10 (PASS EXIT)
+    insn(0x61, 3, 1, 6, 0),       // 3  R3 = *(u32*)(R1+6)   eth src_mac[0..4]
+    insn(0x61, 4, 1, 22, 0),      // 4  R4 = *(u32*)(R1+22)  arp sender_mac[0..4]
+    insn(0x5d, 3, 4, 5, 0),       // 5  if R3 != R4 goto 11 (DROP)
+    insn(0x69, 5, 1, 10, 0),      // 6  R5 = *(u16*)(R1+10)  eth src_mac[4..6]
+    insn(0x69, 6, 1, 26, 0),      // 7  R6 = *(u16*)(R1+26)  arp sender_mac[4..6]
+    insn(0x5d, 5, 6, 2, 0),       // 8  if R5 != R6 goto 11 (DROP)
+    insn(0xb7, 0, 0, 0, 1),       // 9  R0 = PASS (MACs agree)
+    insn(0x95, 0, 0, 0, 0),       // 10 EXIT (PASS)
+    insn(0xb7, 0, 0, 0, 2),       // 11 R0 = DROP
+    insn(0x95, 0, 0, 0, 0),       // 12 EXIT (DROP)
+];
+
 // --- P8 verifier test vectors: adversarial "third-party" rules ---------------
 /// UNSAFE: loads from an arbitrary (scalar) address, not the packet. A runtime
 /// bounds check might catch some of these; the STATIC verifier rejects it flat.

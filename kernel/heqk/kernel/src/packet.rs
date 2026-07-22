@@ -124,6 +124,11 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
 /// frames fail safe to DROP; non-TCP/UDP frames (ARP, ICMP, …) carry no port
 /// threat and PASS.
 fn classify(frame: &[u8]) -> (u16, u16) {
+    // L2 structural tier (napse-l2guard parity: malformed-ARP / ARP-spoof) — runs
+    // on EVERY frame, R1 = the raw L2 start, before any L4 parsing.
+    if crate::rules::run_l2(frame) == DROP {
+        return (0, DROP);
+    }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
             // Run the whole signed rule set on a normalized L4 view: R1 = L4

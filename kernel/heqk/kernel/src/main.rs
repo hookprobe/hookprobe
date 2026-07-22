@@ -1089,6 +1089,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: adaptive NAPI data plane — retire spin-poll (edge-right RX) ---
     p8_adaptive_napi();
 
+    // --- P8: L2 guard — napse-l2guard parity (malformed-ARP / ARP-spoof) ---
+    p8_l2guard();
+
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
     let entries: [usize; NTHREADS] = [
@@ -1342,6 +1345,54 @@ fn p8_adaptive_napi() -> bool {
     let ok = grew && idled && idles >= 1;
     kprint!(" [P8-napi] {} — adaptive budget (peak {}) under load, idle+re-arm when quiet — spin-poll retired\n",
         if ok { "PASS" } else { "FAIL" }, n.max_budget());
+    ok
+}
+
+/// P8 L2 guard: parity with HookProbe `napse-l2guard` — the signed L2 rule tier
+/// drops a malformed ARP (`is_malformed`) and a spoofed ARP (`eth_mismatch`) at
+/// the frame level, while a well-formed ARP and non-ARP traffic pass. R1 = the
+/// raw L2 frame; the same field offsets the `napse-l2guard` BPF program uses.
+#[cfg(not(feature = "cm5"))]
+fn p8_l2guard() -> bool {
+    kprint!("\n [P8] L2 guard — napse-l2guard parity: malformed-ARP + ARP-spoof drop\n");
+    // A well-formed RFC-826 Ethernet/IPv4 ARP frame; `htype_lo` and `smac0` let
+    // us perturb the htype and the payload sender-MAC's first byte.
+    fn arp_frame(htype_lo: u8, smac0: u8) -> [u8; 42] {
+        let mut f = [0u8; 42];
+        for b in f.iter_mut().take(6) {
+            *b = 0xff; // eth dst = broadcast
+        }
+        f[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]); // eth src
+        f[12..14].copy_from_slice(&[0x08, 0x06]); // EtherType = ARP
+        f[14..16].copy_from_slice(&[0x00, htype_lo]); // htype (1 = Ethernet)
+        f[16..18].copy_from_slice(&[0x08, 0x00]); // ptype = IPv4
+        f[18] = 6;
+        f[19] = 4; // hlen, plen
+        f[20..22].copy_from_slice(&[0x00, 0x01]); // oper = request
+        f[22..28].copy_from_slice(&[smac0, 0x11, 0x22, 0x33, 0x44, 0x55]); // ARP sender_mac
+        f
+    }
+    let valid = arp_frame(0x01, 0x02); // well-formed, sender_mac == eth src
+    let malformed = arp_frame(0x02, 0x02); // htype = 2 -> malformed
+    let spoof = arp_frame(0x01, 0x99); // sender_mac != eth src -> spoof
+    let mut ipv4 = [0u8; 42];
+    ipv4[12..14].copy_from_slice(&[0x08, 0x00]); // non-ARP (IPv4)
+    let cases: [(&[u8], u16, &str); 4] = [
+        (&valid, packet::PASS, "well-formed ARP"),
+        (&malformed, packet::DROP, "malformed ARP (htype!=1)"),
+        (&spoof, packet::DROP, "ARP spoof (sender-mac != eth src)"),
+        (&ipv4, packet::PASS, "non-ARP (IPv4)"),
+    ];
+    let mut ok = true;
+    for (f, want, name) in cases {
+        let v = rules::run_l2(f);
+        let good = v == want;
+        ok &= good;
+        kprint!("   L2: {} -> {} [{}]\n",
+            name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+    }
+    kprint!(" [P8-l2] {} — malformed/spoofed ARP dropped at L2, legit frames pass (napse-l2guard parity)\n",
+        if ok { "PASS" } else { "FAIL" });
     ok
 }
 
