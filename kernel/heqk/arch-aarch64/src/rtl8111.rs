@@ -173,10 +173,6 @@ pub struct RcDiag {
     pub mdio_timeouts: u32, // # of the 8 refclk MDIO writes that timed out (want 0)
     pub perst_before: u32, // PCIE_CTRL bit2 before (0 = in reset)
     pub perst_after: u32,  // ... after de-assert (want 1)
-    pub pll_clear: bool,   // PLL locked with clkreq CLEARED (Linux "safe")
-    pub pll_set: bool,     // PLL locked with clkreq SET (FreeBSD)
-    pub pll_lock: bool,    // SERDES PLL locked (MDIO SSC_STATUS bit11) — PHY alive
-    pub ssc: bool,         // SSC active (MDIO SSC_STATUS bit10)
     pub status: u32,       // PCIE_STATUS final (link up iff & 0x30 == 0x30)
 }
 
@@ -304,41 +300,26 @@ pub fn rc1_train() -> RcDiag {
         rc_w(0x416c, (t2 & !0x3f) | 15);
     }
     rc_w(0x40a0, rc_r(0x40a0) & !(1 << 5));
-    // 7. CLKREQ controversy resolved EMPIRICALLY. Linux `brcm_config_clkreq`
-    // "safe" mode CLEARS CLKREQ_DEBUG(0x2)+L1SS(0x200000) → refclk driven
-    // unconditionally; FreeBSD's 2711 driver SETS CLKREQ_ENABLE(0x2). They do the
-    // OPPOSITE with the same bit. The SERDES PLL locks off the refclk regardless of
-    // PERST, so read PLL lock under BOTH settings (L1SS always cleared) and keep
-    // whichever locks. This one flash tells us which mode actually drives refclk on
-    // this hardwired, floating-CLKREQ# connector.
-    rc_w(0x4304, rc_r(0x4304) & !0x0020_0002); // clkreq CLEAR (Linux "safe")
-    delay_us(50_000);
-    let (pll_clear, _) = serdes_pll_status();
-    rc_w(0x4304, (rc_r(0x4304) & !0x0020_0000) | 0x2); // clkreq SET (FreeBSD), L1SS off
-    delay_us(50_000);
-    let (pll_set, _) = serdes_pll_status();
-    // Keep the mode that locked (prefer Linux "safe"=clear on a tie/neither).
-    let clkreq_set_wins = pll_set && !pll_clear;
-    if clkreq_set_wins {
-        rc_w(0x4304, (rc_r(0x4304) & !0x0020_0000) | 0x2);
-    } else {
-        rc_w(0x4304, rc_r(0x4304) & !0x0020_0002);
-    }
+    // 7. clkreq-mode: clear CLKREQ_DEBUG(0x2) + L1SS(0x200000) in HARD_DEBUG (2712
+    // @0x4304) — NO ASPM L1 substates, so the trained link stays in L0 (the safe
+    // subset for a bare-metal bring-up with no power management). Linux trains the
+    // RTL with clkreq-mode "default"; clearing both is the conservative variant that
+    // still trains at the LTSSM level. (The MDIO SSC/PLL-lock read is unreliable on
+    // 2712 — CFG_QUIRK_NO_SSC — so we trust the memory-mapped STATUS 0x4068 only.)
+    rc_w(0x4304, rc_r(0x4304) & !0x0020_0002);
 
-    // 7b. Force Gen1 before releasing the endpoint (marginal PHYs train at Gen1).
+    // 7b. Force Gen1 before releasing the endpoint (the RTL8111H trains at Gen1 x1).
     force_gen1();
 
     // 8. PERST# with a settle window (Linux tperst_clk_ms). Hold PERST# externally
-    // LOW (HARD_DEBUG PERST_ASSERT bit3 = 0x8) while the internal reset releases,
-    // so the SERDES PLL pre-generates a STABLE refclk BEFORE the endpoint leaves
-    // reset — then read PLL lock, then release PERST# to the endpoint.
+    // LOW (HARD_DEBUG PERST_ASSERT bit3 = 0x8) while the internal reset releases so
+    // the SERDES PLL locks on a STABLE refclk BEFORE the endpoint leaves reset, then
+    // release PERST# to the endpoint.
     rc_w(0x4304, rc_r(0x4304) | 0x8); // PERST_ASSERT: force PERST# output low
     let perst_before = rc_r(0x4064) & 0x4;
     rc_w(0x4064, rc_r(0x4064) | 0x4); // internal PERSTB de-assert (bit2 = 1)
     let perst_after = rc_r(0x4064) & 0x4;
     delay_us(200_000); // 200 ms: let the PLL lock on the now-stable refclk
-    // DECISIVE DIAGNOSTIC: did the SERDES PLL lock? (read before endpoint release)
-    let (pll_lock, ssc) = serdes_pll_status();
     rc_w(0x4304, rc_r(0x4304) & !0x8); // release PERST# to the endpoint
     // 9. CEM 100 ms after PERST# release, then poll link up to +100 ms.
     delay_us(100_000);
@@ -357,10 +338,6 @@ pub fn rc1_train() -> RcDiag {
         mdio_timeouts,
         perst_before,
         perst_after,
-        pll_clear,
-        pll_set,
-        pll_lock,
-        ssc,
         status,
     }
 }
