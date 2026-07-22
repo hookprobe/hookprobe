@@ -41,6 +41,26 @@ pub const THREAT_RULE: [u64; 9] = [
     insn(0x95, 0, 0, 0, 0),    // EXIT
 ];
 
+/// A dst-port DROP rule (same L4-header shape as THREAT_RULE) for `port`. Used to
+/// build the P8 rule corpus — the mechanism that lets the SAME bytecode rules run
+/// on the Linux/FreeBSD/QNX HookProbe substrates and here, unchanged.
+pub const fn port_block_rule(port: i32) -> [u64; 9] {
+    [
+        insn(0x71, 2, 1, 2, 0),   // R2 = *(u8*)(R1+2)   dst-port high byte
+        insn(0x67, 2, 0, 0, 8),   // R2 <<= 8
+        insn(0x71, 3, 1, 3, 0),   // R3 = *(u8*)(R1+3)   dst-port low byte
+        insn(0x4f, 2, 3, 0, 0),   // R2 |= R3            (R2 = dst_port)
+        insn(0x55, 2, 0, 2, port), // if R2 != port goto +2
+        insn(0xb7, 0, 0, 0, 2),   // R0 = DROP
+        insn(0x95, 0, 0, 0, 0),   // EXIT
+        insn(0xb7, 0, 0, 0, 1),   // R0 = PASS
+        insn(0x95, 0, 0, 0, 0),   // EXIT
+    ]
+}
+/// P8 corpus (beyond the signed 4444 rule): telnet + a common backdoor port.
+pub const BLOCK_TELNET: [u64; 9] = port_block_rule(23);
+pub const BLOCK_BACKDOOR: [u64; 9] = port_block_rule(31337);
+
 // --- P8 verifier test vectors: adversarial "third-party" rules ---------------
 /// UNSAFE: loads from an arbitrary (scalar) address, not the packet. A runtime
 /// bounds check might catch some of these; the STATIC verifier rejects it flat.

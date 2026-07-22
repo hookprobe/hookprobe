@@ -29,6 +29,8 @@ PHASES=(
   "P6|[P6] PASS|impl|Validation|AI Runtime: RFC 9669 BPF VM (interpreter) verdict + bounds sandbox"
   "P6b|[P6b] PASS|impl|Validation|BPF verifier + JIT (W^X) + self-heal supervisor + telemetry/QSecBit"
   "DRV|[DRV] PASS|impl|Validation|driver isolation: EL0 driver server drives NIC MMIO via a capability"
+  "P8|[P8] PASS|impl|Validation|PREVAIL verifier: statically proves rule memory-safety, rejects unsafe 3rd-party rules"
+  "P8p|[P8-plane] PASS|impl|Validation|detection plane: general BPF JIT (branches) + rule registry (parity) + live QSecBit scoring"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
 

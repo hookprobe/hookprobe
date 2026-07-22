@@ -16,6 +16,7 @@ mod heap;
 mod ipc;
 mod net;
 mod packet;
+mod rules;
 mod scheduler;
 mod telemetry;
 
@@ -182,6 +183,11 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
 
     // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
     cm5_scheduler_demo();
+
+    // --- P8: load the signed HookProbe rule plane (verify every rule; JIT is
+    // QEMU-only, so CM5 runs the bounds-checked interpreter — same verdict). ---
+    let (rv, rj) = rules::init();
+    kprint!(" [P8] rule plane: {} rules verified, {} JIT (interp fallback on metal) — parity corpus armed\n", rv, rj);
 
     // --- P8: statically VERIFY the detection rule before running it on live traffic --
     cm5_p8_verify();
@@ -1010,6 +1016,11 @@ pub extern "C" fn kmain() -> ! {
         arch_aarch64::semihosting::exit(1);
     }
 
+    // --- P8: load the signed HookProbe rule plane — verify + JIT every rule the
+    // datapath will run (rule parity + native codegen). ---
+    let (rv, rj) = rules::init();
+    kprint!(" [P8] rule plane: {} rules verified, {} JIT-compiled (interp fallback) — parity corpus armed\n", rv, rj);
+
     // --- P5: Packet Engine (zero-copy ring + in-place verdict datapath) ---
     if !p5_packet_engine() {
         kprint!(" packet: FAIL\n");
@@ -1048,6 +1059,9 @@ pub extern "C" fn kmain() -> ! {
 
     // --- P8: PREVAIL-style verifier gating untrusted third-party BPF rules ---
     p8_verifier_demo();
+
+    // --- P8: detection plane — general JIT parity + live rule registry + QSecBit
+    p8_detection_plane();
 
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();
@@ -1186,6 +1200,74 @@ fn p8_verifier_demo() {
     let good = verify_prevail(&THREAT_RULE).is_ok();
     kprint!(" [P8] {} — accepts safe rules (incl. expanded ISA), statically rejects every unsafe one\n",
         if good && all_rejected && parse_ok { "PASS" } else { "FAIL" });
+}
+
+/// P8 detection plane: (1) the GENERAL JIT matches the interpreter on a rule with
+/// forward JUMPS + pointer-arith + multi-byte loads (PARSE_RULE) across inputs —
+/// proving branch codegen, not just the straight-line threat rule; (2) the live
+/// rule registry DROPs the threat ports and PASSes benign traffic; (3) QSecBit
+/// scores real hits ("the OS is the sensor"). All QEMU-verifiable, no flash.
+#[cfg(not(feature = "cm5"))]
+fn p8_detection_plane() -> bool {
+    kprint!("\n [P8] detection plane — general JIT parity + live rule registry + QSecBit\n");
+    let mut ok = true;
+
+    // (1) General JIT vs interpreter on PARSE_RULE (has a forward JEQ). Test an
+    // IPv4 frame (DROP) and an ARP frame (PASS) — both must match the interpreter.
+    match arch_aarch64::bpf_jit::compile(&bpf::PARSE_RULE) {
+        Some(va) => {
+            let f: extern "C" fn(*const u8) -> u64 =
+                unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
+            let mut jit_ok = true;
+            for &(et_hi, et_lo) in &[(0x08u8, 0x00u8), (0x08, 0x06), (0x86, 0xdd)] {
+                let mut frame = [0u8; 14];
+                frame[12] = et_hi;
+                frame[13] = et_lo;
+                let jv = f(frame.as_ptr());
+                let iv = bpf::run(&bpf::PARSE_RULE, frame.as_ptr(), frame.len());
+                if jv != iv {
+                    jit_ok = false;
+                }
+            }
+            kprint!("   general JIT (PARSE_RULE, forward JEQ): matches interpreter across inputs: {}\n",
+                if jit_ok { "yes" } else { "NO" });
+            ok &= jit_ok;
+        }
+        None => {
+            kprint!("   general JIT: PARSE_RULE compile FAILED\n");
+            ok = false;
+        }
+    }
+
+    // (2) Live rule registry over crafted L4 headers (dst-port at 2..4, BE).
+    let hits_before = telemetry::rule_hits();
+    let score_before = telemetry::score();
+    let cases: [(u16, u16, &str); 4] = [
+        (4444, packet::DROP, "port-4444"),
+        (23, packet::DROP, "telnet-23"),
+        (31337, packet::DROP, "backdoor-31337"),
+        (80, packet::PASS, "http-80"),
+    ];
+    let mut plane_ok = true;
+    for (port, want, name) in cases {
+        let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
+        let v = rules::run_l4(&l4);
+        let good = v == want;
+        plane_ok &= good;
+        kprint!("   rule plane: dst {} ({}) -> {} [{}]\n",
+            port, name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+    }
+    ok &= plane_ok;
+
+    // (3) QSecBit sensed the three DROPs as scored threat signals.
+    let dhits = telemetry::rule_hits() - hits_before;
+    let dscore = telemetry::score() - score_before;
+    kprint!("   QSecBit: {} live rule hits scored (+{} points) — the OS is the sensor\n", dhits, dscore);
+    ok &= dhits == 3 && dscore > 0;
+
+    kprint!(" [P8-plane] {} — signed rules run at native speed on live traffic, scored in the TCB\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)
@@ -1698,8 +1780,9 @@ fn p6b_demo() -> bool {
         ok = false;
     }
 
-    // 2. JIT: compile the rule to native ARM64, run it, compare to the interpreter.
-    match arch_aarch64::bpf_jit::compile_threat_rule() {
+    // 2. JIT: compile the rule to native ARM64 (general two-pass compiler), run
+    //    it, compare to the interpreter.
+    match arch_aarch64::bpf_jit::compile(&bpf::THREAT_RULE) {
         Some(code_va) => {
             let f: extern "C" fn(*const u8) -> u64 =
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(code_va) };

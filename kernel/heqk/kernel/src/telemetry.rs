@@ -53,3 +53,23 @@ pub fn count(e: Event) -> u32 {
 pub fn score() -> u32 {
     SCORE.load(Ordering::Relaxed)
 }
+
+// --- P8: live QSecBit scoring from the detection plane -----------------------
+// A signed BPF rule firing on real traffic is a first-class threat signal. Each
+// hit adds its rule's SEVERITY (not a flat weight) to the score, and the per-rule
+// tally is the "OS is the sensor" evidence a detector reasons about.
+static RULE_HITS: AtomicU32 = AtomicU32::new(0);
+
+/// Record that a signed threat rule fired on a live packet, adding `severity`
+/// points to the QSecBit score. Called from the datapath verdict (`packet.rs`).
+pub fn emit_rule_hit(severity: u32) {
+    RULE_HITS.fetch_add(1, Ordering::Relaxed);
+    let _ = SCORE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+        Some(s.saturating_add(severity))
+    });
+}
+
+/// Total signed-rule hits observed on live traffic.
+pub fn rule_hits() -> u32 {
+    RULE_HITS.load(Ordering::Relaxed)
+}

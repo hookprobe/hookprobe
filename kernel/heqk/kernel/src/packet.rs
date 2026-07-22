@@ -126,13 +126,12 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
 fn classify(frame: &[u8]) -> (u16, u16) {
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
-            // Run the rule on a normalized L4 view: R1 = L4 header, so the rule
-            // reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
+            // Run the whole signed rule set on a normalized L4 view: R1 = L4
+            // header, so each rule reads dst-port at a fixed offset regardless of
+            // eth/VLAN/IHL. The registry JITs each rule (interpreter fallback) and
+            // scores a hit into QSecBit on a DROP — P8 detection plane.
             let l4 = &frame[m.l4_off..];
-            let v = match crate::bpf::run(&crate::bpf::THREAT_RULE, l4.as_ptr(), l4.len()) {
-                crate::bpf::PASS => PASS,
-                _ => DROP, // DROP or INVALID (sandbox) -> fail-safe
-            };
+            let v = crate::rules::run_l4(l4);
             (m.dst_port, v)
         }
         Some(m) => (m.dst_port, PASS), // valid non-port traffic (ARP/ICMP/…)
