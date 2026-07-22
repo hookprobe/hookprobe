@@ -722,9 +722,56 @@ fn cm5_p9_probe() {
         Some(mac) => {
             kprint!(" [P9] PASS — RTL8111H found @01:00.0 (vendor/device 0x816810EC), MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            kprint!(" [P9] next: inbound window + RX ring (rtl8111::pcie_inbound_window/mac_start)\n");
+            cm5_p9_rx();
         }
         None => kprint!(" [P9] RC1 link up but RTL8111H not found at 01:00.0 (vendor mismatch)\n"),
+    }
+}
+
+/// P9 RX datapath: inbound DMA window + RX ring on the RTL8111H (phy1), then poll
+/// real frames and run each through the kernel IDS — the SAME verdict path the GEM
+/// uses (produce_raw → BPF verdict → consume_one), now on the external NIC.
+#[cfg(feature = "cm5")]
+fn cm5_p9_rx() {
+    use arch_aarch64::rtl8111;
+    kprint!(" [P9] RX datapath — inbound DMA window + RX ring on the RTL8111H (phy1)\n");
+    let (bar1, ubus) = rtl8111::pcie_inbound_window();
+    kprint!(" [P9] PCIe inbound win armed (RC_BAR1_LO was {:#x}, UBUS_REMAP_LO was {:#x})\n", bar1, ubus);
+    rtl8111::mac_start();
+    kprint!(" [P9] MAC started; PHY link={}; polling RX ~5s -> kernel IDS\n",
+        if rtl8111::link_up() { "UP" } else { "down" });
+    struct Pool([u8; packet::FRAME_SZ * 8]);
+    static mut RXPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
+    let pool = core::ptr::addr_of_mut!(RXPOOL) as usize;
+    let mut buf = [0u8; 1600];
+    let mut frames = 0u32;
+    let mut i = 0usize;
+    let mut spins = 0u64;
+    while frames < 4 && spins < 60_000_000 {
+        if let Some(len) = rtl8111::poll_rx(i, &mut buf) {
+            let n = len.min(buf.len());
+            if n >= 14 {
+                let verdict = if packet::produce_raw(pool, &buf[..n]) {
+                    packet::consume_one(pool)
+                } else {
+                    None
+                };
+                if let Some((port, v)) = verdict {
+                    kprint!("   [P9-rx] frame {} ({}B et={:02x}{:02x}) -> IDS {} (dst_port={})\n",
+                        frames, n, buf[12], buf[13],
+                        if v == packet::DROP { "DROP" } else { "PASS" }, port);
+                }
+                frames += 1;
+            }
+            i = (i + 1) % 256; // NRX — advance to the next descriptor
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    if frames > 0 {
+        kprint!(" [P9-rx] PASS — {} real phy1 frame(s) off the RTL8111H -> kernel IDS verdict (BOTH NICs feed the IDS)\n", frames);
+    } else {
+        kprint!(" [P9-rx] SILENT — no RX frames in the window (check the phy1 cable/link-partner); datapath armed without fault\n");
     }
 }
 

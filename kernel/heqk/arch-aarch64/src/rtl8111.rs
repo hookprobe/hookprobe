@@ -373,6 +373,26 @@ pub fn cfg_w32(bus: u32, devfn: u32, reg: usize, v: u32) {
 
 const RTL_VENDOR_DEVICE: u32 = 0x8168_10EC; // device 0x8168 | vendor 0x10EC
 
+/// Program RC1 outbound window `win`: CPU `[cpu_addr, cpu_addr+size)` → PCIe bus
+/// `pcie_addr`. Mirrors Linux `brcm_pcie_set_outbound_win` (BASE/LIMIT in MB units:
+/// low 12 bits in BASE_LIMIT[15:4]/[31:20], high 8 bits in BASE_HI/LIMIT_HI[7:0]).
+/// Without this, CPU reads of `RTL_MMIO` don't reach the RTL's BAR2 → all-0xff.
+fn set_outbound_win(win: usize, cpu_addr: u64, pcie_addr: u64, size: u64) {
+    let (lo, hi) = (0x400c + win * 8, 0x4010 + win * 8);
+    let base_limit = 0x4070 + win * 4;
+    let (base_hi, limit_hi) = (0x4080 + win * 8, 0x4084 + win * 8);
+    rc_w(lo, pcie_addr as u32); // window translates TO this PCIe bus addr
+    rc_w(hi, (pcie_addr >> 32) as u32);
+    let cpu_mb = cpu_addr / 0x10_0000;
+    let limit_mb = (cpu_addr + size - 1) / 0x10_0000;
+    let mut bl = rc_r(base_limit) & !(0x0000_fff0u32 | 0xfff0_0000u32);
+    bl |= ((cpu_mb as u32) & 0xfff) << 4;
+    bl |= ((limit_mb as u32) & 0xfff) << 20;
+    rc_w(base_limit, bl);
+    rc_w(base_hi, (rc_r(base_hi) & !0xff) | (((cpu_mb >> 12) as u32) & 0xff));
+    rc_w(limit_hi, (rc_r(limit_hi) & !0xff) | (((limit_mb >> 12) as u32) & 0xff));
+}
+
 /// Debug: read downstream 01:00.0 vendor/device id once the link is up (sets the
 /// RC secondary bus directly first). 0xffffffff = endpoint not responding (routing/
 /// timing); a wrong-but-nonzero value = config-window offset issue.
@@ -402,6 +422,11 @@ pub fn enumerate() -> Option<[u8; 6]> {
     // Command reg (0x04): Memory-Space-Enable(bit1) | Bus-Master-Enable(bit2).
     let cmd = cfg_r32(1, 0, 0x04);
     cfg_w32(1, 0, 0x04, cmd | 0x0006);
+    // Map BAR2 (PCIe bus 0) into the CPU outbound window at RTL_MMIO so the RTL's
+    // registers are reachable — else every read is 0xff (the missing RX-datapath
+    // piece). CPU RTL_MMIO=0x1b_0000_0000 → PCIe bus 0x0, 1 MiB (covers BAR2 4 KiB).
+    set_outbound_win(0, RTL_MMIO as u64, 0x0, 0x10_0000);
+    let _ = rc_r(0x4068); // posted-write flush
     // MAC0..5 are eFuse-loaded on the 8111H — read them from BAR2 MMIO.
     let mut mac = [0u8; 6];
     for (i, b) in mac.iter_mut().enumerate() {
