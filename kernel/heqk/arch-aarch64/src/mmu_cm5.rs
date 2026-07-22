@@ -56,6 +56,14 @@ pub const USER_GB: u64 = 5;
 pub const USER_VA_BASE: usize = (USER_GB * GB) as usize; // 0x1_4000_0000
 static mut L2_USER: Table = Table([0; 512]);
 static mut L3_USER: Table = Table([0; 512]);
+
+// P8 — JIT code window at GB6 (0x1_8000_0000), an unused-on-CM5 GB. Its first
+// 2 MiB block is L3-mapped so the BPF JIT can install EL1 RO+X code pages on
+// metal — so the detection datapath runs NATIVE code, not just the interpreter.
+pub const JITCODE_GB: u64 = 6;
+pub const JITCODE_VA_BASE: usize = (JITCODE_GB * GB) as usize; // 0x1_8000_0000
+static mut L2_JIT: Table = Table([0; 512]);
+static mut L3_JIT: Table = Table([0; 512]);
 // EL0 driver code + stack live in these Normal-RAM frames (also visible via the
 // GB0 identity map as RW+PXN — same cacheable type, so no attribute mismatch).
 #[repr(align(4096))]
@@ -219,6 +227,12 @@ pub fn enable_identity() {
         let l3u = addr_of_mut!(L3_USER) as *mut u64;
         core::ptr::write_volatile(l2u.add(0), (l3u as u64) | TABLE);
         core::ptr::write_volatile(l1.add(USER_GB as usize), (l2u as u64) | TABLE);
+        // GB6 = the JIT code window: L1[6] -> L2_JIT -> L3_JIT (empty now; the JIT
+        // fills L3_JIT slots at run time). Overwrites the unused GB6 device block.
+        let l2j = addr_of_mut!(L2_JIT) as *mut u64;
+        let l3j = addr_of_mut!(L3_JIT) as *mut u64;
+        core::ptr::write_volatile(l2j.add(0), (l3j as u64) | TABLE);
+        core::ptr::write_volatile(l1.add(JITCODE_GB as usize), (l2j as u64) | TABLE);
     }
     build_wx_gb0(); // GB0 = W^X map (kernel .text RO+X, rest RW+PXN); writes L1[0]
 
@@ -411,4 +425,30 @@ pub fn map_user_device_in(l1_root: usize, va: usize, pa: usize) -> bool {
 /// Map an EL0 Normal-Non-Cacheable (coherent DMA-ring) window into a specific AS.
 pub fn map_user_nc_in(l1_root: usize, va: usize, pa: usize) -> bool {
     map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_NC, PXN | UXN))
+}
+
+static JIT_VA_NEXT: AtomicUsize = AtomicUsize::new(JITCODE_VA_BASE);
+
+/// P8 — map a freshly-written code frame as an EL1 **RO+X** page in the GB6 JIT
+/// window and return its executable VA (or 0 if the window is full). The BPF JIT
+/// writes the code through the frame's GB0 identity alias (RW), then calls this to
+/// get a read-only + EL1-executable view: RO ⇒ not writable ⇒ WXN permits exec;
+/// UXN keeps EL0 out; not-PXN ⇒ EL1 executes it. The writable GB0 alias remains a
+/// documented W^X defense-in-depth residual (B-9), same as the QEMU JIT path.
+pub fn map_kernel_code_page(pa: usize) -> usize {
+    let va = JIT_VA_NEXT.fetch_add(0x1000, Ordering::Relaxed);
+    if va >= JITCODE_VA_BASE + M2 as usize {
+        return 0; // 2 MiB window exhausted (512 code pages)
+    }
+    // EL1 read-only + EL1-executable (UXN, NOT PXN), Normal-WB cacheable.
+    let desc = pa as u64 | AF | SH_IS | AP_RO_EL1 | ATTR_NORMAL | PAGE | UXN;
+    let l3 = addr_of_mut!(L3_JIT) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(l3.add((va >> 12) & 0x1FF), desc);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) as u64);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+    va
 }

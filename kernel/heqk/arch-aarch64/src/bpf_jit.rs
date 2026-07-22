@@ -151,19 +151,14 @@ fn emit_imm(e: &mut Emit, rd: u32, imm: i32) {
 /// op / too-large program / allocation failure. The program MUST have passed
 /// `bpf::verify_prevail` first (forward-only jumps, packet-relative loads).
 pub fn compile(prog: &[u64]) -> Option<usize> {
-    // The JIT maps its code page via the `Mmu` HAL (QEMU stage-1 tables). On CM5
-    // metal the ACTIVE MMU is `mmu_cm5`, which has no EL1 code-page mapper yet, so
-    // a "compiled" VA would be unmapped/non-executable and calling it faults
-    // (instruction abort). Fall back to the bounds-checked interpreter there —
-    // same verdict, slower. (Wiring a CM5 code-page mapper is the follow-up.)
-    if cfg!(feature = "cm5") {
-        return None;
-    }
     let n = prog.len();
     if n == 0 || n > MAX_INSNS {
         return None;
     }
-    let frame = crate::mmu::reserve_region(4096);
+    // Acquire a writable code frame: the CM5 runtime pool (identity-mapped RW in
+    // GB0) on metal, or the `Mmu` HAL reserve on QEMU. The code is emitted through
+    // this writable view, then published RO+X at a separate exec VA (W^X).
+    let frame = acquire_code_frame();
     if frame == 0 {
         return None;
     }
@@ -259,15 +254,45 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
         e.patch(brw, patch_bcond(e.at(brw), delta));
     }
 
+    // The icache is invalidated by physical address (PoU), so cleaning the frame
+    // we wrote covers execution at the separate exec VA (same PA).
     crate::mmu::sync_instruction_cache(frame, e.pos * 4);
 
-    // Map the code at a fresh RO+exec VA (each compiled rule gets its own slot).
-    let slot = JIT_SLOT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    let code_va: usize = 0xD100_0000 + slot * 0x10000;
-    if !crate::Mmu.map_code_page(code_va, frame) {
+    // Publish the code RO+X at its own exec VA (each rule gets its own page).
+    let code_va = publish_exec_page(frame);
+    if code_va == 0 {
         return None;
     }
     Some(code_va)
 }
 
+// --- backend-selected code-page allocation (W^X) -----------------------------
+// CM5 metal uses the mmu_cm5 runtime pool + its GB6 EL1 RO+X code window; QEMU
+// uses the `Mmu` HAL reserve + a fresh high exec VA per rule.
+
+#[cfg(feature = "cm5")]
+fn acquire_code_frame() -> usize {
+    crate::mmu_cm5::alloc_frame()
+}
+#[cfg(not(feature = "cm5"))]
+fn acquire_code_frame() -> usize {
+    crate::mmu::reserve_region(4096)
+}
+
+#[cfg(feature = "cm5")]
+fn publish_exec_page(frame: usize) -> usize {
+    crate::mmu_cm5::map_kernel_code_page(frame)
+}
+#[cfg(not(feature = "cm5"))]
+fn publish_exec_page(frame: usize) -> usize {
+    let slot = JIT_SLOT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let code_va: usize = 0xD100_0000 + slot * 0x10000;
+    if crate::Mmu.map_code_page(code_va, frame) {
+        code_va
+    } else {
+        0
+    }
+}
+
+#[cfg(not(feature = "cm5"))]
 static JIT_SLOT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);

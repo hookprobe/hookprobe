@@ -188,7 +188,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P8: load the signed HookProbe rule plane (verify every rule; JIT is
     // QEMU-only, so CM5 runs the bounds-checked interpreter — same verdict). ---
     let (rv, rj) = rules::init();
-    kprint!(" [P8] rule plane: {} rules verified, {} JIT (interp fallback on metal) — parity corpus armed\n", rv, rj);
+    kprint!(" [P8] rule plane: {} rules verified, {} JIT-compiled to native ARM64 on metal — parity corpus armed\n", rv, rj);
 
     // --- P8: statically VERIFY the detection rule before running it on live traffic --
     cm5_p8_verify();
@@ -590,6 +590,28 @@ fn cm5_p8_verify() {
     kprint!("; adversarial rules {}\n", if rejected { "all REJECTED" } else { "ACCEPTED <- BUG" });
     kprint!(" [P8] {} — rule statically verified before the live datapath runs it\n",
         if safe && rejected { "PASS" } else { "FAIL" });
+
+    // JIT on metal: compile THREAT_RULE to native ARM64 via the CM5 EL1 RO+X code
+    // window, run it, and confirm its verdicts match the interpreter — so the
+    // detection datapath runs NATIVE code on real silicon, not just the interpreter.
+    match arch_aarch64::bpf_jit::compile(&THREAT_RULE) {
+        Some(va) => {
+            let f: extern "C" fn(*const u8) -> u64 =
+                unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
+            let mut jit_ok = true;
+            for &port in &[4444u16, 53u16, 80u16] {
+                let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
+                let jv = f(l4.as_ptr());
+                let iv = bpf::run(&THREAT_RULE, l4.as_ptr(), l4.len());
+                if jv != iv {
+                    jit_ok = false;
+                }
+            }
+            kprint!(" [P8-JIT] {} — THREAT_RULE JIT'd to native ARM64 @ {:#x} (EL1 RO+X), matches interpreter on metal\n",
+                if jit_ok { "PASS" } else { "FAIL" }, va);
+        }
+        None => kprint!(" [P8-JIT] FAIL — JIT compile returned None on metal\n"),
+    }
 }
 
 /// P9 (metal): probe the BCM2712 external PCIe RC1 (Track A: `dtparam=pciex1` →
