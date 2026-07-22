@@ -373,13 +373,26 @@ pub fn cfg_w32(bus: u32, devfn: u32, reg: usize, v: u32) {
 
 const RTL_VENDOR_DEVICE: u32 = 0x8168_10EC; // device 0x8168 | vendor 0x10EC
 
+/// Debug: read downstream 01:00.0 vendor/device id once the link is up (sets the
+/// RC secondary bus directly first). 0xffffffff = endpoint not responding (routing/
+/// timing); a wrong-but-nonzero value = config-window offset issue.
+pub fn rtl_vendor_id() -> u32 {
+    delay_us(100_000);
+    rc_w(0x18, 0x0001_0100); // RC secondary/subordinate bus (direct RC config)
+    cfg_r32(1, 0, 0x00)
+}
+
 /// Stage 2-3: set the RC bus numbers, find the RTL at 01:00.0, assign BAR2 into
 /// the outbound MMIO window, enable Memory-Space + Bus-Master, and read the MAC.
 /// Returns Some(mac) if the RTL is found + configured, else None.
 pub fn enumerate() -> Option<[u8; 6]> {
-    // RC config (bus0 dev0) reg 0x18: primary=0, secondary=1, subordinate=1.
-    cfg_w32(0, 0, 0x18, 0x0001_0100);
-    // Downstream 01:00.0 vendor/device.
+    // The endpoint's config space needs a CEM settle after link-up.
+    delay_us(100_000);
+    // RC config (bus0 dev0) reg 0x18 is memory-mapped at the controller BASE — the
+    // EXT_CFG index/data window is only for bus>=1. Write primary=0/secondary=1/
+    // subordinate=1 DIRECTLY so the EXT_CFG window routes bus-1 config correctly.
+    rc_w(0x18, 0x0001_0100);
+    // Downstream 01:00.0 vendor/device (via EXT_CFG window).
     if cfg_r32(1, 0, 0x00) != RTL_VENDOR_DEVICE {
         return None;
     }
