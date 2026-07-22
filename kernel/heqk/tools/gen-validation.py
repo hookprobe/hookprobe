@@ -166,6 +166,10 @@ SECTIONS = [
         sub="signed block set; running in live classify on metal (drop-logic proven on QEMU)", new=True, phase="P8",
         proves="The stateful substrate generalizes beyond a counter to a keyed lookup: frames from a blocked source prefix are dropped inline; clean sources pass.",
         env=["metal","qemu"], marker="[P8-block]", gate="P8b"),
+   dict(feat="Verifier self-hardening — abstract-operator soundness harness",
+        sub="Agni-style; modular operators (absdom.rs); injected unsoundness caught", new=True, phase="P16",
+        proves="The verifier that gates every rule is itself checked: each abstract operator over-approximates the concrete semantics; a deliberately-unsound operator is caught by the CI harness, not by prod.",
+        env=["qemu"], marker="[P16-verifier]"),
  ]),
  ("L4", "Second interface", "external PCIe — the one hardware blocker", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
