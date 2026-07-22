@@ -1,0 +1,15 @@
+# HEQK Linux-observe: boot the hookprobe-edge Linux kernel (kernel_2712.img) so
+# its pcie-brcmstb driver trains the external PCIe RC1 (RTL8111H) — then the
+# rc1-observe.service dumps the trained register state for HEQK to mirror.
+[all]
+arm_64bit=1
+kernel=kernel_2712.img
+initramfs initramfs_2712 followkernel
+enable_uart=1
+# keep the firmware's RP1 PCIe window alive so the FTDI/RP1 UART console survives
+pciex4_reset=0
+# enable the external PCIe RC1 node so pcie-brcmstb claims + trains the RTL8111H
+dtparam=pciex1
+
+[cm5]
+device_tree=bcm2712-rpi-cm5-cm5io.dtb

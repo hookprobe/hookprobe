@@ -529,12 +529,17 @@ fn cm5_p8_verify() {
 #[cfg(feature = "cm5")]
 fn cm5_p9_probe() {
     use arch_aarch64::rtl8111;
-    let status = rtl8111::rc1_status();
-    kprint!(" [P9] PCIe RC1 status={:#010x} (DL_ACTIVE|PHYLINKUP mask 0x30)\n", status);
-    if !rtl8111::rc1_link_up() {
-        kprint!(" [P9] RC1 link NOT up — add 'dtparam=pciex1' to config.txt (Track A) or no device present\n");
+    kprint!(" [P9] RC1 status before train={:#010x}; training (Path B: HEQK owns RC1)...\n",
+        rtl8111::rc1_status());
+    let d = rtl8111::rc1_train();
+    kprint!(" [P9] diag: rescal_done={} iddq {:#x}->{:#x} (want ->0) mdio_timeouts={}/8 perst {:#x}->{:#x} (want ->0x4)\n",
+        d.rescal_done, d.iddq_before, d.iddq_after, d.mdio_timeouts, d.perst_before, d.perst_after);
+    kprint!(" [P9] RC1 status after train={:#010x} (DL_ACTIVE|PHYLINKUP mask 0x30)\n", d.status);
+    if d.status & 0x30 != 0x30 {
+        kprint!(" [P9] RC1 link still down — diagnostics above pinpoint the failing stage\n");
         return;
     }
+    kprint!(" [P9] RC1 LINK UP (DL_ACTIVE|PHYLINKUP) — HEQK trained the external PCIe!\n");
     match rtl8111::enumerate() {
         Some(mac) => {
             kprint!(" [P9] PASS — RTL8111H found @01:00.0 (vendor/device 0x816810EC), MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",

@@ -48,6 +48,167 @@ pub fn rc1_link_up() -> bool {
     rc_r(PCIE_STATUS) & LINK_UP_MASK == LINK_UP_MASK
 }
 
+// --- P9 Path B: HEQK trains the RC1 link (pcie-brcmstb, BCM2712/BCM7712 path) --
+// The firmware trains RC2 (RP1) but NOT RC1, so we replicate brcm_pcie_setup →
+// post_setup_bcm2712 → start_link ourselves. RESCAL is skipped (global block,
+// already calibrated by firmware for RC2); the per-controller SERDES-PLL refclk
+// MDIO is the mandatory piece firmware never ran on RC1 (the cause of PHYLINKUP=0).
+
+const BRIDGE_SET: usize = 0x10_0150_4330; // brcmstb-reset bank1 SET,  BIT(11)=0x800
+const BRIDGE_CLR: usize = 0x10_0150_4334; // brcmstb-reset bank1 CLEAR
+
+#[inline]
+fn abs_w(addr: usize, v: u32) {
+    unsafe { write_volatile(addr as *mut u32, v) };
+}
+
+/// Accurate busy-delay via the physical counter (bounded — always terminates).
+fn delay_us(us: u64) {
+    let freq: u64;
+    let start: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) start, options(nomem, nostack));
+    }
+    let ticks = freq.saturating_mul(us) / 1_000_000;
+    loop {
+        let now: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now, options(nomem, nostack)) };
+        if now.wrapping_sub(start) >= ticks {
+            break;
+        }
+    }
+}
+
+/// One RC1 SERDES-PLL MDIO write (port 0): addr=regad, dummy read, data|DONE, poll.
+fn mdio_write(regad: u32, data: u16) {
+    rc_w(0x1100, regad); // RC_DL_MDIO_ADDR (write cmd, port 0)
+    let _ = rc_r(0x1100); // posted-flush dummy readback (required)
+    rc_w(0x1104, 0x8000_0000 | data as u32); // RC_DL_MDIO_WR_DATA: MDIO_WT_DONE | data
+    let mut spin = 0u32;
+    while rc_r(0x1104) & 0x8000_0000 != 0 && spin < 200_000 {
+        spin += 1;
+    }
+}
+
+/// RC1 bring-up diagnostics (so one flash pinpoints the failing stage).
+pub struct RcDiag {
+    pub rescal_done: bool, // RESCAL STATUS bit0 after trigger
+    pub iddq_before: u32,  // HARD_DEBUG bit27 (1 = SERDES powered DOWN) before
+    pub iddq_after: u32,   // ... after clearing it (want 0)
+    pub mdio_timeouts: u32, // # of the 8 refclk MDIO writes that timed out (want 0)
+    pub perst_before: u32, // PCIE_CTRL bit2 before (0 = in reset)
+    pub perst_after: u32,  // ... after de-assert (want 1)
+    pub status: u32,       // PCIE_STATUS final (link up iff & 0x30 == 0x30)
+}
+
+/// One RC1 SERDES-PLL MDIO write; returns true if the DONE bit cleared (success).
+fn mdio_write_ok(regad: u32, data: u16) -> bool {
+    rc_w(0x1100, regad);
+    let _ = rc_r(0x1100);
+    rc_w(0x1104, 0x8000_0000 | data as u32);
+    let mut spin = 0u32;
+    while rc_r(0x1104) & 0x8000_0000 != 0 {
+        spin += 1;
+        if spin >= 200_000 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Train the RC1 link (full sequence incl. RESCAL), with per-stage read-back
+/// diagnostics. Link up iff `status & 0x30 == 0x30`.
+pub fn rc1_train() -> RcDiag {
+    // 0. RESCAL PHY-impedance calibration (global block @ 0x10_0011_9500).
+    unsafe {
+        let start = 0x10_0011_9500usize;
+        let v = read_volatile(start as *const u32);
+        write_volatile(start as *mut u32, v | 1); // START
+        let mut spin = 0u32;
+        while read_volatile((start + 8) as *const u32) & 1 == 0 && spin < 100_000 {
+            spin += 1;
+        }
+        let v2 = read_volatile(start as *const u32);
+        write_volatile(start as *mut u32, v2 & !1); // clear START
+    }
+    let rescal_done = unsafe { read_volatile(0x10_0011_9508 as *const u32) & 1 != 0 };
+
+    // 1. bridge reset cycle (brcmstb-reset block, not the RC's dead 0x9210).
+    abs_w(BRIDGE_SET, 0x800);
+    delay_us(150);
+    abs_w(BRIDGE_CLR, 0x800);
+    delay_us(150);
+    // 2. SERDES power-up: clear SERDES_IDDQ (bit27) in HARD_DEBUG (2712 @ 0x4304).
+    let iddq_before = rc_r(0x4304) & 0x0800_0000;
+    rc_w(0x4304, rc_r(0x4304) & !0x0800_0000);
+    delay_us(150);
+    let iddq_after = rc_r(0x4304) & 0x0800_0000;
+    // 3. MISC_CTRL.
+    rc_w(0x4008, (rc_r(0x4008) & !0x0030_3480) | 0x0020_3480);
+    // 5. refclk MDIO — teach RC1's SERDES PLL the 54 MHz reference.
+    let mut mdio_timeouts = 0u32;
+    for (a, d) in [
+        (0x1fu32, 0x1600u16),
+        (0x16, 0x50b9),
+        (0x17, 0xbda1),
+        (0x18, 0x0094),
+        (0x19, 0x97b4),
+        (0x1b, 0x5030),
+        (0x1c, 0x5030),
+        (0x1e, 0x0007),
+    ] {
+        if !mdio_write_ok(a, d) {
+            mdio_timeouts += 1;
+        }
+    }
+    delay_us(150);
+    rc_w(0x184c, (rc_r(0x184c) & !0xff) | 0x12); // PM_CLK_PERIOD
+    // UBUS/AXI error suppression + timeouts.
+    rc_w(0x40a4, rc_r(0x40a4) | (1 << 13) | (1 << 19));
+    rc_w(0x4170, 0xffff_ffff);
+    rc_w(0x40a8, 0x0B2D_0000);
+    rc_w(0x405c, 0x0ABA_0000);
+    let mut t = rc_r(0x416c);
+    t &= !(1 << 7);
+    t |= (1 << 13) | (1 << 12) | (1 << 11);
+    rc_w(0x416c, t);
+    let t2 = rc_r(0x416c);
+    if t2 & (1 << 12) == 0 {
+        rc_w(0x416c, (t2 & !0x3f) | 15);
+    }
+    rc_w(0x40a0, rc_r(0x40a0) & !(1 << 5));
+    // 7. Force the RC to DRIVE the 100 MHz refclk to the endpoint UNCONDITIONALLY:
+    // set REFCLK_OVRD_OUT(0x100000)|REFCLK_OVRD_ENABLE(0x10000), clear L1SS(0x200000)
+    // + CLKREQ_DEBUG(0x2). On this hardwired connector the RTL can't assert CLKREQ#
+    // until it's clocked, so a CLKREQ#-gated refclk leaves its PLL unlocked
+    // (PHYLINKUP=0). Driving refclk unconditionally breaks that chicken-and-egg.
+    rc_w(0x4304, (rc_r(0x4304) & !0x0020_0002) | 0x0011_0000);
+    // 8. de-assert PERST# (PERSTB bit2 = 1 => endpoint out of reset).
+    let perst_before = rc_r(0x4064) & 0x4;
+    rc_w(0x4064, rc_r(0x4064) | 0x4);
+    let perst_after = rc_r(0x4064) & 0x4;
+    // 9. CEM 100ms after PERST, then poll link up to +100ms.
+    delay_us(100_000);
+    let mut status = rc_r(0x4068);
+    for _ in 0..20 {
+        status = rc_r(0x4068);
+        if status & 0x30 == 0x30 {
+            break;
+        }
+        delay_us(5_000);
+    }
+    RcDiag {
+        rescal_done,
+        iddq_before,
+        iddq_after,
+        mdio_timeouts,
+        perst_before,
+        perst_after,
+        status,
+    }
+}
+
 /// Program RC1's INBOUND DMA window (PCIe bus 0x10_0000_0000 → RAM 0x0, 64 GiB).
 /// Byte-for-byte `gem.rs::pcie_inbound_window`, base only differs. Returns the
 /// pre-write (RC_BAR1_LO, UBUS_REMAP_LO) to see if firmware already set it.
