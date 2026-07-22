@@ -691,6 +691,20 @@ fn cm5_p8_verify() {
 #[cfg(feature = "cm5")]
 fn cm5_p9_probe() {
     use arch_aarch64::rtl8111;
+    // REFCLK ROOT-CAUSE PROBE: RC2 (RP1) is firmware-trained + PLL-locked; RC1 is
+    // stuck. Diff their SERDES/refclk registers to find what RC1 is missing.
+    let (r1, r2) = rtl8111::refclk_compare();
+    kprint!(" [P9] refclk compare  RC1(broken) vs RC2(working/RP1):\n");
+    kprint!("   HARD_DEBUG 0x4304: RC1={:#010x} RC2={:#010x} {}\n", r1.hard_debug, r2.hard_debug,
+        if r1.hard_debug != r2.hard_debug { "<-- DIFF" } else { "same" });
+    kprint!("   MISC_CTRL  0x4008: RC1={:#010x} RC2={:#010x} {}\n", r1.misc_ctrl, r2.misc_ctrl,
+        if r1.misc_ctrl != r2.misc_ctrl { "<-- DIFF" } else { "same" });
+    kprint!("   PHY_CTL15  0x184c: RC1={:#010x} RC2={:#010x} {}\n", r1.phy_ctl15, r2.phy_ctl15,
+        if r1.phy_ctl15 != r2.phy_ctl15 { "<-- DIFF" } else { "same" });
+    kprint!("   STATUS     0x4068: RC1={:#010x} RC2={:#010x}\n", r1.status, r2.status);
+    kprint!("   LINK_STATE 0x00bc: RC1={:#010x} RC2={:#010x}\n", r1.link_state, r2.link_state);
+    kprint!("   SERDES PLL_LOCK  : RC1={} RC2={}  (RC2 should be locked — proves the MDIO read is valid)\n",
+        r1.pll_lock, r2.pll_lock);
     kprint!(" [P9] RC1 status before train={:#010x}; training (Path B: HEQK owns RC1)...\n",
         rtl8111::rc1_status());
     let d = rtl8111::rc1_train();

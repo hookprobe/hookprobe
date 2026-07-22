@@ -40,6 +40,80 @@ fn rc_w(off: usize, v: u32) {
     unsafe { write_volatile((RC1 + off) as *mut u32, v) };
 }
 
+/// GEM's RC2 (the internal x4 link to RP1) — ALWAYS firmware-trained + PLL-locked.
+/// Used only as the working REFERENCE to diff against RC1's stuck PLL.
+const RC2: usize = 0x10_0012_0000;
+
+#[inline]
+fn rc_r_at(base: usize, off: usize) -> u32 {
+    unsafe { read_volatile((base + off) as *const u32) }
+}
+#[inline]
+fn rc_w_at(base: usize, off: usize, v: u32) {
+    unsafe { write_volatile((base + off) as *mut u32, v) };
+}
+
+/// Base-parameterized SERDES MDIO read (port 0, CMD_READ in bits 20+).
+fn mdio_read_at(base: usize, regad: u32) -> Option<u16> {
+    rc_w_at(base, 0x1100, regad | 0x0010_0000);
+    let _ = rc_r_at(base, 0x1100);
+    let mut spin = 0u32;
+    loop {
+        let v = rc_r_at(base, 0x1108);
+        if v & 0x8000_0000 != 0 {
+            return Some((v & 0xffff) as u16);
+        }
+        spin += 1;
+        if spin >= 200_000 {
+            return None;
+        }
+    }
+}
+/// Base-parameterized SERDES PLL/SSC status via MDIO. Returns (pll_lock, ssc).
+fn serdes_pll_at(base: usize) -> (bool, bool) {
+    // SET_ADDR_OFFSET(0x1f) = SSC_REGS_ADDR(0x1100), then read SSC_STATUS(0x1).
+    rc_w_at(base, 0x1100, 0x1f);
+    let _ = rc_r_at(base, 0x1100);
+    rc_w_at(base, 0x1104, 0x8000_0000 | 0x1100);
+    let mut spin = 0u32;
+    while rc_r_at(base, 0x1104) & 0x8000_0000 != 0 && spin < 200_000 {
+        spin += 1;
+    }
+    match mdio_read_at(base, 0x1) {
+        Some(s) => (s & 0x800 != 0, s & 0x400 != 0),
+        None => (false, false),
+    }
+}
+
+/// Key SERDES/refclk registers of one RC, for the RC1-vs-RC2 comparison dump.
+pub struct RcRegs {
+    pub hard_debug: u32, // 0x4304 (clkreq/l1ss/iddq/perst)
+    pub misc_ctrl: u32,  // 0x4008
+    pub status: u32,     // 0x4068 (DL_ACTIVE|PHYLINKUP)
+    pub phy_ctl15: u32,  // 0x184c (PM_CLK_PERIOD | DIS_PLL_PD)
+    pub link_state: u32, // 0x00bc (FreeBSD link-state; >>16 nonzero = up)
+    pub pll_lock: bool,  // SERDES PLL locked (MDIO)
+    pub ssc: bool,       // SSC active (MDIO)
+}
+fn dump_rc(base: usize) -> RcRegs {
+    let (pll_lock, ssc) = serdes_pll_at(base);
+    RcRegs {
+        hard_debug: rc_r_at(base, 0x4304),
+        misc_ctrl: rc_r_at(base, 0x4008),
+        status: rc_r_at(base, 0x4068),
+        phy_ctl15: rc_r_at(base, 0x184c),
+        link_state: rc_r_at(base, 0x00bc),
+        pll_lock,
+        ssc,
+    }
+}
+/// Compare the SERDES/refclk state of the BROKEN external RC1 against the WORKING
+/// firmware-trained RC2 (RP1). The register delta pinpoints what firmware did for
+/// RC2's refclk/PLL that RC1 is missing — the root cause of RC1's PLL-lock failure.
+pub fn refclk_compare() -> (RcRegs, RcRegs) {
+    (dump_rc(RC1), dump_rc(RC2))
+}
+
 /// Stage 0: is the RC1 link up? (`dtparam=pciex1` → firmware trains it.)
 pub fn rc1_status() -> u32 {
     rc_r(PCIE_STATUS)
