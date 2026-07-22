@@ -202,6 +202,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P9: external PCIe RC1 link + RTL8111H vendor-ID (2nd-interface bring-up) --
     cm5_p9_probe();
 
+    // --- P14 seed: BCM2712 IOMMU probe (PCIe DMA-containment recon) --
+    cm5_iommu_probe();
+
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
@@ -652,6 +655,26 @@ fn cm5_p9_probe() {
         }
         None => kprint!(" [P9] RC1 link up but RTL8111H not found at 01:00.0 (vendor mismatch)\n"),
     }
+}
+
+/// P14 seed — probe the BCM2712 IOMMU blocks (read-only) to confirm which one
+/// gates the external PCIe (pcie1/RTL) on this stepping + report its live state.
+/// Closes the recon half of the 64 GiB no-IOMMU DMA-window finding; the fence
+/// (ADDR_CAP ceiling) that actually contains DMA is staged (see BUILD_FLASH_PLAN).
+#[cfg(feature = "cm5")]
+fn cm5_iommu_probe() {
+    use arch_aarch64::iommu;
+    kprint!(" [P14] BCM2712 IOMMU probe (PCIe DMA-containment seed):\n");
+    for (name, base) in [
+        ("iommu2 ext-PCIe(D0)", iommu::IOMMU2_BASE),
+        ("iommu8 ext-PCIe(C1)", iommu::IOMMU8_BASE),
+        ("iommu5 RP1/GEM", iommu::IOMMU5_BASE),
+    ] {
+        let i = iommu::probe(base);
+        kprint!("   {} @{:#x}: debug={:#010x} present={} enabled={} bypass={} cap={:#010x}\n",
+            name, base, i.debug_info, i.present, i.enabled, i.bypass, i.addr_cap);
+    }
+    kprint!(" [P14] probe done — the ADDR_CAP fence that closes the 64 GiB window is staged\n");
 }
 
 /// P8: RP1 GEM Ethernet polled-RX first light. Probe reachability + link, arm an
@@ -1712,11 +1735,28 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
             }
         }
         next
+    } else if intid == GEM_RX_INTID {
+        // P8 (RP1 RX-IRQ): the GEM raised RX-complete via RP1 src 6 → MSI-X →
+        // mip0 → GIC SPI 134 / INTID 166. Record it + ack the GEM; the ring is
+        // drained by the (adaptive-NAPI) service loop, not here.
+        #[cfg(feature = "cm5")]
+        {
+            GEM_RX_IRQS.fetch_add(1, Ordering::Relaxed);
+            arch_aarch64::gem::rx_irq_ack();
+        }
+        gic.eoi(intid);
+        sp
     } else {
         gic.eoi(intid);
         sp
     }
 }
+
+/// GEM RX interrupt INTID on CM5: RP1 src 6 (RP1_INT_ETH) → mip0 SPI (128+6)=134
+/// → GIC INTID 32+134 = 166. Used only on the cm5 path.
+const GEM_RX_INTID: u32 = 166;
+/// Count of GEM RX interrupts observed (RP1 MSI-X path live).
+static GEM_RX_IRQS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// P2 self-test: build an Untyped, retype a derivation tree, prove type safety,
 /// then revoke a subtree and the whole tree — synchronous, no GC. Returns pass.

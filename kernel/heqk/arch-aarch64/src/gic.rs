@@ -32,6 +32,28 @@ unsafe fn r(addr: usize) -> u32 {
 /// The GICv2 as a HAL `IrqController`.
 pub struct Gic;
 
+impl Gic {
+    /// Enable a **shared peripheral interrupt (SPI)** — needed for RP1/mip-
+    /// forwarded interrupts (e.g. the GEM RX at INTID 166). Unlike the timer PPI
+    /// (ISENABLER alone), an SPI resets to no-target/level: route it to CPU0, set
+    /// an edge trigger (mip forwards edge), and a priority below the PMR mask.
+    pub fn enable_spi(&self, intid: u32) {
+        unsafe {
+            // Priority (one byte per intid) below PMR (0xF0).
+            write_volatile((GICD + 0x400 + intid as usize) as *mut u8, 0xA0);
+            // Target CPU0 (one byte per intid; SPIs reset to no CPU on GIC-400).
+            write_volatile((GICD + 0x800 + intid as usize) as *mut u8, 0x01);
+            // Edge-triggered: 2 cfg bits per intid, bit[1]=1 == edge.
+            let icfg = GICD + 0xC00 + ((intid / 16) as usize) * 4;
+            let shift = (intid % 16) * 2;
+            let v = (r(icfg) & !(0b11 << shift)) | (0b10 << shift);
+            w(icfg, v);
+            // Enable.
+            w(GICD_ISENABLER + ((intid / 32) as usize) * 4, 1 << (intid % 32));
+        }
+    }
+}
+
 impl hal::IrqController for Gic {
     fn init(&self) {
         unsafe {

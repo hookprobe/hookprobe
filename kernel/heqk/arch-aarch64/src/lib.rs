@@ -13,6 +13,8 @@ pub mod bpf_jit;
 #[cfg(feature = "cm5")]
 pub mod gem;
 pub mod gic;
+#[cfg(feature = "cm5")]
+pub mod iommu;
 pub mod mmu;
 #[cfg(feature = "cm5")]
 pub mod mmu_cm5;

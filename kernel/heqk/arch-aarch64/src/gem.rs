@@ -39,7 +39,10 @@ const TSR: usize = 0x014; // Transmit Status
 const RBQP: usize = 0x018; // RX buffer queue base (low)
 const TBQP: usize = 0x01c; // TX buffer queue base (low)
 const RSR: usize = 0x020; // Receive Status
+const ISR: usize = 0x024; // Interrupt Status (read-to-clear on macb)
+const IER: usize = 0x028; // Interrupt Enable
 const IDR: usize = 0x02c; // Interrupt Disable (mask all)
+const INT_RCOMP: u32 = 1 << 1; // receive-complete interrupt
 const TBQPH: usize = 0x4c8; // TX buffer queue base (high, 64-bit)
 const RBQPH: usize = 0x4d4; // RX buffer queue base (high, 64-bit)
 
@@ -569,6 +572,21 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
 pub fn rsr() -> u32 {
     r(GEM, RSR)
+}
+
+/// P8 (RP1 RX-IRQ) — unmask the GEM **receive-complete** interrupt so an RX frame
+/// raises RP1 internal source 6 → MSI-X → mip0 → GIC SPI 134 / INTID 166 (instead
+/// of pure polling). Pairs with `Gic::enable_spi(166)` + a `handle_irq` branch.
+pub fn rx_irq_enable() {
+    w(GEM, IER, INT_RCOMP);
+}
+
+/// Acknowledge a GEM RX interrupt: read ISR (read-to-clear) and clear the RSR
+/// receive flag. Returns the ISR value. Call from the INTID-166 IRQ branch.
+pub fn rx_irq_ack() -> u32 {
+    let isr = r(GEM, ISR);
+    w(GEM, RSR, RSR_REC); // W1C the received flag
+    isr
 }
 
 /// Physical base of the RX descriptor ring (== RXRING, page-aligned). An EL0 RX
