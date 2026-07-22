@@ -119,6 +119,58 @@ fn bad_and_k(imm: i64) -> Abs {
     }
 }
 
+// --- tnum soundness (Agni-style) ---------------------------------------------
+// A representative grid of tnums (known bits + unknown-bit masks) over a mix of
+// low and wide bit positions.
+fn tnum_grid() -> Vec<Tnum> {
+    let mut g = Vec::new();
+    let pats: &[u64] = &[0, 1, 2, 6, 0x0f, 0x08, 0xff, 0x0800, 0xffff, 0xC0A8_0000];
+    for &value in pats {
+        for &mask in pats {
+            // Invariant: value & mask == 0 (a bit can't be both known and unknown).
+            g.push(Tnum { value: value & !mask, mask });
+        }
+    }
+    g
+}
+// Concrete values consistent with a tnum: known bits fixed, a spread of unknowns.
+fn tnum_samples(t: Tnum) -> Vec<u64> {
+    let mut s = vec![t.value, t.value | t.mask];
+    let mut bit = 0;
+    while bit < 64 {
+        if t.mask & (1u64 << bit) != 0 {
+            s.push(t.value | (1u64 << bit));
+        }
+        bit += 1;
+    }
+    s.truncate(24);
+    s
+}
+// Check a binary tnum op over-approximates the concrete op: for every consistent
+// (x,y), concrete(x,y) must be denoted by the abstract result.
+fn check_tnum2(op_abs: fn(Tnum, Tnum) -> Tnum, op_conc: fn(u64, u64) -> u64) -> usize {
+    let mut bad = 0;
+    let g = tnum_grid();
+    for &a in &g {
+        for &b in &g {
+            let out = op_abs(a, b);
+            for &x in &tnum_samples(a) {
+                for &y in &tnum_samples(b) {
+                    if !tnum_contains(out, op_conc(x, y)) {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+    }
+    bad
+}
+// A deliberately-unsound tnum AND (claims too many known bits) — must be caught.
+fn bad_tnum_and(a: Tnum, b: Tnum) -> Tnum {
+    let t = tnum_and(a, b);
+    Tnum { value: t.value, mask: t.mask & (t.mask >> 1) } // wrongly narrows the unknowns
+}
+
 fn main() {
     println!("== HEQK BPF verifier — abstract-operator soundness harness (P16 / Agni)");
     println!("   scope: verifier-reachable domain (loads 0..2^32, packet offsets, i32 imms)");
@@ -128,9 +180,17 @@ fn main() {
     for (name, n) in [("ADD64_K", a), ("ADD64_X", b), ("AND64_K", c)] {
         println!("   {name}: {}", if n == 0 { "SOUND (over-approximates)" } else { "UNSOUND!" });
     }
-    let caught = check_and_k(bad_and_k);
-    println!("   control: injected-unsound AND_K -> {caught} counterexample(s) CAUGHT by the harness");
-    let prod_unsound = a + b + c;
+    // tnum operators (bitwise precision beyond PREVAIL/Windows) — soundness.
+    let ta = check_tnum2(tnum_and, |x, y| x & y);
+    let to = check_tnum2(tnum_or, |x, y| x | y);
+    let tx = check_tnum2(tnum_xor, |x, y| x ^ y);
+    let td = check_tnum2(tnum_add, |x, y| x.wrapping_add(y));
+    for (name, n) in [("tnum_and", ta), ("tnum_or", to), ("tnum_xor", tx), ("tnum_add", td)] {
+        println!("   {name}: {}", if n == 0 { "SOUND (over-approximates)" } else { "UNSOUND!" });
+    }
+    let caught = check_and_k(bad_and_k) + check_tnum2(bad_tnum_and, |x, y| x & y);
+    println!("   control: injected-unsound AND_K + tnum_and -> {caught} counterexample(s) CAUGHT by the harness");
+    let prod_unsound = a + b + c + ta + to + tx + td;
     let ok = prod_unsound == 0 && caught > 0;
     println!(
         "[P16-verifier] {} — production operators sound on the reachable domain; harness catches injected unsoundness",

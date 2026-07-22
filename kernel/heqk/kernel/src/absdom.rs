@@ -116,3 +116,81 @@ pub fn lsh_k() -> Abs {
 pub fn or_x() -> Abs {
     S_TOP
 }
+
+// ===========================================================================
+// tnum — tristate numbers (bit-level known/unknown), a domain STRICTLY more
+// precise than intervals for bitwise/mask/shift ops (header-field masks, CIDR
+// prefixes, TCP-flag tests — what the detection rules do constantly). PREVAIL
+// and the Windows eBPF verifier LACK tnum and over-approximate these; adding it
+// (with the CGO'22 sound-and-optimal operators, arXiv:2105.05398) makes HEQK's
+// verifier strictly more precise than theirs on exactly those operations. Each
+// operator here is soundness-checked by tools/verifier-harness.rs (Agni-style).
+//
+// Encoding: `mask` bit = 1 means that bit is UNKNOWN; where mask = 0 the bit is
+// known and equals the corresponding `value` bit. Invariant: value & mask == 0.
+// ===========================================================================
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Tnum {
+    pub value: u64,
+    pub mask: u64,
+}
+
+/// A fully-known constant.
+#[inline]
+pub const fn tnum_const(v: u64) -> Tnum {
+    Tnum { value: v, mask: 0 }
+}
+/// ⊤ — every bit unknown.
+pub const TNUM_UNKNOWN: Tnum = Tnum { value: 0, mask: u64::MAX };
+
+/// γ: does the tnum denote the concrete `c`? (all KNOWN bits must match).
+#[inline]
+pub fn tnum_contains(t: Tnum, c: u64) -> bool {
+    (c & !t.mask) == (t.value & !t.mask)
+}
+
+/// Refine a tnum to an unsigned interval: min = known bits with unknowns 0,
+/// max = known bits with unknowns 1. Lets tnum tighten the interval domain.
+#[inline]
+pub fn tnum_range(t: Tnum) -> (u64, u64) {
+    (t.value, t.value | t.mask)
+}
+
+/// tnum AND — exact bit tracking (masking can only clear bits).
+#[inline]
+pub fn tnum_and(a: Tnum, b: Tnum) -> Tnum {
+    let alpha = a.value | a.mask;
+    let beta = b.value | b.mask;
+    let v = a.value & b.value;
+    Tnum { value: v, mask: alpha & beta & !v }
+}
+/// tnum OR.
+#[inline]
+pub fn tnum_or(a: Tnum, b: Tnum) -> Tnum {
+    let v = a.value | b.value;
+    let mu = a.mask | b.mask;
+    Tnum { value: v, mask: mu & !v }
+}
+/// tnum XOR.
+#[inline]
+pub fn tnum_xor(a: Tnum, b: Tnum) -> Tnum {
+    let v = a.value ^ b.value;
+    let mu = a.mask | b.mask;
+    Tnum { value: v & !mu, mask: mu }
+}
+/// tnum left-shift by a known amount.
+#[inline]
+pub fn tnum_lshift(a: Tnum, n: u32) -> Tnum {
+    let n = n & 63;
+    Tnum { value: a.value << n, mask: a.mask << n }
+}
+/// tnum ADD — the CGO'22 sound-and-optimal carry-propagating add.
+#[inline]
+pub fn tnum_add(a: Tnum, b: Tnum) -> Tnum {
+    let sm = a.mask.wrapping_add(b.mask);
+    let sv = a.value.wrapping_add(b.value);
+    let sigma = sm.wrapping_add(sv);
+    let chi = sigma ^ sv;
+    let mu = chi | a.mask | b.mask;
+    Tnum { value: sv & !mu, mask: mu }
+}
