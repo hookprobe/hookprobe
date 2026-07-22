@@ -597,6 +597,16 @@ fn cm5_p8_verify() {
     kprint!(" [P8] {} — rule statically verified before the live datapath runs it\n",
         if safe && rejected { "PASS" } else { "FAIL" });
 
+    // tnum PAYOFF: a variable-IP-header-offset rule ((ihl&0xf)<<2 added to the
+    // packet pointer) — the interval domain rejects it (LSH → ⊤ ⇒ unbounded
+    // offset), but the tnum domain keeps it BOUNDED and ACCEPTS with min_len=75.
+    // This is precision the PREVAIL/Windows eBPF verifiers (no tnum) lack.
+    match verify_prevail(&bpf::VAR_OFFSET_RULE) {
+        Ok(min) => kprint!(" [P16-tnum] {} — variable-offset rule ACCEPTED via tnum (min_len={}, bounded); PREVAIL/Windows reject it\n",
+            if min == 75 { "PASS" } else { "FAIL" }, min),
+        Err(e) => kprint!(" [P16-tnum] FAIL — variable-offset rule rejected ({}) <- tnum not live\n", e),
+    }
+
     // JIT on metal: compile THREAT_RULE to native ARM64 via the CM5 EL1 RO+X code
     // window, run it, and confirm its verdicts match the interpreter — so the
     // detection datapath runs NATIVE code on real silicon, not just the interpreter.
@@ -1275,6 +1285,10 @@ fn p8_verifier_demo() {
         }
     };
     let good = verify_prevail(&THREAT_RULE).is_ok();
+    // tnum payoff: a variable-IP-header-offset rule the interval domain rejects.
+    let tnum_ok = matches!(verify_prevail(&bpf::VAR_OFFSET_RULE), Ok(75));
+    kprint!(" [P16-tnum] {} — variable-offset rule ((ihl&0xf)<<2) ACCEPTED via tnum (bounded); PREVAIL/Windows reject it\n",
+        if tnum_ok { "PASS" } else { "FAIL" });
     kprint!(" [P8] {} — accepts safe rules (incl. expanded ISA), statically rejects every unsafe one\n",
         if good && all_rejected && parse_ok { "PASS" } else { "FAIL" });
 }

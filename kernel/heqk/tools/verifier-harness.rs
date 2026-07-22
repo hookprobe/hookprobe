@@ -21,7 +21,7 @@ use absdom::*;
 fn contains(a: Abs, v: i64) -> bool {
     match a {
         Abs::Uninit => false,
-        Abs::Scalar { lo, hi } | Abs::Pkt { lo, hi } => lo <= v && v <= hi,
+        Abs::Scalar { lo, hi, .. } | Abs::Pkt { lo, hi } => lo <= v && v <= hi,
     }
 }
 
@@ -52,7 +52,7 @@ fn check_add_k() -> usize {
                 continue;
             }
             for &imm in IMMS {
-                for base in [Abs::Scalar { lo, hi }, Abs::Pkt { lo, hi }] {
+                for base in [Abs::Scalar { lo, hi, t: TNUM_UNKNOWN }, Abs::Pkt { lo, hi }] {
                     let out = add_k(base, imm).unwrap();
                     for c in samples(lo, hi) {
                         if !contains(out, c + imm) {
@@ -79,7 +79,7 @@ fn check_add_x() -> usize {
                     if shi < slo {
                         continue;
                     }
-                    let out = add_x(Abs::Pkt { lo: plo, hi: phi }, Abs::Scalar { lo: slo, hi: shi }).unwrap();
+                    let out = add_x(Abs::Pkt { lo: plo, hi: phi }, Abs::Scalar { lo: slo, hi: shi, t: TNUM_UNKNOWN }).unwrap();
                     for p in samples(plo, phi) {
                         for s in samples(slo, shi) {
                             if !contains(out, p + s) {
@@ -94,11 +94,12 @@ fn check_add_x() -> usize {
     bad
 }
 
-/// AND64_K: for any concrete `x`, `x & imm` must be in `and_k(imm)`.
-fn check_and_k(op: fn(i64) -> Abs) -> usize {
+/// AND64_K interval soundness: for a fully-unknown input, `x & imm` must be in
+/// `and_k(⊤, imm)`. (Bit-level precision is covered by the tnum_and check.)
+fn check_and_k() -> usize {
     let mut bad = 0;
     for &imm in &[0i64, 1, 3, 6, 0xff, 0xffff, 0x7fff_ffff] {
-        let out = op(imm);
+        let out = and_k(S_TOP, imm);
         for &x in &[0i64, 1, 2, imm, (imm - 1).max(0), 0x1234, u32::MAX as i64, 0x7fff_ffff] {
             let concrete = ((x as u64) & (imm as u64)) as i64;
             if !contains(out, concrete) {
@@ -107,16 +108,6 @@ fn check_and_k(op: fn(i64) -> Abs) -> usize {
         }
     }
     bad
-}
-
-/// A deliberately-UNSOUND AND_K (excludes the top value `imm`) — the harness must
-/// flag it, proving it detects the Agni bug class rather than rubber-stamping.
-fn bad_and_k(imm: i64) -> Abs {
-    if imm >= 0 {
-        Abs::Scalar { lo: 0, hi: (imm - 1).max(0) }
-    } else {
-        S_TOP
-    }
 }
 
 // --- tnum soundness (Agni-style) ---------------------------------------------
@@ -176,7 +167,7 @@ fn main() {
     println!("   scope: verifier-reachable domain (loads 0..2^32, packet offsets, i32 imms)");
     let a = check_add_k();
     let b = check_add_x();
-    let c = check_and_k(and_k);
+    let c = check_and_k();
     for (name, n) in [("ADD64_K", a), ("ADD64_X", b), ("AND64_K", c)] {
         println!("   {name}: {}", if n == 0 { "SOUND (over-approximates)" } else { "UNSOUND!" });
     }
@@ -188,8 +179,8 @@ fn main() {
     for (name, n) in [("tnum_and", ta), ("tnum_or", to), ("tnum_xor", tx), ("tnum_add", td)] {
         println!("   {name}: {}", if n == 0 { "SOUND (over-approximates)" } else { "UNSOUND!" });
     }
-    let caught = check_and_k(bad_and_k) + check_tnum2(bad_tnum_and, |x, y| x & y);
-    println!("   control: injected-unsound AND_K + tnum_and -> {caught} counterexample(s) CAUGHT by the harness");
+    let caught = check_tnum2(bad_tnum_and, |x, y| x & y);
+    println!("   control: injected-unsound tnum_and -> {caught} counterexample(s) CAUGHT by the harness");
     let prod_unsound = a + b + c + ta + to + tx + td;
     let ok = prod_unsound == 0 && caught > 0;
     println!(

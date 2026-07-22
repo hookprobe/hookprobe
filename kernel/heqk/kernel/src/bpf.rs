@@ -246,6 +246,23 @@ pub const PARSE_RULE: [u64; 9] = [
     insn(0x95, 0, 0, 0, 0),      // EXIT
 ];
 
+/// tnum PAYOFF rule (R1 = L2 frame): compute the L4 offset from the IP header
+/// length `(ihl & 0x0f) << 2`, add it to the packet pointer, and load the L4
+/// header. The `<<2` of a masked value stays BOUNDED [0..60] only with tnum — the
+/// interval domain (PREVAIL/Windows: `LSH → ⊤`) makes the pointer offset
+/// unbounded and REJECTS this rule. tnum ⇒ ACCEPTED, min_len = 14+60+1 = 75.
+pub const VAR_OFFSET_RULE: [u64; 9] = [
+    insn(0x71, 2, 1, 14, 0),   // 0 R2 = *(u8*)(R1+14)  IP version/IHL byte
+    insn(0x57, 2, 0, 0, 0x0f), // 1 R2 &= 0x0f          IHL nibble  [0..15]
+    insn(0x67, 2, 0, 0, 2),    // 2 R2 <<= 2            IHL*4       [0..60]  (tnum: bounded)
+    insn(0xbf, 3, 1, 0, 0),    // 3 R3 = R1             (packet ptr copy)
+    insn(0x07, 3, 0, 0, 14),   // 4 R3 += 14            skip Ethernet
+    insn(0x0f, 3, 2, 0, 0),    // 5 R3 += R2            + IP header len -> L4 ptr
+    insn(0x71, 4, 3, 0, 0),    // 6 R4 = *(u8*)(R3+0)   load L4 (min_len=75)
+    insn(0xb7, 0, 0, 0, 1),    // 7 R0 = PASS
+    insn(0x95, 0, 0, 0, 0),    // 8 EXIT
+];
+
 /// Static verifier — gate a program before it runs (v1: signed first-party, so
 /// this is a safety net; a full PREVAIL-style abstract-interpretation verifier
 /// is for opening the plane to third-party rules). Checks: known opcodes, valid
@@ -305,7 +322,10 @@ use alloc::vec::Vec;
 
 // The abstract domain + its transfer functions live in `absdom` (modular,
 // individually-specified, host-side-soundness-harness-checked — the Agni lesson).
-use crate::absdom::{add_k, add_x, and_k, join, lsh_k, mov_k, or_x, sat_add, Abs, XErr};
+use crate::absdom::{
+    add_k, add_x, and_k, join, load_result, lsh_k, mov_k, or_x, sat_add, scalar_from_tnum, Abs,
+    Tnum, XErr,
+};
 
 /// Merge `src` state into `in_st[pc]`, marking progress. Returns Err on a
 /// register-count issue (shouldn't happen — guarded earlier).
@@ -371,8 +391,9 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                         if need_i as u64 > min_len {
                             min_len = need_i as u64;
                         }
-                        let maxv = if w >= 8 { i64::MAX } else { (1i64 << (8 * w)) - 1 };
-                        out[dst] = Abs::Scalar { lo: 0, hi: maxv };
+                        // Load result carries a tnum (low 8w bits unknown, rest
+                        // known-0) so a later mask+shift on it stays bounded.
+                        out[dst] = load_result(w);
                     }
                     Abs::Uninit => return Err("load base uninitialized"),
                     Abs::Scalar { .. } => return Err("load from non-packet (scalar) address"),
@@ -399,23 +420,24 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                 };
             }
             0x57 => {
-                // AND64_K masking: x & m (m>=0) ∈ [0, m].
+                // AND64_K masking: tnum makes x & m EXACT (bit-level bounded).
                 if st[dst] == Abs::Uninit {
                     return Err("AND of uninitialized register");
                 }
-                out[dst] = and_k(imm);
+                out[dst] = and_k(st[dst], imm);
             }
             0x67 => {
+                // LSH64_K: tnum keeps the shifted value BOUNDED (interval → ⊤).
                 if st[dst] == Abs::Uninit {
                     return Err("LSH of uninitialized register");
                 }
-                out[dst] = lsh_k();
+                out[dst] = lsh_k(st[dst], (imm as u32) & 63);
             }
             0x4f => {
                 if st[dst] == Abs::Uninit || st[src] == Abs::Uninit {
                     return Err("OR of uninitialized register");
                 }
-                out[dst] = or_x();
+                out[dst] = or_x(st[dst], st[src]);
             }
             // Conditional jumps (forward-only, no loops): JEQ/JGT/JGE/JSET/JNE, K + X.
             0x15 | 0x25 | 0x35 | 0x45 | 0x55 | 0x1d | 0x2d | 0x3d | 0x4d | 0x5d => {
@@ -444,7 +466,8 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                 if st[1] == Abs::Uninit || st[2] == Abs::Uninit {
                     return Err("CALL with uninitialized argument register");
                 }
-                out[0] = Abs::Scalar { lo: 0, hi: 1 };
+                // Helpers return 0/1 (one unknown bit).
+                out[0] = scalar_from_tnum(Tnum { value: 0, mask: 1 });
                 for k in 1..=5 {
                     out[k] = Abs::Uninit; // args clobbered by the call
                 }
