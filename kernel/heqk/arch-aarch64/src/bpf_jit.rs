@@ -52,6 +52,10 @@ fn and_reg(rd: u32, rn: u32, rm: u32) -> u32 {
     0x8A000000 | (rm << 16) | (rn << 5) | rd
 }
 #[inline]
+fn eor_reg(rd: u32, rn: u32, rm: u32) -> u32 {
+    0xCA000000 | (rm << 16) | (rn << 5) | rd // EOR Xd, Xn, Xm
+}
+#[inline]
 fn lsl_imm(rd: u32, rn: u32, sh: u32) -> u32 {
     // LSL Xd, Xn, #sh  == UBFM Xd, Xn, #(-sh mod 64), #(63-sh)
     let sh = sh & 63;
@@ -146,6 +150,40 @@ fn emit_imm(e: &mut Emit, rd: u32, imm: i32) {
     }
 }
 
+/// Materialize a full 64-bit value into x`rd` (1-4 words). Used by constant
+/// blinding, where the blinded value and key span all 64 bits.
+fn emit_u64(e: &mut Emit, rd: u32, val: u64) {
+    e.push(movz(rd, (val & 0xFFFF) as u16, 0));
+    for (sh, shift) in [(16, 1u32), (32, 2), (48, 3)] {
+        let h = ((val >> sh) & 0xFFFF) as u16;
+        if h != 0 {
+            e.push(movk(rd, h, shift));
+        }
+    }
+}
+
+/// A per-compile blinding key from the ARM generic counter — unpredictable to a
+/// static attacker, so JIT-spray can't plant a chosen constant. Never 0 (a 0 key
+/// is a no-op blind). Not cryptographic; the goal is defeating gadget planting.
+fn blind_key() -> u64 {
+    let c: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+    c | 0xA5A5_0001_5A5A_0001 // fold in fixed nonzero bits so the key is never trivial
+}
+
+/// Constant blinding for `MOV64_K` (the main JIT-spray vector): emit `rd =
+/// (imm^key)`, `scratch = key`, `rd ^= scratch` — so the target immediate `imm`
+/// (an attacker-chosen gadget address in a hostile rule) NEVER appears verbatim
+/// in the emitted code. Transparent: `rd` ends up = `imm` (JIT still == interp).
+/// Since HEQK's rules are all signed, this is mandatory defense-in-depth (per the
+/// BPF_THREAT_PLANE hardening + the Linux JIT constant-blinding design).
+fn emit_mov_k_blinded(e: &mut Emit, rd: u32, imm: i32, key: u64) {
+    let target = imm as i64 as u64;
+    emit_u64(e, rd, target ^ key);
+    emit_u64(e, SCRATCH2, key);
+    e.push(eor_reg(rd, rd, SCRATCH2));
+}
+
 /// Compile a **verified** BPF program to native ARM64. Returns the entry VA (to
 /// be transmuted to `extern "C" fn(*const u8) -> u64`) or None on an unsupported
 /// op / too-large program / allocation failure. The program MUST have passed
@@ -166,6 +204,7 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
     let mut bpf_start = [0usize; MAX_INSNS + 1];
     let mut fixups: [(usize, usize); MAX_INSNS] = [(0, 0); MAX_INSNS];
     let mut nfix = 0usize;
+    let key = blind_key(); // per-compile constant-blinding key (defeats JIT-spray)
 
     // Prologue: R1 = pkt (arg x0); R0 = 0. Set R1 from x0 before zeroing R0(=x0).
     e.push(mov_reg(1, 0));
@@ -191,7 +230,7 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
                     _ => e.push(ldr_w(dst, SCRATCH)),
                 }
             }
-            0xb7 => emit_imm(&mut e, dst, imm),            // MOV64_K
+            0xb7 => emit_mov_k_blinded(&mut e, dst, imm, key), // MOV64_K (blinded)
             0xbf => e.push(mov_reg(dst, src)),             // MOV64_X
             0x07 => {
                 emit_imm(&mut e, SCRATCH, imm); // ADD64_K
