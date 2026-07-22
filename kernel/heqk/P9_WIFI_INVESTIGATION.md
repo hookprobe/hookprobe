@@ -2,6 +2,27 @@
 
 _Live investigation. Ground truth = the working hookprobe-os image's dmesg._
 
+## ✅✅ P9 COMPLETE ON METAL (2026-07-22): HEQK trains RC1 + enumerates the RTL8111H
+
+Both PHYs up in one HEQK boot:
+- **phy0 (GEM/end0):** reachable + 3 real RX frames + IDS verdicts + isolated EL0 driver — works.
+- **phy1 (RTL8111H/PCIe):**
+  ```
+  [P9] RC1 status after train=0x0003e0bf → RC1 LINK UP (matches RC2's up-pattern)
+  [P9] downstream 01:00.0 vendor/device = 0x816810ec   ← exact match
+  [P9] PASS — RTL8111H found @01:00.0
+  ```
+Two fixes that finished it after the reseat: (a) tidy `rc1_train()` to Linux's
+proven path (clear CLKREQ_DEBUG+L1SS, DIS_PLL_PD, Gen1, tperst settle; dropped the
+bogus MDIO PLL diag); (b) `enumerate()` — write the RC secondary-bus reg DIRECTLY
+at the controller base (bus-0 config is NOT behind the EXT_CFG window) + 100ms
+CEM settle after link-up. Commit 2a5eb79.
+
+REMAINING (phy1 datapath, next — mirrors the working GEM path): MAC read is
+ff:ff:ff:ff because BAR2 MMIO isn't mapped yet. Next = program the RC outbound
+window to the RTL BAR2 + inbound DMA window + RX ring (rtl8111::pcie_inbound_window
+/ mac_start), then RX frames → IDS, same as the GEM datapath.
+
 ## ★ RESOLVED (2026-07-22): root cause = CM5 not fully seated in the Waveshare carrier
 
 The external PCIe (RC1) runs over the CM5↔carrier board-to-board connector. The CM5
