@@ -1757,6 +1757,26 @@ fn p2_caps_test() -> bool {
     let root_reclaimed = cs.get(0).map_or(false, |c| c.watermark == 0);
     kprint!("   revoke(root): live caps {} -> {} (all derived gone, memory reclaimed)\n", live1, live2);
 
+    // Rights enforcement (B-9): mint diminished copies + check on invocation.
+    // Only slot 0 (root Untyped, R|W|G) survives revoke(0) — retype a fresh Frame.
+    let f = cs.retype(0, ObjType::Frame, 4096).unwrap();
+    let ro = cs.mint(f, caps::R).unwrap(); // request R from R|W|G -> R only
+    let rg = cs.mint(f, caps::R | caps::G).unwrap(); // R|G (no W)
+    let child = cs.mint(rg, caps::R | caps::W).unwrap(); // request W from R|G -> W DROPPED
+    let diminished = cs.get(ro).map_or(false, |c| c.rights == caps::R);
+    let no_amplify = cs.get(child).map_or(false, |c| c.rights & caps::W == 0);
+    let write_denied = cs.as_frame_rights(ro, caps::W).is_err(); // RO frame refuses write
+    let read_ok = cs.as_frame_rights(ro, caps::R).is_ok(); // ...but allows read
+    let full_write_ok = cs.as_frame_rights(f, caps::W).is_ok(); // full frame writes
+    let grant_gated = cs.mint(ro, caps::R).is_err(); // RO lacks Grant -> can't re-delegate
+    let rights_ok = diminished && no_amplify && write_denied && read_ok && full_write_ok && grant_gated;
+    kprint!("   rights: RO-frame read {} / write {}; full write {}; amplify {}; non-grant delegate {}\n",
+        if read_ok { "ok" } else { "FAIL" },
+        if write_denied { "DENIED" } else { "allowed?!" },
+        if full_write_ok { "ok" } else { "FAIL" },
+        if no_amplify { "REFUSED" } else { "GAINED?!" },
+        if grant_gated { "REFUSED" } else { "allowed?!" });
+
     let pass = live0 == 8
         && retype_ep
         && ep_as_frame
@@ -1764,7 +1784,8 @@ fn p2_caps_test() -> bool {
         && subtree_gone
         && live1 == 6
         && live2 == 1
-        && root_reclaimed;
+        && root_reclaimed
+        && rights_ok;
     kprint!("   [P2] {}\n", if pass { "PASS" } else { "FAIL" });
     pass
 }

@@ -145,20 +145,34 @@ impl CapSpace {
         d
     }
 
-    /// Recursively delete every capability derived from `slot` (its whole
-    /// subtree), keep `slot` itself, and reclaim its Untyped memory. Synchronous,
-    /// bounded, no garbage collector.
+    /// Delete every capability derived from `slot` (its whole subtree), keep
+    /// `slot` itself, and reclaim its Untyped memory. **Iterative** (no recursion
+    /// — B-9): mark the transitive descendants by a fixpoint over the flat
+    /// parent-linked array (bounded by SLOTS passes, no unbounded kernel stack),
+    /// then delete them. Synchronous, no garbage collector.
     pub fn revoke(&mut self, slot: usize) {
-        let children: [usize; SLOTS] = core::array::from_fn(|i| i);
-        for &ch in children.iter() {
-            let is_child = self
-                .slots
-                .get(ch)
-                .and_then(|c| c.as_ref())
-                .map_or(false, |c| c.parent == Some(slot));
-            if is_child {
-                self.revoke(ch); // delete ch's descendants first
-                self.slots[ch] = None; // then ch itself
+        let mut doomed = [false; SLOTS];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..SLOTS {
+                if doomed[i] || i == slot {
+                    continue;
+                }
+                if let Some(Some(c)) = self.slots.get(i) {
+                    // Doomed iff its parent is `slot` or already-doomed (transitive).
+                    if let Some(p) = c.parent {
+                        if p == slot || (p < SLOTS && doomed[p]) {
+                            doomed[i] = true;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..SLOTS {
+            if doomed[i] {
+                self.slots[i] = None;
             }
         }
         // Reclaim untyped memory now that nothing is derived from it.
@@ -167,6 +181,40 @@ impl CapSpace {
                 c.watermark = 0;
             }
         }
+    }
+
+    /// Rights enforcement (B-9). Delegate a rights-DIMINISHED copy of the cap at
+    /// `slot` into a fresh slot: the new cap references the SAME object but with
+    /// rights `requested & source.rights` — rights can only be NARROWED, never
+    /// amplified (the core capability property) — and only if the source holds the
+    /// **Grant** right. Returns the new slot.
+    pub fn mint(&mut self, slot: usize, requested: u8) -> Result<usize, &'static str> {
+        let (otype, rights, base, size) = {
+            let src = self.get(slot).ok_or("empty slot")?;
+            if src.rights & G == 0 {
+                return Err("mint requires the Grant right");
+            }
+            (src.otype, requested & src.rights, src.base, src.size)
+        };
+        let dst = self.free_slot().ok_or("no free slot")?;
+        self.slots[dst] = Some(Cap { otype, rights, base, size, watermark: 0, parent: Some(slot) });
+        Ok(dst)
+    }
+
+    /// The enforcement point on capability invocation: true only if the cap at
+    /// `slot` holds ALL of the `need` rights.
+    pub fn has_rights(&self, slot: usize, need: u8) -> bool {
+        self.get(slot).map_or(false, |c| c.rights & need == need)
+    }
+
+    /// Type-safe **and** rights-checked Frame view: the cap must be a Frame AND
+    /// hold every right in `need` (e.g. `W` before a write is granted).
+    pub fn as_frame_rights(&self, slot: usize, need: u8) -> Result<&Cap, &'static str> {
+        let c = self.as_frame(slot)?;
+        if c.rights & need != need {
+            return Err("insufficient rights");
+        }
+        Ok(c)
     }
 
     /// Type-safe view: succeeds only if the cap really is a Frame.
