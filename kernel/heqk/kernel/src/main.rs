@@ -210,6 +210,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P14 seed: BCM2712 IOMMU probe (PCIe DMA-containment recon) --
     cm5_iommu_probe();
 
+    // --- P10 Stage A: CYW43455 WiFi SDIO bring-up + chip-ID (0x4345) --
+    cm5_p10_probe();
+
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
@@ -772,6 +775,22 @@ fn cm5_p9_rx() {
         kprint!(" [P9-rx] PASS — {} real phy1 frame(s) off the RTL8111H -> kernel IDS verdict (BOTH NICs feed the IDS)\n", frames);
     } else {
         kprint!(" [P9-rx] SILENT — no RX frames in the window (check the phy1 cable/link-partner); datapath armed without fault\n");
+    }
+}
+
+/// P10 Stage A — CYW43455 WiFi (SDIO) bring-up: read the chip common-core ID and
+/// confirm 0x4345 (BCM4345/6 = CYW43455). First step toward the regdomain backlog
+/// (Stage C: clmload + country iovar). WL_ON rail + clk_emmc2 are mailbox-owned and
+/// assumed up here; SDHCI/DDR50 timing iterates on metal (like rtl8111 did).
+#[cfg(feature = "cm5")]
+fn cm5_p10_probe() {
+    kprint!(" [P10] CYW43455 WiFi (SDIO) — Stage A: SDHCI init + chip-ID read @ SI_ENUM_BASE\n");
+    match arch_aarch64::cyw43::chip_id_probe() {
+        Some(id) => kprint!(
+            " [P10-A] {} — SDIO link up; chip common-core ID = {:#06x} (want 0x4345 = BCM4345/6 / CYW43455)\n",
+            if id == 0x4345 { "PASS" } else { "MISMATCH" }, id),
+        None => kprint!(
+            " [P10-A] SILENT — SDIO init did not complete (WL_ON/clk_emmc2 rail or DDR50 timing — iterate on metal)\n"),
     }
 }
 
