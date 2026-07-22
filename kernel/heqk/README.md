@@ -2,6 +2,8 @@
 
 **HookProbe's IDS/IPS-native microkernel: capability-secured, zero-copy datapath, quantum-safe (PQC) integrity, purpose-built to run a SOC plus custom VMs/containers — the long-horizon endgame of the HookProbe OS program.** Subsystem map in `HEQK_SUBSYSTEMS.md`.
 
+> 📊 **What we build — [live validation matrix](https://claude.ai/code/artifact/826d76e2-3653-47c2-8c7c-84f4ad56c586)** (P0→P17): every feature in the kernel and where it's proven — on Raspberry Pi CM5 (BCM2712) silicon, under QEMU, or both — plus the in-flight residuals and the automation-underlay and assurance roadmaps. Regenerated from a live `./validate.sh` run by `tools/gen-validation.py`; source page in-repo at `heqk-validation.html`.
+
 Sibling to `~/hookprobe-bsd` (base of record) and `~/hookprobe-qnx` (real-time/uptime benchmark). This track asks: if we design the OS *around* threat detection from scratch, what does it look like — and what should we actually build vs. stand on?
 
 ---
