@@ -1466,6 +1466,10 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
             #[cfg(feature = "cm5")]
             if !SCHED_DONE.swap(true, Ordering::SeqCst) {
                 kprint!("\n [P7b] PASS preemptive scheduler on metal ({} ticks, context switch verified)\n", n);
+                // P7c-4c: the EL0 loop driver TCB never exits on its own; kill all
+                // non-idle threads so the idle thread (which runs the demo's wait
+                // loop) resumes and cm5_scheduler_demo can return.
+                scheduler::stop_workers();
             }
         }
         next

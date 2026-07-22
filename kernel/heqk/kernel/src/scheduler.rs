@@ -74,6 +74,22 @@ pub fn exit_current() {
     }
 }
 
+/// Kill every non-idle thread (slots 1..num) so only the idle/boot thread (slot
+/// 0, always alive, priority 0) remains runnable. Used to tear a scheduler demo
+/// down DETERMINISTICALLY: an always-runnable TCB (e.g. the P7c-4c EL0 loop
+/// driver, which never exits on its own) would otherwise starve the idle thread
+/// that runs the demo's wait loop, so the demo could never return. After this the
+/// idle thread resumes on the next tick and the demo completes. P7c-4c.
+pub fn stop_workers() {
+    unsafe {
+        let alive = addr_of_mut!(ALIVE).cast::<bool>();
+        let num = addr_of!(NUM).read();
+        for i in 1..num {
+            alive.add(i).write(false);
+        }
+    }
+}
+
 /// The currently-running thread's id (scheduler slot).
 pub fn current_tid() -> usize {
     unsafe { addr_of!(CUR).read() }
