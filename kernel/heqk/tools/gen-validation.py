@@ -154,6 +154,10 @@ SECTIONS = [
         sub="stateless anomalous-flag signatures (Nmap/Suricata-style)", new=True, phase="P8",
         proves="Anomalous TCP flag combinations dropped as scans; normal SYN/ACK pass (no false positives).",
         env=["qemu"], marker="[P8-tcp]", gate="P8t"),
+   dict(feat="SYN-flood rate-limit — first STATEFUL rule",
+        sub="BPF CALL helper + windowed rate limiter (v1 global bucket, standalone)", new=True, phase="P8",
+        proves="A signed rule consults kernel state via a CALL helper; a SYN flood over the window limit is rate-limited — what single-packet rules can't do.",
+        env=["qemu"], marker="[P8-syn]", gate="P8s"),
  ]),
  ("L4", "Second interface", "external PCIe — the one hardware blocker", [
    dict(feat="RTL8111H external PCIe RC1 bring-up",
