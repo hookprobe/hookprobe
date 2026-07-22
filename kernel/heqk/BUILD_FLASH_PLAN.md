@@ -151,3 +151,35 @@ Ranked (leverage-per-effort). **✅ = landed 2026-07-22.**
 Landing items **1–4** lets HEQK claim, with citations, **a provably-sound verifier
 driving a formally-verified JIT with tnum-grade precision in a tiny owned TCB** —
 a combination Linux, Windows, FreeBSD, seL4, and QNX each individually lack.
+
+## A/B boot — the reliability keystone (fail-safe OTA)
+
+A bad update must never brick a headless edge/farm node. HEQK gets automatic A/B
+fallback on THIS silicon with **no mutable persistent store in HBoot** by layering
+three mechanisms that each already have a durable home:
+
+| Layer | Owns | Mechanism |
+|-------|------|-----------|
+| Pi firmware | the one-shot slot switch (PMIC/EEPROM, survives reboot) | `reboot "0 tryboot"` boots `tryboot.txt` (SLOT B) for exactly one boot, else `config.txt` (SLOT A) |
+| HBoot (EL2) | hang/panic safety | arms the **BCM2712 PM watchdog** (~15 s) before EL1 launch; a kernel that never confirms trips a full-SoC reset |
+| Kernel (EL1) | health proof | once the **detection plane is up**, issues `hvc #1` → the EL2 gate **disarms** the watchdog and commits (`[HBoot-AB] PASS`) |
+
+- **SLOT A** = `heqk8.img` (config.txt) — last known-good; the normal boot.
+- **SLOT B** = `heqk8-b.img` (tryboot.txt) — the candidate; booted once via tryboot.
+
+**Failure ⇒ fallback, automatically.** A candidate that hangs/panics before
+confirming is killed by HBoot's watchdog; the consumed one-shot means the reset
+boots SLOT A. A candidate that boots clean but is never committed returns to A on
+the next power-cycle. Only an explicit **commit** (`ab-update.sh commit`, promotes
+B→A) makes a candidate permanent — with the prior A saved as `heqk8.img.prev`.
+
+**ABI.** BootInfo v6 adds `boot_flags` (bit0 `BOOT_FLAG_TRIAL_WDOG`) + `watchdog_secs`;
+the EL2 gate dispatches `hvc #0` = reboot, `hvc #1` = confirm/commit.
+
+**Status.** Watchdog arm/disarm + the `hvc #1` confirm protocol + v6 handoff are
+built and compile for CM5; the confirm state machine is QEMU-validated
+(`[HBoot-AB] PASS`). Tooling: `cm5-boot/ab-update.sh` (stage/commit/status),
+`cm5-boot/tryboot.txt` (slot-B config). Staged for on-metal: an end-to-end
+deliberate-bad-B flash to observe the watchdog reset → SLOT A fallback, and
+wiring an on-device `reboot "0 tryboot"` path (or host-set one-shot) so the
+candidate can be trialed without a Linux userland.

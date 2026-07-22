@@ -160,11 +160,24 @@ pub struct BootInfo {
     pub measure_count: u64,  // number of events in the log
     pub quote_pa: u64,       // ATTEST_QUOTE_ADDR (AK-signed attestation quote)
     pub eph_pa: u64,         // v5: ATTEST_EPH_ADDR (per-boot ephemeral key + AK cert), 0 if absent
+    pub boot_flags: u64,     // v6: A/B trial-boot flags (see BOOT_FLAG_*)
+    pub watchdog_secs: u64,  // v6: trial watchdog timeout HBoot armed (0 = not armed)
 }
 
 /// BootInfo.verify_flags bits.
 pub const VERIFY_ED25519: u64 = 1 << 0;
 pub const VERIFY_SLHDSA: u64 = 1 << 1;
+
+/// BootInfo.boot_flags bits (A/B trial boot).
+/// A trial-boot watchdog is armed at EL2: the kernel MUST confirm health via
+/// `hvc #1` before it fires, or HBoot resets the SoC and the firmware falls
+/// back to the known-good slot (config.txt). See BUILD_FLASH_PLAN.md (A/B boot).
+pub const BOOT_FLAG_TRIAL_WDOG: u64 = 1 << 0;
+
+/// HBoot EL2 gate HVC immediates (from EL1): `hvc #0` = reboot request;
+/// `hvc #1` = A/B boot confirm (disarm the trial watchdog, commit this boot).
+pub const HVC_REBOOT: u64 = 0;
+pub const HVC_BOOT_CONFIRM: u64 = 1;
 
 /// SLH-DSA-SHA2-128s (FIPS 205) sizes.
 pub const SLHDSA_SIG_LEN: usize = 7856;

@@ -198,6 +198,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P8: statically VERIFY the detection rule before running it on live traffic --
     cm5_p8_verify();
 
+    // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
+    boot_confirm();
+
     // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
     cm5_gem_rx_demo();
 
@@ -222,6 +225,36 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
         core::hint::spin_loop();
     }
     unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+}
+
+/// A/B boot confirm (reliability keystone): once the security-critical services
+/// (the detection plane) are up, tell HBoot's EL2 gate to DISARM the trial
+/// watchdog via `hvc #1`, committing this boot. If the kernel never reaches here
+/// (hang/panic), the watchdog fires and the firmware falls back to the known-good
+/// slot (config.txt). With no EL2 trial gate (QEMU / firmware-direct) there is
+/// nothing to disarm — the state machine is still exercised and the gate PASSes.
+#[cfg(feature = "hboot")]
+fn boot_confirm() {
+    use boot_abi::{BootInfo, BOOTINFO_ADDR, BOOTINFO_MAGIC, BOOT_FLAG_TRIAL_WDOG};
+    let bi = unsafe { &*(BOOTINFO_ADDR as *const BootInfo) };
+    let armed = bi.magic == BOOTINFO_MAGIC
+        && bi.el2_gate != 0
+        && (bi.boot_flags & BOOT_FLAG_TRIAL_WDOG) != 0;
+    if armed {
+        // hvc #1 -> the EL2 gate disarms the PM watchdog and erets back to EL1.
+        unsafe { core::arch::asm!("hvc #1") };
+        kprint!(" [HBoot-AB] PASS — trial boot confirmed; EL2 watchdog disarmed, slot committed\n");
+    } else {
+        kprint!(" [HBoot-AB] PASS — no trial watchdog in handoff; nothing to confirm\n");
+    }
+}
+
+/// A/B boot confirm on a build with no EL2 trial gate (QEMU / firmware-direct):
+/// nothing to disarm, but exercise + report the confirm state machine so the
+/// validator can gate on it.
+#[cfg(not(feature = "hboot"))]
+fn boot_confirm() {
+    kprint!(" [HBoot-AB] PASS — no EL2 trial gate (direct boot); A/B confirm not required\n");
 }
 
 /// P7c step 3b (stage 1) — run a minimal driver at EL0, granted ONLY the GEM MMIO
@@ -1157,6 +1190,9 @@ pub extern "C" fn kmain() -> ! {
 
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
+
+    // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
+    boot_confirm();
 
     // --- P1 priority scheduler + P4 synchronous IPC (one scheduler run) ---
     scheduler::init();

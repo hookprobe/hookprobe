@@ -26,6 +26,7 @@ mod rng;
 mod rollback;
 mod stage2;
 mod trusted_keys;
+mod watchdog;
 
 use boot_abi::sha256;
 use rollback::SecureCounter;
@@ -286,6 +287,18 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         core::ptr::copy_nonoverlapping(body, load_pa as *mut u8, size as usize);
     }
 
+    // A/B TRIAL-BOOT WATCHDOG (reliability keystone): arm the PM watchdog before
+    // handing off to EL1. A healthy kernel confirms via `hvc #1` (the EL2 gate
+    // disarms it) once its detection plane is up; a kernel that hangs or panics
+    // before confirming trips the watchdog -> full SoC reset -> the firmware's
+    // consumed one-shot `tryboot` flag boots the KNOWN-GOOD slot (config.txt).
+    // Automatic A/B fallback with no mutable persistent store in HBoot.
+    const TRIAL_WDOG_SECS: u32 = 15;
+    let wdog_secs = watchdog::arm(TRIAL_WDOG_SECS);
+    puts(" a/b    : trial watchdog armed ");
+    puthex(wdog_secs as u64);
+    puts("s — kernel must hvc#1-confirm or fall back to the known-good slot\n");
+
     // BootInfo — the typed handoff (the kernel never parses the DTB).
     let bi = BOOTINFO_ADDR as *mut BootInfo;
     unsafe {
@@ -293,7 +306,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
             bi,
             BootInfo {
                 magic: BOOTINFO_MAGIC,
-                version: 5,
+                version: 6,
                 dtb_pa,
                 kernel_pa: load_pa,
                 kernel_size: size,
@@ -307,6 +320,8 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 measure_count: m.count(),
                 quote_pa: ATTEST_QUOTE_ADDR as u64,
                 eph_pa: ATTEST_EPH_ADDR as u64,
+                boot_flags: BOOT_FLAG_TRIAL_WDOG,
+                watchdog_secs: wdog_secs as u64,
             },
         );
     }

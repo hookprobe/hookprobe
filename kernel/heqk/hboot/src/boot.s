@@ -192,10 +192,10 @@ lower64_sync_gate:
     stp     x11, x12, [sp, #16]
     str     x13,      [sp, #32]
     mrs     x10, esr_el2
-    lsr     x10, x10, #26
-    cmp     x10, #0x16              // HVC64 -> reboot
-    b.eq    reset_platform
-    cmp     x10, #0x24              // Data Abort from EL1 -> maybe isolation trap
+    lsr     x11, x10, #26
+    cmp     x11, #0x16              // HVC64 -> reboot (#0) or A/B confirm (#1)
+    b.eq    hvc_dispatch
+    cmp     x11, #0x24              // Data Abort from EL1 -> maybe isolation trap
     b.eq    el1_blocked
     movz    x9, #0x0000
     movk    x9, #0x0003, lsl #16
@@ -250,6 +250,36 @@ el1_fault_reset:
     tbnz    w12, #5, 93b
     strb    w11, [x9]
     b       reset_platform
+
+// HVC64 from EL1. ISS (ESR_EL2[15:0], still in x10) = the hvc immediate:
+//   #1 = A/B boot confirm — disarm the trial watchdog + return to EL1 (commit).
+//   anything else (#0) = reboot request -> full SoC reset (unchanged).
+hvc_dispatch:
+    and     x12, x10, #0xffff       // ISS = hvc immediate
+    cmp     x12, #1
+    b.ne    reset_platform          // hvc #0 (or other) -> reboot
+    // hvc #1 — disarm the PM watchdog: RSTC &= ~WRCFG, keep password.
+    movz    x9, #0x0000
+    movk    x9, #0x7d20, lsl #16
+    movk    x9, #0x0010, lsl #32
+    movz    w12, #0x5a00, lsl #16
+    ldr     w10, [x9, #0x1c]
+    bic     w10, w10, #0x30
+    orr     w10, w10, w12
+    str     w10, [x9, #0x1c]
+    // Emit 'C' (A/B boot committed) on the RP1 UART @0x1C00030000.
+    movz    x9, #0x0000
+    movk    x9, #0x0003, lsl #16
+    movk    x9, #0x001c, lsl #32
+    mov     w11, #0x43              // 'C'
+94: ldr     w12, [x9, #0x18]
+    tbnz    w12, #5, 94b
+    strb    w11, [x9]
+    // Restore EL1's x9-x13 (saved at gate entry) and return past the hvc.
+    ldr     x13,      [sp, #32]
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
+    eret
 
     .balign 0x800
 .global __hboot_vectors
