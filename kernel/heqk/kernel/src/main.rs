@@ -50,27 +50,20 @@ static TICKS: AtomicU32 = AtomicU32::new(0);
 // P7c step 4b — fault-restart of a scheduled EL0 driver. When a scheduled EL0 TCB
 // faults, the handler rebuilds a fresh frame from these restart params and
 // reschedules, instead of the cooperative resume_kernel longjmp.
-#[cfg(not(feature = "cm5"))]
+// P7c-4c: shared by the QEMU and CM5 scheduled-EL0 paths (a scheduled EL0 driver
+// TCB whose faults restart/reschedule rather than cooperatively longjmp).
 static EL0_SCHED_MODE: AtomicBool = AtomicBool::new(false);
-#[cfg(not(feature = "cm5"))]
 static EL0_RS_ENTRY: AtomicUsize = AtomicUsize::new(0);
-#[cfg(not(feature = "cm5"))]
 static EL0_RS_USP: AtomicUsize = AtomicUsize::new(0);
-#[cfg(not(feature = "cm5"))]
 static EL0_RS_KSTACK: AtomicUsize = AtomicUsize::new(0);
-#[cfg(not(feature = "cm5"))]
 static EL0_RESTARTS: AtomicU32 = AtomicU32::new(0);
-#[cfg(not(feature = "cm5"))]
 const EL0_MAX_RESTARTS: u32 = 3;
 
 // P7c — physical address of the EL0 preemption-test counter (kernel reads it to
 // prove the uncooperative EL0 task ran), + a dedicated kernel stack for that TCB.
-#[cfg(not(feature = "cm5"))]
 static EL0_CNT_PA: AtomicUsize = AtomicUsize::new(0);
-#[cfg(not(feature = "cm5"))]
 #[repr(align(16))]
 struct KStack([u8; 0x4000]);
-#[cfg(not(feature = "cm5"))]
 static mut EL0_KSTACK: KStack = KStack([0; 0x4000]);
 #[cfg(not(feature = "cm5"))]
 static mut EL0_FKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the crashing driver TCB
@@ -476,6 +469,12 @@ fn cm5_scheduler_demo() {
         scheduler::spawn(sp, prios[i]);
     }
     kprint!(" [P7b] c: 3 workers spawned\n");
+    // P7c-4c: alongside the kernel workers, spawn the EL0 driver as a *preemptible
+    // scheduled TCB in its OWN ASID* on CM5 metal — the piece 4d's cooperative
+    // loop deferred. It runs a pure EL0 loop (increments a counter, no syscalls),
+    // so the timer must preempt it every quantum; the scheduler switches TTBR0 to
+    // its ASID to run it and back to the kernel ASID for the workers.
+    let el0_ok = cm5_spawn_el0_loop_asid();
     let gic = arch_aarch64::Gic;
     gic.init();
     kprint!(" [P7b] d: GIC-400 init\n");
@@ -496,6 +495,69 @@ fn cm5_scheduler_demo() {
         }
     }
     arch_aarch64::disable_irqs();
+
+    // P7c-4c result: the EL0 TCB ran at EL0 (counter > 0) AND the box reached the
+    // scheduler's normal exit (kernel workers kept running, timer kept firing) —
+    // so the EL0 driver was being preempted in its own ASID, not wedging the box.
+    if el0_ok {
+        let cnt_pa = EL0_CNT_PA.load(Ordering::SeqCst);
+        let c = if cnt_pa != 0 { unsafe { core::ptr::read_volatile(cnt_pa as *const u64) } } else { 0 };
+        kprint!(" [P7c-4c] {} — EL0 driver ran as a PREEMPTIBLE SCHEDULED TCB in its own ASID on CM5 (counter={}, not wedged)\n",
+            if c > 0 { "PASS" } else { "FAIL" }, c);
+    }
+    EL0_SCHED_MODE.store(false, Ordering::Relaxed); // back to cooperative for the 4d server stages
+}
+
+/// P7c-4c helper — spawn a pure EL0 loop as a scheduled TCB in a fresh CM5 ASID.
+/// Returns true if it was spawned (its counter frame PA is published in
+/// `EL0_CNT_PA`). Arms fault-reschedule so that even if the mapping were wrong the
+/// box degrades gracefully (restart-budget kill) instead of wedging.
+#[cfg(feature = "cm5")]
+fn cm5_spawn_el0_loop_asid() -> bool {
+    use arch_aarch64::mmu_cm5;
+    extern "C" {
+        static el0_loop_stub: u8;
+        static el0_loop_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(el0_loop_stub) as usize;
+    let len = core::ptr::addr_of!(el0_loop_stub_end) as usize - src;
+    let code = mmu_cm5::alloc_frame();
+    let stack = mmu_cm5::alloc_frame();
+    let cnt = mmu_cm5::alloc_frame();
+    if code == 0 || stack == 0 || cnt == 0 {
+        kprint!(" [P7c-4c] frame alloc failed (pool exhausted) — skipping\n");
+        return false;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(src as *const u8, code as *mut u8, len);
+        core::ptr::write_volatile(cnt as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(code, len);
+    let (l1, asid) = mmu_cm5::new_addr_space();
+    if l1 == 0 {
+        kprint!(" [P7c-4c] new_addr_space failed — skipping\n");
+        return false;
+    }
+    // EL0 VAs inside the GB5 user window's first 2 MiB block, private to this ASID.
+    let ecode = mmu_cm5::USER_VA_BASE;
+    let estack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let ecnt = mmu_cm5::USER_VA_BASE + 0x2000;
+    mmu_cm5::map_user_code_in(l1, ecode, code);
+    mmu_cm5::map_user_data_in(l1, estack, stack);
+    mmu_cm5::map_user_data_in(l1, ecnt, cnt);
+    EL0_CNT_PA.store(cnt, Ordering::SeqCst);
+    let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + 0x4000 };
+    let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ecode, estack + 0x1000, ecnt);
+    // Arm graceful fault handling for this scheduled EL0 TCB (belt & braces — the
+    // loop stub never faults when the mapping is correct).
+    EL0_RS_ENTRY.store(ecode, Ordering::Relaxed);
+    EL0_RS_USP.store(estack + 0x1000, Ordering::Relaxed);
+    EL0_RS_KSTACK.store(kstack_top, Ordering::Relaxed);
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed);
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    scheduler::spawn_as(sp, 1, ttbr0); // low prio: shares with thread_lo, timer preempts it
+    kprint!(" [P7c-4c] EL0 driver spawned as SCHEDULED TCB (asid={}) in its own address space on CM5\n", asid);
+    true
 }
 
 /// P8 (metal): the PREVAIL-style verifier on real silicon — statically prove the
@@ -1208,6 +1270,25 @@ fn el0_fault_spawn() {
     kprint!(" [P7c] crashing EL0 driver spawned (asid={}) — faults must be contained + restarted\n", asid);
 }
 
+/// P7c-4c — switch TTBR0 to the currently-scheduled thread's address space (its
+/// own ASID for an isolated EL0 driver; the kernel/identity space otherwise).
+/// Backend-neutral: uses the `Mmu` HAL on QEMU and `mmu_cm5` on metal, so an EL0
+/// driver runs as a preemptible scheduled TCB in its own ASID on real hardware.
+#[inline]
+fn enter_current_addr_space() {
+    let t = scheduler::current_ttbr0();
+    #[cfg(not(feature = "cm5"))]
+    {
+        let mmu = arch_aarch64::Mmu;
+        mmu.set_ttbr0_raw(if t != 0 { t } else { mmu.kernel_ttbr0() });
+    }
+    #[cfg(feature = "cm5")]
+    {
+        use arch_aarch64::mmu_cm5;
+        mmu_cm5::set_ttbr0_raw(if t != 0 { t } else { mmu_cm5::kernel_ttbr0() });
+    }
+}
+
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
 /// pointer of the thread to run next.
 #[no_mangle]
@@ -1219,15 +1300,10 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
         arch_aarch64::GenericTimer.rearm();
         let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
         let next = scheduler::on_tick(sp);
-        // P7c step 3: enter the next thread's address space (its own ASID for an
-        // isolated EL0 driver server; the kernel/identity space otherwise). CM5
-        // threads are all kernel-space, so this is QEMU-only for now.
-        #[cfg(not(feature = "cm5"))]
-        {
-            let mmu = arch_aarch64::Mmu;
-            let t = scheduler::current_ttbr0();
-            mmu.set_ttbr0_raw(if t != 0 { t } else { mmu.kernel_ttbr0() });
-        }
+        // P7c-4c: enter the next thread's address space (its own ASID for an
+        // isolated EL0 driver; the kernel/identity space otherwise) — now on CM5
+        // metal too (ASID-tagged TTBR0 switch, flush-free).
+        enter_current_addr_space();
         gic.eoi(intid);
         if scheduler::alive_workers() == 0 || n >= RUN_TICKS {
             #[cfg(not(feature = "cm5"))]
@@ -1430,10 +1506,10 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     kprint!("   [EL0 fault] contained: EC={:#04x} FAR={:#x} (kernel survives)\n", ec, far);
     telemetry::emit(telemetry::Event::Fault); // the OS senses its own fault
 
-    // P7c step 4b: a *scheduled* EL0 driver TCB — RESTART it (rebuild a fresh
+    // P7c step 4b/4c: a *scheduled* EL0 driver TCB — RESTART it (rebuild a fresh
     // frame) up to a bound, then kill it, and reschedule. A driver crash is
-    // contained AND recovered without taking the kernel down.
-    #[cfg(not(feature = "cm5"))]
+    // contained AND recovered without taking the kernel down. Active on CM5 too
+    // (P7c-4c), so a scheduled EL0 fault degrades gracefully instead of wedging.
     if EL0_SCHED_MODE.load(Ordering::Relaxed) {
         let cur = scheduler::current_tid();
         let n = EL0_RESTARTS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1452,9 +1528,7 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
             scheduler::exit_current();
             scheduler::on_tick(unsafe { *frame.add(33) as usize }) // any sp; cur is dead now
         };
-        let mmu = arch_aarch64::Mmu;
-        let t = scheduler::current_ttbr0();
-        mmu.set_ttbr0_raw(if t != 0 { t } else { mmu.kernel_ttbr0() });
+        enter_current_addr_space(); // P7c-4c: re-enter the (restarted) driver's ASID — CM5 too
         return next_sp;
     }
 

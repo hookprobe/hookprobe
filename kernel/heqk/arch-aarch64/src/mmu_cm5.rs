@@ -23,6 +23,7 @@ const AP_RO_EL1: u64 = 0b10 << 6; // EL1 read-only (+ executable when !PXN)
 const AP_RO_EL0: u64 = 0b11 << 6; // EL0+EL1 read-only (+ EL0-executable when !UXN)
 const PXN: u64 = 1 << 53; // privileged execute-never
 const UXN: u64 = 1 << 54; // unprivileged execute-never
+const NG: u64 = 1 << 11; // non-global — the entry is tagged by the current ASID
 const ATTR_DEVICE: u64 = 0 << 2; // MAIR index 0 = Device-nGnRnE
 const ATTR_NORMAL: u64 = 1 << 2; // MAIR index 1 = Normal WB cacheable
 const ATTR_NC: u64 = 2 << 2; // MAIR index 2 = Normal Non-Cacheable
@@ -234,7 +235,11 @@ pub fn enable_identity() {
     let tg0: u64 = 0b00 << 14; // 4 KiB
     let epd1: u64 = 1 << 23; // no TTBR1 walks
     let ips: u64 = 0b010 << 32; // 40-bit physical address size
-    let tcr = t0sz | irgn0 | orgn0 | sh0 | tg0 | epd1 | ips;
+    // P7c-4c: AS=1 (16-bit ASIDs) so TTBR0[63:48] selects the address space and a
+    // context switch between per-driver ASIDs needs NO TLB flush (non-global user
+    // entries are ASID-tagged). Kernel/device blocks are global (nG=0) — shared.
+    let asbit: u64 = 1 << 36;
+    let tcr = t0sz | irgn0 | orgn0 | sh0 | tg0 | epd1 | ips | asbit;
 
     unsafe {
         core::arch::asm!(
@@ -266,4 +271,144 @@ pub fn enabled() -> bool {
     let sctlr: u64;
     unsafe { core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr) };
     sctlr & 1 != 0
+}
+
+// ===========================================================================
+// P7c-4c — per-address-space MMU on CM5: a runtime frame allocator, cloned L1s
+// with their OWN GB5 user tables, ASID assignment, and TTBR0 switching. This is
+// the CM5 port of the QEMU `mmu.rs` mechanism (new_addr_space/map_user_*_in/
+// switch_ttbr0), so an isolated EL0 driver can run as a *preemptible scheduled
+// TCB in its own ASID* on metal (not the cooperative `enter_user` loop). The
+// scheduler switches TTBR0 on each tick; ASID-tagged (nG) user entries make the
+// switch flush-free. Kernel/device/alias blocks are shared (global) via the L1
+// copy, so the driver AS sees the same console/RAM/peripheral map.
+// ===========================================================================
+
+use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+
+// Runtime frame pool: a high, unused window of GB0 RAM (Normal WB, mapped RW+PXN
+// as data by the W^X L2). 768 MiB..896 MiB — well above the kernel image, its
+// BSS/stack, the static packet/GEM pools, and the aliases. 4 KiB granularity.
+const POOL_BASE: usize = 0x3000_0000; // 768 MiB
+const POOL_END: usize = 0x3800_0000; // 896 MiB (128 MiB of tables/frames)
+static FRAME_NEXT: AtomicUsize = AtomicUsize::new(POOL_BASE);
+static NEXT_ASID: AtomicU16 = AtomicU16::new(1); // ASID 0 = the kernel/global space
+
+/// Allocate a zeroed 4 KiB physical frame from the CM5 runtime pool, or 0 if the
+/// pool is exhausted. Frames are Normal-WB cacheable (fine for page tables — the
+/// walker does cacheable walks — and for EL0 code/data mapped through user L3).
+pub fn alloc_frame() -> usize {
+    let f = FRAME_NEXT.fetch_add(0x1000, Ordering::Relaxed);
+    if f + 0x1000 > POOL_END {
+        return 0;
+    }
+    unsafe {
+        let p = f as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(p.add(i), 0);
+        }
+        core::arch::asm!("dsb ish");
+    }
+    f
+}
+
+#[inline]
+fn user_page_ng(pa: u64, ap: u64, attr: u64, xn: u64) -> u64 {
+    // Like `user_page`, but non-global (ASID-tagged) so a no-flush TTBR0 switch
+    // between driver address spaces keeps their user entries apart in the TLB.
+    pa | AF | SH_IS | ap | attr | PAGE | xn | NG
+}
+
+/// The kernel/global address space's TTBR0 value (kernel L1 root | ASID 0).
+pub fn kernel_ttbr0() -> u64 {
+    addr_of_mut!(L1) as u64
+}
+
+/// Write a raw TTBR0_EL1 value (root | ASID<<48) + isb. The scheduler calls this
+/// on each context switch to enter the next thread's address space.
+pub fn set_ttbr0_raw(ttbr0: u64) {
+    unsafe {
+        core::arch::asm!("msr ttbr0_el1, {}", in(reg) ttbr0);
+        core::arch::asm!("isb");
+    }
+}
+
+/// Switch the active address space: TTBR0_EL1 = root | (asid<<48), isb. No flush.
+pub fn switch_ttbr0(l1_root: usize, asid: u16) {
+    set_ttbr0_raw(l1_root as u64 | ((asid as u64) << 48));
+}
+
+/// Create a fresh address space: a new L1 that copies the kernel's 512 entries
+/// (so kernel/device/alias/W^X mappings are shared, global) but installs its OWN
+/// GB5 user tables (L2->L3) so its EL0 pages are private. Returns (l1_root_pa,
+/// asid), or (0,0) on pool exhaustion.
+pub fn new_addr_space() -> (usize, u16) {
+    let l1 = alloc_frame();
+    if l1 == 0 {
+        return (0, 0);
+    }
+    let src = addr_of_mut!(L1) as *const u64;
+    let dst = l1 as *mut u64;
+    unsafe {
+        for i in 0..512 {
+            core::ptr::write_volatile(dst.add(i), core::ptr::read_volatile(src.add(i)));
+        }
+    }
+    // Give this AS its own GB5 user window (private L2->L3).
+    let l2u = alloc_frame();
+    let l3u = alloc_frame();
+    if l2u == 0 || l3u == 0 {
+        return (0, 0);
+    }
+    unsafe {
+        core::ptr::write_volatile((l2u as *mut u64).add(0), (l3u as u64) | TABLE);
+        core::ptr::write_volatile(dst.add(USER_GB as usize), (l2u as u64) | TABLE);
+        core::arch::asm!("dsb ish");
+    }
+    let asid = NEXT_ASID.fetch_add(1, Ordering::Relaxed) & 0xFFFF;
+    (l1, asid)
+}
+
+/// Locate an address space's private GB5 user L3 table from its L1 root.
+fn user_l3_of(l1_root: usize) -> *mut u64 {
+    let l1 = l1_root as *const u64;
+    let e1 = unsafe { core::ptr::read_volatile(l1.add(USER_GB as usize)) };
+    let l2 = (e1 & 0xFFFF_FFFF_F000) as *const u64;
+    let e2 = unsafe { core::ptr::read_volatile(l2.add(0)) };
+    (e2 & 0xFFFF_FFFF_F000) as *mut u64
+}
+
+/// Write an EL0 page into a specific address space's private user table (ASID-
+/// tagged / non-global). `va` must be in the GB5 user window's first 2 MiB block.
+fn map_user_in(l1_root: usize, va: usize, desc: u64) -> bool {
+    if l1_root == 0 {
+        return false;
+    }
+    let l3 = user_l3_of(l1_root);
+    if l3.is_null() {
+        return false;
+    }
+    unsafe {
+        core::ptr::write_volatile(l3.add(user_l3_idx(va)), desc);
+        core::arch::asm!("dsb ish");
+        core::arch::asm!("isb");
+    }
+    true
+}
+
+/// Map an EL0 RO+X code page into a specific address space (EL0 exec, EL1 non-exec).
+pub fn map_user_code_in(l1_root: usize, va: usize, pa: usize) -> bool {
+    map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN))
+}
+/// Map an EL0 RW data/stack page into a specific address space.
+pub fn map_user_data_in(l1_root: usize, va: usize, pa: usize) -> bool {
+    map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_NORMAL, PXN | UXN))
+}
+/// Map an EL0 device-MMIO window into a specific address space (a driver's cap).
+pub fn map_user_device_in(l1_root: usize, va: usize, pa: usize) -> bool {
+    map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_DEVICE, PXN | UXN))
+}
+/// Map an EL0 Normal-Non-Cacheable (coherent DMA-ring) window into a specific AS.
+pub fn map_user_nc_in(l1_root: usize, va: usize, pa: usize) -> bool {
+    map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_NC, PXN | UXN))
 }
