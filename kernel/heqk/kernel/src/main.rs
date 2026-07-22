@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+mod absdom;
 mod attest_svc;
 mod blocklist;
 mod bpf;

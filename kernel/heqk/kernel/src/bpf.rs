@@ -303,35 +303,9 @@ pub fn verify(prog: &[u64]) -> bool {
 use alloc::vec;
 use alloc::vec::Vec;
 
-#[derive(Clone, Copy, PartialEq)]
-enum Abs {
-    Uninit,
-    Scalar { lo: i64, hi: i64 }, // value interval — NOT a valid load base
-    Pkt { lo: i64, hi: i64 },    // packet base + byte offset in [lo, hi]
-}
-/// A scalar of fully-unknown value (loads from it rejected; adding it to a
-/// pointer makes the pointer offset unbounded ⇒ its loads rejected too).
-const S_TOP: Abs = Abs::Scalar { lo: i64::MIN, hi: i64::MAX };
-#[inline]
-fn sat_add(a: i64, b: i64) -> i64 {
-    a.saturating_add(b)
-}
-
-fn join(a: Abs, b: Abs) -> Abs {
-    match (a, b) {
-        (Abs::Uninit, Abs::Uninit) => Abs::Uninit,
-        // Init on one path, uninit on another ⇒ treat as uninit (reading is unsafe).
-        (Abs::Uninit, _) | (_, Abs::Uninit) => Abs::Uninit,
-        (Abs::Pkt { lo: l1, hi: h1 }, Abs::Pkt { lo: l2, hi: h2 }) => {
-            Abs::Pkt { lo: l1.min(l2), hi: h1.max(h2) }
-        }
-        (Abs::Scalar { lo: l1, hi: h1 }, Abs::Scalar { lo: l2, hi: h2 }) => {
-            Abs::Scalar { lo: l1.min(l2), hi: h1.max(h2) }
-        }
-        // Any mix of Pkt/Scalar loses pointer-ness ⇒ unknown scalar.
-        _ => S_TOP,
-    }
-}
+// The abstract domain + its transfer functions live in `absdom` (modular,
+// individually-specified, host-side-soundness-harness-checked — the Agni lesson).
+use crate::absdom::{add_k, add_x, and_k, join, lsh_k, mov_k, or_x, sat_add, Abs, XErr};
 
 /// Merge `src` state into `in_st[pc]`, marking progress. Returns Err on a
 /// register-count issue (shouldn't happen — guarded earlier).
@@ -404,7 +378,7 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                     Abs::Scalar { .. } => return Err("load from non-packet (scalar) address"),
                 }
             }
-            0xb7 => out[dst] = Abs::Scalar { lo: imm, hi: imm }, // MOV64_K
+            0xb7 => out[dst] = mov_k(imm), // MOV64_K
             0xbf => {
                 // MOV64_X: reg copy — propagates the abstract value (incl. Pkt-ness).
                 if st[src] == Abs::Uninit {
@@ -414,27 +388,14 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
             }
             0x07 => {
                 // ADD64_K: pointer OR scalar arithmetic with a constant.
-                out[dst] = match st[dst] {
-                    Abs::Pkt { lo, hi } => Abs::Pkt { lo: sat_add(lo, imm), hi: sat_add(hi, imm) },
-                    Abs::Scalar { lo, hi } => {
-                        Abs::Scalar { lo: sat_add(lo, imm), hi: sat_add(hi, imm) }
-                    }
-                    Abs::Uninit => return Err("ADD to uninitialized register"),
-                };
+                out[dst] = add_k(st[dst], imm).ok_or("ADD to uninitialized register")?;
             }
             0x0f => {
                 // ADD64_X: pointer+scalar (widen the offset by the scalar interval).
-                out[dst] = match (st[dst], st[src]) {
-                    (Abs::Uninit, _) | (_, Abs::Uninit) => {
-                        return Err("ADD of uninitialized register")
-                    }
-                    (Abs::Pkt { lo, hi }, Abs::Scalar { lo: a, hi: b }) => {
-                        Abs::Pkt { lo: sat_add(lo, a), hi: sat_add(hi, b) }
-                    }
-                    (Abs::Scalar { lo, hi }, Abs::Scalar { lo: a, hi: b }) => {
-                        Abs::Scalar { lo: sat_add(lo, a), hi: sat_add(hi, b) }
-                    }
-                    _ => return Err("ADD yields a non-scalar (pointer+pointer?)"),
+                out[dst] = match add_x(st[dst], st[src]) {
+                    Ok(a) => a,
+                    Err(XErr::Uninit) => return Err("ADD of uninitialized register"),
+                    Err(XErr::NonScalar) => return Err("ADD yields a non-scalar (pointer+pointer?)"),
                 };
             }
             0x57 => {
@@ -442,23 +403,19 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                 if st[dst] == Abs::Uninit {
                     return Err("AND of uninitialized register");
                 }
-                out[dst] = if imm >= 0 {
-                    Abs::Scalar { lo: 0, hi: imm }
-                } else {
-                    S_TOP
-                };
+                out[dst] = and_k(imm);
             }
             0x67 => {
                 if st[dst] == Abs::Uninit {
                     return Err("LSH of uninitialized register");
                 }
-                out[dst] = S_TOP;
+                out[dst] = lsh_k();
             }
             0x4f => {
                 if st[dst] == Abs::Uninit || st[src] == Abs::Uninit {
                     return Err("OR of uninitialized register");
                 }
-                out[dst] = S_TOP;
+                out[dst] = or_x();
             }
             // Conditional jumps (forward-only, no loops): JEQ/JGT/JGE/JSET/JNE, K + X.
             0x15 | 0x25 | 0x35 | 0x45 | 0x55 | 0x1d | 0x2d | 0x3d | 0x4d | 0x5d => {

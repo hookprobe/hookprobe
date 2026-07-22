@@ -52,6 +52,24 @@ if ! cargo build >/tmp/hp_build.log 2>&1; then
 fi
 echo "ok"
 
+# --- Stage 1b: verifier soundness harness (P16, host-side) ----------------
+# Compile the REAL abstract operators (kernel/src/absdom.rs) for the host and
+# check each over-approximates the concrete semantics (Agni-style). A control
+# injects a deliberately-unsound operator the harness must catch.
+echo -n "[P16]   verifier soundness harness ... "
+VH="$(mktemp)"
+if rustc --edition 2021 -O tools/verifier-harness.rs -o "$VH" >/tmp/hp_vh_build.log 2>&1; then
+  if "$VH" >/tmp/hp_vh.log 2>&1; then
+    echo "PASS (abstract operators sound; injected unsoundness caught)"
+  else
+    echo "FAIL — verifier operator UNSOUND:"; sed 's/^/    /' /tmp/hp_vh.log
+    rm -f "$VH"; exit 2
+  fi
+  rm -f "$VH"
+else
+  echo "skip (rustc host build unavailable)"
+fi
+
 # --- Stage 2: boot + capture ---------------------------------------------
 echo -n "[boot]  qemu virt ... "
 timeout 45 $QEMU "$KERNEL" >"$LOG" 2>&1
