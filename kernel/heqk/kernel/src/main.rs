@@ -716,6 +716,8 @@ fn cm5_p9_probe() {
         return;
     }
     kprint!(" [P9] RC1 LINK UP (DL_ACTIVE|PHYLINKUP) — HEQK trained the external PCIe!\n");
+    kprint!(" [P9] downstream 01:00.0 vendor/device = {:#010x} (want 0x816810ec; 0xffffffff=not responding)\n",
+        rtl8111::rtl_vendor_id());
     match rtl8111::enumerate() {
         Some(mac) => {
             kprint!(" [P9] PASS — RTL8111H found @01:00.0 (vendor/device 0x816810EC), MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
