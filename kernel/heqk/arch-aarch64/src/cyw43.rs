@@ -416,6 +416,19 @@ pub fn chip_id_probe() -> Option<u16> {
         delay(1_000);
     }
     unsafe { SDIO_STEP = 5 };
+    // Request the ALP clock on the backplane BEFORE any chipcommon read. Without it
+    // the SI backplane is UNCLOCKED and F1 reads return noise — the observed
+    // raw=0xff966a53/reread=0x00000000 (unstable) chip-ID garbage. Mirrors brcmfmac
+    // brcmf_sdio_htclk/ALP path: write CHIPCLKCSR ALP_AVAIL_REQ, poll ALP_AVAIL.
+    let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
+    for _ in 0..200 {
+        if let Some(v) = cmd52(false, 1, CHIPCLKCSR, 0) {
+            if v & SBSDIO_ALP_AVAIL != 0 {
+                break;
+            }
+        }
+        delay(1_000);
+    }
     // Point the F1 backplane window at chipcommon, read the 32-bit chip-ID.
     let win_ok = set_backplane_window(SI_ENUM_BASE);
     let mut id = [0u8; 4];
