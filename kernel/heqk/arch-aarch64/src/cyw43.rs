@@ -1535,42 +1535,35 @@ pub fn fw_last_step() -> u8 {
 /// Per the FreeBSD/OpenBSD cross-check: clmload BEFORE the country set; map the
 /// (ccode,rev) pair for correct channel/power (rev 0 = crude fallback).
 pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
-    // clmload — chunk the CLM blob with BEGIN on first / END on last.
-    let mut buf = [0u8; DL_CHUNK + 32];
-    let total = CLM_BLOB.len();
-    let mut off = 0usize;
-    while off < total {
-        let n = (total - off).min(DL_CHUNK);
-        let mut flag = 0u16;
-        if off == 0 {
-            flag |= DL_BEGIN;
-        }
-        if off + n >= total {
-            flag |= DL_END;
-        }
-        let clen = clm_chunk(flag, &CLM_BLOB[off..off + n], &mut buf);
-        // iovar "clmload" carrying this dload chunk, via BCDC WLC_SET_VAR.
-        let mut iob = [0u8; DL_CHUNK + 48];
-        let ilen = iovar_buf(b"clmload", &buf[..clen], &mut iob);
-        if !bcdc_iovar_set(&iob[..ilen]) {
-            return None;
-        }
-        off += n;
-    }
-    // country iovar.
+    // NOTE: the CLM regulatory blob is already resident in the firmware (embedded CLM +
+    // the ccode=RO baked into NVRAM). `clmload` (a chunked SET_VAR carrying the ~KB CLM
+    // blob) needs block-mode CMD53 TX for its >512-byte frames — deferred to P10-D where
+    // the data path drives large-frame TX properly. Here we confirm/re-set the regdomain
+    // with the small `country` iovar, which fits byte-mode, and read it back.
     let mut cp = [0u8; 12];
     country_payload(iso, rev, &mut cp);
     let mut iob = [0u8; 48];
     let ilen = iovar_buf(b"country", &cp, &mut iob);
-    if !bcdc_iovar_set(&iob[..ilen]) {
-        return None;
-    }
-    // read back.
+    let set_ok = bcdc_iovar_set(&iob[..ilen]);
+    unsafe { REGDOM_DIAG.0 = set_ok };
+    // read back the country iovar.
     let mut rb = [0u8; 12];
-    if !bcdc_iovar_get(b"country", &mut rb) {
+    let get_ok = bcdc_iovar_get(b"country", &mut rb);
+    unsafe {
+        REGDOM_DIAG.1 = get_ok;
+        REGDOM_DIAG.2 = [rb[0], rb[1], rb[2], rb[3]];
+    }
+    if !get_ok {
         return None;
     }
-    Some(!(rb[0] == b'0' && rb[1] == b'0') && rb[0] != 0)
+    // A real ISO (not "00"/"99"/empty) means the firmware honored the country set.
+    Some(!(rb[0] == b'0' && rb[1] == b'0') && rb[0] != 0 && rb[0] != b'9')
+}
+
+static mut REGDOM_DIAG: (bool, bool, [u8; 4]) = (false, false, [0; 4]);
+/// (country SET ok, country GET ok, readback abbrev[0..4]).
+pub fn regdom_diag() -> (bool, bool, [u8; 4]) {
+    unsafe { REGDOM_DIAG }
 }
 
 // --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
@@ -1766,10 +1759,17 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let w0: u32 = (seq as u32)
         | ((SDPCM_CONTROL_CHANNEL as u32) << 8)
         | ((SDPCM_HDRLEN as u32) << 24);
-    // BCDC header.
+    // BCDC header. `len` = for a GET, the OUTPUT buffer size the firmware may fill
+    // (reply.len()); for a SET, the payload length. The frame still carries only the
+    // actual payload bytes; len just tells the firmware how much it may return.
+    let bcdc_len = if reply.is_empty() {
+        payload.len()
+    } else {
+        reply.len().max(payload.len())
+    };
     let bcdc = SDPCM_HDRLEN;
     frame[bcdc..bcdc + 4].copy_from_slice(&cmd.to_le_bytes());
-    frame[bcdc + 4..bcdc + 8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame[bcdc + 4..bcdc + 8].copy_from_slice(&(bcdc_len as u32).to_le_bytes());
     let flg = flags | (reqid << 16); // SET bit + reqid in [31:16]
     frame[bcdc + 8..bcdc + 12].copy_from_slice(&flg.to_le_bytes());
     // status [bcdc+12..+16] left 0.
