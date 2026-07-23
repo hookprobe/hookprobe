@@ -820,7 +820,10 @@ fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
         let avail = (data.len() - off).min(space);
         let fbs = F1_BLOCK_SIZE as usize;
         if avail >= fbs {
-            let nblocks = (avail / fbs).min(256); // cap burst
+            // SINGLE 64-B block per CMD53 — sidesteps the multi-block PIO FIFO flow
+            // (the card holds DAT_INHIBIT busy and doesn't re-assert BUF_WR_RDY for
+            // block 2). Slower (watchdog is disarmed by now) but isolates the issue.
+            let nblocks = (avail / fbs).min(1);
             let bytes = nblocks * fbs;
             if !cmd53_write_blocks(1, (win_off as u32) | 0x8000, &data[off..off + bytes], nblocks as u32) {
                 return false;
