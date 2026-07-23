@@ -1612,10 +1612,57 @@ impl ApInfo {
     }
 }
 
-static mut SCAN_DIAG: [u32; 6] = [0; 6]; // [ev_ok, infra_ok, up_ok, scan_ok, frames, aps]
-/// [event_msgs ok, SET_INFRA ok, WLC_UP ok, escan ok, event frames read, APs found].
-pub fn scan_diag() -> [u32; 6] {
+static mut SCAN_DIAG: [u32; 8] = [0; 8]; // [ev,infra,up,escan_ok,frames,aps,escan_status,ver_used]
+/// [event_msgs ok, SET_INFRA ok, WLC_UP ok, escan ok, frames, APs, escan status, params-ver used].
+pub fn scan_diag() -> [u32; 8] {
     unsafe { SCAN_DIAG }
+}
+
+/// Build a v1 (72-byte) or v2 (80-byte) escan params payload into `out`; returns length.
+/// v2 (brcmf_scan_params_v2_le) prepends {version le16, length le16} inside the scan
+/// params and widens scan_type to le32 — newer firmware (incl 7.45.265) wants v2.
+fn build_escan_params(out: &mut [u8], v2: bool) -> usize {
+    for b in out.iter_mut() {
+        *b = 0;
+    }
+    if !v2 {
+        // escan_params_le v1: version(4)=1, action(2)=1, sync_id(2), scan_params_le(64).
+        out[0..4].copy_from_slice(&1u32.to_le_bytes());
+        out[4..6].copy_from_slice(&1u16.to_le_bytes());
+        out[6..8].copy_from_slice(&0x1234u16.to_le_bytes());
+        // scan_params_le @8: ssid(36) bssid@44(6) bss_type@50 scan_type@51 nprobes@52..
+        out[44..50].copy_from_slice(&[0xff; 6]);
+        out[50] = 2; // bss_type ANY
+        out[51] = 0; // scan_type active
+        out[52..56].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out[56..60].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out[60..64].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out[64..68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        // channel_num @68 = 0.
+        72
+    } else {
+        // escan_params_v2_le: version(4)=1, action(2)=1, sync_id(2), scan_params_v2_le.
+        out[0..4].copy_from_slice(&1u32.to_le_bytes());
+        out[4..6].copy_from_slice(&1u16.to_le_bytes());
+        out[6..8].copy_from_slice(&0x1234u16.to_le_bytes());
+        // scan_params_v2_le @8: version(2)=2, length(2)=72, ssid(36), bssid(6),
+        //   bss_type(1), pad(1), scan_type(4), nprobes(4), active(4), passive(4),
+        //   home(4), channel_num(4).
+        let s = 8usize;
+        out[s..s + 2].copy_from_slice(&2u16.to_le_bytes()); // params version 2
+        out[s + 2..s + 4].copy_from_slice(&72u16.to_le_bytes()); // params length
+        // ssid_le @ s+4 (36 zero). bssid @ s+40.
+        out[s + 40..s + 46].copy_from_slice(&[0xff; 6]);
+        out[s + 46] = 2; // bss_type ANY
+        out[s + 47] = 0; // pad
+        out[s + 48..s + 52].copy_from_slice(&0u32.to_le_bytes()); // scan_type active (le32)
+        out[s + 52..s + 56].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // nprobes
+        out[s + 56..s + 60].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // active_time
+        out[s + 60..s + 64].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // passive_time
+        out[s + 64..s + 68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // home_time
+        // channel_num @ s+68 = 0.
+        80
+    }
 }
 
 fn wlc_set_int(cmd: u32, val: u32) -> bool {
@@ -1684,23 +1731,21 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
     let up_ok = bcdc_dcmd(WLC_UP, BCDC_SET, &[], &mut []).0;
     delay(80_000); // let the interface settle
-    // 4. escan params (v1, 72 bytes) — broadcast SSID, all channels, active.
-    let mut p = [0u8; 72];
-    p[0..4].copy_from_slice(&1u32.to_le_bytes()); // version = 1
-    p[4..6].copy_from_slice(&1u16.to_le_bytes()); // action = START
-    p[6..8].copy_from_slice(&0x1234u16.to_le_bytes()); // sync_id
-    // ssid_le.SSID_len @8 = 0, SSID @12 = 0 (broadcast).
-    p[44..50].copy_from_slice(&[0xff; 6]); // bssid broadcast
-    p[50] = 2; // bss_type = ANY
-    p[51] = 0; // scan_type = active
-    p[52..56].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // nprobes = -1
-    p[56..60].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // active_time = -1
-    p[60..64].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // passive_time = -1
-    p[64..68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // home_time = -1
-    // channel_num @68 = 0 (all channels), no channel_list.
-    let mut iob3 = [0u8; 96];
-    let n3 = iovar_buf(b"escan", &p, &mut iob3);
-    let scan_ok = bcdc_iovar_set(&iob3[..n3]);
+    // 4. escan — try v1 (72 B) first; if the firmware rejects it (BADARG), retry v2 (80 B).
+    let mut p = [0u8; 80];
+    let mut iob3 = [0u8; 112];
+    let plen = build_escan_params(&mut p, false);
+    let n3 = iovar_buf(b"escan", &p[..plen], &mut iob3);
+    let (mut scan_ok, mut scan_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3], &mut []);
+    let mut ver_used = 1u32;
+    if !scan_ok {
+        let plen2 = build_escan_params(&mut p, true);
+        let n3b = iovar_buf(b"escan", &p[..plen2], &mut iob3);
+        let (ok2, st2) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3b], &mut []);
+        scan_ok = ok2;
+        scan_status = st2;
+        ver_used = 2;
+    }
     // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS.
     let mut rx = [0u8; DL_CHUNK + 64];
     let mut naps = 0usize;
@@ -1755,7 +1800,10 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         }
     }
     unsafe {
-        SCAN_DIAG = [ev_ok as u32, infra_ok as u32, up_ok as u32, scan_ok as u32, frames, naps as u32];
+        SCAN_DIAG = [
+            ev_ok as u32, infra_ok as u32, up_ok as u32, scan_ok as u32,
+            frames, naps as u32, scan_status, ver_used,
+        ];
     }
     naps
 }
