@@ -803,6 +803,9 @@ fn cm5_p10_probe() {
                 erom, cr4b, cr4w);
             let (cstage, cint, cps) = cyw43::cmd53_diag();
             kprint!("   [P10-B cmd53w] fail_stage={} INT={:#010x} PRESENT={:#010x}\n", cstage, cint, cps);
+            let (ioctl, rstctl) = cyw43::cr4_halt_diag();
+            kprint!("   [P10-B cr4] IOCTL={:#010x} (CPUHALT={}) RESET_CTL={:#010x} — halted={}\n",
+                ioctl, (ioctl >> 5) & 1, rstctl, (ioctl & 0x20 != 0) && (rstctl & 1 == 0));
             if !f2 && cr4w == 0 {
                 let mut ed = [0u32; 24];
                 cyw43::erom_dump(&mut ed);
