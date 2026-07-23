@@ -246,6 +246,27 @@ fn set_clock(divisor: u16) {
 /// NOTE: WL_ON (the radio's power/reset GPIO, `wl_on_reg`) must be asserted and
 /// `clk_emmc2` set via the VC mailbox BEFORE this runs — those live in the caller
 /// (kernel) which owns the mailbox; here we assume the rail/clock are up.
+/// P10 pre-req — power + clock the CYW43455 so the SDIO link can come up. After a
+/// bare-metal boot (no WiFi DT overlay) both are OFF, so CMD5 gets no response
+/// (SDIO step 1). WL_ON = `gio` GPIO 28 (active-high; the SDIO2 `vmmc-supply`
+/// regulator, 150 ms startup); `clk_emmc2` (id 12) is the SDIO2 base clock the
+/// SDHCI divides down. `gio` (brcmstb-gpio) @ CPU 0x10_7d50_8500: bank0 DATA=+0x04,
+/// IODIR=+0x08 (0=output). Returns the clk_emmc2 rate read back (0 = clock off).
+pub fn radio_power_on() -> u32 {
+    const GIO: usize = 0x10_7D50_8500;
+    unsafe {
+        let iodir = (GIO + 0x08) as *mut u32;
+        write_volatile(iodir, read_volatile(iodir) & !(1u32 << 28)); // WL_ON = output
+        let data = (GIO + 0x04) as *mut u32;
+        write_volatile(data, read_volatile(data) | (1u32 << 28)); // drive high = radio on
+        core::arch::asm!("dsb sy");
+    }
+    // Ensure clk_emmc2 is running (the SDHCI clock-control divides it further).
+    let _ = crate::mailbox::set_clock_rate(crate::mailbox::CLK_EMMC2, 100_000_000);
+    delay(150_000); // wl_on_reg startup-delay-us
+    crate::mailbox::get_clock_rate(crate::mailbox::CLK_EMMC2).unwrap_or(0)
+}
+
 /// Last SDIO bring-up step reached (diagnostic): 1=host init, 2=CMD5 OCR,
 /// 3=CMD5 ready, 4=CMD3/7 select, 5=F1 enabled, 6=chip-ID read. On a SILENT probe
 /// this localizes where the SDIO link stalls (clock/WL_ON vs a later step).

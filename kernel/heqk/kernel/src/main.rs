@@ -785,7 +785,9 @@ fn cm5_p9_rx() {
 #[cfg(feature = "cm5")]
 fn cm5_p10_probe() {
     use arch_aarch64::cyw43;
-    kprint!(" [P10] CYW43455 WiFi (SDIO) — Stage A: SDHCI init + chip-ID read @ SI_ENUM_BASE\n");
+    kprint!(" [P10] CYW43455 WiFi (SDIO) — power on radio (WL_ON gpio28 + clk_emmc2), then Stage A\n");
+    let clk = cyw43::radio_power_on();
+    kprint!(" [P10] WL_ON asserted; clk_emmc2 = {} Hz {}\n", clk, if clk > 0 { "(clock live)" } else { "(clock OFF — mailbox failed?)" });
     match cyw43::chip_id_probe() {
         Some(0x4345) => {
             kprint!(" [P10-A] PASS — SDIO link up; chip ID 0x4345 (BCM4345/6 / CYW43455)\n");
