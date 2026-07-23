@@ -252,7 +252,37 @@ fn set_clock(divisor: u16) {
 /// regulator, 150 ms startup); `clk_emmc2` (id 12) is the SDIO2 base clock the
 /// SDHCI divides down. `gio` (brcmstb-gpio) @ CPU 0x10_7d50_8500: bank0 DATA=+0x04,
 /// IODIR=+0x08 (0=output). Returns the clk_emmc2 rate read back (0 = clock off).
+/// Mux the WL_ON + SDIO2 pins to their functions via the BCM2712 pinctrl
+/// (@0x10_7d50_4100). CM5 = D0 stepping (bcm2712-ds.dtsi). fsel 0 = GPIO, fsel
+/// 1..8 = the pin's alt1..alt8. WL_ON gpio28 → "gpio" (fsel 0, so the gio GPIO
+/// write actually drives the pin); SDIO2 gpio30-35 → "sd2" (fsel 1). Offsets/shifts
+/// derived from the D0 pin_regs (GPIO_REGS mr,mb → reg mr*4-ish, shift mb*4) +
+/// pin_funcs tables in pinctrl-bcm2712.c. Read-modify-write to spare neighbor pins.
+fn pinmux_wifi() {
+    const PINCTRL: usize = 0x10_7D50_4100;
+    // (reg offset, shift, fsel)
+    let sets: [(usize, u32, u32); 7] = [
+        (0x08, 16, 0), // gpio28 WL_ON     -> gpio
+        (0x08, 24, 1), // gpio30 SDIO2_CLK -> sd2
+        (0x08, 28, 1), // gpio31 SDIO2_CMD -> sd2
+        (0x0c, 0, 1),  // gpio32 SDIO2_D0  -> sd2
+        (0x0c, 4, 1),  // gpio33 SDIO2_D1  -> sd2
+        (0x0c, 8, 1),  // gpio34 SDIO2_D2  -> sd2
+        (0x0c, 12, 1), // gpio35 SDIO2_D3  -> sd2
+    ];
+    for (off, shift, fsel) in sets {
+        unsafe {
+            let p = (PINCTRL + off) as *mut u32;
+            write_volatile(p, (read_volatile(p) & !(0xF << shift)) | (fsel << shift));
+        }
+    }
+    unsafe { core::arch::asm!("dsb sy") };
+}
+
 pub fn radio_power_on() -> u32 {
+    // Mux the pins FIRST — WL_ON's GPIO write and the SDHCI's SDIO2 signals only
+    // reach the physical pads once their function-select is set.
+    pinmux_wifi();
     const GIO: usize = 0x10_7D50_8500;
     unsafe {
         let iodir = (GIO + 0x08) as *mut u32;
