@@ -718,18 +718,28 @@ fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
     true
 }
 
-// --- 32-bit backplane register access via the F1 window (4-byte access) ---------
+// --- 32-bit backplane register access via the F1 window -------------------------
+// Uses CMD52 BYTE access (offset 0..3, no 4-byte flag) — the proven path that read
+// the chip-ID in Stage A. CMD53 data-phase register reads returned failure here
+// (0xFFFFFFFF), so we do NOT rely on it for the EROM walk / AI reset registers.
 fn bp_r32(addr: u32) -> u32 {
     set_backplane_window(addr);
+    let base = addr & 0x7FFF;
     let mut b = [0u8; 4];
-    if !cmd53_read(1, (addr & 0x7FFF) | 0x8000, &mut b) {
-        return 0xFFFF_FFFF;
+    for i in 0..4u32 {
+        b[i as usize] = cmd52(false, 1, base + i, 0).unwrap_or(0xFF);
     }
     u32::from_le_bytes(b)
 }
 fn bp_w32(addr: u32, val: u32) -> bool {
     set_backplane_window(addr);
-    cmd53_write(1, (addr & 0x7FFF) | 0x8000, &val.to_le_bytes())
+    let base = addr & 0x7FFF;
+    let bytes = val.to_le_bytes();
+    let mut ok = true;
+    for i in 0..4u32 {
+        ok &= cmd52(true, 1, base + i, bytes[i as usize]).is_some();
+    }
+    ok
 }
 
 // --- EROM walk: find a core's (regbase, wrapbase) by DMP part number -------------
@@ -886,6 +896,7 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
+    unsafe { FW_STEP = 2 };
     // 2. CR4 PASSIVE — EROM-find the CR4, halt its CPU (TCM writable), reset D11.
     let (_cr4b, cr4w) = match cr4_set_passive() {
         Some(v) => v,
