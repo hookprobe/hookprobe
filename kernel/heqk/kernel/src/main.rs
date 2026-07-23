@@ -916,8 +916,8 @@ fn cm5_p10_probe() {
                     kprint!("   [P10-D mac] OTP={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} valid={} using={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                         otp[0],otp[1],otp[2],otp[3],otp[4],otp[5], valid, used[0],used[1],used[2],used[3],used[4],used[5]);
                     let (clmok, clmst, ctyok, ctyst, chans) = cyw43::reg_diag();
-                    kprint!("   [P10-D reg] clmload ok={} (st={:#x}) country ok={} (st={:#x}) => chanspecs count={} {}\n",
-                        clmok, clmst, ctyok, ctyst, chans, if chans > 0 { "(band ENABLED)" } else { "(NO channels -> escan will NOTUP)" });
+                    kprint!("   [P10-D reg] clmload ok={} (st={:#x}) country ok={} (st={:#x}) chanspecs={} (band enabled proof = escan success below)\n",
+                        clmok, clmst, ctyok, ctyst, chans);
                     let (upok, bok, upst) = cyw43::up_check_diag();
                     let pn = cyw43::phy_noise_diag();
                     kprint!("   [P10-D up] WLC_UP ok={} GET_BSSID status={:#x} (MAC domain) | GET_PHY_NOISE status={:#x} => RADIO {}\n",
