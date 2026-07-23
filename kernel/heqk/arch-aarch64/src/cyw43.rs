@@ -1628,6 +1628,12 @@ static mut PHY_NOISE_DIAG: u32 = 0;
 pub fn phy_noise_diag() -> u32 {
     unsafe { PHY_NOISE_DIAG }
 }
+static mut MAC_DIAG: ([u8; 6], [u8; 6], bool) = ([0; 6], [0; 6], false);
+/// (OTP cur_etheraddr readback, MAC actually in use, OTP was valid). If OTP invalid, a
+/// locally-administered MAC is set so the primary bsscfg can enable (else escan NOTUPs).
+pub fn mac_diag() -> ([u8; 6], [u8; 6], bool) {
+    unsafe { MAC_DIAG }
+}
 static mut SCAN_VER_DIAG: (bool, u32) = (false, 0);
 /// (scan_ver GET ok, reported version OR status if failed).
 pub fn scan_ver_diag() -> (bool, u32) {
@@ -1753,10 +1759,25 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let scan_ver = if sv_ok { u32::from_le_bytes([sv[0], sv[1], sv[2], sv[3]]) } else { sv_status };
     unsafe { SCAN_VER_DIAG = (sv_ok, scan_ver) };
     // === PREINIT (mirror brcmf_c_preinit_dcmds, common.c) ===
-    // P1. Establish the MAC — GET cur_etheraddr (reads the OTP MAC). brcmf always does
-    //     this in preinit; the firmware expects a valid MAC before bring-up.
-    let mut macbuf = [0u8; 6];
-    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut macbuf);
+    // P1. Establish the MAC — the ROOT of the escan NOTUP. GET the OTP cur_etheraddr; if
+    //     it's invalid (all-zero, or multicast = odd first octet), the primary bsscfg can
+    //     never enable (it needs a valid unicast source address), and escan returns NOTUP
+    //     even though the radio is up. HEQK's NVRAM has no macaddr and the CM5 WiFi OTP MAC
+    //     is unprogrammed -> zero. FIX (brcmf does the same via eth_random_addr): SET a
+    //     valid locally-administered unicast MAC (02:..) while DOWN, before WLC_UP.
+    let mut otp_mac = [0u8; 6];
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut otp_mac);
+    let mac_valid = (otp_mac[0] & 1) == 0 && otp_mac.iter().any(|&b| b != 0);
+    let mut mac = otp_mac;
+    if !mac_valid {
+        // Fixed LAA unicast MAC (02 = locally administered, bit0 clear = unicast). Stable
+        // across boots so the device keeps one identity; derived tail keeps it distinctive.
+        mac = [0x02, 0x43, 0x45, 0x48, 0x51, 0x4b]; // 02:43:45:48:51:4b ("CEHQK")
+        let mut iobmac = [0u8; 32];
+        let nmac = iovar_buf(b"cur_etheraddr", &mac, &mut iobmac);
+        let _ = bcdc_iovar_set(&iobmac[..nmac]);
+    }
+    unsafe { MAC_DIAG = (otp_mac, mac, mac_valid) };
     // P2. event_msgs: GET the firmware's current mask, OR IN the escan-result + set-ssid
     //     bits (preserving BRCMF_E_IF etc. the fw already enabled), then SET it back.
     let mut mask = [0u8; 16];
