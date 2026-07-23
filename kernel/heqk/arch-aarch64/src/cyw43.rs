@@ -1751,24 +1751,28 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
     let up_ok = bcdc_dcmd(WLC_UP, BCDC_SET, &[], &mut []).0;
     delay(80_000); // let the interface settle
-    // 4. escan — try v1 (72 B) then v2 (80 B), capturing BOTH statuses to pin the version.
+    // 4. escan. scan_ver=-23(UNSUPPORTED) => firmware is v1. The v1 escan initially returns
+    //    BCME_NOTUP(-4) because the STA finishes coming up asynchronously after WLC_UP's ACK,
+    //    so RETRY until it's accepted (status 0) or a non-NOTUP error. (If the fw ever reports
+    //    scan_ver supported, use v2 instead.)
+    let use_v2 = sv_ok; // scan_ver present => v2 firmware
     let mut p = [0u8; 80];
     let mut iob3 = [0u8; 112];
-    let plen = build_escan_params(&mut p, false);
+    let plen = build_escan_params(&mut p, use_v2);
     let n3 = iovar_buf(b"escan", &p[..plen], &mut iob3);
-    let (v1_ok, v1_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3], &mut []);
-    let mut scan_ok = v1_ok;
-    let mut scan_status = v1_status;
-    let mut ver_used = 1u32;
-    if !v1_ok {
-        let plen2 = build_escan_params(&mut p, true);
-        let n3b = iovar_buf(b"escan", &p[..plen2], &mut iob3);
-        let (v2_ok, v2_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3b], &mut []);
-        scan_ok = v2_ok;
-        scan_status = v2_status;
-        ver_used = 2;
-        unsafe { ESCAN_STATUS_V1V2 = (v1_status, v2_status) };
+    let ver_used = if use_v2 { 2u32 } else { 1u32 };
+    let mut scan_ok = false;
+    let mut scan_status = 0u32;
+    for _ in 0..20 {
+        let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3], &mut []);
+        scan_ok = ok;
+        scan_status = st;
+        if ok || st != 0xffff_fffc {
+            break; // accepted, or a non-NOTUP error (stop retrying)
+        }
+        delay(60_000); // ~interface still coming up — wait and retry
     }
+    unsafe { ESCAN_STATUS_V1V2 = (scan_status, ver_used) };
     // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS.
     let mut rx = [0u8; DL_CHUNK + 64];
     let mut naps = 0usize;
