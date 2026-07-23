@@ -359,7 +359,14 @@ pub fn radio_power_on() -> u32 {
         let iodir = (GIO + 0x08) as *mut u32;
         write_volatile(iodir, read_volatile(iodir) & !(1u32 << 28)); // WL_ON = output
         let data = (GIO + 0x04) as *mut u32;
-        write_volatile(data, read_volatile(data) | (1u32 << 28)); // drive high = radio on
+        // RESET PULSE: drive WL_ON LOW first. Just holding it high never resets a chip
+        // that was already powered from a prior boot — the BCM43455 PLL stays wedged so
+        // HT_AVAIL never sets (CHIPCLKCSR 0x52, HT bit 0x80 clear) and F2 never comes
+        // ready. Pulse low → settle → high for a clean power-on every boot.
+        write_volatile(data, read_volatile(data) & !(1u32 << 28)); // WL_ON LOW (reset)
+        core::arch::asm!("dsb sy");
+        delay(20_000); // hold in reset
+        write_volatile(data, read_volatile(data) | (1u32 << 28)); // WL_ON HIGH (radio on)
         core::arch::asm!("dsb sy");
     }
     // Ensure clk_emmc2 is running (the SDHCI clock-control divides it further).
@@ -619,9 +626,11 @@ pub fn nvram_strip(src: &[u8], out: &mut [u8]) -> usize {
         out[n] = 0;
         n += 1;
     }
-    // trailer word = token_count | (~token_count << 16), token_count = n/4
+    // trailer word = (tokens & 0xffff) | ((~tokens & 0xffff) << 16), tokens = n/4.
+    // Mask both halves (brcmf_process_nvram) — correct even if the NVRAM grows past
+    // 256 KiB (the unmasked form would corrupt the high half).
     let tokens = (n / 4) as u32;
-    let trailer = tokens | (!tokens << 16);
+    let trailer = (tokens & 0xffff) | ((!tokens & 0xffff) << 16);
     if n + 4 <= out.len() {
         out[n..n + 4].copy_from_slice(&trailer.to_le_bytes());
         n += 4;

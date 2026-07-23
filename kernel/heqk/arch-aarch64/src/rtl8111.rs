@@ -545,7 +545,7 @@ pub fn mac_start() {
         wm8(CFG9346, 0xC0); // unlock
         wm16(CPLUSCMD, 0);
         wm16(INTRMIT, 0);
-        wm16(RMS, 0x4000);
+        wm16(RMS, RXBUF as u16); // cap NIC RX-DMA at the buffer size (was 0x4000 >> RXBUF => overflow)
         wm32(TNPDS_HI, (tx_bus >> 32) as u32); // HIGH before LOW (source quirk)
         wm32(TNPDS_LO, tx_bus as u32);
         wm32(RDSAR_HI, (rx_bus >> 32) as u32);
@@ -569,6 +569,7 @@ pub fn link_up() -> bool {
 /// Poll RX descriptor `i`: returns Some((desc_index, len)) with the frame copied
 /// into `out`, or None if the NIC still owns it / it errored. Re-arms the slot.
 pub fn poll_rx(i: usize, out: &mut [u8]) -> Option<usize> {
+    let i = i % NRX; // bound the descriptor index (caller could pass i >= NRX)
     let rx_desc_pa = unsafe { core::ptr::addr_of!(RX.desc) } as usize;
     let d = nc_desc(rx_desc_pa + i * 16);
     let opts1 = unsafe { read_volatile(d.add(0)) };
@@ -578,7 +579,7 @@ pub fn poll_rx(i: usize, out: &mut [u8]) -> Option<usize> {
     let mut result = None;
     if opts1 & RX_RES == 0 {
         let len = ((opts1 & LEN_MASK) as usize).saturating_sub(4); // strip FCS
-        let n = len.min(out.len());
+        let n = len.min(out.len()).min(RXBUF); // never read past the DMA buffer
         let bufpa = unsafe { core::ptr::addr_of!(RX.buf[i]) } as usize;
         unsafe {
             // Buffers are cacheable — invalidate before reading the NIC's write.

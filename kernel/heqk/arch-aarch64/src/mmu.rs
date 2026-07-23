@@ -74,6 +74,12 @@ impl Mmu {
             }
             unsafe { write_volatile(table.add(idx), f as u64 | VALID | TABLE) };
             Some(f as *mut u64)
+        } else if e & TABLE == 0 {
+            // Existing entry is a BLOCK descriptor, not a table pointer. Returning
+            // (e & ADDR_MASK) would treat the block's physical base as a page table
+            // and write L3 descriptors into live RAM (corruption + forged mappings).
+            // We don't implement implicit block-splitting — refuse.
+            None
         } else {
             Some((e & ADDR_MASK) as *mut u64)
         }
