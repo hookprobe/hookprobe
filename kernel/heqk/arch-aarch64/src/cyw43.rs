@@ -60,6 +60,11 @@ const CMD_DATA: u16 = 1 << 5;
 // Transfer-mode bits (low half of CMD_XFER).
 const XM_READ: u16 = 1 << 4;
 const XM_BLKCNT_EN: u16 = 1 << 1;
+const XM_MULTI: u16 = 1 << 5;
+// SDIO func-1 block size (brcmfmac SDIO_FUNC1_BLOCKSIZE) + its FBR registers.
+const F1_BLOCK_SIZE: u32 = 64;
+const FBR_F1_BLKSIZE_LO: u32 = 0x110;
+const FBR_F1_BLKSIZE_HI: u32 = 0x111;
 
 #[inline]
 fn r8(o: usize) -> u8 {
@@ -737,19 +742,96 @@ pub fn cmd53_diag() -> (u8, u32, u32) {
     unsafe { CMD53_DIAG }
 }
 
-/// Write `data` to backplane address `addr` in ≤32 KiB windows (F1).
+/// Set the SDIO function-1 block size (FBR 0x110/0x111 = F1_BLOCK_SIZE) via CMD52.
+/// brcmfmac does this BEFORE any block-mode CMD53; without it the card's F1 data
+/// engine is framed to a 0-length block → every data transfer DATA-TIMEOUTs.
+fn set_func_block_size() {
+    let _ = cmd52(true, 0, FBR_F1_BLKSIZE_LO, (F1_BLOCK_SIZE & 0xFF) as u8);
+    let _ = cmd52(true, 0, FBR_F1_BLKSIZE_HI, ((F1_BLOCK_SIZE >> 8) & 0xFF) as u8);
+}
+
+/// BLOCK-mode CMD53 write: `nblocks` blocks of F1_BLOCK_SIZE (64) B (data.len() ==
+/// nblocks*64). This is how brcmfmac uploads firmware. PIO: wait BUF_WR_RDY before
+/// EACH block, push 64 B, then wait Transfer-Complete once at the end.
+fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
+    w16(BLK_SIZE_CNT, F1_BLOCK_SIZE as u16); // block size = 64
+    w16(BLK_SIZE_CNT + 2, nblocks as u16); // block count
+    w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI); // block mode, multi, write dir
+    let arg = (1 << 31)               // write
+        | ((fnum & 7) << 28)
+        | (1 << 27)                    // BLOCK mode
+        | (1 << 26)                    // incrementing address
+        | ((addr & 0x1_FFFF) << 9)
+        | (nblocks & 0x1FF);           // block count in the count field
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
+        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
+        return false;
+    }
+    let mut i = 0usize;
+    for _ in 0..nblocks {
+        let mut spin = 0u32;
+        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_WR_EN == 0 {
+            if r32(INT_STATUS) & INT_ERR != 0 {
+                unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
+                return false;
+            }
+            spin += 1;
+            if spin > 1_000_000 {
+                unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
+                return false;
+            }
+        }
+        // push one 64-byte block (16 words)
+        for _ in 0..(F1_BLOCK_SIZE / 4) {
+            let word = (data[i] as u32)
+                | ((data[i + 1] as u32) << 8)
+                | ((data[i + 2] as u32) << 16)
+                | ((data[i + 3] as u32) << 24);
+            w32(BUF_DATA, word);
+            i += 4;
+        }
+    }
+    let mut spin = 0u32;
+    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
+        spin += 1;
+        if spin > 4_000_000 {
+            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
+    }
+    true
+}
+
+/// Write `data` to backplane address `addr` in ≤32 KiB windows (F1). Uses BLOCK-mode
+/// CMD53 (64-B blocks, ≤256 per burst) for the bulk, byte-mode for a <64-B tail.
 fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
     let mut off = 0usize;
     while off < data.len() {
         set_backplane_window(addr);
         let win_off = (addr & 0x7FFF) as usize;
-        let space = 0x8000 - win_off;
-        let n = space.min(data.len() - off).min(512); // CMD53 byte cap per burst
-        if !cmd53_write(1, (win_off as u32) | 0x8000, &data[off..off + n]) {
-            return false;
+        let space = 0x8000 - win_off; // to the 32 KiB window edge
+        let avail = (data.len() - off).min(space);
+        let fbs = F1_BLOCK_SIZE as usize;
+        if avail >= fbs {
+            let nblocks = (avail / fbs).min(256); // cap burst
+            let bytes = nblocks * fbs;
+            if !cmd53_write_blocks(1, (win_off as u32) | 0x8000, &data[off..off + bytes], nblocks as u32) {
+                return false;
+            }
+            off += bytes;
+            addr += bytes as u32;
+        } else {
+            // <64-B tail (end of image / window): byte-mode.
+            if !cmd53_write(1, (win_off as u32) | 0x8000, &data[off..off + avail]) {
+                return false;
+            }
+            off += avail;
+            addr += avail as u32;
         }
-        off += n;
-        addr += n as u32;
     }
     true
 }
@@ -980,6 +1062,9 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         delay(1_000);
     }
     unsafe { FW_STEP = 2 };
+    // Set the SDIO func-1 block size (=64) BEFORE any block-mode CMD53 — without it
+    // the card frames data to a 0-length block and every write DATA-TIMEOUTs.
+    set_func_block_size();
     // 2. CR4 PASSIVE — EROM-find the CR4, halt its CPU (TCM writable), reset D11.
     let (_cr4b, cr4w) = match cr4_set_passive() {
         Some(v) => v,
