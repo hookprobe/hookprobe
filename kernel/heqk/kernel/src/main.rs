@@ -852,14 +852,34 @@ fn cm5_p10_probe() {
                 kprint!("\n");
             }
             if f2 {
-                // Stage C: the regdomain backlog target — clmload + country iovar.
-                // RO (Romania) — matches the ccode=RO baked into the NVRAM; rev 0 is
-                // the driver's ISO3166 fallback (valid for a current CLM). See the
-                // heqk-wifi-regdomain memory: fw >=7.45.265 honors the country.
-                match cyw43::set_regdomain(b"RO", 0) {
-                    Some(true) => kprint!(" [P10-C] PASS — clmload + country iovar set; regdomain readback is a real ISO (not 00/99)\n"),
-                    Some(false) => kprint!(" [P10-C] country readback still 00/99 — map the (ccode,rev) pair vs the CLM\n"),
-                    None => kprint!(" [P10-C] SILENT — BCDC/SDPCM control path (seq/credits) iterates on metal\n"),
+                // Stage C METAL GATE: prove the SDPCM/BCDC control round-trip with the
+                // canonical GET "ver" probe BEFORE the full clmload/country flow. If the
+                // firmware answers with a version string (status 0, reqid matched), the
+                // whole control path works and regdomain follows.
+                let mut ver = [0u8; 128];
+                let ver_ok = cyw43::bcdc_ver_probe(&mut ver);
+                let d = cyw43::bcdc_diag();
+                kprint!("   [P10-C bcdc] tx_seq={} tx_ok={} credit={} intstat={:#010x} rx_ok={} hw_len={} cksum_ok={} chan={} doff={} reqid_match={} status={:#x} tx_max={}\n",
+                    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
+                if ver_ok {
+                    // print the version string (ASCII up to first NUL).
+                    let vlen = ver.iter().position(|&c| c == 0).unwrap_or(ver.len()).min(80);
+                    kprint!("   [P10-C ver] firmware says: ");
+                    for &c in &ver[..vlen] {
+                        if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); }
+                    }
+                    kprint!("\n");
+                }
+                if ver_ok {
+                    // Control path proven — now the regdomain target: clmload + country.
+                    // RO (Romania) matches the ccode=RO baked into NVRAM (fw >=7.45.265).
+                    match cyw43::set_regdomain(b"RO", 0) {
+                        Some(true) => kprint!(" [P10-C] PASS — control round-trip + clmload + country set; regdomain readback is a real ISO (not 00/99)\n"),
+                        Some(false) => kprint!(" [P10-C] control OK; country readback still 00/99 — map the (ccode,rev) pair vs the CLM\n"),
+                        None => kprint!(" [P10-C] control round-trip OK (ver), but clmload/country txn stalled — see bcdc diag\n"),
+                    }
+                } else {
+                    kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
                 }
             }
         }

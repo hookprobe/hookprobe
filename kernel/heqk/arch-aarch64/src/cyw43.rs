@@ -552,7 +552,7 @@ const CY_43455_MESBUSYCTRL: u8 = 0xD0; // MES_WATERMARK(0x50) | MESBUSYCTRL_ENAB
 const SD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SD_REG_HOSTINTMASK: u32 = 0x24;
 const SDPCM_VERSION_MB: u32 = 4 << 16; // SDPCM_PROT_VERSION(4) << SMB_DATA_VERSION_SHIFT(16)
-const HOSTINTMASK: u32 = 0x0800_00F0; // I_HMB_SW_MASK(0xF0) | I_CHIPACTIVE(1<<27)
+const HOSTINTMASK: u32 = 0x2000_00F0; // I_HMB_SW_MASK(0xF0) | I_CHIPACTIVE(1<<29)
 // SDIO func-2 (WLAN data) block size = 512 (FBR 0x210/0x211).
 const FBR_F2_BLKSIZE_LO: u32 = 0x210;
 const FBR_F2_BLKSIZE_HI: u32 = 0x211;
@@ -1471,68 +1471,195 @@ pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
     Some(!(rb[0] == b'0' && rb[1] == b'0') && rb[0] != 0)
 }
 
-// --- BCDC control over SDIO F2 (SDPCM) — structured; metal-iterated -----------
+// --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
 // dcmd header: struct brcmf_proto_bcdc_dcmd { u32 cmd; u32 len; u32 flags; u32 status; }
+const WLC_GET_VERSION: u32 = 1;
 const WLC_SET_VAR: u32 = 263;
 const WLC_GET_VAR: u32 = 262;
-const BCDC_SET: u32 = 0x02;
+const BCDC_SET: u32 = 0x02; // flags bit1 = SET (0 = GET)
+const SDPCM_HDRLEN: usize = 12; // 4 HW tag + 8 SW header
+const BCDC_HDRLEN: usize = 16;
+const SDPCM_CONTROL_CHANNEL: u8 = 0;
+const SD_REG_INTSTATUS: u32 = 0x20;
+const I_HMB_FRAME_IND: u32 = 0x40; // I_HMB_SW2 — a frame is ready on F2
+const BRCMF_FIRSTREAD: usize = 64;
 
-/// Send a BCDC set-iovar dcmd over F2. (SDPCM software header + seq/credit handling
-/// is the metal-iterated part; the BCDC dcmd + iovar payload framing is exact.)
+// SDPCM tx-credit + sequence state (brcmf init: tx_seq=255, tx_max=0 => 1 boot credit).
+static mut TX_SEQ: u8 = 255;
+static mut TX_MAX: u8 = 0;
+static mut BCDC_REQID: u32 = 0;
+// P10-C diagnostics for the first control round-trip (GET "ver").
+// [0]=tx_seq used [1]=tx_ok [2]=credit_avail [3]=intstatus [4]=rx_ok [5]=hw_len
+// [6]=cksum_ok [7]=channel [8]=doffset [9]=reqid_match [10]=bcdc_status [11]=tx_max_after
+static mut BCDC_DIAG: [u32; 12] = [0; 12];
+pub fn bcdc_diag() -> [u32; 12] {
+    unsafe { BCDC_DIAG }
+}
+
+fn sdio_core_base() -> u32 {
+    erom_find_core(CORE_SDIO_DEV).map(|(b, _)| b).unwrap_or(0)
+}
+/// Control credits available (u8 modulo-256), per brcmf txctl_ok.
+fn credit_avail() -> u8 {
+    unsafe { TX_MAX.wrapping_sub(TX_SEQ) }
+}
+fn txctl_ok() -> bool {
+    let d = credit_avail();
+    d != 0 && (d & 0x80) == 0
+}
+
 fn bcdc_iovar_set(iovar: &[u8]) -> bool {
-    bcdc_dcmd(WLC_SET_VAR, BCDC_SET, iovar, &mut [])
+    bcdc_dcmd(WLC_SET_VAR, BCDC_SET, iovar, &mut []).0
 }
 fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
-    // "<name>\0" as the request payload; reply lands in `out`.
-    let mut req = [0u8; 48];
+    let mut req = [0u8; 64];
     let n = iovar_buf(name, &[], &mut req);
-    bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], out)
+    bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], out).0
 }
 
-/// One BCDC dcmd request/reply on the SDPCM control channel over F2. Builds the
-/// 16-byte BCDC header + payload; sends via CMD53 on F2 with the SDPCM frame tag.
-/// NOTE: the SDPCM software header (seq, channel, doffset) + tx-credit flow control
-/// are structured here and confirmed on metal — this is the Stage C metal gate.
-fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> bool {
-    static mut REQID: u32 = 0;
+/// One BCDC dcmd request/reply on the SDPCM control channel (0) over F2. Returns
+/// (ok, bcdc_status). Builds HW tag + 8-B SW header + 16-B BCDC dcmd + payload, gates
+/// on tx credit, sends via CMD53 F2, then polls the SDIO-core intstatus frame-ind bit,
+/// does the 64-B first read + remainder, validates the header, advances tx_max from the
+/// reply's SW window byte, and copies the reply body (after doffset+16) into `reply`.
+fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u32) {
     let reqid = unsafe {
-        REQID = REQID.wrapping_add(1);
-        REQID
+        BCDC_REQID = BCDC_REQID.wrapping_add(1);
+        BCDC_REQID
     };
+    let want_diag = reqid == 1; // capture the first control round-trip (the ver probe)
+    // --- credit gate. The very first control frame rides the boot credit (tx_max-tx_seq
+    //     = 1). Later frames need the firmware to advance tx_max via a reply's window byte.
+    let cred = credit_avail();
+    if !txctl_ok() {
+        if want_diag {
+            unsafe { BCDC_DIAG[2] = cred as u32; }
+        }
+        return (false, 0);
+    }
+    let seq = unsafe { TX_SEQ };
+    // --- build the frame.
     let mut frame = [0u8; DL_CHUNK + 64];
-    // SDPCM hardware frame tag (len | ~len) + software header (8 B) precede BCDC.
-    let sdpcm = 12usize; // hw tag(4) + sw header(8)
-    let bcdc = sdpcm;
+    // SW word0: seq[0:7] | channel[8:11] | nextlen[16:23]=0 | doffset[24:31]=12.
+    let w0: u32 = (seq as u32)
+        | ((SDPCM_CONTROL_CHANNEL as u32) << 8)
+        | ((SDPCM_HDRLEN as u32) << 24);
     // BCDC header.
+    let bcdc = SDPCM_HDRLEN;
     frame[bcdc..bcdc + 4].copy_from_slice(&cmd.to_le_bytes());
     frame[bcdc + 4..bcdc + 8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
-    let flg = flags | (reqid << 16);
+    let flg = flags | (reqid << 16); // SET bit + reqid in [31:16]
     frame[bcdc + 8..bcdc + 12].copy_from_slice(&flg.to_le_bytes());
-    frame[bcdc + 12..bcdc + 16].copy_from_slice(&0u32.to_le_bytes()); // status
-    let body = bcdc + 16;
+    // status [bcdc+12..+16] left 0.
+    let body = bcdc + BCDC_HDRLEN;
     let n = payload.len().min(frame.len() - body);
     frame[body..body + n].copy_from_slice(&payload[..n]);
-    let total = (body + n) as u16;
-    // SDPCM hw tag.
+    let total = (body + n) as u16; // SDPCM length: tag+swhdr+bcdc+payload (no tail pad)
+    // HW tag (LE16 len, LE16 ~len).
     frame[0..2].copy_from_slice(&total.to_le_bytes());
     frame[2..4].copy_from_slice(&(!total).to_le_bytes());
-    // sw header doffset = header length (control channel = 0).
-    frame[6] = sdpcm as u8; // doffset field position (structured)
-    // Send on F2 (whole frame), pad to 4.
+    // SW header word0 @ off 4; word1 @ off 8 = 0 on TX.
+    frame[4..8].copy_from_slice(&w0.to_le_bytes());
+    // --- send on F2 (transfer padded to 4; firmware trims to the SDPCM length).
     let padded = ((total as usize) + 3) & !3;
-    if !cmd53_write(2, 0, &frame[..padded]) {
-        return false;
+    let tx_ok = cmd53_write(2, 0, &frame[..padded]);
+    if tx_ok {
+        unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) }; // seq wraps at 256
     }
-    // Read the reply (GET) — drain one control frame off F2 and copy the BCDC body.
-    if !reply.is_empty() {
-        let mut rx = [0u8; DL_CHUNK + 64];
-        if !cmd53_read(2, 0, &mut rx) {
-            return false;
+    if want_diag {
+        unsafe {
+            BCDC_DIAG[0] = seq as u32;
+            BCDC_DIAG[1] = tx_ok as u32;
+            BCDC_DIAG[2] = cred as u32;
         }
-        // Skip SDPCM + BCDC headers; copy the reply body.
-        let off = sdpcm + 16;
-        let m = reply.len().min(rx.len() - off);
-        reply[..m].copy_from_slice(&rx[off..off + m]);
     }
-    true
+    if !tx_ok {
+        return (false, 0);
+    }
+    // --- wait for the reply: poll the SDIO-core intstatus frame-ind bit.
+    let sdb = sdio_core_base();
+    let mut intstat = 0u32;
+    for _ in 0..2000 {
+        intstat = bp_r32(sdb + SD_REG_INTSTATUS);
+        if intstat & I_HMB_FRAME_IND != 0 {
+            break;
+        }
+        delay(1_000);
+    }
+    // W1C the handled intstatus bits.
+    if intstat != 0 {
+        let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
+    }
+    if want_diag {
+        unsafe { BCDC_DIAG[3] = intstat; }
+    }
+    // --- 64-byte first read, retried until a non-empty frame tag appears (the reply
+    //     may land a little after the frame-ind bit). An all-zero tag = nothing yet.
+    let mut rx = [0u8; DL_CHUNK + 64];
+    let mut rx_ok = false;
+    let mut hw_len = 0u16;
+    let mut hw_ck = 0u16;
+    for _ in 0..1000 {
+        rx_ok = cmd53_read(2, 0, &mut rx[..BRCMF_FIRSTREAD]);
+        hw_len = u16::from_le_bytes([rx[0], rx[1]]);
+        hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
+        if rx_ok && (hw_len != 0 || hw_ck != 0) {
+            break;
+        }
+        delay(1_000);
+    }
+    let cksum_ok = hw_len != 0 && ((!(hw_len ^ hw_ck)) & 0xffff) == 0;
+    let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
+    let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
+    let channel = ((w0r >> 8) & 0xf) as u8;
+    let doffset = ((w0r >> 24) & 0xff) as usize;
+    // advance tx_max from the reply's window byte (SW word1 bits 8..15), brcmf clamp.
+    let mut new_max = ((w1r >> 8) & 0xff) as u8;
+    if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
+        new_max = unsafe { TX_SEQ }.wrapping_add(2);
+    }
+    unsafe { TX_MAX = new_max };
+    // read the remainder if the frame is longer than the first 64 bytes.
+    if cksum_ok && (hw_len as usize) > BRCMF_FIRSTREAD {
+        let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
+        let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
+        let _ = cmd53_read(2, 0, &mut rx[BRCMF_FIRSTREAD..end]);
+    }
+    // locate + copy the reply body (after doffset + 16-byte BCDC header).
+    let mut status = 0u32;
+    let mut reqid_match = false;
+    let valid = rx_ok && cksum_ok && channel == SDPCM_CONTROL_CHANNEL
+        && doffset >= SDPCM_HDRLEN && doffset + BCDC_HDRLEN <= rx.len();
+    if valid {
+        let bh = doffset;
+        let rflags = u32::from_le_bytes([rx[bh + 8], rx[bh + 9], rx[bh + 10], rx[bh + 11]]);
+        status = u32::from_le_bytes([rx[bh + 12], rx[bh + 13], rx[bh + 14], rx[bh + 15]]);
+        reqid_match = (rflags >> 16) == reqid;
+        let off = doffset + BCDC_HDRLEN;
+        if !reply.is_empty() && off < rx.len() {
+            let m = reply.len().min(rx.len() - off);
+            reply[..m].copy_from_slice(&rx[off..off + m]);
+        }
+    }
+    if want_diag {
+        unsafe {
+            BCDC_DIAG[4] = rx_ok as u32;
+            BCDC_DIAG[5] = hw_len as u32;
+            BCDC_DIAG[6] = cksum_ok as u32;
+            BCDC_DIAG[7] = channel as u32;
+            BCDC_DIAG[8] = doffset as u32;
+            BCDC_DIAG[9] = reqid_match as u32;
+            BCDC_DIAG[10] = status;
+            BCDC_DIAG[11] = TX_MAX as u32;
+        }
+    }
+    // success = valid control reply, matching reqid, no BCDC error status.
+    (valid && reqid_match && status == 0, status)
+}
+
+/// P10-C metal gate — the canonical control round-trip: GET "ver". If this returns a
+/// non-empty version string with status 0, the entire SDPCM/BCDC path works and
+/// clmload/country will follow. `out` receives the version string.
+pub fn bcdc_ver_probe(out: &mut [u8]) -> bool {
+    bcdc_iovar_get(b"ver", out)
 }
