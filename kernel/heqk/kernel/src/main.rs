@@ -801,6 +801,8 @@ fn cm5_p10_probe() {
                 cyw43::fw_last_step());
             kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
                 erom, cr4b, cr4w);
+            let (cstage, cint, cps) = cyw43::cmd53_diag();
+            kprint!("   [P10-B cmd53w] fail_stage={} INT={:#010x} PRESENT={:#010x}\n", cstage, cint, cps);
             if !f2 && cr4w == 0 {
                 let mut ed = [0u32; 24];
                 cyw43::erom_dump(&mut ed);
