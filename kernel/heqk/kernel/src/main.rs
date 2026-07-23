@@ -801,6 +801,16 @@ fn cm5_p10_probe() {
                 cyw43::fw_last_step());
             kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
                 erom, cr4b, cr4w);
+            if !f2 && cr4w == 0 {
+                let mut ed = [0u32; 24];
+                cyw43::erom_dump(&mut ed);
+                kprint!("   [P10-B erom]");
+                for (i, w) in ed.iter().enumerate() {
+                    if i % 8 == 0 { kprint!("\n    {:02x}:", i); }
+                    kprint!(" {:08x}", w);
+                }
+                kprint!("\n");
+            }
             if f2 {
                 // Stage C: the regdomain backlog target — clmload + country iovar.
                 // RO (Romania) — matches the ccode=RO baked into the NVRAM; rev 0 is
