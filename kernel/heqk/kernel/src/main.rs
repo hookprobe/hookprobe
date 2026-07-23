@@ -870,6 +870,8 @@ fn cm5_p10_probe() {
                     cstage, cint, cpres);
                 let (mbi, mbd) = cyw43::mailbox_diag();
                 kprint!("   [P10-C mbox] firmware mailbox drained: intstatus={:#010x} tohostmboxdata={:#010x}\n", mbi, mbd);
+                let hte = cyw43::ht_ensure_diag();
+                kprint!("   [P10-C htens] CHIPCLKCSR before F2 txn={:#04x} (HT_avail={}) — must be 1 or F2 CMD53 times out\n", hte, (hte >> 7) & 1);
                 if ver_ok {
                     // print the version string (ASCII up to first NUL).
                     let vlen = ver.iter().position(|&c| c == 0).unwrap_or(ver.len()).min(80);
