@@ -420,8 +420,12 @@ pub fn chip_id_probe() -> Option<u16> {
     let rca = cmd(CMD3_SEND_RCA, 0, RESP_48, true, false)? >> 16;
     cmd(CMD7_SELECT, rca << 16, RESP_48_BUSY, true, false)?;
     unsafe { SDIO_STEP = 4 };
-    // 4-bit bus: CCCR bus-interface-control (0x07) = 0x02.
+    // 4-bit bus: CCCR bus-interface-control (0x07) = 0x02 on the CARD, AND set the
+    // SDHCI HOST to 4-bit (HOST_CTRL1 @0x28 bit1). Without the host side the card
+    // drives 4 DAT lines while the host reads/writes 1 → every CMD53 data transfer
+    // is corrupt (DATA CRC ERROR); CMD52, which uses only the CMD line, still works.
     cmd52(true, 0, 0x07, 0x02)?;
+    w8(HOST_CTRL1, r8(HOST_CTRL1) | 0x02);
     // Enable F1 (I/O-enable 0x02 bit1), wait ready (I/O-ready 0x03 bit1).
     cmd52(true, 0, 0x02, 0x02)?;
     for _ in 0..50 {
