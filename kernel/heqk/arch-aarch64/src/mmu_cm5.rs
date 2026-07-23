@@ -114,7 +114,22 @@ pub fn map_user_device(va: usize, pa: usize) {
 pub fn map_user_nc(va: usize, pa: usize) {
     write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_NC, PXN | UXN));
 }
+/// AUDIT L-14: is `va` actually inside the GB5 EL0 grant window, and page-aligned?
+///
+/// `user_l3_idx` is `(va >> 12) & 0x1FF` with no range check, so passing any other
+/// VA silently installs the mapping at an unrelated L3 slot — i.e. the grant appears
+/// at a VA the caller never intended, while the intended VA stays unmapped. Every
+/// current caller uses `USER_VA_BASE + n*0x1000`, so this is latent today; it stops
+/// being latent the moment range-mappers are added.
+#[inline]
+fn user_va_ok(va: usize) -> bool {
+    va >= USER_VA_BASE && va < USER_VA_BASE + M2 as usize && (va & 0xFFF) == 0
+}
 fn write_user_l3(va: usize, desc: u64) {
+    if !user_va_ok(va) {
+        // Fail closed: refuse to install a grant at an aliased slot.
+        return;
+    }
     let l3 = addr_of_mut!(L3_USER) as *mut u64;
     unsafe {
         core::ptr::write_volatile(l3.add(user_l3_idx(va)), desc);

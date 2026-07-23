@@ -558,6 +558,20 @@ pub fn mac_start() {
         wm32(RDSAR_LO, rx_bus as u32);
         wm8(CFG9346, 0x00); // lock
         let _ = m8(CR); // commit posted writes
+        // AUDIT M-6: clean+invalidate the RX payload pool BEFORE enabling reception.
+        // These buffers are Normal-WB cacheable kernel .bss and can hold dirty lines
+        // from the boot stub's .bss zeroing; this driver otherwise only invalidates,
+        // and only at poll time. A dirty-line eviction landing after the NIC has
+        // DMA'd a frame silently overwrites the received bytes.
+        {
+            let base = core::ptr::addr_of!(RX.buf) as usize;
+            let mut a = base & !63;
+            while a < base + NRX * RXBUF {
+                core::arch::asm!("dc civac, {}", in(reg) a);
+                a += 64;
+            }
+            core::arch::asm!("dsb sy");
+        }
         wm8(CR, 0x0C); // RxEnb | TxEnb
         wm32(TXCFG, 0x0300_0780);
         wm32(RXCFG, 0x0000_CF00);
