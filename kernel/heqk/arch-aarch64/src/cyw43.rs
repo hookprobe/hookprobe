@@ -956,9 +956,11 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     // 0. RAISE THE SDIO CLOCK before the bulk transfer. Enumeration ran at the ~400
     //    kHz init clock; pushing ~600 KB of firmware at that speed takes long enough
     //    to trip the boot watchdog before F2 comes up (no [P10-B], board reboots).
-    //    clk_emmc2 = 100 MHz base; divisor 2 → 25 MHz (SDIO default speed, no
-    //    high-speed-mode handshake needed) → ~60x faster, well under the watchdog.
-    set_clock(2);
+    //    clk_emmc2 = 100 MHz base; divisor 4 → 12.5 MHz. 25 MHz gave a DATA CRC
+    //    ERROR (INT err 0x0020) — marginal signal integrity in default-speed mode on
+    //    the CM5 SDIO2 traces; 12.5 MHz is conservative but still ~30x the init clock
+    //    (600 KB in ~0.5 s), well under the watchdog. Tune up with high-speed mode later.
+    set_clock(4);
     delay(1_000);
     // 1. Request the ALP clock (backplane clock for memory access).
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
