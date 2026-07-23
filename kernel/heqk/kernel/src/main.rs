@@ -958,6 +958,38 @@ fn cm5_p10_probe() {
                 d[0], (d[0] >> 28) & 1, d[1], d[2], d[3], d[4] as u16, (d[4] >> 2) & 1, (d[4] >> 1) & 1, d[5]);
         }
     }
+    cm5_p10bt_probe();
+}
+
+/// P10-BT — the Bluetooth half of the CYW43455, over HCI-UART (uarta, NS16550A).
+/// Independent of the SDIO WiFi path; runs after it so a BT failure can never
+/// affect the WiFi result. Patch-free (the .hcd is optional for HCI + LE scan).
+fn cm5_p10bt_probe() {
+    use arch_aarch64::bt;
+    kprint!(" [P10-BT] CYW43455 Bluetooth — HCI-UART (uarta NS16550A @0x10_7D50_C000), BT_ON gpio29\n");
+    let alive = bt::bringup();
+    let d = bt::bt_diag();
+    kprint!("   [P10-BT hci] reset={:#04x} baud3M={:#04x} (0x00=ok, 0xff=no response)\n", d[0], d[1]);
+    if !alive {
+        kprint!(" [P10-BT] SILENT — no HCI Command Complete for Reset; BT core not responding (WiFi unaffected)\n");
+        return;
+    }
+    let mut devs = [bt::BleDev::new(); 24];
+    let n = bt::ble_scan(&mut devs);
+    let d = bt::bt_diag();
+    kprint!("   [P10-BT le] evt_mask={:#04x} le_evt_mask={:#04x} scan_params={:#04x} scan_enable={:#04x}\n",
+        d[2], d[3], d[4], d[5]);
+    for dev in &devs[..n] {
+        // bdaddr arrives little-endian; print in display order
+        kprint!("   [P10-BT dev] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} type={} rssi={} adv={}\n",
+            dev.addr[5], dev.addr[4], dev.addr[3], dev.addr[2], dev.addr[1], dev.addr[0],
+            dev.addr_type, dev.rssi, dev.evt_type);
+    }
+    if n > 0 {
+        kprint!(" [P10-BT] PASS — Bluetooth alive + LE scan: {} BLE device(s) seen (BT sensor path live)\n", n);
+    } else {
+        kprint!(" [P10-BT] HCI alive, LE scan armed but no advertisers heard in the window\n");
+    }
 }
 
 /// P14 seed — probe the BCM2712 IOMMU blocks (read-only) to confirm which one
