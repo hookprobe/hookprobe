@@ -1302,11 +1302,31 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
             let _ = cmd52(true, 1, SBSDIO_DEVICE_CTL, dc | SBSDIO_DEVCTL_F2WM_ENAB); // 0x10009 |= 0x10
             let _ = cmd52(true, 1, SBSDIO_FUNC1_MESBUSYCTRL, CY_43455_MESBUSYCTRL); // 0x1001D = 0xD0
             unsafe { FW_STEP = 8 };
+            // STAGE C, IMMEDIATELY — no printing between here and the first SDPCM command.
+            // The 43455 RTOS drops the backplane into SR sleep after ~100-150ms of an idle
+            // SDIO bus; the chip is STILL AWAKE + HT still up right now (F2 just readied),
+            // so fire the control round-trip NOW, before main.rs emits any diagnostics.
+            // (ChatGPT + Gemini converge: the 200ms diag gap was letting the firmware sleep.)
+            let mut ver = [0u8; 128];
+            let ok = bcdc_ver_probe(&mut ver);
+            unsafe {
+                VER_OK = ok;
+                VER_BUF = ver;
+                VER_LEN = ver.iter().position(|&c| c == 0).unwrap_or(ver.len());
+            }
             return true;
         }
         delay(2_000);
     }
     false
+}
+
+static mut VER_OK: bool = false;
+static mut VER_BUF: [u8; 128] = [0; 128];
+static mut VER_LEN: usize = 0;
+/// P10-C control round-trip result captured at F2-ready (no idle window): (ok, version bytes).
+pub fn ver_result() -> (bool, [u8; 128], usize) {
+    unsafe { (VER_OK, VER_BUF, VER_LEN) }
 }
 
 static mut F2_DIAG: (u32, u32, u32) = (0, 0, 0);
