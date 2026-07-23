@@ -1321,8 +1321,12 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     //     The firmware download above already completed in the proven 1-bit path, so
     //     this can't regress the firmware-alive result; falls back to 1-bit if rejected.
     let _ = set_bus_width_4bit();
-    // 7. Enable F2, poll ready — F2 ready = firmware alive.
-    let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
+    // 7. Enable F2, poll ready — F2 ready = firmware alive. READ-MODIFY-WRITE the CCCR
+    //    IOE register: a blind write of SDIO_F2 (0x04) would CLEAR F1's enable bit (0x02),
+    //    disabling function 1 so all F1 register/backplane access (CHIPCLKCSR, SLEEPCSR,
+    //    the SDPCM control path) then times out. Preserve F1: IOE = existing | F2 = 0x06.
+    let ioe = cmd52(false, 0, SDIO_FUNC_ENABLE, 0).unwrap_or(0);
+    let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, ioe | (SDIO_F2 as u8));
     for _ in 0..2000 {
         let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
         unsafe { F2_DIAG.2 = ior as u32 };
