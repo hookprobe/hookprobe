@@ -1291,6 +1291,17 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
         unsafe { F2_DIAG.2 = ior as u32 };
         if ior & SDIO_F2 != 0 {
+            // BASELINE probe the INSTANT F2 reads ready, before ANY post-ready write —
+            // to catch the chip while (maybe) still alive and localize when it dies.
+            // [chip_id via backplane, SLEEPCSR, CHIPCLKCSR, CCCR-rev(F0 addr0)].
+            unsafe {
+                READY_STATE = [
+                    bp_r32(SI_ENUM_BASE) & 0xffff,
+                    cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0xEE) as u32,
+                    cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE) as u32,
+                    cmd52(false, 0, 0x00, 0).unwrap_or(0xEE) as u32, // CCCR/SDIO revision
+                ];
+            }
             // F2 up. brcmf_sdio_bus_init tail: HOSTINTMASK, then the 43455-SPECIFIC
             // watermark set (source-verified) — WITHOUT these the F2 data path / SDPCM
             // interrupts don't propagate reliably, which stalls the Stage-C control txn.
@@ -1321,6 +1332,13 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     false
 }
 
+static mut READY_STATE: [u32; 4] = [0; 4];
+/// Chip state captured the instant F2 reads ready (before any post-ready write):
+/// [chip_id(0x4345=alive), SLEEPCSR(0x03=awake), CHIPCLKCSR, CCCR-rev]. If this is alive
+/// but the later control-time probe is dead (0xffff), a post-ready op reset/slept it.
+pub fn ready_state() -> [u32; 4] {
+    unsafe { READY_STATE }
+}
 static mut VER_OK: bool = false;
 static mut VER_BUF: [u8; 128] = [0; 128];
 static mut VER_LEN: usize = 0;
