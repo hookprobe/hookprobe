@@ -429,25 +429,27 @@ pub fn chip_id_probe() -> Option<u16> {
         }
         delay(1_000);
     }
-    // Point the F1 backplane window at chipcommon, read the 32-bit chip-ID.
+    // Point the F1 backplane window at chipcommon.
     let win_ok = set_backplane_window(SI_ENUM_BASE);
+    // Read chipcommon[0..4] (the chip-ID reg) via 4 CMD52 BYTE reads — the proven
+    // path (steps 1-4 use cmd52 fine). CMD53's data phase returns deterministic
+    // garbage (0xff966a53); byte reads at the window offset (no 4-byte flag)
+    // sidestep that and, per brcmfmac, are valid for register-sized backplane reads.
+    let base = SI_ENUM_BASE & 0x7FFF;
     let mut id = [0u8; 4];
-    if !cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut id) {
-        return None;
+    for i in 0..4u32 {
+        id[i as usize] = cmd52(false, 1, base + i, 0).unwrap_or(0xEE);
     }
-    let raw1 = u32::from_le_bytes(id);
-    // Second read of the SAME reg — a stable value means the datapath is solid and
-    // the mismatch is a window/offset issue; a differing value means a data-phase
-    // framing bug (stale FIFO word / off-by-one).
-    let mut id2 = [0u8; 4];
-    let _ = cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut id2);
-    unsafe { CHIPID_DIAG = (raw1, u32::from_le_bytes(id2), win_ok) };
+    // Keep the CMD53 read as a side-by-side diagnostic (was it a CMD53 bug?).
+    let mut c53 = [0u8; 4];
+    let _ = cmd53_read(1, base | 0x8000, &mut c53);
+    unsafe { CHIPID_DIAG = (u32::from_le_bytes(id), u32::from_le_bytes(c53), win_ok) };
     unsafe { SDIO_STEP = 6 };
     Some(u16::from_le_bytes([id[0], id[1]]))
 }
 
 static mut CHIPID_DIAG: (u32, u32, bool) = (0, 0, false);
-/// (raw chipcommon[0..4] read #1, read #2, did the backplane-window cmd52s ACK).
+/// (chipcommon[0..4] via CMD52 byte reads, same via CMD53, backplane-window ACK).
 pub fn chipid_diag() -> (u32, u32, bool) {
     unsafe { CHIPID_DIAG }
 }
