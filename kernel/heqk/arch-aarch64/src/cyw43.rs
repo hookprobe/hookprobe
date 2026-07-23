@@ -35,6 +35,7 @@ const HOST_CTRL2: usize = 0x3E; // [15:0] — UHS mode, 1.8V signalling
 // PRESENT_STATE bits.
 const CMD_INHIBIT: u32 = 1 << 0;
 const DAT_INHIBIT: u32 = 1 << 1;
+const PS_BUF_RD_EN: u32 = 1 << 11; // Buffer Read Enable — FIFO holds valid data
 // CLOCK_CTRL bits.
 const INT_CLK_EN: u16 = 1 << 0;
 const INT_CLK_STABLE: u16 = 1 << 1;
@@ -175,12 +176,11 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
     // block size 1 handled as a byte transfer; count = n bytes.
     w16(BLK_SIZE_CNT, n as u16); // byte count in low field for byte mode
     w16(BLK_SIZE_CNT + 2, 1);
-    // Transfer Mode (0x0C low half) — REQUIRED for any data command: set the data
-    // direction to READ (bit4). cmd() only writes the Command reg (0x0E) and never
-    // this, so without it CMD53 issues with a stale/zero (=WRITE) direction and the
-    // data phase never completes → the P10 "stalled step 5" (first CMD53) symptom.
-    // Single block (byte mode), PIO (no DMA/block-count-enable).
-    w16(CMD_XFER, XM_READ);
+    // Transfer Mode (0x0C low half) — REQUIRED for a data command. Linux
+    // sdhci_set_transfer_mode sets BLK_CNT_EN whenever data is present (only adds
+    // MULTI for >1 block), so a single-block read is BLK_CNT_EN | READ (0x12), not
+    // just READ (0x10). Written before the Command reg (0x0E), which cmd() issues.
+    w16(CMD_XFER, XM_READ | XM_BLKCNT_EN);
     let arg = (0 << 31)            // read
         | ((fnum & 7) << 28)
         | (0 << 27)                 // byte mode (not block)
@@ -190,9 +190,10 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
-    // PIO: wait buffer-read-ready, drain n bytes.
+    // PIO: wait buffer-read-ready, then confirm Present State BUF_RD_EN (b11) before
+    // touching the FIFO — reading 0x20 early yields deterministic garbage.
     let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
+    while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_RD_EN == 0 {
         if r32(INT_STATUS) & INT_ERR != 0 {
             return false;
         }
@@ -209,6 +210,18 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
                 out[i] = ((word >> (b * 8)) & 0xFF) as u8;
                 i += 1;
             }
+        }
+    }
+    // Wait Transfer Complete — de-asserts DAT_INHIBIT so the NEXT data command can
+    // issue. Skipping this left the re-read returning 0x00000000 (DAT stuck).
+    spin = 0;
+    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            return false;
+        }
+        spin += 1;
+        if spin > 1_000_000 {
+            return false;
         }
     }
     true
@@ -617,9 +630,9 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
     let n = data.len().min(512);
     w16(BLK_SIZE_CNT, n as u16);
     w16(BLK_SIZE_CNT + 2, 1);
-    // Transfer Mode (0x0C low half) = WRITE direction (bit4=0), single block. Must
-    // be written explicitly to clear any stale READ bit a prior cmd53_read left.
-    w16(CMD_XFER, 0);
+    // Transfer Mode = BLK_CNT_EN, WRITE direction (READ bit clear), single block.
+    // Explicit write clears any stale READ bit a prior cmd53_read left.
+    w16(CMD_XFER, XM_BLKCNT_EN);
     let arg = (1 << 31)            // write
         | ((fnum & 7) << 28)
         | (0 << 27)                 // byte mode
