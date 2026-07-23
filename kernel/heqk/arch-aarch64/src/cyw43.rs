@@ -1588,6 +1588,178 @@ pub fn regdom_diag() -> RegdomDiag {
     unsafe { REGDOM_DIAG }
 }
 
+// ============================================================================
+// P10-D — WiFi data path: escan (enumerate nearby APs). Source-verified against
+// brcmfmac cfg80211.c / fwil_types.h / fweh.h. The control channel (BCDC dcmd)
+// carries the commands; the results arrive as WLC_E_ESCAN_RESULT EVENT frames on
+// SDPCM channel 1 (BDC-framed, big-endian event header).
+// ============================================================================
+const WLC_UP: u32 = 2;
+const WLC_SET_INFRA: u32 = 20;
+const WLC_E_ESCAN_RESULT: u32 = 69;
+
+#[derive(Clone, Copy)]
+pub struct ApInfo {
+    pub bssid: [u8; 6],
+    pub ssid: [u8; 32],
+    pub ssid_len: u8,
+    pub channel: u8,
+    pub rssi: i16,
+}
+impl ApInfo {
+    pub const fn new() -> Self {
+        ApInfo { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, rssi: 0 }
+    }
+}
+
+static mut SCAN_DIAG: [u32; 6] = [0; 6]; // [ev_ok, infra_ok, up_ok, scan_ok, frames, aps]
+/// [event_msgs ok, SET_INFRA ok, WLC_UP ok, escan ok, event frames read, APs found].
+pub fn scan_diag() -> [u32; 6] {
+    unsafe { SCAN_DIAG }
+}
+
+fn wlc_set_int(cmd: u32, val: u32) -> bool {
+    bcdc_dcmd(cmd, BCDC_SET, &val.to_le_bytes(), &mut []).0
+}
+
+/// Read ONE SDPCM frame off F2 (poll intstatus, 64-B first read + remainder), advancing
+/// tx_max from the SW window byte. Returns (channel, hw_len, doffset), or None if dry.
+fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
+    let sdb = sdio_core_base();
+    let mut hw_len;
+    let mut hw_ck;
+    let mut waited = 0u32;
+    loop {
+        let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
+        if intstat != 0 {
+            let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
+        }
+        let ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
+        hw_len = u16::from_le_bytes([rx[0], rx[1]]);
+        hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
+        if ok && (hw_len != 0 || hw_ck != 0) {
+            break;
+        }
+        waited += 1;
+        if waited > 1500 {
+            return None; // dry — no more frames in the window
+        }
+        delay(1_000);
+    }
+    if hw_len == 0 || ((!(hw_len ^ hw_ck)) & 0xffff) != 0 {
+        return None;
+    }
+    let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
+    let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
+    let channel = ((w0r >> 8) & 0xf) as u8;
+    let doffset = ((w0r >> 24) & 0xff) as usize;
+    let mut new_max = ((w1r >> 8) & 0xff) as u8;
+    if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
+        new_max = unsafe { TX_SEQ }.wrapping_add(2);
+    }
+    unsafe { TX_MAX = new_max };
+    if (hw_len as usize) > BRCMF_FIRSTREAD {
+        let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
+        let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
+        let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
+    }
+    Some((channel, hw_len, doffset))
+}
+
+/// P10-D: enable events, bring the STA interface UP, start an escan, and collect the APs
+/// the firmware reports via WLC_E_ESCAN_RESULT (channel-1) events. Returns the AP count.
+pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
+    // 1. event_msgs: enable ESCAN_RESULT(69) + SET_SSID(0). 16-byte mask.
+    let mut mask = [0u8; 16];
+    mask[0] |= 0x01; // WLC_E_SET_SSID (0)
+    mask[69 / 8] |= 1 << (69 % 8); // WLC_E_ESCAN_RESULT (69) -> mask[8] |= 0x20
+    let mut iob = [0u8; 64];
+    let n = iovar_buf(b"event_msgs", &mask, &mut iob);
+    let ev_ok = bcdc_iovar_set(&iob[..n]);
+    // 2. mpc=0 — keep the radio awake during the scan.
+    let mut iob2 = [0u8; 32];
+    let n2 = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut iob2);
+    let _ = bcdc_iovar_set(&iob2[..n2]);
+    // 3. infra=1, then bring the interface UP.
+    let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
+    let up_ok = bcdc_dcmd(WLC_UP, BCDC_SET, &[], &mut []).0;
+    delay(80_000); // let the interface settle
+    // 4. escan params (v1, 72 bytes) — broadcast SSID, all channels, active.
+    let mut p = [0u8; 72];
+    p[0..4].copy_from_slice(&1u32.to_le_bytes()); // version = 1
+    p[4..6].copy_from_slice(&1u16.to_le_bytes()); // action = START
+    p[6..8].copy_from_slice(&0x1234u16.to_le_bytes()); // sync_id
+    // ssid_le.SSID_len @8 = 0, SSID @12 = 0 (broadcast).
+    p[44..50].copy_from_slice(&[0xff; 6]); // bssid broadcast
+    p[50] = 2; // bss_type = ANY
+    p[51] = 0; // scan_type = active
+    p[52..56].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // nprobes = -1
+    p[56..60].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // active_time = -1
+    p[60..64].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // passive_time = -1
+    p[64..68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // home_time = -1
+    // channel_num @68 = 0 (all channels), no channel_list.
+    let mut iob3 = [0u8; 96];
+    let n3 = iovar_buf(b"escan", &p, &mut iob3);
+    let scan_ok = bcdc_iovar_set(&iob3[..n3]);
+    // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS.
+    let mut rx = [0u8; DL_CHUNK + 64];
+    let mut naps = 0usize;
+    let mut frames = 0u32;
+    for _ in 0..400 {
+        let (channel, hw_len, doffset) = match read_sdpcm_frame(&mut rx) {
+            Some(v) => v,
+            None => break,
+        };
+        frames += 1;
+        if channel != 1 {
+            continue; // want the EVENT channel
+        }
+        // event frame: after SDPCM(doffset) -> BDC hdr(4) + bdc_doff*4 pad + brcmf_event(72).
+        let bdc = doffset;
+        if bdc + 4 > rx.len() {
+            continue;
+        }
+        let bdc_doff = rx[bdc + 3] as usize;
+        let ev = bdc + 4 + bdc_doff * 4; // start of brcmf_event
+        if ev + 72 > (hw_len as usize) || ev + 72 > rx.len() {
+            continue;
+        }
+        // event_type @ ev+28 (BE32), status @ ev+32 (BE32).
+        let event_type = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+        let status = u32::from_be_bytes([rx[ev + 32], rx[ev + 33], rx[ev + 34], rx[ev + 35]]);
+        if event_type != WLC_E_ESCAN_RESULT {
+            continue;
+        }
+        if status == 0 {
+            break; // SUCCESS = scan complete
+        }
+        if status != 8 {
+            continue; // want PARTIAL (8) = one BSS follows
+        }
+        // escan_result @ ev+72; bss_info @ er+12.
+        let bi = ev + 72 + 12;
+        if bi + 80 > rx.len() {
+            continue;
+        }
+        if naps < aps.len() {
+            let mut ap = ApInfo::new();
+            ap.bssid.copy_from_slice(&rx[bi + 8..bi + 14]);
+            let slen = rx[bi + 18].min(32);
+            ap.ssid_len = slen;
+            ap.ssid[..slen as usize].copy_from_slice(&rx[bi + 19..bi + 19 + slen as usize]);
+            let chanspec = u16::from_le_bytes([rx[bi + 72], rx[bi + 73]]);
+            ap.channel = (chanspec & 0xff) as u8;
+            ap.rssi = i16::from_le_bytes([rx[bi + 78], rx[bi + 79]]);
+            aps[naps] = ap;
+            naps += 1;
+        }
+    }
+    unsafe {
+        SCAN_DIAG = [ev_ok as u32, infra_ok as u32, up_ok as u32, scan_ok as u32, frames, naps as u32];
+    }
+    naps
+}
+
 // --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
 // dcmd header: struct brcmf_proto_bcdc_dcmd { u32 cmd; u32 len; u32 flags; u32 status; }
 const WLC_GET_VERSION: u32 = 1;

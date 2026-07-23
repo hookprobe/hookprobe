@@ -905,6 +905,27 @@ fn cm5_p10_probe() {
                         Some(false) => kprint!(" [P10-C] PASS(ctrl) — ver + country round-trip OK; ccode not a real ISO yet\n"),
                         None => kprint!(" [P10-C] PASS(ctrl) — ver round-trip OK; country readback txn incomplete — see regdom diag\n"),
                     }
+                    // P10-D: WiFi scan — enumerate nearby APs (event_msgs -> UP -> escan).
+                    kprint!(" [P10-D] WiFi scan — event_msgs + WLC_UP + escan (all channels)...\n");
+                    let mut aps = [cyw43::ApInfo::new(); 16];
+                    let naps = cyw43::wifi_scan(&mut aps);
+                    let sd = cyw43::scan_diag();
+                    kprint!("   [P10-D scan] event_msgs={} infra={} up={} escan={} frames={} APs={}\n",
+                        sd[0], sd[1], sd[2], sd[3], sd[4], sd[5]);
+                    for ap in &aps[..naps] {
+                        kprint!("   [P10-D AP] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch={} rssi={} ssid=\"",
+                            ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5],
+                            ap.channel, ap.rssi);
+                        for &c in &ap.ssid[..ap.ssid_len as usize] {
+                            if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); }
+                        }
+                        kprint!("\"\n");
+                    }
+                    if naps > 0 {
+                        kprint!(" [P10-D] PASS — WiFi RX works: {} AP(s) seen via escan (the sensor path is live)\n", naps);
+                    } else {
+                        kprint!(" [P10-D] scan armed (up={} escan={}); no AP frames parsed — see scan diag\n", sd[2], sd[3]);
+                    }
                 } else {
                     kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
                 }
