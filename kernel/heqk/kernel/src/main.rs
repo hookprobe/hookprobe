@@ -1013,11 +1013,11 @@ fn cm5_gem_rx_demo() {
         auxstat, sc);
     kprint!(" [P8] eth_cfg.STATUS={:#x}; RX ring @ {:#x}; RE + gigabit={} on; polling ~5 s\n",
         ethst, ring, sc >= 6);
-    // phy0 (BCM54210E) LED config — read-only. phy0 already lights green+amber on
-    // its POR defaults; surface them so we can decide whether to pin them explicitly.
-    let (led_ctrl0, sel1_0, sel2_0) = arch_aarch64::gem::phy0_led_diag(0);
-    kprint!(" [P8-led] phy0 BCM54210E LED_ctrl(0x10)={:#06x} led_sel1(shd0x0D)={:#06x} led_sel2(shd0x0E)={:#06x} (defaults drive green+amber)\n",
-        led_ctrl0, sel1_0, sel2_0);
+    // phy0 (BCM54210PE) LED config — green(nLED3)=link, amber(nLED2)=activity, matching
+    // phy1 and the schematic. Writes LED-Selector-1 shadow 0x0D = 0x030.
+    let (led_b, led_a, phy1reg) = arch_aarch64::gem::phy0_led_config(0);
+    kprint!(" [P8-led] phy0 BCM54210PE LED_sel1(shd0x0D) {:#05x}->{:#05x} (green=link/amber=act); PHY BMSR={:#06x}\n",
+        led_b, led_a, phy1reg);
     // DIAG: post-init register readback — did our DMACFG (ADDR64|RXBMS|TXPBMS|
     // DRBS|burst = expect 0x40200710) and NCFGR actually land? Compare to the
     // firmware default probe above to see what stuck.
