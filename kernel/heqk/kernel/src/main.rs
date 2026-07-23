@@ -861,6 +861,9 @@ fn cm5_p10_probe() {
                 let d = cyw43::bcdc_diag();
                 kprint!("   [P10-C bcdc] tx_seq={} tx_ok={} credit={} intstat={:#010x} rx_ok={} hw_len={} cksum_ok={} chan={} doff={} reqid_match={} status={:#x} tx_max={}\n",
                     d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
+                let (cstage, cint, cpres) = cyw43::cmd53_diag();
+                kprint!("   [P10-C txfail] cmd53 fail_stage={} (1=cmd-rej 2=err-wr 3=bufwr-timeout 4=err-xfer 5=xfer-timeout) INT={:#010x} PRESENT={:#010x}\n",
+                    cstage, cint, cpres);
                 if ver_ok {
                     // print the version string (ASCII up to first NUL).
                     let vlen = ver.iter().position(|&c| c == 0).unwrap_or(ver.len()).min(80);
