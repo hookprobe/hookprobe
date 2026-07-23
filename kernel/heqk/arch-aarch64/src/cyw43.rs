@@ -1601,6 +1601,7 @@ const WLC_SET_PM: u32 = 86;
 const WLC_SET_SCAN_CHANNEL_TIME: u32 = 185;
 const WLC_SET_SCAN_UNASSOC_TIME: u32 = 187;
 const WLC_SET_FAKEFRAG: u32 = 219;
+const WLC_GET_PHY_NOISE: u32 = 135; // brcmf's "is the radio really up" probe (-4 if not)
 const WLC_E_ESCAN_RESULT: u32 = 69;
 
 #[derive(Clone, Copy)]
@@ -1618,9 +1619,14 @@ impl ApInfo {
 }
 
 static mut UP_CHECK_DIAG: (bool, bool, u32) = (false, false, 0);
-/// (WLC_UP ok, GET_BSSID ok, GET_BSSID status). up_status != -4(0xfffffffc) => radio IS up.
+/// (WLC_UP ok, GET_BSSID ok, GET_BSSID status). up_status != -4(0xfffffffc) => MAC domain up.
 pub fn up_check_diag() -> (bool, bool, u32) {
     unsafe { UP_CHECK_DIAG }
+}
+static mut PHY_NOISE_DIAG: u32 = 0;
+/// GET_PHY_NOISE status — the RADIO-up probe. -4(0xfffffffc) => radio not powered (scan NOTUP).
+pub fn phy_noise_diag() -> u32 {
+    unsafe { PHY_NOISE_DIAG }
 }
 static mut SCAN_VER_DIAG: (bool, u32) = (false, 0);
 /// (scan_ver GET ok, reported version OR status if failed).
@@ -1776,13 +1782,27 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
     // B4. fakefrag (optional).
     let _ = wlc_set_int(WLC_SET_FAKEFRAG, 1);
-    delay(80_000); // let the interface settle
+    // B5. mpc=0 — CRITICAL: preinit set mpc=1, which lets the firmware POWER DOWN THE RADIO
+    //     when idle. Then the always-on MAC domain still answers ioctls (GET_BSSID) but the
+    //     scan engine (needs the radio clocked) returns NOTUP. mpc=0 keeps the radio up.
+    let mut iobm = [0u8; 32];
+    let nm = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut iobm);
+    let _ = bcdc_iovar_set(&iobm[..nm]);
+    delay(80_000); // let the radio power up
 
-    // === VERIFY UP === GET_BSSID(23): -4 => still NOTUP (bring-up failed); anything else
-    // (e.g. NOTASSOCIATED) => the radio IS up. The definitive up-check (no GET_UP exists).
+    // === VERIFY the RADIO is really up === GET_BSSID(23) answers from the always-on domain
+    // even when the radio is down, so it's not sufficient. GET_PHY_NOISE(135) is brcmf's
+    // real radio-up probe: -4 => radio NOT powered (scan will NOTUP); a value => radio UP.
+    // Re-assert HT first — the firmware may have let it drop, un-clocking the radio.
+    ensure_ht_avail();
     let mut bssid = [0u8; 6];
     let (bssid_ok, up_status) = bcdc_dcmd(WLC_GET_BSSID, 0, &[], &mut bssid);
-    unsafe { UP_CHECK_DIAG = (up_ok, bssid_ok, up_status) };
+    let mut noise = [0u8; 4];
+    let (_pn_ok, pn_status) = bcdc_dcmd(WLC_GET_PHY_NOISE, 0, &[], &mut noise);
+    unsafe {
+        UP_CHECK_DIAG = (up_ok, bssid_ok, up_status);
+        PHY_NOISE_DIAG = pn_status;
+    }
     // 4. escan. scan_ver=-23(UNSUPPORTED) => firmware is v1. The v1 escan initially returns
     //    BCME_NOTUP(-4) because the STA finishes coming up asynchronously after WLC_UP's ACK,
     //    so RETRY until it's accepted (status 0) or a non-NOTUP error. (If the fw ever reports
