@@ -861,6 +861,9 @@ fn cm5_p10_probe() {
                 // sleeps after ~150ms of a silent bus). Here we only READ the captured
                 // result + diagnostics and print them.
                 let (ver_ok, ver, _vl) = cyw43::ver_result();
+                let (bw, hc) = cyw43::buswidth_diag();
+                kprint!("   [P10-C 4bit] CCCR_bus(0x07)={:#04x} (0x02=card 4-bit) HOST_CTRL1={:#04x} (bit1=host 4-bit) => {}\n",
+                    bw, hc, if bw & 3 == 2 { "4-BIT active" } else { "fell back to 1-bit" });
                 let rs = cyw43::ready_state();
                 kprint!("   [P10-C ready] AT F2-ready (F0 first): CCCR_rev={:#04x} F2_IOR={:#04x} | CHIPCLKCSR={:#04x} chip_id={:#06x} — F0 alive+F1 dead=backplane asleep; both dead=device down\n",
                     rs[0], rs[1], rs[2], rs[3]);

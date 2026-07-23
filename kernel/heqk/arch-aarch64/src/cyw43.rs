@@ -509,6 +509,35 @@ pub fn chipid_diag() -> (u32, u32, bool) {
     unsafe { CHIPID_DIAG }
 }
 
+static mut BUSWIDTH_DIAG: (u32, u32) = (0, 0); // (CCCR 0x07 readback, host_ctrl1)
+/// Switch the SDIO bus to 4-bit — the fix for the DAT1 in-band-interrupt wedge that
+/// takes down the whole device (incl F0) the instant F2 is enabled in 1-bit mode.
+/// Order (mmc_sdio_init_card): set the CARD to 4-bit FIRST (CCCR 0x07 RMW |= 0x02, while
+/// the host is still 1-bit), THEN flip the host Data-Transfer-Width (HOST_CTRL1 bit1).
+/// Verifies the card accepted it (CCCR reads back 4-bit); reverts to 1-bit if not.
+/// Returns true if 4-bit is active.
+fn set_bus_width_4bit() -> bool {
+    let cccr = cmd52(false, 0, 0x07, 0).unwrap_or(0);
+    // card -> 4-bit (clear width bits[1:0], set 0x02; do NOT touch CD_DISABLE bit7).
+    let _ = cmd52(true, 0, 0x07, (cccr & !0x03) | 0x02);
+    // host -> 4-bit.
+    w8(HOST_CTRL1, r8(HOST_CTRL1) | 0x02);
+    let rb = cmd52(false, 0, 0x07, 0).unwrap_or(0);
+    unsafe { BUSWIDTH_DIAG = (rb as u32, r8(HOST_CTRL1) as u32) };
+    if rb & 0x03 == 0x02 {
+        true
+    } else {
+        // revert to 1-bit (both card + host) — keep the proven 1-bit path.
+        let _ = cmd52(true, 0, 0x07, cccr & !0x03);
+        w8(HOST_CTRL1, r8(HOST_CTRL1) & !0x02);
+        false
+    }
+}
+/// (CCCR 0x07 readback — 0x02 = card in 4-bit; SDHCI HOST_CTRL1 — bit1 = host 4-bit).
+pub fn buswidth_diag() -> (u32, u32) {
+    unsafe { BUSWIDTH_DIAG }
+}
+
 // ============================================================================
 // P10 Stage B — firmware / NVRAM / CLM upload + ARMCR4 start (F2 ready)
 // P10 Stage C — BCDC control + clmload + country iovar (the regdomain target)
@@ -1285,6 +1314,13 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
             0,
         );
     }
+    // 6b. SWITCH TO 4-BIT before enabling F2. In 1-bit the firmware's in-band SDIO
+    //     interrupt (DAT1, level-triggered low) wedges the whole SDIO front-end the
+    //     instant F2 comes ready — every command incl F0/CCCR times out. 4-bit confines
+    //     the interrupt to the defined interrupt period and the controller handles it.
+    //     The firmware download above already completed in the proven 1-bit path, so
+    //     this can't regress the firmware-alive result; falls back to 1-bit if rejected.
+    let _ = set_bus_width_4bit();
     // 7. Enable F2, poll ready — F2 ready = firmware alive.
     let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
     for _ in 0..2000 {
