@@ -455,6 +455,17 @@ pub fn rx_init() -> (usize, u16, u32) {
     }
     unsafe { core::arch::asm!("dsb sy") }; // ensure the ring is in DRAM before RE
 
+    // AUDIT M-6: the RX *payload* buffers live in kernel .bss and are Normal-WB
+    // cacheable. The boot stub zeroes .bss with caches on, so they can hold DIRTY
+    // lines. This driver only ever INVALIDATES, and only at read time over the
+    // copied range (dc_ivac in poll_rx). If a dirty line is evicted after the GEM
+    // has DMA'd a frame into that address, the eviction writes stale bytes OVER the
+    // received data — silent, timing-dependent frame corruption which the IDS then
+    // fail-closes to DROP, i.e. packet loss that masquerades as a detection.
+    // Clean+invalidate the whole pool once, before reception is enabled.
+    let bufpool = unsafe { core::ptr::addr_of!(RXRING.buf) as usize };
+    dc_civac(bufpool, NRX * RXBUF);
+
     // Quiesce, mask IRQs (polled), configure DMA64 + RX buffer size, ring base.
     w(GEM, NCR, 0);
     w(GEM, IDR, 0xffff_ffff);
@@ -634,6 +645,35 @@ pub fn peek_rx_frame(i: usize, out: &mut [u8]) -> usize {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };
     }
     n
+}
+
+/// AUDIT M-7 — hardware-reported frame length for RX descriptor `i`, read from the
+/// GEM's OWN status writeback through the NC alias.
+///
+/// The kernel must NOT take the IDS input length from an EL0 driver's report: that
+/// driver is precisely the component the P7c threat model assumes may be
+/// compromised, and a hostile one can report a length that truncates a frame before
+/// the offset a rule inspects, or point at a descriptor whose buffer still holds a
+/// previous, benign frame — making the packet engine classify something other than
+/// what arrived on the wire. That is IDS evasion by the isolated driver.
+///
+/// Returns None if the descriptor is not actually SW-owned (nothing was received)
+/// or the length is implausible, so the caller fails closed.
+pub fn rx_desc_status(i: usize) -> Option<usize> {
+    let i = i % NRX;
+    let dphys = unsafe { core::ptr::addr_of!(RXRING.desc[i]) as usize };
+    let d = nc_desc(dphys);
+    let w0 = unsafe { read_volatile(d.add(0)) };
+    if w0 & RXD_USED == 0 {
+        return None; // GEM still owns it — no frame here
+    }
+    let ctrl = unsafe { read_volatile(d.add(1)) };
+    let len = (ctrl & RXD_FRMLEN) as usize;
+    if (14..=RXBUF).contains(&len) {
+        Some(len)
+    } else {
+        None
+    }
 }
 
 /// Re-arm RX descriptor `i` (clear USED, preserve WRAP) so the GEM refills it —
