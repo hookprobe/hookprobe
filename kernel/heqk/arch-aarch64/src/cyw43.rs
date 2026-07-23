@@ -968,6 +968,12 @@ fn erom_find_core(partnum: u32) -> Option<(u32, u32)> {
 pub fn erom_diag() -> (u32, u32, u32) {
     unsafe { EROM_DIAG }
 }
+static mut CR4_HALT_DIAG: (u32, u32) = (0, 0);
+/// (CR4 IOCTL, CR4 RESET_CTL) read back after the halt — CPUHALT(0x20) should be set,
+/// RESET_CTL should be 0. Tells us if the CR4 is really halted (TCM writable).
+pub fn cr4_halt_diag() -> (u32, u32) {
+    unsafe { CR4_HALT_DIAG }
+}
 /// Raw EROM dump (first `out.len()` 32-bit words) — for decoding the descriptor
 /// stream by hand if the walk still misses the CR4.
 pub fn erom_dump(out: &mut [u32]) {
@@ -1017,6 +1023,12 @@ fn cr4_set_passive() -> Option<(u32, u32)> {
     // disable_arm(CR4): keep only the CPUHALT bit, resetcore with CPUHALT held.
     let keep = bp_r32(cr4w + AI_IOCTL) & ARMCR4_IOCTL_CPUHALT;
     ai_resetcore(cr4w, keep, ARMCR4_IOCTL_CPUHALT, ARMCR4_IOCTL_CPUHALT);
+    // DIAG: read back the halt state. Expect IOCTL & CPUHALT(0x20) set, RESET_CTL=0
+    // (out of backplane reset, CPU halted). If not, the TCM at 0x198000 isn't
+    // writable and the F1 firmware write stalls (no XFER_COMPLETE) — the step-3 wall.
+    unsafe {
+        CR4_HALT_DIAG = (bp_r32(cr4w + AI_IOCTL), bp_r32(cr4w + AI_RESET_CTL));
+    }
     // Reset the D11 (802.11) core.
     if let Some((_, d11w)) = erom_find_core(CORE_80211) {
         if d11w != 0 {
