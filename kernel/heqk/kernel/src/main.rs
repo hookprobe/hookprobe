@@ -911,9 +911,12 @@ fn cm5_p10_probe() {
                     let naps = cyw43::wifi_scan(&mut aps);
                     let sd = cyw43::scan_diag();
                     let (svok, sver) = cyw43::scan_ver_diag();
-                    let (v1s, v2s) = cyw43::escan_status_v1v2();
-                    kprint!("   [P10-D scan] scan_ver ok={} val/status={:#x} | up={} escan={} v1_status={:#x} v2_status={:#x} frames={} APs={}\n",
-                        svok, sver, sd[2], sd[3], v1s, v2s, sd[4], sd[5]);
+                    let (v1s, _v2s) = cyw43::escan_status_v1v2();
+                    let (upok, bok, upst) = cyw43::up_check_diag();
+                    kprint!("   [P10-D up] WLC_UP ok={} GET_BSSID ok={} status={:#x} => radio {}\n",
+                        upok, bok, upst, if upst != 0xfffffffc { "UP" } else { "STILL NOTUP" });
+                    kprint!("   [P10-D scan] scan_ver ok={} val/status={:#x} | escan={} escan_status={:#x} frames={} APs={}\n",
+                        svok, sver, sd[3], v1s, sd[4], sd[5]);
                     for ap in &aps[..naps] {
                         kprint!("   [P10-D AP] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch={} rssi={} ssid=\"",
                             ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5],
