@@ -7,3 +7,5 @@ cm5-boot/hboot8-demo.img
 /firmware/brcm/*.nvram.txt
 cm5-boot/heqk8.img
 cm5-boot/heqk8-b.img
+.claude/worktrees/
+cm5-boot/linux-observe/

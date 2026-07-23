@@ -526,6 +526,15 @@ const SBSDIO_ALP_AVAIL_REQ: u8 = 0x08;
 const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
 const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
+const SBSDIO_FORCE_HT: u8 = 0x02; // FORCE (latch) HT, not just request — F2 needs it
+// SDIO-dev core sdpcmd_regs offsets (from the SDIO_DEV core regbase).
+const SD_REG_TOSBMAILBOXDATA: u32 = 0x48;
+const SD_REG_HOSTINTMASK: u32 = 0x24;
+const SDPCM_VERSION_MB: u32 = 4 << 16; // SDPCM_PROT_VERSION(4) << SMB_DATA_VERSION_SHIFT(16)
+const HOSTINTMASK: u32 = 0x0800_00F0; // I_HMB_SW_MASK(0xF0) | I_CHIPACTIVE(1<<27)
+// SDIO func-2 (WLAN data) block size = 512 (FBR 0x210/0x211).
+const FBR_F2_BLKSIZE_LO: u32 = 0x210;
+const FBR_F2_BLKSIZE_HI: u32 = 0x211;
 // F1 backplane SBADDR window registers (byte, F1).
 const SBADDR_LOW: u32 = 0x1000A;
 const SBADDR_MID: u32 = 0x1000B;
@@ -1104,13 +1113,26 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     let rstvec = u32::from_le_bytes([FW_BIN[0], FW_BIN[1], FW_BIN[2], FW_BIN[3]]);
     cr4_activate(cr4w, rstvec);
     unsafe { FW_STEP = 6 };
-    // 6. Switch to the HT (fast) clock — firmware needs it to come up.
+    // 6. Request HT, then — the fix — the exact brcmf_sdio_bus_init pre-F2 sequence:
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
     for _ in 0..100 {
         if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_HT_AVAIL).unwrap_or(0) != 0 {
             break;
         }
         delay(1_000);
+    }
+    // 6a. F2 (WLAN data) block size = 512 BEFORE enabling F2.
+    let _ = cmd52(true, 0, FBR_F2_BLKSIZE_LO, 0x00); // 512 & 0xff
+    let _ = cmd52(true, 0, FBR_F2_BLKSIZE_HI, 0x02); // 512 >> 8
+    // 6b. FORCE the backplane HT clock (RMW, preserve saveclk) so the F2-enable IOR
+    // handshake propagates. brcmfmac: `saveclk | SBSDIO_FORCE_HT` (43455 is not ULP).
+    // We only REQUESTED HT before (bit 0x10) — that never latches HT; F2 stays silent.
+    let saveclk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+    let _ = cmd52(true, 1, CHIPCLKCSR, saveclk | SBSDIO_FORCE_HT);
+    // 6c. Announce the SDPCM protocol version via the SDIO-dev core mailbox
+    // (w_sdreg32 tosbmailboxdata = SDPCM_PROT_VERSION << 16), right before F2 enable.
+    if let Some((sdb, _)) = erom_find_core(CORE_SDIO_DEV) {
+        let _ = bp_w32(sdb + SD_REG_TOSBMAILBOXDATA, SDPCM_VERSION_MB);
     }
     unsafe { FW_STEP = 7 };
     // DIAG: did the CR4 actually RESUME (CPUHALT cleared → IOCTL ~0x01), and is HT up?
@@ -1121,15 +1143,17 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
             0,
         );
     }
-    // 7. Enable F2, poll ready — F2 ready = firmware alive. Give it longer (the CR4
-    // boot + SDPCM bring-up can take >1 s from cold).
+    // 7. Enable F2, poll ready — F2 ready = firmware alive.
     let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
     for _ in 0..2000 {
         let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
         unsafe { F2_DIAG.2 = ior as u32 };
         if ior & SDIO_F2 != 0 {
-            // Watermark (brcmf_sdio_bus_init) then done.
-            let _ = cmd52(true, 1, 0x10008, 8);
+            // F2 up: watermark + host interrupt mask (brcmf_sdio_bus_init tail).
+            let _ = cmd52(true, 1, 0x10008, 8); // SBSDIO_WATERMARK
+            if let Some((sdb, _)) = erom_find_core(CORE_SDIO_DEV) {
+                let _ = bp_w32(sdb + SD_REG_HOSTINTMASK, HOSTINTMASK);
+            }
             unsafe { FW_STEP = 8 };
             return true;
         }
