@@ -870,6 +870,11 @@ fn cm5_p10_probe() {
                     cstage, cint, cpres);
                 let (mbi, mbd) = cyw43::mailbox_diag();
                 kprint!("   [P10-C mbox] firmware mailbox drained: intstatus={:#010x} tohostmboxdata={:#010x}\n", mbi, mbd);
+                let (wkb, wka) = cyw43::wake_diag();
+                let st = cyw43::p10c_state();
+                kprint!("   [P10-C wake] SLEEPCSR {:#04x}->{:#04x} (KSO={} DEVON={})\n", wkb, wka, wka & 1, (wka >> 1) & 1);
+                kprint!("   [P10-C state] chip_id={:#06x} (0x4345=link alive) F2_IOR={:#04x} (0x04=ready) SLEEPCSR={:#04x} CHIPCLKCSR={:#04x}\n",
+                    st[0], st[1], st[2], st[3]);
                 let hte = cyw43::ht_ensure_diag();
                 kprint!("   [P10-C htens] CHIPCLKCSR before F2 txn={:#04x} (HT_avail={}) — must be 1 or F2 CMD53 times out\n", hte, (hte >> 7) & 1);
                 if ver_ok {

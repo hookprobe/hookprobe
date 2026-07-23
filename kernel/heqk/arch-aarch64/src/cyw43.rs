@@ -1533,6 +1533,50 @@ fn force_ht_resmask() {
     bp_w32(cc + CC_PMUCONTROL, bp_r32(cc + CC_PMUCONTROL) | PMU_CTL_PLL_UPD);
 }
 
+static mut WAKE_DIAG: (u32, u32) = (0, 0); // (SLEEPCSR before, after wake)
+/// Wake the chip: assert KSO (Keep-SDIO-On) and poll for DEVON (device on). After the
+/// firmware boots it can idle into deep sleep (clocks off, KSO/DEVON drop) if unserviced
+/// — then F1/F2 access returns 0 and CMD53-to-F2 times out. brcmf re-asserts KSO and
+/// waits for DEVON before each transaction on SR-capable parts (43455 is SR-capable).
+fn wake_chip() -> u8 {
+    let before = cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0);
+    let _ = cmd52(true, 1, SBSDIO_SLEEPCSR, before | SBSDIO_KSO_EN);
+    let mut after = before;
+    for _ in 0..200 {
+        after = cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0);
+        // DEVON (0x02) set = device awake and backplane reachable.
+        if after & 0x02 != 0 {
+            break;
+        }
+        let _ = cmd52(true, 1, SBSDIO_SLEEPCSR, after | SBSDIO_KSO_EN);
+        delay(1_000);
+    }
+    unsafe { WAKE_DIAG = (before as u32, after as u32) };
+    after
+}
+/// (SLEEPCSR before, after) the KSO wake — after should have DEVON(0x02) + KSO(0x01) set.
+pub fn wake_diag() -> (u32, u32) {
+    unsafe { WAKE_DIAG }
+}
+
+static mut P10C_STATE: [u32; 4] = [0; 4]; // [chip_id, f2_ior, sleepcsr, chipclkcsr] at txn time
+/// Snapshot the SDIO link state at the control-path entry so we can tell a sleeping/dead
+/// link (all reads 0) from a live one that just needs HT. [chip_id via CMD52, F2 IOR,
+/// SLEEPCSR, CHIPCLKCSR].
+fn p10c_state_probe() {
+    let mut id = 0u32;
+    // chip ID low byte via ChipCommon window (bp_r32) — proves the backplane is reachable.
+    id = bp_r32(SI_ENUM_BASE) & 0xffff;
+    let f2 = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0) as u32;
+    let sleep = cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0) as u32;
+    let clk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0) as u32;
+    unsafe { P10C_STATE = [id, f2, sleep, clk] };
+}
+/// [chip_id(0x4345=link alive), F2 IOR(0x04=ready), SLEEPCSR(0x03=awake), CHIPCLKCSR] at txn entry.
+pub fn p10c_state() -> [u32; 4] {
+    unsafe { P10C_STATE }
+}
+
 static mut HT_ENSURE_DIAG: u32 = 0;
 /// Ensure the HT backplane clock is AVAILABLE (CHIPCLKCSR HT_AVAIL 0x80 reads back)
 /// before F2 SDPCM traffic — the F2/DMA engine lives on HT; without it CMD53-to-F2
@@ -1760,11 +1804,16 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 /// non-empty version string with status 0, the entire SDPCM/BCDC path works and
 /// clmload/country will follow. `out` receives the version string.
 pub fn bcdc_ver_probe(out: &mut [u8]) -> bool {
-    // Service the firmware's boot-time mailbox interrupt first so it stops asserting
-    // the in-band SDIO card interrupt (which otherwise wedges the command engine).
+    // 1. Wake the chip (assert KSO, wait DEVON) — the firmware may have idled it into
+    //    deep sleep between F2-ready and now, dropping all clocks (CHIPCLKCSR read 0x00).
+    wake_chip();
+    // 2. Snapshot link state (chip-id/F2-IOR/SLEEPCSR/CHIPCLKCSR) to tell sleep from dead.
+    p10c_state_probe();
+    // 3. Service the firmware's boot-time mailbox interrupt so it stops asserting the
+    //    in-band SDIO card interrupt (which otherwise wedges the command engine).
     drain_firmware_mailbox();
-    // The F2/SDPCM DMA engine lives on the HT backplane clock, which the firmware let
-    // drop after boot. Re-establish HT (HT_AVAIL must read back) or CMD53-to-F2 times out.
+    // 4. The F2/SDPCM DMA engine lives on the HT backplane clock, which the firmware let
+    //    drop after boot. Re-establish HT (HT_AVAIL must read back) or CMD53-to-F2 times out.
     ensure_ht_avail();
     bcdc_iovar_get(b"ver", out)
 }
