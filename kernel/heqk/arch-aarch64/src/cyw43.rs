@@ -688,6 +688,14 @@ fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
 /// Returns true once F2 reports ready (firmware alive). Structured from brcmfmac
 /// `brcmf_sdio_download_firmware` + OpenBSD `bwfm_sdio` — timing iterates on metal.
 pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
+    unsafe { FW_STEP = 1 };
+    // 0. RAISE THE SDIO CLOCK before the bulk transfer. Enumeration ran at the ~400
+    //    kHz init clock; pushing ~600 KB of firmware at that speed takes long enough
+    //    to trip the boot watchdog before F2 comes up (no [P10-B], board reboots).
+    //    clk_emmc2 = 100 MHz base; divisor 2 → 25 MHz (SDIO default speed, no
+    //    high-speed-mode handshake needed) → ~60x faster, well under the watchdog.
+    set_clock(2);
+    delay(1_000);
     // 1. Request the ALP clock (backplane clock for memory access).
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
     for _ in 0..50 {
@@ -696,6 +704,7 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
+    unsafe { FW_STEP = 2 };
     // 2. (ARMCR4 halt — device-specific core reset via the backplane; asserted here
     //    before RAM writes. Exact core-base + reset bits confirmed on metal.)
     //    -- structured: firmware is written while the core is held in reset.
@@ -703,12 +712,14 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     if !backplane_write(RAM_BASE, FW_BIN) {
         return false;
     }
+    unsafe { FW_STEP = 3 };
     // 4. NVRAM (stripped + trailer) near the top of RAM.
     let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
     let nvram_addr = RAM_BASE + RAM_SIZE - (nlen as u32);
     if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
         return false;
     }
+    unsafe { FW_STEP = 4 };
     // 5. (Reset vector + take ARMCR4 out of reset — device-specific; metal.)
     // 6. Switch to the HT (fast) clock.
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
@@ -718,15 +729,24 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
+    unsafe { FW_STEP = 5 };
     // 7. Enable F2, poll ready — F2 ready = firmware alive.
     let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
     for _ in 0..500 {
         if cmd52(false, 0, SDIO_FUNC_READY, 0).map(|v| v & SDIO_F2).unwrap_or(0) != 0 {
+            unsafe { FW_STEP = 6 };
             return true;
         }
         delay(2_000);
     }
     false
+}
+
+static mut FW_STEP: u8 = 0;
+/// Stage B progress: 1=clock raised 2=ALP+RAM-write-start 3=firmware written
+/// 4=NVRAM written 5=HT clock + F2 requested 6=F2 ready (firmware alive).
+pub fn fw_last_step() -> u8 {
+    unsafe { FW_STEP }
 }
 
 /// P10 Stage C — the regdomain fix. clmload the CLM blob (chunked BEGIN/END), then
