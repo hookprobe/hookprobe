@@ -984,6 +984,7 @@ fn cm5_p10_probe() {
 /// P10-BT — the Bluetooth half of the CYW43455, over HCI-UART (uarta, NS16550A).
 /// Independent of the SDIO WiFi path; runs after it so a BT failure can never
 /// affect the WiFi result. Patch-free (the .hcd is optional for HCI + LE scan).
+#[cfg(feature = "cm5")]
 fn cm5_p10bt_probe() {
     use arch_aarch64::bt;
     kprint!(" [P10-BT] CYW43455 Bluetooth — HCI-UART (uarta NS16550A @0x10_7D50_C000), BT_ON gpio29\n");
