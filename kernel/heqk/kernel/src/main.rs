@@ -861,6 +861,9 @@ fn cm5_p10_probe() {
                 // sleeps after ~150ms of a silent bus). Here we only READ the captured
                 // result + diagnostics and print them.
                 let (ver_ok, ver, _vl) = cyw43::ver_result();
+                let rs = cyw43::ready_state();
+                kprint!("   [P10-C ready] AT F2-ready: chip_id={:#06x} (0x4345=alive) SLEEPCSR={:#04x} (0x03=awake) CHIPCLKCSR={:#04x} CCCR_rev={:#04x}\n",
+                    rs[0], rs[1], rs[2], rs[3]);
                 let d = cyw43::bcdc_diag();
                 kprint!("   [P10-C bcdc] tx_seq={} tx_ok={} credit={} intstat={:#010x} rx_ok={} hw_len={} cksum_ok={} chan={} doff={} reqid_match={} status={:#x} tx_max={}\n",
                     d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
