@@ -856,12 +856,11 @@ fn cm5_p10_probe() {
                 kprint!("\n");
             }
             if f2 {
-                // Stage C METAL GATE: prove the SDPCM/BCDC control round-trip with the
-                // canonical GET "ver" probe BEFORE the full clmload/country flow. If the
-                // firmware answers with a version string (status 0, reqid matched), the
-                // whole control path works and regdomain follows.
-                let mut ver = [0u8; 128];
-                let ver_ok = cyw43::bcdc_ver_probe(&mut ver);
+                // Stage C METAL GATE: the GET "ver" round-trip already RAN inside
+                // firmware_upload the instant F2 came ready (no idle window — the 43455
+                // sleeps after ~150ms of a silent bus). Here we only READ the captured
+                // result + diagnostics and print them.
+                let (ver_ok, ver, _vl) = cyw43::ver_result();
                 let d = cyw43::bcdc_diag();
                 kprint!("   [P10-C bcdc] tx_seq={} tx_ok={} credit={} intstat={:#010x} rx_ok={} hw_len={} cksum_ok={} chan={} doff={} reqid_match={} status={:#x} tx_max={}\n",
                     d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
