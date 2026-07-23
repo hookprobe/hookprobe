@@ -857,13 +857,12 @@ fn bp_r32(addr: u32) -> u32 {
 }
 fn bp_w32(addr: u32, val: u32) -> bool {
     set_backplane_window(addr);
-    let base = addr & 0x7FFF;
-    let bytes = val.to_le_bytes();
-    let mut ok = true;
-    for i in 0..4u32 {
-        ok &= cmd52(true, 1, base + i, bytes[i as usize]).is_some();
-    }
-    ok
+    // 32-bit ATOMIC write via CMD53 (4-byte-access flag 0x8000). CMD52 byte writes
+    // do NOT take on the AI wrapper control regs (IOCTL/RESET_CTL) — they need a
+    // single 32-bit access, so the CR4 CPUHALT never latched (halted=false) and the
+    // TCM stayed non-writable. Needs the func block size set first (it is, in
+    // firmware_upload before cr4_set_passive). Reads still use CMD52 bytes (work).
+    cmd53_write(1, (addr & 0x7FFF) | 0x8000, &val.to_le_bytes())
 }
 
 // --- EROM walk: find a core's (regbase, wrapbase) by DMP part number -------------
