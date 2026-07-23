@@ -360,6 +360,11 @@ pub fn chip_id_probe() -> Option<u16> {
     delay(2_000);
     set_clock(0x80); // slow init clock (~400 kHz-ish; tuned on metal)
     delay(2_000);
+    // The CM5 WiFi SDIO2 bus is 1.8V-native (DDR50 embedded radio, no level
+    // shifter): the card won't answer CMD5 at 3.3V I/O. Enable 1.8V signaling
+    // (HOST_CTRL2 bit3) + let it settle before the first command.
+    w16(HOST_CTRL2, r16(HOST_CTRL2) | (1 << 3));
+    delay(5_000);
 
     // CMD5 arg=0 → OCR; then CMD5 arg=OCR until ready (bit31).
     let ocr = cmd(CMD5_IO_OP_COND, 0, RESP_48, false, false)?;
