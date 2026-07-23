@@ -1915,8 +1915,11 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let mut rx = [0u8; DL_CHUNK + 64];
     let mut naps = 0usize;
     let mut frames = 0u32;
+    // A passive all-channel scan takes several seconds with ~100-500ms per-channel dwell,
+    // so the inter-channel gaps are long. Terminate on the ESCAN SUCCESS event (below); the
+    // dry-read tolerance is generous so gaps between channels don't cut the scan short.
     let mut dry = 0u32;
-    for _ in 0..3000 {
+    for _ in 0..12000 {
         let (channel, hw_len, doffset) = match read_sdpcm_frame(&mut rx) {
             Some(v) => {
                 dry = 0;
@@ -1924,8 +1927,8 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
             }
             None => {
                 dry += 1;
-                if dry > 10 {
-                    break; // sustained silence — scan done / no more results
+                if dry > 400 {
+                    break; // sustained silence (well past any inter-channel gap) — done
                 }
                 continue;
             }
