@@ -809,8 +809,11 @@ fn cm5_p10_probe() {
         Some(id) => kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id),
         None => {
             let (ps, ist) = cyw43::sdio_diag();
-            kprint!(" [P10-A] SILENT — SDIO stalled at step {} (1=host 2=CMD5-OCR 3=CMD5-ready 4=CMD3/7 5=F1 6=chip-id); PRESENT_STATE={:#010x} INT_STATUS={:#010x} (0xDEAD0001=CMD_INHIBIT stuck; INT_STATUS bit15=err else timeout)\n",
+            let d = cyw43::p10_regdump();
+            kprint!(" [P10-A] SILENT — stalled step {}; PRESENT={:#010x} INT={:#010x}\n",
                 cyw43::sdio_last_step(), ps, ist);
+            kprint!("   [P10-diag] gioDATA={:#010x} (WL_ON bit28={}) mux08={:#010x} mux0c={:#010x} CAPS={:#010x} CLKCTL={:#06x} (SDclk_en={} stable={}) HOSTCTL={:#010x}\n",
+                d[0], (d[0] >> 28) & 1, d[1], d[2], d[3], d[4] as u16, (d[4] >> 2) & 1, (d[4] >> 1) & 1, d[5]);
         }
     }
 }
