@@ -1133,6 +1133,43 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     }
     unsafe { HT_DIAG = clk as u32 };
     unsafe { FW_STEP = 2 };
+    // 3b. ISOLATION TEST — if the clean HT request produced NO PMU transition
+    //     (res_pending stayed 0, HT_AVAIL never set), force the HT-chain resources
+    //     directly through the PMU resource masks. This separates the two remaining
+    //     causes definitively:
+    //       - HT_AVAIL comes up now  => the PLL/LPO works; the bug is the request path
+    //         (SDIO-core clock request not reaching the PMU).
+    //       - HT_AVAIL still down     => the PLL/LPO physically can't produce HT under
+    //         these conditions (LPO/sequencer/PLL-lock problem).
+    //     max_res_mask is the ceiling, so widen it FIRST, then min_res_mask pulls the
+    //     resource up; pulse PMU_CTL.PLL_UPD to kick the sequencer. Diagnostic only.
+    if clk & SBSDIO_HT_AVAIL == 0 {
+        let cc = SI_ENUM_BASE;
+        let ht_bits = HT_RES_BITS;
+        let maxr = bp_r32(cc + CC_MAX_RES_MASK);
+        let minr = bp_r32(cc + CC_MIN_RES_MASK);
+        bp_w32(cc + CC_MAX_RES_MASK, maxr | ht_bits);
+        bp_w32(cc + CC_MIN_RES_MASK, minr | ht_bits);
+        bp_w32(cc + CC_PMUCONTROL, bp_r32(cc + CC_PMUCONTROL) | PMU_CTL_PLL_UPD);
+        let mut fclk = 0u8;
+        let mut fres = 0u32;
+        for _ in 0..300 {
+            fclk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+            fres = bp_r32(cc + CC_RES_STATE);
+            if fclk & SBSDIO_HT_AVAIL != 0 {
+                break;
+            }
+            delay(1_000);
+        }
+        unsafe {
+            HT_FORCE_DIAG = (
+                fclk as u32,                    // CHIPCLKCSR after forcing (want 0x80 bit)
+                fres,                           // res_state (want HT bits 28/29 up)
+                bp_r32(cc + CC_RES_PENDING),   // res_pending
+                bp_r32(cc + CC_PMUSTATUS),     // pmustatus (PST_HTAVAIL 0x04)
+            );
+        }
+    }
     // #4 register dump: PMU + ChipCommon after HALT + HT, before download.
     unsafe { PMU_DUMP[0] = pmu_dump() };
     unsafe { FW_STEP = 3 };
@@ -1205,7 +1242,19 @@ const CC_PMUCAPABILITIES: u32 = 0x604;
 const CC_PMUSTATUS: u32 = 0x608;
 const CC_RES_STATE: u32 = 0x60c;
 const CC_RES_PENDING: u32 = 0x610; // resources mid-transition — HT_START(28)/HT_AVAIL(29)
+const CC_MIN_RES_MASK: u32 = 0x618;
 const CC_MAX_RES_MASK: u32 = 0x61c;
+// RES4345 HT chain: HT_START=28, HT_AVAIL=29. Forcing these into the resource masks
+// isolates PLL/LPO hardware health from the SDIO-core request path.
+const HT_RES_BITS: u32 = (1 << 28) | (1 << 29);
+const PMU_CTL_PLL_UPD: u32 = 0x400; // pmucontrol PLL_UPD — kick the PMU sequencer
+
+static mut HT_FORCE_DIAG: (u32, u32, u32, u32) = (0, 0, 0, 0);
+/// (CHIPCLKCSR, res_state, res_pending, pmustatus) after forcing HT via the resource
+/// masks. HT_AVAIL(clk 0x80) up => PLL works, request-path bug; still down => PLL/LPO.
+pub fn ht_force_diag() -> (u32, u32, u32, u32) {
+    unsafe { HT_FORCE_DIAG }
+}
 
 static mut KSO_DIAG: (u32, u32) = (0, 0); // (SLEEPCSR before, after KSO enable)
 /// Enable KSO (Keep-Sdio-On) — ungates the backplane so the PMU services HT requests.
