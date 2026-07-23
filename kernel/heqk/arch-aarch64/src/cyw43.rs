@@ -1799,85 +1799,108 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     if !tx_ok {
         return (false, 0);
     }
-    // --- wait for the reply: poll the SDIO-core intstatus frame-ind bit.
+    // --- RX DEMUX: the firmware interleaves channel-1 EVENT frames and channel-2 DATA
+    //     frames with our channel-0 CONTROL reply. Read frames one at a time, advance
+    //     tx_max from EACH frame's SW window byte (credits flow from all channels), and
+    //     keep going until we get the control reply with our reqid (or run dry).
     let sdb = sdio_core_base();
-    let mut intstat = 0u32;
-    for _ in 0..2000 {
-        intstat = bp_r32(sdb + SD_REG_INTSTATUS);
-        if intstat & I_HMB_FRAME_IND != 0 {
-            break;
-        }
-        delay(1_000);
-    }
-    // W1C the handled intstatus bits.
-    if intstat != 0 {
-        let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
-    }
-    if want_diag {
-        unsafe { BCDC_DIAG[3] = intstat; }
-    }
-    // --- 64-byte first read, retried until a non-empty frame tag appears (the reply
-    //     may land a little after the frame-ind bit). An all-zero tag = nothing yet.
     let mut rx = [0u8; DL_CHUNK + 64];
-    let mut rx_ok = false;
-    let mut hw_len = 0u16;
-    let mut hw_ck = 0u16;
-    for _ in 0..1000 {
-        rx_ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
-        hw_len = u16::from_le_bytes([rx[0], rx[1]]);
-        hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
-        if rx_ok && (hw_len != 0 || hw_ck != 0) {
-            break;
-        }
-        delay(1_000);
-    }
-    let cksum_ok = hw_len != 0 && ((!(hw_len ^ hw_ck)) & 0xffff) == 0;
-    let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
-    let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
-    let channel = ((w0r >> 8) & 0xf) as u8;
-    let doffset = ((w0r >> 24) & 0xff) as usize;
-    // advance tx_max from the reply's window byte (SW word1 bits 8..15), brcmf clamp.
-    let mut new_max = ((w1r >> 8) & 0xff) as u8;
-    if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
-        new_max = unsafe { TX_SEQ }.wrapping_add(2);
-    }
-    unsafe { TX_MAX = new_max };
-    // read the remainder if the frame is longer than the first 64 bytes.
-    if cksum_ok && (hw_len as usize) > BRCMF_FIRSTREAD {
-        let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
-        let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-        let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
-    }
-    // locate + copy the reply body (after doffset + 16-byte BCDC header).
     let mut status = 0u32;
+    let mut got_ctrl = false;
+    let mut last_chan = 0xffu8;
+    let mut last_len = 0u16;
+    let mut last_doff = 0usize;
     let mut reqid_match = false;
-    let valid = rx_ok && cksum_ok && channel == SDPCM_CONTROL_CHANNEL
-        && doffset >= SDPCM_HDRLEN && doffset + BCDC_HDRLEN <= rx.len();
-    if valid {
-        let bh = doffset;
-        let rflags = u32::from_le_bytes([rx[bh + 8], rx[bh + 9], rx[bh + 10], rx[bh + 11]]);
-        status = u32::from_le_bytes([rx[bh + 12], rx[bh + 13], rx[bh + 14], rx[bh + 15]]);
-        reqid_match = (rflags >> 16) == reqid;
-        let off = doffset + BCDC_HDRLEN;
-        if !reply.is_empty() && off < rx.len() {
-            let m = reply.len().min(rx.len() - off);
-            reply[..m].copy_from_slice(&rx[off..off + m]);
+    let mut last_cksum_ok = false;
+    let mut any_rx = false;
+    let mut intstat_seen = 0u32;
+    'frames: for _frame in 0..40 {
+        // poll for a frame indication, then read the 64-byte first chunk (retry until a
+        // non-empty tag). An all-zero tag = no frame currently waiting.
+        let mut rx_ok = false;
+        let mut hw_len = 0u16;
+        let mut hw_ck = 0u16;
+        let mut waited_empty = 0u32;
+        loop {
+            let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
+            if intstat != 0 {
+                intstat_seen = intstat;
+                let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat); // W1C
+            }
+            rx_ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
+            hw_len = u16::from_le_bytes([rx[0], rx[1]]);
+            hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
+            if rx_ok && (hw_len != 0 || hw_ck != 0) {
+                break;
+            }
+            waited_empty += 1;
+            if waited_empty > 800 {
+                break 'frames; // dry — no more frames
+            }
+            delay(1_000);
         }
+        any_rx = any_rx || rx_ok;
+        let cksum_ok = hw_len != 0 && ((!(hw_len ^ hw_ck)) & 0xffff) == 0;
+        if !cksum_ok {
+            break 'frames; // malformed tag — stop
+        }
+        let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
+        let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
+        let channel = ((w0r >> 8) & 0xf) as u8;
+        let doffset = ((w0r >> 24) & 0xff) as usize;
+        // advance tx_max from this frame's window byte (brcmf clamp).
+        let mut new_max = ((w1r >> 8) & 0xff) as u8;
+        if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
+            new_max = unsafe { TX_SEQ }.wrapping_add(2);
+        }
+        unsafe { TX_MAX = new_max };
+        last_chan = channel;
+        last_len = hw_len;
+        last_doff = doffset;
+        last_cksum_ok = cksum_ok;
+        // read the remainder if the frame is longer than the first 64 bytes.
+        if (hw_len as usize) > BRCMF_FIRSTREAD {
+            let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
+            let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
+            let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
+        }
+        // A control (channel 0) frame with a BCDC header is our reply candidate.
+        if channel == SDPCM_CONTROL_CHANNEL
+            && doffset >= SDPCM_HDRLEN
+            && doffset + BCDC_HDRLEN <= rx.len()
+            && (hw_len as usize) >= doffset + BCDC_HDRLEN
+        {
+            let bh = doffset;
+            let rflags = u32::from_le_bytes([rx[bh + 8], rx[bh + 9], rx[bh + 10], rx[bh + 11]]);
+            status = u32::from_le_bytes([rx[bh + 12], rx[bh + 13], rx[bh + 14], rx[bh + 15]]);
+            if (rflags >> 16) == reqid {
+                reqid_match = true;
+                got_ctrl = true;
+                let off = doffset + BCDC_HDRLEN;
+                if !reply.is_empty() && off < rx.len() {
+                    let m = reply.len().min(rx.len() - off);
+                    reply[..m].copy_from_slice(&rx[off..off + m]);
+                }
+                break 'frames;
+            }
+        }
+        // else: event/data frame or wrong reqid — skip it and read the next.
     }
     if want_diag {
         unsafe {
-            BCDC_DIAG[4] = rx_ok as u32;
-            BCDC_DIAG[5] = hw_len as u32;
-            BCDC_DIAG[6] = cksum_ok as u32;
-            BCDC_DIAG[7] = channel as u32;
-            BCDC_DIAG[8] = doffset as u32;
+            BCDC_DIAG[3] = intstat_seen;
+            BCDC_DIAG[4] = any_rx as u32;
+            BCDC_DIAG[5] = last_len as u32;
+            BCDC_DIAG[6] = last_cksum_ok as u32;
+            BCDC_DIAG[7] = last_chan as u32;
+            BCDC_DIAG[8] = last_doff as u32;
             BCDC_DIAG[9] = reqid_match as u32;
             BCDC_DIAG[10] = status;
             BCDC_DIAG[11] = TX_MAX as u32;
         }
     }
-    // success = valid control reply, matching reqid, no BCDC error status.
-    (valid && reqid_match && status == 0, status)
+    // success = got the control reply with our reqid and no BCDC error status.
+    (got_ctrl && reqid_match && status == 0, status)
 }
 
 /// P10-C metal gate — the canonical control round-trip: GET "ver". If this returns a
