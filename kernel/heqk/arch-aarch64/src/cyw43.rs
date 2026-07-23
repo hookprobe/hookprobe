@@ -223,6 +223,26 @@ fn set_backplane_window(addr: u32) {
     let _ = cmd52(true, 1, SB_ADDR_HIGH, ((addr >> 24) & 0xFF) as u8);
 }
 
+/// BCM2712 SDHCI `cfg` quirk-block init (@ base+0x400) — the piece the plan flagged.
+/// Mirrors sdhci_brcmstb_cfginit_2712. The critical one for WiFi: FORCE CARD
+/// PRESENCE — the CYW43455 is non-removable with no card-detect pin, so without the
+/// SDCD_N test override the controller sees "no card" and never issues commands
+/// (→ CMD5 timeout). Also select SD (not MMC) mode + tell it the base-clock MHz.
+fn sdhci_cfg_init() {
+    const CFG: usize = 0x10_0110_0400;
+    unsafe {
+        // SDIO_CFG_CTRL (0x00): force presence — SDCD_N_TEST_EN(bit31)=1, LEV(bit30)=0.
+        let ctrl = read_volatile(CFG as *const u32);
+        write_volatile(CFG as *mut u32, (ctrl & !(1u32 << 30)) | (1u32 << 31));
+        // SDIO_CFG_SD_PIN_SEL (0x44): SD mode = BIT(1).
+        let sel = read_volatile((CFG + 0x44) as *const u32);
+        write_volatile((CFG + 0x44) as *mut u32, (sel & !0x3) | 0x2);
+        // SDIO_CFG_CQ_CAPABILITY (0x4c): (3<<12) | base_clk_mhz (clk_emmc2 = 100 MHz).
+        write_volatile((CFG + 0x4c) as *mut u32, (3 << 12) | 100);
+        core::arch::asm!("dsb sy");
+    }
+}
+
 // --- SDHCI host init ----------------------------------------------------------
 fn host_reset() {
     w8(0x2F, RST_ALL); // SW reset all
@@ -334,6 +354,7 @@ pub fn sdio_last_step() -> u8 {
 pub fn chip_id_probe() -> Option<u16> {
     unsafe { SDIO_STEP = 1 };
     host_reset();
+    sdhci_cfg_init(); // force card presence (non-removable) + SD mode — BEFORE CMD5
     // Bus power @ 3.3V (power control byte @0x29: bit0=on, [3:1]=voltage 0b111).
     w8(0x29, (0b111 << 1) | 1);
     delay(2_000);
