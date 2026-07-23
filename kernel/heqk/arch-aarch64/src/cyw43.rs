@@ -284,6 +284,11 @@ fn host_reset() {
     // error bit). We POLL, so leave the Signal-Enable (0x38) at 0 — no IRQ line.
     w32(INT_ENABLE, 0xFFFF_FFFF);
     w32(SIG_ENABLE, 0x0000_0000);
+    // Data Timeout Control (0x2E) — set the counter to max (0xE = 2^27 clocks). SW
+    // reset clears it to 0 (the SHORTEST timeout); a large data transfer then trips
+    // DATA TIMEOUT (INT err 0x0010) before it completes — the 4-bit CMD53 write
+    // symptom. Linux sets a non-zero timeout here too.
+    w8(0x2E, 0x0E);
 }
 
 /// Set the SD clock to `divisor` (SDCLK = base / (2*divisor)); enable it.
