@@ -250,6 +250,16 @@ fn host_reset() {
     while r8(0x2F) & RST_ALL != 0 && spin < 1_000_000 {
         spin += 1;
     }
+    // CRITICAL (found via Linux oracle: 0x34 reads 0x03ff010b when WiFi is up):
+    // the SDHCI only LATCHES a bit into INT_STATUS (0x30) if the matching bit in
+    // the Normal/Error Interrupt STATUS-ENABLE register (0x34) is set. SW-reset
+    // clears 0x34, so without this every command completes on the bus but
+    // INT_STATUS stays 0x00000000 forever — cmd() then spins out and reports a
+    // false "timeout" (the P10 "stalled step 1, INT=0" symptom). Enable ALL
+    // status bits (we need CMD_DONE, XFER_DONE, BUF_RD_RDY for PIO, and every
+    // error bit). We POLL, so leave the Signal-Enable (0x38) at 0 — no IRQ line.
+    w32(INT_ENABLE, 0xFFFF_FFFF);
+    w32(SIG_ENABLE, 0x0000_0000);
 }
 
 /// Set the SD clock to `divisor` (SDCLK = base / (2*divisor)); enable it.
@@ -360,11 +370,10 @@ pub fn chip_id_probe() -> Option<u16> {
     delay(2_000);
     set_clock(0x80); // slow init clock (~400 kHz-ish; tuned on metal)
     delay(2_000);
-    // The CM5 WiFi SDIO2 bus is 1.8V-native (DDR50 embedded radio, no level
-    // shifter): the card won't answer CMD5 at 3.3V I/O. Enable 1.8V signaling
-    // (HOST_CTRL2 bit3) + let it settle before the first command.
-    w16(HOST_CTRL2, r16(HOST_CTRL2) | (1 << 3));
-    delay(5_000);
+    // NOTE: the CM5 WiFi SDIO2 bus runs at 3.3V I/O for init — the Linux oracle
+    // showed HOST_CTRL2 = 0x0000 (no 1.8V signalling) with WiFi fully up, so we
+    // leave HOST_CTRL2 alone here. (A UHS voltage switch, if ever needed, is a
+    // CMD11 sequence done AFTER the card answers — not a blind bit-set before it.)
 
     // CMD5 arg=0 → OCR; then CMD5 arg=OCR until ready (bit31).
     let ocr = cmd(CMD5_IO_OP_COND, 0, RESP_48, false, false)?;
