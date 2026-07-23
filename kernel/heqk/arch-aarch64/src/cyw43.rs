@@ -1522,6 +1522,58 @@ fn sdio_core_base() -> u32 {
     erom_find_core(CORE_SDIO_DEV).map(|(b, _)| b).unwrap_or(0)
 }
 
+/// Force the HT-chain resources up via the PMU min/max_res_mask (the SDIO-core
+/// CHIPCLKCSR request path doesn't propagate on bare-metal HEQK). Idempotent.
+fn force_ht_resmask() {
+    let cc = SI_ENUM_BASE;
+    let maxr = bp_r32(cc + CC_MAX_RES_MASK);
+    bp_w32(cc + CC_MAX_RES_MASK, maxr | HT_RES_BITS);
+    let minr = bp_r32(cc + CC_MIN_RES_MASK);
+    bp_w32(cc + CC_MIN_RES_MASK, minr | HT_RES_BITS);
+    bp_w32(cc + CC_PMUCONTROL, bp_r32(cc + CC_PMUCONTROL) | PMU_CTL_PLL_UPD);
+}
+
+static mut HT_ENSURE_DIAG: u32 = 0;
+/// Ensure the HT backplane clock is AVAILABLE (CHIPCLKCSR HT_AVAIL 0x80 reads back)
+/// before F2 SDPCM traffic — the F2/DMA engine lives on HT; without it CMD53-to-F2
+/// command-times-out (F1 always-on access still works). After the firmware boots it
+/// takes over the PMU and lets the forced HT resources drop, so re-establish here:
+/// try FORCE_HT (the running firmware may honor the request), else re-force via the
+/// resource mask. Returns the final CHIPCLKCSR.
+fn ensure_ht_avail() -> u8 {
+    let clk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+    if clk & SBSDIO_HT_AVAIL == 0 {
+        let _ = cmd52(true, 1, CHIPCLKCSR, clk | SBSDIO_FORCE_HT);
+        let mut up = false;
+        for _ in 0..200 {
+            if cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0) & SBSDIO_HT_AVAIL != 0 {
+                up = true;
+                break;
+            }
+            delay(1_000);
+        }
+        if !up {
+            force_ht_resmask();
+            for _ in 0..300 {
+                if cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0) & SBSDIO_HT_AVAIL != 0 {
+                    break;
+                }
+                delay(1_000);
+            }
+        }
+    }
+    let final_clk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+    unsafe { HT_ENSURE_DIAG = final_clk as u32 };
+    final_clk
+}
+/// CHIPCLKCSR after ensure_ht_avail (want HT_AVAIL 0x80 set before the F2 control txn).
+pub fn ht_ensure_diag() -> u32 {
+    unsafe { HT_ENSURE_DIAG }
+}
+/// SDIO F2 SDPCM access address: ChipCommon-window offset 0 with the 4-byte-access
+/// flag (SBSDIO_SB_ACCESS_2_4B_FLAG 0x8000), matching brcmf_sdiod_send_buf.
+const F2_SDPCM_ADDR: u32 = 0x8000;
+
 static mut MAILBOX_DIAG: (u32, u32) = (0, 0); // (intstatus seen, tohostmailboxdata)
 /// Service the firmware's software mailbox interrupt (DEVREADY/FWREADY posted right
 /// after boot): read tohostmailboxdata, ACK via SMB_INT_ACK, then W1C the SDIO-core
@@ -1607,8 +1659,9 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     // SW header word0 @ off 4; word1 @ off 8 = 0 on TX.
     frame[4..8].copy_from_slice(&w0.to_le_bytes());
     // --- send on F2 (transfer padded to 4; firmware trims to the SDPCM length).
+    //     F2 SDPCM address = 0x8000 (4-byte-access flag), incrementing — per brcmf.
     let padded = ((total as usize) + 3) & !3;
-    let tx_ok = cmd53_write(2, 0, &frame[..padded]);
+    let tx_ok = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
     if tx_ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) }; // seq wraps at 256
     }
@@ -1646,7 +1699,7 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let mut hw_len = 0u16;
     let mut hw_ck = 0u16;
     for _ in 0..1000 {
-        rx_ok = cmd53_read(2, 0, &mut rx[..BRCMF_FIRSTREAD]);
+        rx_ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
         hw_len = u16::from_le_bytes([rx[0], rx[1]]);
         hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
         if rx_ok && (hw_len != 0 || hw_ck != 0) {
@@ -1669,7 +1722,7 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     if cksum_ok && (hw_len as usize) > BRCMF_FIRSTREAD {
         let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
         let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-        let _ = cmd53_read(2, 0, &mut rx[BRCMF_FIRSTREAD..end]);
+        let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
     }
     // locate + copy the reply body (after doffset + 16-byte BCDC header).
     let mut status = 0u32;
@@ -1710,5 +1763,8 @@ pub fn bcdc_ver_probe(out: &mut [u8]) -> bool {
     // Service the firmware's boot-time mailbox interrupt first so it stops asserting
     // the in-band SDIO card interrupt (which otherwise wedges the command engine).
     drain_firmware_mailbox();
+    // The F2/SDPCM DMA engine lives on the HT backplane clock, which the firmware let
+    // drop after boot. Re-establish HT (HT_AVAIL must read back) or CMD53-to-F2 times out.
+    ensure_ht_avail();
     bcdc_iovar_get(b"ver", out)
 }
