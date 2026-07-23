@@ -1717,11 +1717,14 @@ fn build_escan_params(out: &mut [u8], v2: bool) -> usize {
         // scan_params_le @8: ssid(36) bssid@44(6) bss_type@50 scan_type@51 nprobes@52..
         out[44..50].copy_from_slice(&[0xff; 6]);
         out[50] = 2; // bss_type ANY
-        out[51] = 0; // scan_type active
-        out[52..56].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-        out[56..60].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-        out[60..64].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-        out[64..68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out[51] = 0; // scan_type ACTIVE (send broadcast probe requests — finds more APs)
+        // Explicit dwell times: the firmware defaults (-1) combined with our 40ms
+        // SCAN_CHANNEL_TIME are too short to hear beacons (~100ms apart), so weak APs were
+        // missed (HEQK saw 3, the Pi saw 13). nprobes=2, active 120ms, passive 390ms.
+        out[52..56].copy_from_slice(&2u32.to_le_bytes()); // nprobes
+        out[56..60].copy_from_slice(&120u32.to_le_bytes()); // active_time (ms)
+        out[60..64].copy_from_slice(&390u32.to_le_bytes()); // passive_time (ms)
+        out[64..68].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // home_time = default
         // channel_num @68 = 0.
         72
     } else {
@@ -1841,9 +1844,10 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let mut iob = [0u8; 64];
     let n = iovar_buf(b"event_msgs", &mask, &mut iob);
     let ev_ok = bcdc_iovar_set(&iob[..n]);
-    // P3. scan dwell tuning (optional).
-    let _ = wlc_set_int(WLC_SET_SCAN_CHANNEL_TIME, 40);
-    let _ = wlc_set_int(WLC_SET_SCAN_UNASSOC_TIME, 40);
+    // P3. scan dwell tuning — longer than brcmf's 40ms default so we actually hear beacons
+    //     (~100ms apart) from weaker APs; 40ms only caught the strongest few.
+    let _ = wlc_set_int(WLC_SET_SCAN_CHANNEL_TIME, 120);
+    let _ = wlc_set_int(WLC_SET_SCAN_UNASSOC_TIME, 120);
 
     // === BRING-UP (mirror brcmf_config_dongle, cfg80211.c:7968) — EXACT ORDER ===
     // B1. WLC_UP FIRST (value 1 via cmd_int_set — not an empty payload as HEQK had it).
