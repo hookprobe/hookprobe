@@ -1067,6 +1067,28 @@ fn cr4_set_passive() -> Option<(u32, u32)> {
     Some((cr4b, cr4w))
 }
 
+// ARM CR4 core registers (from CR4 REGBASE 0x18002000) for TCM bank-size computation.
+const ARMCR4_CAP: u32 = 0x04; // bank counts: TCBANB[3:0]=A banks, TCBBNB[7:4]=B banks
+const ARMCR4_BANKIDX: u32 = 0x40; // select bank to inspect
+const ARMCR4_BANKINFO: u32 = 0x44; // BSZ[5:0]: bank size = 8192*(BSZ+1)
+
+/// Compute the real CR4 TCM size by summing bank sizes — brcmf_chip_tcm_ramsize.
+/// HEQK hardcoded RAM_SIZE=0x98000; the hardware value drives correct NVRAM placement
+/// (firmware reads NVRAM from the TOP of its real RAM) and the firmware-alive check.
+fn cr4_ramsize(cr4b: u32) -> u32 {
+    let cap = bp_r32(cr4b + ARMCR4_CAP);
+    let totb = (cap & 0xf) + ((cap & 0xf0) >> 4); // A banks + B banks
+    let mut ramsize = 0u32;
+    let mut idx = 0u32;
+    while idx < totb && idx < 32 {
+        bp_w32(cr4b + ARMCR4_BANKIDX, idx);
+        let bxinfo = bp_r32(cr4b + ARMCR4_BANKINFO);
+        ramsize += 8192 * ((bxinfo & 0x3f) + 1);
+        idx += 1;
+    }
+    ramsize
+}
+
 /// CR4 "activate" — write the reset vector to backplane addr 0 and release the CR4
 /// (postreset IOCTL=0 clears CPUHALT → CPU boots from the vector).
 fn cr4_activate(cr4w: u32, rstvec: u32) {
@@ -1114,10 +1136,14 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     //    from OTP defaults, independent of firmware). fwverify proved the ALP download is
     //    byte-perfect, so TCM corruption was never the issue — the missing KSO was.
     set_func_block_size();
-    let (_cr4b, cr4w) = match cr4_set_passive() {
+    let (cr4b, cr4w) = match cr4_set_passive() {
         Some(v) => v,
         None => return false,
     };
+    // Compute the REAL TCM size from the CR4 bank registers — HEQK's hardcoded 0x98000
+    // may be wrong; the firmware reads NVRAM from the top of its actual RAM.
+    let ramsize = cr4_ramsize(cr4b);
+    unsafe { RAM_SIZE_DIAG = ramsize };
     // 3. Request HT the CLEAN brcmf_sdio_htclk way: write CHIPCLKCSR = HT_AVAIL_REQ (0x10)
     //    ALONE (NOT OR'd with FORCE_HT — forcing HT during initial bring-up is what sr_init
     //    does post-firmware, and doing it early can leave the PLL never latching HT_AVAIL).
@@ -1179,9 +1205,15 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     }
     unsafe { FW_VERIFY = backplane_verify(RAM_BASE, FW_BIN) };
     unsafe { FW_STEP = 4 };
-    // 5. NVRAM at top of RAM + verify.
+    // 5. NVRAM at the TOP OF THE *REAL* RAM (RAM_BASE + hardware ramsize - nlen). The
+    //    closed CR4 firmware scans backward from the physical RAM top (0x198000+0xC8000
+    //    = 0x260000) for the NVRAM magic trailer. HEQK's old hardcoded 0x98000 put the
+    //    blob at ~0x230000 — the firmware found no trailer at 0x260000, silently aborted
+    //    init (no MAC/RF params), and F2 never readied. Use the computed hardware size.
+    let ram_top = if ramsize >= RAM_SIZE { ramsize } else { RAM_SIZE };
     let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
-    let nvram_addr = RAM_BASE + RAM_SIZE - (nlen as u32);
+    let nvram_addr = RAM_BASE + ram_top - (nlen as u32);
+    unsafe { NVRAM_ADDR_DIAG = nvram_addr };
     if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
         return false;
     }
@@ -1192,6 +1224,21 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     unsafe { FW_STEP = 6 };
     // #4 register dump: PMU + ChipCommon AFTER CR4 release.
     unsafe { PMU_DUMP[1] = pmu_dump() };
+    // CPU-ALIVE CHECK — once the firmware boots it consumes the NVRAM and writes the
+    // SDPCM-shared-structure pointer to the last RAM word (RAM_BASE+ramsize-4). If that
+    // word becomes a valid RAM pointer, the CR4 is EXECUTING; if it stays the NVRAM
+    // trailer token / unchanged, the firmware never ran. Poll it during the F2 wait.
+    let shared_ptr_addr = RAM_BASE + ram_top - 4;
+    let mut shared = 0u32;
+    for _ in 0..50 {
+        shared = bp_r32(shared_ptr_addr);
+        // valid = points inside RAM and isn't the NVRAM trailer we just wrote.
+        if shared >= RAM_BASE && shared < RAM_BASE + ram_top {
+            break;
+        }
+        delay(2_000);
+    }
+    unsafe { ALIVE_DIAG = (shared_ptr_addr, shared) };
     // 7. F2 block size 512 + SDPCM version, then enable F2.
     let _ = cmd52(true, 0, FBR_F2_BLKSIZE_LO, 0x00); // 512 & 0xff
     let _ = cmd52(true, 0, FBR_F2_BLKSIZE_HI, 0x02); // 512 >> 8
@@ -1254,6 +1301,23 @@ static mut HT_FORCE_DIAG: (u32, u32, u32, u32) = (0, 0, 0, 0);
 /// masks. HT_AVAIL(clk 0x80) up => PLL works, request-path bug; still down => PLL/LPO.
 pub fn ht_force_diag() -> (u32, u32, u32, u32) {
     unsafe { HT_FORCE_DIAG }
+}
+
+static mut RAM_SIZE_DIAG: u32 = 0;
+static mut NVRAM_ADDR_DIAG: u32 = 0;
+static mut ALIVE_DIAG: (u32, u32) = (0, 0);
+/// Hardware-computed CR4 TCM size (expect 0xc8000 for BCM4345, vs the old 0x98000).
+pub fn ramsize_diag() -> u32 {
+    unsafe { RAM_SIZE_DIAG }
+}
+/// Address the NVRAM blob was written to (expect ~0x260000-nlen, not ~0x230000-nlen).
+pub fn nvram_addr_diag() -> u32 {
+    unsafe { NVRAM_ADDR_DIAG }
+}
+/// (shared_ptr_addr, value) — firmware-alive: value in [RAM_BASE, RAM_BASE+ramsize)
+/// means the CR4 booted and wrote its SDPCM-shared pointer; else firmware never ran.
+pub fn alive_diag() -> (u32, u32) {
+    unsafe { ALIVE_DIAG }
 }
 
 static mut KSO_DIAG: (u32, u32) = (0, 0); // (SLEEPCSR before, after KSO enable)
