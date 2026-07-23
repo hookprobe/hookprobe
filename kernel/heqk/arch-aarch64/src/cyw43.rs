@@ -197,10 +197,10 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
-    // PIO: wait buffer-read-ready, then confirm Present State BUF_RD_EN (b11) before
-    // touching the FIFO — reading 0x20 early yields deterministic garbage.
+    // PIO: wait buffer-read-ready (INT bit only — Present-State BUF_RD_EN b11 is
+    // unreliable on this controller and spurious-times-out the wait).
     let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_RD_EN == 0 {
+    while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
         if r32(INT_STATUS) & INT_ERR != 0 {
             return false;
         }
@@ -696,8 +696,10 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
     }
     // Wait Buffer-Write-Ready before pushing the FIFO — writing 0x20 early loses the
     // block and XFER_COMPLETE never fires (the P10 step-3 firmware-write failure).
+    // (Present-State BUF_WR_EN b10 never asserts on this controller — gate on the
+    // INT bit only, or the wait spurious-times-out even though the FIFO is ready.)
     let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_WR_EN == 0 {
+    while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
         if r32(INT_STATUS) & INT_ERR != 0 {
             unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
             return false;
@@ -770,7 +772,7 @@ fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
     let mut i = 0usize;
     for _ in 0..nblocks {
         let mut spin = 0u32;
-        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_WR_EN == 0 {
+        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
             if r32(INT_STATUS) & INT_ERR != 0 {
                 unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
                 return false;
@@ -781,6 +783,7 @@ fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
                 return false;
             }
         }
+        w32(INT_STATUS, INT_BUF_WR_RDY); // clear (W1C) so the next block waits fresh
         // push one 64-byte block (16 words)
         for _ in 0..(F1_BLOCK_SIZE / 4) {
             let word = (data[i] as u32)
