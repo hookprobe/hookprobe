@@ -895,14 +895,14 @@ fn cm5_p10_probe() {
                     // Control path proven — confirm the regdomain via the country iovar.
                     // RO (Romania) matches the ccode=RO baked into NVRAM (fw >=7.45.265).
                     let rd = cyw43::set_regdomain(b"RO", 0);
-                    let (sok, gok, ab) = cyw43::regdom_diag();
-                    kprint!("   [P10-C regdom] country SET ok={} GET ok={} readback=\"{}{}\" (want RO)\n",
-                        sok, gok,
-                        if ab[0] >= 0x20 && ab[0] < 0x7f { ab[0] as char } else { '.' },
-                        if ab[1] >= 0x20 && ab[1] < 0x7f { ab[1] as char } else { '.' });
+                    let d = cyw43::regdom_diag();
+                    let pc = |c: u8| if c >= 0x20 && c < 0x7f { c as char } else { '.' };
+                    kprint!("   [P10-C regdom] SET ok={} (status={:#x}) GET ok={} abbrev=\"{}{}\" ccode=\"{}{}\" (want RO)\n",
+                        d.set_ok, d.set_status, d.get_ok,
+                        pc(d.abbrev[0]), pc(d.abbrev[1]), pc(d.ccode[0]), pc(d.ccode[1]));
                     match rd {
-                        Some(true) => kprint!(" [P10-C] PASS — control round-trip + country iovar set/readback is a real ISO (not 00/99)\n"),
-                        Some(false) => kprint!(" [P10-C] PASS(ctrl) — ver + country round-trip OK; readback not a real ISO yet (clmload deferred to P10-D)\n"),
+                        Some(true) => kprint!(" [P10-C] PASS — control round-trip + regdomain readback is a real ISO (ccode not 00/99)\n"),
+                        Some(false) => kprint!(" [P10-C] PASS(ctrl) — ver + country round-trip OK; ccode not a real ISO yet\n"),
                         None => kprint!(" [P10-C] PASS(ctrl) — ver round-trip OK; country readback txn incomplete — see regdom diag\n"),
                     }
                 } else {
