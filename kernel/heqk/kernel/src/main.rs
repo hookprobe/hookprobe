@@ -821,6 +821,15 @@ fn cm5_p10_probe() {
             kprint!("   [P10-B htforce] clkcsr={:#04x} (HT_avail={}) res_state={:#010x} (HT28/29={}{}) res_pend={:#010x} pmust={:#010x} => {}\n",
                 fclk, (fclk >> 7) & 1, fres, (fres >> 28) & 1, (fres >> 29) & 1, fpend, fpmust,
                 if fclk & 0x80 != 0 { "PLL OK, request-path bug" } else { "PLL/LPO cannot make HT" });
+            // RAM size + NVRAM placement + firmware-alive (the F2 fix):
+            let rs = cyw43::ramsize_diag();
+            let na = cyw43::nvram_addr_diag();
+            let (spa, spv) = cyw43::alive_diag();
+            let alive = spv >= 0x198000 && spv < 0x198000 + rs;
+            kprint!("   [P10-B ram] hw_ramsize={:#08x} (RAM_top={:#010x}) nvram@{:#010x}\n",
+                rs, 0x198000u32.wrapping_add(rs), na);
+            kprint!("   [P10-B alive] shared_ptr@{:#010x} = {:#010x} => {}\n",
+                spa, spv, if alive { "FIRMWARE RUNNING (CR4 executing)" } else { "firmware DID NOT boot (no shared ptr)" });
             // #1 read-back verify: did the firmware actually land in TCM?
             let (nm, ba, exp, got) = cyw43::fw_verify();
             kprint!("   [P10-B fwverify] mismatches={} first_bad@{:#010x} exp={:#010x} got={:#010x} {}\n",
