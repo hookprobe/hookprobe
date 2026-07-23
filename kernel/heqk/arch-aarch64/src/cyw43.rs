@@ -534,6 +534,13 @@ const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
 const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
 const SBSDIO_FORCE_HT: u8 = 0x02; // FORCE (latch) HT, not just request — F2 needs it
+// KSO (Keep-Sdio-On). On the 43455 SDIO core (rev >= 12) the backplane is GATED until
+// KSO is set: ALP-clocked F1 register reads still work, but the PMU never services an
+// HT request (CHIPCLKCSR stuck at 0x5a, HT_AVAIL never asserts). brcmf_sdio_kso_init
+// sets this in probe_attach, BEFORE firmware download. This is the bare-metal omission
+// that was blocking HT (source-verified against brcmfmac/sdio.c).
+const SBSDIO_SLEEPCSR: u32 = 0x1001F; // F1 SLEEPCSR
+const SBSDIO_KSO_EN: u8 = 0x01; // SLEEPCSR bit0 = keep SDIO on
 // SDIO-dev core sdpcmd_regs offsets (from the SDIO_DEV core regbase).
 const SD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SD_REG_HOSTINTMASK: u32 = 0x24;
@@ -1096,20 +1103,26 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
-    // 2. HALT the CR4 FIRST, THEN acquire HT, THEN download — the critical ordering.
-    //    The TCM (0x198000) sits behind the AMBA backplane, which needs the HT clock
-    //    for reliable block transfers. Downloading firmware over ALP silently corrupts
-    //    the TCM → the CR4 releases into a garbage reset vector, hard-faults, and the
-    //    faulting core then blocks the PMU from stabilizing HT (HT_AVAIL never sets —
-    //    the exact CHIPCLKCSR=0x52 symptom). Order: ALP → HALT → HT → download → verify.
+    // 1b. ENABLE KSO — the actual root cause of the stuck HT. On the 43455 SDIO core
+    //     (rev >= 12) the backplane is gated until KSO (SLEEPCSR bit0) is set: ALP-clocked
+    //     register reads still work (so we saw a live 0x5a), but the PMU never services
+    //     the backplane HT request, so HT_AVAIL never asserts no matter how we request it.
+    //     brcmf_sdio_kso_init sets this in probe_attach, before firmware download.
+    kso_enable();
+    // 2. HALT the CR4, THEN acquire HT, THEN download — brcmf order: HT is requested and
+    //    confirmed BEFORE firmware write and BEFORE CR4 release (HT is produced by the PMU
+    //    from OTP defaults, independent of firmware). fwverify proved the ALP download is
+    //    byte-perfect, so TCM corruption was never the issue — the missing KSO was.
     set_func_block_size();
     let (_cr4b, cr4w) = match cr4_set_passive() {
         Some(v) => v,
         None => return false,
     };
-    // 3. Request + FORCE HT, WAIT for HT_AVAIL, with the CR4 HALTED. Want clk = 0xC0.
-    let saveclk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
-    let _ = cmd52(true, 1, CHIPCLKCSR, saveclk | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT);
+    // 3. Request HT the CLEAN brcmf_sdio_htclk way: write CHIPCLKCSR = HT_AVAIL_REQ (0x10)
+    //    ALONE (NOT OR'd with FORCE_HT — forcing HT during initial bring-up is what sr_init
+    //    does post-firmware, and doing it early can leave the PLL never latching HT_AVAIL).
+    //    Then poll for HT_AVAIL (0x80). Want clk = 0xC0 (HT_AVAIL | ALP_AVAIL).
+    let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
     let mut clk = 0u8;
     for _ in 0..300 {
         clk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
@@ -1191,8 +1204,32 @@ const CC_PMUCONTROL: u32 = 0x600;
 const CC_PMUCAPABILITIES: u32 = 0x604;
 const CC_PMUSTATUS: u32 = 0x608;
 const CC_RES_STATE: u32 = 0x60c;
-const CC_MIN_RES_MASK: u32 = 0x618;
+const CC_RES_PENDING: u32 = 0x610; // resources mid-transition — HT_START(28)/HT_AVAIL(29)
 const CC_MAX_RES_MASK: u32 = 0x61c;
+
+static mut KSO_DIAG: (u32, u32) = (0, 0); // (SLEEPCSR before, after KSO enable)
+/// Enable KSO (Keep-Sdio-On) — ungates the backplane so the PMU services HT requests.
+/// Read SLEEPCSR, set bit0 if clear, write back, read back for diagnosis.
+fn kso_enable() {
+    let before = cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0xEE);
+    if before & SBSDIO_KSO_EN == 0 {
+        let _ = cmd52(true, 1, SBSDIO_SLEEPCSR, before | SBSDIO_KSO_EN);
+    }
+    // brcmf retries the readback (device may be transitioning); a few polls suffice here.
+    let mut after = before;
+    for _ in 0..10 {
+        after = cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0xEE);
+        if after & SBSDIO_KSO_EN != 0 {
+            break;
+        }
+        delay(1_000);
+    }
+    unsafe { KSO_DIAG = (before as u32, after as u32) };
+}
+/// (SLEEPCSR before, after) — after should have KSO_EN(0x01) set.
+pub fn kso_diag() -> (u32, u32) {
+    unsafe { KSO_DIAG }
+}
 
 /// Dump the key PMU/ChipCommon registers (+ CHIPCLKCSR) so we can compare HEQK's
 /// clock/PMU state against a known-good sequence at each phase.
@@ -1205,7 +1242,7 @@ fn pmu_dump() -> [u32; 8] {
         bp_r32(cc + CC_PMUCAPABILITIES),                       // [3] pmucap (rev in [7:0])
         bp_r32(cc + CC_PMUSTATUS),                             // [4] pmustatus
         bp_r32(cc + CC_RES_STATE),                             // [5] res_state (UP resources)
-        bp_r32(cc + CC_MIN_RES_MASK),                          // [6] min_res_mask
+        bp_r32(cc + CC_RES_PENDING),                           // [6] res_pending (mid-transition)
         bp_r32(cc + CC_MAX_RES_MASK),                          // [7] max_res_mask
     ]
 }
