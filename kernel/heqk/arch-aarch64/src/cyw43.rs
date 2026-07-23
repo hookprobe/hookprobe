@@ -46,7 +46,9 @@ const RST_DAT: u8 = 1 << 2;
 // INT_STATUS bits.
 const INT_CMD_DONE: u32 = 1 << 0;
 const INT_XFER_DONE: u32 = 1 << 1;
+const INT_BUF_WR_RDY: u32 = 1 << 4;
 const INT_BUF_RD_RDY: u32 = 1 << 5;
+const PS_BUF_WR_EN: u32 = 1 << 10; // Buffer Write Enable — FIFO can accept data
 const INT_ERR: u32 = 1 << 15;
 // CMD flags (in the high half of CMD_XFER).
 const RESP_48: u16 = 0b10; // response type 48-bit
@@ -675,7 +677,22 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
         | ((addr & 0x1_FFFF) << 9)
         | (n as u32 & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
+        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
         return false;
+    }
+    // Wait Buffer-Write-Ready before pushing the FIFO — writing 0x20 early loses the
+    // block and XFER_COMPLETE never fires (the P10 step-3 firmware-write failure).
+    let mut spin = 0u32;
+    while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 || r32(PRESENT_STATE) & PS_BUF_WR_EN == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
+        spin += 1;
+        if spin > 1_000_000 {
+            unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
     }
     // PIO out: pack bytes into the 32-bit data port.
     let mut i = 0;
@@ -689,17 +706,26 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
         }
         w32(BUF_DATA, word);
     }
-    let mut spin = 0u32;
+    spin = 0;
     while r32(INT_STATUS) & INT_XFER_DONE == 0 {
         if r32(INT_STATUS) & INT_ERR != 0 {
+            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
             return false;
         }
         spin += 1;
         if spin > 2_000_000 {
+            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
             return false;
         }
     }
     true
+}
+
+static mut CMD53_DIAG: (u8, u32, u32) = (0, 0, 0);
+/// (fail stage 1=cmd 2=err-wait-wr 3=buf-wr-rdy-timeout 4=err-xfer 5=xfer-timeout,
+/// INT_STATUS, PRESENT_STATE) from the last cmd53_write failure.
+pub fn cmd53_diag() -> (u8, u32, u32) {
+    unsafe { CMD53_DIAG }
 }
 
 /// Write `data` to backplane address `addr` in ≤32 KiB windows (F1).
