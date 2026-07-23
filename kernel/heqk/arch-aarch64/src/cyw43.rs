@@ -530,6 +530,7 @@ const D11_IOCTL_PHYRESET: u32 = 0x0008;
 // EROM descriptor decode (brcmf_chip_dmp_erom_scan).
 const DMP_DESC_MSK: u32 = 0xF;
 const DMP_DESC_COMPONENT: u32 = 0x1;
+const DMP_DESC_MASTER_PORT: u32 = 0x3;
 const DMP_DESC_ADDRESS: u32 = 0x5;
 const DMP_DESC_ADDRSIZE_GT32: u32 = 0x8;
 const DMP_DESC_EOT: u32 = 0xF;
@@ -747,53 +748,90 @@ fn bp_w32(addr: u32, val: u32) -> bool {
 // (CIA/CIB) then its address descriptors; we take the first SLAVE address as regbase
 // and the first WRAPPER (slave- or master-wrap) address as wrapbase.
 static mut EROM_DIAG: (u32, u32, u32) = (0, 0, 0); // (eromptr, cr4_base, cr4_wrap)
+#[inline]
+fn erom_rd(a: &mut u32) -> u32 {
+    let v = bp_r32(*a);
+    *a += 4;
+    v
+}
+/// Extract (regbase, wrapbase) for the component whose descriptors start at `*a`
+/// (just past CIA+CIB). Faithful to brcmf_chip_dmp_get_regaddr: the first descriptor
+/// sets the wrapper type (master-port → MWRAP; a non-slave address → MWRAP else SWRAP),
+/// then we scan address descriptors for the first SLAVE (regbase) and first matching
+/// WRAP (wrapbase), skipping GT32 upper words and size-descriptor words.
+fn erom_get_regaddr(a: &mut u32) -> (u32, u32) {
+    let (mut regbase, mut wrapbase) = (0u32, 0u32);
+    let first = erom_rd(a);
+    let fd = first & DMP_DESC_MSK;
+    let wraptype: u32 = if fd == DMP_DESC_MASTER_PORT {
+        3 // MWRAP
+    } else if fd == DMP_DESC_ADDRESS {
+        if (first & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S != 0 { 3 } else { 2 }
+    } else {
+        *a -= 4; // not a valid component body
+        return (0, 0);
+    };
+    let mut guard = 0u32;
+    loop {
+        guard += 1;
+        if guard > 64 {
+            break;
+        }
+        // find the next ADDRESS or COMPONENT/EOT descriptor
+        let mut val;
+        let mut desc;
+        loop {
+            val = erom_rd(a);
+            desc = val & DMP_DESC_MSK;
+            if desc == DMP_DESC_ADDRESS || desc == DMP_DESC_COMPONENT || desc == DMP_DESC_EOT {
+                break;
+            }
+        }
+        if desc != DMP_DESC_ADDRESS {
+            *a -= 4; // leave the COMPONENT/EOT for the outer scan
+            break;
+        }
+        if val & DMP_DESC_ADDRSIZE_GT32 != 0 {
+            let _ = erom_rd(a); // 64-bit address: skip high word
+        }
+        if (val & DMP_SLAVE_SIZE_TYPE) >> DMP_SLAVE_SIZE_TYPE_S == DMP_SLAVE_SIZE_DESC {
+            let sz = erom_rd(a);
+            if sz & DMP_DESC_ADDRSIZE_GT32 != 0 {
+                let _ = erom_rd(a);
+            }
+        }
+        let stype = (val & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S;
+        if regbase == 0 && stype == 0 {
+            regbase = val & DMP_SLAVE_ADDR_BASE;
+        }
+        if wrapbase == 0 && stype == wraptype {
+            wrapbase = val & DMP_SLAVE_ADDR_BASE;
+        }
+        if regbase != 0 && wrapbase != 0 {
+            break;
+        }
+    }
+    (regbase, wrapbase)
+}
 fn erom_find_core(partnum: u32) -> Option<(u32, u32)> {
-    let eromptr = bp_r32(SI_ENUM_BASE + 0xFC) & 0xFFFF_F000;
+    let eromptr = bp_r32(SI_ENUM_BASE + 0xFC);
     if partnum == CORE_ARM_CR4 {
         unsafe { EROM_DIAG.0 = eromptr };
     }
     let mut a = eromptr;
     let mut guard = 0u32;
-    while guard < 512 {
+    while guard < 1024 {
         guard += 1;
-        let cia = bp_r32(a);
-        a += 4;
+        let cia = erom_rd(&mut a);
         if (cia & DMP_DESC_MSK) == DMP_DESC_EOT {
             break;
         }
         if (cia & DMP_DESC_MSK) != DMP_DESC_COMPONENT {
-            continue;
+            continue; // skip stray non-component words
         }
         let pn = (cia & DMP_COMP_PARTNUM) >> DMP_COMP_PARTNUM_S;
-        let _cib = bp_r32(a); // component CIB (wrapper/port counts — we scan instead)
-        a += 4;
-        // Read this component's ADDRESS descriptors.
-        let (mut regbase, mut wrapbase) = (0u32, 0u32);
-        loop {
-            let d = bp_r32(a);
-            if (d & DMP_DESC_MSK) != DMP_DESC_ADDRESS {
-                break; // next component (or EOT) — leave `a` pointing at it
-            }
-            a += 4;
-            let base = d & DMP_SLAVE_ADDR_BASE;
-            let stype = (d & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S; // 0=slave 2=swrap 3=mwrap
-            if (d & DMP_DESC_ADDRSIZE_GT32) != 0 {
-                a += 4; // 64-bit address: skip the high word
-            }
-            // Size-descriptor form carries extra size words.
-            if ((d & DMP_SLAVE_SIZE_TYPE) >> DMP_SLAVE_SIZE_TYPE_S) == DMP_SLAVE_SIZE_DESC {
-                let sz = bp_r32(a);
-                a += 4;
-                if (sz & DMP_DESC_ADDRSIZE_GT32) != 0 {
-                    a += 4;
-                }
-            }
-            if stype == 0 && regbase == 0 {
-                regbase = base;
-            } else if (stype == 2 || stype == 3) && wrapbase == 0 {
-                wrapbase = base;
-            }
-        }
+        let _cib = erom_rd(&mut a); // CIB
+        let (regbase, wrapbase) = erom_get_regaddr(&mut a);
         if pn == partnum {
             if partnum == CORE_ARM_CR4 {
                 unsafe { EROM_DIAG.1 = regbase; EROM_DIAG.2 = wrapbase };
@@ -806,6 +844,14 @@ fn erom_find_core(partnum: u32) -> Option<(u32, u32)> {
 /// (eromptr, discovered CR4 regbase, CR4 wrapbase) — for the [P10-B] diag.
 pub fn erom_diag() -> (u32, u32, u32) {
     unsafe { EROM_DIAG }
+}
+/// Raw EROM dump (first `out.len()` 32-bit words) — for decoding the descriptor
+/// stream by hand if the walk still misses the CR4.
+pub fn erom_dump(out: &mut [u32]) {
+    let mut a = bp_r32(SI_ENUM_BASE + 0xFC);
+    for w in out.iter_mut() {
+        *w = erom_rd(&mut a);
+    }
 }
 
 // --- AI (aidmp) core reset/enable (brcmf_chip_ai_coredisable / _resetcore) -------
