@@ -794,9 +794,10 @@ fn cm5_p10_probe() {
             // Stage B: firmware + NVRAM upload, start ARMCR4, enable F2.
             static mut NVSCRATCH: [u8; 4096] = [0; 4096];
             let f2 = cyw43::firmware_upload(unsafe { &mut NVSCRATCH });
-            kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {}\n",
+            kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
                 if f2 { "PASS" } else { "SILENT" }, cyw43::FW_BIN.len(),
-                if f2 { "ready (firmware alive)" } else { "not ready — clock/ARMCR4 timing iterates on metal" });
+                if f2 { "ready (firmware alive)" } else { "not ready — ARMCR4 core reset (steps 2/5) still a stub; iterates on metal" },
+                cyw43::fw_last_step());
             if f2 {
                 // Stage C: the regdomain backlog target — clmload + country iovar.
                 match cyw43::set_regdomain(b"GB", 0) {
