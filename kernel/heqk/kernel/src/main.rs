@@ -807,10 +807,10 @@ fn cm5_p10_probe() {
             }
         }
         Some(id) => {
-            let (raw1, raw2, win_ok) = cyw43::chipid_diag();
+            let (via52, via53, win_ok) = cyw43::chipid_diag();
             kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id);
-            kprint!("   [P10-diag] chipcommon[0..4] raw={:#010x} reread={:#010x} (stable={}) window_cmd52_ack={}\n",
-                raw1, raw2, if raw1 == raw2 { "yes" } else { "NO" }, win_ok);
+            kprint!("   [P10-diag] chipcommon[0..4] via_cmd52={:#010x} via_cmd53={:#010x} window_ack={}\n",
+                via52, via53, win_ok);
         }
         None => {
             let (ps, ist) = cyw43::sdio_diag();
