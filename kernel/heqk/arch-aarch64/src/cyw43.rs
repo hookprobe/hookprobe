@@ -1544,25 +1544,47 @@ pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
     country_payload(iso, rev, &mut cp);
     let mut iob = [0u8; 48];
     let ilen = iovar_buf(b"country", &cp, &mut iob);
-    let set_ok = bcdc_iovar_set(&iob[..ilen]);
-    unsafe { REGDOM_DIAG.0 = set_ok };
-    // read back the country iovar.
+    let (set_ok, set_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob[..ilen], &mut []);
+    // read back the full 12-byte country struct {abbrev[4], rev[4], ccode[4]}.
     let mut rb = [0u8; 12];
     let get_ok = bcdc_iovar_get(b"country", &mut rb);
+    // The firmware fills the CCODE field (offset 8), not always the abbrev (offset 0) —
+    // read the ISO from ccode. NVRAM ccode=RO makes this RO even if a runtime SET rev-0
+    // is rejected without a loaded CLM.
+    let ccode = [rb[8], rb[9]];
     unsafe {
-        REGDOM_DIAG.1 = get_ok;
-        REGDOM_DIAG.2 = [rb[0], rb[1], rb[2], rb[3]];
+        REGDOM_DIAG = RegdomDiag {
+            set_ok,
+            set_status,
+            get_ok,
+            abbrev: [rb[0], rb[1]],
+            ccode,
+        };
     }
     if !get_ok {
         return None;
     }
-    // A real ISO (not "00"/"99"/empty) means the firmware honored the country set.
-    Some(!(rb[0] == b'0' && rb[1] == b'0') && rb[0] != 0 && rb[0] != b'9')
+    // A real ISO in ccode (not "00"/"99"/empty) = the firmware has a valid regdomain.
+    Some(!(ccode[0] == b'0' && ccode[1] == b'0') && ccode[0] != 0 && ccode[0] != b'9')
 }
 
-static mut REGDOM_DIAG: (bool, bool, [u8; 4]) = (false, false, [0; 4]);
-/// (country SET ok, country GET ok, readback abbrev[0..4]).
-pub fn regdom_diag() -> (bool, bool, [u8; 4]) {
+#[derive(Clone, Copy)]
+pub struct RegdomDiag {
+    pub set_ok: bool,
+    pub set_status: u32,
+    pub get_ok: bool,
+    pub abbrev: [u8; 2],
+    pub ccode: [u8; 2],
+}
+static mut REGDOM_DIAG: RegdomDiag = RegdomDiag {
+    set_ok: false,
+    set_status: 0,
+    get_ok: false,
+    abbrev: [0; 2],
+    ccode: [0; 2],
+};
+/// SET/GET status + the country abbrev and ccode fields of the readback.
+pub fn regdom_diag() -> RegdomDiag {
     unsafe { REGDOM_DIAG }
 }
 
