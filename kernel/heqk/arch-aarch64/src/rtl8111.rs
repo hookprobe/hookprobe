@@ -567,12 +567,12 @@ pub fn mac_start() {
         wm16(IMR as usize, 0); // polled
 
         // LED config (RTL8168H/8111H LED_CTRL @ 0x18, r8169-verified — no CFG9346 gate).
-        // HEQK never set this, so the LEDs ran on the efuse default (green/link LED dark,
-        // only amber/activity lit). Drive LED0 = any-link (green on 10/100/1000) and
-        // LED1 = activity (amber), matching the r8169 green+amber behaviour. Which physical
-        // diode is green vs amber is board wiring; if swapped, exchange the two nibbles.
+        // Schematic-verified wiring on the Waveshare CM5-DUAL-ETH-MINI (RJ1A / IC1):
+        // GREEN = LED2 (pin25), AMBER = LED1 (pin26), LED0 (pin27) = unused/floating.
+        // So drive LED2 = Link1000 (solid green on a gigabit link) and LED1 = Activity
+        // (amber blink on traffic). Nibbles: LED2[11:8]=0x4, LED1[7:4]=0x8, LED0[3:0]=0.
         let led_por = m16(LED_CTRL);
-        let led_new = (led_por & 0xF000) | 0x0087; // LED0=L10|L100|L1000(0x7), LED1=Act(0x8)
+        let led_new = (led_por & 0xF000) | 0x0480; // LED2=Link1000(green), LED1=Act(amber)
         wm16(LED_CTRL, led_new);
         LED_DIAG = (led_por, led_new, m8(PHYSTATUS) as u16);
     }
