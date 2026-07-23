@@ -1534,24 +1534,35 @@ pub fn fw_last_step() -> u8 {
 ///
 /// Per the FreeBSD/OpenBSD cross-check: clmload BEFORE the country set; map the
 /// (ccode,rev) pair for correct channel/power (rev 0 = crude fallback).
-pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
-    // NOTE: the CLM regulatory blob is already resident in the firmware (embedded CLM +
-    // the ccode=RO baked into NVRAM). `clmload` (a chunked SET_VAR carrying the ~KB CLM
-    // blob) needs block-mode CMD53 TX for its >512-byte frames — deferred to P10-D where
-    // the data path drives large-frame TX properly. Here we confirm/re-set the regdomain
-    // with the small `country` iovar, which fits byte-mode, and read it back.
+static mut REG_DONE: bool = false;
+/// Establish the WiFi regulatory domain ONCE (idempotent): clmload the CLM tables (the
+/// firmware .bin has no embedded CLM, so a bare `country` SET returns BADARG) then SET the
+/// `country` iovar. This is THE gate that enables the band for scanning on the honors-
+/// country 7.45.265 firmware. Must run while the interface is DOWN, before WLC_UP.
+fn wifi_regulatory(iso: &[u8; 2], rev: i32) {
+    if unsafe { REG_DONE } {
+        return;
+    }
+    let (clm_ok, clm_status) = clmload_small();
     let mut cp = [0u8; 12];
     country_payload(iso, rev, &mut cp);
-    let mut iob = [0u8; 48];
-    let ilen = iovar_buf(b"country", &cp, &mut iob);
-    let (set_ok, set_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob[..ilen], &mut []);
-    // read back the full 12-byte country struct {abbrev[4], rev[4], ccode[4]}.
+    let mut iobc = [0u8; 48];
+    let nc = iovar_buf(b"country", &cp, &mut iobc);
+    let (cty_ok, cty_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iobc[..nc], &mut []);
+    unsafe {
+        REG_DIAG = (clm_ok, clm_status, cty_ok, cty_status, 0);
+        REG_DONE = true;
+    }
+}
+
+pub fn set_regdomain(iso: &[u8; 2], rev: i32) -> Option<bool> {
+    // Establish the regulatory domain (clmload + country), then read it back to confirm.
+    wifi_regulatory(iso, rev);
+    // read back the 12-byte country struct {abbrev[4], rev[4], ccode[4]}; ISO is in ccode.
     let mut rb = [0u8; 12];
     let get_ok = bcdc_iovar_get(b"country", &mut rb);
-    // The firmware fills the CCODE field (offset 8), not always the abbrev (offset 0) —
-    // read the ISO from ccode. NVRAM ccode=RO makes this RO even if a runtime SET rev-0
-    // is rejected without a loaded CLM.
     let ccode = [rb[8], rb[9]];
+    let (_, _, set_ok, set_status, _) = unsafe { REG_DIAG };
     unsafe {
         REGDOM_DIAG = RegdomDiag {
             set_ok,
@@ -1819,24 +1830,8 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         let _ = bcdc_iovar_set(&iobmac[..nmac]);
     }
     unsafe { MAC_DIAG = (otp_mac, mac, mac_valid) };
-    // P1.5. REGULATORY — THE escan-NOTUP gate. On honors-country firmware (7.45.265) with
-    //       no country programmed, the band is DISABLED -> zero scannable channels -> escan
-    //       NOTUP. clmload the CLM tables first (the .bin has no embedded CLM, so a bare
-    //       country SET returns BADARG), THEN SET country=RO (ISO3166 form: abbrev=RO,
-    //       rev=0, ccode=RO). Done while DOWN, before WLC_UP.
-    let (clm_ok, clm_status) = clmload_small();
-    let mut cp = [0u8; 12];
-    country_payload(b"RO", 0, &mut cp);
-    let mut iobc = [0u8; 48];
-    let nc = iovar_buf(b"country", &cp, &mut iobc);
-    let (cty_ok, cty_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iobc[..nc], &mut []);
-    // GET chanspecs count — the DIRECT NOTUP mechanism: should go non-zero after country.
-    let mut chbuf = [0u8; 8];
-    let mut chreq = [0u8; 32];
-    let ncr = iovar_buf(b"chanspecs", &[], &mut chreq);
-    let _ = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
-    let chan_count = u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]);
-    unsafe { REG_DIAG = (clm_ok, clm_status, cty_ok, cty_status, chan_count) };
+    // P1.5. REGULATORY — THE escan-NOTUP gate (clmload + country=RO), done once while DOWN.
+    wifi_regulatory(b"RO", 0);
     // P2. event_msgs: GET the firmware's current mask, OR IN the escan-result + set-ssid
     //     bits (preserving BRCMF_E_IF etc. the fw already enabled), then SET it back.
     let mut mask = [0u8; 16];
@@ -1879,9 +1874,18 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let (bssid_ok, up_status) = bcdc_dcmd(WLC_GET_BSSID, 0, &[], &mut bssid);
     let mut noise = [0u8; 4];
     let (_pn_ok, pn_status) = bcdc_dcmd(WLC_GET_PHY_NOISE, 0, &[], &mut noise);
+    // GET chanspecs (now, AFTER bring-up) — brcmf_chanspec_list { count le32; list[] }.
+    // count > 0 proves the band is enabled (the regulatory fix worked). Big buffer so the
+    // firmware can return the list; we only read the count at offset 0.
+    let mut chbuf = [0u8; 256];
+    let mut chreq = [0u8; 32];
+    let ncr = iovar_buf(b"chanspecs", &[], &mut chreq);
+    let _ = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
+    let chan_count = u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]);
     unsafe {
         UP_CHECK_DIAG = (up_ok, bssid_ok, up_status);
         PHY_NOISE_DIAG = pn_status;
+        REG_DIAG.4 = chan_count;
     }
     // 4. escan. scan_ver=-23(UNSUPPORTED) => firmware is v1. The v1 escan initially returns
     //    BCME_NOTUP(-4) because the STA finishes coming up asynchronously after WLC_UP's ACK,
@@ -1905,14 +1909,26 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         delay(60_000); // ~interface still coming up — wait and retry
     }
     unsafe { ESCAN_STATUS_V1V2 = (scan_status, ver_used) };
-    // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS.
+    // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS. The scan spans
+    //    several seconds across all channels, so tolerate inter-channel gaps (dry reads)
+    //    rather than stopping at the first — else we only catch the first channel's APs.
     let mut rx = [0u8; DL_CHUNK + 64];
     let mut naps = 0usize;
     let mut frames = 0u32;
-    for _ in 0..400 {
+    let mut dry = 0u32;
+    for _ in 0..3000 {
         let (channel, hw_len, doffset) = match read_sdpcm_frame(&mut rx) {
-            Some(v) => v,
-            None => break,
+            Some(v) => {
+                dry = 0;
+                v
+            }
+            None => {
+                dry += 1;
+                if dry > 10 {
+                    break; // sustained silence — scan done / no more results
+                }
+                continue;
+            }
         };
         frames += 1;
         if channel != 1 {
@@ -1945,9 +1961,15 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         if bi + 80 > rx.len() {
             continue;
         }
+        let mut bssid = [0u8; 6];
+        bssid.copy_from_slice(&rx[bi + 8..bi + 14]);
+        // DE-DUP: the firmware can report the same BSS on multiple channels/events.
+        if aps[..naps].iter().any(|a| a.bssid == bssid) {
+            continue;
+        }
         if naps < aps.len() {
             let mut ap = ApInfo::new();
-            ap.bssid.copy_from_slice(&rx[bi + 8..bi + 14]);
+            ap.bssid = bssid;
             let slen = rx[bi + 18].min(32);
             ap.ssid_len = slen;
             ap.ssid[..slen as usize].copy_from_slice(&rx[bi + 19..bi + 19 + slen as usize]);
