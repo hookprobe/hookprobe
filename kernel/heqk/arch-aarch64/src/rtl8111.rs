@@ -416,16 +416,25 @@ pub fn enumerate() -> Option<[u8; 6]> {
     if cfg_r32(1, 0, 0x00) != RTL_VENDOR_DEVICE {
         return None;
     }
-    // Assign BAR2 = PCIe bus 0x0 (the outbound window base); BAR3 (64-bit hi) = 0.
-    cfg_w32(1, 0, 0x18, 0x0000_0000);
+    // Assign BAR2 to a clean NON-ZERO PCIe bus address. (A zero base disables the
+    // RC bridge's memory-forwarding window, which is why the first attempt read
+    // 0xff.) BAR2 is 64-bit: low @0x18, high @0x1c.
+    const RTL_BAR2_BUS: u32 = 0x8000_0000;
+    cfg_w32(1, 0, 0x18, RTL_BAR2_BUS);
     cfg_w32(1, 0, 0x1c, 0x0000_0000);
-    // Command reg (0x04): Memory-Space-Enable(bit1) | Bus-Master-Enable(bit2).
+    // RTL command (0x04): Memory-Space-Enable(bit1) | Bus-Master-Enable(bit2).
     let cmd = cfg_r32(1, 0, 0x04);
     cfg_w32(1, 0, 0x04, cmd | 0x0006);
-    // Map BAR2 (PCIe bus 0) into the CPU outbound window at RTL_MMIO so the RTL's
-    // registers are reachable — else every read is 0xff (the missing RX-datapath
-    // piece). CPU RTL_MMIO=0x1b_0000_0000 → PCIe bus 0x0, 1 MiB (covers BAR2 4 KiB).
-    set_outbound_win(0, RTL_MMIO as u64, 0x0, 0x10_0000);
+    // The RC (bus0 dev0) is a PCI-to-PCI BRIDGE — it must FORWARD MMIO to the
+    // secondary bus (bus1/RTL). Set its memory base/limit (0x20: base[15:0]/
+    // limit[31:16], each holding addr[31:20] in bits [15:4]) to cover BAR2, and
+    // enable Memory-Space on the bridge. RC config is memory-mapped at the base.
+    let base16 = (RTL_BAR2_BUS >> 16) & 0xFFF0; // 0x8000 = addr[31:20]<<4
+    let limit16 = ((RTL_BAR2_BUS + 0x10_0000) >> 16) & 0xFFF0; // 0x8010
+    rc_w(0x20, (limit16 << 16) | base16);
+    rc_w(0x04, rc_r(0x04) | 0x0006); // bridge Memory-Space + Bus-Master
+    // Outbound window: CPU RTL_MMIO (Device-mapped GB108) → PCIe bus RTL_BAR2_BUS.
+    set_outbound_win(0, RTL_MMIO as u64, RTL_BAR2_BUS as u64, 0x10_0000);
     let _ = rc_r(0x4068); // posted-write flush
     // MAC0..5 are eFuse-loaded on the 8111H — read them from BAR2 MMIO.
     let mut mac = [0u8; 6];
