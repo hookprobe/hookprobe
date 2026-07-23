@@ -809,6 +809,20 @@ fn cm5_p10_probe() {
             let (rioctl, clkcsr, ior) = cyw43::f2_diag();
             kprint!("   [P10-B f2] post-activate CR4 IOCTL={:#010x} (CPUHALT={}) CHIPCLKCSR={:#04x} (HT_avail={}) F2_IOR={:#04x}\n",
                 rioctl, (rioctl >> 5) & 1, clkcsr, (clkcsr >> 7) & 1, ior);
+            // #2 HT-before-download: did HT lock with the CR4 halted?
+            let ht = cyw43::ht_diag();
+            kprint!("   [P10-B ht] CHIPCLKCSR after halt+HT-wait={:#04x} (HT_avail={}) — want 0xC0\n", ht, (ht >> 7) & 1);
+            // #1 read-back verify: did the firmware actually land in TCM?
+            let (nm, ba, exp, got) = cyw43::fw_verify();
+            kprint!("   [P10-B fwverify] mismatches={} first_bad@{:#010x} exp={:#010x} got={:#010x} {}\n",
+                nm, ba, exp, got, if nm == 0 { "(TCM OK)" } else { "(TCM CORRUPT — download over wrong clock)" });
+            // #4 PMU/ChipCommon dumps (0=after halt+HT, 1=after CR4 release):
+            let p0 = cyw43::pmu_dump_get(0);
+            let p1 = cyw43::pmu_dump_get(1);
+            kprint!("   [P10-B pmu0] clkcsr={:#04x} chipst={:#010x} pmuctl={:#010x} pmucap={:#010x} pmust={:#010x} resst={:#010x} minres={:#010x} maxres={:#010x}\n",
+                p0[0], p0[1], p0[2], p0[3], p0[4], p0[5], p0[6], p0[7]);
+            kprint!("   [P10-B pmu1] clkcsr={:#04x} chipst={:#010x} pmuctl={:#010x} pmucap={:#010x} pmust={:#010x} resst={:#010x} minres={:#010x} maxres={:#010x}\n",
+                p1[0], p1[1], p1[2], p1[3], p1[4], p1[5], p1[6], p1[7]);
             if !f2 && cr4w == 0 {
                 let mut ed = [0u32; 24];
                 cyw43::erom_dump(&mut ed);

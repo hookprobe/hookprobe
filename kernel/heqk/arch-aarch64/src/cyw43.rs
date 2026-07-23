@@ -1088,7 +1088,7 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     //    (600 KB in ~0.5 s), well under the watchdog. Tune up with high-speed mode later.
     set_clock(4);
     delay(1_000);
-    // 1. Request the ALP clock (backplane clock for memory access).
+    // 1. ALP: request + wait.
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
     for _ in 0..50 {
         if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_ALP_AVAIL).unwrap_or(0) != 0 {
@@ -1096,50 +1096,55 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
-    unsafe { FW_STEP = 2 };
-    // Set the SDIO func-1 block size (=64) BEFORE any block-mode CMD53 — without it
-    // the card frames data to a 0-length block and every write DATA-TIMEOUTs.
+    // 2. HALT the CR4 FIRST, THEN acquire HT, THEN download — the critical ordering.
+    //    The TCM (0x198000) sits behind the AMBA backplane, which needs the HT clock
+    //    for reliable block transfers. Downloading firmware over ALP silently corrupts
+    //    the TCM → the CR4 releases into a garbage reset vector, hard-faults, and the
+    //    faulting core then blocks the PMU from stabilizing HT (HT_AVAIL never sets —
+    //    the exact CHIPCLKCSR=0x52 symptom). Order: ALP → HALT → HT → download → verify.
     set_func_block_size();
-    // 2. CR4 PASSIVE — EROM-find the CR4, halt its CPU (TCM writable), reset D11.
     let (_cr4b, cr4w) = match cr4_set_passive() {
         Some(v) => v,
-        None => return false, // EROM lookup failed — FW_STEP stays 2
+        None => return false,
     };
+    // 3. Request + FORCE HT, WAIT for HT_AVAIL, with the CR4 HALTED. Want clk = 0xC0.
+    let saveclk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+    let _ = cmd52(true, 1, CHIPCLKCSR, saveclk | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT);
+    let mut clk = 0u8;
+    for _ in 0..300 {
+        clk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
+        if clk & SBSDIO_HT_AVAIL != 0 {
+            break;
+        }
+        delay(1_000);
+    }
+    unsafe { HT_DIAG = clk as u32 };
+    unsafe { FW_STEP = 2 };
+    // #4 register dump: PMU + ChipCommon after HALT + HT, before download.
+    unsafe { PMU_DUMP[0] = pmu_dump() };
     unsafe { FW_STEP = 3 };
-    // 3. Firmware → CR4 TCM base (0x198000 — NOT 0). Window-split at 32 KiB.
+    // 4. Firmware → TCM 0x198000, then #1 BYTE-FOR-BYTE READ-BACK VERIFY (sampled).
     if !backplane_write(RAM_BASE, FW_BIN) {
         return false;
     }
+    unsafe { FW_VERIFY = backplane_verify(RAM_BASE, FW_BIN) };
     unsafe { FW_STEP = 4 };
-    // 4. NVRAM (stripped + trailer) at rambase + ramsize - varsz (ends at top of RAM).
+    // 5. NVRAM at top of RAM + verify.
     let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
     let nvram_addr = RAM_BASE + RAM_SIZE - (nlen as u32);
     if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
         return false;
     }
     unsafe { FW_STEP = 5 };
-    // 5. CR4 ACTIVATE — reset vector (fw[0..4]) → addr 0, clear CPUHALT → CPU boots.
+    // 6. CR4 ACTIVATE — reset vector (fw[0..4]) → addr 0, clear CPUHALT → CPU boots.
     let rstvec = u32::from_le_bytes([FW_BIN[0], FW_BIN[1], FW_BIN[2], FW_BIN[3]]);
     cr4_activate(cr4w, rstvec);
     unsafe { FW_STEP = 6 };
-    // 6. Request HT, then — the fix — the exact brcmf_sdio_bus_init pre-F2 sequence:
-    let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
-    for _ in 0..100 {
-        if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_HT_AVAIL).unwrap_or(0) != 0 {
-            break;
-        }
-        delay(1_000);
-    }
-    // 6a. F2 (WLAN data) block size = 512 BEFORE enabling F2.
+    // #4 register dump: PMU + ChipCommon AFTER CR4 release.
+    unsafe { PMU_DUMP[1] = pmu_dump() };
+    // 7. F2 block size 512 + SDPCM version, then enable F2.
     let _ = cmd52(true, 0, FBR_F2_BLKSIZE_LO, 0x00); // 512 & 0xff
     let _ = cmd52(true, 0, FBR_F2_BLKSIZE_HI, 0x02); // 512 >> 8
-    // 6b. FORCE the backplane HT clock (RMW, preserve saveclk) so the F2-enable IOR
-    // handshake propagates. brcmfmac: `saveclk | SBSDIO_FORCE_HT` (43455 is not ULP).
-    // We only REQUESTED HT before (bit 0x10) — that never latches HT; F2 stays silent.
-    let saveclk = cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0);
-    let _ = cmd52(true, 1, CHIPCLKCSR, saveclk | SBSDIO_FORCE_HT);
-    // 6c. Announce the SDPCM protocol version via the SDIO-dev core mailbox
-    // (w_sdreg32 tosbmailboxdata = SDPCM_PROT_VERSION << 16), right before F2 enable.
     if let Some((sdb, _)) = erom_find_core(CORE_SDIO_DEV) {
         let _ = bp_w32(sdb + SD_REG_TOSBMAILBOXDATA, SDPCM_VERSION_MB);
     }
@@ -1176,6 +1181,76 @@ static mut F2_DIAG: (u32, u32, u32) = (0, 0, 0);
 /// HT_AVAIL(0x80); last F2 IOR read) — diagnoses why F2 didn't come ready.
 pub fn f2_diag() -> (u32, u32, u32) {
     unsafe { F2_DIAG }
+}
+
+// --- PMU / ChipCommon register dump + firmware read-back verify -----------------
+// ChipCommon PMU register offsets (from SI_ENUM_BASE = 0x18000000). Standard across
+// Broadcom chips; the #3 PMU audit will confirm the 4345 resource masks.
+const CC_CHIPSTATUS: u32 = 0x2c;
+const CC_PMUCONTROL: u32 = 0x600;
+const CC_PMUCAPABILITIES: u32 = 0x604;
+const CC_PMUSTATUS: u32 = 0x608;
+const CC_RES_STATE: u32 = 0x60c;
+const CC_MIN_RES_MASK: u32 = 0x618;
+const CC_MAX_RES_MASK: u32 = 0x61c;
+
+/// Dump the key PMU/ChipCommon registers (+ CHIPCLKCSR) so we can compare HEQK's
+/// clock/PMU state against a known-good sequence at each phase.
+fn pmu_dump() -> [u32; 8] {
+    let cc = SI_ENUM_BASE;
+    [
+        cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE) as u32, // [0] F1 CHIPCLKCSR
+        bp_r32(cc + CC_CHIPSTATUS),                             // [1] chipstatus
+        bp_r32(cc + CC_PMUCONTROL),                            // [2] pmucontrol
+        bp_r32(cc + CC_PMUCAPABILITIES),                       // [3] pmucap (rev in [7:0])
+        bp_r32(cc + CC_PMUSTATUS),                             // [4] pmustatus
+        bp_r32(cc + CC_RES_STATE),                             // [5] res_state (UP resources)
+        bp_r32(cc + CC_MIN_RES_MASK),                          // [6] min_res_mask
+        bp_r32(cc + CC_MAX_RES_MASK),                          // [7] max_res_mask
+    ]
+}
+
+/// Read back TCM after a firmware write and compare byte-for-byte (sampled ~48 words
+/// across the image). Returns (mismatches, first_bad_addr, expected, got). All-zero =
+/// perfect. Non-zero mismatches with the CR4 halted = the backplane write is corrupting.
+fn backplane_verify(addr: u32, data: &[u8]) -> (u32, u32, u32, u32) {
+    let words = data.len() / 4;
+    if words == 0 {
+        return (0, 0, 0, 0);
+    }
+    let step = (words / 48).max(1);
+    let mut mism = 0u32;
+    let mut first = (0u32, 0u32, 0u32);
+    let mut i = 0usize;
+    while i < words {
+        let off = i * 4;
+        let expected = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        let got = bp_r32(addr + off as u32);
+        if got != expected {
+            if mism == 0 {
+                first = (addr + off as u32, expected, got);
+            }
+            mism += 1;
+        }
+        i += step;
+    }
+    (mism, first.0, first.1, first.2)
+}
+
+static mut HT_DIAG: u32 = 0;
+static mut FW_VERIFY: (u32, u32, u32, u32) = (0, 0, 0, 0);
+static mut PMU_DUMP: [[u32; 8]; 2] = [[0; 8]; 2];
+/// CHIPCLKCSR after the early HT wait (want 0xC0 = HT_AVAIL|ALP_AVAIL; 0x52 = HT stuck).
+pub fn ht_diag() -> u32 {
+    unsafe { HT_DIAG }
+}
+/// (mismatches, first_bad_addr, expected, got) from the TCM read-back verify.
+pub fn fw_verify() -> (u32, u32, u32, u32) {
+    unsafe { FW_VERIFY }
+}
+/// PMU/ChipCommon dump at phase `i` (0 = after halt+HT before download, 1 = after CR4 release).
+pub fn pmu_dump_get(i: usize) -> [u32; 8] {
+    unsafe { PMU_DUMP[i & 1] }
 }
 
 static mut FW_STEP: u8 = 0;
