@@ -862,7 +862,7 @@ fn cm5_p10_probe() {
                 // result + diagnostics and print them.
                 let (ver_ok, ver, _vl) = cyw43::ver_result();
                 let rs = cyw43::ready_state();
-                kprint!("   [P10-C ready] AT F2-ready: chip_id={:#06x} (0x4345=alive) SLEEPCSR={:#04x} (0x03=awake) CHIPCLKCSR={:#04x} CCCR_rev={:#04x}\n",
+                kprint!("   [P10-C ready] AT F2-ready (F0 first): CCCR_rev={:#04x} F2_IOR={:#04x} | CHIPCLKCSR={:#04x} chip_id={:#06x} — F0 alive+F1 dead=backplane asleep; both dead=device down\n",
                     rs[0], rs[1], rs[2], rs[3]);
                 let d = cyw43::bcdc_diag();
                 kprint!("   [P10-C bcdc] tx_seq={} tx_ok={} credit={} intstat={:#010x} rx_ok={} hw_len={} cksum_ok={} chan={} doff={} reqid_match={} status={:#x} tx_max={}\n",
