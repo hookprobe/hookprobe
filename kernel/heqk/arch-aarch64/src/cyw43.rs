@@ -1628,6 +1628,12 @@ static mut PHY_NOISE_DIAG: u32 = 0;
 pub fn phy_noise_diag() -> u32 {
     unsafe { PHY_NOISE_DIAG }
 }
+static mut REG_DIAG: (bool, u32, bool, u32, u32) = (false, 0, false, 0, 0);
+/// (clmload ok, clmload status, country SET ok, country status, chanspecs count).
+/// chanspecs count > 0 after country => the band is enabled and escan can run.
+pub fn reg_diag() -> (bool, u32, bool, u32, u32) {
+    unsafe { REG_DIAG }
+}
 static mut MAC_DIAG: ([u8; 6], [u8; 6], bool) = ([0; 6], [0; 6], false);
 /// (OTP cur_etheraddr readback, MAC actually in use, OTP was valid). If OTP invalid, a
 /// locally-administered MAC is set so the primary bsscfg can enable (else escan NOTUPs).
@@ -1653,6 +1659,41 @@ pub fn scan_diag() -> [u32; 8] {
 /// Build a v1 (72-byte) or v2 (80-byte) escan params payload into `out`; returns length.
 /// v2 (brcmf_scan_params_v2_le) prepends {version le16, length le16} inside the scan
 /// params and widens scan_type to le32 — newer firmware (incl 7.45.265) wants v2.
+/// clmload the CLM regulatory blob in SMALL (<=384-byte data) chunks so every F2 frame
+/// stays <=512 bytes (byte-mode CMD53) — avoids the multi-block PIO issue. BEGIN on the
+/// first chunk, END on the last. Returns (all chunks ok, last BCDC status).
+fn clmload_small() -> (bool, u32) {
+    const CS: usize = 384;
+    let total = CLM_BLOB.len();
+    if total == 0 {
+        return (true, 0);
+    }
+    let mut off = 0usize;
+    let mut ok = true;
+    let mut last_status = 0u32;
+    let mut buf = [0u8; CS + 32];
+    let mut iob = [0u8; CS + 48];
+    while off < total {
+        let n = (total - off).min(CS);
+        let mut flag = 0u16;
+        if off == 0 {
+            flag |= DL_BEGIN;
+        }
+        if off + n >= total {
+            flag |= DL_END;
+        }
+        let clen = clm_chunk(flag, &CLM_BLOB[off..off + n], &mut buf);
+        let ilen = iovar_buf(b"clmload", &buf[..clen], &mut iob);
+        let (o, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob[..ilen], &mut []);
+        if !o {
+            ok = false;
+            last_status = st;
+        }
+        off += n;
+    }
+    (ok, last_status)
+}
+
 fn build_escan_params(out: &mut [u8], v2: bool) -> usize {
     for b in out.iter_mut() {
         *b = 0;
@@ -1778,6 +1819,24 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         let _ = bcdc_iovar_set(&iobmac[..nmac]);
     }
     unsafe { MAC_DIAG = (otp_mac, mac, mac_valid) };
+    // P1.5. REGULATORY — THE escan-NOTUP gate. On honors-country firmware (7.45.265) with
+    //       no country programmed, the band is DISABLED -> zero scannable channels -> escan
+    //       NOTUP. clmload the CLM tables first (the .bin has no embedded CLM, so a bare
+    //       country SET returns BADARG), THEN SET country=RO (ISO3166 form: abbrev=RO,
+    //       rev=0, ccode=RO). Done while DOWN, before WLC_UP.
+    let (clm_ok, clm_status) = clmload_small();
+    let mut cp = [0u8; 12];
+    country_payload(b"RO", 0, &mut cp);
+    let mut iobc = [0u8; 48];
+    let nc = iovar_buf(b"country", &cp, &mut iobc);
+    let (cty_ok, cty_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iobc[..nc], &mut []);
+    // GET chanspecs count — the DIRECT NOTUP mechanism: should go non-zero after country.
+    let mut chbuf = [0u8; 8];
+    let mut chreq = [0u8; 32];
+    let ncr = iovar_buf(b"chanspecs", &[], &mut chreq);
+    let _ = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
+    let chan_count = u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]);
+    unsafe { REG_DIAG = (clm_ok, clm_status, cty_ok, cty_status, chan_count) };
     // P2. event_msgs: GET the firmware's current mask, OR IN the escan-result + set-ssid
     //     bits (preserving BRCMF_E_IF etc. the fw already enabled), then SET it back.
     let mut mask = [0u8; 16];
