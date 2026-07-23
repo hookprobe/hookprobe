@@ -1113,10 +1113,21 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         delay(1_000);
     }
     unsafe { FW_STEP = 7 };
-    // 7. Enable F2, poll ready — F2 ready = firmware alive (tens of ms typical).
+    // DIAG: did the CR4 actually RESUME (CPUHALT cleared → IOCTL ~0x01), and is HT up?
+    unsafe {
+        F2_DIAG = (
+            bp_r32(cr4w + AI_IOCTL),
+            cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0) as u32,
+            0,
+        );
+    }
+    // 7. Enable F2, poll ready — F2 ready = firmware alive. Give it longer (the CR4
+    // boot + SDPCM bring-up can take >1 s from cold).
     let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
-    for _ in 0..500 {
-        if cmd52(false, 0, SDIO_FUNC_READY, 0).map(|v| v & SDIO_F2).unwrap_or(0) != 0 {
+    for _ in 0..2000 {
+        let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
+        unsafe { F2_DIAG.2 = ior as u32 };
+        if ior & SDIO_F2 != 0 {
             // Watermark (brcmf_sdio_bus_init) then done.
             let _ = cmd52(true, 1, 0x10008, 8);
             unsafe { FW_STEP = 8 };
@@ -1125,6 +1136,13 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         delay(2_000);
     }
     false
+}
+
+static mut F2_DIAG: (u32, u32, u32) = (0, 0, 0);
+/// (CR4 IOCTL after activate — expect CPUHALT(0x20) CLEARED; CHIPCLKCSR — expect
+/// HT_AVAIL(0x80); last F2 IOR read) — diagnoses why F2 didn't come ready.
+pub fn f2_diag() -> (u32, u32, u32) {
+    unsafe { F2_DIAG }
 }
 
 static mut FW_STEP: u8 = 0;
