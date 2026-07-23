@@ -1596,6 +1596,11 @@ pub fn regdom_diag() -> RegdomDiag {
 // ============================================================================
 const WLC_UP: u32 = 2;
 const WLC_SET_INFRA: u32 = 20;
+const WLC_GET_BSSID: u32 = 23; // -4 NOTUP when down; other code when up = clean up-check
+const WLC_SET_PM: u32 = 86;
+const WLC_SET_SCAN_CHANNEL_TIME: u32 = 185;
+const WLC_SET_SCAN_UNASSOC_TIME: u32 = 187;
+const WLC_SET_FAKEFRAG: u32 = 219;
 const WLC_E_ESCAN_RESULT: u32 = 69;
 
 #[derive(Clone, Copy)]
@@ -1612,6 +1617,11 @@ impl ApInfo {
     }
 }
 
+static mut UP_CHECK_DIAG: (bool, bool, u32) = (false, false, 0);
+/// (WLC_UP ok, GET_BSSID ok, GET_BSSID status). up_status != -4(0xfffffffc) => radio IS up.
+pub fn up_check_diag() -> (bool, bool, u32) {
+    unsafe { UP_CHECK_DIAG }
+}
 static mut SCAN_VER_DIAG: (bool, u32) = (false, 0);
 /// (scan_ver GET ok, reported version OR status if failed).
 pub fn scan_ver_diag() -> (bool, u32) {
@@ -1736,21 +1746,43 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let (sv_ok, sv_status) = bcdc_dcmd(WLC_GET_VAR, 0, &req[..rn], &mut sv);
     let scan_ver = if sv_ok { u32::from_le_bytes([sv[0], sv[1], sv[2], sv[3]]) } else { sv_status };
     unsafe { SCAN_VER_DIAG = (sv_ok, scan_ver) };
-    // 1. event_msgs: enable ESCAN_RESULT(69) + SET_SSID(0). 16-byte mask.
+    // === PREINIT (mirror brcmf_c_preinit_dcmds, common.c) ===
+    // P1. Establish the MAC — GET cur_etheraddr (reads the OTP MAC). brcmf always does
+    //     this in preinit; the firmware expects a valid MAC before bring-up.
+    let mut macbuf = [0u8; 6];
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut macbuf);
+    // P2. event_msgs: GET the firmware's current mask, OR IN the escan-result + set-ssid
+    //     bits (preserving BRCMF_E_IF etc. the fw already enabled), then SET it back.
     let mut mask = [0u8; 16];
+    let _ = bcdc_iovar_get(b"event_msgs", &mut mask);
     mask[0] |= 0x01; // WLC_E_SET_SSID (0)
     mask[69 / 8] |= 1 << (69 % 8); // WLC_E_ESCAN_RESULT (69) -> mask[8] |= 0x20
     let mut iob = [0u8; 64];
     let n = iovar_buf(b"event_msgs", &mask, &mut iob);
     let ev_ok = bcdc_iovar_set(&iob[..n]);
-    // 2. mpc=0 — keep the radio awake during the scan.
-    let mut iob2 = [0u8; 32];
-    let n2 = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut iob2);
-    let _ = bcdc_iovar_set(&iob2[..n2]);
-    // 3. infra=1, then bring the interface UP.
+    // P3. scan dwell tuning (optional).
+    let _ = wlc_set_int(WLC_SET_SCAN_CHANNEL_TIME, 40);
+    let _ = wlc_set_int(WLC_SET_SCAN_UNASSOC_TIME, 40);
+
+    // === BRING-UP (mirror brcmf_config_dongle, cfg80211.c:7968) — EXACT ORDER ===
+    // B1. WLC_UP FIRST (value 1 via cmd_int_set — not an empty payload as HEQK had it).
+    let up_ok = wlc_set_int(WLC_UP, 1);
+    // B2. PM off (keep radio awake), roam off.
+    let _ = wlc_set_int(WLC_SET_PM, 0);
+    let mut iobr = [0u8; 32];
+    let nr = iovar_buf(b"roam_off", &1u32.to_le_bytes(), &mut iobr);
+    let _ = bcdc_iovar_set(&iobr[..nr]);
+    // B3. THEN infra=1 (AFTER up, per brcmf — doing it before up left the radio not-up).
     let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
-    let up_ok = bcdc_dcmd(WLC_UP, BCDC_SET, &[], &mut []).0;
+    // B4. fakefrag (optional).
+    let _ = wlc_set_int(WLC_SET_FAKEFRAG, 1);
     delay(80_000); // let the interface settle
+
+    // === VERIFY UP === GET_BSSID(23): -4 => still NOTUP (bring-up failed); anything else
+    // (e.g. NOTASSOCIATED) => the radio IS up. The definitive up-check (no GET_UP exists).
+    let mut bssid = [0u8; 6];
+    let (bssid_ok, up_status) = bcdc_dcmd(WLC_GET_BSSID, 0, &[], &mut bssid);
+    unsafe { UP_CHECK_DIAG = (up_ok, bssid_ok, up_status) };
     // 4. escan. scan_ver=-23(UNSUPPORTED) => firmware is v1. The v1 escan initially returns
     //    BCME_NOTUP(-4) because the STA finishes coming up asynchronously after WLC_UP's ACK,
     //    so RETRY until it's accepted (status 0) or a non-NOTUP error. (If the fw ever reports
