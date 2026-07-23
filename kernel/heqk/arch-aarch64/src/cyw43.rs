@@ -1613,9 +1613,14 @@ impl ApInfo {
 }
 
 static mut SCAN_VER_DIAG: (bool, u32) = (false, 0);
-/// (scan_ver GET ok, reported scan version) — firmware's supported scan-params version.
+/// (scan_ver GET ok, reported version OR status if failed).
 pub fn scan_ver_diag() -> (bool, u32) {
     unsafe { SCAN_VER_DIAG }
+}
+static mut ESCAN_STATUS_V1V2: (u32, u32) = (0, 0);
+/// (v1 escan BCDC status, v2 escan BCDC status). err = -(idx): -14=BUFTOOSHORT -37=VERSION.
+pub fn escan_status_v1v2() -> (u32, u32) {
+    unsafe { ESCAN_STATUS_V1V2 }
 }
 static mut SCAN_DIAG: [u32; 8] = [0; 8]; // [ev,infra,up,escan_ok,frames,aps,escan_status,ver_used]
 /// [event_msgs ok, SET_INFRA ok, WLC_UP ok, escan ok, frames, APs, escan status, params-ver used].
@@ -1723,10 +1728,13 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 /// P10-D: enable events, bring the STA interface UP, start an escan, and collect the APs
 /// the firmware reports via WLC_E_ESCAN_RESULT (channel-1) events. Returns the AP count.
 pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
-    // 0. Query the firmware's supported scan-params version (informs v1 vs v2).
+    // 0. Query the firmware's supported scan-params version (informs v1 vs v2). Capture
+    //    the GET status: -23 (BCME_UNSUPPORTED) => firmware is v1; success => v2.
     let mut sv = [0u8; 8];
-    let sv_ok = bcdc_iovar_get(b"scan_ver", &mut sv);
-    let scan_ver = if sv_ok { u32::from_le_bytes([sv[0], sv[1], sv[2], sv[3]]) } else { 0 };
+    let mut req = [0u8; 32];
+    let rn = iovar_buf(b"scan_ver", &[], &mut req);
+    let (sv_ok, sv_status) = bcdc_dcmd(WLC_GET_VAR, 0, &req[..rn], &mut sv);
+    let scan_ver = if sv_ok { u32::from_le_bytes([sv[0], sv[1], sv[2], sv[3]]) } else { sv_status };
     unsafe { SCAN_VER_DIAG = (sv_ok, scan_ver) };
     // 1. event_msgs: enable ESCAN_RESULT(69) + SET_SSID(0). 16-byte mask.
     let mut mask = [0u8; 16];
@@ -1743,20 +1751,23 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
     let up_ok = bcdc_dcmd(WLC_UP, BCDC_SET, &[], &mut []).0;
     delay(80_000); // let the interface settle
-    // 4. escan — try v1 (72 B) first; if the firmware rejects it (BADARG), retry v2 (80 B).
+    // 4. escan — try v1 (72 B) then v2 (80 B), capturing BOTH statuses to pin the version.
     let mut p = [0u8; 80];
     let mut iob3 = [0u8; 112];
     let plen = build_escan_params(&mut p, false);
     let n3 = iovar_buf(b"escan", &p[..plen], &mut iob3);
-    let (mut scan_ok, mut scan_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3], &mut []);
+    let (v1_ok, v1_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3], &mut []);
+    let mut scan_ok = v1_ok;
+    let mut scan_status = v1_status;
     let mut ver_used = 1u32;
-    if !scan_ok {
+    if !v1_ok {
         let plen2 = build_escan_params(&mut p, true);
         let n3b = iovar_buf(b"escan", &p[..plen2], &mut iob3);
-        let (ok2, st2) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3b], &mut []);
-        scan_ok = ok2;
-        scan_status = st2;
+        let (v2_ok, v2_status) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob3[..n3b], &mut []);
+        scan_ok = v2_ok;
+        scan_status = v2_status;
         ver_used = 2;
+        unsafe { ESCAN_STATUS_V1V2 = (v1_status, v2_status) };
     }
     // 5. read WLC_E_ESCAN_RESULT event frames (channel 1), parse each BSS.
     let mut rx = [0u8; DL_CHUNK + 64];
