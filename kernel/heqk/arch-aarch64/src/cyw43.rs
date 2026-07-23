@@ -425,12 +425,12 @@ pub fn chip_id_probe() -> Option<u16> {
     let rca = cmd(CMD3_SEND_RCA, 0, RESP_48, true, false)? >> 16;
     cmd(CMD7_SELECT, rca << 16, RESP_48_BUSY, true, false)?;
     unsafe { SDIO_STEP = 4 };
-    // 4-bit bus: CCCR bus-interface-control (0x07) = 0x02 on the CARD, AND set the
-    // SDHCI HOST to 4-bit (HOST_CTRL1 @0x28 bit1). Without the host side the card
-    // drives 4 DAT lines while the host reads/writes 1 → every CMD53 data transfer
-    // is corrupt (DATA CRC ERROR); CMD52, which uses only the CMD line, still works.
-    cmd52(true, 0, 0x07, 0x02)?;
-    w8(HOST_CTRL1, r8(HOST_CTRL1) | 0x02);
+    // Bus WIDTH: stay 1-bit (D0 only) for now. 4-bit (card CCCR 0x07=0x02 + host
+    // HOST_CTRL1 bit1) made CMD53 writes TIME OUT — the D1..D3 DAT lines don't
+    // deliver data (pinmux/carrier routing to confirm). 1-bit uses only D0, which
+    // is the same line CMD/CMD52 use and works. Keep card + host both at 1-bit
+    // (card defaults to 1-bit at reset; leave CCCR 0x07 = 0x00, host bit1 = 0).
+    cmd52(true, 0, 0x07, 0x00)?;
     // Enable F1 (I/O-enable 0x02 bit1), wait ready (I/O-ready 0x03 bit1).
     cmd52(true, 0, 0x02, 0x02)?;
     for _ in 0..50 {
