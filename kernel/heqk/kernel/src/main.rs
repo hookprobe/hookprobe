@@ -910,8 +910,9 @@ fn cm5_p10_probe() {
                     let mut aps = [cyw43::ApInfo::new(); 16];
                     let naps = cyw43::wifi_scan(&mut aps);
                     let sd = cyw43::scan_diag();
-                    kprint!("   [P10-D scan] event_msgs={} infra={} up={} escan={} frames={} APs={} escan_status={:#x} params_v{}\n",
-                        sd[0], sd[1], sd[2], sd[3], sd[4], sd[5], sd[6], sd[7]);
+                    let (svok, sver) = cyw43::scan_ver_diag();
+                    kprint!("   [P10-D scan] scan_ver ok={} ver={} | event_msgs={} infra={} up={} escan={} frames={} APs={} escan_status={:#x} params_v{}\n",
+                        svok, sver, sd[0], sd[1], sd[2], sd[3], sd[4], sd[5], sd[6], sd[7]);
                     for ap in &aps[..naps] {
                         kprint!("   [P10-D AP] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch={} rssi={} ssid=\"",
                             ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5],

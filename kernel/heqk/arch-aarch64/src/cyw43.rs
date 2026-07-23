@@ -1612,6 +1612,11 @@ impl ApInfo {
     }
 }
 
+static mut SCAN_VER_DIAG: (bool, u32) = (false, 0);
+/// (scan_ver GET ok, reported scan version) — firmware's supported scan-params version.
+pub fn scan_ver_diag() -> (bool, u32) {
+    unsafe { SCAN_VER_DIAG }
+}
 static mut SCAN_DIAG: [u32; 8] = [0; 8]; // [ev,infra,up,escan_ok,frames,aps,escan_status,ver_used]
 /// [event_msgs ok, SET_INFRA ok, WLC_UP ok, escan ok, frames, APs, escan status, params-ver used].
 pub fn scan_diag() -> [u32; 8] {
@@ -1716,6 +1721,11 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 /// P10-D: enable events, bring the STA interface UP, start an escan, and collect the APs
 /// the firmware reports via WLC_E_ESCAN_RESULT (channel-1) events. Returns the AP count.
 pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
+    // 0. Query the firmware's supported scan-params version (informs v1 vs v2).
+    let mut sv = [0u8; 8];
+    let sv_ok = bcdc_iovar_get(b"scan_ver", &mut sv);
+    let scan_ver = if sv_ok { u32::from_le_bytes([sv[0], sv[1], sv[2], sv[3]]) } else { 0 };
+    unsafe { SCAN_VER_DIAG = (sv_ok, scan_ver) };
     // 1. event_msgs: enable ESCAN_RESULT(69) + SET_SSID(0). 16-byte mask.
     let mut mask = [0u8; 16];
     mask[0] |= 0x01; // WLC_E_SET_SSID (0)
