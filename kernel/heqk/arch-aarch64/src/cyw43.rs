@@ -425,6 +425,23 @@ pub fn chip_id_probe() -> Option<u16> {
 // country struct) are pure logic and correct off-metal. The SDIO/backplane TIMING
 // (ALP/HT clock, ARMCR4 halt/clear order, F2-ready, SDPCM credits) is structured
 // from brcmfmac + OpenBSD bwfm and iterates on metal.
+//
+// REGDOMAIN — three metal-proven facts (2026-07-23, cross-checked vs a live CM5
+// Linux, brcmfmac source, OpenWRT, FreeBSD net80211):
+//   1. The CYW43455 FIRMWARE is the regulatory authority — it enforces per-country
+//      channels/power from its CLM blob. No host stack (Linux cfg80211 or FreeBSD
+//      net80211) can override it; both are advisory over a FullMAC radio.
+//   2. FIRMWARE VERSION MATTERS: 7.45.234 (2021) SILENTLY IGNORES the country set —
+//      the radio stays world/99, ch12/13 + full ETSI 5 GHz stay blocked (the "stuck
+//      at country 99" symptom). Firmware >= 7.45.265 honors it. stage-wifi-firmware.sh
+//      REQUIRES >= 7.45.265 and bakes ccode=RO into the NVRAM (verbatim loader → the
+//      firmware's power-on domain, deterministic; no `iw reg set` negotiation needed).
+//   3. set_regdomain() below is the runtime belt-and-braces (clmload → country iovar).
+//      With ccode already in NVRAM it is a confirming no-op; kept for a live re-set.
+// ALL-CHANNEL SENSING (HookProbe "the OS is the sensor"): the country iovar governs
+// AP/TX legality only. The DETECTION plane monitors ALL channels via RX/monitor +
+// channel-hop — the firmware permits passive receive on every channel under any
+// regd — so wide spectrum visibility does NOT require (nor imply) illegal TX.
 // ============================================================================
 
 /// The CYW43455 blobs, baked into the self-contained HEQK image.
