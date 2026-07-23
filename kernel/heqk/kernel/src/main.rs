@@ -864,6 +864,8 @@ fn cm5_p10_probe() {
                 let (cstage, cint, cpres) = cyw43::cmd53_diag();
                 kprint!("   [P10-C txfail] cmd53 fail_stage={} (1=cmd-rej 2=err-wr 3=bufwr-timeout 4=err-xfer 5=xfer-timeout) INT={:#010x} PRESENT={:#010x}\n",
                     cstage, cint, cpres);
+                let (mbi, mbd) = cyw43::mailbox_diag();
+                kprint!("   [P10-C mbox] firmware mailbox drained: intstatus={:#010x} tohostmboxdata={:#010x}\n", mbi, mbd);
                 if ver_ok {
                     // print the version string (ASCII up to first NUL).
                     let vlen = ver.iter().position(|&c| c == 0).unwrap_or(ver.len()).min(80);

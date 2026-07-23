@@ -48,6 +48,7 @@ const INT_CMD_DONE: u32 = 1 << 0;
 const INT_XFER_DONE: u32 = 1 << 1;
 const INT_BUF_WR_RDY: u32 = 1 << 4;
 const INT_BUF_RD_RDY: u32 = 1 << 5;
+const INT_CARD: u32 = 1 << 8; // SDIO Card Interrupt (in-band) — we poll instead
 const PS_BUF_WR_EN: u32 = 1 << 10; // Buffer Write Enable — FIFO can accept data
 const INT_ERR: u32 = 1 << 15;
 // CMD flags (in the high half of CMD_XFER).
@@ -131,9 +132,20 @@ fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<
     let inhibit = CMD_INHIBIT | if data { DAT_INHIBIT } else { 0 };
     while r32(PRESENT_STATE) & inhibit != 0 {
         spin += 1;
-        if spin > 1_000_000 {
-            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), 0xDEAD_0001) };
-            return None;
+        if spin > 200_000 {
+            // Inhibit stuck (e.g. the command engine wedged on an in-band card
+            // interrupt) — soft-reset the CMD (+ DAT for data cmds) circuit to
+            // recover, then proceed. Standard SDHCI error recovery.
+            let mut rb = RST_CMD;
+            if data {
+                rb |= RST_DAT;
+            }
+            w8(0x2F, rb);
+            let mut rs = 0u32;
+            while r8(0x2F) & rb != 0 && rs < 200_000 {
+                rs += 1;
+            }
+            break;
         }
     }
     w32(INT_STATUS, 0xFFFF_FFFF); // clear stale
@@ -287,7 +299,14 @@ fn host_reset() {
     // false "timeout" (the P10 "stalled step 1, INT=0" symptom). Enable ALL
     // status bits (we need CMD_DONE, XFER_DONE, BUF_RD_RDY for PIO, and every
     // error bit). We POLL, so leave the Signal-Enable (0x38) at 0 — no IRQ line.
-    w32(INT_ENABLE, 0xFFFF_FFFF);
+    // EXCEPT the SDIO Card Interrupt (bit 8, 0x100): HEQK polls the backplane
+    // (SDIO-core intstatus) for frames and never uses the SDHCI in-band SDIO IRQ.
+    // Once the WiFi firmware boots it asserts that in-band interrupt (mailbox
+    // DEVREADY/FWREADY); in 1-bit mode a latched, unserviced card interrupt wedges
+    // the command engine (Command Inhibit stuck → the P10-C first F2 write fails,
+    // fail_stage=1, INT=0x100, PRESENT bit0=1). Masking it out of INT_ENABLE stops
+    // the controller from ever latching/acting on it.
+    w32(INT_ENABLE, 0xFFFF_FFFF & !INT_CARD); // all status bits except Card Interrupt
     w32(SIG_ENABLE, 0x0000_0000);
     // Data Timeout Control (0x2E) — set the counter to max (0xE = 2^27 clocks). SW
     // reset clears it to 0 (the SHORTEST timeout); a large data transfer then trips
@@ -549,8 +568,11 @@ const SBSDIO_FUNC1_MESBUSYCTRL: u32 = 0x1001D;
 const CY_43455_F2_WATERMARK: u8 = 0x60;
 const CY_43455_MESBUSYCTRL: u8 = 0xD0; // MES_WATERMARK(0x50) | MESBUSYCTRL_ENAB(0x80)
 // SDIO-dev core sdpcmd_regs offsets (from the SDIO_DEV core regbase).
+const SD_REG_TOSBMAILBOX: u32 = 0x40; // host -> firmware mailbox (SMB_INT_ACK etc.)
 const SD_REG_TOSBMAILBOXDATA: u32 = 0x48;
+const SD_REG_TOHOSTMAILBOXDATA: u32 = 0x4C; // firmware -> host mailbox data (DEVREADY/FWREADY)
 const SD_REG_HOSTINTMASK: u32 = 0x24;
+const SMB_INT_ACK: u32 = 0x02; // ack the firmware's software mailbox interrupt
 const SDPCM_VERSION_MB: u32 = 4 << 16; // SDPCM_PROT_VERSION(4) << SMB_DATA_VERSION_SHIFT(16)
 const HOSTINTMASK: u32 = 0x2000_00F0; // I_HMB_SW_MASK(0xF0) | I_CHIPACTIVE(1<<29)
 // SDIO func-2 (WLAN data) block size = 512 (FBR 0x210/0x211).
@@ -1499,6 +1521,30 @@ pub fn bcdc_diag() -> [u32; 12] {
 fn sdio_core_base() -> u32 {
     erom_find_core(CORE_SDIO_DEV).map(|(b, _)| b).unwrap_or(0)
 }
+
+static mut MAILBOX_DIAG: (u32, u32) = (0, 0); // (intstatus seen, tohostmailboxdata)
+/// Service the firmware's software mailbox interrupt (DEVREADY/FWREADY posted right
+/// after boot): read tohostmailboxdata, ACK via SMB_INT_ACK, then W1C the SDIO-core
+/// intstatus. This de-asserts the firmware's in-band SDIO interrupt so it stops
+/// wedging the SDHCI command engine. Safe to call repeatedly.
+fn drain_firmware_mailbox() {
+    let sdb = sdio_core_base();
+    if sdb == 0 {
+        return;
+    }
+    let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
+    let mbdata = bp_r32(sdb + SD_REG_TOHOSTMAILBOXDATA);
+    // ACK the firmware's software mailbox, then clear the handled intstatus bits.
+    let _ = bp_w32(sdb + SD_REG_TOSBMAILBOX, SMB_INT_ACK);
+    if intstat != 0 {
+        let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
+    }
+    unsafe { MAILBOX_DIAG = (intstat, mbdata) };
+}
+/// (SDIO-core intstatus, tohostmailboxdata) seen when the firmware's mailbox was drained.
+pub fn mailbox_diag() -> (u32, u32) {
+    unsafe { MAILBOX_DIAG }
+}
 /// Control credits available (u8 modulo-256), per brcmf txctl_ok.
 fn credit_avail() -> u8 {
     unsafe { TX_MAX.wrapping_sub(TX_SEQ) }
@@ -1661,5 +1707,8 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 /// non-empty version string with status 0, the entire SDPCM/BCDC path works and
 /// clmload/country will follow. `out` receives the version string.
 pub fn bcdc_ver_probe(out: &mut [u8]) -> bool {
+    // Service the firmware's boot-time mailbox interrupt first so it stops asserting
+    // the in-band SDIO card interrupt (which otherwise wedges the command engine).
+    drain_firmware_mailbox();
     bcdc_iovar_get(b"ver", out)
 }
