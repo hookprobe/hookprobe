@@ -1291,15 +1291,17 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
         unsafe { F2_DIAG.2 = ior as u32 };
         if ior & SDIO_F2 != 0 {
-            // BASELINE probe the INSTANT F2 reads ready, before ANY post-ready write —
-            // to catch the chip while (maybe) still alive and localize when it dies.
-            // [chip_id via backplane, SLEEPCSR, CHIPCLKCSR, CCCR-rev(F0 addr0)].
+            // BASELINE probe the INSTANT F2 reads ready, before ANY post-ready write.
+            // Read F0/CCCR (always-on domain) FIRST so an F1 access can't wedge the bus
+            // ahead of it — this cleanly separates "backplane asleep" (F0 ok, F1 dead)
+            // from "whole device dead" (F0 dead too).
+            // [CCCR-rev(F0), F2-IOR(F0), CHIPCLKCSR(F1), chip_id(F1 backplane)].
             unsafe {
                 READY_STATE = [
-                    bp_r32(SI_ENUM_BASE) & 0xffff,
-                    cmd52(false, 1, SBSDIO_SLEEPCSR, 0).unwrap_or(0xEE) as u32,
-                    cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE) as u32,
-                    cmd52(false, 0, 0x00, 0).unwrap_or(0xEE) as u32, // CCCR/SDIO revision
+                    cmd52(false, 0, 0x00, 0).unwrap_or(0xEE) as u32, // F0 CCCR/SDIO revision
+                    cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0xEE) as u32, // F0 IOR (F2 ready)
+                    cmd52(false, 1, CHIPCLKCSR, 0).unwrap_or(0xEE) as u32, // F1 clock
+                    bp_r32(SI_ENUM_BASE) & 0xffff, // F1 backplane chip-id
                 ];
             }
             // F2 up. brcmf_sdio_bus_init tail: HOSTINTMASK, then the 43455-SPECIFIC
