@@ -1646,8 +1646,10 @@ fn build_escan_params(out: &mut [u8], v2: bool) -> usize {
         // channel_num @68 = 0.
         72
     } else {
-        // escan_params_v2_le: version(4)=1, action(2)=1, sync_id(2), scan_params_v2_le.
-        out[0..4].copy_from_slice(&1u32.to_le_bytes());
+        // escan_params_v2_le: WRAPPER version(4)=2 (BRCMF_ESCAN_REQ_VERSION_V2 — the fix;
+        // the firmware validates this outer field first and rejects 1 with BCME_VERSION),
+        // action(2)=1, sync_id(2), then scan_params_v2_le.
+        out[0..4].copy_from_slice(&2u32.to_le_bytes());
         out[4..6].copy_from_slice(&1u16.to_le_bytes());
         out[6..8].copy_from_slice(&0x1234u16.to_le_bytes());
         // scan_params_v2_le @8: version(2)=2, length(2)=72, ssid(36), bssid(6),
