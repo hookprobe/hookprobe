@@ -222,11 +222,14 @@ const SB_ADDR_MID: u32 = 0x1000B;
 const SB_ADDR_HIGH: u32 = 0x1000C;
 const SI_ENUM_BASE: u32 = 0x1800_0000; // chipcommon core — chip-ID at +0x00
 
-fn set_backplane_window(addr: u32) {
-    // Window is 0x8000-aligned; program the bits above bit15.
-    let _ = cmd52(true, 1, SB_ADDR_LOW, ((addr >> 8) & 0x80) as u8);
-    let _ = cmd52(true, 1, SB_ADDR_MID, ((addr >> 16) & 0xFF) as u8);
-    let _ = cmd52(true, 1, SB_ADDR_HIGH, ((addr >> 24) & 0xFF) as u8);
+fn set_backplane_window(addr: u32) -> bool {
+    // Window is 0x8000-aligned; program address bits [31:8] (brcmfmac masks the low
+    // byte with 0xFF after clearing the 15-bit offset — 0x80 dropped real bits for
+    // any window whose addr[14:8] != 0, e.g. cores above chipcommon).
+    let a = cmd52(true, 1, SB_ADDR_LOW, ((addr >> 8) & 0xFF) as u8);
+    let b = cmd52(true, 1, SB_ADDR_MID, ((addr >> 16) & 0xFF) as u8);
+    let c = cmd52(true, 1, SB_ADDR_HIGH, ((addr >> 24) & 0xFF) as u8);
+    a.is_some() && b.is_some() && c.is_some()
 }
 
 /// BCM2712 SDHCI `cfg` quirk-block init (@ base+0x400) — the piece the plan flagged.
@@ -414,13 +417,26 @@ pub fn chip_id_probe() -> Option<u16> {
     }
     unsafe { SDIO_STEP = 5 };
     // Point the F1 backplane window at chipcommon, read the 32-bit chip-ID.
-    set_backplane_window(SI_ENUM_BASE);
+    let win_ok = set_backplane_window(SI_ENUM_BASE);
     let mut id = [0u8; 4];
     if !cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut id) {
         return None;
     }
+    let raw1 = u32::from_le_bytes(id);
+    // Second read of the SAME reg — a stable value means the datapath is solid and
+    // the mismatch is a window/offset issue; a differing value means a data-phase
+    // framing bug (stale FIFO word / off-by-one).
+    let mut id2 = [0u8; 4];
+    let _ = cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut id2);
+    unsafe { CHIPID_DIAG = (raw1, u32::from_le_bytes(id2), win_ok) };
     unsafe { SDIO_STEP = 6 };
     Some(u16::from_le_bytes([id[0], id[1]]))
+}
+
+static mut CHIPID_DIAG: (u32, u32, bool) = (0, 0, false);
+/// (raw chipcommon[0..4] read #1, read #2, did the backplane-window cmd52s ACK).
+pub fn chipid_diag() -> (u32, u32, bool) {
+    unsafe { CHIPID_DIAG }
 }
 
 // ============================================================================
