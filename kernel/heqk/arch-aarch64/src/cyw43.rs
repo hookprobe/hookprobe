@@ -541,6 +541,13 @@ const SBSDIO_FORCE_HT: u8 = 0x02; // FORCE (latch) HT, not just request — F2 n
 // that was blocking HT (source-verified against brcmfmac/sdio.c).
 const SBSDIO_SLEEPCSR: u32 = 0x1001F; // F1 SLEEPCSR
 const SBSDIO_KSO_EN: u8 = 0x01; // SLEEPCSR bit0 = keep SDIO on
+// 43455 F2 data-path watermark (brcmf_sdio_bus_init, CY_43455_* constants).
+const SBSDIO_WATERMARK: u32 = 0x10008;
+const SBSDIO_DEVICE_CTL: u32 = 0x10009;
+const SBSDIO_DEVCTL_F2WM_ENAB: u8 = 0x10;
+const SBSDIO_FUNC1_MESBUSYCTRL: u32 = 0x1001D;
+const CY_43455_F2_WATERMARK: u8 = 0x60;
+const CY_43455_MESBUSYCTRL: u8 = 0xD0; // MES_WATERMARK(0x50) | MESBUSYCTRL_ENAB(0x80)
 // SDIO-dev core sdpcmd_regs offsets (from the SDIO_DEV core regbase).
 const SD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SD_REG_HOSTINTMASK: u32 = 0x24;
@@ -1083,7 +1090,9 @@ fn cr4_ramsize(cr4b: u32) -> u32 {
     while idx < totb && idx < 32 {
         bp_w32(cr4b + ARMCR4_BANKIDX, idx);
         let bxinfo = bp_r32(cr4b + ARMCR4_BANKINFO);
-        ramsize += 8192 * ((bxinfo & 0x3f) + 1);
+        // bank size = ((BSZ & 0x7f) + 1) * blksize; blksize = 8192, or 1024 if BLK_1K.
+        let blksize = if bxinfo & 0x200 != 0 { 1024 } else { 8192 };
+        ramsize += ((bxinfo & 0x7f) + 1) * blksize;
         idx += 1;
     }
     ramsize
@@ -1260,11 +1269,16 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         let ior = cmd52(false, 0, SDIO_FUNC_READY, 0).unwrap_or(0);
         unsafe { F2_DIAG.2 = ior as u32 };
         if ior & SDIO_F2 != 0 {
-            // F2 up: watermark + host interrupt mask (brcmf_sdio_bus_init tail).
-            let _ = cmd52(true, 1, 0x10008, 8); // SBSDIO_WATERMARK
+            // F2 up. brcmf_sdio_bus_init tail: HOSTINTMASK, then the 43455-SPECIFIC
+            // watermark set (source-verified) — WITHOUT these the F2 data path / SDPCM
+            // interrupts don't propagate reliably, which stalls the Stage-C control txn.
             if let Some((sdb, _)) = erom_find_core(CORE_SDIO_DEV) {
                 let _ = bp_w32(sdb + SD_REG_HOSTINTMASK, HOSTINTMASK);
             }
+            let _ = cmd52(true, 1, SBSDIO_WATERMARK, CY_43455_F2_WATERMARK); // 0x10008 = 0x60
+            let dc = cmd52(false, 1, SBSDIO_DEVICE_CTL, 0).unwrap_or(0);
+            let _ = cmd52(true, 1, SBSDIO_DEVICE_CTL, dc | SBSDIO_DEVCTL_F2WM_ENAB); // 0x10009 |= 0x10
+            let _ = cmd52(true, 1, SBSDIO_FUNC1_MESBUSYCTRL, CY_43455_MESBUSYCTRL); // 0x1001D = 0xD0
             unsafe { FW_STEP = 8 };
             return true;
         }
