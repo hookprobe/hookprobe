@@ -175,6 +175,12 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
     // block size 1 handled as a byte transfer; count = n bytes.
     w16(BLK_SIZE_CNT, n as u16); // byte count in low field for byte mode
     w16(BLK_SIZE_CNT + 2, 1);
+    // Transfer Mode (0x0C low half) — REQUIRED for any data command: set the data
+    // direction to READ (bit4). cmd() only writes the Command reg (0x0E) and never
+    // this, so without it CMD53 issues with a stale/zero (=WRITE) direction and the
+    // data phase never completes → the P10 "stalled step 5" (first CMD53) symptom.
+    // Single block (byte mode), PIO (no DMA/block-count-enable).
+    w16(CMD_XFER, XM_READ);
     let arg = (0 << 31)            // read
         | ((fnum & 7) << 28)
         | (0 << 27)                 // byte mode (not block)
@@ -580,6 +586,9 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
     let n = data.len().min(512);
     w16(BLK_SIZE_CNT, n as u16);
     w16(BLK_SIZE_CNT + 2, 1);
+    // Transfer Mode (0x0C low half) = WRITE direction (bit4=0), single block. Must
+    // be written explicitly to clear any stale READ bit a prior cmd53_read left.
+    w16(CMD_XFER, 0);
     let arg = (1 << 31)            // write
         | ((fnum & 7) << 28)
         | (0 << 27)                 // byte mode
