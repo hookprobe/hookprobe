@@ -816,6 +816,11 @@ fn cm5_p10_probe() {
             // #2 HT-before-download: did HT lock with the CR4 halted?
             let ht = cyw43::ht_diag();
             kprint!("   [P10-B ht] CHIPCLKCSR after halt+HT-wait={:#04x} (HT_avail={}) — want 0xC0\n", ht, (ht >> 7) & 1);
+            // 3b isolation: force HT via resource masks — PLL health vs request-path.
+            let (fclk, fres, fpend, fpmust) = cyw43::ht_force_diag();
+            kprint!("   [P10-B htforce] clkcsr={:#04x} (HT_avail={}) res_state={:#010x} (HT28/29={}{}) res_pend={:#010x} pmust={:#010x} => {}\n",
+                fclk, (fclk >> 7) & 1, fres, (fres >> 28) & 1, (fres >> 29) & 1, fpend, fpmust,
+                if fclk & 0x80 != 0 { "PLL OK, request-path bug" } else { "PLL/LPO cannot make HT" });
             // #1 read-back verify: did the firmware actually land in TCM?
             let (nm, ba, exp, got) = cyw43::fw_verify();
             kprint!("   [P10-B fwverify] mismatches={} first_bad@{:#010x} exp={:#010x} got={:#010x} {}\n",
