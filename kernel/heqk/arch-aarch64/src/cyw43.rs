@@ -499,14 +499,48 @@ pub static FW_BIN: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.bin
 pub static NVRAM_TXT: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio-cm5.nvram.txt");
 pub static CLM_BLOB: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.clm_blob");
 
-// BCM4345/6 (CYW43455) SoCRAM/ARMCR4 geometry + F1 chip-backplane control regs.
-const RAM_BASE: u32 = 0x0000_0000; // ATCM — firmware loads at 0
-const RAM_SIZE: u32 = 0x0009_8000; // 608 KiB (0x198000 per P9_P10_BRINGUP)
+// BCM4345/6 (CYW43455) ARMCR4 geometry + F1 chip-backplane control regs.
+// CRITICAL (metal + brcmfmac brcmf_chip_tcm_rambase): the 4345 firmware loads at
+// 0x198000 (the CR4 TCM base), NOT 0. Only the 4-byte reset VECTOR goes to addr 0.
+const RAM_BASE: u32 = 0x0019_8000; // CR4 TCM base — full firmware image loads here
+const RAM_SIZE: u32 = 0x0009_8000; // 608 KiB
+const RESET_VEC_ADDR: u32 = 0x0000_0000; // fw[0..4] (reset vector) → backplane addr 0
 const CHIPCLKCSR: u32 = 0x1000E; // F1 clock-control (backplane)
 const SBSDIO_ALP_AVAIL_REQ: u8 = 0x08;
 const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
 const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
+// F1 backplane SBADDR window registers (byte, F1).
+const SBADDR_LOW: u32 = 0x1000A;
+const SBADDR_MID: u32 = 0x1000B;
+const SBADDR_HIGH: u32 = 0x1000C;
+// Backplane core part numbers (DMP/AMBA) we look up in the EROM.
+const CORE_ARM_CR4: u32 = 0x83E;
+const CORE_80211: u32 = 0x812; // D11
+const CORE_SDIO_DEV: u32 = 0x829;
+// AI (aidmp) core-wrapper registers — offsets from a core's WRAPBASE.
+const AI_IOCTL: u32 = 0x0408;
+const AI_RESET_CTL: u32 = 0x0800;
+const AI_IOCTL_CLK: u32 = 0x0001;
+const AI_IOCTL_FGC: u32 = 0x0002;
+const AI_RESET_CTL_RESET: u32 = 0x0001;
+const ARMCR4_IOCTL_CPUHALT: u32 = 0x0020;
+const D11_IOCTL_PHYCLOCKEN: u32 = 0x0004;
+const D11_IOCTL_PHYRESET: u32 = 0x0008;
+// EROM descriptor decode (brcmf_chip_dmp_erom_scan).
+const DMP_DESC_MSK: u32 = 0xF;
+const DMP_DESC_COMPONENT: u32 = 0x1;
+const DMP_DESC_ADDRESS: u32 = 0x5;
+const DMP_DESC_ADDRSIZE_GT32: u32 = 0x8;
+const DMP_DESC_EOT: u32 = 0xF;
+const DMP_COMP_PARTNUM_S: u32 = 8;
+const DMP_COMP_PARTNUM: u32 = 0x000F_FF00;
+const DMP_SLAVE_ADDR_BASE: u32 = 0xFFFF_F000;
+const DMP_SLAVE_TYPE: u32 = 0x0000_00C0;
+const DMP_SLAVE_TYPE_S: u32 = 6;
+const DMP_SLAVE_SIZE_TYPE: u32 = 0x0000_0030;
+const DMP_SLAVE_SIZE_TYPE_S: u32 = 4;
+const DMP_SLAVE_SIZE_DESC: u32 = 0x3;
 // CCCR: I/O-enable 0x02, I/O-ready 0x03. F2 = bit2.
 const SDIO_FUNC_ENABLE: u32 = 0x02;
 const SDIO_FUNC_READY: u32 = 0x03;
@@ -684,6 +718,154 @@ fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
     true
 }
 
+// --- 32-bit backplane register access via the F1 window (4-byte access) ---------
+fn bp_r32(addr: u32) -> u32 {
+    set_backplane_window(addr);
+    let mut b = [0u8; 4];
+    if !cmd53_read(1, (addr & 0x7FFF) | 0x8000, &mut b) {
+        return 0xFFFF_FFFF;
+    }
+    u32::from_le_bytes(b)
+}
+fn bp_w32(addr: u32, val: u32) -> bool {
+    set_backplane_window(addr);
+    cmd53_write(1, (addr & 0x7FFF) | 0x8000, &val.to_le_bytes())
+}
+
+// --- EROM walk: find a core's (regbase, wrapbase) by DMP part number -------------
+// Mirrors brcmf_chip_dmp_erom_scan + _get_regaddr. The EROM lists each component
+// (CIA/CIB) then its address descriptors; we take the first SLAVE address as regbase
+// and the first WRAPPER (slave- or master-wrap) address as wrapbase.
+static mut EROM_DIAG: (u32, u32, u32) = (0, 0, 0); // (eromptr, cr4_base, cr4_wrap)
+fn erom_find_core(partnum: u32) -> Option<(u32, u32)> {
+    let eromptr = bp_r32(SI_ENUM_BASE + 0xFC) & 0xFFFF_F000;
+    if partnum == CORE_ARM_CR4 {
+        unsafe { EROM_DIAG.0 = eromptr };
+    }
+    let mut a = eromptr;
+    let mut guard = 0u32;
+    while guard < 512 {
+        guard += 1;
+        let cia = bp_r32(a);
+        a += 4;
+        if (cia & DMP_DESC_MSK) == DMP_DESC_EOT {
+            break;
+        }
+        if (cia & DMP_DESC_MSK) != DMP_DESC_COMPONENT {
+            continue;
+        }
+        let pn = (cia & DMP_COMP_PARTNUM) >> DMP_COMP_PARTNUM_S;
+        let _cib = bp_r32(a); // component CIB (wrapper/port counts — we scan instead)
+        a += 4;
+        // Read this component's ADDRESS descriptors.
+        let (mut regbase, mut wrapbase) = (0u32, 0u32);
+        loop {
+            let d = bp_r32(a);
+            if (d & DMP_DESC_MSK) != DMP_DESC_ADDRESS {
+                break; // next component (or EOT) — leave `a` pointing at it
+            }
+            a += 4;
+            let base = d & DMP_SLAVE_ADDR_BASE;
+            let stype = (d & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S; // 0=slave 2=swrap 3=mwrap
+            if (d & DMP_DESC_ADDRSIZE_GT32) != 0 {
+                a += 4; // 64-bit address: skip the high word
+            }
+            // Size-descriptor form carries extra size words.
+            if ((d & DMP_SLAVE_SIZE_TYPE) >> DMP_SLAVE_SIZE_TYPE_S) == DMP_SLAVE_SIZE_DESC {
+                let sz = bp_r32(a);
+                a += 4;
+                if (sz & DMP_DESC_ADDRSIZE_GT32) != 0 {
+                    a += 4;
+                }
+            }
+            if stype == 0 && regbase == 0 {
+                regbase = base;
+            } else if (stype == 2 || stype == 3) && wrapbase == 0 {
+                wrapbase = base;
+            }
+        }
+        if pn == partnum {
+            if partnum == CORE_ARM_CR4 {
+                unsafe { EROM_DIAG.1 = regbase; EROM_DIAG.2 = wrapbase };
+            }
+            return Some((regbase, wrapbase));
+        }
+    }
+    None
+}
+/// (eromptr, discovered CR4 regbase, CR4 wrapbase) — for the [P10-B] diag.
+pub fn erom_diag() -> (u32, u32, u32) {
+    unsafe { EROM_DIAG }
+}
+
+// --- AI (aidmp) core reset/enable (brcmf_chip_ai_coredisable / _resetcore) -------
+fn ai_coredisable(wrapbase: u32, prereset: u32, reset: u32) {
+    if bp_r32(wrapbase + AI_RESET_CTL) & AI_RESET_CTL_RESET == 0 {
+        bp_w32(wrapbase + AI_IOCTL, prereset | AI_IOCTL_FGC | AI_IOCTL_CLK);
+        let _ = bp_r32(wrapbase + AI_IOCTL); // posted-write flush
+        bp_w32(wrapbase + AI_RESET_CTL, AI_RESET_CTL_RESET);
+        delay(20);
+        let mut g = 0;
+        while bp_r32(wrapbase + AI_RESET_CTL) & AI_RESET_CTL_RESET == 0 && g < 300 {
+            g += 1;
+        }
+    }
+    bp_w32(wrapbase + AI_IOCTL, reset | AI_IOCTL_FGC | AI_IOCTL_CLK);
+    let _ = bp_r32(wrapbase + AI_IOCTL);
+}
+fn ai_resetcore(wrapbase: u32, prereset: u32, reset: u32, postreset: u32) {
+    ai_coredisable(wrapbase, prereset, reset);
+    let mut count = 0;
+    while bp_r32(wrapbase + AI_RESET_CTL) & AI_RESET_CTL_RESET != 0 {
+        bp_w32(wrapbase + AI_RESET_CTL, 0); // out of reset
+        count += 1;
+        if count > 50 {
+            break;
+        }
+        delay(60);
+    }
+    bp_w32(wrapbase + AI_IOCTL, postreset | AI_IOCTL_CLK); // note: no FGC
+    let _ = bp_r32(wrapbase + AI_IOCTL);
+}
+
+/// CR4 "passive" — halt the CR4 CPU (TCM writable) + reset the D11 core. Returns
+/// the CR4 (regbase, wrapbase) on success, or None if the EROM lookup failed.
+fn cr4_set_passive() -> Option<(u32, u32)> {
+    let (cr4b, cr4w) = erom_find_core(CORE_ARM_CR4)?;
+    if cr4w == 0 {
+        return None;
+    }
+    // disable_arm(CR4): keep only the CPUHALT bit, resetcore with CPUHALT held.
+    let keep = bp_r32(cr4w + AI_IOCTL) & ARMCR4_IOCTL_CPUHALT;
+    ai_resetcore(cr4w, keep, ARMCR4_IOCTL_CPUHALT, ARMCR4_IOCTL_CPUHALT);
+    // Reset the D11 (802.11) core.
+    if let Some((_, d11w)) = erom_find_core(CORE_80211) {
+        if d11w != 0 {
+            ai_resetcore(
+                d11w,
+                D11_IOCTL_PHYRESET | D11_IOCTL_PHYCLOCKEN,
+                D11_IOCTL_PHYCLOCKEN,
+                D11_IOCTL_PHYCLOCKEN,
+            );
+        }
+    }
+    Some((cr4b, cr4w))
+}
+
+/// CR4 "activate" — write the reset vector to backplane addr 0 and release the CR4
+/// (postreset IOCTL=0 clears CPUHALT → CPU boots from the vector).
+fn cr4_activate(cr4w: u32, rstvec: u32) {
+    // Clear the SDIO core's intstatus (brcmf_sdio_buscore_activate).
+    if let Some((sdb, _)) = erom_find_core(CORE_SDIO_DEV) {
+        if sdb != 0 {
+            let _ = bp_w32(sdb + 0x20, 0xFFFF_FFFF); // sdpcmd intstatus
+        }
+    }
+    let _ = bp_w32(RESET_VEC_ADDR, rstvec);
+    unsafe { core::arch::asm!("dsb sy") };
+    ai_resetcore(cr4w, ARMCR4_IOCTL_CPUHALT, 0, 0);
+}
+
 /// P10 Stage B — download firmware + NVRAM, start the ARMCR4 core, enable F2.
 /// Returns true once F2 reports ready (firmware alive). Structured from brcmfmac
 /// `brcmf_sdio_download_firmware` + OpenBSD `bwfm_sdio` — timing iterates on metal.
@@ -704,37 +886,44 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         }
         delay(1_000);
     }
-    unsafe { FW_STEP = 2 };
-    // 2. (ARMCR4 halt — device-specific core reset via the backplane; asserted here
-    //    before RAM writes. Exact core-base + reset bits confirmed on metal.)
-    //    -- structured: firmware is written while the core is held in reset.
-    // 3. Firmware → RAM base (ATCM @0).
+    // 2. CR4 PASSIVE — EROM-find the CR4, halt its CPU (TCM writable), reset D11.
+    let (_cr4b, cr4w) = match cr4_set_passive() {
+        Some(v) => v,
+        None => return false, // EROM lookup failed — FW_STEP stays 2
+    };
+    unsafe { FW_STEP = 3 };
+    // 3. Firmware → CR4 TCM base (0x198000 — NOT 0). Window-split at 32 KiB.
     if !backplane_write(RAM_BASE, FW_BIN) {
         return false;
     }
-    unsafe { FW_STEP = 3 };
-    // 4. NVRAM (stripped + trailer) near the top of RAM.
+    unsafe { FW_STEP = 4 };
+    // 4. NVRAM (stripped + trailer) at rambase + ramsize - varsz (ends at top of RAM).
     let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
     let nvram_addr = RAM_BASE + RAM_SIZE - (nlen as u32);
     if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
         return false;
     }
-    unsafe { FW_STEP = 4 };
-    // 5. (Reset vector + take ARMCR4 out of reset — device-specific; metal.)
-    // 6. Switch to the HT (fast) clock.
+    unsafe { FW_STEP = 5 };
+    // 5. CR4 ACTIVATE — reset vector (fw[0..4]) → addr 0, clear CPUHALT → CPU boots.
+    let rstvec = u32::from_le_bytes([FW_BIN[0], FW_BIN[1], FW_BIN[2], FW_BIN[3]]);
+    cr4_activate(cr4w, rstvec);
+    unsafe { FW_STEP = 6 };
+    // 6. Switch to the HT (fast) clock — firmware needs it to come up.
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ);
-    for _ in 0..50 {
+    for _ in 0..100 {
         if cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v & SBSDIO_HT_AVAIL).unwrap_or(0) != 0 {
             break;
         }
         delay(1_000);
     }
-    unsafe { FW_STEP = 5 };
-    // 7. Enable F2, poll ready — F2 ready = firmware alive.
+    unsafe { FW_STEP = 7 };
+    // 7. Enable F2, poll ready — F2 ready = firmware alive (tens of ms typical).
     let _ = cmd52(true, 0, SDIO_FUNC_ENABLE, SDIO_F2);
     for _ in 0..500 {
         if cmd52(false, 0, SDIO_FUNC_READY, 0).map(|v| v & SDIO_F2).unwrap_or(0) != 0 {
-            unsafe { FW_STEP = 6 };
+            // Watermark (brcmf_sdio_bus_init) then done.
+            let _ = cmd52(true, 1, 0x10008, 8);
+            unsafe { FW_STEP = 8 };
             return true;
         }
         delay(2_000);
@@ -743,8 +932,9 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
 }
 
 static mut FW_STEP: u8 = 0;
-/// Stage B progress: 1=clock raised 2=ALP+RAM-write-start 3=firmware written
-/// 4=NVRAM written 5=HT clock + F2 requested 6=F2 ready (firmware alive).
+/// Stage B progress: 1=clk 2=ALP (next: CR4 passive) 3=CR4 halted+D11 reset
+/// 4=firmware written 5=NVRAM written 6=CR4 activated (vector+release) 7=HT/F2-req
+/// 8=F2 ready (firmware alive). A stop at 2 = EROM CR4 lookup failed (see erom_diag).
 pub fn fw_last_step() -> u8 {
     unsafe { FW_STEP }
 }

@@ -794,13 +794,19 @@ fn cm5_p10_probe() {
             // Stage B: firmware + NVRAM upload, start ARMCR4, enable F2.
             static mut NVSCRATCH: [u8; 4096] = [0; 4096];
             let f2 = cyw43::firmware_upload(unsafe { &mut NVSCRATCH });
+            let (erom, cr4b, cr4w) = cyw43::erom_diag();
             kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
                 if f2 { "PASS" } else { "SILENT" }, cyw43::FW_BIN.len(),
-                if f2 { "ready (firmware alive)" } else { "not ready — ARMCR4 core reset (steps 2/5) still a stub; iterates on metal" },
+                if f2 { "ready (firmware alive)" } else { "not ready — see step + EROM diag" },
                 cyw43::fw_last_step());
+            kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
+                erom, cr4b, cr4w);
             if f2 {
                 // Stage C: the regdomain backlog target — clmload + country iovar.
-                match cyw43::set_regdomain(b"GB", 0) {
+                // RO (Romania) — matches the ccode=RO baked into the NVRAM; rev 0 is
+                // the driver's ISO3166 fallback (valid for a current CLM). See the
+                // heqk-wifi-regdomain memory: fw >=7.45.265 honors the country.
+                match cyw43::set_regdomain(b"RO", 0) {
                     Some(true) => kprint!(" [P10-C] PASS — clmload + country iovar set; regdomain readback is a real ISO (not 00/99)\n"),
                     Some(false) => kprint!(" [P10-C] country readback still 00/99 — map the (ccode,rev) pair vs the CLM\n"),
                     None => kprint!(" [P10-C] SILENT — BCDC/SDPCM control path (seq/credits) iterates on metal\n"),
