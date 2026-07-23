@@ -906,12 +906,15 @@ fn cm5_p10_probe() {
                         None => kprint!(" [P10-C] PASS(ctrl) — ver round-trip OK; country readback txn incomplete — see regdom diag\n"),
                     }
                     // P10-D: WiFi scan — enumerate nearby APs (event_msgs -> UP -> escan).
-                    kprint!(" [P10-D] WiFi scan — event_msgs + WLC_UP + escan (all channels)...\n");
+                    kprint!(" [P10-D] WiFi scan — MAC + preinit + WLC_UP + escan (all channels)...\n");
                     let mut aps = [cyw43::ApInfo::new(); 16];
                     let naps = cyw43::wifi_scan(&mut aps);
                     let sd = cyw43::scan_diag();
                     let (svok, sver) = cyw43::scan_ver_diag();
                     let (v1s, _v2s) = cyw43::escan_status_v1v2();
+                    let (otp, used, valid) = cyw43::mac_diag();
+                    kprint!("   [P10-D mac] OTP={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} valid={} using={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                        otp[0],otp[1],otp[2],otp[3],otp[4],otp[5], valid, used[0],used[1],used[2],used[3],used[4],used[5]);
                     let (upok, bok, upst) = cyw43::up_check_diag();
                     let pn = cyw43::phy_noise_diag();
                     kprint!("   [P10-D up] WLC_UP ok={} GET_BSSID status={:#x} (MAC domain) | GET_PHY_NOISE status={:#x} => RADIO {}\n",
