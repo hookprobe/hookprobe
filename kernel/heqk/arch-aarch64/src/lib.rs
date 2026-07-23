@@ -22,6 +22,8 @@ pub mod mmu_cm5;
 pub mod rtl8111;
 #[cfg(feature = "cm5")]
 pub mod cyw43;
+#[cfg(feature = "cm5")]
+pub mod mailbox;
 pub mod semihosting;
 pub mod syscall;
 pub mod thread;
