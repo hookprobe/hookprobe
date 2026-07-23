@@ -107,36 +107,42 @@ const CMD7_SELECT: u16 = 7;
 const CMD52_IO_RW_DIRECT: u16 = 52;
 const CMD53_IO_RW_EXTENDED: u16 = 53;
 
+/// Diagnostic: (PRESENT_STATE, INT_STATUS) captured at the last command failure —
+/// distinguishes a card that never responds (timeout, INT_STATUS ~0) from a host
+/// that rejected the response (INT_ERR bits set).
+static mut SDIO_DIAG: (u32, u32) = (0, 0);
+pub fn sdio_diag() -> (u32, u32) {
+    unsafe { SDIO_DIAG }
+}
+
 /// Issue an SDHCI command; return the 32-bit RESP0 (or None on error/timeout).
-fn cmd(idx: u16, arg: u32, resp_kind: u16, data: bool) -> Option<u32> {
-    // Wait for the command line (and data line, for data cmds) to be free.
+/// `crc_idx` = check the response CRC + command index (true for R1/R5/R6/R1b;
+/// FALSE for R3/R4 — e.g. CMD5's R4 has no CRC or index, so checking it errors).
+fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<u32> {
     let mut spin = 0u32;
     let inhibit = CMD_INHIBIT | if data { DAT_INHIBIT } else { 0 };
     while r32(PRESENT_STATE) & inhibit != 0 {
         spin += 1;
         if spin > 1_000_000 {
+            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), 0xDEAD_0001) };
             return None;
         }
     }
     w32(INT_STATUS, 0xFFFF_FFFF); // clear stale
     w32(ARG1, arg);
     let mut flags = resp_kind;
-    if resp_kind != 0 {
+    if crc_idx && resp_kind != 0 {
         flags |= CMD_CRC_CHK | CMD_IDX_CHK;
-    }
-    if resp_kind == RESP_136 {
-        flags &= !(CMD_CRC_CHK | CMD_IDX_CHK); // R2 has no idx; keep CRC per host
-        flags |= CMD_CRC_CHK;
     }
     if data {
         flags |= CMD_DATA;
     }
     w16(CMD_XFER + 2, (idx << 8) | flags);
-    // Wait for command-complete.
     let mut spin = 0u32;
     loop {
         let st = r32(INT_STATUS);
         if st & INT_ERR != 0 {
+            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), st) };
             return None;
         }
         if st & INT_CMD_DONE != 0 {
@@ -144,6 +150,7 @@ fn cmd(idx: u16, arg: u32, resp_kind: u16, data: bool) -> Option<u32> {
         }
         spin += 1;
         if spin > 1_000_000 {
+            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), st) };
             return None;
         }
     }
@@ -158,7 +165,7 @@ fn cmd52(write: bool, fnum: u32, addr: u32, val: u8) -> Option<u8> {
         | ((write as u32) << 27) // RAW (read-after-write) when writing
         | ((addr & 0x1_FFFF) << 9)
         | (val as u32);
-    cmd(CMD52_IO_RW_DIRECT, arg, RESP_48, false).map(|r| (r & 0xFF) as u8)
+    cmd(CMD52_IO_RW_DIRECT, arg, RESP_48, true, false).map(|r| (r & 0xFF) as u8)
 }
 
 /// CMD53 (IO_RW_EXTENDED) block/byte read into `out` from function `fnum` at
@@ -174,7 +181,7 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
         | (1 << 26)                 // op-code: incrementing address
         | ((addr & 0x1_FFFF) << 9)
         | (n as u32 & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true).is_none() {
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
     // PIO: wait buffer-read-ready, drain n bytes.
@@ -315,11 +322,11 @@ pub fn chip_id_probe() -> Option<u16> {
     delay(2_000);
 
     // CMD5 arg=0 → OCR; then CMD5 arg=OCR until ready (bit31).
-    let ocr = cmd(CMD5_IO_OP_COND, 0, RESP_48, false)?;
+    let ocr = cmd(CMD5_IO_OP_COND, 0, RESP_48, false, false)?;
     unsafe { SDIO_STEP = 2 };
     let mut ready = false;
     for _ in 0..50 {
-        if let Some(r) = cmd(CMD5_IO_OP_COND, ocr & 0x00FF_FFFF, RESP_48, false) {
+        if let Some(r) = cmd(CMD5_IO_OP_COND, ocr & 0x00FF_FFFF, RESP_48, false, false) {
             if r & (1 << 31) != 0 {
                 ready = true;
                 break;
@@ -332,8 +339,8 @@ pub fn chip_id_probe() -> Option<u16> {
     }
     unsafe { SDIO_STEP = 3 };
     // CMD3 → RCA (upper 16 bits of R6); CMD7 select.
-    let rca = cmd(CMD3_SEND_RCA, 0, RESP_48, false)? >> 16;
-    cmd(CMD7_SELECT, rca << 16, RESP_48_BUSY, false)?;
+    let rca = cmd(CMD3_SEND_RCA, 0, RESP_48, true, false)? >> 16;
+    cmd(CMD7_SELECT, rca << 16, RESP_48_BUSY, true, false)?;
     unsafe { SDIO_STEP = 4 };
     // 4-bit bus: CCCR bus-interface-control (0x07) = 0x02.
     cmd52(true, 0, 0x07, 0x02)?;
@@ -508,7 +515,7 @@ fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
         | (1 << 26)                 // incrementing
         | ((addr & 0x1_FFFF) << 9)
         | (n as u32 & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true).is_none() {
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
     // PIO out: pack bytes into the 32-bit data port.
