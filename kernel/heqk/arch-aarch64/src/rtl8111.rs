@@ -450,6 +450,10 @@ unsafe fn m8(off: usize) -> u8 {
     read_volatile((RTL_MMIO + off) as *const u8)
 }
 #[inline]
+unsafe fn m16(off: usize) -> u16 {
+    read_volatile((RTL_MMIO + off) as *const u16)
+}
+#[inline]
 unsafe fn wm8(off: usize, v: u8) {
     write_volatile((RTL_MMIO + off) as *mut u8, v);
 }
@@ -463,6 +467,8 @@ unsafe fn wm32(off: usize, v: u32) {
 }
 
 // RTL register offsets.
+const LED_CTRL: usize = 0x18; // RTL8168H LED_CTRL (r8169): 3 LEDs x 4-bit nibble,
+// per-LED bits: 0=Link10 1=Link100 2=Link1000 3=Activity; LED index shift = idx*4.
 const CR: usize = 0x37; // ChipCmd: Reset=0x10 RxEnb=0x08 TxEnb=0x04 StopReq=0x80
 const TXPOLL: usize = 0x38; // NPQ doorbell = 0x40
 const IMR: usize = 0x3C;
@@ -559,7 +565,24 @@ pub fn mac_start() {
         wm32(0x0C, 0xFFFF_FFFF);
         wm32(RXCFG, (read_volatile((RTL_MMIO + RXCFG) as *const u32) & !0xF) | 0x0E); // B|MyPhys|Mcast
         wm16(IMR as usize, 0); // polled
+
+        // LED config (RTL8168H/8111H LED_CTRL @ 0x18, r8169-verified — no CFG9346 gate).
+        // HEQK never set this, so the LEDs ran on the efuse default (green/link LED dark,
+        // only amber/activity lit). Drive LED0 = any-link (green on 10/100/1000) and
+        // LED1 = activity (amber), matching the r8169 green+amber behaviour. Which physical
+        // diode is green vs amber is board wiring; if swapped, exchange the two nibbles.
+        let led_por = m16(LED_CTRL);
+        let led_new = (led_por & 0xF000) | 0x0087; // LED0=L10|L100|L1000(0x7), LED1=Act(0x8)
+        wm16(LED_CTRL, led_new);
+        LED_DIAG = (led_por, led_new, m8(PHYSTATUS) as u16);
     }
+}
+
+static mut LED_DIAG: (u16, u16, u16) = (0, 0, 0);
+/// (LED_CTRL power-on default, value written, PHYstatus) — PHYstatus bits:
+/// 0x02=LinkUp 0x10=1000F 0x08=100 0x04=10 0x01=FullDuplex.
+pub fn led_diag() -> (u16, u16, u16) {
+    unsafe { LED_DIAG }
 }
 
 pub fn link_up() -> bool {

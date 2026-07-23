@@ -282,6 +282,21 @@ pub fn phy_rgmii_id(phy: u32) {
     phy_write(phy, 0x1c, (0x8000 | (0x03 << 10) | ((shd | 0x0200) & 0x3ff)) as u16);
 }
 
+/// Read the BCM54210E LED configuration (read-only diagnostic). Returns
+/// (led_ctrl reg0x10, led_selector1 shadow0x0D, led_selector2 shadow0x0E).
+/// phy0 already lights green+amber on the PHY's power-on defaults; this surfaces
+/// what those defaults are so we can pin them explicitly if wanted. Broadcom shadow
+/// read via reg 0x1C: write (shadow<<10) with bit15=0, then read reg 0x1C.
+pub fn phy0_led_diag(phy: u32) -> (u16, u16, u16) {
+    w(GEM, NCR, NCR_MPE);
+    let led_ctrl = phy_read(phy, 0x10);
+    phy_write(phy, 0x1c, 0x0d << 10); // select LED Selector 1 shadow for read
+    let sel1 = phy_read(phy, 0x1c);
+    phy_write(phy, 0x1c, 0x0e << 10); // select LED Selector 2 shadow for read
+    let sel2 = phy_read(phy, 0x1c);
+    (led_ctrl, sel1, sel2)
+}
+
 /// Read the RP1 eth_cfg STATUS: RGMII link (bit0), speed (bits2:1), duplex (bit3).
 pub fn link_status() -> u32 {
     r(ETH_CFG, 0x04)

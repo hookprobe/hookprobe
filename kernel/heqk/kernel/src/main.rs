@@ -741,8 +741,12 @@ fn cm5_p9_rx() {
     let (bar1, ubus) = rtl8111::pcie_inbound_window();
     kprint!(" [P9] PCIe inbound win armed (RC_BAR1_LO was {:#x}, UBUS_REMAP_LO was {:#x})\n", bar1, ubus);
     rtl8111::mac_start();
+    let (led_por, led_new, physt) = rtl8111::led_diag();
+    let spd = if physt & 0x10 != 0 { "1000" } else if physt & 0x08 != 0 { "100" } else if physt & 0x04 != 0 { "10" } else { "?" };
     kprint!(" [P9] MAC started; PHY link={}; polling RX ~5s -> kernel IDS\n",
         if rtl8111::link_up() { "UP" } else { "down" });
+    kprint!(" [P9-led] LED_CTRL por={:#06x} -> set {:#06x} (LED0=any-link/green, LED1=act/amber); PHYstatus={:#04x} link={} speed={}Mbps fdx={}\n",
+        led_por, led_new, physt, (physt >> 1) & 1, spd, physt & 1);
     struct Pool([u8; packet::FRAME_SZ * 8]);
     static mut RXPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
     let pool = core::ptr::addr_of_mut!(RXPOOL) as usize;
@@ -1000,6 +1004,11 @@ fn cm5_gem_rx_demo() {
         auxstat, sc);
     kprint!(" [P8] eth_cfg.STATUS={:#x}; RX ring @ {:#x}; RE + gigabit={} on; polling ~5 s\n",
         ethst, ring, sc >= 6);
+    // phy0 (BCM54210E) LED config — read-only. phy0 already lights green+amber on
+    // its POR defaults; surface them so we can decide whether to pin them explicitly.
+    let (led_ctrl0, sel1_0, sel2_0) = arch_aarch64::gem::phy0_led_diag(0);
+    kprint!(" [P8-led] phy0 BCM54210E LED_ctrl(0x10)={:#06x} led_sel1(shd0x0D)={:#06x} led_sel2(shd0x0E)={:#06x} (defaults drive green+amber)\n",
+        led_ctrl0, sel1_0, sel2_0);
     // DIAG: post-init register readback — did our DMACFG (ADDR64|RXBMS|TXPBMS|
     // DRBS|burst = expect 0x40200710) and NCFGR actually land? Compare to the
     // firmware default probe above to see what stuck.
