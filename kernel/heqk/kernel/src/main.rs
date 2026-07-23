@@ -409,7 +409,19 @@ fn cm5_gem_el0_ids() {
     unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
     let report = DRIVER_REPORT.load(Ordering::Relaxed);
     let idx = ((report >> 16) & 0xff) as usize;
-    let flen = (report & 0x3fff) as usize;
+    // AUDIT M-7: use the EL0 driver's report ONLY as a hint for WHICH descriptor to
+    // look at. The frame LENGTH must come from the GEM's own status writeback, which
+    // is kernel-readable — a compromised driver that could choose the length could
+    // make the packet engine classify a truncated frame, or a stale one from a
+    // previous descriptor, instead of what actually arrived. That is IDS evasion by
+    // the isolated driver, which is exactly the component P7c assumes may be hostile.
+    let flen = match arch_aarch64::gem::rx_desc_status(idx) {
+        Some(hw_len) => hw_len,
+        None => {
+            kprint!(" [P7c] EL0 IDS: driver reported desc {} but the GEM shows no valid frame there — FAIL (fail-closed)\n", idx);
+            return;
+        }
+    };
     if flen < 14 {
         kprint!(" [P7c] EL0 IDS: no frame delivered by the driver — FAIL\n");
         return;
@@ -482,7 +494,15 @@ fn cm5_gem_el0_server() {
         }
         let report = DRIVER_REPORT.load(Ordering::Relaxed);
         let idx = ((report >> 16) & 0xff) as usize;
-        let flen = (report & 0x3fff) as usize;
+        // AUDIT M-7: length from the GEM status writeback, not from the untrusted
+        // EL0 driver's report (see cm5_gem_el0_ids). The report only picks the slot.
+        let flen = match arch_aarch64::gem::rx_desc_status(idx) {
+            Some(hw_len) => hw_len,
+            None => {
+                kprint!("   [server] iter {}: no frame this window\n", iter);
+                continue;
+            }
+        };
         if flen < 14 {
             kprint!("   [server] iter {}: no frame this window\n", iter);
             continue;
@@ -2431,7 +2451,15 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
         } else {
             kprint!("   [EL0 fault] restart budget exhausted -> killing the driver TCB\n");
             scheduler::exit_current();
-            scheduler::on_tick(unsafe { *frame.add(33) as usize }) // any sp; cur is dead now
+            // AUDIT M-9: frame slot 33 is SP_EL0 — the FAULTING EL0 TASK's user stack
+            // pointer, fully attacker-controlled. on_tick() unconditionally stores its
+            // argument into SP[cur], the table of KERNEL stack pointers, before picking
+            // the next thread. Today `cur` was just marked dead and no slot is ever
+            // revived, so it is not exploitable — but it breaks the invariant "SP[]
+            // only ever holds kernel stack pointers", and any future slot reuse turns
+            // it into `mov sp, <attacker value>` followed by an eret: a straight
+            // EL0->EL1 escalation. Pass the KERNEL trap frame, never a user value.
+            scheduler::on_tick(frame as usize)
         };
         enter_current_addr_space(); // P7c-4c: re-enter the (restarted) driver's ASID — CM5 too
         return next_sp;

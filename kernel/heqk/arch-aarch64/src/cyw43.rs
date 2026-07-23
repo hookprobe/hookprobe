@@ -749,6 +749,12 @@ pub const DL_CHUNK: usize = 1400;
 
 /// Fill `out` with one clmload dload chunk header + `chunk` bytes; returns total len.
 pub fn clm_chunk(flag: u16, chunk: &[u8], out: &mut [u8]) -> usize {
+    // AUDIT L-11: `out.len() - 12` underflows on a usize for a short buffer, so
+    // `min` then returns chunk.len() and the copy_from_slice below panics ->
+    // panic=abort -> hang on metal. This is pub, so guard it at the door.
+    if out.len() < 12 {
+        return 0;
+    }
     let len = chunk.len() as u32;
     out[0..2].copy_from_slice(&(flag | DL_HANDLER_VER).to_le_bytes());
     out[2..4].copy_from_slice(&DL_TYPE_CLM.to_le_bytes());
@@ -839,6 +845,14 @@ fn set_func_block_size() {
 /// nblocks*64). This is how brcmfmac uploads firmware. PIO: wait BUF_WR_RDY before
 /// EACH block, push 64 B, then wait Transfer-Complete once at the end.
 fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
+    // AUDIT L-10: the push loop below indexes data[i..i+3] for nblocks*64 bytes
+    // with no length check. The sole caller currently pins nblocks to 1, but that
+    // .min(1) is a documented temporary isolation measure -- relaxing it for
+    // throughput would turn this into a slice-index panic (= abort = hang on metal).
+    let need = (nblocks as usize) * F1_BLOCK_SIZE as usize;
+    if data.len() < need {
+        return false;
+    }
     w16(BLK_SIZE_CNT, F1_BLOCK_SIZE as u16); // block size = 64
     w16(BLK_SIZE_CNT + 2, nblocks as u16); // block count
     w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI); // block mode, multi, write dir
@@ -983,13 +997,25 @@ fn erom_get_regaddr(a: &mut u32) -> (u32, u32) {
             break;
         }
         // find the next ADDRESS or COMPONENT/EOT descriptor
+        //
+        // AUDIT H-1: this scan MUST be bounded. bp_r32 returns 0x0000_0000 when the
+        // backplane is unclocked/asleep (the documented deep-sleep state, see the
+        // KSO/DEVON note in read_sdpcm_frame) — and desc==0 matches none of the three
+        // exit conditions, so an unbounded loop here spins forever issuing 7 SDIO
+        // commands per iteration. It is reachable from read_sdpcm_frame/bcdc_dcmd,
+        // i.e. on the live WiFi RX path. (0xFFFF_FFFF escapes via EOT; 0 does not.)
         let mut val;
         let mut desc;
+        let mut scan = 0u32;
         loop {
             val = erom_rd(a);
             desc = val & DMP_DESC_MSK;
             if desc == DMP_DESC_ADDRESS || desc == DMP_DESC_COMPONENT || desc == DMP_DESC_EOT {
                 break;
+            }
+            scan += 1;
+            if scan > 32 {
+                return (0, 0); // brcmf_chip_dmp_get_regaddr never scans further
             }
         }
         if desc != DMP_DESC_ADDRESS {
@@ -1022,6 +1048,11 @@ fn erom_find_core(partnum: u32) -> Option<(u32, u32)> {
     let eromptr = bp_r32(SI_ENUM_BASE + 0xFC);
     if partnum == CORE_ARM_CR4 {
         unsafe { EROM_DIAG.0 = eromptr };
+    }
+    // AUDIT H-1: bail immediately on an implausible EROM pointer rather than
+    // walking nonexistent backplane space. 0 = backplane asleep, !0 = bus dead.
+    if eromptr == 0 || eromptr == 0xFFFF_FFFF || eromptr & 3 != 0 {
+        return None;
     }
     let mut a = eromptr;
     let mut guard = 0u32;
@@ -1202,7 +1233,19 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     };
     // Compute the REAL TCM size from the CR4 bank registers — HEQK's hardcoded 0x98000
     // may be wrong; the firmware reads NVRAM from the top of its actual RAM.
+    // AUDIT M-5: cr4_ramsize is derived entirely from device reads, and bp_r32
+    // returns 0xFFFF_FFFF when a backplane read fails. That yields 30 banks x 128 x
+    // 8192 ~= 31 MB instead of the real 0xC8000, which would place the NVRAM blob
+    // ~31 MB past the TCM (firmware then finds no trailer and silently never
+    // readies F2) and walk ~960 windows of nonexistent backplane space -- presenting
+    // as a mysterious timeout rather than a failed register read. Gate it to a
+    // plausible band for BCM4345/6 and fall back to the known-good constant.
     let ramsize = cr4_ramsize(cr4b);
+    let ramsize = if (0x4_0000..=0x20_0000).contains(&ramsize) {
+        ramsize
+    } else {
+        RAM_SIZE
+    };
     unsafe { RAM_SIZE_DIAG = ramsize };
     // 3. Request HT the CLEAN brcmf_sdio_htclk way: write CHIPCLKCSR = HT_AVAIL_REQ (0x10)
     //    ALONE (NOT OR'd with FORCE_HT — forcing HT during initial bring-up is what sr_init
@@ -1794,11 +1837,31 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
         new_max = unsafe { TX_SEQ }.wrapping_add(2);
     }
     unsafe { TX_MAX = new_max };
+    // AUDIT M-3 / L-15: cmd53_read silently caps a byte-mode transfer at 512 bytes
+    // and still reports success, so for a frame claiming more than
+    // BRCMF_FIRSTREAD+512 the tail of `rx` is NEVER written by this frame. `rx` is
+    // reused across thousands of poll iterations, so every parser that keys its
+    // bounds off the device-supplied hw_len (the escan BSS parser, the BCDC reply
+    // copy) could assemble BSSIDs/SSIDs/ccode from STALE bytes of a previous frame.
+    // That is not memory-unsafe (all indices are bounded by rx.len()) but it is a
+    // data-integrity break across a trust boundary, and scan output IS a security
+    // signal here. Two defences, both fail-closed:
+    //   1. zero the region this frame could not fill, so a short read yields zeros
+    //      (which de-dup/validation rejects) rather than a previous frame's bytes;
+    //   2. clamp the hw_len we report to the bytes actually transferred, so every
+    //      downstream bound tightens instead of over-reading.
+    let mut valid = BRCMF_FIRSTREAD;
     if (hw_len as usize) > BRCMF_FIRSTREAD {
         let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
         let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
+        let got = (end - BRCMF_FIRSTREAD).min(512); // what cmd53_read actually moves
+        for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
+            *b = 0;
+        }
         let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
+        valid = BRCMF_FIRSTREAD + got;
     }
+    let hw_len = hw_len.min(valid as u16);
     Some((channel, hw_len, doffset))
 }
 
@@ -1965,7 +2028,11 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         }
         // escan_result @ ev+72; bss_info @ er+12.
         let bi = ev + 72 + 12;
-        if bi + 80 > rx.len() {
+        // AUDIT M-3: bound by the RECEIVED length, not by the buffer length —
+        // rx is reused across poll iterations, so rx.len() would admit stale bytes
+        // from a previous frame into BSSID/SSID/RSSI. hw_len is already clamped to
+        // bytes actually transferred by read_sdpcm_frame.
+        if bi + 80 > (hw_len as usize) || bi + 80 > rx.len() {
             continue;
         }
         let mut bssid = [0u8; 6];
@@ -2021,8 +2088,19 @@ pub fn bcdc_diag() -> [u32; 12] {
     unsafe { BCDC_DIAG }
 }
 
+/// Cached SDIO-core regbase. AUDIT M-4: this is called from read_sdpcm_frame AND
+/// bcdc_dcmd, i.e. once per frame poll. An EROM walk costs ~30 descriptor reads x
+/// 7 SDIO commands each (~210 commands); wifi_scan polls up to 12000 times, so the
+/// uncached form burned on the order of 2.5M SDIO transactions per scan. The core
+/// layout is fixed for the life of the chip, so walk it once.
+static mut SDIO_CORE_BASE: u32 = 0;
 fn sdio_core_base() -> u32 {
-    erom_find_core(CORE_SDIO_DEV).map(|(b, _)| b).unwrap_or(0)
+    unsafe {
+        if SDIO_CORE_BASE == 0 {
+            SDIO_CORE_BASE = erom_find_core(CORE_SDIO_DEV).map(|(b, _)| b).unwrap_or(0);
+        }
+        SDIO_CORE_BASE
+    }
 }
 
 /// Force the HT-chain resources up via the PMU min/max_res_mask (the SDIO-core
