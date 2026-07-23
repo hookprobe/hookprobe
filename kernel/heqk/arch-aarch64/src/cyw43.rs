@@ -246,7 +246,16 @@ fn set_clock(divisor: u16) {
 /// NOTE: WL_ON (the radio's power/reset GPIO, `wl_on_reg`) must be asserted and
 /// `clk_emmc2` set via the VC mailbox BEFORE this runs — those live in the caller
 /// (kernel) which owns the mailbox; here we assume the rail/clock are up.
+/// Last SDIO bring-up step reached (diagnostic): 1=host init, 2=CMD5 OCR,
+/// 3=CMD5 ready, 4=CMD3/7 select, 5=F1 enabled, 6=chip-ID read. On a SILENT probe
+/// this localizes where the SDIO link stalls (clock/WL_ON vs a later step).
+static mut SDIO_STEP: u8 = 0;
+pub fn sdio_last_step() -> u8 {
+    unsafe { SDIO_STEP }
+}
+
 pub fn chip_id_probe() -> Option<u16> {
+    unsafe { SDIO_STEP = 1 };
     host_reset();
     // Bus power @ 3.3V (power control byte @0x29: bit0=on, [3:1]=voltage 0b111).
     w8(0x29, (0b111 << 1) | 1);
@@ -256,6 +265,7 @@ pub fn chip_id_probe() -> Option<u16> {
 
     // CMD5 arg=0 → OCR; then CMD5 arg=OCR until ready (bit31).
     let ocr = cmd(CMD5_IO_OP_COND, 0, RESP_48, false)?;
+    unsafe { SDIO_STEP = 2 };
     let mut ready = false;
     for _ in 0..50 {
         if let Some(r) = cmd(CMD5_IO_OP_COND, ocr & 0x00FF_FFFF, RESP_48, false) {
@@ -269,9 +279,11 @@ pub fn chip_id_probe() -> Option<u16> {
     if !ready {
         return None;
     }
+    unsafe { SDIO_STEP = 3 };
     // CMD3 → RCA (upper 16 bits of R6); CMD7 select.
     let rca = cmd(CMD3_SEND_RCA, 0, RESP_48, false)? >> 16;
     cmd(CMD7_SELECT, rca << 16, RESP_48_BUSY, false)?;
+    unsafe { SDIO_STEP = 4 };
     // 4-bit bus: CCCR bus-interface-control (0x07) = 0x02.
     cmd52(true, 0, 0x07, 0x02)?;
     // Enable F1 (I/O-enable 0x02 bit1), wait ready (I/O-ready 0x03 bit1).
@@ -282,12 +294,14 @@ pub fn chip_id_probe() -> Option<u16> {
         }
         delay(1_000);
     }
+    unsafe { SDIO_STEP = 5 };
     // Point the F1 backplane window at chipcommon, read the 32-bit chip-ID.
     set_backplane_window(SI_ENUM_BASE);
     let mut id = [0u8; 4];
     if !cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut id) {
         return None;
     }
+    unsafe { SDIO_STEP = 6 };
     Some(u16::from_le_bytes([id[0], id[1]]))
 }
 

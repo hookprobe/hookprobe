@@ -805,7 +805,8 @@ fn cm5_p10_probe() {
             }
         }
         Some(id) => kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id),
-        None => kprint!(" [P10-A] SILENT — SDIO init did not complete (WL_ON/clk_emmc2 rail or DDR50 timing — iterate on metal)\n"),
+        None => kprint!(" [P10-A] SILENT — SDIO stalled at step {} (1=host init 2=CMD5-OCR 3=CMD5-ready 4=CMD3/7 5=F1 6=chip-id); likely WL_ON/clk_emmc2 rail not up (needs kernel VC mailbox)\n",
+            cyw43::sdio_last_step()),
     }
 }
 
