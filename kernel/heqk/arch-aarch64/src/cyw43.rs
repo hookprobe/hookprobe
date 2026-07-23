@@ -304,6 +304,25 @@ pub fn radio_power_on() -> u32 {
     crate::mailbox::get_clock_rate(crate::mailbox::CLK_EMMC2).unwrap_or(0)
 }
 
+/// P10 diagnosis dump: confirm each stage's register actually took.
+/// [0]=gio bank0 DATA (WL_ON = bit28 should be 1), [1]=pinctrl mux 0x08 (gpio28
+/// nibble@16 should be 0, gpio30/31 @24/28 should be 1), [2]=pinctrl mux 0x0c
+/// (gpio32-35 @0/4/8/12 should be 1), [3]=SDHCI CAPS (base clock MHz in [13:8]),
+/// [4]=SDHCI CLOCK_CTRL (SD_CLK_EN bit2 + INT_CLK_STABLE bit1 should be set),
+/// [5]=SDHCI HOST_CTRL1/power (power-on bit8, 3.3V).
+pub fn p10_regdump() -> [u32; 6] {
+    unsafe {
+        [
+            read_volatile(0x10_7D50_8504 as *const u32), // gio DATA
+            read_volatile(0x10_7D50_4108 as *const u32), // pinctrl mux 0x08
+            read_volatile(0x10_7D50_410C as *const u32), // pinctrl mux 0x0c
+            r32(0x40),                                    // SDHCI CAPABILITIES
+            r32(CLOCK_CTRL),                              // clock control
+            r32(HOST_CTRL1),                              // host ctrl + power
+        ]
+    }
+}
+
 /// Last SDIO bring-up step reached (diagnostic): 1=host init, 2=CMD5 OCR,
 /// 3=CMD5 ready, 4=CMD3/7 select, 5=F1 enabled, 6=chip-ID read. On a SILENT probe
 /// this localizes where the SDIO link stalls (clock/WL_ON vs a later step).
