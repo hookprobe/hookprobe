@@ -70,6 +70,15 @@ pub struct Cap {
     // use THIS, never a syscall argument — so a badge cannot be forged, only held.
     // Preserved (not amplifiable) across `mint`/`mint_into`. 0 for non-signal caps.
     pub badge: u64,
+    // CORE-1: the EL0 virtual address this Frame cap's memory is currently mapped at
+    // (via `map_frame_cap`), or None if it backs no live mapping. This is the record
+    // that turns `revoke` into a real authority-severing operation: when revoke deletes
+    // a Frame cap whose `mapped_va` is Some, it INVALIDATES that L3 entry (+ tlbi) so the
+    // EL0 owner loses its MMIO/DMA/RAM access — not just its CSpace slot. A cap with no
+    // mapping (None) is a safe no-op on revoke. NOT propagated by mint/mint_into: a
+    // delegated/derived copy names the same object but records no mapping of its own
+    // until it is itself mapped, so revoke never double-unmaps one VA through two caps.
+    pub mapped_va: Option<usize>,
 }
 
 const SLOTS: usize = 64;
@@ -117,6 +126,7 @@ impl CapSpace {
             watermark: 0,
             parent: None,
             badge: 0,
+            mapped_va: None,
         });
         s
     }
@@ -195,6 +205,7 @@ impl CapSpace {
             watermark: 0,
             parent: Some((ut_slot, ut_gen)),
             badge: 0,
+            mapped_va: None,
         });
         Ok(dst)
     }
@@ -249,6 +260,18 @@ impl CapSpace {
         }
         for i in 0..SLOTS {
             if doomed[i] {
+                // CORE-1: severing authority, not just the slot. If this doomed cap is a
+                // Frame that was mapped into an EL0 VSpace via `map_frame_cap`, INVALIDATE
+                // its L3 entry (+ tlbi) BEFORE dropping the slot, so revoking a driver's
+                // Frame cap actually revokes its MMIO/DMA/RAM access. A cap with no
+                // recorded mapping (mapped_va == None) is a no-op here — safe by default.
+                if let Some(c) = self.slots[i].as_ref() {
+                    if c.otype == ObjType::Frame {
+                        if let Some(va) = c.mapped_va {
+                            arch_aarch64::unmap_user_frame(va);
+                        }
+                    }
+                }
                 self.slots[i] = None;
                 // CORE-9: bump the freed slot's generation so any lingering stale
                 // child pointing here (old gen) can never re-attach to a future reuse.
@@ -281,7 +304,7 @@ impl CapSpace {
         let dst = self.free_slot().ok_or("no free slot")?;
         // CORE-9: tag the derivation link with the source slot's current generation.
         let parent = Some((slot, self.gen_of(slot)));
-        self.slots[dst] = Some(Cap { otype, rights, base, size, watermark, parent, badge });
+        self.slots[dst] = Some(Cap { otype, rights, base, size, watermark, parent, badge, mapped_va: None });
         Ok(dst)
     }
 
@@ -319,6 +342,9 @@ impl CapSpace {
             // through a reused parent slot in the OTHER space.
             parent: None,
             badge: src.badge,
+            // CORE-1: a delegated copy records no mapping of its own (only the cap that
+            // was actually `map_frame_cap`'d carries the VA), so revoke unmaps each VA once.
+            mapped_va: None,
         };
         let d = dst.free_slot().ok_or("no free slot in dst")?;
         dst.slots[d] = Some(cap);
@@ -348,6 +374,7 @@ impl CapSpace {
             watermark: generation as usize,
             parent: None,
             badge,
+            mapped_va: None,
         });
         Ok(dst)
     }
@@ -366,6 +393,42 @@ impl CapSpace {
             return Err("insufficient rights");
         }
         Ok(c)
+    }
+
+    /// CORE-1 — the cap-gated EL0 mapping path: map the Frame cap at `slot` into the
+    /// owner's VSpace at `va`, with the memory attributes DERIVED from the cap's rights,
+    /// and RECORD the mapping on the cap so `revoke` can later sever it. This is the
+    /// confused-deputy fix for grants: authority to touch a frame's memory now flows
+    /// through a *capability invocation* that is rights-checked and revocation-tracked,
+    /// not an ad-hoc `map_user_*` call the kernel keeps no account of.
+    ///
+    /// * `has_rights` gate FIRST (`as_frame_rights`): the cap must be a Frame AND hold
+    ///   every right in `need` — a driver with no cap, the wrong type, or too-few rights
+    ///   is refused before a single PTE is written.
+    /// * RIGHTS → ATTRIBUTES: the mapping is writable **only** if the caller both holds
+    ///   and requests the `W` right (`need & W`). A cap lacking `W` can never request it
+    ///   (the `has_rights` gate fails), so an RO cap is structurally forced to an AP
+    ///   read-only mapping — EL0 can read but not write the frame.
+    /// * RECORD: `mapped_va = Some(va)` on the cap, so revoke knows exactly which L3
+    ///   entry to invalidate. Re-mapping a cap that was already mapped overwrites the
+    ///   record (the last VA wins) — one cap tracks one live mapping.
+    pub fn map_frame_cap(&mut self, slot: usize, va: usize, need: u8) -> Result<(), &'static str> {
+        // Enforcement point: Frame type + ALL requested rights, BEFORE any mapping.
+        let (pa, writable) = {
+            let c = self.as_frame_rights(slot, need)?;
+            // Writable iff W is both held (checked above) and requested. RO otherwise.
+            (c.base, need & W != 0)
+        };
+        // Route the grant through the backend-neutral mapper (RO if no W right).
+        if !arch_aarch64::map_user_frame(va, pa, writable) {
+            return Err("map_frame_cap: backend refused the mapping");
+        }
+        // Record the live mapping against the cap so revoke severs exactly this VA.
+        match self.slots.get_mut(slot).and_then(|c| c.as_mut()) {
+            Some(c) => c.mapped_va = Some(va),
+            None => return Err("cap vanished mid-map"),
+        }
+        Ok(())
     }
 
     /// Type-safe view: succeeds only if the cap really is a Frame.
