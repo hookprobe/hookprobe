@@ -1777,6 +1777,9 @@ pub extern "C" fn kmain() -> ! {
     // Root task CSpace with real-frame-backed capabilities (used by P3 below).
     build_root_cspace();
 
+    // CORE-2: prove per-TCB CSpace isolation + rights-narrowing delegation.
+    cspace_isolation_demo();
+
     // --- P3: EL0 userspace + SVC syscalls (incl. capability invocation) + fault ---
     p3_user_demo();
 
@@ -3094,6 +3097,54 @@ fn build_root_cspace() {
     );
     // CORE-2: the root task is scheduler tid 0.
     unsafe { (*core::ptr::addr_of_mut!(CSPACE))[0] = Some(cs) };
+}
+
+/// CORE-2 `[P2-iso]` — prove the property per-TCB CSpaces exist for: two DISTINCT
+/// capability spaces, and a task holds EXACTLY the authority it was delegated, no more.
+/// A "parent" CSpace owns a Frame (R|W|G) and an Endpoint (R|W|G); it delegates to a
+/// "child" CSpace ONLY the Frame, and only the READ right. The child must then:
+///   * hold the Frame with R but NOT W and NOT G (rights narrowed, cannot amplify), and
+///   * NOT hold the Endpoint at all (un-delegated authority is simply absent).
+/// This is the confused-deputy fix and the exact primitive P12 needs ("a publisher may
+/// hold Topic{W} but not Topic{R}"). Uses local CSpaces so it can't perturb the live
+/// per-tid CSPACE table or the scheduler.
+fn cspace_isolation_demo() {
+    use caps::{CapSpace, ObjType, G, R, W};
+    let base = arch_aarch64::mmu::reserve_region(64 * 1024);
+    let mut parent = CapSpace::with_root_untyped(base, 64 * 1024);
+    let ep = parent.retype(0, ObjType::Endpoint, 16).unwrap();
+    let frame = parent.retype(0, ObjType::Frame, 4096).unwrap();
+
+    let mut child = CapSpace::empty(); // a fresh TCB starts with NO authority
+    // Delegate the Frame to the child with READ-ONLY rights (parent asked for R only).
+    let cframe = parent.mint_into(frame, R, &mut child).unwrap();
+    // The Endpoint is deliberately NOT delegated.
+
+    let child_has_read = child.has_rights(cframe, R);
+    let child_denied_write = !child.has_rights(cframe, W);
+    let child_denied_grant = !child.has_rights(cframe, G);
+    // The child holds only one cap (the minted Frame); no slot resolves to an Endpoint.
+    let mut child_has_endpoint = false;
+    for s in 0..caps::SLOTS_PER_CSPACE {
+        if let Some(c) = child.get(s) {
+            if c.otype == ObjType::Endpoint {
+                child_has_endpoint = true;
+            }
+        }
+    }
+    let parent_keeps_endpoint =
+        parent.get(ep).map(|c| c.otype == ObjType::Endpoint).unwrap_or(false);
+
+    let ok = child_has_read
+        && child_denied_write
+        && child_denied_grant
+        && !child_has_endpoint
+        && parent_keeps_endpoint;
+    kprint!(
+        " [P2-iso] {} — child CSpace: Frame R={} W-denied={} G-denied={}, Endpoint-absent={}, parent keeps Endpoint={}\n",
+        if ok { "PASS" } else { "FAIL" },
+        child_has_read, child_denied_write, child_denied_grant, !child_has_endpoint, parent_keeps_endpoint
+    );
 }
 
 fn p3_user_demo() {
