@@ -9,3 +9,4 @@ cm5-boot/heqk8.img
 cm5-boot/heqk8-b.img
 .claude/worktrees/
 cm5-boot/linux-observe/
+/cm5-boot/bt-fw/*.hcd
