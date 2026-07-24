@@ -187,3 +187,25 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 
 ## METAL FINDING 2026-07-24 (P13/P15 flash)
 P13 PASS on metal (deny-list enforced, i2c1 EL0-driver works, eMMC block device up 59640MiB, MBR+guard OK; SPI SRL loopback WARN non-fatal). P15 metal run FOUND a security-critical HMAC bug (commit ff80854): the incremental Hasher dropped a message tail <=32 bytes, so seal tamper detection LEAKED for short ciphertexts — QEMU missed it (36-byte test secret took the good path). Fixed + QEMU gate now uses a 28-byte secret to guard the path. Confirms XC-15 (dual-backend coverage gap).
+
+
+## DEEP-INVESTIGATION AUDIT ROUND 2026-07-25 (post-P17, new P11-P17 + CORE code)
+A fresh multi-agent audit of the newly-added code (caps/notify/netq/devq/seal/store/rp1/packet) surfaced these. Closed one per commit with a regression gate:
+
+| ID | Sev | Loc | Defect | Status |
+|----|-----|-----|--------|--------|
+| AUD-NET-1 | High | packet.rs strip_vlan | DET-4 VLAN normalizer read the TCI as the ethertype (off-by-2) → re-opened the FLOW-tier IDS bypass it was meant to close | CLOSED ffcdad9 — [P8-vlan] byte-identical reconstruction gate |
+| AUD-CAP-1 | High | main.rs P12 syscalls | resolve_ntfn_cap accepted EITHER Notification or Topic for all 6 ops → Notification{W} could drive PUBLISH (type confusion) | CLOSED e8ef215 — resolve takes expected ObjType, 6 typed callers |
+| AUD-STO-1 | High | seal.rs/kdf.rs | CTR keystream deterministic in (SRK,policy) → two same-policy blobs shared a keystream (two-time-pad) | CLOSED 9f5db34 — fresh per-seal nonce in MAC-covered header, ctr_xor_nonce; [P15] no-reuse=DISTINCT gate |
+| AUD-BLD-1 | High(build) | linker-cm5.ld | CORE-1 W^X refs __text_start/__text_end in mmu_cm5.rs but linker-cm5.ld never defined them → metal flavour failed to LINK since f754307 | CLOSED (this round) — symbols added; all 4 flavours build |
+| AUD-CAP-3 | Med | notify.rs subscribe | no per-tid dedup/quota → one Topic{R} holder loops subscribe() to take all 4 sub slots, starving others (asymmetry: create() has NOTIFY_QUOTA_PER_TASK, subscribe had none) | CLOSED — subscribe idempotent (1 slot per tid) |
+| AUD-CAP-4 | Low-Med | notify.rs detach_tcb | frees dead tid's subscriptions but NOT the NOTIFY objects it OWNS → 16-slot leak + a reused tid inherits the dead owner's create-quota | CLOSED — reclaim owner's notifs on death (wake foreign waiter RC_REVOKED, bump gen) |
+| AUD-RP1-4 | Low | rp1_gpio get_level/dump/funcsel | unbounded `pin: u8` → `v>>pin` shift-overflow (pin>=32) / out-of-window MMIO read (pin>27) on the read-only paths | CLOSED — guard `pin > BANK0_MAX` at each entry |
+| AUD-RP1-5 | Low | rp1_spi set_cs | `1u32 << cs` shift-overflow for `cs>=32` | CLOSED — reject `cs >= 32` |
+
+**Ruled OUT by the re-scan (verified NOT present in the code):**
+- **AUD-NET-2** — the interpreter/fallback path IS fully bounds-checked: `run_set` gates JIT on `pkt.len() >= min_len`, else falls to `bpf::run` which range-checks every load and maps INVALID→DROP fail-closed; `net::parse` is `.get()`-based. A short frame yields DROP, never an OOB read.
+- **AUD-RP1-1** (write bypasses deny-list) — every MMIO write calls `writable()`/`is_reserved` first; `mux_group` validates the whole slice before applying (no partial mux).
+- **AUD-RP1-2** (unbounded poll) — every HW wait uses CNTPCT-bounded `poll_until`/`delay_us`; inner FIFO loops bounded by transfer length.
+- **AUD-STO-2/3/4** — seal/unseal arithmetic safe (len checked before the `HDR+ct_len` term in a short-circuit `||`); SealKey volatile-zeroized on drop; CT compares; MBR parse in-bounds; window `[2016,2048)` has no off-by-one.
+- **devq.rs / netq.rs** — DevQ copy-then-validate + kernel-private cap + csdb + no-RMW sound; NetQ per-slot ownership with clamped untrusted `len` (never used as an index) sound on both directions.

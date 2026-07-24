@@ -187,6 +187,11 @@ pub fn set_level(pin: u8, high: bool) -> bool {
 
 /// Read a pin's live level from the RIO IN register.
 pub fn get_level(pin: u8) -> bool {
+    // AUD-RP1-4: reject an out-of-bank pin. `pin >= 32` would be a shift-overflow
+    // (panic in debug, garbage in release); bank0 is only 0..=27 anyway.
+    if pin > BANK0_MAX {
+        return false;
+    }
     rp1::wfence();
     let v = rp1::rd(SYS_RIO0 + RIO_IN);
     (v >> pin) & 1 != 0
@@ -213,6 +218,11 @@ pub fn mux_group(pins: &[u8], func: u32) -> bool {
 
 /// Dump a pin's register state: (CTRL, PAD, RIO_OUT, RIO_OE, RIO_IN).
 pub fn dump(pin: u8) -> (u32, u32, u32, u32, u32) {
+    // AUD-RP1-4: ctrl_addr(pin)/pad_addr(pin) are only valid inside bank0; an
+    // out-of-range pin would issue an unintended MMIO read past the pad window.
+    if pin > BANK0_MAX {
+        return (0, 0, 0, 0, 0);
+    }
     rp1::wfence();
     (
         rp1::rd(ctrl_addr(pin)),
@@ -225,6 +235,10 @@ pub fn dump(pin: u8) -> (u32, u32, u32, u32, u32) {
 
 /// The current FUNCSEL of a pad (low 5 bits of CTRL).
 pub fn funcsel(pin: u8) -> u32 {
+    // AUD-RP1-4: bound the pin before ctrl_addr(pin) computes an out-of-window MMIO addr.
+    if pin > BANK0_MAX {
+        return 0;
+    }
     rp1::wfence();
     rp1::rd(ctrl_addr(pin)) & 0x1f
 }
