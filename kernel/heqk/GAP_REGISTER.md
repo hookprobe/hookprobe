@@ -158,7 +158,7 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 **A. Large structural refactors (dedicated session each; several need metal):**
 - CORE-1/XC-5  route all mapping through cap invocation + revoke unmaps
 - CORE-2/XC-6  per-TCB CSpace (unblocks P12)
-- CORE-6       per-TCB fault-restart records (unblocks P17)
+- CORE-6 ✅ DONE  per-TCB fault-restart records (P17 prerequisite; QEMU-validated: fault-restart PASS 3x then kill)
 - CORE-9       generation-tagged CDT/MDB (enables single-cap delete/move)
 - DRV-1/XC-4   program RP1 MSI-X for real RX-IRQ (metal)
 - DRV-2/XC-3   relocate kernel above the IOMMU ceiling (metal)
