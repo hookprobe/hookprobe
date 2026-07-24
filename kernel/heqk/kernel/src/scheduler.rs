@@ -31,27 +31,110 @@ pub fn init() {
 }
 
 /// Register a runnable thread by initial stack pointer + priority (kernel address
-/// space). Before IRQs on. Returns false if the table is full.
-pub fn spawn(sp: usize, prio: u8) -> bool {
+/// space). Before IRQs on. Returns `Some(tid)` (the slot), or `None` if full.
+pub fn spawn(sp: usize, prio: u8) -> Option<usize> {
     spawn_as(sp, prio, 0)
 }
 
 /// Register a runnable thread that runs in a specific address space (raw TTBR0 =
 /// root | ASID<<48; 0 = kernel space). Used for isolated EL0 driver servers.
-/// CORE-8: returns false when the table is full instead of SILENTLY dropping the
-/// thread — a silent drop looked like a spawned-but-never-scheduled TCB.
-pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) -> bool {
+/// CORE-8: returns `None` when the table is full instead of SILENTLY dropping the
+/// thread. CORE-6: returns the assigned tid so the caller can arm a per-TCB restart
+/// record (`set_restart`).
+pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) -> Option<usize> {
     unsafe {
         let n = addr_of!(NUM).read();
         if n >= MAX_THREADS {
-            return false;
+            return None;
         }
         addr_of_mut!(SP).cast::<usize>().add(n).write(sp);
         addr_of_mut!(PRIO).cast::<u8>().add(n).write(prio);
         addr_of_mut!(ALIVE).cast::<bool>().add(n).write(true);
         addr_of_mut!(TTBR0).cast::<u64>().add(n).write(ttbr0);
         addr_of_mut!(NUM).write(n + 1);
-        true
+        Some(n)
+    }
+}
+
+// CORE-6: per-TCB EL0 fault-restart records. Was a set of GLOBAL statics
+// (EL0_RS_ENTRY/USP/KSTACK + one EL0_RESTARTS counter + EL0_SCHED_MODE), so with two
+// scheduled EL0 TCBs a fault in one would restart it from the OTHER's entry/stack and
+// share the restart budget. Keyed per slot, a fault restarts the FAULTING thread from
+// ITS OWN params with ITS OWN budget.
+#[derive(Clone, Copy)]
+pub struct RestartRec {
+    pub sched: bool,   // this TCB's faults restart/reschedule (vs cooperative longjmp)
+    pub entry: usize,
+    pub usp: usize,
+    pub kstack: usize,
+    pub used: u32,
+}
+const EMPTY_RESTART: RestartRec =
+    RestartRec { sched: false, entry: 0, usp: 0, kstack: 0, used: 0 };
+static mut RESTART: [RestartRec; MAX_THREADS] = [EMPTY_RESTART; MAX_THREADS];
+
+/// Arm a scheduled EL0 TCB's fault-restart record (its faults now restart from these
+/// params with a fresh budget, instead of the cooperative longjmp).
+pub fn set_restart(tid: usize, entry: usize, usp: usize, kstack: usize) {
+    if tid >= MAX_THREADS {
+        return;
+    }
+    unsafe {
+        addr_of_mut!(RESTART).cast::<RestartRec>().add(tid).write(RestartRec {
+            sched: true,
+            entry,
+            usp,
+            kstack,
+            used: 0,
+        });
+    }
+}
+/// The restart record for `tid`, or `None` if it isn't a scheduled/armed TCB (in
+/// which case a fault falls to the cooperative path).
+pub fn restart_rec(tid: usize) -> Option<RestartRec> {
+    if tid >= MAX_THREADS {
+        return None;
+    }
+    let r = unsafe { addr_of!(RESTART).cast::<RestartRec>().add(tid).read() };
+    if r.sched {
+        Some(r)
+    } else {
+        None
+    }
+}
+/// Increment and return `tid`'s restart count.
+pub fn bump_restart(tid: usize) -> u32 {
+    if tid >= MAX_THREADS {
+        return u32::MAX;
+    }
+    unsafe {
+        let p = addr_of_mut!(RESTART).cast::<RestartRec>().add(tid);
+        let mut r = p.read();
+        r.used += 1;
+        p.write(r);
+        r.used
+    }
+}
+/// `tid`'s current restart count (for the P7c report), 0 if none.
+pub fn restart_used(tid: usize) -> u32 {
+    if tid >= MAX_THREADS {
+        return 0;
+    }
+    unsafe { addr_of!(RESTART).cast::<RestartRec>().add(tid).read().used }
+}
+/// DISARM a TCB's restart record on kill: clear `sched` so a reused slot can't
+/// inherit the scheduled-restart behavior, but KEEP `used` so the fault-restart
+/// report can still read how many restarts happened before the kill. (A genuinely
+/// reused EL0 slot gets a fresh record via `set_restart`, which resets `used`.)
+pub fn clear_restart(tid: usize) {
+    if tid >= MAX_THREADS {
+        return;
+    }
+    unsafe {
+        let p = addr_of_mut!(RESTART).cast::<RestartRec>().add(tid);
+        let mut r = p.read();
+        r.sched = false;
+        p.write(r);
     }
 }
 
