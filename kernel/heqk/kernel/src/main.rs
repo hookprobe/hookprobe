@@ -14,6 +14,7 @@ mod attest_svc;
 mod blocklist;
 mod bpf;
 mod caps;
+mod devq;
 mod events;
 mod l7;
 mod heap;
@@ -1894,6 +1895,11 @@ pub extern "C" fn kmain() -> ! {
     // documented follow-up). QEMU-validatable core only. ---
     p17_overlay_qemu();
 
+    // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
+    // transport that REJECTS a hostile driver's forged descriptors, proven with an
+    // in-kernel stand-in driver + a software LoopDev. Metal GemDev/RtlDev deferred. ---
+    p11_devq_qemu();
+
     // --- crypto primitive: incremental Hasher == one-shot digest (metal-found bug guard) ---
     {
         let ok = boot_abi::sha256::hasher_selftest();
@@ -2139,6 +2145,218 @@ fn p17_overlay_qemu() {
     } else {
         kprint!(" [P17] FAIL — ingress_ok={} egress_ok={}\n", ingress_ok, egress_ok);
     }
+}
+
+/// P11 — device-class transport (the sDDF borrow), the QEMU-validatable SECURITY
+/// core. Proves the hardened SPSC transport (devq.rs) REJECTS and COUNTS every
+/// class of forged descriptor a hostile driver can place in the shared region,
+/// while the queue stays usable and the kernel stays up. No hardware: a software
+/// LoopDev exercises the honest transport, and an IN-KERNEL stand-in "driver"
+/// scribbles the shared region exactly as an untrusted EL0 driver with a Normal-NC
+/// grant would (the p17_overlay_qemu pattern).
+///
+/// Threat model (DEVICE_CLASS_TRANSPORT.md): the RxActive queue is driver->kernel
+/// and HOSTILE. The kernel is its consumer; `drain_checked` + `NetClass::
+/// check_from_driver` are the enforcement point. Forged classes proven rejected:
+///   (a) V2  — tail = head + huge            (index out of range)
+///   (b) V4  — io_or_off far outside region  (offset)
+///   (c) V4  — len = 0xFFFF                   (length)
+///   (d) V5  — double-submit / never-given   (not owned)
+///   (e) V4  — unknown flag bits             (flags)
+#[cfg(not(feature = "cm5"))]
+fn p11_devq_qemu() {
+    use devq::{
+        drain_checked, enqueue, qid, BufDesc, BufState, DevQRegion, DevQStats, LoopDev, NetClass,
+        QHandle, Violation, MASK, NET_BUFSZ, NET_FLAG_EOF, NET_FLAG_SOF, NET_MIN,
+    };
+
+    kprint!("\n [P11] device-class transport (sDDF borrow) — hardened SPSC vs a hostile driver\n");
+
+    static mut REGION: DevQRegion = DevQRegion::new();
+    let region = unsafe { &*core::ptr::addr_of!(REGION) };
+
+    // --- Software LoopDev: exercise the HONEST transport with no hardware. ---
+    let (lp_prod, lp_drop, lp_cons) = LoopDev::selftest(region);
+    let loop_ok = lp_prod == lp_cons && lp_drop >= 1;
+    kprint!(" [P11] LoopDev: produced_ok={} dropped_full={} consumed={} (full=>drop+count, SPSC carries all) -> {}\n",
+        lp_prod, lp_drop, lp_cons, if loop_ok { "ok" } else { "BAD" });
+
+    // Raw shared-memory forge, exactly as an untrusted producer would: write a
+    // descriptor into a chosen slot and bump tail with an STLR. The kernel NEVER
+    // trusts these; it re-derives every index from its private geometry.
+    let forge = |q: usize, slot: usize, d: BufDesc| unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of!(region.desc[q][slot]) as *mut BufDesc, d);
+    };
+    // A valid descriptor for buffer `cookie`; len is a full Ethernet/IPv4/UDP frame
+    // (14+20+8) so the honest path's `packet::verdict` sees a complete frame.
+    let good = |cookie: u32| BufDesc {
+        io_or_off: cookie as u64 * NET_BUFSZ as u64,
+        len: (14 + 20 + 8) as u16,
+        flags: NET_FLAG_SOF | NET_FLAG_EOF,
+        cookie,
+    };
+    let _ = NET_MIN;
+
+    let mut net = NetClass::new();
+    let mut stats = DevQStats::new();
+
+    // ===================== (1) HONEST PATH =====================
+    // Kernel produces buffers on RxFree and records them handed to the driver;
+    // the stand-in driver moves them to RxActive with VALID descriptors; the
+    // kernel drains RxActive, validating each against the ownership table.
+    region.reset(qid::RX_FREE);
+    region.reset(qid::RX_ACTIVE);
+    const HANDED: u32 = 4;
+    let kprod = QHandle::producer(qid::RX_FREE);
+    let mut fstats = DevQStats::new();
+    for c in 0..HANDED {
+        // Kernel grants buffer c to the driver (RX role) + advertises it on RxFree.
+        net.hand_to_driver(c as usize, BufState::DriverRx);
+        enqueue(region, &kprod, &mut fstats, &good(c));
+    }
+    // Stand-in HONEST driver: publish valid RxActive descriptors for those buffers.
+    let dprod = QHandle::producer(qid::RX_ACTIVE);
+    for c in 0..HANDED {
+        enqueue(region, &dprod, &mut fstats, &good(c));
+    }
+    // Kernel drains RxActive; on accept it runs the signed rule plane on the frame
+    // and reclaims the buffer. `frames` counts descriptors that validated AND passed.
+    static mut DATA: [[u8; NET_BUFSZ]; devq::NET_NBUF] = [[0u8; NET_BUFSZ]; devq::NET_NBUF];
+    let data = unsafe { &mut *core::ptr::addr_of_mut!(DATA) };
+    // Lay a benign UDP:53 frame into each handed buffer (verdict must PASS).
+    for c in 0..HANDED as usize {
+        let n = build_udp_into(&mut data[c]);
+        let _ = n;
+    }
+    let mut frames = 0u32;
+    let mut kcons = QHandle::consumer(qid::RX_ACTIVE);
+    let accepted = drain_checked(region, &mut kcons, 64, &mut stats, |d| {
+        net.check_from_driver(d, BufState::DriverRx)?;
+        // Validated: read the kernel's own buffer (never the driver's addresses),
+        // run the IPS, count the frame, reclaim the buffer.
+        let c = d.cookie as usize;
+        let n = (d.len as usize).min(NET_BUFSZ);
+        let (_p, v) = packet::verdict(&data[c][..n]);
+        if v == packet::PASS {
+            frames += 1;
+        }
+        net.reclaim(c);
+        Ok(())
+    });
+    let honest_ok = accepted == HANDED && frames == HANDED;
+    kprint!(" [P11] honest: kernel handed {} buffers -> driver published -> drained+validated {} -> IPS PASS frames {} -> {}\n",
+        HANDED, accepted, frames, if honest_ok { "ok" } else { "BAD" });
+
+    // ===================== (2) HOSTILE PATHS =====================
+    // Each case forges a descriptor / index on the HOSTILE RxActive queue; the
+    // kernel must REJECT + COUNT it, and the queue must stay usable afterward.
+    let v0 = |s: &DevQStats, v: Violation| s.viol[v as usize];
+
+    // (a) V2 — forged tail = head + huge. Placed AT the head slot so an unhardened
+    // consumer would happily index it; occupancy (tail-head) is astronomically > cap.
+    region.reset(qid::RX_ACTIVE);
+    forge(qid::RX_ACTIVE, 0, good(0));
+    region.hdr[qid::RX_ACTIVE].tail.store(0x4000_0000, core::sync::atomic::Ordering::Release);
+    let before = v0(&stats, Violation::Index);
+    drain_checked(region, &mut kcons, 64, &mut stats, |d| net.check_from_driver(d, BufState::DriverRx));
+    let a_ok = v0(&stats, Violation::Index) > before;
+
+    // (b) V4 — io_or_off far outside the data region (cookie valid, address wild).
+    region.reset(qid::RX_ACTIVE);
+    net.hand_to_driver(0, BufState::DriverRx);
+    let mut bad = good(0);
+    bad.io_or_off = 0xDEAD_0000_0000; // nowhere near the region
+    forge(qid::RX_ACTIVE, 0, bad);
+    region.hdr[qid::RX_ACTIVE].tail.store(1, core::sync::atomic::Ordering::Release);
+    let before = v0(&stats, Violation::Offset);
+    drain_checked(region, &mut kcons, 64, &mut stats, |d| net.check_from_driver(d, BufState::DriverRx));
+    let b_ok = v0(&stats, Violation::Offset) > before;
+
+    // (c) V4 — len = 0xFFFF.
+    region.reset(qid::RX_ACTIVE);
+    net.hand_to_driver(0, BufState::DriverRx);
+    let mut bad = good(0);
+    bad.len = 0xFFFF;
+    forge(qid::RX_ACTIVE, 0, bad);
+    region.hdr[qid::RX_ACTIVE].tail.store(1, core::sync::atomic::Ordering::Release);
+    let before = v0(&stats, Violation::Len);
+    drain_checked(region, &mut kcons, 64, &mut stats, |d| net.check_from_driver(d, BufState::DriverRx));
+    let c_ok = v0(&stats, Violation::Len) > before;
+
+    // (d) V5 — the SAME buffer submitted twice + a buffer never given. First submit
+    // of cookie 0 (owned DriverRx) validates and is reclaimed (=> KernelOwned); the
+    // second submit is now NotOwned. Cookie 7 was never handed out => NotOwned too.
+    region.reset(qid::RX_ACTIVE);
+    net.hand_to_driver(0, BufState::DriverRx);
+    net.reclaim(7); // ensure cookie 7 is KernelOwned (never given)
+    forge(qid::RX_ACTIVE, 0, good(0));
+    forge(qid::RX_ACTIVE, 1, good(0)); // double-submit
+    forge(qid::RX_ACTIVE, 2, good(7)); // never given
+    region.hdr[qid::RX_ACTIVE].tail.store(3, core::sync::atomic::Ordering::Release);
+    let before = v0(&stats, Violation::NotOwned);
+    drain_checked(region, &mut kcons, 64, &mut stats, |d| {
+        net.check_from_driver(d, BufState::DriverRx)?;
+        net.reclaim(d.cookie as usize); // accept => reclaim (flips owner; double-submit now NotOwned)
+        Ok(())
+    });
+    let d_ok = v0(&stats, Violation::NotOwned) >= before + 2;
+
+    // (e) V4 — unknown flag bits.
+    region.reset(qid::RX_ACTIVE);
+    net.hand_to_driver(0, BufState::DriverRx);
+    let mut bad = good(0);
+    bad.flags = 0x8000; // no such flag
+    forge(qid::RX_ACTIVE, 0, bad);
+    region.hdr[qid::RX_ACTIVE].tail.store(1, core::sync::atomic::Ordering::Release);
+    let before = v0(&stats, Violation::Flags);
+    drain_checked(region, &mut kcons, 64, &mut stats, |d| net.check_from_driver(d, BufState::DriverRx));
+    let e_ok = v0(&stats, Violation::Flags) > before;
+
+    // The queue must STILL be usable after all the hostile traffic: hand a fresh
+    // buffer, publish a valid descriptor, drain it, and confirm it validates.
+    region.reset(qid::RX_ACTIVE);
+    net.hand_to_driver(3, BufState::DriverRx);
+    let mut post = DevQStats::new();
+    enqueue(region, &QHandle::producer(qid::RX_ACTIVE), &mut post, &good(3));
+    let after_ok = drain_checked(region, &mut kcons, 64, &mut post, |d| {
+        net.check_from_driver(d, BufState::DriverRx)
+    }) == 1;
+
+    let forged_rejected = stats.total_violations();
+    let classes_ok = a_ok && b_ok && c_ok && d_ok && e_ok;
+    kprint!(" [P11] hostile: V2-index={} V4-offset={} V4-len={} V4-flags={} V5-notowned={} (total forged rejected={})\n",
+        v0(&stats, Violation::Index), v0(&stats, Violation::Offset), v0(&stats, Violation::Len),
+        v0(&stats, Violation::Flags), v0(&stats, Violation::NotOwned), forged_rejected);
+    kprint!(" [P11] slot=idx&{:#x} (structurally in-bounds), cap KERNEL-PRIVATE (H1), copy-then-validate (H3), no RMW on the region; queue still usable after attack={}\n",
+        MASK, after_ok);
+    kprint!(" [P11] FOLLOW-UP (documented): the metal GemDev/RtlDev NetDev impls + the read-only HW-ring grant (map_user_nc_ro, H4) are the metal-oriented deferral\n");
+
+    if loop_ok && honest_ok && classes_ok && after_ok && frames >= 1 && forged_rejected >= 5 {
+        kprint!(" [P11] PASS — hardened device-class transport rejects+counts every forged-descriptor class (V2/V4/V5); honest frames pass, queue survives\n");
+    } else {
+        kprint!(" [P11] FAIL — loop={} honest={} classes={} usable={} frames={} forged_rejected={}\n",
+            loop_ok, honest_ok, classes_ok, after_ok, frames, forged_rejected);
+    }
+}
+
+/// Build a minimal benign Ethernet/IPv4/UDP:53 frame into `buf`, returning its
+/// length — the P11 honest path lays one into each kernel-owned buffer so the
+/// signed rule plane (`packet::verdict`) returns PASS on the validated drain.
+#[cfg(not(feature = "cm5"))]
+fn build_udp_into(buf: &mut [u8]) -> usize {
+    const N: usize = 14 + 20 + 8;
+    for b in buf.iter_mut().take(N) {
+        *b = 0;
+    }
+    buf[12] = 0x08; // ethertype IPv4
+    buf[14] = 0x45; // IPv4, IHL=5
+    buf[17] = 28; // IP total length
+    buf[23] = 17; // proto UDP
+    buf[34] = 0x04;
+    buf[35] = 0xd2; // src port 1234
+    buf[36] = 0x00;
+    buf[37] = 53; // dst port 53 (benign)
+    N
 }
 
 /// P8 — prove the PREVAIL-style verifier accepts the safe signed rule (computing
