@@ -3046,11 +3046,31 @@ const SYS_DRIVER_REPORT: u64 = 7; // EL0 driver reports a value it read from its
 // Value the isolated EL0 driver server reported (a NIC register it read).
 static DRIVER_REPORT: AtomicU32 = AtomicU32::new(0);
 
-// The root task's capability space (initialized by build_root_cspace).
-static mut ROOT: Option<caps::CapSpace> = None;
+// CORE-2: PER-TCB capability spaces, keyed by the scheduler's tid (mirrors how
+// RESTART/TTBR0 already live per slot). Replaces the single global `ROOT` so an EL0
+// task can only ever name caps IN ITS OWN space — the confused-deputy fix and the
+// prerequisite for P12 ("a publisher may hold Topic{W} but not Topic{R}"). Steps 1-3
+// of PER_TCB_CSPACE.md: behavior-preserving (the root task is tid 0), with the
+// per-spawn `mint` + the [P3-iso] isolation gate as the completion step.
+static mut CSPACE: [Option<caps::CapSpace>; scheduler::MAX_THREADS] =
+    [const { None }; scheduler::MAX_THREADS];
 
+/// The CSpace of thread `tid`, if it has one.
+fn cspace_of(tid: usize) -> Option<&'static caps::CapSpace> {
+    if tid >= scheduler::MAX_THREADS {
+        return None;
+    }
+    unsafe { (*core::ptr::addr_of!(CSPACE)).get(tid).and_then(|c| c.as_ref()) }
+}
+
+/// The currently-running thread's CSpace (what a cap syscall resolves against).
+fn current_cspace() -> Option<&'static caps::CapSpace> {
+    cspace_of(scheduler::current_tid())
+}
+
+/// The root task's CSpace (tid 0). Kept for the boot/demo paths during the migration.
 fn root() -> &'static caps::CapSpace {
-    unsafe { (&*core::ptr::addr_of!(ROOT)).as_ref().unwrap() }
+    cspace_of(0).expect("root CSpace (tid 0) not built")
 }
 
 /// Build the root task's CSpace: retype real-frame-backed caps from an Untyped
@@ -3072,7 +3092,8 @@ fn build_root_cspace() {
         " root task: CSpace over untyped@{:#x}; cap[3]=Frame backs real PA {:#x}, r/w {}\n",
         base, fbase, if ok { "verified" } else { "FAIL" }
     );
-    unsafe { ROOT = Some(cs) };
+    // CORE-2: the root task is scheduler tid 0.
+    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[0] = Some(cs) };
 }
 
 fn p3_user_demo() {
@@ -3185,16 +3206,17 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
             0
         }
         SYS_CAP_IDENTIFY => {
-            // Genuine capability invocation from EL0: resolve a CPtr in the root
-            // task's CSpace and return the object type.
+            // Genuine capability invocation from EL0: resolve a CPtr in the CALLER's
+            // OWN CSpace (CORE-2 — never a global), so a task can only name caps it
+            // actually holds. Returns the object type, or u64::MAX for empty / no CSpace.
             let cptr = a0 as usize;
-            match root().get(cptr) {
+            match current_cspace().and_then(|cs| cs.get(cptr)) {
                 Some(c) => {
                     kprint!("   [EL0>svc] invoked cap[{}] -> {} (type code {})\n", cptr, c.otype.name(), c.otype.code());
                     c.otype.code()
                 }
                 None => {
-                    kprint!("   [EL0>svc] invoked cap[{}] -> empty slot\n", cptr);
+                    kprint!("   [EL0>svc] invoked cap[{}] -> empty slot (or no CSpace)\n", cptr);
                     u64::MAX
                 }
             }
