@@ -24,6 +24,7 @@ PHASES=(
   "P2|[P2] PASS|impl|Implementation+Verification|capabilities: untyped/retype/CDT/revoke"
   "P2iso|[P2-iso] PASS|impl|Implementation+Verification|CORE-2 per-TCB CSpaces: distinct capability spaces + rights-narrowing cross-CSpace delegation (child holds only the delegated Frame, read-only; Endpoint absent) — the P12 authority primitive"
   "P2gen|[P2-gen] PASS|impl|Implementation+Verification|CORE-9 generation-tagged CDT: parent link = (slot, generation); a freed+reused slot bumps its generation so a stale child (old-gen link) is orphaned — revoke of the new occupant spares it, never re-attaches"
+  "P2unmap|[P2-unmap] PASS|impl|Implementation+Verification|CORE-1 cap-gated Frame mapping + revoke-unmaps: map_frame_cap routes an EL0 grant through a has_rights-gated capability invocation (RW cap => AP RW, RO cap => AP RO, W-on-RO-cap denied) and RECORDS the VA; revoke then SEVERS authority by INVALIDATING the L3 entry + tlbi (present -> revoke -> invalid), closing the confused-deputy gap where revoke only cleared the CSpace slot"
   "P3|[P3] PASS|impl|Implementation+Verification|EL0 userspace + SVC syscall boundary + fault containment"
   "P4|[P4] PASS|impl|Implementation+Verification|synchronous IPC rendezvous over an Endpoint (block/unblock)"
   "P5|[P5] PASS|impl|Validation|Packet Engine: zero-copy ring + in-place verdict (synthetic pkts)"
