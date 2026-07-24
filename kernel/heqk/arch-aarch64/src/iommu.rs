@@ -98,12 +98,25 @@ pub fn fence(base: usize, granted_top: usize) -> (u32, u32) {
         // No transparent bypass range.
         w(base, BYPASS_START, 0);
         w(base, BYPASS_END, 0);
-        // Ceiling: abort above `granted_top`.
-        let cap = ADDR_CAP_ENABLE | (((granted_top as u64 >> ADDR_CAP_SHIFT) as u32).wrapping_sub(1));
+        // DRV-3/C3: the ceiling field is (granted_top >> ADDR_CAP_SHIFT) - 1 (the last
+        // permitted unit). The old `wrapping_sub(1)` turned a granted_top below one
+        // cap-unit into 0xFFFF_FFFF — a ceiling so high it aborts NOTHING (fail-OPEN)
+        // while the register still read "enabled". Reject that: never arm a no-op
+        // fence. saturating_sub can no longer wrap.
+        let units = (granted_top as u64 >> ADDR_CAP_SHIFT) as u32;
+        if units == 0 {
+            // Too small to express a meaningful ceiling — do NOT enable. Caller sees
+            // ADDR_CAP read-back 0 = not armed (fail closed vs a silent no-op).
+            return (0, 0);
+        }
+        let cap = ADDR_CAP_ENABLE | units.saturating_sub(1);
         w(base, ADDR_CAP, cap);
         // Enable with cap-exceeded abort; no bypass, no page tables.
         w(base, CTRL, CTRL_ENABLE | CTRL_CAP_EXCEEDED_ABORT_EN);
         core::arch::asm!("dsb sy");
+        // DRV-3/C4: return the read-back ADDR_CAP + CTRL so the caller can ASSERT the
+        // decoded ceiling matches intent before trusting containment (ADDR_CAP_SHIFT is
+        // still to be confirmed on metal via this read-back).
         (r(base, ADDR_CAP), r(base, CTRL))
     }
 }
