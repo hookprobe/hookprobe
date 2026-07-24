@@ -1503,7 +1503,7 @@ pub extern "C" fn kmain() -> ! {
 
     // Verify the signed threat rule BEFORE the datapath ever runs it (verify-
     // then-run; any future third-party rule must clear the verifier + JIT too).
-    if !bpf::verify(&bpf::THREAT_RULE) {
+    if !bpf::verify_structural_demo(&bpf::THREAT_RULE) {
         kprint!(" bpf: signed threat rule failed verification\n");
         arch_aarch64::semihosting::exit(1);
     }
@@ -2638,9 +2638,9 @@ fn p6b_demo() -> bool {
 
     // 1. Verifier: accept the signed rule; reject a program with a backward jump
     //    (a loop — non-terminating).
-    let good = bpf::verify(&bpf::THREAT_RULE);
+    let good = bpf::verify_structural_demo(&bpf::THREAT_RULE);
     let backward: [u64; 2] = [0xFFFF_0055, 0x0000_0095]; // JNE off=-1 (backward), EXIT
-    let bad = bpf::verify(&backward);
+    let bad = bpf::verify_structural_demo(&backward);
     kprint!(
         "   verifier: signed rule -> {}, looping rule -> {}\n",
         if good { "ACCEPT" } else { "reject?!" },

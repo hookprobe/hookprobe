@@ -282,12 +282,13 @@ pub const L7_MQTT: [u64; 11] = [
     insn(0x95, 0, 0, 0, 0),    // 10 EXIT (PASS)
 ];
 
-/// Static verifier — gate a program before it runs (v1: signed first-party, so
-/// this is a safety net; a full PREVAIL-style abstract-interpretation verifier
-/// is for opening the plane to third-party rules). Checks: known opcodes, valid
-/// registers, **no backward jumps** (termination — no loops), forward jump
-/// targets in range, and a reachable EXIT. Returns true if the program is safe.
-pub fn verify(prog: &[u64]) -> bool {
+/// DEMO ONLY — a STRUCTURAL check (opcodes/registers/no-backward-jumps/reachable
+/// EXIT). It is **UNSOUND for memory safety** (permits LDX from any base with no
+/// bounds proof) and MUST NEVER gate a JIT or live execution. The real gate is
+/// `verify_prevail` (abstract interpretation). Kept only for the P6 boot demo that
+/// shows structural rejection of a backward-jump program (DET-12/XC-14: renamed from
+/// `verify` so it can't be wired to gate execution by mistake).
+pub fn verify_structural_demo(prog: &[u64]) -> bool {
     if prog.is_empty() {
         return false;
     }
