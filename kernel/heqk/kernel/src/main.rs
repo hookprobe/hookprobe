@@ -24,6 +24,8 @@ mod packet;
 mod ratelimit;
 mod rules;
 mod scheduler;
+mod seal;
+mod store;
 mod telemetry;
 
 use alloc::vec::Vec;
@@ -212,6 +214,10 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
 
     // --- P10 Stage A: CYW43455 WiFi SDIO bring-up + chip-ID (0x4345) --
     cm5_p10_probe();
+
+    // --- P15: eMMC read-only block device + sealing (in-RAM, synthetic key) --
+    #[cfg(feature = "hboot")]
+    cm5_p15_block_seal();
 
     // --- P13: RP1 peripheral buses (GPIO/pinmux + I2C + SPI + UART), EL0-isolated --
     cm5_p13_probe();
@@ -990,6 +996,142 @@ fn cm5_p10_probe() {
     kprint!(" [P10-BT] SKIPPED — opt-in via --features p10bt (uarta clock/power sequencing unresolved; see Cargo.toml)\n");
 }
 
+/// P15 (metal) — eMMC read-only block device + sealing, on real BCM2712 silicon.
+/// Runs AFTER cm5_p10_probe and AFTER boot_confirm. Strictly read-only on disk:
+///   * probe the eMMC (dump-before-touch, force-presence, CMD0/1/2/3/9/7/16/8);
+///   * read LBA 0, parse + print the MBR, evaluate the write guard;
+///   * scan (read-only) the reserved window LBA 2016..2047;
+///   * seal/unseal IN RAM against a SYNTHETIC key, proving wrong-measurement +
+///     tamper are refused.
+///
+/// LIMITATION, stated plainly: measurement enforcement is NOT yet real. HBoot
+/// does not publish a SealHandoff, so the SRK is synthetic — a modified kernel
+/// would derive the same key. Real binding needs the HBoot SRK derivation + the
+/// closing of audit finding V3/SEC-2 (EL1 must not be able to read OTP). This
+/// build therefore claims NEITHER measurement enforcement NOR rollback protection.
+#[cfg(all(feature = "cm5", feature = "hboot"))]
+fn cm5_p15_block_seal() {
+    use arch_aarch64::emmc::Emmc;
+    use hal::BlockDev; // brings read_block/block_count into scope for Emmc
+    use store::{guard_from_mbr, SealedStore};
+
+    kprint!("\n [P15] eMMC block storage + sealed persistence (read-only bring-up)\n");
+
+    // clk-emmc2 is SHARED with the live WiFi host — read the rate, never set it.
+    let clk = arch_aarch64::mailbox::get_clock_rate(arch_aarch64::mailbox::CLK_EMMC2).unwrap_or(0);
+    let pre = Emmc::dump_regs();
+    kprint!("   [P15] clk-emmc2={} Hz (get only; shared w/ WiFi), pre-touch: CAPS={:#010x} PRESENT={:#010x} CLKCTL={:#06x} INT_EN={:#010x}\n",
+        clk, pre[0], pre[1], pre[3] as u16, pre[5]);
+
+    let emmc = match Emmc::probe() {
+        Ok(e) => e,
+        Err((step, err)) => {
+            kprint!("   [P15] eMMC SILENT — stalled step {} ({:?}); read-only probe, no disk change\n", step, err);
+            kprint!(" [P15-block] SKIPPED — eMMC bring-up incomplete on this carrier (read-only, safe)\n");
+            // Still exercise the sealing crypto in RAM so the phase is meaningful.
+            p15_seal_ram_demo();
+            return;
+        }
+    };
+    kprint!("   [P15] eMMC up: sector-addressed={}, capacity={} sectors ({} MiB)\n",
+        emmc.sector_addressed(), emmc.sec_count(), emmc.sec_count() / 2048);
+
+    // Read LBA 0 + parse the MBR (READ-ONLY).
+    let mut mbr = [0u8; 512];
+    if emmc.read_block(0, &mut mbr).is_err() {
+        kprint!("   [P15] LBA0 read failed — aborting (read-only, no change)\n");
+        p15_seal_ram_demo();
+        return;
+    }
+    let parts = store::parse_mbr(&mbr);
+    kprint!("   [P15] MBR sig={:02x}{:02x}; partitions:\n", mbr[510], mbr[511]);
+    for (i, p) in parts.iter().enumerate() {
+        if p.ptype != 0 || p.count != 0 {
+            kprint!("     p{}: type={:#04x} start=LBA {} count={} sectors\n", i + 1, p.ptype, p.start, p.count);
+        }
+    }
+    match guard_from_mbr(&mbr, emmc.sec_count()) {
+        Ok(g) => kprint!("   [P15] write-guard OK: window LBA {}..{} (first partition @LBA {}) — 2015 sectors clear of MBR\n",
+            g.lo, g.hi, g.first_part),
+        Err(e) => kprint!("   [P15] write-guard REFUSES this disk: {:?} (writes would be blocked — safe)\n", e),
+    }
+
+    // Scan the reserved window READ-ONLY: report whether a HQKSEAL1 blob is present.
+    let mut found = false;
+    let mut first = [0u8; 512];
+    if emmc.read_block(store::RESERVED_LBA_LO, &mut first).is_ok() {
+        found = &first[..8] == seal::SEAL_MAGIC;
+    }
+    kprint!("   [P15] reserved window LBA {} scan (read-only): {}\n",
+        store::RESERVED_LBA_LO, if found { "HQKSEAL1 blob present" } else { "empty (no seal yet)" });
+
+    // If we can build a store over the real disk, exercise the READ/scan path.
+    {
+        let mut dev = emmc; // move into the store (read path uses it immutably)
+        if let Ok(ss) = SealedStore::open(&mut dev) {
+            let mut buf = [0u8; seal::SEAL_MAX_BLOB];
+            match ss.load(&mut buf) {
+                Some(n) => kprint!("   [P15] store scan/load: found a {}-byte blob in the window\n", n),
+                None => kprint!("   [P15] store scan/load: window holds no valid blob (expected on a fresh disk)\n"),
+            }
+        }
+    }
+
+    // Sealing crypto proof IN RAM (synthetic key) — the security-honest part.
+    let ram_ok = p15_seal_ram_demo();
+
+    kprint!(" [P15-block] {} — eMMC READ-ONLY block device + in-RAM sealing proven on metal\n",
+        if ram_ok { "PASS" } else { "FAIL" });
+    kprint!(" [P15-LIMIT] measurement enforcement + rollback protection are NOT yet real:\n");
+    kprint!("             SRK is SYNTHETIC (no HBoot SealHandoff); prerequisite = HBoot SRK derivation\n");
+    kprint!("             + closing audit finding V3/SEC-2 (EL1 must not read OTP). Do not claim binding.\n");
+}
+
+/// The arch-agnostic sealing proof used by the metal P15 path: seal/unseal a
+/// secret with a SYNTHETIC key and prove wrong-measurement + tamper are refused.
+/// No disk, no hardware — pure crypto, so it is meaningful even if the eMMC
+/// bring-up stalls on a given carrier.
+#[cfg(all(feature = "cm5", feature = "hboot"))]
+fn p15_seal_ram_demo() -> bool {
+    use seal::{Policy, SealBlob, SealErr};
+    let srk = [0x5au8; 32]; // SYNTHETIC (HBoot does not derive one yet)
+    let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
+    pcr[0] = [0x11; 32];
+    pcr[1] = [0x22; 32];
+    let policy = Policy {
+        mask: boot_abi::SEAL_POLICY_STRICT,
+        device_id: 0x0BADF00D_1234_5678,
+        svn_floor: 7,
+        pcr,
+    };
+    let secret = b"HEQK-P15-metal-sealed-secret";
+    let mut blob = SealBlob::new();
+    if seal::seal(&srk, &policy, secret, &mut blob).is_err() {
+        return false;
+    }
+    let mut pt = [0u8; 64];
+    let round = matches!(seal::unseal(&srk, &policy, blob.as_slice(), &mut pt),
+        Ok(n) if &pt[..n] == secret);
+    // wrong measurement (PCR1 changed under strict policy) -> refused.
+    let mut wpcr = pcr;
+    wpcr[1] = [0xEE; 32];
+    let wrong = Policy { pcr: wpcr, ..policy };
+    let wrong_refused = matches!(seal::unseal(&srk, &wrong, blob.as_slice(), &mut pt),
+        Err(SealErr::PolicyMismatch));
+    // tampered ciphertext -> refused.
+    let mut t = SealBlob::new();
+    t.bytes[..blob.len].copy_from_slice(blob.as_slice());
+    t.len = blob.len;
+    t.bytes[seal::SEAL_HDR_LEN] ^= 0x01;
+    let tamper_refused = matches!(seal::unseal(&srk, &policy, t.as_slice(), &mut pt),
+        Err(SealErr::Tag));
+    kprint!("   [P15] in-RAM seal/unseal (SYNTHETIC key): round-trip {}, wrong-measurement {}, tamper {}\n",
+        if round { "MATCH" } else { "MISMATCH" },
+        if wrong_refused { "REFUSED" } else { "LEAK!" },
+        if tamper_refused { "REFUSED" } else { "LEAK!" });
+    round && wrong_refused && tamper_refused
+}
+
 /// P10-BT — the Bluetooth half of the CYW43455, over HCI-UART (uarta, NS16550A).
 /// Independent of the SDIO WiFi path; runs after it so a BT failure can never
 /// affect the WiFi result. Patch-free (the .hcd is optional for HCI + LE scan).
@@ -1714,6 +1856,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
+    // --- P15: sealed storage — seal/unseal + guard over a RamDisk (arch-agnostic) ---
+    p15_seal_selftest();
+
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
 
@@ -2223,6 +2368,246 @@ fn p8_l7() -> bool {
     kprint!(" [P8-l7] {} — L7 MQTT signature caught in-kernel before EL0 automation services\n",
         if ok { "PASS" } else { "FAIL" });
     ok
+}
+
+/// P15 self-test (arch-agnostic, QEMU-gated): exercise the sealing crypto + the
+/// MBR write-guard over an in-RAM block device — no disk, no brick risk. Proves:
+///  * seal -> unseal round-trips the plaintext;
+///  * the store-layer READ path scans + loads a blob from the reserved window;
+///  * wrong-policy, flipped-ciphertext, flipped-header, and device_id-mismatch
+///    all REFUSE (no plaintext leaks);
+///  * `guard_from_mbr` rejects a GPT-protective MBR, a too-low partition, and a
+///    missing signature, and accepts a well-formed one;
+///  * the reserved-window guard admits only LBA 2016..2047.
+/// Under `p15-write` it additionally drives the real store write path (read-back
+/// verified) through the RamDisk, whose write hook PANICS on any out-of-window
+/// LBA — the write-window-escape assertion.
+#[cfg(not(feature = "cm5"))]
+fn p15_seal_selftest() {
+    use seal::{Policy, SealBlob, SealErr};
+    use store::{guard_from_mbr, GuardErr, SealedStore};
+
+    kprint!("\n [P15] sealed storage — seal/unseal + MBR write-guard (RamDisk, no disk)\n");
+
+    // A synthetic SRK stands in for the HBoot-derived, measurement-bound key. On
+    // QEMU there is no OTP + no V3 closure, so this is NOT real measurement
+    // enforcement — it validates the crypto/format/guard logic only.
+    let srk = [0x5au8; 32];
+    let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
+    pcr[0] = [0x11; 32];
+    pcr[1] = [0x22; 32];
+    pcr[2] = [0x33; 32];
+
+    let policy = Policy {
+        mask: boot_abi::SEAL_POLICY_STRICT,
+        device_id: 0x0BADF00D_1234_5678u64,
+        svn_floor: 7,
+        pcr,
+    };
+    let secret = b"HEQK-P15-sealed-secret-material-0x01";
+
+    // 1) round-trip seal/unseal.
+    let mut blob = SealBlob::new();
+    let sealed_ok = seal::seal(&srk, &policy, secret, &mut blob).is_ok();
+    let mut pt = [0u8; 64];
+    let round = seal::unseal(&srk, &policy, blob.as_slice(), &mut pt);
+    let round_ok = sealed_ok
+        && matches!(round, Ok(n) if n == secret.len() && &pt[..n] == secret);
+    kprint!("   round-trip: seal {} bytes -> unseal -> {}\n",
+        blob.len, if round_ok { "MATCH" } else { "MISMATCH" });
+
+    // 2) wrong policy (a changed measurement) is refused.
+    let mut wrong_pcr = pcr;
+    wrong_pcr[1] = [0xEE; 32]; // PCR1 differs -> strict policy diverges
+    let wrong_policy = Policy { pcr: wrong_pcr, ..policy };
+    let r_wrong = seal::unseal(&srk, &wrong_policy, blob.as_slice(), &mut pt);
+    let wrong_refused = matches!(r_wrong, Err(SealErr::PolicyMismatch));
+
+    // 3) flipped ciphertext byte -> tag fails.
+    let mut tamper_ct = SealBlob::new();
+    tamper_ct.bytes[..blob.len].copy_from_slice(blob.as_slice());
+    tamper_ct.len = blob.len;
+    tamper_ct.bytes[seal::SEAL_HDR_LEN] ^= 0x01;
+    let r_ct = seal::unseal(&srk, &policy, tamper_ct.as_slice(), &mut pt);
+    let ct_refused = matches!(r_ct, Err(SealErr::Tag));
+
+    // 4) flipped header byte (in the tag-covered reserved area) -> tag fails.
+    let mut tamper_hdr = SealBlob::new();
+    tamper_hdr.bytes[..blob.len].copy_from_slice(blob.as_slice());
+    tamper_hdr.len = blob.len;
+    tamper_hdr.bytes[80] ^= 0x01; // reserved region (72..96): authenticated
+    let r_hdr = seal::unseal(&srk, &policy, tamper_hdr.as_slice(), &mut pt);
+    let hdr_refused = matches!(r_hdr, Err(SealErr::Tag));
+
+    // 5) device_id mismatch -> refused (constant-time identity gate).
+    let other_dev = Policy { device_id: 0xAAAA_BBBB_CCCC_DDDDu64, ..policy };
+    let r_dev = seal::unseal(&srk, &other_dev, blob.as_slice(), &mut pt);
+    let dev_refused = matches!(r_dev, Err(SealErr::DeviceMismatch));
+
+    kprint!("   refusals: wrong-policy {}, flip-ct {}, flip-hdr {}, dev-mismatch {}\n",
+        yn(wrong_refused), yn(ct_refused), yn(hdr_refused), yn(dev_refused));
+
+    // 6) guard unit tests over synthetic MBRs.
+    let good = mbr_with(&[(0x0c, 2048u32, 262144u32), (0x83, 526336, 1048576)]);
+    let cap = 4096u64 * 1024; // plenty
+    let g_good = guard_from_mbr(&good, cap);
+    let gpt = mbr_with(&[(0xEE, 1, 0xFFFF_FFFF)]);
+    let g_gpt = matches!(guard_from_mbr(&gpt, cap), Err(GuardErr::GptDetected));
+    let low = mbr_with(&[(0x83, 34, 1000)]); // partition at LBA 34 -> too low
+    let g_low = matches!(guard_from_mbr(&low, cap), Err(GuardErr::PartitionTooLow));
+    let mut nosig = mbr_with(&[(0x0c, 2048, 1000)]);
+    nosig[510] = 0; nosig[511] = 0; // strip the signature
+    let g_nosig = matches!(guard_from_mbr(&nosig, cap), Err(GuardErr::NoSignature));
+    let guard_ok = g_good.is_ok() && g_gpt && g_low && g_nosig;
+    kprint!("   guard: well-formed {}, GPT-protective->reject {}, LBA34->too-low {}, no-sig->reject {}\n",
+        if g_good.is_ok() { "accept" } else { "REJECT?!" }, yn(g_gpt), yn(g_low), yn(g_nosig));
+
+    // 7) reserved-window guard admits ONLY 2016..2047.
+    let win = g_good.unwrap_or(store::LbaGuard { lo: store::RESERVED_LBA_LO, hi: store::RESERVED_LBA_HI, capacity: cap, first_part: 2048 });
+    let window_ok = !win.allows(0) && !win.allows(2015) && win.allows(2016)
+        && win.allows(2047) && !win.allows(2048) && !win.allows(4095);
+
+    // 8) store-layer READ path: seed a blob into the RamDisk's reserved window
+    //    (direct backing write — NOT a BlockDev write), then scan+load it back.
+    let mut disk = RamDisk::new(2_000_000);
+    disk.install_mbr(&good);
+    disk.seed(store::RESERVED_LBA_LO, blob.as_slice());
+    let load_ok = {
+        let ss = SealedStore::open(&mut disk);
+        match ss {
+            Ok(store) => {
+                let mut loaded = [0u8; seal::SEAL_MAX_BLOB];
+                match store.load(&mut loaded) {
+                    Some(n) => {
+                        let mut lpt = [0u8; 64];
+                        matches!(seal::unseal(&srk, &policy, &loaded[..n], &mut lpt),
+                            Ok(m) if &lpt[..m] == secret)
+                    }
+                    None => false,
+                }
+            }
+            Err(_) => false,
+        }
+    };
+    kprint!("   store: window-guard {}, scan+load+unseal {}\n", yn(window_ok), yn(load_ok));
+
+    // 9) (p15-write) real write path through the RamDisk, whose write hook PANICS
+    //    on any LBA outside [2016,2048) — proves the store never escapes the window.
+    #[cfg(feature = "p15-write")]
+    let write_ok = {
+        let mut wdisk = RamDisk::new(2_000_000);
+        wdisk.install_mbr(&good);
+        let mut store_w = SealedStore::open(&mut wdisk).expect("guard");
+        let stored = store_w.store(blob.as_slice()).is_ok();
+        drop(store_w);
+        let mut back = SealedStore::open(&mut wdisk).expect("guard");
+        let mut lb = [0u8; seal::SEAL_MAX_BLOB];
+        let reread = back.load(&mut lb).is_some();
+        stored && reread
+    };
+    #[cfg(not(feature = "p15-write"))]
+    let write_ok = true; // write path compiled out by default (read-only build)
+
+    let pass = round_ok
+        && wrong_refused && ct_refused && hdr_refused && dev_refused
+        && guard_ok && window_ok && load_ok && write_ok;
+    kprint!(" [P15-seal] {} — Encrypt-then-MAC seal/unseal, tamper+wrong-measurement refused, MBR write-guard enforced (RamDisk)\n",
+        if pass { "PASS" } else { "FAIL" });
+}
+
+#[cfg(not(feature = "cm5"))]
+#[inline]
+fn yn(b: bool) -> &'static str {
+    if b { "yes" } else { "NO" }
+}
+
+/// Build a synthetic 512-byte MBR sector with the given `(type, start_lba,
+/// sector_count)` primary entries and a valid 0x55AA signature.
+#[cfg(not(feature = "cm5"))]
+fn mbr_with(parts: &[(u8, u32, u32)]) -> [u8; 512] {
+    let mut s = [0u8; 512];
+    for (i, &(ptype, start, count)) in parts.iter().enumerate().take(4) {
+        let off = 446 + i * 16;
+        s[off + 4] = ptype;
+        s[off + 8..off + 12].copy_from_slice(&start.to_le_bytes());
+        s[off + 12..off + 16].copy_from_slice(&count.to_le_bytes());
+    }
+    s[510] = 0x55;
+    s[511] = 0xAA;
+    s
+}
+
+/// An in-RAM block device for the P15 self-test. SPARSE on purpose (a dense
+/// 4096-sector array is 2 MiB and would exhaust the tiny kernel heap): it backs
+/// only LBA 0 (the MBR) and the reserved window LBA 2016..2047, and reports a
+/// large synthetic capacity so the guard's partition/capacity checks are real.
+/// The write hook is the SECOND, independent write-window gate: it PANICS on any
+/// LBA outside [2016,2048), so a store-layer escape becomes an immediate, loud
+/// abort (the write-window-escape assertion). `seed`/`install_mbr` bypass it for
+/// test setup (they are direct backing writes, not BlockDev writes).
+#[cfg(not(feature = "cm5"))]
+struct RamDisk {
+    mbr: [u8; 512],
+    window: [u8; ((store::RESERVED_LBA_HI - store::RESERVED_LBA_LO) as usize) * 512], // 32 sectors
+    sectors: u64, // reported capacity
+}
+
+#[cfg(not(feature = "cm5"))]
+impl RamDisk {
+    fn new(sectors: u64) -> Self {
+        RamDisk {
+            mbr: [0u8; 512],
+            window: [0u8; ((store::RESERVED_LBA_HI - store::RESERVED_LBA_LO) as usize) * 512],
+            sectors,
+        }
+    }
+    fn install_mbr(&mut self, mbr: &[u8; 512]) {
+        self.mbr = *mbr;
+    }
+    /// Direct backing write for test setup (NOT a BlockDev write — bypasses the
+    /// window gate on purpose, to place a blob for the read/scan path). Only the
+    /// reserved window is backed.
+    fn seed(&mut self, lba: u64, bytes: &[u8]) {
+        assert!((store::RESERVED_LBA_LO..store::RESERVED_LBA_HI).contains(&lba));
+        let off = ((lba - store::RESERVED_LBA_LO) as usize) * 512;
+        self.window[off..off + bytes.len()].copy_from_slice(bytes);
+    }
+}
+
+#[cfg(not(feature = "cm5"))]
+impl hal::BlockDev for RamDisk {
+    fn block_count(&self) -> u64 {
+        self.sectors
+    }
+    fn read_block(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), hal::BlockErr> {
+        if lba >= self.sectors {
+            return Err(hal::BlockErr::OutOfRange);
+        }
+        if lba == 0 {
+            buf.copy_from_slice(&self.mbr);
+        } else if (store::RESERVED_LBA_LO..store::RESERVED_LBA_HI).contains(&lba) {
+            let off = ((lba - store::RESERVED_LBA_LO) as usize) * 512;
+            buf.copy_from_slice(&self.window[off..off + 512]);
+        } else {
+            *buf = [0u8; 512]; // unbacked region reads as zero
+        }
+        Ok(())
+    }
+    #[cfg(feature = "p15-write")]
+    fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), hal::BlockErr> {
+        // Write-window-escape assertion: the ONLY writable sectors are 2016..2047.
+        assert!(
+            (store::RESERVED_LBA_LO..store::RESERVED_LBA_HI).contains(&lba),
+            "P15 write-window ESCAPE: LBA {} outside [2016,2048)",
+            lba
+        );
+        if lba >= self.sectors {
+            return Err(hal::BlockErr::OutOfRange);
+        }
+        let off = ((lba - store::RESERVED_LBA_LO) as usize) * 512;
+        self.window[off..off + 512].copy_from_slice(buf);
+        Ok(())
+    }
 }
 
 /// P7c — spawn an uncooperative EL0 task (loops at EL0 with IRQs on, no syscalls)

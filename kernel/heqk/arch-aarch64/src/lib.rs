@@ -33,6 +33,11 @@ pub mod rp1_uartp;
 pub mod rtl8111;
 #[cfg(feature = "cm5")]
 pub mod cyw43;
+// P15 — eMMC block storage: base-parameterized SDHCI + read-only eMMC driver.
+#[cfg(feature = "cm5")]
+pub mod sdhci;
+#[cfg(feature = "cm5")]
+pub mod emmc;
 #[cfg(feature = "cm5")]
 pub mod bt;
 #[cfg(feature = "cm5")]
