@@ -603,6 +603,14 @@ pub fn link_up() -> bool {
     unsafe { m8(PHYSTATUS) & 0x02 != 0 }
 }
 
+// DRV-5: count of RX frames dropped for a hardware error (RX_RES) or an unexpected
+// multi-segment layout (missing FS/LS). Visible to the kernel instead of masked.
+static mut RX_ERRORS: u32 = 0;
+/// Number of RX descriptors dropped due to an error/fragment (DRV-5).
+pub fn rx_errors() -> u32 {
+    unsafe { RX_ERRORS }
+}
+
 /// Poll RX descriptor `i`: returns Some((desc_index, len)) with the frame copied
 /// into `out`, or None if the NIC still owns it / it errored. Re-arms the slot.
 pub fn poll_rx(i: usize, out: &mut [u8]) -> Option<usize> {
@@ -614,7 +622,14 @@ pub fn poll_rx(i: usize, out: &mut [u8]) -> Option<usize> {
         return None; // NIC still owns it
     }
     let mut result = None;
-    if opts1 & RX_RES == 0 {
+    // DRV-5: surface RX errors and multi-segment frames instead of masking them as
+    // "empty". RX_RES = the NIC's error summary; FS|LS must BOTH be set for a whole
+    // frame (with RMS=RXBUF the MTU never spans descriptors, so a missing FS/LS is
+    // anomalous). Count these so a burst of errors/fragments is visible to the IDS
+    // rather than silently dropped and indistinguishable from an idle ring.
+    if opts1 & RX_RES != 0 || (opts1 & (FS | LS)) != (FS | LS) {
+        unsafe { RX_ERRORS = RX_ERRORS.wrapping_add(1) };
+    } else {
         let len = ((opts1 & LEN_MASK) as usize).saturating_sub(4); // strip FCS
         let n = len.min(out.len()).min(RXBUF); // never read past the DMA buffer
         let bufpa = unsafe { core::ptr::addr_of!(RX.buf[i]) } as usize;
