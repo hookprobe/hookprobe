@@ -1141,19 +1141,24 @@ fn cm5_gem_rx_demo() {
     let mut buf = [0u8; 1600];
     let mut got = 0u32;
     for tick in 0..500u32 {
+        // L-13/XC-16: poll_rx now reports len=0 when the descriptor gives no length,
+        // instead of fabricating a full-buffer frame. Skip those — they are not real
+        // frames and must not be fed to the IDS as detections.
         if let Some((n, w0, w1, w2, w3)) = arch_aarch64::gem::poll_rx(&mut buf) {
             let n = n.min(buf.len());
-            kprint!(" [P8] RX len={} w0={:#010x} w1={:#010x} w2={:#010x} w3={:#010x} buf[0..14]={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}{:02x}{:02x} et={:02x}{:02x}\n",
-                n, w0, w1, w2, w3, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13]);
-            if packet::produce_raw(pool, &buf[..n]) {
-                if let Some((port, verdict)) = packet::consume_one(pool) {
-                    kprint!(" [P8] IDS verdict: dst_port={} -> {}\n", port,
-                        if verdict == packet::DROP { "DROP" } else { "PASS" });
+            if n >= 14 {
+                kprint!(" [P8] RX len={} w0={:#010x} w1={:#010x} w2={:#010x} w3={:#010x} buf[0..14]={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}{:02x}{:02x} et={:02x}{:02x}\n",
+                    n, w0, w1, w2, w3, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13]);
+                if packet::produce_raw(pool, &buf[..n]) {
+                    if let Some((port, verdict)) = packet::consume_one(pool) {
+                        kprint!(" [P8] IDS verdict: dst_port={} -> {}\n", port,
+                            if verdict == packet::DROP { "DROP" } else { "PASS" });
+                    }
                 }
-            }
-            got += 1;
-            if got >= 3 {
-                break;
+                got += 1;
+                if got >= 3 {
+                    break;
+                }
             }
         }
         for _ in 0..2_000_000u32 {
