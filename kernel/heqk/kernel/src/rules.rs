@@ -83,6 +83,20 @@ fn rstate(state: *mut RState, i: usize) -> RState {
 /// Verify + JIT-compile a rule set into `state`. A rule that fails verification
 /// is DISABLED (never run) — the plane admits only statically-proven-safe rules.
 /// Returns (verified, jitted).
+///
+/// DET-2 — INTEGRITY MODEL. The corpus passed here is `&'static` bytecode baked into
+/// the kernel image, and the image is **hybrid-signed (ed25519 + SLH-DSA) and measured
+/// into PCR1** by HBoot. So a rule cannot be tampered without breaking the image
+/// signature: "signed rule" is backed by IMAGE-LEVEL signing + measured boot for the
+/// static corpus, NOT by a per-rule signature. `verify_prevail` here proves memory
+/// SAFETY (an independent property); it is not an authenticity check.
+///
+/// HARD PREREQUISITE for any future DYNAMIC rule source (loaded from storage / HYDRA,
+/// i.e. NOT this static corpus): a per-rule authenticity gate MUST be added at the top
+/// of this function — verify an ed25519 / FIPS-205 signature over the rule bytecode
+/// (reuse `attest_svc`) and refuse any rule whose signature does not verify — BEFORE
+/// `verify_prevail`. Until that gate exists, there must be no code path that feeds a
+/// non-static rule into `compile_set`.
 fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
     let mut verified = 0usize;
     let mut jitted = 0usize;
