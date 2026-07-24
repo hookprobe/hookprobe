@@ -486,6 +486,31 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                 if st[1] == Abs::Uninit || st[2] == Abs::Uninit {
                     return Err("CALL with uninitialized argument register");
                 }
+                // DET-1/XC-11: PER-HELPER ABI. `payload_match(R1=ptr, R2=id)`
+                // dereferences R1 for PATTERNS[R2].len() bytes, so R1 MUST be a
+                // VALIDATED PACKET POINTER — never a scalar / attacker-chosen address —
+                // and the packet must be provably long enough. Otherwise this helper is
+                // an arbitrary-kernel-read oracle (CVE-2021-4204 class). R2 (pattern id)
+                // is a runtime value, so fold a SOUND upper bound — the longest pattern
+                // — into min_len. (syn_rate_over/ip_blocked take scalar args, so this
+                // requirement applies only to the dereferencing helper.)
+                if (imm as u32) == crate::ratelimit::HELPER_PAYLOAD_MATCH {
+                    match st[1] {
+                        Abs::Pkt { lo, hi } => {
+                            if sat_add(lo, 0) < 0 {
+                                return Err("payload_match arg1 below packet start");
+                            }
+                            let need_i = sat_add(hi, crate::l7::max_pattern_len() as i64);
+                            if need_i < 0 || need_i > 65536 {
+                                return Err("payload_match read offset unbounded");
+                            }
+                            if need_i as u64 > min_len {
+                                min_len = need_i as u64;
+                            }
+                        }
+                        _ => return Err("payload_match arg1 must be a packet pointer"),
+                    }
+                }
                 // Helpers return 0/1 (one unknown bit).
                 out[0] = scalar_from_tnum(Tnum { value: 0, mask: 1 });
                 for k in 1..=5 {
