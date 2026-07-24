@@ -273,6 +273,15 @@ pub fn subscribe(index: usize, generation: u32, tid: usize) -> Result<usize, u64
     match topic_slot(index, generation) {
         None => Err(RC_REVOKED),
         Some(t) => {
+            // AUD-CAP-3: one subscription per (tid, topic). A tid that already holds a
+            // subscription gets the SAME id back (idempotent) rather than consuming a
+            // second slot — so a single Topic{R} holder cannot re-subscribe in a loop to
+            // exhaust MAX_SUBS_PER_TOPIC and starve other legitimate subscribers.
+            for i in 0..MAX_SUBS_PER_TOPIC {
+                if t.subs[i].used && t.subs[i].subscriber == tid {
+                    return Ok(i);
+                }
+            }
             for i in 0..MAX_SUBS_PER_TOPIC {
                 if !t.subs[i].used {
                     t.subs[i] = EMPTY_SUB;
@@ -364,6 +373,25 @@ pub fn dropped(index: usize, generation: u32, sub_id: usize) -> u64 {
 pub fn detach_tcb(tid: usize) {
     unsafe {
         for n in (*addr_of_mut!(NOTIFY)).iter_mut() {
+            // AUD-CAP-4: reclaim Notification objects OWNED by the dead task so their
+            // slots (and the owner-keyed create quota) don't leak permanently — a reused
+            // tid would otherwise inherit a dead owner's quota. Owner-death ends the
+            // object, matching the create(owner) model and mirroring the subscription
+            // reclaim below. A FOREIGN task parked on it is woken RC_REVOKED (never left
+            // blocked forever); the generation bump makes any surviving cap fail closed.
+            if n.used && n.owner == tid {
+                if let Some(w) = n.waiter.take() {
+                    if w != tid {
+                        scheduler::deliver_wake(w, RC_REVOKED);
+                        scheduler::unblock(w);
+                    }
+                }
+                n.used = false;
+                n.word = 0;
+                n.generation = n.generation.wrapping_add(1);
+                continue;
+            }
+            // Not owned by tid: just detach tid if it is parked here as a foreign waiter.
             if n.waiter == Some(tid) {
                 n.waiter = None;
             }
