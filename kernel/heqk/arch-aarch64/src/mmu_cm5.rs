@@ -409,7 +409,16 @@ pub fn new_addr_space() -> (usize, u16) {
         core::ptr::write_volatile(dst.add(USER_GB as usize), (l2u as u64) | TABLE);
         core::arch::asm!("dsb ish");
     }
-    let asid = NEXT_ASID.fetch_add(1, Ordering::Relaxed) & 0xFFFF;
+    // CORE-10/A10: ASID 0 is the kernel/GLOBAL TLB tag. The old `fetch_add & 0xFFFF`
+    // would, after 65535 address spaces, wrap the AtomicU16 counter back to 0 and hand
+    // a user address space the kernel's global ASID — a catastrophic TLB-aliasing
+    // collision. Refuse (fail closed) rather than issue 0. (Full reclamation of freed
+    // ASIDs on TCB death is a later enhancement; today only a handful of address
+    // spaces are ever created, so exhaustion means a leak to fix, not a normal state.)
+    let asid = NEXT_ASID.fetch_add(1, Ordering::Relaxed);
+    if asid == 0 {
+        return (0, 0);
+    }
     (l1, asid)
 }
 
