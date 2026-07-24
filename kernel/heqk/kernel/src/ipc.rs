@@ -27,8 +27,11 @@ fn wait_until_runnable() {
     }
 }
 
-/// Receive a message word (blocks until a sender rendezvous).
-pub fn recv() -> u64 {
+/// Receive a message word (blocks until a sender rendezvous). CORE-11: returns
+/// `Some(word)` on a real delivery, `None` when the endpoint is busy (a second
+/// concurrent receiver is refused) — the old `0` was ambiguous with a genuine
+/// 0-word message.
+pub fn recv() -> Option<u64> {
     arch_aarch64::disable_irqs();
     if let Some(sender) = unsafe { addr_of!(SEND_WAITER).read() } {
         // A sender is already waiting: take its parked message, wake it.
@@ -36,13 +39,13 @@ pub fn recv() -> u64 {
         unsafe { addr_of_mut!(SEND_WAITER).write(None) };
         scheduler::unblock(sender);
         arch_aarch64::enable_irqs();
-        m
+        Some(m)
     } else {
         // No sender yet: register as receiver and block. Refuse a second
         // concurrent receiver rather than overwrite the waiter slot.
         if unsafe { addr_of!(RECV_WAITER).read() }.is_some() {
             arch_aarch64::enable_irqs();
-            return 0; // endpoint busy
+            return None; // endpoint busy
         }
         unsafe { addr_of_mut!(RECV_WAITER).write(Some(scheduler::current_tid())) };
         scheduler::block_current();
@@ -50,7 +53,7 @@ pub fn recv() -> u64 {
         wait_until_runnable();
         // Woken by a sender that handed us a private DELIVERED word.
         arch_aarch64::disable_irqs();
-        let m = unsafe { addr_of!(DELIVERED).read() }.unwrap_or(0);
+        let m = unsafe { addr_of!(DELIVERED).read() };
         unsafe {
             addr_of_mut!(DELIVERED).write(None);
             addr_of_mut!(RECV_WAITER).write(None);
@@ -61,7 +64,9 @@ pub fn recv() -> u64 {
 }
 
 /// Send a message word (rendezvous with a receiver; blocks if none waiting).
-pub fn send(msg: u64) {
+/// CORE-11: returns `false` when the endpoint is busy (a second concurrent sender
+/// is refused rather than clobbering the parked message), `true` otherwise.
+pub fn send(msg: u64) -> bool {
     arch_aarch64::disable_irqs();
     if let Some(receiver) = unsafe { addr_of!(RECV_WAITER).read() } {
         // A receiver is waiting: deliver, CLEAR the waiter at the moment of
@@ -73,6 +78,7 @@ pub fn send(msg: u64) {
         }
         scheduler::unblock(receiver);
         arch_aarch64::enable_irqs();
+        true
     } else {
         // No receiver yet: park the message and block until one takes it. This
         // single-endpoint rendezvous supports one waiter per side; refuse a
@@ -80,7 +86,7 @@ pub fn send(msg: u64) {
         // A multi-waiter queue is the generalization (keyed by Endpoint cap).
         if unsafe { addr_of!(SEND_WAITER).read() }.is_some() {
             arch_aarch64::enable_irqs();
-            return; // endpoint busy: drop rather than corrupt the waiter slot
+            return false; // endpoint busy: drop rather than corrupt the waiter slot
         }
         unsafe {
             addr_of_mut!(SEND_MSG).write(msg);
@@ -89,5 +95,6 @@ pub fn send(msg: u64) {
         scheduler::block_current();
         arch_aarch64::enable_irqs();
         wait_until_runnable();
+        true
     }
 }
