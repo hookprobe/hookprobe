@@ -1874,6 +1874,13 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/DET-6: JIT<->interpreter differential over ALL live JIT'd rules ---
     p8_jit_differential();
 
+    // --- AUD-NET-1: strip_vlan reconstructs the canonical untagged frame (guards the
+    //     VLAN-normalization off-by-2 that would re-open the DET-4 IDS bypass) ---
+    kprint!(
+        " [P8-vlan] {} — strip_vlan(1-tag) and strip_vlan(QinQ) reconstruct the untagged frame byte-identical (L2/FLOW tiers see the true ethertype + IP src)\n",
+        if packet::strip_vlan_selftest() { "PASS" } else { "FAIL" }
+    );
+
     // --- P8: adaptive NAPI data plane — retire spin-poll (edge-right RX) ---
     p8_adaptive_napi();
 

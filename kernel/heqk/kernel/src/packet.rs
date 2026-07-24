@@ -147,10 +147,14 @@ fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
     let mut inner = et0;
     let mut tags = 0;
     while (inner == ETHERTYPE_VLAN || inner == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
-        if l3 + 2 > frame.len() {
+        // AUD-NET-1: a VLAN tag is [TPID:2][TCI:2][inner ethertype:2]. `l3` points at
+        // the TCI, so the inner ethertype is at l3+2 — NOT l3 (which is the TCI). The
+        // original code read the TCI as the ethertype, writing garbage into the
+        // normalized frame and re-opening the DET-4 bypass. Mirror net::parse exactly.
+        if l3 + 4 > frame.len() {
             return frame; // truncated tag; leave to net::parse to fail-close
         }
-        inner = ((frame[l3] as u16) << 8) | frame[l3 + 1] as u16; // ethertype after TCI
+        inner = ((frame[l3 + 2] as u16) << 8) | frame[l3 + 3] as u16; // ethertype after the 2-byte TCI
         l3 += 4;
         tags += 1;
     }
@@ -173,6 +177,45 @@ fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
 /// fail closed to DROP. Same code path as the inline datapath verdict.
 pub fn verdict(frame: &[u8]) -> (u16, u16) {
     classify(frame)
+}
+
+/// AUD-NET-1 regression guard: prove strip_vlan reconstructs the CANONICAL untagged
+/// frame for 1 and 2 (QinQ) tags — a VLAN-tagged frame, stripped, must be byte-identical
+/// to the same frame untagged (so the L2/FLOW fixed-offset tiers see the true ethertype
+/// and IP source). The off-by-2 bug (reading the TCI as the ethertype) fails this.
+pub fn strip_vlan_selftest() -> bool {
+    let mut u = [0u8; FRAME_SZ];
+    let ulen = build_udp_frame(&mut u, 4444); // untagged eth/IPv4/UDP -> :4444
+    // Insert `ntags` 802.1Q tags after the eth src (offset 12): [0x8100][TCI].
+    let tagged = |ntags: usize, out: &mut [u8]| -> usize {
+        out[..12].copy_from_slice(&u[..12]);
+        let mut p = 12;
+        for _ in 0..ntags {
+            out[p] = 0x81;
+            out[p + 1] = 0x00; // TPID 0x8100
+            out[p + 2] = 0x0a;
+            out[p + 3] = 0xbc; // TCI (arbitrary vid/pcp — MUST NOT leak into the ethertype)
+            p += 4;
+        }
+        out[p..p + (ulen - 12)].copy_from_slice(&u[12..ulen]);
+        p + (ulen - 12)
+    };
+    let mut ok = true;
+    for ntags in 1..=2 {
+        let mut t = [0u8; FRAME_SZ];
+        let tlen = tagged(ntags, &mut t);
+        let mut nbuf = [0u8; FRAME_SZ];
+        let stripped = strip_vlan(&t[..tlen], &mut nbuf);
+        // The stripped frame must equal the original untagged frame byte-for-byte.
+        if stripped != &u[..ulen] {
+            ok = false;
+        }
+        // And its IPv4 source must be recovered (DET-11), not 0/garbage.
+        if crate::net::eth_ipv4_src(stripped) != crate::net::eth_ipv4_src(&u[..ulen]) {
+            ok = false;
+        }
+    }
+    ok
 }
 
 fn classify(frame: &[u8]) -> (u16, u16) {
