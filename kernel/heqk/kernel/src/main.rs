@@ -59,13 +59,14 @@ static TICKS: AtomicU32 = AtomicU32::new(0);
 // P7c step 4b — fault-restart of a scheduled EL0 driver. When a scheduled EL0 TCB
 // faults, the handler rebuilds a fresh frame from these restart params and
 // reschedules, instead of the cooperative resume_kernel longjmp.
-// P7c-4c: shared by the QEMU and CM5 scheduled-EL0 paths (a scheduled EL0 driver
-// TCB whose faults restart/reschedule rather than cooperatively longjmp).
+// CORE-6: the fault-restart PARAMS and COUNT are now PER-TCB (scheduler::RestartRec,
+// armed via set_restart) — the old EL0_RS_ENTRY/USP/KSTACK + single EL0_RESTARTS let a
+// fault in one scheduled EL0 TCB restart it from ANOTHER's params and share the
+// budget. EL0_SCHED_MODE is KEPT as the phase gate (scheduled stages vs the cooperative
+// enter_user stages), so the handler only consults per-TCB records while scheduled EL0
+// TCBs are the ones running. EL0_FAULT_TID lets the P7c report read the crash TCB's count.
 static EL0_SCHED_MODE: AtomicBool = AtomicBool::new(false);
-static EL0_RS_ENTRY: AtomicUsize = AtomicUsize::new(0);
-static EL0_RS_USP: AtomicUsize = AtomicUsize::new(0);
-static EL0_RS_KSTACK: AtomicUsize = AtomicUsize::new(0);
-static EL0_RESTARTS: AtomicU32 = AtomicU32::new(0);
+static EL0_FAULT_TID: AtomicUsize = AtomicUsize::new(usize::MAX);
 const EL0_MAX_RESTARTS: u32 = 3;
 
 // P7c — physical address of the EL0 preemption-test counter (kernel reads it to
@@ -631,14 +632,14 @@ fn cm5_spawn_el0_loop_asid() -> bool {
     EL0_CNT_PA.store(cnt, Ordering::SeqCst);
     let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + 0x4000 };
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ecode, estack + 0x1000, ecnt);
-    // Arm graceful fault handling for this scheduled EL0 TCB (belt & braces — the
-    // loop stub never faults when the mapping is correct).
-    EL0_RS_ENTRY.store(ecode, Ordering::Relaxed);
-    EL0_RS_USP.store(estack + 0x1000, Ordering::Relaxed);
-    EL0_RS_KSTACK.store(kstack_top, Ordering::Relaxed);
-    EL0_SCHED_MODE.store(true, Ordering::Relaxed);
     let ttbr0 = l1 as u64 | ((asid as u64) << 48);
-    scheduler::spawn_as(sp, 1, ttbr0); // low prio: shares with thread_lo, timer preempts it
+    // CORE-6: arm this scheduled EL0 TCB's PER-TCB fault-restart record (belt &
+    // braces — the loop stub never faults when the mapping is correct).
+    if let Some(tid) = scheduler::spawn_as(sp, 1, ttbr0) {
+        // low prio: shares with thread_lo, timer preempts it
+        scheduler::set_restart(tid, ecode, estack + 0x1000, kstack_top);
+    }
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase: faults restart
     kprint!(" [P7c-4c] EL0 driver spawned as SCHEDULED TCB (asid={}) in its own address space on CM5\n", asid);
     true
 }
@@ -2649,7 +2650,13 @@ fn el0_preempt_spawn() {
     let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + 0x4000 };
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ECODE_VA, ESTACK_VA + 0x1000, ECNT_VA);
     let ttbr0 = l1 as u64 | ((asid as u64) << 48);
-    scheduler::spawn_as(sp, 1, ttbr0); // low prio, in its own address space (ASID)
+    // CORE-6/DSN-6: even the preempt-loop TCB gets its OWN restart record, so if it
+    // ever faults it restarts from its own params — never falling through to the
+    // cooperative longjmp path (which would jump into a stale KRESUME for a scheduled
+    // TCB).
+    if let Some(tid) = scheduler::spawn_as(sp, 1, ttbr0) {
+        scheduler::set_restart(tid, ECODE_VA, ESTACK_VA + 0x1000, kstack_top);
+    }
     kprint!(" [P7c] EL0 task spawned in its OWN address space (asid={}) — preemptible + isolated\n", asid);
 }
 
@@ -2681,14 +2688,16 @@ fn el0_fault_spawn() {
     mmu.map_user_code_in(l1, FCODE_VA, code);
     mmu.map_user_data_in(l1, FSTACK_VA, stack);
     let kstack_top = unsafe { core::ptr::addr_of!(EL0_FKSTACK) as usize + 0x4000 };
-    // Arm restart params, then spawn a fresh frame from them.
-    EL0_RS_ENTRY.store(FCODE_VA, Ordering::Relaxed);
-    EL0_RS_USP.store(FSTACK_VA + 0x1000, Ordering::Relaxed);
-    EL0_RS_KSTACK.store(kstack_top, Ordering::Relaxed);
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, FCODE_VA, FSTACK_VA + 0x1000, 0);
     let ttbr0 = l1 as u64 | ((asid as u64) << 48);
-    scheduler::spawn_as(sp, 2, ttbr0); // higher prio: runs (and crashes) promptly
-    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // faults now restart/reschedule, not longjmp
+    // CORE-6: arm THIS TCB's own restart record (was the shared globals). Capture its
+    // tid so the P7c report can read its restart count directly.
+    if let Some(tid) = scheduler::spawn_as(sp, 2, ttbr0) {
+        // higher prio: runs (and crashes) promptly
+        scheduler::set_restart(tid, FCODE_VA, FSTACK_VA + 0x1000, kstack_top);
+        EL0_FAULT_TID.store(tid, Ordering::Relaxed);
+    }
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase: faults restart
     kprint!(" [P7c] crashing EL0 driver spawned (asid={}) — faults must be contained + restarted\n", asid);
 }
 
@@ -2741,7 +2750,8 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                 };
                 kprint!(" [P7c] EL0 preempt {}: uncooperative EL0 task ran (counter={}), preempted over {} ticks — box NOT wedged (B-6 closed)\n",
                     if el0_cnt > 0 { "PASS" } else { "FAIL" }, el0_cnt, n);
-                let restarts = EL0_RESTARTS.load(Ordering::Relaxed);
+                // CORE-6: the crash TCB's restart count is now its OWN per-TCB record.
+                let restarts = scheduler::restart_used(EL0_FAULT_TID.load(Ordering::Relaxed));
                 kprint!(" [P7c] EL0 fault-restart {}: crashing driver TCB contained + restarted {} times then killed — kernel survived (4b)\n",
                     if restarts >= EL0_MAX_RESTARTS { "PASS" } else { "FAIL" }, restarts.min(EL0_MAX_RESTARTS));
                 kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
@@ -2974,35 +2984,32 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     // frame) up to a bound, then kill it, and reschedule. A driver crash is
     // contained AND recovered without taking the kernel down. Active on CM5 too
     // (P7c-4c), so a scheduled EL0 fault degrades gracefully instead of wedging.
+    // CORE-6: while scheduled EL0 TCBs are the ones running (EL0_SCHED_MODE = the phase
+    // gate), restart the FAULTING thread from ITS OWN per-TCB record with ITS OWN
+    // budget — no longer from a global shared with whatever scheduled EL0 TCB spawned
+    // last. A tid with no record (shouldn't happen while scheduled) falls through to
+    // the cooperative path.
+    let cur = scheduler::current_tid();
     if EL0_SCHED_MODE.load(Ordering::Relaxed) {
-        let cur = scheduler::current_tid();
-        let n = EL0_RESTARTS.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(rec) = scheduler::restart_rec(cur) {
+        let n = scheduler::bump_restart(cur);
         let next_sp = if n <= EL0_MAX_RESTARTS {
-            kprint!("   [EL0 fault] restarting the driver TCB (restart #{})\n", n);
-            let sp = arch_aarch64::thread::make_el0_thread(
-                EL0_RS_KSTACK.load(Ordering::Relaxed),
-                EL0_RS_ENTRY.load(Ordering::Relaxed),
-                EL0_RS_USP.load(Ordering::Relaxed),
-                0,
-            );
+            kprint!("   [EL0 fault] restarting driver TCB {} (restart #{})\n", cur, n);
+            let sp = arch_aarch64::thread::make_el0_thread(rec.kstack, rec.entry, rec.usp, 0);
             scheduler::set_sp(cur, sp);
             scheduler::on_tick(sp)
         } else {
-            kprint!("   [EL0 fault] restart budget exhausted -> killing the driver TCB\n");
+            kprint!("   [EL0 fault] restart budget exhausted -> killing driver TCB {}\n", cur);
             scheduler::exit_current();
-            // AUDIT M-9: frame slot 33 is SP_EL0 — the FAULTING EL0 TASK's user stack
-            // pointer, fully attacker-controlled. on_tick() unconditionally stores its
-            // argument into SP[cur], the table of KERNEL stack pointers, before picking
-            // the next thread. Today `cur` was just marked dead and no slot is ever
-            // revived, so it is not exploitable — but it breaks the invariant "SP[]
-            // only ever holds kernel stack pointers", and any future slot reuse turns
-            // it into `mov sp, <attacker value>` followed by an eret: a straight
-            // EL0->EL1 escalation. Pass the KERNEL trap frame, never a user value.
+            scheduler::clear_restart(cur); // a reused slot must not inherit this record
+            // AUDIT M-9: pass the KERNEL trap frame, never the attacker-controlled
+            // SP_EL0 (frame slot 33) — on_tick stores its arg into the kernel SP table.
             scheduler::on_tick(frame as usize)
         };
         enter_current_addr_space(); // P7c-4c: re-enter the (restarted) driver's ASID — CM5 too
         return next_sp;
-    }
+        } // if let Some(rec)
+    } // if EL0_SCHED_MODE
 
     // Cooperative EL0 (P3/DRV, the CM5 stages): longjmp back to the kernel.
     unsafe { arch_aarch64::syscall::resume_kernel() };
