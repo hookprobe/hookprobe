@@ -122,7 +122,7 @@ pub fn init() -> (usize, usize) {
 /// verdict — `packet::DROP` on the first rule that fires, else `packet::PASS`.
 /// Uses the JIT when `pkt` is long enough for the rule's proven `min_len`, else
 /// the bounds-checked interpreter; a DROP scores a severity-weighted QSecBit hit.
-fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8]) -> u16 {
+fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8], src: u32) -> u16 {
     for i in 0..n {
         let st = rstate(state, i);
         if !st.verified {
@@ -139,7 +139,7 @@ fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8]) -> u16 {
             telemetry::emit_rule_hit(rules[i].severity);
             // SOAR: async, non-blocking event export ("the OS is the sensor" can
             // report). The header only — never the payload.
-            crate::events::push_hit(rules[i].id, rules[i].severity as u8, crate::packet::DROP as u8, 0);
+            crate::events::push_hit(rules[i].id, rules[i].severity as u8, crate::packet::DROP as u8, src);
             return crate::packet::DROP;
         } else if v != bpf::PASS {
             // DET-9: v == INVALID (VM fault: OOB / step-limit / unknown op on a
@@ -153,28 +153,29 @@ fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8]) -> u16 {
     crate::packet::PASS
 }
 
-/// Run the L4-header rule set against `l4` (R1 = L4 header).
-pub fn run_l4(l4: &[u8]) -> u16 {
-    run_set(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4)
+/// Run the L4-header rule set against `l4` (R1 = L4 header). `src` = IPv4 source for
+/// SIEM attribution (DET-11).
+pub fn run_l4(l4: &[u8], src: u32) -> u16 {
+    run_set(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4, src)
 }
 
 /// Run the L2 rule set against the raw `frame` (R1 = L2 start) — the
 /// `napse-l2guard` parity tier (malformed-ARP / ARP-spoof). Runs on every frame.
-pub fn run_l2(frame: &[u8]) -> u16 {
-    run_set(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame)
+pub fn run_l2(frame: &[u8], src: u32) -> u16 {
+    run_set(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame, src)
 }
 
 /// Run the TCP-flag scan tier against the TCP header `tcp` (R1 = TCP header).
 /// classify runs this ONLY when the L4 protocol is TCP.
-pub fn run_tcp(tcp: &[u8]) -> u16 {
-    run_set(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp)
+pub fn run_tcp(tcp: &[u8], src: u32) -> u16 {
+    run_set(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp, src)
 }
 
 /// Run the STATEFUL flow tier against the raw `frame` (R1 = L2 start) — per-source
 /// SYN-flood rate-limit etc. Runs on every frame; each rule self-parses and
 /// PASSes non-matching traffic.
-pub fn run_flow(frame: &[u8]) -> u16 {
-    run_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame)
+pub fn run_flow(frame: &[u8], src: u32) -> u16 {
+    run_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src)
 }
 
 /// How many rules are active (verified) across all tiers — for the boot report.
