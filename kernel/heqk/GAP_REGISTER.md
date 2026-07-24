@@ -137,7 +137,7 @@ static rules are image-signed).
 
 **REMAINING — large structural / feature (dedicated passes):**
 - CORE-1/XC-5 caps enforcement (route mapping through caps; revoke unmaps)
-- CORE-2/XC-6 per-TCB CSpace: MECHANISM DONE (spec PER_TCB_CSPACE.md; global ROOT->CSPACE[tid], resolve against caller; P2/P3 green). Completion (per-spawn mint + [P3-iso] gate) lands with P11/P12.
+- CORE-2/XC-6 per-TCB CSpace: MECHANISM DONE (spec PER_TCB_CSPACE.md; global ROOT->CSPACE[tid], resolve against caller; P2/P3 green). Delegation (mint_into) + [P2-iso] isolation gate DONE (rights-narrowing cross-CSpace grant proven). Only the per-spawn wiring into real EL0 TCBs remains, lands with P11/P12.
 - CORE-6 per-TCB restart params (unblocks P17)
 - CORE-9 CDT generation-tagged MDB; CORE-10 ASID reclaim; CORE-11 ipc Result/badges; CORE-12 real allocator
 - DRV-1/XC-4 RP1 RX-IRQ MSI-X; DRV-2/XC-3 IOMMU relocate kernel
