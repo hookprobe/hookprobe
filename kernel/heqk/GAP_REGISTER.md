@@ -145,3 +145,41 @@ static rules are image-signed).
   SEC-5 AK PCR0 binding; SEC-6 SVN floor; SEC-9 EL2 W^X
 - DET-6 differential over all JIT'd rules; DET-8 telemetry drainer (tied to P12); DET-13 tnum harness; XC-15 dual-backend property tests
 - Design phases: P13, P15(ro), P17, P11, P12
+
+---
+## Update: surgical/medium phase complete (23 closed)
+
+Added since last checkpoint: CORE-10 (never issue ASID 0), CORE-11 (ipc Option/bool).
+**Total closed: 23**, all QEMU-green; 21 of them also metal-validated (23 PASS / 0 FAIL
+/ 0 faults, inline IPS proven on live wire).
+
+Every remaining gap is NOT a surgical fix — categorized honestly:
+
+**A. Large structural refactors (dedicated session each; several need metal):**
+- CORE-1/XC-5  route all mapping through cap invocation + revoke unmaps
+- CORE-2/XC-6  per-TCB CSpace (unblocks P12)
+- CORE-6       per-TCB fault-restart records (unblocks P17)
+- CORE-9       generation-tagged CDT/MDB (enables single-cap delete/move)
+- DRV-1/XC-4   program RP1 MSI-X for real RX-IRQ (metal)
+- DRV-2/XC-3   relocate kernel above the IOMMU ceiling (metal)
+- SEC-2/XC-10  remove OTP mailbox page from EL1 stage-2 + hvc proxy (metal)
+
+**B. Irreversible / operational (must NOT be done autonomously):**
+- SEC-3/XC-9   enable BCM2712 signed-boot (fuse key hash — irreversible)
+- SEC-6        advance the anti-rollback SVN floor (OTP-latched — irreversible) + a real per-release SVN process
+- SEC-5        AK = KDF(OTP, PCR0): correct DICE fix but CHANGES the device attestation identity (re-enroll) — do deliberately, not mid-run
+
+**C. MMU-restructure risk (like the deferred CORE-4):**
+- SEC-9        split EL2 GB0 for HBoot W^X
+- CORE-4/DET-7/XC-2  jit_seal on the QEMU backend (QEMU-only; production sealed)
+
+**D. Test-coverage / assurance (moderate, own pass):**
+- DET-6        differential over ALL JIT'd rules (per-rule input domains)
+- DET-13       Abs-level soundness-harness checks for scalar_from_tnum/join/lsh_k/or_x; tnum_add beyond width 6 (offline tool)
+- XC-15        cap-invariant property tests on both MMU backends
+
+**E. Tied to an unbuilt feature:**
+- DET-8        live telemetry drainer (the EL0 exporter = P12 territory)
+- CORE-12      real EL0 allocator (only when untrusted input reaches alloc)
+
+**F. Design-phase implementations (each a multi-file feature):** P13, P15(ro), P17, P11, P12.
