@@ -116,7 +116,24 @@ pub fn emit_ephemeral_cert(
 
     // Per-boot ephemeral keypair from TRNG entropy (distinct from the AK).
     let mut seed = [0u8; 32];
-    let _ = rng::fill(&mut seed);
+    let live = rng::fill(&mut seed); // count of LIVE hardware-RNG words (8 = fully live)
+    // SEC-7/V9: the ephemeral attestation private key MUST be unpredictable. If the
+    // TRNG was not fully live, `seed` is a cntpct-folded (guessable) value — an
+    // attacker could precompute this key and answer live challenge nonces, defeating
+    // per-request freshness. Fail CLOSED: publish NO runtime-attestation key (zero the
+    // handoff so its magic is invalid). Attestation-unavailable is safe; a predictable
+    // attestation key is not.
+    if live < 8 {
+        puts(" attest : TRNG not fully live -> REFUSING to publish ephemeral key (attestation unavailable)\n");
+        unsafe {
+            core::ptr::write_bytes(
+                ATTEST_EPH_ADDR as *mut u8,
+                0,
+                core::mem::size_of::<AttestEphemeral>(),
+            );
+        }
+        return;
+    }
     let kp = KeyPair::from_seed(Seed::new(seed));
     let mut eph_pk = [0u8; 32];
     let mut eph_sk = [0u8; 64];
