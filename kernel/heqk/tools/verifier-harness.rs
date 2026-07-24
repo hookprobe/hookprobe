@@ -240,6 +240,123 @@ fn check_lshift_exhaustive(w: u32) -> usize {
     bad
 }
 
+// --- DET-13: Abs-level transfer functions that were previously UNCHECKED ------
+// scalar_from_tnum / join / lsh_k / or_x underpin verifier soundness but had no
+// harness coverage. Same discipline: for every abstract input, every concrete it
+// denotes must map to a concrete the abstract OUTPUT still denotes (interval AND,
+// for a Scalar, its carried tnum). A grid of Scalars (interval × tnum) + Pkt.
+fn abs_grid() -> Vec<Abs> {
+    let ivals: &[(i64, i64)] = &[(0, 0), (0, 1), (0, 14), (0, 255), (1, 42), (14, 65535), (0, 100_000)];
+    let tns: &[Tnum] = &[
+        TNUM_UNKNOWN,
+        Tnum { value: 0, mask: 0 },
+        Tnum { value: 4, mask: 0 },
+        Tnum { value: 0, mask: 0x0f },
+        Tnum { value: 0x10, mask: 0x0f },
+    ];
+    let mut g = Vec::new();
+    for &(lo, hi) in ivals {
+        for &t in tns {
+            g.push(Abs::Scalar { lo, hi, t });
+        }
+        g.push(Abs::Pkt { lo, hi });
+    }
+    g
+}
+// Concrete values the abstract `a` ACTUALLY denotes (interval ∩ tnum-consistent) —
+// the only inputs an operator's output is required to over-approximate.
+fn abs_samples(a: Abs) -> Vec<i64> {
+    match a {
+        Abs::Uninit => vec![],
+        Abs::Pkt { lo, hi } => samples(lo, hi),
+        Abs::Scalar { lo, hi, t } => {
+            let mut out = Vec::new();
+            for &v in &samples(lo, hi) {
+                if tnum_contains(t, v as u64) {
+                    out.push(v);
+                }
+            }
+            for &u in &tnum_samples(t) {
+                let v = u as i64;
+                if lo <= v && v <= hi {
+                    out.push(v);
+                }
+            }
+            out.sort();
+            out.dedup();
+            out
+        }
+    }
+}
+// Does the abstract `a` denote concrete `v` — interval AND (for Scalar) tnum?
+fn denotes(a: Abs, v: i64) -> bool {
+    contains(a, v) && tnum_contains(tnum_of(a), v as u64)
+}
+/// scalar_from_tnum: the Scalar built from a tnum must denote every concrete the tnum does.
+fn check_scalar_from_tnum() -> usize {
+    let mut bad = 0;
+    for &t in &tnum_grid() {
+        let out = scalar_from_tnum(t);
+        for &x in &tnum_samples(t) {
+            if !denotes(out, x as i64) {
+                bad += 1;
+            }
+        }
+    }
+    bad
+}
+/// join (lattice widening): every concrete denoted by EITHER input must be denoted by the join.
+fn check_join() -> usize {
+    let mut bad = 0;
+    let g = abs_grid();
+    for &a in &g {
+        for &b in &g {
+            let out = join(a, b);
+            for src in [a, b] {
+                for &c in &abs_samples(src) {
+                    if !denotes(out, c) {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+    }
+    bad
+}
+/// lsh_k: for every concrete c the input denotes, `c << sh` must be denoted by the output.
+fn check_lsh_k() -> usize {
+    let mut bad = 0;
+    for &a in &abs_grid() {
+        for sh in [0u32, 1, 2, 3, 8] {
+            let out = lsh_k(a, sh);
+            for &c in &abs_samples(a) {
+                if !denotes(out, (c as u64).wrapping_shl(sh) as i64) {
+                    bad += 1;
+                }
+            }
+        }
+    }
+    bad
+}
+/// or_x: for concretes cd, cs the inputs denote, `cd | cs` must be denoted by the output.
+fn check_or_x() -> usize {
+    let mut bad = 0;
+    let g = abs_grid();
+    for &a in &g {
+        for &b in &g {
+            let out = or_x(a, b);
+            for &cd in &abs_samples(a) {
+                for &cs in &abs_samples(b) {
+                    if !denotes(out, ((cd as u64) | (cs as u64)) as i64) {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+    }
+    bad
+}
+
 fn main() {
     println!("== HEQK BPF verifier — abstract-operator soundness harness (P16 / Agni)");
     println!("   scope: verifier-reachable domain (loads 0..2^32, packet offsets, i32 imms)");
@@ -260,6 +377,16 @@ fn main() {
     let caught = check_tnum2(bad_tnum_and, |x, y| x & y);
     println!("   control: injected-unsound tnum_and -> {caught} counterexample(s) CAUGHT by the harness");
 
+    // DET-13: the Abs-level transfer functions that were previously unchecked.
+    let sf = check_scalar_from_tnum();
+    let jn = check_join();
+    let ls = check_lsh_k();
+    let ox = check_or_x();
+    for (name, n) in [("scalar_from_tnum", sf), ("join", jn), ("lsh_k", ls), ("or_x", ox)] {
+        println!("   {name}: {}", if n == 0 { "SOUND (over-approximates)" } else { "UNSOUND!" });
+    }
+    let abs_transfer_unsound = sf + jn + ls + ox;
+
     // EXHAUSTIVE (complete) soundness over a reduced bit-width — a real proof on
     // that domain, not a sample. W=6 ⇒ every one of 3^6 tnums and every pair,
     // fully concretized (~16^6 checks/op, ~sub-second in release).
@@ -279,7 +406,7 @@ fn main() {
     println!("   EXHAUSTIVE control: injected-unsound op -> {ecaught} counterexample(s) CAUGHT (exhaustive)");
 
     let exhaustive_unsound = ea + eo + ex + ed + el;
-    let prod_unsound = a + b + c + ta + to + tx + td + exhaustive_unsound;
+    let prod_unsound = a + b + c + ta + to + tx + td + abs_transfer_unsound + exhaustive_unsound;
     let ok = prod_unsound == 0 && caught > 0 && ecaught > 0;
     println!(
         "[P16-verifier] {} — production operators sound on the reachable domain; harness catches injected unsoundness",
