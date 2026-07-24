@@ -182,7 +182,7 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 - DET-8        live telemetry drainer (the EL0 exporter = P12 territory)
 - CORE-12      real EL0 allocator (only when untrusted input reaches alloc)
 
-**F. Design-phase implementations:** P13 ✅ + P15 ✅ IMPLEMENTED (P13=8025477 RP1 buses; P15=5336ca8 read-only eMMC + sealing crypto, QEMU-gated [P15 PASS], write behind p15-write, V3 limitation printed). P17 foundation ✅ + P12 ✅ IMPLEMENTED (b4f7dc1: notification objects + capability pub-sub, topics-as-caps via CORE-2 mint_into, blocking WAIT, MAX_THREADS->16, DSN-6 fixed; [P12] PASS — ungranted-subscribe REFUSED proven). Remaining design phase: P11 (device-class transport; its net-class-queue substrate exists from P17).
+**F. Design-phase implementations:** P13 ✅ + P15 ✅ IMPLEMENTED (P13=8025477 RP1 buses; P15=5336ca8 read-only eMMC + sealing crypto, QEMU-gated [P15 PASS], write behind p15-write, V3 limitation printed). P17 foundation ✅ + P12 ✅ IMPLEMENTED (b4f7dc1: notification objects + capability pub-sub, topics-as-caps via CORE-2 mint_into, blocking WAIT, MAX_THREADS->16, DSN-6 fixed; [P12] PASS — ungranted-subscribe REFUSED proven). P11 core ✅ IMPLEMENTED (695414b: hardened SPSC device-class transport, H1/H2/H3, [P11] PASS — rejects+counts 5 forged-descriptor classes from a hostile driver, queue survives; metal GemDev/RtlDev deferred). ALL 5 DESIGN PHASES now implemented/foundationed.
 
 
 ## METAL FINDING 2026-07-24 (P13/P15 flash)
