@@ -11,9 +11,19 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-const SLOTS: usize = 64;
+// DET-5/XC-12: a per-slot KEY tag turns the shared `key % SLOTS` counters into
+// per-key state. Without it, distinct sources that alias the same slot share a
+// counter: an attacker could pick a source IP colliding with a victim's and inflate
+// the victim's SYN budget (false DROP / targeted DoS) or deflate his own across
+// non-colliding keys. Larger table + tag makes collisions rare and, when they do
+// happen, a mismatch RESETS the slot to the new key so one key's traffic can never
+// be counted against another's. Residual (documented): a colliding key can still
+// EVICT another's in-flight window — acceptable vs the count-min complexity at this
+// tier; enlarge SLOTS or move to a sketch if that eviction ever matters.
+const SLOTS: usize = 256; // power of two
 static WIN_START: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static COUNT: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
+static KEY: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 
 #[inline]
 fn cntpct() -> u64 {
@@ -37,8 +47,10 @@ pub fn syn_rate_over(key: u64, limit: u64) -> u64 {
     let now = cntpct();
     let win = cntfrq().max(1); // ~1 second in counter ticks
     let start = WIN_START[i].load(Ordering::Relaxed);
-    if now.wrapping_sub(start) >= win {
-        // New window: reset to this packet.
+    // DET-5/XC-12: reset the slot for a NEW window OR when a different key aliases
+    // this slot — so one source's SYNs are never counted against another's.
+    if KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(start) >= win {
+        KEY[i].store(key, Ordering::Relaxed);
         WIN_START[i].store(now, Ordering::Relaxed);
         COUNT[i].store(1, Ordering::Relaxed);
         return 0;
