@@ -20,14 +20,14 @@ cm5 = ["arch-aarch64/cm5"]
 # Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
 # already up, consume the typed BootInfo handoff.
 hboot = ["cm5", "arch-aarch64/hboot"]
-# P10-BT (CYW43455 Bluetooth over HCI-UART). OFF BY DEFAULT.
-# METAL 2026-07-24: the BT core did not answer HCI Reset and the probe left a
-# DEFERRED EXTERNAL ABORT that surfaced as SError/Lower64 (EC=0x2f) at the next
-# EL0 entry, killing the following P7c stage. uarta evidently needs clock/power
-# sequencing HEQK does not yet do. Until that is understood, BT must not be able
-# to poison later phases.
-#   re-enable with: cargo build -p kernel --features hboot,p10bt --release
-p10bt = []  # PROVEN on metal 2026-07-24: reset+baud ok, 17 BLE devs; kept opt-in-buildable
+# P10-BT (CYW43455 Bluetooth over HCI-UART). PROVEN on metal 2026-07-24:
+# HCI Reset + 3 Mbaud both acked, LE scan saw 17 BLE devices, 0 faults, boot reached
+# a clean end. The first attempt SError'd because it muxed the WRONG pins (gio
+# namespace); the fix muxes gpio24-27 -> uart0 on pinctrl 0x7d504100 BEFORE the first
+# UART access (that also un-gates the block), plus esb/DISR containment as defense.
+# Kept as an explicit feature (the LE scan adds ~30s to boot):
+#   cargo build -p kernel --features hboot,p10bt --release
+p10bt = []
 
 [[bin]]
 name = "kernel"
