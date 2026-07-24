@@ -20,11 +20,16 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-const BT_UART: usize = 0x10_7D50_C000; // uarta (NS16550A), reg-shift 2
-const GIO_BASE: usize = 0x10_7D50_8500; // SoC gio bank0
-const PINCTRL: usize = 0x10_7D50_4100;
-const FSEL: usize = PINCTRL + 0x0C; // gpio24..29 mux nibbles
-const PULL: usize = PINCTRL + 0x24; // gpio24..29 pull, 2 bits each
+const BT_UART: usize = 0x10_7D50_C000; // uarta (brcm,bcm7271-uart 16550 core), reg-shift 2
+const GIO_BASE: usize = 0x10_7D50_8500; // SoC gio bank0 (BT_ON=gpio29, WL_ON=gpio28)
+const PINCTRL: usize = 0x10_7D50_4100; // bcm2712 main pinctrl (D0)
+// Register-EXACT from the working CM5 Linux + pinctrl-bcm2712.c (see P10BT_REFERENCE.md).
+// uarta pins gpio24(RTS)/25(CTS)/26(TXD)/27(RXD) all live in mux reg 0x08 (nibbles
+// 0/1/2/3), function uart0 = fsel index 4. Pull is reg 0x14 (2-bit fields @ 12/14/16/18).
+// My first driver used 0x0C/0x24 and the gio line-name numbering (gpio22-25) — the WRONG
+// controller namespace — which is why the BT core never answered.
+const FSEL: usize = PINCTRL + 0x08; // gpio24..27 mux nibbles
+const PULL: usize = PINCTRL + 0x14; // gpio24..27 pull, 2 bits each @ shift 12..
 
 // NS16550A register offsets — reg-shift 2 => byte offset = reg * 4.
 const RBR_THR: usize = 0x00; // RBR(r)/THR(w), DLL when DLAB=1
@@ -74,18 +79,23 @@ fn delay_us(us: u64) {
     }
 }
 
-/// Route gpio24..27 to uart0 and gpio29 to plain GPIO, PRESERVING gpio28 (WL_ON).
-/// FSEL nibble per pin at shift (gpio-24)*4: 24->alt3(3), 25/26/27->alt4(4), 29->gpio(0).
+/// Route gpio24/25/26/27 to uart0 (fsel 4) on the bcm2712 main pinctrl.
+///
+/// Encoding (pinctrl-bcm2712.c): all four pins are 4-bit nibbles in mux reg 0x08 at
+/// shifts 0/4/8/12; uart0 = fsel index 4 for each. RMW preserving bits [31:16] — pin28
+/// (if present on this pinctrl) sits at shift 16, and WL_ON is a separate gio pin, so
+/// this cannot disturb the working WiFi. Pull reg 0x14: bias-disable (0) at shifts
+/// 12/14/16/18 to match the DT `uarta_24_pins`.
+///
+/// Muxing to uart0 also un-gates the UART's functional path — on this SoC the block
+/// must be selected before its registers respond, which is why the FIRST UART access
+/// must come AFTER this call (my first driver touched the UART before muxing → abort).
 fn pinmux() {
-    // clear bits [15:0] (gpio24..27) and [23:20] (gpio29); keep [19:16] = gpio28.
-    let keep_mask: u32 = !0x00F0_FFFF;
-    let val: u32 = 3 | (4 << 4) | (4 << 8) | (4 << 12); // 29 -> 0, already cleared
-    w32(FSEL, (r32(FSEL) & keep_mask) | val);
-    // PULL: 2 bits/pin. 24@2=none, 25@4=up, 26@6=none, 27@8=up, 29@12=none.
-    // gpio28 sits at shift 10 — masked out and preserved.
-    let pull_keep: u32 = !0x0000_33FC;
-    let pull_val: u32 = (2 << 4) | (2 << 8);
-    w32(PULL, (r32(PULL) & pull_keep) | pull_val);
+    // gpio24..27 -> uart0 (0x4444 in the low 16 bits), preserve [31:16].
+    w32(FSEL, (r32(FSEL) & !0x0000_FFFF) | 0x0000_4444);
+    // pull: clear the 2-bit fields for pins 24..27 (shifts 12/14/16/18) -> bias-disable.
+    w32(PULL, r32(PULL) & !0x000F_F000);
+    unsafe { core::arch::asm!("dsb sy", "isb") };
 }
 
 /// Drive BT_ON (gpio29). Read-modify-write so WL_ON (bit 28) is untouched.
@@ -259,23 +269,14 @@ pub fn bt_diag() -> [u32; 6] {
     unsafe { BT_DIAG }
 }
 
-/// P10-BT bring-up: power the BT core, open the UART at 115200, HCI Reset, switch
-/// to 3 Mbaud, then enable LE scanning. Patch-free path (the .hcd is optional).
-/// Returns true if the controller answered HCI Reset (i.e. the BT core is alive).
-/// Is uarta actually alive (clocked, powered, decoding)?
-///
-/// METAL FINDING 2026-07-24: on the first hardware run the BT core did not respond
-/// (`reset=0xff`) and this probe left a **deferred external abort** behind, which
-/// surfaced as `SError/Lower64 (EC=0x2f, ELR=EL0 entry)` at the NEXT EL0 entry and
-/// killed the following P7c stage. Degrading gracefully inside our own phase is NOT
-/// enough — touching an unclocked/unpowered peripheral poisons whatever runs next.
-///
-/// So: prove the block decodes using the NS16550A scratch register (a plain RW
-/// register with no side effects) BEFORE asserting BT_ON or issuing any HCI, and
-/// bail out entirely if it does not read back. Drain the write pipeline either way
-/// so nothing we did can be reported asynchronously to a later phase.
+/// Does uarta decode after the pins are muxed? Scratch register (SCR) is a plain RW
+/// register with no side effects — write two patterns, require read-back. MUST be
+/// called AFTER pinmux(): on this SoC the UART's functional path is gated by the pin
+/// function-select, so a scratch access before muxing aborts (that ordering bug in the
+/// first driver is what produced the deferred SError). 0xFE in BT_DIAG[0] = block did
+/// not decode even after muxing.
 fn uart_present() -> bool {
-    const SCR: usize = 7 << 2; // NS16550A scratch register, reg-shift 2
+    const SCR: usize = 7 << 2; // 16550 scratch register, reg-shift 2
     let saved = r32(BT_UART + SCR);
     let mut ok = true;
     for pat in [0xA5u32, 0x5A] {
@@ -291,13 +292,52 @@ fn uart_present() -> bool {
     ok
 }
 
+/// Mask SError (PSTATE.A) for the BT window. MUST bracket bringup() together with
+/// `drain_errors()`: with A masked, a UART external abort stays pending instead of
+/// being taken, so `esb` can then consume it into DISR_EL1 rather than escalating to
+/// the fatal SError vector. Without this bracket, `esb` on an unmasked abort would
+/// simply trigger the "UNEXPECTED KERNEL FAULT" handler early.
+pub fn mask_serror() {
+    unsafe { core::arch::asm!("msr daifset, #4", "isb", options(nomem, nostack)) };
+}
+
+/// Consume any pending external abort into DISR_EL1 (A is masked by mask_serror), read
+/// and clear it, then unmask SError. Returns the DISR_EL1 syndrome — nonzero means a
+/// BT access aborted and was CONTAINED here, never reaching a later phase. `esb` is
+/// FEAT_RAS (present on Cortex-A76/BCM2712).
+pub fn drain_errors() -> u64 {
+    let disr: u64;
+    unsafe {
+        // Raw encodings so the assembler needs no `ras` target-feature flag:
+        //   esb        = hint #16
+        //   DISR_EL1   = S3_0_C12_C1_1
+        core::arch::asm!(
+            "dsb sy",
+            "hint #16",                   // esb: A masked => pending SError -> DISR_EL1
+            "mrs {d}, S3_0_c12_c1_1",     // read DISR_EL1
+            "msr S3_0_c12_c1_1, xzr",     // clear it
+            "msr daifclr, #4",            // safe now: the pending abort was drained
+            "isb",
+            d = out(reg) disr,
+            options(nostack),
+        );
+    }
+    disr
+}
+
+/// P10-BT bring-up: mux the UART pins, power the BT core, open the UART at 115200,
+/// HCI Reset, switch to 3 Mbaud. Patch-free path (the .hcd is optional). Returns true
+/// if the controller answered HCI Reset (i.e. the BT core is alive). Every wait is
+/// bounded; a failure returns false and is contained by drain_errors() in the caller.
 pub fn bringup() -> bool {
-    // Gate EVERYTHING behind the presence probe (see uart_present).
+    // 1. Mux gpio24..27 -> uart0 FIRST — this un-gates the UART block on this SoC.
+    pinmux();
+    delay_us(1_000);
+    // 2. Only now is a register access safe. Bail cleanly if it still doesn't decode.
     if !uart_present() {
-        unsafe { BT_DIAG[0] = 0xFE }; // 0xFE = block absent/unclocked; never probed
+        unsafe { BT_DIAG[0] = 0xFE }; // block did not decode even after muxing
         return false;
     }
-    pinmux();
     // Power-cycle the BT core. RTS held low across power-up (bcm43438 quirk).
     bt_power(false);
     delay_us(100_000);

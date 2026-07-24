@@ -993,12 +993,19 @@ fn cm5_p10_probe() {
 #[cfg(all(feature = "cm5", feature = "p10bt"))]
 fn cm5_p10bt_probe() {
     use arch_aarch64::bt;
-    kprint!(" [P10-BT] CYW43455 Bluetooth — HCI-UART (uarta NS16550A @0x10_7D50_C000), BT_ON gpio29\n");
+    kprint!(" [P10-BT] CYW43455 Bluetooth — HCI-UART (uarta bcm7271 @0x10_7D50_C000), pins gpio24-27=uart0, BT_ON gpio29\n");
+    // Bracket the whole probe with SError masked so any UART external abort is drained
+    // into DISR_EL1 by drain_errors() instead of escalating to the fatal handler.
+    bt::mask_serror();
     let alive = bt::bringup();
+    let disr = bt::drain_errors();
     let d = bt::bt_diag();
-    kprint!("   [P10-BT hci] reset={:#04x} baud3M={:#04x} (0x00=ok, 0xff=no response)\n", d[0], d[1]);
+    kprint!("   [P10-BT hci] reset={:#04x} baud3M={:#04x} (0x00=ok, 0xff=no response, 0xfe=uart did not decode)\n", d[0], d[1]);
+    if disr != 0 {
+        kprint!("   [P10-BT] CONTAINED external abort DISR_EL1={:#x} — drained in-phase, later phases safe\n", disr);
+    }
     if !alive {
-        kprint!(" [P10-BT] SILENT — no HCI Command Complete for Reset; BT core not responding (WiFi unaffected)\n");
+        kprint!(" [P10-BT] SILENT — BT core not responding (contained; WiFi + later phases unaffected)\n");
         return;
     }
     let mut devs = [bt::BleDev::new(); 24];
