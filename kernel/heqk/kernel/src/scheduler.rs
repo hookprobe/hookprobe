@@ -31,30 +31,38 @@ pub fn init() {
 }
 
 /// Register a runnable thread by initial stack pointer + priority (kernel address
-/// space). Before IRQs on.
-pub fn spawn(sp: usize, prio: u8) {
-    spawn_as(sp, prio, 0);
+/// space). Before IRQs on. Returns false if the table is full.
+pub fn spawn(sp: usize, prio: u8) -> bool {
+    spawn_as(sp, prio, 0)
 }
 
 /// Register a runnable thread that runs in a specific address space (raw TTBR0 =
 /// root | ASID<<48; 0 = kernel space). Used for isolated EL0 driver servers.
-pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) {
+/// CORE-8: returns false when the table is full instead of SILENTLY dropping the
+/// thread — a silent drop looked like a spawned-but-never-scheduled TCB.
+pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) -> bool {
     unsafe {
         let n = addr_of!(NUM).read();
         if n >= MAX_THREADS {
-            return;
+            return false;
         }
         addr_of_mut!(SP).cast::<usize>().add(n).write(sp);
         addr_of_mut!(PRIO).cast::<u8>().add(n).write(prio);
         addr_of_mut!(ALIVE).cast::<bool>().add(n).write(true);
         addr_of_mut!(TTBR0).cast::<u64>().add(n).write(ttbr0);
         addr_of_mut!(NUM).write(n + 1);
+        true
     }
 }
 
 /// Replace a thread's saved context pointer (used to RESTART a faulted EL0
 /// driver: rebuild a fresh frame and point the thread at it). P7c step 4b.
+/// CORE-8: bounds-check `tid` — a stray/attacker-influenced tid must never write
+/// past the fixed-size SP table (latent OOB `static mut` write).
 pub fn set_sp(tid: usize, sp: usize) {
+    if tid >= MAX_THREADS {
+        return;
+    }
     unsafe { addr_of_mut!(SP).cast::<usize>().add(tid).write(sp) };
 }
 
@@ -103,13 +111,19 @@ pub fn block_current() {
     }
 }
 
-/// Wake a blocked thread.
+/// Wake a blocked thread. CORE-8: bounds-checked.
 pub fn unblock(tid: usize) {
+    if tid >= MAX_THREADS {
+        return;
+    }
     unsafe { addr_of_mut!(BLOCKED).cast::<bool>().add(tid).write(false) };
 }
 
-/// Is `tid` currently blocked?
+/// Is `tid` currently blocked? CORE-8: bounds-checked (out-of-range => not blocked).
 pub fn is_blocked(tid: usize) -> bool {
+    if tid >= MAX_THREADS {
+        return false;
+    }
     unsafe { addr_of!(BLOCKED).cast::<bool>().add(tid).read() }
 }
 
