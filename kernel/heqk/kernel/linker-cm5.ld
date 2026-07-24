@@ -7,11 +7,15 @@ ENTRY(_start)
 SECTIONS
 {
     . = 0x200000;
+    __text_start = .;            /* page-aligned (2 MiB origin): W^X maps [__text_start,__text_end) RO+X */
 
     .text : {
         KEEP(*(.text.boot))      /* _start must lead the image */
         *(.text .text.*)
     }
+
+    . = ALIGN(4096);
+    __text_end = .;              /* everything past here is RW+PXN (no W^X violation) */
 
     .rodata : { *(.rodata .rodata.*) }
     .data   : { *(.data .data.*) }
