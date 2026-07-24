@@ -134,6 +134,40 @@ impl Hasher {
     }
 }
 
+/// Self-test: the incremental `Hasher` MUST agree with the one-shot `digest()` for
+/// every message length and every chunking. A metal run found a bug where a message
+/// tail absorbed into the partial buffer was silently dropped (breaking HMAC auth for
+/// short ciphertexts); this guards the primitive DIRECTLY, across the block boundary
+/// (56/64) and the ≤32 partial-tail case that the bug hit — so any regression fails
+/// loudly regardless of caller. Returns true iff every case matches. no_std / no heap.
+pub fn hasher_selftest() -> bool {
+    // Deterministic message bytes.
+    let mut msg = [0u8; 200];
+    for (i, b) in msg.iter_mut().enumerate() {
+        *b = (i as u8).wrapping_mul(31).wrapping_add(7);
+    }
+    // Awkward chunk sizes, including ones that leave a small partial tail.
+    let chunk_sizes = [1usize, 3, 7, 28, 31, 32, 33, 63, 64, 65, 96, 127];
+    // Lengths spanning empty, sub-block, exact blocks, and the 56/64 padding edges.
+    let lens = [0usize, 1, 27, 28, 31, 32, 55, 56, 63, 64, 65, 91, 96, 119, 128, 156, 200];
+    for &len in lens.iter() {
+        let one = digest(&msg[..len]);
+        for &cs in chunk_sizes.iter() {
+            let mut h = Hasher::new();
+            let mut off = 0;
+            while off < len {
+                let n = cs.min(len - off);
+                h.update(&msg[off..off + n]);
+                off += n;
+            }
+            if h.finish() != one {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 impl Default for Hasher {
     fn default() -> Self {
         Self::new()

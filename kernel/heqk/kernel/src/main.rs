@@ -1863,6 +1863,15 @@ pub extern "C" fn kmain() -> ! {
     // documented follow-up). QEMU-validatable core only. ---
     p17_overlay_qemu();
 
+    // --- crypto primitive: incremental Hasher == one-shot digest (metal-found bug guard) ---
+    {
+        let ok = boot_abi::sha256::hasher_selftest();
+        kprint!(
+            " [P16-sha] {} — incremental SHA-256 Hasher == one-shot digest across all lengths/chunkings (guards the short-tail HMAC bug)\n",
+            if ok { "PASS" } else { "FAIL" }
+        );
+    }
+
     // --- P15: sealed storage — seal/unseal + guard over a RamDisk (arch-agnostic) ---
     p15_seal_selftest();
 
