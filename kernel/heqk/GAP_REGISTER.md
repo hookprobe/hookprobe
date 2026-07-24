@@ -1,0 +1,120 @@
+# HEQK Gap Register — deep sweep 2026-07-24
+
+Consolidated from a 5-way parallel audit (CORE / DET / DRV / SEC / DSN+XC), each
+cross-checked against HEQK_REMEDIATION_PLAN.md and commit e1da341 so only
+STILL-OPEN gaps are listed. Closing top-down, one gap per change.
+
+## CORE (P0–P4) — microkernel
+
+| ID | Sev | File:line | Gap | Fix |
+|---|---|---|---|---|
+| CORE-1 | High | main.rs:291,2753; caps.rs | revoke can't unmap live MMIO/DMA grants (mapping bypasses cap invocation) | route mapping through Frame/PageTable caps; revoke walks+unmaps (A1) |
+| CORE-2 | High | main.rs:2357 static mut ROOT | one global CSpace for all EL0 tasks → confused deputy | per-TCB CSpace root keyed on current_tid (A6) |
+| CORE-3 | Med→High | caps.rs:127,184 | retype after revoke reuses Untyped WITHOUT zeroing → stale-secret leak | zero [base,base+need) on retype |
+| CORE-4 | Med | mmu.rs:371 | QEMU JIT code RO+X but keeps writable alias (CM5 seals, QEMU doesn't) | port jit_seal to QEMU path (X1/A4) |
+| CORE-5 | Med | mmu_cm5.rs:427 map_user_in | per-ASID grant path lacks user_va_ok check + tlbi (L-14 asymmetry) | add range check + tlbi vaae1is (A9) |
+| CORE-6 | Med | main.rs:62-67,2452 | EL0 fault-restart state GLOBAL not per-TCB (M-8 not fully closed) | move restart params+count into scheduler slot |
+| CORE-7 | Med | thread.rs:9; no CPACR | FP/SIMD traps; frame saves no q-regs; leak if FPEN later set | decide policy: keep trapped+documented, or save/scrub (A5) |
+| CORE-8 | Low→Med | scheduler.rs:57,107,112,43 | tid accessors unbounded add() (latent OOB); spawn_as silent drop >8 | bounds-check tid; return spawn error (A8) |
+| CORE-9 | Med latent | caps.rs:56,205 | CDT parent = raw slot index, no generation → stale re-attach on reuse | generation-tagged MDB (A11) |
+| CORE-10 | Low | mmu.rs:304; mmu_cm5.rs:412 | ASIDs never reclaimed, wrap to 0 (collides kernel TLB tag) | reclaim on TCB death; never issue 0 (A10) |
+| CORE-11 | Low | ipc.rs:44,53,83 | recv() returns 0 for both empty + busy; no badge/len; single endpoint | Result return; per-endpoint waiter queues+badges (A7) |
+| CORE-12 | Low | heap.rs:58 | bump allocator never frees → alloc-driven DoS | real allocator when untrusted input reaches alloc (A12) |
+
+## SEC (P7-SEC) — secure boot / attestation
+
+V-items: V1 CLOSED, V10 CLOSED(as-documented); V2/V3/V4/V5/V6(partial)/V7/V8/V9 OPEN.
+Verified-correct (NOT gaps): hybrid ed25519+SLH-DSA both-required over sha256(svn‖hash);
+SVN bound into signed message; load geometry pinned; AK zeroized (moot under SEC-2).
+
+| ID | Sev | File:line | Gap | Fix |
+|---|---|---|---|---|
+| SEC-1 (V2) | High | ak_derive.rs:203 | first-boot OTP burn discards TRNG liveness → predictable per-device AK fused irreversibly | check live-word count; skip burn + SW-AK fallback if live<8 |
+| SEC-2 (V3) | High | stage2.rs:63 | EL1 can read OTP secret via VC mailbox (GB4..511 RW) → reconstructs "non-extractable" AK | invalidate mailbox page in stage-2; expose OTP only via hvc |
+| SEC-3 (V4) | High | config.txt:33 | os_check=0 + unsigned hboot8.img → whole chain TOFU | enable BCM2712 signed-boot; until then document TOFU |
+| SEC-4 (V7a) | High | main.rs:286→344 | measure→launch TOCTOU: payload hashed then copied, never re-hashed before EL1 entry | re-sha256(load_pa,size) after copy, park on mismatch |
+| SEC-5 (V5) | Med | ak_derive.rs:147 | AK = KDF(OTP) only, no PCR0 binding → tampered HBoot derives same AK | ak_seed = KDF(OTP, PCR0_after_self_measure) |
+| SEC-6 (V6) | Med | rollback.rs:39 | anti-rollback inert: FLOOR=0, never advanced, images svn=1 | real SVN counter + advance_floor release step |
+| SEC-7 (V9) | Med | attest.rs:119 | ephemeral attest seed + nonce ignore TRNG liveness → predictable key | require full liveness or refuse to publish key |
+| SEC-8 (V7b) | Med | linker.ld:37 | HBoot stack grows toward image, no guard page → silent overrun corrupts measured bytes | unmapped guard region below __stack_top |
+| SEC-9 (V8) | Low-Med | hboot/mmu.rs:53 | EL2 GB0 Normal RWX — HBoot code W^X hole at highest privilege | split GB0, .text RO+X, data RW+XN |
+| SEC-10 (V10) | Low | watchdog.rs | A/B hvc#1 is reliability not security (documented) — keep framing | none; keep SECURITY.md framing |
+
+## DRV (P9/P10/P14) — metal drivers
+
+Verified-closed: D1/D2/D5, M-3/L-15 (in read_sdpcm_frame), M-4/M-5/M-6, H-1, L-10/L-11, D4.
+
+| ID | Sev | File:line | Gap | Fix |
+|---|---|---|---|---|
+| DRV-1 | High | main.rs:1081; gem.rs:610 | NO real IRQ-driven RX: RP1 MSI-X (MSIX_CFG_6→SPI134) never programmed, RCOMP never reaches GIC → polling-only despite "PASS" | program RP1 MSI-X entry in rx_init + read back; stop reporting IRQ path as enabled |
+| DRV-2 | High | main.rs:1054; iommu.rs:96; gem.rs:119 | P14 protects nothing live: iommu2(RTL) fenced but link DOWN; iommu5(GEM, the live master) unfenced; ceiling 1GiB sits ABOVE all kernel/DMA memory | fence iommu5 above live ring PAs; relocate kernel above ceiling or invert window (C1/X5) |
+| DRV-3 | Med | iommu.rs:102,45,74 | fence ceiling math unverified: wrapping_sub(1) underflow→0xFFFFFFFF no-op; ADDR_CAP_SHIFT guessed; weak present-check | read back ADDR_CAP + assert; saturating sub; confirm shift on metal (C3/C4) |
+| DRV-4 | Med latent | cyw43.rs:2370,2388 | bcdc_dcmd remainder read did NOT get the M-3 fix → control reply >576B assembles STALE bytes of prior frame | same clamp+zero as read_sdpcm_frame; loop transfer in ≤512B chunks |
+| DRV-5 | Low | rtl8111.rs:608 | poll_rx ignores FS/LS segment bits; RX-error frames returned as None (indistinguishable from idle) | check FS|LS; surface RX errors as counted, not masked |
+
+## DSN — design-phase gaps (P11/P12/P13/P15/P17)
+
+| ID | Phase | Sev | Gap | To close |
+|---|---|---|---|---|
+| DSN-1 | P11 | High | P11-R1: EL0 keeps RW on MMIO → can relocate HW ring, defeats H4 (mitigation=iommu fence, which XC-3 shows broken) | doorbell-only MMIO sub-page or kernel register-write syscall; fix XC-3 first |
+| DSN-2 | P11 | Med | no substrate: NetDev/LoopDev/own[] table/private capacity unwritten; rings still duplicated | build the trait + impls + ownership table; unify rings |
+| DSN-3 | P11 | Med | H3/no-RMW sound only under single-core invariant (XC-1) | land XC-1 first |
+| DSN-4 | P12 | High | one CSpace → "publisher may not subscribe" inexpressible (=CORE-2/XC-6) | per-TCB CSpace root |
+| DSN-5 | P12 | Med | MAX_THREADS=8 exactly full; needs 16 | raise + re-verify arrays |
+| DSN-6 | P12 | Med | SYS_EXIT_USER → stale KRESUME for scheduled TCB (latent bug, fix regardless) | gate on !EL0_SCHED_MODE + SYS_TASK_EXIT + switch_to() |
+| DSN-7 | P13 | Med | safety = one deny-list; granting io_bank page = all 28 pins (console/PHY) | SYS_GPIO_OP masked; owner table; validate-before-write; bounded waits |
+| DSN-8 | P15 | High | seal claim cosmetic until V3 closes (=SEC-2/XC-10) | close V3 as hard prereq |
+| DSN-9 | P15 | Med | brick-risk write path unbuilt; shared clk-emmc2 with live WiFi | sdhci.rs transcribe; dual write gates; get_clock_rate only; no CMD6/38/42/RPMB |
+| DSN-10 | P17 | Med | CNTKCTL_EL1 never set (no EL0 Instant); no multi-page EL0 loader; needs per-TCB restart (CORE-6) | set EL0PCTEN + time_us; fixed-VA loader; land CORE-6 |
+| DSN-11 | P17 | Med | smoltcp = biggest attack surface; seed must be TRNG not cntpct; pin+measure into PCR3 | pin+checksum; TRNG seed; PCR3 measure |
+
+## XC — cross-cutting (dedup: XC-3≈DRV-2, XC-5/6/7≈CORE-1/2/3, XC-9/10≈SEC-3/2, XC-13≈SEC-1, XC-16≈L-13)
+
+| ID | Sev | Area | Gap | Fix |
+|---|---|---|---|---|
+| XC-1 | Med(High@P11/12) | ARCHITECTURE.md, events.rs | single-core invariant undocumented AND unenforced (push_hit HEAD non-atomic) | document as contract; push_hit HEAD=fetch_add; ratelimit CAS |
+| XC-2 | Med | mmu.rs | W^X hole on QEMU backend (map_code_page leaves RW alias; no jit_seal) | port jit_seal to mmu.rs |
+| XC-3 | High | iommu.rs | =DRV-2: fence protects nothing (ceiling below all sensitive mem; shift unverified) | relocate kernel above ceiling; readback ADDR_CAP |
+| XC-4 | Med | gem.rs, napi.rs | =DRV-1: RP1 GEM poll-only, no RX-IRQ/MSI-X; NAPI re-arm aspirational | discover INTID + wire GIC SPI to napi |
+| XC-5 | High | main.rs, caps.rs | =CORE-1: caps asserted not enforced; revoke can't unmap | route mapping through caps; revoke unmaps |
+| XC-6 | Med(High@P12) | main.rs:2357 | =CORE-2: single global CSpace | per-TCB CSpace |
+| XC-7 | Med | caps.rs:102 | =CORE-3: no zero-on-reuse → cross-tenant disclosure | write_bytes(0) on retype/reset |
+| XC-8 | Med | thread.rs | =CORE-7: no FP/SIMD policy | decide + implement |
+| XC-9 | High | hboot main.rs | =SEC-3: unverified first stage (TOFU) | signed-boot or document |
+| XC-10 | High | stage2.rs | =SEC-2: EL1 reads OTP via mailbox | remove mailbox page from EL1 map; hvc proxy |
+| XC-11 | High latent | ratelimit.rs, l7.rs, bpf.rs | untyped BPF helper ABI: payload_match derefs R1 raw → arbitrary-kernel-read oracle (CVE-2021-4204 class) | per-helper ABI sig table; bounds-check in helper |
+| XC-12 | Med | ratelimit.rs:36 | rate-limiter no key tag → victim-targeted DoS via collision | store full key per slot; reset on mismatch |
+| XC-13 | Low-Med | ak_derive.rs:205 | =SEC-1: OTP burn not gated on TRNG liveness | gate burn on live==8 |
+| XC-14 | Low-Med | bpf.rs:290 | unsound legacy verify() still callable | delete/rename so it can't gate a JIT |
+| XC-15 | Med | validate.sh | QEMU-vs-metal coverage gap; no cap-invariant property tests; P11-17 no gate | dual-backend property tests; CSDB after bounds; per-phase gates |
+| XC-16 | Low | gem.rs poll_rx | =L-13 (deferred): fabricates len=out.len() → bogus frames to IDS | read len from status writeback only |
+
+## DET (P5–P8) — detection plane
+
+| ID | Sev | File:line | Gap | Fix |
+|---|---|---|---|---|
+| DET-1 | High | l7.rs:24; bpf.rs:478 | =XC-11: untyped CALL ABI; payload_match derefs rule scalar R1 → kernel-read oracle | per-helper ABI sig table; fold pattern len into min_len |
+| DET-2 | Med-High | rules.rs:86 | "signed rule" but NO signature verification exists (only verify_prevail) | ed25519/FIPS-205 gate in compile_set before verify_prevail |
+| DET-3 | **High** | net.rs:59,79 | **>3 VLAN tags → fail OPEN** (ip_proto=0, classify PASS) → all L4/scan rules skipped. Exploitable NOW by L2 sender | residual-VLAN after cap → return None (fail closed) |
+| DET-4 | Med-High | bpf.rs:157; packet.rs:134 | FLOW tier (SYN-flood/blocklist) self-parses FIXED offsets; ONE VLAN tag shifts +4 → rule PASSes. Exploitable NOW | run FLOW rules against normalized net.rs view |
+| DET-5 | Med | ratelimit.rs:14 | =XC-12: rate-limiter no key tag → collision DoS | store full key; reset on mismatch |
+| DET-6 | Med | main.rs:674 vs rules.rs:131 | JIT↔interp differential covers only THREAT/PARSE; live corpus JIT'd rules uncrossed-checked | differential over EVERY JIT'd rule |
+| DET-7 | Med | bpf_jit.rs:330 | =XC-2/DET: QEMU publish_exec_page never seals RW alias (W^X hole) | port jit_seal to mmu.rs |
+| DET-8 | Med | events.rs:44; main.rs:2042 | telemetry ring has NO live drainer → >64 detections silently OVERRUN-dropped | EL0 exporter poll/drain loop |
+| DET-9 | Low | rules.rs:131 | VM INVALID (fault) logged identically to DROP → wrong attribution, inflates QSecBit | distinguish INVALID→VmFault event |
+| DET-10 | Low | telemetry.rs:43 | QSecBit monotonic no decay; drop scored twice | windowed/EWMA; score once |
+| DET-11 | Low | rules.rs:142 | push_hit always src=0 → SIEM can't identify attacker | thread IP-src hash |
+| DET-12 | Low | bpf.rs:290 | =XC-14: unsound legacy verify() still callable | delete/rename |
+| DET-13 | Low | absdom.rs:114 | tnum transfer fns not harness-checked; tnum_add proven only to width 6 | Abs-level harness + wrap concretes |
+
+---
+
+## MASTER CLOSING PLAN (deduped, ranked value÷risk)
+
+**Wave 1 — detection integrity, small & exploitable now:** DET-3, DET-4, DRV-4, XC-16/L-13, DET-9
+**Wave 2 — cheap hardening / unblockers:** XC-1 (single-core doc+atomic), DET-12/XC-14, DET-5/XC-12, CORE-8, DET-11
+**Wave 3 — self-contained security (need flash):** SEC-4 TOCTOU re-hash, SEC-1/XC-13 OTP liveness, SEC-8 stack guard, DET-7/XC-2 W^X, CORE-3/XC-7 zero-on-reuse, CORE-5 grant range+tlbi
+**Wave 4 — security ABI:** DET-1/XC-11 helper ABI, DET-2 rule signature gate
+**Wave 5 — structural (large, gated):** CORE-1/2+XC-5/6 caps+per-TCB CSpace (→P12), CORE-6 per-TCB restart (→P17), DRV-2/XC-3 IOMMU, DRV-1/XC-4 RX-IRQ, SEC-2/3 signed-boot+OTP
+**Then:** implement design phases P13 → P15(ro) → P17 → P11 → P12
+
