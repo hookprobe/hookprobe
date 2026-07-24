@@ -123,15 +123,57 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
 /// located L4 header in place. Returns (dst_port, verdict). Malformed/truncated
 /// frames fail safe to DROP; non-TCP/UDP frames (ARP, ICMP, …) carry no port
 /// threat and PASS.
+/// DET-4: the L2 and FLOW tiers self-parse at FIXED offsets (ethertype@12, IP@14,
+/// proto@23, src@26, TCP-flags@47). A single 802.1Q tag shifts every field +4, so a
+/// tagged SYN flood or blocklisted source reads as a non-IPv4 frame and slips the
+/// ARP-guard, the rate-limiter and the threat-feed. Normalize by STRIPPING VLAN tags
+/// into `buf` so those tiers always see a canonical untagged frame. Returns the raw
+/// frame unchanged on the fast path (no tags → no copy).
+fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
+    use crate::net::{ETHERTYPE_QINQ, ETHERTYPE_VLAN, MAX_VLAN_TAGS};
+    if frame.len() < 16 {
+        return frame; // too short to carry a tag; nothing to strip
+    }
+    let et0 = ((frame[12] as u16) << 8) | frame[13] as u16;
+    if et0 != ETHERTYPE_VLAN && et0 != ETHERTYPE_QINQ {
+        return frame; // fast path: untagged
+    }
+    // Walk (bounded) to the inner ethertype and the L3 start, mirroring net::parse.
+    let mut l3 = crate::net::ETH_HLEN; // 14
+    let mut inner = et0;
+    let mut tags = 0;
+    while (inner == ETHERTYPE_VLAN || inner == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        if l3 + 2 > frame.len() {
+            return frame; // truncated tag; leave to net::parse to fail-close
+        }
+        inner = ((frame[l3] as u16) << 8) | frame[l3 + 1] as u16; // ethertype after TCI
+        l3 += 4;
+        tags += 1;
+    }
+    // Build dst(6)+src(6)+inner_ethertype(2)+L3.. into buf.
+    let l3_len = frame.len() - l3;
+    if 14 + l3_len > buf.len() {
+        return frame; // won't fit; raw frame is the safe fallback
+    }
+    buf[..12].copy_from_slice(&frame[..12]);
+    buf[12] = (inner >> 8) as u8;
+    buf[13] = inner as u8;
+    buf[14..14 + l3_len].copy_from_slice(&frame[l3..]);
+    &buf[..14 + l3_len]
+}
+
 fn classify(frame: &[u8]) -> (u16, u16) {
+    // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
+    let mut nbuf = [0u8; FRAME_SZ];
+    let nframe = strip_vlan(frame, &mut nbuf);
     // L2 structural tier (napse-l2guard parity: malformed-ARP / ARP-spoof) — runs
-    // on EVERY frame, R1 = the raw L2 start, before any L4 parsing.
-    if crate::rules::run_l2(frame) == DROP {
+    // on EVERY frame, R1 = the (normalized) L2 start, before any L4 parsing.
+    if crate::rules::run_l2(nframe) == DROP {
         return (0, DROP);
     }
-    // Stateful flow tier (per-source SYN-flood rate-limit) — also on the raw
-    // frame; self-parses IPv4/TCP/SYN and keys the limiter by IP source.
-    if crate::rules::run_flow(frame) == DROP {
+    // Stateful flow tier (per-source SYN-flood rate-limit) — self-parses IPv4/TCP/SYN
+    // and keys the limiter by IP source, on the normalized frame.
+    if crate::rules::run_flow(nframe) == DROP {
         return (0, DROP);
     }
     match crate::net::parse(frame) {
