@@ -978,13 +978,19 @@ fn cm5_p10_probe() {
                 d[0], (d[0] >> 28) & 1, d[1], d[2], d[3], d[4] as u16, (d[4] >> 2) & 1, (d[4] >> 1) & 1, d[5]);
         }
     }
+    // P10-BT is opt-in (feature `p10bt`) — see kernel/Cargo.toml. On metal the
+    // unresponsive BT core left a deferred external abort that SError'd the next
+    // phase, so it stays out of the default image until uarta clock/power is solved.
+    #[cfg(feature = "p10bt")]
     cm5_p10bt_probe();
+    #[cfg(not(feature = "p10bt"))]
+    kprint!(" [P10-BT] SKIPPED — opt-in via --features p10bt (uarta clock/power sequencing unresolved; see Cargo.toml)\n");
 }
 
 /// P10-BT — the Bluetooth half of the CYW43455, over HCI-UART (uarta, NS16550A).
 /// Independent of the SDIO WiFi path; runs after it so a BT failure can never
 /// affect the WiFi result. Patch-free (the .hcd is optional for HCI + LE scan).
-#[cfg(feature = "cm5")]
+#[cfg(all(feature = "cm5", feature = "p10bt"))]
 fn cm5_p10bt_probe() {
     use arch_aarch64::bt;
     kprint!(" [P10-BT] CYW43455 Bluetooth — HCI-UART (uarta NS16550A @0x10_7D50_C000), BT_ON gpio29\n");

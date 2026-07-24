@@ -262,7 +262,41 @@ pub fn bt_diag() -> [u32; 6] {
 /// P10-BT bring-up: power the BT core, open the UART at 115200, HCI Reset, switch
 /// to 3 Mbaud, then enable LE scanning. Patch-free path (the .hcd is optional).
 /// Returns true if the controller answered HCI Reset (i.e. the BT core is alive).
+/// Is uarta actually alive (clocked, powered, decoding)?
+///
+/// METAL FINDING 2026-07-24: on the first hardware run the BT core did not respond
+/// (`reset=0xff`) and this probe left a **deferred external abort** behind, which
+/// surfaced as `SError/Lower64 (EC=0x2f, ELR=EL0 entry)` at the NEXT EL0 entry and
+/// killed the following P7c stage. Degrading gracefully inside our own phase is NOT
+/// enough — touching an unclocked/unpowered peripheral poisons whatever runs next.
+///
+/// So: prove the block decodes using the NS16550A scratch register (a plain RW
+/// register with no side effects) BEFORE asserting BT_ON or issuing any HCI, and
+/// bail out entirely if it does not read back. Drain the write pipeline either way
+/// so nothing we did can be reported asynchronously to a later phase.
+fn uart_present() -> bool {
+    const SCR: usize = 7 << 2; // NS16550A scratch register, reg-shift 2
+    let saved = r32(BT_UART + SCR);
+    let mut ok = true;
+    for pat in [0xA5u32, 0x5A] {
+        w32(BT_UART + SCR, pat);
+        unsafe { core::arch::asm!("dsb sy", "isb") };
+        if r32(BT_UART + SCR) & 0xFF != pat {
+            ok = false;
+            break;
+        }
+    }
+    w32(BT_UART + SCR, saved);
+    unsafe { core::arch::asm!("dsb sy", "isb") };
+    ok
+}
+
 pub fn bringup() -> bool {
+    // Gate EVERYTHING behind the presence probe (see uart_present).
+    if !uart_present() {
+        unsafe { BT_DIAG[0] = 0xFE }; // 0xFE = block absent/unclocked; never probed
+        return false;
+    }
     pinmux();
     // Power-cycle the BT core. RTS held low across power-up (bcm43438 quirk).
     bt_power(false);
