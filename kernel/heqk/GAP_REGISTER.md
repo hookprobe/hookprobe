@@ -183,3 +183,7 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 - CORE-12      real EL0 allocator (only when untrusted input reaches alloc)
 
 **F. Design-phase implementations:** P13 ✅ + P15 ✅ IMPLEMENTED (P13=8025477 RP1 buses; P15=5336ca8 read-only eMMC + sealing crypto, QEMU-gated [P15 PASS], write behind p15-write, V3 limitation printed). P17 foundation ✅ (181052a: net-class queue + dual-direction IPS gate [P17 PASS] + EL0 timer; smoltcp-EL0-service deferred). Remaining: P11, P12 (both need per-TCB CSpace = CORE-2).
+
+
+## METAL FINDING 2026-07-24 (P13/P15 flash)
+P13 PASS on metal (deny-list enforced, i2c1 EL0-driver works, eMMC block device up 59640MiB, MBR+guard OK; SPI SRL loopback WARN non-fatal). P15 metal run FOUND a security-critical HMAC bug (commit ff80854): the incremental Hasher dropped a message tail <=32 bytes, so seal tamper detection LEAKED for short ciphertexts — QEMU missed it (36-byte test secret took the good path). Fixed + QEMU gate now uses a 28-byte secret to guard the path. Confirms XC-15 (dual-backend coverage gap).
