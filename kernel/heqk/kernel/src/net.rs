@@ -41,6 +41,24 @@ impl PacketMeta {
     }
 }
 
+/// DET-11: the IPv4 source address (host-order u32) of a VLAN-NORMALIZED Ethernet
+/// frame, for SIEM attribution on a detection. 0 if the frame is not IPv4 or too
+/// short. Callers pass the normalized frame (IP starts at offset 14).
+pub fn eth_ipv4_src(frame: &[u8]) -> u32 {
+    if frame.len() < 30 {
+        return 0;
+    }
+    let et = ((frame[12] as u16) << 8) | frame[13] as u16;
+    if et != ETHERTYPE_IPV4 {
+        return 0; // ARP / IPv6 / other — no IPv4 source to attribute
+    }
+    // IPv4 source address is 4 bytes at IP-header offset 12 (= frame 14+12 = 26).
+    ((frame[26] as u32) << 24)
+        | ((frame[27] as u32) << 16)
+        | ((frame[28] as u32) << 8)
+        | frame[29] as u32
+}
+
 #[inline]
 fn be16(b: &[u8], off: usize) -> Option<u16> {
     Some(((*b.get(off)? as u16) << 8) | (*b.get(off + 1)? as u16))

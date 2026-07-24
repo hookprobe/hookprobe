@@ -166,14 +166,16 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
     let mut nbuf = [0u8; FRAME_SZ];
     let nframe = strip_vlan(frame, &mut nbuf);
+    // DET-11: the IPv4 source (0 if not IPv4), attributed on any detection below.
+    let src = crate::net::eth_ipv4_src(nframe);
     // L2 structural tier (napse-l2guard parity: malformed-ARP / ARP-spoof) — runs
     // on EVERY frame, R1 = the (normalized) L2 start, before any L4 parsing.
-    if crate::rules::run_l2(nframe) == DROP {
+    if crate::rules::run_l2(nframe, src) == DROP {
         return (0, DROP);
     }
     // Stateful flow tier (per-source SYN-flood rate-limit) — self-parses IPv4/TCP/SYN
     // and keys the limiter by IP source, on the normalized frame.
-    if crate::rules::run_flow(nframe) == DROP {
+    if crate::rules::run_flow(nframe, src) == DROP {
         return (0, DROP);
     }
     match crate::net::parse(frame) {
@@ -182,11 +184,11 @@ fn classify(frame: &[u8]) -> (u16, u16) {
             // each rule reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
             let l4 = &frame[m.l4_off..];
             // TCP-flag scan tier (NULL/FIN/Xmas/SYN-FIN) — TCP only.
-            if m.ip_proto == crate::net::IPPROTO_TCP && crate::rules::run_tcp(l4) == DROP {
+            if m.ip_proto == crate::net::IPPROTO_TCP && crate::rules::run_tcp(l4, src) == DROP {
                 return (m.dst_port, DROP);
             }
             // Port/threat rules (TCP + UDP). A DROP scores a QSecBit hit.
-            let v = crate::rules::run_l4(l4);
+            let v = crate::rules::run_l4(l4, src);
             (m.dst_port, v)
         }
         Some(m) => (m.dst_port, PASS), // valid non-port traffic (ARP/ICMP/…)
