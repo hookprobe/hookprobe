@@ -188,6 +188,21 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthash(&computed);
     puts("\n");
 
+    // SEC-8/V7b: software stack guard. HBoot's stack grows DOWN from __stack_top
+    // (0x800000) toward the payload image with the **MMU OFF**, so a HW guard page is
+    // impossible, and the SLH-DSA/ed25519 verify below is stack-hungry. Lay a canary
+    // band in the free RAM just above the payload; if the stack overruns down into it
+    // during verify/sign, the payload we measured has been corrupted. Checked right
+    // before the EL1 handoff (GUARD_MAGIC ^ index, so a memset can't fake it).
+    const GUARD_WORDS: usize = 512; // 4 KiB band
+    const GUARD_MAGIC: u64 = 0x5354_4B47_5244_0001; // "STKGRD\0\1"
+    let guard = (((body as usize) + size as usize + 0xFFF) & !0xFFF) as *mut u64;
+    unsafe {
+        for k in 0..GUARD_WORDS {
+            core::ptr::write_volatile(guard.add(k), GUARD_MAGIC ^ k as u64);
+        }
+    }
+
     // The signed message binds the SVN: SHA-256( LE64(svn) || sha256(payload) ).
     // Because svn is inside what's signed, an attacker cannot bump the version
     // on an old payload to clear the floor — that breaks both signatures.
@@ -349,6 +364,18 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // Programs VTCR/VTTBR; HCR_EL2.VM is flipped in hboot_launch_el1 before eret.
     stage2::enable();
     puts(" stage2 : EL1<->EL2 isolation armed (HBoot region 0x200000..0x800000 hidden)\n");
+
+    // SEC-8/V7b: verify the stack never overran into the payload guard band during
+    // the stack-hungry verify/sign. A mismatch means HBoot's stack corrupted the
+    // measured payload — refuse to launch rather than hand off corrupt-but-attested
+    // code.
+    let guard_ok = unsafe {
+        (0..GUARD_WORDS).all(|k| core::ptr::read_volatile(guard.add(k)) == GUARD_MAGIC ^ k as u64)
+    };
+    if !guard_ok {
+        puts(" secure boot: FAIL — HBoot stack overran the payload guard (SEC-8), refusing to boot\n");
+        unsafe { park() }
+    }
 
     puts(" launch : EL1 entry ");
     puthex(load_pa + entry_off);
