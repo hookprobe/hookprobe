@@ -8,8 +8,8 @@
 //!   PRK  = HKDF-Extract(salt = policy_digest, ikm = SRK)
 //!   k_enc = HKDF-Expand(PRK, "HQKSEAL1-enc")   (CTR keystream key)
 //!   k_mac = HKDF-Expand(PRK, "HQKSEAL1-mac")   (HMAC tag key)
-//!   ct   = CTR(k_enc, plaintext)
-//!   tag  = HMAC(k_mac, header[0..96] || ct)     (Encrypt-then-MAC)
+//!   ct   = CTR(k_enc, nonce, plaintext)         (fresh per-seal nonce, AUD-STO-1)
+//!   tag  = HMAC(k_mac, header[0..96] || ct)     (Encrypt-then-MAC; nonce in header)
 //!
 //! Blob = 128-byte header (incl. the tag) followed by the ciphertext.
 //!
@@ -39,7 +39,9 @@ const O_FLOOR: usize = 24; //  u64
 const O_PDIGEST: usize = 32; // 32 bytes
 const O_PTLEN: usize = 64; //  u32
 const O_CTLEN: usize = 68; //  u32
-// 72..96 reserved (zero)
+const O_NONCE: usize = 72; // 16 bytes — per-seal CTR nonce (AUD-STO-1); MAC-covered
+const NONCE_LEN: usize = 16;
+// 88..96 reserved (zero)
 const O_TAG: usize = 96; //  32 bytes
 const TAG_COVER: usize = 96; // header bytes the tag authenticates (before the tag)
 
@@ -155,6 +157,31 @@ fn get_u32(buf: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
 }
 
+/// Per-seal CTR nonce (AUD-STO-1). MUST be unique per (key, seal) or the keystream
+/// repeats. Within a boot this is guaranteed: a strictly-monotonic counter is the
+/// high entropy and the cycle counter the low, expanded through SHA-256. Cross-boot
+/// uniqueness needs a hardware-TRNG seed or a persistent monotonic sequence — both
+/// part of the deferred HBoot SealHandoff (SEALED_STORAGE.md). Until then per-boot
+/// uniqueness holds, which closes the exploitable case: two assets sealed under one
+/// policy in the same session no longer share a keystream.
+fn gen_nonce() -> [u8; NONCE_LEN] {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let t: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack));
+    }
+    let mut h = Hasher::new();
+    h.update(b"HQKSEAL1-nonce");
+    h.update(&seq.to_le_bytes());
+    h.update(&t.to_le_bytes());
+    let d = h.finish();
+    let mut n = [0u8; NONCE_LEN];
+    n.copy_from_slice(&d[..NONCE_LEN]);
+    n
+}
+
 /// Seal `plaintext` under `policy` using `srk`, writing the blob into `out`.
 pub fn seal(
     srk: &[u8; 32],
@@ -182,10 +209,16 @@ pub fn seal(
     put_u32(b, O_PTLEN, plaintext.len() as u32);
     put_u32(b, O_CTLEN, plaintext.len() as u32);
 
-    // Ciphertext = CTR(plaintext).
+    // AUD-STO-1: fresh per-seal nonce, written into the MAC-covered header so it is
+    // authenticated and available to unseal. Binds the CTR keystream to this seal.
+    let nonce = gen_nonce();
+    b[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce);
+
+    // Ciphertext = CTR(k_enc, nonce, plaintext).
     b[SEAL_HDR_LEN..SEAL_HDR_LEN + plaintext.len()].copy_from_slice(plaintext);
-    kdf::ctr_xor(
+    kdf::ctr_xor_nonce(
         &key.k_enc,
+        &nonce,
         &mut b[SEAL_HDR_LEN..SEAL_HDR_LEN + plaintext.len()],
     );
 
@@ -260,8 +293,9 @@ pub fn unseal(
         return Err(SealErr::Tag); // authentication failed — reveal NO plaintext
     }
 
-    // Authenticated: decrypt into the caller's buffer.
+    // Authenticated: decrypt into the caller's buffer. The nonce lives in the
+    // MAC-covered header, so the tag check above already authenticated it.
     out[..ct_len].copy_from_slice(&blob[SEAL_HDR_LEN..SEAL_HDR_LEN + ct_len]);
-    kdf::ctr_xor(&key.k_enc, &mut out[..ct_len]);
+    kdf::ctr_xor_nonce(&key.k_enc, &blob[O_NONCE..O_NONCE + NONCE_LEN], &mut out[..ct_len]);
     Ok(ct_len)
 }

@@ -1150,11 +1150,21 @@ fn p15_seal_ram_demo() -> bool {
     t.bytes[seal::SEAL_HDR_LEN] ^= 0x01;
     let tamper_refused = matches!(seal::unseal(&srk, &policy, t.as_slice(), &mut pt),
         Err(SealErr::Tag));
-    kprint!("   [P15] in-RAM seal/unseal (SYNTHETIC key): round-trip {}, wrong-measurement {}, tamper {}\n",
+    // AUD-STO-1: two seals of the SAME secret under the SAME key/policy must produce
+    // DIFFERENT ciphertext (fresh per-seal nonce => distinct keystream, no reuse).
+    let mut blob2 = SealBlob::new();
+    let hdr = seal::SEAL_HDR_LEN;
+    let no_reuse = seal::seal(&srk, &policy, secret, &mut blob2).is_ok()
+        && blob2.as_slice()[hdr..hdr + secret.len()] != blob.as_slice()[hdr..hdr + secret.len()]
+        // ...and the second blob still round-trips (nonce carried in its own header).
+        && matches!(seal::unseal(&srk, &policy, blob2.as_slice(), &mut pt),
+            Ok(n) if &pt[..n] == secret);
+    kprint!("   [P15] in-RAM seal/unseal (SYNTHETIC key): round-trip {}, wrong-measurement {}, tamper {}, no-reuse {}\n",
         if round { "MATCH" } else { "MISMATCH" },
         if wrong_refused { "REFUSED" } else { "LEAK!" },
-        if tamper_refused { "REFUSED" } else { "LEAK!" });
-    round && wrong_refused && tamper_refused
+        if tamper_refused { "REFUSED" } else { "LEAK!" },
+        if no_reuse { "DISTINCT" } else { "REUSED!" });
+    round && wrong_refused && tamper_refused && no_reuse
 }
 
 /// P10-BT — the Bluetooth half of the CYW43455, over HCI-UART (uarta, NS16550A).
@@ -2929,6 +2939,18 @@ fn p15_seal_selftest() {
     kprint!("   round-trip: seal {} bytes -> unseal -> {}\n",
         blob.len, if round_ok { "MATCH" } else { "MISMATCH" });
 
+    // 1b) AUD-STO-1: re-sealing the SAME secret under the SAME key/policy must yield
+    //     DIFFERENT ciphertext (fresh per-seal nonce => no CTR keystream reuse), and
+    //     still round-trip (nonce travels in its own MAC-covered header).
+    let mut blob_b = SealBlob::new();
+    let hdr = seal::SEAL_HDR_LEN;
+    let no_reuse = seal::seal(&srk, &policy, secret, &mut blob_b).is_ok()
+        && blob_b.as_slice()[hdr..hdr + secret.len()] != blob.as_slice()[hdr..hdr + secret.len()]
+        && matches!(seal::unseal(&srk, &policy, blob_b.as_slice(), &mut pt),
+            Ok(n) if &pt[..n] == secret);
+    kprint!("   no-reuse: two seals of same secret -> {} keystream\n",
+        if no_reuse { "DISTINCT" } else { "REUSED!" });
+
     // 2) wrong policy (a changed measurement) is refused.
     let mut wrong_pcr = pcr;
     wrong_pcr[1] = [0xEE; 32]; // PCR1 differs -> strict policy diverges
@@ -3021,7 +3043,7 @@ fn p15_seal_selftest() {
     #[cfg(not(feature = "p15-write"))]
     let write_ok = true; // write path compiled out by default (read-only build)
 
-    let pass = round_ok
+    let pass = round_ok && no_reuse
         && wrong_refused && ct_refused && hdr_refused && dev_refused
         && guard_ok && window_ok && load_ok && write_ok;
     kprint!(" [P15-seal] {} — Encrypt-then-MAC seal/unseal, tamper+wrong-measurement refused, MBR write-guard enforced (RamDisk)\n",
