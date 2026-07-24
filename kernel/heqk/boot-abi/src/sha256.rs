@@ -58,6 +58,78 @@ fn compress(state: &mut [u32; 8], block: &[u8]) {
     state[7] = state[7].wrapping_add(h);
 }
 
+/// Incremental SHA-256 — same `compress`/`K` core as `digest()`, added for the
+/// P15 KDF (HMAC needs to stream `ipad || key-derived || message` without
+/// heap-concatenating a possibly-multi-KiB message). `digest()` is left exactly
+/// as it was (NIST-vector tested); this shares its primitives.
+pub struct Hasher {
+    state: [u32; 8],
+    buf: [u8; 64],
+    buflen: usize,
+    total: u64,
+}
+
+impl Hasher {
+    pub fn new() -> Self {
+        Hasher {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+                0x1f83d9ab, 0x5be0cd19,
+            ],
+            buf: [0u8; 64],
+            buflen: 0,
+            total: 0,
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.total = self.total.wrapping_add(data.len() as u64);
+        if self.buflen > 0 {
+            let need = 64 - self.buflen;
+            let take = need.min(data.len());
+            self.buf[self.buflen..self.buflen + take].copy_from_slice(&data[..take]);
+            self.buflen += take;
+            data = &data[take..];
+            if self.buflen == 64 {
+                let block = self.buf;
+                compress(&mut self.state, &block);
+                self.buflen = 0;
+            }
+        }
+        let mut chunks = data.chunks_exact(64);
+        for block in &mut chunks {
+            compress(&mut self.state, block);
+        }
+        let rem = chunks.remainder();
+        self.buf[..rem.len()].copy_from_slice(rem);
+        self.buflen = rem.len();
+    }
+
+    pub fn finish(mut self) -> [u8; 32] {
+        let bitlen = self.total.wrapping_mul(8);
+        let mut tail = [0u8; 128];
+        tail[..self.buflen].copy_from_slice(&self.buf[..self.buflen]);
+        tail[self.buflen] = 0x80;
+        let tail_len = if self.buflen < 56 { 64 } else { 128 };
+        tail[tail_len - 8..tail_len].copy_from_slice(&bitlen.to_be_bytes());
+        compress(&mut self.state, &tail[..64]);
+        if tail_len == 128 {
+            compress(&mut self.state, &tail[64..128]);
+        }
+        let mut out = [0u8; 32];
+        for (i, s) in self.state.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&s.to_be_bytes());
+        }
+        out
+    }
+}
+
+impl Default for Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn digest(data: &[u8]) -> [u8; 32] {
     let mut state: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,

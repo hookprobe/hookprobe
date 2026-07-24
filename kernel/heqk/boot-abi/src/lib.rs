@@ -4,6 +4,7 @@
 //! owns platform discovery and hands over this structure (the seed of the
 //! Phase-2 HEQK Object Model).
 
+pub mod kdf;
 pub mod sha256;
 
 /// "HBOTINF1" little-endian.
@@ -214,6 +215,51 @@ pub fn signed_message_input(svn: u64, payload_hash: &[u8; 32]) -> [u8; 40] {
     buf[..8].copy_from_slice(&svn.to_le_bytes());
     buf[8..].copy_from_slice(payload_hash);
     buf
+}
+
+// -------------------- P15 sealed storage handoff ---------------------------
+/// Reserved page (below the ephemeral-key page) where HBoot will one day publish
+/// the sealing root key + the measurements the seal policy binds to. It is a
+/// SEPARATE page from `BootInfo` on purpose: BootInfo stays byte-for-byte
+/// backward-compatible, and the kernel treats a missing/!magic SealHandoff as
+/// "no root key available" (falls back to a synthetic key + prints the limit).
+pub const SEAL_HANDOFF_ADDR: usize = 0x3FFA_0000;
+/// "HQKSEAL1" little-endian.
+pub const SEAL_HANDOFF_MAGIC: u64 = 0x31_4c_41_45_53_4b_51_48;
+
+/// Seal-policy selector bits (`policy_mask`). The low bits pick which PCRs the
+/// key is bound to; the high bits are the always-on identity/rollback binders.
+pub const SEAL_MASK_PCR0: u32 = 1 << 0; // firmware baseline (base policy)
+pub const SEAL_MASK_PCR1: u32 = 1 << 1; // kernel payload (strict)
+pub const SEAL_MASK_PCR2: u32 = 1 << 2; // boot config (strict)
+pub const SEAL_MASK_DEVICE_ID: u32 = 1 << 8; // bind to the per-device serial
+pub const SEAL_MASK_SVN_FLOOR: u32 = 1 << 9; // bind to the anti-rollback floor
+
+/// `base` policy — production default: PCR0 + identity + floor. Survives a signed
+/// kernel update (PCR1/2 may change) but refuses foreign firmware / a lowered floor.
+pub const SEAL_POLICY_BASE: u32 = SEAL_MASK_PCR0 | SEAL_MASK_DEVICE_ID | SEAL_MASK_SVN_FLOOR;
+/// `strict` policy — PCR0|1|2 + identity + floor: dies on ANY measured change
+/// (the modified-image demo gate).
+pub const SEAL_POLICY_STRICT: u32 =
+    SEAL_MASK_PCR0 | SEAL_MASK_PCR1 | SEAL_MASK_PCR2 | SEAL_MASK_DEVICE_ID | SEAL_MASK_SVN_FLOOR;
+
+/// SealHandoff.flags bits.
+/// bit0: the SRK is REAL — derived in HBoot from the OTP secret with EL1 unable
+/// to read OTP (V3 closed). 0 = synthetic/absent: measurement binding is
+/// cosmetic and the kernel MUST print that limitation.
+pub const SEAL_FLAG_SRK_HW_DERIVED: u64 = 1 << 0;
+
+/// The sealing handoff HBoot writes at `SEAL_HANDOFF_ADDR` (0 until the V3
+/// prerequisite ships). `srk` is the sealing root key; the kernel derives every
+/// per-policy key from it and NEVER sees the OTP secret it came from.
+#[repr(C)]
+pub struct SealHandoff {
+    pub magic: u64,             // SEAL_HANDOFF_MAGIC
+    pub srk: [u8; 32],          // sealing root key (measurement-bound in HBoot)
+    pub device_id: u64,         // per-device serial the identity binder uses
+    pub svn_floor: u64,         // anti-rollback floor the policy binds to
+    pub pcr: [[u8; 32]; NUM_PCR], // measurements the policy may bind to
+    pub flags: u64,             // SEAL_FLAG_* (bit0 = SRK is hardware-derived)
 }
 
 /// The payload header sits at this offset inside the combined hboot8.img
