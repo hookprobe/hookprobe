@@ -95,6 +95,16 @@ impl Hasher {
                 compress(&mut self.state, &block);
                 self.buflen = 0;
             }
+            // CRITICAL (metal-found): if `data` was fully absorbed into the partial
+            // buffer without completing a block, the buffered bytes must be KEPT.
+            // Returning here prevents the `self.buflen = rem.len()` below from
+            // resetting buflen to 0 and SILENTLY DROPPING this update's bytes — which
+            // made HMAC ignore any message tail that fit in the free buffer space
+            // (e.g. a <=32-byte ciphertext), breaking authentication (tamper went
+            // undetected on metal because the 28-byte secret hit exactly this path).
+            if data.is_empty() {
+                return;
+            }
         }
         let mut chunks = data.chunks_exact(64);
         for block in &mut chunks {
