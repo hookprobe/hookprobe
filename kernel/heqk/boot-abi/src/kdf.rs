@@ -65,13 +65,24 @@ pub fn hkdf_expand32(prk: &[u8; 32], info: &[u8]) -> [u8; 32] {
 /// Stream-cipher XOR in place: keystream block `i` = `SHA256(key || LE64(i))`,
 /// 32 bytes each, counter incrementing from 0. Encrypt == decrypt.
 pub fn ctr_xor(key: &[u8; 32], data: &mut [u8]) {
+    ctr_xor_nonce(key, &[], data)
+}
+
+/// AUD-STO-1: nonce-bound CTR. Keystream block i = SHA256(key || nonce || LE64(i)).
+/// Binding a UNIQUE per-seal nonce means two blobs encrypted under the same key (same
+/// measurement/policy) get DIFFERENT keystreams — closing the keystream-reuse hole
+/// where XORing two same-key ciphertexts reveals the XOR of the plaintexts.
+pub fn ctr_xor_nonce(key: &[u8; 32], nonce: &[u8], data: &mut [u8]) {
     let mut counter: u64 = 0;
     let mut off = 0usize;
-    let mut blk = [0u8; 40];
-    blk[..32].copy_from_slice(key);
     while off < data.len() {
-        blk[32..40].copy_from_slice(&counter.to_le_bytes());
-        let ks = sha256::digest(&blk);
+        // Stream key || nonce || LE64(ctr) through the incremental hasher so an
+        // arbitrary-length nonce needs no fixed block buffer.
+        let mut h = Hasher::new();
+        h.update(key);
+        h.update(nonce);
+        h.update(&counter.to_le_bytes());
+        let ks = h.finish();
         let n = (data.len() - off).min(32);
         for j in 0..n {
             data[off + j] ^= ks[j];
