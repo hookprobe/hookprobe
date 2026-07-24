@@ -40,6 +40,7 @@ PHASES=(
   "P8soar|[P8-soar] PASS|impl|Validation|SOAR event-ring: async non-blocking telemetry exfiltration (verdict engine -> SPSC ring -> EL0 exporter)"
   "P8l7|[P8-l7] PASS|impl|Validation|L7 deep-packet signature: helper #3 payload_match — MQTT CONNECT flagged in the verified fast-path before EL0 services"
   "P17|[P17] PASS|impl|Validation|overlay convergence: net-class queue + dual-direction IPS gate (ingress DROP before ring + egress DROP before wire); EL0 monotonic counter; smoltcp EL0 service deferred"
+  "P16sha|[P16-sha] PASS|impl|Validation|crypto primitive: incremental SHA-256 Hasher == one-shot digest across all lengths/chunkings (guards the metal-found short-tail HMAC auth bug)"
   "P15|[P15-seal] PASS|impl|Validation|sealed storage: Encrypt-then-MAC seal/unseal (SHA256 HMAC/HKDF/CTR), tamper+wrong-measurement refused, MBR write-guard (RamDisk); eMMC driver read-only (writes behind p15-write)"
   "AB|[HBoot-AB] PASS|impl|Validation|A/B trial boot: kernel confirms health (hvc #1 disarms HBoot's EL2 watchdog) or firmware falls back to the known-good slot"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
