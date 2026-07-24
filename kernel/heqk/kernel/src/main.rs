@@ -1871,6 +1871,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8: detection plane — general JIT parity + live rule registry + QSecBit
     p8_detection_plane();
 
+    // --- P8/DET-6: JIT<->interpreter differential over ALL live JIT'd rules ---
+    p8_jit_differential();
+
     // --- P8: adaptive NAPI data plane — retire spin-poll (edge-right RX) ---
     p8_adaptive_napi();
 
@@ -2481,6 +2484,95 @@ fn p8_detection_plane() -> bool {
     kprint!(" [P8-plane] {} — signed rules run at native speed on live traffic, scored in the TCB\n",
         if ok { "PASS" } else { "FAIL" });
     ok
+}
+
+/// P8/DET-6 — JIT<->interpreter differential over EVERY live JIT-compiled rule.
+///
+/// The boot self-test previously cross-checked ONLY THREAT_RULE (exhaustively over
+/// all 65536 L4 ports; that test stays). But the live corpus JIT-compiles ~9
+/// CALL-free rules (port blocks, ARP guards, TCP-scan flags) and the hot path runs
+/// the native code with NO runtime cross-check — a codegen bug in one rule's
+/// LDX/multi-tag/JNE path would silently pass a matching threat. This extends the
+/// differential to ALL of them: for each JIT'd rule (reusing the entry VA `init()`
+/// already published — no recompile) we run BOTH the native fn and the verified
+/// interpreter over a match-constant-stressed pseudo-deterministic input set and
+/// assert identical verdicts.
+///
+/// FLOW rules use the `CALL` helper (opcode 0x85); the JIT rejects them
+/// (`compile` -> None) so they run interpreter-only — nothing to differentiate —
+/// and `rules::jitted_rules` excludes them (jit == 0).
+///
+/// Input set: N frames of the rule's proven `min_len`, each byte drawn (via a
+/// deterministic xorshift seeded by the rule index — NO Date/rand) from an
+/// alphabet of the corpora's match-constant bytes (ethertype halves 0x08/0x06,
+/// ARP htype/ptype/hlen/plen 0x00/0x01/0x04/0x06, TCP flag bytes, port halves), so
+/// each rule's PASS *and* DROP branches are exercised, not just the trivial
+/// no-match path. Every rule reads only within its `min_len`, so the frame stresses
+/// exactly the offsets that rule reads.
+#[cfg(not(feature = "cm5"))]
+fn p8_jit_differential() {
+    const N: usize = 4096;
+    // Every byte that appears in a live rule's match constants (so random frames
+    // hit both branches): 0x08/0x06 ethertype halves; 0x00/0x01 htype; 0x04/0x06
+    // hlen/plen; TCP flags 0x00/0x01/0x02/0x04/0x08/0x10/0x20/0x29/0x18/0x17; port
+    // halves 0x11/0x5c (4444) 0x00/0x17 (23) 0x7a/0x69 (31337); 0xff.
+    const ALPHA: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x04, 0x06, 0x08, 0x10, 0x11, 0x17, 0x18, 0x20, 0x29, 0x5c, 0x69, 0x7a,
+        0xff,
+    ];
+    kprint!("\n [P8] DET-6 JIT<->interpreter differential — every live JIT'd rule (not just THREAT_RULE)\n");
+
+    let mut views = [rules::JittedRule { name: "", prog: &[], min_len: 0, jit: 0 }; 16];
+    let nr = rules::jitted_rules(&mut views);
+
+    let mut buf = [0u8; 128]; // >= any live rule's min_len (ARP_MALFORMED = 42)
+    let mut total_mismatch = 0u32;
+    let mut diffed = 0u32;
+    for r in 0..nr {
+        let v = views[r];
+        let len = (v.min_len as usize).clamp(1, buf.len());
+        let f: extern "C" fn(*const u8) -> u64 =
+            unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(v.jit) };
+        // deterministic xorshift32, seeded by rule index (never 0) — no rand/Date.
+        let mut s: u32 = 0x9E37_79B9 ^ (r as u32).wrapping_mul(0x0100_0193).wrapping_add(1);
+        let mut mm = 0u32;
+        let (mut passes, mut drops, mut inval) = (0u32, 0u32, 0u32);
+        for _ in 0..N {
+            for b in buf[..len].iter_mut() {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                *b = ALPHA[(s as usize) & 15];
+            }
+            let jv = f(buf.as_ptr());
+            let iv = bpf::run(v.prog, buf.as_ptr(), len);
+            if jv != iv {
+                mm += 1;
+            }
+            match iv {
+                bpf::PASS => passes += 1,
+                bpf::DROP => drops += 1,
+                _ => inval += 1,
+            }
+        }
+        total_mismatch += mm;
+        diffed += 1;
+        kprint!(
+            "   [P8-diff] {:<16} min_len={:<2} jit@{:#x} N={} pass={} drop={} inval={} mismatches={}\n",
+            v.name, v.min_len, v.jit, N, passes, drops, inval, mm
+        );
+    }
+    // PASS iff the native code agrees with the verified interpreter on every input
+    // of every JIT'd rule, AND we actually differentiated >= 2 distinct rules
+    // (guards against a silently-empty corpus reporting a vacuous pass).
+    let ok = total_mismatch == 0 && diffed >= 2;
+    kprint!(
+        " [P8-diff] {} — {} live JIT'd rules cross-checked vs interpreter ({} frames each); FLOW/CALL rules interp-only (excluded); {} total mismatches\n",
+        if ok { "PASS" } else { "FAIL" },
+        diffed,
+        N,
+        total_mismatch
+    );
 }
 
 /// P8 adaptive NAPI: drive the detection datapath through an adaptive poll-budget
