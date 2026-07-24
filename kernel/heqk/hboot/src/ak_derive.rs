@@ -200,10 +200,21 @@ pub fn provision_and_derive() -> DerivedAk {
             // Blank region -> burn a fresh on-device TRNG secret, ONCE.
             puts(" ak     : customer OTP blank -> burning per-device secret (IRREVERSIBLE)...\n");
             let mut w = [0u32; 8];
+            let mut live = 0u32;
             for x in w.iter_mut() {
                 let mut b = [0u8; 4];
-                let _ = rng::fill(&mut b);
+                live += rng::fill(&mut b); // returns the count of LIVE hardware-RNG words
                 *x = u32::from_le_bytes(b);
+            }
+            // SEC-1/V2: NEVER fuse counter-derived bits. If the silicon RNG was not
+            // fully live, rng::fill fell back to a cntpct-folded (predictable) value
+            // that would still pass the popcount gate — and this burn is IRREVERSIBLE.
+            // A device provisioned with a cold TRNG would get a brute-forceable AK
+            // permanently fused. Require full liveness (all 8 words); else refuse the
+            // burn and use the software AK.
+            if live < 8 {
+                puts(" ak     : TRNG not fully live -> refusing IRREVERSIBLE OTP burn, software AK fallback\n");
+                return software_ak();
             }
             let reported = mailbox::set_customer_otp(&w);
             // Ground truth: read back. Require FULL fidelity (read-back == written)
