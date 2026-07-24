@@ -3331,6 +3331,17 @@ fn p2_caps_test() -> bool {
         if no_amplify { "REFUSED" } else { "GAINED?!" },
         if grant_gated { "REFUSED" } else { "allowed?!" });
 
+    // CORE-9 [P2-gen]: a freed+reused slot must not re-attach a stale child. Prove a
+    // cap whose parent link records the slot's OLD generation is orphaned — revoke of
+    // the new occupant spares it, while the new occupant's real child is deleted.
+    let gbase = arch_aarch64::mmu::reserve_region(64 * 1024);
+    let gen_ok = caps::core9_gen_selftest(gbase);
+    kprint!(
+        "   generation CDT: reused slot rejects stale child (old-gen link orphaned), real child revoked -> {}\n",
+        if gen_ok { "ok" } else { "FAIL" },
+    );
+    kprint!("   [P2-gen] {}\n", if gen_ok { "PASS" } else { "FAIL" });
+
     let pass = live0 == 8
         && retype_ep
         && ep_as_frame
@@ -3339,7 +3350,8 @@ fn p2_caps_test() -> bool {
         && live1 == 6
         && live2 == 1
         && root_reclaimed
-        && rights_ok;
+        && rights_ok
+        && gen_ok;
     kprint!("   [P2] {}\n", if pass { "PASS" } else { "FAIL" });
     pass
 }
