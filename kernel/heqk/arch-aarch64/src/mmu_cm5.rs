@@ -428,12 +428,22 @@ fn map_user_in(l1_root: usize, va: usize, desc: u64) -> bool {
     if l1_root == 0 {
         return false;
     }
+    // CORE-5/A9: apply the SAME GB5-window range check as write_user_l3 — the L-14
+    // fix landed only on the single-AS path, leaving this per-ASID grant path able to
+    // wrap an out-of-window VA (user_l3_idx = (va>>12)&0x1FF) to a wrong L3 slot,
+    // silently granting a page at a VA the caller never intended.
+    if !user_va_ok(va) {
+        return false;
+    }
     let l3 = user_l3_of(l1_root);
     if l3.is_null() {
         return false;
     }
     unsafe {
         core::ptr::write_volatile(l3.add(user_l3_idx(va)), desc);
+        core::arch::asm!("dsb ish");
+        // CORE-5: invalidate any stale TLB entry for this VA (was missing here).
+        core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) as u64);
         core::arch::asm!("dsb ish");
         core::arch::asm!("isb");
     }
