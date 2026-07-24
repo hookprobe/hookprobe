@@ -3257,7 +3257,7 @@ fn p12_task_exit(cur: usize, frame: *mut u64) -> usize {
 /// the READ right (else fail CLOSED with RC_DENIED), then hand off to the object's
 /// state machine. A missing CSpace is RC_DENIED, never a panic.
 fn p12_wait(cptr: usize, tid: usize) -> notify::WaitOut {
-    let (index, generation) = match resolve_ntfn_cap(cptr, caps::R) {
+    let (index, generation) = match resolve_ntfn_cap(cptr, caps::R, caps::ObjType::Notification) {
         Ok((i, g, _badge)) => (i, g),
         Err(rc) => return notify::WaitOut::Rc(rc),
     };
@@ -3268,12 +3268,16 @@ fn p12_wait(cptr: usize, tid: usize) -> notify::WaitOut {
 /// holds all of `need` rights. Returns `(index, generation, badge)` — the badge comes
 /// from the CAP, never a syscall arg. Fails CLOSED (RC_DENIED) on a missing CSpace,
 /// empty slot, or insufficient rights; RC_BADARG on a wrong object type.
-fn resolve_ntfn_cap(cptr: usize, need: u8) -> Result<(usize, u32, u64), u64> {
+fn resolve_ntfn_cap(cptr: usize, need: u8, expect: caps::ObjType) -> Result<(usize, u32, u64), u64> {
     let cs = current_cspace().ok_or(abi::RC_DENIED)?; // no CSpace => fail closed
     let c = cs.get(cptr).ok_or(abi::RC_DENIED)?;
-    match c.otype {
-        caps::ObjType::Notification | caps::ObjType::Topic => {}
-        _ => return Err(abi::RC_BADARG),
+    // AUD-CAP-1: the cap's type MUST match the operation's TARGET object type. The op
+    // indexes a table chosen by the SYSCALL (signal/poll/wait -> NOTIFY[], publish/recv/
+    // subscribe -> TOPICS[]); the two tables share index/generation ranges, so accepting
+    // either type let e.g. a Notification{W} cap drive PUBLISH into a TOPICS[] object it
+    // was never granted — a type-confusion that breaks the cap type-tag guarantee.
+    if c.otype != expect {
+        return Err(abi::RC_BADARG);
     }
     if c.rights & need != need {
         return Err(abi::RC_DENIED); // "ungranted subscribe/signal is REFUSED"
@@ -4008,14 +4012,14 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
         // caller's OWN cap + rights; the badge is read from the cap, never from `a0`. ---
         SYS_SIGNAL => {
             // Signal(CPtr{W}) — OR the cap's stamped badge into the object. Never blocks.
-            match resolve_ntfn_cap(a0 as usize, caps::W) {
+            match resolve_ntfn_cap(a0 as usize, caps::W, caps::ObjType::Notification) {
                 Ok((i, g, badge)) => notify::signal(i, g, badge),
                 Err(rc) => rc,
             }
         }
         SYS_POLL => {
             // Poll(CPtr{R}) — non-blocking read+clear of the notification word.
-            match resolve_ntfn_cap(a0 as usize, caps::R) {
+            match resolve_ntfn_cap(a0 as usize, caps::R, caps::ObjType::Notification) {
                 Ok((i, g, _)) => notify::poll(i, g),
                 Err(_) => 0,
             }
@@ -4023,7 +4027,7 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
         SYS_SUBSCRIBE => {
             // Subscribe(TopicCPtr{R}) — REQUIRES the R right (ungranted subscribe is
             // refused by resolve_ntfn_cap). Returns a subscription id, or an RC error.
-            match resolve_ntfn_cap(a0 as usize, caps::R) {
+            match resolve_ntfn_cap(a0 as usize, caps::R, caps::ObjType::Topic) {
                 Ok((i, g, _)) => match notify::subscribe(i, g, scheduler::current_tid()) {
                     Ok(sub_id) => sub_id as u64,
                     Err(rc) => rc,
@@ -4033,7 +4037,7 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
         }
         SYS_PUBLISH => {
             // Publish(TopicCPtr{W}, kind=a1) — non-blocking, O(subscribers).
-            match resolve_ntfn_cap(a0 as usize, caps::W) {
+            match resolve_ntfn_cap(a0 as usize, caps::W, caps::ObjType::Topic) {
                 Ok((i, g, badge)) => notify::publish(i, g, badge, _a1 as u32, 0),
                 Err(rc) => rc,
             }
@@ -4042,7 +4046,7 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
             // Recv(TopicCPtr{R}, sub_id=a1) — pop one bounded event; RC_EMPTY if drained.
             // The 24 B metadata is delivered via the P11 payload ring; the syscall
             // returns only the status code (kernel never returns object indices to EL0).
-            match resolve_ntfn_cap(a0 as usize, caps::R) {
+            match resolve_ntfn_cap(a0 as usize, caps::R, caps::ObjType::Topic) {
                 Ok((i, g, _)) => match notify::recv(i, g, _a1 as usize, scheduler::current_tid()) {
                     Ok(_meta) => abi::RC_OK,
                     Err(rc) => rc,
