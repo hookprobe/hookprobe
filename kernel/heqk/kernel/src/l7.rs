@@ -19,6 +19,21 @@ static PATTERNS: &[Pat] = &[
     Pat { bytes: b"MQTT" }, // 0: the MQTT protocol name (CONNECT var-header @ payload+4)
 ];
 
+/// DET-1/XC-11: the longest signed pattern. The verifier folds this (a sound upper
+/// bound, since the runtime pattern id in R2 is not known at verify time) into the
+/// rule's min_len, so payload_match's dereference of R1 is proven in-bounds.
+pub fn max_pattern_len() -> usize {
+    let mut m = 0;
+    let mut i = 0;
+    while i < PATTERNS.len() {
+        if PATTERNS[i].bytes.len() > m {
+            m = PATTERNS[i].bytes.len();
+        }
+        i += 1;
+    }
+    m
+}
+
 /// Helper #3: `R0 = payload_match(R1 = ptr, R2 = pattern_id)` — 1 on match, else 0.
 /// Bounds are the caller's responsibility (touch-LDX before the call).
 pub fn payload_match(ptr: u64, pattern_id: u64) -> u64 {
