@@ -731,6 +731,17 @@ Before going to production:
 
 **Remember**: Security is a continuous process, not a one-time setup. Stay vigilant! 🛡️
 
+## Accepted residual: EL0 high-resolution timer (P17)
+
+P17 sets `CNTKCTL_EL1.EL0PCTEN = 1`, granting EL0 read access to the monotonic
+`CNTPCT_EL0` counter (needed for the IP-overlay service's timekeeping). This is a
+**timing side-channel primitive** — EL0 code can measure durations at counter
+resolution. It is **accepted** on HEQK's single-tenant edge-appliance model (there is
+no mutually-distrusting second EL0 tenant to attack), and it grants the counter
+*only* — no compare registers, no timer control, no event stream. It is revocable
+(clear EL0PCTEN, fall back to the kernel-published `time_us` word) if a future
+multi-tenant model needs it.
+
 ---
 
 **Questions about security?** Email security@hookprobe.com

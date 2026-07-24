@@ -182,4 +182,4 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 - DET-8        live telemetry drainer (the EL0 exporter = P12 territory)
 - CORE-12      real EL0 allocator (only when untrusted input reaches alloc)
 
-**F. Design-phase implementations:** P13 ✅ + P15 ✅ IMPLEMENTED (P13=8025477 RP1 buses; P15=5336ca8 read-only eMMC + sealing crypto, QEMU-gated [P15 PASS], write behind p15-write, V3 limitation printed). Remaining: P17, P11, P12.
+**F. Design-phase implementations:** P13 ✅ + P15 ✅ IMPLEMENTED (P13=8025477 RP1 buses; P15=5336ca8 read-only eMMC + sealing crypto, QEMU-gated [P15 PASS], write behind p15-write, V3 limitation printed). P17 foundation ✅ (181052a: net-class queue + dual-direction IPS gate [P17 PASS] + EL0 timer; smoltcp-EL0-service deferred). Remaining: P11, P12 (both need per-TCB CSpace = CORE-2).
