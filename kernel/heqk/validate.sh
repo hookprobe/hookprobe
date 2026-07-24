@@ -40,6 +40,7 @@ PHASES=(
   "P8b|[P8-block] PASS|impl|Validation|threat-feed blocklist: helper #2 (keyed CIDR lookup) drops blocked source prefixes, clean sources pass"
   "P8soar|[P8-soar] PASS|impl|Validation|SOAR event-ring: async non-blocking telemetry exfiltration (verdict engine -> SPSC ring -> EL0 exporter)"
   "P8l7|[P8-l7] PASS|impl|Validation|L7 deep-packet signature: helper #3 payload_match — MQTT CONNECT flagged in the verified fast-path before EL0 services"
+  "P12|[P12] PASS|impl|Implementation+Verification|notification objects + capability pub-sub: seL4 Signal/Poll (OR-coalescing), topics-as-caps authority (ungranted subscribe REFUSED via has_rights), blocking WAIT syscall woken by Signal under the scheduler; badge-from-cap; MAX_THREADS->16; DSN-6 fixed"
   "P17|[P17] PASS|impl|Validation|overlay convergence: net-class queue + dual-direction IPS gate (ingress DROP before ring + egress DROP before wire); EL0 monotonic counter; smoltcp EL0 service deferred"
   "P16sha|[P16-sha] PASS|impl|Validation|crypto primitive: incremental SHA-256 Hasher == one-shot digest across all lengths/chunkings (guards the metal-found short-tail HMAC auth bug)"
   "P15|[P15-seal] PASS|impl|Validation|sealed storage: Encrypt-then-MAC seal/unseal (SHA256 HMAC/HKDF/CTR), tamper+wrong-measurement refused, MBR write-guard (RamDisk); eMMC driver read-only (writes behind p15-write)"

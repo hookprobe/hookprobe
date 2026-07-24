@@ -289,6 +289,40 @@ p13_i2c_stub:
 9:  b    9b
 p13_i2c_stub_end:
 
+// -------- P12: the blocking-WAIT proof (two scheduled EL0 TCBs) --------------
+// WAITer: holds a read-right Notification at CPtr 0. Calls SYS_WAIT (17) and BLOCKS; the
+// kernel resumes it (via a later Signal + the timer) with the received badge in x0.
+// It stores that badge to its result word (mapped RW at 0x8400_2000) so the kernel
+// can verify it after the scheduler run, then exits cleanly via SYS_TASK_EXIT (22)
+// — NOT SYS_EXIT_USER (which for a scheduled TCB would longjmp into a stale KRESUME;
+// the DSN-6 fix routes even that safely, but a scheduled TCB should use TASK_EXIT).
+.global p12_wait_stub
+.global p12_wait_stub_end
+p12_wait_stub:
+    mov  x0, #0                   // CPtr 0 = my read-right Notification
+    mov  x8, #17                  // SYS_WAIT (blocks; wakes with badge in x0)
+    svc  #0
+    movz x1, #0x8400, lsl #16     // x1 = 0x8400_0000
+    add  x1, x1, #0x2000          // x1 = 0x8400_2000 (my result word, EL0-mapped RW)
+    str  x0, [x1]                 // result = received badge
+    mov  x8, #22                  // SYS_TASK_EXIT (scheduler-aware clean exit)
+    svc  #0
+1:  b    1b
+p12_wait_stub_end:
+
+// SIGNALler: holds a write-right Notification (badge stamped in the cap) at CPtr 0.
+// One SYS_SIGNAL (16) — the badge comes from the CAP, not from x0 — then exits.
+.global p12_signal_stub
+.global p12_signal_stub_end
+p12_signal_stub:
+    mov  x0, #0                   // CPtr 0 = my write-right Notification (badge in the cap)
+    mov  x8, #16                  // SYS_SIGNAL (never blocks the signaller)
+    svc  #0
+    mov  x8, #22                  // SYS_TASK_EXIT
+    svc  #0
+1:  b    1b
+p12_signal_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME

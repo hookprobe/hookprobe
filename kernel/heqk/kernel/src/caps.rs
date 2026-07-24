@@ -21,6 +21,12 @@ pub enum ObjType {
     Endpoint = 2,
     Frame = 3,
     Tcb = 4,
+    // P12: async signalling objects. A cap of these types names a kernel object by
+    // (index, generation) carried in `base`/`watermark`, plus a `badge` stamped at
+    // mint time. `Notification` = a badge word + waiter (seL4-exact). `Topic` = a
+    // pub-sub channel; `Topic{W}` may publish, `Topic{R}` may subscribe/receive.
+    Notification = 5,
+    Topic = 6,
 }
 
 impl ObjType {
@@ -34,6 +40,8 @@ impl ObjType {
             ObjType::Endpoint => "Endpoint",
             ObjType::Frame => "Frame",
             ObjType::Tcb => "Tcb",
+            ObjType::Notification => "Notification",
+            ObjType::Topic => "Topic",
         }
     }
 }
@@ -49,10 +57,14 @@ pub const G: u8 = 1 << 2; // grant (may delegate copies)
 pub struct Cap {
     pub otype: ObjType,
     pub rights: u8,
-    pub base: usize,          // object's physical base (nominal in P2)
+    pub base: usize,          // object's physical base (nominal in P2) — P12: object INDEX
     pub size: usize,          // object's size in bytes
-    pub watermark: usize,     // Untyped only: bytes already retyped
+    pub watermark: usize,     // Untyped: bytes already retyped — P12: object GENERATION
     pub parent: Option<usize>, // derivation parent slot (None = root)
+    // P12: badge stamped at mint time on a Notification/Topic cap. `Signal`/`Publish`
+    // use THIS, never a syscall argument — so a badge cannot be forged, only held.
+    // Preserved (not amplifiable) across `mint`/`mint_into`. 0 for non-signal caps.
+    pub badge: u64,
 }
 
 const SLOTS: usize = 64;
@@ -89,6 +101,7 @@ impl CapSpace {
             size,
             watermark: 0,
             parent: None,
+            badge: 0,
         });
         s
     }
@@ -148,6 +161,7 @@ impl CapSpace {
             size: need,
             watermark: 0,
             parent: Some(ut_slot),
+            badge: 0,
         });
         Ok(dst)
     }
@@ -211,15 +225,17 @@ impl CapSpace {
     /// amplified (the core capability property) — and only if the source holds the
     /// **Grant** right. Returns the new slot.
     pub fn mint(&mut self, slot: usize, requested: u8) -> Result<usize, &'static str> {
-        let (otype, rights, base, size) = {
+        let (otype, rights, base, size, watermark, badge) = {
             let src = self.get(slot).ok_or("empty slot")?;
             if src.rights & G == 0 {
                 return Err("mint requires the Grant right");
             }
-            (src.otype, requested & src.rights, src.base, src.size)
+            // P12: carry the object identity (index=base, generation=watermark) and the
+            // badge UNCHANGED — mint may only NARROW rights, never re-stamp a badge.
+            (src.otype, requested & src.rights, src.base, src.size, src.watermark, src.badge)
         };
         let dst = self.free_slot().ok_or("no free slot")?;
-        self.slots[dst] = Some(Cap { otype, rights, base, size, watermark: 0, parent: Some(slot) });
+        self.slots[dst] = Some(Cap { otype, rights, base, size, watermark, parent: Some(slot), badge });
         Ok(dst)
     }
 
@@ -246,12 +262,42 @@ impl CapSpace {
             rights: requested & src.rights,
             base: src.base,
             size: src.size,
-            watermark: 0,
+            // P12: preserve object identity (generation) + the badge across the CSpace
+            // boundary; the delegated cap names the SAME object with (only) NARROWED rights.
+            watermark: src.watermark,
             parent: None,
+            badge: src.badge,
         };
         let d = dst.free_slot().ok_or("no free slot in dst")?;
         dst.slots[d] = Some(cap);
         Ok(d)
+    }
+
+    /// P12 — install a Notification/Topic object cap into a free slot: names the
+    /// kernel object `(index, generation)` with `rights` and a `badge` stamped now.
+    /// This is the STATIC, kernel-side object-cap creation (Microkit-style) — an EL0
+    /// task can NEVER mint an object cap or a badge for itself; the kernel hands it
+    /// exactly the authority it should hold (e.g. `Topic{W}` to a sensor driver, or
+    /// `Topic{R}` to the rule engine). Returns the assigned slot.
+    pub fn install_object(
+        &mut self,
+        otype: ObjType,
+        rights: u8,
+        index: usize,
+        generation: u32,
+        badge: u64,
+    ) -> Result<usize, &'static str> {
+        let dst = self.free_slot().ok_or("no free slot")?;
+        self.slots[dst] = Some(Cap {
+            otype,
+            rights,
+            base: index,
+            size: 0,
+            watermark: generation as usize,
+            parent: None,
+            badge,
+        });
+        Ok(dst)
     }
 
     /// The enforcement point on capability invocation: true only if the cap at

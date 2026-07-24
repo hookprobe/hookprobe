@@ -8,7 +8,11 @@
 
 use core::ptr::{addr_of, addr_of_mut};
 
-pub const MAX_THREADS: usize = 8;
+// P12 raised this 8 -> 16: the QEMU path was EXACTLY full at 8 (idle + P4 pair +
+// P1 H/M/L + the EL0 preempt-loop + the EL0 crash TCB), leaving no room for the two
+// scheduled EL0 TCBs the blocking-WAIT proof needs. Every per-tid array below AND
+// `main.rs`'s `CSPACE[MAX_THREADS]` grow with this constant.
+pub const MAX_THREADS: usize = 16;
 
 static mut SP: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut PRIO: [u8; MAX_THREADS] = [0; MAX_THREADS];
@@ -200,6 +204,24 @@ pub fn unblock(tid: usize) {
         return;
     }
     unsafe { addr_of_mut!(BLOCKED).cast::<bool>().add(tid).write(false) };
+}
+
+/// P12 — deliver a WAIT syscall's return value into a BLOCKED thread's saved `x0`.
+/// A thread that blocked inside `SYS_WAIT` parked its trap frame at `SP[tid]` (word 0
+/// = its saved x0); writing there sets the value `x0` will hold when it is resumed —
+/// this is how a `Signal` hands the badge (or `RC_REVOKED`) to the waiter with no new
+/// assembly. Bounds-checked; a 0/absent frame pointer is a no-op. Callers run in the
+/// exception epilogue with IRQs masked, so this is atomic against the timer.
+pub fn deliver_wake(tid: usize, x0: u64) {
+    if tid >= MAX_THREADS {
+        return;
+    }
+    unsafe {
+        let fp = addr_of!(SP).cast::<usize>().add(tid).read();
+        if fp != 0 {
+            core::ptr::write(fp as *mut u64, x0); // frame word 0 = x0 (see thread.rs)
+        }
+    }
 }
 
 /// Is `tid` currently blocked? CORE-8: bounds-checked (out-of-range => not blocked).

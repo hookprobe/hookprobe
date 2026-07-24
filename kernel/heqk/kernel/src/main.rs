@@ -21,6 +21,7 @@ mod ipc;
 mod napi;
 mod net;
 mod netq;
+mod notify;
 mod packet;
 mod ratelimit;
 mod rules;
@@ -80,6 +81,27 @@ static mut EL0_KSTACK: KStack = KStack([0; 0x4000]);
 static mut EL0_FKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the crashing driver TCB
 /// Set by the timer IRQ when the on-metal scheduler demo completes (cm5).
 static SCHED_DONE: AtomicBool = AtomicBool::new(false);
+
+// --- P12 self-test state. (a) signal/poll + (b) pub-sub authority run synchronously
+// pre-scheduler and store their verdict here; (c) the blocking-WAIT proof runs under
+// the scheduler, so the verdict is read post-run in handle_irq (like [P7c]). ---
+#[cfg(not(feature = "cm5"))]
+static P12_A_SIGNAL_POLL: AtomicBool = AtomicBool::new(false);
+#[cfg(not(feature = "cm5"))]
+static P12_B_PUBSUB_AUTH: AtomicBool = AtomicBool::new(false);
+// Written by the shared blocking-WAIT syscall path (both backends); read by the QEMU
+// self-test report — so NOT cm5-gated.
+static P12_WAIT_BLOCKED: AtomicBool = AtomicBool::new(false); // the WAIT actually blocked
+#[cfg(not(feature = "cm5"))]
+static P12_RESULT_PA: AtomicUsize = AtomicUsize::new(0); // PA of the EL0 waiter's result word
+/// The badge stamped into the EL0 signaller's `Notification{W}` cap — the EL0 waiter
+/// must receive EXACTLY this (badge comes from the cap, not a syscall arg). Bit 12 = P12.
+#[cfg(not(feature = "cm5"))]
+const P12_BADGE_C: u64 = 0x0000_0000_0000_1000;
+#[cfg(not(feature = "cm5"))]
+static mut EL0_WKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the WAIT TCB
+#[cfg(not(feature = "cm5"))]
+static mut EL0_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the SIGNAL TCB
 
 /// CM5 / BCM2712 first-boot entry: prove HEQK boots and prints on real silicon
 /// via the on-SoC debug UART. MMU stays OFF (the UART is at a 40-bit PA that the
@@ -1780,6 +1802,12 @@ pub extern "C" fn kmain() -> ! {
     // CORE-2: prove per-TCB CSpace isolation + rights-narrowing delegation.
     cspace_isolation_demo();
 
+    // --- P12 (a)+(b): Notification signal/poll + pub-sub AUTHORITY (topics as caps).
+    // Synchronous, pre-scheduler; the blocking-WAIT proof (c) runs under the scheduler
+    // and is reported post-run. ---
+    P12_A_SIGNAL_POLL.store(p12_signal_poll(), Ordering::Relaxed);
+    P12_B_PUBSUB_AUTH.store(p12_pubsub_authority(), Ordering::Relaxed);
+
     // --- P3: EL0 userspace + SVC syscalls (incl. capability invocation) + fault ---
     p3_user_demo();
 
@@ -1898,6 +1926,7 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" sched: {} threads (P4 IPC consumer/producer + P1 priority H/M/L, + idle)\n", NTHREADS);
     el0_preempt_spawn(); // P7c: + one uncooperative EL0 TCB that the timer must preempt
     el0_fault_spawn(); // P7c 4b: + one crashing EL0 driver TCB that must be contained + restarted
+    p12_el0_spawn(); // P12 (c): + a WAIT TCB (blocks) and a SIGNAL TCB (wakes it) — the real syscall path
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -2881,6 +2910,55 @@ fn enter_current_addr_space() {
     }
 }
 
+/// P12 — the ONE place a syscall/fault path returns a DIFFERENT thread's SP. It
+/// enters that (now-current) thread's address space FIRST, so the TTBR0 switch can
+/// never be forgotten (omitting it would run the thread under the wrong page tables).
+/// `scheduler::on_tick` has already set CUR to the next thread before this is called.
+#[inline]
+fn switch_to(next_sp: usize) -> usize {
+    enter_current_addr_space();
+    next_sp
+}
+
+/// P12 — scheduler-aware clean exit of a scheduled TCB (SYS_TASK_EXIT, or a scheduled
+/// caller of SYS_EXIT_USER per the DSN-6 fix). Detach from all wait queues, mark dead,
+/// disarm its restart record, then reschedule and return the next thread's SP.
+fn p12_task_exit(cur: usize, frame: *mut u64) -> usize {
+    notify::detach_tcb(cur); // death path: no stale badge into a freed frame
+    scheduler::exit_current();
+    scheduler::clear_restart(cur); // a reused slot must not inherit scheduled-restart
+    let next = scheduler::on_tick(frame as usize);
+    switch_to(next)
+}
+
+/// P12 — resolve a WAIT: the CPtr must name a Notification/Topic the CALLER holds with
+/// the READ right (else fail CLOSED with RC_DENIED), then hand off to the object's
+/// state machine. A missing CSpace is RC_DENIED, never a panic.
+fn p12_wait(cptr: usize, tid: usize) -> notify::WaitOut {
+    let (index, generation) = match resolve_ntfn_cap(cptr, caps::R) {
+        Ok((i, g, _badge)) => (i, g),
+        Err(rc) => return notify::WaitOut::Rc(rc),
+    };
+    notify::wait_prepare(index, generation, tid)
+}
+
+/// P12 — resolve a Notification/Topic CPtr in the CALLER's OWN CSpace and check it
+/// holds all of `need` rights. Returns `(index, generation, badge)` — the badge comes
+/// from the CAP, never a syscall arg. Fails CLOSED (RC_DENIED) on a missing CSpace,
+/// empty slot, or insufficient rights; RC_BADARG on a wrong object type.
+fn resolve_ntfn_cap(cptr: usize, need: u8) -> Result<(usize, u32, u64), u64> {
+    let cs = current_cspace().ok_or(abi::RC_DENIED)?; // no CSpace => fail closed
+    let c = cs.get(cptr).ok_or(abi::RC_DENIED)?;
+    match c.otype {
+        caps::ObjType::Notification | caps::ObjType::Topic => {}
+        _ => return Err(abi::RC_BADARG),
+    }
+    if c.rights & need != need {
+        return Err(abi::RC_DENIED); // "ungranted subscribe/signal is REFUSED"
+    }
+    Ok((c.base, c.watermark as u32, c.badge))
+}
+
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
 /// pointer of the thread to run next.
 #[no_mangle]
@@ -2916,7 +2994,19 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                 kprint!(" [P7c] EL0 fault-restart {}: crashing driver TCB contained + restarted {} times then killed — kernel survived (4b)\n",
                     if restarts >= EL0_MAX_RESTARTS { "PASS" } else { "FAIL" }, restarts.min(EL0_MAX_RESTARTS));
                 kprint!("\n [P1] PASS priority scheduler (H>M>L order, threads exited, context switch verified)\n");
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c GREEN\n");
+                // P12 (c): the EL0 WAITer blocked in SYS_WAIT and was woken by the EL0
+                // SIGNALler's SYS_SIGNAL — it wrote the received badge to its result word.
+                let rp = P12_RESULT_PA.load(Ordering::SeqCst);
+                let got = if rp != 0 { unsafe { read_volatile(rp as *const u64) } } else { 0 };
+                let a = P12_A_SIGNAL_POLL.load(Ordering::Relaxed);
+                let b = P12_B_PUBSUB_AUTH.load(Ordering::Relaxed);
+                let blocked = P12_WAIT_BLOCKED.load(Ordering::Relaxed);
+                let c = got == P12_BADGE_C && blocked;
+                kprint!(" [P12c] blocking-WAIT {} — EL0 WAITer blocked={}, woken by EL0 Signal, received badge {:#x} (expected {:#x})\n",
+                    if c { "PASS" } else { "FAIL" }, blocked, got, P12_BADGE_C);
+                kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=16, DSN-6 fixed]\n",
+                    if a && b && c { "PASS" } else { "FAIL" }, a, b, c);
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 GREEN\n");
                 arch_aarch64::semihosting::exit(0);
             }
             // On real silicon there is no semihosting exit: signal the idle
@@ -3045,6 +3135,15 @@ const SYS_PRINTVAL: u64 = 4;
 const SYS_CAP_IDENTIFY: u64 = 5;
 const SYS_EXIT_USER: u64 = 6; // EL0 server returns control to the kernel
 const SYS_DRIVER_REPORT: u64 = 7; // EL0 driver reports a value it read from its device
+// P12 (block 16..23; 8..15 reserved for P11). Re-exported from `abi` so the ring-3
+// ABI has one home; matched by path below.
+const SYS_SIGNAL: u64 = abi::SYS_SIGNAL;
+const SYS_WAIT: u64 = abi::SYS_WAIT;
+const SYS_POLL: u64 = abi::SYS_POLL;
+const SYS_PUBLISH: u64 = abi::SYS_PUBLISH;
+const SYS_RECV: u64 = abi::SYS_RECV;
+const SYS_SUBSCRIBE: u64 = abi::SYS_SUBSCRIBE;
+const SYS_TASK_EXIT: u64 = abi::SYS_TASK_EXIT;
 
 // Value the isolated EL0 driver server reported (a NIC register it read).
 static DRIVER_REPORT: AtomicU32 = AtomicU32::new(0);
@@ -3074,6 +3173,17 @@ fn current_cspace() -> Option<&'static caps::CapSpace> {
 /// The root task's CSpace (tid 0). Kept for the boot/demo paths during the migration.
 fn root() -> &'static caps::CapSpace {
     cspace_of(0).expect("root CSpace (tid 0) not built")
+}
+
+/// CORE-2/P12 — install a per-spawn CSpace into scheduler slot `tid`. The kernel
+/// (the policy owner) mints exactly the caps a child TCB should hold into a fresh
+/// CSpace, then installs it here so `current_cspace()` resolves the child's authority.
+#[cfg(not(feature = "cm5"))]
+fn install_cspace(tid: usize, cs: caps::CapSpace) {
+    if tid >= scheduler::MAX_THREADS {
+        return;
+    }
+    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[tid] = Some(cs) };
 }
 
 /// Build the root task's CSpace: retype real-frame-backed caps from an Untyped
@@ -3147,6 +3257,186 @@ fn cspace_isolation_demo() {
     );
 }
 
+/// P12 (a) — Signal/Poll on a Notification: signal a badge, Poll returns it, a second
+/// Poll returns 0 (read-and-clear). Pure synchronous kernel-side check (no scheduler),
+/// so it is rock-solid. seL4 Idle -> Active -> (poll) -> Idle.
+#[cfg(not(feature = "cm5"))]
+fn p12_signal_poll() -> bool {
+    let h = match notify::create(scheduler::current_tid()) {
+        Some(h) => h,
+        None => {
+            kprint!(" [P12a] FAIL: notification table full\n");
+            return false;
+        }
+    };
+    const BADGE: u64 = 0x0000_0000_0000_0042;
+    let _ = notify::signal(h.index, h.generation, BADGE); // Idle -> Active
+    let first = notify::poll(h.index, h.generation); // returns BADGE, clears -> Idle
+    let second = notify::poll(h.index, h.generation); // Idle -> 0
+    let ok = first == BADGE && second == 0;
+    notify::destroy(h);
+    kprint!(
+        " [P12a] signal/poll {} — signalled {:#x}, poll#1={:#x} poll#2={:#x} (OR-coalesce, read+clear)\n",
+        if ok { "PASS" } else { "FAIL" }, BADGE, first, second
+    );
+    ok
+}
+
+/// P12 (b) — pub-sub AUTHORITY. Topics ARE capabilities: `Topic{W}` may publish,
+/// `Topic{R}` may subscribe. Prove, with three per-task CSpaces over ONE topic:
+///   * a task holding `Topic{W}` publishes OK,
+///   * a task WITHOUT `Topic{R}` is DENIED subscribe (the check falls out of
+///     `has_rights` — "ungranted subscribe is REFUSED", RC_DENIED), and
+///   * a task holding `Topic{R}` subscribes and RECEIVES the published event.
+/// This is the smart-farm property: a compromised sensor driver (Topic{W} only)
+/// simply cannot subscribe/actuate — that authority is not in its CSpace.
+#[cfg(not(feature = "cm5"))]
+fn p12_pubsub_authority() -> bool {
+    use caps::{CapSpace, ObjType, G, R, W};
+    let t = match notify::topic_create() {
+        Some(t) => t,
+        None => {
+            kprint!(" [P12b] FAIL: topic table full\n");
+            return false;
+        }
+    };
+    const BADGE: u64 = 0x0000_0000_0000_0080; // topic bit stamped in the caps
+    const KIND: u32 = 0xA5;
+
+    // publisher: Topic{W}. no_sub: Topic{W} only (NO read). subscriber: Topic{R}.
+    let mut pub_cs = CapSpace::empty();
+    let w_slot = pub_cs.install_object(ObjType::Topic, W | G, t.index, t.generation, BADGE).unwrap();
+    let mut nosub_cs = CapSpace::empty();
+    let n_slot = nosub_cs.install_object(ObjType::Topic, W, t.index, t.generation, BADGE).unwrap();
+    let mut sub_cs = CapSpace::empty();
+    let r_slot = sub_cs.install_object(ObjType::Topic, R, t.index, t.generation, BADGE).unwrap();
+
+    // AUTHORITY GATE: subscribe is attempted ONLY if the CSpace holds Topic{R}.
+    let ungranted_refused = !nosub_cs.has_rights(n_slot, R); // no R -> subscribe REFUSED
+    let subscribe_granted = sub_cs.has_rights(r_slot, R); // has R -> subscribe allowed
+    // The publisher must hold W to publish.
+    let publish_granted = pub_cs.has_rights(w_slot, W);
+
+    // Only the R-holder actually subscribes (as it would after the has_rights gate).
+    let sub_id = match notify::subscribe(t.index, t.generation, /*tid*/ 1) {
+        Ok(id) => id,
+        Err(_) => {
+            kprint!(" [P12b] FAIL: subscribe returned error\n");
+            notify::topic_destroy(t);
+            return false;
+        }
+    };
+    // Publisher publishes (badge from its Topic{W} cap); subscriber receives.
+    let _ = notify::publish(t.index, t.generation, BADGE, KIND, 0);
+    let received = matches!(
+        notify::recv(t.index, t.generation, sub_id, 1),
+        Ok(m) if m.kind == KIND
+    );
+    // A second recv drains empty.
+    let drained = matches!(notify::recv(t.index, t.generation, sub_id, 1), Err(rc) if rc == abi::RC_EMPTY);
+
+    let ok = ungranted_refused && subscribe_granted && publish_granted && received && drained;
+    notify::topic_destroy(t);
+    kprint!(
+        " [P12b] pubsub-authority {} — publish(W)-OK={} ungranted-subscribe-REFUSED={} granted-subscribe={} R-holder-received={}\n",
+        if ok { "PASS" } else { "FAIL" }, publish_granted, ungranted_refused, subscribe_granted, received
+    );
+    ok
+}
+
+/// P12 (c) — spawn two SCHEDULED EL0 TCBs that exercise the REAL blocking-WAIT
+/// syscall path end to end: a WAITer (holds `Notification{R}`) and a SIGNALler (holds
+/// `Notification{W}` with the badge stamped in its cap). Higher-priority WAITer runs
+/// first and BLOCKS inside `SYS_WAIT` (proving the syscall can return another thread's
+/// SP without wedging the box); the SIGNALler then `SYS_SIGNAL`s — the kernel writes
+/// the cap's badge into the WAITer's saved x0 and unblocks it. The WAITer resumes,
+/// writes the received badge to a shared result word, and `SYS_TASK_EXIT`s. The kernel
+/// reads that word after the scheduler run and checks it equals `P12_BADGE_C`.
+#[cfg(not(feature = "cm5"))]
+fn p12_el0_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    extern "C" {
+        static p12_wait_stub: u8;
+        static p12_wait_stub_end: u8;
+        static p12_signal_stub: u8;
+        static p12_signal_stub_end: u8;
+    }
+    // One Notification object shared by both TCBs (via distinct rights-narrowed caps).
+    let nh = match notify::create(0) {
+        Some(h) => h,
+        None => {
+            kprint!(" [P12c] FAIL: notification table full\n");
+            return;
+        }
+    };
+
+    // ---- WAITer TCB ----
+    let (wcode, wstack, wresult) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if wcode == 0 || wstack == 0 || wresult == 0 {
+        return;
+    }
+    let wsrc = core::ptr::addr_of!(p12_wait_stub) as usize;
+    let wlen = core::ptr::addr_of!(p12_wait_stub_end) as usize - wsrc;
+    unsafe {
+        core::ptr::copy_nonoverlapping(wsrc as *const u8, wcode as *mut u8, wlen);
+        core::ptr::write_volatile(wresult as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(wcode, wlen);
+    let (wl1, wasid) = mmu.new_addr_space();
+    if wl1 == 0 {
+        return;
+    }
+    const WCODE_VA: usize = 0x8400_0000;
+    const WSTACK_VA: usize = 0x8400_1000;
+    const WRESULT_VA: usize = 0x8400_2000; // the stub hard-codes this
+    mmu.map_user_code_in(wl1, WCODE_VA, wcode);
+    mmu.map_user_data_in(wl1, WSTACK_VA, wstack);
+    mmu.map_user_data_in(wl1, WRESULT_VA, wresult);
+    P12_RESULT_PA.store(wresult, Ordering::SeqCst);
+    let wkstack = unsafe { core::ptr::addr_of!(EL0_WKSTACK) as usize + 0x4000 };
+    let wsp = arch_aarch64::thread::make_el0_thread(wkstack, WCODE_VA, WSTACK_VA + 0x1000, 0);
+    let wttbr0 = wl1 as u64 | ((wasid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(wsp, 7, wttbr0) {
+        // WAITer's CSpace: Notification with the READ right only (slot 0). No W -> it
+        // could never signal; no badge needed to receive.
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Notification, caps::R, nh.index, nh.generation, 0);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, WCODE_VA, WSTACK_VA + 0x1000, wkstack); // DSN-6: never longjmp
+    }
+
+    // ---- SIGNALler TCB ----
+    let (scode, sstack) = (mmu.alloc_frame(), mmu.alloc_frame());
+    if scode == 0 || sstack == 0 {
+        return;
+    }
+    let ssrc = core::ptr::addr_of!(p12_signal_stub) as usize;
+    let slen = core::ptr::addr_of!(p12_signal_stub_end) as usize - ssrc;
+    unsafe { core::ptr::copy_nonoverlapping(ssrc as *const u8, scode as *mut u8, slen) };
+    arch_aarch64::mmu::sync_instruction_cache(scode, slen);
+    let (sl1, sasid) = mmu.new_addr_space();
+    if sl1 == 0 {
+        return;
+    }
+    const SCODE_VA: usize = 0x8500_0000;
+    const SSTACK_VA: usize = 0x8500_1000;
+    mmu.map_user_code_in(sl1, SCODE_VA, scode);
+    mmu.map_user_data_in(sl1, SSTACK_VA, sstack);
+    let skstack = unsafe { core::ptr::addr_of!(EL0_SKSTACK) as usize + 0x4000 };
+    let ssp = arch_aarch64::thread::make_el0_thread(skstack, SCODE_VA, SSTACK_VA + 0x1000, 0);
+    let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(ssp, 6, sttbr0) {
+        // SIGNALler's CSpace: Notification with the WRITE right + the BADGE stamped in
+        // the cap (slot 0). SYS_SIGNAL reads the badge from HERE, not from a syscall arg.
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Notification, caps::W, nh.index, nh.generation, P12_BADGE_C);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, SCODE_VA, SSTACK_VA + 0x1000, skstack);
+    }
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase
+    kprint!(" [P12c] spawned EL0 WAITer(prio7,Notification{{R}}) + SIGNALler(prio6,Notification{{W}},badge={:#x})\n", P12_BADGE_C);
+}
+
 fn p3_user_demo() {
     let mmu = arch_aarch64::Mmu;
     extern "C" {
@@ -3196,8 +3486,45 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
         let num = unsafe { *frame.add(8) };
         let a0 = unsafe { *frame.add(0) };
         let a1 = unsafe { *frame.add(1) };
+        let cur = scheduler::current_tid();
+
+        // DSN-6 (latent, fixed regardless of P12): SYS_EXIT_USER used to
+        // UNCONDITIONALLY longjmp via resume_kernel() into the KRESUME saved by the
+        // last cooperative enter_user. For a SCHEDULED EL0 TCB that context is stale
+        // — the jump lands in a dead kernel stack. Gate the longjmp on the caller NOT
+        // being a scheduled TCB (a scheduled TCB has an armed restart record); route a
+        // scheduled caller through the clean, scheduler-aware exit instead.
         if num == SYS_EXIT_USER {
+            if scheduler::restart_rec(cur).is_some() {
+                return p12_task_exit(cur, frame);
+            }
             unsafe { arch_aarch64::syscall::resume_kernel() }; // cooperative EL0 done -> kernel
+        }
+        // P12 — scheduler-aware clean exit of the current scheduled TCB.
+        if num == SYS_TASK_EXIT {
+            return p12_task_exit(cur, frame);
+        }
+        // P12 — the ONLY blocking syscall, and it blocks ONLY the caller. Same epilogue
+        // as the IRQ path (restore 34 words, eret), so a thread that blocks here is
+        // resumed later by a Signal + the timer. Reuses the proven "return a different
+        // thread's SP from handle_lower_sync" mechanism (see the fault-restart path).
+        if num == SYS_WAIT {
+            match p12_wait(a0 as usize, cur) {
+                notify::WaitOut::Ready(x0) => {
+                    unsafe { *frame.add(0) = x0 };
+                    return frame as usize;
+                }
+                notify::WaitOut::Rc(rc) => {
+                    unsafe { *frame.add(0) = rc };
+                    return frame as usize;
+                }
+                notify::WaitOut::Block => {
+                    P12_WAIT_BLOCKED.store(true, Ordering::Relaxed);
+                    scheduler::block_current(); // enqueued as the waiter; won't be picked
+                    let next = scheduler::on_tick(frame as usize); // save my frame, pick next
+                    return switch_to(next); // MUST enter next's ASID before returning its SP
+                }
+            }
         }
         let ret = syscall_dispatch(num, a0, a1);
         unsafe { *frame.add(0) = ret };
@@ -3220,6 +3547,10 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     // last. A tid with no record (shouldn't happen while scheduled) falls through to
     // the cooperative path.
     let cur = scheduler::current_tid();
+    // P12: a faulting TCB may have been parked as a notification/topic waiter — detach
+    // it on EVERY death path (restart AND kill below) so a later Signal can't write a
+    // badge into its (about to be rebuilt / freed) trap frame.
+    notify::detach_tcb(cur);
     if EL0_SCHED_MODE.load(Ordering::Relaxed) {
         if let Some(rec) = scheduler::restart_rec(cur) {
         let n = scheduler::bump_restart(cur);
@@ -3276,6 +3607,53 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
             // An isolated EL0 driver reports a value it read from its device MMIO.
             DRIVER_REPORT.store(a0 as u32, Ordering::Relaxed);
             0
+        }
+        // --- P12 non-blocking syscalls (WAIT/TASK_EXIT are handled in handle_lower_sync
+        // because they touch the trap frame / scheduler). Every one is gated on the
+        // caller's OWN cap + rights; the badge is read from the cap, never from `a0`. ---
+        SYS_SIGNAL => {
+            // Signal(CPtr{W}) — OR the cap's stamped badge into the object. Never blocks.
+            match resolve_ntfn_cap(a0 as usize, caps::W) {
+                Ok((i, g, badge)) => notify::signal(i, g, badge),
+                Err(rc) => rc,
+            }
+        }
+        SYS_POLL => {
+            // Poll(CPtr{R}) — non-blocking read+clear of the notification word.
+            match resolve_ntfn_cap(a0 as usize, caps::R) {
+                Ok((i, g, _)) => notify::poll(i, g),
+                Err(_) => 0,
+            }
+        }
+        SYS_SUBSCRIBE => {
+            // Subscribe(TopicCPtr{R}) — REQUIRES the R right (ungranted subscribe is
+            // refused by resolve_ntfn_cap). Returns a subscription id, or an RC error.
+            match resolve_ntfn_cap(a0 as usize, caps::R) {
+                Ok((i, g, _)) => match notify::subscribe(i, g, scheduler::current_tid()) {
+                    Ok(sub_id) => sub_id as u64,
+                    Err(rc) => rc,
+                },
+                Err(rc) => rc,
+            }
+        }
+        SYS_PUBLISH => {
+            // Publish(TopicCPtr{W}, kind=a1) — non-blocking, O(subscribers).
+            match resolve_ntfn_cap(a0 as usize, caps::W) {
+                Ok((i, g, badge)) => notify::publish(i, g, badge, _a1 as u32, 0),
+                Err(rc) => rc,
+            }
+        }
+        SYS_RECV => {
+            // Recv(TopicCPtr{R}, sub_id=a1) — pop one bounded event; RC_EMPTY if drained.
+            // The 24 B metadata is delivered via the P11 payload ring; the syscall
+            // returns only the status code (kernel never returns object indices to EL0).
+            match resolve_ntfn_cap(a0 as usize, caps::R) {
+                Ok((i, g, _)) => match notify::recv(i, g, _a1 as usize, scheduler::current_tid()) {
+                    Ok(_meta) => abi::RC_OK,
+                    Err(rc) => rc,
+                },
+                Err(rc) => rc,
+            }
         }
         _ => u64::MAX,
     }
