@@ -56,6 +56,8 @@ pub struct Cap {
 }
 
 const SLOTS: usize = 64;
+/// Number of cap slots per CSpace (public, for callers that iterate a CSpace).
+pub const SLOTS_PER_CSPACE: usize = SLOTS;
 
 /// A capability space: one root CNode of `SLOTS` slots (nested CSpaces later).
 pub struct CapSpace {
@@ -68,6 +70,14 @@ fn align16(n: usize) -> usize {
 
 impl CapSpace {
     /// Create a CSpace whose slot 0 holds a root Untyped over [base, base+size).
+    /// An EMPTY CSpace (no caps). A child TCB starts here and is handed exactly the
+    /// authority its spawner delegates via `mint_into` (CORE-2).
+    pub fn empty() -> Self {
+        CapSpace {
+            slots: [const { None }; SLOTS],
+        }
+    }
+
     pub fn with_root_untyped(base: usize, size: usize) -> Self {
         let mut s = CapSpace {
             slots: [const { None }; SLOTS],
@@ -211,6 +221,37 @@ impl CapSpace {
         let dst = self.free_slot().ok_or("no free slot")?;
         self.slots[dst] = Some(Cap { otype, rights, base, size, watermark: 0, parent: Some(slot) });
         Ok(dst)
+    }
+
+    /// CORE-2 — cross-CSpace DELEGATION: grant a rights-narrowed copy of `src_slot`
+    /// FROM this CSpace INTO another TCB's CSpace `dst`. This is how an EL0 driver /
+    /// P12 subscriber is handed EXACTLY the authority it should hold, and no more —
+    /// requires the Grant right, and rights can only NARROW (`requested & src.rights`),
+    /// never amplify. Returns the slot assigned in `dst`. (The delegated cap carries no
+    /// `parent` link because the parent lives in a DIFFERENT CSpace; a cross-CSpace CDT
+    /// for single-cap revoke needs the generation/CSpace-tagged MDB of CORE-9 — until
+    /// then, teardown is whole-CSpace drop on TCB kill.)
+    pub fn mint_into(
+        &self,
+        src_slot: usize,
+        requested: u8,
+        dst: &mut CapSpace,
+    ) -> Result<usize, &'static str> {
+        let src = self.get(src_slot).ok_or("empty slot")?;
+        if src.rights & G == 0 {
+            return Err("mint requires the Grant right");
+        }
+        let cap = Cap {
+            otype: src.otype,
+            rights: requested & src.rights,
+            base: src.base,
+            size: src.size,
+            watermark: 0,
+            parent: None,
+        };
+        let d = dst.free_slot().ok_or("no free slot in dst")?;
+        dst.slots[d] = Some(cap);
+        Ok(d)
     }
 
     /// The enforcement point on capability invocation: true only if the cap at

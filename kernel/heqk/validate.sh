@@ -22,6 +22,7 @@ PHASES=(
   "P1|[P1] PASS|impl|Implementation+Verification|preemptive scheduler + context switch"
   "P1b|[P1b] PASS|impl|Implementation+Verification|MMU stage-1 + physical frame allocator"
   "P2|[P2] PASS|impl|Implementation+Verification|capabilities: untyped/retype/CDT/revoke"
+  "P2iso|[P2-iso] PASS|impl|Implementation+Verification|CORE-2 per-TCB CSpaces: distinct capability spaces + rights-narrowing cross-CSpace delegation (child holds only the delegated Frame, read-only; Endpoint absent) — the P12 authority primitive"
   "P3|[P3] PASS|impl|Implementation+Verification|EL0 userspace + SVC syscall boundary + fault containment"
   "P4|[P4] PASS|impl|Implementation+Verification|synchronous IPC rendezvous over an Endpoint (block/unblock)"
   "P5|[P5] PASS|impl|Validation|Packet Engine: zero-copy ring + in-place verdict (synthetic pkts)"
