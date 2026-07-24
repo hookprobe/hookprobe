@@ -28,6 +28,11 @@ hboot = ["cm5", "arch-aarch64/hboot"]
 # Kept as an explicit feature (the LE scan adds ~30s to boot):
 #   cargo build -p kernel --features hboot,p10bt --release
 p10bt = []
+# P15 sealed storage WRITE path — OFF by default. Compiles the eMMC write_block +
+# the store-layer one-shot narrowing write window + read-back verify. Even when
+# built, writes are hard-clamped to LBA 2016..2047 by two independent gates.
+#   cargo build -p kernel --features hboot,p15-write --release
+p15-write = ["arch-aarch64/p15-write"]
 
 [[bin]]
 name = "kernel"
