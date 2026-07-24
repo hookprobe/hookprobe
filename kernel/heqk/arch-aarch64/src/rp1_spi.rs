@@ -108,6 +108,11 @@ impl Spi {
     /// responsible for muxing the corresponding CSn pad (via rp1_gpio) if it wants
     /// the CS to appear on the header. Leaving SER=0 keeps all CS lines idle.
     pub fn set_cs(&self, cs: u8, on: bool) {
+        // AUD-RP1-5: SER is a 32-bit slave-enable mask; `cs >= 32` would be a
+        // shift-overflow (panic in debug, UB-ish garbage in release). Reject it.
+        if cs >= 32 {
+            return;
+        }
         let bit = 1u32 << cs;
         let cur = self.rd(SER);
         self.wr(SER, if on { cur | bit } else { cur & !bit });
