@@ -166,6 +166,15 @@ fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
     &buf[..14 + l3_len]
 }
 
+/// P17 — the public verdict entry point. Both IPS gates (netq::rx_publish on
+/// ingress, netq::tx_drain on egress) call THIS so the userspace IP service is a
+/// *client* of the signed rule plane, never a bypass of it. Returns
+/// (dst_port, verdict) where verdict is PASS or DROP. Malformed/truncated frames
+/// fail closed to DROP. Same code path as the inline datapath verdict.
+pub fn verdict(frame: &[u8]) -> (u16, u16) {
+    classify(frame)
+}
+
 fn classify(frame: &[u8]) -> (u16, u16) {
     // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
     let mut nbuf = [0u8; FRAME_SZ];
