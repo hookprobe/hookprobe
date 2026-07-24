@@ -140,4 +140,39 @@ The mechanism from `ZEROCOPY_IPC_RING.md` is correct; the **policy** is now edge
 
 ---
 
+## Concurrency invariant (SINGLE-CORE, NON-REENTRANT) — a global safety contract
+
+HEQK currently runs on **one core**, and several safety arguments depend on it. This
+is a **load-bearing invariant**, stated here so it is explicit and cannot be lifted
+by accident (remediation X2 / gap XC-1):
+
+> **The kernel executes on a single core, and its state-mutating paths are
+> non-reentrant.** Every `static mut` global, and every SPSC ring, assumes exactly
+> one writer at a time.
+
+What relies on it (audit ALL of these before enabling SMP or reentrancy):
+
+- **The telemetry ring** (`events.rs`): `push_hit` is a *single-producer* SPSC ring —
+  a plain `HEAD.load` then `store`, not a `fetch_add` reservation. Correct with one
+  producer (the verdict engine in the TCB); a second producer would race the index.
+  `drain` is the single consumer (the EL0 exporter).
+- **The packet ring** (`packet.rs`): same SPSC discipline (producer HEAD, consumer TAIL).
+- **The rate limiter** (`ratelimit.rs`): the window reset is a `load` of `WIN_START`
+  then separate `store`s of `WIN_START`/`COUNT`/`KEY` — a benign read-modify-write on
+  one core, an MPSC race on many.
+- **The scheduler** (`scheduler.rs`): `static mut` SP/PRIO/ALIVE/BLOCKED/TTBR0 tables,
+  accessed only from IRQ context — "single core, non-reentrant, so no locking".
+- **Driver diagnostic globals** (`cyw43.rs`, `gem.rs`, `bt.rs`, …): the many
+  `static mut` diag latches are sound only because bring-up is single-threaded.
+
+**To lift this invariant** (SMP or reentrant IRQ paths) you must, in one pass:
+convert every SPSC producer index to a proper reservation (`fetch_add` + a separate
+commit index) or add per-ring locks; make the rate-limiter reset a single CAS; and
+put the scheduler tables behind a lock or per-CPU state. Until then, **do not add a
+second writer to any of the above** — including a reentrant call to `push_hit` from
+an IRQ handler. New SPSC rings must reuse the frozen discipline in
+`ZEROCOPY_IPC_RING.md` and cite this invariant.
+
+---
+
 *This is the clear architecture. `ZEROCOPY_IPC_RING.md` (mechanism), `CAPABILITY_MODEL.md` (authority), and `BPF_THREAT_PLANE.md` (detection) are its subsystems; `buildPlan.md` now defers its phase plan to §8 here. The differentiator is "the OS is the sensor," not throughput — that is what makes a custom HookProbe microkernel worth building.*
