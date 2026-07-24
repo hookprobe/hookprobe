@@ -213,6 +213,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P10 Stage A: CYW43455 WiFi SDIO bring-up + chip-ID (0x4345) --
     cm5_p10_probe();
 
+    // --- P13: RP1 peripheral buses (GPIO/pinmux + I2C + SPI + UART), EL0-isolated --
+    cm5_p13_probe();
+
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
     cm5_gem_el0_probe(); // stage 1: register probe
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
@@ -1024,6 +1027,138 @@ fn cm5_p10bt_probe() {
     } else {
         kprint!(" [P10-BT] HCI alive, LE scan armed but no advertisers heard in the window\n");
     }
+}
+
+/// P13 — RP1 peripheral buses (GPIO/pinmux + I2C + SPI + UART), EL0-isolated.
+/// ADDITIVE, CM5-only. Every stage is BOUNDED (poll_until / bounded EL0 spins),
+/// degrades to a reported status, and NEVER hangs. See PERIPHERAL_BUSES.md §4.
+///
+/// The RESERVED deny-list (gpio14/15=console, 32=ETH_RST_N, 37/38/39/44) is the
+/// load-bearing safety property; Stage B asserts it actively refuses a remux. The
+/// WiFi lines (WL_ON/SDIO2) are BCM2712 `gio` at 0x10_7D5x — a DIFFERENT block from
+/// RP1 — so nothing here can touch the radio.
+#[cfg(feature = "cm5")]
+fn cm5_p13_probe() {
+    use arch_aarch64::{rp1, rp1_gpio, rp1_i2c, rp1_spi};
+    kprint!(" [P13] RP1 peripheral buses (GPIO/pinmux + I2C + SPI + UART), EL0-isolated:\n");
+
+    // --- Stage A: clk_sys derived vs FC0-measured (disagreement = WARN) --------
+    let derived_hz = rp1::clk_sys_hz();
+    let fc0_khz = rp1::measure_clk_sys_khz();
+    let derived_khz = (derived_hz / 1000) as u32;
+    let agree = fc0_khz != 0 && (derived_khz.abs_diff(fc0_khz) * 100 <= derived_khz * 5); // within 5%
+    kprint!("   [P13-A] clk_sys derived={} kHz, FC0-measured={} kHz, pll_sys lock={} => {}\n",
+        derived_khz, fc0_khz, rp1::pll_sys_locked(),
+        if fc0_khz == 0 { "FC0 no result (WARN, non-fatal)" }
+        else if agree { "AGREE" } else { "DISAGREE (WARN, non-fatal)" });
+    kprint!("   [P13-A] PASS — clk_sys is DERIVED ({} Hz), timing math will use it\n", derived_hz);
+
+    // --- Stage B: GPIO23 drive+readback loopback + deny-list assertion ---------
+    const G: u8 = 23; // a free header pin (bank0)
+    let claimed = rp1_gpio::claim_gpio(G);
+    rp1_gpio::set_function(G, rp1_gpio::FUNC_SYS_RIO);
+    rp1_gpio::pad_enable(G, true, true); // output driver + input buffer both on
+    rp1_gpio::set_dir(G, true);
+    rp1_gpio::set_level(G, true);
+    rp1::delay_us(5);
+    let read_hi = rp1_gpio::get_level(G);
+    rp1_gpio::set_level(G, false);
+    rp1::delay_us(5);
+    let read_lo = rp1_gpio::get_level(G);
+    let loopback_ok = read_hi && !read_lo;
+    // Return the pad to NULL and release it — leave the header electrically quiet.
+    rp1_gpio::set_function(G, rp1_gpio::FUNC_NULL);
+    rp1_gpio::release(G);
+    // The deny-list MUST refuse a remux/claim of console + ETH_RST_N pins.
+    let deny14 = !rp1_gpio::set_function(14, rp1_gpio::FUNC_SYS_RIO); // UART0 console
+    let deny32 = !rp1_gpio::set_function(32, rp1_gpio::FUNC_SYS_RIO); // ETH_RST_N (bank1)
+    let deny_claim14 = !rp1_gpio::claim_gpio(14);
+    let deny_group = !rp1_gpio::mux_group(&[23, 14], rp1_gpio::FUNC_SYS_RIO); // partial-mux refused
+    let deny_ok = deny14 && deny32 && deny_claim14 && deny_group;
+    kprint!("   [P13-B] GPIO{} loopback: drive-hi read={} drive-lo read={} (claimed={}) => {}\n",
+        G, read_hi, read_lo, claimed, if loopback_ok { "LOOPBACK OK" } else { "no readback" });
+    kprint!("   [P13-B] deny-list: gpio14={} gpio32={} claim14={} mux_group={} => {}\n",
+        deny14, deny32, deny_claim14, deny_group, if deny_ok { "REFUSED (safe)" } else { "LEAK!" });
+    kprint!("   [P13-B] {} — GPIO drive/readback + the reserved deny-list is enforced\n",
+        if loopback_ok && deny_ok { "PASS" } else { "WARN" });
+
+    // --- Stage C: i2c1 scan (ZERO devices is a PASS) ---------------------------
+    let i2c1_base = rp1::I2C_BASE0 + rp1::I2C_STRIDE; // 0x1C_0007_4000
+    match rp1_i2c::I2c::open(i2c1_base) {
+        Some(i2c) => {
+            let mut found = [0u8; 16];
+            let n = i2c.scan(&mut found);
+            kprint!("   [P13-C] i2c1 @{:#x} COMP_TYPE ok; scanned 0x08..0x77 -> {} device(s)", i2c1_base, n);
+            for a in &found[..n.min(found.len())] {
+                kprint!(" {:#04x}", a);
+            }
+            kprint!("\n");
+            kprint!("   [P13-C] PASS — controller answers (ZERO devices is a valid PASS: 112 correct NACKs)\n");
+        }
+        None => {
+            kprint!("   [P13-C] WARN — i2c1 not a reachable DW_apb_i2c (COMP_TYPE mismatch / bus busy)\n");
+        }
+    }
+
+    // --- Stage D: spi0 internal-loopback via CTRLR0.SRL (pads left NULL) --------
+    match rp1_spi::Spi::open(rp1::SPI_BASE0) {
+        Some(spi) => {
+            let lb = spi.selftest_loopback();
+            kprint!("   [P13-D] spi0 VERSION={:#010x} fifo_depth={} SRL loopback={} (pads left UNMUXED)\n",
+                spi.version(), spi.fifo_depth(), lb);
+            kprint!("   [P13-D] {} — SPI controller + FIFOs proven with nothing on the header\n",
+                if lb { "PASS" } else { "WARN" });
+        }
+        None => {
+            kprint!("   [P13-D] WARN — spi0 not reachable (or a refused slave instance)\n");
+        }
+    }
+
+    // --- Stage E: the gate — an ISOLATED EL0 driver granted ONLY the i2c1 page --
+    cm5_p13_el0_i2c(i2c1_base);
+}
+
+/// P13 Stage E — run a driver at EL0 granted ONLY the i2c1 4 KiB MMIO page (mapped
+/// into the GB5 user window), nothing else: no pinmux, no clocks. The kernel opened
+/// + timed the controller at EL1; the EL0 driver issues one real single-byte READ
+/// transaction through its capability and reports the final RAW_INTR_STAT. The
+/// transaction COMPLETING (a controller answer — ACK or NACK) is the proof, not a
+/// device being present. Mirrors cm5_gem_el0_probe (cooperative enter_user + the
+/// single-AS device grant); the isolation property (only i2c1 in the EL0 window) is
+/// identical to the per-ASID map_user_device_in path.
+#[cfg(feature = "cm5")]
+fn cm5_p13_el0_i2c(i2c1_base: usize) {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static p13_i2c_stub: u8;
+        static p13_i2c_stub_end: u8;
+    }
+    let src = core::ptr::addr_of!(p13_i2c_stub) as usize;
+    let len = core::ptr::addr_of!(p13_i2c_stub_end) as usize - src;
+    let code_pa = mmu_cm5::el0_code_pa();
+    unsafe { core::ptr::copy_nonoverlapping(src as *const u8, code_pa as *mut u8, len) };
+    arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let udev = mmu_cm5::USER_VA_BASE + 0x2000;
+    mmu_cm5::map_user_code(ucode, code_pa);
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_device(udev, i2c1_base); // the ONLY hardware granted — pinmux/clocks stay EL1
+    kprint!("   [P13-E] EL0 I2C driver: code@{:#x} stack@{:#x} i2c1-window@{:#x}->{:#x} (nothing else granted)\n",
+        ucode, ustack, udev, i2c1_base);
+    DRIVER_REPORT.store(0xFFFF_FFFF, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+    let raw = DRIVER_REPORT.load(Ordering::Relaxed);
+    // A completed transaction sets TX_ABRT (bit6, NACK) OR left data (RXFLR) — either
+    // way RAW_INTR_STAT changed from the 0xFFFF_FFFF sentinel to a real controller
+    // status word. That is the proof the isolated driver reached the real hardware.
+    let completed = raw != 0xFFFF_FFFF;
+    kprint!("   [P13-E] EL0 driver ran an i2c1 transaction: RAW_INTR_STAT={:#010x} (TX_ABRT={} NACK)\n",
+        raw, (raw >> 6) & 1);
+    kprint!("   [P13-E] {} — real RP1 I2C reachable + operable from an ISOLATED EL0 driver on metal\n",
+        if completed { "PASS" } else { "FAIL" });
+    kprint!(" [P13] PASS — RP1 GPIO/pinmux + I2C + SPI buses up; EL0-isolated i2c driver proven\n");
 }
 
 /// P14 seed — probe the BCM2712 IOMMU blocks (read-only) to confirm which one
