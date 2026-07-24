@@ -18,6 +18,17 @@ pub mod iommu;
 pub mod mmu;
 #[cfg(feature = "cm5")]
 pub mod mmu_cm5;
+// P13 — RP1 peripheral buses (GPIO/pinmux, I2C, SPI, UART). CM5-only, additive.
+#[cfg(feature = "cm5")]
+pub mod rp1;
+#[cfg(feature = "cm5")]
+pub mod rp1_gpio;
+#[cfg(feature = "cm5")]
+pub mod rp1_i2c;
+#[cfg(feature = "cm5")]
+pub mod rp1_spi;
+#[cfg(feature = "cm5")]
+pub mod rp1_uartp;
 #[cfg(feature = "cm5")]
 pub mod rtl8111;
 #[cfg(feature = "cm5")]

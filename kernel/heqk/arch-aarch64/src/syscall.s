@@ -245,6 +245,50 @@ gem_ids_stub:
 9:  b    9b
 gem_ids_stub_end:
 
+// -------- P13 Stage E: isolated EL0 I2C driver (a real DW_apb_i2c transaction) --
+// Runs at EL0 granted ONLY the i2c1 4 KiB MMIO page (mapped at the GB5 user window
+// 0x1_4000_2000) — no pinmux, no clocks, nothing else. The kernel already opened +
+// timed the controller (EL1). This driver issues ONE single-byte READ probe of
+// address 0x08 through its capability: set IC_TAR (offset 0x04), enable (IC_ENABLE
+// 0x6c = 1), push IC_DATA_CMD (0x10 = 0x300 READ|STOP), then poll IC_RAW_INTR_STAT
+// (0x34) for TX_ABRT (bit6 = NACK) or IC_RXFLR (0x78 != 0 = data). It reports the
+// final RAW_INTR_STAT — the transaction COMPLETING (a controller answer, ACK or
+// NACK) is the proof, not a device being present. All loops are bounded.
+.global p13_i2c_stub
+.global p13_i2c_stub_end
+p13_i2c_stub:
+    movz x1, #0x4000, lsl #16     // x1 = 0x0000_0000_4000_0000
+    movk x1, #0x0001, lsl #32     // x1 = 0x0000_0001_4000_0000 (GB5 base)
+    add  x1, x1, #0x2000          // UDEV_VA = 0x1_4000_2000 (granted i2c1 page)
+    // Program target address 0x08 while disabled (kernel left it enabled=0).
+    mov  w2, #0
+    str  w2, [x1, #0x6c]          // IC_ENABLE = 0 (ensure disabled)
+    mov  w2, #0x08
+    str  w2, [x1, #0x04]          // IC_TAR = 0x08
+    mov  w2, #1
+    str  w2, [x1, #0x6c]          // IC_ENABLE = 1
+    ldr  w2, [x1, #0x54]          // read IC_CLR_TX_ABRT (clear stale abort)
+    movz w2, #0x0300              // DATA_CMD = READ | STOP
+    str  w2, [x1, #0x10]          // IC_DATA_CMD (issue the 1-byte READ)
+    dsb  sy
+    mov  x6, xzr                  // bounded poll
+1:  ldr  w3, [x1, #0x34]          // IC_RAW_INTR_STAT
+    tbnz w3, #6, 2f               // TX_ABRT (bit6) -> NACK, transaction done
+    ldr  w4, [x1, #0x78]          // IC_RXFLR
+    cbnz w4, 2f                   // data arrived -> ACK, transaction done
+    add  x6, x6, #1
+    movz x7, #0x0040, lsl #16     // ~0x40_0000 bound
+    cmp  x6, x7
+    b.lo 1b
+2:  ldr  w0, [x1, #0x34]          // report final RAW_INTR_STAT (proof of completion)
+    ldr  w5, [x1, #0x54]          // clear the abort latch
+    mov  x8, #7                   // SYS_DRIVER_REPORT
+    svc  #0
+    mov  x8, #6                   // SYS_EXIT_USER
+    svc  #0
+9:  b    9b
+p13_i2c_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME
