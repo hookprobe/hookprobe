@@ -287,6 +287,18 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         core::ptr::copy_nonoverlapping(body, load_pa as *mut u8, size as usize);
     }
 
+    // SEC-4/V7a: close the measure->launch TOCTOU. The hash (`computed`, line 186)
+    // and the signature were taken over the payload AT ITS SOURCE; we then copied it
+    // to `load_pa` and are about to ENTER EL1 there. Verification and execution are
+    // of DIFFERENT memory — any corruption or transient write to the destination
+    // between hash and jump would execute unverified code that still reports the good
+    // hash. Re-hash the payload AT ITS DESTINATION and refuse to launch on a mismatch.
+    let recheck = sha256::digest(unsafe { core::slice::from_raw_parts(load_pa as *const u8, size as usize) });
+    if recheck != computed {
+        puts(" secure boot: FAIL — payload hash mismatch after relocation (SEC-4), refusing to boot\n");
+        unsafe { park() }
+    }
+
     // A/B TRIAL-BOOT WATCHDOG (reliability keystone): arm the PM watchdog before
     // handing off to EL1. A healthy kernel confirms via `hvc #1` (the EL2 gate
     // disarms it) once its detection plane is up; a kernel that hangs or panics
