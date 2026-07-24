@@ -124,6 +124,13 @@ impl CapSpace {
             Some(ut) => ut.watermark += need,
             None => return Err("untyped vanished mid-retype"),
         }
+        // CORE-3/XC-7: ZERO the reclaimed Untyped memory before it backs the new
+        // object. After a `revoke` resets the watermark, this same range may have
+        // previously backed another tenant's object (e.g. a Frame holding secrets);
+        // without scrubbing, retype would leak those stale bytes into the new cap.
+        // seL4's reset-on-reuse. `base` is a kernel-accessible identity-mapped address
+        // (Untyped is backed by real reserved physical memory).
+        unsafe { core::ptr::write_bytes(base as *mut u8, 0, need) };
         self.slots[dst] = Some(Cap {
             otype,
             rights: R | W | G,
