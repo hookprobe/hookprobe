@@ -2367,15 +2367,28 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         last_doff = doffset;
         last_cksum_ok = cksum_ok;
         // read the remainder if the frame is longer than the first 64 bytes.
+        // DRV-4 (mirrors the M-3 fix in read_sdpcm_frame): cmd53_read silently caps a
+        // byte-mode transfer at 512 B and still returns true, so for hw_len >
+        // FIRSTREAD+512 the tail of rx is NEVER written by this frame. rx is reused
+        // across the frame loop, so the BCDC header/reply below could otherwise be
+        // assembled from a PREVIOUS frame's bytes (stale firmware-control data crossing
+        // the trust boundary). Zero the unfillable region and clamp every downstream
+        // bound to `valid` = bytes actually transferred, not rx.len().
+        let mut valid = BRCMF_FIRSTREAD;
         if (hw_len as usize) > BRCMF_FIRSTREAD {
             let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
             let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
+            let got = (end - BRCMF_FIRSTREAD).min(512); // what cmd53_read actually moves
+            for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
+                *b = 0;
+            }
             let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
+            valid = BRCMF_FIRSTREAD + got;
         }
         // A control (channel 0) frame with a BCDC header is our reply candidate.
         if channel == SDPCM_CONTROL_CHANNEL
             && doffset >= SDPCM_HDRLEN
-            && doffset + BCDC_HDRLEN <= rx.len()
+            && doffset + BCDC_HDRLEN <= valid
             && (hw_len as usize) >= doffset + BCDC_HDRLEN
         {
             let bh = doffset;
@@ -2385,8 +2398,8 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
                 reqid_match = true;
                 got_ctrl = true;
                 let off = doffset + BCDC_HDRLEN;
-                if !reply.is_empty() && off < rx.len() {
-                    let m = reply.len().min(rx.len() - off);
+                if !reply.is_empty() && off < valid {
+                    let m = reply.len().min(valid - off);
                     reply[..m].copy_from_slice(&rx[off..off + m]);
                 }
                 break 'frames;

@@ -511,13 +511,13 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     let w3 = unsafe { read_volatile(dptr.add(3)) };
     let desc_len = (ctrl & RXD_FRMLEN) as usize;
     let bufpa = unsafe { core::ptr::addr_of!(RXRING.buf[i]) as usize };
-    // Copy exactly the received frame (bounded by `out` and the buffer). Fall
-    // back to the whole buffer only if the length is unreported (ctrl==0).
-    let copy_n = if desc_len > 0 {
-        desc_len.min(out.len()).min(RXBUF)
-    } else {
-        out.len().min(RXBUF)
-    };
+    // Copy exactly the GEM-reported frame length. L-13/XC-16: when the descriptor
+    // reports NO length (word1==0), do NOT fabricate a full-buffer frame — that fed
+    // the IDS ~1600 bytes of mostly-stale buffer as if it were a real frame,
+    // manufacturing a false detection. Copy nothing and report len=0; the slot is
+    // still recycled below, and the caller treats len==0 as "no valid frame". The
+    // authoritative IDS path uses rx_desc_status() (M-7), which also rejects len==0.
+    let copy_n = desc_len.min(out.len()).min(RXBUF);
     dc_ivac(bufpa, copy_n); // buffers stay cacheable — invalidate before reading DMA'd data
     for k in 0..copy_n {
         out[k] = unsafe { read_volatile((bufpa + k) as *const u8) };

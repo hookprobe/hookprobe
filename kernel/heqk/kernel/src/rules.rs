@@ -135,11 +135,18 @@ fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8]) -> u16 {
         } else {
             bpf::run(rules[i].prog, pkt.as_ptr(), pkt.len())
         };
-        if v != bpf::PASS {
+        if v == bpf::DROP {
             telemetry::emit_rule_hit(rules[i].severity);
             // SOAR: async, non-blocking event export ("the OS is the sensor" can
             // report). The header only — never the payload.
             crate::events::push_hit(rules[i].id, rules[i].severity as u8, crate::packet::DROP as u8, 0);
+            return crate::packet::DROP;
+        } else if v != bpf::PASS {
+            // DET-9: v == INVALID (VM fault: OOB / step-limit / unknown op on a
+            // malformed frame). Fail CLOSED (drop the packet) but do NOT attribute it
+            // to this signed rule firing — that inflated QSecBit and mislabelled a
+            // parse fault as a detection. Emit a distinct Fault event instead.
+            telemetry::emit(telemetry::Event::Fault);
             return crate::packet::DROP;
         }
     }
