@@ -27,7 +27,7 @@ hboot = ["cm5", "arch-aarch64/hboot"]
 # sequencing HEQK does not yet do. Until that is understood, BT must not be able
 # to poison later phases.
 #   re-enable with: cargo build -p kernel --features hboot,p10bt --release
-p10bt = []
+p10bt = []  # PROVEN on metal 2026-07-24: reset+baud ok, 17 BLE devs; kept opt-in-buildable
 
 [[bin]]
 name = "kernel"
