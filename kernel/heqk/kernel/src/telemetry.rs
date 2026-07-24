@@ -45,6 +45,17 @@ pub fn emit(e: Event) {
     });
 }
 
+/// DET-10: record an event for the COUNT/telemetry WITHOUT adding to the QSecBit
+/// score. Used for a rule-driven PacketDrop, which is already scored (with its rule's
+/// severity) by `emit_rule_hit` — emitting the generic PacketDrop weight too would
+/// double-count it. Also the right call for a malformed-frame drop: fail-closed
+/// hygiene that should be counted but must not inflate the threat score on noisy
+/// links. (The lifetime SCORE stays monotonic; a time-decayed "current level" view is
+/// a documented follow-up, not implemented here to avoid perturbing QSecBit semantics.)
+pub fn emit_count(e: Event) {
+    COUNTS[e as usize].fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn count(e: Event) -> u32 {
     COUNTS[e as usize].load(Ordering::Relaxed)
 }
