@@ -192,6 +192,50 @@ pub fn run_flow(frame: &[u8], src: u32) -> u16 {
     run_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src)
 }
 
+/// DET-6 — a view of one VERIFIED + JIT-compiled live rule, for the boot-time
+/// JIT<->interpreter differential self-test. `jit` is the native entry VA already
+/// published by `init()` (reused, NOT recompiled — no extra exec pages).
+#[cfg(not(feature = "cm5"))]
+#[derive(Clone, Copy)]
+pub struct JittedRule {
+    pub name: &'static str,
+    pub prog: &'static [u64],
+    pub min_len: u64,
+    pub jit: usize,
+}
+
+/// DET-6 — enumerate EVERY verified + JIT-compiled rule across the L4/L2/TCP
+/// corpora into `out`, returning the count. The FLOW corpus is deliberately
+/// excluded: its rules use the `CALL` helper (opcode 0x85) which the JIT rejects
+/// (`compile` -> None => `jit == 0`), so they run interpreter-only and there is no
+/// native codegen to cross-check. The `jit != 0` guard below also excludes any
+/// such interpreter-only rule regardless of tier. MUST be called after `init()`.
+#[cfg(not(feature = "cm5"))]
+pub fn jitted_rules(out: &mut [JittedRule]) -> usize {
+    let mut k = 0usize;
+    let sets: [(&[Rule], *mut RState, &AtomicUsize); 3] = [
+        (RULES, addr_of_mut!(RSTATE).cast::<RState>(), &NRULES),
+        (L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), &NRULES_L2),
+        (TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), &NRULES_TCP),
+    ];
+    for (rules, state, n) in sets {
+        let cnt = n.load(Ordering::Relaxed).min(rules.len());
+        for i in 0..cnt {
+            let st = rstate(state, i);
+            if st.verified && st.jit != 0 && k < out.len() {
+                out[k] = JittedRule {
+                    name: rules[i].name,
+                    prog: rules[i].prog,
+                    min_len: st.min_len,
+                    jit: st.jit,
+                };
+                k += 1;
+            }
+        }
+    }
+    k
+}
+
 /// How many rules are active (verified) across all tiers — for the boot report.
 pub fn active() -> usize {
     let a = (0..NRULES.load(Ordering::Relaxed))
