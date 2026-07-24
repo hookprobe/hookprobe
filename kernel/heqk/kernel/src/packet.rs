@@ -110,7 +110,11 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
     let frame = unsafe { core::slice::from_raw_parts(p, d.len as usize) };
     let (port, verdict) = classify(frame);
     if verdict == DROP {
-        crate::telemetry::emit(crate::telemetry::Event::PacketDrop);
+        // DET-10: COUNT the drop but do not add to the score here. A rule-driven drop
+        // was already scored with its rule's SEVERITY inside classify (emit_rule_hit);
+        // adding the generic PacketDrop weight too would double-count it. A malformed
+        // drop is fail-closed hygiene that shouldn't inflate the threat score.
+        crate::telemetry::emit_count(crate::telemetry::Event::PacketDrop);
     }
     d.verdict = verdict;
     unsafe { dp.write(d) };
