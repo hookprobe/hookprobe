@@ -8,7 +8,7 @@
 
 use core::ptr::{addr_of, addr_of_mut};
 
-const MAX_THREADS: usize = 8;
+pub const MAX_THREADS: usize = 8;
 
 static mut SP: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut PRIO: [u8; MAX_THREADS] = [0; MAX_THREADS];
