@@ -20,6 +20,7 @@ mod heap;
 mod ipc;
 mod napi;
 mod net;
+mod netq;
 mod packet;
 mod ratelimit;
 mod rules;
@@ -1857,6 +1858,11 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
+    // --- P17: overlay convergence foundation — net-class queue + dual-direction
+    // IPS gating + EL0 monotonic counter (the smoltcp EL0 service itself is a
+    // documented follow-up). QEMU-validatable core only. ---
+    p17_overlay_qemu();
+
     // --- P15: sealed storage — seal/unseal + guard over a RamDisk (arch-agnostic) ---
     p15_seal_selftest();
 
@@ -1953,6 +1959,145 @@ fn attest_challenge_demo() {
         s1.as_ref()[0], s1.as_ref()[1], s2.as_ref()[0], s2.as_ref()[1]);
     kprint!(" [P7d-B2] {} — verifier-supplied per-request freshness (distinct nonces -> distinct valid sigs; cross-replay rejected)\n",
         if pass { "PASS" } else { "FAIL" });
+}
+
+/// P17 — overlay-convergence FOUNDATION (QEMU-validatable core). Proves the
+/// net-class transport (netq.rs) + the dual-direction IPS gate WITHOUT the actual
+/// EL0 smoltcp stack (a documented follow-up: external crate + multi-page EL0
+/// loader + linker script). An IN-KERNEL software stand-in plays the untrusted EL0
+/// service, using the raw slot protocol exactly as EL0 would.
+///
+/// The property proven (OVERLAY_CONVERGENCE §A3.3): the signed rule plane
+/// (`packet::verdict`) is authoritative on BOTH sides of the queue —
+///  * INGRESS: a threat frame is DROPPED by `rx_publish` and never enters rxq, so
+///    the service can't even observe it.
+///  * EGRESS: a threat frame the (compromised) service injects into txq is DROPPED
+///    by `tx_drain` and NEVER reaches the wire sink.
+#[cfg(not(feature = "cm5"))]
+fn p17_overlay_qemu() {
+    use core::sync::atomic::Ordering;
+    use netq::{NetQueue, NETQ_FRAME_SZ, NETQ_SLOTS, SLOT_FREE, SLOT_FULL};
+
+    fn verd(v: u16) -> &'static str {
+        if v == packet::DROP { "DROP" } else { "PASS" }
+    }
+    // Minimal Ethernet/IPv4/UDP frame with the given dst port.
+    fn build_udp(buf: &mut [u8], dst_port: u16) -> usize {
+        const N: usize = 14 + 20 + 8;
+        for b in buf.iter_mut().take(N) {
+            *b = 0;
+        }
+        buf[12] = 0x08; // ethertype IPv4
+        buf[14] = 0x45; // IPv4, IHL=5
+        buf[17] = 28; // IP total length = 20 + 8
+        buf[23] = 17; // proto = UDP
+        buf[34] = 0x04;
+        buf[35] = 0xd2; // src port 1234
+        buf[36] = (dst_port >> 8) as u8;
+        buf[37] = (dst_port & 0xff) as u8;
+        N
+    }
+
+    kprint!("\n [P17] overlay convergence — net-class queue + dual-direction IPS gate\n");
+
+    // Grant EL0 the monotonic counter the (follow-up) smoltcp `Instant` needs.
+    arch_aarch64::timer::enable_el0_counter();
+    kprint!(" [P17] CNTKCTL_EL1.EL0PCTEN=1 — EL0 granted the monotonic counter only (no compare regs)\n");
+
+    // Two page-aligned net-class queues: rxq (kernel->svc), txq (svc->kernel).
+    static mut RXQ: NetQueue = NetQueue::new();
+    static mut TXQ: NetQueue = NetQueue::new();
+    let rxq = unsafe { &mut *core::ptr::addr_of_mut!(RXQ) };
+    let txq = unsafe { &mut *core::ptr::addr_of_mut!(TXQ) };
+    rxq.init();
+    txq.init();
+
+    // --- INGRESS gate: publish a benign :53 and a threat :4444. ---
+    let mut benign = [0u8; 64];
+    let mut threat = [0u8; 64];
+    let bn = build_udp(&mut benign, 53);
+    let tn = build_udp(&mut threat, 4444);
+    let v_benign = netq::rx_publish(rxq, &benign[..bn]);
+    let v_threat = netq::rx_publish(rxq, &threat[..tn]);
+    let mut rx_full = 0;
+    for i in 0..NETQ_SLOTS {
+        if rxq.slot[i].state.load(Ordering::Acquire) == SLOT_FULL {
+            rx_full += 1;
+        }
+    }
+    kprint!(" [P17] ingress: benign:53 -> {}, threat:4444 -> {}; frames in rxq = {} (threat never entered the ring)\n",
+        verd(v_benign), verd(v_threat), rx_full);
+    let ingress_ok = v_benign == packet::PASS && v_threat == packet::DROP && rx_full == 1;
+
+    // --- IN-KERNEL STAND-IN "service": drains rxq (the PASSed frames) and echoes
+    // them into txq using the RAW slot protocol, exactly as an untrusted EL0
+    // service would (no kernel validation on this path). ---
+    let mut echoed = 0;
+    for i in 0..NETQ_SLOTS {
+        let s = &rxq.slot[i];
+        if s.state.load(Ordering::Acquire) != SLOT_FULL {
+            continue;
+        }
+        let n = (unsafe { core::ptr::read_volatile(core::ptr::addr_of!(s.len)) } as usize)
+            .min(NETQ_FRAME_SZ);
+        let mut tmp = [0u8; NETQ_FRAME_SZ];
+        tmp[..n].copy_from_slice(&rxq.frame[i][..n]);
+        s.state.store(SLOT_FREE, Ordering::Release); // service consumed the rxq slot
+        for j in 0..NETQ_SLOTS {
+            let t = &txq.slot[j];
+            if t.state.load(Ordering::Acquire) == SLOT_FREE {
+                txq.frame[j][..n].copy_from_slice(&tmp[..n]);
+                unsafe {
+                    core::ptr::write_volatile(core::ptr::addr_of!(t.len) as *mut u32, n as u32)
+                };
+                t.state.store(SLOT_FULL, Ordering::Release);
+                echoed += 1;
+                break;
+            }
+        }
+    }
+
+    // COMPROMISED-service case: the stand-in ALSO injects a threat :4444 frame
+    // straight into txq via the raw protocol — the egress gate must still block it.
+    let mut svc_threat = [0u8; 64];
+    let sn = build_udp(&mut svc_threat, 4444);
+    for j in 0..NETQ_SLOTS {
+        let t = &txq.slot[j];
+        if t.state.load(Ordering::Acquire) == SLOT_FREE {
+            txq.frame[j][..sn].copy_from_slice(&svc_threat[..sn]);
+            unsafe { core::ptr::write_volatile(core::ptr::addr_of!(t.len) as *mut u32, sn as u32) };
+            t.state.store(SLOT_FULL, Ordering::Release);
+            break;
+        }
+    }
+
+    // --- EGRESS gate: drain txq to the "wire" sink. Benign echo -> FORWARDED;
+    // injected threat -> DROPPED by the kernel rule plane, never on the wire. ---
+    let mut wire_ports = [0u16; NETQ_SLOTS];
+    let mut wire_n = 0usize;
+    let (fwd, blk) = netq::tx_drain(txq, |frame| {
+        if frame.len() >= 38 {
+            wire_ports[wire_n] = ((frame[36] as u16) << 8) | frame[37] as u16;
+            wire_n += 1;
+        }
+    });
+    let benign_on_wire = wire_ports.iter().take(wire_n).any(|p| *p == 53);
+    let threat_on_wire = wire_ports.iter().take(wire_n).any(|p| *p == 4444);
+    kprint!(" [P17] egress: service echoed {} frame(s) + injected 1 threat:4444; drain forwarded {} blocked {}\n",
+        echoed, fwd, blk);
+    kprint!(" [P17] wire: benign:53 forwarded={} | threat:4444 on the wire={} (MUST be false)\n",
+        benign_on_wire, threat_on_wire);
+    let egress_ok = benign_on_wire && !threat_on_wire && fwd == 1 && blk == 1;
+
+    kprint!(" [P17] NOTE: the smoltcp IP stack running at EL0 is a documented FOLLOW-UP\n");
+    kprint!("       (external smoltcp crate + multi-page EL0 loader + linker script); this\n");
+    kprint!("       pass proves the transport + the dual-direction IPS gating in-kernel.\n");
+
+    if ingress_ok && egress_ok {
+        kprint!(" [P17] PASS — net-class queue + IPS authoritative on ingress AND egress (a threat frame the service tried to send was DROPPED by the kernel rule plane)\n");
+    } else {
+        kprint!(" [P17] FAIL — ingress_ok={} egress_ok={}\n", ingress_ok, egress_ok);
+    }
 }
 
 /// P8 — prove the PREVAIL-style verifier accepts the safe signed rule (computing
