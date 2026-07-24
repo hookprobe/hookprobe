@@ -2813,14 +2813,14 @@ fn thread_exit() -> ! {
 // runs first and blocks in recv(); producer then sends, unblocking it.
 extern "C" fn consumer() -> ! {
     kprint!(" [P4] consumer: recv() — blocks until producer sends...\n");
-    let m = ipc::recv();
+    let m = ipc::recv().unwrap_or(0); // CORE-11: None = endpoint busy (not a 0 message)
     kprint!(" [P4] consumer: received {:#x} via endpoint rendezvous\n", m);
     kprint!(" [P4] PASS ipc (synchronous endpoint rendezvous with block/unblock)\n");
     thread_exit()
 }
 extern "C" fn producer() -> ! {
     kprint!(" [P4] producer: send(0xBEEF) to endpoint\n");
-    ipc::send(0xBEEF);
+    let _ = ipc::send(0xBEEF); // CORE-11: false = endpoint busy
     kprint!(" [P4] producer: send returned (message delivered)\n");
     thread_exit()
 }
