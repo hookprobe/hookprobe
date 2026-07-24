@@ -2550,7 +2550,11 @@ fn p15_seal_selftest() {
         svn_floor: 7,
         pcr,
     };
-    let secret = b"HEQK-P15-sealed-secret-material-0x01";
+    // A 28-byte secret (<=32): its ciphertext is fully absorbed into HMAC's partial
+    // block, exercising the Hasher::update path that a metal run found broken (a
+    // short message tail was silently dropped, so tamper went undetected). Keep this
+    // <=32 so the QEMU gate catches any regression of that bug.
+    let secret = b"HEQK-P15-short-secret-28byte";
 
     // 1) round-trip seal/unseal.
     let mut blob = SealBlob::new();
