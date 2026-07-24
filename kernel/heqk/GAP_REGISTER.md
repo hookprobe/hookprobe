@@ -113,7 +113,7 @@ Verified-closed: D1/D2/D5, M-3/L-15 (in read_sdpcm_frame), M-4/M-5/M-6, H-1, L-1
 
 **Wave 1 — detection integrity, small & exploitable now:** ✅ DONE (DET-3, DET-4, DRV-4, XC-16/L-13, DET-9 — commits eaa95e5, 4b3a1f3; QEMU 0 failing)
 **Wave 2 — cheap hardening / unblockers:** ✅ DONE (DET-5/XC-12, DET-12/XC-14, CORE-8, DET-11, XC-1)
-**Wave 3 — self-contained security (need flash):** SEC-4 TOCTOU re-hash, SEC-1/XC-13 OTP liveness, SEC-8 stack guard, DET-7/XC-2 W^X, CORE-3/XC-7 zero-on-reuse, CORE-5 grant range+tlbi
+**Wave 3 — self-contained security:** ✅ 5/6 DONE (CORE-3/XC-7, CORE-5, SEC-4, SEC-1/XC-13, SEC-8; hboot+CM5 items metal-pending). DEFERRED: DET-7/XC-2/CORE-4 jit_seal-on-QEMU (needs boot-MMU restructure, QEMU-only, production sealed)
 **Wave 4 — security ABI:** DET-1/XC-11 helper ABI, DET-2 rule signature gate
 **Wave 5 — structural (large, gated):** CORE-1/2+XC-5/6 caps+per-TCB CSpace (→P12), CORE-6 per-TCB restart (→P17), DRV-2/XC-3 IOMMU, DRV-1/XC-4 RX-IRQ, SEC-2/3 signed-boot+OTP
 **Then:** implement design phases P13 → P15(ro) → P17 → P11 → P12
