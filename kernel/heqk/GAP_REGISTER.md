@@ -118,3 +118,30 @@ Verified-closed: D1/D2/D5, M-3/L-15 (in read_sdpcm_frame), M-4/M-5/M-6, H-1, L-1
 **Wave 5 — structural (large, gated):** CORE-1/2+XC-5/6 caps+per-TCB CSpace (→P12), CORE-6 per-TCB restart (→P17), DRV-2/XC-3 IOMMU, DRV-1/XC-4 RX-IRQ, SEC-2/3 signed-boot+OTP
 **Then:** implement design phases P13 → P15(ro) → P17 → P11 → P12
 
+
+---
+## Progress (2026-07-24)
+
+**CLOSED (21 gaps), all QEMU-green, committed:**
+DET-3, DET-4, DRV-4, L-13/XC-16, DET-9, DET-5/XC-12, DET-12/XC-14, CORE-8, DET-11,
+XC-1, CORE-3/XC-7, CORE-5, SEC-4, SEC-1/XC-13, SEC-8, DET-1/XC-11, DET-2, SEC-7,
+DRV-3, DRV-5, DET-10.
+
+**METAL-PENDING** (build-clean, need a flash to confirm on hardware): CORE-5, DRV-3,
+DRV-5 (CM5 driver), SEC-1, SEC-4, SEC-7, SEC-8 (hboot). Image: heqk8.img payload
+sha 214b6961..., svn 1, hybrid-signed.
+
+**DEFERRED w/ rationale:** CORE-4/DET-7/XC-2 (jit_seal-on-QEMU — boot-MMU restructure,
+QEMU-only, production sealed); DET-2 per-rule sig (tied to unbuilt dynamic loading;
+static rules are image-signed).
+
+**REMAINING — large structural / feature (dedicated passes):**
+- CORE-1/XC-5 caps enforcement (route mapping through caps; revoke unmaps)
+- CORE-2/XC-6/DSN-4 per-TCB CSpace (unblocks P12)
+- CORE-6 per-TCB restart params (unblocks P17)
+- CORE-9 CDT generation-tagged MDB; CORE-10 ASID reclaim; CORE-11 ipc Result/badges; CORE-12 real allocator
+- DRV-1/XC-4 RP1 RX-IRQ MSI-X; DRV-2/XC-3 IOMMU relocate kernel
+- SEC-2/XC-10 OTP stage-2 isolation + hvc proxy; SEC-3/XC-9 signed-boot (operator/irreversible);
+  SEC-5 AK PCR0 binding; SEC-6 SVN floor; SEC-9 EL2 W^X
+- DET-6 differential over all JIT'd rules; DET-8 telemetry drainer (tied to P12); DET-13 tnum harness; XC-15 dual-backend property tests
+- Design phases: P13, P15(ro), P17, P11, P12
