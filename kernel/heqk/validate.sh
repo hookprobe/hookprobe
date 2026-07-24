@@ -35,6 +35,7 @@ PHASES=(
   "P8|[P8] PASS|impl|Validation|PREVAIL verifier: statically proves rule memory-safety, rejects unsafe 3rd-party rules"
   "P8p|[P8-plane] PASS|impl|Validation|detection plane: general BPF JIT (branches) + rule registry (parity) + live QSecBit scoring"
   "P8diff|[P8-diff] PASS|impl|Validation|DET-6: JIT<->interpreter differential over ALL live JIT'd rules (L4 port + L2 ARP + TCP-scan), not just THREAT_RULE — native codegen proven == verified interpreter on a match-constant-stressed input set; FLOW/CALL rules interp-only, excluded"
+  "P8vlan|[P8-vlan] PASS|impl|Validation|AUD-NET-1: strip_vlan reconstructs the canonical untagged frame for 1-tag and QinQ (guards the VLAN-normalization off-by-2 that re-opened the DET-4 L2/FLOW IDS bypass)"
   "P8n|[P8-napi] PASS|impl|Validation|adaptive NAPI: poll-budget grows under load, idles+re-arms when quiet (spin-poll retired)"
   "P8l|[P8-l2] PASS|impl|Validation|L2 guard: napse-l2guard parity — malformed-ARP + ARP-spoof dropped at frame level"
   "P8t|[P8-tcp] PASS|impl|Validation|TCP scan detection: NULL/FIN/Xmas/SYN-FIN anomalous-flag scans dropped, normal SYN/ACK pass"
