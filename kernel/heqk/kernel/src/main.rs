@@ -1774,7 +1774,7 @@ fn p8_detection_plane() -> bool {
     let mut plane_ok = true;
     for (port, want, name) in cases {
         let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
-        let v = rules::run_l4(&l4);
+        let v = rules::run_l4(&l4, 0);
         let good = v == want;
         plane_ok &= good;
         kprint!("   rule plane: dst {} ({}) -> {} [{}]\n",
@@ -1817,7 +1817,7 @@ fn p8_adaptive_napi() -> bool {
                     let port = ports[seq % ports.len()];
                     seq += 1;
                     let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
-                    let _ = rules::run_l4(&l4); // real verdict, feeds QSecBit
+                    let _ = rules::run_l4(&l4, 0); // real verdict, feeds QSecBit
                 }
                 remaining -= take;
                 take
@@ -1879,7 +1879,7 @@ fn p8_l2guard() -> bool {
     ];
     let mut ok = true;
     for (f, want, name) in cases {
-        let v = rules::run_l2(f);
+        let v = rules::run_l2(f, 0);
         let good = v == want;
         ok &= good;
         kprint!("   L2: {} -> {} [{}]\n",
@@ -1913,7 +1913,7 @@ fn p8_tcpscan() -> bool {
     let mut ok = true;
     for (flags, want, name) in cases {
         let t = tcp_hdr(flags);
-        let v = rules::run_tcp(&t);
+        let v = rules::run_tcp(&t, 0);
         let good = v == want;
         ok &= good;
         kprint!("   TCP flags {:#04x}: {} -> {} [{}]\n",
@@ -1984,12 +1984,12 @@ fn p8_synflood_src() -> bool {
     let limit = bpf::SYN_LIMIT as usize;
     let (mut ap, mut ad) = (0usize, 0usize);
     for _ in 0..(limit + 20) {
-        match rules::run_flow(&a) {
+        match rules::run_flow(&a, 0) {
             packet::PASS => ap += 1,
             _ => ad += 1,
         }
     }
-    let bp = (0..5).filter(|_| rules::run_flow(&b) == packet::PASS).count();
+    let bp = (0..5).filter(|_| rules::run_flow(&b, 0) == packet::PASS).count();
     kprint!("   source A flood: {} passed (~limit {}), {} dropped; source B: {}/5 passed (isolated)\n",
         ap, limit, ad, bp);
     let ok = ad >= 19 && ap <= limit + 1 && ap >= limit - 1 && bp == 5;
@@ -2020,7 +2020,7 @@ fn p8_blocklist() -> bool {
     let mut ok = true;
     for (src, want, name) in cases {
         let f = ipv4_frame(src);
-        let v = rules::run_flow(&f);
+        let v = rules::run_flow(&f, 0);
         let good = v == want;
         ok &= good;
         kprint!("   blocklist: {} -> {} [{}]\n",
@@ -2042,7 +2042,7 @@ fn p8_soar() -> bool {
     // Trigger two fresh threat drops (each pushes an event header in the TCB).
     for &port in &[4444u16, 23u16] {
         let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
-        let _ = rules::run_l4(&l4);
+        let _ = rules::run_l4(&l4, 0);
     }
     // The exporter drains the ring (zero-copy read of the headers, never payload).
     let mut batch = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
