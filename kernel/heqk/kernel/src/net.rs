@@ -20,7 +20,7 @@ pub const ETHERTYPE_ARP: u16 = 0x0806;
 pub const ETHERTYPE_IPV6: u16 = 0x86dd;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
-const MAX_VLAN_TAGS: usize = 3; // bound stacked-tag unwrap
+pub const MAX_VLAN_TAGS: usize = 3; // bound stacked-tag unwrap
 const MAX_V6_EXT: usize = 8; // bound IPv6 extension-header walk
 
 /// Validated view of a parsed frame. All offsets are within the frame length.
@@ -60,6 +60,15 @@ pub fn parse(frame: &[u8]) -> Option<PacketMeta> {
         et = be16(frame, l3_off + 2)?; // inner ethertype after the 4-byte tag (2B TCI)
         l3_off += 4;
         tags += 1;
+    }
+    // DET-3: fail CLOSED if the frame is STILL VLAN-tagged after the cap. Otherwise an
+    // attacker buries an L4 threat (e.g. TCP/4444) under >MAX_VLAN_TAGS tags, the loop
+    // stops with `et` still VLAN, and the `_ => Some(meta)` arm below PASSes it with
+    // ip_proto=0 — skipping the entire L4/scan corpus. A legitimately >3-stacked frame
+    // is pathological; dropping it is the correct sensor posture. `None` => classify
+    // fail-closes to DROP.
+    if et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ {
+        return None;
     }
 
     let mut meta = PacketMeta {
