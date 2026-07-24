@@ -1803,6 +1803,11 @@ pub extern "C" fn kmain() -> ! {
     // CORE-2: prove per-TCB CSpace isolation + rights-narrowing delegation.
     cspace_isolation_demo();
 
+    // CORE-1: prove mapping flows through a capability invocation AND that revoke
+    // SEVERS the mapping (invalidates the L3 entry), not just clears the CSpace slot.
+    #[cfg(not(feature = "cm5"))]
+    p2_revoke_unmap_demo();
+
     // --- P12 (a)+(b): Notification signal/poll + pub-sub AUTHORITY (topics as caps).
     // Synchronous, pre-scheduler; the blocking-WAIT proof (c) runs under the scheduler
     // and is reported post-run. ---
@@ -3484,6 +3489,67 @@ fn cspace_isolation_demo() {
         " [P2-iso] {} — child CSpace: Frame R={} W-denied={} G-denied={}, Endpoint-absent={}, parent keeps Endpoint={}\n",
         if ok { "PASS" } else { "FAIL" },
         child_has_read, child_denied_write, child_denied_grant, !child_has_endpoint, parent_keeps_endpoint
+    );
+}
+
+/// CORE-1 `[P2-unmap]` — prove that mapping now flows through a capability invocation
+/// AND that `revoke` SEVERS the mapped authority (not just clears the CSpace slot). This
+/// is the confused-deputy / authority gap closed: today a Frame cap's memory could be
+/// mapped into EL0 by an ad-hoc `map_user_*` the kernel kept no account of, so revoking
+/// the cap left the driver's MMIO/DMA access intact. Now:
+///   1. `map_frame_cap` (has_rights-gated) maps a Frame(RW) cap into an EL0 VA and RECORDS
+///      the VA on the cap; the L3 descriptor reads back PRESENT with AP=RW.
+///   2. an R-only cap (minted, W-narrowed) maps read-only; its descriptor reads back
+///      PRESENT with AP=RO — the rights → attribute enforcement.
+///   3. `revoke` of the parent Untyped deletes both Frame caps and, because they carry a
+///      mapping record, INVALIDATES their L3 entries (+ tlbi) — both descriptors read back
+///      INVALID. Authority was severed BY revoke, through the cap, not by clearing a slot.
+/// Uses a local CSpace + real reserved frames; arch-neutral read-back so it validates
+/// under QEMU. #[cfg(not(cm5))] so the metal build is untouched (P10-BT lesson).
+#[cfg(not(feature = "cm5"))]
+fn p2_revoke_unmap_demo() {
+    use caps::{CapSpace, ObjType, R, W};
+    // AP field of an aarch64 stage-1 leaf lives in bits [7:6]. EL0 RW = 0b01, EL0 RO = 0b11.
+    const AP_RW_EL0: u64 = 0b01;
+    const AP_RO_EL0: u64 = 0b11;
+    let ap = |d: u64| (d >> 6) & 0b11;
+    let present = |d: u64| d & 1 != 0;
+    // Two unused EL0 VAs (GB2 window — unmapped in the QEMU global root; map_frame_cap
+    // builds the L2/L3 tables on demand). No EL0 execution here — we only read descriptors.
+    const VA_RW: usize = 0x2_8000_0000; // GB10
+    const VA_RO: usize = 0x2_8000_1000;
+
+    let base = arch_aarch64::mmu::reserve_region(64 * 1024);
+    let mut cs = CapSpace::with_root_untyped(base, 64 * 1024);
+    // A Frame(R|W|G) child of the root Untyped.
+    let frame = cs.retype(0, ObjType::Frame, 4096).unwrap();
+    // An R-only cap over the SAME object (mint narrows rights: requested R & (R|W|G) = R).
+    let ro = cs.mint(frame, R).unwrap();
+
+    // (1) cap-gated RW mapping — has_rights(R|W) passes, writable attribute derived.
+    let map_rw_ok = cs.map_frame_cap(frame, VA_RW, R | W).is_ok();
+    // (2) cap-gated RO mapping — request only R; the RO cap could not request W anyway.
+    let map_ro_ok = cs.map_frame_cap(ro, VA_RO, R).is_ok();
+    // A cap without the W right CANNOT obtain a writable mapping (has_rights gate).
+    let w_denied = cs.map_frame_cap(ro, VA_RO, R | W).is_err();
+
+    let d_rw = arch_aarch64::user_frame_desc(VA_RW);
+    let d_ro = arch_aarch64::user_frame_desc(VA_RO);
+    let live_rw = present(d_rw) && ap(d_rw) == AP_RW_EL0; // present + read/write
+    let live_ro = present(d_ro) && ap(d_ro) == AP_RO_EL0; // present + read-only
+
+    // (3) revoke the PARENT Untyped: deletes both derived Frame caps AND unmaps them.
+    cs.revoke(0);
+    let sev_rw = !present(arch_aarch64::user_frame_desc(VA_RW)); // now INVALID
+    let sev_ro = !present(arch_aarch64::user_frame_desc(VA_RO)); // now INVALID
+    // The caps themselves are gone from the CSpace (only the root Untyped survives).
+    let caps_gone = cs.get(frame).is_none() && cs.get(ro).is_none();
+
+    let ok = map_rw_ok && map_ro_ok && w_denied && live_rw && live_ro && sev_rw && sev_ro && caps_gone;
+    kprint!(
+        " [P2-unmap] {} — cap-gated map: RW-mapped(AP=RW)={} RO-mapped(AP=RO)={} W-on-RO-cap-denied={}; revoke severed: RW-unmapped={} RO-unmapped={} caps-deleted={}\n",
+        if ok { "PASS" } else { "FAIL" },
+        live_rw, live_ro, w_denied, sev_rw, sev_ro, caps_gone
     );
 }
 

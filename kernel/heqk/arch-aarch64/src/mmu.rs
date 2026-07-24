@@ -358,6 +358,43 @@ impl Mmu {
         self.map(va, pa, ATTR_NORMAL, AP_RW_EL0, true, true)
     }
 
+    /// User DATA page, READ-ONLY: EL0 read-only, non-executable at both levels.
+    /// CORE-1: the attribute a Frame cap lacking the `W` right maps to — EL0 can
+    /// read the frame but any write faults.
+    pub fn map_user_data_ro_page(&self, va: usize, pa: usize) -> bool {
+        self.map(va, pa, ATTR_NORMAL, AP_RO_EL0, true, true)
+    }
+
+    /// CORE-1 — invalidate the L3 leaf for `va` in the GLOBAL kernel root (write an
+    /// invalid descriptor + tlbi), the primitive `caps::revoke` uses to sever a Frame
+    /// cap's EL0 authority. Returns false if `va` has no L3 leaf to clear (nothing to
+    /// do). The L1/L2 table pointers are left intact — only the leaf mapping is removed.
+    pub fn unmap_user_page(&self, va: usize) -> bool {
+        let i1 = (va >> 30) & 0x1FF;
+        let i2 = (va >> 21) & 0x1FF;
+        let i3 = (va >> 12) & 0x1FF;
+        let l1 = l1_ptr();
+        let e1 = unsafe { read_volatile(l1.add(i1)) };
+        if e1 & VALID == 0 || e1 & TABLE == 0 {
+            return false;
+        }
+        let l2 = (e1 & ADDR_MASK) as *mut u64;
+        let e2 = unsafe { read_volatile(l2.add(i2)) };
+        // Must be a table pointer (not a block) to have a per-page leaf to clear.
+        if e2 & VALID == 0 || e2 & TABLE == 0 {
+            return false;
+        }
+        let l3 = (e2 & ADDR_MASK) as *mut u64;
+        unsafe {
+            write_volatile(l3.add(i3), 0); // invalid descriptor — EL0 access now faults
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) as u64);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        true
+    }
+
     /// User DEVICE-MMIO window: an isolated EL0 driver's capability to touch its
     /// hardware — Device memory, EL0 read/write, non-executable (UXN+PXN). This
     /// is what lets a driver run in user space with *only* the device granted.

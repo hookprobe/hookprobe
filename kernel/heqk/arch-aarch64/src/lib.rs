@@ -95,6 +95,65 @@ pub fn _print(args: fmt::Arguments) {
     let _ = u.write_fmt(args);
 }
 
+// ===========================================================================
+// CORE-1 — backend-neutral EL0 frame-mapping surface used by the capability
+// system (`caps::map_frame_cap` / `caps::revoke`). Both backends map into the
+// address space `page_desc`/`user_page_desc` reads back, so the map -> read ->
+// revoke -> read proof is self-consistent per backend. QEMU maps into the
+// GLOBAL kernel root (the p3-style demo path); CM5 into its single-AS GB5 user
+// window. Migrating the live per-ASID driver grants onto this path is CORE-1's
+// follow-up (they stay on the metal-proven `map_user_*_in` calls for now).
+// ===========================================================================
+
+/// Map a Frame cap's physical `pa` at EL0 `va`. `writable` => EL0 RW, else EL0
+/// read-only (the rights-derived attribute a cap lacking the `W` right forces).
+/// Always non-executable at EL0/EL1. Returns true on success.
+pub fn map_user_frame(va: usize, pa: usize, writable: bool) -> bool {
+    #[cfg(not(feature = "cm5"))]
+    {
+        let m = mmu::Mmu;
+        if writable {
+            m.map_user_data_page(va, pa)
+        } else {
+            m.map_user_data_ro_page(va, pa)
+        }
+    }
+    #[cfg(feature = "cm5")]
+    {
+        if writable {
+            mmu_cm5::map_user_data(va, pa)
+        } else {
+            mmu_cm5::map_user_data_ro(va, pa)
+        }
+    }
+}
+
+/// Invalidate (unmap) the EL0 mapping at `va` + tlbi — the primitive `revoke`
+/// uses to sever a Frame cap's authority. Returns true if an entry was cleared.
+pub fn unmap_user_frame(va: usize) -> bool {
+    #[cfg(not(feature = "cm5"))]
+    {
+        mmu::Mmu.unmap_user_page(va)
+    }
+    #[cfg(feature = "cm5")]
+    {
+        mmu_cm5::unmap_user(va)
+    }
+}
+
+/// Read back the effective descriptor at EL0 `va` (0 = not mapped). The proof
+/// helper: shows a mapping present with its AP bits, then invalid after revoke.
+pub fn user_frame_desc(va: usize) -> u64 {
+    #[cfg(not(feature = "cm5"))]
+    {
+        mmu::Mmu.page_desc(va)
+    }
+    #[cfg(feature = "cm5")]
+    {
+        mmu_cm5::page_desc(va)
+    }
+}
+
 /// Entry point for the kernel's `#[panic_handler]`.
 pub fn on_panic(info: &core::panic::PanicInfo) -> ! {
     let mut u = Pl011;

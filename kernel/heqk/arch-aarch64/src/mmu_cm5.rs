@@ -101,9 +101,38 @@ fn user_l3_idx(va: usize) -> usize {
 pub fn map_user_code(va: usize, pa: usize) {
     write_user_l3(va, user_page(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN)); // EL0 exec, EL1 non-exec
 }
-/// Map an EL0 RW data/stack page.
-pub fn map_user_data(va: usize, pa: usize) {
+/// Map an EL0 RW data/stack page. Returns whether the grant was installed (false
+/// if `va` fell outside the GB5 user window — fail-closed, same as write_user_l3).
+pub fn map_user_data(va: usize, pa: usize) -> bool {
+    if !user_va_ok(va) {
+        return false;
+    }
     write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_NORMAL, PXN | UXN));
+    true
+}
+/// CORE-1 — map an EL0 READ-ONLY data page (AP read-only): the attribute a Frame
+/// cap lacking the `W` right maps to. Returns false if `va` is out of the window.
+pub fn map_user_data_ro(va: usize, pa: usize) -> bool {
+    if !user_va_ok(va) {
+        return false;
+    }
+    write_user_l3(va, user_page(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN | UXN));
+    true
+}
+/// CORE-1 — invalidate the EL0 mapping at `va` in the single-AS GB5 user table (+
+/// tlbi), the primitive `caps::revoke` uses to sever a Frame cap's authority.
+/// write_user_l3(0) fail-closes on an out-of-window `va`. Returns true if in-window.
+pub fn unmap_user(va: usize) -> bool {
+    if !user_va_ok(va) {
+        return false;
+    }
+    write_user_l3(va, 0); // invalid descriptor — EL0 access now faults
+    true
+}
+/// CORE-1 — invalidate the EL0 mapping at `va` in a SPECIFIC address space's private
+/// GB5 user table (the per-ASID revoke-unmap primitive). Mirrors `map_user_in`.
+pub fn unmap_user_in(l1_root: usize, va: usize) -> bool {
+    map_user_in(l1_root, va, 0)
 }
 /// Map an EL0 device-MMIO window (a driver's capability to touch one device).
 pub fn map_user_device(va: usize, pa: usize) {
