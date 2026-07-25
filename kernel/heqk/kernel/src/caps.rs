@@ -567,5 +567,44 @@ pub fn cap_invariants_selftest(base: usize) -> bool {
         ok = false;
     }
 
+    // (5) CORE-3 zero-on-retype — the single most security-relevant `retype` invariant
+    // (stops cross-tenant secret leakage). Poison the untyped backing, retype over it, and
+    // assert the new object's bytes are ALL zero. Fresh CSpace at `base` (cs is done above).
+    {
+        let mut cs2 = CapSpace::with_root_untyped(base, 64 * 1024);
+        unsafe { core::ptr::write_bytes(base as *mut u8, 0xAA, 4096) };
+        if let Ok(f2) = cs2.retype(0, ObjType::Frame, 1024) {
+            let fb = cs2.get(f2).map(|c| c.base).unwrap_or(0);
+            let leaked = (0..1024).any(|i| unsafe { core::ptr::read_volatile((fb + i) as *const u8) } != 0);
+            if fb == 0 || leaked {
+                ok = false; // stale poison survived the retype scrub -> cross-tenant leak
+            }
+        } else {
+            ok = false;
+        }
+    }
+
+    // (6) transitive revoke of a >1-level tree: revoke(A) must delete B AND C (a→b→c),
+    // proving the CDT teardown reaches the whole subtree, not just direct children.
+    {
+        let mut cs3 = CapSpace::with_root_untyped(base + 0x1_0000, 64 * 1024);
+        if let Ok(a) = cs3.retype(0, ObjType::Untyped, 32 * 1024) {
+            if let Ok(b) = cs3.retype(a, ObjType::Untyped, 8 * 1024) {
+                if let Ok(c) = cs3.retype(b, ObjType::Frame, 1024) {
+                    cs3.revoke(a);
+                    if cs3.get(b).is_some() || cs3.get(c).is_some() {
+                        ok = false; // a deep descendant survived a revoke of its ancestor
+                    }
+                } else {
+                    ok = false;
+                }
+            } else {
+                ok = false;
+            }
+        } else {
+            ok = false;
+        }
+    }
+
     ok
 }
