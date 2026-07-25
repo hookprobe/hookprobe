@@ -217,6 +217,13 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P7b: GIC-400 + generic timer + preemptive scheduler on metal ------
     cm5_scheduler_demo();
 
+    // PH7 (XC-15): run the SAME capability-invariant sweep as the QEMU backend, now on
+    // CM5 silicon (a different MMU backend) — the dual-backend coverage that would have
+    // caught a metal-only divergence. Base = the free RAM window (above HBoot's stack).
+    let caps_ok = caps::cap_invariants_selftest(0x0098_0000);
+    kprint!(" [PH7-caps] {} — mint narrows+never-amplifies (all 8 rights), type-tag safety, revoke severs+bumps-gen (CM5 backend)\n",
+        if caps_ok { "PASS" } else { "FAIL" });
+
     // --- P8: load the signed HookProbe rule plane (verify every rule; JIT is
     // QEMU-only, so CM5 runs the bounds-checked interpreter — same verdict). ---
     let (rv, rj) = rules::init();
@@ -3628,6 +3635,12 @@ fn p2_caps_test() -> bool {
         if gen_ok { "ok" } else { "FAIL" },
     );
     kprint!("   [P2-gen] {}\n", if gen_ok { "PASS" } else { "FAIL" });
+
+    // PH7 (XC-15): capability-invariant property sweep. The SAME check runs on the CM5
+    // backend (cm5 kmain) so a divergence between the two MMU backends can't hide.
+    let caps_ok = caps::cap_invariants_selftest(arch_aarch64::mmu::reserve_region(256 * 1024));
+    kprint!("   [PH7-caps] {} — mint narrows+never-amplifies (all 8 rights), type-tag safety, revoke severs+bumps-gen, no-grant-no-delegate\n",
+        if caps_ok { "PASS" } else { "FAIL" });
 
     let pass = live0 == 8
         && retype_ep
