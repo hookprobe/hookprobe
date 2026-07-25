@@ -24,9 +24,12 @@
 #   - GitHub tokens (ghp_/gho_/ghs_/ghu_/ghr_)
 #   - AWS access key IDs (AKIA...)
 #   - Slack tokens (xox[baprs]-...)
-#   - the two known-scrubbed tokens from the 2026-07-25 filter-repo purge
-#     (DEV-CRED-SCRUBBED, the DEV-HASH-SCRUBBED shadow-hash prefix) -- a REGRESSION tripwire;
-#     if either string is ever staged again in any commit, this blocks it.
+#   - any Unix sha512crypt shadow-password hash ($6$salt$hash) -- the CLASS of
+#     the credential scrubbed on 2026-07-25, caught generically
+#   - any personal-webmail address (hotmail/gmail/... -- the project contact is
+#     a hookprobe.com address, so a personal domain here is a PII leak)
+#   These generic patterns replace the earlier hardcoded personal literals so
+#   the guard itself carries no PII.
 #
 # Install (one-time, per clone -- git does not auto-install hooks from a
 # tracked path):
@@ -84,8 +87,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   check_range "$range" "GitHub token"       '(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}'
   check_range "$range" "AWS access key"     'AKIA[0-9A-Z]{16}'
   check_range "$range" "Slack token"        'xox[baprs]-[A-Za-z0-9-]{10,}'
-  check_range "$range" "scrubbed dev username (regression)"      'DEV-CRED-SCRUBBED'
-  check_range "$range" "scrubbed shadow-hash prefix (regression)" 'DEV-HASH-SCRUBBED'
+  check_range "$range" "Unix shadow password hash" '[$]6[$][./A-Za-z0-9]{8,}[$][./A-Za-z0-9]{20,}'
+  check_range "$range" "personal email address"    '@(hotmail|gmail|outlook|yahoo|icloud|proton(mail)?|aol)[.][a-z]{2,}'
 done
 
 if [ "$FOUND" -ne 0 ]; then
