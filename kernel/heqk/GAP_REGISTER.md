@@ -209,3 +209,23 @@ A fresh multi-agent audit of the newly-added code (caps/notify/netq/devq/seal/st
 - **AUD-RP1-2** (unbounded poll) — every HW wait uses CNTPCT-bounded `poll_until`/`delay_us`; inner FIFO loops bounded by transfer length.
 - **AUD-STO-2/3/4** — seal/unseal arithmetic safe (len checked before the `HDR+ct_len` term in a short-circuit `||`); SealKey volatile-zeroized on drop; CT compares; MBR parse in-bounds; window `[2016,2048)` has no off-by-one.
 - **devq.rs / netq.rs** — DevQ copy-then-validate + kernel-private cap + csdb + no-RMW sound; NetQ per-slot ownership with clamped untrusted `len` (never used as an index) sound on both directions.
+
+
+## PRODUCTION-HARDENING AUDIT ROUND 2026-07-25 (PH1-PH7)
+Two parallel auditors swept the PH1-PH7 code (prod service, netsvc/smoltcp, PH2a SRK handoff, cap sweep). Every confirmed finding CLOSED (one commit); the crypto ordering, domain-sep, repr(C) layout, cache-flush range, and enforce/fail-closed logic were all confirmed SOUND.
+
+| ID | Sev | Loc | Defect | Status |
+|----|-----|-----|--------|--------|
+| D3/D4 | Med | main.rs cm5_prod_service | contained EL0 driver fault indistinguishable from empty RX window (DRIVER_REPORT=0 both) -> crash-loop reads as quiet link | CLOSED — RPT_SENTINEL(0xFFFFFFFF) before enter_user + separate faults counter |
+| D2 | Med | main.rs cm5_prod_service | PASS frame whose tx_frame() times out uncounted -> seen != fwd+dropped | CLOSED — tx_fail counter; invariant seen==fwd+dropped+tx_fail |
+| D5 | Low | main.rs cm5_prod_service | RX buf 1600 < RXBUF 2048 -> deep-L7 frame truncated before verdict (evasion) | CLOSED — buf = packet::FRAME_SZ (2048) |
+| D6 | Low | main.rs cm5_prod_service | dead PRODPOOL allocation | CLOSED — removed |
+| D1 | Med | netsvc.rs TxSink | smoltcp multi-frame-per-poll silently overwrote the single tx slot | CLOSED — tx_lost counter (loss now observable) |
+| D7 | Low | netsvc.rs selftest | [PH6-net] only tested PASS, never proved the gate DROPs | CLOSED — negative case: UDP:4444 threat REFUSED admission |
+| R1 | Med | main.rs read_seal_handoff | SRK sat in plaintext at fixed well-known addr 0x3FFA_0000 for whole runtime, never scrubbed (exposure beyond V3) | CLOSED — seal_srk() copies to kernel-private .bss + scrubs page (write-zero+dsb+dc civac) |
+| R3 | Low | main.rs p15 demo | printed "(SYNTHETIC key)" even when using the REAL per-device SRK | CLOSED — honest per-device/synthetic label |
+| R2 | Low-Med | caps.rs cap_invariants_selftest | missing CORE-3 zero-on-retype + deep-tree revoke coverage | CLOSED — both subtests added |
+| R4 | Low | hboot main.rs | derived SRK unscrubbed on the SEC-4 re-hash-mismatch park() | CLOSED — scrub ak.srk before park |
+| R5 | Info | main.rs | CM5 cap-test base hardcoded 0x980000 | ACCEPTED — verified in the free RAM window (above HBoot stack, below kernel image); documented |
+
+**Confirmed SOUND (no defect):** packet::verdict fail-closed + enforce correctness; no crafted-frame panic in the datapath or netsvc; cntfrq div-by-zero guarded (max(1)); rx_desc_status uses HW writeback length (M-7); netsvc dual-gate has no bypass + split-borrow sound; SRK domain-sep / flush-range / write-before-stage2 / repr(C) layout / hw_bound=false fallback / srk-derived-before-wipe all correct; self-heal survival real (kernel never halts). QEMU [PHprod]/[PH7-caps]/[PH6-net] PASS + [ALL] GREEN, 0 failing.
