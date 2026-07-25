@@ -202,6 +202,14 @@ irreversible OTP/fuse SVN counter, so it lives in the metal bring-up batch, not 
 - **Acceptance:** `[P11]` passes on metal with real NIC traffic; forged-descriptor rejection holds.
 
 ### PH6 — P17 smoltcp EL0 service
+**Status 2026-07-25:** **stack-integration core DONE + QEMU-gated** — smoltcp 0.13 (`no_std`,
+no heap) added behind the `netsvc` feature (OFF by default, so the prod/metal kernel TCB is
+untouched). `netsvc.rs` runs smoltcp ABOVE the P17 rule plane via a `phy::Device` that admits
+an ingress frame only if `packet::verdict` PASSes it and emits an egress frame only if it
+PASSes too (the netq dual-gate). `[PH6-net] PASS`: the stack correctly answers an ARP for its
+own IP with both directions verdict-gated. **Deferred to metal (largest attack surface):**
+running it as the EL0-ISOLATED service over the live netq (needs the multi-page EL0 loader,
+DSN-10), a TRNG seed (not a constant), and a PCR3 measurement of the pinned stack (DSN-11).
 - **Build:** smoltcp as an EL0 service — TRNG-seeded, pinned + checksummed + measured into PCR3,
   bounded resource use, fault-contained.
 - **Acceptance:** `[P17]` handles real TCP with the stack measured into PCR3; faults are contained.

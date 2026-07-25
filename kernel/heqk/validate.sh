@@ -48,6 +48,7 @@ PHASES=(
   "P12|[P12] PASS|impl|Implementation+Verification|notification objects + capability pub-sub: seL4 Signal/Poll (OR-coalescing), topics-as-caps authority (ungranted subscribe REFUSED via has_rights), blocking WAIT syscall woken by Signal under the scheduler; badge-from-cap; MAX_THREADS->16; DSN-6 fixed"
   "P17|[P17] PASS|impl|Validation|overlay convergence: net-class queue + dual-direction IPS gate (ingress DROP before ring + egress DROP before wire); EL0 monotonic counter; smoltcp EL0 service deferred"
   "PHprod|[PHprod] PASS|impl|Validation|PH1 production datapath: the running-sensor enforce decision (verdict-per-frame -> PASS FORWARDED / threat DROPPED) over a mixed benign+threat batch; the cm5 prod build wraps this loop around a real EL0-driven NIC (self-healing, never halts)"
+  "PH6net|[PH6-net] PASS|impl|Validation|PH6 smoltcp net-service stack integration: the smoltcp TCP/IP stack runs ABOVE the P17 rule plane (ingress admits only verdict-PASS frames, egress emits only verdict-PASS frames) and correctly answers an ARP for its own IP; the EL0-isolated netq service + TRNG seed + PCR3 measure is the metal follow-up"
   "P11|[P11] PASS|impl|Validation|device-class transport (sDDF borrow): hardened SPSC (H1 kernel-private cap, H2 ownership table, H3 copy-then-validate, csdb, no-RMW) REJECTS+COUNTS a hostile driver's forged descriptors (V2 index/V4 offset+len+flags/V5 not-owned); LoopDev + honest path pass; metal GemDev/RtlDev deferred"
   "P16sha|[P16-sha] PASS|impl|Validation|crypto primitive: incremental SHA-256 Hasher == one-shot digest across all lengths/chunkings (guards the metal-found short-tail HMAC auth bug)"
   "P15|[P15-seal] PASS|impl|Validation|sealed storage: Encrypt-then-MAC seal/unseal (SHA256 HMAC/HKDF/CTR), tamper+wrong-measurement refused, MBR write-guard (RamDisk); eMMC driver read-only (writes behind p15-write)"
@@ -61,7 +62,7 @@ echo "==================================================================="
 
 # --- Stage 1: build -------------------------------------------------------
 echo -n "[build] cargo build ... "
-if ! cargo build >/tmp/hp_build.log 2>&1; then
+if ! cargo build --features netsvc >/tmp/hp_build.log 2>&1; then
   echo "FAIL"; echo "  --- build errors ---"; grep -E '^error' /tmp/hp_build.log | head;
   echo "GAP: build broken — cannot validate. Fix compile errors first."; exit 2
 fi

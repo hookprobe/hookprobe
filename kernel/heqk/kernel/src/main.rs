@@ -22,6 +22,8 @@ mod ipc;
 mod napi;
 mod net;
 mod netq;
+#[cfg(feature = "netsvc")]
+mod netsvc;
 mod notify;
 mod packet;
 mod ratelimit;
@@ -2082,6 +2084,16 @@ pub extern "C" fn kmain() -> ! {
         let (ok, fwd, drp) = packet::prod_datapath_selftest();
         kprint!(" [PHprod] {} — production datapath enforce: {} benign FORWARDED, {} threat DROPPED (verdict-per-frame, the running-sensor decision)\n",
             if ok { "PASS" } else { "FAIL" }, fwd, drp);
+    }
+
+    // --- PH6: smoltcp net-service stack integration — the stack answers an ARP for its
+    // own IP with BOTH the ingress request and the egress reply passing the rule plane.
+    // The EL0-isolated netq service + TRNG seed + PCR3 measurement is the metal half. ---
+    #[cfg(feature = "netsvc")]
+    {
+        let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
+        kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
+            if ok { "PASS" } else { "FAIL" });
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
