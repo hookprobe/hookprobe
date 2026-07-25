@@ -503,3 +503,69 @@ pub fn core9_gen_selftest(base: usize) -> bool {
 
     freed_and_bumped && slot_reused && not_descendant && stale_survived && real_deleted
 }
+
+/// PH7 (XC-15) — arch-agnostic capability-invariant property checks, run on BOTH MMU
+/// backends (QEMU `mmu.rs` + CM5 `mmu_cm5.rs`) so a single-backend blind spot (the class
+/// of bug the metal-only HMAC break exposed) can't hide. Deterministic, no_std "property"
+/// sweep. Checks:
+///   (1) `mint` NARROWS rights to exactly `requested & source.rights` and never amplifies,
+///       across ALL 8 rights combinations;
+///   (2) type-tag safety — a Frame is usable as a Frame, an Endpoint is NOT;
+///   (3) `revoke` severs a child subtree AND bumps its generation (CORE-9);
+///   (4) `mint` WITHOUT the Grant right is refused (no unauthorized delegation).
+/// `base` must point at scratch RAM the retype scrub may write. Returns true iff all hold.
+pub fn cap_invariants_selftest(base: usize) -> bool {
+    let mut ok = true;
+    let mut cs = CapSpace::with_root_untyped(base, 256 * 1024);
+    let root_rights = cs.get(0).map(|c| c.rights).unwrap_or(0);
+
+    // (1) mint narrows to exactly `requested & source.rights`, never amplifies.
+    for r in 0u8..8 {
+        match cs.mint(0, r) {
+            Ok(d) => {
+                let cr = cs.get(d).map(|c| c.rights).unwrap_or(0xff);
+                if cr != (r & root_rights) || (cr & !root_rights) != 0 {
+                    ok = false;
+                }
+            }
+            Err(_) => ok = false, // root holds Grant, so mint MUST succeed
+        }
+    }
+
+    // (4) a cap WITHOUT the Grant right cannot delegate (closes any amplification path).
+    match cs.mint(0, R) {
+        Ok(nog) => {
+            if cs.mint(nog, R | W | G).is_ok() {
+                ok = false;
+            }
+        }
+        Err(_) => ok = false,
+    }
+
+    // (2) type-tag safety: a Frame is usable as a Frame; an Endpoint is NOT.
+    match (cs.retype(0, ObjType::Frame, 1024), cs.retype(0, ObjType::Endpoint, 0)) {
+        (Ok(f), Ok(e)) => {
+            if cs.as_frame(f).is_err() || cs.as_frame(e).is_ok() {
+                ok = false;
+            }
+        }
+        _ => ok = false,
+    }
+
+    // (3) revoke severs a child subtree + bumps its generation.
+    if let Ok(a) = cs.retype(0, ObjType::Untyped, 16 * 1024) {
+        if let Ok(b) = cs.retype(a, ObjType::Frame, 1024) {
+            let gen_b = cs.gen_of(b);
+            cs.revoke(a);
+            if cs.get(b).is_some() || cs.gen_of(b) == gen_b {
+                ok = false; // child must be gone AND its generation bumped
+            }
+        } else {
+            ok = false;
+        }
+    } else {
+        ok = false;
+    }
+
+    ok
+}
