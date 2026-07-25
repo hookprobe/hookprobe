@@ -248,6 +248,13 @@ pub const SEAL_POLICY_STRICT: u32 =
 /// to read OTP (V3 closed). 0 = synthetic/absent: measurement binding is
 /// cosmetic and the kernel MUST print that limitation.
 pub const SEAL_FLAG_SRK_HW_DERIVED: u64 = 1 << 0;
+/// bit1: the SRK is derived from the per-device OTP secret (PH2a) — so sealing is
+/// PER-DEVICE (a modified image on another board derives a different key), a real
+/// improvement over a global synthetic key. It is NOT yet tamper-proof on THIS board
+/// until V3/SEC-2 closes (EL1 can still read OTP and re-derive it); bit0 is set only
+/// then. bit1-without-bit0 => the kernel uses the real per-device SRK but prints that
+/// the on-device binding is not yet tamper-proof.
+pub const SEAL_FLAG_SRK_FROM_OTP: u64 = 1 << 1;
 
 /// The sealing handoff HBoot writes at `SEAL_HANDOFF_ADDR` (0 until the V3
 /// prerequisite ships). `srk` is the sealing root key; the kernel derives every

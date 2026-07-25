@@ -353,12 +353,42 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         );
     }
 
+    // PH2a: hand the sealing root key to the kernel via the SealHandoff page. HBoot
+    // derived the SRK from the OTP secret (SRK = SHA256("HEQK-SEAL-SRK-v1" || OTP)); the
+    // kernel derives every per-policy key from it and NEVER sees the OTP secret. bit1
+    // (FROM_OTP) marks the SRK real + per-device; bit0 (HW_DERIVED = tamper-proof) is set
+    // only once V3/SEC-2 closes (EL1 can no longer read OTP) — PH2b.
+    unsafe {
+        write_volatile(
+            SEAL_HANDOFF_ADDR as *mut SealHandoff,
+            SealHandoff {
+                magic: if ak.hw_bound { SEAL_HANDOFF_MAGIC } else { 0 },
+                srk: ak.srk,
+                device_id,
+                svn_floor: floor,
+                pcr: pcrs,
+                flags: if ak.hw_bound { SEAL_FLAG_SRK_FROM_OTP } else { 0 },
+            },
+        );
+    }
+    // Scrub HBoot's copy of the SRK now it is handed off (defense in depth).
+    for b in ak.srk.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    puts(if ak.hw_bound {
+        " seal   : SRK handed to kernel (per-device, OTP-derived); V3/SEC-2 open -> not yet tamper-proof\n"
+    } else {
+        " seal   : no OTP secret -> no SRK handoff (kernel keeps its synthetic seal key)\n"
+    });
+
     // Cache coherency: flush the relocated kernel and the handoff structures
-    // (quote/measure-log/BootInfo, contiguous below 0x40000000) from HBoot's
-    // D-cache to DRAM, so the kernel sees them when it reads non-cacheably at
-    // EL1 before enabling its own MMU. (I-cache is invalidated in the launch.)
+    // (SealHandoff/eph-cert/quote/measure-log/BootInfo, contiguous below 0x40000000)
+    // from HBoot's D-cache to DRAM, so the kernel sees them when it reads non-cacheably
+    // at EL1 before enabling its own MMU. (I-cache is invalidated in the launch.)
     mmu::clean_dcache_range(load_pa as usize, size as usize);
-    mmu::clean_dcache_range(ATTEST_EPH_ADDR, 0x0005_0000); // eph-cert..quote..log..bootinfo..bootdebug
+    // Start at SEAL_HANDOFF_ADDR (0x3FFA_0000) — one page below ATTEST_EPH_ADDR — so the
+    // seal handoff is flushed too: 0x3FFA_0000..0x4000_0000.
+    mmu::clean_dcache_range(SEAL_HANDOFF_ADDR, 0x0006_0000);
 
     // P7e: install stage-2 isolation (EL1 walled off from HBoot's EL2 region).
     // Programs VTCR/VTTBR; HCR_EL2.VM is flipped in hboot_launch_el1 before eret.
