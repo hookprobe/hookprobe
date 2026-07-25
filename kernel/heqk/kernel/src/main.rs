@@ -613,11 +613,15 @@ fn cm5_prod_service() -> ! {
     mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
     mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa());
     arch_aarch64::gem::tx_init(); // forwarding path for a PASS verdict
-    struct Pool([u8; packet::FRAME_SZ * 8]);
-    static mut PRODPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
-    let _pool = core::ptr::addr_of_mut!(PRODPOOL) as usize;
 
-    let (mut seen, mut forwarded, mut dropped, mut empty) = (0u64, 0u64, 0u64, 0u64);
+    // Distinct sentinel (AUDIT D3/D4) so a CONTAINED EL0 driver fault — the stub crashed
+    // before it ran its report syscall — is told apart from a benign empty window (where
+    // the stub DOES report, with 0). Without this the two collapse into `empty` and a
+    // crash-looping driver reads as a quiet link.
+    const RPT_SENTINEL: u32 = 0xFFFF_FFFF; // DRIVER_REPORT is u32; a real report is idx<<16 (< this)
+    // Telemetry invariant: seen == forwarded + dropped + tx_fail.
+    let (mut seen, mut forwarded, mut dropped) = (0u64, 0u64, 0u64);
+    let (mut empty, mut faults, mut tx_fail) = (0u64, 0u64, 0u64);
     // Wall-clock heartbeat so the sensor is visibly ALIVE on a quiet link (the empty-
     // window `continue` below skips any end-of-loop print). ~5 s cadence via cntpct.
     let cntfrq = {
@@ -635,8 +639,8 @@ fn cm5_prod_service() -> ! {
         let now = prod_cntpct();
         if now.wrapping_sub(last_hb) >= hb_interval {
             last_hb = now;
-            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} empty={} qsecbit={}\n",
-                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, empty, telemetry::score());
+            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={}\n",
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
         }
         // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
         // iteration was contained by the EL0 fault handler; this reload is the
@@ -646,14 +650,21 @@ fn cm5_prod_service() -> ! {
         arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
         mmu_cm5::map_user_code(ucode, code_pa);
 
-        DRIVER_REPORT.store(0, Ordering::Relaxed);
+        DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
         // Drop to EL0; returns here on the driver's report syscall OR on a contained fault.
         unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
 
         let report = DRIVER_REPORT.load(Ordering::Relaxed);
+        if report == RPT_SENTINEL {
+            // The driver FAULTED before reporting (contained by the EL0 fault handler; the
+            // trusted stub is re-copied above). Count it so a crash-looping driver is
+            // observable, DISTINCT from a quiet link — this is the honest self-heal signal.
+            faults += 1;
+            continue;
+        }
         let idx = ((report >> 16) & 0xff) as usize;
         // Frame length from the HW status writeback (AUDIT M-7), never the untrusted
-        // EL0 report. None => no frame this window (also the crash/empty path).
+        // EL0 report. None => the stub reported but no frame is ready -> empty window.
         let flen = match arch_aarch64::gem::rx_desc_status(idx) {
             Some(l) if l >= 14 => l,
             _ => {
@@ -661,16 +672,22 @@ fn cm5_prod_service() -> ! {
                 continue;
             }
         };
-        let mut buf = [0u8; 1600];
+        // AUDIT D5: size the buffer to the HW RX buffer (RXBUF up to 2048), NOT 1600 —
+        // a 1601..2048 B frame must not be truncated before verdict (deep-L7 evasion).
+        let mut buf = [0u8; packet::FRAME_SZ];
         let n = flen.min(buf.len());
         arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
         seen += 1;
         // The verified rule plane's verdict on the real frame.
         let (_port, v) = packet::verdict(&buf[..n]);
         if v == packet::PASS {
-            // ENFORCE: forward the frame on the wire.
+            // ENFORCE: forward on the wire; a TX-completion timeout is counted (AUDIT D2)
+            // so `seen == forwarded + dropped + tx_fail` holds and a lost PASS frame is
+            // never invisible.
             if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
                 forwarded += 1;
+            } else {
+                tx_fail += 1;
             }
         } else {
             // ENFORCE: threat verdict — dropped, NOT forwarded.
@@ -679,8 +696,8 @@ fn cm5_prod_service() -> ! {
         arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
         // A processed-frame beat too, so a busy link reports progress between the ~5 s ticks.
         if (seen & 0xff) == 0 && seen != 0 {
-            kprint!("   [PROD hb] seen={} fwd={} drop={} empty={} qsecbit={} (frame-beat)\n",
-                seen, forwarded, dropped, empty, telemetry::score());
+            kprint!("   [PROD hb] seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={} (frame-beat)\n",
+                seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
         }
     }
 }
@@ -1264,13 +1281,58 @@ fn read_seal_handoff() -> Option<&'static boot_abi::SealHandoff> {
     (sh.magic == boot_abi::SEAL_HANDOFF_MAGIC).then_some(sh)
 }
 
+/// PH2a (AUDIT R1): consume the SRK from the fixed handoff page EXACTLY ONCE — copy it into
+/// kernel-private `.bss` (not the well-known 0x3FFA_0000 address, and never EL0-mappable),
+/// then SCRUB the 32 SRK bytes in the page (write-zero + `dsb` + `dc civac` to DRAM) so the
+/// master seal key does not persist in plaintext at a constant address for an EL1 leak, an
+/// EL0 frame-map of that PA, or a non-IOMMU-contained DMA peer to lift. magic/device_id/pcr/
+/// flags are LEFT intact (not secret) so the status print still reads them. Returns None on a
+/// device with no handoff (synthetic-key fallback).
+#[cfg(feature = "hboot")]
+fn seal_srk() -> Option<[u8; 32]> {
+    static mut SRK_PRIV: [u8; 32] = [0u8; 32];
+    static mut SRK_STATE: u8 = 0; // 0 = unread, 1 = present, 2 = absent
+    unsafe {
+        if SRK_STATE == 0 {
+            let sh = &*(boot_abi::SEAL_HANDOFF_ADDR as *const boot_abi::SealHandoff);
+            if sh.magic == boot_abi::SEAL_HANDOFF_MAGIC {
+                SRK_PRIV = sh.srk;
+                // Scrub the SRK bytes at page offset 8 (immediately after the u64 magic).
+                let p = (boot_abi::SEAL_HANDOFF_ADDR + 8) as *mut u8;
+                for i in 0..32 {
+                    core::ptr::write_volatile(p.add(i), 0u8);
+                }
+                // Push the zeros out to DRAM so a physical / DMA read can't recover the key.
+                core::arch::asm!(
+                    "dsb sy",
+                    "dc civac, {a}",
+                    "dsb sy",
+                    a = in(reg) (boot_abi::SEAL_HANDOFF_ADDR + 8),
+                    options(nostack),
+                );
+                SRK_STATE = 1;
+            } else {
+                SRK_STATE = 2;
+            }
+        }
+        if SRK_STATE == 1 {
+            Some(SRK_PRIV)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(all(feature = "cm5", feature = "hboot"))]
 fn p15_seal_ram_demo() -> bool {
     use seal::{Policy, SealBlob, SealErr};
-    // PH2a: seal with the REAL per-device SRK + policy from the HBoot handoff when
-    // present; fall back to the synthetic key on a device with no OTP secret.
+    // PH2a: seal with the REAL per-device SRK + policy from the HBoot handoff when present;
+    // fall back to the synthetic key on a device with no OTP secret. `seal_srk()` copies the
+    // key into kernel-private storage and scrubs the fixed handoff page (AUDIT R1); the
+    // non-secret fields (device_id/pcr/flags) stay readable via read_seal_handoff().
+    let srk = seal_srk().unwrap_or([0x5au8; 32]);
     let handoff = read_seal_handoff();
-    let srk = handoff.map(|h| h.srk).unwrap_or([0x5au8; 32]);
+    let keylabel = if handoff.is_some() { "per-device OTP SRK" } else { "SYNTHETIC key" };
     let (device_id, svn_floor, pcr) = match handoff {
         Some(h) => (h.device_id, h.svn_floor, h.pcr),
         None => {
@@ -1316,7 +1378,8 @@ fn p15_seal_ram_demo() -> bool {
         // ...and the second blob still round-trips (nonce carried in its own header).
         && matches!(seal::unseal(&srk, &policy, blob2.as_slice(), &mut pt),
             Ok(n) if &pt[..n] == secret);
-    kprint!("   [P15] in-RAM seal/unseal (SYNTHETIC key): round-trip {}, wrong-measurement {}, tamper {}, no-reuse {}\n",
+    kprint!("   [P15] in-RAM seal/unseal ({}): round-trip {}, wrong-measurement {}, tamper {}, no-reuse {}\n",
+        keylabel,
         if round { "MATCH" } else { "MISMATCH" },
         if wrong_refused { "REFUSED" } else { "LEAK!" },
         if tamper_refused { "REFUSED" } else { "LEAK!" },
