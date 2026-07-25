@@ -143,7 +143,14 @@ buildable step with explicit acceptance criteria, built and validated one at a t
 | **PH6** | P17 smoltcp EL0 service — measured, TRNG-seeded, bounded (largest attack surface) | ✅ software |
 | **PH7** | Assurance closeout — close the QEMU↔metal gap (XC-15) + final security review → declare G3 | ✅ software |
 
-### PH1 — Production service profile  *(START HERE)*
+### PH1 — Production service profile  *(BUILT — QEMU-gated; metal flash pending)*
+**Status 2026-07-25:** `prod` feature added (`cargo build --features prod`). The metal
+`cm5_prod_service()` loop is implemented (isolated EL0 GEM driver → `packet::verdict` →
+forward PASS via `gem::tx_frame` / drop threat → recycle → throttled telemetry; per-iteration
+trusted-stub reload = structural self-heal; never returns). The enforce decision is gated on
+QEMU by `[PHprod] PASS` (10 benign FORWARDED, 6 threat DROPPED). **Remaining for acceptance:**
+flash a `prod` image and confirm `[PROD] HEQK sensor UP` + live heartbeats on silicon.
+
 - **Build:** a `prod` boot-mode/feature that SKIPS the P0–P17 self-test sequence and instead does
   minimal bring-up (MMU, caps, EL0, NIC via the isolated EL0 driver) → loads the compiled ruleset
   → runs the continuous **RX → classify → verdict → enforce** datapath (reusing the P7c EL0-driver
