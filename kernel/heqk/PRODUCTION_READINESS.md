@@ -126,7 +126,71 @@ should still be metal-smoke-tested**, not QEMU-only.
 
 ---
 
+## 7. Production-Hardening Roadmap (the path from G2 → G3)
+
+P0–P17 (§2) are the *capability* phases and are complete (QEMU-green, silicon-proven).
+The phases below (**PH1–PH7**) are the *productization* phases — each is a discrete,
+buildable step with explicit acceptance criteria, built and validated one at a time
+(same discipline as the P0–P17 finalize sequence). Ordered by dependency + value.
+
+| Phase | Goal | Autonomy |
+|-------|------|----------|
+| **PH1** | Production service profile — HEQK boots into the *running sensor*, not the self-test | ✅ software |
+| **PH2** | Real root of trust — SRK from OTP (closes V3/SEC-2); EL1 cannot read OTP | ✅ software, metal-gated |
+| **PH3** | Anti-rollback advancement + attest-key TRNG liveness (SEC-6/SEC-7) | ✅ software |
+| **PH4** | Production signing + release pipeline (dev keys → key custody) | ⚠️ needs key-custody decision |
+| **PH5** | P11 metal device-class drivers (GemDev/RtlDev on the hardened transport) | ✅ software, metal-iterative |
+| **PH6** | P17 smoltcp EL0 service — measured, TRNG-seeded, bounded (largest attack surface) | ✅ software |
+| **PH7** | Assurance closeout — close the QEMU↔metal gap (XC-15) + final security review → declare G3 | ✅ software |
+
+### PH1 — Production service profile  *(START HERE)*
+- **Build:** a `prod` boot-mode/feature that SKIPS the P0–P17 self-test sequence and instead does
+  minimal bring-up (MMU, caps, EL0, NIC via the isolated EL0 driver) → loads the compiled ruleset
+  → runs the continuous **RX → classify → verdict → enforce** datapath (reusing the P7c EL0-driver
+  server + P8 inline IPS + P17 dual-direction gate) → stays up, self-heals on driver crash, streams
+  telemetry/QSecBit to the SOAR ring.
+- **Acceptance:** metal boot reaches a *running* sensor that continuously forwards benign / drops
+  threat traffic on the real NIC, survives a driver crash-restart, and has NO self-test scaffolding
+  on the production path. `validate.sh` still green for the (separate) test build.
+
+### PH2 — Real root of trust: SRK from OTP  (closes V3/SEC-2)
+- **Build:** HBoot (EL2) reads the OTP secret, derives `SRK = KDF(OTP, PCR0_after_self_measure)`,
+  passes it via a `SealHandoff` in `BootInfo`; blocks EL1 OTP access; the kernel consumes the real
+  SRK and drops the synthetic one. **READ-only on OTP — no new burn** (the per-device AK is already
+  provisioned; irreversible fuses are never touched here).
+- **Acceptance:** `[P15]` stops printing the synthetic-limit line; a blob sealed on device A fails to
+  unseal on device B (different OTP); an EL1 OTP read returns blocked/zero (verified on metal).
+
+### PH3 — Anti-rollback advancement + attest liveness  (SEC-6/SEC-7)
+- **Build:** a real monotonic SVN counter (sealed store or fuse row) + an `advance_floor` release
+  step; attest seed/nonce require full TRNG liveness (`live==8`) or refuse to publish the key.
+- **Acceptance:** a lower-SVN signed image is refused on metal; attest-key generation aborts without
+  liveness.
+
+### PH4 — Production signing + release pipeline
+- **Build:** move from the dev signer (`~/heqk-sign`) to production key custody (HSM / key ceremony),
+  reproducible signed-image build, SVN bump, release manifest with image hash.
+- **Acceptance:** a production-signed image boots; key custody documented.
+- **NOTE:** blocked on a **user decision** about key custody — cannot be finalized autonomously.
+
+### PH5 — P11 metal device-class drivers (GemDev / RtlDev)
+- **Build:** real GemDev (RP1 GEM) + RtlDev (RTL8111) implementing the DevQ NetClass on metal (not
+  just LoopDev/QEMU); wire RX-IRQ/MSI (DRV-1/XC-4).
+- **Acceptance:** `[P11]` passes on metal with real NIC traffic; forged-descriptor rejection holds.
+
+### PH6 — P17 smoltcp EL0 service
+- **Build:** smoltcp as an EL0 service — TRNG-seeded, pinned + checksummed + measured into PCR3,
+  bounded resource use, fault-contained.
+- **Acceptance:** `[P17]` handles real TCP with the stack measured into PCR3; faults are contained.
+
+### PH7 — Assurance closeout → declare G3
+- **Build:** dual-backend cap-invariant property tests (close XC-15), metal-smoke every security
+  path, re-run the full audit, update this report to reflect G3 met.
+- **Acceptance:** readiness shows **G3 Metal-hardened ✅**; security review clean.
+
+---
+
 _This report is honest about what is done and what is not. G1/G2 are complete and every
 audited finding through 2026-07-25 is closed or verified not-present (see GAP_REGISTER.md).
-The remaining work in §4 is bounded, metal-gated, and largely tied to hardware roots of trust
-and signing keys that must not — and cannot — be exercised from an emulator._
+§7 is the ordered path to G3; PH1 is in progress. The items that cannot be finalized
+autonomously (PH4 key custody, the irreversible-fuse steps) are flagged as such._
