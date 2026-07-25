@@ -310,6 +310,12 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // hash. Re-hash the payload AT ITS DESTINATION and refuse to launch on a mismatch.
     let recheck = sha256::digest(unsafe { core::slice::from_raw_parts(load_pa as *const u8, size as usize) });
     if recheck != computed {
+        // AUDIT R4 (defense in depth): scrub the derived SRK off HBoot's stack before we
+        // halt, so a live master seal key does not linger in RAM on a refused boot.
+        for b in ak.srk.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        unsafe { core::arch::asm!("dsb sy") };
         puts(" secure boot: FAIL — payload hash mismatch after relocation (SEC-4), refusing to boot\n");
         unsafe { park() }
     }
