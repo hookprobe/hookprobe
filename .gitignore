@@ -28,12 +28,13 @@ builder/generated/
 
 # ── ADR 0044 / Phase-0 GitHub-prep hardening (2026-07-25) ─────────────────────
 # History was purged with git-filter-repo (2026-07-25): builder/release.key*, the
-# kernel-build .deb bloat, .claude/cortex/ telemetry, and the personal `DEV-CRED-SCRUBBED`
-# dev credential are gone from ALL commits (verified: `git rev-list --all | git grep`
-# returns clean). These rules keep them from ever re-entering the tree.
+# kernel-build .deb bloat, .claude/cortex/ telemetry, and a personal dev credential
+# (both the operator username and a hardcoded wifi password) are gone from ALL
+# commits — including the inherited HEQK history (verified clean). These rules keep
+# them from ever re-entering the tree.
 #
 # Secrets / private key material — MUST NEVER be tracked (defense-in-depth; the
-# committed `builder/release.key*` still needs an explicit history purge + rotate).
+# committed signing keys were purged from history — production signs via HSM/keyless).
 builder/release.key
 builder/release.key*
 *.key
