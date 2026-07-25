@@ -121,3 +121,12 @@ dataplane_tuning:
   rps_default: false
   rps_cpu_mask: 1
   housekeeping_allowed_cpus:
+
+# ADR 0043 / MIGRATION-heqk.md Phase M1 — substrate selector for the rpi-native tier.
+# `linux` (DEFAULT, shipping): the Debian/hookprobe-edge kernel via make-pi-image.sh.
+# `heqk`: the heqk microkernel substrate (kernel/heqk) via builder/make-cm5-heqk-image.sh —
+# a PARALLEL variant that produces config.txt kernel=heqk8.img. Do NOT promote heqk to the
+# default until the M2 gates (P8 rule-parity + the 0.7 enforcement-separation matrix + Gate R)
+# pass on heqk metal. The CM5 (raspberrypi,5-compute-module / brcm,bcm2712) matches this rpi5
+# profile; the substrate only swaps the kernel+boot wrapper, the rootfs/brain is shared.
+substrate: linux

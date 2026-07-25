@@ -231,3 +231,37 @@ _This report is honest about what is done and what is not. G1/G2 are complete an
 audited finding through 2026-07-25 is closed or verified not-present (see GAP_REGISTER.md).
 §7 is the ordered path to G3; PH1 is in progress. The items that cannot be finalized
 autonomously (PH4 key custody, the irreversible-fuse steps) are flagged as such._
+
+---
+
+## 8. Remaining work — what is NOT autonomously completable (2026-07-25)
+
+Everything build-blindable is done + QEMU-gated, and PH1/PH2a/PH7 + the whole audit are
+metal-validated. The tasks below are terminal for autonomous work; each needs either an
+OPERATOR DECISION or a METAL bring-up loop (agreed: not built blind).
+
+### Operator decisions
+- **PH4 — production signing key custody.** The signing PIPELINE is realized: `mkimage-hboot.sh`
+  hybrid-signs (ed25519 + SLH-DSA) and `builder/make-cm5-heqk-image.sh` invokes it. It currently
+  uses the DEV signer at `~/heqk-sign`. **Decision needed:** production key custody — HSM vs
+  offline key ceremony vs KMS — and mapping hookprobe-os's ML-DSA-65+Ed25519 release key to
+  heqk `hboot`'s boot key (ADR 0043 D4 "the two trust chains merge"). One decision from done.
+- **Version control of the unified tree.** DONE — hookprobe-os is now `git init`'d (commit f149fef);
+  heqk's 316-commit history is preserved at `~/heqk-git-history-backup-20260725.tar.gz`.
+
+### Next metal bring-up session (the board in a flash→debug loop)
+1. **PH2b — EL1 cannot read OTP (V3/SEC-2 tamper-proofing).** Returning HVC mailbox proxy in
+   `hboot/boot.s` (tag allowlist refusing GET_USER_OTP 0x0003_0024 / 0x0003_8024) + stage-2
+   fine-grain carve of the mailbox page (0x10_7C01_3000) + reroute the kernel's get/set_clock_rate
+   through the proxy. Flips `[P15-SRK]` → `[P15-BOUND]` (bit0). Brick-prone EL2 asm — iterate.
+2. **PH3 / SEC-6 — anti-rollback SVN advancement.** Real monotonic SVN counter (sealed store or
+   OTP fuse — IRREVERSIBLE) + `advance_floor` release step. Refuse a lower-SVN image on metal.
+3. **PH5 — metal NIC drivers + `tx_fail` tuning.** Real GemDev/RtlDev on the DevQ NetClass;
+   tune the GEM TX-completion path (metal shows `tx_fail ≈ 7%`, now observable). RX-IRQ/MSI-X.
+4. **PH6-metal — smoltcp EL0 service.** Run `netsvc` as the EL0-isolated service over the live
+   netq (needs the multi-page EL0 loader, DSN-10), a TRNG `random_seed`, PCR3 measurement (DSN-11).
+
+### Migration continuation (governed, in MIGRATION-heqk.md — Track C)
+PH8/M1 landed. **M2** (detection parity: port the hookprobe-os catalogue to RFC 9669 + the 0.7
+enforcement-separation matrix on heqk metal) → **M3** storage/OTA → **M4** net stack → **M5**
+loader+Wasm host → **M6** app-tier Linux guest → **M7** unbuild. Each Amber/operator-gated.
