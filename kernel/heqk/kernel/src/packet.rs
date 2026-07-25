@@ -218,6 +218,41 @@ pub fn strip_vlan_selftest() -> bool {
     ok
 }
 
+/// PH1 production-datapath proof. The persistent sensor's core decision is: for each
+/// frame, `verdict()` -> ENFORCE (PASS => forward on the wire, threat => drop). This
+/// runs a mixed batch (benign :53 + threat :4444) as the continuous loop would see it
+/// and asserts EVERY benign frame is forwarded and EVERY threat frame dropped. The
+/// metal `cm5_prod_service` loop wraps this exact decision around a real EL0-driven
+/// NIC (with self-heal on driver crash); this gates the enforce logic on QEMU.
+/// Returns (ok, forwarded, dropped).
+pub fn prod_datapath_selftest() -> (bool, u32, u32) {
+    let mut benign = [0u8; FRAME_SZ];
+    let blen = build_udp_frame(&mut benign, 53);
+    let mut threat = [0u8; FRAME_SZ];
+    let tlen = build_udp_frame(&mut threat, 4444);
+    let (mut forwarded, mut dropped, mut ok) = (0u32, 0u32, true);
+    for i in 0..16u32 {
+        let is_threat = i % 3 == 0; // threats at 0,3,6,9,12,15 -> 6 threat, 10 benign
+        let frame: &[u8] = if is_threat { &threat[..tlen] } else { &benign[..blen] };
+        let (_port, v) = verdict(frame);
+        let forward = v == PASS;
+        if forward {
+            forwarded += 1;
+        } else {
+            dropped += 1;
+        }
+        // The enforce invariant: benign MUST forward, threat MUST drop.
+        if is_threat && forward {
+            ok = false;
+        }
+        if !is_threat && !forward {
+            ok = false;
+        }
+    }
+    ok = ok && forwarded == 10 && dropped == 6;
+    (ok, forwarded, dropped)
+}
+
 fn classify(frame: &[u8]) -> (u16, u16) {
     // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
     let mut nbuf = [0u8; FRAME_SZ];

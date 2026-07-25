@@ -252,19 +252,30 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
     cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
     cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
-    cm5_gem_el0_server(); // stage 4d: continuous, restartable isolated EL0 driver server
-
     // --- P8 (RX-IRQ): enable interrupt-driven RX (LAST — bounded, self-contained) ---
     cm5_gem_rx_irq_probe();
 
-    kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
-    // After the banner: drain the UART, then request reboot via `hvc #0` —
-    // the EL2 gate performs the PM reset (EL1 writes to the PM block are
-    // silently ignored; EL2 is the proven path). The bench self-recovers.
-    for _ in 0..200_000_000u64 {
-        core::hint::spin_loop();
+    // PH1 — GO LIVE (a `prod` build). Every bring-up phase above has run (MMU/W^X,
+    // scheduler, verified rule plane, GEM Ethernet, the P14 IOMMU DMA fence, and the
+    // isolated EL0 driver just proven on stages 1-4a), so enter the persistent
+    // RX -> verdict -> ENFORCE sensor loop. It never returns and never reboots.
+    #[cfg(feature = "prod")]
+    cm5_prod_service();
+
+    // --- Self-test build: the bounded restartable EL0 server demo, then reboot the
+    //     bench (a `prod` build replaces this tail with the live service above). ---
+    #[cfg(not(feature = "prod"))]
+    {
+        cm5_gem_el0_server(); // stage 4d: continuous, restartable isolated EL0 driver server
+        kprint!(" halting; next: RP1 networking (the packet-plane keystone)\n");
+        // After the banner: drain the UART, then request reboot via `hvc #0` —
+        // the EL2 gate performs the PM reset (EL1 writes to the PM block are
+        // silently ignored; EL2 is the proven path). The bench self-recovers.
+        for _ in 0..200_000_000u64 {
+            core::hint::spin_loop();
+        }
+        unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
     }
-    unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
 }
 
 /// A/B boot confirm (reliability keystone): once the security-critical services
@@ -555,6 +566,89 @@ fn cm5_gem_el0_server() {
     }
     kprint!(" [P7c] {} — EL0 driver SERVER processed {} frames + survived {} crash-restart — continuous isolated driver (4d)\n",
         if processed >= 1 && crashes >= 1 { "PASS" } else { "FAIL" }, processed, crashes);
+}
+
+/// PH1 — the PRODUCTION service loop (NEVER returns). This is what a `prod` build boots
+/// into INSTEAD of the P0-P17 self-test sequence: an ISOLATED EL0 GEM driver polls the
+/// RX ring and the kernel runs every real frame through the verified rule plane, then
+/// ENFORCES — a PASS verdict is FORWARDED on the wire (`gem::tx_frame`), a threat verdict
+/// is DROPPED (never forwarded). The NIC driver runs unprivileged in its own EL0 context;
+/// the trusted stub is reloaded each iteration, so a driver crash (contained by the EL0
+/// fault handler, exactly as [P7c] proves) simply costs one empty window and the loop
+/// keeps running — structural self-heal. Telemetry is emitted on a throttle. The running
+/// sensor: it does not halt and does not reboot.
+#[cfg(feature = "cm5")]
+fn cm5_prod_service() -> ! {
+    use arch_aarch64::mmu_cm5;
+    arch_aarch64::disable_irqs();
+    extern "C" {
+        static gem_ids_stub: u8;
+        static gem_ids_stub_end: u8;
+    }
+    let ids = (
+        core::ptr::addr_of!(gem_ids_stub) as usize,
+        core::ptr::addr_of!(gem_ids_stub_end) as usize,
+    );
+    let code_pa = mmu_cm5::el0_code_pa();
+    let ucode = mmu_cm5::USER_VA_BASE;
+    let ustack = mmu_cm5::USER_VA_BASE + 0x1000;
+    let uring = mmu_cm5::USER_VA_BASE + 0x3000;
+    mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
+    mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa());
+    arch_aarch64::gem::tx_init(); // forwarding path for a PASS verdict
+    struct Pool([u8; packet::FRAME_SZ * 8]);
+    static mut PRODPOOL: Pool = Pool([0; packet::FRAME_SZ * 8]);
+    let _pool = core::ptr::addr_of_mut!(PRODPOOL) as usize;
+
+    let (mut seen, mut forwarded, mut dropped, mut empty) = (0u64, 0u64, 0u64, 0u64);
+    kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
+    loop {
+        // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
+        // iteration was contained by the EL0 fault handler; this reload is the
+        // structural self-heal ([P7c] proves the contain+restart survives).
+        let len = ids.1 - ids.0;
+        unsafe { core::ptr::copy_nonoverlapping(ids.0 as *const u8, code_pa as *mut u8, len) };
+        arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+        mmu_cm5::map_user_code(ucode, code_pa);
+
+        DRIVER_REPORT.store(0, Ordering::Relaxed);
+        // Drop to EL0; returns here on the driver's report syscall OR on a contained fault.
+        unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+
+        let report = DRIVER_REPORT.load(Ordering::Relaxed);
+        let idx = ((report >> 16) & 0xff) as usize;
+        // Frame length from the HW status writeback (AUDIT M-7), never the untrusted
+        // EL0 report. None => no frame this window (also the crash/empty path).
+        let flen = match arch_aarch64::gem::rx_desc_status(idx) {
+            Some(l) if l >= 14 => l,
+            _ => {
+                empty += 1;
+                continue;
+            }
+        };
+        let mut buf = [0u8; 1600];
+        let n = flen.min(buf.len());
+        arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
+        seen += 1;
+        // The verified rule plane's verdict on the real frame.
+        let (_port, v) = packet::verdict(&buf[..n]);
+        if v == packet::PASS {
+            // ENFORCE: forward the frame on the wire.
+            if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
+                forwarded += 1;
+            }
+        } else {
+            // ENFORCE: threat verdict — dropped, NOT forwarded.
+            dropped += 1;
+        }
+        arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
+
+        // Throttled telemetry so the console is not flooded at line rate.
+        if (seen & 0xff) == 0 && seen != 0 {
+            kprint!("   [PROD hb] seen={} forwarded={} dropped={} empty_windows={} qsecbit={}\n",
+                seen, forwarded, dropped, empty, telemetry::score());
+        }
+    }
 }
 
 /// P7b: spawn priority workers, bring up GIC-400 + the generic timer, enable
@@ -1919,6 +2013,15 @@ pub extern "C" fn kmain() -> ! {
     // IPS gating + EL0 monotonic counter (the smoltcp EL0 service itself is a
     // documented follow-up). QEMU-validatable core only. ---
     p17_overlay_qemu();
+
+    // --- PH1: production-datapath enforce logic — the decision the metal prod service
+    // loop makes on every real frame (PASS -> forward, threat -> drop). QEMU gate for
+    // the enforce invariant; the persistent EL0-driven loop itself is cm5-only. ---
+    {
+        let (ok, fwd, drp) = packet::prod_datapath_selftest();
+        kprint!(" [PHprod] {} — production datapath enforce: {} benign FORWARDED, {} threat DROPPED (verdict-per-frame, the running-sensor decision)\n",
+            if ok { "PASS" } else { "FAIL" }, fwd, drp);
+    }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
     // transport that REJECTS a hostile driver's forged descriptors, proven with an
