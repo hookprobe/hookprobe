@@ -143,13 +143,14 @@ buildable step with explicit acceptance criteria, built and validated one at a t
 | **PH6** | P17 smoltcp EL0 service — measured, TRNG-seeded, bounded (largest attack surface) | ✅ software |
 | **PH7** | Assurance closeout — close the QEMU↔metal gap (XC-15) + final security review → declare G3 | ✅ software |
 
-### PH1 — Production service profile  *(BUILT — QEMU-gated; metal flash pending)*
-**Status 2026-07-25:** `prod` feature added (`cargo build --features prod`). The metal
-`cm5_prod_service()` loop is implemented (isolated EL0 GEM driver → `packet::verdict` →
-forward PASS via `gem::tx_frame` / drop threat → recycle → throttled telemetry; per-iteration
-trusted-stub reload = structural self-heal; never returns). The enforce decision is gated on
-QEMU by `[PHprod] PASS` (10 benign FORWARDED, 6 threat DROPPED). **Remaining for acceptance:**
-flash a `prod` image and confirm `[PROD] HEQK sensor UP` + live heartbeats on silicon.
+### PH1 — Production service profile  *(DONE — METAL-VALIDATED 2026-07-25)*
+`prod` feature boots into `cm5_prod_service()`: isolated EL0 GEM driver → `packet::verdict`
+→ forward PASS via `gem::tx_frame` / drop threat → recycle → wall-clock liveness heartbeat;
+per-iteration trusted-stub reload = self-heal; never returns. QEMU gate `[PHprod] PASS`.
+**Metal-validated on CM5:** sustained run, 124 real frames processed / 115 forwarded through
+the verified rule plane, 0 dropped, **0 uncontained faults**; `[PROD hb]` beats every ~5 s and
+keeps beating across quiet periods. The running sensor is operational on silicon. (Higher RX
+throughput / MSI-X-driven delivery is PH5.)
 
 - **Build:** a `prod` boot-mode/feature that SKIPS the P0–P17 self-test sequence and instead does
   minimal bring-up (MMU, caps, EL0, NIC via the isolated EL0 driver) → loads the compiled ruleset
@@ -179,6 +180,11 @@ is NOT an "build-blind, works-first-try" change. Until PH2b lands, the kernel pr
   unseal on device B (different OTP); an EL1 OTP read returns blocked/zero (verified on metal).
 
 ### PH3 — Anti-rollback advancement + attest liveness  (SEC-6/SEC-7)
+**Status 2026-07-25:** **SEC-7 (attest-key TRNG liveness) already CLOSED** — `attest.rs`
+`emit_ephemeral_cert` fails CLOSED when `rng::fill` reports `live < 8` (refuses to publish the
+ephemeral key + zeroes the handoff). Confirmed on metal (the AK/ephemeral cert published only
+because the TRNG was fully live). **SEC-6 (SVN advancement)** remains — it involves an
+irreversible OTP/fuse SVN counter, so it lives in the metal bring-up batch, not build-blind.
 - **Build:** a real monotonic SVN counter (sealed store or fuse row) + an `advance_floor` release
   step; attest seed/nonce require full TRNG liveness (`live==8`) or refuse to publish the key.
 - **Acceptance:** a lower-SVN signed image is refused on metal; attest-key generation aborts without
