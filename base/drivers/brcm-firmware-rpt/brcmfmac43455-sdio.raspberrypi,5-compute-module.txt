@@ -6,7 +6,9 @@ devid=0x43ab
 manfid=0x2d0
 prodid=0x06e4
 #macaddr=00:90:4c:c5:12:38
-macaddr=DEVICE-OTP-MAC
+# macaddr intentionally omitted -- device uses its own OTP/eeprom MAC.
+# A hardcoded macaddr here leaks a specific unit's MAC and causes MAC
+# collisions across every flashed device. Scrubbed in Phase-0 GitHub prep.
 nocrc=1
 boardtype=0x6e4
 boardrev=0x1304
