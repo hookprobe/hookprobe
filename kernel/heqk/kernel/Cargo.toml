@@ -33,6 +33,13 @@ p10bt = []
 # built, writes are hard-clamped to LBA 2016..2047 by two independent gates.
 #   cargo build -p kernel --features hboot,p15-write --release
 p15-write = ["arch-aarch64/p15-write"]
+# PH1 — PRODUCTION service profile. Instead of the P0-P17 self-test sequence that
+# reboots at the end, boot into the persistent RX->classify->verdict->ENFORCE sensor
+# datapath: an isolated EL0 GEM driver feeds real frames to the verified rule plane,
+# PASS is forwarded on the wire, a threat verdict is dropped, the driver self-heals on
+# crash, and the loop NEVER halts. Implies hboot (metal, EL2-launched, measured boot).
+#   cargo build -p kernel --features prod --release
+prod = ["hboot"]
 
 [[bin]]
 name = "kernel"
