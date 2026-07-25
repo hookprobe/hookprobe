@@ -12,8 +12,17 @@ boot-abi     = { path = "../boot-abi" }
 # challenge nonces with a per-boot EPHEMERAL ed25519 key (fast/small — no
 # SLH-DSA in the kernel; the device AK stays in HBoot). Bare-metal, no std/RNG.
 ed25519-compact = { version = "2", default-features = false }
+# PH6 — smoltcp TCP/IP stack for the net service (behind `netsvc`, OFF by default so the
+# default/prod kernel TCB is untouched). no_std, no heap. The production target runs this
+# as an EL0-ISOLATED service over the P17 rule-plane-gated netq; the `netsvc` build gates
+# the stack integration on QEMU (smoltcp answers an ARP under packet::verdict both ways).
+smoltcp = { version = "0.13", default-features = false, features = [
+    "proto-ipv4", "medium-ethernet", "socket-udp",
+], optional = true }
 
 [features]
+# PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
+netsvc = ["dep:smoltcp"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
