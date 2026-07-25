@@ -195,48 +195,52 @@ LABEL=BOOTFS          /boot/firmware vfat  defaults,nofail   0 2
 FSTAB
 mkdir -p "$WORK/p2/boot/firmware"
 
-# ---- ADMIN ACCESS — GATED (ADR 0008; security-audit F1) ----------------------------------
-# Release images ship NO password auth, NO root login, and NO default password user — access is
-# via an enrolled SSH key (dashboard-first). The bring-up debug logins (andrei/root passwords)
-# are opt-in ONLY: set HOOKPROBE_DEBUG_ACCESS=1. Default OFF so a shipped image is never trivially
-# cracked (hydra cracked root:hookprobe when this block was unconditional).
-#   debug build:  HOOKPROBE_DEBUG_ACCESS=1  →  ssh andrei@<ip> pw DEV-CRED-SCRUBBED · ssh root@<ip> pw hookprobe
+# ---- ADMIN ACCESS — GATED (ADR 0008; security-audit F1; credentials neutralized to the
+# default hookprobe/hookprobe login per ADR 0045, 2026-07-25) ------------------------------
+# Release images ship NO password auth, NO root login, and NO login-capable account — access is
+# via an enrolled SSH key (dashboard-first). The bring-up debug login (hookprobe/root passwords)
+# is opt-in ONLY: set HOOKPROBE_DEBUG_ACCESS=1. Default OFF so a shipped image is never trivially
+# cracked (hydra cracked root:hookprobe when this block was unconditional). Debug mode elevates
+# the existing hookprobe SERVICE account (created by mkosi.postinst, normally nologin) into a
+# login admin instead of creating a second account.
+#   debug build:  HOOKPROBE_DEBUG_ACCESS=1  →  ssh hookprobe@<ip> pw hookprobe · ssh root@<ip> pw hookprobe
 RT="$WORK/p2"
 mkdir -p "$RT/etc/ssh/sshd_config.d" "$RT/etc/systemd/system/multi-user.target.wants"
 if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
   # DEBUG-ONLY: cracked-by-design credentials. NEVER set this flag for a release build.
-  A_HASH='DEV-HASH-SCRUBBED'
   R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
-  if ! grep -q '^andrei:' "$RT/etc/passwd"; then
-    echo "andrei:x:1000:1000:HookProbe debug:/home/andrei:/bin/bash" >> "$RT/etc/passwd"
-    echo "andrei:${A_HASH}:20000:0:99999:7:::" >> "$RT/etc/shadow"
-    echo "andrei:x:1000:" >> "$RT/etc/group"
-    mkdir -p "$RT/home/andrei"; cp -rT "$RT/etc/skel" "$RT/home/andrei" 2>/dev/null || true
-    chown -R 1000:1000 "$RT/home/andrei" 2>/dev/null || true
+  if grep -q '^hookprobe:' "$RT/etc/passwd"; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/bin/bash"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
   fi
-  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="andrei"; else if($4 !~ /(^|,)andrei(,|$)/) $4=$4",andrei" } 1' \
+  sed -i "s|^hookprobe:[^:]*:|hookprobe:${R_HASH}:|" "$RT/etc/shadow"
+  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="hookprobe"; else if($4 !~ /(^|,)hookprobe(,|$)/) $4=$4",hookprobe" } 1' \
     "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   sed -i "s|^root:[^:]*:|root:${R_HASH}:|" "$RT/etc/shadow"
   rm -f "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf" 2>/dev/null || true
   printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > "$RT/etc/ssh/sshd_config.d/10-hookprobe-debug.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "debug" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: DEBUG (andrei sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
+  echo "  ADMIN ACCESS: DEBUG (hookprobe sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
 else
-  # RELEASE: lock root, no default password user, harden sshd (key-only, no root login).
-  # Defense-in-depth (2026-07-07 backend audit F2): mkosi.postinst now gates account creation
-  # at the SOURCE, so a fresh release-mode base rootfs never carries 'andrei' — but this
-  # branch must not assume that: strip it explicitly here too, in case $SRC was built with
-  # HOOKPROBE_DEBUG_ACCESS=1 and fed into a "release" make-pi4-image.sh run by mistake. A
-  # release .img must have ZERO default-credential sudo accounts, full stop.
+  # RELEASE: lock root, revert the hookprobe account to no-login, harden sshd (key-only, no root
+  # login). Defense-in-depth (2026-07-07 backend audit F2): mkosi.postinst now gates account
+  # elevation at the SOURCE, so a fresh release-mode base rootfs never carries a login-capable
+  # hookprobe account — but this branch must not assume that: strip it explicitly here too, in
+  # case $SRC was built with HOOKPROBE_DEBUG_ACCESS=1 and fed into a "release" make-pi4-image.sh
+  # run by mistake. A release .img must have ZERO default-credential sudo accounts, full stop.
+  # Also strips a leftover legacy 'andrei' entry (pre-ADR-0045 rootfs).
+  if grep -q '^hookprobe:' "$RT/etc/passwd" 2>/dev/null; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/usr/sbin/nologin"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
+  fi
+  sed -i 's|^hookprobe:[^:]*:|hookprobe:!:|' "$RT/etc/shadow" 2>/dev/null || true
   if grep -q '^andrei:' "$RT/etc/passwd" 2>/dev/null; then
     sed -i '/^andrei:/d' "$RT/etc/passwd"
     sed -i '/^andrei:/d' "$RT/etc/shadow"
     sed -i '/^andrei:/d' "$RT/etc/group"
     rm -rf "$RT/home/andrei"
-    echo "  defense-in-depth: stripped leftover 'andrei' debug account from the release rootfs"
+    echo "  defense-in-depth: stripped leftover legacy 'andrei' debug account from the release rootfs"
   fi
   if grep -q '^sudo:' "$RT/etc/group" 2>/dev/null; then
-    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
+    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="hookprobe" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
       "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   fi
   sed -i 's|^root:[^:]*:|root:!:|' "$RT/etc/shadow" 2>/dev/null || true
@@ -244,7 +248,7 @@ else
   printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
     > "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "release" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: RELEASE (root locked, no andrei, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
+  echo "  ADMIN ACCESS: RELEASE (root locked, no login account, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
 fi
 # ssh service + the E1/E2/flow-fix operational services (make-pi4-only builds don't re-run preset-all)
 # GAP-1 (2026-07-16): only a DEBUG image runs sshd. Release has no login user + root locked, so a

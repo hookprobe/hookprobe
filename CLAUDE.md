@@ -13,21 +13,25 @@ When these docs and this file disagree, **the docs win** — update this file to
 
 ---
 
-## The three load-bearing decisions (don't relitigate)
+## The three load-bearing decisions
 
-1. **The OS is a Containerfile.** One signed OCI image is the **universal source of truth** on every platform; build with `podman build`, ship to a registry. The *update mechanism* splits by boot model (**ADR 0019**): on **UEFI** platforms (amd64/N100/VM/cloud, arm64-virt) bootc performs `upgrade`/`rollback` against a self-built Debian-bootc base; on **Raspberry-Pi-native** platforms (Pi4/Pi5/CM5) an OCI-derived **A/B image-sync** delivers equivalent transactional update + rollback from the same image — bootc architecturally cannot manage the Pi's MBR/`config.txt`/SoC-firmware boot. Base distro **Debian/Ubuntu**; the composefs-native backend is pinned + tracked (experimental). No RAUC/custom firmware pipeline; mkosi/make-pi4 remains the factory first-flash. *(Refined + accepted, not reopened.)*
-2. **Logic & detection are Wasm components (WASI 0.2/0.3, WIT).** One `.wasm` runs on arm64/amd64/riscv64; capability-sandboxed by default; ~1–5 ms cold start; inference via WASI-NN (no GPU drivers). Heavy stateful services run as **rootless Podman containers (Quadlet)**; host-integral pieces (OVS, kernel bits) layer into the bootc image (`sysext`).
+> ⚠️ **Substrate pivot (ADR 0043 + ADR 0044, ratified 2026-07-25).** HookProbe OS now runs on **two substrates**, and decisions #1/#2 below are **tier-scoped, not universal — "don't relitigate" applies only to the Linux/UEFI tier.** On the **UEFI + amd64/N100/cloud** tier: bootc/Debian, Wasm+Podman, exactly as written (canonical + permanent). On the **rpi-native tier (CM5 only, ADR 0044 D2)**: Linux is being **replaced entirely by the heqk microkernel** — a from-scratch Rust aarch64 capability microkernel as substrate **and** app-host (**zero Linux on CM5, not even a guest**, ADR 0044 D1). See `docs/BuildPlan.md` **Track C** and `docs/MIGRATION-heqk.md`. **Do not read #1/#2 as universal.**
+
+1. **The OS is a Containerfile — on the Linux/UEFI tier.** One signed OCI image is the source of truth; build with `podman build`, ship to a registry. The *update mechanism* splits by boot model (**ADR 0019**): on **UEFI** platforms (amd64/N100/VM/cloud, arm64-virt) bootc performs `upgrade`/`rollback` against a self-built Debian-bootc base; on **Raspberry-Pi-native Linux** an OCI-derived **A/B image-sync** delivers equivalent transactional update + rollback — bootc architecturally cannot manage the Pi's MBR/`config.txt`/SoC-firmware boot. Base distro **Debian/Ubuntu**; composefs-native backend pinned + tracked (experimental). mkosi/make-pi4 remains the factory first-flash. **⚠️ Superseded on the CM5/rpi-native tier (ADR 0043/0044):** heqk is a **third boot model** — bare-metal aarch64, `config.txt kernel=heqk8.img`, A/B tryboot + `hboot` — **no bootc/OCI/composefs/systemd/Debian.** *(Linux/UEFI: refined + accepted, not reopened. CM5: replaced by heqk.)*
+2. **Logic & detection are Wasm components (WASI 0.2/0.3, WIT).** One `.wasm` runs on arm64/amd64/riscv64; capability-sandboxed by default; ~1–5 ms cold start; inference via WASI-NN (no GPU drivers). Heavy stateful services run as **rootless Podman containers (Quadlet)**; host-integral pieces (OVS, kernel bits) layer into the bootc image (`sysext`). **⚠️ On the CM5/heqk tier (ADR 0044):** the on-device Wasm host is a build target (Track C M5); detection rules are portable via the **RFC 9669 BPF ISA** (ADR 0043 D2, not Linux eBPF); and heavy services run **native-on-heqk or hosted off-device (ADR 0044 D3) — NOT in Podman/Quadlet and NOT in a Linux guest.**
 3. **Operated by intent, not configured.** The operator declares *what they want*; **AEGIS** reconciles it. Config is a generated artifact, never the interface.
 
 ## Architecture — three layers
 
 ```
 HookProbe OS (experience)  — operated by INTENT · Mission Control · AEGIS
-LOGIC: Wasm (WASI)  +  SERVICES: Podman (rootless, Quadlet)
-HookProbe Base — the OS is a Containerfile (bootc, Debian)
-Hardware: Pi 5 · RK3588 · N100 · VM · Cloud · HP appliances
+LOGIC: Wasm (WASI)  +  SERVICES: Podman (rootless, Quadlet)   [Linux/UEFI tier]
+        Wasm host on heqk  +  services native-on-heqk / off-device [CM5/heqk tier, ADR 0044]
+SUBSTRATE:  UEFI/amd64 → HookProbe Base (Containerfile · bootc · Debian)
+            CM5/rpi-native → heqk microkernel (bare-metal aarch64, zero Linux — ADR 0043/0044)
+Hardware: Pi 5 · RK3588 · N100 · VM · Cloud · HP appliances   |   CM5 (heqk)
 ```
-Everything above "Base" is identical on every platform. Hardware differences are absorbed by the Base image + the **Platform Manifest**.
+Everything above "Substrate" is identical **from the operator's view** on every platform (capability-gated off the Platform Manifest). Hardware differences are absorbed by the Base image + the **Platform Manifest**; on CM5 the substrate itself differs (heqk), but the swap is designed to be **invisible** to Mission Control (ADR 0044 M6).
 
 ## Core invariants
 

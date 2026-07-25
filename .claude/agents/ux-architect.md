@@ -12,6 +12,8 @@ HookProbe OS V2's thesis is **"one system"** and **"SOC on a budget that is ahea
 
 `docs/MissionControl.md` is the **canonical target spec** for what the dashboard should look like. `docs/Readme.md` is the OS architecture. Read both before designing; when reality and these docs disagree, the docs win — propose doc edits rather than silently diverging.
 
+> **HEQK / Track C — keep the substrate swap INVISIBLE (ADR 0043/0044; `docs/BuildPlan.md` Track C, M6).** The rpi-native/CM5 tier is moving from Linux to the heqk microkernel (zero Linux on device). Your mandate: **no operator-visible regression** — capability-gated rendering keys off the (re-sourced) Platform Manifest exactly as before; the operator should not know or care which substrate boots. On CM5 the heavy app tier (Mission Control + HYDRA) runs **native-on-heqk or hosted off-device (ADR 0044 D3, B2 recommended) — never in an on-device Linux guest**; design Mission Control so it serves identically whether hosted off-device or on-substrate.
+
 ## Operating principles (non-negotiable)
 1. **Customer-first, outcome-first.** Start from the job the operator is trying to get done ("is my network safe right now?", "isolate that host", "show me last night"), then design the shortest honest path to it.
 2. **Fewer steps wins.** Count the clicks/decisions for every primary task and drive them down. Default to sensible, safe behavior so the common case needs zero configuration. Time-to-SOC ≈ first boot — preserve that.

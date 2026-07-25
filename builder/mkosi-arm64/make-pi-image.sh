@@ -51,7 +51,7 @@
 #   sudo builder/mkosi-arm64/make-pi-image.sh [SRC.raw] [OUT.img] [SIZE_GB]
 #
 # Env knobs (same gated model as make-pi4-image.sh):
-#   HOOKPROBE_DEBUG_ACCESS=1   opt-in debug account (andrei/root passwords, password SSH).
+#   HOOKPROBE_DEBUG_ACCESS=1   opt-in debug login (hookprobe/root passwords, password SSH).
 #                              Default OFF = release-mode, key-only SSH, no default password user.
 #   HOOKPROBE_SPLASH=1         Plymouth boot splash (kept off during bring-up/debug).
 #   HOOKPROBE_VERITY=1         H3b whole-root dm-verity seal (opt-in).
@@ -570,34 +570,37 @@ else
   echo "  edge kernel: native BTF (CONFIG_DEBUG_INFO_BTF=y) — no sideload blob staged (ADR 0032)"
 fi
 
-# ---- ADMIN ACCESS — GATED (ADR 0008; security-audit F1) — identical model to make-pi4-image.sh
+# ---- ADMIN ACCESS — GATED (ADR 0008; security-audit F1; credentials neutralized to the
+# default hookprobe/hookprobe login per ADR 0045, 2026-07-25) — identical model to
+# make-pi4-image.sh: debug mode elevates the existing hookprobe SERVICE account into a login
+# admin instead of creating a second account.
 RT="$WORK/p2"
 mkdir -p "$RT/etc/ssh/sshd_config.d" "$RT/etc/systemd/system/multi-user.target.wants"
 if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
-  A_HASH='DEV-HASH-SCRUBBED'
   R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
-  if ! grep -q '^andrei:' "$RT/etc/passwd"; then
-    echo "andrei:x:1000:1000:HookProbe debug:/home/andrei:/bin/bash" >> "$RT/etc/passwd"
-    echo "andrei:${A_HASH}:20000:0:99999:7:::" >> "$RT/etc/shadow"
-    echo "andrei:x:1000:" >> "$RT/etc/group"
-    mkdir -p "$RT/home/andrei"; cp -rT "$RT/etc/skel" "$RT/home/andrei" 2>/dev/null || true
-    chown -R 1000:1000 "$RT/home/andrei" 2>/dev/null || true
+  if grep -q '^hookprobe:' "$RT/etc/passwd"; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/bin/bash"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
   fi
-  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="andrei"; else if($4 !~ /(^|,)andrei(,|$)/) $4=$4",andrei" } 1' \
+  sed -i "s|^hookprobe:[^:]*:|hookprobe:${R_HASH}:|" "$RT/etc/shadow"
+  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="hookprobe"; else if($4 !~ /(^|,)hookprobe(,|$)/) $4=$4",hookprobe" } 1' \
     "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   sed -i "s|^root:[^:]*:|root:${R_HASH}:|" "$RT/etc/shadow"
   rm -f "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf" 2>/dev/null || true
   printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > "$RT/etc/ssh/sshd_config.d/10-hookprobe-debug.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "debug" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: DEBUG (andrei sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
+  echo "  ADMIN ACCESS: DEBUG (hookprobe sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
 else
+  if grep -q '^hookprobe:' "$RT/etc/passwd" 2>/dev/null; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/usr/sbin/nologin"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
+  fi
+  sed -i 's|^hookprobe:[^:]*:|hookprobe:!:|' "$RT/etc/shadow" 2>/dev/null || true
   if grep -q '^andrei:' "$RT/etc/passwd" 2>/dev/null; then
     sed -i '/^andrei:/d' "$RT/etc/passwd"; sed -i '/^andrei:/d' "$RT/etc/shadow"; sed -i '/^andrei:/d' "$RT/etc/group"
     rm -rf "$RT/home/andrei"
-    echo "  defense-in-depth: stripped leftover 'andrei' debug account from the release rootfs"
+    echo "  defense-in-depth: stripped leftover legacy 'andrei' debug account from the release rootfs"
   fi
   if grep -q '^sudo:' "$RT/etc/group" 2>/dev/null; then
-    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
+    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="hookprobe" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
       "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   fi
   sed -i 's|^root:[^:]*:|root:!:|' "$RT/etc/shadow" 2>/dev/null || true
@@ -605,7 +608,7 @@ else
   printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
     > "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "release" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: RELEASE (root locked, no andrei, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
+  echo "  ADMIN ACCESS: RELEASE (root locked, no login account, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
 fi
 # GAP-1 (2026-07-16): only a DEBUG image runs sshd. A release image has no login user and root is
 # locked, so a live sshd is pure pre-auth WAN attack surface with zero function — mask it (symlink

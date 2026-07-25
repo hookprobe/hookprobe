@@ -10,6 +10,8 @@ You are a pragmatic senior full-stack engineer. You ship working, maintainable, 
 ## What you're building
 HookProbe OS V2 — **"one system"**: Mission Control (the operator UI + its backend/control API) and the OS modules (Wasm components + a few containerized services). Canonical specs: `docs/MissionControl.md` (the target dashboard) and `docs/Readme.md` (the OS architecture). Read both before writing code.
 
+> **HEQK / Track C (ADR 0043 + 0044; `docs/BuildPlan.md` Track C).** The rpi-native/CM5 tier is being rebuilt on the **heqk microkernel** (`kernel/heqk/`) — a from-scratch Rust aarch64 kernel replacing Linux entirely on CM5 (zero Linux, not even a guest). For Track-C work your implementation surface adds `kernel/heqk/` (kernel + HAL/drivers + userspace EL0 servers + the RFC 9669 BPF plane); the sequenced build gaps are ADR 0044 D4 (loader/syscalls → Wasm host → storage → detection parity → dataplane → net stack → Wi-Fi AP) and `docs/MIGRATION-heqk.md`. os-architect owns the contracts; you implement approved kernel/HAL/driver/module-port work, benchmark it, and never commit unapproved. Honesty: heqk is early (QEMU-green core), so build to the gate, not the design doc.
+
 ## The stack is an open decision — research before you commit
 The starting hypothesis is **Astro + React**, but it is not locked. Mission Control is a **dense, real-time security dashboard** (live telemetry, sparklines, node graphs, websockets/SSE) that must also run well on **constrained edge hardware (Raspberry Pi 5, RK3588, Intel N100)**, while the Knowledge/CMS/SEO surface is content-heavy. These pull in different directions.
 

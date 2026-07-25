@@ -17,3 +17,36 @@ builder/mkosi*/pi-kernel-cache/
 
 # ADR 0043 M1: heqk build-seam staging output
 builder/generated/
+
+# ── ADR 0044 / Phase-0 GitHub-prep hardening (2026-07-25) ─────────────────────
+# NOTE: adding ignore rules does NOT untrack already-committed files. The private
+# signing keys + `DEV-CRED-SCRUBBED` credential currently IN HISTORY still require the Red
+# purge (see ADR 0046 / the secrets-scrub checklist) before any `git push`.
+#
+# Secrets / private key material — MUST NEVER be tracked (defense-in-depth; the
+# committed `builder/release.key*` still needs an explicit history purge + rotate).
+builder/release.key
+builder/release.key*
+*.key
+!**/*.pub
+!**/*public*.pem
+cosign.key
+*.sk
+*.pem
+!kernel/heqk/tools/usbboot/secure-boot-example/*.pem   # upstream usbboot PUBLIC example (gitleaks-allowlist); drop if unused
+.env
+!ui/.env.example
+.netrc
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Build-artifact catch-alls (path-scoped rules above stay authoritative; these are
+# defense-in-depth for the whole tree — e.g. a stray backup tarball like
+# heqk-git-history-backup-*.tar.gz must never be added).
+builder/kernel-build/out/
+*.img
+*.raw
+*.qcow2
+*.tar.gz
+!base/drivers/**/*.tar.gz          # pinned vendored-driver sources (base/drivers/SOURCES.md) are legitimate

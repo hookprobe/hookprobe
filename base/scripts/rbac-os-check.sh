@@ -13,10 +13,12 @@
 #       on a RELEASE artifact.
 #   §3  SSH allows password/root login on a release image (ADR 0008 E4b).
 #   §4  default/debug credential accounts (ADR 0008 F1) — a backend security audit (2026-07-07,
-#       F1/F2) found this script silently PASSED an image that still carried root:hookprobe +
-#       andrei:DEV-CRED-SCRUBBED (it fell back to treating uid-1000 'andrei' as THE admin and never
-#       inspected password hashes). Sanitization must be provable by this check, not assumed from a
-#       comment.
+#       F1/F2) found this script silently PASSED an image that still carried a default root
+#       password plus a personal debug identity/password pair (it fell back to treating the
+#       lowest real UID as THE admin and never inspected password hashes). Sanitization must be
+#       provable by this check, not assumed from a comment. (ADR 0045, 2026-07-25: that personal
+#       debug identity was retired; the sole dev/test login is now the neutral hookprobe/hookprobe
+#       admin, elevated from the existing hookprobe service account — never a second account.)
 # §2 (disk-key anchor mode) stays audit-only — a hygiene signal, not the core RBAC separation claim.
 #
 # Writes a posture report to the encrypted data volume for QSECBIT/the dashboard; logs loudly on drift.
@@ -27,15 +29,15 @@ REPORT=/var/lib/hookprobe/rbac-os-check.json
 # it as a RELEASE image — never skip the credential hard-gate just because we can't prove debug.
 MODE="$(cat /etc/hookprobe/build-mode 2>/dev/null || echo release)"
 
-# Known default/debug credential hashes (SHA-512 crypt, $6$...) — the ONLY two password hashes
-# mkosi.postinst / make-pi4-image.sh ever bake, and only when HOOKPROBE_DEBUG_ACCESS=1. Finding
-# either of these on a release image means the artifact shipped a hardcoded backdoor.
-DEBUG_HASHES='DEV-HASH-SCRUBBED
-$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
+# Known default/debug credential hash (SHA-512 crypt, $6$...) — the ONLY password hash
+# mkosi.postinst / make-pi4-image.sh ever bake (root and the elevated hookprobe login share it),
+# and only when HOOKPROBE_DEBUG_ACCESS=1. Finding it on a release image means the artifact shipped
+# a hardcoded backdoor.
+DEBUG_HASHES='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
 
 # The single OS admin: provisioning/wizard writes /etc/hookprobe/admin-user; fall back to the lowest
 # real UID (1000) so a dev image without a wizard run still audits cleanly. NOTE: this fallback does
-# NOT make an 'andrei'-named account exempt from the credential hard-gate below — that check is
+# NOT exempt a debug-elevated login account from the credential hard-gate below — that check is
 # identity/hash based, independent of whichever account this heuristic happens to call "admin".
 ADMIN="$(cat /etc/hookprobe/admin-user 2>/dev/null || awk -F: '$3==1000{print $1; exit}' /etc/passwd)"
 
@@ -70,18 +72,28 @@ case "$ssh_state" in
     ;;
 esac
 
-# 4. Default/debug credential accounts — HARD GATE on release images (mode != debug). Two checks:
-#    (a) the debug identity 'andrei' present at all, regardless of what its password hash now is
-#        (it could have been rotated but the account itself is still a leftover backdoor identity).
-#    (b) ANY sudo-capable account (root, or a member of the 'sudo' group) whose /etc/shadow hash
-#        matches a known default/debug hash verbatim.
+# 4. Default/debug credential accounts — HARD GATE on release images (mode != debug). Four checks:
+#    (a) the legacy pre-ADR-0045 personal debug identity 'andrei' present at all, regardless of
+#        what its password hash now is (it could have been rotated but the account itself is
+#        still a leftover backdoor identity).
+#    (b) the 'hookprobe' service account still carries a login shell (the debug-mode elevation,
+#        ADR 0045, not reverted).
+#    (c) ANY sudo-capable account (root, hookprobe, or a member of the 'sudo' group) whose
+#        /etc/shadow hash matches the known default/debug hash verbatim.
+#    (d) the broad guardrail: ANY OS account at all carrying an active (non-locked) password hash
+#        — a release image must ship zero password-bearing login accounts, full stop, independent
+#        of whether we recognize the specific hash.
 if [ "$MODE" != debug ]; then
   if awk -F: '$1=="andrei"{f=1} END{exit !f}' /etc/passwd 2>/dev/null; then
-    echo "rbac-os-check: VIOLATION — debug identity 'andrei' present on a RELEASE image (default-credential backdoor, ADR 0008 F1)"
+    echo "rbac-os-check: VIOLATION — legacy debug identity 'andrei' present on a RELEASE image (default-credential backdoor, ADR 0008 F1)"
+    viol=1; hard_fail=1
+  fi
+  if awk -F: '$1=="hookprobe" && $7!~/(nologin|false)$/{f=1} END{exit !f}' /etc/passwd 2>/dev/null; then
+    echo "rbac-os-check: VIOLATION — 'hookprobe' carries a login shell on a RELEASE image (debug-mode elevation not reverted, ADR 0045) — HARD GATE"
     viol=1; hard_fail=1
   fi
   sudo_members="$(awk -F: '$1=="sudo"{print $4}' /etc/group 2>/dev/null | tr ',' ' ')"
-  for u in root $sudo_members; do
+  for u in $(printf '%s\n' "root hookprobe $sudo_members" | tr ' ' '\n' | sort -u); do
     [ -n "$u" ] || continue
     uhash="$(awk -F: -v u="$u" '$1==u{print $2}' /etc/shadow 2>/dev/null)"
     [ -n "$uhash" ] || continue
@@ -90,6 +102,11 @@ if [ "$MODE" != debug ]; then
       viol=1; hard_fail=1
     fi
   done
+  active="$(awk -F: '$2!="" && $2!="*" && $2!~/^!/{print $1}' /etc/shadow 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+  if [ -n "$active" ]; then
+    echo "rbac-os-check: VIOLATION — account(s) with an active (non-locked) password hash on a RELEASE image: $active — a release artifact must ship ZERO password-bearing login accounts (ADR 0045) — HARD GATE"
+    viol=1; hard_fail=1
+  fi
 fi
 
 mkdir -p "$(dirname "$REPORT")" 2>/dev/null || true

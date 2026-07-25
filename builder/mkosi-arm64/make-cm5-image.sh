@@ -267,32 +267,33 @@ LABEL=BOOTFS          /boot/firmware vfat  defaults,nofail   0 2
 FSTAB
 mkdir -p "$RT/boot/firmware"
 
-# ---- ADMIN ACCESS — GATED (ADR 0008; same model as make-pi4-image.sh) --------------------
+# ---- ADMIN ACCESS — GATED (ADR 0008; same model as make-pi4-image.sh; credentials
+# neutralized to the default hookprobe/hookprobe login per ADR 0045, 2026-07-25) -----------
 mkdir -p "$RT/etc/ssh/sshd_config.d" "$RT/etc/systemd/system/multi-user.target.wants"
 if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
-  A_HASH='DEV-HASH-SCRUBBED'
   R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
-  if ! grep -q '^andrei:' "$RT/etc/passwd"; then
-    echo "andrei:x:1000:1000:HookProbe debug:/home/andrei:/bin/bash" >> "$RT/etc/passwd"
-    echo "andrei:${A_HASH}:20000:0:99999:7:::" >> "$RT/etc/shadow"
-    echo "andrei:x:1000:" >> "$RT/etc/group"
-    mkdir -p "$RT/home/andrei"; cp -rT "$RT/etc/skel" "$RT/home/andrei" 2>/dev/null || true
-    chown -R 1000:1000 "$RT/home/andrei" 2>/dev/null || true
+  if grep -q '^hookprobe:' "$RT/etc/passwd"; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/bin/bash"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
   fi
-  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="andrei"; else if($4 !~ /(^|,)andrei(,|$)/) $4=$4",andrei" } 1' \
+  sed -i "s|^hookprobe:[^:]*:|hookprobe:${R_HASH}:|" "$RT/etc/shadow"
+  awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="hookprobe"; else if($4 !~ /(^|,)hookprobe(,|$)/) $4=$4",hookprobe" } 1' \
     "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   sed -i "s|^root:[^:]*:|root:${R_HASH}:|" "$RT/etc/shadow"
   rm -f "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf" 2>/dev/null || true
   printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > "$RT/etc/ssh/sshd_config.d/10-hookprobe-debug.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "debug" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: DEBUG (andrei sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
+  echo "  ADMIN ACCESS: DEBUG (hookprobe sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
 else
+  if grep -q '^hookprobe:' "$RT/etc/passwd" 2>/dev/null; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/usr/sbin/nologin"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
+  fi
+  sed -i 's|^hookprobe:[^:]*:|hookprobe:!:|' "$RT/etc/shadow" 2>/dev/null || true
   if grep -q '^andrei:' "$RT/etc/passwd" 2>/dev/null; then
     sed -i '/^andrei:/d' "$RT/etc/passwd"; sed -i '/^andrei:/d' "$RT/etc/shadow"; sed -i '/^andrei:/d' "$RT/etc/group"
     rm -rf "$RT/home/andrei"
   fi
   if grep -q '^sudo:' "$RT/etc/group" 2>/dev/null; then
-    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
+    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="hookprobe" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' \
       "$RT/etc/group" > "$RT/etc/group.new" && mv "$RT/etc/group.new" "$RT/etc/group"
   fi
   sed -i 's|^root:[^:]*:|root:!:|' "$RT/etc/shadow" 2>/dev/null || true
@@ -300,7 +301,7 @@ else
   printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
     > "$RT/etc/ssh/sshd_config.d/10-hookprobe-hardened.conf"
   mkdir -p "$RT/etc/hookprobe"; echo "release" > "$RT/etc/hookprobe/build-mode"
-  echo "  ADMIN ACCESS: RELEASE (root locked, no andrei, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
+  echo "  ADMIN ACCESS: RELEASE (root locked, no login account, key-only SSH) — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
 fi
 # RP1 caveat marker baked into the image itself — so a booted console/MOTD never claims network
 # capability this build cannot deliver (never let a build-time-only warning be the ONLY record).
