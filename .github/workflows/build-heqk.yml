@@ -1,0 +1,100 @@
+# =============================================================================
+# build-heqk.yml — Track C / Milestone M1 CI beachhead for the heqk microkernel
+# substrate (ADR 0043/0044, docs/MIGRATION-heqk.md). heqk lives at kernel/heqk
+# as its OWN nightly no_std / build-std / aarch64-unknown-none-softfloat Cargo
+# workspace (excluded from the root workspace — see Cargo.toml `exclude`), with
+# its own proven local gate: kernel/heqk/validate.sh. This workflow does NOT
+# reimplement that gate — it installs the toolchain heqk's rust-toolchain.toml
+# pins + qemu, then INVOKES validate.sh verbatim, so CI and a developer's box
+# can never silently diverge (same DRY principle as gate-ladder.yml).
+#
+# HONESTY (ADR 0044 D5 / docs/BuildPlan.md Track-C honesty header): the job
+# below is the **QEMU gate**, not a metal gate. A green run proves the kernel
+# boots + every IMPLEMENTED phase's PASS marker fires under QEMU's `virt`
+# machine (cortex-a72, softfloat, virtio-net) — it proves NOTHING about the
+# real CM5/RP1 metal target (P7 in validate.sh's own table is explicitly
+# PLANNED, not gated here) and it does not run, flash, or sign anything.
+# Metal bring-up and the signed heqk8.img artifact are separate, later gates
+# (M2+; see builder/make-cm5-heqk-image.sh, which needs a private heqk-sign
+# key this CI environment deliberately does not have — see note at the bottom
+# of this file).
+#
+# Toolchain reality (kernel/heqk/rust-toolchain.toml): channel = "nightly"
+# (NOT date-pinned — heqk floats on nightly by its own choice, independent of
+# this repo's root workspace, which pins stable 1.96.0 in gate-ladder.yml).
+# components = rust-src (build-std) + llvm-tools; target =
+# aarch64-unknown-none-softfloat. dtolnay/rust-toolchain@nightly below mirrors
+# that pin exactly (no drift risk since heqk itself carries no date pin to
+# drift against); the checked-out kernel/heqk/rust-toolchain.toml remains the
+# authoritative override the moment any cargo command runs inside that dir.
+# =============================================================================
+name: build-heqk
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kernel/heqk/**"
+      - "builder/make-cm5-heqk-image.sh"
+      - ".github/workflows/build-heqk.yml"
+  pull_request:
+    paths:
+      - "kernel/heqk/**"
+      - "builder/make-cm5-heqk-image.sh"
+      - ".github/workflows/build-heqk.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # heqk-qemu-gate — THE primary, must-work M1 job. Builds heqk (--features
+  # netsvc, matching validate.sh's own build invocation), boots it under QEMU
+  # `virt`, and checks every IMPLEMENTED phase's PASS marker. This is a QEMU
+  # gate ONLY — see the honesty note in the file header. validate.sh itself
+  # exits non-zero on any built-phase regression or a broken build, so this
+  # job needs no extra pass/fail parsing beyond the script's own exit code.
+  # ---------------------------------------------------------------------------
+  heqk-qemu-gate:
+    name: "heqk QEMU gate (validate.sh — NOT a metal gate)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain (kernel/heqk/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools
+          targets: aarch64-unknown-none-softfloat
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kernel/heqk
+
+      - name: Install qemu-system-aarch64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm
+
+      - name: heqk validate.sh (build + QEMU boot + phase-gate report)
+        run: ./validate.sh
+        working-directory: kernel/heqk
+
+# -----------------------------------------------------------------------------
+# NOT wired here, deliberately (M1 scope discipline — don't over-scope the
+# beachhead):
+#
+#   builder/make-cm5-heqk-image.sh — the signed heqk8.img image-build seam.
+#   It calls kernel/heqk/cm5-boot/mkimage-hboot.sh, which shells out to a
+#   SEPARATE `heqk-sign` binary + a KEYDIR of real ML-DSA/Ed25519 signing
+#   material (default $HOME/heqk-sign) that must never live in this repo or
+#   in CI (canon: "signing keys never land on devices or in the repo"). CI
+#   has neither the heqk-sign binary nor any key material, so this script
+#   cannot run here as-is — running it unsigned/dev-keyed would blur the
+#   signing/trust-store boundary (Amber territory: operator-reviewed, not a
+#   green-lane CI job). A follow-up "image-build smoke" job is plausible
+#   ONLY as an explicit unsigned-artifact dry run (e.g. a --allow-unsigned /
+#   --skip-sign escape hatch added to make-cm5-heqk-image.sh, gated behind
+#   workflow_dispatch, never on push/PR) — proposed here, not implemented.
+# -----------------------------------------------------------------------------
