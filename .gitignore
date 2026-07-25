@@ -18,10 +18,19 @@ builder/mkosi*/pi-kernel-cache/
 # ADR 0043 M1: heqk build-seam staging output
 builder/generated/
 
+# Product-Cortex RUNTIME telemetry — logs session/transcript content (user prompts,
+# agent summaries) + a 4MB lifecycle SQLite DB. MUST NOT be in a public repo (it
+# captured the scrubbed dev credential via an agent report). Keep .claude/agents,
+# .claude/workflows, .claude/hooks, .claude/settings.json — those are project canon.
+.claude/cortex/
+.claude/**/*.db
+.claude/**/*.db-journal
+
 # ── ADR 0044 / Phase-0 GitHub-prep hardening (2026-07-25) ─────────────────────
-# NOTE: adding ignore rules does NOT untrack already-committed files. The private
-# signing keys + `DEV-CRED-SCRUBBED` credential currently IN HISTORY still require the Red
-# purge (see ADR 0046 / the secrets-scrub checklist) before any `git push`.
+# History was purged with git-filter-repo (2026-07-25): builder/release.key*, the
+# kernel-build .deb bloat, .claude/cortex/ telemetry, and the personal `DEV-CRED-SCRUBBED`
+# dev credential are gone from ALL commits (verified: `git rev-list --all | git grep`
+# returns clean). These rules keep them from ever re-entering the tree.
 #
 # Secrets / private key material — MUST NEVER be tracked (defense-in-depth; the
 # committed `builder/release.key*` still needs an explicit history purge + rotate).
