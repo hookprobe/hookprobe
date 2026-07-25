@@ -161,6 +161,16 @@ flash a `prod` image and confirm `[PROD] HEQK sensor UP` + live heartbeats on si
   on the production path. `validate.sh` still green for the (separate) test build.
 
 ### PH2 — Real root of trust: SRK from OTP  (closes V3/SEC-2)
+**Status 2026-07-25:** **PH2a DONE** (built, committed) — HBoot derives `SRK = SHA256("HEQK-SEAL-SRK-v1"‖OTP)`
+and hands it to the kernel via the SealHandoff; sealing is now a REAL per-device key
+(`SEAL_FLAG_SRK_FROM_OTP`), no longer a global synthetic constant. **PH2b OPEN & metal-iterative** —
+closing V3/SEC-2 (EL1 must not read OTP) requires a *returning* HVC mailbox proxy in EL2
+assembly (`boot.s`) + a stage-2 fine-grain carve of the mailbox page + rerouting the kernel's
+`get/set_clock_rate` through the proxy. This is brick-prone EL2 work that **cannot be QEMU-gated**
+(no VC mailbox in QEMU) and needs iterative on-metal bring-up like the P10 WiFi/BT work did — it
+is NOT an "build-blind, works-first-try" change. Until PH2b lands, the kernel prints
+`[P15-SRK] … V3/SEC-2 OPEN` (honest: per-device but not yet tamper-proof).
+
 - **Build:** HBoot (EL2) reads the OTP secret, derives `SRK = KDF(OTP, PCR0_after_self_measure)`,
   passes it via a `SealHandoff` in `BootInfo`; blocks EL1 OTP access; the kernel consumes the real
   SRK and drops the synthetic one. **READ-only on OTP — no new burn** (the per-device AK is already
