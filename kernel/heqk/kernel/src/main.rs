@@ -577,6 +577,14 @@ fn cm5_gem_el0_server() {
 /// fault handler, exactly as [P7c] proves) simply costs one empty window and the loop
 /// keeps running — structural self-heal. Telemetry is emitted on a throttle. The running
 /// sensor: it does not halt and does not reboot.
+/// Physical counter read for the production heartbeat cadence.
+#[cfg(feature = "cm5")]
+fn prod_cntpct() -> u64 {
+    let c: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+    c
+}
+
 #[cfg(feature = "cm5")]
 fn cm5_prod_service() -> ! {
     use arch_aarch64::mmu_cm5;
@@ -601,8 +609,26 @@ fn cm5_prod_service() -> ! {
     let _pool = core::ptr::addr_of_mut!(PRODPOOL) as usize;
 
     let (mut seen, mut forwarded, mut dropped, mut empty) = (0u64, 0u64, 0u64, 0u64);
+    // Wall-clock heartbeat so the sensor is visibly ALIVE on a quiet link (the empty-
+    // window `continue` below skips any end-of-loop print). ~5 s cadence via cntpct.
+    let cntfrq = {
+        let f: u64;
+        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+        f.max(1)
+    };
+    let hb_interval = cntfrq * 5;
+    let t0 = prod_cntpct();
+    let mut last_hb = t0;
     kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
     loop {
+        // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
+        // running sensor proves it is looping on metal, not hung.
+        let now = prod_cntpct();
+        if now.wrapping_sub(last_hb) >= hb_interval {
+            last_hb = now;
+            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} empty={} qsecbit={}\n",
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, empty, telemetry::score());
+        }
         // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
         // iteration was contained by the EL0 fault handler; this reload is the
         // structural self-heal ([P7c] proves the contain+restart survives).
@@ -642,10 +668,9 @@ fn cm5_prod_service() -> ! {
             dropped += 1;
         }
         arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
-
-        // Throttled telemetry so the console is not flooded at line rate.
+        // A processed-frame beat too, so a busy link reports progress between the ~5 s ticks.
         if (seen & 0xff) == 0 && seen != 0 {
-            kprint!("   [PROD hb] seen={} forwarded={} dropped={} empty_windows={} qsecbit={}\n",
+            kprint!("   [PROD hb] seen={} fwd={} drop={} empty={} qsecbit={} (frame-beat)\n",
                 seen, forwarded, dropped, empty, telemetry::score());
         }
     }
