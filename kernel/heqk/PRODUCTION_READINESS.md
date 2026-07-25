@@ -200,6 +200,9 @@ irreversible OTP/fuse SVN counter, so it lives in the metal bring-up batch, not 
 - **Build:** real GemDev (RP1 GEM) + RtlDev (RTL8111) implementing the DevQ NetClass on metal (not
   just LoopDev/QEMU); wire RX-IRQ/MSI (DRV-1/XC-4).
 - **Acceptance:** `[P11]` passes on metal with real NIC traffic; forged-descriptor rejection holds.
+- **Metal observation 2026-07-25 (from the audit-fixed prod sensor):** `tx_fail ≈ 7%` of PASS frames
+  (`seen=411 fwd=381 tx_fail=30`) — the GEM `tx_frame` completion poll times out on some forwards.
+  Now *observable* (audit fix D2); tuning the TX-completion path / ring is part of this phase.
 
 ### PH6 — P17 smoltcp EL0 service
 **Status 2026-07-25:** **stack-integration core DONE + QEMU-gated** — smoltcp 0.13 (`no_std`,
