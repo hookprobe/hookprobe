@@ -29,7 +29,7 @@ These are made, not offered as options.
 | Fleet | **Pull-based GitOps**, desired state in Git, drift self-heal | Resilient to intermittent links; scales to thousands of nodes without proportional ops cost. |
 | Supply chain | **Everything signed** (sigstore/cosign), SBOM + CBOM per image, SLSA provenance | It's a security product; integrity of the whole OS stack is the credibility moat. |
 | Crypto | **Crypto-agility from day one**; module signing is hybrid ML-DSA-65 + Ed25519 **today** (fail-closed, both legs enforced); ML-KEM transport + LMS/XMSS boot signing are named **roadmap** (no code yet) | RSA/ECC deprecate by 2030; firmware-signing PQC mandates land 2027. Ship the cheap, real leg now; keep the rest honestly labeled, not fabricated. |
-| License | **Open-core** (base Apache-2.0 proposed; cloud layer commercial) | Keeps the community on-ramp open; the business is the managed layer. |
+| License | **Open-core, dual-license** — base OS + standalone SOC under **GNU AGPL-3.0**; offering-as-a-service / cloud layer requires a **commercial license** (see `LICENSING.md`) | AGPL network-copyleft keeps the community on-ramp open and audit-able while stopping SaaS free-riding; the business is the managed/service layer. |
 
 **Positioning sentence (use everywhere):**
 > *HookProbe OS is the operating system. SOC is its default workspace. Hardware only unlocks capabilities.*
