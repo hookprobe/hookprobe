@@ -1201,26 +1201,55 @@ fn cm5_p15_block_seal() {
 
     kprint!(" [P15-block] {} — eMMC READ-ONLY block device + in-RAM sealing proven on metal\n",
         if ram_ok { "PASS" } else { "FAIL" });
-    kprint!(" [P15-LIMIT] measurement enforcement + rollback protection are NOT yet real:\n");
-    kprint!("             SRK is SYNTHETIC (no HBoot SealHandoff); prerequisite = HBoot SRK derivation\n");
-    kprint!("             + closing audit finding V3/SEC-2 (EL1 must not read OTP). Do not claim binding.\n");
+    // PH2a: report the ACTUAL provenance of the sealing root key from the handoff flags.
+    match read_seal_handoff() {
+        Some(h) if h.flags & boot_abi::SEAL_FLAG_SRK_HW_DERIVED != 0 => {
+            kprint!(" [P15-BOUND] sealing binding is REAL — per-device SRK derived from OTP in HBoot, EL1 cannot read OTP (V3/SEC-2 closed)\n");
+        }
+        Some(h) if h.flags & boot_abi::SEAL_FLAG_SRK_FROM_OTP != 0 => {
+            kprint!(" [P15-SRK] SRK is REAL + per-device (OTP-derived by HBoot, device_id={:#018x}) — sealing is no longer a global synthetic key.\n", h.device_id);
+            kprint!("           LIMIT: V3/SEC-2 (EL1 can still read OTP via the VC mailbox) is OPEN, so on-device binding is not yet tamper-proof (closes in PH2b).\n");
+        }
+        _ => {
+            kprint!(" [P15-LIMIT] SRK is SYNTHETIC (no HBoot SealHandoff) — measurement binding is cosmetic;\n");
+            kprint!("             prerequisite = HBoot SRK derivation + V3/SEC-2 (EL1 must not read OTP).\n");
+        }
+    }
 }
 
 /// The arch-agnostic sealing proof used by the metal P15 path: seal/unseal a
 /// secret with a SYNTHETIC key and prove wrong-measurement + tamper are refused.
 /// No disk, no hardware — pure crypto, so it is meaningful even if the eMMC
 /// bring-up stalls on a given carrier.
+/// PH2a: read the sealing handoff HBoot wrote at `SEAL_HANDOFF_ADDR`. `None` if the
+/// magic is absent (QEMU or the software-AK fallback — the kernel then keeps its
+/// synthetic key). The kernel NEVER sees the OTP secret the SRK was derived from.
+#[cfg(feature = "hboot")]
+fn read_seal_handoff() -> Option<&'static boot_abi::SealHandoff> {
+    let sh = unsafe { &*(boot_abi::SEAL_HANDOFF_ADDR as *const boot_abi::SealHandoff) };
+    (sh.magic == boot_abi::SEAL_HANDOFF_MAGIC).then_some(sh)
+}
+
 #[cfg(all(feature = "cm5", feature = "hboot"))]
 fn p15_seal_ram_demo() -> bool {
     use seal::{Policy, SealBlob, SealErr};
-    let srk = [0x5au8; 32]; // SYNTHETIC (HBoot does not derive one yet)
-    let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
-    pcr[0] = [0x11; 32];
-    pcr[1] = [0x22; 32];
+    // PH2a: seal with the REAL per-device SRK + policy from the HBoot handoff when
+    // present; fall back to the synthetic key on a device with no OTP secret.
+    let handoff = read_seal_handoff();
+    let srk = handoff.map(|h| h.srk).unwrap_or([0x5au8; 32]);
+    let (device_id, svn_floor, pcr) = match handoff {
+        Some(h) => (h.device_id, h.svn_floor, h.pcr),
+        None => {
+            let mut p = [[0u8; 32]; boot_abi::NUM_PCR];
+            p[0] = [0x11; 32];
+            p[1] = [0x22; 32];
+            (0x0BADF00D_1234_5678, 7, p)
+        }
+    };
     let policy = Policy {
         mask: boot_abi::SEAL_POLICY_STRICT,
-        device_id: 0x0BADF00D_1234_5678,
-        svn_floor: 7,
+        device_id,
+        svn_floor,
         pcr,
     };
     let secret = b"HEQK-P15-metal-sealed-secret";
