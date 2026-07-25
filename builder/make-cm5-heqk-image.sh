@@ -27,7 +27,11 @@ OUT="${OUT:-$ROOT/builder/generated/cm5-heqk}"
 FEATURES="${FEATURES:-prod}"
 SVN="${SVN:-1}"
 
-[ -d "$HEQK/.git" ] || { echo "FATAL: $HEQK not found (run make-pi-image.sh for the Linux tier)"; exit 1; }
+# heqk is flattened into the monorepo (its history was inherited via -s ours merge,
+# ADR 0046) — it is a subdir, not a nested repo, so probe for the workspace markers,
+# not a $HEQK/.git that no longer exists.
+[ -f "$HEQK/Cargo.toml" ] && [ -f "$HEQK/rust-toolchain.toml" ] && [ -d "$HEQK/kernel" ] || {
+  echo "FATAL: heqk workspace not found at $HEQK (expected Cargo.toml + rust-toolchain.toml + kernel/)"; exit 1; }
 command -v llvm-objcopy >/dev/null || { echo "FATAL: llvm-objcopy not on PATH"; exit 1; }
 
 echo "== [M1] building heqk substrate (features=$FEATURES svn=$SVN) at $HEQK"
