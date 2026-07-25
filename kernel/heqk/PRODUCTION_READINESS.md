@@ -207,8 +207,11 @@ irreversible OTP/fuse SVN counter, so it lives in the metal bring-up batch, not 
 - **Acceptance:** `[P17]` handles real TCP with the stack measured into PCR3; faults are contained.
 
 ### PH7 — Assurance closeout → declare G3
-- **Build:** dual-backend cap-invariant property tests (close XC-15), metal-smoke every security
-  path, re-run the full audit, update this report to reflect G3 met.
+**Status 2026-07-25:** dual-backend cap-invariant property sweep **DONE + metal-validated** —
+`caps::cap_invariants_selftest` runs on BOTH the QEMU and CM5 MMU backends (`[PH7-caps] PASS`
+on each), closing XC-15's "no cap-invariant tests / single-backend blind spot" for the
+capability system. **Remaining for G3:** the metal-batch phases (PH2b, PH5, PH6) must land and
+be metal-smoked before this report can flip **G3 → ✅** and a final security review runs.
 - **Acceptance:** readiness shows **G3 Metal-hardened ✅**; security review clean.
 
 ---
