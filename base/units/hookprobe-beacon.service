@@ -1,0 +1,37 @@
+[Unit]
+Description=HookProbe opt-in product-health beacon (ADR 0012 D5) — consent-gated, local only
+Documentation=file:///usr/share/hookprobe/docs/adr/0012-release-definition-cortex-pass.md
+# Needs the data partition (manifest, consent marker, qsecbit-scores, beacon output).
+After=var-lib-hookprobe.mount
+ConditionPathExists=/var/lib/hookprobe
+
+[Service]
+Type=oneshot
+# Off by default: with no consent marker at /var/lib/hookprobe/consent/beacon-v1 the
+# script logs one line and exits 0 — a clean skip, same pattern as cellular-connect.sh
+# when no modem is present. Nothing is collected or written without consent.
+ExecStart=/usr/lib/hookprobe/beacon-export.sh run
+Nice=15
+
+# Hardening: read-only everywhere except the data partition; no network at all —
+# this beacon has no transport (manual export only, ADR 0012 D5).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io

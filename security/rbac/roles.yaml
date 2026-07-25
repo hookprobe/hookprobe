@@ -1,0 +1,59 @@
+# HookProbe OS — RBAC role policy (ADR 0008). Roles are DATA, not code: the dashboard backend loads
+# this, and adding/editing a role is a policy change, never a rebuild. Every grant is intersected with
+# the device capability manifest and clamped to the acting tenant subtree (recursive multi-tenancy).
+#
+# Verbs (additive):
+#   view        read dashboards, evidence graph, reports
+#   query       run investigations / searches over the telemetry fabric
+#   annotate    add notes / tags / triage state to evidence
+#   investigate open + pivot the evidence graph, request AI explanations
+#   respond     take enforcement actions (isolate, block, kill session)
+#   run-playbook execute Automate/SOAR playbooks
+#   configure   change device/tenant settings (intent, not raw OS config)
+#   manage-users create/scope operator accounts WITHIN the tenant subtree
+#   os-root     shell/SSH/keys — ADMIN ONLY, and this lives in the OS, not here (see below)
+#
+# Workspaces mirror Mission Control (docs/MissionControl.md). "*" = all workspaces.
+schema: 1
+
+roles:
+  viewer:
+    description: Read-only oversight / compliance.
+    workspaces: [observe, detect, investigate, intelligence, business]
+    verbs: [view]
+
+  analyst:
+    description: SOC tier-1/2 — investigate and triage, no enforcement.
+    inherits: viewer
+    workspaces: [observe, detect, investigate, intelligence]
+    verbs: [query, annotate, investigate]
+
+  responder:
+    description: SOC tier-3 / incident response — can take action.
+    inherits: analyst
+    workspaces: [protect, automate]
+    verbs: [respond, run-playbook]
+
+  tenant-admin:
+    description: Manage a customer tenant subtree (MSSP). Scoped — never escalates to device OS.
+    inherits: responder
+    workspaces: [customers, administration]
+    verbs: [configure, manage-users]
+    scope: tenant-subtree
+
+  admin:
+    description: >
+      Appliance owner. Full dashboard AND OS root (shell/SSH/disk-key). The os-root verb is NOT granted
+      through the dashboard — it is an OS account property (ADR 0008). Listed here only so the dashboard
+      renders the admin's full surface; the OS is the source of truth for os-root.
+    workspaces: ["*"]
+    verbs: [view, query, annotate, investigate, respond, run-playbook, configure, manage-users]
+    os_backed: true   # identity is the OS admin account, not a dashboard-store row
+
+# Hard rules the backend MUST enforce (fail closed):
+enforcement:
+  default: deny                     # unknown/unparseable role or missing binding → no access
+  operators_never_os: true          # no dashboard role maps to an OS account / shell / SSH / keys
+  intersect_capability_manifest: true
+  clamp_to_tenant_subtree: true
+  store: /var/lib/hookprobe/rbac/    # encrypted (ADR 0007); Argon2id password hashes; NOT /etc/passwd

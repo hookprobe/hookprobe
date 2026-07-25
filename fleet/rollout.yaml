@@ -1,0 +1,24 @@
+# fleet/rollout.yaml — rollout state (ADR 0012 D2/D3: ring windows, enforced).
+#
+# Written by the CI `promote` job (`.github/workflows/build-os.yml`'s `promote` /
+# `release-pass` jobs) each time a digest is blessed onto a channel — or hand-edited
+# here for rehearsal/dev-loop testing. Nodes read this alongside `hookprobe.yaml`:
+# `crate::fleet::diff_ring_gated` downgrades a channel-mismatch drift to the
+# non-actionable `ChannelMismatchPending` when the node's `rollout.ring`
+# (`hookprobe.yaml`) is NOT yet in `promoted_rings` below — so `bootc upgrade` only
+# fires inside the promoted window (canary → ring → fleet), while the operator still
+# SEES the pending drift instead of it silently vanishing.
+#
+# Absence of this file is NOT an error — `diff_ring_gated(..., rollout: None)` falls
+# back to the legacy (always-actionable) behavior; ring-gating is opt-in via this
+# file's presence, so an older/simpler fleet keeps working unmodified.
+#
+# `channel` scopes this file to ONE channel's promotion state — a node whose desired
+# channel doesn't match this value gets no ring evidence from this file either way
+# (falls back to legacy actionable behavior for its own channel mismatch; see
+# `crate::fleet::diff_ring_gated` doc comment).
+
+version: "2026.7"                     # ADR 0012 D1 calendar version this state describes
+digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"   # PLACEHOLDER — real digest lands per-release from `promote`'s release.json
+promoted_rings: [canary]              # canary is in; ring/fleet still waiting
+channel: stable

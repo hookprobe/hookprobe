@@ -1,0 +1,15 @@
+# cellular.example.yaml — 5G/LTE modem connection (Get Online / Network-Gateway).
+#
+# Runtime config ONLY (not a driver). Copy to /etc/hookprobe/cellular.yaml; the
+# hookprobe-cellular.service connects via ModemManager at boot. The modem's
+# driver + firmware must be in the image — a USB 5G modem on a CM5 may need a
+# driver sysext (see docs/driver-strategy.md).
+#
+# "Single plane of glass": HookProbe OS detects the modem (prober), flags a missing
+# driver as a prerequisite, connects it here, and surfaces it in Get Online exactly
+# like a wired or Wi-Fi WAN — one OS, one console, every uplink.
+
+apn: "internet"          # carrier APN (REQUIRED)
+ip_type: "ipv4v6"        # ipv4 | ipv6 | ipv4v6
+pin: ""                  # SIM PIN if the SIM is locked (else empty)
+allow_roaming: false

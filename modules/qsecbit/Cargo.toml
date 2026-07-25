@@ -1,0 +1,23 @@
+[package]
+name = "qsecbit"
+version = "0.1.0"
+edition = "2021"
+description = "QSECBIT composite cyber-resilience scorer — HookProbe OS V2 detection module"
+license = "Apache-2.0"
+
+# Library: deterministic math engine, shared by the WASI binary and tests.
+# Tests run on the native target; the binary is built for wasm32-wasip1.
+[lib]
+name = "qsecbit"
+crate-type = ["rlib"]
+
+# WASI binary: reads telemetry events from stdin, writes JSON score lines to stdout.
+[[bin]]
+name = "qsecbit"
+path = "src/main.rs"
+
+# Zero external dependencies — keeps the .wasm binary small and the security
+# surface minimal (no supply-chain exposure beyond std).
+# Release profile (opt-level="s", lto, panic="abort", strip) is declared at
+# the workspace root Cargo.toml and applies to all members.
+[dependencies]

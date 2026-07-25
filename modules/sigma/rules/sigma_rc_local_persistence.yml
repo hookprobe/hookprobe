@@ -1,0 +1,24 @@
+title: Write to /etc/rc.local (Legacy Boot Script Persistence)
+id: 6ac352c3-4c95-46e1-adc4-45ed35a054be
+status: stable
+description: >
+  A write to /etc/rc.local (or the RHEL-family /etc/rc.d/rc.local alias) — a legacy
+  boot-time script every root-owned process on the system trusts and executes once per
+  boot, still enabled by default on most Debian/Ubuntu images. A gap in
+  hookprobe_evidence::host_edr::classify_persistence, which watches cron/systemd/
+  authorized_keys/ld.so.preload/shell-profile/passwd-shadow paths but NOT this one — real,
+  non-duplicate NEW coverage. Field-equality over a short list (no modifier needed for an
+  exact-path match), proving the plain "selection: {field: [v1, v2]}" OR-list form.
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    path:
+      - "/etc/rc.local"
+      - "/etc/rc.d/rc.local"
+  condition: selection
+level: high
+tags:
+  - attack.persistence
+  - attack.t1037.004

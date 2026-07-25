@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-run the DNS sinkhole/RPZ generator on the bundled-feed + dnsxai-verdict cadence
+
+[Timer]
+# First pass shortly after dnsxai/evidence exist, then every 5 minutes — same cadence
+# hookprobe-hydra.timer uses (frequent enough that a fresh BLOCK_INSTANT verdict gets sinkholed
+# promptly; cheap because both inputs are small local files, not a network fetch).
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

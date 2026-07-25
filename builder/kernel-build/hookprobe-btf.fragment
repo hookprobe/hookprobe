@@ -1,0 +1,57 @@
+# Delta 1 vs the RPi defconfig: make the kernel self-describe with BTF.
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=y
+CONFIG_DEBUG_INFO_REDUCED=n
+CONFIG_DEBUG_INFO_SPLIT=n
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+# Delta 2 (2026-07-09 on-metal pentest finding): the RPi defconfig ships PSI OFF, so
+# /proc/pressure/{cpu,memory,io} does not exist and AEGIS resource-shed's CPU/memory-pressure
+# shedding is BLIND — it cannot react to a flood that saturates CPU via the mirror→DPI path,
+# the exact mechanism that collaterally denied a legit LAN customer. Enable PSI (and leave it
+# runtime-enabled, NOT default-disabled) so the reflex can read real pressure and shed the
+# top-talker source before customer traffic is starved. Cheap: PSI overhead is negligible.
+CONFIG_PSI=y
+CONFIG_PSI_DEFAULT_DISABLED=n
+# Delta 3 (2026-07-10 CM5 on-metal separation pentest): the RPi defconfig ships
+# CONFIG_NF_CONNTRACK_PROCFS OFF, so /proc/net/nf_conntrack does not exist. senzorium-flow.service
+# gates on `ConditionPathExists=/proc/net/nf_conntrack` → it is SKIPPED on the edge kernel, so ALL
+# flow-based detection (SSH-brute 1000001, beaconing 1000040, lateral 1000041, exfil) is BLIND
+# while packet-path detection (port scans) still works. Restore the procfs the flow engine reads.
+# (Longer-term senzorium-flow should move to conntrack NETLINK — see task; this is the cheap fix.)
+CONFIG_NF_CONNTRACK_PROCFS=y
+# Delta 4 (2026-07-15 base-tier build ticket Phase 0): IEEE-1588 hardware timestamping.
+# --- PTP / IEEE-1588 hardware timestamping (macb TSU behind RP1) — base-tier time-truth (ADR 0031 §B) ---
+# The macb TSU driver (macb_ptp) compiles automatically once CONFIG_MACB=y (already in defconfig) AND
+# CONFIG_PTP_1588_CLOCK=y — no separate macb symbol. Feeds Phase 3 ptp4l/phc2sys → NAPSE HW timestamps.
+CONFIG_PTP_1588_CLOCK=y
+CONFIG_NET_PTP_CLASSIFY=y     # auto-selected by PTP consumers; assert it lands
+# Delta 5 (2026-07-16 box-hardening audit GAP-2): extend "trust nothing unsigned" to the kernel.
+# Module signing (the kernel signs its OWN in-tree modules at modules_install via MODULE_SIG_ALL,
+# embeds the public key in its keyring, and verifies on load) + the Lockdown LSM (the ENFORCEMENT:
+# lockdown=integrity, set via kargs.d/cmdline, rejects unsigned-module load + kexec/hibernate/
+# /dev/mem-write). The default image ships ONLY in-tree modules — all auto-signed — so this does not
+# brick it. An OPTIONAL baked out-of-tree dongle .ko (drivers-build/staged, absent by default) must
+# be signed with THIS build's certs/signing_key.pem (scripts/sign-file) or it won't load under
+# lockdown — documented in the dongle build path. lockdown=INTEGRITY not confidentiality: integrity
+# still permits the eBPF stack's bpf_probe_read kernel reads (execsnoop/TC), confidentiality breaks them.
+CONFIG_MODULE_SIG=y
+CONFIG_MODULE_SIG_ALL=y
+CONFIG_MODULE_SIG_SHA256=y
+CONFIG_MODULE_SIG_HASH="sha256"
+CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
+CONFIG_SECURITY_LOCKDOWN_LSM=y
+CONFIG_SECURITY_LOCKDOWN_LSM_EARLY=y
+CONFIG_LOCK_DOWN_KERNEL_FORCE_NONE=y
+# CRITICAL (verified 2026-07-16): the RPi bcm2711/bcm2712 defconfig ships CONFIG_LSM="" — an EMPTY
+# LSM list, so NO LSM initializes and `lockdown=integrity` would be SILENTLY INERT (and the existing
+# kernel.yama.ptrace_scope sysctl was itself inert). Explicitly enrol the minor LSMs so lockdown is
+# actually active. Kept minimal + permissive-by-default (yama = ptrace restriction we already want
+# via sysctl; bpf = BPF LSM hooks, no policy = no-op). Deliberately NO loadpin (could block firmware/
+# module loads from /usr) and NO SELinux/AppArmor (unused, enforcing would break the box).
+CONFIG_SECURITY_YAMA=y
+CONFIG_LSM="lockdown,yama,bpf"
+CONFIG_STRICT_DEVMEM=y
+CONFIG_IO_STRICT_DEVMEM=y

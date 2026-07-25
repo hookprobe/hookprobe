@@ -1,0 +1,22 @@
+# HookProbe OS identity — brands the image as its own OS (like every network/security appliance
+# vendor does: Cisco, Palo Alto, Arista …). ID_LIKE=debian keeps apt/debian tooling + anything that
+# checks the base distro working, while ID=hookprobe makes this present as HookProbe OS to the
+# operator, to systemd-sysext (extension-release ID match), and to compliance scanners. Installed as
+# /usr/lib/os-release in the bootc image (ADR 0006). Bump VERSION_ID + SYSEXT_LEVEL on releases.
+NAME="HookProbe OS"
+PRETTY_NAME="HookProbe OS 2 — one node's detection, everyone's protection"
+ID=hookprobe
+ID_LIKE=debian
+VERSION="2"
+VERSION_ID="2"
+VERSION_CODENAME=organism
+IMAGE_ID=hookprobe-os
+IMAGE_VERSION=2
+# SYSEXT_LEVEL lets signed sysexts (napse-capture eBPF, drivers) track an extension-API level
+# independent of VERSION_ID, so an OS minor bump doesn't silently invalidate every extension.
+SYSEXT_LEVEL=1
+HOME_URL="https://hookprobe.com"
+DOCUMENTATION_URL="https://hookprobe.com/docs"
+SUPPORT_URL="https://hookprobe.com/support"
+BUG_REPORT_URL="https://hookprobe.com/support"
+ANSI_COLOR="0;36"

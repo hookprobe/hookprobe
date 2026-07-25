@@ -1,0 +1,39 @@
+# security/sbom/syft.yaml — syft configuration for HookProbe OS SBOM generation.
+# Used by .github/workflows/build-os.yml (image SBOM) and build-modules.yml (module SBOM).
+#
+# ADR 0002 §4 / Readme "Security & supply chain": SBOM per image (and per module),
+# CycloneDX JSON, attached to the artifact as a cosign attestation
+# (predicateType https://cyclonedx.org/bom) and uploaded as a CI artifact.
+#
+# Invoke: syft -c security/sbom/syft.yaml <source> -o cyclonedx-json=<out>.cdx.json
+#         (also emit spdx-json for ecosystems that require SPDX — see `output` below).
+
+# Emit BOTH CycloneDX (our canonical, drives the CBOM cross-reference) and SPDX
+# (broad tooling/regulator compatibility). The file paths are set per-invocation by CI.
+output:
+  - "cyclonedx-json"
+  - "spdx-json"
+
+# Catalogers: for an OCI image syft auto-selects the image set (apt/dpkg, binary,
+# rust-cargo-lock baked into binaries, etc.). For a directory/source scan (modules) it
+# uses the directory set. We keep defaults but document the intent here.
+# TODO: once a real image exists, pin `default-catalogers` explicitly so the SBOM is
+#       deterministic across syft upgrades (reproducible-build requirement, Readme §threat).
+
+# Relationships: include file ownership so the SBOM ties packages to on-disk paths
+# (useful for evidence + the CBOM library cross-reference).
+package:
+  search:
+    scope: "all-layers"   # scan every image layer, not just the squashed view
+
+# Source-level config. `base/` Rust binaries are built statically into the image; syft's
+# binary + cargo-auditable catalogers recover their crate inventory IF the binaries are
+# built with `cargo auditable` (TODO: enable in the workspace build to enrich the SBOM).
+relationships:
+  package-file-usage: true
+
+# Exclude transient build/cache paths from directory scans (modules).
+exclude:
+  - "**/target/debug/**"
+  - "**/.git/**"
+  - "**/node_modules/**"

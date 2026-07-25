@@ -1,0 +1,18 @@
+[Unit]
+Description=HookProbe on-boot self-test verdict (PASS/FAIL to console)
+Documentation=file:///usr/share/hookprobe/docs/OS-platform-report.md
+# Run after the self-provisioning chain so it reports a settled verdict.
+After=hookprobe-network-reconcile.service hookprobe-supervisor.service multi-user.target
+Wants=hookprobe-supervisor.service
+ConditionPathExists=/usr/lib/hookprobe/selftest-boot.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/selftest-boot.sh
+# Print the verdict to the console (visible on serial / headless boots).
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

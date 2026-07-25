@@ -1,0 +1,103 @@
+# modules/yara-scan/module.yaml — YARA file-scanning engine (ADR 0026).
+#
+# WHY `runtime: host`, not `wasm`: `yara-x` (VirusTotal's maintained, pure-Rust YARA
+# re-implementation — chosen specifically because it has NO libyara/C dependency, fitting this
+# workspace's Rust/Wasm supply-chain posture) internally compiles a rule's `condition:` to Wasm
+# bytecode and JITs it via its OWN embedded `wasmtime`/`cranelift` — a dependency tree far heavier
+# than the zero-dep floor `modules/napse`/`modules/dnsxai`'s Wasm binaries hold to, and one that
+# needs real file-tree access (a configured scan set) rather than a single stdin pipe. Native
+# `runtime: host` (the SAME tier `modules/senzorium-flow`/`modules/evidence`/`modules/sigma`
+# already use) is the honest, tractable choice for a first version.
+#
+# ARCH STATUS (state plainly, per the build brief's own honesty bar): proven GREEN on
+# amd64/x86_64-unknown-linux-gnu (`cargo test -p hookprobe-yara-scan`, 8 tests, incl. a real EICAR-
+# string scan) **and** on aarch64-unknown-linux-gnu (2026-07-08, release-engineer pass: `yara-x`'s
+# pure-Rust dependency graph cross-compiled clean via the same aarch64-gnu sysroot every other
+# native loader in this repo uses — no libbpf-sys/rusqlite-bundled C-toolchain step needed) — both
+# arches' binaries are built and staged into the arm64 Pi image tree; see the `artifacts:` block
+# below for the real per-arch digests.
+#
+# Canon: docs/adr/0026-sigma-yara-detection.md (this module's own ADR), docs/MissionControl.md §4.
+
+id: yara-scan
+version: 0.1.0
+title: "YARA — file-scanning engine (amd64/gnu + arm64/gnu proven)"
+runtime: host
+artifact: base
+
+requires:
+  capabilities: [soc]
+  min_memory_mb: 128
+
+grants:
+  # The scan set is a small, fixed, tractable v1 scope (world-writable/staging paths — the SAME
+  # ones `hookprobe_evidence::host_edr`'s EXEC_FROM_WRITABLE_PATH check watches); a full
+  # filesystem sweep is explicitly out of scope for the edge CPU/IO budget (ADR 0003).
+  - read:  /tmp
+  - read:  /var/tmp
+  - read:  /dev/shm
+  - write: /var/lib/hookprobe/events
+  - write: /var/lib/hookprobe/yara-status.json
+
+provides:
+  capabilities: [yara_scanning]   # downstream: Mission Control's Detect workspace `/api/engines`
+                                  # reads yara-status.json for the REAL loaded-rule/last-scan data.
+
+resources:
+  cpu_pct: 15
+  memory_mb: 256
+
+# staging: — required for runtime: host (ADR 0015 D1).
+#
+# staging.artifacts (above) is the BUILD-TREE src->dest copy gen-staging.sh/stage-apply.sh use;
+# it is a DIFFERENT list from the `artifacts:` (payload digest) block below, same split every
+# other native-loader module in this registry uses (api/evidence/exploit).
+staging:
+  build:
+    - crate: hookprobe-yara-scan
+      toolchain: gnu
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-yara-scan", dest: "/usr/lib/hookprobe/hookprobe-yara-scan", mode: "0755" }
+  units:
+    - "modules/yara-scan/units/hookprobe-yara-scan.service"
+    - "modules/yara-scan/units/hookprobe-yara-scan.timer"
+  # No `preset:` override needed — `hookprobe-yara-scan.timer` has an `[Install]` section and
+  # this module's `requires.capabilities` ([soc]) hits neither of gen-staging.sh's
+  # HARDWARE_GATED_CAPS, so the generator's own default_verb ("enable") already applies (same
+  # convention as evidence's own prune .service+.timer pair).
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — CLOSES the "signature: optional,
+# no artifacts: block" gap a release-engineer pass found staged into the arm64 Pi image
+# (2026-07-08): `gen-staging.sh` auto-enables this module (baseline `soc` capability) regardless
+# of `signature:`, so without this block it would have run on-device under a metadata-only
+# signature with no artifact-hash binding — a "trust nothing unsigned" violation (CLAUDE.md
+# canon). Same `role: executable`, one entry per built arch, convention modules/api,
+# modules/evidence/module.yaml already use. `value`s are written by
+# `hookprobe-supervisor --write-artifact-digests yara-scan` (arm64 run via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly), NEVER
+# hand-`sha256sum`'d; a real release pipeline re-runs it against its OWN per-arch build before
+# shipping (D3's build -> digest -> sign order — `builder/sign-release.sh` enforces it).
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-yara-scan
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "1240117beba9be772f8a97581dfb6fb756ff4a64e831a697f63334dd82ba7651"
+  - path: /usr/lib/hookprobe/hookprobe-yara-scan
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "676539a24619fb2343dcf011aa9764d795e431c6562003ffdaaf2ac7442a73fd"
+
+signature: required             # cosign-signed like every other staged artifact (flipped from
+                                # `optional` — see the artifacts: block comment above); the
+                                # device VERIFIES, never signs (ADR 0002 §5). Bundled YARA rules
+                                # (modules/yara-scan/rules/*.yar) are NOT separate staged
+                                # artifacts — `hookprobe_yara_scan`'s `BUNDLED_RULES` pulls them
+                                # in via `include_str!` at COMPILE time (src/lib.rs), so they are
+                                # already baked into, and covered by, the `role: executable`
+                                # digest above; no separate `role: data` entry is needed (unlike
+                                # ovs/senzorium-flow/exploit's genuinely-external staged data
+                                # files).

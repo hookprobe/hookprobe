@@ -1,0 +1,22 @@
+title: Write to /etc/sudoers or /etc/sudoers.d/
+id: e6140da4-729f-4981-963f-c5aeeea0e2ae
+status: stable
+description: >
+  A direct file write to /etc/sudoers or anything under /etc/sudoers.d/ — the classic
+  "add NOPASSWD:ALL for my own user/backdoor account" privilege-escalation persistence
+  move. hookprobe_evidence::host_edr::classify_persistence does not watch this path at
+  all (its watchlist stops at cron/systemd/authorized_keys/ld.so.preload/shell-profile/
+  passwd-shadow) — real, non-duplicate NEW coverage. Demonstrates the `path|startswith`
+  modifier so both /etc/sudoers itself and every file under /etc/sudoers.d/ match with
+  one rule.
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    path|startswith: "/etc/sudoers"
+  condition: selection
+level: critical
+tags:
+  - attack.privilege-escalation
+  - attack.t1548.003

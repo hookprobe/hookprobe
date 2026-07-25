@@ -1,0 +1,24 @@
+title: DNS Query to a Low-Quality/Abuse-Prone TLD
+id: 6b5a4c3d-2e1f-4a3b-9c8d-7e6f5a4b3c2d
+status: stable
+description: >
+  A DNS query to a free/low-cost, abuse-prone TLD often used for disposable C2/phishing
+  infrastructure. Demonstrates the endswith modifier over a list (OR semantics).
+logsource:
+  category: dns_query
+  product: linux
+detection:
+  selection:
+    query|endswith:
+      - ".tk"
+      - ".ml"
+      - ".ga"
+      - ".cf"
+      - ".gq"
+      - ".xyz"
+      - ".top"
+  condition: selection
+level: low
+tags:
+  - attack.command-and-control
+  - attack.t1071.004

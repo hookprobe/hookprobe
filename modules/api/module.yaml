@@ -1,0 +1,105 @@
+# modules/api/module.yaml — registry entry for `hookprobe-api` (Mission Control read-API,
+# ADR 0001: Rust/Axum), wired into the staging registry 2026-07-05 (release-engineer, item 1 of
+# the image-integration closure pass — it previously had a `crates/hookprobe-api/` source tree,
+# unit, and 2.4MB binary, but was staged NOWHERE, on either build path).
+#
+# RESOLUTION (mirrors modules/evidence/module.yaml's own C3 precedent exactly, same reasoning):
+# `hookprobe-api`'s SOURCE lives under `crates/hookprobe-api/` (a workspace crate — it began life
+# next to `hookprobe-evidence`, the graph it reads, rather than under `modules/`), not under
+# `modules/api/`. Per ADR 0015's own implementation spec, this file is the lower-disruption
+# "reference entry" option: a `modules/api/module.yaml` that points at the crate's artifact/units
+# in place via the `staging:` override block, rather than relocating `crates/hookprobe-api/`
+# wholesale (that relocation is still the ALTERNATIVE NOT APPLIED, flagged for product-steward,
+# same as evidence's own header says).
+#
+# Canon: docs/adr/0001-app-stack.md (Rust/Axum read-API), docs/adr/0009-soc-brain-edge-cloud.md
+# (Axum read-API + SSE over the evidence graph → Observe/Detect/Investigate/Intelligence boards),
+# docs/adr/0015-registry-driven-module-inclusion.md (C3-style irregular-crate-location pattern).
+
+id: api
+version: 0.1.0
+title: "Mission Control read-API — read-only HTTP+SSE over the evidence graph (ADR 0001)"
+runtime: host                  # host-integral binary + unit; no kernel-only capability beyond
+                                # ordinary file I/O + a loopback TCP bind — matches evidence's
+                                # and senzorium-flow's `runtime: host` classification exactly.
+artifact: base                 # host-integral; delivered IN the bootc image (no separate OCI)
+
+requires:
+  capabilities: [soc, evidence]  # baseline SOC + the evidence graph this API serves read-only
+                                  # (modules/evidence/module.yaml `provides.capabilities: [evidence]`)
+                                  # — After=/Wants= on hookprobe-evidence.service in the unit
+                                  # itself already encodes the same soft dependency; this is the
+                                  # manifest-capability mirror of it (ADR 0015 D4 baseline token,
+                                  # not hardware-gated, so the generator preset-enables it).
+  min_memory_mb: 64
+
+grants:                         # the ONLY host access this binary opens (see hookprobe-api's own
+                                 # unit hardening: ProtectSystem=strict, ReadOnlyPaths=/var/lib/hookprobe)
+  - read: /var/lib/hookprobe/evidence.db
+  - read: /var/lib/hookprobe/manifest.json
+  - read: /var/lib/hookprobe/claim.json
+
+provides:
+  capabilities: [mission_control_api]   # downstream: the on-device HTTP+SSE origin Mission
+                                        # Control's UI (or a same-origin reverse proxy) calls;
+                                        # loopback-only (127.0.0.1:8420) — no host grant needed
+                                        # for the bind itself, this is a plain `runtime: host`
+                                        # process, not a WASI-sandboxed module.
+
+resources:
+  cpu_pct: 10
+  memory_mb: 64                  # matches the unit's own hand-authored `MemoryMax=64M` — the
+                                  # resource-budget cgroup-dropin generator (gen-staging.sh) will
+                                  # emit an ADDITIVE drop-in with the SAME numbers, not a conflict.
+
+# staging: — the crate lives OUTSIDE modules/ (see header), so this cannot use the wasm
+# convention; one of the five explicit override blocks ADR 0015 D1 calls for (same shape as
+# modules/evidence/module.yaml's own staging: block — hookprobe-api depends on hookprobe-evidence
+# + hookprobe-manifest, both of which already need the SAME glibc/bundled-rusqlite toolchain).
+staging:
+  build:
+    - crate: hookprobe-api
+      toolchain: gnu            # bundled SQLite (via hookprobe-evidence, rusqlite `bundled`) needs
+                                # a glibc target, NOT musl — same aarch64-GNU cross-recipe as
+                                # hookprobe-evidence/napse-quarantine (module_sig::resolve_staging_src
+                                # `{gnu_bin}` placeholder resolves to the `-unknown-linux-gnu` triple).
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-api", dest: "/usr/lib/hookprobe/hookprobe-api", mode: "0755" }
+  units:
+    - "crates/hookprobe-api/units/hookprobe-api.service"
+  # No `preset:` override needed — `hookprobe-api.service` has an `[Install]` section and this
+  # module's `requires.capabilities` ([soc, evidence]) hits neither of gen-staging.sh's
+  # HARDWARE_GATED_CAPS, so the generator's own default_verb ("enable") already applies, matching
+  # every other always-on baseline SOC service (napse/qsecbit/dnsxai/evidence).
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — on-device dest path (this crate lives
+# outside modules/, see header, so its module.yaml is never co-located with the compiled binary
+# either — same convention as modules/evidence/module.yaml's own artifacts: block).
+#
+# RESOLVED 2026-07-05 (code-developer, multi-arch native-binary digest gap closure): the
+# single-arch-slot gap this file used to flag is CLOSED — one arch-qualified entry per built arch,
+# same `role: aot` convention generalized (`docs/adr/0021-multiarch-native-artifact-digests.md`).
+# Both `value`s are REAL sha256 of `hookprobe-api` rebuilt fresh in this pass for
+# x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (same exact-glibc-2.36 sysroot
+# wrapper as modules/napse-quarantine/README.md's trail), each written by its own arch's
+# `hookprobe-supervisor --write-artifact-digests api` run (arm64 via qemu-aarch64-static/binfmt so
+# `module_sig::running_arch()` reports `arm64` correctly) — proven `verified` under a
+# qemu-aarch64-static arm64 reconcile (docs/BuildPlan.md's changelog). A compiled binary's bytes
+# remain toolchain/version-sensitive; a real release pipeline re-runs `--write-artifact-digests` +
+# `--sign-modules` against its OWN build of each arch before shipping.
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-api
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "5a3b82f6080124a90b201aaf40b541f7502808f91b13300d974414d020fd4e52"
+  - path: /usr/lib/hookprobe/hookprobe-api
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "fe0ed9b868e3c821e83dd25c01ecf4095c2f3204780413a542c104cd762dd731"
+
+signature: required             # cosign-signed like every other staged artifact; the
+                                # device VERIFIES, never signs (ADR 0002 §5).

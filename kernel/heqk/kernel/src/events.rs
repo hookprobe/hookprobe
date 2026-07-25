@@ -1,0 +1,76 @@
+//! P8 / SOAR — the async telemetry exfiltration path ("the OS is the sensor" can
+//! now REPORT). The BPF verdict engine, in the TCB, pushes a fixed-size event
+//! HEADER (never the packet payload) into an SPSC ring on a rule hit; an EL0
+//! Telemetry Exporter drains it and ships it (TLS/MQTT) to the SIEM.
+//!
+//! Non-blocking by construction: if the ring is full, `push` increments an
+//! OVERRUN counter and DROPS the export (the inline packet drop already
+//! happened) — an attacker who triggers a flood of events must NOT be able to
+//! stall the datapath. Losing visibility (a counted overrun the SIEM sees) is
+//! acceptable; stalling the wire is not. Same zero-copy/release-acquire discipline
+//! as the P5 packet ring; the EL0 exporter's wakeup is a batched P12 Notification.
+
+use core::ptr::{addr_of, addr_of_mut};
+use core::sync::atomic::{AtomicU32, Ordering};
+
+/// One telemetry event — a compact header, 24 bytes. No payload bytes ever leave
+/// the TCB through here (privacy + bounded size).
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct Event {
+    pub ts: u64,      // cntpct at detection
+    pub src: u32,     // source hash / rate key (0 if not flow-scoped)
+    pub rule_id: u16, // which signed rule fired
+    pub severity: u8, // QSecBit severity points
+    pub verdict: u8,  // 1 = PASS, 2 = DROP
+}
+const EMPTY: Event = Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 };
+
+const RING: usize = 64; // power of two
+static mut BUF: [Event; RING] = [EMPTY; RING];
+static HEAD: AtomicU32 = AtomicU32::new(0); // producer (verdict engine)
+static TAIL: AtomicU32 = AtomicU32::new(0); // consumer (EL0 exporter)
+static OVERRUN: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn cntpct() -> u64 {
+    let c: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+    c
+}
+
+/// Producer (in the TCB): record a rule hit. Non-blocking — full ring ⇒ count an
+/// overrun and drop the export. Stamps the timestamp internally.
+pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, src: u32) {
+    let h = HEAD.load(Ordering::Relaxed);
+    let t = TAIL.load(Ordering::Acquire);
+    if h.wrapping_sub(t) >= RING as u32 {
+        OVERRUN.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let ev = Event { ts: cntpct(), src, rule_id, severity, verdict };
+    unsafe { core::ptr::write_volatile(addr_of_mut!(BUF).cast::<Event>().add((h as usize) % RING), ev) };
+    HEAD.store(h.wrapping_add(1), Ordering::Release); // publish (release)
+}
+
+/// Consumer (the EL0 Telemetry Exporter): drain up to `out.len()` events into
+/// `out`, returning the count. Zero-copy read + release the slot.
+pub fn drain(out: &mut [Event]) -> usize {
+    let mut n = 0;
+    while n < out.len() {
+        let t = TAIL.load(Ordering::Relaxed);
+        let h = HEAD.load(Ordering::Acquire); // see the published event
+        if t == h {
+            break; // empty
+        }
+        out[n] = unsafe { core::ptr::read_volatile(addr_of!(BUF).cast::<Event>().add((t as usize) % RING)) };
+        TAIL.store(t.wrapping_add(1), Ordering::Release); // free the slot
+        n += 1;
+    }
+    n
+}
+
+/// Count of events dropped because the ring was full (a SIEM-visible signal).
+pub fn overruns() -> u32 {
+    OVERRUN.load(Ordering::Relaxed)
+}

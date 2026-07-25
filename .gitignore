@@ -1,0 +1,19 @@
+target/
+node_modules/
+ui/dist/
+builder/kernel-build/build-*/
+builder/kernel-build/debroot-*/
+builder/kernel-build/linux-*/
+builder/kernel-build/*.deb
+builder/kernel-build/*.tar.gz
+builder/mkosi*/*.img
+builder/mkosi*/*.raw
+builder/mkosi*/*.efi
+builder/mkosi*/*.initrd
+builder/mkosi*/*.vmlinuz
+builder/mkosi*/pi-kernel-cache/
+*.orig
+*.old
+
+# ADR 0043 M1: heqk build-seam staging output
+builder/generated/

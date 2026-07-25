@@ -1,0 +1,16 @@
+#!/bin/sh
+# initramfs-tools HOOK (build time) — pull the dm-verity toolchain into the Pi initrd so the boot
+# script can set up a read-only, hash-verified root. See docs/adr/0006-os-hardening.md (H3b).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /sbin/veritysetup /sbin 2>/dev/null || copy_exec /usr/sbin/veritysetup /sbin
+copy_exec /sbin/dmsetup /sbin 2>/dev/null || copy_exec /usr/sbin/dmsetup /sbin
+# dm-verity + overlay + the FAT driver (hash tree lives on the boot partition)
+manual_add_modules dm_verity
+manual_add_modules dm_mod
+manual_add_modules vfat
+manual_add_modules nls_cp437
+manual_add_modules nls_ascii

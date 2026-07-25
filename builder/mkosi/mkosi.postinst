@@ -1,0 +1,62 @@
+#!/bin/sh
+# Runs inside the image chroot during the mkosi build (after packages + mkosi.extra/).
+# Finalizes the HookProbe install: exec bits, /usr/bin symlinks, the service user, and
+# unit enablement (so the self-provisioning chain fires on first boot).
+set -eux
+# NOTE: /usr is READ-ONLY in the final postinst, so exec bits + /usr/bin symlinks are
+# pre-baked into mkosi.extra/ (see build-vm.sh). Here we only touch writable /etc + /var.
+
+getent group hookprobe >/dev/null || groupadd -r hookprobe
+id hookprobe >/dev/null 2>&1 || useradd -r -g hookprobe -d /var/lib/hookprobe -s /usr/sbin/nologin hookprobe
+mkdir -p /var/lib/hookprobe /etc/hookprobe
+
+# Enable the HookProbe units (preset file ships in /usr/lib/systemd/system-preset).
+systemctl preset-all 2>/dev/null || true
+systemctl enable \
+  hookprobe-firstboot-data.service \
+  hookprobe-bootstrap.service \
+  hookprobe-supervisor.service \
+  hookprobe-network-reconcile.service \
+  hookprobe-trust-reconcile.timer 2>/dev/null || true
+
+# A one-shot that prints a clear self-test verdict to the console after the chain settles,
+# so the qemu serial log shows PASS/FAIL without anyone logging in.
+systemctl enable hookprobe-selftest.service 2>/dev/null || true
+
+# ---- ADMIN ACCESS — GATED, CLEAN-BY-DEFAULT (release security fix, 2026-07-07; twin of the
+# builder/mkosi-arm64 fix; backend audit F1) -------------------------------------------------
+# This base rootfs must be BORN clean. Default (HOOKPROBE_DEBUG_ACCESS unset/0) = RELEASE: root
+# LOCKED (no password, no hash). Only when HOOKPROBE_DEBUG_ACCESS=1 (passed through by
+# mkosi.conf's `Environment=HOOKPROBE_DEBUG_ACCESS`) does root get the debug password hash — so
+# boot-vm.sh's serial-console (ttyS0) validation still gets a root shell to log into.
+# NOTE: the console AUTOLOGIN getty unit itself (a /usr systemd drop-in) is staged separately,
+# by build-vm.sh into mkosi.extra/ (gated on this SAME env var) — NOT written here. This
+# script's sandboxed execution presents /usr as a READ-ONLY overlay (mkosi's context.sandbox()
+# unconditionally ro-binds, then overlay-mounts, the package-manager cache tree's `usr` over
+# /usr for build/postinst/finalize scripts whenever that cache tree exists — verified against
+# mkosi 20.2's mkosi/context.py), so a new unit file cannot be created from here; that's the
+# same reason the /usr/bin symlinks above are pre-baked in build-vm.sh instead of postinst.
+# Mirrors builder/mkosi-arm64/mkosi.postinst's gate exactly (same env var, same password hash).
+#   debug build:  HOOKPROBE_DEBUG_ACCESS=1 for BOTH build-vm.sh's populate AND `mkosi build`
+#                 → root:hookprobe; boot-vm.sh's serial console auto-logs-in as root (the
+#                 password also works from a plain login: prompt if autologin ever doesn't fire).
+#   release (default): root LOCKED, no autologin unit staged (build-vm.sh) — this image ships
+#                 no openssh-server/sudo package today, so there is no sshd posture to harden
+#                 here (arm64's gate additionally hardens sshd; that doesn't apply to this leg).
+R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'   # hookprobe
+# 2026-07-07 regression fix (see arm64 mkosi.postinst): mkosi runs this postinst in a sandbox
+# where bare /etc is NOT the image account DB (host /usr overlaid, /etc/shadow absent) — a bare
+# sed here exits 2 under `set -e` and fails `mkosi build`. mkosi.conf no longer bakes a root
+# password so the base .raw is clean-by-default (root locked); the debug console autologin is
+# staged by build-vm.sh. Only touch bare /etc when it really is the image account DB; else skip.
+if [ ! -f /etc/shadow ]; then
+  echo "hookprobe: postinst account block skipped — no image /etc in this mkosi phase"
+elif [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
+  sed -i "s|^root:[^:]*:|root:${R_HASH}:|" /etc/shadow
+  echo "debug" > /etc/hookprobe/build-mode
+  echo "hookprobe: ADMIN ACCESS = DEBUG (root:hookprobe console login; autologin staged by build-vm.sh) — HOOKPROBE_DEBUG_ACCESS=1"
+else
+  sed -i 's|^root:[^:]*:|root:!:|' /etc/shadow
+  echo "release" > /etc/hookprobe/build-mode
+  echo "hookprobe: ADMIN ACCESS = RELEASE (root locked, no console autologin) — default; set HOOKPROBE_DEBUG_ACCESS=1 for a debug build"
+fi

@@ -1,0 +1,66 @@
+# napse-l2guard.service — Ring-0 line-rate DETERMINISTIC malformed-frame / malformed-ARP drop —
+# the real enforcement point crates/hookprobe-manifest/src/l2_responder.rs's
+# `render_frame_drop_todo` stub named as still missing. Attaches the tiny CO-RE `l2guard_ingress`
+# TC-bpf program at clsact INGRESS on wlan0 (Wi-Fi/LAN — ADR 0005: brcmfmac has no native XDP) and
+# end0 (WAN). C9: this unit enforces exactly what `napse_loader::dpi`'s detectors already flag; it
+# makes zero new decisions of its own.
+#
+# COEXISTS WITH, DOES NOT REPLACE OR COLLIDE WITH, napse-quarantine.service (TC priority 1) or
+# napse-capture's DPI mirror (TC priority 10): this program claims priority 5 — a SEPARATE
+# concern (a structurally-bad FRAME, regardless of identity) from quarantine's spoofable-IDENTITY
+# drop. `L2Verdict::FrameDrop` findings this program covers (l2_malformed, arp_spoof/
+# malformed_fields, arp_spoof/eth_mismatch) remain ALERT-ONLY via l2_responder if this loader ever
+# fails to load/attach (fail-open — see loader/src/bpf.rs's doc comment).
+#
+# arch F4 fix: preset-ENABLED everywhere (builder/gen-staging.sh, module.yaml `staging.
+# self_gated: true`) — the supervisor has no runtime path that ever starts a `managed` unit, so
+# this unit self-gates instead: loader/src/main.rs reads the manifest at startup and exits 0
+# cleanly unless capabilities.ddos_mitigation.state == "granted" (mirrors napse-quarantine's
+# identical self-gate). Stays inactive/no-op until BOTH that capability is granted AND the signed
+# sysext delivers l2guard.bpf.o (ConditionPathExists below).
+
+[Unit]
+Description=NAPSE l2guard — Ring-0 TC-bpf malformed-frame / malformed-ARP drop
+Documentation=file:///usr/share/hookprobe/docs/adr/0020-adversarial-resilience-harness.md
+Requires=systemd-sysext.service
+After=systemd-sysext.service hookprobe-bootstrap.service hookprobe-network-reconcile.service
+Wants=hookprobe-bootstrap.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+ConditionPathExists=/usr/lib/hookprobe/bpf/l2guard.bpf.o
+
+[Service]
+Type=simple
+Environment=NAPSE_L2GUARD_OBJ=/usr/lib/hookprobe/bpf/l2guard.bpf.o
+# 2026-07-07 cross-platform fix: these `wlan0`/`end0` values are the Pi's names — a LAST-RESORT
+# default only. The REAL source of truth is `/var/lib/hookprobe/ifaces.env`, written by
+# `hookprobe-network-reconcile.service` from THIS SAME manifest's classified WAN uplink + LAN
+# bridge/routed-AP radio (`aegis::reconcile_network`'s `render_ifaces_env`) — per
+# systemd.exec(5) "Settings from these files [EnvironmentFile=] override settings made with
+# Environment=", so ifaces.env ALWAYS wins once it exists. See napse-quarantine.service's
+# identical comment for the live amd64-VM finding this fixes.
+Environment=NAPSE_L2GUARD_LAN_IFACE=wlan0
+Environment=NAPSE_L2GUARD_WAN_IFACE=end0
+EnvironmentFile=-/var/lib/hookprobe/ifaces.env
+Environment=NAPSE_L2GUARD_PIN_DIR=/sys/fs/bpf/napse-l2guard
+Environment=NAPSE_L2GUARD_STATS_INTERVAL_SECS=300
+ExecStart=/usr/lib/hookprobe/bin/napse-l2guard
+# Fail-open: a load/attach error just ends the process (see bpf.rs) — Restart retries on its own
+# schedule; nothing about the existing datapath is ever touched by a failed attempt.
+Restart=on-failure
+RestartSec=5
+Slice=hookprobe-dataplane.slice
+
+# The narrow privileged surface: load the object (CAP_BPF), attach TC at clsact (CAP_NET_ADMIN),
+# read/observe (CAP_PERFMON — BTF/CO-RE relocation + map introspection). No CAP_NET_RAW: this
+# program only reads existing skbs handed to it by the TC hook, it never opens a raw socket.
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=-/sys/fs/bpf
+ReadOnlyPaths=/var/lib/hookprobe/manifest.json
+MemoryMax=32M
+
+[Install]
+WantedBy=multi-user.target

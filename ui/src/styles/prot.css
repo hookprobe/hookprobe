@@ -1,0 +1,628 @@
+/*
+ * HookProbe OS V2 — Protect workspace (§6) styles
+ *
+ * Spec: docs/MissionControl.md §6 — response & posture; the data-plane surface.
+ * Theme: cyber-industrial (void-black canvas, cyan #00B4FF + green #00FF9D,
+ * JetBrains Mono, terminal-window panels with `hookprobe@edge ~ <ctx>`).
+ *
+ * All classes are prefixed `.prot-` to avoid collisions with global.css.
+ * Global tokens (--hp-*), shared panel chrome (.hp-terminal, .mc-*, .inv-plan-*,
+ * .hp-btn-primary, .hp-prompt) and animation utilities come from global.css.
+ */
+
+/* ===========================================================================
+ * KPI row override
+ * =========================================================================*/
+
+/** Override mc-cell--kpis (span 5, 3-col grid) → span 12, 5 equal columns */
+.prot-kpis {
+  grid-column: span 12 !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+}
+
+/* ===========================================================================
+ * Per-interface posture — the key panel
+ * =========================================================================*/
+
+.prot-ifaces {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.prot-iface {
+  background: var(--hp-surface);
+  border: 1px solid var(--hp-border);
+  border-radius: var(--hp-radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.prot-iface:hover {
+  border-color: var(--hp-border-accent);
+  background: var(--hp-surface-elevated);
+}
+
+/* Top accent bar encodes the role */
+.prot-iface--inline {
+  border-top: 2px solid rgba(0, 180, 255, 0.55);  /* cyan → inline */
+}
+.prot-iface--oob {
+  border-top: 2px solid rgba(90, 90, 106, 0.45);  /* grey → out-of-band */
+}
+
+.prot-iface-top { display: flex; flex-direction: column; gap: 3px; }
+
+.prot-iface-name-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.prot-iface-name {
+  font-family: var(--hp-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hp-cyan);
+}
+
+/* Status dot */
+.prot-iface-st-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.prot-iface-st-dot--healthy  { background: var(--hp-green); box-shadow: 0 0 5px rgba(0,255,157,0.5); }
+.prot-iface-st-dot--degraded { background: var(--hp-amber); box-shadow: 0 0 5px rgba(255,170,0,0.5); }
+.prot-iface-st-dot--down     { background: var(--hp-red);   box-shadow: 0 0 5px rgba(255,107,107,0.5); }
+
+.prot-iface-label {
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+}
+
+/* Role + fail-mode badge row */
+.prot-iface-badges {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.prot-role, .prot-fail {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.prot-role--inline {
+  color: var(--hp-cyan);
+  background: rgba(0, 180, 255, 0.10);
+  border: 1px solid rgba(0, 180, 255, 0.22);
+}
+.prot-role--oob {
+  color: var(--hp-text-muted);
+  background: rgba(90, 90, 106, 0.12);
+  border: 1px solid rgba(90, 90, 106, 0.20);
+}
+
+.prot-fail--open {
+  color: var(--hp-amber);
+  background: rgba(255, 170, 0, 0.08);
+  border: 1px solid rgba(255, 170, 0, 0.18);
+}
+.prot-fail--closed {
+  color: var(--hp-red);
+  background: rgba(255, 107, 107, 0.10);
+  border: 1px solid rgba(255, 107, 107, 0.22);
+}
+
+/* Traffic stats */
+.prot-iface-traffic {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prot-traffic-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+}
+
+.prot-traffic-dir {
+  color: var(--hp-text-muted);
+  font-size: 10px;
+  width: 9px;
+  flex-shrink: 0;
+}
+
+.prot-traffic-val { color: var(--hp-text-secondary); }
+
+.prot-traffic-pps {
+  font-family: var(--hp-font-mono);
+  font-size: 9.5px;
+  color: var(--hp-text-muted);
+  margin-top: 1px;
+}
+
+/* Segment label */
+.prot-iface-seg {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--hp-text-muted);
+  border-top: 1px solid var(--hp-border);
+  padding-top: 7px;
+  margin-top: 2px;
+}
+
+/* ===========================================================================
+ * Firewall rules
+ * =========================================================================*/
+
+.prot-rules {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prot-rule {
+  display: grid;
+  grid-template-columns: 48px 58px 1fr 80px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px;
+  border-radius: var(--hp-radius-sm);
+}
+.prot-rule:hover { background: rgba(255, 255, 255, 0.03); }
+
+.prot-rule--disabled { opacity: 0.40; }
+
+.prot-rule-id {
+  font-family: var(--hp-font-mono);
+  font-size: 10px;
+  color: var(--hp-text-muted);
+}
+
+/* Action badges */
+.prot-rule-action {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-align: center;
+  white-space: nowrap;
+}
+.prot-ra--accept { color: var(--hp-green);  background: rgba(0,255,157,0.10); }
+.prot-ra--drop   { color: var(--hp-red);    background: rgba(255,107,107,0.10); }
+.prot-ra--reject { color: var(--hp-amber);  background: rgba(255,170,0,0.10); }
+.prot-ra--log    { color: var(--hp-purple); background: rgba(168,85,247,0.10); }
+
+.prot-rule-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prot-rule-chain {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hp-text-muted);
+}
+
+.prot-rule-flow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  color: var(--hp-text-secondary);
+  overflow: hidden;
+}
+
+.prot-rule-ep {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.prot-arrow { color: var(--hp-cyan); flex-shrink: 0; }
+
+.prot-rule-proto {
+  font-family: var(--hp-font-mono);
+  font-size: 9.5px;
+  color: var(--hp-text-muted);
+}
+
+.prot-rule-hits {
+  font-family: var(--hp-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--hp-text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+.prot-rule-hk { font-size: 9px; color: var(--hp-text-muted); font-weight: 400; }
+
+/* ===========================================================================
+ * Isolation / quarantine
+ * =========================================================================*/
+
+.prot-isolations {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prot-iso {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.prot-iso-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.prot-iso-dot--active     { background: var(--hp-red);   box-shadow: 0 0 7px rgba(255,107,107,0.55); }
+.prot-iso-dot--monitoring { background: var(--hp-amber);  box-shadow: 0 0 6px rgba(255,170,0,0.45); }
+.prot-iso-dot--released   { background: var(--hp-green);  box-shadow: 0 0 5px rgba(0,255,157,0.40); }
+
+.prot-iso-body { flex: 1; min-width: 0; }
+
+.prot-iso-host {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prot-iso-ip {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-cyan);
+  margin-top: 1px;
+}
+
+.prot-iso-reason {
+  font-size: 11px;
+  color: var(--hp-text-muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.prot-iso-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.prot-iso-time {
+  font-family: var(--hp-font-mono);
+  font-size: 10px;
+  color: var(--hp-text-muted);
+}
+
+.prot-iso-status {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.prot-iso-status--active     { color: var(--hp-red);   background: rgba(255,107,107,0.10); }
+.prot-iso-status--monitoring { color: var(--hp-amber);  background: rgba(255,170,0,0.10); }
+.prot-iso-status--released   { color: var(--hp-green);  background: rgba(0,255,157,0.08); }
+
+.prot-iso-ttl {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  color: var(--hp-text-muted);
+}
+
+/* ===========================================================================
+ * Segment policies
+ * =========================================================================*/
+
+.prot-policies {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.prot-policy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--hp-border);
+  border-radius: var(--hp-radius-sm);
+  border-left: 3px solid var(--seg-tone, var(--hp-border));
+}
+
+.prot-policy-seg {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--seg-tone, var(--hp-text-secondary));
+  white-space: nowrap;
+  min-width: 72px;
+}
+
+.prot-policy-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prot-policy-posture {
+  font-size: 10px;
+  color: var(--hp-text-muted);
+}
+
+.prot-failmode {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.prot-failmode--open {
+  color: var(--hp-amber);
+  background: rgba(255, 170, 0, 0.08);
+}
+.prot-failmode--closed {
+  color: var(--hp-red);
+  background: rgba(255, 107, 107, 0.10);
+}
+
+.prot-policy-devs {
+  font-family: var(--hp-font-mono);
+  font-size: 10px;
+  color: var(--hp-text-muted);
+}
+
+/* ===========================================================================
+ * Zero-trust
+ * =========================================================================*/
+
+.prot-zt {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.prot-zt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  gap: 10px;
+}
+
+.prot-zt-label { color: var(--hp-text-secondary); }
+
+.prot-zt-val {
+  font-family: var(--hp-font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ===========================================================================
+ * Compliance + Risk
+ * =========================================================================*/
+
+.prot-compliance {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prot-comp-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 36px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.prot-comp-fw { color: var(--hp-text-secondary); }
+
+.prot-comp-bar {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.prot-comp-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.prot-comp-score {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: right;
+}
+
+/* Divider between compliance and risk sections */
+.prot-risk-div {
+  height: 1px;
+  background: var(--hp-border);
+  margin: 10px 0;
+}
+
+.prot-risk {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prot-risk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  gap: 10px;
+}
+
+.prot-risk-label { color: var(--hp-text-secondary); }
+
+.prot-risk-val {
+  font-family: var(--hp-font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ===========================================================================
+ * Capability-gated panel (greyed-with-reason)
+ * =========================================================================*/
+
+.prot-gated {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 4px;
+}
+
+.prot-gated-icon {
+  font-size: 20px;
+  color: var(--hp-grey);
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.prot-gated-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prot-gated-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--hp-text-muted);
+  letter-spacing: 0.02em;
+}
+
+.prot-gated-reason {
+  font-size: 11.5px;
+  color: var(--hp-grey);
+  line-height: 1.45;
+}
+
+.prot-gated-code {
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  color: var(--hp-text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hp-border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ===========================================================================
+ * Plan-as-diff (mirrors InvestigateApp inv-plan pattern)
+ * =========================================================================*/
+
+/** The section outer is .hp-terminal .mc-panel (from global.css) */
+.prot-plan { background: var(--hp-glass); }
+
+.prot-plan-body {
+  padding: 16px 18px;
+}
+
+/** Intent label — prominent heading above the summary */
+.prot-plan-intent {
+  font-family: var(--hp-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hp-cyan);
+  margin-bottom: 8px;
+}
+
+.prot-plan-summary {
+  font-size: 13.5px;
+  color: var(--hp-text-primary);
+  line-height: 1.55;
+  margin-bottom: 4px;
+}
+
+/** Dismiss button — sits beside Modify/Approve in inv-plan-actions */
+.prot-dismiss {
+  background: transparent;
+  border: 1px solid var(--hp-border);
+  color: var(--hp-text-muted);
+  border-radius: var(--hp-radius);
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--hp-font);
+  transition: border-color 0.15s, color 0.15s;
+}
+.prot-dismiss:hover {
+  border-color: var(--hp-border-accent);
+  color: var(--hp-text-secondary);
+}
+
+/* ===========================================================================
+ * Responsive
+ * =========================================================================*/
+
+@media (max-width: 1280px) {
+  .prot-ifaces { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 1080px) {
+  .prot-ifaces { grid-template-columns: repeat(2, 1fr); }
+  .prot-kpis   { grid-template-columns: repeat(3, 1fr) !important; }
+}
+
+@media (max-width: 760px) {
+  .prot-ifaces         { grid-template-columns: 1fr; }
+  .prot-kpis           { grid-template-columns: repeat(2, 1fr) !important; }
+  .prot-rule           { grid-template-columns: 48px 1fr 60px; }
+  .prot-rule-id        { display: none; }
+  .prot-comp-row       { grid-template-columns: 1fr 50px 30px; }
+}
+
+/* Reduced-motion — transitions only; no layout changes */
+@media (prefers-reduced-motion: reduce) {
+  .prot-comp-fill { transition: none; }
+}

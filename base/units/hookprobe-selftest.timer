@@ -1,0 +1,31 @@
+# hookprobe-selftest.timer — RE-RUN the boot self-test verdict periodically, not just once
+# at boot (2026-07-07 backend-audit finding: greenboot/selftest-boot.sh is a BOOT-time-only
+# verdict — a SOC engine that wedges/crash-loops at hour 30 of uptime is invisible until the
+# next reboot, because nothing re-checks it in between. Combined with most SOC-engine units
+# carrying no WatchdogSec= (systemd itself can't tell "alive" from "hung"), this was a real
+# "day-2 blind spot": the device could silently go dark for days on a running box and the
+# only signal would be a customer noticing missing alerts.
+#
+# This does NOT change what selftest-boot.sh checks or how severely it reacts — it is the
+# SAME oneshot, RemainAfterExit=yes service (the `fstrim.timer`-style pattern: a periodic
+# timer re-triggering a oneshot re-runs its ExecStart even though the unit "remained active"
+# from the prior run). A FAIL verdict here does NOT reboot/rollback anything by itself (no
+# auto-remediation added — that stays the reconciler's job, out of this gate's scope); it
+# marks hookprobe-selftest.service "failed" in systemd (visible to `systemctl is-failed`,
+# `systemctl --failed`, journal, and any monitoring that polls unit state or the API), which
+# is a strictly better outcome than "nobody knows until the next reboot".
+[Unit]
+Description=Periodically re-run the HookProbe boot self-test verdict (not boot-time-only)
+Documentation=file:///usr/share/hookprobe/docs/OS-platform-report.md
+
+[Timer]
+# Give the box a full settle window before the first periodic re-check (the boot-time run
+# via hookprobe-selftest.service's own multi-user.target ordering already covers boot itself
+# — this is about CONTINUED health, so no rush on the first firing).
+OnBootSec=20min
+OnUnitActiveSec=15min
+Persistent=false
+Unit=hookprobe-selftest.service
+
+[Install]
+WantedBy=timers.target

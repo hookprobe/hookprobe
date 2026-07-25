@@ -1,0 +1,21 @@
+{
+  "name": "hookprobe-mission-control",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "HookProbe OS V2 — Mission Control (Layer 0 calm landing). Stack: Astro 7 + SolidJS + TypeScript. Build to static assets; served at runtime by Rust/Axum (no Node at runtime on edge). ADR 0001.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/solid-js": "7.0.0",
+    "astro": "7.0.3",
+    "solid-js": "1.9.13"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=HookProbe unlock encrypted data volume (plain dm-crypt, ADR 0007 E1)
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0007-data-at-rest-encryption.md
+DefaultDependencies=no
+# After provisioning (first boot creates+encrypts it); BEFORE the mount that needs the decrypted mapper.
+After=local-fs-pre.target hookprobe-firstboot-data.service
+Before=var-lib-hookprobe.mount hookprobe-bootstrap.service hookprobe-supervisor.service
+Wants=hookprobe-firstboot-data.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/unlock-data.sh
+# Read-only except opening the dm-crypt device; needs the key + dm-crypt. Non-fatal (mount is nofail).
+ProtectHome=yes
+
+[Install]
+WantedBy=local-fs.target

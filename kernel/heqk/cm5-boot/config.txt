@@ -1,0 +1,33 @@
+# HEQK Core — CM5 boot. kernel= MUST match the filename flash-cm5.sh copies
+# (heqk8.img); pointing at kernel_2712.img loads the Linux image's leftover
+# kernel of that name instead of HEQK. Header matches real Pi kernels
+# (text_offset=0, valid flags); kernel_address pins the load to 0x80000.
+[all]
+arm_64bit=1
+enable_uart=1
+disable_overscan=1
+# CRITICAL for bare metal: keep the firmware's RP1 PCIe window alive at OS
+# entry. Without this the firmware resets the PCIe x4 RC before starting the
+# kernel and any access to RP1 (0x1F_xxxx_xxxx — incl. the GPIO-header UART
+# the FTDI is wired to) hangs.
+pciex4_reset=0
+# P9 (Track A): enable the external PCIe RC1 so the firmware trains the link to
+# the RTL8111H (eth1) before OS entry — HEQK then only enumerates + inits the MAC.
+dtparam=pciex1
+# EXPERIMENT (direct analog of pciex4_reset=0 for RP1): try to keep the firmware
+# from resetting RC1 before OS handoff. Unconfirmed param — harmless if ignored.
+pciex1_reset=0
+# P9 (schematic-guided, 2026-07-22): the Waveshare board has NO PCIe reset/power
+# GPIO (traced: PERST#=SoC-internal, RTL power always-on). Remaining software
+# knobs before declaring a hardware fault:
+#  - force Gen1 for training (marginal PHYs only train at Gen1; HEQK also
+#    writes LNKCAP/LNKCTL2 SLS=1 in rc1_train). RTL8111H can up-speed later.
+dtparam=pciex1_gen=1
+#  - give a slow-to-present endpoint more PERST#->refclk settle time.
+dtparam=pcie_tperst_clk_ms=100
+
+[cm5]
+kernel=heqk8.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+kernel_address=0x80000
+os_check=0

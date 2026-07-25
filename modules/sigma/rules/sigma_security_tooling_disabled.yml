@@ -1,0 +1,41 @@
+title: Security Tooling or Host Firewall Disabled
+id: 40a45172-a8a2-4e7c-88a4-563ebf1601df
+status: stable
+description: >
+  A command that disables/stops a security control on the host itself: auditd or
+  falco/apparmor stopped or disabled via systemctl, `auditctl -D` (delete all audit
+  rules), SELinux flipped permissive via `setenforce 0`, or the local firewall flushed/
+  disabled (`iptables -F`/`--flush`, `nft flush ruleset`, `ufw disable`). Primarily
+  MITRE T1562.001 (Impair Defenses: Disable or Modify Tools); the firewall-flush
+  variants specifically are also T1562.004 (Disable or Modify System Firewall) — this
+  engine's `tags:` extraction keeps only the FIRST `attack.tNNNN` tag (see module doc),
+  so T1562.001 is the primary id and T1562.004 is recorded as a second tag for
+  documentation, not double-counted. Not covered by host_edr (no "impair defenses"
+  detector exists anywhere in this workspace today) or any bundled rule — real NEW
+  coverage, and highly operator-relevant for a security appliance: an attacker (or a
+  misconfigured automation job) disabling the box's own controls is a high-value alert
+  either way.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "systemctl stop auditd"
+      - "systemctl disable auditd"
+      - "auditctl -D"
+      - "setenforce 0"
+      - "systemctl stop falco"
+      - "systemctl disable falco"
+      - "systemctl stop apparmor"
+      - "systemctl disable apparmor"
+      - "iptables -f"
+      - "iptables --flush"
+      - "nft flush ruleset"
+      - "ufw disable"
+  condition: selection
+level: high
+tags:
+  - attack.defense-evasion
+  - attack.t1562.001
+  - attack.t1562.004

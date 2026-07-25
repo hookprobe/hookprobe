@@ -1,0 +1,23 @@
+---
+/**
+ * /mission — Mission Control (§1), the dense command center.
+ *
+ * The flagship operator dashboard; designed to ~/hookprobe-v2-dashboard.png.
+ * Static Astro shell + one Solid client:load island (left rail + bento grid).
+ * The calm `/` landing is the standalone-mode surface; this is cloud-linked.
+ *
+ * Spec: docs/MissionControl.md §1.
+ */
+
+import Shell from '../layouts/Shell.astro';
+import MissionControlApp from '../components/MissionControlApp';
+import '../styles/rail.css';
+import '../styles/mission.css';
+---
+
+<Shell
+  title="Mission Control — HookProbe OS"
+  description="Global security operations overview — Organism status, threat pulse, AI activity, incidents, fleet and customer health."
+>
+  <MissionControlApp client:load />
+</Shell>

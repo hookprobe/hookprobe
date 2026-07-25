@@ -1,0 +1,19 @@
+# hookprobe-live.slice — HIGH-priority slice for the live path (Architecture §4.3).
+# Hosts the supervisor, the local backend, and live detection (Wasm) modules. Under
+# saturation this slice wins CPU/IO contention against background.slice so that
+# enforcement + sub-second telemetry never starve. Name dash = child of hookprobe.slice.
+
+[Unit]
+Description=HookProbe live path (high priority)
+Before=slices.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+
+# CPUWeight is RELATIVE and only matters under contention (cpu.weight, default 100).
+# Live = high; background = low (see hookprobe-background.slice). Per-module hard
+# ceilings (CPUQuota/MemoryMax) are set by the supervisor on each scope, not here.
+CPUWeight=800
+IOWeight=800

@@ -1,0 +1,99 @@
+# modules/sigma/module.yaml — Sigma rule ingestion + evaluation engine (ADR 0026).
+#
+# WHY `runtime: host`, not `wasm` (the workspace default for detection/policy/enrichment —
+# CLAUDE.md's own bias): Sigma rules are YAML with genuinely nested structure (`detection:`
+# selections/modifiers, `condition:` strings, `logsource:`, `tags:`). Hand-rolling a YAML parser
+# — the zero-external-dependency convention `modules/napse`/`modules/dnsxai`'s *Wasm* binaries
+# use, which exists specifically to keep the SANDBOXED hot path minimal — would be materially
+# MORE risk here than depending on the maintained `serde_yaml` this workspace already vets and
+# uses elsewhere (`hookprobe-manifest`, `supervisor`). Native `runtime: host` (the SAME tier
+# `modules/senzorium-flow`/`modules/evidence` already use — ordinary file I/O, no eBPF/special
+# capabilities) is the honest, tractable choice for a first version; a future pass could still
+# port the pure-evaluation half (matching, not YAML parsing) to Wasm once the rule set is
+# pre-compiled to a compact representation outside the sandbox.
+#
+# Canon: docs/adr/0026-sigma-yara-detection.md (this module's own ADR), docs/MissionControl.md §4
+# (the Detect workspace's "Suricata/Sigma/YARA/AI/Behavioral" engine row this closes the mock on).
+
+id: sigma
+version: 0.1.0
+title: "Sigma — rule ingestion + evaluation (a practical subset)"
+runtime: host                  # native binary + unit; ordinary file I/O only. Staged +
+                                # preset-enabled (baseline `soc` capability — see `staging:` below).
+artifact: base                 # host-integral; delivered IN the bootc image (no separate OCI)
+
+requires:
+  capabilities: [soc]           # baseline SOC capability, same floor `evidence`/`napse` require
+  min_memory_mb: 128
+
+grants:
+  - read:  /var/lib/hookprobe/flows
+  - read:  /var/lib/hookprobe/host-events
+  - write: /var/lib/hookprobe/events
+  - write: /var/lib/hookprobe/sigma-status.json
+
+provides:
+  capabilities: [sigma_detection]  # downstream: Mission Control's Detect workspace `/api/engines`
+                                    # (crates/hookprobe-api's engine_status.rs) reads
+                                    # sigma-status.json for the REAL loaded-rule count.
+
+resources:
+  cpu_pct: 10
+  memory_mb: 128
+
+# staging: — required for runtime: host (ADR 0015 D1: irregular runtimes MUST supply an explicit
+# override block; gen-staging.sh refuses to include a `runtime != wasm` module with none).
+#
+# staging.artifacts (above) is the BUILD-TREE src->dest copy gen-staging.sh/stage-apply.sh use;
+# it is a DIFFERENT list from the `artifacts:` (payload digest) block below, same split every
+# other native-loader module in this registry uses (api/evidence/exploit).
+staging:
+  build:
+    - crate: hookprobe-sigma
+      toolchain: gnu           # ordinary file I/O + serde_yaml -- no bundled-C-library reason to
+                                # need musl (unlike rusqlite `bundled`/libbpf-sys); gnu matches
+                                # senzorium-flow/evidence's own native-loader convention.
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-sigma", dest: "/usr/lib/hookprobe/hookprobe-sigma", mode: "0755" }
+  units:
+    - "modules/sigma/units/sigma.service"
+  # No `preset:` override needed — `sigma.service` has an `[Install]` section and this module's
+  # `requires.capabilities` ([soc]) hits neither of gen-staging.sh's HARDWARE_GATED_CAPS, so the
+  # generator's own default_verb ("enable") already applies (same convention as evidence/api).
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — CLOSES the "signature: optional,
+# no artifacts: block" gap a release-engineer pass found staged into the arm64 Pi image
+# (2026-07-08): `gen-staging.sh` auto-enables this module (baseline `soc` capability) regardless
+# of `signature:`, so without this block it would have run on-device under a metadata-only
+# signature with no artifact-hash binding — a "trust nothing unsigned" violation (CLAUDE.md
+# canon). Same `role: executable`, one entry per built arch, convention modules/api,
+# modules/evidence/module.yaml already use — both amd64 (native, x86_64-unknown-linux-gnu) and
+# arm64 (aarch64-unknown-linux-gnu, this dev box's proven cross-compile — see
+# modules/napse-quarantine/README.md's sysroot trail) binaries build clean for this module.
+# `value`s are written by `hookprobe-supervisor --write-artifact-digests sigma` (arm64 run via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly), NEVER
+# hand-`sha256sum`'d; a real release pipeline re-runs it against its OWN per-arch build before
+# shipping (D3's build -> digest -> sign order — `builder/sign-release.sh` enforces it).
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-sigma
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "5f09161604a27b56b96c965f932cde0ac523579e88c4249f7528c47b8956824f"
+  - path: /usr/lib/hookprobe/hookprobe-sigma
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "afcf01f398855369590dea20247bda599f4834cea1b17bd0bf2474ff7c7692f2"
+
+signature: required             # cosign-signed like every other staged artifact (flipped from
+                                # `optional` — see the artifacts: block comment above); the
+                                # device VERIFIES, never signs (ADR 0002 §5). Bundled Sigma rules
+                                # (modules/sigma/rules/*.yml) are NOT separate staged artifacts —
+                                # `hookprobe_sigma::load_bundled_rules` pulls them in via
+                                # `include_str!` at COMPILE time (src/lib.rs), so they are already
+                                # baked into, and covered by, the `role: executable` digest above;
+                                # no separate `role: data` entry is needed (unlike ovs/
+                                # senzorium-flow/exploit's genuinely-external staged data files).

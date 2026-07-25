@@ -1,0 +1,29 @@
+#!/bin/sh
+# initramfs-tools local-premount — after the RO verity root is mounted at ${rootmnt}, lay a writable
+# tmpfs overlay over it so services can write /etc,/var,… at runtime while the lower (verified) layer
+# stays immutable. PERSISTENT SOC state is unaffected — it lives on /var/lib/hookprobe (its own mount).
+# FALLBACK-SAFE: if the overlay can't be built, the plain RO root is restored. See ADR 0006 (H3b).
+PREREQ="hookprobe-verity"
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /scripts/functions
+
+# Only act when verity/fallback root is in play.
+grep -q "verity.roothash=" /proc/cmdline || exit 0
+[ -e /dev/mapper/hpverity ] || exit 0
+
+modprobe overlay 2>/dev/null
+mkdir -p /vlower /vupper
+if ! mount --move "${rootmnt}" /vlower 2>/dev/null; then
+  log_warning_msg "hookprobe-overlay: cannot move root — leaving RO root as-is"
+  exit 0
+fi
+mount -t tmpfs -o mode=0755 tmpfs /vupper
+mkdir -p /vupper/up /vupper/work
+if mount -t overlay overlay -o "lowerdir=/vlower,upperdir=/vupper/up,workdir=/vupper/work" "${rootmnt}" 2>/dev/null; then
+  log_success_msg "hookprobe-overlay: writable tmpfs overlay over read-only verified root"
+else
+  log_warning_msg "hookprobe-overlay: overlay failed — restoring plain RO root"
+  mount --move /vlower "${rootmnt}" 2>/dev/null
+fi
+exit 0

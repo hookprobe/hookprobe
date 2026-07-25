@@ -1,0 +1,26 @@
+[package]
+name = "hboot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+boot-abi = { path = "../boot-abi" }
+# HYBRID secure boot — both must verify:
+# ed25519 (classical, RFC 8032) + SLH-DSA-SHA2-128s (post-quantum, FIPS 205).
+# default-features=false drops std + the RNG (getrandom); verification needs
+# neither, and this is bare metal.
+ed25519-compact = { version = "2", default-features = false }
+# 128s = boot-signature VERIFY (fast, small sig). 128f = Attestation Key SIGN
+# on-device (fast-sign variant; 128s sign is unusable in bare-metal software).
+fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2_128s", "slh_dsa_sha2_128f"] }
+# ZeroRng for deterministic AK signing (hedged=false), avoiding getrandom.
+# MUST match the rand_core that fips205 0.4 + ed25519-compact 2 depend on (0.6.x):
+# the RngCore trait impls here (next_u32/next_u64/fill_bytes/try_fill_bytes ->
+# rand_core::Error) are the 0.6 shape, and fips205's try_*_with_rng bounds are
+# rand_core-0.6 CryptoRngCore. Pinning 0.10 pulled in an incompatible reworked
+# crate (RngCore is a method-less marker there) and broke the build.
+rand_core = { version = "0.6", default-features = false }
+
+[[bin]]
+name = "hboot"
+path = "src/main.rs"

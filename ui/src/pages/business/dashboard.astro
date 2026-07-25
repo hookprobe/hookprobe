@@ -1,0 +1,17 @@
+---
+/**
+ * /business/dashboard — Business (§10): revenue, licenses, marketplace, AI cost.
+ * Static Astro shell + Solid client:load island. Spec: docs/MissionControl.md §10.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import BusinessApp from '../../components/BusinessApp';
+import '../../styles/biz.css';
+---
+
+<Shell
+  title="Business — HookProbe OS"
+  description="Revenue, licenses, marketplace and AI cost — run the commercial side of HookProbe OS inside the platform."
+>
+  <BusinessApp client:load />
+</Shell>

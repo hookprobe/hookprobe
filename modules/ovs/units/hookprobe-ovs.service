@@ -1,0 +1,53 @@
+# hookprobe-ovs.service — manifest-driven OVS datapath + bridge bring-up (oneshot).
+# Image-layer module: CI COPYs modules/ovs/units/ -> /usr/lib/systemd/system/ in the
+# bootc image (mirroring how base/units/ are installed in base/Containerfile Layer F),
+# and modules/ovs/config/ -> /usr/lib/hookprobe/ovs/.
+#
+# Brings up OVS ONLY when the manifest grants `openvswitch`, then creates the HookProbe
+# bridges and applies the per-segment fail-mode (secure|standalone) from the manifest.
+# Depends on the stock ovsdb/ovs-vswitchd units shipped by openvswitch-switch.
+
+[Unit]
+Description=HookProbe OVS dataplane bring-up (per manifest)
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/modules/ovs/README.md
+# The stock packages ship ovsdb-server.service + ovs-vswitchd.service via ovs-ctl;
+# require them so the DB + switch daemon are up before we program bridges.
+Requires=ovsdb-server.service ovs-vswitchd.service
+After=ovsdb-server.service ovs-vswitchd.service hookprobe-bootstrap.service network-pre.target
+Wants=hookprobe-bootstrap.service
+# Gate on the manifest granting openvswitch. ConditionPathExists can't read JSON, so the
+# script self-aborts cleanly if not granted; this just avoids running with no manifest.
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+# Also gate on OVS being INSTALLED: the manifest can GRANT openvswitch on a minimal image that
+# doesn't ship openvswitch-switch yet (the capability is aspirational until realized). Without
+# this the unit fails on its missing Requires= (ovsdb-server/ovs-vswitchd); with it the unit is
+# cleanly SKIPPED when absent and activates automatically once openvswitch-switch is installed.
+ConditionPathExists=/usr/bin/ovs-vsctl
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Idempotent: ovs-vsctl --may-exist / set ... so re-runs converge (reconciler-friendly).
+ExecStart=/usr/lib/hookprobe/ovs/ovs-bringup up
+ExecStop=/usr/lib/hookprobe/ovs/ovs-bringup down
+Slice=hookprobe-dataplane.slice
+
+# net_admin for bridge/flow programming. CAP_SYS_MODULE was DROPPED 2026-07-16 (audit GAP-7): the
+# openvswitch datapath module is now preloaded at boot by systemd-modules-load.service via
+# /etc/modules-load.d/50-hookprobe-openvswitch.conf, so this unit no longer needs the
+# load-arbitrary-kernel-module capability (which is especially dangerous while the Pi kernels still
+# accept unsigned modules, GAP-2). If the module is somehow absent, ovs-bringup already degrades to
+# the userspace (netdev) datapath rather than failing — so the drop is safe. CAP_NET_ADMIN is the
+# honest non-Wasm boundary that remains.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+# GAP-7: this unit only runs the ovs-vsctl CLIENT + ovs-bringup (talking to the ovsdb unix socket
+# under /var/run) — it writes nothing under /usr, /boot, or /etc, so ProtectSystem=full is safe and
+# closes the "no ProtectSystem" gap (ovsdb-server.service owns the /etc/openvswitch DB, not this unit).
+ProtectSystem=full
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/hookprobe/manifest.json
+
+[Install]
+WantedBy=multi-user.target

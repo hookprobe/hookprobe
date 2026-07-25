@@ -1,0 +1,138 @@
+# modules/napse-quarantine/module.yaml — Ring-0 TC-bpf quarantine enforcement (ADR 0009).
+#
+# Same class of exception as napse-capture: an in-kernel TC-bpf program cannot run inside a
+# Wasm/WASI sandbox, so this ships as a systemd-sysext extending /usr (Pillar 1), gated by
+# capability and enabled by the supervisor — not sandbox-loaded like a Wasm module.
+#
+# Canon: docs/adr/0009-soc-brain-edge-cloud.md (Ring-0 LPM/atomic-map-swap enforcement — this
+# module is the exact-match, small-scale sibling of that design; see bpf/quarantine.h for why a
+# hash map, not an LPM-trie, is the right structure for the scan-responder's quarantine set).
+# docs/adr/0005-unified-ebpf-detection.md (why wlan0 is TC-bpf, never XDP; end0 likewise here for
+# code-path uniformity). crates/hookprobe-manifest/src/scan_responder.rs (the quarantine STATE
+# this module enforces — it makes zero decisions of its own, C9).
+
+id: napse-quarantine
+version: 0.1.0
+title: "NAPSE quarantine — Ring-0 TC-bpf line-rate enforcement"
+runtime: sysext               # kernel/eBPF; NOT Wasm. /usr overlay merged at boot.
+artifact: registry.hookprobe.com/sysext/napse-quarantine:0.1.0   # per-arch OCI sysext image
+
+requires:
+  capabilities: [capture, ddos_mitigation]
+                              # CHANGED (ADR 0015 C5): previously just [capture], which `capture`
+                              # is `policy: enabled` even on a single-NIC cloud/VM box — so the
+                              # module would attach TC-bpf and load inertly (no edge LAN to
+                              # quarantine, capability-granted but operationally useless). Adding
+                              # `ddos_mitigation` (already the platform's edge-vs-cloud gate: policy
+                              # enabled on rpi4/rpi5/rk3588/n100, DISABLED on cloud/generic — see
+                              # platforms/*.yaml) makes the supervisor correctly gate this module
+                              # OFF-with-a-reason on cloud/VM instead of silently-active-but-inert,
+                              # without inventing a new capability token. TC_ACT_SHOT here is still a
+                              # per-flow verdict the deterministic scan-responder already decided
+                              # (not a bulk mitigation posture) — `ddos_mitigation` is reused only as
+                              # the existing edge-role proxy, not a new semantic claim about this
+                              # module's function.
+  min_kernel: "4.1"           # TC-bpf/clsact (BPF_PROG_TYPE_SCHED_CLS) landed in 4.1; no ct-lookup
+                              # kfunc dependency here (unlike napse_detect.bpf.c) — this program
+                              # never touches conntrack, so it needs none of ADR 0005's 5.19 floor.
+
+grants:                       # HOST capabilities — a Wasm module can never hold these (no kernel
+                              # address space, no bpf(2)). Scoped to THIS loader process only
+                              # (AmbientCapabilities in the unit), never granted host-wide.
+  - cap: [bpf, net_admin]
+      # bpf      → bpf(2): load the TC program, create/update the two hash maps + stats array.
+      # net_admin→ attach/detach at clsact ingress on wlan0/end0.
+
+provides:
+  capabilities: [quarantine_enforcement]   # the SERVICE this module materializes: line-rate,
+                                            # kernel-level drop of any source already present in
+                                            # /var/lib/hookprobe/scan-quarantine.json. Downstream
+                                            # consumer: none yet (Mission Control's Protect
+                                            # workspace reads the pinned maps via `--status` in a
+                                            # follow-up read-API pass — not wired here).
+  feeds:
+    - /sys/fs/bpf/napse-quarantine/ips     # pinned quarantine_ips map (exact IPv4, hit-count value)
+    - /sys/fs/bpf/napse-quarantine/macs    # pinned quarantine_macs map (packed MAC, hit-count value)
+    - /sys/fs/bpf/napse-quarantine/stats   # pinned quarantine_stats map ([pass, drop] u64 counters)
+
+resources:
+  slice: hookprobe-dataplane.slice    # same host slice as napse-capture — the in-kernel TC
+                                      # program itself is not cgroup-accountable; only the tiny
+                                      # userspace loader/reconciler is (MemoryMax=32M in the unit).
+
+signature: required           # the sysext OCI image is cosign-signed (ADR 0002 module_signing);
+                              # the device VERIFIES, never signs.
+
+# staging: — ADR 0015 D1 explicit override (irregular runtime), generalizing the hand-wired
+# staging block that briefly lived in builder/mkosi-arm64/build-arm64.sh (2026-07-03 bake).
+# Same aarch64-GNU cross-recipe napse-quarantine/README.md documents (exact-version sysroot
+# needed — the Pi's glibc 2.36 vs the cross package's stock 2.39 headers).
+staging:
+  build:
+    - crate: napse-quarantine
+      features: [bpf]
+      toolchain: gnu
+  artifacts:
+    - { src: "{gnu_bin}/napse-quarantine", dest: "/usr/lib/hookprobe/bin/napse-quarantine", mode: "0755" }
+    - { src: "modules/napse-quarantine/sysext/usr/lib/hookprobe/bpf/quarantine.bpf.o",
+        dest: "/usr/lib/hookprobe/bpf/quarantine.bpf.o", mode: "0644" }
+  units:
+    - "modules/napse-quarantine/sysext/usr/lib/systemd/system/napse-quarantine.service"
+  # arch F4 fix: the supervisor has no runtime path that ever starts a `managed` unit (that
+  # verb only ever produced a comment in the generated preset — a hardware-gated module with
+  # no self-gating ships staged-but-INERT forever, which is exactly what happened to this
+  # module's Ring-0 TC-bpf enforcement). `self_gated: true` tells gen-staging.sh this module's
+  # OWN loader (loader/src/main.rs's `granted("ddos_mitigation")`, mirroring
+  # modules/ovs/config/ovs-bringup's bash `granted <cap> || exit 0`) already checks
+  # capabilities.ddos_mitigation.state == granted at startup and exits 0 cleanly when it
+  # isn't — so the generator emits a plain `enable` (not `managed`) for this hardware-gated
+  # module: harmless everywhere (a capability-checked no-op on cloud/single-NIC), and it
+  # actually RUNS everywhere the capability IS granted, instead of sitting staged and never
+  # started. See gen-staging.sh's D4 gate-classification block for the generator-side half.
+  self_gated: true
+
+# Payload digests (ADR 0016, arch-qualified per ADR 0021) — on-device dest paths (matches
+# staging.artifacts[].dest above: a sysext module is never co-located with its own module.yaml at
+# runtime).
+#
+# RESOLVED 2026-07-05 (code-developer, multi-arch native-binary digest gap closure): the
+# single-arch-slot limitation this file used to flag ("role: loader has no arch: qualifier the way
+# role: aot does") is now CLOSED — `ArtifactDigest.arch` (already schema-present since ADR 0017)
+# is populated on the `loader` role too, one entry per built arch, exactly the `role: aot`
+# convention generalized (`module_sig::verify_artifact_digests`/`verify_executable_binding` now
+# select the entry matching `running_arch()`, skip every other arch's entry as inert metadata, and
+# fail-closed if NONE match — see `docs/adr/0021-multiarch-native-artifact-digests.md`). Both
+# `value`s below are REAL sha256 of the loader cross-built fresh in this pass
+# (`CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/tmp/aarch64-sysroot-gcc CC_aarch64_unknown_linux_gnu=/tmp/aarch64-sysroot-gcc
+# cargo build --release --target aarch64-unknown-linux-gnu -p napse-quarantine --features bpf` for
+# arm64; `cargo build --release --target x86_64-unknown-linux-gnu -p napse-quarantine --features
+# bpf` for amd64 — both via `hookprobe-supervisor --write-artifact-digests napse-quarantine`, run
+# once per arch, never hand-`sha256sum`'d), and proven `verified` under a qemu-aarch64-static arm64
+# reconcile (see docs/BuildPlan.md's changelog for this pass).
+#
+# `bpf-object` stays a SINGLE arch-less entry (unchanged convention): `quarantine.bpf.c` contains
+# no `PT_REGS`/register-layout macro dependency at all (TC-bpf on `__sk_buff`/`ethhdr`/`iphdr`
+# only) — VERIFIED this pass by rebuilding it with both `-D__TARGET_ARCH_arm64` and
+# `-D__TARGET_ARCH_x86` and diffing: byte-identical output either way. The CO-RE bytecode is
+# genuinely arch-independent for this program, so pinning ONE digest that covers every arch is the
+# honest representation (not a gap) — `verify_artifact_digests` supports an arch-qualified
+# `bpf-object` too (proven by its own regression test) for the day a DIFFERENT module's `.bpf.o`
+# genuinely does vary by arch (e.g. one that reads `PT_REGS` from a kprobe).
+artifacts:
+  - path: /usr/lib/hookprobe/bin/napse-quarantine
+    role: loader
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "42392c802326ae2573646231aec445e9e63df1c574f33de3fe094753ec676b1b"
+  - path: /usr/lib/hookprobe/bin/napse-quarantine
+    role: loader
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "12abedc2097c747f09995d1a2b98320472dafb7f4e6d175d1a7287bed792fbcc"
+  - path: /usr/lib/hookprobe/bpf/quarantine.bpf.o
+    role: bpf-object
+    digest:
+      alg: sha256
+      value: "7e64fc3a0176c4defeb0ddcd7468261f2591ecd72382bac05bd70f877f96a792"

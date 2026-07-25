@@ -1,0 +1,14 @@
+[Unit]
+Description=HookProbe stream retention cap (bound data-partition growth)
+After=var-lib-hookprobe.mount
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/hookprobe/retention-cap.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+# 2026-07-07 backend-audit fix: no Slice= meant this ran unaccounted in system.slice.
+# hookprobe-background.slice is the literal named example in its own header comment
+# ("Hosts retention compaction...") and Architecture.md §4.3.
+Slice=hookprobe-background.slice

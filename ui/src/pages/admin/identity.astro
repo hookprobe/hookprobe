@@ -1,0 +1,18 @@
+---
+/**
+ * /admin/identity — Administration (§12): identity, infrastructure, and the
+ * OS lifecycle (Build → Deploy).
+ * Static Astro shell + Solid client:load island. Spec: docs/MissionControl.md §12.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import AdministrationApp from '../../components/AdministrationApp';
+import '../../styles/adm.css';
+---
+
+<Shell
+  title="Administration — HookProbe OS"
+  description="Identity, access, edge node manifest viewer, OS lifecycle (Builder, Images, Modules, Provisioning/Enrollment), and AEGIS AI model configuration."
+>
+  <AdministrationApp client:load />
+</Shell>

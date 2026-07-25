@@ -1,0 +1,95 @@
+# modules/dga-lm/module.yaml — int8 char-level DGA (Domain-Generation-Algorithm) classifier.
+#
+# base-tier-build-ticket.md Phase 4 / ADR 0014 D6 (continuous-improvement detection lifecycle,
+# "dga-lm is the first CPU-native detector"): pure-CPU int8 conv/pool/dense classifier, no NPU,
+# no WASI-NN. On A76-tier silicon (rpi5/rk3588/CM5) the SAME source additionally has an explicit
+# `core::arch::wasm32` relaxed-dot ("SDOT") fast path (`src/dot.rs`, `relaxed-dot` Cargo
+# feature) — but that path is a SEPARATE, gated build (`modules/dga-lm/tools/sdot-gate/
+# sdot-gate.sh`), deliberately NOT part of this module's ordinary, shared build/precompile
+# pipeline. The `.wasm`/`.cwasm` staged by THIS module.yaml (via `builder/refresh-aot.sh
+# --precompile all`, the same path every other `runtime: wasm` module goes through) are always
+# built WITHOUT `relaxed-dot` — the portable-SIMD/scalar A72-safe baseline (base-tier-build-
+# ticket.md Phase 4 "A72 / no-dotprod fallback"). Do not add an a76-tier `.cwasm` artifact entry
+# here; that variant rides its own gated pipeline, never this one (ticket must-fix #2).
+#
+# `p_dga` is advisory/observe-only (C9 — never in the enforcement path); the QSECBIT wiring
+# that feeds it into `p_attack` is an OPEN GAP tracked in modules/qsecbit/src/lib.rs (2026-07-15
+# update) — this module.yaml only registers dga-lm for staging, it does not itself wire that
+# pipeline (out of scope here; os-architect/code-developer lane).
+#
+# The supervisor resolves requires/grants/provides against the signed manifest (ADR 0003). This
+# follows the SAME registry pattern as modules/qsecbit/module.yaml (mirrors its shape exactly).
+id: dga-lm
+version: 0.1.0
+title: "dga-lm — int8 char-level DGA classifier (CPU-native, no NPU)"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/dga-lm:0.1.0
+
+# `ml_cpu` (base-tier-build-ticket.md Phase 4 / ADR 0014 D6) is the ONLY capability this module
+# gates on — granted on A76-tier boards (rpi5/rk3588/CM5), `present_unsafe`/budget-gated on the
+# A72 baseline (rpi4) per `crates/hookprobe-manifest/src/capabilities.rs`'s `ml_cpu` known-good
+# step. `ml_cpu` itself already requires `soc` in every platforms/*.yaml, so this module does not
+# separately require `soc` (matches the existing `ml_cpu: { requires: [soc], ... }` convention —
+# no redundant second requirement).
+requires:
+  capabilities: [ml_cpu]
+  min_memory_mb: 128
+
+# Pure stdin -> stdout transform (see `src/main.rs`'s own doc comment: "No WASI filesystem
+# grants are needed"). The seed/quantized model is `include_bytes!`-embedded at compile time
+# (`src/model.rs`), covered by the artifact's own digest below — not read from disk at runtime.
+# The tightest possible sandbox: zero host access.
+grants: []
+
+provides:
+  capabilities: [dga_detection]   # downstream modules / UI can gate on this token
+
+# wasm-M budget (ADR 0003 defaults: 50%/256MB/50ms) — tightened per base-tier-build-ticket.md
+# Phase 4's own acceptance gate ("dga-lm <= 5 ms per epoch batch, model <= 256 KB, within the
+# 50 ms QSECBIT epoch"): a small int8 conv/pool/dense forward pass over a bounded per-domain
+# token window, well inside a 25% CPU / 128 MB / 50 ms envelope even on the A72 baseline.
+resources:
+  cpu_pct: 25
+  memory_mb: 128
+  epoch_ms: 50
+
+# Payload digest (ADR 0016) — refreshed by
+# `hookprobe-supervisor --write-artifact-digests dga-lm` (builder/sign-release.sh runs it
+# BEFORE --sign-modules); never hand-edit `value`. Left as the recognized PENDING placeholder
+# here (builder/release-pass.sh / builder/verify-staging.sh / builder/test-artifact-digest-gate.sh
+# all treat `"PENDING"` as the honest "populated at the real release build" tracked state, not a
+# hard failure) — computing + signing real digests is a release-engineer/operator-approved
+# signing-pipeline run (Amber: touches the trust store), out of scope for this staging pass. A
+# `modules/dga-lm/module.sig` (+ `module.mldsa.sig`, ADR 0002 F5 hybrid leg) does not exist yet
+# either — `builder/gen-staging.sh` will correctly refuse to stage this module (D0 fail-closed,
+# ADR 0015/0016: "signature: required but module.sig is absent") until that signing pass runs.
+# This is the intended, by-design gap this staging pass leaves open (see ADR 0016 D3: "no
+# grandfathering flag — an image either pins all payloads or fails its release pass").
+artifacts:
+  - path: dga-lm.wasm
+    role: executable
+    digest:
+      alg: sha256
+      value: "0d5a99a9a8600be570f485fc5548be7bae7fd6dcb8ba8624ff4ba2849c00ae15"
+
+  # ADR 0017 — build-time-precompiled AOT blob, arch-qualified (one entry per built arch; the
+  # supervisor consults only the entry matching its own running arch, falls back to the verified
+  # `.wasm` JIT floor on any doubt). Populated by `--write-artifact-digests dga-lm`; never
+  # hand-edit `value`. Both legs are the ORDINARY (non-relaxed-dot) precompile — see this file's
+  # header note; the a76/SDOT variant is a separate, sdot-gate-only artifact, not staged here.
+  - path: dga-lm.cwasm
+    role: aot
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "53df5462c6cf7b67858c4350af02caea84d084e0c8be03acfaf7688d55727390"
+
+  - path: dga-lm.cwasm
+    role: aot
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "2f31a45fc7f45a5426f3318ca5ffda1be7029d771681fce6ea6a6c0f8540a9b9"
+
+# All modules must be cosign-signed before the supervisor will load them.
+signature: required

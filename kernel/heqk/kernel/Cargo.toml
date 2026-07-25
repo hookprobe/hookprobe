@@ -1,0 +1,55 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hal          = { path = "../hal" }
+arch-aarch64 = { path = "../arch-aarch64" }
+abi          = { path = "../abi" }
+boot-abi     = { path = "../boot-abi" }
+# Runtime attestation service (B-2): the kernel signs verifier-supplied
+# challenge nonces with a per-boot EPHEMERAL ed25519 key (fast/small — no
+# SLH-DSA in the kernel; the device AK stays in HBoot). Bare-metal, no std/RNG.
+ed25519-compact = { version = "2", default-features = false }
+# PH6 — smoltcp TCP/IP stack for the net service (behind `netsvc`, OFF by default so the
+# default/prod kernel TCB is untouched). no_std, no heap. The production target runs this
+# as an EL0-ISOLATED service over the P17 rule-plane-gated netq; the `netsvc` build gates
+# the stack integration on QEMU (smoltcp answers an ARP under packet::verdict both ways).
+smoltcp = { version = "0.13", default-features = false, features = [
+    "proto-ipv4", "medium-ethernet", "socket-udp",
+], optional = true }
+
+[features]
+# PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
+netsvc = ["dep:smoltcp"]
+# Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
+# addresses + linker load address, and boots a minimal serial "hello" first.
+cm5 = ["arch-aarch64/cm5"]
+# Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
+# already up, consume the typed BootInfo handoff.
+hboot = ["cm5", "arch-aarch64/hboot"]
+# P10-BT (CYW43455 Bluetooth over HCI-UART). PROVEN on metal 2026-07-24:
+# HCI Reset + 3 Mbaud both acked, LE scan saw 17 BLE devices, 0 faults, boot reached
+# a clean end. The first attempt SError'd because it muxed the WRONG pins (gio
+# namespace); the fix muxes gpio24-27 -> uart0 on pinctrl 0x7d504100 BEFORE the first
+# UART access (that also un-gates the block), plus esb/DISR containment as defense.
+# Kept as an explicit feature (the LE scan adds ~30s to boot):
+#   cargo build -p kernel --features hboot,p10bt --release
+p10bt = []
+# P15 sealed storage WRITE path — OFF by default. Compiles the eMMC write_block +
+# the store-layer one-shot narrowing write window + read-back verify. Even when
+# built, writes are hard-clamped to LBA 2016..2047 by two independent gates.
+#   cargo build -p kernel --features hboot,p15-write --release
+p15-write = ["arch-aarch64/p15-write"]
+# PH1 — PRODUCTION service profile. Instead of the P0-P17 self-test sequence that
+# reboots at the end, boot into the persistent RX->classify->verdict->ENFORCE sensor
+# datapath: an isolated EL0 GEM driver feeds real frames to the verified rule plane,
+# PASS is forwarded on the wire, a threat verdict is dropped, the driver self-heals on
+# crash, and the loop NEVER halts. Implies hboot (metal, EL2-launched, measured boot).
+#   cargo build -p kernel --features prod --release
+prod = ["hboot"]
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"

@@ -1,0 +1,22 @@
+[Unit]
+Description=HookProbe depmod for baked out-of-tree dongle drivers
+Documentation=file:///usr/share/hookprobe/docs/driver-strategy.md
+# The baked Tier-2 USB-Wi-Fi .ko (/usr/lib/modules/<ver>/updates/hookprobe) are added after
+# the kernel package's own depmod, so modules.dep may not list them. On an rw image this
+# regenerates it once at first boot, before networking brings up any wlan interface. On a
+# read-only (bootc) image this is a no-op — depmod runs at image-build time instead.
+DefaultDependencies=no
+After=systemd-remount-fs.service local-fs.target
+Before=hookprobe-bootstrap.service network-pre.target sysinit.target
+ConditionPathExistsGlob=/usr/lib/modules/*/updates/hookprobe
+ConditionPathExists=!/run/hookprobe-depmod-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Only does work if /usr is writable (rw image); harmless otherwise. Stamp on success so it
+# never re-runs. /var/lib/hookprobe is created by firstboot, so stamp under /run as a fallback.
+ExecStart=/bin/sh -c 'for kv in /usr/lib/modules/*/; do depmod -a "$(basename "$kv")" 2>/dev/null || true; done; : > /run/hookprobe-depmod-done'
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,104 @@
+# modules/evidence/module.yaml — registry entry for `hookprobe-evidence` (registry-driven
+# module inclusion, ADR 0015 C3).
+#
+# RESOLUTION OF C3 (flagged, not silently invented): `hookprobe-evidence`'s SOURCE lives
+# under `crates/hookprobe-evidence/` (a workspace crate, not `modules/`), because it began
+# life as a shared library + two bins (the ingest CLI and the read-only MCP server) rather
+# than a capability-gated module. ADR 0015's own implementation spec picks the LOWER-
+# DISRUPTION option it names first: add a `modules/evidence/module.yaml` that REFERENCES
+# the crate's artifact/units in place, rather than relocating the crate tree. This file is
+# that reference entry — `id: evidence` (not `hookprobe-evidence`, to match the module id
+# `builder/gen-staging.sh` emits and the D5 per-device matrix's `evidence` row), pointing at
+# `crates/hookprobe-evidence/` paths via the `staging:` override block.
+#
+# ALTERNATIVE NOT APPLIED (still flagged for product-steward, ADR 0015 C3): move
+# `crates/hookprobe-evidence/` under `modules/evidence/` wholesale, so every module's
+# source and manifest are co-located. Not done here — out of scope for a build-script
+# refactor, and it would touch Cargo workspace membership + every build path's crate path,
+# which is the kind of change os-architect/product-steward should decide, not infer.
+#
+# Canon: docs/adr/0009-soc-brain-edge-cloud.md (evidence graph, "track/trace/threat-graph
+# spine"), docs/adr/0015-registry-driven-module-inclusion.md (C3, D0 "every staged artifact
+# must have a module.yaml").
+
+id: evidence
+version: 0.1.0
+title: "Evidence graph — track/trace/threat-graph spine (SQLite edge tier)"
+runtime: host                  # host-integral binary + timer; no kernel-only cap beyond
+                                # ordinary file I/O, so `host` (not `sysext`) — matches
+                                # senzorium-flow's runtime classification.
+artifact: base                 # host-integral; delivered IN the bootc image (no separate OCI)
+
+requires:
+  capabilities: [soc]           # baseline SOC capability — enabled on every real class,
+                                # including `generic` (see D5 matrix: evidence = A everywhere).
+  min_memory_mb: 64
+
+grants:
+  - read:  /var/lib/hookprobe/flows
+  - read:  /var/lib/hookprobe/events
+  - read:  /var/lib/hookprobe/host-events
+  - write: /var/lib/hookprobe/evidence.sqlite3
+
+provides:
+  capabilities: [evidence]      # downstream: Mission Control's Investigate workspace /
+                                # AEGIS planner query the graph via this token.
+
+resources:
+  cpu_pct: 10
+  memory_mb: 64
+
+# staging: — the crate lives OUTSIDE modules/ (see header), so this cannot use the wasm
+# convention; it is one of the five explicit override blocks ADR 0015 D1 calls for.
+staging:
+  build:
+    - crate: hookprobe-evidence
+      toolchain: gnu            # bundled SQLite (rusqlite `bundled`) needs a glibc target,
+                                # NOT musl — same aarch64-GNU cross-recipe as napse-quarantine
+                                # (see modules/napse-quarantine/README.md's sysroot trail).
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-evidence", dest: "/usr/lib/hookprobe/hookprobe-evidence", mode: "0755" }
+  units:
+    - "crates/hookprobe-evidence/units/hookprobe-evidence.service"
+    - "crates/hookprobe-evidence/units/hookprobe-evidence.timer"
+    # 2026-07-07 backend-audit gap 1 (evidence.db retention): a SIBLING timer, deliberately not
+    # folded into the 2-minute ingest cadence above -- see hookprobe-evidence-prune.service's own
+    # comment for why (VACUUM is a full-file rewrite + briefly exclusive-locks the DB).
+    - "crates/hookprobe-evidence/units/hookprobe-evidence-prune.service"
+    - "crates/hookprobe-evidence/units/hookprobe-evidence-prune.timer"
+  preset:
+    hookprobe-evidence.timer: enable
+    hookprobe-evidence-prune.timer: enable
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — on-device dest path (this crate lives
+# outside modules/, see header, so its module.yaml is never co-located with the compiled binary
+# either).
+#
+# RESOLVED 2026-07-05 (code-developer, multi-arch native-binary digest gap closure): the
+# single-arch-slot gap this file used to flag ("role: executable has no arch: qualifier the way
+# role: aot does") is CLOSED — one arch-qualified entry per built arch, same `role: aot`
+# convention generalized (`docs/adr/0021-multiarch-native-artifact-digests.md`). Both `value`s
+# are REAL sha256 of `hookprobe-evidence` rebuilt fresh in this pass for
+# x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (same exact-glibc-2.36 sysroot
+# wrapper as modules/napse-quarantine/README.md's trail), each written by its own arch's
+# `hookprobe-supervisor --write-artifact-digests evidence` run (arm64 via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly) — proven
+# `verified` under a qemu-aarch64-static arm64 reconcile (docs/BuildPlan.md's changelog). A
+# compiled binary's bytes remain toolchain/version-sensitive; a real release pipeline re-runs
+# `--write-artifact-digests` + `--sign-modules` against its OWN build of each arch before shipping.
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-evidence
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "9a42012d9e860b175d8e43118bc54cbd29b888a77070f9fa547a91b5d537ea12"
+  - path: /usr/lib/hookprobe/hookprobe-evidence
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "bdd3e202819f239027e8e8345a9b601fb0c4c32c5b2b09e543b64ff4452df301"
+
+signature: required             # cosign-signed like every other staged artifact; the
+                                # device VERIFIES, never signs (ADR 0002 §5).

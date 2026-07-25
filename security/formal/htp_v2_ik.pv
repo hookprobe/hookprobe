@@ -1,0 +1,301 @@
+(* ============================================================================
+   HTP v2 -- IK (device <-> gateway) handshake -- ProVerif (applied pi) model
+   ----------------------------------------------------------------------------
+   Spec modelled: docs/htp-v2-handshake.md (reviewed/fixed 2026-06-28).
+   This is the SS6.2 formal gate for the IK-equivalent VPN variant (device =
+   initiator, gateway = responder).  Tested with ProVerif 2.05.
+
+   What is modelled faithfully:
+     * Ephemeral X25519 DH via the standard ProVerif DH equational theory.
+     * ML-KEM-768 as an encap/decap KEM abstraction (KEM-as-PKE-of-fresh-key:
+       the encapsulator chooses the shared secret, binds it into the ciphertext;
+       only the holder of the decapsulation key can recover it).
+     * The HYBRID shared secret as the combiner ikm(ss_dh, ss_pq, psk) fed to
+       HKDF-Extract -- to derive the keys the attacker must break BOTH KEX legs
+       (concatenation combiner; one-way under the symbolic hash).
+     * HYBRID signatures as ONE symbolic sign/verify primitive.  In the real
+       impl gw_sig/client_sig = Ed25519.Sign || ML-DSA-65.Sign and BOTH must
+       verify; symbolically a single unforgeable signature is the faithful and
+       conservative abstraction (forgery requires the secret key).
+     * The TWO-TRANSCRIPT SPLIT (the Finding-1 fix):
+         th_ks  = key-share transcript (NO identities)  -> KEY SCHEDULE (salt)
+         th_auth_gw / th_auth_client (WITH identities)   -> SIGNATURES only
+       Keys never depend on an identity; this is what makes responder-identity
+       hiding non-circular (see htp_v2_ik_hidden.pv for that query).
+     * SIGMA sign+MAC: each side signs its *-auth transcript AND MACs its own
+       identity under k_mac (binds identity to the derived session key -> UKS).
+     * Directional handshake keys k_hs_c2g / k_hs_g2c (ATTEST under c2g, ACCEPT
+       under g2c) and directional data keys k_c2g / k_g2c.
+     * ACCEPT as an AEAD record under k_hs_g2c = key confirmation for the client;
+       the gateway decrypting ATTEST = key confirmation from the client.
+     * Suite/version bound into th_ks AND the signed transcripts (downgrade).
+     * PSK demoted to an extra IKM factor (never the authenticator).
+
+   Threat model: Dolev-Yao network attacker (channel c is public).
+   Long-term signing keys + PSK can be revealed:
+     - adaptively in phase 0 (guarded, emits Compromise()) -> drives KCI;
+     - unconditionally in phase 1 (after all phase-0 sessions) -> forward secrecy.
+   ============================================================================ *)
+
+set ignoreTypes = false.
+
+(* ---------- channels & public constants ---------- *)
+free c: channel.                    (* the public (Dolev-Yao) network *)
+
+const V2: bitstring.                (* HTP_VERSION = 0x0002 *)
+const suiteStrong: bitstring.       (* ml-kem-768+x25519 / ml-dsa-65+ed25519   *)
+const suiteWeak:   bitstring.       (* a hypothetical weaker offered suite      *)
+const pubNode:     bitstring.       (* node_id: an attacker-visible HANDLE only
+                                       (SS2.9 Finding 2: never used for authz)  *)
+
+(* SIGMA / domain-separation context strings (SS2.3, SS2.4) *)
+const ctx_srv:   bitstring.         (* "HTP-v2 server-auth" *)
+const ctx_cli:   bitstring.         (* "HTP-v2 client-auth" *)
+const ctx_srvid: bitstring.         (* "HTP-v2 server-id"   (MAC label)  *)
+const ctx_cliid: bitstring.         (* "HTP-v2 client-id"   (MAC label)  *)
+
+(* HKDF-Expand labels (SS2.4) *)
+const lbl_hs_c2g: bitstring.
+const lbl_hs_g2c: bitstring.
+const lbl_mac:    bitstring.
+const lbl_c2g:    bitstring.
+const lbl_g2c:    bitstring.
+
+(* AEAD AAD = frame header per record type (SS2.3: AAD = version|type|flow_token) *)
+const aad_attest: bitstring.
+const aad_accept: bitstring.
+const aad_data:   bitstring.
+
+(* reveal command tags *)
+const revGw: bitstring.
+const revCl: bitstring.
+
+(* ---------- ephemeral X25519 DH (standard equational theory) ---------- *)
+type G.
+type exponent.
+const g: G [data].
+fun dhexp(G, exponent): G.
+equation forall x: exponent, y: exponent;
+  dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
+
+(* ---------- ML-KEM-768 as an encap/decap KEM abstraction ----------
+   pkem(sk)          : ephemeral encapsulation (public) key from decap key sk
+   encap(pk, ss)     : ciphertext that binds a freshly chosen shared secret ss
+   decap(sk, ct)=ss  : only the decap-key holder recovers ss
+   Attacker with pk can run its OWN encap, but cannot extract ss from a
+   ciphertext it did not create (no decap without sk) -> KEM IND-CCA abstraction,
+   FIPS-203 implicit-rejection (no decap oracle leak).                        *)
+type skem.
+type pkem.
+type kemct.
+type kemkey.
+fun kempk(skem): pkem.
+fun encap(pkem, kemkey): kemct.
+reduc forall sk: skem, ss: kemkey; decap(sk, encap(kempk(sk), ss)) = ss.
+
+(* ---------- hybrid identity signatures (one symbolic sign/verify) ----------
+   Real impl: Sign_hybrid = Ed25519.Sign || ML-DSA-65.Sign, BOTH verify.       *)
+type sskey.   (* static identity SECRET key (PUF/LDevID-anchored) *)
+type spkey.   (* static identity PUBLIC key bundle {ed25519_pub, ml_dsa_pub}   *)
+fun spk(sskey): spkey.
+fun sign(bitstring, sskey): bitstring.
+reduc forall m: bitstring, k: sskey; checksign(sign(m,k), spk(k)) = m.
+fun spk2b(spkey): bitstring [typeConverter].
+
+(* ---------- symmetric key material ---------- *)
+type key.
+fun extract(bitstring, bitstring): bitstring.   (* HKDF-Extract(salt, ikm) -> PRK *)
+fun kdfexp(bitstring, bitstring): key.          (* HKDF-Expand(PRK, label) -> key  *)
+
+(* hybrid KEX combiner: IKM = ss_dh || ss_pq [|| PSK]; one-way, needs all parts *)
+fun ikm(G, kemkey, bitstring): bitstring.
+
+(* keyed MAC (SIGMA identity-MAC under k_mac); verify by recomputation *)
+fun mac(key, bitstring): bitstring.
+
+(* AEAD (ChaCha20-Poly1305) with AAD; directional keys make nonce reuse moot here *)
+fun aenc(bitstring, key, bitstring): bitstring.
+reduc forall m: bitstring, k: key, ad: bitstring; adec(aenc(m,k,ad), k, ad) = m.
+
+(* transcript builders (model SHA-384 transcript hashes as collision-free,
+   one-way constructors over the exact fielded inputs).                        *)
+(* th_ks: KEY-SHARE transcript ONLY -- NO identities (the Finding-1 split).
+   fields: ver, offered, selected, node_id, flow, nC, nG, epkC, epkG, ekpqC, ctpq *)
+fun th_ks(bitstring,bitstring,bitstring,bitstring,bitstring,
+          bitstring,bitstring,G,G,pkem,kemct): bitstring.
+(* th_auth_gw = H(HELLO || CHALLENGE_ks || gw_static_pub)  -- adds gw identity   *)
+fun th_auth_gw(bitstring, spkey): bitstring.
+(* th_auth_client = H(HELLO || CHALLENGE_full || client_static_pub)             *)
+fun th_auth_cl(bitstring, spkey, bitstring, bitstring, spkey): bitstring.
+(* concat for "context-string || transcript" sign inputs and MAC inputs        *)
+fun cat(bitstring, bitstring): bitstring.
+(* ATTEST plaintext packer (client identity flight, encrypted under k_hs_c2g)  *)
+fun attestpack(spkey, bitstring, bitstring): bitstring [data].
+
+(* ---------- secrets used to test session-key secrecy / forward secrecy ---------- *)
+free psk: bitstring [private].        (* the (optional) shared PSK, demoted role *)
+free secretC2G: bitstring [private].  (* sent by client under data key k_c2g     *)
+free secretG2C: bitstring [private].  (* sent by gateway under data key k_g2c     *)
+const acceptOK: bitstring.            (* ACCEPT payload stand-in (assigned_ip)    *)
+
+(* ---------- events ---------- *)
+event ClientRunForGw(spkey, spkey, bitstring).  (* pkC, pkG, sid: client commits, pre-ATTEST *)
+event GwAcceptClient(spkey, spkey, bitstring).  (* pkC, pkG, sid: gw verified client          *)
+event GwRunForClient(spkey, bitstring, bitstring). (* pkG, sid, selected: gw commits, at CHALLENGE *)
+event ClientAcceptGw(spkey, bitstring, bitstring). (* pkG, sid, selected: client verified gw       *)
+event Compromise(spkey).
+event ClientDone().                                (* client completed full handshake (sanity)     *)
+event GwDone().                                    (* gateway completed full handshake (sanity)     *)
+
+(* ================= QUERIES ================= *)
+
+(* (1) MUTUAL AUTHENTICATION -- gateway authenticates device (injective).
+       Holds unless the DEVICE's own key was compromised.  Note: it must hold
+       even when the GATEWAY key is compromised -> that IS the KCI statement
+       for the gateway-accepts-client direction.                              *)
+query pkC: spkey, pkG: spkey, sid: bitstring;
+  inj-event(GwAcceptClient(pkC, pkG, sid)) ==>
+    inj-event(ClientRunForGw(pkC, pkG, sid)) || event(Compromise(pkC)).
+
+(* (2) MUTUAL AUTHENTICATION -- device authenticates gateway (injective) AND
+       DOWNGRADE RESISTANCE (the accepted `selected` suite/version equals the
+       one the gateway actually committed to -- carried in the event & bound in
+       sid/th_ks/th_auth).  Holds unless the GATEWAY key was compromised; it
+       must hold even when the DEVICE key is compromised -> KCI for this side. *)
+query pkG: spkey, sid: bitstring, sel: bitstring;
+  inj-event(ClientAcceptGw(pkG, sid, sel)) ==>
+    inj-event(GwRunForClient(pkG, sid, sel)) || event(Compromise(pkG)).
+
+(* (5) UKS / identity-misbinding: if a gateway accepts client pkC on session
+       sid, and a client accepts gateway pkG2 on the SAME sid, the gateway
+       identity both sides bind must be identical (k_mac/SIGMA-MAC binding).   *)
+query pkC: spkey, pkG: spkey, pkG2: spkey, sid: bitstring, sel: bitstring;
+  event(GwAcceptClient(pkC, pkG, sid)) && event(ClientAcceptGw(pkG2, sid, sel))
+    ==> pkG = pkG2.
+
+(* (3)+(4) SESSION-KEY SECRECY and FORWARD SECRECY.
+       Long-term keys + PSK are revealed in phase 1 (after the phase-0 session);
+       the data secrets must remain secret regardless -> forward secrecy.
+       "false" = attacker cannot derive them = secret.                          *)
+query attacker(secretC2G).
+query attacker(secretG2C).
+
+(* SANITY (non-vacuity): the honest handshake MUST be able to complete, else all
+   the queries above would hold trivially.  Expected RESULT: each is FALSE
+   (i.e. the Done event IS reachable -> a full honest run exists).            *)
+query event(ClientDone()) ==> false.
+query event(GwDone()) ==> false.
+
+(* ================= PROTOCOL ROLES ================= *)
+
+(* ---- device / initiator (IK: already knows gateway anchor pkGanchor) ---- *)
+let Client(csk: sskey, pkGanchor: spkey) =
+  let pkC = spk(csk) in
+  new nC: bitstring;
+  new x: exponent;       let epkC  = dhexp(g, x) in
+  new dkC: skem;         let ekpqC = kempk(dkC) in
+  new flow: bitstring;
+  let offered = suiteStrong in
+  (* M1 HELLO: no identity, no signature yet *)
+  out(c, (V2, offered, pubNode, flow, nC, epkC, ekpqC));
+
+  (* M2 CHALLENGE (public-gateway IK: gw identity bundle in cleartext).
+     Pattern =pkGanchor forces the on-wire gw pubkey to equal the pinned
+     anchor (IK trust anchor / SS2.3 gw_keyid_hint).                          *)
+  in(c, (=V2, selected: bitstring, nG: bitstring, epkG: G, ctpq: kemct,
+         =pkGanchor, gw_sig: bitstring, gw_mac: bitstring));
+  let ss_dh = dhexp(epkG, x) in
+  let ss_pq = decap(dkC, ctpq) in
+  let sid   = th_ks(V2, offered, selected, pubNode, flow, nC, nG, epkC, epkG, ekpqC, ctpq) in
+  let prk   = extract(sid, ikm(ss_dh, ss_pq, psk)) in
+  let k_hs_c2g = kdfexp(prk, lbl_hs_c2g) in
+  let k_hs_g2c = kdfexp(prk, lbl_hs_g2c) in
+  let k_mac    = kdfexp(prk, lbl_mac) in
+  let k_c2g    = kdfexp(prk, lbl_c2g) in
+  let k_g2c    = kdfexp(prk, lbl_g2c) in
+  (* verify gw signature over its auth transcript (against the pinned anchor) *)
+  let ta_gw = th_auth_gw(sid, pkGanchor) in
+  let (=cat(ctx_srv, ta_gw)) = checksign(gw_sig, pkGanchor) in
+  (* verify SIGMA gw MAC under k_mac -> binds gw identity to THIS session key  *)
+  let (=gw_mac) = mac(k_mac, cat(ctx_srvid, spk2b(pkGanchor))) in
+  (* both checks passed: the device authenticates the gateway (and the suite)  *)
+  event ClientAcceptGw(pkGanchor, sid, selected);
+
+  (* M3 ATTEST: reveal+sign device identity, encrypted under k_hs_c2g          *)
+  event ClientRunForGw(pkC, pkGanchor, sid);
+  let ta_cl = th_auth_cl(sid, pkGanchor, gw_sig, gw_mac, pkC) in
+  let client_sig = sign(cat(ctx_cli, ta_cl), csk) in
+  let client_mac = mac(k_mac, cat(ctx_cliid, spk2b(pkC))) in
+  let attest_rec = aenc(attestpack(pkC, client_sig, client_mac), k_hs_c2g, aad_attest) in
+  out(c, (V2, flow, attest_rec));
+
+  (* M4 ACCEPT: AEAD under k_hs_g2c = gateway key confirmation to the client    *)
+  in(c, (=V2, accept_rec: bitstring));
+  let (=acceptOK) = adec(accept_rec, k_hs_g2c, aad_accept) in
+  (* data path: directional data keys *)
+  out(c, aenc(secretC2G, k_c2g, aad_data));
+  event ClientDone();
+  0.
+
+(* ---- gateway / responder ---- *)
+let Gateway(gskG: sskey) =
+  let pkG = spk(gskG) in
+  (* M1 *)
+  in(c, (=V2, offered: bitstring, nodeid: bitstring, flow: bitstring,
+         nC: bitstring, epkC: G, ekpqC: pkem));
+  new nG: bitstring;
+  new y: exponent;          let epkG = dhexp(g, y) in
+  new ss_pq: kemkey;        let ctpq = encap(ekpqC, ss_pq) in
+  let selected = offered in        (* permissive echo; transcript-binding catches tampering *)
+  let ss_dh = dhexp(epkC, y) in
+  let sid = th_ks(V2, offered, selected, nodeid, flow, nC, nG, epkC, epkG, ekpqC, ctpq) in
+  let prk = extract(sid, ikm(ss_dh, ss_pq, psk)) in
+  let k_hs_c2g = kdfexp(prk, lbl_hs_c2g) in
+  let k_hs_g2c = kdfexp(prk, lbl_hs_g2c) in
+  let k_mac    = kdfexp(prk, lbl_mac) in
+  let k_c2g    = kdfexp(prk, lbl_c2g) in
+  let k_g2c    = kdfexp(prk, lbl_g2c) in
+  let ta_gw  = th_auth_gw(sid, pkG) in
+  let gw_sig = sign(cat(ctx_srv, ta_gw), gskG) in
+  let gw_mac = mac(k_mac, cat(ctx_srvid, spk2b(pkG))) in
+  (* M2: commit to serve this session (gw does NOT yet know the client identity) *)
+  event GwRunForClient(pkG, sid, selected);
+  out(c, (V2, selected, nG, epkG, ctpq, pkG, gw_sig, gw_mac));
+
+  (* M3: decrypt the device identity flight, then verify sig + SIGMA MAC        *)
+  in(c, (=V2, =flow, attest_rec: bitstring));
+  let attestpack(pkC: spkey, client_sig: bitstring, client_mac: bitstring) =
+        adec(attest_rec, k_hs_c2g, aad_attest) in
+  let ta_cl = th_auth_cl(sid, pkG, gw_sig, gw_mac, pkC) in
+  let (=cat(ctx_cli, ta_cl)) = checksign(client_sig, pkC) in
+  let (=client_mac) = mac(k_mac, cat(ctx_cliid, spk2b(pkC))) in
+  event GwAcceptClient(pkC, pkG, sid);
+
+  (* M4 ACCEPT under k_hs_g2c, then data under directional k_g2c                *)
+  out(c, (V2, aenc(acceptOK, k_hs_g2c, aad_accept)));
+  out(c, aenc(secretG2C, k_g2c, aad_data));
+  event GwDone();
+  0.
+
+(* ---- adaptive (phase-0) long-term key reveal, guarded -> drives KCI ---- *)
+let RevealGw(gskG: sskey) =
+  in(c, =revGw); event Compromise(spk(gskG)); out(c, gskG).
+let RevealClient(csk: sskey) =
+  in(c, (=revCl, =spk(csk))); event Compromise(spk(csk)); out(c, csk).
+
+(* ---- a device principal: fresh identity, published, runs many sessions ---- *)
+let ClientPrincipal(pkGanchor: spkey) =
+  new csk: sskey;
+  out(c, spk(csk));                 (* publish device identity (attacker sees it) *)
+  ( !Client(csk, pkGanchor) | RevealClient(csk) ).
+
+(* ================= MAIN ================= *)
+process
+  new gskG: sskey;
+  out(c, spk(gskG));                (* publish gateway identity (public IK)       *)
+  ( !Gateway(gskG)
+  | !ClientPrincipal(spk(gskG))
+  | RevealGw(gskG)
+  (* phase-1 TOTAL long-term compromise (after phase-0 sessions) -> FORWARD SECRECY *)
+  | ( phase 1; out(c, gskG); out(c, psk) )
+  )

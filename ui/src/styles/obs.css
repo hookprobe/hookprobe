@@ -1,0 +1,365 @@
+/*
+ * obs.css — Observe (§3, Senzorium) workspace styles.
+ *
+ * ALL classes in this file are prefixed `.obs-` to prevent collisions with
+ * global.css and sibling workspace sheets written by parallel agents.
+ * Reuses global tokens (var(--hp-*)) and shared primitives (hp-terminal,
+ * mc-grid, mc-panel, mc-kpi, mc-cell--kpis) — never redefines them.
+ *
+ * Spec: docs/MissionControl.md §3 — source breakdown, live event stream,
+ * retention tiers, asset inventory. Theme: cyber-industrial terminal windows,
+ * void-black canvas, cyan/green neon signal only, JetBrains Mono for data.
+ */
+
+/* ---------------------------------------------------------------------------
+ * KPI row — 4 columns (overrides global mc-cell--kpis repeat(3, 1fr))
+ * ------------------------------------------------------------------------- */
+.obs-kpis {
+  grid-column: span 12 !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * SOURCE BREAKDOWN panel
+ * ------------------------------------------------------------------------- */
+.obs-sources {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.obs-src-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+}
+
+.obs-src-name {
+  color: var(--hp-text-secondary);
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.obs-src-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.obs-src-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  /* width and background set inline per-row */
+}
+
+.obs-src-count {
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ * LIVE EVENT STREAM panel
+ * ------------------------------------------------------------------------- */
+.obs-events {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.obs-evt-row {
+  display: grid;
+  grid-template-columns: 8px 72px 76px 112px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px;
+  border-radius: var(--hp-radius-sm);
+}
+
+.obs-evt-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.obs-evt-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* background set inline via sevTone */
+}
+
+.obs-evt-time {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+  white-space: nowrap;
+}
+
+.obs-evt-source {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-cyan);
+  white-space: nowrap;
+}
+
+.obs-evt-type {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-purple);
+  white-space: nowrap;
+}
+
+.obs-evt-host {
+  font-size: 12.5px;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Drill trail footer */
+.obs-evt-footer {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+  border-top: 1px solid var(--hp-border);
+  padding-top: 9px;
+  margin-top: 2px;
+}
+
+.obs-evt-drill {
+  color: var(--hp-text-secondary);
+}
+
+.obs-evt-arrow {
+  color: var(--hp-cyan);
+}
+
+.obs-evt-link {
+  color: var(--hp-cyan);
+  text-decoration: none;
+  transition: opacity 0.12s;
+}
+
+.obs-evt-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------------------
+ * RETENTION TIERS panel
+ * ------------------------------------------------------------------------- */
+.obs-tiers {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.obs-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.obs-tier-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.obs-tier-name {
+  font-family: var(--hp-font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--hp-text-primary);
+  letter-spacing: 0.02em;
+}
+
+.obs-tier-window {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  /* color set inline per tier tone */
+}
+
+.obs-tier-pct {
+  margin-left: auto;
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+}
+
+.obs-tier-bar {
+  display: block;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.obs-tier-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  /* width and background set inline per tier */
+}
+
+.obs-tier-note {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+}
+
+/* Bounded-retention footer note */
+.obs-tier-footer {
+  font-family: var(--hp-font-mono);
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  border-top: 1px solid var(--hp-border);
+  padding-top: 10px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+ * ASSET INVENTORY panel
+ * ------------------------------------------------------------------------- */
+.obs-assets {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.obs-asset-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 80px;
+  align-items: center;
+  gap: 10px;
+}
+
+.obs-asset-name {
+  font-size: 12.5px;
+  color: var(--hp-text-secondary);
+  font-family: var(--hp-font-mono);
+  font-size: 11.5px;
+}
+
+.obs-asset-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+/* Real device row's middle column (no OS/group % to show — see ObserveApp's live wiring) —
+ * plain mac-address text in the same grid slot the mock's progress bar occupied. */
+.obs-asset-mac {
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  color: var(--hp-text-muted);
+}
+
+.obs-asset-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  /* width and background set inline per group */
+}
+
+.obs-asset-count {
+  font-family: var(--hp-font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+  /* color set inline per group tone */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.obs-asset-delta {
+  font-size: 10px;
+  color: var(--hp-green);
+  font-weight: 400;
+  font-family: var(--hp-font-mono);
+}
+
+/* Summary totals footer */
+.obs-asset-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--hp-border);
+  padding-top: 10px;
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+  flex-wrap: wrap;
+}
+
+.obs-asset-sep {
+  color: var(--hp-text-muted);
+  opacity: 0.4;
+}
+
+.obs-asset-total-v {
+  color: var(--hp-text-secondary);
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------------
+ * Responsive
+ * ------------------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  /* Collapse KPI row to 2 cols when the grid itself collapses */
+  .obs-kpis {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .obs-kpis {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .obs-evt-row {
+    grid-template-columns: 8px 60px 68px 1fr;
+  }
+
+  /* Hide type column at narrow widths */
+  .obs-evt-type {
+    display: none;
+  }
+
+  .obs-src-row {
+    grid-template-columns: 72px 1fr 68px;
+  }
+
+  .obs-asset-row {
+    grid-template-columns: 80px 1fr 64px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced-motion
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .obs-src-fill,
+  .obs-tier-fill,
+  .obs-asset-fill {
+    transition: none;
+  }
+}

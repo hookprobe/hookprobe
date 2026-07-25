@@ -1,0 +1,60 @@
+# builder/glibc-pin-amd64/Containerfile — pinned-glibc build environment for the NATIVE amd64
+# `--features bpf` loader binaries (hookprobe-execsnoop, napse-quarantine, napse-l2guard).
+#
+# THE GAP THIS CLOSES (2026-07-07): the arm64 leg already cross-compiles these loaders against
+# an exact-glibc-2.36 sysroot (modules/napse-quarantine/README.md's "Cross-compile trail" —
+# because arm64 is genuinely cross, host!=target arch, and needed a hand-built sysroot). The
+# amd64 leg has NO equivalent: `builder/mkosi/build-vm.sh` builds `hookprobe-execsnoop` NATIVELY
+# on whatever dev/CI box happens to run it, and `libbpf-rs`'s `vendored` feature (Cargo.toml:
+# `libbpf-rs = { version = "0.24", features = ["vendored"] }`) compiles libelf+zlib from source
+# using THAT box's system `cc` against THAT box's system glibc headers. On a dev box running a
+# newer glibc (this repo's own dev box: glibc 2.39), that vendored C code silently picks up
+# `GLIBC_2.38`-versioned symbols (`__isoc23_sscanf` et al., a real glibc >=2.38 ABI change) that
+# don't exist on the shipped bookworm image (glibc 2.36-9+deb12u14) — `hookprobe-execsnoop` then
+# crash-loops on boot with `version 'GLIBC_2.38' not found`. This was worked around by hand once
+# (an ad hoc Ubuntu-22.04 container build for amd64 VM validation, 2026-07 memory) — this
+# Containerfile + builder/build-glibc-pin-amd64.sh make that recipe repeatable, from-scratch,
+# with no manual staging — the same "no hand-staging" discipline builder/refresh-aot.sh
+# established for AOT.
+#
+# WHY THIS IS SIMPLER THAN THE ARM64 LEG: amd64-on-amd64 is NATIVE, not cross — there is no
+# cross-toolchain/sysroot-wrapper dance, just an OLDER-glibc *build host*. Ubuntu 22.04 ships
+# glibc 2.35 (< bookworm's 2.36) — any C symbol version that resolves at compile time on
+# Ubuntu 22.04 is, by construction, <= glibc 2.35 <= the image's runtime 2.36. The container's own
+# `apt`-installed `gcc`/headers are what libbpf-sys's `cc` invocation actually compiles against
+# (the Rust *toolchain's own* build-glibc is irrelevant here — it never injects headers into a
+# `cc` invocation it merely shells out to), so pinning the CONTAINER's base image is sufficient;
+# no `--sysroot`/`-isystem` wrapper script needed at all.
+#
+# DELIBERATELY NO RUST TOOLCHAIN BAKED IN HERE: `builder/build-glibc-pin-amd64.sh` bind-mounts
+# the CALLING HOST's own already-installed rustup toolchain (`rustc --print sysroot`) into the
+# container read-only instead of a fresh `rustup`/apt `rustc` install, for two reasons found the
+# hard way on this dev box: (1) this box's network egress resets connections to
+# static.rust-lang.org specifically (rustup's distribution channel) even though docker.io/
+# crates.io/Ubuntu's own apt mirrors all work fine — baking a network-dependent rustup install
+# into this Containerfile would make the recipe fail here even though nothing about the GLIBC
+# PIN itself needs it; (2) reusing the host's EXACT pinned rustc (`dtolnay/rust-toolchain@1.96.0`
+# in CI, matching this repo's toolchain everywhere else) removes a second, independently-
+# drifting "which rustc got installed in the glibc-pin container" version to keep in lockstep —
+# there is only ever ONE rustc version in play. A CI runner with full internet access can install
+# its OWN pinned rustc normally (e.g. `dtolnay/rust-toolchain@1.96.0`) on the RUNNER, then run
+# this same container with that runner's sysroot mounted in, identically to this dev box.
+FROM docker.io/library/ubuntu:22.04
+
+# elfutils' build system (autoconf/automake/libtool/autopoint/flex/bison) is required because
+# libbpf-rs's `vendored` feature (not just the crate-default `vendored-libbpf`) ALSO vendors +
+# builds libelf/zlib from source — same requirement modules/napse-quarantine/README.md documents
+# for the arm64 cross leg (point 2 of its "Cross-compile trail"). `gawk` is a SEPARATE,
+# undocumented-upstream requirement discovered empirically here: `libbpf-sys` v1.7.0's build.rs
+# hard-requires it ("gawk is required to compile libbpf-sys with the selected feature set") when
+# building elfutils from source with vendored-libelf/vendored-zlib — Ubuntu 22.04's default
+# `mawk` does not satisfy it. clang/pkg-config/make/git round out the toolchain the three loader
+# crates' build.rs steps need; `binutils` is this recipe's own `objdump -T` verification step.
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+      build-essential \
+      autoconf automake libtool autopoint flex bison gawk \
+      clang pkg-config make git ca-certificates binutils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src

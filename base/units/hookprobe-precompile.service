@@ -1,0 +1,55 @@
+# hookprobe-precompile.service — AOT-precompile INSTALLED, `signature: unsigned` (DEV-ONLY)
+# Wasm modules to `.cwasm` on the writable data partition (ADR 0009 build step 1, gap 2).
+#
+# ⚠️ ADR 0017 D4 — RETIRED FROM THE DEFAULT PRESET, scoped to dev-only unsigned modules.
+# Every `signature: required` wasm module this repo ships (napse, qsecbit, dnsxai,
+# aegis-guard) now gets its `.cwasm` build-time-precompiled, NATIVE to the target arch,
+# straight into the signed module.yaml + immutable RO rootfs (base/Containerfile Layer D2,
+# `modules/*/module.yaml` `role: aot`) — there is nothing left for THIS unit to usefully
+# produce for those. And even before ADR 0017, ADR 0016 Fix A had already made this unit's
+# writable-partition output UNTRUSTED for signed modules (`wasm_loader::load_module_gated`
+# never reaches `Module::deserialize_file` on a `/var`-cache `.cwasm` for a `signature:
+# required` module, ever) — so running this at first boot for signed modules was ALREADY a
+# pure CPU tax with zero effect on what actually executes. It remains an opt-in DEV
+# convenience: local `signature: unsigned` modules (which never claimed ADR 0016/0017
+# protection) still use this writable cache via the ORIGINAL `.cwasm`-sidecar-hash fast path
+# (`wasm_loader::locate_executable`/`load_module`) — enable it by hand
+# (`systemctl enable hookprobe-precompile.service`) for a local dev/test box, never as part
+# of a shipped device's default boot sequence (base/config/presets/80-hookprobe.preset no
+# longer enables it).
+#
+# Runs ONCE per boot (oneshot, RemainAfterExit) when enabled. Writes into the WRITABLE
+# persistent data partition (/var/lib/hookprobe/modules-cache), never the read-only rootfs.
+#
+# Failure here is NEVER fatal to detection: `hookprobe-supervisor --run-wasm <id>` (see
+# napse.service/qsecbit.service/dnsxai.service/aegis-guard.service) transparently falls back to
+# compiling the `.wasm` fresh (JIT) if no matching `.cwasm` is found or it fails to deserialize
+# (wasm_loader::locate_executable / load_module) — so this unit degrades gracefully, not a boot gate.
+
+[Unit]
+Description=HookProbe Wasm AOT precompile cache (.cwasm, ADR 0009 build step 1)
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0009-soc-brain-edge-cloud.md
+After=var-lib-hookprobe.mount
+Requires=var-lib-hookprobe.mount
+# Only meaningful once at least one module is installed read-only in the image.
+# Layout is per-module subdirs: modules/<id>/<id>.wasm (+ module.yaml + module.sig) — matches
+# base/Containerfile Layer D2 and build-arm64.sh staging. (First Pi4 boot 2026-07-03 caught the
+# flat-path condition silently skipping this unit → engines ran JIT.)
+ConditionPathExists=/usr/lib/hookprobe/modules/napse/napse.wasm
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/hookprobe-supervisor \
+    --precompile all \
+    --modules /usr/lib/hookprobe/modules \
+    --precompile-out /var/lib/hookprobe/modules-cache
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

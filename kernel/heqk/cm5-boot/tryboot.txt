@@ -1,0 +1,23 @@
+# HEQK A/B — SLOT B (candidate). The Pi firmware boots THIS config for exactly
+# ONE boot after `reboot "0 tryboot"` (the one-shot tryboot flag lives in the
+# firmware/PMIC, not on the FAT filesystem). If that boot does not become
+# permanent, the NEXT boot falls back to config.txt = SLOT A (heqk8.img, the
+# last known-good HEQK). Two independent safety nets make the fallback automatic:
+#   1. HANG/PANIC before the kernel confirms  -> HBoot's EL2 trial watchdog
+#      full-resets the SoC; the consumed one-shot means the reset boots SLOT A.
+#   2. Clean-but-bad boot that never gets promoted -> a plain power-cycle already
+#      returns to SLOT A (the one-shot was single-use).
+# A healthy candidate is COMMITTED by promoting it to slot A: copy heqk8-b.img
+# over heqk8.img (see cm5-boot/ab-update.sh commit step).
+arm_64bit=1
+enable_uart=1
+# Keep the RP1 PCIe window alive at OS entry (bare-metal needs this or all
+# RP1 access incl. the GPIO-header UART hangs).
+pciex4_reset=0
+# EEPROM 2024-07-30+: firmware fully brings up RP1 and initializes UART0 on
+# GPIO14/15 @115200 BEFORE starting the ARM cores, and (2025-07+) mirrors its
+# own boot messages there — bare-metal earlycon on the header, officially.
+enable_rp1_uart=1
+kernel=heqk8-b.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+os_check=0

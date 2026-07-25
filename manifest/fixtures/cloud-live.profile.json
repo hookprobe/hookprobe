@@ -1,0 +1,20 @@
+{
+  "_comment": "LIVE read-only capture from the real cloud MSSP VM (mesh.hookprobe.com, Ampere/Oracle KVM), 2026-06-29. Physical interface only — vrf-hp-*/dummy-mirror were correctly filtered by the prober's device-symlink rule.",
+  "scan": {
+    "device_tree_compatible": [],
+    "dmi": { "sys_vendor": "QEMU", "product_name": "KVM Virtual Machine", "board_name": null },
+    "arch": "arm64",
+    "cpu": { "model": "Ampere Altra (Neoverse-N1)", "cores": 4 },
+    "memory_mb": 23974,
+    "storage": [ { "dev": "sda", "size_gb": 104, "type": "hdd" } ],
+    "tpm": { "present": false, "version": null, "kind": "none" },
+    "secure_boot": { "supported": true, "enabled": false },
+    "npu": { "present": false, "driver_ready": false, "vendor": null, "model": null },
+    "virt": "kvm",
+    "interfaces": [
+      { "name": "enp0s6", "mac": null, "type": "ethernet", "driver": "virtio_net", "supported_modes": [], "role": "unassigned", "state": "up" }
+    ],
+    "wifi": { "present": false },
+    "lte": { "present": false }
+  }
+}
