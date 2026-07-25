@@ -77,7 +77,7 @@ UX rules: capability-gated rendering · everything clickable (drills to evidence
 | **Cloud-linked (MSSP)** | `mssp.hookprobe.com` tenant | Fleets, multi-tenant, billing |
 | **Self-hosted control plane** | your own endpoint | Enterprise/gov fleet ops without our cloud |
 
-**Recursive multi-tenancy** (AWS-Organizations-style): `HookProbe → MSSP → Customer → Customer → …` by tenant inheritance, unlimited depth, no code changes. Hard per-tenant isolation (segregated data, scoped RBAC, separate keys). **Fleet** = pull-based GitOps; desired state (`hookprobe.yaml`) in Git; drift self-heal; staged rollout rings (canary → ring → fleet, health-gated). **Business model: open-core** — base OS + standalone SOC free (Apache-2.0 recommended); the cloud/account layer is commercial.
+**Recursive multi-tenancy** (AWS-Organizations-style): `HookProbe → MSSP → Customer → Customer → …` by tenant inheritance, unlimited depth, no code changes. Hard per-tenant isolation (segregated data, scoped RBAC, separate keys). **Fleet** = pull-based GitOps; desired state (`hookprobe.yaml`) in Git; drift self-heal; staged rollout rings (canary → ring → fleet, health-gated). **Business model: open-core** — base OS + standalone SOC free under **GNU AGPL-3.0**; offering-as-a-service / the cloud/account layer requires a **commercial license** (dual-license, AGPL-3.0 + Commercial). See `LICENSING.md`.
 
 ## Naming
 

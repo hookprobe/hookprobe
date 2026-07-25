@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/hooks/pre-push — local secrets-gate hook (ADR 0046 D5: "a gitleaks
+# pre-push gate, wired into CI and local hooks").
+# =============================================================================
+# Belt-and-suspenders with .github/workflows/secrets-scan.yml: this hook is
+# the BELT (blocks a push from ever leaving this machine); the CI workflow is
+# the SUSPENDERS (backstop for anyone who bypasses/uninstalls the hook, or
+# pushes from a machine that never installed it).
+#
+# HONESTY: this is pure grep/ripgrep, NOT gitleaks/trufflehog. Those binaries
+# are blocked on this dev box (fortress001 -- CDN/binary-release egress is
+# firewalled per the private-dev-box posture; see the box's own hardening
+# notes). So the local hook mirrors the CI grep-tripwire job's patterns
+# exactly (same labels, same regexes) rather than running the real scanner --
+# it is a real but SHALLOWER check than what CI does. Anyone who wants the
+# full gitleaks ruleset + .gitleaks.toml allowlist locally can install the
+# `gitleaks` binary on a box with egress and run `gitleaks protect --staged`
+# themselves; this hook does not attempt to fake that.
+#
+# What this checks: everything about to be pushed (the commits reachable from
+# the refs being pushed but not yet on the remote), for:
+#   - PEM private-key headers (BEGIN ... PRIVATE KEY)
+#   - GitHub tokens (ghp_/gho_/ghs_/ghu_/ghr_)
+#   - AWS access key IDs (AKIA...)
+#   - Slack tokens (xox[baprs]-...)
+#   - the two known-scrubbed tokens from the 2026-07-25 filter-repo purge
+#     (DEV-CRED-SCRUBBED, the DEV-HASH-SCRUBBED shadow-hash prefix) -- a REGRESSION tripwire;
+#     if either string is ever staged again in any commit, this blocks it.
+#
+# Install (one-time, per clone -- git does not auto-install hooks from a
+# tracked path):
+#   ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
+#   chmod +x .git/hooks/pre-push
+#
+# git invokes pre-push with two args ($1 remote name, $2 remote URL) and feeds
+# "<local ref> <local sha1> <remote ref> <remote sha1>" lines on stdin, one
+# per ref being pushed. We diff each local sha1 against its remote sha1 (or
+# against the empty tree if the remote ref doesn't exist yet, e.g. a new
+# branch) and grep the added content.
+# =============================================================================
+set -uo pipefail
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+FOUND=0
+
+grep_cmd() {
+  if command -v rg >/dev/null 2>&1; then
+    rg -n -I "$@"
+  else
+    # POSIX-grep fallback (rg may not be installed on every dev machine).
+    # -a: treat binary as text so we don't silently skip a binary blob that
+    # happens to contain a PEM/token string.
+    grep -naE "$@"
+  fi
+}
+
+check_range() {
+  local range="$1"
+  local label="$2"
+  local pattern="$3"
+  local hits
+  hits="$(git diff "$range" -- . ':(exclude)scripts/hooks/pre-push' ':(exclude).gitleaks.toml' ':(exclude).github/workflows/secrets-scan.yml' \
+            | grep_cmd "$pattern" || true)"
+  if [ -n "$hits" ]; then
+    echo "PRE-PUSH SECRET TRIPWIRE [$label] -- refusing to push:" >&2
+    echo "$hits" >&2
+    FOUND=1
+  fi
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO_SHA" ] && continue   # a branch delete -- nothing to scan
+
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    # New branch/tag on the remote -- diff against the empty tree so the
+    # WHOLE history being introduced is scanned, not just the tip commit.
+    range="$(git hash-object -t tree /dev/null)..$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  check_range "$range" "PEM private key"    '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY)'
+  check_range "$range" "GitHub token"       '(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}'
+  check_range "$range" "AWS access key"     'AKIA[0-9A-Z]{16}'
+  check_range "$range" "Slack token"        'xox[baprs]-[A-Za-z0-9-]{10,}'
+  check_range "$range" "scrubbed dev username (regression)"      'DEV-CRED-SCRUBBED'
+  check_range "$range" "scrubbed shadow-hash prefix (regression)" 'DEV-HASH-SCRUBBED'
+done
+
+if [ "$FOUND" -ne 0 ]; then
+  echo "" >&2
+  echo "pre-push BLOCKED: secret-shaped content detected in the commits being pushed." >&2
+  echo "If this is a false positive, fix the underlying match (or, for a verified-safe" >&2
+  echo "case, add a tight path-scoped entry to .gitleaks.toml with a WHY comment --" >&2
+  echo "the CI gate (.github/workflows/secrets-scan.yml) is the source of truth for" >&2
+  echo "allowlisting, this hook has no allowlist of its own by design)." >&2
+  exit 1
+fi
+
+exit 0

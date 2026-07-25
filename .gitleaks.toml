@@ -1,0 +1,89 @@
+# =============================================================================
+# .gitleaks.toml — HookProbe OS secrets-gate config (ADR 0046 D5).
+# =============================================================================
+# EXTENDS gitleaks' default ruleset (do not replace it) and adds a TIGHT,
+# path-scoped allowlist for the small number of things in this tree that look
+# like secrets but are verified-safe. Keep this list short; every entry below
+# must be commented with WHY it is safe, and scoped as narrowly as gitleaks
+# allows (path/regex, never a blanket rule-disable) so a genuine new leak is
+# never masked by an over-broad allowlist.
+#
+# Consumed by:
+#   .github/workflows/secrets-scan.yml  (gitleaks/gitleaks-action@v2, CI gate)
+#   scripts/hooks/pre-push               (local grep tripwire mirrors the same
+#                                          patterns/intent, pure-grep -- see that
+#                                          script's header for why it can't run
+#                                          the real gitleaks binary on this box)
+# =============================================================================
+
+title = "HookProbe OS gitleaks config"
+
+[extend]
+# Pull in gitleaks' full built-in ruleset (generic API keys, cloud-provider
+# keys, PEM headers, JWTs, etc.) -- this file only ADDS allowlist entries, it
+# never narrows or replaces the default detectors.
+useDefault = true
+
+[allowlist]
+# Global (non-path-scoped) regex allowlist, description-commented per entry.
+# Keep this list SHORT -- prefer the path-scoped `[[rules]]`-style targeted
+# allowlists below wherever possible; only use `regexes` here for a pattern
+# that must be exempted anywhere it appears (e.g. a fully-qualified filename
+# glob gitleaks can match regardless of directory depth).
+regexes = [
+  # Any public key material -- a `.pub` file or a filename containing
+  # "public" is, by definition, not a secret. Mirrors .gitignore's own
+  # `!**/*.pub` / `!**/*public*.pem` allow-exceptions on the tracking side.
+  '''.*\.pub$''',
+  '''.*public.*\.pem$''',
+]
+
+[[allowlist.paths]]
+# (a) Upstream raspberrypi/usbboot secure-boot QUICKSTART example. This
+# directory ships a matched example-private.pem / example-public.pem PAIR
+# specifically so a developer can `sign.sh` a test image without touching
+# real production key material (see the directory's own README.md: "This
+# example demonstrates how the low level code signing and provisioning
+# tools can be used..."). It is inherited verbatim from upstream
+# raspberrypi/usbboot (now under kernel/heqk/tools/usbboot/ per ADR 0043 M1)
+# and is publicly documented/distributed by Raspberry Pi themselves -- not a
+# credential of ours, not unique, not rotatable-because-leaked (it was never
+# secret). Scoped to exactly this one upstream directory, nothing wider.
+paths = [
+  '''kernel/heqk/tools/usbboot/secure-boot-example/.*\.pem$''',
+]
+
+[[allowlist.paths]]
+# (b) Any *.pub file, or any *.pem file with "public" in its name, anywhere
+# in the tree -- public keys are meant to be public (trust stores, release
+# verification keys, etc. are baked into shipped images on purpose). This is
+# a path-based mirror of the `regexes` entry above, kept for gitleaks rule
+# variants that match on path rather than content.
+paths = [
+  '''.*\.pub$''',
+  '''.*public.*\.pem$''',
+]
+
+[[allowlist.paths]]
+# (c) builder/release.key(.mldsa) -- the DETERMINISTIC dev module-signing key
+# (see docs/adr/0046-github-migration-and-key-custody.md, "Deterministic dev
+# release-signing key" note; derived in
+# crates/hookprobe-manifest/src/module_sig.rs::load_or_create_release_key from
+# Sha256("hookprobe-dev-release-key-v1")). It is PUBLIC-BY-DESIGN: anyone can
+# regenerate the byte-identical key from that published constant, so it is
+# not secret material by definition and gitleaks flagging it as a "private
+# key" would be a pure false positive. NOTE: this key was ALSO purged from
+# git history in the 2026-07-25 filter-repo pass as supply-chain hygiene (a
+# public repo should not ship key-shaped blobs even non-secret ones) and
+# .gitignore keeps it untracked going forward -- so in the normal case this
+# allowlist entry never actually matches anything in the tree; it exists so
+# that IF a developer's local dev build regenerates builder/release.key and
+# it is accidentally staged, the CI gate fails on "should not be committed"
+# grounds via .gitignore/review, not on a misleading "you leaked a secret"
+# gitleaks false-positive that would send someone down a rotation fire-drill
+# for a key that was never secret. Real production signing NEVER uses this
+# key (HSM-held keys + cosign keyless-OIDC only, ADR 0002 §3 / ADR 0046 D4).
+paths = [
+  '''^builder/release\.key$''',
+  '''^builder/release\.key\.mldsa$''',
+]
