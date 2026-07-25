@@ -34,6 +34,11 @@ pub struct DerivedAk {
     pub slh_sk: [u8; 64],
     pub slh_pk: [u8; 32],
     pub hw_bound: bool, // true => derived from OTP (non-extractable from image)
+    /// PH2a: sealing root key, derived from the SAME OTP secret as the AK
+    /// (SRK = SHA256("HEQK-SEAL-SRK-v1" || OTP)). Zero + meaningless when
+    /// !hw_bound (the kernel then keeps its synthetic key). Handed to the
+    /// kernel via the SealHandoff page; the kernel never sees the OTP secret.
+    pub srk: [u8; 32],
 }
 
 impl DerivedAk {
@@ -118,6 +123,7 @@ fn software_ak() -> DerivedAk {
         slh_sk,
         slh_pk: attest_keys::AK_SLHDSA_PK,
         hw_bound: false,
+        srk: [0u8; 32], // no OTP secret -> kernel keeps its synthetic seal key
     }
 }
 
@@ -151,6 +157,9 @@ fn derive_from_secret(secret_words: &[u32; 8]) -> Option<DerivedAk> {
     }
     let mut ed_seed = derive32(b"HEQK-AK-ed25519-v1", &secret);
     let mut slh_seed = derive32(b"HEQK-AK-slhdsa-v1", &secret);
+    // PH2a: derive the sealing root key from the SAME OTP secret, domain-separated.
+    // Kept (not wiped) — it is handed to the kernel via the SealHandoff. SEALED_STORAGE.md.
+    let srk = derive32(b"HEQK-SEAL-SRK-v1", &secret);
 
     // ed25519 keypair from the derived seed.
     let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(ed_seed));
@@ -175,6 +184,7 @@ fn derive_from_secret(secret_words: &[u32; 8]) -> Option<DerivedAk> {
         slh_sk: sk.into_bytes(),
         slh_pk: pk.into_bytes(),
         hw_bound: true,
+        srk,
     })
 }
 
