@@ -32,6 +32,7 @@ mod scheduler;
 mod seal;
 mod store;
 mod telemetry;
+mod verdict;
 
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
@@ -2132,6 +2133,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/SOAR: async event-ring — the non-blocking telemetry exfiltration path
     p8_soar();
 
+    // --- DET-SEP: the M2 keystone — tri-state decide() seam (ADR 0023 observe-by-default)
+    p8_separation();
+
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
@@ -2909,10 +2913,14 @@ fn p8_l2guard() -> bool {
     let spoof = arp_frame(0x01, 0x99); // sender_mac != eth src -> spoof
     let mut ipv4 = [0u8; 42];
     ipv4[12..14].copy_from_slice(&[0x08, 0x00]); // non-ARP (IPv4)
+    // DET-SEP (ADR 0023): malformed = a STRUCTURAL fact -> FrameDrop (drops); an
+    // eth-src≠sender-mac shape is what a legit gratuitous/proxy/NAT-rebind ARP ALSO
+    // presents, and heqk has no cross-packet state to confirm a real spoof -> Observe
+    // (matrix row L3: PASS on the wire, alerted, never a fabricated FrameDrop).
     let cases: [(&[u8], u16, &str); 4] = [
         (&valid, packet::PASS, "well-formed ARP"),
-        (&malformed, packet::DROP, "malformed ARP (htype!=1)"),
-        (&spoof, packet::DROP, "ARP spoof (sender-mac != eth src)"),
+        (&malformed, packet::DROP, "malformed ARP (htype!=1) -> FrameDrop"),
+        (&spoof, packet::PASS, "ARP eth-src mismatch -> Observe (legit gratuitous/proxy ARP passes)"),
         (&ipv4, packet::PASS, "non-ARP (IPv4)"),
     ];
     let mut ok = true;
@@ -2923,7 +2931,18 @@ fn p8_l2guard() -> bool {
         kprint!("   L2: {} -> {} [{}]\n",
             name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
     }
-    kprint!(" [P8-l2] {} — malformed/spoofed ARP dropped at L2, legit frames pass (napse-l2guard parity)\n",
+    // Prove the tri-state seam: malformed DECIDES FrameDrop, the mismatch DECIDES
+    // Observe (detected — not a detection gap), the valid frame fires NOTHING.
+    let mal_v = rules::verdict_l2(&malformed, 0);
+    let spf_v = rules::verdict_l2(&spoof, 0);
+    let val_v = rules::verdict_l2(&valid, 0);
+    let seam_ok = matches!(mal_v, Some(verdict::Verdict::FrameDrop))
+        && matches!(spf_v, Some(verdict::Verdict::Observe))
+        && val_v.is_none();
+    ok &= seam_ok;
+    kprint!("   seam: malformed={:?} mismatch={:?} valid={:?} [{}]\n",
+        mal_v, spf_v, val_v, if seam_ok { "ok" } else { "BUG" });
+    kprint!(" [P8-l2] {} — malformed ARP FrameDropped; eth-src mismatch detected but OBSERVED (legit ARP passes); tri-state seam (ADR 0023)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
@@ -2940,24 +2959,33 @@ fn p8_tcpscan() -> bool {
         t[13] = flags; // TCP flags byte
         t
     }
-    let cases: [(u8, u16, &str); 6] = [
-        (0x00, packet::DROP, "NULL scan (no flags)"),
-        (0x01, packet::DROP, "FIN scan"),
-        (0x29, packet::DROP, "Xmas scan (FIN|PSH|URG)"),
-        (0x03, packet::DROP, "SYN+FIN (illegal)"),
-        (0x02, packet::PASS, "normal SYN"),
-        (0x10, packet::PASS, "normal ACK"),
+    // DET-SEP (ADR 0023 / matrix row A6): a NULL/FIN/Xmas/SYN-FIN shape is a single
+    // crafted packet with no rate context; it is DETECTED (fires an alert) but the
+    // observe-by-default verdict is `RateLimit{over_limit:false}` -> PASS on the wire
+    // (a per-source scan-rate meter is the M2.2 follow-on). Normal SYN/ACK fire
+    // NOTHING. `want_fired` = does this shape produce an alert.
+    let cases: [(u8, bool, &str); 6] = [
+        (0x00, true, "NULL scan (no flags)"),
+        (0x01, true, "FIN scan"),
+        (0x29, true, "Xmas scan (FIN|PSH|URG)"),
+        (0x03, true, "SYN+FIN (illegal)"),
+        (0x02, false, "normal SYN"),
+        (0x10, false, "normal ACK"),
     ];
     let mut ok = true;
-    for (flags, want, name) in cases {
+    for (flags, want_fired, name) in cases {
         let t = tcp_hdr(flags);
-        let v = rules::run_tcp(&t, 0);
-        let good = v == want;
+        let v = rules::verdict_tcp(&t, 0);
+        // Every case must PASS on the wire (observe-by-default — no legit segment
+        // dropped); a scan shape additionally must have FIRED (Some), a normal one not.
+        let wire = v.map_or(packet::PASS, verdict::Verdict::to_wire);
+        let fired = v.is_some();
+        let good = wire == packet::PASS && fired == want_fired;
         ok &= good;
-        kprint!("   TCP flags {:#04x}: {} -> {} [{}]\n",
-            flags, name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+        kprint!("   TCP flags {:#04x}: {} -> wire {} fired {} [{}]\n",
+            flags, name, if wire == packet::DROP { "DROP" } else { "PASS" }, fired, if good { "ok" } else { "BUG" });
     }
-    kprint!(" [P8-tcp] {} — NULL/FIN/Xmas/SYN-FIN scans dropped, normal SYN/ACK pass\n",
+    kprint!(" [P8-tcp] {} — NULL/FIN/Xmas/SYN-FIN scans DETECTED but OBSERVED (no legit segment dropped); normal SYN/ACK fire nothing (ADR 0023 observe-by-default)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
@@ -3050,21 +3078,29 @@ fn p8_blocklist() -> bool {
         f[26..30].copy_from_slice(&src); // IP source
         f
     }
-    let cases: [([u8; 4], u16, &str); 3] = [
-        ([192, 0, 2, 5], packet::DROP, "192.0.2.5 (in blocked /24)"),
-        ([8, 8, 8, 8], packet::PASS, "8.8.8.8 (clean)"),
-        ([10, 66, 66, 200], packet::DROP, "10.66.66.200 (C2 subnet)"),
+    // DET-SEP (ADR 0023 / matrix row L11): a single threat-feed IOC hit is a
+    // reputation signal, not proof of attack — a shared-hosting/CDN IP a customer
+    // legitimately uses can appear in a feed. So a hit is DETECTED (fires an alert)
+    // but OBSERVED (PASS): "a customer touching one IOC is never quarantined."
+    // Corroboration -> a higher verdict is the M2 follow-on. `want_fired` = feed hit.
+    let cases: [([u8; 4], bool, &str); 3] = [
+        ([192, 0, 2, 5], true, "192.0.2.5 (in blocked /24)"),
+        ([8, 8, 8, 8], false, "8.8.8.8 (clean)"),
+        ([10, 66, 66, 200], true, "10.66.66.200 (C2 subnet)"),
     ];
     let mut ok = true;
-    for (src, want, name) in cases {
+    for (src, want_fired, name) in cases {
         let f = ipv4_frame(src);
-        let v = rules::run_flow(&f, 0);
-        let good = v == want;
+        let v = rules::verdict_flow(&f, 0);
+        let wire = v.map_or(packet::PASS, verdict::Verdict::to_wire);
+        // A feed hit fires as Observe (never a drop); a clean source fires nothing.
+        let fired_observe = matches!(v, Some(verdict::Verdict::Observe));
+        let good = wire == packet::PASS && (if want_fired { fired_observe } else { v.is_none() });
         ok &= good;
-        kprint!("   blocklist: {} -> {} [{}]\n",
-            name, if v == packet::DROP { "DROP" } else { "PASS" }, if good { "ok" } else { "BUG" });
+        kprint!("   blocklist: {} -> wire {} verdict {:?} [{}]\n",
+            name, if wire == packet::DROP { "DROP" } else { "PASS" }, v, if good { "ok" } else { "BUG" });
     }
-    kprint!(" [P8-block] {} — blocked source prefixes dropped, clean sources pass (threat-feed parity)\n",
+    kprint!(" [P8-block] {} — feed IOC hit DETECTED but OBSERVED (single hit never drops a customer, matrix L11); clean sources pass\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
@@ -3077,6 +3113,15 @@ fn p8_blocklist() -> bool {
 #[cfg(not(feature = "cm5"))]
 fn p8_soar() -> bool {
     kprint!("\n [P8] SOAR event-ring — async telemetry exfiltration (non-blocking)\n");
+    // DET-SEP: prior P8 selftests now push OBSERVE events (verdict=PASS) into the
+    // shared ring (blocklist/scan/arp-spoof are observed, not dropped). Drain-and-
+    // discard the ring first so this test asserts only on its OWN two fresh drops —
+    // otherwise the "all exported events are DROP" check would see leftover PASS
+    // events. (Order-independent test hygiene; the metal exporter drains continuously.)
+    {
+        let mut junk = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        while events::drain(&mut junk) > 0 {}
+    }
     // Trigger two fresh threat drops (each pushes an event header in the TCB).
     for &port in &[4444u16, 23u16] {
         let l4 = [0u8, 0u8, (port >> 8) as u8, (port & 0xff) as u8];
@@ -3093,6 +3138,132 @@ fn p8_soar() -> bool {
     let ok = n >= 2 && batch[..n].iter().all(|e| e.verdict == packet::DROP as u8);
     kprint!(" [P8-soar] {} — {} threat events exported async ({} overruns, wire never stalled)\n",
         if ok { "PASS" } else { "FAIL" }, n, events::overruns());
+    ok
+}
+
+/// DET-SEP — the M2 KEYSTONE selftest: the tri-state `decide()` seam ports the
+/// operator's hard rule (ADR 0023) onto heqk. Mirrors the LEGIT rows of the Linux
+/// `0.7-separation-matrix` that this seam makes satisfiable — "a legitimate customer
+/// connection must ALWAYS pass" — and proves the four suspicion-free CONFIRMED drops
+/// still drop (via the tri-state, not the old "any fire = drop"). QEMU-provable.
+#[cfg(not(feature = "cm5"))]
+fn p8_separation() -> bool {
+    use verdict::{decide, DecideCtx, FindingClass, Verdict};
+    kprint!("\n [P8] enforcement separation — tri-state decide() seam (ADR 0023: observe-by-default)\n");
+    let mut ok = true;
+
+    #[inline]
+    fn wire(v: Option<Verdict>) -> u16 {
+        v.map_or(packet::PASS, Verdict::to_wire)
+    }
+
+    // --- Row L11: a customer touching ONE threat-feed IOC is OBSERVED, never dropped.
+    fn ipv4_src(src: [u8; 4]) -> [u8; 34] {
+        let mut f = [0u8; 34];
+        f[12] = 0x08;
+        f[13] = 0x00;
+        f[14] = 0x45;
+        f[26..30].copy_from_slice(&src);
+        f
+    }
+    let ioc = ipv4_src([10, 66, 66, 200]); // in a blocked C2 /24
+    let ioc_v = rules::verdict_flow(&ioc, u32::from_be_bytes([10, 66, 66, 200]));
+    let c_l11 = matches!(ioc_v, Some(Verdict::Observe)) && wire(ioc_v) == packet::PASS;
+    ok &= c_l11;
+    kprint!("   L11 blocklist IOC hit -> {:?}, wire PASS (customer never quarantined on one hit) [{}]\n",
+        ioc_v, if c_l11 { "ok" } else { "BUG" });
+
+    // --- Row L3: a single eth-src != sender-mac ARP is OBSERVED (legit gratuitous/proxy ARP passes).
+    let mut spoof = [0u8; 42];
+    for b in spoof.iter_mut().take(6) {
+        *b = 0xff;
+    }
+    spoof[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]); // eth src
+    spoof[12..14].copy_from_slice(&[0x08, 0x06]); // ARP
+    spoof[14..16].copy_from_slice(&[0x00, 0x01]); // htype=1
+    spoof[16..18].copy_from_slice(&[0x08, 0x00]); // ptype ipv4
+    spoof[18] = 6;
+    spoof[19] = 4;
+    spoof[20..22].copy_from_slice(&[0x00, 0x01]);
+    spoof[22..28].copy_from_slice(&[0x99, 0x11, 0x22, 0x33, 0x44, 0x55]); // sender-mac != eth src
+    let spf_v = rules::verdict_l2(&spoof, 0);
+    let c_l3 = matches!(spf_v, Some(Verdict::Observe)) && wire(spf_v) == packet::PASS;
+    ok &= c_l3;
+    kprint!("   L3 ARP eth-src mismatch -> {:?}, wire PASS (legit gratuitous/proxy ARP passes) [{}]\n",
+        spf_v, if c_l3 { "ok" } else { "BUG" });
+
+    // --- Allowlisted floor: a management source is NEVER enforced against (ADR 0022 D2).
+    let mgmt = u32::from_be_bytes([10, 200, 0, 5]);
+    let atk = u32::from_be_bytes([203, 0, 113, 9]);
+    let c_floor1 = verdict::is_allowlisted(mgmt) && !verdict::is_allowlisted(atk);
+    ok &= c_floor1;
+    kprint!("   floor: is_allowlisted(mgmt)={} is_allowlisted(attacker)={} [{}]\n",
+        verdict::is_allowlisted(mgmt), verdict::is_allowlisted(atk), if c_floor1 { "ok" } else { "BUG" });
+    let mgmt_flood = decide(FindingClass::FloodRate, DecideCtx::for_src(mgmt));
+    let atk_flood = decide(FindingClass::FloodRate, DecideCtx::for_src(atk));
+    let c_floor2 = mgmt_flood == Verdict::Allowlisted && !mgmt_flood.is_drop()
+        && atk_flood == (Verdict::RateLimit { over_limit: true }) && atk_flood.is_drop();
+    ok &= c_floor2;
+    kprint!("   floor: FloodRate mgmt->{:?} (PASS), attacker->{:?} (DROP) [{}]\n",
+        mgmt_flood, atk_flood, if c_floor2 { "ok" } else { "BUG" });
+
+    // --- Floor end-to-end: a SYN-flood burst from a mgmt source drops ZERO frames,
+    // however far over the rate wall (the floor is unconditional — never self-lock-out).
+    fn syn_frame(src: [u8; 4]) -> [u8; 54] {
+        let mut f = [0u8; 54];
+        f[12] = 0x08;
+        f[13] = 0x00;
+        f[14] = 0x45;
+        f[23] = 6; // TCP
+        f[26..30].copy_from_slice(&src);
+        f[46] = 0x50; // TCP data offset
+        f[47] = 0x02; // lone SYN
+        f
+    }
+    let mgmt_syn = syn_frame([10, 200, 0, 5]);
+    let burst = (bpf::SYN_LIMIT as usize) + 20;
+    let mgmt_drops = (0..burst).filter(|_| rules::run_flow(&mgmt_syn, mgmt) == packet::DROP).count();
+    let c_floor3 = mgmt_drops == 0;
+    ok &= c_floor3;
+    kprint!("   floor end-to-end: mgmt SYN-flood burst of {} -> {} drops (must be 0) [{}]\n",
+        burst, mgmt_drops, if c_floor3 { "ok" } else { "BUG" });
+
+    // --- Generic: a fired detector defaults to Observe, never drops a legit frame.
+    let mut nullscan = [0u8; 20];
+    nullscan[12] = 0x50;
+    nullscan[13] = 0x00; // NULL scan (no flags)
+    let scan_v = rules::verdict_tcp(&nullscan, 0);
+    let c_gen = scan_v.is_some() && wire(scan_v) == packet::PASS;
+    ok &= c_gen;
+    kprint!("   generic: fired scan detector -> {:?}, wire PASS (observe-by-default) [{}]\n",
+        scan_v, if c_gen { "ok" } else { "BUG" });
+
+    // --- The suspicion-free CONFIRMED drops STILL drop (via the tri-state, not "any fire").
+    let mut malformed = [0u8; 42];
+    for b in malformed.iter_mut().take(6) {
+        *b = 0xff;
+    }
+    malformed[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    malformed[12..14].copy_from_slice(&[0x08, 0x06]);
+    malformed[14..16].copy_from_slice(&[0x00, 0x02]); // htype=2 -> malformed
+    malformed[16..18].copy_from_slice(&[0x08, 0x00]);
+    malformed[18] = 6;
+    malformed[19] = 4;
+    malformed[22..28].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let mal_v = rules::verdict_l2(&malformed, 0);
+    let c_mal = matches!(mal_v, Some(Verdict::FrameDrop)) && wire(mal_v) == packet::DROP;
+    ok &= c_mal;
+    kprint!("   confirmed-drop: malformed frame -> {:?}, wire DROP [{}]\n",
+        mal_v, if c_mal { "ok" } else { "BUG" });
+    let l4_4444 = [0u8, 0u8, (4444u16 >> 8) as u8, (4444u16 & 0xff) as u8];
+    let sig_v = rules::verdict_l4(&l4_4444, 0);
+    let c_sig = wire(sig_v) == packet::DROP;
+    ok &= c_sig;
+    kprint!("   confirmed-drop: :4444 signature -> {:?}, wire DROP [{}]\n",
+        sig_v, if c_sig { "ok" } else { "BUG" });
+
+    kprint!(" [P8-sep] {} — tri-state decide() seam: observe-by-default, blocklist/ARP-spoof OBSERVED (legit passes), mgmt floor never enforced, malformed/signature still FrameDrop (ADR 0023 keystone)\n",
+        if ok { "PASS" } else { "FAIL" });
     ok
 }
 

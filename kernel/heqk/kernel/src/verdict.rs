@@ -1,0 +1,196 @@
+//! DET-SEP / M2 keystone — the **tri-state enforcement verdict** and the `decide()`
+//! seam, porting the operator's hard rule (ADR 0023) onto heqk: *observe by
+//! default; a legitimate customer connection must ALWAYS pass; drop ONLY a genuine,
+//! high-confidence attack or a resource-reality event.*
+//!
+//! Before this module heqk's detection plane was **binary**: a signed rule that
+//! matched returned `packet::DROP` inline (`rules::run_set`), so *detection == wire
+//! drop* — the exact "fire = drop the customer" inversion ADR 0023 forbids. The
+//! seam here decouples the two: a rule FIRING is now an **alert** carrying a
+//! `FindingClass`; a single `decide()` / `decide_l2()` maps that class to a
+//! tri-state `Verdict` whose **default is `Observe` (PASS on the wire)**. Only the
+//! four ADR-0023-D2 suspicion-free classes (a truly-malformed frame, an operator
+//! signature policy, a real rate/flood, and — later — a confirmed scan) ever reach
+//! a wire drop, and the management `Allowlisted` floor can never be enforced against
+//! (ADR 0022 D2, "the operator can never self-lock-out").
+//!
+//! On-wire integers are unchanged (`packet::PASS = 1` / `packet::DROP = 2`) — the
+//! net gate (`netq`, `packet::classify`) still consumes a `u16`; it is now DERIVED
+//! from the verdict via `Verdict::to_wire()` instead of being the rule's raw result.
+
+use crate::packet;
+
+/// The tri-state verdict, isomorphic to Linux `scan_responder::ReflexVerdict` /
+/// `l2_responder::L2Verdict` (ADR 0023 D1). Graduated by confidence, with a
+/// management-safety floor that is never enforced.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    /// Management/mgmt-path floor — detected or not, **never enforced** (PASS).
+    /// The operator can never self-lock-out (ADR 0022 D2).
+    Allowlisted,
+    /// Detected, not attributable-to-enforce — **log only, PASS on the wire**.
+    /// This is the DEFAULT for any fired detector (observe-by-default).
+    Observe,
+    /// A real pattern, identity unconfirmed — a bounded, self-reverting cap.
+    /// `over_limit` = a measured rate/resource wall was actually crossed *this
+    /// window* (only then does it touch the wire). Reflecting a victim's spoofed
+    /// IP costs it at most a windowed cap, never a durable block.
+    RateLimit { over_limit: bool },
+    /// A truly-malformed / structural L2 fact — drop the FRAME (never the identity).
+    FrameDrop,
+    /// High-confidence, ADR-0018-CONFIRMED identity threat — durable block.
+    /// Not yet reachable on heqk (no handshake/conntrack-ESTABLISHED source exists
+    /// yet — see the M2 gap-map §2 flow-state row); defined so the seam is complete
+    /// and the follow-on port only has to supply `ctx.confirmed`.
+    Quarantine,
+}
+
+impl Verdict {
+    /// Derive the on-wire integer the net gate consumes. Only a structural
+    /// `FrameDrop`, a `Quarantine`, or a `RateLimit` whose rate wall was crossed
+    /// touches the wire; `Observe` / `Allowlisted` / an under-limit `RateLimit`
+    /// PASS. This is the whole point: a legit customer is never on a DROP path.
+    #[inline]
+    pub fn to_wire(self) -> u16 {
+        match self {
+            Verdict::FrameDrop | Verdict::Quarantine => packet::DROP,
+            Verdict::RateLimit { over_limit: true } => packet::DROP,
+            Verdict::Allowlisted | Verdict::Observe | Verdict::RateLimit { over_limit: false } => {
+                packet::PASS
+            }
+        }
+    }
+
+    /// True iff this verdict drops the frame on the wire.
+    #[inline]
+    pub fn is_drop(self) -> bool {
+        self.to_wire() == packet::DROP
+    }
+}
+
+/// What a fired signed rule MEANS — the input to `decide()`. Each rule in the
+/// corpus (`rules.rs`) carries one; firing the rule proposes this class, and
+/// `decide()` chooses the final verdict. Keeps detection (the bytecode) decoupled
+/// from enforcement (this policy), exactly as ADR 0023 D1 requires.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FindingClass {
+    /// A structurally-malformed frame (bad ARP shape, VM fault on a truncated
+    /// frame). Keyed on WHAT THE FRAME IS, never who sent it → `FrameDrop`.
+    MalformedFrame,
+    /// An explicit operator destination-port / payload signature policy (block
+    /// :4444/:23/:31337, an MQTT probe). Not identity-keyed (a customer never
+    /// connects TO the box's backdoor port) → drops.
+    Signature,
+    /// A stateless anomalous-flag scan SHAPE (TCP NULL/FIN/Xmas/SYN-FIN). A single
+    /// crafted packet, no rate context → `RateLimit`-unconfirmed → **Observe on the
+    /// wire** today (a per-source scan meter is the M2.2 follow-on).
+    ScanShape,
+    /// A per-source RATE wall crossed this window (SYN-flood limiter fired). Keyed
+    /// on rate reality, self-reverting by the window → `RateLimit { over_limit }`.
+    FloodRate,
+    /// A real L1/L2 flood (mac-flood / broadcast-storm). No heqk detector emits this
+    /// yet (M2.1 follow-on); defined so the mapping is total.
+    L2Flood,
+    /// A threat-feed / blocklist reputation hit (one IOC). A SINGLE uncorroborated
+    /// hit must **never** drop a customer (matrix row L11) → `Observe`. Corroboration
+    /// → a higher verdict is the M2 follow-on.
+    IdentityReputation,
+    /// An ARP identity anomaly (eth-src ≠ sender-mac). A legit gratuitous / proxy /
+    /// NAT-rebind ARP presents this shape, and heqk has no cross-packet state to
+    /// confirm a real spoof → `Observe` (matrix row L3), never a fabricated drop.
+    IdentitySpoof,
+}
+
+/// The context `decide()` reads. `allowlisted` = the source is on the management
+/// path (the floor). `confirmed` = an ADR-0018 confirmation signal is present
+/// (handshake / conntrack-ESTABLISHED) — always `false` on heqk today, so
+/// `Quarantine` is unreachable until the flow-state port lands (honest per the
+/// gap-map). Everything is a `Copy` scalar — no allocation, `no_std`-clean.
+#[derive(Clone, Copy)]
+pub struct DecideCtx {
+    pub allowlisted: bool,
+    pub confirmed: bool,
+}
+
+impl DecideCtx {
+    /// Build the context for an IPv4 source (host-order u32; 0 = no attributable
+    /// source). `confirmed` is wired `false` until heqk grows a flow-state /
+    /// handshake tracker (M2.2).
+    #[inline]
+    pub fn for_src(src: u32) -> Self {
+        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false }
+    }
+}
+
+/// The management allowlist (the `Allowlisted` floor). A minimal, self-contained
+/// mgmt prefix so the floor is real and testable; in production this is sourced
+/// from the signed Platform Manifest / caps, NOT hard-coded — that is the M2
+/// follow-on. Host-order `10.200.0.0/24` (the mgmt /24 the fleet uses).
+pub const MGMT_NET: u32 = 0x0A_C8_00_00; // 10.200.0.0
+pub const MGMT_LEN: u32 = 24;
+
+/// Is `src` (host-order IPv4) on the management path? A `0` source (no IPv4
+/// attribution) is never allowlisted — the floor requires a positive identity.
+#[inline]
+pub fn is_allowlisted(src: u32) -> bool {
+    if src == 0 {
+        return false;
+    }
+    let mask = if MGMT_LEN == 0 { 0 } else { u32::MAX << (32 - MGMT_LEN) };
+    (src & mask) == (MGMT_NET & mask)
+}
+
+/// The core policy: `FindingClass` × `DecideCtx` → `Verdict`. Default is `Observe`.
+/// The management floor short-circuits every ENFORCEABLE class to `Allowlisted`
+/// (structural/policy drops of the FRAME still apply — a malformed frame or a
+/// backdoor-port hit is dropped regardless of source, since that cannot lock the
+/// operator out of anything).
+fn decide_core(class: FindingClass, ctx: DecideCtx) -> Verdict {
+    match class {
+        // Keyed on the frame/policy, not identity — the floor does not exempt these
+        // (dropping a malformed frame or a :4444 hit never self-locks-out the operator).
+        FindingClass::MalformedFrame | FindingClass::Signature => Verdict::FrameDrop,
+
+        // Identity/reputation findings — observe-by-default; a single hit never drops
+        // a customer. The floor is moot (already PASS), but honored for clarity.
+        FindingClass::IdentityReputation | FindingClass::IdentitySpoof => Verdict::Observe,
+
+        // A single scan-shaped packet: unconfirmed, no rate context. Confirmed →
+        // Quarantine (unreachable today); mgmt → floor; else observe on the wire.
+        FindingClass::ScanShape => {
+            if ctx.allowlisted {
+                Verdict::Allowlisted
+            } else if ctx.confirmed {
+                Verdict::Quarantine
+            } else {
+                Verdict::RateLimit { over_limit: false }
+            }
+        }
+
+        // A real rate/flood wall crossed — bounded self-reverting drop, UNLESS the
+        // source is on the management path (the floor: mgmt is never rate-dropped).
+        FindingClass::FloodRate | FindingClass::L2Flood => {
+            if ctx.allowlisted {
+                Verdict::Allowlisted
+            } else {
+                Verdict::RateLimit { over_limit: true }
+            }
+        }
+    }
+}
+
+/// The L3-L4 / flow-tier decision seam (signatures, TCP-scan shapes, SYN-flood,
+/// blocklist). Detectors emit an alert + `class`; THIS is the only place an L3/L4
+/// verdict is chosen.
+#[inline]
+pub fn decide(class: FindingClass, ctx: DecideCtx) -> Verdict {
+    decide_core(class, ctx)
+}
+
+/// The L1-L2 / frame-tier decision seam (malformed-ARP, ARP-spoof, and — later —
+/// L2 floods). Isomorphic to Linux `l2_responder::decide_l2`; shares the core
+/// mapping with `decide()` since the `FindingClass` already encodes the tier.
+#[inline]
+pub fn decide_l2(class: FindingClass, ctx: DecideCtx) -> Verdict {
+    decide_core(class, ctx)
+}
