@@ -330,6 +330,60 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     observed
 }
 
+// ---- M2.2: the stateful distinct-dst-port scan tier (rule 1000003 parity) ----
+
+/// Rule ID for the M2.2 distinct-dst-port scan detector (Linux rule 1000003 parity;
+/// kept distinct from the M2.1 L2 tier 110-112 and the bytecode corpus 101/102/201-204).
+pub const RULE_PORT_SCAN: u16 = 113;
+
+/// M2.2 — the STATEFUL distinct-dst-port scan detector (rule 1000003), the
+/// conntrack-equivalent scan counter. Runs on the VLAN-NORMALIZED frame (R1 = L2 start);
+/// self-parses IPv4/TCP. Only SYN-only (SYN set, ACK clear) segments — connection
+/// ATTEMPTS — feed the per-source distinct-dst-port set; an ACK-bearing segment marks the
+/// flow ESTABLISHED (heqk's handshake-completed proxy). Returns the tri-state verdict via
+/// `decide()` (or `None` below the scan bar / no attribution).
+///
+/// LEGIT-SAFETY (ADR 0023 keystone): the escalation keys on scan SHAPE — SYN-only to many
+/// DISTINCT ports WITHOUT establishment — never on flow COUNT. `ratelimit::scan_confirmed`
+/// / `scan_over_ratelimit` gate every escalation on `est == 0`, so a legit busy source
+/// (a NAS with 150 established flows, a phone's 100/s web-load burst) can NEVER reach
+/// `RateLimit`/`Quarantine`: an ESTABLISHED flow is definitionally not a scan.
+pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
+    if src == 0 {
+        return None; // the port-scan verdict is identity-keyed; no attribution → nothing
+    }
+    let meta = crate::net::parse(frame)?;
+    if meta.ip_proto != crate::net::IPPROTO_TCP || !meta.has_l4_ports() {
+        return None; // only TCP carries the SYN/ACK scan shape
+    }
+    // TCP flags live at L4 offset + 13; bounds-checked read.
+    let flags = *frame.get(meta.l4_off + 13)?;
+    const TCP_SYN: u8 = 0x02;
+    const TCP_ACK: u8 = 0x10;
+    let src64 = src as u64;
+    if flags & TCP_ACK != 0 {
+        // An ACK-bearing segment ⇒ an existing/established flow. Records establishment,
+        // which holds the scan escalation off for this source (legit-safety).
+        crate::ratelimit::flow_established(src64);
+    } else if flags & TCP_SYN != 0 {
+        // A SYN-only connection attempt ⇒ a scan-shape probe. Counts the distinct dst port.
+        crate::ratelimit::syn_scan_observe(src64, meta.dst_port);
+    }
+
+    if !crate::ratelimit::scan_over_ratelimit(src64) {
+        return None; // below the distinct-port wall (or established) → clean/Observe
+    }
+    // The distinct-port wall is crossed with zero establishment. Build the ctx: `for_src`
+    // already sources `confirmed` from `scan_confirmed` (>= CONFIRM ports ⇒ durable
+    // Quarantine); set `over_limit` so the sub-confirm case is a bounded cap that touches
+    // the wire (a real sweep), not a mere Observe.
+    let mut ctx = DecideCtx::for_src(src);
+    ctx.over_limit = true;
+    let v = verdict::decide(FindingClass::ScanShape, ctx);
+    fire(RULE_PORT_SCAN, SEV_HIGH, v, src);
+    Some(v)
+}
+
 /// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service
 /// discovery a chatty-but-legit device emits; EXEMPT from the storm counter before it
 /// can ever reach a drop path (ADR 0023 D13 / the matrix broadcast LEGIT row).
