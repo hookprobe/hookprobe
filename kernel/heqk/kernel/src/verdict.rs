@@ -101,6 +101,14 @@ pub enum FindingClass {
     /// NAT-rebind ARP presents this shape, and heqk has no cross-packet state to
     /// confirm a real spoof → `Observe` (matrix row L3), never a fabricated drop.
     IdentitySpoof,
+    /// An L7 / BEHAVIORAL finding (M2.4): C2 beacon periodicity, east-west lateral fan-out,
+    /// bulk outbound exfil, tunneled/DGA DNS. OBSERVE-ONLY BY CONSTRUCTION (ADR 0023 /
+    /// matrix A10-detection + L8) — the SOC must SEE these, but none is a suspicion-free
+    /// confirmed drop, so this maps UNCONDITIONALLY to `Verdict::Observe` (PASS on the
+    /// wire), even for a `confirmed`/non-mgmt source. Zero legit-drop risk: a false positive
+    /// only emits a SOAR alert, never a wire action. Mirrors the Linux posture (beacon/
+    /// lateral run in the userspace observation stream, never in the tc-bpf drop path).
+    Behavioral,
 }
 
 /// The role of the ingress port — the FP guard that keeps a busy AP/uplink radio's
@@ -202,7 +210,12 @@ fn decide_core(class: FindingClass, ctx: DecideCtx) -> Verdict {
 
         // Identity/reputation findings — observe-by-default; a single hit never drops
         // a customer. The floor is moot (already PASS), but honored for clarity.
-        FindingClass::IdentityReputation | FindingClass::IdentitySpoof => Verdict::Observe,
+        // Behavioral (M2.4) is observe-only BY CONSTRUCTION: a beacon/lateral/exfil/DNS
+        // finding is never a confirmed suspicion-free drop → always Observe (PASS), even
+        // for a `confirmed`/non-mgmt source. Grouped here since the mapping is unconditional.
+        FindingClass::IdentityReputation
+        | FindingClass::IdentitySpoof
+        | FindingClass::Behavioral => Verdict::Observe,
 
         // A scan SHAPE finding, graduated by flow-state (M2.2). mgmt → floor;
         // CONFIRMED (>= CONFIRM distinct SYN-only ports, zero establishment) → durable

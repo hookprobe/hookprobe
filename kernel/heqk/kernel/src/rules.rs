@@ -434,6 +434,70 @@ pub fn conn_rate_shed_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     Some(shed_verdict(RULE_CONN_RATE_SHED, src, true))
 }
 
+// ---- M2.4: L7 / behavioral OBSERVE-ONLY detectors (detection parity, NEVER a drop) ----
+
+/// Rule IDs for the M2.4 behavioral tier (distinct from 110-115). Comments carry the
+/// Linux parity rule numbers (1000040/1000041/1000025/1000002) these mirror.
+pub const RULE_BEACON: u16 = 116; // parity: napse-capture beacon 1000040 (A10/L8)
+pub const RULE_LATERAL: u16 = 117; // parity: napse-capture lateral 1000041 (A10)
+pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
+pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
+
+/// M2.4 shared verdict step: a behavioral detector FIRED → route through `decide()` as
+/// `FindingClass::Behavioral`, which is OBSERVE-ONLY by construction (always `Observe`,
+/// PASS on the wire — zero legit-drop risk). `fire()` still exports the SOAR alert so the
+/// SOC SEES the behavior; the wire is never touched. This is the whole M2.4 contract:
+/// detection parity WITHOUT enforcement.
+#[inline]
+fn behavioral_verdict(rule_id: u16, src: u32) -> Verdict {
+    let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(src));
+    fire(rule_id, SEV_MED, v, src);
+    v
+}
+
+/// M2.4 / BEACON (A10 detection-half + L8 NTP exemption) — C2 beacon periodicity, with an
+/// INJECTED clock (`now` in whole seconds) for deterministic proof. Fed from the connection
+/// observation stream (src/dst/dst_port), NOT the drop fast-path — parity with the Linux
+/// beacon tracker that runs in userspace. NTP (dst port 123) is exempt inside
+/// `beacon_observe_at` (returns None here). Always `Some(Observe)` when it fires.
+pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<Verdict> {
+    if !crate::behavioral::beacon_observe_at(src, dst, dst_port, now) {
+        return None;
+    }
+    Some(behavioral_verdict(RULE_BEACON, src))
+}
+
+/// M2.4 / LATERAL (A10 detection-half) — one internal source fanning out across many
+/// distinct internal peers on admin ports. FP guards (internal→internal, distinct-peer,
+/// self-conn) live in `lateral_observe`. Always `Some(Observe)` when it fires.
+pub fn lateral_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
+    if !crate::behavioral::lateral_observe(src, dst, dst_port) {
+        return None;
+    }
+    Some(behavioral_verdict(RULE_LATERAL, src))
+}
+
+/// M2.4 / EXFIL — anomalous OUTBOUND (internal→external) byte volume from one source.
+/// Direction + windowing guards live in `exfil_observe`. Always `Some(Observe)` when it fires.
+pub fn exfil_verdict(src: u32, dst: u32, bytes: u64) -> Option<Verdict> {
+    if !crate::behavioral::exfil_observe(src, dst, bytes) {
+        return None;
+    }
+    Some(behavioral_verdict(RULE_EXFIL, src))
+}
+
+/// M2.4 / DNS ANALYTICS — tunneling / DGA / high-entropy QNAME. Self-parses the frame
+/// (UDP:53) and the QNAME. `None` = not DNS or a normal name; a hostile-shaped name →
+/// `Some(Observe)` (detected, PASS). `src` is attributed from the frame for the SOAR alert.
+pub fn dns_verdict(frame: &[u8]) -> Option<Verdict> {
+    if crate::behavioral::dns_qname_anomaly(frame)? {
+        let src = crate::net::eth_ipv4_src(frame);
+        Some(behavioral_verdict(RULE_DNS, src))
+    } else {
+        None // parsed as DNS but the name is normal
+    }
+}
+
 /// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service
 /// discovery a chatty-but-legit device emits; EXEMPT from the storm counter before it
 /// can ever reach a drop path (ADR 0023 D13 / the matrix broadcast LEGIT row).

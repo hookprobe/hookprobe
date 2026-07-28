@@ -121,16 +121,16 @@ Grouped by layer. "heqk" column: ✅/🟡/⬜ as above.
 ### L7
 | Linux detector | rule ID | heqk equivalent | Notes |
 |---|---|---|---|
-| C2 beacon (JA3 / timing) | 1000004 / 1000040 | ⬜ missing | No beacon tracker |
-| Lateral movement | 1000041 | ⬜ missing | No lateral tracker |
-| Bulk outbound exfil | 1000025 | ⬜ missing | No byte-volume flow state |
-| DNS tunneling / suspicious TLD / non-std port | 1000002 / 1000021 / 1000011 | ⬜ missing | No DNS analytic |
+| C2 beacon (timing) | 1000040 | ✅ **M2.4** | `behavioral::beacon_observe_at` (rule 116) — per-(src,dst,port) inter-arrival periodicity via an INTEGER mad/mean proxy for CV (no_std, no float); NTP(:123) exempt (L8). OBSERVE-only (`FindingClass::Behavioral`→`Observe`). JA3-content beacon (1000004) is deferred (no TLS-fingerprint surface on heqk) |
+| Lateral movement | 1000041 | ✅ **M2.4** | `behavioral::lateral_observe` (rule 117) — internal→internal distinct-peer fan-out on admin ports; OBSERVE-only |
+| Bulk outbound exfil | 1000025 | ✅ **M2.4** (volume) | `behavioral::exfil_observe` (rule 118) — per-source windowed internal→external byte volume; OBSERVE-only. Upload/download RATIO deferred (needs bidirectional flow accounting heqk lacks) |
+| DNS tunneling / DGA / high-entropy | 1000002 / 1000021 / 1000011 | ✅ **M2.4** (heuristic) | `behavioral::dns_qname_anomaly` (rule 119) — parses the UDP:53 QNAME in-kernel (FEASIBLE via `net::parse` l4_off+8); flags over-long name/label (tunneling) + long high-byte-diversity digit-mixed label (DGA); OBSERVE-only. DEFERRED (noted, not faked): true Shannon-entropy/n-gram/NN scoring + DNS name-compression-pointer following |
 | L7 signature (payload match) | (dpi) | 🟡 partial | `l7::payload_match` helper #3 exists (MQTT seed corpus) — mechanism present, corpus tiny |
 
 ### Host-EDR (architecturally special — call out honestly)
 | Linux detector | rule ID | heqk equivalent | Notes |
 |---|---|---|---|
-| exec / persistence host-EDR | 1000100–1000115 | ⬜ **architecturally N/A on heqk** | **heqk has no process/exec model** (ADR 0044: zero Linux, capability microkernel; the on-device Wasm host is a *build target*, not a POSIX process table). There is no `execsnoop`/`fanotify` equivalent because there are no processes to snoop in the Linux sense. Host-EDR parity is **not portable as-is** — it must either move **off-device** (ADR 0044 D3 hosted tier) or be re-expressed against heqk's capability/IPC events (a lifecycle telemetry stream), which is out of M2 scope. **These rows are correctly *excluded* from the heqk separation matrix**; document the exclusion so it is not mistaken for a miss |
+| exec / persistence host-EDR | 1000100–1000115 | ⬜ **architecturally N/A on heqk — EXCLUDED at M2.4 (implemented decision, not a miss)** | **heqk has no process/exec model** (ADR 0044: zero Linux, capability microkernel; the on-device Wasm host is a *build target*, not a POSIX process table). There is no `execsnoop`/`fanotify` equivalent because there are no processes to snoop in the Linux sense. Host-EDR parity is **not portable as-is** — it must either move **off-device** (ADR 0044 D3 hosted tier) or be re-expressed against heqk's capability/IPC events (a lifecycle telemetry stream), which is out of M2 scope. **M2.4 DECISION (2026-07-28):** these rows are deliberately **NOT implemented** on-device — no fake host-EDR was fabricated; the exclusion is recorded here and enforced by the absence of any `RULE_*` in the 1000100–115 band in `kernel/heqk/kernel/src/rules.rs`. The on-device M2.4 behavioral tier ships beacon/lateral/exfil/DNS only (`RULE_BEACON`/`LATERAL`/`EXFIL`/`DNS` = 116–119). Host-EDR is routed **off-device (ADR 0044 D3)**. **These rows are correctly *excluded* from the heqk separation matrix**; documented so it is not mistaken for a miss |
 
 ### Flow-state (conntrack-equivalent)
 | Linux primitive | heqk equivalent | Notes |

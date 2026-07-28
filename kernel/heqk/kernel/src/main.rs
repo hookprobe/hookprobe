@@ -11,6 +11,7 @@ extern crate alloc;
 
 mod absdom;
 mod attest_svc;
+mod behavioral;
 mod blocklist;
 mod bpf;
 mod caps;
@@ -2150,6 +2151,10 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
+    // --- M2.4: L7 / behavioral OBSERVE-ONLY detectors — beacon/lateral/exfil/DNS all
+    // detect (SOC sees them) but route decide()->Observe->PASS; NTP beacon exempt.
+    p8_l7behav();
+
     // --- P17: overlay convergence foundation — net-class queue + dual-direction
     // IPS gating + EL0 monotonic counter (the smoltcp EL0 service itself is a
     // documented follow-up). QEMU-validatable core only. ---
@@ -3732,6 +3737,194 @@ fn p8_l7() -> bool {
         if vm == bpf::DROP { "DROP" } else { "PASS" },
         if vo == bpf::PASS { "PASS" } else { "DROP" });
     kprint!(" [P8-l7] {} — L7 MQTT signature caught in-kernel before EL0 automation services\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// M2.4 — L7 / BEHAVIORAL observe-only detectors: the LAST M2 detection-parity port.
+/// Beacon (A10/L8), lateral (A10), exfil, and DNS analytics are OBSERVE-ONLY BY
+/// CONSTRUCTION (ADR 0023 / CLAUDE.md): the SOC must SEE them, but none is a suspicion-free
+/// confirmed drop, so each routes through `decide(Behavioral)` → `Observe` (PASS). Every
+/// assertion proves BOTH halves at once — the detector FIRES (real detection, not a no-op)
+/// AND the verdict is `Observe` / wire PASS (never a drop, zero legit-drop risk) — plus the
+/// L8 NTP exemption and each detector's FP guards. Uses isolated ids (TEST-NET / RFC1918
+/// ranges used nowhere else) + an injected clock for the beacon, so PHprod/PH6-net stay green.
+#[cfg(not(feature = "cm5"))]
+fn p8_l7behav() -> bool {
+    use verdict::Verdict;
+    kprint!("\n [P8] L7/behavioral (M2.4) — beacon/lateral/exfil/DNS: detected but OBSERVE-only (decide()->Observe->PASS, never a drop)\n");
+    let mut ok = true;
+
+    #[inline]
+    fn ip(a: u8, b: u8, c: u8, d: u8) -> u32 {
+        u32::from_be_bytes([a, b, c, d])
+    }
+    // "fires but never drops": the verdict must be Some(Observe) AND wire == PASS.
+    #[inline]
+    fn is_observe_pass(v: Option<Verdict>) -> bool {
+        matches!(v, Some(Verdict::Observe)) && v.map_or(packet::PASS, Verdict::to_wire) == packet::PASS
+    }
+
+    // === BEACON (A10 detection): a metronomic 60s +/-2s check-in to ONE dst:443 fires,
+    //     and the verdict is Observe/PASS (detected, never dropped). Injected clock. ===
+    behavioral::beacon_reset_for_test();
+    let bsrc = ip(10, 66, 0, 5);
+    let bdst = ip(203, 0, 113, 50);
+    let jit: [i64; 10] = [0, 1, -1, 2, -2, 1, -1, 0, 1, -1]; // low jitter (real implant budget)
+    let mut beacon_fired: Option<Verdict> = None;
+    for (i, j) in jit.iter().enumerate() {
+        let now = (i as i64 * 60 + j) as u64;
+        if let Some(v) = rules::beacon_verdict_at(bsrc, bdst, 443, now) {
+            beacon_fired = Some(v);
+        }
+    }
+    let c_beacon = is_observe_pass(beacon_fired);
+    ok &= c_beacon;
+    kprint!("   BEACON metronomic 60s check-in -> {:?}, wire PASS (FIRED=detection real, but observe-only) [{}]\n",
+        beacon_fired, if c_beacon { "ok" } else { "BUG" });
+
+    // === L8 NTP EXEMPTION: the SAME textbook-regular pattern on dst:123 (NTP) NEVER fires
+    //     — allowlisted before any state is touched (FP guard #4). ===
+    behavioral::beacon_reset_for_test();
+    let nsrc = ip(10, 66, 0, 9);
+    let ndst = ip(132, 163, 96, 1); // pool.ntp.org-shaped
+    let mut ntp_fired = false;
+    for i in 0..20u64 {
+        if rules::beacon_verdict_at(nsrc, ndst, 123, i * 64).is_some() {
+            ntp_fired = true;
+        }
+    }
+    let c_ntp = !ntp_fired;
+    ok &= c_ntp;
+    kprint!("   L8 NTP (:123) same beacon shape -> fired={} (MUST be false — allowlisted, never flagged) [{}]\n",
+        ntp_fired, if c_ntp { "ok" } else { "BUG" });
+
+    // === BEACON FP guards: high-jitter (human/bursty) NEVER fires; a rapid retry storm
+    //     (mean interval < 8s) NEVER fires — however regular. ===
+    behavioral::beacon_reset_for_test();
+    let hsrc = ip(10, 66, 0, 11);
+    let hdst = ip(203, 0, 113, 80);
+    let gaps: [u64; 10] = [10, 300, 45, 900, 20, 600, 5, 400, 15, 700]; // wild variance
+    let mut ts = 0u64;
+    let mut jitter_fired = false;
+    for g in gaps {
+        if rules::beacon_verdict_at(hsrc, hdst, 443, ts).is_some() {
+            jitter_fired = true;
+        }
+        ts += g;
+    }
+    behavioral::beacon_reset_for_test();
+    let rsrc = ip(10, 66, 0, 12);
+    let rdst = ip(203, 0, 113, 81);
+    let mut storm_fired = false;
+    for i in 0..20u64 {
+        if rules::beacon_verdict_at(rsrc, rdst, 443, i * 2).is_some() {
+            storm_fired = true; // 2s spacing < 8s MIN_MEAN_INTERVAL guard
+        }
+    }
+    let c_bfp = !jitter_fired && !storm_fired;
+    ok &= c_bfp;
+    kprint!("   BEACON FP guards: high-jitter fired={}, rapid-retry-storm fired={} (both MUST be false) [{}]\n",
+        jitter_fired, storm_fired, if c_bfp { "ok" } else { "BUG" });
+
+    // === LATERAL (A10 detection): one internal source hitting 6 DISTINCT internal peers on
+    //     admin ports (SMB/RDP/SSH) fires -> Observe/PASS. A normal client hitting its ONE
+    //     file server many times NEVER fires (distinct-peer, not per-connection). ===
+    let lsrc = ip(10, 20, 0, 5);
+    let ports = [445u16, 3389, 22, 445, 5985, 5900];
+    let mut lateral_fired: Option<Verdict> = None;
+    for (k, p) in ports.iter().enumerate() {
+        let dst = ip(10, 20, 0, 100 + k as u8); // 6 distinct internal peers
+        if let Some(v) = rules::lateral_verdict(lsrc, dst, *p) {
+            lateral_fired = Some(v);
+        }
+    }
+    // Legit: one source, ONE internal peer, many sessions -> distinct==1, never fires.
+    let lgood = ip(10, 20, 0, 200);
+    let lserver = ip(10, 20, 0, 250);
+    let mut lgood_fired = false;
+    for _ in 0..30 {
+        if rules::lateral_verdict(lgood, lserver, 445).is_some() {
+            lgood_fired = true;
+        }
+    }
+    // Legit: internal->EXTERNAL SSH (out to a public jump host) is out of scope -> never fires.
+    let lext = ip(10, 20, 0, 201);
+    let mut lext_fired = false;
+    for _ in 0..30 {
+        if rules::lateral_verdict(lext, ip(198, 51, 100, 7), 22).is_some() {
+            lext_fired = true;
+        }
+    }
+    let c_lat = is_observe_pass(lateral_fired)
+        && behavioral::lateral_distinct_peers(lsrc) > behavioral::LATERAL_THRESHOLD
+        && !lgood_fired
+        && !lext_fired;
+    ok &= c_lat;
+    kprint!("   LATERAL {} distinct internal peers (>{}) -> {:?} wire PASS; legit 1-peer fired={}, internal->external fired={} [{}]\n",
+        behavioral::lateral_distinct_peers(lsrc), behavioral::LATERAL_THRESHOLD,
+        lateral_fired, lgood_fired, lext_fired, if c_lat { "ok" } else { "BUG" });
+
+    // === EXFIL: a bulk internal->external outbound transfer (> threshold) fires ->
+    //     Observe/PASS. An internal->internal transfer (not outbound) NEVER fires. ===
+    let esrc = ip(10, 30, 0, 5);
+    let eext = ip(203, 0, 113, 200);
+    let exfil_fired = rules::exfil_verdict(esrc, eext, behavioral::EXFIL_BYTES_THRESH + 1);
+    let e_internal = rules::exfil_verdict(ip(10, 30, 0, 6), ip(10, 30, 0, 9), behavioral::EXFIL_BYTES_THRESH + 1);
+    let c_exfil = is_observe_pass(exfil_fired) && e_internal.is_none();
+    ok &= c_exfil;
+    kprint!("   EXFIL bulk internal->external ({}B) -> {:?} wire PASS; internal->internal fired={} (must be None) [{}]\n",
+        behavioral::EXFIL_BYTES_THRESH + 1, exfil_fired, e_internal.is_some(), if c_exfil { "ok" } else { "BUG" });
+
+    // === DNS analytics: a DGA-shaped + a tunneling-shaped QNAME fire -> Observe/PASS; a
+    //     normal "www.google.com" does NOT. Full UDP:53 frame, QNAME parsed in-kernel. ===
+    // Build eth(14)+IPv4(20)+UDP(8)+DNS(12+qname). proto=17, dst port 53.
+    fn dns_frame(qname: &[u8], out: &mut [u8]) -> usize {
+        // DNS msg = 12B header + QNAME (1B label-length prefix + qname bytes) + 1B root label.
+        let dns_len = 12 + 1 + qname.len() + 1;
+        let udp_len = 8 + dns_len;
+        let ip_len = 20 + udp_len;
+        let total = 14 + ip_len;
+        out[12] = 0x08;
+        out[13] = 0x00; // IPv4
+        out[14] = 0x45; // IHL=5
+        out[16] = (ip_len >> 8) as u8;
+        out[17] = (ip_len & 0xff) as u8; // IP total length
+        out[23] = 17; // UDP
+        out[26..30].copy_from_slice(&[10, 40, 0, 5]); // IP source (internal client)
+        // UDP header @ 34
+        out[36] = (53u16 >> 8) as u8;
+        out[37] = (53u16 & 0xff) as u8; // dst port 53
+        out[38] = (udp_len >> 8) as u8;
+        out[39] = (udp_len & 0xff) as u8;
+        // DNS message @ 42; header 12 bytes (zeros ok), QNAME @ 54.
+        let mut o = 54;
+        // encode qname as a single label for simplicity (len byte + bytes + root 0)
+        out[o] = qname.len() as u8;
+        o += 1;
+        out[o..o + qname.len()].copy_from_slice(qname);
+        o += qname.len();
+        out[o] = 0; // root label
+        total
+    }
+    let mut buf = [0u8; 256];
+    // DGA: 14-char high-diversity label mixing digits — algorithmically-generated look.
+    let n = dns_frame(b"a8f3kd9xz2qw7b", &mut buf);
+    let dga_v = rules::dns_verdict(&buf[..n]);
+    let mut buf2 = [0u8; 256];
+    // Tunneling: a 60-char single label (base32-blob smuggled as a hostname).
+    let n2 = dns_frame(b"mfrgg2dfmzqwy3dpn5xhi4tvmqqgk3tenb2giz3fmvqxezlgnfxgk2a", &mut buf2);
+    let tun_v = rules::dns_verdict(&buf2[..n2]);
+    let mut buf3 = [0u8; 256];
+    // Normal dictionary hostname -> Some(false) inside the analytic -> verdict None.
+    let n3 = dns_frame(b"google", &mut buf3);
+    let norm_v = rules::dns_verdict(&buf3[..n3]);
+    let c_dns = is_observe_pass(dga_v) && is_observe_pass(tun_v) && norm_v.is_none();
+    ok &= c_dns;
+    kprint!("   DNS DGA-label -> {:?}, tunnel-label -> {:?}, normal 'google' -> {:?} (DGA/tunnel FIRE observe-PASS; normal None) [{}]\n",
+        dga_v, tun_v, norm_v, if c_dns { "ok" } else { "BUG" });
+
+    kprint!(" [P8-l7b] {} — M2.4 behavioral parity: beacon(A10)/lateral(A10)/exfil/DNS all DETECT (SOC sees them) but route decide(Behavioral)->Observe->wire PASS (never a drop, zero legit-drop risk); NTP(:123) beacon EXEMPT (L8); FP guards (jitter/retry-storm/1-peer/internal-dst) hold\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
