@@ -40,6 +40,10 @@ mod netq;
 mod netsvc;
 #[cfg(feature = "netsvc")]
 mod netcfg;
+// M4.2a — PQC secure-channel crypto PRIMITIVES + KATs (framing-agnostic). Behind
+// `securechannel`, OFF by default so the base TCB links no KEX/AEAD crate.
+#[cfg(feature = "securechannel")]
+mod securechannel;
 mod notify;
 mod packet;
 mod ratelimit;
@@ -2204,6 +2208,20 @@ pub extern "C" fn kmain() -> ! {
         kprint!(" [P18-netcfg] M4.1 net config over smoltcp (DHCP/DNS/SNTP), rule-gated:\n");
         let ok = netcfg::netcfg_selftest();
         kprint!(" [P18-netcfg] {} — heqk drives smoltcp UDP: dhcpv4 DISCOVER emitted through the egress verdict gate, DNS+SNTP request/parse round-trip, config-gate admits benign & refuses threat, and the air-gap fallback yields a static config WITHOUT blocking boot (standalone stays fully functional, no account); real SLIRP lease+DNS reported above, real NIC/servers/timing = metal (Gate R)\n",
+            if ok { "PASS" } else { "FAIL" });
+    }
+
+    // --- M4.2a (P19-pqc-kat): PQC secure-channel crypto PRIMITIVES + KATs. The
+    // FRAMING-AGNOSTIC KEX + AEAD both the ADR-0002 rustls path and the ADR-0004
+    // Noise path need — brought in ONCE, KAT-gated, no handshake (that is M4.2b).
+    // All deterministic (seeded/fixed, no RNG); the TRNG-fed real keygen is metal
+    // (Gate R). ML-KEM-768 round-trip+pinned-KAT, X25519 RFC-7748, ChaCha20-Poly1305
+    // RFC-8439, hybrid HKDF combiner Alice==Bob. ---
+    #[cfg(feature = "securechannel")]
+    {
+        kprint!(" [P19-pqc-kat] M4.2a secure-channel crypto primitives (framing-agnostic KEX+AEAD):\n");
+        let ok = securechannel::securechannel_selftest();
+        kprint!(" [P19-pqc-kat] {} — ML-KEM-768 (FIPS 203) encaps/decaps + pinned KAT, X25519 (RFC 7748) vector, ChaCha20-Poly1305 (RFC 8439) AEAD + forgery-reject, and the hybrid HKDF combiner (ML-KEM ss + X25519 ss) derives ONE shared secret Alice==Bob; all DETERMINISTIC (test seeds — real TRNG keygen = metal, Gate R); handshake + framing (rustls vs Noise) + crypto review = M4.2b\n",
             if ok { "PASS" } else { "FAIL" });
     }
 
