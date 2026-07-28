@@ -25,6 +25,15 @@ mod l7;
 mod heap;
 mod ipc;
 mod napi;
+// M3.4 — on-device A/B OTA orchestrator + state machine. Behind `p15-write`: it
+// needs both the store WRITE path (inactive-slot staging) and the SHARED
+// `boot_abi::verify` hybrid verifier (pulled in by p15-write → boot-abi/otaverify).
+// The default kernel does not compile it, keeping the base TCB untouched. On the
+// cm5 (metal) build the QEMU [P15-ota] selftest is compiled out, so the orchestrator
+// has no caller yet (the metal OTA driver is a later wiring) — allow dead_code there.
+#[cfg(feature = "p15-write")]
+#[cfg_attr(feature = "cm5", allow(dead_code))]
+mod ota;
 mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
@@ -2215,6 +2224,11 @@ pub extern "C" fn kmain() -> ! {
     //     payloads are HQKSEAL1 ciphertext, tamper is rejected fail-closed, and
     //     the volume key survives reboot via the sealed keystore ---
     p15_sealfs_selftest();
+
+    // --- P15-ota: M3.4 on-device A/B OTA — pull -> inactive-slot write -> verify
+    //     (SHARED hboot verifier) -> flip -> confirm/rollback; state persisted;
+    //     brick-safety + verify-before-flip + downgrade-refused asserted ---
+    p15_ota_selftest();
 
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
@@ -4798,6 +4812,272 @@ fn p15_sealfs_selftest() {
             }
             Err(e) => {
                 kprint!(" [P15-sealfs] FAIL — sealed persistence log open failed: {:?}\n", e);
+            }
+        }
+    }
+}
+
+/// M3.4 candidate fixture — a REAL hybrid-signed HEQK payload (PayloadHeader +
+/// body), signed by `heqk-sign` over the SAME trust root HBoot embeds (svn=5,
+/// body 512 B, total 8504 B). It is the QEMU stand-in for the M4 network "pull":
+/// a candidate delivered as a RAM buffer. `#[repr(align(8))]` so a `&PayloadHeader`
+/// view over its head is correctly aligned (no 7992-B stack copy).
+#[cfg(all(not(feature = "cm5"), feature = "p15-write"))]
+#[repr(align(8))]
+struct AlignedCandidate([u8; 8504]);
+#[cfg(all(not(feature = "cm5"), feature = "p15-write"))]
+static OTA_CANDIDATE: AlignedCandidate =
+    AlignedCandidate(*include_bytes!("testdata/ota_candidate.bin"));
+
+/// M3.4 — on-device A/B OTA orchestrator + state machine over the file-backed
+/// virtio-blk device. Proves, in QEMU over `hal::BlockDev` (the trait the metal
+/// eMMC slots into):
+///   (a) a VALID candidate verifies (SHARED hboot verifier) → stages to the
+///       INACTIVE slot → state Staged, persisted;
+///   (b) an INVALID candidate (bad signature OR svn < floor) is REJECTED —
+///       verify-before-flip: no inactive-slot write, active slot + tryboot flag
+///       untouched;
+///   (c) flip → Trying → simulated healthy trial → Committed (new slot active);
+///   (d) simulated failed trial → RolledBack (old slot active), and a below-floor
+///       downgrade is refused (SVN floor);
+///   (e) OTA state (and the staged candidate) SURVIVE a reboot (persisted) —
+///       driven by validate.sh's two boots over one backing file;
+///   (f) brick-safety: the candidate write only ever touches the InactiveSlot —
+///       LBA 0 / the active slot are refused by the guard.
+/// The REAL firmware one-shot flip, the REAL PM-watchdog trial reset, and a real
+/// power cycle are hboot/metal (Gate R) — reused, not reimplemented here.
+#[cfg(not(feature = "cm5"))]
+fn p15_ota_selftest() {
+    let present = arch_aarch64::virtio_blk::VirtioBlk::open().is_some();
+    #[cfg(not(feature = "p15-write"))]
+    {
+        if present {
+            kprint!(" [P15-ota] SKIP — read-only build (rebuild --features p15-write for the OTA proof)\n");
+        } else {
+            kprint!(" [P15-ota] SKIP — no virtio-blk device (diskless boot)\n");
+        }
+    }
+    #[cfg(feature = "p15-write")]
+    {
+        use fslog::RT_TEST;
+        use ota::{OtaPhase, OtaState, SLOT_A, SLOT_B, SLOT_NONE};
+        use store::{RegionKind, SealedStore};
+        if !present {
+            kprint!(" [P15-ota] SKIP — no virtio-blk device (diskless boot)\n");
+            return;
+        }
+        let mut dev = arch_aarch64::virtio_blk::VirtioBlk::open().unwrap();
+        let mut store = match SealedStore::open(&mut dev) {
+            Ok(s) => s,
+            Err(e) => {
+                kprint!(" [P15-ota] FAIL — guard refused device MBR: {:?}\n", e);
+                return;
+            }
+        };
+        // Two OTA regions, disjoint from the P15-persist/fs/sealfs footprints
+        // (which live below LBA 8700). DataVolume [9000,9080) holds BOTH state logs
+        // (cross-reboot [9000,9020) + scratch [9040,9060)); InactiveSlot [9100,9400)
+        // holds BOTH candidate windows (scratch [9100,9200) + cross-reboot
+        // [9300,9400)). Keeping to two regions respects MAX_REGIONS (keystore + 2).
+        const DV_LO: u64 = 9000;
+        const DV_HI: u64 = 9080;
+        const IS_LO: u64 = 9100;
+        const IS_HI: u64 = 9400;
+        if store.add_region(DV_LO, DV_HI, RegionKind::DataVolume).is_err()
+            || store.add_region(IS_LO, IS_HI, RegionKind::InactiveSlot).is_err()
+        {
+            kprint!(" [P15-ota] FAIL — could not register OTA data/inactive regions\n");
+            return;
+        }
+
+        let candidate = &OTA_CANDIDATE.0;
+        // Anti-rollback floors: COMPILE_FLOOR-equivalent accept (candidate svn=5 >=
+        // 1) and a raised floor 9 that refuses the same validly-signed image.
+        const FLOOR_OK: u64 = 1;
+        const FLOOR_HIGH: u64 = 9;
+        // A never-registered LBA standing in for the ACTIVE slot (inside the FAT
+        // partition [2048,131072) but registered by NO region).
+        const ACTIVE_SLOT_LBA: u64 = 3000;
+
+        // ---- (f) brick-safety: writes to LBA 0 + the active slot are refused ----
+        let poison = [0xEEu8; 512];
+        let mbr_refused = store.store_sector(0, &poison).is_err();
+        let active_refused = store.store_sector(ACTIVE_SLOT_LBA, &poison).is_err();
+        let brick_safe = mbr_refused && active_refused;
+
+        // ---- (a) VALID candidate → verify → stage to inactive slot → Staged ----
+        // Scratch state log [9040,9060); scratch inactive window [9100,9200).
+        let (slo, shi) = (9040u64, 9060u64);
+        let (i_lo, i_hi) = (9100u64, 9200u64);
+        let mut staged_state = OtaState::initial();
+        let stage_res = ota::stage(&mut store, &staged_state, i_lo, i_hi, candidate, FLOOR_OK);
+        let pass_a = match stage_res {
+            Ok(s) => {
+                staged_state = s;
+                s.phase == OtaPhase::Staged && s.candidate_svn == 5 && s.active_slot == SLOT_A
+            }
+            Err(_) => false,
+        };
+        // Persist the Staged state through the crash-safe log, then read it back.
+        let persist_a = (|| -> bool {
+            let mut log = match fslog::open_or_format(&mut store, slo, shi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            if log
+                .append(&mut store, RT_TEST, &staged_state.to_bytes())
+                .is_err()
+            {
+                return false;
+            }
+            // Re-mount + read the last record → the persisted phase must be Staged.
+            let r = match fslog::LogStore::mount(&store, slo, shi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            let mut got: Option<OtaState> = None;
+            r.for_each(&store, |_seq, _rt, pl| {
+                if let Some(s) = OtaState::from_bytes(pl) {
+                    got = Some(s);
+                }
+            })
+            .ok();
+            matches!(got, Some(s) if s.phase == OtaPhase::Staged && s.candidate_svn == 5)
+        })();
+
+        // ---- (b) INVALID: bad signature → verify FAILS → rejected, no write ----
+        // Corrupt one ed25519-signature byte in a copy; verify_candidate must fail
+        // and stage() must leave the state untouched with NO inactive-slot write.
+        // Zero the scratch inactive window first so we can prove nothing was written.
+        let zero = [0u8; 512];
+        for lba in i_lo..i_lo + 20 {
+            let _ = store.store_sector(lba, &zero);
+        }
+        let mut bad = [0u8; 8504];
+        bad.copy_from_slice(candidate);
+        // ed25519_sig starts at offset 40 (magic/size/entry/load/svn) + 32 (sha256).
+        bad[40 + 32] ^= 0xFF;
+        let before = staged_state; // Staged
+        let bad_res = ota::stage(&mut store, &before, i_lo, i_hi, &bad, FLOOR_OK);
+        let mut inactive_clean = true;
+        {
+            let mut sec = [0u8; 512];
+            if store.read_sector(i_lo, &mut sec).is_ok() && sec != zero {
+                inactive_clean = false;
+            }
+        }
+        let pass_b = matches!(
+            bad_res,
+            Err(ota::OtaErr::VerifyRejected(boot_abi::verify::VerifyErr::BadEd25519))
+        ) && inactive_clean;
+
+        // ---- (d-refuse) below-floor: validly-signed svn=5 vs floor 9 → refused ----
+        let downgrade_res = ota::stage(&mut store, &before, i_lo, i_hi, candidate, FLOOR_HIGH);
+        let downgrade_refused = matches!(
+            downgrade_res,
+            Err(ota::OtaErr::VerifyRejected(boot_abi::verify::VerifyErr::BelowFloor))
+        );
+
+        // ---- (c) flip → Trying → simulated healthy trial → Committed ----
+        let pass_c = (|| -> bool {
+            let flipped = match ota::flip(&staged_state) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            if flipped.phase != OtaPhase::Trying || flipped.try_slot != SLOT_B {
+                return false;
+            }
+            // Simulated HEALTHY trial (metal: kernel hvc#1 disarms the PM watchdog).
+            let committed = match ota::confirm(&flipped) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            committed.phase == OtaPhase::Committed
+                && committed.active_slot == SLOT_B
+                && committed.try_slot == SLOT_NONE
+        })();
+
+        // ---- (d) flip → Trying → simulated FAILED trial → RolledBack ----
+        let pass_d = (|| -> bool {
+            let flipped = match ota::flip(&staged_state) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            // Simulated FAILED trial (metal: watchdog fires, one-shot reverts to A).
+            let rolled = match ota::rollback(&flipped) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            rolled.phase == OtaPhase::RolledBack
+                && rolled.active_slot == SLOT_A // old slot stays known-good
+                && rolled.try_slot == SLOT_NONE
+        })() && downgrade_refused;
+
+        // ---- (e) cross-reboot persistence: dedicated state log + candidate ----
+        // State log [9000,9020); cross-reboot candidate window [9300,9400).
+        let (plo, phi) = (9000u64, 9020u64);
+        let (ci_lo, ci_hi) = (9300u64, 9400u64);
+        match fslog::open_or_format(&mut store, plo, phi) {
+            Ok(mut log) if log.count() == 0 => {
+                // ---- BOOT 1: stage a valid candidate + persist Staged ----
+                let st0 = OtaState::initial();
+                let staged = match ota::stage(&mut store, &st0, ci_lo, ci_hi, candidate, FLOOR_OK) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        kprint!(" [P15-ota] FAIL — boot-1 stage failed: {:?}\n", e);
+                        return;
+                    }
+                };
+                let flipped = ota::flip(&staged).unwrap_or(staged);
+                let wrote = log.append(&mut store, RT_TEST, &flipped.to_bytes()).is_ok();
+                kprint!(" [P15-ota] BOOT1 — brick-safe {} (LBA0+active-slot refused), valid staged→{:?} (svn {}), bad-sig rejected {}, downgrade refused {}, commit {}, rollback {}; persisted try-slot state {} — reboot to verify OTA state + candidate survive\n",
+                    yn(brick_safe), flipped.phase, flipped.candidate_svn,
+                    yn(pass_b), yn(downgrade_refused), yn(pass_c), yn(pass_d), yn(wrote));
+            }
+            Ok(log) => {
+                // ---- BOOT 2: the OTA state (Trying, try_slot=B) must have survived,
+                // and the staged candidate must still be in the inactive slot. Then
+                // simulate a healthy trial → Committed and persist it. ----
+                let mut got: Option<OtaState> = None;
+                log.for_each(&store, |_seq, _rt, pl| {
+                    if let Some(s) = OtaState::from_bytes(pl) {
+                        got = Some(s);
+                    }
+                })
+                .ok();
+                let state_survived = matches!(
+                    got,
+                    Some(s) if s.phase == OtaPhase::Trying && s.try_slot == SLOT_B && s.candidate_svn == 5
+                );
+                // The candidate bytes written to the inactive slot in boot 1 persisted:
+                // re-verify header magic at the slot head (a cheap on-disk proof).
+                let mut head = [0u8; 512];
+                let cand_survived = store.read_sector(ci_lo, &mut head).is_ok()
+                    && u64::from_le_bytes(head[0..8].try_into().unwrap()) == boot_abi::PAYLOAD_MAGIC;
+                // Confirm the trial → Committed (new slot active).
+                let committed_ok = got
+                    .and_then(|s| ota::confirm(&s).ok())
+                    .map(|c| c.phase == OtaPhase::Committed && c.active_slot == SLOT_B)
+                    .unwrap_or(false);
+
+                let pass = brick_safe
+                    && pass_a
+                    && persist_a
+                    && pass_b
+                    && pass_c
+                    && pass_d
+                    && downgrade_refused
+                    && state_survived
+                    && cand_survived
+                    && committed_ok;
+                kprint!("   ota: brick-safe {}, stage→Staged {} (persisted {}), bad-sig rejected {}, downgrade refused {}, commit {}, rollback {}, state survived reboot {}, candidate survived {}, confirm→Committed {}\n",
+                    yn(brick_safe), yn(pass_a), yn(persist_a), yn(pass_b), yn(downgrade_refused),
+                    yn(pass_c), yn(pass_d), yn(state_survived), yn(cand_survived), yn(committed_ok));
+                kprint!(" [P15-ota] {} — M3.4 on-device A/B OTA: verify-before-flip (SHARED hboot verifier, no 2nd trust root), candidate staged to INACTIVE slot only (brick-safe), bad-sig + below-floor downgrade REFUSED, flip→trial→{{commit|rollback}} decisions, OTA state + candidate SURVIVED reboot; real firmware one-shot flip + PM-watchdog reset = metal (Gate R)\n",
+                    if pass { "PASS" } else { "FAIL" });
+            }
+            Err(e) => {
+                kprint!(" [P15-ota] FAIL — OTA state log open failed: {:?}\n", e);
             }
         }
     }

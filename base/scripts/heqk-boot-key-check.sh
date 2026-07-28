@@ -2,7 +2,7 @@
 # heqk-boot-key-check.sh — RELEASE-BLOCKING gate: no DEV boot/AK signing keys in a RELEASE hboot.
 # ADR 0046 / docs/design/heqk-signing-identity.md (security-auditor decision #5, raised to blocker).
 #
-# heqk's hboot compiles its root-of-trust pubkeys (kernel/heqk/hboot/src/trusted_keys.rs) and its
+# heqk's hboot compiles its root-of-trust pubkeys (boot-abi/src/verify.rs since M3.4) and its
 # software Attestation Key (attest_keys.rs — INCLUDING the AK PRIVATE keys, AK_*_SK) directly into
 # the boot binary. If a RELEASE image ships the DEV keys, the operator's laptop key becomes a
 # production boot-RoT / AK master key (the dev *_SK live unencrypted under ~/heqk-sign/keys). This
@@ -19,7 +19,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 REG="$ROOT/builder/heqk-dev-key-fingerprints.txt"
-KEYFILES=("$ROOT/kernel/heqk/hboot/src/trusted_keys.rs" "$ROOT/kernel/heqk/hboot/src/attest_keys.rs")
+# Boot root-of-trust pubkeys live in boot-abi/src/verify.rs since M3.4 (consolidated from the
+# now-deleted hboot/src/trusted_keys.rs — one trust root shared by boot-time verify + OTA
+# pre-flight). trusted_keys.rs kept in the list for robustness (gracefully skipped if absent).
+# attest_keys.rs still carries the software-AK keys (incl. private AK_*_SK) in hboot.
+KEYFILES=("$ROOT/kernel/heqk/boot-abi/src/verify.rs" "$ROOT/kernel/heqk/hboot/src/trusted_keys.rs" "$ROOT/kernel/heqk/hboot/src/attest_keys.rs")
 
 MODE=""
 if [ "${1:-}" = "--mode" ]; then MODE="${2:-}"; fi

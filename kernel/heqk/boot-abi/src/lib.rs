@@ -6,6 +6,11 @@
 
 pub mod kdf;
 pub mod sha256;
+/// The ONE hybrid secure-boot verifier + embedded trust root, shared by HBoot's
+/// boot-time verify and the kernel's M3.4 OTA pre-flight verify. Behind
+/// `otaverify` so the base ABI has no crypto-crate dependency.
+#[cfg(feature = "otaverify")]
+pub mod verify;
 
 /// "HBOTINF1" little-endian.
 pub const BOOTINFO_MAGIC: u64 = 0x31464e49_544f4248;
