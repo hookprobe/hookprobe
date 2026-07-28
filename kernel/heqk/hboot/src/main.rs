@@ -12,9 +12,9 @@
 use boot_abi::*;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
-use ed25519_compact::{PublicKey as EdPublicKey, Signature as EdSignature};
-use fips205::slh_dsa_sha2_128s;
-use fips205::traits::{SerDes, Verifier};
+// The hybrid crypto now lives in the SHARED `boot_abi::verify` (called below);
+// HBoot no longer instantiates ed25519/SLH-DSA verifiers inline. `fips205` /
+// `ed25519-compact` remain hboot deps for the attestation SIGN path (attest.rs).
 
 mod ak_derive;
 mod attest;
@@ -25,8 +25,11 @@ mod mmu;
 mod rng;
 mod rollback;
 mod stage2;
-mod trusted_keys;
 mod watchdog;
+// The boot trust root (ed25519 + SLH-DSA public keys) moved to the SHARED
+// `boot_abi::verify` so HBoot's boot-time verify and the kernel's M3.4 OTA
+// pre-flight verify use ONE key set. Re-key by regenerating those constants
+// (heqk-sign keygen) in `boot-abi/src/verify.rs` — not here.
 
 use boot_abi::sha256;
 use rollback::SecureCounter;
@@ -205,30 +208,25 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
 
     // The signed message binds the SVN: SHA-256( LE64(svn) || sha256(payload) ).
     // Because svn is inside what's signed, an attacker cannot bump the version
-    // on an old payload to clear the floor — that breaks both signatures.
-    let signed = sha256::digest(&signed_message_input(svn, &computed));
+    // on an old payload to clear the floor — that breaks both signatures. This is
+    // the SHARED `boot_abi::verify` construction — the identical bytes the kernel's
+    // M3.4 OTA pre-flight verifies (one message, one trust root).
+    let signed = boot_abi::verify::digest_signed(svn, &computed);
 
-    // HYBRID VERIFY: both signatures over `signed`, with the trusted public
-    // keys embedded in HBoot (never taken from the image).
+    // HYBRID VERIFY via the SHARED verifier (boot_abi::verify) — the SAME code +
+    // the SAME embedded trust root (`boot_abi::verify::TRUSTED_*`) the on-device
+    // OTA pre-flight uses. No second verifier, no second key set.
     let ed_sig_bytes: [u8; ED25519_SIG_LEN] =
         unsafe { read_volatile(core::ptr::addr_of!((*hdr).ed25519_sig)) };
     let pq_sig_bytes: [u8; SLHDSA_SIG_LEN] =
         unsafe { read_volatile(core::ptr::addr_of!((*hdr).slhdsa_sig)) };
 
     // Classical: ed25519.
-    let ed_ok = (|| {
-        let pk = EdPublicKey::from_slice(&trusted_keys::ED25519_PUBKEY).ok()?;
-        let sig = EdSignature::from_slice(&ed_sig_bytes).ok()?;
-        pk.verify(signed, &sig).ok()
-    })()
-    .is_some();
+    let ed_ok = boot_abi::verify::verify_ed25519(&signed, &ed_sig_bytes);
     puts(if ed_ok { " verify : ed25519  OK\n" } else { " verify : ed25519  FAIL\n" });
 
     // Post-quantum: SLH-DSA-SHA2-128s (FIPS 205) — hash-based, quantum-safe.
-    let pq_ok = match slh_dsa_sha2_128s::PublicKey::try_from_bytes(&trusted_keys::SLHDSA_PUBKEY) {
-        Ok(pk) => pk.verify(&signed, &pq_sig_bytes, SIG_CTX),
-        Err(_) => false,
-    };
+    let pq_ok = boot_abi::verify::verify_slhdsa(&signed, &pq_sig_bytes);
     puts(if pq_ok { " verify : SLH-DSA OK (quantum-safe)\n" } else { " verify : SLH-DSA FAIL\n" });
 
     // BOTH signatures required. Either failing = refuse to boot.

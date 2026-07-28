@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# HYBRID secure-boot VERIFY (ed25519 + SLH-DSA-SHA2-128s / FIPS 205), behind the
+# `otaverify` feature so the ONE verifier + the ONE embedded trust root are shared
+# by BOTH HBoot's boot-time verify AND the kernel's on-device OTA pre-flight verify
+# (M3.4) — no second trust root. OFF by default so the base boot-abi (and the
+# default kernel that depends on it) pulls in neither crypto crate.
+ed25519-compact = { version = "2", default-features = false, optional = true }
+fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2_128s"], optional = true }
+
+[features]
+# The shared hybrid-signature + anti-rollback verifier (boot-abi::verify).
+otaverify = ["dep:ed25519-compact", "dep:fips205"]

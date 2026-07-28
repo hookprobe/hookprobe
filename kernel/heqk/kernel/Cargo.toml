@@ -41,7 +41,11 @@ p10bt = []
 # the store-layer one-shot narrowing write window + read-back verify. Even when
 # built, writes are hard-clamped to LBA 2016..2047 by two independent gates.
 #   cargo build -p kernel --features hboot,p15-write --release
-p15-write = ["arch-aarch64/p15-write"]
+# Also pulls in the SHARED hybrid verifier (boot-abi::verify) for the M3.4 OTA
+# pre-flight verify — the SAME verifier + trust root HBoot uses (no second trust
+# root). The default (non-p15-write) kernel links neither ed25519 nor SLH-DSA
+# beyond its existing ephemeral-attest use, keeping the base TCB untouched.
+p15-write = ["arch-aarch64/p15-write", "boot-abi/otaverify"]
 # PH1 — PRODUCTION service profile. Instead of the P0-P17 self-test sequence that
 # reboots at the end, boot into the persistent RX->classify->verdict->ENFORCE sensor
 # datapath: an isolated EL0 GEM driver feeds real frames to the verified rule plane,
