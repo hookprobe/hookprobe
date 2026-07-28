@@ -290,6 +290,17 @@ fn classify(frame: &[u8]) -> (u16, u16) {
             return (0, DROP);
         }
     }
+    // M2.3 — L1 blanket per-source new-connection-rate cap (resource-shed). Meters SYN-only
+    // new-conn attempts per source; over DEFAULT_NEW_CONN_PPS (400/s) → a SELF-REVERTING
+    // RateLimit (DROP) keyed on RATE reality, reverting next window. The mgmt Allowlisted
+    // floor is honored (never shed). L2 (conntrack-saturation) and L3 (scheduler-pressure)
+    // sheds are contextual, not per-packet, and are driven by the reconciler/telemetry loop
+    // with real saturation/PSI (Gate R metal) — see ratelimit::{saturation_shed,pressure_shed}.
+    if let Some(v) = crate::rules::conn_rate_shed_verdict(nframe, src) {
+        if v.is_drop() {
+            return (0, DROP);
+        }
+    }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
             // Run the signed rule set on a normalized L4 view: R1 = L4 header, so
