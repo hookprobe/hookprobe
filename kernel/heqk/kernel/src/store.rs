@@ -56,19 +56,118 @@ pub struct Partition {
     pub count: u64,
 }
 
-/// The runtime-derived write guard: writes are permitted ONLY in [lo, hi).
+/// M3.0 — the kind of a WRITABLE region in the multi-region allowlist. Every
+/// writable byte on the device belongs to exactly one of these; nothing else is
+/// writable (allowlist, never denylist).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionKind {
+    /// The 16 KiB sealing-key window in the MBR alignment gap (LBA 2016..2047) —
+    /// key material only (the existing P15 keystore).
+    Keystore,
+    /// The persistent data partition: evidence graph + QSecBit history (M3).
+    DataVolume,
+    /// The INACTIVE A/B boot slot — OTA stages a candidate here; the ACTIVE slot
+    /// is never registered, so it is refused by default (brick-safety).
+    InactiveSlot,
+}
+
+/// A half-open writable region [lo, hi).
+#[derive(Clone, Copy)]
+pub struct Region {
+    pub lo: u64,
+    pub hi: u64,
+    pub kind: RegionKind,
+}
+impl Region {
+    #[inline]
+    fn contains(&self, lba: u64) -> bool {
+        lba >= self.lo && lba < self.hi
+    }
+}
+
+/// Max writable regions (keystore + data volume + inactive slot + one spare).
+pub const MAX_REGIONS: usize = 4;
+
+/// The runtime-derived write guard (M3.0 multi-region allowlist). `lo`/`hi` keep
+/// naming the keystore window for the existing single-blob store()/load() path;
+/// `regions` is the strict allowlist that authorizes every OTHER guarded write.
+/// A write is permitted ONLY if its LBA falls inside a REGISTERED region — LBA 0
+/// (MBR / partition table), the active boot slot, the active FAT partition, and
+/// every unregistered gap stay `WriteRefused` by construction.
 #[derive(Clone, Copy)]
 pub struct LbaGuard {
     pub lo: u64,
     pub hi: u64,
     pub capacity: u64,
+    // The first partition's start + length — the anchor the M3.2 FS/OTA layout
+    // layer reads to size the data volume / place the A/B slots. Carried now so
+    // that layer needs no MBR re-parse; not read inside the kernel yet.
+    #[allow(dead_code)]
     pub first_part: u64,
+    #[allow(dead_code)]
+    pub first_part_count: u64,
+    regions: [Region; MAX_REGIONS],
+    nregions: usize,
 }
 
 impl LbaGuard {
+    /// The ONE predicate that authorizes a write. Allowlist: true iff `lba` lies
+    /// in a registered writable region — and NEVER LBA 0 (MBR/partition table),
+    /// however a region were mis-registered. Everything unregistered is refused.
     #[inline]
     pub fn allows(&self, lba: u64) -> bool {
-        lba >= self.lo && lba < self.hi
+        if lba == 0 {
+            return false; // MBR / partition table — never writable, defensively
+        }
+        for r in &self.regions[..self.nregions] {
+            if r.contains(lba) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Which region kind owns `lba`, or None if it is not writable.
+    #[inline]
+    pub fn region_of(&self, lba: u64) -> Option<RegionKind> {
+        if lba == 0 {
+            return None;
+        }
+        for r in &self.regions[..self.nregions] {
+            if r.contains(lba) {
+                return Some(r.kind);
+            }
+        }
+        None
+    }
+
+    /// Register a writable region (chainable builder). Refuses: LBA 0 inclusion,
+    /// an empty/inverted range, a range past capacity, an overlap with any
+    /// already-registered region, or exceeding MAX_REGIONS. A conflict is refused
+    /// (fail-closed) rather than silently clamped — a bad layout must not weaken
+    /// the guard.
+    pub fn with_region(mut self, lo: u64, hi: u64, kind: RegionKind) -> Result<Self, GuardErr> {
+        if lo == 0 || hi <= lo || hi > self.capacity {
+            return Err(GuardErr::WindowOverlap);
+        }
+        if self.nregions >= MAX_REGIONS {
+            return Err(GuardErr::WindowOverlap);
+        }
+        for r in &self.regions[..self.nregions] {
+            // Overlap iff the ranges intersect.
+            if lo < r.hi && r.lo < hi {
+                return Err(GuardErr::WindowOverlap);
+            }
+        }
+        self.regions[self.nregions] = Region { lo, hi, kind };
+        self.nregions += 1;
+        Ok(self)
+    }
+
+    /// Number of registered writable regions (for tests/logging).
+    #[inline]
+    pub fn region_count(&self) -> usize {
+        self.nregions
     }
 }
 
@@ -100,6 +199,7 @@ pub fn guard_from_mbr(sector: &[u8; 512], capacity: u64) -> Result<LbaGuard, Gua
     }
     let parts = parse_mbr(sector);
     let mut first = u64::MAX;
+    let mut first_count = 0u64;
     let mut any = false;
     for p in &parts {
         if p.ptype == PTYPE_GPT_PROTECTIVE {
@@ -116,6 +216,7 @@ pub fn guard_from_mbr(sector: &[u8; 512], capacity: u64) -> Result<LbaGuard, Gua
             }
             if p.start < first {
                 first = p.start;
+                first_count = p.count;
             }
         }
     }
@@ -126,12 +227,28 @@ pub fn guard_from_mbr(sector: &[u8; 512], capacity: u64) -> Result<LbaGuard, Gua
     if RESERVED_LBA_HI > first {
         return Err(GuardErr::WindowOverlap);
     }
-    Ok(LbaGuard {
+    let mut g = LbaGuard {
         lo: RESERVED_LBA_LO,
         hi: RESERVED_LBA_HI,
         capacity,
         first_part: first,
-    })
+        first_part_count: first_count,
+        regions: [Region {
+            lo: 0,
+            hi: 0,
+            kind: RegionKind::Keystore,
+        }; MAX_REGIONS],
+        nregions: 0,
+    };
+    // Region 0 is ALWAYS the keystore window — the one region present on every
+    // device, in the alignment gap below the first partition.
+    g.regions[0] = Region {
+        lo: RESERVED_LBA_LO,
+        hi: RESERVED_LBA_HI,
+        kind: RegionKind::Keystore,
+    };
+    g.nregions = 1;
+    Ok(g)
 }
 
 /// A sealed store over a block device: opens by reading + guarding the MBR, then
@@ -153,6 +270,14 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
 
     pub fn guard(&self) -> &LbaGuard {
         &self.guard
+    }
+
+    /// M3.0 — register an additional writable region (data volume / inactive slot)
+    /// into this store's guard. The layout module supplies these from the on-disk
+    /// layout; overlap with LBA 0, the keystore, or an existing region is refused.
+    pub fn add_region(&mut self, lo: u64, hi: u64, kind: RegionKind) -> Result<(), GuardErr> {
+        self.guard = self.guard.with_region(lo, hi, kind)?;
+        Ok(())
     }
 
     /// Scan the reserved window for a `HQKSEAL1` blob and copy it into `out`.
@@ -186,6 +311,34 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
             out[off..off + n].copy_from_slice(&s[..n]);
         }
         Some(total)
+    }
+
+    /// Read one 512-byte sector at `lba` (always available — reads are never
+    /// guarded). Thin pass-through so callers persisting the data volume / an OTA
+    /// slot go through the store, not the raw device.
+    pub fn read_sector(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), StoreErr> {
+        self.dev.read_block(lba, buf).map_err(|_| StoreErr::Io)
+    }
+
+    /// M3.0 — write one sector to a REGISTERED writable region (behind
+    /// `p15-write`). Gate 1: `region_of(lba)` must resolve (the allowlist); a
+    /// write outside every registered region — LBA 0, the active slot, the active
+    /// partition, any gap — is `WindowEscape`. Gate 2: the device driver's own
+    /// independent refusal (virtio-blk refuses LBA 0; the eMMC arm-window on
+    /// metal). Read-back verified. Returns the region the write landed in.
+    #[cfg(feature = "p15-write")]
+    pub fn store_sector(&mut self, lba: u64, buf: &[u8; 512]) -> Result<RegionKind, StoreErr> {
+        let kind = match self.guard.region_of(lba) {
+            Some(k) => k,
+            None => return Err(StoreErr::WindowEscape),
+        };
+        self.dev.write_block(lba, buf).map_err(|_| StoreErr::Io)?;
+        let mut rb = [0u8; 512];
+        self.dev.read_block(lba, &mut rb).map_err(|_| StoreErr::Io)?;
+        if &rb != buf {
+            return Err(StoreErr::VerifyFailed);
+        }
+        Ok(kind)
     }
 
     /// Store a sealed blob into the reserved window (behind `p15-write`).

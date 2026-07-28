@@ -2196,6 +2196,13 @@ pub extern "C" fn kmain() -> ! {
     // --- P15: sealed storage — seal/unseal + guard over a RamDisk (arch-agnostic) ---
     p15_seal_selftest();
 
+    // --- P15-guard2: M3.0 multi-region write-guard (brick-safety, every boot) ---
+    p15_guard_selftest();
+
+    // --- P15-persist: M3.1 cross-restart persistence over file-backed virtio-blk
+    //     (skips diskless; the two-boot proof is driven by validate.sh) ---
+    p15_persist_selftest();
+
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
 
@@ -4037,8 +4044,8 @@ fn p15_seal_selftest() {
     kprint!("   guard: well-formed {}, GPT-protective->reject {}, LBA34->too-low {}, no-sig->reject {}\n",
         if g_good.is_ok() { "accept" } else { "REJECT?!" }, yn(g_gpt), yn(g_low), yn(g_nosig));
 
-    // 7) reserved-window guard admits ONLY 2016..2047.
-    let win = g_good.unwrap_or(store::LbaGuard { lo: store::RESERVED_LBA_LO, hi: store::RESERVED_LBA_HI, capacity: cap, first_part: 2048 });
+    // 7) reserved-window guard admits ONLY 2016..2047 (the keystore region).
+    let win = g_good.expect("well-formed MBR yields a guard");
     let window_ok = !win.allows(0) && !win.allows(2015) && win.allows(2016)
         && win.allows(2047) && !win.allows(2048) && !win.allows(4095);
 
@@ -4088,6 +4095,196 @@ fn p15_seal_selftest() {
         && guard_ok && window_ok && load_ok && write_ok;
     kprint!(" [P15-seal] {} — Encrypt-then-MAC seal/unseal, tamper+wrong-measurement refused, MBR write-guard enforced (RamDisk)\n",
         if pass { "PASS" } else { "FAIL" });
+}
+
+/// M3.0 — multi-region write-guard (brick-safety) self-test. Arch-agnostic, runs
+/// in EVERY boot (no device needed): proves the allowlist ALLOWS keystore + data
+/// volume + inactive slot and REFUSES LBA 0 / the MBR / the active slot / gaps /
+/// past-capacity, and that a bad region registration (LBA-0 inclusion, keystore
+/// overlap, past capacity) is rejected fail-closed. This is the load-bearing
+/// brick-safety gate for M3 persistence + OTA.
+#[cfg(not(feature = "cm5"))]
+fn p15_guard_selftest() {
+    use store::{guard_from_mbr, RegionKind};
+
+    // 64 MiB model disk: p1 (FAT boot) @ LBA 2048. Boot slots + data volume live
+    // as disjoint sub-ranges (faithful to the CM5 layout: active/inactive kernel
+    // slots in the boot area, evidence graph in a separate data region).
+    let cap: u64 = 131072; // 64 MiB / 512
+    let mbr = mbr_with(&[(0x0c, 2048, 129024)]);
+    let g = match guard_from_mbr(&mbr, cap) {
+        Ok(g) => g,
+        Err(_) => {
+            kprint!(" [P15-guard2] FAIL — guard_from_mbr rejected a well-formed MBR\n");
+            return;
+        }
+    };
+    // Register the extra writable regions (as the layout/OTA module would):
+    //   active slot   [2048, 4096)  -> DELIBERATELY UNREGISTERED (must be refused)
+    //   inactive slot [4096, 6144)  -> InactiveSlot (OTA staging target)
+    //   boot gap      [6144, 8192)  -> UNREGISTERED (must be refused)
+    //   data volume   [8192, cap)   -> DataVolume (evidence graph + QSecBit)
+    let g = match g
+        .with_region(4096, 6144, RegionKind::InactiveSlot)
+        .and_then(|g| g.with_region(8192, cap, RegionKind::DataVolume))
+    {
+        Ok(g) => g,
+        Err(_) => {
+            kprint!(" [P15-guard2] FAIL — could not register data/inactive regions\n");
+            return;
+        }
+    };
+
+    // REFUSED: MBR, pre-keystore gap, active slot, boot gap, past capacity.
+    let refused = !g.allows(0)          // MBR / partition table
+        && !g.allows(1)
+        && !g.allows(2015)              // alignment gap below the keystore
+        && !g.allows(2048)              // ACTIVE slot head
+        && !g.allows(3000)              // ACTIVE slot
+        && !g.allows(4095)              // ACTIVE slot tail
+        && !g.allows(6144)              // boot gap
+        && !g.allows(8191)              // boot gap tail
+        && !g.allows(cap)               // first sector past capacity
+        && !g.allows(cap + 999);
+    // ALLOWED: keystore, inactive slot, data volume.
+    let allowed = g.allows(2016)        // keystore lo
+        && g.allows(2047)               // keystore hi-1
+        && g.allows(4096)               // inactive slot lo
+        && g.allows(6143)               // inactive slot hi-1
+        && g.allows(8192)               // data volume lo
+        && g.allows(cap - 1);           // data volume hi-1
+    // region_of resolves each writable LBA to the right kind; refused -> None.
+    let kinds = g.region_of(2016) == Some(RegionKind::Keystore)
+        && g.region_of(5000) == Some(RegionKind::InactiveSlot)
+        && g.region_of(100_000) == Some(RegionKind::DataVolume)
+        && g.region_of(3000).is_none()
+        && g.region_of(0).is_none();
+    // Bad registrations are rejected fail-closed (never silently weaken the guard).
+    let bad_reject = g.with_region(0, 100, RegionKind::DataVolume).is_err()      // includes LBA 0
+        && g.with_region(2000, 2032, RegionKind::DataVolume).is_err()            // overlaps keystore
+        && g.with_region(8192, cap + 4096, RegionKind::DataVolume).is_err()      // past capacity
+        && g.with_region(5000, 4000, RegionKind::DataVolume).is_err();           // inverted range
+
+    let pass = refused && allowed && kinds && bad_reject && g.region_count() == 3;
+    kprint!("   guard2: {} writable regions, refuse(MBR/active-slot/gaps/oob) {}, allow(keystore/inactive/data) {}, region_of {}, bad-reg->reject {}\n",
+        g.region_count(), yn(refused), yn(allowed), yn(kinds), yn(bad_reject));
+    kprint!(" [P15-guard2] {} — M3.0 multi-region write allowlist: LBA 0/MBR + ACTIVE slot + gaps REFUSED, keystore+data-volume+inactive-slot ALLOWED; overlap/LBA0/capacity registration rejected fail-closed (brick-safe)\n",
+        if pass { "PASS" } else { "FAIL" });
+}
+
+/// M3.1 — cross-restart persistence proof over a FILE-BACKED virtio-blk device.
+/// Boot 1 (fresh disk): seal a known cookie + write a data-volume marker, both
+/// through the M3.0 guard. Boot 2 (SAME backing file): read them back, unseal,
+/// and confirm they SURVIVED the restart — the thing a volatile RamDisk cannot
+/// prove. Skips cleanly when QEMU attached no `-drive` (diskless boot). The real
+/// eMMC write on brcm,bcm2712-sdhci is metal (Gate R); this proves the write-path
+/// LOGIC + persistence in QEMU only.
+#[cfg(not(feature = "cm5"))]
+fn p15_persist_selftest() {
+    use hal::BlockDev;
+    use seal::Policy;
+    use store::{RegionKind, SealedStore};
+
+    let mut dev = match arch_aarch64::virtio_blk::VirtioBlk::open() {
+        Some(d) => d,
+        None => {
+            kprint!(" [P15-persist] SKIP — no virtio-blk device (diskless boot; attach -drive to prove persistence)\n");
+            return;
+        }
+    };
+    let cap = dev.block_count();
+
+    // Same synthetic SRK + fixed policy as the P15 seal test — deterministic
+    // across both boots so unseal reproduces (synthetic-SRK caveat: NOT real
+    // measurement enforcement until OTP/V3; this validates format+persistence).
+    let srk = [0x5au8; 32];
+    let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
+    pcr[0] = [0x11; 32];
+    pcr[1] = [0x22; 32];
+    pcr[2] = [0x33; 32];
+    let policy = Policy {
+        mask: boot_abi::SEAL_POLICY_STRICT,
+        device_id: 0x0BADF00D_1234_5678u64,
+        svn_floor: 7,
+        pcr,
+    };
+    let cookie = b"HEQK-M3.1-PERSIST-COOKIE-v1";
+    const DATAVOL_LBA: u64 = 8192;
+    let marker = b"HEQK-M3.1-DATAVOL-MARKER";
+
+    let mut store = match SealedStore::open(&mut dev) {
+        Ok(s) => s,
+        Err(e) => {
+            kprint!(" [P15-persist] FAIL — guard refused to open the device MBR: {:?}\n", e);
+            return;
+        }
+    };
+    // Register the data-volume region so the guarded data-sector write is admitted.
+    if store.add_region(DATAVOL_LBA, cap, RegionKind::DataVolume).is_err() {
+        kprint!(" [P15-persist] FAIL — could not register the data-volume region\n");
+        return;
+    }
+
+    // The disk itself is the boot counter: an empty keystore window => BOOT 1.
+    let mut loaded = [0u8; seal::SEAL_MAX_BLOB];
+    match store.load(&mut loaded) {
+        None => {
+            // ---- BOOT 1: write, then ask for a reboot ----
+            #[cfg(feature = "p15-write")]
+            {
+                // Brick-safety end-to-end: a write to LBA 0 (MBR) and to an ACTIVE
+                // (unregistered) slot LBA MUST be refused by the guard on the REAL
+                // device — not just the predicate. If either escaped, the partition
+                // table / running kernel could be clobbered; refuse to proceed.
+                let poison = [0xEEu8; 512];
+                let mbr_refused = store.store_sector(0, &poison).is_err();
+                let active_refused = store.store_sector(3000, &poison).is_err();
+                if !(mbr_refused && active_refused) {
+                    kprint!(" [P15-persist] FAIL — brick-safety: LBA0-refused {}, active-slot-refused {} (a guarded write ESCAPED)\n",
+                        yn(mbr_refused), yn(active_refused));
+                    return;
+                }
+                let mut blob = seal::SealBlob::new();
+                if seal::seal(&srk, &policy, cookie, &mut blob).is_err() {
+                    kprint!(" [P15-persist] FAIL — seal() failed on boot 1\n");
+                    return;
+                }
+                if let Err(e) = store.store(blob.as_slice()) {
+                    kprint!(" [P15-persist] FAIL — keystore store() failed: {:?}\n", e);
+                    return;
+                }
+                let mut sec = [0u8; 512];
+                sec[..marker.len()].copy_from_slice(marker);
+                match store.store_sector(DATAVOL_LBA, &sec) {
+                    Ok(RegionKind::DataVolume) => {}
+                    other => {
+                        kprint!(" [P15-persist] FAIL — data-vol store_sector -> {:?}\n", other);
+                        return;
+                    }
+                }
+                kprint!(" [P15-persist] BOOT1 — brick-safety: LBA0+active-slot writes REFUSED on the real device; sealed cookie ({} B) + data-vol marker @LBA {} written through the guard; reboot (same disk) to verify persistence\n",
+                    blob.len, DATAVOL_LBA);
+            }
+            #[cfg(not(feature = "p15-write"))]
+            kprint!(" [P15-persist] SKIP — read-only build (rebuild --features p15-write for the write/persistence proof)\n");
+        }
+        Some(n) => {
+            // ---- BOOT 2: the keystore blob persisted — verify it round-trips ----
+            let mut pt = [0u8; 64];
+            let cookie_ok = matches!(
+                seal::unseal(&srk, &policy, &loaded[..n], &mut pt),
+                Ok(m) if m == cookie.len() && &pt[..m] == cookie
+            );
+            let mut sec = [0u8; 512];
+            let datavol_ok = store.read_sector(DATAVOL_LBA, &mut sec).is_ok()
+                && &sec[..marker.len()] == marker;
+            let pass = cookie_ok && datavol_ok;
+            kprint!("   persist: sealed-cookie unseal {}, data-vol marker @LBA {} {}\n",
+                yn(cookie_ok), DATAVOL_LBA, yn(datavol_ok));
+            kprint!(" [P15-persist] {} — M3.1 cross-restart persistence: sealed cookie + data-vol marker SURVIVED reboot over file-backed virtio-blk (seal->persist->reboot->unseal); RamDisk cannot prove this — real eMMC write is metal (Gate R)\n",
+                if pass { "PASS" } else { "FAIL" });
+        }
+    }
 }
 
 #[cfg(not(feature = "cm5"))]

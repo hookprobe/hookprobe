@@ -57,6 +57,8 @@ PHASES=(
   "P11|[P11] PASS|impl|Validation|device-class transport (sDDF borrow): hardened SPSC (H1 kernel-private cap, H2 ownership table, H3 copy-then-validate, csdb, no-RMW) REJECTS+COUNTS a hostile driver's forged descriptors (V2 index/V4 offset+len+flags/V5 not-owned); LoopDev + honest path pass; metal GemDev/RtlDev deferred"
   "P16sha|[P16-sha] PASS|impl|Validation|crypto primitive: incremental SHA-256 Hasher == one-shot digest across all lengths/chunkings (guards the metal-found short-tail HMAC auth bug)"
   "P15|[P15-seal] PASS|impl|Validation|sealed storage: Encrypt-then-MAC seal/unseal (SHA256 HMAC/HKDF/CTR), tamper+wrong-measurement refused, MBR write-guard (RamDisk); eMMC driver read-only (writes behind p15-write)"
+  "P15g|[P15-guard2] PASS|impl|Validation|M3.0 multi-region write-guard (brick-safety): the write allowlist REFUSES LBA 0/MBR + the ACTIVE boot slot + unregistered gaps + past-capacity, ALLOWS keystore+data-volume+inactive-slot, and rejects a bad region registration (LBA-0 inclusion / keystore overlap / past capacity) fail-closed — runs every boot, no device needed"
+  "P15p|[P15-persist] PASS|impl|Validation|M3.1 cross-restart persistence: over a FILE-BACKED virtio-blk device (behind hal::BlockDev, the identical trait the metal eMMC slots into), boot-1 seals a cookie + writes a data-volume marker through the M3.0 guard and boot-2 (same backing file) reads them back + unseals — seal->persist->reboot->unseal SURVIVES restart (a volatile RamDisk cannot prove this); real eMMC write on brcm,bcm2712-sdhci is metal (Gate R)"
   "AB|[HBoot-AB] PASS|impl|Validation|A/B trial boot: kernel confirms health (hvc #1 disarms HBoot's EL2 watchdog) or firmware falls back to the known-good slot"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
@@ -96,6 +98,40 @@ echo -n "[boot]  qemu virt ... "
 timeout 45 $QEMU "$KERNEL" >"$LOG" 2>&1
 RC=$?
 if grep -q "\[ALL\]" "$LOG"; then echo "clean exit"; else echo "rc=$RC (no ALL marker; possible hang/regression)"; fi
+
+# --- Stage 2b: M3.1 cross-restart persistence (file-backed virtio-blk) -----
+# The volatile RamDisk (P15 above) proves the write-window LOGIC but cannot prove
+# "survives reboot". A file-backed virtio-blk device — the SAME hal::BlockDev the
+# metal eMMC slots into — can: boot twice against ONE backing file and confirm the
+# sealed cookie + data-volume marker persisted. Needs the p15-write build (the
+# store WRITE path); the eMMC write driver stays cfg(cm5) = NOT built here.
+echo -n "[P15-persist] two-boot persistence (virtio-blk, p15-write) ... "
+if command -v dd >/dev/null 2>&1 && cargo build --features netsvc,p15-write >/tmp/hp_build_p15w.log 2>&1; then
+  DISK="$(mktemp)"; B1="$(mktemp)"; B2="$(mktemp)"
+  # Factory step: a 64 MiB image with a valid MBR (p1 FAT @ LBA 2048, 129024
+  # sectors). The running kernel is FORBIDDEN to write LBA 0 (brick-safety), so
+  # the image tool lays the partition table down — exactly as on a real device.
+  dd if=/dev/zero of="$DISK" bs=1M count=64 status=none
+  printf '\x0c'             | dd of="$DISK" bs=1 seek=450 conv=notrunc status=none  # part type 0x0c (FAT)
+  printf '\x00\x08\x00\x00' | dd of="$DISK" bs=1 seek=454 conv=notrunc status=none  # LBA start = 2048
+  printf '\x00\xf8\x01\x00' | dd of="$DISK" bs=1 seek=458 conv=notrunc status=none  # sector count = 129024
+  printf '\x55\xaa'         | dd of="$DISK" bs=1 seek=510 conv=notrunc status=none  # 0x55AA boot signature
+  QEMU_BLK="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+    -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+    -drive file=$DISK,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
+  timeout 45 $QEMU_BLK "$KERNEL" >"$B1" 2>&1   # boot 1: write cookie+marker through the guard
+  timeout 45 $QEMU_BLK "$KERNEL" >"$B2" 2>&1   # boot 2: SAME disk -> read back + unseal
+  cat "$B1" "$B2" >> "$LOG"                     # feed both boots' markers into the report
+  if grep -qF "[P15-persist] PASS" "$B2"; then
+    echo "PASS (cookie+marker survived restart)"
+  else
+    echo "FAIL/see report"; echo "  --- boot1 tail ---"; grep -F "[P15-persist]" "$B1" | sed 's/^/    /'
+    echo "  --- boot2 tail ---"; grep -F "[P15-persist]" "$B2" | sed 's/^/    /'
+  fi
+  rm -f "$DISK" "$B1" "$B2"
+else
+  echo "skip (no dd, or p15-write build failed — see /tmp/hp_build_p15w.log)"
+fi
 
 # --- Stage 3: phase gate report ------------------------------------------
 printf "\n %-4s %-8s %-30s %s\n" "PH" "STATUS" "LIFECYCLE STAGE" "GATE"

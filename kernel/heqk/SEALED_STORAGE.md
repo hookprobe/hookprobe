@@ -101,3 +101,52 @@ feature flag, 8 sectors, read-back verified -> **D** power-cycle + modified-imag
 refusal -> **SEC** close V3 and V7. `seal.rs`/`store.rs` are arch-agnostic, so the
 whole crypto half is CI-gateable in QEMU over a RamDisk, including a
 write-window-escape test.
+
+## M3.0 — the multi-region write model (the ADR-grade widening)
+
+Phases A–D above write **one** region: the 16 KiB keystore window (LBA 2016..2047)
+— right for a sealing key, wrong for a data volume or an OTA slot. **M3 widens the
+write surface**, and the write-safety model widens with it: the single `[lo, hi)`
+window becomes a **strict multi-region allowlist** (`store::LbaGuard`), still
+brick-safe by the same two-independent-gates discipline.
+
+**The region map — an ALLOWLIST, never a denylist. Only these are writable:**
+
+| Region | Kind | Who registers it | Contents |
+|---|---|---|---|
+| LBA 2016..2047 | `Keystore` | `guard_from_mbr` (always) | the sealing/volume key blob (unchanged) |
+| a data partition (LBA ≥ 2048, ≥ first-part) | `DataVolume` | the layout module (`add_region`) | evidence graph + QSecBit history |
+| the **inactive** A/B boot slot | `InactiveSlot` | the OTA module (`add_region`) | a staged OTA candidate |
+
+**Everything else stays `WriteRefused` by construction** — there is no denylist to
+get wrong. LBA 0 (MBR / partition table) is refused *twice*: `LbaGuard::allows`
+returns false for LBA 0 unconditionally (gate 1, even if a region were
+mis-registered), and the device driver refuses LBA 0 independently (gate 2 — the
+virtio-blk backend refuses it outright; the metal eMMC's one-shot `arm_write_window`
+is the hardware analogue). The **active** boot slot, the active FAT partition, and
+every alignment/boot gap are simply **never registered**, so they are refused by the
+allowlist default. `with_region` **rejects fail-closed** any registration that
+includes LBA 0, overlaps the keystore or another region, inverts its range, or runs
+past capacity — a bad layout can never widen the guard.
+
+## M3.1 — the block backend + cross-restart persistence proof
+
+`hal::BlockDev` is the seam. Two backends sit behind it:
+
+- **`RamDisk`** (host/CI) — volatile; proves the write-window *logic* but **cannot
+  prove "survives reboot."**
+- **`arch_aarch64::virtio_blk::VirtioBlk`** (QEMU) — a file-backed
+  `virtio-blk-device`; its contents **survive a QEMU restart**, so it is the honest
+  QEMU proxy for power-cycle persistence.
+- **`arch_aarch64::emmc::Emmc`** (`cfg(cm5)`) — the real `brcm,bcm2712-sdhci` write
+  path, **metal-only (Gate R)**; it is the slot-in behind the *identical* trait and
+  is **not built in QEMU**.
+
+The `[P15-persist]` gate boots QEMU **twice against one backing file**: boot 1 seals
+a cookie into the keystore + writes a `DataVolume` marker through the guard (and
+proves an LBA-0 and active-slot write are *refused* on the real device); boot 2 reads
+both back and unseals — proving `seal → persist → reboot → unseal` across a restart.
+The `[P15-guard2]` gate proves the allowlist/refusal predicate every boot (no device
+needed). **Honesty:** the virtio-blk path proves the write-path logic + persistence
+in QEMU; the real eMMC write on `brcm,bcm2712-sdhci`, real power-cycle persistence,
+and the measurement binding (OTP/V3) remain **metal (Gate R)** — not claimed here.
