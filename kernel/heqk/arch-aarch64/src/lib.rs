@@ -48,6 +48,7 @@ pub mod thread;
 pub mod timer;
 pub mod virtio;
 pub mod virtio_blk;
+pub mod virtio_net;
 
 pub use gic::Gic;
 pub use mmu::Mmu;
