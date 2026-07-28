@@ -19,10 +19,29 @@ ed25519-compact = { version = "2", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = [
     "proto-ipv4", "medium-ethernet", "socket-udp", "socket-dhcpv4",
 ], optional = true }
+# M4.2a — PQC secure-channel crypto PRIMITIVES (KEX + AEAD), FRAMING-AGNOSTIC (the
+# identical primitives feed BOTH the ADR-0002 rustls-hybrid path AND the ADR-0004
+# Noise path; the handshake itself is M4.2b). All no_std, behind `securechannel`,
+# OFF by default so the base kernel TCB pulls in none of this. See
+# docs/design/heqk-control-plane.md §2 + ADR 0002 (hybrid ML-KEM-768 + X25519 KEX).
+#   ml-kem          — FIPS 203 ML-KEM-768 (RustCrypto), no_std; deterministic KAT API.
+#   x25519-dalek    — RFC 7748 X25519 (no_std, serial backend on aarch64 softfloat).
+#   chacha20poly1305— RFC 8439 AEAD (no AES-NI dependence — right for a softfloat edge).
+ml-kem           = { version = "0.2", default-features = false, features = ["deterministic"], optional = true }
+# The RustCrypto `kem` traits (Encapsulate/Decapsulate) that ml-kem's key types
+# implement but does NOT re-export — needed in scope to call `.decapsulate()`.
+# no_std + forbid(unsafe_code); pinned to the exact rev ml-kem 0.2.3 resolves.
+kem              = { version = "=0.3.0-pre.0", default-features = false, optional = true }
+x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
+chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
 
 [features]
 # PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
 netsvc = ["dep:smoltcp"]
+# M4.2a: compile the PQC secure-channel crypto primitives + the [P19-pqc-kat] gate
+# (ML-KEM-768 round-trip + KAT, X25519 RFC-7748 vector, ChaCha20-Poly1305 RFC-8439
+# vector, hybrid HKDF combiner Alice==Bob). Framing-agnostic; the handshake is M4.2b.
+securechannel = ["dep:ml-kem", "dep:kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
