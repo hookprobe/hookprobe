@@ -384,6 +384,56 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     Some(v)
 }
 
+// ---- M2.3: resource-shed verdict routing (ADR 0023's fourth suspicion-free drop) ----
+
+/// Rule IDs for the M2.3 resource-shed layers (distinct from the M2.1/M2.2 tiers).
+pub const RULE_CONN_RATE_SHED: u16 = 114; // L1 blanket per-source new-conn cap
+pub const RULE_RESOURCE_SHED: u16 = 115; // L2 saturation / L3 pressure top-talker shed
+
+/// M2.3 — map a resource-shed TRIGGER (rate / saturation / pressure — all identity-blind)
+/// to a tri-state verdict via `decide()`, so the mgmt `Allowlisted` floor is HONORED: a
+/// mgmt-path source is NEVER shed however hot it is (ADR 0022 D2 — never self-lock-out),
+/// while any other source over a genuine resource wall gets a bounded, self-reverting
+/// `RateLimit` (wire DROP). `triggered == false` → `Observe` (PASS). The FloodRate class
+/// is the right one: a shed is a rate/resource-reality event, not an identity finding.
+pub fn shed_verdict(rule_id: u16, src: u32, triggered: bool) -> Verdict {
+    if !triggered {
+        return Verdict::Observe;
+    }
+    let mut ctx = DecideCtx::for_src(src);
+    ctx.over_limit = true;
+    // decide(FloodRate): allowlisted → Allowlisted (floor, PASS); else RateLimit{true} (DROP).
+    let v = verdict::decide(FindingClass::FloodRate, ctx);
+    fire(rule_id, SEV_MED, v, src);
+    v
+}
+
+/// M2.3 / L1 — the blanket per-source new-connection-rate cap on the live datapath, on
+/// the VLAN-normalized frame. Self-parses TCP; only SYN-only (new-conn ATTEMPT) segments
+/// are metered. Over `DEFAULT_NEW_CONN_PPS` (400/s) this window → a SELF-REVERTING
+/// `RateLimit` (wire DROP), reverting the instant the source's rate falls next window.
+/// Routes through `shed_verdict` so the mgmt floor is honored. Returns the verdict or None.
+pub fn conn_rate_shed_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
+    if src == 0 {
+        return None; // datapath src=0 short-circuits (never poisons; PHprod/PH6-net clean)
+    }
+    let meta = crate::net::parse(frame)?;
+    if meta.ip_proto != crate::net::IPPROTO_TCP || !meta.has_l4_ports() {
+        return None;
+    }
+    let flags = *frame.get(meta.l4_off + 13)?;
+    const TCP_SYN: u8 = 0x02;
+    const TCP_ACK: u8 = 0x10;
+    if !(flags & TCP_SYN != 0 && flags & TCP_ACK == 0) {
+        return None; // only new-connection attempts count toward the blanket cap
+    }
+    let over = crate::ratelimit::conn_rate_over(src as u64, crate::ratelimit::DEFAULT_NEW_CONN_PPS);
+    if !over {
+        return None;
+    }
+    Some(shed_verdict(RULE_CONN_RATE_SHED, src, true))
+}
+
 /// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service
 /// discovery a chatty-but-legit device emits; EXEMPT from the storm counter before it
 /// can ever reach a drop path (ADR 0023 D13 / the matrix broadcast LEGIT row).

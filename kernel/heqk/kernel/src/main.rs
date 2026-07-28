@@ -2143,6 +2143,10 @@ pub extern "C" fn kmain() -> ! {
     // with the legit-busy-source-stays-PASS proof (the whole point of the matrix)
     p8_flow();
 
+    // --- M2.3: resource-shed — the fourth suspicion-free inline drop; self-reverting
+    // meters keyed on RATE / saturation / scheduler-pressure REALITY, mgmt floor spared
+    p8_shed();
+
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
@@ -3554,6 +3558,148 @@ fn p8_flow() -> bool {
     ok &= SCAN_PORTS_RATELIMIT <= SCAN_PORTS_CONFIRM;
 
     kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines — establishment ⇒ not a scan (ADR 0018/0023, conntrack-equivalent)\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// M2.3 — RESOURCE-SHED selftest: ADR 0023's FOURTH suspicion-free inline drop. Proves
+/// the SELF-REVERTING meters keyed on MEASURED RESOURCE REALITY (never identity):
+///   L1 — a blanket per-source new-conn-rate cap (400/s) that DROPs over cap then PASSes
+///        the next window (the SELF-REVERT proof, driven with a synthetic clock);
+///   L2 — a conntrack-saturation top-talker shed (saturated → shed the flood source; an
+///        un-saturated table (L9) or a small legit source → NO shed);
+///   L3 — a heqk-native PSI-equivalent scheduler-pressure shed (synthetic pressure high →
+///        shed; low → no shed) — the LOGIC is QEMU-provable, the REAL pressure-under-load
+///        is Gate-R metal (honestly split via the synthetic injector);
+///   A8 — under pressure the top-talker sheds first.
+/// And the invariants: a legit busy source in an UN-saturated table with low PSI is NEVER
+/// shed, and the mgmt `Allowlisted` source is NEVER shed however hot (routed through
+/// `decide()`; the floor short-circuits). Uses isolated TEST-NET src ids (datapath src=0
+/// short-circuits, so PHprod/PH6-net stay green).
+#[cfg(not(feature = "cm5"))]
+fn p8_shed() -> bool {
+    use ratelimit::{
+        clear_synthetic_pressure, conn_rate_over_at, flow_record, pressure_shed, saturation_shed,
+        set_synthetic_pressure, DEFAULT_NEW_CONN_PPS, PSI_SHED_PCT, SHED_TOPTALKER_MIN_FLOWS,
+    };
+    kprint!("\n [P8] resource-shed (M2.3) — self-reverting drops keyed on RATE/saturation/pressure REALITY (ADR 0023's 4th inline drop)\n");
+    let mut ok = true;
+
+    #[inline]
+    fn ipn(a: u8, b: u8, c: u8, d: u8) -> u64 {
+        u32::from_be_bytes([a, b, c, d]) as u64
+    }
+
+    // === L1 SELF-REVERT: over the 400/s cap this window → shed; next window under → PASS. ===
+    // Synthetic clock (win = 1000 ticks) so the window boundary is deterministic (no sleep).
+    let s1 = ipn(198, 18, 1, 10); // TEST-NET-2, isolated
+    let cap = DEFAULT_NEW_CONN_PPS;
+    let win = 1000u64;
+    let mut w1_shed = false;
+    for _ in 0..(cap + 50) {
+        if conn_rate_over_at(s1, cap, 0, win) {
+            w1_shed = true; // crossed the blanket cap within window 1
+        }
+    }
+    // Window 2 (now advanced past the boundary): a modest under-cap rate must PASS again.
+    let mut w2_reverted = true;
+    for _ in 0..20 {
+        if conn_rate_over_at(s1, cap, win, win) {
+            w2_reverted = false; // any drop here means the meter did NOT self-revert
+        }
+    }
+    let c_l1 = w1_shed && w2_reverted;
+    ok &= c_l1;
+    kprint!("   L1 blanket cap {}/s: over-cap shed (window1)={}, under-cap PASS (window2 self-revert)={} [{}]\n",
+        cap, w1_shed, w2_reverted, if c_l1 { "ok" } else { "BUG" });
+
+    // === Build a top-talker census: a flood source with 500 conns + 10 small legit sources. ===
+    let flood = ipn(203, 0, 113, 50);
+    for _ in 0..500 {
+        flow_record(flood);
+    }
+    for j in 0..10u8 {
+        let legit = ipn(192, 168, 2, j);
+        for _ in 0..5 {
+            flow_record(legit);
+        }
+    }
+    let one_legit = ipn(192, 168, 2, 0);
+
+    // === L2 conntrack-saturation shed: saturated (85%) → shed the flood top-talker;
+    //     an un-saturated table (L9, 40%) → NO shed; a small legit source → NO shed. ===
+    let a7 = saturation_shed(flood, 85_000, 100_000); // over the 80% wall → shed flood
+    let l9 = saturation_shed(flood, 40_000, 100_000); // under the wall → never shed
+    let legit_sat = saturation_shed(one_legit, 85_000, 100_000); // saturated but not top-talker
+    let c_l2 = a7 && !l9 && !legit_sat;
+    ok &= c_l2;
+    kprint!("   L2 saturation (top-talker {} flows, floor {}): 85%-full shed flood={}, 40%-full(L9) shed={}, small-legit shed={} [{}]\n",
+        ratelimit::top_talker_flows(), SHED_TOPTALKER_MIN_FLOWS, a7, l9, legit_sat, if c_l2 { "ok" } else { "BUG" });
+
+    // === L3 PSI-equivalent + A8: synthetic pressure HIGH → shed the top-talker; a legit
+    //     small source is NOT shed; pressure LOW → no shed at all (self-reverting signal). ===
+    set_synthetic_pressure(60); // >= PSI_SHED_PCT (40)
+    let psi_high_flood = pressure_shed(flood); // A8: top-talker sheds first
+    let psi_high_legit = pressure_shed(one_legit); // small legit source: never top-talker
+    set_synthetic_pressure(10); // < PSI_SHED_PCT → pressure cleared
+    let psi_low = pressure_shed(flood); // no pressure → no shed (revert)
+    clear_synthetic_pressure();
+    let c_l3 = psi_high_flood && !psi_high_legit && !psi_low;
+    ok &= c_l3;
+    kprint!("   L3 PSI (wall {}%): synth-high shed top-talker={}, small-legit shed={}, synth-low shed={} (QEMU synthetic; real pressure = Gate-R metal) [{}]\n",
+        PSI_SHED_PCT, psi_high_flood, psi_high_legit, psi_low, if c_l3 { "ok" } else { "BUG" });
+
+    // === LEGIT (keystone): a busy-but-normal source — 150 flows, table NOT saturated,
+    //     PSI low — is NEVER shed (preserve the M2.2-proven legit row for the shed ACTION). ===
+    let nas = ipn(192, 168, 2, 200);
+    for _ in 0..150 {
+        flow_record(nas);
+    }
+    // Table at 40% (not saturated), no injected pressure (synth cleared → runqueue-derived,
+    // ~0 under QEMU idle): neither shed path fires for the legit source.
+    let legit_sat_shed = saturation_shed(nas, 40_000, 100_000);
+    let legit_psi_shed = pressure_shed(nas);
+    let c_legit = !legit_sat_shed && !legit_psi_shed;
+    ok &= c_legit;
+    kprint!("   LEGIT busy-but-normal (150 flows, table 40pct, PSI low) -> saturation-shed={}, pressure-shed={} (MUST be false — resource wall never crossed) [{}]\n",
+        legit_sat_shed, legit_psi_shed, if c_legit { "ok" } else { "BUG" });
+
+    // === mgmt FLOOR: a mgmt-path source, even as the hottest top-talker under saturation
+    //     AND pressure, is NEVER shed — the shed routes through decide() and the
+    //     Allowlisted floor short-circuits (ADR 0022 D2: never self-lock-out). ===
+    let mgmt = ipn(10, 200, 0, 5); // in MGMT_NET 10.200.0.0/24
+    for _ in 0..600 {
+        flow_record(mgmt); // make mgmt the measured top-talker by sheer volume
+    }
+    set_synthetic_pressure(90);
+    // The TRIGGERS are identity-blind and DO fire for mgmt (it IS the top-talker under
+    // pressure/saturation) — proving the floor is a verdict-layer override, not a trigger hack.
+    let mgmt_trig_sat = saturation_shed(mgmt as u64, 90_000, 100_000);
+    let mgmt_trig_psi = pressure_shed(mgmt as u64);
+    let mgmt_sat_v = rules::shed_verdict(rules::RULE_RESOURCE_SHED, mgmt as u32, mgmt_trig_sat);
+    let mgmt_psi_v = rules::shed_verdict(rules::RULE_RESOURCE_SHED, mgmt as u32, mgmt_trig_psi);
+    clear_synthetic_pressure();
+    let c_mgmt = mgmt_trig_sat && mgmt_trig_psi // triggers fire (identity-blind reality)
+        && mgmt_sat_v == verdict::Verdict::Allowlisted && !mgmt_sat_v.is_drop()
+        && mgmt_psi_v == verdict::Verdict::Allowlisted && !mgmt_psi_v.is_drop();
+    ok &= c_mgmt;
+    kprint!("   mgmt FLOOR: triggers fired (sat={}, psi={}) but verdict sat={:?} psi={:?} -> wire PASS (Allowlisted never shed, never self-lock-out) [{}]\n",
+        mgmt_trig_sat, mgmt_trig_psi, mgmt_sat_v, mgmt_psi_v, if c_mgmt { "ok" } else { "BUG" });
+
+    // Attacker counterpart: a non-mgmt top-talker under the SAME saturation trigger DOES
+    // shed (DROP). Record a fresh flood above the current top (mgmt's 600) so it is the
+    // measured top-talker — proving the floor is what spares mgmt, not a weaker trigger.
+    let atk = ipn(203, 0, 113, 99);
+    for _ in 0..700 {
+        flow_record(atk);
+    }
+    let atk_v = rules::shed_verdict(rules::RULE_RESOURCE_SHED, atk as u32, saturation_shed(atk, 85_000, 100_000));
+    let c_atk = matches!(atk_v, verdict::Verdict::RateLimit { over_limit: true }) && atk_v.is_drop();
+    ok &= c_atk;
+    kprint!("   attacker top-talker (saturated, {} flows) -> {:?} wire DROP (bounded, self-reverting) [{}]\n",
+        ratelimit::top_talker_flows(), atk_v, if c_atk { "ok" } else { "BUG" });
+
+    kprint!(" [P8-shed] {} — L1 blanket cap self-reverts (over->DROP, next window->PASS); L2 saturation + L3 PSI shed the top-talker only (legit-not-saturated NEVER shed); mgmt Allowlisted floor NEVER shed (ADR 0023 4th inline drop, all identity-blind + self-reverting)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
