@@ -6,6 +6,7 @@
 //! (e.g. CM5 metal, whose runtime frame allocator differs) a rule falls back to
 //! the bounds-checked interpreter — same verdict, slower.
 
+use crate::verdict::{self, DecideCtx, FindingClass, Verdict};
 use crate::{bpf, telemetry};
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -20,39 +21,48 @@ pub struct Rule {
     pub name: &'static str,
     pub prog: &'static [u64],
     pub severity: u32,
+    /// DET-SEP — what firing this rule MEANS. `run_set` feeds it to `verdict::decide`
+    /// so a match is an ALERT graduated to a tri-state verdict, never an inline drop.
+    pub class: FindingClass,
 }
 
 /// The signed L4 corpus. R1 = the L4 header (net.rs normalizes eth/VLAN/IHL
 /// away), so every rule reads dst-port at a fixed offset regardless of framing.
 pub static RULES: &[Rule] = &[
-    Rule { id: 1, name: "block-port-4444", prog: &bpf::THREAT_RULE, severity: SEV_HIGH },
-    Rule { id: 2, name: "block-telnet-23", prog: &bpf::BLOCK_TELNET, severity: SEV_MED },
-    Rule { id: 3, name: "block-backdoor-31337", prog: &bpf::BLOCK_BACKDOOR, severity: SEV_HIGH },
+    Rule { id: 1, name: "block-port-4444", prog: &bpf::THREAT_RULE, severity: SEV_HIGH, class: FindingClass::Signature },
+    Rule { id: 2, name: "block-telnet-23", prog: &bpf::BLOCK_TELNET, severity: SEV_MED, class: FindingClass::Signature },
+    Rule { id: 3, name: "block-backdoor-31337", prog: &bpf::BLOCK_BACKDOOR, severity: SEV_HIGH, class: FindingClass::Signature },
 ];
 
 /// The signed L2 corpus — parity with HookProbe `napse-l2guard` (Ring-0
 /// deterministic frame/ARP enforcement). R1 = the raw L2 FRAME start; these run
 /// on EVERY frame (before the L4 tier), mirroring `dpi::ArpObs` predicates.
 pub static L2_RULES: &[Rule] = &[
-    Rule { id: 101, name: "arp-malformed", prog: &bpf::ARP_MALFORMED, severity: SEV_MED },
-    Rule { id: 102, name: "arp-spoof", prog: &bpf::ARP_SPOOF, severity: SEV_HIGH },
+    Rule { id: 101, name: "arp-malformed", prog: &bpf::ARP_MALFORMED, severity: SEV_MED, class: FindingClass::MalformedFrame },
+    // DET-SEP / matrix row L3: a single-packet eth-src≠sender-mac is the shape a
+    // legit gratuitous/proxy/NAT-rebind ARP ALSO presents; observe, never FrameDrop.
+    Rule { id: 102, name: "arp-spoof", prog: &bpf::ARP_SPOOF, severity: SEV_HIGH, class: FindingClass::IdentitySpoof },
 ];
 
 /// The signed TCP corpus — stateless anomalous-flag scan detection (Nmap/
 /// Suricata-style). R1 = the TCP header; classify runs these ONLY on TCP.
 pub static TCP_RULES: &[Rule] = &[
-    Rule { id: 201, name: "tcp-null-scan", prog: &bpf::TCP_NULL_SCAN, severity: SEV_HIGH },
-    Rule { id: 202, name: "tcp-fin-scan", prog: &bpf::TCP_FIN_SCAN, severity: SEV_MED },
-    Rule { id: 203, name: "tcp-xmas-scan", prog: &bpf::TCP_XMAS_SCAN, severity: SEV_HIGH },
-    Rule { id: 204, name: "tcp-syn-fin", prog: &bpf::TCP_SYNFIN, severity: SEV_HIGH },
+    Rule { id: 201, name: "tcp-null-scan", prog: &bpf::TCP_NULL_SCAN, severity: SEV_HIGH, class: FindingClass::ScanShape },
+    Rule { id: 202, name: "tcp-fin-scan", prog: &bpf::TCP_FIN_SCAN, severity: SEV_MED, class: FindingClass::ScanShape },
+    Rule { id: 203, name: "tcp-xmas-scan", prog: &bpf::TCP_XMAS_SCAN, severity: SEV_HIGH, class: FindingClass::ScanShape },
+    Rule { id: 204, name: "tcp-syn-fin", prog: &bpf::TCP_SYNFIN, severity: SEV_HIGH, class: FindingClass::ScanShape },
 ];
 
 /// The signed FLOW corpus — STATEFUL rules on the full L2 frame (R1 = frame),
 /// keyed per-source via the rate-limiter CALL helper. Runs on every frame; each
 /// rule self-parses (IPv4/TCP/…) and PASSes non-matching traffic.
 pub static FLOW_RULES: &[Rule] = &[
-    Rule { id: 301, name: "syn-flood-per-src", prog: &bpf::TCP_SYN_FLOOD_SRC, severity: SEV_HIGH },
-    Rule { id: 302, name: "ip-blocklist", prog: &bpf::IP_BLOCKLIST, severity: SEV_HIGH },
+    // Fires only when the per-source SYN RATE wall is crossed this window → a bounded,
+    // self-reverting drop keyed on rate reality (ADR 0023 D2/D3), never identity.
+    Rule { id: 301, name: "syn-flood-per-src", prog: &bpf::TCP_SYN_FLOOD_SRC, severity: SEV_HIGH, class: FindingClass::FloodRate },
+    // DET-SEP / matrix row L11: a single threat-feed IOC hit must never drop a
+    // customer; observe (corroboration → higher verdict is the M2 follow-on).
+    Rule { id: 302, name: "ip-blocklist", prog: &bpf::IP_BLOCKLIST, severity: SEV_HIGH, class: FindingClass::IdentityReputation },
 ];
 
 const MAX_RULES: usize = 16;
@@ -132,11 +142,28 @@ pub fn init() -> (usize, usize) {
     (v4 + v2 + vt + vf, j4 + j2 + jt + jf)
 }
 
-/// Run a rule set against a byte view `pkt` (R1 = pkt start). Returns the packet
-/// verdict — `packet::DROP` on the first rule that fires, else `packet::PASS`.
-/// Uses the JIT when `pkt` is long enough for the rule's proven `min_len`, else
-/// the bounds-checked interpreter; a DROP scores a severity-weighted QSecBit hit.
-fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8], src: u32) -> u16 {
+/// DET-SEP — run a rule set against a byte view `pkt` (R1 = pkt start) and return
+/// the TRI-STATE verdict. A matching rule is an ALERT: its `FindingClass` is fed to
+/// `decide_fn` (`verdict::decide` or `decide_l2`), whose default is `Observe`
+/// (PASS). `None` = no rule fired (clean). Uses the JIT when `pkt` is long enough
+/// for the rule's proven `min_len`, else the bounds-checked interpreter.
+///
+/// A DROP-verdict is authoritative and short-circuits; an OBSERVE-verdict is
+/// recorded but scanning CONTINUES (a later rule may be a genuine structural drop —
+/// e.g. a blocklisted source whose frame is ALSO malformed must still FrameDrop).
+/// Only a drop-verdict scores a QSecBit hit; every fire (observe or drop) is
+/// exported to the SOAR ring with its REAL wire verdict, so an observed threat is
+/// still reported to the SIEM without touching the wire.
+fn run_set_verdict(
+    rules: &[Rule],
+    state: *mut RState,
+    n: usize,
+    pkt: &[u8],
+    src: u32,
+    decide_fn: fn(FindingClass, DecideCtx) -> Verdict,
+) -> Option<Verdict> {
+    let ctx = DecideCtx::for_src(src);
+    let mut observed: Option<Verdict> = None;
     for i in 0..n {
         let st = rstate(state, i);
         if !st.verified {
@@ -150,46 +177,78 @@ fn run_set(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8], src: u32) -
             bpf::run(rules[i].prog, pkt.as_ptr(), pkt.len())
         };
         if v == bpf::DROP {
-            telemetry::emit_rule_hit(rules[i].severity);
-            // SOAR: async, non-blocking event export ("the OS is the sensor" can
-            // report). The header only — never the payload.
-            crate::events::push_hit(rules[i].id, rules[i].severity as u8, crate::packet::DROP as u8, src);
-            return crate::packet::DROP;
+            // The rule MATCHED — an alert, not a wire action. decide() graduates it.
+            let verdict = decide_fn(rules[i].class, ctx);
+            let wire = verdict.to_wire();
+            // SOAR: async, non-blocking export ("the OS is the sensor"). Header only —
+            // never the payload — carrying the ACTUAL wire verdict (PASS for observe).
+            crate::events::push_hit(rules[i].id, rules[i].severity as u8, wire as u8, src);
+            if wire == crate::packet::DROP {
+                // A scored, ENFORCED threat signal — QSecBit reflects wire drops only.
+                telemetry::emit_rule_hit(rules[i].severity);
+                return Some(verdict);
+            }
+            // Observed (observe-by-default): keep scanning for a genuine drop.
+            if observed.is_none() {
+                observed = Some(verdict);
+            }
         } else if v != bpf::PASS {
             // DET-9: v == INVALID (VM fault: OOB / step-limit / unknown op on a
-            // malformed frame). Fail CLOSED (drop the packet) but do NOT attribute it
-            // to this signed rule firing — that inflated QSecBit and mislabelled a
-            // parse fault as a detection. Emit a distinct Fault event instead.
+            // malformed frame). Fail CLOSED as a STRUCTURAL FrameDrop, but do NOT
+            // attribute it to a signed rule firing (that inflated QSecBit and
+            // mislabelled a parse fault as a detection). Emit a distinct Fault event.
             telemetry::emit(telemetry::Event::Fault);
-            return crate::packet::DROP;
+            return Some(Verdict::FrameDrop);
         }
     }
-    crate::packet::PASS
+    observed
 }
 
-/// Run the L4-header rule set against `l4` (R1 = L4 header). `src` = IPv4 source for
-/// SIEM attribution (DET-11).
+// ---- Tri-state verdict entry points (for the enforcement-separation matrix) ----
+
+/// L4-header tier verdict. `src` = host-order IPv4 source (DET-11 attribution + the
+/// `Allowlisted` floor). `None` = clean.
+pub fn verdict_l4(l4: &[u8], src: u32) -> Option<Verdict> {
+    run_set_verdict(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4, src, verdict::decide)
+}
+
+/// L2 frame-tier verdict (`napse-l2guard` parity: malformed-ARP / ARP-spoof).
+pub fn verdict_l2(frame: &[u8], src: u32) -> Option<Verdict> {
+    run_set_verdict(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame, src, verdict::decide_l2)
+}
+
+/// TCP-flag scan-tier verdict (NULL/FIN/Xmas/SYN-FIN). classify runs this ONLY on TCP.
+pub fn verdict_tcp(tcp: &[u8], src: u32) -> Option<Verdict> {
+    run_set_verdict(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp, src, verdict::decide)
+}
+
+/// Stateful flow-tier verdict (per-source SYN-flood rate-limit, blocklist).
+pub fn verdict_flow(frame: &[u8], src: u32) -> Option<Verdict> {
+    run_set_verdict(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src, verdict::decide)
+}
+
+// ---- On-wire (u16) wrappers — the datapath (`packet::classify`, `netq`) consumes
+// these; each derives its wire int from the tri-state verdict above. `None`/observe
+// → PASS; only a drop-verdict → DROP. ----
+
+/// Run the L4-header rule set against `l4` (R1 = L4 header). Wire verdict.
 pub fn run_l4(l4: &[u8], src: u32) -> u16 {
-    run_set(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4, src)
+    verdict_l4(l4, src).map_or(crate::packet::PASS, Verdict::to_wire)
 }
 
-/// Run the L2 rule set against the raw `frame` (R1 = L2 start) — the
-/// `napse-l2guard` parity tier (malformed-ARP / ARP-spoof). Runs on every frame.
+/// Run the L2 rule set against the raw `frame` (R1 = L2 start). Wire verdict.
 pub fn run_l2(frame: &[u8], src: u32) -> u16 {
-    run_set(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame, src)
+    verdict_l2(frame, src).map_or(crate::packet::PASS, Verdict::to_wire)
 }
 
-/// Run the TCP-flag scan tier against the TCP header `tcp` (R1 = TCP header).
-/// classify runs this ONLY when the L4 protocol is TCP.
+/// Run the TCP-flag scan tier against the TCP header `tcp` (R1 = TCP header). Wire verdict.
 pub fn run_tcp(tcp: &[u8], src: u32) -> u16 {
-    run_set(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp, src)
+    verdict_tcp(tcp, src).map_or(crate::packet::PASS, Verdict::to_wire)
 }
 
-/// Run the STATEFUL flow tier against the raw `frame` (R1 = L2 start) — per-source
-/// SYN-flood rate-limit etc. Runs on every frame; each rule self-parses and
-/// PASSes non-matching traffic.
+/// Run the STATEFUL flow tier against the raw `frame` (R1 = L2 start). Wire verdict.
 pub fn run_flow(frame: &[u8], src: u32) -> u16 {
-    run_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src)
+    verdict_flow(frame, src).map_or(crate::packet::PASS, Verdict::to_wire)
 }
 
 /// DET-6 — a view of one VERIFIED + JIT-compiled live rule, for the boot-time
