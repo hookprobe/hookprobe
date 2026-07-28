@@ -244,8 +244,10 @@ OPERATOR DECISION or a METAL bring-up loop (agreed: not built blind).
 - **PH4 — production signing key custody.** The signing PIPELINE is realized: `mkimage-hboot.sh`
   hybrid-signs (ed25519 + SLH-DSA) and `builder/make-cm5-heqk-image.sh` invokes it. It currently
   uses the DEV signer at `~/heqk-sign`. **Decision needed:** production key custody — HSM vs
-  offline key ceremony vs KMS — and mapping hookprobe-os's ML-DSA-65+Ed25519 release key to
-  heqk `hboot`'s boot key (ADR 0043 D4 "the two trust chains merge"). One decision from done.
+  offline key ceremony vs KMS — and how the hookprobe-os module-signing key (ML-DSA-65+Ed25519)
+  and heqk `hboot`'s boot key (Ed25519 + SLH-DSA-SHA2-128s, FIPS 205 — a **distinct** key, different
+  algorithm family) are **co-rooted** under one governed custody process (NOT one shared key; see the
+  ADR 0002 heqk-coupling note + `docs/design/heqk-signing-identity.md`). One decision from done.
 - **Version control of the unified tree.** DONE — hookprobe-os is now `git init`'d (commit f149fef);
   heqk's 316-commit history is preserved at `~/heqk-git-history-backup-20260725.tar.gz`.
 
