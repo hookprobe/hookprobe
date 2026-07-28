@@ -182,3 +182,52 @@ last 4 (oldest evicted) and never writes outside the region; (d) a real `events:
 + a QSecBit history record round-trip field-for-field across the reboot. **Honesty:**
 QEMU/virtio-blk-proven; the real eMMC write + real power-fail atomicity are **metal
 (Gate R)**, and record confidentiality waits on **M3.3** (this phase is integrity only).
+
+## M3.3 — the sealed data-volume (encryption at rest)
+
+M3.2 left the record PAYLOAD in the clear (integrity-only digest). **M3.3 encrypts
+it at rest** (ADR 0007 confidentiality) by reusing the existing `seal.rs` HQKSEAL1
+Encrypt-then-MAC — no new crypto.
+
+**The Volume Encryption Key (VEK).** A 32-byte key is generated at first mount
+(best-effort entropy = `cntpct_el0 || SRK` through SHA-256 — QEMU has no TRNG, so a
+real RNG/OTP seed is **metal (Gate R)**, the same caveat `seal.rs`'s nonce carries)
+and **sealed** under the boot-measurement SRK + policy into the keystore at
+**LBA 2024** (distinct from the P15-persist cookie at LBA 2016; both inside the
+always-registered `Keystore` window 2016..2047). It **never lands cleartext on the
+DataVolume**; every subsequent mount **loads + unseals** it. A wrong measurement
+cannot even load the VEK (DICE), and the guarded write lands only in the keystore.
+
+**Per-record sealing.** `append_sealed` seals the plaintext with the VEK (playing
+the role of the seal SRK) + the volume policy, and writes the resulting blob
+(128-B header + ciphertext + HMAC tag) as the record's opaque payload through the
+normal guarded `append`. The **framing stays cleartext** (`magic·seq·len·rtype·
+digest`) so the key-free ring scan + torn-tail recovery (`mount`) still work with no
+key; only the payload bytes are ciphertext. Max sealed plaintext = 480 − 128 =
+**352 B/record**.
+
+**Two integrity layers, distinct jobs.** The keyless framing digest is **cheap,
+key-free torn-write detection** — an attacker CAN forge it, so it is not an
+authenticity claim. The seal's HMAC tag over the ciphertext is the **real, keyed
+tamper check**: `mount_sealed` / `for_each_sealed` verify it and **drop any record
+that fails, fail-closed, revealing no plaintext** — so a ciphertext edit that
+recomputes the forgeable digest (which `mount` would accept) is still rejected.
+
+The `[P15-sealfs]` gate proves the three "sealed" properties on virtio-blk:
+- **Confidentiality** — a RAW block read of a slot holding a known Event is
+  ciphertext: the plaintext markers (`ts` 0xDEADBEEF…, the src IP, the 16-B Event
+  image) are **absent** from the on-disk sector, while the HQKSEAL1 magic is present.
+- **Integrity** — a ciphertext byte flipped on disk **with the keyless framing
+  digest recomputed** is MAC-rejected at `mount_sealed` (proving the seal MAC, not
+  the digest, is the guard), while the intact records survive.
+- **Cross-restart** — the sealed VEK persists in the keystore, so boot 2 loads it
+  (`created=false`) and decrypts boot 1's evidence Event + QSecBit history
+  field-for-field.
+
+**Honesty:** QEMU/virtio-blk-proven; the real eMMC write on `brcm,bcm2712-sdhci`,
+hardware-grade VEK entropy, and the **OTP-bound SRK / measurement binding (audit V3)**
+remain **metal (Gate R)** — until V3 closes, the SRK is synthetic and the docs do not
+claim measurement enforcement. Cross-boot CTR-nonce uniqueness is inherited from
+`seal.rs` (per-boot unique today; a persistent monotonic seed is the deferred HBoot
+SealHandoff) — the M3.3 test only *reads* on boot 2, so no same-key/same-nonce reuse
+occurs across the two boots.

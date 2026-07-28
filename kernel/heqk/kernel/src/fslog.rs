@@ -33,6 +33,7 @@
 //! (the next append reuses the torn slot). Integrity here is a keyless DIGEST
 //! (CRC-grade); per-record/volume ENCRYPTION is M3.3 (seal.rs), not this phase.
 
+use crate::seal; // M3.3 — HQKSEAL1 Encrypt-then-MAC for record confidentiality
 use crate::store::{SealedStore, StoreErr};
 #[cfg(feature = "p15-write")]
 use crate::store::RegionKind; // only the guarded write path names the region kind
@@ -45,6 +46,42 @@ pub const SB_MAGIC: &[u8; 8] = b"HQKFSLOG";
 pub const SB_VERSION: u32 = 1;
 pub const REC_HDR: usize = 32;
 pub const MAX_PAYLOAD: usize = SEC - REC_HDR; // 480
+
+// --- M3.3: sealed data-volume (encryption at rest) ---------------------------
+//
+// The record PAYLOAD is sealed with `seal.rs` HQKSEAL1 (Encrypt-then-MAC) before
+// it lands in the slot, so a raw block read of the DataVolume yields ciphertext,
+// not the evidence Event / QSecBit fields. The framing (magic/seq/len/rtype/
+// digest) stays cleartext so the key-free ring scan + torn-tail recovery
+// (`mount`) still work with no key. Two integrity layers, distinct jobs:
+//   * the keyless framing digest — cheap, key-free TORN-write detection at mount
+//     (an attacker CAN forge it; it is not an authenticity claim);
+//   * the seal's HMAC tag over the ciphertext — the real, keyed TAMPER check.
+//     `mount_sealed` verifies it and DROPS any record that fails (fail-closed,
+//     never revealing plaintext), so a forged-digest ciphertext edit is caught.
+//
+// The Volume Encryption Key (VEK) plays the role of seal.rs's SRK for per-record
+// sealing; it is itself SEALED (under the boot-measurement SRK + policy) into the
+// keystore, so it never lands cleartext on the DataVolume and a wrong measurement
+// cannot even load it.
+
+/// Largest plaintext a sealed record holds: the 480-B slot payload minus the
+/// 128-B HQKSEAL1 header = 352 B (the seal's own ciphertext == plaintext length).
+pub const MAX_SEALED_PAYLOAD: usize = MAX_PAYLOAD - seal::SEAL_HDR_LEN; // 352
+
+/// Keystore LBA holding the SEALED Volume Encryption Key blob. Distinct from the
+/// P15-persist cookie at `RESERVED_LBA_LO` (2016); both live inside the always-
+/// registered `Keystore` region [2016, 2048), so the guarded write is admitted.
+pub const VEK_LBA: u64 = 2024;
+
+/// The per-volume sealing context threaded through the sealed read/write paths.
+/// `vek` is the 32-B Volume Encryption Key (used AS the seal SRK per record);
+/// `policy` binds each record to the device measurement — defence in depth, since
+/// the VEK is already sealed under the same policy in the keystore.
+pub struct SealCtx<'a> {
+    pub vek: &'a [u8; 32],
+    pub policy: &'a seal::Policy,
+}
 
 // Record-type tags (evidence graph + QSecBit history + a test record).
 pub const RT_EVIDENCE: u16 = 1;
@@ -183,11 +220,16 @@ impl LogStore {
         self.lo + 1 + (seq % self.nslots)
     }
 
-    /// Mount an already-formatted log: read the superblock, then SCAN every slot,
-    /// keep valid records, and derive the head (next seq = max valid seq + 1).
-    /// Read-only — always available (no `p15-write`). This IS the crash-recovery
-    /// path: torn slots fail their digest and are silently excluded.
-    pub fn mount<D: BlockDev>(store: &SealedStore<D>, lo: u64, hi: u64) -> Result<LogStore, FsErr> {
+    /// Shared mount scan for `mount` (key-free) and `mount_sealed` (keyed). Read
+    /// the superblock, scan every slot, and keep the records that self-validate by
+    /// framing digest AND — when `ctx` is `Some` — also authenticate under the
+    /// volume seal. Derive the head (next seq = max valid seq + 1). Read-only.
+    fn scan<D: BlockDev>(
+        store: &SealedStore<D>,
+        lo: u64,
+        hi: u64,
+        ctx: Option<&SealCtx>,
+    ) -> Result<LogStore, FsErr> {
         if hi <= lo + 1 {
             return Err(FsErr::RegionTooSmall);
         }
@@ -205,7 +247,26 @@ impl LogStore {
         for i in 0..nslots {
             let mut sec = [0u8; SEC];
             store.read_sector(lo + 1 + i, &mut sec)?;
-            if let Some((seq, _rt, _len)) = parse_record(&sec) {
+            if let Some((seq, _rt, len)) = parse_record(&sec) {
+                if let Some(c) = ctx {
+                    // M3.3 fail-closed authentication: a record whose ciphertext/tag
+                    // does not verify under the volume seal is DROPPED exactly like a
+                    // torn one — no plaintext is ever recovered from it. This catches
+                    // a ciphertext edit that recomputes the (keyless, forgeable)
+                    // framing digest, which the digest alone would let pass.
+                    let mut scratch = [0u8; MAX_SEALED_PAYLOAD];
+                    if len < seal::SEAL_HDR_LEN
+                        || seal::unseal(
+                            c.vek,
+                            c.policy,
+                            &sec[REC_HDR..REC_HDR + len],
+                            &mut scratch,
+                        )
+                        .is_err()
+                    {
+                        continue; // tampered/forged — exclude, reveal nothing
+                    }
+                }
                 count += 1;
                 max_seq = Some(max_seq.map_or(seq, |m| if seq > m { seq } else { m }));
             }
@@ -218,6 +279,30 @@ impl LogStore {
             next_seq,
             count,
         })
+    }
+
+    /// Mount an already-formatted log: read the superblock, then SCAN every slot,
+    /// keep valid records, and derive the head (next seq = max valid seq + 1).
+    /// Read-only — always available (no `p15-write`). This IS the crash-recovery
+    /// path: torn slots fail their digest and are silently excluded. Key-free, so
+    /// it works on an encrypted volume too (the framing is cleartext); use
+    /// `mount_sealed` when the volume key is available to ALSO reject tampered
+    /// ciphertext at mount.
+    pub fn mount<D: BlockDev>(store: &SealedStore<D>, lo: u64, hi: u64) -> Result<LogStore, FsErr> {
+        Self::scan(store, lo, hi, None)
+    }
+
+    /// M3.3 — mount an ENCRYPTED log: like `mount`, but additionally MAC-verifies
+    /// every record's sealed payload under `ctx`. A record whose seal does not
+    /// authenticate (tampered ciphertext/tag, or the wrong volume key) is dropped
+    /// fail-closed — never counted, never decrypted. Read-only.
+    pub fn mount_sealed<D: BlockDev>(
+        store: &SealedStore<D>,
+        ctx: &SealCtx,
+        lo: u64,
+        hi: u64,
+    ) -> Result<LogStore, FsErr> {
+        Self::scan(store, lo, hi, Some(ctx))
     }
 
     /// Iterate the live records in logical (oldest-first) order, calling `cb(seq,
@@ -242,6 +327,70 @@ impl LogStore {
             }
         }
         Ok(())
+    }
+
+    /// M3.3 — iterate live records like `for_each`, but UNSEAL each payload under
+    /// `ctx` before handing the PLAINTEXT to `cb`. A record that fails to
+    /// authenticate (tamper/wrong key) is SKIPPED fail-closed — its plaintext is
+    /// never produced. Read-only. Use this (not `for_each`) on an encrypted volume.
+    pub fn for_each_sealed<D, F>(
+        &self,
+        store: &SealedStore<D>,
+        ctx: &SealCtx,
+        mut cb: F,
+    ) -> Result<(), FsErr>
+    where
+        D: BlockDev,
+        F: FnMut(u64, u16, &[u8]),
+    {
+        if self.count == 0 {
+            return Ok(());
+        }
+        let start = self.next_seq - self.count;
+        for seq in start..self.next_seq {
+            let mut sec = [0u8; SEC];
+            store.read_sector(self.slot_lba(seq), &mut sec)?;
+            if let Some((s, rt, len)) = parse_record(&sec) {
+                if s == seq && len >= seal::SEAL_HDR_LEN {
+                    let mut pt = [0u8; MAX_SEALED_PAYLOAD];
+                    if let Ok(n) =
+                        seal::unseal(ctx.vek, ctx.policy, &sec[REC_HDR..REC_HDR + len], &mut pt)
+                    {
+                        cb(seq, rt, &pt[..n]); // authenticated plaintext only
+                    }
+                    // unseal failure => skip (fail-closed; no plaintext leaked)
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// --- M3.3: the sealed Volume Encryption Key in the keystore -------------------
+
+/// Load the VEK: read the sealed blob at `VEK_LBA` and unseal it under (`srk`,
+/// `policy`). Returns the 32-byte key, or `None` if absent / measurement-mismatch
+/// / tampered (fail-closed — a bad or missing VEK yields no key, never a panic).
+pub fn load_vek<D: BlockDev>(
+    store: &SealedStore<D>,
+    srk: &[u8; 32],
+    policy: &seal::Policy,
+) -> Option<[u8; 32]> {
+    let mut sec = [0u8; SEC];
+    store.read_sector(VEK_LBA, &mut sec).ok()?;
+    if &sec[..8] != seal::SEAL_MAGIC {
+        return None; // no VEK blob written yet
+    }
+    // ct_len lives at HQKSEAL1 header offset 68 (little-endian).
+    let ct_len = get_u32(&sec, 68) as usize;
+    let total = seal::SEAL_HDR_LEN + ct_len;
+    if total > SEC {
+        return None;
+    }
+    let mut vek = [0u8; 32];
+    match seal::unseal(srk, policy, &sec[..total], &mut vek) {
+        Ok(32) => Some(vek),
+        _ => None, // wrong length / tag / policy — fail closed
     }
 }
 
@@ -339,4 +488,79 @@ impl LogStore {
         }
         Ok(seq)
     }
+
+    /// M3.3 — append an ENCRYPTED record: seal `plaintext` with the volume key
+    /// (`ctx`) via HQKSEAL1, then write the resulting blob (header + ciphertext +
+    /// MAC) as the record's opaque payload through the normal guarded `append`.
+    /// The framing (magic/seq/len/rtype/digest) stays cleartext; the payload bytes
+    /// are ciphertext, so a raw block read reveals no Event/QSecBit fields.
+    #[cfg(feature = "p15-write")]
+    pub fn append_sealed<D: BlockDev>(
+        &mut self,
+        store: &mut SealedStore<D>,
+        ctx: &SealCtx,
+        rtype: u16,
+        plaintext: &[u8],
+    ) -> Result<u64, FsErr> {
+        if plaintext.len() > MAX_SEALED_PAYLOAD {
+            return Err(FsErr::TooBig);
+        }
+        let mut blob = seal::SealBlob::new();
+        // Encrypt-then-MAC under the VEK (as SRK) + volume policy.
+        if seal::seal(ctx.vek, ctx.policy, plaintext, &mut blob).is_err() {
+            return Err(FsErr::TooBig); // only TooLong is reachable (guarded above)
+        }
+        // Reuse the framing/digest/guarded-write path — the blob IS the payload.
+        self.append(store, rtype, blob.as_slice())
+    }
+}
+
+/// M3.3 — generate a fresh Volume Encryption Key and PERSIST it sealed.
+///
+/// Best-effort entropy = `cntpct_el0 || SRK` through SHA-256. HONESTY: QEMU has no
+/// TRNG, so this is adequate to prove the mechanism but is NOT hardware-grade
+/// entropy; a real RNG/OTP seed is metal (Gate R), the same caveat seal.rs already
+/// carries for its nonce. The key is SEALED under (`srk`,`policy`) and written to
+/// `VEK_LBA` through the guard (Keystore region) — it never lands cleartext on disk.
+#[cfg(feature = "p15-write")]
+pub fn create_vek<D: BlockDev>(
+    store: &mut SealedStore<D>,
+    srk: &[u8; 32],
+    policy: &seal::Policy,
+) -> Result<[u8; 32], FsErr> {
+    let t: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack));
+    }
+    let mut h = Hasher::new();
+    h.update(b"HEQK-M3.3-VEK-v1");
+    h.update(srk); // fold the 256-bit SRK in so weak cntpct entropy is not the floor
+    h.update(&t.to_le_bytes());
+    let vek = h.finish();
+
+    let mut blob = seal::SealBlob::new();
+    seal::seal(srk, policy, &vek, &mut blob).map_err(|_| FsErr::Io)?;
+    let mut sec = [0u8; SEC];
+    sec[..blob.len].copy_from_slice(blob.as_slice());
+    match store.store_sector(VEK_LBA, &sec)? {
+        RegionKind::Keystore => Ok(vek),
+        _ => Err(FsErr::OutsideRegion), // VEK must land in the keystore window
+    }
+}
+
+/// M3.3 — the normal volume-open path for the key: load the sealed VEK, or create
+/// + persist a fresh one on first mount. Returns `(vek, created)` — `created` is
+/// true only on the very first open of a volume (proves cross-restart survival:
+/// a second boot must return `false`).
+#[cfg(feature = "p15-write")]
+pub fn load_or_create_vek<D: BlockDev>(
+    store: &mut SealedStore<D>,
+    srk: &[u8; 32],
+    policy: &seal::Policy,
+) -> Result<([u8; 32], bool), FsErr> {
+    if let Some(v) = load_vek(store, srk, policy) {
+        return Ok((v, false));
+    }
+    let v = create_vek(store, srk, policy)?;
+    Ok((v, true))
 }
