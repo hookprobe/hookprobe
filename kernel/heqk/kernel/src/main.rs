@@ -2139,6 +2139,10 @@ pub extern "C" fn kmain() -> ! {
     // --- M2.1: L2 structural + flood parity — F6/F7/F8 + mac-flood(port-role) + bcast-storm
     p8_l2struct();
 
+    // --- M2.2: flow-state (conntrack-equivalent) — distinct-dst-port scan → tri-state,
+    // with the legit-busy-source-stays-PASS proof (the whole point of the matrix)
+    p8_flow();
+
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
@@ -3403,6 +3407,153 @@ fn p8_l2struct() -> bool {
         mdns_fired, if c_mdns { "ok" } else { "BUG" });
 
     kprint!(" [P8-l2struct] {} — F6/F7/F8 -> FrameDrop; mac-flood Access->RateLimit but Uplink/AP->Observe (legit AP clients NEVER dropped); broadcast-storm fires but mDNS/SSDP/LLMNR exempt (ADR 0023 D12/D13, all via decide_l2)\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// M2.2 — FLOW-STATE parity selftest (the conntrack-equivalent). Proves heqk's
+/// per-source distinct-dst-port scan counter reaches the CORRECT tri-state via the SAME
+/// `decide()` seam: an unconfirmed sweep → bounded `RateLimit` (wire DROP), a confirmed
+/// sweep (>= CONFIRM ports, zero establishment) → durable `Quarantine` (wire DROP). The
+/// LOAD-BEARING assertions are the legit-safety rows (the whole point of the separation
+/// matrix): a busy source with 150 ESTABLISHED flows, and a 100/s new-conn burst, must
+/// reach OBSERVE/PASS and NEVER a RateLimit/Quarantine — establishment holds every
+/// escalation off. Also proves an established handshake is never scan-confirmed, and maps
+/// the A7/L9 flow-table-saturation signal. QEMU-provable (pure verdict logic over
+/// synthetic frames); uses ISOLATED TEST-NET src IPs so the port-0 datapath is never
+/// poisoned (PHprod/PH6-net stay green).
+#[cfg(not(feature = "cm5"))]
+fn p8_flow() -> bool {
+    use ratelimit::{
+        scan_confirmed, scan_distinct_ports, table_saturated, DEFAULT_NEW_CONN_PPS,
+        SATURATION_SHED_PCT, SCAN_PORTS_CONFIRM, SCAN_PORTS_RATELIMIT,
+    };
+    kprint!("\n [P8] flow-state (M2.2) — distinct-dst-port scan → tri-state via decide(); legit busy source stays PASS\n");
+    let mut ok = true;
+
+    // A normalized eth/IPv4/TCP frame (54B) with a settable src, dst port, and flags.
+    // Mirrors the live datapath: `flow_scan_verdict` self-parses to the IP source.
+    fn tcp_frame(src: [u8; 4], dst_port: u16, flags: u8) -> [u8; 54] {
+        let mut f = [0u8; 54];
+        f[12] = 0x08;
+        f[13] = 0x00; // EtherType IPv4
+        f[14] = 0x45; // IPv4, IHL=5
+        f[17] = 40; // IP total length = 20 (IP) + 20 (TCP)
+        f[23] = 6; // proto TCP
+        f[26..30].copy_from_slice(&src); // IP source
+        f[36] = (dst_port >> 8) as u8;
+        f[37] = (dst_port & 0xff) as u8; // TCP dst port
+        f[46] = 0x50; // TCP data offset = 5 words
+        f[47] = flags; // TCP flags
+        f
+    }
+    const SYN: u8 = 0x02;
+    const ACK: u8 = 0x10;
+    #[inline]
+    fn ip(src: [u8; 4]) -> u32 {
+        crate::net::eth_ipv4_src(&tcp_frame(src, 0, SYN))
+    }
+    #[inline]
+    fn scan_step(src: [u8; 4], dst_port: u16, flags: u8) -> Option<verdict::Verdict> {
+        let f = tcp_frame(src, dst_port, flags);
+        rules::flow_scan_verdict(&f, crate::net::eth_ipv4_src(&f))
+    }
+
+    // === ATTACKER A4: a 60-distinct-port SYN scan, UNCONFIRMED → RateLimit (wire DROP),
+    //     never Quarantine (bounded, self-reverting; anti-spoof — durable block withheld). ===
+    let atk: [u8; 4] = [198, 18, 0, 10]; // TEST-NET-2, used nowhere else
+    let mut saw_ratelimit_drop = false;
+    let mut saw_quarantine_early = false;
+    for port in 1..=60u16 {
+        if let Some(v) = scan_step(atk, port, SYN) {
+            if matches!(v, verdict::Verdict::RateLimit { over_limit: true }) && v.is_drop() {
+                saw_ratelimit_drop = true;
+            }
+            if matches!(v, verdict::Verdict::Quarantine) {
+                saw_quarantine_early = true;
+            }
+        }
+    }
+    let c_a4 = saw_ratelimit_drop && !saw_quarantine_early && !scan_confirmed(ip(atk) as u64);
+    ok &= c_a4;
+    kprint!("   A4 60-port SYN scan UNCONFIRMED (distinct={}) -> RateLimit-DROP seen={}, Quarantine seen={} (must be RateLimit, never Quarantine) [{}]\n",
+        scan_distinct_ports(ip(atk) as u64), saw_ratelimit_drop, saw_quarantine_early, if c_a4 { "ok" } else { "BUG" });
+
+    // === ATTACKER A5: the SAME source keeps scanning past the CONFIRM bar (still zero
+    //     establishment) → CONFIRMED → durable Quarantine (wire DROP). ===
+    let mut saw_quarantine = false;
+    for port in 61..=130u16 {
+        if let Some(verdict::Verdict::Quarantine) = scan_step(atk, port, SYN) {
+            saw_quarantine = true;
+        }
+    }
+    let c_a5 = saw_quarantine && scan_confirmed(ip(atk) as u64);
+    ok &= c_a5;
+    kprint!("   A5 same source past CONFIRM bar ({} ports, distinct={}) -> Quarantine-DROP seen={}, confirmed={} [{}]\n",
+        SCAN_PORTS_CONFIRM, scan_distinct_ports(ip(atk) as u64), saw_quarantine, scan_confirmed(ip(atk) as u64), if c_a5 { "ok" } else { "BUG" });
+
+    // === LEGIT (keystone): a busy source with 150 ESTABLISHED flows to 150 DISTINCT ports
+    //     — each flow SYN then ACK (established) — must NEVER fire a scan verdict, however
+    //     many distinct ports its SYNs touch. Establishment holds every escalation off. ===
+    let nas: [u8; 4] = [198, 18, 0, 50];
+    let mut nas_fired = false; // ANY Some(verdict) here is a false-positive on a legit source
+    for port in 1..=150u16 {
+        if scan_step(nas, port, SYN).is_some() {
+            nas_fired = true;
+        }
+        if scan_step(nas, port, ACK).is_some() {
+            nas_fired = true;
+        }
+    }
+    let c_nas = !nas_fired
+        && !scan_confirmed(ip(nas) as u64)
+        && !ratelimit::scan_over_ratelimit(ip(nas) as u64);
+    ok &= c_nas;
+    kprint!("   LEGIT NAS 150 ESTABLISHED flows/150 distinct ports (est={}, distinct-syn={}) -> scan verdict fired={} (MUST be false — establishment ⇒ not a scan) [{}]\n",
+        ratelimit::flow_established_count(ip(nas) as u64), scan_distinct_ports(ip(nas) as u64), nas_fired, if c_nas { "ok" } else { "BUG" });
+
+    // === LEGIT: a ~100 new-conn/s burst (heavy web load) to a FEW dst ports — keys on
+    //     distinct PORTS not conn COUNT, and sits under the blanket cap. Never fires. ===
+    let burst: [u8; 4] = [198, 18, 0, 60];
+    let mut burst_fired = false;
+    for _ in 0..100u16 {
+        // 100 connections, all to :443 (a web page load): 1 distinct dst port.
+        if scan_step(burst, 443, SYN).is_some() {
+            burst_fired = true;
+        }
+        if scan_step(burst, 443, ACK).is_some() {
+            burst_fired = true;
+        }
+    }
+    let legit_pps: u64 = core::hint::black_box(100);
+    let c_burst = !burst_fired && legit_pps < DEFAULT_NEW_CONN_PPS;
+    ok &= c_burst;
+    kprint!("   LEGIT 100/s web-load burst (1 distinct port) -> fired={}; {}/s < blanket cap {}/s [{}]\n",
+        burst_fired, legit_pps, DEFAULT_NEW_CONN_PPS, if c_burst { "ok" } else { "BUG" });
+
+    // === LEGIT: an ESTABLISHED handshake flow (SYN then ACK) is NEVER scan-confirmed. ===
+    let est: [u8; 4] = [198, 18, 0, 70];
+    let _ = scan_step(est, 22, SYN);
+    let _ = scan_step(est, 22, ACK);
+    let c_est = !scan_confirmed(ip(est) as u64) && !ratelimit::scan_over_ratelimit(ip(est) as u64);
+    ok &= c_est;
+    kprint!("   LEGIT established handshake (est={}) -> scan_confirmed={} (an established flow is definitionally not a scan) [{}]\n",
+        ratelimit::flow_established_count(ip(est) as u64), scan_confirmed(ip(est) as u64), if c_est { "ok" } else { "BUG" });
+
+    // === A7 / L9: the flow-table SATURATION signal (pure verdict map; the self-reverting
+    //     SHED action is M2.3). L9 40% full → no shed; A7 85% full → shed signal. Keyed on
+    //     RESOURCE REALITY (table fill), never identity. ===
+    let l9 = !table_saturated(40_000, 100_000); // 40% — a legit heavy source, no shed
+    let a7 = table_saturated(85_000, 100_000); // 85% — over the wall, shed signal
+    let c_sat = l9 && a7;
+    ok &= c_sat;
+    kprint!("   A7/L9 saturation (wall {}%): 40%-full sheds={} (must be false), 85%-full sheds={} (must be true) [{}]\n",
+        SATURATION_SHED_PCT, !l9, a7, if c_sat { "ok" } else { "BUG" });
+
+    // Sanity: the two bars are ordered so RateLimit precedes Quarantine.
+    ok &= SCAN_PORTS_RATELIMIT <= SCAN_PORTS_CONFIRM;
+
+    kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines — establishment ⇒ not a scan (ADR 0018/0023, conntrack-equivalent)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }

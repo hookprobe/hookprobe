@@ -280,6 +280,16 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     if crate::rules::run_flow(nframe, src) == DROP {
         return (0, DROP);
     }
+    // M2.2 — stateful distinct-dst-port scan tier (rule 1000003). Self-parses TCP; keys
+    // per-source flow-state on the distinct SYN-only dst-port set. A confirmed sweep
+    // (>= CONFIRM ports, zero establishment) → Quarantine (DROP); a moderate one →
+    // bounded RateLimit (DROP); everything a legit source produces (established flows,
+    // few distinct ports) → Observe (PASS). All graduated through decide().
+    if let Some(v) = crate::rules::flow_scan_verdict(nframe, src) {
+        if v.is_drop() {
+            return (0, DROP);
+        }
+    }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
             // Run the signed rule set on a normalized L4 view: R1 = L4 header, so
