@@ -38,6 +38,8 @@ mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
 mod netsvc;
+#[cfg(feature = "netsvc")]
+mod netcfg;
 mod notify;
 mod packet;
 mod ratelimit;
@@ -2189,6 +2191,19 @@ pub extern "C" fn kmain() -> ! {
     {
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
+            if ok { "PASS" } else { "FAIL" });
+    }
+
+    // --- M4.1 (P18-netcfg): network CONFIG clients over smoltcp — DHCP + DNS + SNTP,
+    // every frame rule-gated (PH6net property), with the SACRED air-gap invariant
+    // proven (no server -> static fallback -> local SOC unaffected, never a boot-block).
+    // Deterministic core gates PASS; a real SLIRP lease + DNS over virtio-net is a
+    // reported bonus (real NIC/DHCP/DNS/NTP timing = metal, Gate R). ---
+    #[cfg(feature = "netsvc")]
+    {
+        kprint!(" [P18-netcfg] M4.1 net config over smoltcp (DHCP/DNS/SNTP), rule-gated:\n");
+        let ok = netcfg::netcfg_selftest();
+        kprint!(" [P18-netcfg] {} — heqk drives smoltcp UDP: dhcpv4 DISCOVER emitted through the egress verdict gate, DNS+SNTP request/parse round-trip, config-gate admits benign & refuses threat, and the air-gap fallback yields a static config WITHOUT blocking boot (standalone stays fully functional, no account); real SLIRP lease+DNS reported above, real NIC/servers/timing = metal (Gate R)\n",
             if ok { "PASS" } else { "FAIL" });
     }
 
