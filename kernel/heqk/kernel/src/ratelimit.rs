@@ -349,7 +349,197 @@ pub fn saturation_pct(count: u64, max: u64) -> u64 {
 
 /// Does the flow-table fill cross the resource-reality shed wall (>= 80%)? Keyed on
 /// RESOURCE REALITY (table fill), never identity — a legit busy source in an un-saturated
-/// table (L9) is never a shed candidate. The self-reverting SHED ACTION itself is M2.3.
+/// table (L9) is never a shed candidate.
 pub fn table_saturated(count: u64, max: u64) -> bool {
     saturation_pct(count, max) >= SATURATION_SHED_PCT
+}
+
+// =====================================================================================
+// M2.3 — RESOURCE-SHED. ADR 0023's FOURTH suspicion-free inline drop: a SELF-REVERTING
+// drop keyed on MEASURED RESOURCE REALITY (rate / table-fill / scheduler pressure),
+// NEVER on identity. This is where the M2.2 saturation SIGNAL becomes a shed ACTION and
+// where a `RateLimit` gets its self-reverting wire meter. Three layers (Linux parity):
+//   L1 — a blanket per-source new-connection-rate cap (self-reverting by the ~1s window)
+//   L2 — a conntrack-saturation top-talker shed (self-reverting as the table drains)
+//   L3 — a heqk-native PSI-equivalent scheduler-pressure shed (top-talker sheds first)
+// EVERY shed routes through `decide()` (FloodRate → RateLimit{over_limit}); the mgmt
+// `Allowlisted` floor short-circuits there, so a mgmt source is NEVER shed however hot.
+// The TRIGGERS below are deliberately IDENTITY-BLIND (they measure only rate/fill/
+// pressure + a source's measured SHARE); the floor is applied at the verdict layer.
+// =====================================================================================
+
+// ---- L1: the blanket per-source new-connection-rate cap ----
+
+/// Per-source new-conn meter slots (direct-mapped, collision-reset like `syn_rate_over`).
+const CR_SLOTS: usize = 256;
+static CR_WIN: [AtomicU64; CR_SLOTS] = [const { AtomicU64::new(0) }; CR_SLOTS];
+static CR_KEY: [AtomicU64; CR_SLOTS] = [const { AtomicU64::new(0) }; CR_SLOTS];
+static CR_COUNT: [AtomicU64; CR_SLOTS] = [const { AtomicU64::new(0) }; CR_SLOTS];
+
+/// L1 core — the windowed per-source new-conn meter with an INJECTED clock (so the
+/// self-revert property is deterministically provable in QEMU without a wall-clock
+/// sleep). Bumps `src`'s counter; returns true iff it now EXCEEDS `cap` within the
+/// window `[start, start+win)`. SELF-REVERTING: crossing a window boundary
+/// (`now - start >= win`) resets the counter to 1, so a source back under `cap` next
+/// window immediately returns false (PASS) — the shed reverts the instant the rate
+/// falls, never a durable block. Keyed on RATE reality; `src == 0` never sheds.
+pub fn conn_rate_over_at(src: u64, cap: u64, now: u64, win: u64) -> bool {
+    if src == 0 {
+        return false;
+    }
+    let i = (src as usize) % CR_SLOTS;
+    let start = CR_WIN[i].load(Ordering::Relaxed);
+    if CR_KEY[i].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
+        CR_KEY[i].store(src, Ordering::Relaxed);
+        CR_WIN[i].store(now, Ordering::Relaxed);
+        CR_COUNT[i].store(1, Ordering::Relaxed);
+        return false; // first conn of a fresh window is always under cap
+    }
+    let c = CR_COUNT[i].fetch_add(1, Ordering::Relaxed) + 1;
+    c > cap
+}
+
+/// L1 live wrapper — the blanket new-conn-rate cap on the real ARM generic-counter clock
+/// (~1 s window). `cap` is `DEFAULT_NEW_CONN_PPS` (400/s) at the call site; a legit heavy
+/// burst (~100/s) sits far under it.
+pub fn conn_rate_over(src: u64, cap: u64) -> bool {
+    conn_rate_over_at(src, cap, cntpct(), cntfrq().max(1))
+}
+
+// ---- L2/L3 shared: the top-talker (highest new-conn/flow-rate source) tracker ----
+
+/// A source below this measured flow/conn count is NEVER treated as a shed-worthy
+/// top-talker, even if it is the current maximum in a saturated table — so a saturated
+/// table full of many SMALL legit sources sheds none of them (only a genuine flood).
+pub const SHED_TOPTALKER_MIN_FLOWS: u64 = 100;
+
+/// The scheduler-pressure shed wall (parity with the Linux PSI `some avg60 >= 40%`).
+pub const PSI_SHED_PCT: u64 = 40;
+
+const CT_WINDOW_SECS: u64 = 10;
+static CT_WIN: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static CT_SRC: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static CT_COUNT: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static TOP_SRC: AtomicU64 = AtomicU64::new(0);
+static TOP_FLOWS: AtomicU64 = AtomicU64::new(0);
+static TOP_WIN: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn ct_touch(src: u64) -> usize {
+    let s = (src as usize) % FLOW_SRCS;
+    let now = cntpct();
+    let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
+    let start = CT_WIN[s].load(Ordering::Relaxed);
+    if CT_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
+        CT_SRC[s].store(src, Ordering::Relaxed);
+        CT_WIN[s].store(now, Ordering::Relaxed);
+        CT_COUNT[s].store(0, Ordering::Relaxed);
+    }
+    s
+}
+
+/// Record one new connection/flow from `src` for the top-talker census. Bumps the
+/// per-source windowed count and, if it becomes the new maximum, promotes `src` to the
+/// current top-talker. The census + top slot are windowed, so the "top" self-reverts as
+/// traffic ages out. `src == 0` (no attribution) is ignored.
+pub fn flow_record(src: u64) {
+    if src == 0 {
+        return;
+    }
+    // Window the global top slot alongside the per-source census.
+    let now = cntpct();
+    let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
+    if now.wrapping_sub(TOP_WIN.load(Ordering::Relaxed)) >= win {
+        TOP_WIN.store(now, Ordering::Relaxed);
+        TOP_SRC.store(0, Ordering::Relaxed);
+        TOP_FLOWS.store(0, Ordering::Relaxed);
+    }
+    let s = ct_touch(src);
+    let c = CT_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1;
+    if c > TOP_FLOWS.load(Ordering::Relaxed) {
+        TOP_FLOWS.store(c, Ordering::Relaxed);
+        TOP_SRC.store(src, Ordering::Relaxed);
+    }
+}
+
+/// The current top-talker source key (0 if none this window).
+pub fn top_talker() -> u64 {
+    TOP_SRC.load(Ordering::Relaxed)
+}
+
+/// The top-talker's measured new-conn/flow count this window.
+pub fn top_talker_flows() -> u64 {
+    TOP_FLOWS.load(Ordering::Relaxed)
+}
+
+/// Is `src` the current measured top-talker (and a real one, above the dominance floor)?
+pub fn is_top_talker(src: u64) -> bool {
+    src != 0 && TOP_SRC.load(Ordering::Relaxed) == src && TOP_FLOWS.load(Ordering::Relaxed) >= SHED_TOPTALKER_MIN_FLOWS
+}
+
+// ---- L2: conntrack-saturation top-talker shed ----
+
+/// L2 — the conntrack-saturation shed TRIGGER for `src` (identity-blind). Fires iff the
+/// flow table is SATURATED (`table_count/table_max >= 80%`) AND `src` is the measured
+/// dominant top-talker. Keyed on FILL REALITY + the source's measured share, never
+/// identity. SELF-REVERTING: as the table drains below the wall, `table_saturated` goes
+/// false and this returns false — the source PASSes again with no durable mark. A legit
+/// source in an un-saturated table (L9), or a small source in a saturated one, never
+/// fires. The `Allowlisted` floor is applied by `shed_verdict`, not here.
+pub fn saturation_shed(src: u64, table_count: u64, table_max: u64) -> bool {
+    table_saturated(table_count, table_max) && is_top_talker(src)
+}
+
+// ---- L3: heqk-native PSI-equivalent (scheduler-pressure) shed ----
+
+/// Synthetic pressure override (0..=100). `SYNTH_UNSET` = not injected → derive from the
+/// real scheduler. The selftest injects a value so the shed LOGIC is QEMU-provable
+/// deterministically; production/metal leaves it unset and derives real pressure.
+const SYNTH_UNSET: u64 = u64::MAX;
+static SYNTH_PSI: AtomicU64 = AtomicU64::new(SYNTH_UNSET);
+
+/// TEST/GATE-R hook — inject a synthetic CPU-pressure percentage (0..=100). When set it
+/// is AUTHORITATIVE (the QEMU path has no real contention to measure), so the shed logic
+/// is deterministically provable. Metal leaves it unset (see `cpu_pressure_pct`).
+pub fn set_synthetic_pressure(pct: u64) {
+    SYNTH_PSI.store(pct.min(100), Ordering::Relaxed);
+}
+
+/// TEST hook — clear the synthetic override, restoring the real (metal) derivation.
+pub fn clear_synthetic_pressure() {
+    SYNTH_PSI.store(SYNTH_UNSET, Ordering::Relaxed);
+}
+
+/// heqk-native CPU-pressure percentage (0..=100) — the PSI-equivalent. heqk IS the
+/// scheduler, so there is no `/proc/pressure` to read; it EXPOSES its own signal.
+///
+/// HONEST QEMU-vs-METAL SPLIT: when a synthetic value is injected (selftest / Gate-R
+/// harness) it is authoritative and the shed LOGIC is fully QEMU-provable. Otherwise the
+/// signal is DERIVED from the real runqueue depth (runnable-but-waiting threads — the
+/// classic CPU-pressure proxy) via `scheduler::runnable_depth`. Under QEMU with no
+/// contention that depth is ~0, so the REAL pressure signal only becomes meaningful under
+/// genuine metal load (Gate R). A future refinement folds in allocator/frame-pool
+/// occupancy; that is NOT claimed here. No metal pressure is fabricated.
+pub fn cpu_pressure_pct() -> u64 {
+    let synth = SYNTH_PSI.load(Ordering::Relaxed);
+    if synth != SYNTH_UNSET {
+        return synth; // QEMU / Gate-R: the injected signal is authoritative
+    }
+    // METAL: real runqueue-depth-derived pressure (each runnable-but-waiting thread ≈ 10%,
+    // capped). ~0 under QEMU idle; rises only under real contention.
+    let rq = crate::scheduler::runnable_depth() as u64;
+    rq.saturating_mul(10).min(100)
+}
+
+/// Is the scheduler under sustained CPU pressure (>= `PSI_SHED_PCT`)?
+pub fn under_pressure() -> bool {
+    cpu_pressure_pct() >= PSI_SHED_PCT
+}
+
+/// L3 / A8 — the scheduler-pressure shed TRIGGER for `src` (identity-blind): under CPU
+/// pressure, the measured TOP-TALKER sheds first. Keyed on PRESSURE REALITY + the highest-
+/// rate source, never identity. SELF-REVERTING: pressure clears → false. The `Allowlisted`
+/// floor is applied by `shed_verdict`, not here.
+pub fn pressure_shed(src: u64) -> bool {
+    under_pressure() && is_top_talker(src)
 }

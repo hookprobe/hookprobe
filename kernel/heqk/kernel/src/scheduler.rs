@@ -190,6 +190,29 @@ pub fn current_tid() -> usize {
     unsafe { addr_of!(CUR).read() }
 }
 
+/// M2.3 — the RUNQUEUE DEPTH: how many registered threads are ALIVE and NOT blocked
+/// (i.e. runnable) MINUS the one currently on-core — the classic scheduler proxy for
+/// CPU pressure (runnable-but-waiting-for-CPU). heqk IS the scheduler, so this is a
+/// real, cheap signal (no `/proc/pressure` to read). Under QEMU with no contention this
+/// is ~0; it only rises to a meaningful pressure under real metal load (Gate R) — the
+/// resource-shed L3 layer blends it with a synthetic injector so the LOGIC is
+/// QEMU-provable while the REAL pressure is honestly metal-only.
+pub fn runnable_depth() -> usize {
+    unsafe {
+        let alive = addr_of!(ALIVE).cast::<bool>();
+        let blocked = addr_of!(BLOCKED).cast::<bool>();
+        let num = addr_of!(NUM).read();
+        let cur = addr_of!(CUR).read();
+        let mut n = 0usize;
+        for i in 0..num {
+            if i != cur && alive.add(i).read() && !blocked.add(i).read() {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
 /// Block the current thread (waiting on IPC); it won't be scheduled until unblocked.
 pub fn block_current() {
     unsafe {
