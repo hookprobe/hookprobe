@@ -88,8 +88,10 @@ pub enum FindingClass {
     /// A per-source RATE wall crossed this window (SYN-flood limiter fired). Keyed
     /// on rate reality, self-reverting by the window → `RateLimit { over_limit }`.
     FloodRate,
-    /// A real L1/L2 flood (mac-flood / broadcast-storm). No heqk detector emits this
-    /// yet (M2.1 follow-on); defined so the mapping is total.
+    /// A real L1/L2 flood (mac-flood / broadcast-storm). Port-role-aware: on an
+    /// Access port a genuine flood is `RateLimit` (bounded, self-reverting); on an
+    /// Uplink/AP port many distinct client MACs are LEGITIMATE, so it stays `Observe`
+    /// — detected, logged, NEVER a wire cap that could drop a legit AP client (D12).
     L2Flood,
     /// A threat-feed / blocklist reputation hit (one IOC). A SINGLE uncorroborated
     /// hit must **never** drop a customer (matrix row L11) → `Observe`. Corroboration
@@ -101,24 +103,54 @@ pub enum FindingClass {
     IdentitySpoof,
 }
 
+/// The role of the ingress port — the FP guard that keeps a busy AP/uplink radio's
+/// many legitimate client MACs from being mistaken for a mac-flood (ADR 0023 D12).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PortRole {
+    /// A downstream access port — one endpoint expected; a genuine fan-out of many
+    /// distinct source MACs is a real mac-flood → `RateLimit`.
+    Access,
+    /// An uplink / AP-radio / bridge port — MANY distinct client MACs are ordinary
+    /// churn; a flood here is detected but stays `Observe`, never a wire cap.
+    Uplink,
+}
+
+/// PLACEHOLDER — the ingress port's role. On a real deployment this is sourced from
+/// the signed Platform Manifest (a per-interface role: `wlan0`=AP=Uplink, a wired
+/// access port=Access). heqk has **no manifest port-role source yet** (M2 follow-on).
+/// Default `Access` is the conservative choice (a genuine mac-flood IS rate-limited);
+/// an AP build overrides to `Uplink` so many client MACs stay `Observe`. This is a
+/// stub, honestly flagged — NOT faked as manifest-driven.
+pub const DEFAULT_PORT_ROLE: PortRole = PortRole::Access;
+
 /// The context `decide()` reads. `allowlisted` = the source is on the management
 /// path (the floor). `confirmed` = an ADR-0018 confirmation signal is present
 /// (handshake / conntrack-ESTABLISHED) — always `false` on heqk today, so
 /// `Quarantine` is unreachable until the flow-state port lands (honest per the
-/// gap-map). Everything is a `Copy` scalar — no allocation, `no_std`-clean.
+/// gap-map). `port_role` = the D12 mac-flood FP guard. Everything is a `Copy`
+/// scalar — no allocation, `no_std`-clean.
 #[derive(Clone, Copy)]
 pub struct DecideCtx {
     pub allowlisted: bool,
     pub confirmed: bool,
+    pub port_role: PortRole,
 }
 
 impl DecideCtx {
     /// Build the context for an IPv4 source (host-order u32; 0 = no attributable
-    /// source). `confirmed` is wired `false` until heqk grows a flow-state /
-    /// handshake tracker (M2.2).
+    /// source), with the default port role. `confirmed` is wired `false` until heqk
+    /// grows a flow-state / handshake tracker (M2.2).
     #[inline]
     pub fn for_src(src: u32) -> Self {
-        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false }
+        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false, port_role: DEFAULT_PORT_ROLE }
+    }
+
+    /// Build the context for an L2 finding on a specific port role (mac-flood /
+    /// broadcast-storm). `src` = the IPv4 source if the frame carries one (for the
+    /// mgmt floor + attribution), else 0.
+    #[inline]
+    pub fn for_l2(src: u32, port_role: PortRole) -> Self {
+        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false, port_role }
     }
 }
 
@@ -167,13 +199,29 @@ fn decide_core(class: FindingClass, ctx: DecideCtx) -> Verdict {
             }
         }
 
-        // A real rate/flood wall crossed — bounded self-reverting drop, UNLESS the
-        // source is on the management path (the floor: mgmt is never rate-dropped).
-        FindingClass::FloodRate | FindingClass::L2Flood => {
+        // A per-source RATE wall crossed (SYN-flood limiter) — a bounded, self-
+        // reverting drop keyed on rate reality, UNLESS the source is on the mgmt path.
+        FindingClass::FloodRate => {
             if ctx.allowlisted {
                 Verdict::Allowlisted
             } else {
                 Verdict::RateLimit { over_limit: true }
+            }
+        }
+
+        // A real L1/L2 flood — PORT-ROLE-AWARE (ADR 0023 D12). Access: RateLimit
+        // (bounded). Uplink/AP: Observe — a genuine multi-hundred-MAC flood is still
+        // DETECTED and logged, but NEVER a wire cap, because that port legitimately
+        // carries many client MACs and a cap would drop real AP clients. The mgmt
+        // floor still short-circuits either way.
+        FindingClass::L2Flood => {
+            if ctx.allowlisted {
+                Verdict::Allowlisted
+            } else {
+                match ctx.port_role {
+                    PortRole::Access => Verdict::RateLimit { over_limit: true },
+                    PortRole::Uplink => Verdict::Observe,
+                }
             }
         }
     }

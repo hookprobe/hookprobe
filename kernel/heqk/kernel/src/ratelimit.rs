@@ -83,3 +83,90 @@ pub const HELPER_IP_BLOCKED: u32 = 2;
 pub const HELPER_PAYLOAD_MATCH: u32 = 3;
 /// Highest valid helper id (the verifier bounds `CALL imm` by this).
 pub const MAX_HELPER_ID: u32 = 3;
+
+// =====================================================================================
+// M2.1 — L2 fan-out state (the SEED of the M2.2 flow table, scoped to exactly what
+// mac-flood + broadcast-storm need). Per-PORT, windowed, `no_std`, lock-free.
+// =====================================================================================
+
+/// How many ports carry independent fan-out state (QEMU has one NIC = port 0; tests
+/// use higher ids to stay isolated). Sourced per-interface from the manifest in
+/// production (M2 follow-on).
+const FANOUT_PORTS: usize = 8;
+/// Per-port direct-mapped distinct-source-MAC set (gen-tagged so a new window costs
+/// O(1), never an O(N) clear). 512 slots hold the uplink/AP bar (>300) with headroom.
+const MAC_SET: usize = 512;
+/// The fan-out measurement window (distinct MACs / broadcast rate accrue over this).
+const FANOUT_WINDOW_SECS: u64 = 10;
+
+static MAC_WIN: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
+static MAC_GEN: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(1) }; FANOUT_PORTS];
+static MAC_DISTINCT: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
+static MAC_SLOT_GEN: [[AtomicU64; MAC_SET]; FANOUT_PORTS] =
+    [const { [const { AtomicU64::new(0) }; MAC_SET] }; FANOUT_PORTS];
+static MAC_SLOT_KEY: [[AtomicU64; MAC_SET]; FANOUT_PORTS] =
+    [const { [const { AtomicU64::new(0) }; MAC_SET] }; FANOUT_PORTS];
+
+static BCAST_WIN: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
+static BCAST_COUNT: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
+
+/// Fold a 6-byte MAC into a non-zero u64 key (bit 48 set distinguishes any real MAC
+/// from the `0` empty-slot sentinel).
+pub fn mac_hash(mac: &[u8]) -> u64 {
+    let mut h = 0u64;
+    for (i, &b) in mac.iter().take(6).enumerate() {
+        h |= (b as u64) << (i * 8);
+    }
+    h | (1u64 << 48)
+}
+
+/// mac-flood: count DISTINCT source MACs seen on `port` within the window; return 1
+/// once the distinct count EXCEEDS `threshold`, else 0. A new window bumps the port's
+/// generation (O(1), invalidating every slot) and resets the distinct count, so a
+/// sustained fan-out trips it but ordinary churn never accumulates across windows.
+pub fn mac_flood_over(port: u64, mac_key: u64, threshold: u64) -> u64 {
+    let p = (port as usize) % FANOUT_PORTS;
+    let now = cntpct();
+    let win = cntfrq().max(1).saturating_mul(FANOUT_WINDOW_SECS);
+    let start = MAC_WIN[p].load(Ordering::Relaxed);
+    if now.wrapping_sub(start) >= win {
+        MAC_WIN[p].store(now, Ordering::Relaxed);
+        MAC_GEN[p].fetch_add(1, Ordering::Relaxed);
+        MAC_DISTINCT[p].store(0, Ordering::Relaxed);
+    }
+    let gen = MAC_GEN[p].load(Ordering::Relaxed);
+    let i = (mac_key as usize) % MAC_SET;
+    let seen = MAC_SLOT_GEN[p][i].load(Ordering::Relaxed) == gen
+        && MAC_SLOT_KEY[p][i].load(Ordering::Relaxed) == mac_key;
+    if !seen {
+        MAC_SLOT_GEN[p][i].store(gen, Ordering::Relaxed);
+        MAC_SLOT_KEY[p][i].store(mac_key, Ordering::Relaxed);
+        MAC_DISTINCT[p].fetch_add(1, Ordering::Relaxed);
+    }
+    if MAC_DISTINCT[p].load(Ordering::Relaxed) > threshold {
+        1
+    } else {
+        0
+    }
+}
+
+/// broadcast-storm: count broadcast/multicast frames on `port` within the window;
+/// return 1 once the count EXCEEDS `threshold`. The caller pre-filters exempt groups
+/// (mDNS/SSDP/LLMNR) so they never even reach this counter.
+pub fn bcast_over(port: u64, threshold: u64) -> u64 {
+    let p = (port as usize) % FANOUT_PORTS;
+    let now = cntpct();
+    let win = cntfrq().max(1).saturating_mul(FANOUT_WINDOW_SECS);
+    let start = BCAST_WIN[p].load(Ordering::Relaxed);
+    if now.wrapping_sub(start) >= win {
+        BCAST_WIN[p].store(now, Ordering::Relaxed);
+        BCAST_COUNT[p].store(1, Ordering::Relaxed);
+        return 0;
+    }
+    let c = BCAST_COUNT[p].fetch_add(1, Ordering::Relaxed) + 1;
+    if c > threshold {
+        1
+    } else {
+        0
+    }
+}

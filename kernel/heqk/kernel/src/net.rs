@@ -59,6 +59,67 @@ pub fn eth_ipv4_src(frame: &[u8]) -> u32 {
         | frame[29] as u32
 }
 
+/// Maximum on-wire Ethernet frame size (802.1Q-tagged): 1518 + 4 = 1522. A frame
+/// past this from an unrecognized source is a structural anomaly (F7). Mirrors
+/// Linux `dpi::DEFAULT_MAX_FRAME_LEN`.
+pub const MAX_FRAME_LEN: usize = 1522;
+
+/// M2.1 — STRUCTURAL frame anomaly (F6/F7/F8): a fact about WHAT THE FRAME IS, never
+/// who sent it, so a `true` here routes to a `MalformedFrame` FrameDrop that the
+/// `Allowlisted` floor correctly does NOT exempt. Single-frame, stateless. Mirrors
+/// the Linux `dpi::frame_anomaly_reason_local` rows exercised by
+/// `separation_matrix_frames.rs`:
+///   F6 — the SOURCE MAC has the I/G (multicast/broadcast) bit set. IEEE 802.3
+///        forbids a group-bit source; a locally-administered *unicast* MAC (U/L bit
+///        0x02 set, I/G bit 0x01 CLEAR — e.g. an iOS-randomized MAC) is NOT flagged.
+///   F7 — the frame exceeds `MAX_FRAME_LEN` (1522) — oversize/jumbo from an
+///        unrecognized source.
+///   F8 — the frame carries ≥2 stacked 802.1Q/QinQ tags — the VLAN-hopping ambiguity
+///        a single-tag topology must never accept.
+/// A too-short frame (<14) is left to `parse` (→ `None` → fail-closed) as before.
+pub fn structural_anomaly(frame: &[u8]) -> bool {
+    if frame.len() < ETH_HLEN {
+        return false; // truncation is handled by `parse` fail-closed, not here
+    }
+    // F6 — source MAC I/G bit (LSB of the first source octet, at offset 6).
+    if frame[6] & 0x01 != 0 {
+        return true;
+    }
+    // F7 — oversize.
+    if frame.len() > MAX_FRAME_LEN {
+        return true;
+    }
+    // F8 — count stacked VLAN tags; ≥2 (QinQ) is the anomaly.
+    let mut et = match be16(frame, 12) {
+        Some(e) => e,
+        None => return false,
+    };
+    let mut off = ETH_HLEN;
+    let mut tags = 0usize;
+    while et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ {
+        tags += 1;
+        if tags >= 2 {
+            return true; // double/stacked tag
+        }
+        et = match be16(frame, off + 2) {
+            Some(e) => e,
+            None => break, // truncated tag — parse fail-closes it later
+        };
+        off += 4;
+        if tags > MAX_VLAN_TAGS {
+            break;
+        }
+    }
+    false
+}
+
+/// The Ethernet destination MAC is broadcast (all-ones) or multicast (dst I/G bit
+/// set). Used by the broadcast-storm detector to decide what to count.
+#[inline]
+pub fn dst_is_bcast_or_mcast(frame: &[u8]) -> bool {
+    frame.len() >= 6 && (frame[0] & 0x01 != 0)
+}
+
 #[inline]
 fn be16(b: &[u8], off: usize) -> Option<u16> {
     Some(((*b.get(off)? as u16) << 8) | (*b.get(off + 1)? as u16))
