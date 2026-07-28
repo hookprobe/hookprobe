@@ -17,6 +17,10 @@ mod bpf;
 mod caps;
 mod devq;
 mod events;
+// The crash-safe log layer is only fully exercised under `p15-write` (its writers
+// are all guarded); a read-only build compiles it but drives none of it.
+#[cfg_attr(not(feature = "p15-write"), allow(dead_code))]
+mod fslog;
 mod l7;
 mod heap;
 mod ipc;
@@ -2203,6 +2207,10 @@ pub extern "C" fn kmain() -> ! {
     //     (skips diskless; the two-boot proof is driven by validate.sh) ---
     p15_persist_selftest();
 
+    // --- P15-fs: M3.2 crash-safe log-structured record store (torn-tail recovery
+    //     + bounded retention + evidence/QSecBit records survive reboot) ---
+    p15_fs_selftest();
+
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
 
@@ -4284,6 +4292,246 @@ fn p15_persist_selftest() {
             kprint!(" [P15-persist] {} — M3.1 cross-restart persistence: sealed cookie + data-vol marker SURVIVED reboot over file-backed virtio-blk (seal->persist->reboot->unseal); RamDisk cannot prove this — real eMMC write is metal (Gate R)\n",
                 if pass { "PASS" } else { "FAIL" });
         }
+    }
+}
+
+/// M3.2 — crash-safe log-structured record store self-test over the file-backed
+/// virtio-blk device. Runs (b) torn-tail recovery + (c) bounded-retention every
+/// boot (self-contained, re-mount proves the recovery/eviction algorithms), and
+/// (a)+(d) persistence across the ACTUAL reboot driven by validate.sh's two boots:
+/// boot 1 appends a real evidence Event + a QSecBit record; boot 2 reads them back
+/// and verifies field-for-field. QEMU-proven over virtio-blk; the real eMMC write
+/// is metal (Gate R).
+#[cfg(not(feature = "cm5"))]
+fn p15_fs_selftest() {
+    let present = arch_aarch64::virtio_blk::VirtioBlk::open().is_some();
+    #[cfg(not(feature = "p15-write"))]
+    {
+        if present {
+            kprint!(" [P15-fs] SKIP — read-only build (rebuild --features p15-write for the crash-safe log proof)\n");
+        } else {
+            kprint!(" [P15-fs] SKIP — no virtio-blk device (diskless boot)\n");
+        }
+    }
+    #[cfg(feature = "p15-write")]
+    {
+        use fslog::{RT_EVIDENCE, RT_QSECBIT, RT_TEST};
+        use store::{RegionKind, SealedStore};
+        if !present {
+            kprint!(" [P15-fs] SKIP — no virtio-blk device (diskless boot)\n");
+            return;
+        }
+        let mut dev = arch_aarch64::virtio_blk::VirtioBlk::open().unwrap();
+        let cap = {
+            use hal::BlockDev;
+            dev.block_count()
+        };
+        let mut store = match SealedStore::open(&mut dev) {
+            Ok(s) => s,
+            Err(e) => {
+                kprint!(" [P15-fs] FAIL — guard refused device MBR: {:?}\n", e);
+                return;
+            }
+        };
+        // The whole log lives inside the M3.1 DataVolume allowlist; sub-windows are
+        // disjoint and clear of the M3.1 persist marker at LBA 8192.
+        if store.add_region(8192, cap, RegionKind::DataVolume).is_err() {
+            kprint!(" [P15-fs] FAIL — could not register the data-volume region\n");
+            return;
+        }
+
+        // ---- (b) torn-tail recovery: 3 intact records + an injected torn frontier ----
+        // Region [8320,8330) = 9 slots, so the torn record lands on a FRESH slot
+        // (no eviction) — a clean "intact survive, torn dropped" demonstration.
+        let (blo, bhi) = (8320u64, 8330u64);
+        let pass_b = (|| -> bool {
+            let mut log = match fslog::format(&mut store, blo, bhi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            for i in 0..3u8 {
+                let p = [b'I', b'N', b'T', i + b'0'];
+                if log.append(&mut store, RT_TEST, &p).is_err() {
+                    return false;
+                }
+            }
+            // Inject a TORN record at the write frontier (seq 3 -> slot 3): build a
+            // valid record, then corrupt one payload byte so its on-disk digest no
+            // longer matches — exactly what a power-loss mid-payload write leaves.
+            let torn_lba = blo + 1 + 3;
+            let mut torn = [0u8; fslog::SEC];
+            let pl = b"TORN-RECORD";
+            torn[0..4].copy_from_slice(&fslog::REC_MAGIC.to_le_bytes());
+            torn[8..16].copy_from_slice(&3u64.to_le_bytes());
+            torn[16..18].copy_from_slice(&(pl.len() as u16).to_le_bytes());
+            torn[18..20].copy_from_slice(&RT_TEST.to_le_bytes());
+            torn[fslog::REC_HDR..fslog::REC_HDR + pl.len()].copy_from_slice(pl);
+            {
+                use boot_abi::sha256::Hasher;
+                let mut h = Hasher::new();
+                h.update(&torn[0..24]);
+                h.update(&torn[fslog::REC_HDR..fslog::REC_HDR + pl.len()]);
+                let d = h.finish();
+                torn[24..32].copy_from_slice(&d[..8]);
+            }
+            torn[fslog::REC_HDR + 2] ^= 0xFF; // corrupt the payload AFTER digesting
+            if store.store_sector(torn_lba, &torn).is_err() {
+                return false;
+            }
+            // Re-mount (crash recovery): the 3 intact records survive, torn dropped.
+            let recovered = match fslog::LogStore::mount(&store, blo, bhi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            if recovered.count() != 3 || recovered.next_seq() != 3 {
+                return false;
+            }
+            // Store is still WRITABLE: append a new record (reuses the torn slot).
+            let mut log2 = recovered;
+            if log2.append(&mut store, RT_TEST, b"AFTER").is_err() {
+                return false;
+            }
+            let mut n = 0u64;
+            let mut order_ok = true;
+            let mut last: Option<u64> = None;
+            let _ = fslog::LogStore::mount(&store, blo, bhi).map(|l| {
+                l.for_each(&store, |seq, _rt, _pl| {
+                    n += 1;
+                    if let Some(x) = last {
+                        if seq != x + 1 {
+                            order_ok = false;
+                        }
+                    }
+                    last = Some(seq);
+                })
+                .ok();
+            });
+            n == 4 && order_ok // seq 0,1,2 intact + new seq 3
+        })();
+
+        // ---- (c) bounded retention: write 10 into a 4-slot ring, oldest evicted ----
+        let (clo, chi) = (8340u64, 8345u64); // 4 slots
+        let mut retention_in_region = true;
+        let pass_c = (|| -> bool {
+            let mut log = match fslog::format(&mut store, clo, chi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            for s in 0..10u64 {
+                let p = [b'R', (b'0' + (s % 10) as u8)];
+                match log.append(&mut store, RT_TEST, &p) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        retention_in_region = false; // a write escaped the region/guard
+                        return false;
+                    }
+                }
+            }
+            // Re-mount: only the last 4 (seq 6..9) survive; head advanced to 10.
+            let r = match fslog::LogStore::mount(&store, clo, chi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            if r.count() != 4 || r.next_seq() != 10 || r.capacity() != 4 {
+                return false;
+            }
+            let mut seqs = [0u64; 8];
+            let mut i = 0usize;
+            r.for_each(&store, |seq, _rt, _pl| {
+                if i < seqs.len() {
+                    seqs[i] = seq;
+                }
+                i += 1;
+            })
+            .ok();
+            i == 4 && seqs[0] == 6 && seqs[1] == 7 && seqs[2] == 8 && seqs[3] == 9
+        })();
+
+        // ---- (a)+(d) persistence across reboot: evidence Event + QSecBit record ----
+        // Known values so boot 2 can verify field-for-field.
+        const EV_TS: u64 = 0xDEAD_BEEF_0000_1234;
+        const EV_SRC: u32 = 0x0A00_0205; // 10.0.2.5
+        const EV_RULE: u16 = 1000; // (rule_id truncated into u16 space for the test)
+        const EV_SEV: u8 = 7;
+        const EV_VERDICT: u8 = 1; // PASS
+        const QS_TS: u64 = 0x0000_0000_1234_5678;
+        const QS_SCORE: u32 = 4242;
+        let (plo, phi) = (8500u64, 8510u64); // 9-slot persistence log
+
+        let mut fs_line_done = false;
+        match fslog::open_or_format(&mut store, plo, phi) {
+            Ok(mut log) if log.count() == 0 => {
+                // ---- BOOT 1: append the real records ----
+                let ev = events::Event {
+                    ts: EV_TS,
+                    src: EV_SRC,
+                    rule_id: EV_RULE,
+                    severity: EV_SEV,
+                    verdict: EV_VERDICT,
+                };
+                let mut evb = [0u8; 16];
+                evb[0..8].copy_from_slice(&ev.ts.to_le_bytes());
+                evb[8..12].copy_from_slice(&ev.src.to_le_bytes());
+                evb[12..14].copy_from_slice(&ev.rule_id.to_le_bytes());
+                evb[14] = ev.severity;
+                evb[15] = ev.verdict;
+                let mut qsb = [0u8; 12];
+                qsb[0..8].copy_from_slice(&QS_TS.to_le_bytes());
+                qsb[8..12].copy_from_slice(&QS_SCORE.to_le_bytes());
+                let wrote = log.append(&mut store, RT_EVIDENCE, &evb).is_ok()
+                    && log.append(&mut store, RT_QSECBIT, &qsb).is_ok()
+                    && log.append(&mut store, RT_TEST, b"evg-tail-1").is_ok()
+                    && log.append(&mut store, RT_TEST, b"evg-tail-2").is_ok();
+                kprint!(" [P15-fs] BOOT1 — torn-recovery {}, retention-cap {}, wrote {} log records (Event+QSecBit+2) — reboot (same disk) to verify persistence\n",
+                    yn(pass_b), yn(pass_c && retention_in_region), if wrote { 4 } else { 0 });
+                fs_line_done = true;
+            }
+            Ok(log) => {
+                // ---- BOOT 2: read the records back + verify field-for-field ----
+                let mut nseen = 0u64;
+                let mut order_ok = true;
+                let mut last: Option<u64> = None;
+                let mut ev_ok = false;
+                let mut qs_ok = false;
+                log.for_each(&store, |seq, rt, pl| {
+                    nseen += 1;
+                    if let Some(x) = last {
+                        if seq != x + 1 {
+                            order_ok = false;
+                        }
+                    }
+                    last = Some(seq);
+                    if rt == RT_EVIDENCE && pl.len() >= 16 {
+                        let ts = u64::from_le_bytes(pl[0..8].try_into().unwrap());
+                        let src = u32::from_le_bytes(pl[8..12].try_into().unwrap());
+                        let rule = u16::from_le_bytes(pl[12..14].try_into().unwrap());
+                        ev_ok = ts == EV_TS
+                            && src == EV_SRC
+                            && rule == EV_RULE
+                            && pl[14] == EV_SEV
+                            && pl[15] == EV_VERDICT;
+                    } else if rt == RT_QSECBIT && pl.len() >= 12 {
+                        let ts = u64::from_le_bytes(pl[0..8].try_into().unwrap());
+                        let score = u32::from_le_bytes(pl[8..12].try_into().unwrap());
+                        qs_ok = ts == QS_TS && score == QS_SCORE;
+                    }
+                })
+                .ok();
+                let pass_a = nseen == 4 && order_ok;
+                let pass_d = ev_ok && qs_ok;
+                let pass = pass_a && pass_b && pass_c && retention_in_region && pass_d;
+                kprint!("   fs: records-in-order {} ({}), torn-recovery {}, retention-cap {}, Event round-trip {}, QSecBit round-trip {}\n",
+                    yn(pass_a), nseen, yn(pass_b), yn(pass_c && retention_in_region), yn(ev_ok), yn(qs_ok));
+                kprint!(" [P15-fs] {} — M3.2 crash-safe log: {} records SURVIVED reboot in order, torn tail dropped on recovery, retention cap holds, evidence Event + QSecBit history round-trip (virtio-blk; real eMMC = metal Gate R)\n",
+                    if pass { "PASS" } else { "FAIL" }, nseen);
+                fs_line_done = true;
+            }
+            Err(e) => {
+                kprint!(" [P15-fs] FAIL — persistence log open failed: {:?}\n", e);
+                fs_line_done = true;
+            }
+        }
+        let _ = fs_line_done;
     }
 }
 
