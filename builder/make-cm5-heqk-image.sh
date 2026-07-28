@@ -34,6 +34,23 @@ SVN="${SVN:-1}"
   echo "FATAL: heqk workspace not found at $HEQK (expected Cargo.toml + rust-toolchain.toml + kernel/)"; exit 1; }
 command -v llvm-objcopy >/dev/null || { echo "FATAL: llvm-objcopy not on PATH"; exit 1; }
 
+# ── Fail-closed boot-signing keydir (ADR 0046 / docs/design/heqk-signing-identity.md) ──────
+# mkimage-hboot.sh otherwise SILENTLY defaults KEYDIR/SIGNER to ~/heqk-sign — i.e. it would sign
+# the CM5 boot ROOT-OF-TRUST with whatever dev key sits in one operator's $HOME, with no
+# indication. Require the keydir to be chosen EXPLICITLY; never fall through to $HOME. (The rest
+# of the plumbing — an in-tree vendored heqk-sign, builder/gen-heqk-dev-keys.sh, and the
+# release-BLOCKING dev-key-in-prod fingerprint gate — is tracked in the design note.)
+if [ -z "${HEQK_KEYDIR:-}" ]; then
+  echo "FATAL: HEQK_KEYDIR is unset — refusing to silently sign the CM5 boot root-of-trust" >&2
+  echo "       with the dev key in ~/heqk-sign. Set HEQK_KEYDIR to a keydir holding the" >&2
+  echo "       ed25519 + slh-dsa-sha2-128s signing keys (dev/CI: a generated dev keydir;" >&2
+  echo "       production: an HSM-backed keydir). See docs/design/heqk-signing-identity.md." >&2
+  exit 1
+fi
+[ -d "$HEQK_KEYDIR" ] || { echo "FATAL: HEQK_KEYDIR=$HEQK_KEYDIR is not a directory" >&2; exit 1; }
+HEQK_SIGNER="${HEQK_SIGNER:-$HOME/heqk-sign/target/release/heqk-sign}"
+[ -x "$HEQK_SIGNER" ] || { echo "FATAL: heqk-sign not executable at $HEQK_SIGNER — set HEQK_SIGNER (in-tree vendoring tracked in docs/design/heqk-signing-identity.md)" >&2; exit 1; }
+
 echo "== [M1] building heqk substrate (features=$FEATURES svn=$SVN) at $HEQK"
 cd "$HEQK"
 
@@ -52,7 +69,7 @@ KBIN="$(mktemp -d)/kernel.bin"
 llvm-objcopy -O binary target/aarch64-unknown-none-softfloat/release/kernel "$KBIN"
 
 # Hybrid-sign (ed25519 + SLH-DSA) + assemble the combined hboot image = the CM5 kernel8 drop-in.
-SVN="$SVN" ./cm5-boot/mkimage-hboot.sh \
+SVN="$SVN" KEYDIR="$HEQK_KEYDIR" SIGNER="$HEQK_SIGNER" ./cm5-boot/mkimage-hboot.sh \
   target/aarch64-unknown-none-softfloat/release/hboot "$KBIN" cm5-boot/heqk8.img
 
 # Stage the CM5 boot-partition contents (what flash-now.sh copies onto the FAT boot part).
