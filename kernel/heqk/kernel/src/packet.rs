@@ -259,6 +259,17 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     let nframe = strip_vlan(frame, &mut nbuf);
     // DET-11: the IPv4 source (0 if not IPv4), attributed on any detection below.
     let src = crate::net::eth_ipv4_src(nframe);
+    // M2.1 — structural + stateful L2 tier (F6/F7/F8 structural anomalies + mac-flood
+    // + broadcast-storm), on the ORIGINAL frame (MAC offsets, length, and VLAN-tag
+    // depth are pre-normalization facts). Port 0 = the single datapath ingress; the
+    // role is the manifest stub default (verdict::DEFAULT_PORT_ROLE). Routes through
+    // decide_l2 — a structural anomaly or a genuine Access-port flood DROPs; an
+    // Uplink flood / observed finding PASSes (a later tier may still drop).
+    if let Some(v) = crate::rules::l2_stateful_verdict(frame, src, 0, crate::verdict::DEFAULT_PORT_ROLE) {
+        if v.is_drop() {
+            return (0, DROP);
+        }
+    }
     // L2 structural tier (napse-l2guard parity: malformed-ARP / ARP-spoof) — runs
     // on EVERY frame, R1 = the (normalized) L2 start, before any L4 parsing.
     if crate::rules::run_l2(nframe, src) == DROP {

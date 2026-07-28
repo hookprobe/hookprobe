@@ -6,7 +6,7 @@
 //! (e.g. CM5 metal, whose runtime frame allocator differs) a rule falls back to
 //! the bounds-checked interpreter — same verdict, slower.
 
-use crate::verdict::{self, DecideCtx, FindingClass, Verdict};
+use crate::verdict::{self, DecideCtx, FindingClass, PortRole, Verdict};
 use crate::{bpf, telemetry};
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -179,13 +179,8 @@ fn run_set_verdict(
         if v == bpf::DROP {
             // The rule MATCHED — an alert, not a wire action. decide() graduates it.
             let verdict = decide_fn(rules[i].class, ctx);
-            let wire = verdict.to_wire();
-            // SOAR: async, non-blocking export ("the OS is the sensor"). Header only —
-            // never the payload — carrying the ACTUAL wire verdict (PASS for observe).
-            crate::events::push_hit(rules[i].id, rules[i].severity as u8, wire as u8, src);
-            if wire == crate::packet::DROP {
-                // A scored, ENFORCED threat signal — QSecBit reflects wire drops only.
-                telemetry::emit_rule_hit(rules[i].severity);
+            fire(rules[i].id, rules[i].severity, verdict, src);
+            if verdict.is_drop() {
                 return Some(verdict);
             }
             // Observed (observe-by-default): keep scanning for a genuine drop.
@@ -249,6 +244,109 @@ pub fn run_tcp(tcp: &[u8], src: u32) -> u16 {
 /// Run the STATEFUL flow tier against the raw `frame` (R1 = L2 start). Wire verdict.
 pub fn run_flow(frame: &[u8], src: u32) -> u16 {
     verdict_flow(frame, src).map_or(crate::packet::PASS, Verdict::to_wire)
+}
+
+/// DET-SEP — a detector FIRED: export the SOAR event with the REAL wire verdict
+/// (PASS for an observed finding) and score a QSecBit hit ONLY on an enforced
+/// (wire-DROP) verdict. Shared by the bytecode tiers and the M2.1 stateful L2 tier.
+fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
+    let wire = v.to_wire();
+    crate::events::push_hit(rule_id, severity as u8, wire as u8, src);
+    if wire == crate::packet::DROP {
+        telemetry::emit_rule_hit(severity);
+    }
+}
+
+// ---- M2.1: the structural + stateful L2 tier (F6/F7/F8 + mac-flood + broadcast-storm)
+// ----
+
+/// Rule IDs for the M2.1 tier (kept distinct from the bytecode L2 corpus 101/102).
+pub const RULE_STRUCT_ANOMALY: u16 = 110;
+pub const RULE_MAC_FLOOD: u16 = 111;
+pub const RULE_BCAST_STORM: u16 = 112;
+
+/// Distinct-source-MAC-per-window thresholds (ADR 0023 D12). Access is tight; the
+/// uplink/AP bar is deliberately far higher (many client MACs are legitimate there).
+const MAC_FLOOD_ACCESS: u64 = 20;
+const MAC_FLOOD_UPLINK: u64 = 300;
+/// Broadcast/multicast frames per window before it's a storm (well above legit ARP/
+/// DHCP rates; a genuine storm floods far past it).
+const BCAST_STORM_THRESH: u64 = 50;
+
+/// M2.1 — structural + stateful L2 tier. Runs on the ORIGINAL frame (MAC offsets,
+/// length, and VLAN-tag depth are pre-normalization facts). EVERY finding routes
+/// through `verdict::decide_l2` — no rule drops inline. Returns the tri-state verdict
+/// (or `None` if nothing fired). `port` = the ingress port id (fan-out state is
+/// per-port); `port_role` gates the mac-flood FP guard.
+pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRole) -> Option<Verdict> {
+    let ctx = DecideCtx::for_l2(src, port_role);
+
+    // F6/F7/F8 — a STRUCTURAL fact (multicast-src / oversize / double-tag) → a
+    // MalformedFrame FrameDrop keyed on WHAT THE FRAME IS. Authoritative; the
+    // Allowlisted floor correctly does not exempt it.
+    if crate::net::structural_anomaly(frame) {
+        let v = verdict::decide_l2(FindingClass::MalformedFrame, ctx);
+        fire(RULE_STRUCT_ANOMALY, SEV_MED, v, src);
+        return Some(v);
+    }
+
+    let mut observed: Option<Verdict> = None;
+
+    // mac-flood — DISTINCT source MACs per port within the window. On an Access port
+    // a genuine fan-out → RateLimit (drop); on an Uplink/AP port it stays Observe
+    // (decide_l2 D12) so a busy radio's many legit client MACs are NEVER wire-dropped.
+    if frame.len() >= 12 {
+        let key = crate::ratelimit::mac_hash(&frame[6..12]);
+        let threshold = match port_role {
+            PortRole::Access => MAC_FLOOD_ACCESS,
+            PortRole::Uplink => MAC_FLOOD_UPLINK,
+        };
+        if crate::ratelimit::mac_flood_over(port, key, threshold) == 1 {
+            let v = verdict::decide_l2(FindingClass::L2Flood, ctx);
+            fire(RULE_MAC_FLOOD, SEV_MED, v, src);
+            if v.is_drop() {
+                return Some(v);
+            }
+            observed = Some(v);
+        }
+    }
+
+    // broadcast-storm — count only NON-EXEMPT broadcast/multicast dst frames (mDNS/
+    // SSDP/LLMNR are exempt before counting, so a chatty-but-legit device is never a
+    // storm). A genuine flood on an Access port → RateLimit; Uplink → Observe.
+    if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6]) {
+        if crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
+            let v = verdict::decide_l2(FindingClass::L2Flood, ctx);
+            fire(RULE_BCAST_STORM, SEV_MED, v, src);
+            if v.is_drop() {
+                return Some(v);
+            }
+            if observed.is_none() {
+                observed = Some(v);
+            }
+        }
+    }
+
+    observed
+}
+
+/// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service
+/// discovery a chatty-but-legit device emits; EXEMPT from the storm counter before it
+/// can ever reach a drop path (ADR 0023 D13 / the matrix broadcast LEGIT row).
+fn is_exempt_multicast(dst: &[u8]) -> bool {
+    if dst.len() < 6 {
+        return false;
+    }
+    // IPv6 multicast (33:33:xx:xx:xx:xx) — includes mDNSv6 (ff02::fb → 33:33:00:00:00:fb).
+    if dst[0] == 0x33 && dst[1] == 0x33 {
+        return true;
+    }
+    // IPv4 link-local multicast (01:00:5e:..): mDNS .fb, LLMNR .fc, SSDP .fa.
+    if dst[0] == 0x01 && dst[1] == 0x00 && dst[2] == 0x5e {
+        let g = [dst[3], dst[4], dst[5]];
+        return g == [0x00, 0x00, 0xfb] || g == [0x00, 0x00, 0xfc] || g == [0x7f, 0xff, 0xfa];
+    }
+    false
 }
 
 /// DET-6 — a view of one VERIFIED + JIT-compiled live rule, for the boot-time

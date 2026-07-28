@@ -2136,6 +2136,9 @@ pub extern "C" fn kmain() -> ! {
     // --- DET-SEP: the M2 keystone — tri-state decide() seam (ADR 0023 observe-by-default)
     p8_separation();
 
+    // --- M2.1: L2 structural + flood parity — F6/F7/F8 + mac-flood(port-role) + bcast-storm
+    p8_l2struct();
+
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
 
@@ -3263,6 +3266,143 @@ fn p8_separation() -> bool {
         sig_v, if c_sig { "ok" } else { "BUG" });
 
     kprint!(" [P8-sep] {} — tri-state decide() seam: observe-by-default, blocklist/ARP-spoof OBSERVED (legit passes), mgmt floor never enforced, malformed/signature still FrameDrop (ADR 0023 keystone)\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// M2.1 — L2 structural + flood parity selftest: F6/F7/F8 structural anomalies +
+/// mac-flood (port-role-aware) + broadcast-storm (with the mDNS/SSDP/LLMNR exemption),
+/// ALL routed through the `decide_l2()` seam. The load-bearing assertion is the
+/// Access-vs-Uplink mac-flood split: the SAME fan-out that RateLimit-DROPs on an
+/// access port stays OBSERVE (PASS) on an uplink/AP port — a legit AP client is NEVER
+/// dropped (ADR 0023 D12). QEMU-provable; uses isolated port ids so it never pollutes
+/// the datapath's port-0 fan-out state.
+#[cfg(not(feature = "cm5"))]
+fn p8_l2struct() -> bool {
+    use verdict::{decide_l2, DecideCtx, FindingClass, PortRole, Verdict};
+    kprint!("\n [P8] L2 structural + flood parity (M2.1) — F6/F7/F8 + mac-flood(port-role) + broadcast-storm, via decide_l2()\n");
+    let mut ok = true;
+
+    #[inline]
+    fn wire(v: Option<Verdict>) -> u16 {
+        v.map_or(packet::PASS, Verdict::to_wire)
+    }
+    const DST: [u8; 6] = [0x99, 0x88, 0x77, 0x66, 0x55, 0x44];
+
+    // --- F6: a multicast/broadcast SOURCE MAC (I/G bit set) -> FrameDrop.
+    let mut f6 = [0u8; 64];
+    f6[0..6].copy_from_slice(&DST);
+    f6[6..12].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0x01]); // I/G bit set
+    f6[12..14].copy_from_slice(&[0x08, 0x00]);
+    let f6_v = rules::l2_stateful_verdict(&f6, 0, 2, PortRole::Access);
+    let c_f6 = matches!(f6_v, Some(Verdict::FrameDrop)) && wire(f6_v) == packet::DROP;
+    ok &= c_f6;
+    kprint!("   F6 multicast-src MAC -> {:?}, wire DROP [{}]\n", f6_v, if c_f6 { "ok" } else { "BUG" });
+
+    // --- F6 LEGIT: a locally-administered UNICAST src (0x02 set, I/G 0x01 CLEAR) must NOT flag.
+    let mut f6l = f6;
+    f6l[6..12].copy_from_slice(&[0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
+    let f6l_v = rules::l2_stateful_verdict(&f6l, 0, 2, PortRole::Access);
+    let c_f6l = wire(f6l_v) == packet::PASS;
+    ok &= c_f6l;
+    kprint!("   F6 legit locally-admin unicast src -> {:?}, wire PASS [{}]\n", f6l_v, if c_f6l { "ok" } else { "BUG" });
+
+    // --- F7: an oversize frame (>1522B) -> FrameDrop.
+    let mut f7 = [0u8; 1600];
+    f7[0..6].copy_from_slice(&DST);
+    f7[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    f7[12..14].copy_from_slice(&[0x08, 0x00]);
+    let f7_v = rules::l2_stateful_verdict(&f7, 0, 2, PortRole::Access);
+    let c_f7 = matches!(f7_v, Some(Verdict::FrameDrop)) && wire(f7_v) == packet::DROP;
+    ok &= c_f7;
+    kprint!("   F7 oversize frame ({}B) -> {:?}, wire DROP [{}]\n", f7.len(), f7_v, if c_f7 { "ok" } else { "BUG" });
+
+    // --- F8: a double-tagged (QinQ) VLAN frame -> FrameDrop.
+    let mut f8 = [0u8; 64];
+    f8[0..6].copy_from_slice(&DST);
+    f8[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    f8[12..14].copy_from_slice(&[0x81, 0x00]); // 802.1Q tag 1
+    f8[14..16].copy_from_slice(&[0x00, 0x0a]);
+    f8[16..18].copy_from_slice(&[0x81, 0x00]); // stacked tag 2 (QinQ)
+    f8[18..20].copy_from_slice(&[0x00, 0x0b]);
+    f8[20..22].copy_from_slice(&[0x08, 0x00]);
+    let f8_v = rules::l2_stateful_verdict(&f8, 0, 2, PortRole::Access);
+    let c_f8 = matches!(f8_v, Some(Verdict::FrameDrop)) && wire(f8_v) == packet::DROP;
+    ok &= c_f8;
+    kprint!("   F8 double-tagged VLAN -> {:?}, wire DROP [{}]\n", f8_v, if c_f8 { "ok" } else { "BUG" });
+
+    // --- decide_l2 port-role logic (deterministic): Access L2Flood->RateLimit(DROP), Uplink->Observe(PASS).
+    let c_role = decide_l2(FindingClass::L2Flood, DecideCtx::for_l2(0, PortRole::Access)) == (Verdict::RateLimit { over_limit: true })
+        && decide_l2(FindingClass::L2Flood, DecideCtx::for_l2(0, PortRole::Uplink)) == Verdict::Observe;
+    ok &= c_role;
+    kprint!("   decide_l2 port-role: Access L2Flood->RateLimit(DROP), Uplink L2Flood->Observe(PASS) [{}]\n",
+        if c_role { "ok" } else { "BUG" });
+
+    // --- mac-flood ACCESS: 40 distinct source MACs -> RateLimit (wire DROP) once past 20.
+    let mut fr = [0u8; 64];
+    fr[0..6].copy_from_slice(&DST);
+    fr[12..14].copy_from_slice(&[0x08, 0x00]);
+    let mut mf_access_drop = false;
+    for i in 0..40u8 {
+        fr[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, i]); // distinct unicast src
+        if rules::l2_stateful_verdict(&fr, 0, 5, PortRole::Access).map_or(false, Verdict::is_drop) {
+            mf_access_drop = true;
+        }
+    }
+    ok &= mf_access_drop;
+    kprint!("   mac-flood ACCESS (40 distinct MACs) -> RateLimit DROP fired: {} [{}]\n",
+        mf_access_drop, if mf_access_drop { "ok" } else { "BUG" });
+
+    // --- mac-flood UPLINK/AP: the SAME fan-out (320 distinct MACs) must FIRE but stay
+    //     OBSERVE — NEVER a wire drop (the key legit-safety assertion: AP clients pass).
+    let mut mf_uplink_fired = false;
+    let mut mf_uplink_bad = false; // any drop OR any non-Observe verdict on an uplink = failure
+    for i in 0..320u16 {
+        fr[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, (i >> 8) as u8, (i & 0xff) as u8]);
+        if let Some(v) = rules::l2_stateful_verdict(&fr, 0, 6, PortRole::Uplink) {
+            mf_uplink_fired = true;
+            if v.is_drop() || v != Verdict::Observe {
+                mf_uplink_bad = true;
+            }
+        }
+    }
+    let c_uplink = mf_uplink_fired && !mf_uplink_bad;
+    ok &= c_uplink;
+    kprint!("   mac-flood UPLINK/AP (320 distinct MACs) -> fired={} any_drop_or_non_observe={} (must fire+Observe, NEVER drop legit AP clients) [{}]\n",
+        mf_uplink_fired, mf_uplink_bad, if c_uplink { "ok" } else { "BUG" });
+
+    // --- broadcast-storm: a non-exempt raw broadcast flood on an Access port -> RateLimit (DROP).
+    let mut bc = [0u8; 64];
+    bc[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]); // broadcast dst
+    bc[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]); // SAME src (no mac-flood)
+    bc[12..14].copy_from_slice(&[0x08, 0x00]);
+    let mut bc_drop = false;
+    for _ in 0..60 {
+        if rules::l2_stateful_verdict(&bc, 0, 7, PortRole::Access).map_or(false, Verdict::is_drop) {
+            bc_drop = true;
+        }
+    }
+    ok &= bc_drop;
+    kprint!("   broadcast-storm non-exempt (60 bcast frames) -> RateLimit DROP fired: {} [{}]\n",
+        bc_drop, if bc_drop { "ok" } else { "BUG" });
+
+    // --- broadcast-storm EXEMPT: an mDNS burst (01:00:5e:00:00:fb) must NEVER fire or drop.
+    let mut md = [0u8; 64];
+    md[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]); // mDNS group
+    md[6..12].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    md[12..14].copy_from_slice(&[0x08, 0x00]);
+    let mut mdns_fired = false;
+    for _ in 0..200 {
+        if let Some(_v) = rules::l2_stateful_verdict(&md, 0, 4, PortRole::Access) {
+            mdns_fired = true;
+        }
+    }
+    let c_mdns = !mdns_fired;
+    ok &= c_mdns;
+    kprint!("   broadcast-storm EXEMPT mDNS (200 frames) -> fired={} (must never fire; legit service-discovery passes) [{}]\n",
+        mdns_fired, if c_mdns { "ok" } else { "BUG" });
+
+    kprint!(" [P8-l2struct] {} — F6/F7/F8 -> FrameDrop; mac-flood Access->RateLimit but Uplink/AP->Observe (legit AP clients NEVER dropped); broadcast-storm fires but mDNS/SSDP/LLMNR exempt (ADR 0023 D12/D13, all via decide_l2)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
