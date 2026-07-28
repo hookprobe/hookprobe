@@ -60,3 +60,6 @@ builder/kernel-build/out/
 *.qcow2
 *.tar.gz
 !base/drivers/**/*.tar.gz          # pinned vendored-driver sources (base/drivers/SOURCES.md) are legitimate
+
+# heqk dev boot-signing keydir (builder/gen-heqk-dev-keys.sh) — private key material, never tracked
+builder/.heqk-dev-keys/
