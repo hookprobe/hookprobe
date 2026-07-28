@@ -38,7 +38,7 @@ The M1-Linux SOC (metal-proven, `BuildPlan.md` M1 milestone) is the acceptance s
 1. **Userspace-server substrate** — ELF/multi-page EL0 loader + real syscall surface + caps *enforced not asserted* (the keystone; every isolation claim depends on it).
 2. **Wasm/WASI host as an EL0 server** — runs the actual signed `.wasm`/`.cwasm` module catalogue (napse-dpi/aegis-guard/qsecbit/dnsxai) *on heqk* (ADR 0016/0017 signing ports).
 3. **Writable storage + minimal FS + sealed retention store** (eMMC write path; today read-only).
-4. **Detection-catalogue + separation-matrix parity** in RFC 9669 — the release-blocking security floor (Gate 0.7 30-row matrix + Gate R) must re-pass **on heqk metal**.
+4. **Detection-catalogue + separation-matrix parity** in RFC 9669 — the release-blocking security floor (Gate 0.7 33-row matrix + Gate R) must re-pass **on heqk metal**.
 5. **Dataplane** (native switching/filtering/mirror to replace OVS+nft).
 6. **Net stack as an EL0 service + control-plane API.**
 7. **Wi-Fi AP mode on CYW43455** (FullMAC AP — the SASE-edge default; unstarted; the longest single-driver pole).

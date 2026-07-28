@@ -57,7 +57,7 @@ Each phase is independently gate-laddered; nothing that boots green today regres
 ### Phase M2 — Detection parity (P8 rule-parity) — **os-architect / verification-engineer**
 - Port the hookprobe-os detection catalogue to RFC 9669 bytecode (event schema + BPF ISA contract, ADR 0043 D2). Re-target napse-capture/-l2guard/-quarantine/host-telemetry semantics onto the Packet Engine.
 - Stand up conntrack-equivalent flow accounting + the tri-state `decide()`/`decide_l2` enforcement-separation posture (ADR 0023) natively.
-- **Gate (release-blocking):** the **0.7 enforcement-separation matrix** (30 rows, legit-passes + attacks-caught, both directions) and **Gate R** (adversarial resilience) pass **on heqk metal**. Detection verdicts match Linux rule-for-rule on the shared corpus.
+- **Gate (release-blocking):** the **0.7 enforcement-separation matrix** (33 rows, legit-passes + attacks-caught, both directions) and **Gate R** (adversarial resilience) pass **on heqk metal**. Detection verdicts match Linux rule-for-rule on the shared corpus.
 
 ### Phase M3 — Persistence & OTA — **os-architect / release-engineer**
 - eMMC/SDHCI block driver → minimal filesystem → sealed/encrypted data volume (re-homing ADR 0007 off dm-crypt) → persistent evidence graph + QSecBit history + lifecycle-event log.

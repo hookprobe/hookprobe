@@ -226,7 +226,7 @@ release-blocking by itself.
 - **On-metal (live Pi 4, this session):** the runt-floor false-drop severing a legitimate iPhone
   (a well-formed 42-byte ARP frame) was reproduced and fixed protocol-aware (`dpi.rs:154`); the
   device regained connectivity.
-- **Gate:** `0.7-separation-matrix` — 30 rows, legit-passes + attacks-caught, both directions —
+- **Gate:** `0.7-separation-matrix` — 33 rows (22 verdict-level + 11 frame-level), legit-passes + attacks-caught, both directions —
   calls the real enforcement-decision functions and is release-blocking (`gate-ladder.sh:285`).
 - **Adversarial:** the resource-shed (D3) was the direct output of an adversarial audit that found
   the one un-shed enforcement gap; ADR 0020's harness pentests attacker × legit both directions.
