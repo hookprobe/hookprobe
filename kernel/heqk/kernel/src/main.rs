@@ -2211,6 +2211,11 @@ pub extern "C" fn kmain() -> ! {
     //     + bounded retention + evidence/QSecBit records survive reboot) ---
     p15_fs_selftest();
 
+    // --- P15-sealfs: M3.3 sealed data-volume (encryption at rest) — record
+    //     payloads are HQKSEAL1 ciphertext, tamper is rejected fail-closed, and
+    //     the volume key survives reboot via the sealed keystore ---
+    p15_sealfs_selftest();
+
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
 
@@ -4532,6 +4537,269 @@ fn p15_fs_selftest() {
             }
         }
         let _ = fs_line_done;
+    }
+}
+
+/// M3.3 — sealed data-volume (encryption at rest). Proves the three properties
+/// that make the DataVolume "sealed", over the file-backed virtio-blk device:
+///   * CONFIDENTIALITY — a RAW block read of a slot holding a known Event shows
+///     CIPHERTEXT: the plaintext field markers (ts 0xDEADBEEF…, src IP, the 16-B
+///     Event image) are ABSENT from the on-disk sector; the HQKSEAL1 magic IS.
+///   * INTEGRITY — flipping a ciphertext byte on disk (and recomputing the
+///     forgeable keyless framing digest so the frame still parses) is REJECTED at
+///     `mount_sealed` by the seal MAC; the intact records survive.
+///   * CROSS-RESTART — the VEK persists SEALED in the keystore, so boot 2 loads it
+///     (created=false) and decrypts boot 1's records field-for-field.
+/// QEMU/virtio-blk-proven; the real eMMC write + OTP-bound SRK are metal (Gate R).
+#[cfg(not(feature = "cm5"))]
+fn p15_sealfs_selftest() {
+    let present = arch_aarch64::virtio_blk::VirtioBlk::open().is_some();
+    #[cfg(not(feature = "p15-write"))]
+    {
+        if present {
+            kprint!(" [P15-sealfs] SKIP — read-only build (rebuild --features p15-write for the encryption-at-rest proof)\n");
+        } else {
+            kprint!(" [P15-sealfs] SKIP — no virtio-blk device (diskless boot)\n");
+        }
+    }
+    #[cfg(feature = "p15-write")]
+    {
+        use fslog::{SealCtx, RT_EVIDENCE, RT_QSECBIT, RT_TEST};
+        use seal::Policy;
+        use store::{RegionKind, SealedStore};
+        if !present {
+            kprint!(" [P15-sealfs] SKIP — no virtio-blk device (diskless boot)\n");
+            return;
+        }
+        let mut dev = arch_aarch64::virtio_blk::VirtioBlk::open().unwrap();
+        let cap = {
+            use hal::BlockDev;
+            dev.block_count()
+        };
+        let mut store = match SealedStore::open(&mut dev) {
+            Ok(s) => s,
+            Err(e) => {
+                kprint!(" [P15-sealfs] FAIL — guard refused device MBR: {:?}\n", e);
+                return;
+            }
+        };
+        if store.add_region(8192, cap, RegionKind::DataVolume).is_err() {
+            kprint!(" [P15-sealfs] FAIL — could not register the data-volume region\n");
+            return;
+        }
+
+        // Same synthetic SRK + strict policy as P15-persist (deterministic across
+        // both boots). Synthetic-SRK caveat: NOT real measurement enforcement until
+        // OTP/V3 — this validates the seal-at-rest mechanism + key persistence.
+        let srk = [0x5au8; 32];
+        let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
+        pcr[0] = [0x11; 32];
+        pcr[1] = [0x22; 32];
+        pcr[2] = [0x33; 32];
+        let policy = Policy {
+            mask: boot_abi::SEAL_POLICY_STRICT,
+            device_id: 0x0BADF00D_1234_5678u64,
+            svn_floor: 7,
+            pcr,
+        };
+
+        // ---- Load-or-create the Volume Encryption Key (sealed in the keystore) ----
+        let (vek, created) = match fslog::load_or_create_vek(&mut store, &srk, &policy) {
+            Ok(v) => v,
+            Err(e) => {
+                kprint!(" [P15-sealfs] FAIL — VEK load/create failed: {:?}\n", e);
+                return;
+            }
+        };
+        let ctx = SealCtx { vek: &vek, policy: &policy };
+
+        // Known Event so both the confidentiality scan and the boot-2 round-trip
+        // can look for exact field markers.
+        const EV_TS: u64 = 0xDEAD_BEEF_0000_1234;
+        const EV_SRC: u32 = 0x0A00_0205; // 10.0.2.5
+        const EV_RULE: u16 = 1000;
+        const EV_SEV: u8 = 7;
+        const EV_VERDICT: u8 = 1;
+        const QS_TS: u64 = 0x0000_0000_1234_5678;
+        const QS_SCORE: u32 = 4242;
+        let evb = {
+            let mut b = [0u8; 16];
+            b[0..8].copy_from_slice(&EV_TS.to_le_bytes());
+            b[8..12].copy_from_slice(&EV_SRC.to_le_bytes());
+            b[12..14].copy_from_slice(&EV_RULE.to_le_bytes());
+            b[14] = EV_SEV;
+            b[15] = EV_VERDICT;
+            b
+        };
+
+        // Sliding-window substring test (confidentiality scan).
+        let contains = |hay: &[u8], needle: &[u8]| -> bool {
+            if needle.is_empty() || needle.len() > hay.len() {
+                return false;
+            }
+            hay.windows(needle.len()).any(|w| w == needle)
+        };
+
+        // ---- (b) CONFIDENTIALITY: a raw slot read must be ciphertext ----
+        let (clo, chi) = (8620u64, 8630u64);
+        let mut conf_seal_magic = false;
+        let pass_conf = (|| -> bool {
+            let mut log = match fslog::format(&mut store, clo, chi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            if log.append_sealed(&mut store, &ctx, RT_EVIDENCE, &evb).is_err() {
+                return false;
+            }
+            // Raw read of slot for seq 0 (lba = clo + 1).
+            let mut raw = [0u8; fslog::SEC];
+            if store.read_sector(clo + 1, &mut raw).is_err() {
+                return false;
+            }
+            // The payload IS a HQKSEAL1 blob (positive check) …
+            conf_seal_magic = &raw[fslog::REC_HDR..fslog::REC_HDR + 8] == seal::SEAL_MAGIC;
+            // … and NONE of the plaintext markers survive on disk (the proof).
+            let ts_absent = !contains(&raw, &EV_TS.to_le_bytes());
+            let src_absent = !contains(&raw, &EV_SRC.to_le_bytes());
+            let img_absent = !contains(&raw, &evb);
+            conf_seal_magic && ts_absent && src_absent && img_absent
+        })();
+
+        // ---- (c) INTEGRITY: a forged-digest ciphertext edit is rejected ----
+        // Append 3 sealed records, then TAMPER the tail (seq 2): flip a ciphertext
+        // byte AND recompute the keyless framing digest so the frame still parses —
+        // only the seal MAC can catch this. mount_sealed must drop seq 2, keep 0,1.
+        let (tlo, thi) = (8640u64, 8650u64);
+        let mut tamper_plaintext_leaked = false;
+        let pass_integ = (|| -> bool {
+            let mut log = match fslog::format(&mut store, tlo, thi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            for i in 0..3u8 {
+                let p = [b'S', b'E', b'C', i + b'0'];
+                if log.append_sealed(&mut store, &ctx, RT_TEST, &p).is_err() {
+                    return false;
+                }
+            }
+            let tail_lba = tlo + 1 + 2; // seq 2
+            let mut sec = [0u8; fslog::SEC];
+            if store.read_sector(tail_lba, &mut sec).is_err() {
+                return false;
+            }
+            let len = u16::from_le_bytes([sec[16], sec[17]]) as usize;
+            // Flip one CIPHERTEXT byte (past the 128-B seal header inside the payload).
+            let ct0 = fslog::REC_HDR + seal::SEAL_HDR_LEN;
+            if ct0 >= fslog::REC_HDR + len {
+                return false;
+            }
+            sec[ct0] ^= 0xFF;
+            // Recompute the (forgeable, keyless) framing digest so parse_record passes.
+            {
+                use boot_abi::sha256::Hasher;
+                let mut h = Hasher::new();
+                h.update(&sec[0..24]);
+                h.update(&sec[fslog::REC_HDR..fslog::REC_HDR + len]);
+                let d = h.finish();
+                sec[24..32].copy_from_slice(&d[..8]);
+            }
+            if store.store_sector(tail_lba, &sec).is_err() {
+                return false;
+            }
+            // Keyed re-mount: the seal MAC rejects seq 2; seq 0,1 survive.
+            let recovered = match fslog::LogStore::mount_sealed(&store, &ctx, tlo, thi) {
+                Ok(l) => l,
+                Err(_) => return false,
+            };
+            if recovered.count() != 2 || recovered.next_seq() != 2 {
+                return false;
+            }
+            // No plaintext from the tampered record is ever delivered.
+            let mut n = 0u64;
+            recovered
+                .for_each_sealed(&store, &ctx, |_seq, _rt, pl| {
+                    n += 1;
+                    if pl == b"SEC2" {
+                        tamper_plaintext_leaked = true;
+                    }
+                })
+                .ok();
+            // For contrast: the key-free mount would ACCEPT the forged frame (the
+            // digest was fixed) — proving the seal MAC, not the digest, is the guard.
+            let digest_only = fslog::LogStore::mount(&store, tlo, thi)
+                .map(|l| l.count())
+                .unwrap_or(0);
+            n == 2 && !tamper_plaintext_leaked && digest_only == 3
+        })();
+
+        // ---- (a)+(d) CROSS-RESTART: sealed Event + QSecBit survive reboot ----
+        let (plo, phi) = (8660u64, 8670u64);
+        match fslog::open_or_format(&mut store, plo, phi) {
+            Ok(log) if log.count() == 0 => {
+                // BOOT 1 — append the real sealed records.
+                let mut qsb = [0u8; 12];
+                qsb[0..8].copy_from_slice(&QS_TS.to_le_bytes());
+                qsb[8..12].copy_from_slice(&QS_SCORE.to_le_bytes());
+                let mut log = log;
+                let wrote = log.append_sealed(&mut store, &ctx, RT_EVIDENCE, &evb).is_ok()
+                    && log.append_sealed(&mut store, &ctx, RT_QSECBIT, &qsb).is_ok()
+                    && log.append_sealed(&mut store, &ctx, RT_TEST, b"sealed-tail").is_ok();
+                kprint!(" [P15-sealfs] BOOT1 — VEK {} + sealed to keystore; confidentiality {} (on-disk ciphertext, HQKSEAL1 magic {}), integrity {} (MAC rejects forged-digest tamper); wrote {} sealed records — reboot to verify key-survival + decrypt\n",
+                    if created { "generated" } else { "loaded" },
+                    yn(pass_conf), yn(conf_seal_magic), yn(pass_integ),
+                    if wrote { 3 } else { 0 });
+            }
+            Ok(_) => {
+                // BOOT 2 — the VEK must have LOADED (created=false), and decrypt.
+                let key_survived = !created;
+                let log = match fslog::LogStore::mount_sealed(&store, &ctx, plo, phi) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        kprint!(" [P15-sealfs] FAIL — sealed re-mount failed: {:?}\n", e);
+                        return;
+                    }
+                };
+                let mut nseen = 0u64;
+                let mut order_ok = true;
+                let mut last: Option<u64> = None;
+                let mut ev_ok = false;
+                let mut qs_ok = false;
+                log.for_each_sealed(&store, &ctx, |seq, rt, pl| {
+                    nseen += 1;
+                    if let Some(x) = last {
+                        if seq != x + 1 {
+                            order_ok = false;
+                        }
+                    }
+                    last = Some(seq);
+                    if rt == RT_EVIDENCE && pl.len() >= 16 {
+                        let ts = u64::from_le_bytes(pl[0..8].try_into().unwrap());
+                        let src = u32::from_le_bytes(pl[8..12].try_into().unwrap());
+                        let rule = u16::from_le_bytes(pl[12..14].try_into().unwrap());
+                        ev_ok = ts == EV_TS
+                            && src == EV_SRC
+                            && rule == EV_RULE
+                            && pl[14] == EV_SEV
+                            && pl[15] == EV_VERDICT;
+                    } else if rt == RT_QSECBIT && pl.len() >= 12 {
+                        let ts = u64::from_le_bytes(pl[0..8].try_into().unwrap());
+                        let score = u32::from_le_bytes(pl[8..12].try_into().unwrap());
+                        qs_ok = ts == QS_TS && score == QS_SCORE;
+                    }
+                })
+                .ok();
+                let pass_a = nseen == 3 && order_ok && log.count() == 3;
+                let pass_d = key_survived && ev_ok && qs_ok;
+                let pass = pass_conf && pass_integ && pass_a && pass_d;
+                kprint!("   sealfs: key-survived-reboot {}, decrypted-in-order {} ({}), Event round-trip {}, QSecBit round-trip {}, confidentiality {}, integrity {}\n",
+                    yn(key_survived), yn(pass_a), nseen, yn(ev_ok), yn(qs_ok), yn(pass_conf), yn(pass_integ));
+                kprint!(" [P15-sealfs] {} — M3.3 sealed data-volume: record payloads are HQKSEAL1 ciphertext at rest (plaintext markers ABSENT on disk), a forged-digest ciphertext tamper is MAC-REJECTED fail-closed, and the sealed VEK SURVIVED reboot to decrypt the evidence Event + QSecBit history (virtio-blk; real eMMC + OTP-bound SRK = metal Gate R)\n",
+                    if pass { "PASS" } else { "FAIL" });
+            }
+            Err(e) => {
+                kprint!(" [P15-sealfs] FAIL — sealed persistence log open failed: {:?}\n", e);
+            }
+        }
     }
 }
 
