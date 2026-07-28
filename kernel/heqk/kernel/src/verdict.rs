@@ -125,32 +125,49 @@ pub const DEFAULT_PORT_ROLE: PortRole = PortRole::Access;
 
 /// The context `decide()` reads. `allowlisted` = the source is on the management
 /// path (the floor). `confirmed` = an ADR-0018 confirmation signal is present
-/// (handshake / conntrack-ESTABLISHED) — always `false` on heqk today, so
-/// `Quarantine` is unreachable until the flow-state port lands (honest per the
-/// gap-map). `port_role` = the D12 mac-flood FP guard. Everything is a `Copy`
-/// scalar — no allocation, `no_std`-clean.
+/// (M2.2: a confirmed distinct-dst-port scan — SYN-only to >= CONFIRM ports from one
+/// source WITH ZERO establishment — sourced from `ratelimit::scan_confirmed`, so
+/// `Quarantine` is now reachable for a confirmed sweep and unreachable for anything a
+/// legit busy source can produce). `over_limit` = a per-source RATE/PORT-COUNT wall is
+/// actively crossed THIS window (a bounded, self-reverting cap should touch the wire);
+/// `false` for a single crafted packet with no rate context. `port_role` = the D12
+/// mac-flood FP guard. Everything is a `Copy` scalar — no allocation, `no_std`-clean.
 #[derive(Clone, Copy)]
 pub struct DecideCtx {
     pub allowlisted: bool,
     pub confirmed: bool,
+    pub over_limit: bool,
     pub port_role: PortRole,
 }
 
 impl DecideCtx {
     /// Build the context for an IPv4 source (host-order u32; 0 = no attributable
-    /// source), with the default port role. `confirmed` is wired `false` until heqk
-    /// grows a flow-state / handshake tracker (M2.2).
+    /// source), with the default port role. M2.2: `confirmed` is now sourced from
+    /// flow-state (`ratelimit::scan_confirmed`) instead of the old hardwired `false`, so
+    /// a confirmed scanner's findings can reach `Quarantine`. `over_limit` defaults
+    /// `false` (a single-packet finding carries no rate context); the stateful port-scan
+    /// detector sets it explicitly when the distinct-port wall is crossed.
     #[inline]
     pub fn for_src(src: u32) -> Self {
-        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false, port_role: DEFAULT_PORT_ROLE }
+        DecideCtx {
+            allowlisted: is_allowlisted(src),
+            confirmed: crate::ratelimit::scan_confirmed(src as u64),
+            over_limit: false,
+            port_role: DEFAULT_PORT_ROLE,
+        }
     }
 
     /// Build the context for an L2 finding on a specific port role (mac-flood /
     /// broadcast-storm). `src` = the IPv4 source if the frame carries one (for the
-    /// mgmt floor + attribution), else 0.
+    /// mgmt floor + attribution), else 0. L2 findings are not flow-confirmed.
     #[inline]
     pub fn for_l2(src: u32, port_role: PortRole) -> Self {
-        DecideCtx { allowlisted: is_allowlisted(src), confirmed: false, port_role }
+        DecideCtx {
+            allowlisted: is_allowlisted(src),
+            confirmed: false,
+            over_limit: false,
+            port_role,
+        }
     }
 }
 
@@ -187,15 +204,22 @@ fn decide_core(class: FindingClass, ctx: DecideCtx) -> Verdict {
         // a customer. The floor is moot (already PASS), but honored for clarity.
         FindingClass::IdentityReputation | FindingClass::IdentitySpoof => Verdict::Observe,
 
-        // A single scan-shaped packet: unconfirmed, no rate context. Confirmed →
-        // Quarantine (unreachable today); mgmt → floor; else observe on the wire.
+        // A scan SHAPE finding, graduated by flow-state (M2.2). mgmt → floor;
+        // CONFIRMED (>= CONFIRM distinct SYN-only ports, zero establishment) → durable
+        // Quarantine; else a bounded, self-reverting RateLimit whose `over_limit` is the
+        // flow-state signal — `true` once the per-source distinct-port wall is crossed
+        // (a real sweep → the cap touches the wire), `false` for a single crafted flag
+        // packet with no rate context (→ Observe on the wire, unchanged for the stateless
+        // NULL/FIN/Xmas tier). A legit source can reach neither: establishment holds
+        // `confirmed` off and it never crosses the distinct-port wall (`over_limit` stays
+        // `false`).
         FindingClass::ScanShape => {
             if ctx.allowlisted {
                 Verdict::Allowlisted
             } else if ctx.confirmed {
                 Verdict::Quarantine
             } else {
-                Verdict::RateLimit { over_limit: false }
+                Verdict::RateLimit { over_limit: ctx.over_limit }
             }
         }
 

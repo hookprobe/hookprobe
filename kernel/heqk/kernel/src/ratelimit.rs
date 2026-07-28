@@ -170,3 +170,186 @@ pub fn bcast_over(port: u64, threshold: u64) -> u64 {
         0
     }
 }
+
+// =====================================================================================
+// M2.2 — FLOW STATE (the conntrack-equivalent). Per-SOURCE state, gen-tagged + windowed
+// exactly like the M2.1 mac-flood seed, but keyed on the L3 IPv4 source. Two facts per
+// source: a DISTINCT SYN-only dst-port set (rule 1000003 port-scan counter), and an
+// ESTABLISHED-flow count (heqk's handshake-completed signal — the ADR-0018 confirmation
+// input `decide()` needs). Plus a pure flow-table saturation evaluator (A7 signal).
+//
+// LEGIT-SAFETY KEYSTONE. Every escalation below is gated on `est == 0` (zero
+// established flows). An ESTABLISHED (handshake-completed) flow is definitionally NOT a
+// scan, so a legit busy source — a NAS with 150 concurrent established flows, a phone
+// doing a 100/s web-load burst — can NEVER cross the RateLimit or Confirm bar, however
+// many distinct ports its SYNs briefly touch. The verdict keys on scan SHAPE (SYN-only
+// to many distinct ports WITHOUT establishment), never on flow COUNT. This deliberately
+// favors MISSING a scanner that found one open port over DROPPING a legit source — the
+// operator's hard rule (ADR 0023): a legitimate customer connection must ALWAYS pass.
+// =====================================================================================
+
+/// Distinct source slots (direct-mapped by IP low bits, gen-tagged, collision-reset —
+/// a colliding source EVICTS the slot's prior occupant, never counts against it).
+const FLOW_SRCS: usize = 16;
+/// Per-source distinct-dst-port set (gen-tagged so a new window is an O(1) generation
+/// bump, never an O(N) clear). 256 slots hold the confirm bar (>=100) with headroom.
+const SCAN_PORT_SET: usize = 256;
+/// The scan measurement window (distinct SYN-only ports accrue over this).
+const SCAN_WINDOW_SECS: u64 = 10;
+
+/// Distinct SYN-only dst-port bars (rule 1000003 parity). Crossing RATELIMIT (with zero
+/// establishment) is a bounded, self-reverting cap; crossing the higher CONFIRM bar
+/// (still zero establishment) is a durable Quarantine — a thorough sweep is stronger
+/// evidence, and the anti-spoof cost of a durable block is only paid once confirmation
+/// is unambiguous.
+pub const SCAN_PORTS_RATELIMIT: u64 = 50;
+pub const SCAN_PORTS_CONFIRM: u64 = 100;
+
+/// Blanket per-source new-connection rate ceiling — parity with the Linux
+/// `scan_responder::DEFAULT_NEW_CONN_PPS`. A legit heavy burst (~100/s) sits far under
+/// it; the self-reverting meter that ENFORCES this is M2.3 (here it is the reconciled
+/// cap VALUE only, so a legit burst is provably under the wall).
+pub const DEFAULT_NEW_CONN_PPS: u64 = 400;
+
+/// The flow-table saturation shed wall (A7 / L9), a RESOURCE-REALITY percentage — never
+/// keyed on identity. The self-reverting per-source top-talker shed ACTION is M2.3; M2.2
+/// supplies the SIGNAL + the verdict map only.
+pub const SATURATION_SHED_PCT: u64 = 80;
+
+static SCAN_WIN: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static SCAN_GEN: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(1) }; FLOW_SRCS];
+static SCAN_SRC: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static SCAN_DISTINCT: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static SCAN_EST: [AtomicU64; FLOW_SRCS] = [const { AtomicU64::new(0) }; FLOW_SRCS];
+static SCAN_PORT_GEN: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
+    [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
+static SCAN_PORT_KEY: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
+    [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
+
+/// A GLOBAL flow-table fill counter (the conntrack-equivalent occupancy). Bumped on each
+/// established flow; a real gauge would also decrement on teardown (M2.3). Exposed for
+/// the live saturation SIGNAL; the deterministic verdict map takes count/max as params.
+static FLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Locate + refresh source `src`'s slot for the CURRENT window. A new source aliasing
+/// the slot, or an expired window, resets the slot (generation bump invalidates the
+/// distinct-port set in O(1), and the distinct + established counters reset). Mirrors the
+/// `syn_rate_over` / `mac_flood_over` collision-reset discipline so one source's state is
+/// never counted against another's.
+#[inline]
+fn touch_scan_slot(src: u64) -> usize {
+    let s = (src as usize) % FLOW_SRCS;
+    let now = cntpct();
+    let win = cntfrq().max(1).saturating_mul(SCAN_WINDOW_SECS);
+    let start = SCAN_WIN[s].load(Ordering::Relaxed);
+    if SCAN_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
+        SCAN_SRC[s].store(src, Ordering::Relaxed);
+        SCAN_WIN[s].store(now, Ordering::Relaxed);
+        SCAN_GEN[s].fetch_add(1, Ordering::Relaxed);
+        SCAN_DISTINCT[s].store(0, Ordering::Relaxed);
+        SCAN_EST[s].store(0, Ordering::Relaxed);
+    }
+    s
+}
+
+/// Record a SYN-only (connection-attempt) packet to `dst_port` from `src` (host-order
+/// IPv4). Adds the port to the source's distinct set; returns the running distinct count.
+/// `src == 0` (no attribution) is ignored — the port-scan verdict requires an identity.
+pub fn syn_scan_observe(src: u64, dst_port: u16) -> u64 {
+    if src == 0 {
+        return 0;
+    }
+    let s = touch_scan_slot(src);
+    let gen = SCAN_GEN[s].load(Ordering::Relaxed);
+    let pk = (dst_port as u64) | (1u64 << 48); // non-zero key (port 0 is a real port)
+    let i = (dst_port as usize) % SCAN_PORT_SET;
+    let seen = SCAN_PORT_GEN[s][i].load(Ordering::Relaxed) == gen
+        && SCAN_PORT_KEY[s][i].load(Ordering::Relaxed) == pk;
+    if !seen {
+        SCAN_PORT_GEN[s][i].store(gen, Ordering::Relaxed);
+        SCAN_PORT_KEY[s][i].store(pk, Ordering::Relaxed);
+        SCAN_DISTINCT[s].fetch_add(1, Ordering::Relaxed);
+    }
+    SCAN_DISTINCT[s].load(Ordering::Relaxed)
+}
+
+/// Record that a flow from `src` reached ESTABLISHED (handshake completed — heqk's
+/// cheapest proxy is an ACK-bearing segment on an existing flow). Bumps the source's
+/// established count AND the global flow-table fill. An established source is
+/// definitionally NOT a scanner: `est > 0` holds every scan escalation OFF (below).
+pub fn flow_established(src: u64) {
+    FLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+    if src == 0 {
+        return;
+    }
+    let s = touch_scan_slot(src);
+    SCAN_EST[s].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Distinct SYN-only dst-port count for `src` in the current window (0 if the slot was
+/// evicted by another source, or no attribution).
+pub fn scan_distinct_ports(src: u64) -> u64 {
+    if src == 0 {
+        return 0;
+    }
+    let s = (src as usize) % FLOW_SRCS;
+    if SCAN_SRC[s].load(Ordering::Relaxed) != src {
+        return 0;
+    }
+    SCAN_DISTINCT[s].load(Ordering::Relaxed)
+}
+
+/// Established-flow count for `src` in the current window (0 if evicted / unattributed).
+pub fn flow_established_count(src: u64) -> u64 {
+    if src == 0 {
+        return 0;
+    }
+    let s = (src as usize) % FLOW_SRCS;
+    if SCAN_SRC[s].load(Ordering::Relaxed) != src {
+        return 0;
+    }
+    SCAN_EST[s].load(Ordering::Relaxed)
+}
+
+/// The bounded-RateLimit gate: a SYN-only distinct-port scan crossed the RATELIMIT bar
+/// WITH ZERO establishment. Keyed on scan SHAPE + no-establishment, never flow count.
+pub fn scan_over_ratelimit(src: u64) -> bool {
+    flow_established_count(src) == 0 && scan_distinct_ports(src) >= SCAN_PORTS_RATELIMIT
+}
+
+/// The ADR-0018 CONFIRMATION signal for a durable Quarantine: a SYN-only sweep to
+/// >= CONFIRM distinct ports from one source WITH ZERO establishment. Any establishment
+/// (a single completed handshake) holds this at `false` forever within the window — this
+/// is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
+pub fn scan_confirmed(src: u64) -> bool {
+    flow_established_count(src) == 0 && scan_distinct_ports(src) >= SCAN_PORTS_CONFIRM
+}
+
+/// Live flow-table fill as a percentage (0..=100) — the A7 conntrack-saturation SIGNAL.
+pub fn flow_saturation_pct() -> u64 {
+    saturation_pct(FLOW_COUNT.load(Ordering::Relaxed), flow_table_max())
+}
+
+/// The logical flow-table capacity used for the live saturation percentage. Sourced from
+/// the manifest per-platform in production (M2 follow-on); a conservative default here.
+#[inline]
+pub fn flow_table_max() -> u64 {
+    100_000
+}
+
+/// Pure, deterministic saturation evaluator (mirrors the Linux
+/// `evaluate_resource_reality` conntrack ratio): `count/max` as a percentage. Used by the
+/// verdict map + selftest so the A7/L9 rows are provable without wall-clock/global state.
+pub fn saturation_pct(count: u64, max: u64) -> u64 {
+    if max == 0 {
+        return 0;
+    }
+    count.saturating_mul(100) / max
+}
+
+/// Does the flow-table fill cross the resource-reality shed wall (>= 80%)? Keyed on
+/// RESOURCE REALITY (table fill), never identity — a legit busy source in an un-saturated
+/// table (L9) is never a shed candidate. The self-reverting SHED ACTION itself is M2.3.
+pub fn table_saturated(count: u64, max: u64) -> bool {
+    saturation_pct(count, max) >= SATURATION_SHED_PCT
+}
