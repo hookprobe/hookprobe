@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-boot-abi = { path = "../boot-abi" }
+# `otaverify` pulls in the SHARED hybrid verifier (boot-abi::verify) — the same
+# ONE verifier + trust root the kernel's M3.4 OTA pre-flight uses. HBoot's
+# boot-time verify calls it; there is no second verifier.
+boot-abi = { path = "../boot-abi", features = ["otaverify"] }
 # HYBRID secure boot — both must verify:
 # ed25519 (classical, RFC 8032) + SLH-DSA-SHA2-128s (post-quantum, FIPS 205).
 # default-features=false drops std + the RNG (getrandom); verification needs

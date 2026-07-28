@@ -43,13 +43,17 @@ wrong for an evidence graph. Nothing in the tree persists **detection events, th
 graph, or QSecBit history**: `events.rs` pushes 24-byte headers into an SPSC ring drained
 to serial/SIEM (never disk); `telemetry.rs` keeps the QSecBit-lite score **in RAM only**.
 
-**On-device OTA does not exist.** `ab-update.sh` is a **host-PC** script: it mounts the
-FAT boot partition over rpiboot and copies `heqk8-b.img`. The device cannot rewrite its own
-boot slot — the boot partition lives at LBA ≥ 2048, which the current guard **refuses by
-design**. What the *device* already owns is the **fallback half** of A/B: the firmware
-one-shot `tryboot` flag + hboot's EL2 trial watchdog + the SVN anti-rollback floor. M3 OTA
-**rides on that machinery** (reuse, don't reinvent) and adds only the missing front half —
-on-device *pull, inactive-slot write, verify, slot-flip*.
+**On-device OTA now exists in QEMU (M3.4, `P15-ota`), host-PC path retained for factory.**
+`ab-update.sh` is still the **host-PC** factory/recovery script (mounts the FAT boot partition
+over rpiboot, copies `heqk8-b.img`). The *device* already owned the **fallback half** of A/B —
+the firmware one-shot `tryboot` flag + hboot's EL2 trial watchdog + the SVN anti-rollback
+floor. M3.4 (`kernel/heqk/kernel/src/ota.rs`) adds the missing **front half** on-device —
+*pull → inactive-slot write → verify → slot-flip* — riding on that existing machinery (reuse,
+don't reinvent). The candidate is staged **only** into the `InactiveSlot` region (the active
+slot / LBA 0 stay guard-refused, brick-safe), verified by the **shared** hboot verifier
+(`boot-abi/src/verify.rs`, no second trust root) BEFORE any flip, and the OTA state machine is
+persisted so it survives reboot. The real firmware one-shot flip + PM-watchdog trial reset +
+power cycle remain **Gate R** (metal).
 
 ### What M3 OTA inherits from the existing hboot A/B + SVN
 
@@ -270,6 +274,10 @@ phased the read driver last.
 - **The FS is purpose-built, not a standard.** A custom log-structured format is right for an
   appliance but carries its own correctness burden; the torn-write / recovery gate (`P15-fs`)
   is load-bearing and must be adversarial.
-- **Docs-ahead-of-kernel drift** (Track-C standing caveat): this doc specifies M3; the kernel
-  has M3.0–M3.4 as **⬜ absent** today. Keep `LIFECYCLE.md` / `buildPlan.md` §5a and this doc
-  in sync as phases land, and never let the doc imply a phase is built before its gate is green.
+- **Docs-ahead-of-kernel drift** (Track-C standing caveat): M3.0–M3.4 have now LANDED in the
+  kernel and are QEMU-gate-green — `P15-guard2` (M3.0), `P15-persist` (M3.1), `P15-fs` (M3.2),
+  `P15-sealfs` (M3.3), and `P15-ota` (M3.4, on-device A/B OTA over the shared hboot verifier).
+  The metal half (real eMMC write, real firmware one-shot flip + PM-watchdog reset, power-cycle
+  persistence) remains **Gate R** and unproven on silicon. Keep `LIFECYCLE.md` / `buildPlan.md`
+  §5a and this doc in sync, and never let the doc imply the metal sign-off is done before Gate R
+  is green.

@@ -31,6 +31,10 @@ dependencies = [
 [[package]]
 name = "boot-abi"
 version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+ "fips205",
+]
 
 [[package]]
 name = "byteorder"
