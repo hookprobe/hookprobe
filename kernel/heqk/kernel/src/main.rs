@@ -2225,6 +2225,20 @@ pub extern "C" fn kmain() -> ! {
             if ok { "PASS" } else { "FAIL" });
     }
 
+    // --- M4.2b (P19-noise): the PQ-HYBRID secure-channel HANDSHAKE over the M4.2a
+    // primitives. Noise (ADR 0004 HTP-v2), NOT rustls: IK-analog, hybrid X25519 +
+    // ML-KEM-768 KEX combined via hybrid_combine, ChaCha20-Poly1305 AEAD, Ed25519
+    // (PUF-anchored) device identity. Noise rev-34 SymmetricState/CipherState/Split
+    // implemented to spec; KEM-in-Noise per PQNoise. Loopback in QEMU with seeded
+    // ephemerals (real HW-TRNG/PUF/PKI + real network = metal/M4.3, Gate R). ---
+    #[cfg(feature = "securechannel")]
+    {
+        kprint!(" [P19-noise] M4.2b PQ-hybrid Noise handshake (IK-analog, X25519+ML-KEM-768, Ed25519 device auth):\n");
+        let ok = securechannel::noise_selftest();
+        kprint!(" [P19-noise] {} — full initiator<->responder handshake yields MATCHING crossed transport keys (i.send==r.recv, i.recv==r.send, send!=recv, transcript-hash agree); a transport record round-trips (confidentiality+integrity) and a REPLAY is rejected (advanced nonce counter); a TAMPERED handshake msg aborts (AEAD auth); a WRONG responder static key aborts (es key diverges); an UNENROLLED device identity aborts; the hybrid combiner binds BOTH ML-KEM & X25519 legs (secure if either holds) and fresh ephemerals derive a new key (forward secrecy). DETERMINISTIC loopback (seeded); real HW-TRNG/PUF/responder-PKI + network transport (anti-replay window) = metal/M4.3 (Gate R)\n",
+            if ok { "PASS" } else { "FAIL" });
+    }
+
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
     // transport that REJECTS a hostile driver's forged descriptors, proven with an
     // in-kernel stand-in driver + a software LoopDev. Metal GemDev/RtlDev deferred. ---

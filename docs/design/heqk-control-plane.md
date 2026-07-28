@@ -273,3 +273,34 @@ not exist in the tree and must be brought in as new `no_std` crates.**
   from a build-stamped floor / signed time, refine via SNTP. Own item in the M4.2 sub-plan.
 - **Standalone invariant is testable, not aspirational** — every M4 gate carries an air-gapped
   negative case. A regression here is release-blocking.
+
+---
+
+## M4.2b security-auditor review — verdict: GO (loopback), with tracked metal/M4.3 conditions
+
+The PQ-hybrid Noise handshake (`kernel/src/securechannel.rs`) passed an adversarial
+security-auditor review (2026-07-29). The Noise rev-34 state machine, the AEAD
+nonce-never-reuse invariant, the transcript/Ed25519-signature binding (no UKS /
+misbinding), the ML-KEM implicit-reject handling (KEM ss never trusted before the AEAD
+gate), the hybrid_combine (HKDF over two fixed-length secrets, "secure if either leg
+holds"), and the fixed suite (no downgrade surface) were all **verified correct**; the
+loopback selftest does **not** false-pass. **No must-fix correctness bug.** Verdict: **GO**
+to commit as a loopback-proven phase.
+
+**Tracked conditions — these do NOT block the loopback commit; every one BLOCKS the
+metal / M4.3 network promotion (Gate R):**
+1. **⚠️ Entropy (highest consequence).** Real ephemerals/keygen MUST be HW-TRNG-sourced on
+   metal, with NO seeded fallback and a boot-time entropy-health assertion. The KATs pass
+   identically for a seed or a TRNG — a wiring slip that lets a seeded path reach metal
+   gives the whole fleet reused ephemerals behind a green gate (total confidentiality break).
+2. **Fixed buffers.** Replace the transport/handshake `alloc::Vec` (leaks per-record on the
+   never-freeing bump allocator) with fixed in-place buffers (the AEAD is already detached).
+3. **Zeroize.** Enable `zeroize` on the dalek crates + scrub the raw `ss_*`/`dh_*` arrays.
+4. **`key_for_test()`** — feature-gate behind `securechannel-selftest`, out of the metal profile.
+5. **Anti-replay window** (IPsec/DTLS-style sliding window) + **msg1-replay DoS** mitigation
+   (cookie/retry or rate-limit — asymmetric ML-KEM/keygen/verify work on the responder).
+6. **CBOM/SBOM** entry for the pre-release `kem =0.3.0-pre.0` crate (SHA + "pre-release"),
+   upgrade when RustCrypto tags `kem 0.3`.
+7. **ML-DSA-65 co-signature** at the auth site (ADR 0002/0004 target — roadmap; KEX is
+   hybrid-PQ today, auth is classical Ed25519, which is acceptable now since auth signatures
+   are not subject to harvest-now-decrypt-later).
