@@ -150,3 +150,35 @@ The `[P15-guard2]` gate proves the allowlist/refusal predicate every boot (no de
 needed). **Honesty:** the virtio-blk path proves the write-path logic + persistence
 in QEMU; the real eMMC write on `brcm,bcm2712-sdhci`, real power-cycle persistence,
 and the measurement binding (OTP/V3) remain **metal (Gate R)** — not claimed here.
+
+## M3.2 — the crash-safe record store (`fslog.rs`)
+
+The `DataVolume` region gains a **log-structured record store** (`kernel/src/fslog.rs`)
+so the evidence graph + QSecBit history **persist** (today they reach only the
+serial/SIEM ring + RAM). It is deliberately **not a POSIX FS** — a ring of
+self-validating fixed-size records is the right shape for append-mostly telemetry:
+
+- **Layout:** a `HQKFSLOG` superblock at the region base, then N one-sector RECORD
+  slots. Record `seq` → slot `seq % N`, so the log is a **ring** — append past
+  capacity overwrites the oldest slot (**bounded, honest retention**, CLAUDE.md).
+- **Record (512 B, sector-atomic):** `magic · seq · len · rtype · digest[8] ·
+  payload(≤480 B)`. The digest is a keyless truncated SHA-256 over the header
+  (digest field excluded) + payload — integrity only; **per-record/volume
+  ENCRYPTION is M3.3** (`seal.rs`), not this phase.
+- **Crash recovery (load-bearing):** every record self-validates, so no separate
+  write cursor exists to get torn. On `mount`, scan all slots, keep the valid ones,
+  set next seq = (max valid seq)+1. A power-loss torn write leaves exactly one
+  invalid slot at the frontier — it fails its digest and is **dropped**; every
+  intact record survives and the store is immediately writable again.
+- **Every write is guarded:** `format`/`append` go through `store_sector`, so a
+  record can only ever land inside the `DataVolume` allowlist — a ring-math or
+  region bug is `WindowEscape`, never a partition-table or boot-slot write.
+
+The `[P15-fs]` gate proves all four on virtio-blk: (a) N records survive an actual
+reboot **in order**; (b) an **injected torn-tail** record (valid header, one payload
+byte corrupted after digesting) is dropped on re-mount while the intact records
+survive and a new append succeeds; (c) a 4-slot ring fed 10 records keeps only the
+last 4 (oldest evicted) and never writes outside the region; (d) a real `events::Event`
++ a QSecBit history record round-trip field-for-field across the reboot. **Honesty:**
+QEMU/virtio-blk-proven; the real eMMC write + real power-fail atomicity are **metal
+(Gate R)**, and record confidentiality waits on **M3.3** (this phase is integrity only).
