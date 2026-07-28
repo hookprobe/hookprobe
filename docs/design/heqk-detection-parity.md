@@ -10,6 +10,18 @@
 > `modules/napse-capture/loader/tests/separation_matrix_frames.rs` (the acceptance matrix),
 > `docs/adr/0043` / `0044` (the substrate pivot), `kernel/heqk/PRODUCTION_READINESS.md` (heqk's
 > QEMU-proven surface).
+>
+> **⬆ M2 IMPLEMENTATION STATUS (2026-07-28 — QEMU-green).** M2.0–M2.4 are now BUILT + committed +
+> validate.sh-green on heqk under QEMU (no longer scoping-only): **M2.0** tri-state `decide()` seam
+> (`verdict.rs`, `P8-sep`) · **M2.1** L2 structural + mac-flood/bcast-storm w/ Access-vs-Uplink FP
+> guards (`P8-l2struct`) · **M2.2** flow-state/conntrack-equiv → confirmed-scan `Quarantine` +
+> saturation signal (`P8-flow`) · **M2.3** resource-shed: self-reverting L1 conn-cap + L2 saturation
+> + L3 PSI-equiv, mgmt-floor-never-shed (`P8-shed`) · **M2.4** L7 observe-only beacon/lateral/exfil/
+> DNS (`P8-l7b`); host-EDR EXCLUDED (off-device, ADR 0044 D3). **Metal remainder (Gate R — NOT
+> QEMU-closable):** the L3 PSI *real* signal, conntrack-saturation + confirmed-scan *under real
+> load*, self-revert TTL under wall-clock, and the whole-matrix end-to-end "a legit customer ALWAYS
+> passes under load." **~24/33 rows QEMU-green; ~9 are metal.** QEMU-green is the M2 *engineering*
+> milestone, NOT the release sign-off (ADR 0023 requires the matrix on heqk metal).
 
 ---
 
