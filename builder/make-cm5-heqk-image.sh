@@ -48,8 +48,18 @@ if [ -z "${HEQK_KEYDIR:-}" ]; then
   exit 1
 fi
 [ -d "$HEQK_KEYDIR" ] || { echo "FATAL: HEQK_KEYDIR=$HEQK_KEYDIR is not a directory" >&2; exit 1; }
-HEQK_SIGNER="${HEQK_SIGNER:-$HOME/heqk-sign/target/release/heqk-sign}"
-[ -x "$HEQK_SIGNER" ] || { echo "FATAL: heqk-sign not executable at $HEQK_SIGNER — set HEQK_SIGNER (in-tree vendoring tracked in docs/design/heqk-signing-identity.md)" >&2; exit 1; }
+# In-tree vendored signer (builder/heqk-sign) — NOT the external ~/heqk-sign. Build if missing.
+HEQK_SIGNER="${HEQK_SIGNER:-$ROOT/builder/heqk-sign/target/release/heqk-sign}"
+if [ ! -x "$HEQK_SIGNER" ] && [ -f "$ROOT/builder/heqk-sign/Cargo.toml" ]; then
+  echo "== building in-tree heqk-sign (builder/heqk-sign)"
+  ( cd "$ROOT/builder/heqk-sign" && cargo build --release )
+fi
+[ -x "$HEQK_SIGNER" ] || { echo "FATAL: heqk-sign not executable at $HEQK_SIGNER — build builder/heqk-sign or set HEQK_SIGNER" >&2; exit 1; }
+
+# Release-BLOCKING boot-key gate (ADR 0046 / security-auditor decision #5): a RELEASE build must
+# not compile DEV boot/AK keys into hboot. Mode resolves from HOOKPROBE_DEBUG_ACCESS (default
+# release → FATAL on dev keys; debug → allowed). Checks the source trusted_keys.rs/attest_keys.rs.
+"$ROOT/base/scripts/heqk-boot-key-check.sh"
 
 echo "== [M1] building heqk substrate (features=$FEATURES svn=$SVN) at $HEQK"
 cd "$HEQK"
