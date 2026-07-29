@@ -39,7 +39,6 @@ use ml_kem::{EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768, B32};
 use x25519_dalek::{x25519, PublicKey, StaticSecret};
 
 // --- M4.2b (Noise handshake) additional imports ---
-use alloc::vec::Vec;
 use boot_abi::kdf::{hmac_sha256, hmac_sha256_2};
 use ed25519_compact::{KeyPair, PublicKey as EdPub, Signature as EdSig};
 
@@ -47,6 +46,81 @@ use ed25519_compact::{KeyPair, PublicKey as EdPub, Signature as EdSig};
 /// every module reaches the early console through the same arch seam).
 macro_rules! kprint {
     ($($t:tt)*) => { arch_aarch64::_print(format_args!($($t)*)) };
+}
+
+// ---------------------------------------------------------------------------
+// M4.3 #7 — fixed, heap-free wire buffers (auditor tracked condition #2).
+//
+// The M4.2b handshake originally returned `alloc::Vec` records. On heqk's bump
+// allocator (`heap.rs`) there is NO reclaim, so every per-record `Vec` LEAKS a
+// slice of a 1 MiB arena — a slow-motion OOM under any real record rate. These
+// fixed-capacity stack buffers replace every handshake/transport `Vec`: the
+// ChaCha20-Poly1305 core is already detached/in-place, so nothing here needs the
+// heap. `Buf<N>` is a tiny bounded push-buffer; the transport hot path uses
+// caller-provided `&mut [u8]` (`encrypt_into`/`decrypt_into`) so record size is
+// not even capped by a fixed return type. No `alloc` symbol remains in this
+// module — the base kernel (no `securechannel`) already linked none.
+// ---------------------------------------------------------------------------
+
+/// A bounded, heap-free byte buffer. `push` fails closed (returns false) rather
+/// than truncating or panicking if the content would exceed `N`.
+pub struct Buf<const N: usize> {
+    b: [u8; N],
+    n: usize,
+}
+
+impl<const N: usize> Buf<N> {
+    #[inline]
+    pub const fn new() -> Self {
+        Buf { b: [0u8; N], n: 0 }
+    }
+    /// Append `s`; returns false (and appends nothing) if it would overflow.
+    #[inline]
+    #[must_use]
+    fn push(&mut self, s: &[u8]) -> bool {
+        let end = match self.n.checked_add(s.len()) {
+            Some(e) if e <= N => e,
+            _ => return false,
+        };
+        self.b[self.n..end].copy_from_slice(s);
+        self.n = end;
+        true
+    }
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.b[..self.n]
+    }
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.n
+    }
+}
+
+/// Largest single handshake message on the wire. msg1 =
+/// e_x(32) + e_k_ek(1184) + es-ct(1088) + id(32+16) + sig(64+16) + payload+16;
+/// 4096 leaves comfortable headroom for the enrollment payload.
+pub const HS_MSG_MAX: usize = 4096;
+/// Largest handshake AEAD RECORD plaintext (device id 32, transcript sig 64, and
+/// small enrollment request/response payloads). 1024 is ample; a larger payload
+/// is refused rather than heap-allocated.
+pub const HS_REC_MAX: usize = 1024;
+
+/// A handshake message buffer.
+pub type HsMsg = Buf<HS_MSG_MAX>;
+/// A handshake AEAD-record buffer (encrypt/decrypt-and-hash plaintext/ciphertext).
+pub type HsRec = Buf<HS_REC_MAX>;
+
+/// Volatile-scrub a 32-byte secret (raw ML-KEM / X25519 shared secret) once it
+/// has been folded into the chaining key — defense-in-depth in the spirit of
+/// auditor condition #3 (full `zeroize`-crate adoption on the dalek types is the
+/// deferred metal item; this at least does not leave the raw `ss`/`dh` on the
+/// stack after use).
+#[inline]
+fn scrub32(b: &mut [u8; 32]) {
+    for x in b.iter_mut() {
+        unsafe { core::ptr::write_volatile(x, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 // ===========================================================================
@@ -452,42 +526,61 @@ impl CipherState {
         nb
     }
 
-    /// AEAD-encrypt `pt` with associated data `ad`; returns `ciphertext || tag`.
-    /// Advances the counter. Detached-in-place API (no heap for the crypto core;
-    /// the returned `Vec` is the wire record, non-secret).
-    pub fn encrypt(&mut self, ad: &[u8], pt: &[u8]) -> Vec<u8> {
+    /// AEAD-encrypt `pt` (associated data `ad`) IN PLACE into `out`, writing
+    /// `ciphertext || tag` and returning its length. Heap-free (auditor #2): the
+    /// caller owns `out` (a stack/embedded buffer), so no per-record arena leak.
+    /// Advances the counter. Fails closed (returns `None`) if `out` cannot hold
+    /// `pt.len() + AEAD_TAG_LEN`. The counter is NOT advanced on a capacity miss.
+    pub fn encrypt_into(&mut self, ad: &[u8], pt: &[u8], out: &mut [u8]) -> Option<usize> {
+        let total = pt.len().checked_add(AEAD_TAG_LEN)?;
+        if out.len() < total {
+            return None;
+        }
+        out[..pt.len()].copy_from_slice(pt);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&self.k));
         let nb = Self::nonce_bytes(self.n);
-        let mut buf = pt.to_vec();
         let tag = cipher
-            .encrypt_in_place_detached(Nonce::from_slice(&nb), ad, &mut buf)
+            .encrypt_in_place_detached(Nonce::from_slice(&nb), ad, &mut out[..pt.len()])
             .expect("chacha20poly1305 encrypt is infallible for valid key/nonce");
-        buf.extend_from_slice(tag.as_slice());
+        out[pt.len()..total].copy_from_slice(tag.as_slice());
         self.n = self.n.wrapping_add(1);
-        buf
+        Some(total)
     }
 
-    /// AEAD-decrypt `ciphertext || tag` with associated data `ad`. Advances the
-    /// counter ONLY on success. A wrong counter (replay), tampered bytes, or a
-    /// diverged key all surface as `AeadAuth` with no plaintext revealed.
-    pub fn decrypt(&mut self, ad: &[u8], ct_tag: &[u8]) -> Result<Vec<u8>, NoiseErr> {
+    /// AEAD-decrypt `ciphertext || tag` (associated data `ad`) IN PLACE into
+    /// `out`, returning the plaintext length. `out` must hold at least
+    /// `ct_tag.len() - AEAD_TAG_LEN` bytes. Advances the counter ONLY on success.
+    /// A wrong counter (replay), tampered bytes, or a diverged key all surface as
+    /// `AeadAuth` with no plaintext revealed (`out` is left with undecrypted
+    /// bytes, never trusted). Heap-free.
+    pub fn decrypt_into(&mut self, ad: &[u8], ct_tag: &[u8], out: &mut [u8]) -> Result<usize, NoiseErr> {
         if ct_tag.len() < AEAD_TAG_LEN {
             return Err(NoiseErr::Truncated);
         }
         let (ct, tag) = ct_tag.split_at(ct_tag.len() - AEAD_TAG_LEN);
+        if out.len() < ct.len() {
+            return Err(NoiseErr::Truncated);
+        }
+        out[..ct.len()].copy_from_slice(ct);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&self.k));
         let nb = Self::nonce_bytes(self.n);
-        let mut buf = ct.to_vec();
         cipher
-            .decrypt_in_place_detached(Nonce::from_slice(&nb), ad, &mut buf, Tag::from_slice(tag))
+            .decrypt_in_place_detached(
+                Nonce::from_slice(&nb),
+                ad,
+                &mut out[..ct.len()],
+                Tag::from_slice(tag),
+            )
             .map_err(|_| NoiseErr::AeadAuth)?;
         self.n = self.n.wrapping_add(1);
-        Ok(buf)
+        Ok(ct.len())
     }
 
-    /// Accessor so the [P19-noise] gate can assert send.k == peer.recv.k. The
-    /// transport key never leaves the CipherState in production; this is for the
-    /// in-process loopback KAT only.
+    /// Accessor so the [P19-noise]/[P19-enroll] gates can assert send.k ==
+    /// peer.recv.k. The transport key NEVER leaves the CipherState in production;
+    /// feature-gated behind `securechannel-selftest` (auditor #4) so it cannot be
+    /// called from the metal profile.
+    #[cfg(feature = "securechannel-selftest")]
     pub fn key_for_test(&self) -> [u8; 32] {
         self.k
     }
@@ -556,52 +649,71 @@ impl SymmetricState {
     /// EncryptAndHash(pt): AEAD-seal under (k, n) with `h` as associated data (so
     /// the whole transcript authenticates the ciphertext), then MixHash the
     /// ciphertext. With no key set, returns the plaintext (Noise semantics).
-    fn encrypt_and_hash(&mut self, pt: &[u8]) -> Vec<u8> {
-        let ct = match self.k {
+    /// Heap-free: the record is built in a fixed `HsRec` (auditor #2). Returns
+    /// `None` if the record would exceed `HS_REC_MAX` (fail-closed, never truncate).
+    fn encrypt_and_hash(&mut self, pt: &[u8]) -> Option<HsRec> {
+        let mut rec = HsRec::new();
+        match self.k {
             Some(k) => {
+                if !rec.push(pt) {
+                    return None;
+                }
                 let cipher = ChaCha20Poly1305::new(Key::from_slice(&k));
                 let nb = CipherState::nonce_bytes(self.n);
-                let mut buf = pt.to_vec();
+                let ptlen = rec.n;
                 let tag = cipher
-                    .encrypt_in_place_detached(Nonce::from_slice(&nb), &self.h, &mut buf)
+                    .encrypt_in_place_detached(Nonce::from_slice(&nb), &self.h, &mut rec.b[..ptlen])
                     .expect("handshake AEAD encrypt infallible");
-                buf.extend_from_slice(tag.as_slice());
+                if !rec.push(tag.as_slice()) {
+                    return None;
+                }
                 self.n = self.n.wrapping_add(1);
-                buf
             }
-            None => pt.to_vec(),
-        };
-        self.mix_hash(&ct);
-        ct
+            None => {
+                if !rec.push(pt) {
+                    return None;
+                }
+            }
+        }
+        self.mix_hash(rec.as_slice());
+        Some(rec)
     }
 
     /// DecryptAndHash(ct): the inverse. MixHash uses the CIPHERTEXT (as on the
     /// sender), so `h` stays in lock-step even though it is authenticated per-op.
-    fn decrypt_and_hash(&mut self, ct: &[u8]) -> Result<Vec<u8>, NoiseErr> {
-        let pt = match self.k {
+    /// Heap-free: plaintext is recovered in place in a fixed `HsRec`.
+    fn decrypt_and_hash(&mut self, ct: &[u8]) -> Result<HsRec, NoiseErr> {
+        let mut out = HsRec::new();
+        match self.k {
             Some(k) => {
                 if ct.len() < AEAD_TAG_LEN {
                     return Err(NoiseErr::Truncated);
                 }
                 let (body, tag) = ct.split_at(ct.len() - AEAD_TAG_LEN);
+                if !out.push(body) {
+                    return Err(NoiseErr::Truncated);
+                }
                 let cipher = ChaCha20Poly1305::new(Key::from_slice(&k));
                 let nb = CipherState::nonce_bytes(self.n);
-                let mut buf = body.to_vec();
+                let blen = out.n;
                 cipher
                     .decrypt_in_place_detached(
                         Nonce::from_slice(&nb),
                         &self.h,
-                        &mut buf,
+                        &mut out.b[..blen],
                         Tag::from_slice(tag),
                     )
                     .map_err(|_| NoiseErr::AeadAuth)?;
                 self.n = self.n.wrapping_add(1);
-                buf
             }
-            None => ct.to_vec(),
-        };
+            None => {
+                if !out.push(ct) {
+                    return Err(NoiseErr::Truncated);
+                }
+            }
+        }
         self.mix_hash(ct);
-        Ok(pt)
+        Ok(out)
     }
 
     /// Split(): derive the two transport CipherStates (Noise §5.2). First is
@@ -626,24 +738,35 @@ pub struct ResponderStatic {
     x_sk: StaticSecret,
     x_pk: [u8; 32],
     k_dk: MlDk,
-    k_ek_bytes: Vec<u8>,
+    k_ek_bytes: [u8; MLKEM_EK_LEN],
 }
 
 /// What the device holds about the responder (the enrolled public static key).
 #[derive(Clone)]
 pub struct ResponderPub {
     x_pk: [u8; 32],
-    k_ek_bytes: Vec<u8>, // ML-KEM-768 encapsulation key (1184 bytes)
+    k_ek_bytes: [u8; MLKEM_EK_LEN], // ML-KEM-768 encapsulation key (1184 bytes)
+}
+
+impl ResponderPub {
+    /// The responder's static X25519 public key (bound into an `Enrollment`).
+    #[inline]
+    pub fn x_pk(&self) -> [u8; 32] {
+        self.x_pk
+    }
 }
 
 impl ResponderStatic {
     /// Derive the responder static keypair deterministically from seeds (TRNG on
     /// metal, Gate R). `x_seed` -> X25519 static; `(d,z)` -> ML-KEM static.
+    /// These are the MSSP's long-term PROVISIONED keys (the device knows the public
+    /// halves from enrollment bootstrap), NOT per-session entropy.
     pub fn from_seeds(x_seed: &[u8; 32], d: &[u8; 32], z: &[u8; 32]) -> Self {
         let x_sk = StaticSecret::from(*x_seed);
         let x_pk = PublicKey::from(&x_sk).to_bytes();
         let (k_dk, k_ek) = MlKem768::generate_deterministic(&Array(*d), &Array(*z));
-        let k_ek_bytes = k_ek.as_bytes().as_slice().to_vec();
+        let mut k_ek_bytes = [0u8; MLKEM_EK_LEN];
+        k_ek_bytes.copy_from_slice(k_ek.as_bytes().as_slice());
         ResponderStatic {
             x_sk,
             x_pk,
@@ -654,24 +777,76 @@ impl ResponderStatic {
     pub fn public(&self) -> ResponderPub {
         ResponderPub {
             x_pk: self.x_pk,
-            k_ek_bytes: self.k_ek_bytes.clone(),
+            k_ek_bytes: self.k_ek_bytes,
         }
     }
 }
 
-/// Per-session ephemeral randomness for the INITIATOR (device). Deterministic
-/// seeds here; on metal each field is fresh hardware-TRNG output (Gate R).
+/// Per-session ephemeral randomness for the INITIATOR (device).
+///
+/// M4.3 #6: the fields are PRIVATE and the ONLY production constructor is
+/// `from_entropy`, which draws from a fail-closed `EntropySource`. There is no
+/// public seeded constructor outside `securechannel-selftest`, so on the metal
+/// profile the ONLY way to obtain this is fresh hardware-TRNG output — a seeded
+/// path is not just unused, it does not compile (see `entropy.rs`).
 pub struct InitiatorRandomness {
-    pub e_x_seed: [u8; 32],  // ephemeral X25519
-    pub e_k_d: [u8; 32],     // ephemeral ML-KEM keygen d
-    pub e_k_z: [u8; 32],     // ephemeral ML-KEM keygen z
-    pub m_es: [u8; 32],      // encaps randomness for the es step (to responder static)
+    e_x_seed: [u8; 32], // ephemeral X25519
+    e_k_d: [u8; 32],    // ephemeral ML-KEM keygen d
+    e_k_z: [u8; 32],    // ephemeral ML-KEM keygen z
+    m_es: [u8; 32],     // encaps randomness for the es step (to responder static)
 }
 
-/// Per-session ephemeral randomness for the RESPONDER.
+impl InitiatorRandomness {
+    /// PRODUCTION path: draw all four per-session ephemerals from the entropy
+    /// source. On metal `e` is `MetalEntropy<HwTrng>`, which FAILS CLOSED if the
+    /// TRNG is unavailable — so a session either uses fresh HW entropy or is not
+    /// created at all. Never seeded on metal.
+    pub fn from_entropy(
+        e: &mut dyn crate::entropy::EntropySource,
+    ) -> Result<Self, crate::entropy::EntropyError> {
+        Ok(InitiatorRandomness {
+            e_x_seed: e.fill_32()?,
+            e_k_d: e.fill_32()?,
+            e_k_z: e.fill_32()?,
+            m_es: e.fill_32()?,
+        })
+    }
+
+    /// SELFTEST-ONLY deterministic constructor (fixed seeds → reproducible KAT).
+    /// Compiled out of the metal profile.
+    #[cfg(feature = "securechannel-selftest")]
+    pub(crate) fn from_test_seeds(
+        e_x_seed: [u8; 32],
+        e_k_d: [u8; 32],
+        e_k_z: [u8; 32],
+        m_es: [u8; 32],
+    ) -> Self {
+        InitiatorRandomness { e_x_seed, e_k_d, e_k_z, m_es }
+    }
+}
+
+/// Per-session ephemeral randomness for the RESPONDER. Same #6 discipline.
 pub struct ResponderRandomness {
-    pub re_x_seed: [u8; 32], // ephemeral X25519
-    pub m_ee: [u8; 32],      // encaps randomness for the ee step (to device ephemeral)
+    re_x_seed: [u8; 32], // ephemeral X25519
+    m_ee: [u8; 32],      // encaps randomness for the ee step (to device ephemeral)
+}
+
+impl ResponderRandomness {
+    /// PRODUCTION path: fail-closed TRNG-sourced ephemerals.
+    pub fn from_entropy(
+        e: &mut dyn crate::entropy::EntropySource,
+    ) -> Result<Self, crate::entropy::EntropyError> {
+        Ok(ResponderRandomness {
+            re_x_seed: e.fill_32()?,
+            m_ee: e.fill_32()?,
+        })
+    }
+
+    /// SELFTEST-ONLY deterministic constructor. Compiled out of the metal profile.
+    #[cfg(feature = "securechannel-selftest")]
+    pub(crate) fn from_test_seeds(re_x_seed: [u8; 32], m_ee: [u8; 32]) -> Self {
+        ResponderRandomness { re_x_seed, m_ee }
+    }
 }
 
 /// Carried by the initiator between msg1 and msg2 (its private ephemerals + the
@@ -713,24 +888,26 @@ pub fn initiator_write_msg1(
     resp_pub: &ResponderPub,
     rnd: &InitiatorRandomness,
     payload1: &[u8],
-) -> Option<(Vec<u8>, InitiatorPending)> {
+) -> Option<(HsMsg, InitiatorPending)> {
     let mut ss = SymmetricState::new(PROTOCOL_NAME);
     ss.mix_hash(PROLOGUE);
     // pre-message: the responder static keys the device knows from enrollment.
     ss.mix_hash(&resp_pub.x_pk);
     ss.mix_hash(&resp_pub.k_ek_bytes);
 
-    let mut msg = Vec::new();
+    let mut msg = HsMsg::new();
 
     // token e (hybrid ephemeral): X25519 pub + ML-KEM ephemeral ek, both cleartext.
     let e_x_sk = StaticSecret::from(rnd.e_x_seed);
     let e_x_pub = PublicKey::from(&e_x_sk).to_bytes();
     let (e_k_dk, e_k_ek) = MlKem768::generate_deterministic(&Array(rnd.e_k_d), &Array(rnd.e_k_z));
-    let e_k_ek_bytes = e_k_ek.as_bytes().as_slice().to_vec();
+    let mut e_k_ek_bytes = [0u8; MLKEM_EK_LEN];
+    e_k_ek_bytes.copy_from_slice(e_k_ek.as_bytes().as_slice());
     ss.mix_hash(&e_x_pub);
     ss.mix_hash(&e_k_ek_bytes);
-    msg.extend_from_slice(&e_x_pub);
-    msg.extend_from_slice(&e_k_ek_bytes);
+    if !msg.push(&e_x_pub) || !msg.push(&e_k_ek_bytes) {
+        return None;
+    }
 
     // token es (hybrid, to responder STATIC -> authenticates the responder):
     //   X25519(e, RS_x)  AND  ML-KEM.Encaps(RS_k).
@@ -741,23 +918,34 @@ pub fn initiator_write_msg1(
     let mut ss_es_b = [0u8; 32];
     ss_es_b.copy_from_slice(ss_es.as_slice());
     ss.mix_hash(ct_es.as_slice());
-    msg.extend_from_slice(ct_es.as_slice());
+    if !msg.push(ct_es.as_slice()) {
+        return None;
+    }
     ss.mix_key(&hybrid_combine(&ss_es_b, &dh_es));
+    // Scrub the raw es shared secret once folded (defense-in-depth, auditor #3 spirit).
+    scrub32(&mut ss_es_b);
 
     // token s: the device's Ed25519 identity, AEAD-encrypted under the es key.
-    let id_pub = dev.pk[..].to_vec(); // 32 bytes (PublicKey derefs to [u8; 32])
-    let c_id = ss.encrypt_and_hash(&id_pub);
-    msg.extend_from_slice(&c_id);
+    let mut id_pub = [0u8; 32];
+    id_pub.copy_from_slice(&dev.pk[..]); // PublicKey derefs to [u8; 32]
+    let c_id = ss.encrypt_and_hash(&id_pub)?;
+    if !msg.push(c_id.as_slice()) {
+        return None;
+    }
 
     // token sig: Ed25519 signature over the CURRENT transcript hash `h` (device
     // authentication, bound to this responder + these ephemerals), then encrypted.
     let sig = dev.sk.sign(&ss.h, None);
-    let c_sig = ss.encrypt_and_hash(&sig[..]);
-    msg.extend_from_slice(&c_sig);
+    let c_sig = ss.encrypt_and_hash(&sig[..])?;
+    if !msg.push(c_sig.as_slice()) {
+        return None;
+    }
 
     // optional handshake payload (also authenticated + encrypted).
-    let c_pl = ss.encrypt_and_hash(payload1);
-    msg.extend_from_slice(&c_pl);
+    let c_pl = ss.encrypt_and_hash(payload1)?;
+    if !msg.push(c_pl.as_slice()) {
+        return None;
+    }
 
     Some((
         msg,
@@ -775,7 +963,7 @@ pub struct ResponderPending {
     ss: SymmetricState,
     e_x_pub: [u8; 32],
     e_k_ek: MlEk,
-    pub payload1: Vec<u8>,
+    pub payload1: HsRec,
 }
 
 /// Parse msg1, authenticate the device, and derive the shared es key. Aborts
@@ -825,23 +1013,25 @@ pub fn responder_read_msg1(
     ss_es_b.copy_from_slice(ss_es.as_slice());
     ss.mix_hash(ct_es_s);
     ss.mix_key(&hybrid_combine(&ss_es_b, &dh_es));
+    scrub32(&mut ss_es_b);
 
     // token s: decrypt the device identity (AEAD failure here == tamper OR a wrong
     // responder static key, both of which diverge the es key -> ABORT).
     let c_id = take(&mut off, ED_PUB_LEN + AEAD_TAG_LEN)?;
-    let id_pub_bytes = ss.decrypt_and_hash(c_id)?;
+    let id_pub_rec = ss.decrypt_and_hash(c_id)?;
+    let id_pub_bytes = id_pub_rec.as_slice();
     // Enrollment gate: the identity MUST be the enrolled device (constant-time).
-    if !kdf::ct_eq(&id_pub_bytes, &enrolled_device[..]) {
+    if !kdf::ct_eq(id_pub_bytes, &enrolled_device[..]) {
         return Err(NoiseErr::UnenrolledIdentity);
     }
-    let device_pub = EdPub::from_slice(&id_pub_bytes).map_err(|_| NoiseErr::BadKeyMaterial)?;
+    let device_pub = EdPub::from_slice(id_pub_bytes).map_err(|_| NoiseErr::BadKeyMaterial)?;
 
     // token sig: `h` here equals the value the device signed (both sides have just
     // MixHash'd c_id and nothing since). Capture it BEFORE decrypting the sig record.
     let signed_h = ss.h;
     let c_sig = take(&mut off, ED_SIG_LEN + AEAD_TAG_LEN)?;
-    let sig_bytes = ss.decrypt_and_hash(c_sig)?;
-    let sig = EdSig::from_slice(&sig_bytes).map_err(|_| NoiseErr::BadSignature)?;
+    let sig_rec = ss.decrypt_and_hash(c_sig)?;
+    let sig = EdSig::from_slice(sig_rec.as_slice()).map_err(|_| NoiseErr::BadSignature)?;
     device_pub
         .verify(signed_h, &sig)
         .map_err(|_| NoiseErr::BadSignature)?;
@@ -868,14 +1058,16 @@ pub fn responder_write_msg2(
     mut pend: ResponderPending,
     rnd: &ResponderRandomness,
     payload2: &[u8],
-) -> Option<(Vec<u8>, Session)> {
-    let mut msg = Vec::new();
+) -> Option<(HsMsg, Session)> {
+    let mut msg = HsMsg::new();
 
     // token e (responder ephemeral X25519).
     let re_x_sk = StaticSecret::from(rnd.re_x_seed);
     let re_x_pub = PublicKey::from(&re_x_sk).to_bytes();
     pend.ss.mix_hash(&re_x_pub);
-    msg.extend_from_slice(&re_x_pub);
+    if !msg.push(&re_x_pub) {
+        return None;
+    }
 
     // token ee (hybrid, EPHEMERAL-EPHEMERAL -> forward secrecy):
     //   X25519(re, e_x)  AND  ML-KEM.Encaps(e_k_ek).
@@ -886,13 +1078,18 @@ pub fn responder_write_msg2(
     let mut ss_ee_b = [0u8; 32];
     ss_ee_b.copy_from_slice(ss_ee.as_slice());
     pend.ss.mix_hash(ct_ee.as_slice());
-    msg.extend_from_slice(ct_ee.as_slice());
+    if !msg.push(ct_ee.as_slice()) {
+        return None;
+    }
     pend.ss.mix_key(&hybrid_combine(&ss_ee_b, &dh_ee));
+    scrub32(&mut ss_ee_b);
 
     // key-confirmation payload (an AEAD tag the initiator verifies -> responder
     // authenticated to the initiator).
-    let c_pl = pend.ss.encrypt_and_hash(payload2);
-    msg.extend_from_slice(&c_pl);
+    let c_pl = pend.ss.encrypt_and_hash(payload2)?;
+    if !msg.push(c_pl.as_slice()) {
+        return None;
+    }
 
     let (cs_i2r, cs_r2i) = pend.ss.split();
     Some((
@@ -910,7 +1107,7 @@ pub fn responder_write_msg2(
 pub fn initiator_read_msg2(
     mut pend: InitiatorPending,
     msg: &[u8],
-) -> Result<(Session, Vec<u8>), NoiseErr> {
+) -> Result<(Session, HsRec), NoiseErr> {
     let mut off = 0usize;
     if X_PUB_LEN + MLKEM_CT_LEN > msg.len() {
         return Err(NoiseErr::Truncated);
@@ -935,6 +1132,7 @@ pub fn initiator_read_msg2(
     ss_ee_b.copy_from_slice(ss_ee.as_slice());
     pend.ss.mix_hash(ct_ee_s);
     pend.ss.mix_key(&hybrid_combine(&ss_ee_b, &dh_ee));
+    scrub32(&mut ss_ee_b);
 
     // key confirmation: this decrypt fails if the responder derived a different ck
     // (e.g. the device used a WRONG responder static key) -> responder NOT authentic.
@@ -954,17 +1152,24 @@ pub fn initiator_read_msg2(
 // ===========================================================================
 // The [P19-noise] gate — full handshake + the six required property proofs.
 // All DETERMINISTIC (seeded ephemerals); real TRNG/PUF/PKI = metal (Gate R).
+//
+// The ENTIRE test harness below is behind `securechannel-selftest`: it uses the
+// deterministic seed constructors + `key_for_test`, both of which are compiled
+// OUT of the metal profile (auditor #4/#6). The production handshake functions
+// above carry NO test coupling.
 // ===========================================================================
 
 /// Deterministic test seeds, all distinct + domain-labelled (never all-zero).
-struct TestVectors {
-    dev: KeyPair,
-    resp: ResponderStatic,
-    irand: InitiatorRandomness,
-    rrand: ResponderRandomness,
+#[cfg(feature = "securechannel-selftest")]
+pub(crate) struct TestVectors {
+    pub dev: KeyPair,
+    pub resp: ResponderStatic,
+    pub irand: InitiatorRandomness,
+    pub rrand: ResponderRandomness,
 }
 
-fn test_vectors() -> TestVectors {
+#[cfg(feature = "securechannel-selftest")]
+pub(crate) fn test_vectors() -> TestVectors {
     let dev = KeyPair::from_seed(ed25519_compact::Seed::new(sha256::digest(
         b"HEQK-M4.2b-device-PUF-identity",
     )));
@@ -973,16 +1178,16 @@ fn test_vectors() -> TestVectors {
         &sha256::digest(b"HEQK-M4.2b-resp-static-mlkem-d"),
         &sha256::digest(b"HEQK-M4.2b-resp-static-mlkem-z"),
     );
-    let irand = InitiatorRandomness {
-        e_x_seed: sha256::digest(b"HEQK-M4.2b-init-eph-x25519"),
-        e_k_d: sha256::digest(b"HEQK-M4.2b-init-eph-mlkem-d"),
-        e_k_z: sha256::digest(b"HEQK-M4.2b-init-eph-mlkem-z"),
-        m_es: sha256::digest(b"HEQK-M4.2b-init-encaps-es-m"),
-    };
-    let rrand = ResponderRandomness {
-        re_x_seed: sha256::digest(b"HEQK-M4.2b-resp-eph-x25519"),
-        m_ee: sha256::digest(b"HEQK-M4.2b-resp-encaps-ee-m"),
-    };
+    let irand = InitiatorRandomness::from_test_seeds(
+        sha256::digest(b"HEQK-M4.2b-init-eph-x25519"),
+        sha256::digest(b"HEQK-M4.2b-init-eph-mlkem-d"),
+        sha256::digest(b"HEQK-M4.2b-init-eph-mlkem-z"),
+        sha256::digest(b"HEQK-M4.2b-init-encaps-es-m"),
+    );
+    let rrand = ResponderRandomness::from_test_seeds(
+        sha256::digest(b"HEQK-M4.2b-resp-eph-x25519"),
+        sha256::digest(b"HEQK-M4.2b-resp-encaps-ee-m"),
+    );
     TestVectors {
         dev,
         resp,
@@ -992,22 +1197,24 @@ fn test_vectors() -> TestVectors {
 }
 
 /// Drive a full initiator<->responder handshake. Returns both sessions on success.
+#[cfg(feature = "securechannel-selftest")]
 fn run_handshake(tv: &TestVectors) -> Option<(Session, Session)> {
     let (msg1, ipend) =
         initiator_write_msg1(&tv.dev, &tv.resp.public(), &tv.irand, b"hello-from-device")?;
-    let rpend = responder_read_msg1(&tv.resp, &tv.dev.pk, &msg1).ok()?;
+    let rpend = responder_read_msg1(&tv.resp, &tv.dev.pk, msg1.as_slice()).ok()?;
     // The device's msg1 payload was delivered + authenticated to the responder.
-    if rpend.payload1 != b"hello-from-device" {
+    if rpend.payload1.as_slice() != b"hello-from-device" {
         return None;
     }
     let (msg2, rsession) = responder_write_msg2(rpend, &tv.rrand, b"welcome")?;
-    let (isession, _p2) = initiator_read_msg2(ipend, &msg2).ok()?;
+    let (isession, _p2) = initiator_read_msg2(ipend, msg2.as_slice()).ok()?;
     Some((isession, rsession))
 }
 
 /// Prove the hybrid combiner binds BOTH legs: changing either the ML-KEM ss or the
 /// X25519 ss changes the derived key. So the transport key is secure if EITHER
 /// primitive holds (an attacker who breaks only one still lacks the other's input).
+#[cfg(feature = "securechannel-selftest")]
 fn hybrid_either_leg_binds() -> bool {
     let a = sha256::digest(b"mlkem-ss");
     let b = sha256::digest(b"x25519-ss");
@@ -1023,6 +1230,7 @@ fn hybrid_either_leg_binds() -> bool {
 }
 
 /// The [P19-noise] self-test: full handshake + all six required properties.
+#[cfg(feature = "securechannel-selftest")]
 pub fn noise_selftest() -> bool {
     let tv = test_vectors();
     let mut all = true;
@@ -1051,11 +1259,14 @@ pub fn noise_selftest() -> bool {
     // (B) A transport record round-trips (confidentiality + integrity) and a
     //     REPLAY of it is REJECTED (nonce counter has advanced).
     let plaintext = b"evidence-record-42";
-    let rec = isess.send.encrypt(b"", plaintext);
-    let got = rsess.recv.decrypt(b"", &rec);
-    let rt_ok = matches!(&got, Ok(p) if kdf::ct_eq(p, plaintext));
+    let mut recbuf = [0u8; 64];
+    let rlen = isess.send.encrypt_into(b"", plaintext, &mut recbuf).unwrap_or(0);
+    let mut ptbuf = [0u8; 64];
+    let got = rsess.recv.decrypt_into(b"", &recbuf[..rlen], &mut ptbuf);
+    let rt_ok = matches!(&got, Ok(n) if kdf::ct_eq(&ptbuf[..*n], plaintext));
     // Replay the SAME record: receiver is now at n=1, so it must reject.
-    let replay = rsess.recv.decrypt(b"", &rec);
+    let mut ptbuf2 = [0u8; 64];
+    let replay = rsess.recv.decrypt_into(b"", &recbuf[..rlen], &mut ptbuf2);
     let replay_rejected = replay == Err(NoiseErr::AeadAuth);
     kprint!(
         "   [B] transport record round-trip {} · replayed record rejected {}\n",
@@ -1065,11 +1276,13 @@ pub fn noise_selftest() -> bool {
     all &= rt_ok && replay_rejected;
 
     // (C) A TAMPERED handshake msg1 -> responder ABORTS (AEAD auth fails).
-    let (mut msg1, _ip) =
+    let (msg1, _ip) =
         initiator_write_msg1(&tv.dev, &tv.resp.public(), &tv.irand, b"x").unwrap();
-    let ti = msg1.len() - 1;
-    msg1[ti] ^= 0x01; // flip a byte in the (encrypted) tail
-    let tamper_abort = responder_read_msg1(&tv.resp, &tv.dev.pk, &msg1).is_err();
+    let mut msg1b = [0u8; HS_MSG_MAX];
+    let m1len = msg1.len();
+    msg1b[..m1len].copy_from_slice(msg1.as_slice());
+    msg1b[m1len - 1] ^= 0x01; // flip a byte in the (encrypted) tail
+    let tamper_abort = responder_read_msg1(&tv.resp, &tv.dev.pk, &msg1b[..m1len]).is_err();
     kprint!(
         "   [C] tampered handshake message -> abort {}\n",
         if tamper_abort { "OK" } else { "ACCEPTED!" }
@@ -1087,7 +1300,7 @@ pub fn noise_selftest() -> bool {
     let (msg1_w, _ipw) =
         initiator_write_msg1(&tv.dev, &wrong_resp.public(), &tv.irand, b"x").unwrap();
     // real responder tries to read a msg1 built for a DIFFERENT static key.
-    let wrongkey_abort = responder_read_msg1(&tv.resp, &tv.dev.pk, &msg1_w).is_err();
+    let wrongkey_abort = responder_read_msg1(&tv.resp, &tv.dev.pk, msg1_w.as_slice()).is_err();
     kprint!(
         "   [D] wrong responder static key -> abort {}\n",
         if wrongkey_abort { "OK" } else { "ACCEPTED!" }
@@ -1100,7 +1313,7 @@ pub fn noise_selftest() -> bool {
     let (msg1_r, _ipr) =
         initiator_write_msg1(&rogue, &tv.resp.public(), &tv.irand, b"x").unwrap();
     let unenrolled_abort = matches!(
-        responder_read_msg1(&tv.resp, &tv.dev.pk, &msg1_r),
+        responder_read_msg1(&tv.resp, &tv.dev.pk, msg1_r.as_slice()),
         Err(NoiseErr::UnenrolledIdentity)
     );
     kprint!(
@@ -1113,10 +1326,17 @@ pub fn noise_selftest() -> bool {
     //     either holds), and forward secrecy: fresh ephemerals -> different keys.
     let hybrid_ok = hybrid_either_leg_binds();
     let mut tv2 = test_vectors();
-    tv2.irand.e_x_seed = sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-x");
-    tv2.irand.e_k_d = sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-d");
-    tv2.irand.e_k_z = sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-z");
-    tv2.rrand.re_x_seed = sha256::digest(b"HEQK-M4.2b-DIFFERENT-resp-eph-x");
+    // Different per-session ephemerals (same statics) -> forward secrecy.
+    tv2.irand = InitiatorRandomness::from_test_seeds(
+        sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-x"),
+        sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-d"),
+        sha256::digest(b"HEQK-M4.2b-DIFFERENT-init-eph-z"),
+        sha256::digest(b"HEQK-M4.2b-init-encaps-es-m"),
+    );
+    tv2.rrand = ResponderRandomness::from_test_seeds(
+        sha256::digest(b"HEQK-M4.2b-DIFFERENT-resp-eph-x"),
+        sha256::digest(b"HEQK-M4.2b-resp-encaps-ee-m"),
+    );
     let fs_ok = match (run_handshake(&tv), run_handshake(&tv2)) {
         (Some((s1, _)), Some((s2, _))) => {
             !kdf::ct_eq(&s1.send.key_for_test(), &s2.send.key_for_test())
