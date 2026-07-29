@@ -289,14 +289,33 @@ to commit as a loopback-proven phase.
 
 **Tracked conditions — these do NOT block the loopback commit; every one BLOCKS the
 metal / M4.3 network promotion (Gate R):**
-1. **⚠️ Entropy (highest consequence).** Real ephemerals/keygen MUST be HW-TRNG-sourced on
-   metal, with NO seeded fallback and a boot-time entropy-health assertion. The KATs pass
-   identically for a seed or a TRNG — a wiring slip that lets a seeded path reach metal
-   gives the whole fleet reused ephemerals behind a green gate (total confidentiality break).
-2. **Fixed buffers.** Replace the transport/handshake `alloc::Vec` (leaks per-record on the
-   never-freeing bump allocator) with fixed in-place buffers (the AEAD is already detached).
-3. **Zeroize.** Enable `zeroize` on the dalek crates + scrub the raw `ss_*`/`dh_*` arrays.
-4. **`key_for_test()`** — feature-gate behind `securechannel-selftest`, out of the metal profile.
+
+> **M4.3 update (2026-07-29): conditions 1, 2, 4 CLOSED; 3 PARTIAL.** The
+> `[P19-enroll]` gate (QEMU) proves the fail-closed entropy structure, the heap-free
+> fixed buffers, and the selftest-gating of `key_for_test`. See `kernel/src/entropy.rs`,
+> the `Buf`/`encrypt_into`/`decrypt_into` rework in `kernel/src/securechannel.rs`, and
+> `kernel/src/enroll.rs`. Conditions 5/6/7 remain deferred (M4.4 / CBOM / roadmap).
+
+1. **✅ CLOSED (M4.3) — Entropy (highest consequence).** `entropy.rs` makes a seeded path
+   **structurally impossible on metal**: `MetalEntropy<HwTrng>` is the ONLY production
+   `EntropySource` and it **fails closed** (no seed, no timer, no zeros, no partial fill) if
+   the TRNG is dry; the seeded `TestEntropy`/`StubTrng` doubles live behind
+   `securechannel-selftest`, which a `compile_error!` refuses to build together with `cm5`;
+   the ephemeral fields are private with `from_entropy` the only production constructor; and
+   `boot_health_assert()` is the boot-time entropy-health assertion (proven to fail closed on
+   the no-TRNG QEMU target). *Residual (Gate R):* the `HwTrng` hardware leaf (BCM2712 RNG200 /
+   FEAT_RNG) is not yet wired — metal secure-channel therefore **refuses** rather than runs
+   until that driver lands, which is the correct fail-closed posture.
+2. **✅ CLOSED (M4.3) — Fixed buffers.** Every transport/handshake `alloc::Vec` is gone: the
+   handshake builds into fixed `Buf<N>` stack buffers and the transport hot path is
+   `encrypt_into`/`decrypt_into` over caller-owned slices. `[P19-enroll]` proves repeated
+   handshakes + transport records grow the bump heap by **0 bytes**. No `alloc` symbol remains
+   in `securechannel.rs`.
+3. **🟡 PARTIAL — Zeroize.** The raw `ss_*`/`dh_*` shared-secret arrays are volatile-scrubbed
+   after folding (`scrub32`). Enabling the `zeroize` crate feature on the dalek types (so their
+   internal scalars scrub on drop) is still **deferred** (Gate R hardening).
+4. **✅ CLOSED (M4.3) — `key_for_test()`** — feature-gated behind `securechannel-selftest`, out
+   of the metal profile (with the whole `[P19-noise]`/`[P19-enroll]` seeded harness).
 5. **Anti-replay window** (IPsec/DTLS-style sliding window) + **msg1-replay DoS** mitigation
    (cookie/retry or rate-limit — asymmetric ML-KEM/keygen/verify work on the responder).
 6. **CBOM/SBOM** entry for the pre-release `kem =0.3.0-pre.0` crate (SHA + "pre-release"),

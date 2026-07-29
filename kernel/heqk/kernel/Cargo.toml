@@ -42,6 +42,13 @@ netsvc = ["dep:smoltcp"]
 # (ML-KEM-768 round-trip + KAT, X25519 RFC-7748 vector, ChaCha20-Poly1305 RFC-8439
 # vector, hybrid HKDF combiner Alice==Bob). Framing-agnostic; the handshake is M4.2b.
 securechannel = ["dep:ml-kem", "dep:kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
+# M4.3: the secure-channel SELFTEST surface — the [P19-noise] + [P19-enroll] gates,
+# their deterministic seeded ephemerals, the `TestEntropy`/`StubTrng` doubles, and
+# `CipherState::key_for_test`. This is the "seed" path the M4.2b auditor (condition
+# #6) warns must NEVER reach metal: `entropy.rs` carries a `compile_error!` that
+# refuses to build if this is enabled together with the `cm5` (metal) profile.
+# validate.sh's QEMU builds enable it; the prod/cm5 image MUST NOT.
+securechannel-selftest = ["securechannel"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
