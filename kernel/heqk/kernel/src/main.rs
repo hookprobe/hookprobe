@@ -51,6 +51,7 @@ mod entropy;
 // M4.3 — MSSP enrollment + authenticated update fetch over the Noise channel.
 #[cfg(feature = "securechannel")]
 mod enroll;
+mod edge;
 mod notify;
 mod packet;
 mod ratelimit;
@@ -2257,6 +2258,17 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "securechannel-selftest")]
     {
         enroll::enroll_selftest();
+    }
+
+    // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
+    // native stack. Closes the last two deferred Noise-transport conditions (#9
+    // anti-replay window / N1 msg1-replay DoS) and lands the ADR-0004 WAN-egress
+    // kill-switch, riding the M2 netq egress gate. QEMU-provable DECISION logic; the
+    // full PBR/NAT/TUN SASE dataplane at line rate + the real super-PoP tunnel =
+    // metal (Gate R), scoped in docs/design/heqk-control-plane.md §M4.4. ---
+    #[cfg(feature = "securechannel-selftest")]
+    {
+        edge::edge_selftest();
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC

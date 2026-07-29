@@ -202,9 +202,47 @@ Re-implement the "crown jewel" operational envelope on heqk's stack (ADR 0004 he
 - **Kill-switch** (no plaintext leaks if the tunnel drops), **PBR/fwmark** routing, **NAT**,
   **TUN**-equivalent — as native heqk constructs gating egress through `packet::verdict`
   (the envelope is *policy on top of* the rule plane, not a bypass of it).
-- **Gate `P20-envelope` (QEMU):** tunnel-down ⇒ egress fail-closed (kill-switch); policy routes
-  select the tunnel path; a non-tunneled packet that would leak is DROPPED by the rule plane.
+- **Gate `P19-edge` (QEMU):** tunnel-down ⇒ WAN egress fail-closed (kill-switch); a non-tunneled
+  WAN-bound packet that would leak is CUT; the anti-replay window + msg1-DoS guard hold.
 - **Fork note:** this is where HTP-v2 (ADR 0004 path B, §2.3) lands if adopted for edge mesh.
+
+**Status (2026-07-30) — the DECISION half landed; the DATAPLANE half is scoped, not built.**
+The `[P19-edge]` gate proves, in QEMU, the three pieces that are pure decision/state logic:
+1. **Anti-replay window** — RFC 6479 sliding bitmap on the transport receiver (`AntiReplayRx`,
+   `kernel/src/securechannel.rs`), RFC 4303 §3.4.3 order.
+2. **msg1-DoS guard** — WireGuard/DTLS-1.3 load-triggered stateless cookie + token-bucket
+   (`Msg1DosGuard`, `kernel/src/edge.rs`); a forged/replayed flood costs one HMAC, never ML-KEM.
+3. **WAN-egress kill-switch** — fail-closed, riding `netq::tx_drain`→`packet::verdict`
+   (`edge::egress_allowed`): **enrolled + tunnel down/compromised ⇒ WAN cut**, while LAN + local
+   SOC + the PoP-reconnect carve-out stay up; **never-enrolled/standalone/air-gapped ⇒ never
+   arms** (the air-gap invariant — a standalone device is a valid steady state, never bricked).
+
+#### The un-built remainder — the SASE dataplane (scope, do NOT read as built)
+The rest of ADR 0004's envelope — **PBR (policy routing LAN→WAN/tunnel), NAT, and the encrypted
+TUN tunnel to the super-PoP** — is a subsystem the **size of M2/M3** and is **NOT built**. It
+splits cleanly into a QEMU-provable half and a metal (Gate R) half, and should be phased so each
+phase carries its own gate and its own air-gapped negative case:
+
+| Piece | QEMU-provable (decision/logic) | Metal (Gate R) — real datapath |
+|---|---|---|
+| **PBR / fwmark** | route-selection *decision* (mark a flow "tunnel" vs "direct WAN" vs "LAN"; a fwmark→table map; the kill-switch's WAN/PoP/LAN scope classifier is the seed of this) | line-rate per-packet routing on RP1 GEM / RTL8111; real multi-WAN failover + roaming |
+| **NAT** | the translation *table* + rewrite *logic* (conntrack-equivalent tuple map, checksum-delta math), QEMU loopback vectors | line-rate rewrite on real NICs; hairpin/PMTU on silicon |
+| **TUN tunnel to PoP** | the M4.2b Noise session *is* the tunnel key schedule; framing/encapsulation (encap header, MTU/fragment logic) provable in loopback | the real UDP/TUN datapath + the **real `super-PoP`** (a live remote endpoint, not an in-process peer); real RTT/MTU/rekey-under-loss |
+| **WAN failover / roaming** | the failover *state machine* (which WAN is primary; health-probe decision) | real dual-WAN (`wwan1`) + PPPoE/DHCP-PD on metal (V1 WAN dual-stack reference) |
+
+**Recommended phasing (each a gate with an air-gapped negative case):**
+- **M4.4a (this phase, DONE):** kill-switch decision + anti-replay + msg1-DoS — `[P19-edge]`.
+- **M4.4b:** PBR/fwmark **decision** + NAT **table/rewrite logic** — QEMU loopback vectors, no
+  new datapath. Reuse `edge::egress_scope` as the routing-scope seed. Gate: a marked flow selects
+  the tunnel table; a LAN flow selects direct; a would-leak flow is cut (extends the kill-switch).
+- **M4.4c (metal, Gate R):** the encrypted **TUN** to a **real super-PoP** over the RP1 GEM
+  datapath, line-rate NAT/PBR, real WAN failover/roaming. This is where ADR 0004's HTP-v2 tunnel
+  actually carries traffic; it depends on M4-metal NIC bring-up (P7) and is honestly the largest
+  remaining lift. **Do not claim any of M4.4c until it runs on silicon against a real PoP.**
+
+**Honesty:** M4.4 today is the **decision/state** layer (kill-switch fail-closed logic,
+anti-replay, msg1-DoS) — QEMU-green. The **line-rate PBR/NAT/TUN dataplane + the real super-PoP
+tunnel** are unbuilt and metal — scoped above, not faked.
 
 ---
 
@@ -295,6 +333,19 @@ metal / M4.3 network promotion (Gate R):**
 > fixed buffers, and the selftest-gating of `key_for_test`. See `kernel/src/entropy.rs`,
 > the `Buf`/`encrypt_into`/`decrypt_into` rework in `kernel/src/securechannel.rs`, and
 > `kernel/src/enroll.rs`. Conditions 5/6/7 remain deferred (M4.4 / CBOM / roadmap).
+>
+> **M4.4 update (2026-07-30): condition 5 CLOSED (#9 anti-replay + N1 msg1-DoS).** The
+> `[P19-edge]` gate (QEMU) proves an **RFC 6479** sliding-bitmap anti-replay window on the
+> Noise transport RECEIVER (`ReplayWindow`/`AntiReplayRx` in `kernel/src/securechannel.rs`:
+> in-order + in-window reorder accepted, exact-replay + below-window rejected, a forged
+> record fails AEAD and never advances the window — RFC 4303 §3.4.3 order) and a
+> WireGuard/DTLS-1.3 (RFC 9147 §5.1) **load-triggered stateless-cookie + token-bucket**
+> msg1-DoS guard (`Msg1DosGuard` in `kernel/src/edge.rs`: a forged/replayed msg1 flood is
+> rejected pre-crypto — the only work forced is one keyed HMAC — while a cookie-vouched peer
+> reaches the expensive path). Defense-in-depth: `ResponderStatic::from_seeds` is now
+> `securechannel-selftest`-only (the device is always the initiator; no responder static on
+> metal). **Remaining: 3 (dalek-zeroize, partial), 6 (CBOM `kem-0.3.0-pre`), 7 (ML-DSA-65
+> co-signature).**
 
 1. **✅ CLOSED (M4.3) — Entropy (highest consequence).** `entropy.rs` makes a seeded path
    **structurally impossible on metal**: `MetalEntropy<HwTrng>` is the ONLY production
@@ -316,8 +367,13 @@ metal / M4.3 network promotion (Gate R):**
    internal scalars scrub on drop) is still **deferred** (Gate R hardening).
 4. **✅ CLOSED (M4.3) — `key_for_test()`** — feature-gated behind `securechannel-selftest`, out
    of the metal profile (with the whole `[P19-noise]`/`[P19-enroll]` seeded harness).
-5. **Anti-replay window** (IPsec/DTLS-style sliding window) + **msg1-replay DoS** mitigation
-   (cookie/retry or rate-limit — asymmetric ML-KEM/keygen/verify work on the responder).
+5. **✅ CLOSED (M4.4) — Anti-replay window + msg1-replay DoS.** An **RFC 6479**
+   sliding-bitmap window on the Noise transport receiver (`AntiReplayRx`), and a
+   WireGuard/DTLS-1.3 load-triggered stateless-cookie + token-bucket **msg1-DoS** guard
+   (`Msg1DosGuard`) that rejects a forged/replayed msg1 flood before any asymmetric
+   ML-KEM/keygen/verify work. Proven by `[P19-edge]` (QEMU). *Residual (Gate R):* the real
+   reordering network + a real flood source are metal, but the window + guard **logic** is
+   QEMU-proven.
 6. **CBOM/SBOM** entry for the pre-release `kem =0.3.0-pre.0` crate (SHA + "pre-release"),
    upgrade when RustCrypto tags `kem 0.3`.
 7. **ML-DSA-65 co-signature** at the auth site (ADR 0002/0004 target — roadmap; KEX is

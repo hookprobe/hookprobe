@@ -59,6 +59,36 @@ pub fn eth_ipv4_src(frame: &[u8]) -> u32 {
         | frame[29] as u32
 }
 
+/// M4.4 — the IPv4 DESTINATION address (host-order u32) of an Ethernet frame,
+/// walking up to `MAX_VLAN_TAGS` 802.1Q/QinQ tags exactly like `parse`. `None` if
+/// the frame is not IPv4 or is too short to hold the dst field. Used ONLY by the
+/// WAN-egress kill-switch (`edge.rs`) to classify a well-formed egress frame's
+/// destination scope. The kill-switch is consulted by `netq::tx_drain` AFTER
+/// `packet::verdict` has already PASSed the frame, so a malformed/truncated IPv4
+/// datagram is dropped by the IPS before this can ever see it (fail-closed upstream).
+pub fn eth_ipv4_dst(frame: &[u8]) -> Option<u32> {
+    let mut et = be16(frame, 12)?; // also checks len >= 14
+    let mut l3_off = ETH_HLEN;
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = be16(frame, l3_off + 2)?; // inner ethertype after the 4-byte tag (2B TCI)
+        l3_off += 4;
+        tags += 1;
+    }
+    if et != ETHERTYPE_IPV4 {
+        return None; // ARP / IPv6 / still-tagged — no IPv4 dst to classify
+    }
+    // IPv4 destination address is 4 bytes at IP-header offset 16.
+    let d = l3_off + 16;
+    if d + 4 > frame.len() {
+        return None;
+    }
+    Some(((frame[d] as u32) << 24)
+        | ((frame[d + 1] as u32) << 16)
+        | ((frame[d + 2] as u32) << 8)
+        | frame[d + 3] as u32)
+}
+
 /// Maximum on-wire Ethernet frame size (802.1Q-tagged): 1518 + 4 = 1522. A frame
 /// past this from an unrecognized source is a structural anomaly (F7). Mirrors
 /// Linux `dpi::DEFAULT_MAX_FRAME_LEN`.
