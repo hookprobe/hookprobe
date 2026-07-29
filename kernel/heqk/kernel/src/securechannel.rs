@@ -501,6 +501,9 @@ pub enum NoiseErr {
     UnenrolledIdentity,
     /// The device's Ed25519 transcript signature did not verify.
     BadSignature,
+    /// M4.4 #9 — a record authenticated but its sequence number was an exact replay
+    /// or fell below the RFC 6479 anti-replay window (a genuine-but-stale record).
+    Replay,
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +586,162 @@ impl CipherState {
     #[cfg(feature = "securechannel-selftest")]
     pub fn key_for_test(&self) -> [u8; 32] {
         self.k
+    }
+
+    /// M4.4 — the current nonce counter (the sequence number the NEXT record this
+    /// CipherState encrypts will use). This is NOT secret — it is exactly what
+    /// travels on the wire as a record's sequence — so a network sender can label
+    /// each record with its `seq` for the anti-replay RECEIVER below. Distinct from
+    /// `key_for_test` (which exposes the key and stays selftest-gated).
+    #[inline]
+    pub fn counter(&self) -> u64 {
+        self.n
+    }
+
+    /// M4.4 #9 — build an anti-replay RECEIVER from this cipher's key, for a real
+    /// (reordering) network transport. Does NOT expose the key: `AntiReplayRx` keeps
+    /// `k` private and only ever uses it for AEAD-open. Use this in place of the
+    /// strict in-order `decrypt_into` when records can arrive out of order.
+    #[inline]
+    pub fn into_anti_replay(&self) -> AntiReplayRx {
+        AntiReplayRx {
+            k: self.k,
+            win: ReplayWindow::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M4.4 #9 — anti-replay sliding window (RFC 6479 + RFC 4303 §3.4.3).
+//
+// The in-order `CipherState::decrypt_into` above rejects a replay only IMPLICITLY:
+// its counter has advanced, so a replayed record decrypts at the wrong nonce and
+// the AEAD tag fails. That is correct ONLY for a strictly in-order transport. A
+// REAL network reorders records, so the receiver must (a) ACCEPT an in-window
+// out-of-order record and (b) still REJECT an exact replay and a below-window
+// record. RFC 6479 ("IPsec Anti-Replay Algorithm without Bit Shifting") gives a
+// redundant sliding bitmap that needs no per-packet shifting — the same
+// construction WireGuard uses. ORDER (RFC 4303 §3.4.3, LOAD-BEARING): the window is
+// advanced ONLY AFTER the AEAD integrity check on that sequence SUCCEEDS, so a
+// forged record can never push the window forward and shadow a genuine one.
+// ---------------------------------------------------------------------------
+
+/// Redundant-bitmap replay window (RFC 6479). `BITS_TOTAL` is the whole bitmap; the
+/// usable reorder window is `BITS_TOTAL - BITS_PER_WORD` (the top word is the RFC's
+/// redundant word that absorbs the no-shift trick). Power-of-two word count so the
+/// ring index is a mask, never a modulo.
+pub struct ReplayWindow {
+    bitmap: [u64; ReplayWindow::WORDS],
+    last: u64, // highest INTERNAL (1-based) counter accepted; 0 = none yet
+}
+
+impl ReplayWindow {
+    const BITS_PER_WORD: u64 = 64;
+    const WORD_SHIFT: u64 = 6; // log2(64)
+    const BITS_TOTAL: u64 = 512; // -> 8 words (power of two)
+    const WORDS: usize = (Self::BITS_TOTAL / Self::BITS_PER_WORD) as usize; // 8
+    const WINDOW: u64 = Self::BITS_TOTAL - Self::BITS_PER_WORD; // 448 reorder depth
+    const WORD_MASK: u64 = (Self::WORDS as u64) - 1; // 7
+    const BIT_MASK: u64 = Self::BITS_PER_WORD - 1; // 63
+
+    pub const fn new() -> Self {
+        ReplayWindow {
+            bitmap: [0u64; Self::WORDS],
+            last: 0,
+        }
+    }
+
+    /// Validate + record sequence `seq` (a record's 64-bit nonce counter). Returns
+    /// true iff `seq` is FRESH (strictly in-order OR an in-window reorder not seen
+    /// before); false for an exact REPLAY or a BELOW-WINDOW sequence. Mirrors RFC
+    /// 6479 / WireGuard `counter_validate`: the external `seq` is shifted +1 so that
+    /// `seq == 0` (the first Noise record's nonce) maps to internal counter 1 and is
+    /// accepted against the initial `last == 0`. CALL ONLY AFTER the AEAD tag verified.
+    pub fn validate(&mut self, seq: u64) -> bool {
+        let cur = match seq.checked_add(1) {
+            Some(c) => c, // internal 1-based counter
+            None => return false, // 2^64-1 records — refuse the wrap
+        };
+        if cur > self.last {
+            // New high-water mark. Clear the bitmap words we skip over (bounded by
+            // WORDS — a big jump wipes the whole window, never over-runs it).
+            let idx = cur >> Self::WORD_SHIFT;
+            let prev = self.last >> Self::WORD_SHIFT;
+            let span = core::cmp::min(idx - prev, Self::WORDS as u64);
+            let mut i = 1u64;
+            while i <= span {
+                self.bitmap[((prev + i) & Self::WORD_MASK) as usize] = 0;
+                i += 1;
+            }
+            self.last = cur;
+            let w = (idx & Self::WORD_MASK) as usize;
+            self.bitmap[w] |= 1u64 << (cur & Self::BIT_MASK);
+            true
+        } else {
+            // seq <= last: an in-window reorder, or a below-window/replay.
+            if self.last - cur >= Self::WINDOW {
+                return false; // below the window -> stale -> refuse
+            }
+            let w = ((cur >> Self::WORD_SHIFT) & Self::WORD_MASK) as usize;
+            let bit = 1u64 << (cur & Self::BIT_MASK);
+            if self.bitmap[w] & bit != 0 {
+                return false; // this exact sequence was already accepted -> replay
+            }
+            self.bitmap[w] |= bit;
+            true // in-window reorder, first time seen -> accept
+        }
+    }
+}
+
+/// A transport RECEIVER with an RFC 6479 anti-replay window. Unlike `CipherState`
+/// (strict in-order), it consumes the record's sequence number FROM THE WIRE, so it
+/// tolerates reordering while still rejecting replays + below-window records. It
+/// shares the exact AEAD construction with `CipherState` (Noise §12.3 nonce = 4 zero
+/// bytes || LE64(seq)); the window is the only addition. `k` is private and never
+/// leaves the receiver.
+pub struct AntiReplayRx {
+    k: [u8; 32],
+    win: ReplayWindow,
+}
+
+impl AntiReplayRx {
+    /// AEAD-decrypt `ct_tag` at sequence `seq` (associated data `ad`) into `out`,
+    /// then admit it through the anti-replay window. Returns the plaintext length.
+    /// Fail-closed:
+    ///   * a tampered / wrong-key record -> `AeadAuth`, and the window is LEFT
+    ///     UNTOUCHED (a forgery can never advance the window or burn a slot);
+    ///   * a record that authenticates but is a below-window or exact replay ->
+    ///     `Replay`.
+    pub fn open(
+        &mut self,
+        seq: u64,
+        ad: &[u8],
+        ct_tag: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, NoiseErr> {
+        if ct_tag.len() < AEAD_TAG_LEN {
+            return Err(NoiseErr::Truncated);
+        }
+        let (ct, tag) = ct_tag.split_at(ct_tag.len() - AEAD_TAG_LEN);
+        if out.len() < ct.len() {
+            return Err(NoiseErr::Truncated);
+        }
+        out[..ct.len()].copy_from_slice(ct);
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&self.k));
+        let nb = CipherState::nonce_bytes(seq);
+        cipher
+            .decrypt_in_place_detached(
+                Nonce::from_slice(&nb),
+                ad,
+                &mut out[..ct.len()],
+                Tag::from_slice(tag),
+            )
+            .map_err(|_| NoiseErr::AeadAuth)?;
+        // AEAD verified -> ONLY NOW consult + advance the window (RFC 4303 §3.4.3).
+        if !self.win.validate(seq) {
+            return Err(NoiseErr::Replay);
+        }
+        Ok(ct.len())
     }
 }
 
@@ -734,6 +893,14 @@ impl SymmetricState {
 /// The control plane's static identity, held by the responder. From enrollment the
 /// device knows the PUBLIC halves (`ResponderPub`). Authenticating `es` against
 /// these is what proves the responder is the enrolled one.
+///
+/// M4.4 #3 (defense-in-depth): the ONLY constructor (`from_seeds`) is now gated
+/// behind `securechannel-selftest`, so on the metal profile a `ResponderStatic`
+/// CANNOT be built — the device is always the INITIATOR and never holds a responder
+/// static. The type + the responder read/write functions still compile (they are the
+/// loopback test's control-plane peer, and the shape a future off-device control
+/// plane would use), but the seeded-static path is out of the device binary.
+#[cfg_attr(not(feature = "securechannel-selftest"), allow(dead_code))]
 pub struct ResponderStatic {
     x_sk: StaticSecret,
     x_pk: [u8; 32],
@@ -761,6 +928,12 @@ impl ResponderStatic {
     /// metal, Gate R). `x_seed` -> X25519 static; `(d,z)` -> ML-KEM static.
     /// These are the MSSP's long-term PROVISIONED keys (the device knows the public
     /// halves from enrollment bootstrap), NOT per-session entropy.
+    ///
+    /// M4.4 #3: SELFTEST-ONLY. A metal device is always the initiator and never
+    /// constructs a responder static, so this seeded path is compiled OUT of the
+    /// device binary (a `compile_error!` already refuses `securechannel-selftest`
+    /// together with `cm5`, so it can never reach metal).
+    #[cfg(feature = "securechannel-selftest")]
     pub fn from_seeds(x_seed: &[u8; 32], d: &[u8; 32], z: &[u8; 32]) -> Self {
         let x_sk = StaticSecret::from(*x_seed);
         let x_pk = PublicKey::from(&x_sk).to_bytes();

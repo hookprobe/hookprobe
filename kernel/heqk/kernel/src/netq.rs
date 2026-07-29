@@ -175,12 +175,18 @@ pub fn tx_drain<F: FnMut(&[u8])>(q: &NetQueue, mut sink: F) -> (u32, u32) {
         let bytes = &q.frame[i][..n];
         // THE egress property: re-classify EVERY frame the service tries to send.
         let (_port, v) = crate::packet::verdict(bytes);
-        if v == crate::packet::PASS {
+        // M4.4 — the ADR-0004 WAN-egress KILL-SWITCH rides here: even a rule-PASS
+        // frame is CUT if it is WAN-bound while an ENROLLED device's secure tunnel is
+        // down/compromised (fail-closed, no plaintext leak). Disarmed by default and
+        // ALWAYS for a standalone/air-gapped device -> `egress_allowed` returns true,
+        // so this is a no-op unless enrollment armed it. Governs WAN egress ONLY; the
+        // local SOC, LAN, and the PoP-reconnect path are never cut.
+        if v == crate::packet::PASS && crate::edge::egress_allowed(bytes) {
             sink(bytes); // reaches the wire
             forwarded += 1;
         } else {
             crate::telemetry::emit_count(crate::telemetry::Event::PacketDrop);
-            blocked += 1; // NEVER on the wire — the IPS is authoritative over EL0
+            blocked += 1; // NEVER on the wire — the IPS + kill-switch are authoritative over EL0
         }
         s.state.store(SLOT_FREE, Ordering::Release); // free the slot for reuse
     }
