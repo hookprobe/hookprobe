@@ -264,6 +264,10 @@ OPERATOR DECISION or a METAL bring-up loop (agreed: not built blind).
    netq (needs the multi-page EL0 loader, DSN-10), a TRNG `random_seed`, PCR3 measurement (DSN-11).
 
 ### Migration continuation (governed, in MIGRATION-heqk.md — Track C)
-PH8/M1 landed. **M2** (detection parity: port the hookprobe-os catalogue to RFC 9669 + the 0.7
-enforcement-separation matrix on heqk metal) → **M3** storage/OTA → **M4** net stack → **M5**
-loader+Wasm host → **M6** app-tier Linux guest → **M7** unbuild. Each Amber/operator-gated.
+PH8/M1 landed. **M2** (detection parity), **M3** (storage/OTA), **M4** (control-plane net stack +
+PQC-hybrid Noise secure channel + enrollment + secure-edge kill-switch) are all **QEMU-green
+(2026-07-29)** — the 0.7 enforcement-separation matrix + the whole catalogue at parity ON HEQK
+METAL remain Gate R. → **M5** loader+Wasm host (in progress — the R1 IPC beachhead; the multi-year
+app-host weight per ADR 0044 D4/D5) → **M6** app-tier **native-on-heqk OR hosted off-device — NO
+Linux guest** (the Linux-guest app tier is SUPERSEDED by ADR 0044 D1/D3, B2 = off-device default)
+→ **M7** unbuild. Each Amber/operator-gated.
