@@ -44,6 +44,13 @@ mod netcfg;
 // `securechannel`, OFF by default so the base TCB links no KEX/AEAD crate.
 #[cfg(feature = "securechannel")]
 mod securechannel;
+// M4.3 #6 — entropy source abstraction (fail-closed HW-TRNG; no seeded path on
+// metal). Behind `securechannel` (the only consumer). See entropy.rs.
+#[cfg(feature = "securechannel")]
+mod entropy;
+// M4.3 — MSSP enrollment + authenticated update fetch over the Noise channel.
+#[cfg(feature = "securechannel")]
+mod enroll;
 mod notify;
 mod packet;
 mod ratelimit;
@@ -2231,12 +2238,25 @@ pub extern "C" fn kmain() -> ! {
     // (PUF-anchored) device identity. Noise rev-34 SymmetricState/CipherState/Split
     // implemented to spec; KEM-in-Noise per PQNoise. Loopback in QEMU with seeded
     // ephemerals (real HW-TRNG/PUF/PKI + real network = metal/M4.3, Gate R). ---
-    #[cfg(feature = "securechannel")]
+    #[cfg(feature = "securechannel-selftest")]
     {
         kprint!(" [P19-noise] M4.2b PQ-hybrid Noise handshake (IK-analog, X25519+ML-KEM-768, Ed25519 device auth):\n");
         let ok = securechannel::noise_selftest();
         kprint!(" [P19-noise] {} — full initiator<->responder handshake yields MATCHING crossed transport keys (i.send==r.recv, i.recv==r.send, send!=recv, transcript-hash agree); a transport record round-trips (confidentiality+integrity) and a REPLAY is rejected (advanced nonce counter); a TAMPERED handshake msg aborts (AEAD auth); a WRONG responder static key aborts (es key diverges); an UNENROLLED device identity aborts; the hybrid combiner binds BOTH ML-KEM & X25519 legs (secure if either holds) and fresh ephemerals derive a new key (forward secrecy). DETERMINISTIC loopback (seeded); real HW-TRNG/PUF/responder-PKI + network transport (anti-replay window) = metal/M4.3 (Gate R)\n",
             if ok { "PASS" } else { "FAIL" });
+    }
+
+    // --- M4.3 (P19-enroll): MSSP enrollment + authenticated update fetch over the
+    // Noise channel. Ties M4.2b (transport + mutual auth) to M3.4 OTA (trust root)
+    // and the M3.2/M3.3 sealed store (enrollment persistence). The FULL gate (enroll
+    // persist across reboot + authenticated fetch→ota::stage) needs p15-write + a
+    // virtio-blk disk (validate.sh's two-boot); the plain build proves the
+    // protocol/entropy/air-gap/buffer halves inline. Entropy #6 fails closed with NO
+    // seeded path on metal; #7 fixed buffers (no per-record heap); #8 key_for_test
+    // gated. Real MSSP PKI + HW-TRNG + network = metal (Gate R). ---
+    #[cfg(feature = "securechannel-selftest")]
+    {
+        enroll::enroll_selftest();
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
