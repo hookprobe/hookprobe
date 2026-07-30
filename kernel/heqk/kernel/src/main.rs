@@ -20,6 +20,11 @@ mod devq;
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
 mod elf;
+// M5.2 (Track C) — the Wasm-host BEACHHEAD: verify-then-run ONE signed .wasm module,
+// in-kernel, via the wasmi no_std interpreter. Behind `wasmhost` (OFF by default so the
+// base kernel TCB pulls in no interpreter); the [P-wasm] QEMU gate enables it.
+#[cfg(feature = "wasmhost")]
+mod wasmhost;
 mod events;
 // The crash-safe log layer is only fully exercised under `p15-write` (its writers
 // are all guarded); a read-only build compiles it but drives none of it.
@@ -5599,6 +5604,21 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                     if ea { "PASS" } else { "FAIL" }, ELF_MSG, ELF_REPLY, elf_reply);
                 kprint!(" [P-elf] {} — (a)loaded-task-runs+real-cap-gated-syscall={} (b)malformed/oversize/overlap-REFUSED={} (c)W+X-segment-REJECTED={} [minimal static ELF64/aarch64 loader; PT_LOAD segments mapped via the enforced CORE-1 map_frame_cap path (W^X), loaded task inherits the M5.0 enforced Endpoint cap; NOT dynamic/reloc/shared-lib/Wasm/catalogue — ADR 0044 D5]\n",
                     if ea && eb && ec { "PASS" } else { "FAIL" }, ea, eb, ec);
+                // M5.2 (Track C): the Wasm-host beachhead — verify-then-run ONE signed
+                // .wasm module in-kernel. Deterministic + synchronous (no scheduler),
+                // like the cap/ELF-parser proofs. Only the `wasmhost` build drives it.
+                #[cfg(feature = "wasmhost")]
+                {
+                    let w = wasmhost::wasmhost_selftest();
+                    kprint!(" [P-wasm-a] {} — SIGNED .wasm Ed25519-VERIFIED then EXECUTED (bespoke minimal no_std interpreter, in-kernel): classify(4444)={} (exp 1), classify(443)={} (exp 0)\n",
+                        if w.a_verify_run { "PASS" } else { "FAIL" }, w.bad_result, w.ok_result);
+                    kprint!(" [P-wasm] {} — (a)signed-verify-then-run+correct={} (b)TAMPERED-module-REFUSED-never-interpreted={} (b')bad-signature-REFUSED={} [FIRST minimal Wasm-host sliver: one memoryless module, Ed25519 leg of heqk's hybrid (NOT ML-DSA-65), bespoke MVP-subset interpreter (dep-free), EL1 in-kernel; wasmi builds no_std but +2MiB TCB deferred; NOT WASI-p1/components/catalogue/EL0-hosted/metal — ADR 0044 D5]\n",
+                        if w.a_verify_run && w.b_fail_closed && w.b_unsigned { "PASS" } else { "FAIL" },
+                        w.a_verify_run, w.b_fail_closed, w.b_unsigned);
+                }
+                #[cfg(feature = "wasmhost")]
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm GREEN\n");
+                #[cfg(not(feature = "wasmhost"))]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf GREEN\n");
                 arch_aarch64::semihosting::exit(0);
             }

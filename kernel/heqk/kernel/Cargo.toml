@@ -34,8 +34,33 @@ ml-kem           = { version = "0.2", default-features = false, features = ["det
 kem              = { version = "=0.3.0-pre.0", default-features = false, optional = true }
 x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
 chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
+# M5.2 (Track C) — the Wasm-host BEACHHEAD ships a BESPOKE MINIMAL no_std interpreter
+# (kernel/src/wasmhost.rs) with ZERO external dependencies. FEASIBILITY was assessed
+# first: `wasmi` 0.32 (pure-Rust no_std interpreter) DOES build for
+# aarch64-unknown-none-softfloat under build-std with `alloc` only (zero std leakage /
+# no getrandom) and runs a memoryless module in ~7 KiB heap — but folding it in adds
+# ~2 MiB of `.text` (~15 crates) AND overran the QEMU MMU's single-2-MiB-block W^X map
+# (build_wx_ram), faulting at MMU-enable. That TCB expansion + MMU rework is
+# disproportionate for a ONE-MODULE proof, so the sliver stays dependency-free; wasmi
+# is the documented path for the eventual FULL host once the MMU multi-block-W^X fix +
+# an explicit TCB-expansion decision land. See docs/design/heqk-module-runtime.md §M5.2.
+
+# --- build-time fixture signer (host, NOT in the kernel TCB) ------------------
+# M5.2: build.rs hand-assembles the .wasm fixture AND signs it (Ed25519, the
+# classical leg of heqk's real per-artifact hybrid — see the module header for the
+# honest signature-primitive note). Host build-dep only; the kernel VERIFIES with
+# its always-on `ed25519-compact`. No committed binary, no external toolchain.
+# default-features=false: we only use deterministic KeyPair::from_seed + sign (no RNG),
+# so the host signer pulls in NO getrandom/wasm-bindgen — keeps Cargo.lock lean.
+[build-dependencies]
+ed25519-compact = { version = "2", default-features = false }
 
 [features]
+# M5.2 (Track C): compile the Wasm-host beachhead + its [P-wasm] QEMU gate — a
+# signed `.wasm` module is Ed25519-VERIFIED (fail-closed), then its exported fn is
+# executed by the bespoke minimal no_std interpreter in-kernel and the result checked
+# against a known vector. Dependency-free; OFF by default (base kernel untouched).
+wasmhost = []
 # PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
 netsvc = ["dep:smoltcp"]
 # M4.2a: compile the PQC secure-channel crypto primitives + the [P19-pqc-kat] gate
