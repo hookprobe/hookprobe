@@ -144,6 +144,7 @@ struct Endpoint {
     call_waiter: Option<usize>, // a client BLOCKED in CALL, msg parked, not yet received
     call_msg: u64,              // the message word parked by `call_waiter`
     reply_to: Option<usize>,    // the client being served — BLOCKED awaiting REPLY
+    server: Option<usize>,      // the TCB currently SERVING (received the call, not yet replied)
 }
 const EMPTY_EP: Endpoint = Endpoint {
     used: false,
@@ -152,6 +153,7 @@ const EMPTY_EP: Endpoint = Endpoint {
     call_waiter: None,
     call_msg: 0,
     reply_to: None,
+    server: None,
 };
 static mut ENDPOINTS: [Endpoint; MAX_ENDPOINTS] = [EMPTY_EP; MAX_ENDPOINTS];
 
@@ -214,7 +216,9 @@ pub fn call(index: usize, generation: u32, msg: u64, caller: usize) -> IpcOut {
             if let Some(server) = e.recv_waiter.take() {
                 // Server waiting: deliver the message straight into its RECV return
                 // (frame word 0 = x0), record this caller as awaiting reply, wake it.
+                // Track the serving TCB so its death (before REPLY) can be recovered.
                 e.reply_to = Some(caller);
+                e.server = Some(server);
                 scheduler::deliver_wake(server, msg);
                 scheduler::unblock(server);
             } else {
@@ -243,6 +247,7 @@ pub fn recv_ep(index: usize, generation: u32, server: usize) -> IpcOut {
                 let m = e.call_msg;
                 e.call_msg = 0;
                 e.reply_to = Some(caller); // the caller stays blocked until REPLY
+                e.server = Some(server); // this RECVer is now serving until it REPLYs
                 IpcOut::Ready(m)
             } else if e.recv_waiter.is_some() {
                 IpcOut::Rc(RC_NORESOURCE) // one server per endpoint
@@ -262,6 +267,7 @@ pub fn reply(index: usize, generation: u32, word: u64) -> u64 {
         None => RC_REVOKED,
         Some(e) => match e.reply_to.take() {
             Some(caller) => {
+                e.server = None; // serving complete — endpoint free for a new rendezvous
                 scheduler::deliver_wake(caller, word);
                 scheduler::unblock(caller);
                 RC_OK
@@ -292,6 +298,7 @@ pub fn on_endpoint_cap_deleted(index: usize, generation: u32) -> usize {
                     woken += 1;
                 }
             }
+            e.server = None;
             e.used = false;
             e.call_msg = 0;
             e.generation = e.generation.wrapping_add(1); // stale every cap -> fail closed
@@ -303,6 +310,14 @@ pub fn on_endpoint_cap_deleted(index: usize, generation: u32) -> usize {
 /// Detach `tid` from every endpoint it is parked on (a death path). Mirrors
 /// `notify::detach_tcb` — called on ALL TCB death paths so a later reply/sever can never
 /// write a word into a dead / reused thread's trap frame. Bounds-safe; idempotent.
+///
+/// LIVENESS (server-death recovery): a server that RECVs a call and then dies/faults
+/// BEFORE `reply` would otherwise strand its client forever — `reply_to` holds the
+/// CLIENT, so clearing only `reply_to==tid` (the client-death case) never matched a
+/// dying SERVER, leaving the endpoint permanently `reply_to=Some` → every future
+/// `call`/`recv_ep` on it returns `RC_NORESOURCE` (a shared IPC channel bricked by one
+/// compromised EL0 module). Here, if the dying `tid` is the serving TCB, we wake its
+/// stranded client `RC_DENIED` and reset the rendezvous so the endpoint recovers.
 pub fn detach_tcb(tid: usize) {
     unsafe {
         for e in (*addr_of_mut!(ENDPOINTS)).iter_mut() {
@@ -312,6 +327,14 @@ pub fn detach_tcb(tid: usize) {
             if e.call_waiter == Some(tid) {
                 e.call_waiter = None;
                 e.call_msg = 0;
+            }
+            // Serving TCB died before REPLY: recover the endpoint, don't strand the client.
+            if e.server == Some(tid) {
+                e.server = None;
+                if let Some(client) = e.reply_to.take() {
+                    scheduler::deliver_wake(client, RC_DENIED);
+                    scheduler::unblock(client); // never leave the client hung
+                }
             }
             if e.reply_to == Some(tid) {
                 e.reply_to = None;

@@ -10,6 +10,8 @@
 //! cannot escape gate (2), and a driver bug cannot escape gate (1).
 
 use hal::BlockDev;
+#[cfg(feature = "p15-write")]
+use hal::BlockErr; // only the guarded write path maps the driver's gate-2 refusal
 
 /// Reserved write window (SEALED_STORAGE.md), half-open [lo, hi).
 pub const RESERVED_LBA_LO: u64 = 2016;
@@ -323,16 +325,29 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     /// M3.0 — write one sector to a REGISTERED writable region (behind
     /// `p15-write`). Gate 1: `region_of(lba)` must resolve (the allowlist); a
     /// write outside every registered region — LBA 0, the active slot, the active
-    /// partition, any gap — is `WindowEscape`. Gate 2: the device driver's own
-    /// independent refusal (virtio-blk refuses LBA 0; the eMMC arm-window on
-    /// metal). Read-back verified. Returns the region the write landed in.
+    /// partition, any gap — is `WindowEscape`.
+    ///
+    /// Gate 2 — the device driver's OWN independent refusal — differs by backend and
+    /// is reported HONESTLY: virtio-blk (QEMU) refuses only LBA 0, so above LBA 0 the
+    /// allowlist is the sole gate; the current eMMC scaffold (metal) hard-clamps to the
+    /// reserved KEYSTORE window [2016,2048) — so a DataVolume/InactiveSlot/OTA write on
+    /// real eMMC returns `BlockErr::WriteRefused`, which we surface as the DISTINCT
+    /// `StoreErr::WindowEscape` (a region the driver won't take), NOT a generic `Io`
+    /// fault, so a metal "region unsupported" failure is never disguised. The real
+    /// multi-region eMMC driver (arming the full registered layout as gate 2) is Gate-R
+    /// metal work — see docs/design/heqk-persistence.md. Read-back verified on success.
     #[cfg(feature = "p15-write")]
     pub fn store_sector(&mut self, lba: u64, buf: &[u8; 512]) -> Result<RegionKind, StoreErr> {
         let kind = match self.guard.region_of(lba) {
             Some(k) => k,
             None => return Err(StoreErr::WindowEscape),
         };
-        self.dev.write_block(lba, buf).map_err(|_| StoreErr::Io)?;
+        self.dev.write_block(lba, buf).map_err(|e| match e {
+            // Gate-2 driver refusal (e.g. the eMMC reserved-window clamp) is a WINDOW
+            // decision, not an I/O fault — keep it distinct so metal failures are honest.
+            BlockErr::WriteRefused => StoreErr::WindowEscape,
+            _ => StoreErr::Io,
+        })?;
         let mut rb = [0u8; 512];
         self.dev.read_block(lba, &mut rb).map_err(|_| StoreErr::Io)?;
         if &rb != buf {
@@ -363,7 +378,10 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
             let n = (total - off).min(512);
             let mut s = [0u8; 512];
             s[..n].copy_from_slice(&blob[off..off + n]);
-            self.dev.write_block(lba, &s).map_err(|_| StoreErr::Io)?;
+            self.dev.write_block(lba, &s).map_err(|e| match e {
+                BlockErr::WriteRefused => StoreErr::WindowEscape,
+                _ => StoreErr::Io,
+            })?;
             // Read-back verify.
             let mut rb = [0u8; 512];
             self.dev.read_block(lba, &mut rb).map_err(|_| StoreErr::Io)?;

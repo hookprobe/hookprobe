@@ -66,14 +66,33 @@ static INTERPRETED: AtomicBool = AtomicBool::new(false);
 
 // ============================ signature gate =================================
 
+/// The PINNED module-signing root — the ONLY public key a module signature is ever
+/// accepted under. In this beachhead it is the kernel's built-in fixture signing key
+/// (build.rs, fixed dev seed); in production it is the HSM-custodied module-signing
+/// root. Pinning it is the SAME discipline `boot-abi/verify.rs` uses for the boot
+/// root-of-trust: the verifying key must be COMPILED IN, never travel alongside the
+/// artifact it authenticates. Without the pin, `verify_module` trusts a caller-supplied
+/// key — so an attacker self-signs (their own keypair + their own signature over a
+/// malicious module) and all three "verify". (crypto-F1: latent today because every
+/// caller passes the embedded fixture key, CRITICAL the moment a real catalogue sources
+/// the key from a module bundle / on-wire manifest.)
+const TRUSTED_MODULE_PK: &[u8] = FIXTURE_PK;
+
 /// FAIL-CLOSED signature gate. Verify the Ed25519 signature over the EXACT module bytes
-/// against the embedded module-signing public key. Any malformed key/sig, or any
-/// tamper, yields `false` — the module is refused. (Ed25519 signs arbitrary-length
-/// messages directly; signing the artifact bytes is ADR-0016-shaped artifact signing.)
+/// against the PINNED module-signing root (`TRUSTED_MODULE_PK`) — NOT a caller-supplied
+/// key. Any key that is not the pinned root, any malformed sig, or any tamper yields
+/// `false` — the module is refused. (Ed25519 signs arbitrary-length messages directly;
+/// signing the artifact bytes is ADR-0016-shaped artifact signing.)
 fn verify_module(wasm: &[u8], pk_bytes: &[u8], sig_bytes: &[u8]) -> bool {
     use ed25519_compact::{PublicKey, Signature};
+    // PIN: the presented key MUST be the compiled-in module root. A key that travels
+    // with the artifact is never trusted — that is the confused-deputy the boot
+    // verifier avoids, and the whole point of a trust ROOT.
+    if pk_bytes != TRUSTED_MODULE_PK {
+        return false;
+    }
     (|| {
-        let pk = PublicKey::from_slice(pk_bytes).ok()?;
+        let pk = PublicKey::from_slice(TRUSTED_MODULE_PK).ok()?;
         let sig = Signature::from_slice(sig_bytes).ok()?;
         pk.verify(wasm, &sig).ok()
     })()
@@ -424,7 +443,16 @@ pub fn wasmhost_selftest() -> WasmProof {
     badsig.copy_from_slice(FIXTURE_SIG);
     badsig[0] ^= 0xff;
     let u = run_verified(FIXTURE_WASM, FIXTURE_PK, &badsig, BAD_PORT);
-    let b_unsigned = u.is_none();
+
+    // ---- (b'') PIN (crypto-F1): a module presented with a NON-PINNED signing key is
+    // REFUSED at the pin, before any verify — closing the self-sign bypass where an
+    // attacker supplies their own (pk, sig) over a malicious module and all three
+    // "verify". A key that is not the compiled-in module root never gets that far.
+    let mut attacker_pk = [0u8; 32];
+    attacker_pk.copy_from_slice(FIXTURE_PK);
+    attacker_pk[0] ^= 0x01; // an attacker-chosen key != TRUSTED_MODULE_PK
+    let p = run_verified(FIXTURE_WASM, &attacker_pk, FIXTURE_SIG, BAD_PORT);
+    let b_unsigned = u.is_none() && p.is_none();
 
     WasmProof {
         a_verify_run,
