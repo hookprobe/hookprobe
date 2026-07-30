@@ -60,6 +60,29 @@ const PAGE: usize = 0x1000;
 pub const MAX_SEG_BYTES: usize = 2 * 1024 * 1024; // 512 pages (was 64 KiB — M5.3 widened)
 pub const MAX_SEGMENTS: usize = 8; // (was 4 — M5.3: real images carry text/rodata/data/bss)
 
+/// EL0 USER VA WINDOW — every loadable segment span AND the entry point MUST lie
+/// wholly inside this range. This is the invariant the CM5 mapper enforces via
+/// `user_va_ok` and the QEMU mapper previously did NOT: without it, a crafted ELF
+/// whose `p_vaddr`/`e_entry` names a KERNEL VA (e.g. a `.text` page at 0x4008_0000,
+/// L1 slot 1) would, on the QEMU per-AS map path — whose L1 SHARES the kernel's L2/L3
+/// tables for the RAM region — overwrite a live kernel PTE for EVERY address space
+/// (kernel-integrity DoS + an EL0 mapping planted at a kernel VA). Pinning the window
+/// in the pure `parse()` refuses that image before a single frame is mapped. The
+/// window is L1 slot 2 [0x8000_0000, 0xC000_0000): it holds every real EL0 image the
+/// beachhead loads (the asm fixtures at 0x8A00_0000.., the wasmi host at 0x9000_0000..)
+/// and excludes the kernel RAM/text region and the low device/identity region.
+pub const USER_VA_LO: usize = 0x8000_0000;
+pub const USER_VA_HI: usize = 0xC000_0000;
+
+/// Is `[va, va+len)` wholly inside the EL0 user VA window (and non-wrapping)?
+#[inline]
+fn user_span_ok(va: usize, len: usize) -> bool {
+    match va.checked_add(len) {
+        Some(end) => va >= USER_VA_LO && end <= USER_VA_HI,
+        None => false,
+    }
+}
+
 #[inline]
 fn page_up(n: usize) -> usize {
     (n + (PAGE - 1)) & !(PAGE - 1)
@@ -122,6 +145,7 @@ pub enum ElfError {
     Overlap,             // two PT_LOAD vaddr ranges overlap
     EntryNotExecutable,  // e_entry falls outside every executable segment
     IntegerOverflow,     // an offset/size add or multiply would overflow
+    VaOutOfWindow,       // a segment span or e_entry lands outside the EL0 user VA window
 }
 
 // -------- little-endian field readers: bounds-checked, NEVER panic/OOB --------
@@ -236,6 +260,11 @@ pub fn parse(img: &[u8]) -> Result<ParsedElf, ElfError> {
         if p_vaddr & (PAGE - 1) != 0 {
             return Err(ElfError::Unaligned);
         }
+        // VA-WINDOW: the segment's mapped span (rounded up to whole pages, exactly what
+        // `load_into` maps) must lie inside the EL0 user window — never a kernel VA.
+        if !user_span_ok(p_vaddr, page_up(p_memsz).max(PAGE)) {
+            return Err(ElfError::VaOutOfWindow);
+        }
         if nsegs >= MAX_SEGMENTS {
             return Err(ElfError::TooManySegments);
         }
@@ -275,6 +304,12 @@ pub fn parse(img: &[u8]) -> Result<ParsedElf, ElfError> {
     });
     if !entry_ok {
         return Err(ElfError::EntryNotExecutable);
+    }
+    // Belt-and-suspenders: e_entry itself must be in the EL0 user window (guaranteed by
+    // the per-segment window check + entry-in-exec-segment above, asserted directly so a
+    // future change to either can't silently re-open a kernel-VA entry point).
+    if !user_span_ok(e_entry, 1) {
+        return Err(ElfError::VaOutOfWindow);
     }
 
     Ok(ParsedElf { entry: e_entry, segs, nsegs })

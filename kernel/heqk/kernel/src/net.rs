@@ -89,6 +89,56 @@ pub fn eth_ipv4_dst(frame: &[u8]) -> Option<u32> {
         | frame[d + 3] as u32)
 }
 
+/// M4.4 (IPv6 kill-switch fix) — does this frame carry an IPv6 datagram? Walks up to
+/// `MAX_VLAN_TAGS` 802.1Q/QinQ tags exactly like `eth_ipv4_dst`, so a tagged IPv6
+/// frame is not mistaken for a non-IP L2 frame. Used by the WAN-egress kill-switch to
+/// distinguish "genuine link-local L2 mgmt (ARP/…)" — safe to pass — from "IPv6"
+/// (which may be a plaintext WAN leak and must be scope-classified, fail-closed).
+pub fn frame_is_ipv6(frame: &[u8]) -> bool {
+    let mut et = match be16(frame, 12) {
+        Some(v) => v,
+        None => return false,
+    };
+    let mut off = ETH_HLEN;
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = match be16(frame, off + 2) {
+            Some(v) => v,
+            None => return false,
+        };
+        off += 4;
+        tags += 1;
+    }
+    et == ETHERTYPE_IPV6
+}
+
+/// M4.4 (IPv6 kill-switch fix) — the IPv6 DESTINATION address (16 raw bytes,
+/// network order) of an Ethernet frame, walking VLAN tags like `eth_ipv4_dst`.
+/// `None` if the frame is not IPv6 or is too short to hold the dst field. Used ONLY
+/// by the WAN-egress kill-switch (`edge.rs`) so an enrolled device with its tunnel
+/// down cannot leak plaintext IPv6 to the internet. The kill-switch runs AFTER
+/// `packet::verdict` has PASSed the frame, so a truncated/malformed IPv6 datagram is
+/// already dropped by the IPS before this can see it (fail-closed upstream).
+pub fn eth_ipv6_dst(frame: &[u8]) -> Option<[u8; 16]> {
+    let mut et = be16(frame, 12)?;
+    let mut l3_off = ETH_HLEN;
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = be16(frame, l3_off + 2)?;
+        l3_off += 4;
+        tags += 1;
+    }
+    if et != ETHERTYPE_IPV6 {
+        return None;
+    }
+    // IPv6 destination address is 16 bytes at fixed-header offset 24.
+    let d = l3_off + 24;
+    let slice = frame.get(d..d + 16)?;
+    let mut out = [0u8; 16];
+    out.copy_from_slice(slice);
+    Some(out)
+}
+
 /// Maximum on-wire Ethernet frame size (802.1Q-tagged): 1518 + 4 = 1522. A frame
 /// past this from an unrecognized source is a structural anomaly (F7). Mirrors
 /// Linux `dpi::DEFAULT_MAX_FRAME_LEN`.
