@@ -38,6 +38,7 @@ fn main() {
     if std::env::var("CARGO_FEATURE_WASMHOST").is_ok() && std::env::var("CARGO_FEATURE_CM5").is_err()
     {
         gen_fixture_trap_wasm(&std::env::var("OUT_DIR").unwrap());
+        gen_fixture_detect_wasm(&std::env::var("OUT_DIR").unwrap());
         build_el0_wasmhost(&dir, &std::env::var("OUT_DIR").unwrap());
     }
     println!("cargo:rerun-if-changed=build.rs");
@@ -267,6 +268,78 @@ fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
         panic!("el0-wasmhost ELF not found at {}: {e}", produced.display())
     });
+}
+
+// M5.4 (Track C) — the DETECTION-shaped `.wasm` fixture the [P-wasm-parity] gate runs at
+// PARITY with the in-kernel `rules::run_l4` (ADR 0044 D4 #4, at small scale). Unlike the
+// M5.2/M5.3 MEMORYLESS `classify(port)` module, this one:
+//   * has LINEAR MEMORY (1 page) it owns + exports,
+//   * imports a BESPOKE MINIMAL host ABI — `hp_input(ptr,cap)->len` (read the input L4
+//     header into linear memory) and `hp_emit(verdict)` (emit the verdict),
+//   * does REAL detection: reads the big-endian dst-port from mem[2..4] (mirroring
+//     THREAT_RULE's R1+2/R1+3) and LOOPS the blocked-port corpus {4444, 23, 31337} held in
+//     linear memory (== rules.rs RULES, all FindingClass::Signature) — DROP(2) on a match,
+//     else PASS(1) — and defensively TRAPs (`unreachable`) on a <4-byte header.
+//
+// The bytes below are the EXACT output of `wat::parse_str` on the WAT in the comment,
+// with custom (name) sections stripped — GENERATED + VERIFIED through the SAME wasmi 0.32
+// the EL0 host links (all 8 parity verdicts == rules.rs, `emitted`==return, malformed
+// header traps-contained) before hardcoding, so no `wat`/wasm-tools build-dep is pulled
+// into the kernel graph (the M5.2/M5.3 hand-assembled-fixture convention). WAT:
+//   (module
+//     (import "hp" "hp_input" (func $hp_input (param i32 i32) (result i32)))
+//     (import "hp" "hp_emit"  (func $hp_emit  (param i32)))
+//     (memory (export "memory") 1)
+//     (data (i32.const 256) "\03\00\00\00\5c\11\00\00\17\00\00\00\69\7a\00\00") ;; 3; 4444; 23; 31337
+//     (func (export "detect") (result i32)
+//       (local $len i32) (local $dport i32) (local $i i32) (local $count i32) (local $verdict i32)
+//       (local.set $len (call $hp_input (i32.const 0) (i32.const 64)))
+//       (if (i32.lt_u (local.get $len) (i32.const 4)) (then unreachable))
+//       (local.set $dport (i32.or (i32.shl (i32.load8_u (i32.const 2)) (i32.const 8))
+//                                 (i32.load8_u (i32.const 3))))
+//       (local.set $verdict (i32.const 1))
+//       (local.set $count (i32.load (i32.const 256)))
+//       (local.set $i (i32.const 0))
+//       (block $done (loop $lp
+//         (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+//         (if (i32.eq (local.get $dport)
+//               (i32.load (i32.add (i32.const 260) (i32.mul (local.get $i) (i32.const 4)))))
+//           (then (local.set $verdict (i32.const 2)) (br $done)))
+//         (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $lp)))
+//       (call $hp_emit (local.get $verdict))
+//       (local.get $verdict)))
+//
+// Signed with the SAME dev seed as the other fixtures (kernel verifies the Ed25519 leg of
+// heqk's hybrid — NOT ML-DSA-65 — before any byte reaches the EL0 wasmi host, fail-closed).
+fn gen_fixture_detect_wasm(out_dir: &str) {
+    let wasm: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x03, 0x60,
+        0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x01, 0x7f, 0x00, 0x60, 0x00, 0x01,
+        0x7f, 0x02, 0x1c, 0x02, 0x02, 0x68, 0x70, 0x08, 0x68, 0x70, 0x5f, 0x69,
+        0x6e, 0x70, 0x75, 0x74, 0x00, 0x00, 0x02, 0x68, 0x70, 0x07, 0x68, 0x70,
+        0x5f, 0x65, 0x6d, 0x69, 0x74, 0x00, 0x01, 0x03, 0x02, 0x01, 0x02, 0x05,
+        0x03, 0x01, 0x00, 0x01, 0x07, 0x13, 0x02, 0x06, 0x6d, 0x65, 0x6d, 0x6f,
+        0x72, 0x79, 0x02, 0x00, 0x06, 0x64, 0x65, 0x74, 0x65, 0x63, 0x74, 0x00,
+        0x02, 0x0a, 0x6c, 0x01, 0x6a, 0x01, 0x05, 0x7f, 0x41, 0x00, 0x41, 0xc0,
+        0x00, 0x10, 0x00, 0x21, 0x00, 0x20, 0x00, 0x41, 0x04, 0x49, 0x04, 0x40,
+        0x00, 0x0b, 0x41, 0x02, 0x2d, 0x00, 0x00, 0x41, 0x08, 0x74, 0x41, 0x03,
+        0x2d, 0x00, 0x00, 0x72, 0x21, 0x01, 0x41, 0x01, 0x21, 0x04, 0x41, 0x80,
+        0x02, 0x28, 0x02, 0x00, 0x21, 0x03, 0x41, 0x00, 0x21, 0x02, 0x02, 0x40,
+        0x03, 0x40, 0x20, 0x02, 0x20, 0x03, 0x4f, 0x0d, 0x01, 0x20, 0x01, 0x41,
+        0x84, 0x02, 0x20, 0x02, 0x41, 0x04, 0x6c, 0x6a, 0x28, 0x02, 0x00, 0x46,
+        0x04, 0x40, 0x41, 0x02, 0x21, 0x04, 0x0c, 0x02, 0x0b, 0x20, 0x02, 0x41,
+        0x01, 0x6a, 0x21, 0x02, 0x0c, 0x00, 0x0b, 0x0b, 0x20, 0x04, 0x10, 0x01,
+        0x20, 0x04, 0x0b, 0x0b, 0x17, 0x01, 0x00, 0x41, 0x80, 0x02, 0x0b, 0x10,
+        0x03, 0x00, 0x00, 0x00, 0x5c, 0x11, 0x00, 0x00, 0x17, 0x00, 0x00, 0x00,
+        0x69, 0x7a, 0x00, 0x00,
+    ];
+    use ed25519_compact::{KeyPair, Seed};
+    let kp = KeyPair::from_seed(Seed::new([0x5au8; 32]));
+    let sig = kp.sk.sign(wasm, None);
+    let dir = std::path::Path::new(out_dir);
+    std::fs::write(dir.join("fixture_detect.wasm"), wasm).expect("write detect wasm");
+    std::fs::write(dir.join("fixture_detect.pk"), kp.pk.as_ref()).expect("write detect pk");
+    std::fs::write(dir.join("fixture_detect.sig"), sig.as_ref()).expect("write detect sig");
 }
 
 fn put16(b: &mut [u8], off: usize, v: u16) {
