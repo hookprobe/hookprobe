@@ -22,7 +22,62 @@ fn main() {
     // runs (kernel/src/elf.rs, [P-elf] gate). It is EMITTED here (no committed binary,
     // no external cross-toolchain) and `include_bytes!`d by the kernel. See gen_fixture.
     gen_fixture_elf(&std::env::var("OUT_DIR").unwrap());
+
+    // M5.2 (Track C) — generate the SIGNED .wasm fixture the Wasm-host beachhead
+    // verifies-then-runs (kernel/src/wasmhost.rs, [P-wasm] gate). Hand-assembled wasm
+    // bytes + an Ed25519 signature over them, all EMITTED here (no committed binary,
+    // no wat2wasm/external toolchain). See gen_fixture_wasm.
+    gen_fixture_wasm(&std::env::var("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+// A minimal, real WebAssembly (MVP) module + its Ed25519 signature — the M5.2 fixture.
+// The module exports ONE detection-shaped predicate `classify(port: i32) -> i32` that
+// returns 1 iff `port == 4444` (the known-bad backdoor port of rule 1 "block-port-4444"
+// in rules.rs), else 0 — so the proof is tied to the real detection domain, not a toy
+// `add`. It is MEMORYLESS (no linear memory, no imports) so the interpreter needs only a
+// few KiB of heap. We ALSO sign it here (Ed25519, deterministic from a fixed dev seed —
+// no RNG) and emit the 32-byte pubkey + 64-byte signature; the kernel VERIFIES with its
+// always-on `ed25519-compact` BEFORE the bytes ever reach the interpreter (fail-closed).
+//
+// SIGNATURE HONESTY (reported): heqk's REAL per-artifact hybrid is Ed25519 + SLH-DSA-
+// SHA2-128s (boot-abi::verify, image-level) — NOT ML-DSA-65 (which is NOT on heqk; only
+// named as roadmap in securechannel.rs). This beachhead verifies with the Ed25519 leg —
+// the kernel's ALWAYS-ON primitive (attest_svc uses the identical `ed25519-compact`) —
+// so the base TCB is untouched; fips205/SLH-DSA is deliberately kept OUT of the default
+// kernel (it rides `boot-abi/otaverify`, only under p15-write) and is added as the PQ
+// co-leg at catalogue-parity time (M5.3), not for a one-module sliver.
+fn gen_fixture_wasm(out_dir: &str) {
+    // (module
+    //   (func (export "classify") (param i32) (result i32)
+    //     local.get 0   i32.const 4444   i32.eq))
+    // 4444 = i32.const, signed-LEB128 -> 0xDC 0x22. Verified valid + correct
+    // (classify(4444)=1, classify(443)=0) under wasmi before hardcoding.
+    let wasm: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // \0asm, version 1
+        // type section: 1 type, (i32) -> (i32)
+        0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+        // function section: 1 func, type 0
+        0x03, 0x02, 0x01, 0x00,
+        // export section: "classify" -> func 0
+        0x07, 0x0c, 0x01, 0x08, b'c', b'l', b'a', b's', b's', b'i', b'f', b'y', 0x00, 0x00,
+        // code section: body = local.get 0; i32.const 4444; i32.eq; end
+        0x0a, 0x0a, 0x01, 0x08, 0x00, 0x20, 0x00, 0x41, 0xdc, 0x22, 0x46, 0x0b,
+    ];
+
+    // Deterministic Ed25519 keypair from a FIXED dev seed (no RNG; reproducible).
+    // The PRIVATE half exists only here at build time; only the public key +
+    // signature are emitted, and both are emitted TOGETHER so they always match
+    // (a tampered module fails the signature — that is the (b) sub-proof).
+    use ed25519_compact::{KeyPair, Seed};
+    let seed = Seed::new([0x5au8; 32]);
+    let kp = KeyPair::from_seed(seed);
+    let sig = kp.sk.sign(wasm, None); // Ed25519 over the artifact bytes (ADR-0016-shaped)
+
+    let dir = std::path::Path::new(out_dir);
+    std::fs::write(dir.join("fixture_classify.wasm"), wasm).expect("write fixture wasm");
+    std::fs::write(dir.join("fixture_classify.pk"), kp.pk.as_ref()).expect("write fixture pk");
+    std::fs::write(dir.join("fixture_classify.sig"), sig.as_ref()).expect("write fixture sig");
 }
 
 // A minimal, real ELF64/aarch64 ET_EXEC image with TWO PT_LOAD segments — the M5.1
