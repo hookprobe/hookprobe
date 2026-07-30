@@ -229,6 +229,17 @@ pub fn unblock(tid: usize) {
     unsafe { addr_of_mut!(BLOCKED).cast::<bool>().add(tid).write(false) };
 }
 
+/// Block an ARBITRARY thread by tid (the general-tid analogue of `block_current`).
+/// Bounds-checked. Used by the R1 IPC (c) self-test to park a victim TCB so the
+/// revoke-sever path can PROVE it unblocks it (woken, not left hung).
+#[cfg(not(feature = "cm5"))]
+pub fn block_tid(tid: usize) {
+    if tid >= MAX_THREADS {
+        return;
+    }
+    unsafe { addr_of_mut!(BLOCKED).cast::<bool>().add(tid).write(true) };
+}
+
 /// P12 — deliver a WAIT syscall's return value into a BLOCKED thread's saved `x0`.
 /// A thread that blocked inside `SYS_WAIT` parked its trap frame at `SP[tid]` (word 0
 /// = its saved x0); writing there sets the value `x0` will hold when it is resumed —

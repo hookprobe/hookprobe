@@ -271,6 +271,16 @@ impl CapSpace {
                             arch_aarch64::unmap_user_frame(va);
                         }
                     }
+                    // R1 IPC-sever (the Endpoint analogue of the Frame-unmap above):
+                    // deleting an Endpoint cap tears down its synchronous-IPC rendezvous
+                    // FAIL-CLOSED — a TCB parked on the object is woken RC_DENIED (never
+                    // hung) and the object generation is bumped so ALL caps to it fail
+                    // closed. `base` = object index, `watermark` = object generation. A
+                    // retyped-Endpoint cap (base = nominal phys addr, index >= table size)
+                    // names no live object, so this is a safe no-op for the P2 self-tests.
+                    if c.otype == ObjType::Endpoint {
+                        crate::ipc::on_endpoint_cap_deleted(c.base, c.watermark as u32);
+                    }
                 }
                 self.slots[i] = None;
                 // CORE-9: bump the freed slot's generation so any lingering stale
