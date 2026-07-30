@@ -323,6 +323,49 @@ p12_signal_stub:
 1:  b    1b
 p12_signal_stub_end:
 
+// -------- R1 (M5.0): cap-gated synchronous IPC — SERVER (Recv -> Reply) ------
+// Runs at EL0 holding an Endpoint(R-right) cap at CPtr 0 in its OWN CSpace. SYS_EP_RECV (25)
+// BLOCKS until a client SYS_CALLs; the kernel returns the delivered message word in x0.
+// The server saves that word to its result page (0x8600_2000), then SYS_REPLY (26) with
+// reply word 0x2bee in x1 to wake the caller, and SYS_TASK_EXIT (22). Proves a real EL0
+// task drives the real syscall path with an ENFORCED capability (D4 #1 gate).
+.global ipc_server_stub
+.global ipc_server_stub_end
+ipc_server_stub:
+    mov  x0, #0                  // CPtr 0 = my Endpoint(R-right)
+    mov  x8, #25                 // SYS_EP_RECV (blocks; delivered msg returns in x0)
+    svc  #0
+    movz x1, #0x8600, lsl #16    // x1 = 0x8600_0000
+    add  x1, x1, #0x2000         // SRESULT_VA = 0x8600_2000 (EL0-mapped RW)
+    str  x0, [x1]                // server result = the received message word
+    mov  x0, #0                  // CPtr 0 = my Endpoint(R-right) (REPLY needs the R right)
+    movz x1, #0x2bee             // reply word (server -> caller)
+    mov  x8, #26                 // SYS_REPLY (wakes the served caller with x1; never blocks)
+    svc  #0
+    mov  x8, #22                 // SYS_TASK_EXIT (scheduler-aware clean exit)
+    svc  #0
+1:  b    1b
+ipc_server_stub_end:
+
+// -------- R1 (M5.0): cap-gated synchronous IPC — CLIENT (Call) ---------------
+// Runs at EL0 holding an Endpoint(W-right) cap at CPtr 0. SYS_CALL (24) sends message 0x1c71
+// (x1) and BLOCKS until the server SYS_REPLYs; the kernel returns the reply word in x0.
+// The client saves that to its result page (0x8700_2000) and SYS_TASK_EXITs.
+.global ipc_client_stub
+.global ipc_client_stub_end
+ipc_client_stub:
+    mov  x0, #0                  // CPtr 0 = my Endpoint(W-right)
+    movz x1, #0x1c71             // message word (client -> server)
+    mov  x8, #24                 // SYS_CALL (send + block until REPLY; reply returns in x0)
+    svc  #0
+    movz x1, #0x8700, lsl #16    // x1 = 0x8700_0000
+    add  x1, x1, #0x2000         // CRESULT_VA = 0x8700_2000 (EL0-mapped RW)
+    str  x0, [x1]                // client result = the reply word
+    mov  x8, #22                 // SYS_TASK_EXIT
+    svc  #0
+1:  b    1b
+ipc_client_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME
