@@ -60,6 +60,9 @@ mod entropy;
 // M4.3 — MSSP enrollment + authenticated update fetch over the Noise channel.
 #[cfg(feature = "securechannel")]
 mod enroll;
+// M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
+#[cfg(feature = "securechannel")]
+mod export;
 mod edge;
 mod notify;
 mod packet;
@@ -2486,6 +2489,19 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "securechannel-selftest")]
     {
         edge::edge_selftest();
+    }
+
+    // --- M6 (P-m6-export): ADR 0044 D3 B2 on-device evidence/telemetry EXPORT.
+    // The CM5 is a PURE heqk sensor; MC + HYDRA + heavy services are OFF-DEVICE
+    // (the existing cloud stack, ADR 0009). heqk streams its M2 SOAR verdicts + M3
+    // persisted evidence + QSecBit over the M4 enrolled Noise channel to a FAKE
+    // in-process off-device MC that decrypts + authenticates it. Air-gap invariant
+    // preserved (unenrolled => persist locally, SOC unaffected, no export). The
+    // FULL gate (M2 verdict -> M3 DISK persist -> M4 export -> MC verify) rides the
+    // p15-write two-boot; the plain build proves the in-RAM halves inline. ---
+    #[cfg(feature = "securechannel-selftest")]
+    {
+        export::m6_export_selftest();
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
