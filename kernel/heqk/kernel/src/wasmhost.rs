@@ -281,6 +281,45 @@ fn run_verified(wasm: &[u8], pk: &[u8], sig: &[u8], port: i32) -> Option<i32> {
     interpret_classify(wasm, port)
 }
 
+// =============================== M5.2b hooks =================================
+// The EL0-hosted step (ADR 0044 D4 #2): the SAME signed module, but its 5-opcode
+// interpreter runs in an ISOLATED EL0 task and its verdict returns to the kernel over
+// the enforced Endpoint-cap IPC. The trust root stays the KERNEL's signing key: the
+// kernel verifies (here) and locates the classify() expression (bounds-safe decode, no
+// fault possible) BEFORE handing the EL0 host anything — so a tampered/unsigned module
+// yields no expression and the EL0 host is never even spawned for it. What moves to EL0
+// is the EXECUTION ENGINE (`exec_expr`); the DECODE (find_section/export/func_expr) is
+// not execution and stays at EL1. `arch-aarch64/src/syscall.s:wasmhost_stub` is the
+// hand-written EL0 form of `exec_expr` (byte-identical opcode semantics).
+
+/// M5.2b — the embedded fixture bytes/keys, for the kernel's EL0-host spawn.
+#[cfg(not(feature = "cm5"))]
+pub fn fixture() -> (&'static [u8], &'static [u8], &'static [u8]) {
+    (FIXTURE_WASM, FIXTURE_PK, FIXTURE_SIG)
+}
+
+/// M5.2b — VERIFY the module's Ed25519 signature (kernel = trust root) then, ONLY if it
+/// holds, return the exported `classify` code-EXPRESSION bytes (the input the EL0
+/// 5-opcode interpreter executes). `None` = fail-closed: a tampered/unsigned module (bad
+/// signature) yields NO expression, so the EL0 host is never handed anything to run; a
+/// malformed-but-signed module that fails to decode also yields `None`.
+#[cfg(not(feature = "cm5"))]
+pub fn verified_classify_expr<'a>(wasm: &'a [u8], pk: &[u8], sig: &[u8]) -> Option<&'a [u8]> {
+    if !verify_module(wasm, pk, sig) {
+        return None; // refused BEFORE decode/hand-off — never crosses into EL0
+    }
+    let idx = export_func_index(wasm, b"classify")?;
+    func_expr(wasm, idx)
+}
+
+/// M5.2b — the in-kernel REFERENCE of the exact 5-opcode execution the EL0 host performs,
+/// so the [P-wasm-el0] proof can assert EL0-verdict == reference-verdict (the EL0 engine
+/// is the SAME logic, only relocated across the EL1/EL0 boundary). Reuses `exec_expr`.
+#[cfg(not(feature = "cm5"))]
+pub fn reference_exec(expr: &[u8], port: i32) -> Option<i32> {
+    exec_expr(expr, &[port])
+}
+
 // ================================ the proof ==================================
 
 /// The result of the beachhead self-test, surfaced to the [P-wasm] gate print.
