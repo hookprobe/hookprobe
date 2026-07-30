@@ -366,6 +366,29 @@ ipc_client_stub:
 1:  b    1b
 ipc_client_stub_end:
 
+// -------- M5.1: cap-gated sync-IPC SERVER for the ELF-LOADED client ----------
+// The client of THIS rendezvous is LOADED FROM AN ELF (kernel/src/elf.rs), not copied
+// from a stub — this plain server stub is its counterpart. Holds an Endpoint(R-right)
+// cap at CPtr 0 in its OWN CSpace. SYS_EP_RECV (25) BLOCKS until the ELF client
+// SYS_CALLs; the kernel delivers the message in x0. The server then SYS_REPLY (26) with
+// a DISTINCT reply word 0x5e17 in x1 (distinct from R1's 0x2bee so the M5.1 proof is
+// independent of the M5.0 proof), and SYS_TASK_EXIT (22). No result page needed — the
+// M5.1 proof reads the ELF CLIENT's received reply, written into its RW data segment.
+.global elf_ipc_server_stub
+.global elf_ipc_server_stub_end
+elf_ipc_server_stub:
+    mov  x0, #0                  // CPtr 0 = my Endpoint(R-right)
+    mov  x8, #25                 // SYS_EP_RECV (blocks; delivered msg returns in x0)
+    svc  #0
+    mov  x0, #0                  // CPtr 0 for REPLY (needs the R right)
+    movz x1, #0x5e17             // reply word (server -> ELF client)
+    mov  x8, #26                 // SYS_REPLY (wakes the served caller with x1; never blocks)
+    svc  #0
+    mov  x8, #22                 // SYS_TASK_EXIT (scheduler-aware clean exit)
+    svc  #0
+1:  b    1b
+elf_ipc_server_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME
