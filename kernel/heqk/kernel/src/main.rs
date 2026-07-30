@@ -199,6 +199,42 @@ static mut EL0_ELF_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for th
 #[cfg(not(feature = "cm5"))]
 const FIXTURE_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_client.elf"));
 
+// --- M5.2b (Track C) Wasm-host-AS-EL0-SERVER beachhead: verdict + result statics -----
+// (a) is proven LIVE post-scheduler: the kernel Ed25519-verifies the signed fixture
+// (trust root) and locates classify()'s code expression, then an ISOLATED EL0 host (own
+// ASID/TTBR0) interprets it with the bespoke 5-opcode engine (`wasmhost_stub`) and
+// SYS_CALLs the verdict over an Endpoint{W}; an asm server (Endpoint{R}) RECVs it, writes
+// it to a result page the kernel reads back, and REPLYs. (b) is deterministic
+// pre-scheduler (a tampered module yields no verified expression -> the host is never
+// spawned). (c) is a SECOND EL0 host handed a fault-inducing expression -> EL0 fault
+// contained by the R1 fault-restart (reuses `EL0_FAULT_TID`'s per-TCB restart record).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WHOST_SRESULT_PA: AtomicUsize = AtomicUsize::new(0); // PA of the server's received-verdict word
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WHOST_REF_VERDICT: AtomicU32 = AtomicU32::new(u32::MAX); // in-kernel reference classify(port)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WHOST_B_TAMPER_NOSPAWN: AtomicBool = AtomicBool::new(false); // (b) tampered -> no verified expr
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WHOST_FAULT_TID: AtomicUsize = AtomicUsize::new(usize::MAX); // (c) the faulting EL0 host's tid
+/// The port arg the signed module classifies: 4444 == rule-1 "block-port-4444" -> verdict 1.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WHOST_PORT: u64 = 4444;
+/// EL0 wasm-host VAs (its OWN address space). Code R+X, Work RW (== the `wasmhost_stub`
+/// hard-coded 0x8C00_2000), Stack RW. The counterpart server reuses `ipc_server_stub`'s
+/// 0x8600_* VAs in its OWN address space (no cross-AS collision).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WHOST_CODE_VA: usize = 0x8C00_0000;
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WHOST_STACK_VA: usize = 0x8C00_1000;
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WHOST_WORK_VA: usize = 0x8C00_2000;
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut EL0_WHOST_CKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the EL0 host TCB
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut EL0_WHOST_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the asm server TCB
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut EL0_WHOST_FKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the faulting host TCB
+
 /// CM5 / BCM2712 first-boot entry: prove HEQK boots and prints on real silicon
 /// via the on-SoC debug UART. MMU stays OFF (the UART is at a 40-bit PA that the
 /// QEMU identity map doesn't cover); GIC-400 / generic-timer / RP1 are the next
@@ -2432,6 +2468,8 @@ pub extern "C" fn kmain() -> ! {
     p12_el0_spawn(); // P12 (c): + a WAIT TCB (blocks) and a SIGNAL TCB (wakes it) — the real syscall path
     r1_ipc_el0_spawn(); // R1 (M5.0) (a): + an IPC server (RECV/REPLY) and client (CALL) — cap-gated sync IPC
     m5_elf_loader_spawn(); // M5.1 (Track C) (a): + a client LOADED FROM AN ELF (real cap-gated SYS_CALL) — ELF-loader beachhead
+    #[cfg(feature = "wasmhost")]
+    m5_wasmhost_el0_spawn(); // M5.2b (Track C) (a): + the signed module HOSTED in an ISOLATED EL0 task, verdict returned via enforced IPC
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -5590,7 +5628,7 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                 let c = got == P12_BADGE_C && blocked;
                 kprint!(" [P12c] blocking-WAIT {} — EL0 WAITer blocked={}, woken by EL0 Signal, received badge {:#x} (expected {:#x})\n",
                     if c { "PASS" } else { "FAIL" }, blocked, got, P12_BADGE_C);
-                kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=16, DSN-6 fixed]\n",
+                kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=20, DSN-6 fixed]\n",
                     if a && b && c { "PASS" } else { "FAIL" }, a, b, c);
                 // R1 (M5.0): the cap-gated synchronous-IPC beachhead. (a) is the LIVE EL0
                 // rendezvous verified here (the server received the client's SYS_CALL msg;
@@ -5631,9 +5669,26 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                     kprint!(" [P-wasm] {} — (a)signed-verify-then-run+correct={} (b)TAMPERED-module-REFUSED-never-interpreted={} (b')bad-signature-REFUSED={} [FIRST minimal Wasm-host sliver: one memoryless module, Ed25519 leg of heqk's hybrid (NOT ML-DSA-65), bespoke MVP-subset interpreter (dep-free), EL1 in-kernel; wasmi builds no_std but +2MiB TCB deferred; NOT WASI-p1/components/catalogue/EL0-hosted/metal — ADR 0044 D5]\n",
                         if w.a_verify_run && w.b_fail_closed && w.b_unsigned { "PASS" } else { "FAIL" },
                         w.a_verify_run, w.b_fail_closed, w.b_unsigned);
+                    // M5.2b — the module HOSTED IN AN ISOLATED EL0 TASK (ADR 0044 D4 #2
+                    // shape). (a) is the LIVE proof verified here: the kernel verified +
+                    // decoded (trust root), the EL0 host (own ASID/TTBR0) interpreted
+                    // classify(4444) with the bespoke 5-opcode engine, and its verdict
+                    // returned to the kernel through the cap-gated SYS_CALL -> asm server ->
+                    // result page. (b) tampered-never-handed-to-EL0 + (c) EL0-fault-contained.
+                    let vp = WHOST_SRESULT_PA.load(Ordering::SeqCst);
+                    let el0_verdict = if vp != 0 { (unsafe { read_volatile(vp as *const u64) }) as i32 } else { -1 };
+                    let refv = WHOST_REF_VERDICT.load(Ordering::SeqCst) as i32;
+                    let el0_a = el0_verdict == 1 && el0_verdict == refv;
+                    let el0_b = WHOST_B_TAMPER_NOSPAWN.load(Ordering::SeqCst);
+                    let frestarts = scheduler::restart_used(WHOST_FAULT_TID.load(Ordering::Relaxed));
+                    let el0_c = frestarts >= EL0_MAX_RESTARTS; // faulting host contained+restarted+killed
+                    kprint!(" [P-wasm-el0-a] {} — SIGNED module classify({}) interpreted IN EL0 (own ASID/TTBR0) -> verdict {} (in-kernel ref {}); returned to the kernel over the enforced Endpoint-cap IPC (cap-gated SYS_CALL -> asm server RECV/REPLY -> result page)\n",
+                        if el0_a { "PASS" } else { "FAIL" }, WHOST_PORT, el0_verdict, refv);
+                    kprint!(" [P-wasm-el0] {} — (a)EL0-hosted verify(kernel=trust-root)->interpret(EL0 own TTBR0)->verdict-via-cap-gated-IPC={} (b)TAMPERED refused BEFORE EL0 hand-off (host never spawned)={} (c)module/host fault CONTAINED at EL0 (restarts {}, kernel survived)={} [ADR 0044 D4 #2 shape @ min scale: bespoke 5-opcode engine moved to an isolated EL0 server, NOT wasmi/WASI/wasm32-wasip1, ONE module, NOT catalogue-parity, NOT metal — ADR 0044 D5]\n",
+                        if el0_a && el0_b && el0_c { "PASS" } else { "FAIL" }, el0_a, el0_b, frestarts.min(EL0_MAX_RESTARTS), el0_c);
                 }
                 #[cfg(feature = "wasmhost")]
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm GREEN\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 GREEN\n");
                 #[cfg(not(feature = "wasmhost"))]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf GREEN\n");
                 arch_aarch64::semihosting::exit(0);
@@ -6555,6 +6610,171 @@ fn m5_elf_loader_spawn() {
     kprint!(
         " [P-elf-a] LOADED EL0 client from ELF (entry {:#x}, {} PT_LOAD seg) + asm server(prio9,Endpoint{{R}}); msg={:#x} reply={:#x}\n",
         loaded.entry, parsed.nsegs, ELF_MSG, ELF_REPLY
+    );
+}
+
+// ===========================================================================
+// M5.2b (Track C) — the Wasm host AS AN EL0 SERVER (ADR 0044 D4 #2 shape).
+// ===========================================================================
+
+/// Bring up ONE isolated EL0 wasm-host TCB: copy the `wasmhost_stub` 5-opcode
+/// interpreter into an R+X code page, write the verified `expr` + `port` into a RW work
+/// page (the interpreter reads them at 0x8C00_2000), map a stack, spawn it in its OWN
+/// address space (own ASID/TTBR0) at `prio`, and — if `ep` is given — install an
+/// `Endpoint{W}` cap at CPtr 0 so the host can SYS_CALL its verdict. Returns the tid.
+/// The work page holds: [+0]=port, [+8]=expr_len, [+16..]=expr bytes.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn bringup_wasmhost_el0(
+    mmu: &arch_aarch64::Mmu,
+    stub: usize,
+    stub_len: usize,
+    expr: &[u8],
+    port: u64,
+    ep: Option<ipc::EpHandle>,
+    prio: u8,
+    kstack: usize,
+) -> Option<usize> {
+    let (code, work, stack) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if code == 0 || work == 0 || stack == 0 {
+        return None;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(stub as *const u8, code as *mut u8, stub_len);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(code, stub_len);
+    // Work page: port (local 0), expr_len, then the verified expression bytes. `expr` is
+    // bounded (fixture ~7 B); cap the copy so it can never reach the operand-stack region
+    // at +0x800 (belt-and-braces — a hostile length is already refused by the decoder).
+    let n = expr.len().min(0x700);
+    unsafe {
+        write_volatile(work as *mut u64, port);
+        write_volatile((work + 8) as *mut u64, n as u64);
+        core::ptr::copy_nonoverlapping(expr.as_ptr(), (work + 16) as *mut u8, n);
+    }
+    let (l1, asid) = mmu.new_addr_space();
+    if l1 == 0 {
+        return None;
+    }
+    mmu.map_user_code_in(l1, WHOST_CODE_VA, code); // EL0 RO+X (W^X)
+    mmu.map_user_data_in(l1, WHOST_WORK_VA, work); // EL0 RW, non-exec
+    mmu.map_user_data_in(l1, WHOST_STACK_VA, stack);
+    let sp = arch_aarch64::thread::make_el0_thread(kstack, WHOST_CODE_VA, WHOST_STACK_VA + 0x1000, 0);
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    let tid = scheduler::spawn_as(sp, prio, ttbr0)?;
+    let mut cs = caps::CapSpace::empty();
+    if let Some(eh) = ep {
+        // Endpoint with the WRITE right (may SYS_CALL) at CPtr 0 — the host's ONLY
+        // authority to reach the kernel; the verdict flows through this cap-gated path.
+        let _ = cs.install_object(caps::ObjType::Endpoint, caps::W, eh.index, eh.generation, 0);
+    }
+    install_cspace(tid, cs);
+    scheduler::set_restart(tid, WHOST_CODE_VA, WHOST_STACK_VA + 0x1000, kstack);
+    Some(tid)
+}
+
+/// M5.2b (a)+(b)+(c) — host the ONE signed module in an ISOLATED EL0 task, returning its
+/// verdict to the kernel over the enforced Endpoint-cap IPC (ADR 0044 D4 #2 shape, min
+/// scale). The kernel is the TRUST ROOT: it Ed25519-verifies the module and locates
+/// classify()'s expression (bounds-safe decode) BEFORE handing the EL0 host anything.
+/// Spawns: (1) an asm SERVER (`ipc_server_stub`, Endpoint{R}) that RECVs the verdict, (2)
+/// the EL0 wasm-host CLIENT (`wasmhost_stub`, Endpoint{W}) that interprets classify(4444)
+/// AT EL0 and SYS_CALLs the verdict, (3) a SECOND EL0 host handed a fault-inducing
+/// expression to prove EL0 isolation (its fault is contained by the R1 fault-restart).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn m5_wasmhost_el0_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    extern "C" {
+        static wasmhost_stub: u8;
+        static wasmhost_stub_end: u8;
+        static ipc_server_stub: u8;
+        static ipc_server_stub_end: u8;
+    }
+    let stub = core::ptr::addr_of!(wasmhost_stub) as usize;
+    let stub_len = core::ptr::addr_of!(wasmhost_stub_end) as usize - stub;
+    let (wasm, pk, sig) = wasmhost::fixture();
+
+    // (b) FAIL-CLOSED, BEFORE any EL0 hand-off: a TAMPERED module (one code byte flipped —
+    // still valid wasm, but the Ed25519 sig no longer matches) yields NO verified
+    // expression, so the EL0 host is NEVER spawned for it. Prove it deterministically.
+    let mut tampered = [0u8; 46];
+    let n = wasm.len();
+    tampered[..n].copy_from_slice(wasm);
+    tampered[n - 3] ^= 0x01; // flip i32.eq (0x46) -> i32.ne (0x47)
+    let tamper_blocked = wasmhost::verified_classify_expr(&tampered[..n], pk, sig).is_none();
+    WHOST_B_TAMPER_NOSPAWN.store(tamper_blocked, Ordering::SeqCst);
+
+    // (a) SIGNED: verify (kernel = trust root) THEN locate classify()'s code expression.
+    let expr = match wasmhost::verified_classify_expr(wasm, pk, sig) {
+        Some(e) => e,
+        None => {
+            kprint!(" [P-wasm-el0-a] FAIL: signed fixture failed verify/decode\n");
+            return;
+        }
+    };
+    // The in-kernel reference of the SAME 5-opcode execution, to cross-check the EL0 result.
+    let refv = wasmhost::reference_exec(expr, WHOST_PORT as i32).unwrap_or(-1);
+    WHOST_REF_VERDICT.store(refv as u32, Ordering::SeqCst);
+
+    // A fresh Endpoint object shared by the EL0 host (W) and the asm server (R).
+    let eh = match ipc::ep_create() {
+        Some(h) => h,
+        None => {
+            kprint!(" [P-wasm-el0-a] FAIL: endpoint table full\n");
+            return;
+        }
+    };
+
+    // ---- SERVER: reuse the R1 asm server (Endpoint{R}) — RECV verdict -> result page -> REPLY ----
+    let (scode, sstack, sresult) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if scode == 0 || sstack == 0 || sresult == 0 {
+        return;
+    }
+    let ssrc = core::ptr::addr_of!(ipc_server_stub) as usize;
+    let slen = core::ptr::addr_of!(ipc_server_stub_end) as usize - ssrc;
+    unsafe {
+        core::ptr::copy_nonoverlapping(ssrc as *const u8, scode as *mut u8, slen);
+        write_volatile(sresult as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(scode, slen);
+    let (sl1, sasid) = mmu.new_addr_space();
+    if sl1 == 0 {
+        return;
+    }
+    // The `ipc_server_stub` hard-codes SCODE 0x8600_0000 / SSTACK 0x8600_1000 / SRESULT
+    // 0x8600_2000 (its own address space; no collision with the R1 server's identical VAs).
+    mmu.map_user_code_in(sl1, 0x8600_0000, scode);
+    mmu.map_user_data_in(sl1, 0x8600_1000, sstack);
+    mmu.map_user_data_in(sl1, 0x8600_2000, sresult);
+    WHOST_SRESULT_PA.store(sresult, Ordering::SeqCst);
+    let skstack = unsafe { core::ptr::addr_of!(EL0_WHOST_SKSTACK) as usize + 0x4000 };
+    let ssp = arch_aarch64::thread::make_el0_thread(skstack, 0x8600_0000, 0x8600_1000 + 0x1000, 0);
+    let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(ssp, 9, sttbr0) {
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Endpoint, caps::R, eh.index, eh.generation, 0);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, 0x8600_0000, 0x8600_1000 + 0x1000, skstack);
+    }
+
+    // ---- CLIENT: the EL0 wasm-host — the 5-opcode interpreter runs HERE at EL0 ----
+    let ckstack = unsafe { core::ptr::addr_of!(EL0_WHOST_CKSTACK) as usize + 0x4000 };
+    let _ = bringup_wasmhost_el0(&mmu, stub, stub_len, expr, WHOST_PORT, Some(eh), 8, ckstack);
+
+    // ---- (c) ISOLATION: a SECOND EL0 host handed a FAULT-INDUCING expression ----
+    // `local.get <huge idx>; end` -> the EL0 interpreter loads locals[idx] from a far
+    // unmapped EL0 address -> data abort at EL0 -> CONTAINED + restarted by the R1
+    // fault path (never a kernel panic). It holds NO endpoint cap (faults before any
+    // CALL). Kernel survival + the GOOD host's verdict staying intact = the isolation proof.
+    static BAD_EXPR: [u8; 6] = [0x20, 0xFF, 0xFF, 0xFF, 0x7F, 0x0b]; // local.get 0x0FFFFFFF; end
+    let fkstack = unsafe { core::ptr::addr_of!(EL0_WHOST_FKSTACK) as usize + 0x4000 };
+    if let Some(tid) = bringup_wasmhost_el0(&mmu, stub, stub_len, &BAD_EXPR, 0, None, 7, fkstack) {
+        WHOST_FAULT_TID.store(tid, Ordering::Relaxed);
+    }
+
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase
+    kprint!(
+        " [P-wasm-el0-a] spawned EL0 wasm-host(prio8,Endpoint{{W}}) + asm server(prio9,Endpoint{{R}}) + fault-host(prio7); classify({}) ref-verdict={} tamper-blocked={}\n",
+        WHOST_PORT, refv, tamper_blocked
     );
 }
 

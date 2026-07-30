@@ -389,6 +389,111 @@ elf_ipc_server_stub:
 1:  b    1b
 elf_ipc_server_stub_end:
 
+// -------- M5.2b: the bespoke 5-opcode Wasm INTERPRETER, running AT EL0 --------
+// The M5.2 in-kernel interpreter's EXECUTION ENGINE (exec_expr: local.get / i32.const /
+// i32.add / i32.eq / end) relocated to run ISOLATED at EL0, in its OWN ASID/TTBR0. The
+// kernel (EL1) has ALREADY Ed25519-verified the module (trust root = the kernel's signing
+// key, checked BEFORE any byte crosses into EL0) and located the exported classify()
+// code-expression; it hands THIS host ONLY the verified expression + the port arg through
+// a RW work page, plus an Endpoint(W-right) cap at CPtr 0. The host interprets classify
+// HERE at EL0 and SYS_CALLs the verdict to the kernel over the ENFORCED IPC path. A
+// malformed expression (e.g. an out-of-range local.get) faults at EL0 and is CONTAINED by
+// the R1 fault-restart — it can NEVER panic the kernel. Position-independent (only
+// PC-relative bl to internal .L labels + absolute-VALUE VA immediates, no relocations),
+// so it is copied verbatim into an EL0 code page exactly like the other stubs.
+//
+// Work page (mapped RW at WHOST_WORK_VA = 0x8C00_2000; base rebuilt into x0 below):
+//   [+0]  port (i32 local 0)   [+8] expr_len (u64)   [+16..] expr bytes
+//   [+0x800..] operand-stack scratch (grows up; 32-bit values zero/sign-extended to 64)
+.global wasmhost_stub
+.global wasmhost_stub_end
+wasmhost_stub:
+    movz x0, #0x8C00, lsl #16     // x0 = WHOST_WORK_VA base (0x8C00_0000)
+    add  x0, x0, #0x2, lsl #12    // x0 = 0x8C00_2000 (the RW work page)
+    ldr  x20, [x0, #8]            // x20 = expr_len
+    add  x21, x0, #16            // x21 = expr cursor
+    add  x22, x21, x20           // x22 = expr end
+    add  x23, x0, #0x800         // x23 = operand-stack ptr (grows up)
+.Lwh_loop:
+    cmp  x21, x22
+    b.hs .Lwh_fail               // ran off the end without `end` -> fail-closed sentinel
+    ldrb w9, [x21], #1           // op = *cursor++
+    cmp  w9, #0x20               // local.get
+    b.eq .Lwh_localget
+    cmp  w9, #0x41               // i32.const
+    b.eq .Lwh_const
+    cmp  w9, #0x6a               // i32.add
+    b.eq .Lwh_add
+    cmp  w9, #0x46               // i32.eq
+    b.eq .Lwh_eq
+    cmp  w9, #0x0b               // end
+    b.eq .Lwh_end
+    b    .Lwh_fail               // unknown opcode -> fail-closed
+.Lwh_localget:
+    bl   .Lwh_leb_u              // idx -> x10 (advances x21)
+    add  x14, x0, x10, lsl #2    // &locals[idx] (32-bit locals; port at [x0]); OOB idx ->
+    ldr  w15, [x14]             //   unmapped EL0 addr -> CONTAINED EL0 fault (isolation)
+    str  x15, [x23], #8          // push (zero-extended)
+    b    .Lwh_loop
+.Lwh_const:
+    bl   .Lwh_leb_s              // signed value -> x10 (advances x21)
+    str  x10, [x23], #8          // push
+    b    .Lwh_loop
+.Lwh_add:
+    ldr  x16, [x23, #-8]!        // pop b
+    ldr  x17, [x23, #-8]!        // pop a
+    add  w17, w17, w16           // 32-bit add
+    str  x17, [x23], #8          // push (zero-extended)
+    b    .Lwh_loop
+.Lwh_eq:
+    ldr  x16, [x23, #-8]!        // pop b
+    ldr  x17, [x23, #-8]!        // pop a
+    cmp  w17, w16
+    cset x18, eq                 // 1 iff equal, else 0
+    str  x18, [x23], #8          // push
+    b    .Lwh_loop
+.Lwh_end:
+    ldr  x24, [x23, #-8]         // verdict = top of operand stack
+    b    .Lwh_send
+.Lwh_fail:
+    mov  x24, #-1                // fail-closed sentinel (kernel treats !=0/1 as error)
+.Lwh_send:
+    mov  x0, #0                  // CPtr 0 = my Endpoint(W-right)
+    and  x1, x24, #0xffffffff    // verdict word (i32) -> the message
+    mov  x8, #24                 // SYS_CALL (send verdict + block for reply)
+    svc  #0
+    mov  x8, #22                 // SYS_TASK_EXIT (scheduler-aware clean exit)
+    svc  #0
+9:  b    9b
+// --- internal PC-relative LEB128 subroutines (self-contained; bl stays inside the blob) --
+.Lwh_leb_u:                       // unsigned LEB128 -> x10 (advances x21); clobbers x10-x13,x30
+    mov  x10, xzr                 // result
+    mov  x11, xzr                 // shift
+1:  ldrb w12, [x21], #1
+    and  x13, x12, #0x7f
+    lsl  x13, x13, x11
+    orr  x10, x10, x13
+    add  x11, x11, #7
+    tbnz w12, #7, 1b              // continuation bit set -> keep going
+    ret
+.Lwh_leb_s:                       // signed LEB128 -> x10 sign-extended (advances x21); +x14
+    mov  x10, xzr
+    mov  x11, xzr
+1:  ldrb w12, [x21], #1
+    and  x13, x12, #0x7f
+    lsl  x13, x13, x11
+    orr  x10, x10, x13
+    add  x11, x11, #7
+    tbnz w12, #7, 1b
+    tbz  w12, #6, 2f              // sign bit of last group clear -> no sign-extension
+    cmp  x11, #64
+    b.hs 2f
+    mov  x14, #-1
+    lsl  x14, x14, x11
+    orr  x10, x10, x14           // sign-extend the high bits
+2:  ret
+wasmhost_stub_end:
+
 .global resume_kernel
 resume_kernel:
     adrp    x2, KRESUME
