@@ -126,10 +126,20 @@ pub enum PortRole {
 /// PLACEHOLDER — the ingress port's role. On a real deployment this is sourced from
 /// the signed Platform Manifest (a per-interface role: `wlan0`=AP=Uplink, a wired
 /// access port=Access). heqk has **no manifest port-role source yet** (M2 follow-on).
-/// Default `Access` is the conservative choice (a genuine mac-flood IS rate-limited);
-/// an AP build overrides to `Uplink` so many client MACs stay `Observe`. This is a
-/// stub, honestly flagged — NOT faked as manifest-driven.
-pub const DEFAULT_PORT_ROLE: PortRole = PortRole::Access;
+///
+/// The live datapath (`packet::classify`) fuses ALL ingress into a single aggregate
+/// port 0. That port carries the box's own built-in Wi-Fi AP + bridged LAN, where
+/// MANY distinct client MACs are ordinary churn — a SOHO/office LAN or AP with 20+
+/// active devices is completely normal. If the aggregate port defaulted to `Access`,
+/// the 21st distinct MAC in a 10s window would trip the mac-flood wire cap and
+/// FrameDrop the whole segment — a self-reinflicting outage of LEGITIMATE customer
+/// traffic, the exact thing ADR 0023 ("a legitimate connection must ALWAYS pass")
+/// and its D12 mac-flood FP guard exist to prevent. So the SAFE default for the
+/// aggregate port is `Uplink`: a genuine mac-flood is still DETECTED (→ `Observe`,
+/// logged for the operator), but never wire-capped. Only a manifest that resolves a
+/// specific wired-access interface may narrow it back to `Access`. Fail-safe toward
+/// never dropping legit traffic — honestly a stub, NOT faked as manifest-driven.
+pub const DEFAULT_PORT_ROLE: PortRole = PortRole::Uplink;
 
 /// The context `decide()` reads. `allowlisted` = the source is on the management
 /// path (the floor). `confirmed` = an ADR-0018 confirmation signal is present

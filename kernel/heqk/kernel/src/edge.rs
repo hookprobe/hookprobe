@@ -49,6 +49,22 @@ static LAN_MASK: AtomicU32 = AtomicU32::new(0);
 /// standard kill-switch carve-out (WireGuard/OpenVPN allow their own endpoint). 0 =
 /// unset.
 static POP_ADDR: AtomicU32 = AtomicU32::new(0);
+/// Configured LAN IPv6 /64 prefix (first 8 bytes of the on-link prefix), split into
+/// two big-endian halves. Frames to this prefix are LAN/local and NEVER cut. 0/0 =
+/// "not learned" (link-local / ULA / multicast are still recognized without it, and
+/// global-unicast is still cut). Set via `set_lan6_prefix` from SLAAC/DHCPv6-PD.
+static LAN6_PREFIX_HI: AtomicU32 = AtomicU32::new(0);
+static LAN6_PREFIX_LO: AtomicU32 = AtomicU32::new(0);
+
+/// Learn the on-link LAN IPv6 /64 prefix (first 8 bytes, network order) so egress to
+/// it is treated as LAN. Sourced from SLAAC/DHCPv6-PD on metal; call with all-zero to
+/// clear. Idempotent; safe to call before or after `set_state`.
+pub fn set_lan6_prefix(prefix8: [u8; 8]) {
+    let hi = u32::from_be_bytes([prefix8[0], prefix8[1], prefix8[2], prefix8[3]]);
+    let lo = u32::from_be_bytes([prefix8[4], prefix8[5], prefix8[6], prefix8[7]]);
+    LAN6_PREFIX_HI.store(hi, Ordering::Release);
+    LAN6_PREFIX_LO.store(lo, Ordering::Release);
+}
 
 /// Enrollment posture, as it bears on the kill-switch. Mirrors `enroll::EnrollStatus`
 /// but is the datapath-facing projection (the envelope must not depend on the
@@ -163,23 +179,70 @@ fn is_local_dst(dst: u32) -> bool {
     mask != 0 && (dst & mask) == (net & mask)
 }
 
-/// Classify a well-formed egress frame's destination scope. A non-IPv4 frame (ARP,
-/// IPv6-ND, …) is link-local L2 management and is treated as `LocalOrLan` — never
-/// cut. (Malformed IPv4 never reaches here: `packet::verdict` fail-closes it before
-/// `netq::tx_drain` consults the kill-switch.)
+/// Is `dst6` (16 raw bytes, network order) a LAN/local IPv6 destination that must
+/// NEVER be cut? True for link-local (`fe80::/10`), unique-local (`fc00::/7`),
+/// multicast (`ff00::/8`), loopback (`::1`), the unspecified address (`::`), and the
+/// configured LAN /64 prefix. Everything else — global unicast (`2000::/3` and the
+/// wider public space) — is WAN and IS cut while armed. Fail-closed: a destination we
+/// cannot positively classify as local is treated as WAN.
+fn is_local_dst6(dst6: &[u8; 16]) -> bool {
+    // ::  (unspecified) and ::1 (loopback)
+    if dst6[..15].iter().all(|&b| b == 0) && (dst6[15] == 0 || dst6[15] == 1) {
+        return true;
+    }
+    if dst6[0] == 0xff {
+        return true; // ff00::/8 multicast
+    }
+    if dst6[0] == 0xfe && (dst6[1] & 0xc0) == 0x80 {
+        return true; // fe80::/10 link-local
+    }
+    if (dst6[0] & 0xfe) == 0xfc {
+        return true; // fc00::/7 unique-local (ULA)
+    }
+    // Configured LAN /64 prefix (first 8 bytes), if one has been learned.
+    let lo = LAN6_PREFIX_LO.load(Ordering::Acquire);
+    if lo != 0 {
+        let hi = LAN6_PREFIX_HI.load(Ordering::Acquire);
+        let mut pfx = [0u8; 8];
+        pfx[..4].copy_from_slice(&hi.to_be_bytes());
+        pfx[4..].copy_from_slice(&lo.to_be_bytes());
+        if dst6[..8] == pfx {
+            return true;
+        }
+    }
+    false
+}
+
+/// Classify a well-formed egress frame's destination scope.
+///
+/// A genuine non-IP L2 frame (ARP, …) is link-local management and is `LocalOrLan` —
+/// never cut. But **IPv6 is NOT non-IP**: an enrolled device with its tunnel down must
+/// not leak plaintext IPv6 to the internet, so an IPv6 frame is scope-classified just
+/// like IPv4 (global-unicast → `Wan` → CUT). An IPv6 ethertype we cannot parse a
+/// destination out of is fail-closed to `Wan` (it never reaches here in practice —
+/// `packet::verdict` drops malformed frames upstream — but the kill-switch must not
+/// assume that). Only truly non-IP L2 frames fall through to `LocalOrLan`.
 pub fn egress_scope(frame: &[u8]) -> Scope {
-    let dst = match crate::net::eth_ipv4_dst(frame) {
-        Some(d) => d,
-        None => return Scope::LocalOrLan,
-    };
-    let pop = POP_ADDR.load(Ordering::Acquire);
-    if pop != 0 && dst == pop {
-        return Scope::PopReconnect;
+    if let Some(dst) = crate::net::eth_ipv4_dst(frame) {
+        let pop = POP_ADDR.load(Ordering::Acquire);
+        if pop != 0 && dst == pop {
+            return Scope::PopReconnect;
+        }
+        if is_local_dst(dst) {
+            return Scope::LocalOrLan;
+        }
+        return Scope::Wan;
     }
-    if is_local_dst(dst) {
-        return Scope::LocalOrLan;
+    // Not IPv4. If it is IPv6, classify it — do NOT blanket-pass it as "L2 mgmt".
+    if crate::net::frame_is_ipv6(frame) {
+        return match crate::net::eth_ipv6_dst(frame) {
+            Some(dst6) if is_local_dst6(&dst6) => Scope::LocalOrLan,
+            Some(_) => Scope::Wan,           // global-unicast IPv6 → CUT while armed
+            None => Scope::Wan,              // IPv6 we can't parse a dst from → fail-closed
+        };
     }
-    Scope::Wan
+    // Genuine non-IP L2 (ARP, …) — link-local management, never cut.
+    Scope::LocalOrLan
 }
 
 /// THE datapath hook. `netq::tx_drain` calls this on EVERY frame the untrusted EL0
@@ -531,6 +594,23 @@ fn kill_switch_check() -> bool {
     arp[12] = 0x08;
     arp[13] = 0x06;
     let al = 42usize;
+    // IPv6 frames (ethertype 0x86dd; dst at eth+IPv6-hdr offset 14+24=38). The
+    // kill-switch must classify these like IPv4 — a global-unicast IPv6 dst is a
+    // plaintext WAN leak that MUST be cut; link-local (fe80::) is LAN mgmt and passes.
+    let mut v6wan = [0u8; 64];
+    v6wan[12] = 0x86;
+    v6wan[13] = 0xdd;
+    v6wan[38] = 0x20; // 2000::/3 global unicast (e.g. 2001:...:8888)
+    v6wan[39] = 0x01;
+    v6wan[53] = 0x88;
+    let v6wl = 62usize;
+    let mut v6ll = [0u8; 64];
+    v6ll[12] = 0x86;
+    v6ll[13] = 0xdd;
+    v6ll[38] = 0xfe; // fe80::/10 link-local
+    v6ll[39] = 0x80;
+    v6ll[53] = 0x01;
+    let v6ll_len = 62usize;
 
     // --- state-level pure decision (exhaustive) ---
     let s_never = wan_egress_permitted(Posture::NeverEnrolled, Tunnel::Down); // true
@@ -557,7 +637,9 @@ fn kill_switch_check() -> bool {
     let lan_up = egress_allowed(&lan[..ll]); // LAN + local SOC stay up
     let arp_up = egress_allowed(&arp[..al]); // link-local mgmt never cut
     let pop_up = egress_allowed(&pop[..pl]); // reconnect path allowed
-    let down_ok = armed && wan_cut && lan_up && arp_up && pop_up;
+    let v6wan_cut = !egress_allowed(&v6wan[..v6wl]); // IPv6 global-unicast leak CUT
+    let v6ll_up = egress_allowed(&v6ll[..v6ll_len]); // IPv6 link-local mgmt never cut
+    let down_ok = armed && wan_cut && lan_up && arp_up && pop_up && v6wan_cut && v6ll_up;
 
     // --- (D) enrolled + COMPROMISED: same fail-closed cut ---
     set_state(Posture::Enrolled, Tunnel::Compromised);

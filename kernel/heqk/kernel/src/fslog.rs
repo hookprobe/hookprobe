@@ -248,6 +248,17 @@ impl LogStore {
             let mut sec = [0u8; SEC];
             store.read_sector(lo + 1 + i, &mut sec)?;
             if let Some((seq, _rt, len)) = parse_record(&sec) {
+                // Ring-placement sanity: a record with sequence `seq` lives ONLY in slot
+                // `seq % nslots`. A record whose `seq` does not map home to the slot it
+                // was READ from is misplaced — a torn write, foreign data, or a FORGED
+                // record (e.g. a `seq = u64::MAX` planted to poison `max_seq`/`next_seq`).
+                // Dropping it here both preserves ordering integrity and denies the
+                // overflow/underflow the forged-seq DoS relied on. (Keyless framing can't
+                // authenticate content — that's the sealed path — but a forger can no
+                // longer choose an arbitrary `seq` for a given slot.)
+                if seq % nslots != i {
+                    continue;
+                }
                 if let Some(c) = ctx {
                     // M3.3 fail-closed authentication: a record whose ciphertext/tag
                     // does not verify under the volume seal is DROPPED exactly like a
@@ -271,7 +282,11 @@ impl LogStore {
                 max_seq = Some(max_seq.map_or(seq, |m| if seq > m { seq } else { m }));
             }
         }
-        let next_seq = max_seq.map_or(0, |m| m + 1);
+        // saturating_add: even if a record survived with seq == u64::MAX, the head must
+        // not overflow (dev builds compile with overflow-checks + panic=abort → a plain
+        // `m + 1` would ABORT the boot on hostile disk content). The ring-placement check
+        // above already rejects an arbitrary forged seq, so this is belt-and-suspenders.
+        let next_seq = max_seq.map_or(0, |m| m.saturating_add(1));
         Ok(LogStore {
             lo,
             hi,
@@ -316,7 +331,7 @@ impl LogStore {
         if self.count == 0 {
             return Ok(());
         }
-        let start = self.next_seq - self.count;
+        let start = self.next_seq.saturating_sub(self.count);
         for seq in start..self.next_seq {
             let mut sec = [0u8; SEC];
             store.read_sector(self.slot_lba(seq), &mut sec)?;
@@ -346,7 +361,7 @@ impl LogStore {
         if self.count == 0 {
             return Ok(());
         }
-        let start = self.next_seq - self.count;
+        let start = self.next_seq.saturating_sub(self.count);
         for seq in start..self.next_seq {
             let mut sec = [0u8; SEC];
             store.read_sector(self.slot_lba(seq), &mut sec)?;

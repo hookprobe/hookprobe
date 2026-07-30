@@ -60,6 +60,13 @@ pub fn spawn_as(sp: usize, prio: u8, ttbr0: u64) -> Option<usize> {
     }
 }
 
+/// Number of scheduler slots handed out so far (`NUM`). Boot self-tests that borrow a
+/// high spare slot (`MAX_THREADS-1`, …) as a scratch "victim" MUST first check this so
+/// they never corrupt a LIVE thread's saved SP when the boot spawn count grows.
+pub fn live_count() -> usize {
+    unsafe { addr_of!(NUM).read() }
+}
+
 // CORE-6: per-TCB EL0 fault-restart records. Was a set of GLOBAL statics
 // (EL0_RS_ENTRY/USP/KSTACK + one EL0_RESTARTS counter + EL0_SCHED_MODE), so with two
 // scheduled EL0 TCBs a fault in one would restart it from the OTHER's entry/stack and

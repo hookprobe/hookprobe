@@ -13,6 +13,23 @@ const RAM_BASE: usize = 0x4000_0000;
 const RAM_END: usize = RAM_BASE + 512 * 1024 * 1024; // -m 512M
 const PAGE: usize = 4096;
 
+/// Kernel-owned L1 slot-1 window (RAM/text). `new_addr_space` copies all 512 L1
+/// entries, so a per-TCB L1 SHARES the kernel's L2/L3 tables for this region; an EL0
+/// user mapping landing here would overwrite a live kernel `.text`/`.data` PTE for
+/// EVERY address space. All EL0 user-map primitives refuse a VA in this window
+/// (defense-in-depth behind `elf::user_span_ok`; parity with the CM5 `user_va_ok`
+/// discipline). No legitimate EL0 image maps into kernel RAM — user VAs live at
+/// slot 2 (0x8000_0000..) / slot 0 device windows, never slot 1.
+const KERN_VA_LO: usize = RAM_BASE; // 0x4000_0000 (L1 slot 1 base)
+const KERN_VA_HI: usize = 0x8000_0000; // end of L1 slot 1
+
+/// May an EL0 user mapping target `va`? False for any VA inside the kernel's shared
+/// RAM/text tables (slot 1). Fail-closed: a user map to a kernel VA is refused.
+#[inline]
+fn user_va_permitted(va: usize) -> bool {
+    !(va >= KERN_VA_LO && va < KERN_VA_HI)
+}
+
 // Descriptor bits.
 const VALID: u64 = 1 << 0;
 const TABLE: u64 = 1 << 1; // L1/L2 table (VALID|TABLE); L3 page also sets bit1
@@ -401,11 +418,17 @@ impl Mmu {
     /// Map an EL0 RW data page into a specific address space (its own tables for
     /// unmapped-in-kernel high VAs; shared kernel tables otherwise).
     pub fn map_user_data_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RW_EL0, true, true)
     }
 
     /// Map an EL0 RO+X code page into a specific address space.
     pub fn map_user_code_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RO_EL0, false, true)
     }
 
@@ -413,12 +436,18 @@ impl Mmu {
     /// segment: readable, non-writable, NON-executable — the rodata leg of W^X). Mirrors
     /// `map_user_data_in` but with AP_RO_EL0 and UXN set (uxn=true forces non-exec).
     pub fn map_user_data_ro_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RO_EL0, true, true)
     }
 
     /// Map an EL0 device-MMIO window into a specific address space (a driver's
     /// capability to touch exactly one device — Device memory, EL0 RW, non-exec).
     pub fn map_user_device_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_DEVICE, AP_RW_EL0, true, true)
     }
 
@@ -450,11 +479,17 @@ impl Mmu {
     /// User CODE page: EL0 read-only + EL0-executable (**W^X**), EL1-non-exec
     /// (PXN — the kernel can never execute user-writable-derived memory).
     pub fn map_user_code_page(&self, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map(va, pa, ATTR_NORMAL, AP_RO_EL0, false, true)
     }
 
     /// User DATA/stack page: EL0 read/write, non-executable at both EL0 and EL1.
     pub fn map_user_data_page(&self, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map(va, pa, ATTR_NORMAL, AP_RW_EL0, true, true)
     }
 
@@ -462,6 +497,9 @@ impl Mmu {
     /// CORE-1: the attribute a Frame cap lacking the `W` right maps to — EL0 can
     /// read the frame but any write faults.
     pub fn map_user_data_ro_page(&self, va: usize, pa: usize) -> bool {
+        if !user_va_permitted(va) {
+            return false;
+        }
         self.map(va, pa, ATTR_NORMAL, AP_RO_EL0, true, true)
     }
 

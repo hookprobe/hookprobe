@@ -73,6 +73,67 @@ Legend: **QEMU** = self-test green in emulation · **METAL** = confirmed on CM5 
 
 ---
 
+## 3a. Adversarial bug-hunt hardening (2026-07-30)
+
+A five-front adversarial code review (crypto/trust · capability-TCB/IPC · MMU/loader/Wasm ·
+detection/enforcement · persistence/drivers) traced each subsystem to concrete failure inputs.
+The confirmed defects below were **fixed and re-validated** (`validate.sh` all-green, plus new
+regression self-tests); the remainder were reclassified as by-design or metal-gated residuals.
+
+**Fixed (with a new or extended QEMU self-test each):**
+- **Detection legit-drop (CRITICAL):** the live datapath fused all ingress to one port with a
+  hardwired `PortRole::Access`, so a normal LAN/AP with **>20 client MACs** tripped the mac-flood
+  wire cap and FrameDropped the whole segment — defeating the ADR-0023 D12 FP guard. Default is
+  now `Uplink` (a genuine flood still DETECTS→`Observe`, never wire-caps the aggregate port).
+  `verdict.rs::DEFAULT_PORT_ROLE`.
+- **IPv6 WAN kill-switch fail-open (HIGH):** the kill-switch treated *all* IPv6 as `LocalOrLan`,
+  leaking plaintext IPv6 to the internet with the tunnel down. Now parses the IPv6 dst,
+  classifies global-unicast as `Wan` (cut) and fail-closes an unresolvable IPv6 dst. `edge.rs`
+  + `net.rs::eth_ipv6_dst`; proven by a new `[P19-edge]` IPv6-leak-cut / link-local-pass case.
+- **EL0 VA-window escape (HIGH):** `elf::parse` / the QEMU `map_frame_cap` path did not confine
+  a segment's `vaddr`/`entry` to the EL0 user window (the CM5 side already had `user_va_ok`), so
+  a crafted module could overwrite a **shared kernel `.text` PTE** for every address space. Added
+  `elf::user_span_ok` (window `[0x8000_0000,0xC000_0000)`) + a kernel-window guard on every QEMU
+  user-map primitive; new `[P-elf]` `VaOutOfWindow` case.
+- **IPC server-death brick (HIGH):** a server that RECV'd a call then died before REPLY left the
+  endpoint permanently `reply_to=Some` → every future call/recv `RC_NORESOURCE` (one compromised
+  EL0 module could brick a shared IPC channel). The endpoint now tracks the serving TCB and, on
+  its death, wakes the stranded client `RC_DENIED` and recovers; new `[P-r1-ipc-d]` case.
+- **Module trust root not pinned (crypto):** `wasmhost::verify_module` verified against a
+  caller-supplied pubkey (self-sign bypass once a real catalogue sources the key with the
+  artifact). Pinned `TRUSTED_MODULE_PK` — a non-pinned key is refused before verify; new
+  `[P-wasm]` self-signed-refused assertion.
+- **fslog forged-seq DoS (persistence):** a forged `seq=u64::MAX` overflowed `next_seq` → boot
+  abort under dev overflow-checks. Added a ring-placement reject (`seq % nslots == slot`) +
+  saturating arithmetic in `next_seq`/`start`.
+- **eMMC write-refusal disguised as I/O (persistence):** a gate-2 `WriteRefused` on metal was
+  mapped to a generic `StoreErr::Io`. Now surfaced as the distinct `WindowEscape`, and the
+  "two independent gates" claim in `store.rs` corrected to describe each backend honestly
+  (virtio-blk = LBA-0-only; eMMC = reserved-window clamp; full multi-region eMMC = Gate R).
+- **IPC self-test slot fragility:** the `victim = MAX_THREADS-1` scratch borrow now asserts the
+  slot is unspawned (`scheduler::live_count()`), turning a latent silent-corruption into a loud
+  FAIL if the boot spawn count ever grows into it.
+
+**Reclassified (documented, not forced — a "fix" would regress a green gate or needs metal):**
+- **Spoofable mgmt `Allowlisted` floor** (`is_allowlisted` keyed on an IPv4 prefix, forgeable):
+  binding it to the physical mgmt interface/VLAN needs per-interface **Platform-Manifest**
+  plumbing that heqk does not yet have (M2 follow-on). Until then the floor trades spoofability
+  for the never-self-lock-out invariant, and malformed-frame/signature drops still apply.
+- **Scan escalation on a legit pre-handshake burst** (a P2P/DHT client opening ≥100 ports in one
+  window with zero establishment can momentarily reach `Quarantine`): the fix (require the
+  distinct-port wall to persist across two windows) would change the tested ADR-0018 confirm
+  contract and regress `[P8-flow]`. Left as a self-reverting (~10 s) degradation, not an outage.
+- **Write-guard vs active partition** (`with_region` allows regions that overlap the first
+  partition): by design — the CM5 A/B slots + data volume are **sub-ranges of the boot
+  partition**; the active slot is protected by *deliberate non-registration* (see `[P15-guard2]`).
+- **Free-list ABA** (`mmu::alloc_frame_raw`): concurrency-conditional, unreachable on the
+  current single-core pre-scheduler path; a tagged pointer / IRQ-masked pop is the SMP-era fix.
+- **Endpoint/Msg1-cookie hardening** (endpoint objects not reclaimed at runtime; the msg1 DoS
+  cookie lacks epoch/source-address binding): both are Gate-R metal items (no live network
+  intake yet), tracked in `docs/design/heqk-control-plane.md`.
+
+---
+
 ## 4. Blockers to field deployment — METAL / HUMAN ACTION REQUIRED
 
 These CANNOT be finalized autonomously (they need the board, signing keys, or are irreversible):

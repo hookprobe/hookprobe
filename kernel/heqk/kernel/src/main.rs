@@ -6411,6 +6411,16 @@ fn r1_ipc_cap_selftest() -> (bool, bool) {
     // RC_DENIED the sever delivers (deliver_wake writes frame word 0 = the victim's x0).
     let fbase = arch_aarch64::mmu::reserve_region(4096);
     let victim = scheduler::MAX_THREADS - 1; // a spare slot never spawned in this run
+    // ipc-F3: only safe while the top TWO slots (victim, victim-1 — the (d) test also
+    // borrows victim-1) are truly unspawned. Assert it rather than silently corrupting a
+    // live thread's saved SP if the boot spawn count ever grows to reach them.
+    if scheduler::live_count() > victim - 1 {
+        kprint!(
+            " [P-r1-ipc-c] FAIL — boot spawn count {} reached the scratch victim slots ({}, {}); test infra must allocate real spawns\n",
+            scheduler::live_count(), victim - 1, victim
+        );
+        return (b, false);
+    }
     unsafe { write_volatile(fbase as *mut u64, 0) };
     scheduler::set_sp(victim, fbase); // give the victim a saved frame to receive x0 into
     scheduler::block_tid(victim); // park it (blocked) so the sever must UNBLOCK it
@@ -6449,15 +6459,56 @@ fn r1_ipc_cap_selftest() -> (bool, bool) {
         && victim_unblocked
         && parent_fail_closed;
 
+    // ---------- (d) SERVER-DEATH LIVENESS: a server that RECVs a call then DIES/faults
+    // before REPLY must NOT strand its client or permanently brick the endpoint. --------
+    let fbase2 = arch_aarch64::mmu::reserve_region(4096);
+    let dead_server = victim - 1; // a spare slot; only its e.server link + a scratch frame
+    let client = victim; // reuse the (c) victim frame as the awaiting-reply client
+    let d = match ipc::ep_create() {
+        None => false,
+        Some(dh) => {
+            unsafe { write_volatile(fbase as *mut u64, 0) };
+            unsafe { write_volatile(fbase2 as *mut u64, 0) };
+            scheduler::set_sp(client, fbase);
+            scheduler::set_sp(dead_server, fbase2);
+            scheduler::block_tid(client);
+            // client CALLs (no server yet) -> message parked, client BLOCKED awaiting reply.
+            let parked =
+                matches!(ipc::call(dh.index, dh.generation, 0xD00D, client), ipc::IpcOut::Block);
+            // server RECVs the parked call -> becomes the serving TCB (reply_to=client).
+            let served = matches!(
+                ipc::recv_ep(dh.index, dh.generation, dead_server),
+                ipc::IpcOut::Ready(0xD00D)
+            );
+            // ... then the server DIES before ever calling REPLY.
+            ipc::detach_tcb(dead_server);
+            let client_woken =
+                unsafe { read_volatile(fbase as *const u64) } == abi::RC_DENIED;
+            let client_unblocked = !scheduler::is_blocked(client); // not left hung
+            let obj_alive = ipc::ep_exists(dh.index, dh.generation); // NOT bricked
+            // Recovered: a fresh RECV now PARKS (Block); a still-stuck reply_to would
+            // instead return RC_NORESOURCE (the pre-fix permanent brick).
+            let recovered = matches!(
+                ipc::recv_ep(dh.index, dh.generation, dead_server),
+                ipc::IpcOut::Block
+            );
+            ipc::on_endpoint_cap_deleted(dh.index, dh.generation); // reclaim + wake the parked RECVer
+            scheduler::set_sp(client, 0);
+            scheduler::set_sp(dead_server, 0);
+            parked && served && client_woken && client_unblocked && obj_alive && recovered
+        }
+    };
+    let c = c && d;
+
     kprint!(
         " [P-r1-ipc-b] {} — CALL-without-cap DENIED={} CALL-with-R-only(insufficient) DENIED={} RECV-with-R OK={} wrong-type REFUSED={} stale-object REFUSED={}\n",
         if b { "PASS" } else { "FAIL" },
         call_no_cap, call_insufficient, recv_ok, wrong_type, stale_refused
     );
     kprint!(
-        " [P-r1-ipc-c] {} — mint CHILD from PARENT Endpoint cap, revoke PARENT: child-deleted={} parent-kept={} object-severed={} victim-woken-RC_DENIED={} not-hung(unblocked)={} kept-parent-now-fail-closed={}\n",
+        " [P-r1-ipc-c] {} — mint CHILD from PARENT Endpoint cap, revoke PARENT: child-deleted={} parent-kept={} object-severed={} victim-woken-RC_DENIED={} not-hung(unblocked)={} kept-parent-now-fail-closed={} | (d) server-death-recovery(client-woken-RC_DENIED+endpoint-not-bricked)={}\n",
         if c { "PASS" } else { "FAIL" },
-        child_deleted, parent_kept, obj_severed, victim_woken_denied, victim_unblocked, parent_fail_closed
+        child_deleted, parent_kept, obj_severed, victim_woken_denied, victim_unblocked, parent_fail_closed, d
     );
     (b, c)
 }
@@ -6584,7 +6635,7 @@ fn build_valid_elf(b: &mut [u8]) -> usize {
     tput16(b, 16, 2);   // e_type    = ET_EXEC
     tput16(b, 18, 183); // e_machine = EM_AARCH64
     tput32(b, 20, 1);   // e_version
-    tput64(b, 24, 0x1000); // e_entry (inside the R+X segment)
+    tput64(b, 24, 0x8000_1000); // e_entry (inside the R+X segment; EL0 user window)
     tput64(b, 32, 64);     // e_phoff
     tput16(b, 52, 64);     // e_ehsize
     tput16(b, 54, 56);     // e_phentsize
@@ -6593,8 +6644,8 @@ fn build_valid_elf(b: &mut [u8]) -> usize {
     tput32(b, p, 1);         // PT_LOAD
     tput32(b, p + 4, 4 | 1); // PF_R | PF_X
     tput64(b, p + 8, 120);   // p_offset
-    tput64(b, p + 16, 0x1000); // p_vaddr (page-aligned)
-    tput64(b, p + 24, 0x1000); // p_paddr
+    tput64(b, p + 16, 0x8000_1000); // p_vaddr (page-aligned, in the EL0 user VA window)
+    tput64(b, p + 24, 0x8000_1000); // p_paddr
     tput64(b, p + 32, 4);    // p_filesz
     tput64(b, p + 40, 4);    // p_memsz
     tput64(b, p + 48, 0x1000); // p_align
@@ -6610,16 +6661,16 @@ fn build_valid_2seg(b: &mut [u8]) -> usize {
     b[0..4].copy_from_slice(b"\x7fELF");
     b[4] = 2; b[5] = 1; b[6] = 1;
     tput16(b, 16, 2); tput16(b, 18, 183); tput32(b, 20, 1);
-    tput64(b, 24, 0x1000);
+    tput64(b, 24, 0x8000_1000);
     tput64(b, 32, 64);
     tput16(b, 52, 64); tput16(b, 54, 56); tput16(b, 56, 2); // e_phnum = 2
     let p0 = 64;
     tput32(b, p0, 1); tput32(b, p0 + 4, 4 | 1);            // seg0 R+X
-    tput64(b, p0 + 8, 176); tput64(b, p0 + 16, 0x1000); tput64(b, p0 + 24, 0x1000);
+    tput64(b, p0 + 8, 176); tput64(b, p0 + 16, 0x8000_1000); tput64(b, p0 + 24, 0x8000_1000);
     tput64(b, p0 + 32, 4); tput64(b, p0 + 40, 4); tput64(b, p0 + 48, 0x1000);
     let p1 = 64 + 56;
     tput32(b, p1, 1); tput32(b, p1 + 4, 4 | 2);            // seg1 R+W
-    tput64(b, p1 + 8, 0); tput64(b, p1 + 16, 0x2000); tput64(b, p1 + 24, 0x2000);
+    tput64(b, p1 + 8, 0); tput64(b, p1 + 16, 0x8000_2000); tput64(b, p1 + 24, 0x8000_2000);
     tput64(b, p1 + 32, 0); tput64(b, p1 + 40, 8); tput64(b, p1 + 48, 0x1000);
     tput32(b, 176, 0x14000000);
     180
@@ -6647,11 +6698,13 @@ fn elf_bounds_safety_selftest() -> bool {
     { let mut b = base; tput64(&mut b, 64 + 40, 0); ok &= matches!(elf::parse(&b[..len]), Err(ElfError::MemszLessThanFilesz)); }
     { let mut b = base; tput64(&mut b, 64 + 40, (elf::MAX_SEG_BYTES as u64) + 1);
       ok &= matches!(elf::parse(&b[..len]), Err(ElfError::SegmentTooLarge)); }
-    { let mut b = base; tput64(&mut b, 64 + 16, 0x1001); ok &= matches!(elf::parse(&b[..len]), Err(ElfError::Unaligned)); }
-    // overlapping segments (seg1 vaddr -> seg0's)
+    { let mut b = base; tput64(&mut b, 64 + 16, 0x8000_1001); ok &= matches!(elf::parse(&b[..len]), Err(ElfError::Unaligned)); }
+    // out-of-window vaddr (a kernel VA) is REFUSED — the CORE-5/user_va_ok parity check
+    { let mut b = base; tput64(&mut b, 64 + 16, 0x4008_0000); ok &= matches!(elf::parse(&b[..len]), Err(ElfError::VaOutOfWindow)); }
+    // overlapping segments (seg1 vaddr -> seg0's, both in the EL0 user window)
     { let mut b2 = [0u8; 208]; let l2 = build_valid_2seg(&mut b2);
       let valid2 = elf::parse(&b2[..l2]).is_ok();
-      tput64(&mut b2, 64 + 56 + 16, 0x1000);
+      tput64(&mut b2, 64 + 56 + 16, 0x8000_1000);
       ok &= valid2 && matches!(elf::parse(&b2[..l2]), Err(ElfError::Overlap)); }
     ok
 }
