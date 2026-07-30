@@ -2102,6 +2102,22 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" [P7b] W^X {} (kernel .text RO+X, data RW+PXN, SCTLR.WXN on)\n",
         if wx_ok { "PASS" } else { "FAIL" });
 
+    // --- P-wx: MULTI-BLOCK W^X proof ----------------------------------------
+    // P7b above reads back the REAL kernel descriptors, but today .text is ~1.2 MiB
+    // = one 2 MiB block, so it only exercises the single-block path. build_wx_ram
+    // used to L3-map ONLY the block holding text_start; any .text growth past 2 MiB
+    // (real drivers / bigger catalogue / a wasmi Wasm host) spilled code into a PXN
+    // block -> instruction abort at first fetch. wx_multiblock_selftest builds a
+    // synthetic executable range spanning THREE 2 MiB blocks and reads the real PTEs
+    // back, proving code is RO+X across the 2nd AND last block, data is RW+NX before/
+    // after/beyond text, and NO page is ever both W and X (strict W^X).
+    let wx_mb = mmu.wx_multiblock_selftest();
+    kprint!(" [P-wx] {} (multi-block W^X: .text may span >2 MiB — code RO+X across all text blocks, data RW+NX, no page W&&X)\n",
+        if wx_mb { "PASS" } else { "FAIL" });
+    if !wx_mb {
+        arch_aarch64::semihosting::exit(1);
+    }
+
     // Frame allocator now has a free list: free then re-alloc returns the frame.
     let f1 = mmu.alloc_frame();
     mmu.free_frame(f1);

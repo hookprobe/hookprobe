@@ -45,9 +45,19 @@ pub const NC_ALIAS_VA: usize = (NC_ALIAS_GB * GB) as usize;
 struct Table([u64; 512]);
 static mut L1: Table = Table([0; 512]);
 // P7b W^X: GB0 is split into an L2 table of 2 MiB RW+PXN blocks, except the
-// kernel's 2 MiB block which uses an L3 table (per-page: .text RO+X, rest RW+PXN).
+// blocks the kernel's .text occupies, which use L3 tables (per-page: .text RO+X,
+// rest RW+PXN).
 static mut L2_GB0: Table = Table([0; 512]);
-static mut L3_KERN: Table = Table([0; 512]);
+// P-wx multi-block W^X (mirrors mmu.rs::build_wx_ram_range on the QEMU backend):
+// the kernel's `.text` may span MORE than one 2 MiB block — real RP1/RTL/CYW43
+// drivers + a bigger detection catalogue + a wasmi Wasm host all push it past
+// 2 MiB. Each 2 MiB block overlapping [__text_start,__text_end) gets its OWN L3
+// table from this pool so every code page is RO+X; a single L3 table could only
+// cover the FIRST 2 MiB, spilling later code into a PXN block -> instruction
+// abort at first fetch (the metal ceiling this fix removes). 8 tables = up to
+// 16 MiB of .text (generous headroom; 32 KiB of static BSS).
+const KERN_L3_POOL: usize = 8;
+static mut L3_KERN: [Table; KERN_L3_POOL] = [const { Table([0; 512]) }; KERN_L3_POOL];
 
 // P7c step 3b — EL0 user window at GB5 (0x1_4000_0000), an unused-on-CM5 GB. Its
 // first 2 MiB block is L3-mapped so an isolated EL0 driver gets code/stack/device
@@ -199,8 +209,14 @@ fn normal_nc_block(pa: u64) -> u64 {
     pa | AF | SH_IS | AP_RW_EL1 | ATTR_NC | BLOCK | VALID | PXN | UXN
 }
 
-/// P7b — build GB0 as a W^X map: L2 of 2 MiB RW+PXN blocks, with the kernel's
-/// 2 MiB block an L3 table (`.text` RO+X, everything else RW+PXN). Writes L1[0].
+/// P7b / P-wx — build GB0 as a W^X map: L2 of 2 MiB RW+PXN blocks, with EVERY
+/// 2 MiB block the kernel `.text` occupies expanded into its OWN L3 table
+/// (per-page: `.text` RO+X, everything else in the block RW+PXN). Writes L1[0].
+/// Generalized from a single kernel block to the full `[__text_start,__text_end)`
+/// span so `.text` growth past 2 MiB no longer spills code into a PXN block.
+/// `__text_end` is `ALIGN(4096)` (and `__text_start` is 2 MiB-aligned at 0x200000)
+/// in linker-cm5.ld, so the code/data split lands on a page boundary — W^X is
+/// strict at PAGE granularity: no page is ever both writable and executable.
 fn build_wx_gb0() {
     extern "C" {
         static __text_start: u8;
@@ -209,31 +225,46 @@ fn build_wx_gb0() {
     let ts = unsafe { core::ptr::addr_of!(__text_start) as u64 };
     let te = unsafe { core::ptr::addr_of!(__text_end) as u64 };
     let l2 = addr_of_mut!(L2_GB0) as *mut u64;
-    let l3 = addr_of_mut!(L3_KERN) as *mut u64;
     let l3j = addr_of_mut!(L3_JITPOOL) as *mut u64;
-    let kern_blk = (ts / M2) as usize; // GB0 base = 0
-    let blk_base = kern_blk as u64 * M2;
+    // GB0 base = 0. Which 2 MiB blocks does [ts,te) overlap? (te > ts always.)
+    let first_blk = (ts / M2) as usize;
+    let last_blk = ((te - 1) / M2) as usize; // inclusive
+    let n_text = last_blk - first_blk + 1;
+    // Fail-closed: if `.text` outgrows the L3 pool we must NOT under-map it (that
+    // would silently drop code pages -> instruction abort). No console exists yet,
+    // so spin so the failure is unmistakable (the board never boots) rather than
+    // booting with a broken W^X map. Bump KERN_L3_POOL if this ever trips.
+    if n_text > KERN_L3_POOL {
+        loop {
+            unsafe { core::arch::asm!("wfe") }
+        }
+    }
     unsafe {
-        // L3 for the kernel's 2 MiB block.
-        for p in 0..512u64 {
-            let pa = blk_base + p * 0x1000;
-            let desc = if pa >= ts && pa < te { text_page(pa) } else { data_page(pa) };
-            core::ptr::write_volatile(l3.add(p as usize), desc);
+        // One L3 table per text-spanning block: per-page RO+X code / RW+PXN data.
+        for k in 0..n_text {
+            let blk_base = (first_blk + k) as u64 * M2;
+            let l3 = addr_of_mut!(L3_KERN[k]) as *mut u64;
+            for p in 0..512u64 {
+                let pa = blk_base + p * 0x1000;
+                let desc = if pa >= ts && pa < te { text_page(pa) } else { data_page(pa) };
+                core::ptr::write_volatile(l3.add(p as usize), desc);
+            }
         }
         // L3 for the JIT-pool block: RW+PXN data pages (emit here, then seal RO).
         for p in 0..512u64 {
             core::ptr::write_volatile(l3j.add(p as usize), data_page(JITPOOL_BASE + p * 0x1000));
         }
-        // L2: 2 MiB RW+PXN blocks, except the kernel + JIT-pool blocks -> L3 tables.
+        // L2: 2 MiB RW+PXN blocks, except the .text blocks + JIT-pool block -> L3.
         for b in 0..512u64 {
-            let desc = if b as usize == kern_blk {
-                (l3 as u64) | TABLE
-            } else if b as usize == JITPOOL_BLK {
+            let bi = b as usize;
+            let desc = if bi >= first_blk && bi <= last_blk {
+                (addr_of_mut!(L3_KERN[bi - first_blk]) as u64) | TABLE
+            } else if bi == JITPOOL_BLK {
                 (l3j as u64) | TABLE
             } else {
                 normal_rw_block(b * M2)
             };
-            core::ptr::write_volatile(l2.add(b as usize), desc);
+            core::ptr::write_volatile(l2.add(bi), desc);
         }
         // Install GB0 = the L2 table.
         core::ptr::write_volatile(addr_of_mut!(L1) as *mut u64, (l2 as u64) | TABLE);
