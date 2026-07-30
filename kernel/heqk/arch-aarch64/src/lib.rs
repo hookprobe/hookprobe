@@ -130,6 +130,26 @@ pub fn map_user_frame(va: usize, pa: usize, writable: bool) -> bool {
     }
 }
 
+/// M5.1 (QEMU beachhead) — the CORE-1 enforced-cap mapping into a SPECIFIC per-TCB
+/// address space `l1_root`, with a W^X-checked `executable` bit for the ELF loader.
+/// Rights → attributes, W^X by construction:
+///   * `executable`            => AP RO + EL0-executable (RO+X code)   [caller must !writable]
+///   * `writable && !exec`     => AP RW + non-exec       (RW+NX data)
+///   * `!writable && !exec`    => AP RO + non-exec       (RO+NX rodata)
+/// The three cases are mutually exclusive; a W+X request is rejected by the caller
+/// (`caps::map_frame_cap_in`) before reaching here, so no page is ever both W and X.
+#[cfg(not(feature = "cm5"))]
+pub fn map_user_frame_in(l1_root: usize, va: usize, pa: usize, writable: bool, executable: bool) -> bool {
+    let m = mmu::Mmu;
+    if executable {
+        m.map_user_code_in(l1_root, va, pa) // RO + X
+    } else if writable {
+        m.map_user_data_in(l1_root, va, pa) // RW + NX
+    } else {
+        m.map_user_data_ro_in(l1_root, va, pa) // RO + NX
+    }
+}
+
 /// Invalidate (unmap) the EL0 mapping at `va` + tlbi — the primitive `revoke`
 /// uses to sever a Frame cap's authority. Returns true if an entry was cleared.
 pub fn unmap_user_frame(va: usize) -> bool {

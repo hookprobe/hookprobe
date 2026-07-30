@@ -316,6 +316,13 @@ impl Mmu {
         self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RO_EL0, false, true)
     }
 
+    /// Map an EL0 RO+NX data page into a specific address space (a read-only ELF data
+    /// segment: readable, non-writable, NON-executable — the rodata leg of W^X). Mirrors
+    /// `map_user_data_in` but with AP_RO_EL0 and UXN set (uxn=true forces non-exec).
+    pub fn map_user_data_ro_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {
+        self.map_in_root(l1_root as *mut u64, va, pa, ATTR_NORMAL, AP_RO_EL0, true, true)
+    }
+
     /// Map an EL0 device-MMIO window into a specific address space (a driver's
     /// capability to touch exactly one device — Device memory, EL0 RW, non-exec).
     pub fn map_user_device_in(&self, l1_root: usize, va: usize, pa: usize) -> bool {

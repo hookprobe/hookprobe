@@ -441,6 +441,45 @@ impl CapSpace {
         Ok(())
     }
 
+    /// M5.1 — the CORE-1 enforced-cap mapping into a SPECIFIC (per-TCB) address space,
+    /// with an explicit `executable` bit for the ELF loader. Same enforcement discipline
+    /// as `map_frame_cap` (Frame type + ALL requested rights checked FIRST, RO cap forced
+    /// to an AP-RO mapping, VA recorded for revoke), extended two ways the loader needs:
+    ///   * it maps into `l1_root` (the loaded task's OWN VSpace), not the global root; and
+    ///   * it carries a W^X-checked `executable` attribute — a segment may be writable
+    ///     (RW+NX) OR executable (RO+X), NEVER both. A `writable && executable` request is
+    ///     REFUSED here (defense in depth on top of the ELF parser's W^X check), so no PTE
+    ///     can ever be both W and X regardless of how the caller derived its flags.
+    /// The rights model still gates writability: an EL0 code page is mapped from an R-only
+    /// cap (executable=true), a data page from a W cap (executable=false).
+    #[cfg(not(feature = "cm5"))]
+    pub fn map_frame_cap_in(
+        &mut self,
+        l1_root: usize,
+        slot: usize,
+        va: usize,
+        need: u8,
+        executable: bool,
+    ) -> Result<(), &'static str> {
+        // Enforcement point: Frame type + ALL requested rights, BEFORE any mapping.
+        let (pa, writable) = {
+            let c = self.as_frame_rights(slot, need)?;
+            (c.base, need & W != 0)
+        };
+        // W^X at the mapping boundary — never both writable and executable.
+        if writable && executable {
+            return Err("map_frame_cap_in: W^X violation (writable+executable)");
+        }
+        if !arch_aarch64::map_user_frame_in(l1_root, va, pa, writable, executable) {
+            return Err("map_frame_cap_in: backend refused the mapping");
+        }
+        match self.slots.get_mut(slot).and_then(|c| c.as_mut()) {
+            Some(c) => c.mapped_va = Some(va),
+            None => return Err("cap vanished mid-map"),
+        }
+        Ok(())
+    }
+
     /// Type-safe view: succeeds only if the cap really is a Frame.
     pub fn as_frame(&self, slot: usize) -> Result<&Cap, &'static str> {
         match self.get(slot) {
