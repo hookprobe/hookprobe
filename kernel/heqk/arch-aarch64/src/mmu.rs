@@ -187,10 +187,8 @@ impl hal::Mmu for Mmu {
 
 impl Mmu {
     /// P7b — build one 1 GiB RAM region (`gb_base`, installed at L1 slot `l1_idx`)
-    /// as an L2 table of 2 MiB Normal RW+PXN blocks, EXCEPT the 2 MiB block that
-    /// holds the kernel image, which becomes an L3 table with **W^X**: pages in
-    /// `[__text_start,__text_end)` are RO+X (EL1 code), everything else RW+PXN.
-    /// Built with the MMU off (identity), so there is no break-before-make.
+    /// as a W^X map, using the kernel's linked `[__text_start,__text_end)` range.
+    /// Thin wrapper over `build_wx_ram_range` (below), which does the real work.
     fn build_wx_ram(&self, gb_base: usize, l1_idx: usize) {
         extern "C" {
             static __text_start: u8;
@@ -198,23 +196,50 @@ impl Mmu {
         }
         let text_start = unsafe { addr_of!(__text_start) as usize };
         let text_end = unsafe { addr_of!(__text_end) as usize };
+        self.build_wx_ram_range(gb_base, l1_idx, text_start, text_end);
+    }
+
+    /// P-wx — generalized W^X RAM builder. Builds the 1 GiB region at `gb_base`
+    /// (installed at L1 slot `l1_idx`) as 512 × 2 MiB blocks: **every** block that
+    /// OVERLAPS the executable range `[text_start, text_end)` is expanded into an
+    /// L3 table so each 4 KiB page is mapped INDIVIDUALLY — code pages RO+X, any
+    /// data / pre-image pages sharing that block RW+PXN; every block that does NOT
+    /// overlap the text range stays a plain 2 MiB Normal RW+PXN block.
+    ///
+    /// This removes the old single-2-MiB-block ceiling (the previous code only
+    /// L3-mapped the ONE block holding `text_start`; the moment `.text` grew past
+    /// 2 MiB — real drivers, a larger detection catalogue, a wasmi Wasm host — code
+    /// in the 2nd+ block landed in a PXN block and instruction-aborted at first
+    /// fetch, exactly what killed the wasmi/P1b integration).
+    ///
+    /// W^X stays STRICT at PAGE granularity: within a boundary block, a code page
+    /// is RO+X and a data page is RW+PXN — never both, for any page. `__text_end`
+    /// is `ALIGN(4096)` in the linker script (and `__text_start` is page-aligned),
+    /// so the code/data split always lands on a page boundary — no page ever
+    /// straddles the boundary, so no 2 MiB alignment of `.text` is required (which
+    /// would waste up to ~2 MiB of RAM per image on a 512 MiB edge box). SCTLR.WXN
+    /// (set in `enable`) is the hardware backstop on top of this per-page PXN.
+    /// Built with the MMU off (identity), so there is no break-before-make.
+    fn build_wx_ram_range(&self, gb_base: usize, l1_idx: usize, text_start: usize, text_end: usize) {
         const M2: usize = 2 << 20; // 2 MiB
         let l2 = self.alloc_frame_raw();
         if l2 == 0 {
             return;
         }
-        // Which 2 MiB block within this GB holds the kernel .text.
-        let kern_blk = (text_start - gb_base) / M2;
         for b in 0..512usize {
             let base = gb_base + b * M2;
-            if b == kern_blk {
+            let blk_end = base + M2;
+            // Does this 2 MiB block OVERLAP the executable range? Half-open
+            // intersection test: [base,blk_end) ∩ [text_start,text_end) non-empty.
+            let overlaps_text = text_start < blk_end && text_end > base;
+            if overlaps_text {
                 let l3 = self.alloc_frame_raw();
                 if l3 == 0 {
                     return;
                 }
                 for p in 0..512usize {
                     let va = base + p * PAGE;
-                    // Kernel .text: RO + EL1-executable (UXN, not PXN). Else RW + non-exec.
+                    // Code page: RO + EL1-executable (UXN, not PXN). Else RW + non-exec.
                     let (ap, xn) = if va >= text_start && va < text_end {
                         (AP_RO_EL1, UXN)
                     } else {
@@ -232,6 +257,74 @@ impl Mmu {
             }
         }
         unsafe { write_volatile(l1_ptr().add(l1_idx), l2 as u64 | VALID | TABLE) };
+    }
+
+    /// P-wx — PROVE the multi-block W^X generalization. Today the kernel's real
+    /// `.text` is ~1.2 MiB = one 2 MiB block, so P7b (which reads back the real
+    /// kernel descriptors) only exercises the single-block path. This selftest
+    /// builds a SYNTHETIC executable range that deliberately SPANS THREE 2 MiB
+    /// blocks into an unused L1 slot (VA 2 GiB — dev=slot0, RAM=slot1, map_page
+    /// scratch=slot3, so slot2 is free), then reads the REAL page descriptors back
+    /// through the same table walk P7b uses, and confirms:
+    ///   (1) a code page in the 2nd (middle, fully-text) block is RO+X,
+    ///   (2) a code page in the 3rd (LAST) text block is RO+X — proving text in the
+    ///       2nd+ block is executable (the fetch that used to abort),
+    ///   (3) data pages BEFORE `ts` (boundary block 0), AT/AFTER `te` (boundary
+    ///       block 2), and in a block BEYOND text (plain block 3) are all RW+NX,
+    ///   (4) STRICT W^X: sweeping EVERY page of the three L3 blocks, none is ever
+    ///       both writable AND EL1-executable.
+    /// Uses the REAL `build_wx_ram_range` builder + the REAL `page_desc` walker —
+    /// not just the decision logic — so it is faithful for the metal / wasmi case.
+    pub fn wx_multiblock_selftest(&self) -> bool {
+        const M2: usize = 2 << 20;
+        let gb = 0x8000_0000usize; // VA 2 GiB — L1 slot 2 (unused)
+        let l1_idx = 2usize;
+        // Executable range crossing block boundaries: 1 MiB into block 0 .. 1 MiB
+        // into block 2 — so block 0 is a partial boundary block, block 1 is fully
+        // text, block 2 is a partial boundary block, and block 3+ is plain data.
+        let ts = gb + 0x10_0000;
+        let te = gb + 2 * M2 + 0x10_0000;
+        self.build_wx_ram_range(gb, l1_idx, ts, te);
+        unsafe {
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        let ap = |d: u64| (d >> 6) & 3;
+        let pxn = |d: u64| (d >> 53) & 1;
+        // EL1-writable AP encodings: 0b00 (EL1 RW) or 0b01 (EL0+EL1 RW).
+        let writable = |d: u64| ap(d) == 0b00 || ap(d) == 0b01;
+        let executable = |d: u64| pxn(d) == 0; // EL1-executable (PXN clear)
+        let mid = self.page_desc(gb + M2 + 0x1000); // block 1 code
+        let last = self.page_desc(gb + 2 * M2 + 0x1000); // block 2 (last) code, below te
+        let pre = self.page_desc(gb + 0x1000); // block 0 data, below ts
+        let post = self.page_desc(te); // block 2 data, at te
+        let beyond = self.page_desc(gb + 3 * M2); // block 3, plain RW block beyond text
+        let attrs_ok = ap(mid) == 0b10 && pxn(mid) == 0
+            && ap(last) == 0b10 && pxn(last) == 0
+            && ap(pre) == 0b00 && pxn(pre) == 1
+            && ap(post) == 0b00 && pxn(post) == 1
+            && ap(beyond) == 0b00 && pxn(beyond) == 1;
+        // Strict W^X sweep over every page of the three L3-mapped blocks.
+        let mut wx_strict = true;
+        for b in 0..3usize {
+            for p in 0..512usize {
+                let d = self.page_desc(gb + b * M2 + p * PAGE);
+                if d & VALID != 0 && writable(d) && executable(d) {
+                    wx_strict = false;
+                }
+            }
+        }
+        // Tear down the synthetic slot so the (unbacked) VA never lingers. We only
+        // ever read the tables, never touched VA 2 GiB, so this is pure hygiene;
+        // the 3 scratch table frames leak — a bounded one-time boot cost.
+        unsafe {
+            write_volatile(l1_ptr().add(l1_idx), 0);
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("tlbi vmalle1is");
+            core::arch::asm!("dsb ish");
+            core::arch::asm!("isb");
+        }
+        attrs_ok && wx_strict
     }
 
     /// Read back the L3 page descriptor for a VA (for W^X proof). Returns the raw
