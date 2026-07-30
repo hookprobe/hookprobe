@@ -45,6 +45,16 @@ const FIXTURE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_cl
 const FIXTURE_PK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_classify.pk"));
 const FIXTURE_SIG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_classify.sig"));
 
+/// M5.3 (c) — a SIGNED, memoryless module whose `classify` body is `unreachable` (it TRAPS
+/// on call). Same type/export as the good fixture, so the EL0 wasmi host loads it
+/// identically; the trap only fires at call time and is contained by wasmi AT EL0.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const FIXTURE_TRAP_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_trap.wasm"));
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const FIXTURE_TRAP_PK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_trap.pk"));
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const FIXTURE_TRAP_SIG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_trap.sig"));
+
 /// The known-bad backdoor port the fixture predicate matches (rules.rs rule 1
 /// "block-port-4444"). `classify(BAD_PORT) == 1`, everything else `== 0`.
 const BAD_PORT: i32 = 4444;
@@ -310,6 +320,39 @@ pub fn verified_classify_expr<'a>(wasm: &'a [u8], pk: &[u8], sig: &[u8]) -> Opti
     }
     let idx = export_func_index(wasm, b"classify")?;
     func_expr(wasm, idx)
+}
+
+// ============================ M5.3 wasmi-host hooks ==========================
+// The REAL wasmi runtime runs in the EL0-host BINARY (el0-wasmhost), loaded via the M5.1
+// ELF loader — NOT in the kernel. wasmi parses the WHOLE module, so unlike the bespoke path
+// (which hands the EL0 stub only classify()'s code expression) the kernel here verifies the
+// module then hands the EL0 wasmi host the FULL signed `.wasm` bytes. The trust root stays
+// the KERNEL: verification happens HERE (EL1) before any byte crosses into EL0.
+
+/// M5.3 — the good fixture triple (full module bytes + key + sig), for the wasmi EL0 host.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+pub fn fixture_full() -> (&'static [u8], &'static [u8], &'static [u8]) {
+    (FIXTURE_WASM, FIXTURE_PK, FIXTURE_SIG)
+}
+
+/// M5.3 (c) — the signed TRAPPING fixture triple, for the isolation host.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+pub fn fixture_trap() -> (&'static [u8], &'static [u8], &'static [u8]) {
+    (FIXTURE_TRAP_WASM, FIXTURE_TRAP_PK, FIXTURE_TRAP_SIG)
+}
+
+/// M5.3 — VERIFY a module's Ed25519 signature (kernel = trust root); on success return the
+/// EXACT module bytes to hand to the EL0 wasmi host, else `None` (fail-closed: a
+/// tampered/unsigned module is refused BEFORE it can cross into EL0). Unlike
+/// `verified_classify_expr` (which also decodes classify() for the bespoke stub), wasmi
+/// consumes the whole module, so this returns the whole verified image.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+pub fn verified_module<'a>(wasm: &'a [u8], pk: &[u8], sig: &[u8]) -> Option<&'a [u8]> {
+    if verify_module(wasm, pk, sig) {
+        Some(wasm)
+    } else {
+        None
+    }
 }
 
 /// M5.2b — the in-kernel REFERENCE of the exact 5-opcode execution the EL0 host performs,

@@ -49,8 +49,16 @@ const PAGE: usize = 0x1000;
 /// Beachhead bounds — a loaded segment may not exceed this, and the image may hold at
 /// most `MAX_SEGMENTS` PT_LOADs. Keeps the loader's memory + slot use bounded and makes
 /// a hostile "gigantic segment" ELF a cheap REFUSAL, never an allocation storm.
-pub const MAX_SEG_BYTES: usize = 64 * 1024; // 16 pages
-pub const MAX_SEGMENTS: usize = 4;
+///
+/// M5.3 raised the ceiling (NOT the safety): the REAL wasmi EL0 Wasm-host image
+/// (el0-wasmhost) is a 3-PT_LOAD ET_EXEC whose R+X `.text` measures ~326 KiB (wasmi 0.32,
+/// opt-level=z + LTO). 64 KiB was fine for the hand-rolled fixtures but far too small for a
+/// real interpreter. The cap is widened to 2 MiB / 8 segments — still a hard, bounded
+/// refusal for a hostile "gigantic segment" ELF, and every bounds/overflow/overlap/W^X
+/// check below is UNCHANGED. The MMU multi-block-W^X fix (build_wx_ram_range) already
+/// removed the old ~2 MiB `.text` block ceiling this larger image would otherwise hit.
+pub const MAX_SEG_BYTES: usize = 2 * 1024 * 1024; // 512 pages (was 64 KiB — M5.3 widened)
+pub const MAX_SEGMENTS: usize = 8; // (was 4 — M5.3: real images carry text/rodata/data/bss)
 
 #[inline]
 fn page_up(n: usize) -> usize {

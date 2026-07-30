@@ -28,6 +28,18 @@ fn main() {
     // bytes + an Ed25519 signature over them, all EMITTED here (no committed binary,
     // no wat2wasm/external toolchain). See gen_fixture_wasm.
     gen_fixture_wasm(&std::env::var("OUT_DIR").unwrap());
+
+    // M5.3 (Track C) — the REAL wasmi runtime in an EL0 SERVER. Two build outputs, ONLY
+    // under `wasmhost` (and not cm5): (1) a SIGNED trapping module fixture for the (c)
+    // wasmi-trap-isolation proof; (2) the EL0 Wasm-host BINARY — a separate no_std crate
+    // that links wasmi 0.32, compiled to an aarch64 ELF by a NESTED `cargo build` in a
+    // clean env and embedded via include_bytes!. wasmi's ~326 KiB .text lives in THAT EL0
+    // image, NOT the kernel TCB (ADR 0044 D4 #2). See build_el0_wasmhost.
+    if std::env::var("CARGO_FEATURE_WASMHOST").is_ok() && std::env::var("CARGO_FEATURE_CM5").is_err()
+    {
+        gen_fixture_trap_wasm(&std::env::var("OUT_DIR").unwrap());
+        build_el0_wasmhost(&dir, &std::env::var("OUT_DIR").unwrap());
+    }
     println!("cargo:rerun-if-changed=build.rs");
 }
 
@@ -157,6 +169,104 @@ fn gen_fixture_elf(out_dir: &str) {
 
     let path = std::path::Path::new(out_dir).join("fixture_client.elf");
     std::fs::write(path, &e).expect("write fixture ELF");
+}
+
+// M5.3 (c) — a SIGNED, memoryless module whose exported `classify(port)` body is a single
+// `unreachable` — so calling it TRAPS inside wasmi. Same (i32)->(i32) type + "classify"
+// export as the good fixture, so the EL0 host loads + instantiates it identically; the trap
+// only fires on call. The EL0 wasmi host catches wasmi's trap (call returns Err) and sends
+// the fail-closed sentinel over IPC — proving a module trap is CONTAINED at EL0 by wasmi
+// itself, kernel untouched. Signed with the SAME dev seed as the good fixture (the kernel
+// verifies it — it IS signed — then hands it to a SECOND EL0 host).
+fn gen_fixture_trap_wasm(out_dir: &str) {
+    // (module (func (export "classify") (param i32) (result i32) unreachable))
+    // code body = [locals=0x00, unreachable=0x00, end=0x0b] -> body_size 3.
+    let wasm: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // \0asm, version 1
+        0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f, // type: (i32)->(i32)
+        0x03, 0x02, 0x01, 0x00, // function: 1 func, type 0
+        0x07, 0x0c, 0x01, 0x08, b'c', b'l', b'a', b's', b's', b'i', b'f', b'y', 0x00, 0x00, // export
+        0x0a, 0x05, 0x01, 0x03, 0x00, 0x00, 0x0b, // code: body = unreachable; end
+    ];
+    use ed25519_compact::{KeyPair, Seed};
+    let kp = KeyPair::from_seed(Seed::new([0x5au8; 32]));
+    let sig = kp.sk.sign(wasm, None);
+    let dir = std::path::Path::new(out_dir);
+    std::fs::write(dir.join("fixture_trap.wasm"), wasm).expect("write trap wasm");
+    std::fs::write(dir.join("fixture_trap.pk"), kp.pk.as_ref()).expect("write trap pk");
+    std::fs::write(dir.join("fixture_trap.sig"), sig.as_ref()).expect("write trap sig");
+}
+
+// M5.3 — compile the EL0 Wasm-host crate (../el0-wasmhost) to an aarch64 ELF and copy it to
+// OUT_DIR/el0_wasmhost.elf for the kernel to include_bytes!. It is a DETACHED workspace
+// built by a NESTED `cargo build` — run in a CLEAN env (the parent build-script env would
+// otherwise leak CARGO_ENCODED_RUSTFLAGS / CARGO_FEATURE_* / OUT_DIR into the child and
+// corrupt it) with its OWN target dir (no lock contention with the parent kernel build).
+// Fail-CLOSED: any failure PANICS the kernel build — a `wasmhost` kernel that can't produce
+// its EL0 host must not link a stale/absent image.
+fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
+    use std::path::Path;
+    use std::process::Command;
+
+    let crate_dir = Path::new(kernel_manifest_dir).join("../el0-wasmhost");
+    let crate_dir = crate_dir.canonicalize().expect("el0-wasmhost dir missing");
+    let manifest = crate_dir.join("Cargo.toml");
+    let nested_target = Path::new(out_dir).join("el0host-target");
+
+    // Rebuild if any of the EL0 host's sources change.
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("src/main.rs").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("link.ld").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("build.rs").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join(".cargo/config.toml").display());
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&nested_target)
+        .current_dir(&crate_dir);
+
+    // CLEAN env: drop every parent-build-script var that would confuse the child cargo/rustc,
+    // keeping PATH/HOME/rustup so the nightly toolchain + registry resolve normally.
+    for (k, _) in std::env::vars() {
+        let leak = k == "RUSTFLAGS"
+            || k == "CARGO_ENCODED_RUSTFLAGS"
+            || k == "RUSTC"
+            || k == "RUSTC_WRAPPER"
+            || k == "RUSTC_WORKSPACE_WRAPPER"
+            || k == "RUSTDOC"
+            || k == "CARGO"
+            || k == "CARGO_TARGET_DIR"
+            || k == "CARGO_BUILD_TARGET"
+            || k == "OUT_DIR"
+            || k == "TARGET"
+            || k == "HOST"
+            || k == "NUM_JOBS"
+            || k == "CARGO_MANIFEST_DIR"
+            || k == "CARGO_MANIFEST_LINKS"
+            || k == "CARGO_PRIMARY_PACKAGE"
+            || k.starts_with("CARGO_FEATURE_")
+            || k.starts_with("CARGO_CFG_")
+            || k.starts_with("CARGO_PKG_");
+        if leak {
+            cmd.env_remove(k);
+        }
+    }
+
+    let status = cmd.status().expect("failed to invoke nested cargo for el0-wasmhost");
+    if !status.success() {
+        panic!("el0-wasmhost nested build FAILED (status {status}) — wasmhost kernel cannot ship without its EL0 Wasm host");
+    }
+
+    let produced = nested_target
+        .join("aarch64-unknown-none-softfloat/release/el0-wasmhost");
+    let dest = Path::new(out_dir).join("el0_wasmhost.elf");
+    std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
+        panic!("el0-wasmhost ELF not found at {}: {e}", produced.display())
+    });
 }
 
 fn put16(b: &mut [u8], off: usize, v: u16) {

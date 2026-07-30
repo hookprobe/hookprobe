@@ -235,6 +235,47 @@ static mut EL0_WHOST_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for 
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 static mut EL0_WHOST_FKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the faulting host TCB
 
+// --- M5.3 (Track C) — the REAL wasmi runtime in an EL0 SERVER (ADR 0044 D4 #2). The EL0
+// Wasm-host BINARY (el0-wasmhost, links wasmi 0.32) is loaded via the M5.1 ELF loader into
+// its OWN address space; the kernel (TRUST ROOT) Ed25519-verifies the signed module then
+// copies the FULL bytes into the host's RW work page. The host runs classify(port) THROUGH
+// WASMI and SYS_CALLs the verdict back over its Endpoint{W}. Three hosts prove it:
+//   A: the good module, port 4444 -> verdict 1  (a: correct verdict via wasmi in EL0)
+//   B: the good module, port 443  -> verdict 0  (a: the predicate really computes, not const)
+//   C: the SIGNED TRAPPING module -> wasmi trap -> FAIL sentinel (c: trap contained at EL0)
+// (b) is proven kernel-side: a tampered module fails verify -> no host spawned.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_HEAP_VA: usize = 0x9300_0000; // 64 pages RW (== el0-wasmhost HEAP_BASE/HEAP_SIZE)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_HEAP_PAGES: usize = 64; // 256 KiB
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_STACK_VA: usize = 0x9200_0000; // 16 pages RW (kernel-provided; not in the ELF)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_STACK_PAGES: usize = 16; // 64 KiB
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_WORK_VA: usize = 0x9400_0000; // 1 page RW (== el0-wasmhost WORK_BASE)
+/// The EL0 wasmi-host ELF, compiled by build.rs (nested cargo) and embedded — wasmi's
+/// ~326 KiB .text lives HERE, NOT in the kernel TCB.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/el0_wasmhost.elf"));
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMI_RES_A: AtomicUsize = AtomicUsize::new(0); // PA of host-A's server result word (packed)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMI_RES_C: AtomicUsize = AtomicUsize::new(0); // PA of host-C's (trap) server result word
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMI_B_TAMPER_NOSPAWN: AtomicBool = AtomicBool::new(false); // (b) tampered -> no host
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMI_KERNEL_TEXT_DELTA: AtomicUsize = AtomicUsize::new(0); // kernel .text bytes (TCB size)
+// Kernel stacks for the 3 host TCBs + 3 asm-server TCBs (mirrors the M5.2b pattern).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMI_A_HKS: KStack = KStack([0; 0x4000]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMI_A_SKS: KStack = KStack([0; 0x4000]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMI_C_HKS: KStack = KStack([0; 0x4000]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMI_C_SKS: KStack = KStack([0; 0x4000]);
+
 /// CM5 / BCM2712 first-boot entry: prove HEQK boots and prints on real silicon
 /// via the on-SoC debug UART. MMU stays OFF (the UART is at a 40-bit PA that the
 /// QEMU identity map doesn't cover); GIC-400 / generic-timer / RP1 are the next
@@ -2470,6 +2511,8 @@ pub extern "C" fn kmain() -> ! {
     m5_elf_loader_spawn(); // M5.1 (Track C) (a): + a client LOADED FROM AN ELF (real cap-gated SYS_CALL) — ELF-loader beachhead
     #[cfg(feature = "wasmhost")]
     m5_wasmhost_el0_spawn(); // M5.2b (Track C) (a): + the signed module HOSTED in an ISOLATED EL0 task, verdict returned via enforced IPC
+    #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+    m5_wasmi_el0_spawn(); // M5.3 (Track C) (a): + a REAL wasmi runtime in an EL0 SERVER running one signed module, verdict over enforced IPC
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -5628,7 +5671,7 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                 let c = got == P12_BADGE_C && blocked;
                 kprint!(" [P12c] blocking-WAIT {} — EL0 WAITer blocked={}, woken by EL0 Signal, received badge {:#x} (expected {:#x})\n",
                     if c { "PASS" } else { "FAIL" }, blocked, got, P12_BADGE_C);
-                kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=20, DSN-6 fixed]\n",
+                kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=24, DSN-6 fixed]\n",
                     if a && b && c { "PASS" } else { "FAIL" }, a, b, c);
                 // R1 (M5.0): the cap-gated synchronous-IPC beachhead. (a) is the LIVE EL0
                 // rendezvous verified here (the server received the client's SYS_CALL msg;
@@ -5686,9 +5729,33 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                         if el0_a { "PASS" } else { "FAIL" }, WHOST_PORT, el0_verdict, refv);
                     kprint!(" [P-wasm-el0] {} — (a)EL0-hosted verify(kernel=trust-root)->interpret(EL0 own TTBR0)->verdict-via-cap-gated-IPC={} (b)TAMPERED refused BEFORE EL0 hand-off (host never spawned)={} (c)module/host fault CONTAINED at EL0 (restarts {}, kernel survived)={} [ADR 0044 D4 #2 shape @ min scale: bespoke 5-opcode engine moved to an isolated EL0 server, NOT wasmi/WASI/wasm32-wasip1, ONE module, NOT catalogue-parity, NOT metal — ADR 0044 D5]\n",
                         if el0_a && el0_b && el0_c { "PASS" } else { "FAIL" }, el0_a, el0_b, frestarts.min(EL0_MAX_RESTARTS), el0_c);
+
+                    // M5.3 — the REAL wasmi runtime, in an EL0 SERVER (ADR 0044 D4 #2 #2).
+                    // Host A ran the GOOD module's classify(4444) AND classify(443) THROUGH
+                    // wasmi at EL0 and packed the verdicts (0x0001_0000 = 1<<16 | 0) back over
+                    // the enforced IPC; host C ran the SIGNED TRAPPING module -> wasmi trap ->
+                    // FAIL (0xFFFF_FFFF). wasmi's ~326 KiB .text is in the EL0 image, NOT the
+                    // kernel TCB (printed below to prove it).
+                    let ra = WASMI_RES_A.load(Ordering::SeqCst);
+                    let wa_packed = if ra != 0 { (unsafe { read_volatile(ra as *const u64) }) as u32 } else { 0 };
+                    let rc = WASMI_RES_C.load(Ordering::SeqCst);
+                    let wc_packed = if rc != 0 { (unsafe { read_volatile(rc as *const u64) }) as u32 } else { 0 };
+                    let ktext = WASMI_KERNEL_TEXT_DELTA.load(Ordering::SeqCst);
+                    // (a): both vectors correct AND actually computed (1<<16|0), via real wasmi.
+                    let wi_a = wa_packed == 0x0001_0000;
+                    // (b): a tampered module was refused before any EL0 spawn (kernel trust root).
+                    let wi_b = WASMI_B_TAMPER_NOSPAWN.load(Ordering::SeqCst);
+                    // (c): the trapping module's trap was contained by wasmi at EL0 (FAIL
+                    // returned via IPC) AND host A's verdict stayed intact AND the kernel
+                    // reached here alive.
+                    let wi_c = wc_packed == 0xFFFF_FFFF && wi_a;
+                    kprint!(" [P-wasmi-el0-a] {} — GOOD module run THROUGH REAL wasmi IN EL0 (own ASID/TTBR0): classify(4444)=<verdict hi>, classify(443)=<verdict lo>, packed={:#010x} (exp 0x00010000); returned over the enforced Endpoint-cap IPC (SYS_CALL -> asm server -> result page); kernel .text={} B (wasmi .text ~326 KiB lives in the EL0 image, NOT here)\n",
+                        if wi_a { "PASS" } else { "FAIL" }, wa_packed, ktext);
+                    kprint!(" [P-wasmi-el0] {} — (a)REAL-wasmi-in-EL0 verify(kernel=trust-root)->wasmi-run(EL0)->both-vectors-correct-via-cap-gated-IPC={} (b)TAMPERED refused BEFORE EL0 hand-off={} (c)wasm TRAP contained by wasmi AT EL0 (packed {:#010x}=FAIL, good host intact, kernel alive)={} [ADR 0044 D4 #2 beachhead: ONE real signed module via wasmi 0.32 in an isolated EL0 server, wasmi OUT of the kernel TCB; NOT the full catalogue at parity, NOT WASI/wasm32-wasip1 (no host imports reachable), NOT metal — ADR 0044 D5]\n",
+                        if wi_a && wi_b && wi_c { "PASS" } else { "FAIL" }, wi_a, wi_b, wc_packed, wi_c);
                 }
                 #[cfg(feature = "wasmhost")]
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 GREEN\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 GREEN\n");
                 #[cfg(not(feature = "wasmhost"))]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf GREEN\n");
                 arch_aarch64::semihosting::exit(0);
@@ -6775,6 +6842,201 @@ fn m5_wasmhost_el0_spawn() {
     kprint!(
         " [P-wasm-el0-a] spawned EL0 wasm-host(prio8,Endpoint{{W}}) + asm server(prio9,Endpoint{{R}}) + fault-host(prio7); classify({}) ref-verdict={} tamper-blocked={}\n",
         WHOST_PORT, refv, tamper_blocked
+    );
+}
+
+// ===========================================================================
+// M5.3 (Track C) — the REAL wasmi runtime in an EL0 SERVER (ADR 0044 D4 #2 #2).
+// ===========================================================================
+
+/// M5.3 — spawn an asm IPC SERVER (`ipc_server_stub`, Endpoint{R}) that RECVs the host's
+/// verdict into a result page and REPLYs. Returns the result-page PA (0 on failure). The
+/// server hard-codes VAs 0x8600_0000/_1000/_2000 in its OWN address space — reused across
+/// servers because each is a distinct TTBR0.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn spawn_ipc_result_server(
+    mmu: &arch_aarch64::Mmu,
+    ep: ipc::EpHandle,
+    prio: u8,
+    kstack: usize,
+) -> usize {
+    extern "C" {
+        static ipc_server_stub: u8;
+        static ipc_server_stub_end: u8;
+    }
+    let (scode, sstack, sresult) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if scode == 0 || sstack == 0 || sresult == 0 {
+        return 0;
+    }
+    let ssrc = core::ptr::addr_of!(ipc_server_stub) as usize;
+    let slen = core::ptr::addr_of!(ipc_server_stub_end) as usize - ssrc;
+    unsafe {
+        core::ptr::copy_nonoverlapping(ssrc as *const u8, scode as *mut u8, slen);
+        write_volatile(sresult as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(scode, slen);
+    let (sl1, sasid) = mmu.new_addr_space();
+    if sl1 == 0 {
+        return 0;
+    }
+    mmu.map_user_code_in(sl1, 0x8600_0000, scode);
+    mmu.map_user_data_in(sl1, 0x8600_1000, sstack);
+    mmu.map_user_data_in(sl1, 0x8600_2000, sresult);
+    let ssp = arch_aarch64::thread::make_el0_thread(kstack, 0x8600_0000, 0x8600_1000 + 0x1000, 0);
+    let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(ssp, prio, sttbr0) {
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Endpoint, caps::R, ep.index, ep.generation, 0);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, 0x8600_0000, 0x8600_1000 + 0x1000, kstack);
+    }
+    sresult
+}
+
+/// M5.3 — bring up ONE EL0 wasmi-host TCB: LOAD the `el0-wasmhost` ELF (which links wasmi)
+/// into a fresh address space via the M5.1 loader (enforced CORE-1 map, W^X), map a stack
+/// (16 pages), a HEAP window (64 pages = 256 KiB, the region wasmi's global allocator bumps
+/// over) and a work page carrying `[port_a, port_b, wasm_len, module bytes]`, then spawn it
+/// holding an `Endpoint{W}` at CPtr 0. The kernel has ALREADY verified `module` (trust
+/// root) before this call. Returns the tid.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn bringup_wasmi_el0(
+    mmu: &arch_aarch64::Mmu,
+    parsed: &elf::ParsedElf,
+    port_a: u64,
+    port_b: u64,
+    module: &[u8],
+    ep: ipc::EpHandle,
+    prio: u8,
+    kstack: usize,
+) -> Option<usize> {
+    let (l1, asid) = mmu.new_addr_space();
+    if l1 == 0 {
+        return None;
+    }
+    // Code / rodata / bss segments — mapped at the ELF's own VAs (0x9000_0000..) through
+    // the enforced, W^X-checked loader path. wasmi's ~326 KiB .text lands HERE, at EL0.
+    let loaded = elf::load_into(parsed, WASMI_ELF, l1).ok()?;
+    // Stack (kernel-provided; not declared in the ELF) — RW+NX, grows down from the top.
+    for p in 0..WASMI_STACK_PAGES {
+        let f = mmu.alloc_frame();
+        if f == 0 {
+            return None;
+        }
+        mmu.map_user_data_in(l1, WASMI_STACK_VA + p * 0x1000, f);
+    }
+    let sp_top = WASMI_STACK_VA + WASMI_STACK_PAGES * 0x1000;
+    // Heap window (RW+NX) — 256 KiB the EL0 bump allocator hands to wasmi. `alloc_frame`
+    // zeroes each frame, so the heap starts clean.
+    for p in 0..WASMI_HEAP_PAGES {
+        let f = mmu.alloc_frame();
+        if f == 0 {
+            return None;
+        }
+        mmu.map_user_data_in(l1, WASMI_HEAP_VA + p * 0x1000, f);
+    }
+    // Work page: [+0]=port_a [+8]=port_b [+16]=wasm_len [+24..]=module bytes. Cap the copy
+    // so it can never run past one page (belt-and-braces; the module is ~46 B).
+    let work = mmu.alloc_frame();
+    if work == 0 {
+        return None;
+    }
+    let n = module.len().min(0xF00);
+    unsafe {
+        write_volatile(work as *mut u64, port_a);
+        write_volatile((work + 8) as *mut u64, port_b);
+        write_volatile((work + 16) as *mut u64, n as u64);
+        core::ptr::copy_nonoverlapping(module.as_ptr(), (work + 24) as *mut u8, n);
+    }
+    mmu.map_user_data_in(l1, WASMI_WORK_VA, work);
+
+    let sp = arch_aarch64::thread::make_el0_thread(kstack, loaded.entry, sp_top, 0);
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    let tid = scheduler::spawn_as(sp, prio, ttbr0)?;
+    let mut cs = caps::CapSpace::empty();
+    // Endpoint{W} at CPtr 0 — the host's ONLY authority to reach the kernel; the verdict
+    // flows through this cap-gated SYS_CALL. A fault/trap otherwise contained at EL0.
+    let _ = cs.install_object(caps::ObjType::Endpoint, caps::W, ep.index, ep.generation, 0);
+    install_cspace(tid, cs);
+    scheduler::set_restart(tid, loaded.entry, sp_top, kstack);
+    Some(tid)
+}
+
+/// M5.3 (a)+(b)+(c) — run ONE real signed `.wasm` module through a REAL wasmi runtime that
+/// lives in an ISOLATED EL0 SERVER (the `el0-wasmhost` binary), returning its verdict over
+/// the enforced Endpoint-cap IPC. The kernel is the TRUST ROOT: it Ed25519-verifies each
+/// module BEFORE handing it to EL0. Spawns two host+server pairs:
+///   * host A (good module): runs classify(4444) AND classify(443) via wasmi, packs the two
+///     verdicts into 0x0001_0000 — (a) the real predicate computes correctly, in EL0 wasmi.
+///   * host C (signed TRAPPING module): classify() executes `unreachable` -> wasmi TRAP ->
+///     the host sends the FAIL packing 0xFFFF_FFFF — (c) a trap is CONTAINED at EL0 by wasmi
+///     and the kernel + host A's verdict survive.
+/// (b) is proven kernel-side: a tampered module fails verify -> no EL0 host is spawned.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn m5_wasmi_el0_spawn() {
+    let mmu = arch_aarch64::Mmu;
+
+    // Record the kernel's OWN .text size (its TCB) so the [P-wasmi-el0] report can PROVE
+    // wasmi did NOT bloat the kernel — it links only the `include_bytes!` of the EL0 image.
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+    let tsz = unsafe {
+        core::ptr::addr_of!(__text_end) as usize - core::ptr::addr_of!(__text_start) as usize
+    };
+    WASMI_KERNEL_TEXT_DELTA.store(tsz, Ordering::SeqCst);
+
+    // Parse the EL0 host ELF ONCE (pure, fail-closed). Reused for every host's load_into.
+    let parsed = match elf::parse(WASMI_ELF) {
+        Ok(p) => p,
+        Err(e) => {
+            kprint!(" [P-wasmi-el0-a] FAIL: EL0 host ELF rejected by loader: {:?}\n", e);
+            return;
+        }
+    };
+
+    let (gwasm, gpk, gsig) = wasmhost::fixture_full();
+
+    // (b) FAIL-CLOSED, BEFORE any EL0 hand-off: a TAMPERED module (one code byte flipped)
+    // fails Ed25519 verify -> `verified_module` is None -> no EL0 host is ever spawned.
+    let mut tampered = [0u8; 64];
+    let n = gwasm.len().min(64);
+    tampered[..n].copy_from_slice(&gwasm[..n]);
+    tampered[n - 3] ^= 0x01;
+    let tamper_blocked = wasmhost::verified_module(&tampered[..n], gpk, gsig).is_none();
+    WASMI_B_TAMPER_NOSPAWN.store(tamper_blocked, Ordering::SeqCst);
+
+    // ---- host A: the GOOD module, VERIFIED (kernel = trust root) then run in EL0 wasmi ----
+    if let Some(module) = wasmhost::verified_module(gwasm, gpk, gsig) {
+        if let Some(eh) = ipc::ep_create() {
+            let sks = unsafe { core::ptr::addr_of!(WASMI_A_SKS) as usize + 0x4000 };
+            let sres = spawn_ipc_result_server(&mmu, eh, 9, sks);
+            WASMI_RES_A.store(sres, Ordering::SeqCst);
+            let hks = unsafe { core::ptr::addr_of!(WASMI_A_HKS) as usize + 0x4000 };
+            let _ = bringup_wasmi_el0(&mmu, &parsed, 4444, 443, module, eh, 8, hks);
+        }
+    } else {
+        kprint!(" [P-wasmi-el0-a] FAIL: signed fixture failed verify\n");
+        return;
+    }
+
+    // ---- host C: the SIGNED TRAPPING module -> wasmi trap -> FAIL, contained at EL0 ----
+    let (twasm, tpk, tsig) = wasmhost::fixture_trap();
+    if let Some(tmodule) = wasmhost::verified_module(twasm, tpk, tsig) {
+        if let Some(eh) = ipc::ep_create() {
+            let sks = unsafe { core::ptr::addr_of!(WASMI_C_SKS) as usize + 0x4000 };
+            let sres = spawn_ipc_result_server(&mmu, eh, 9, sks);
+            WASMI_RES_C.store(sres, Ordering::SeqCst);
+            let hks = unsafe { core::ptr::addr_of!(WASMI_C_HKS) as usize + 0x4000 };
+            let _ = bringup_wasmi_el0(&mmu, &parsed, 4444, 4444, tmodule, eh, 8, hks);
+        }
+    }
+
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase
+    kprint!(
+        " [P-wasmi-el0-a] spawned REAL wasmi EL0 host (loaded from {}-seg ELF, entry {:#x}, wasmi .text OUT of kernel TCB) + trap-host + asm servers; kernel .text={} B; tamper-blocked={}\n",
+        parsed.nsegs, parsed.entry, tsz, tamper_blocked
     );
 }
 
