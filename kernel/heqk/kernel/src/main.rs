@@ -135,6 +135,29 @@ static mut EL0_WKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the WA
 #[cfg(not(feature = "cm5"))]
 static mut EL0_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the SIGNAL TCB
 
+// --- R1 (M5.0) cap-gated synchronous-IPC self-test state. (b) fail-closed + (c)
+// revoke-severs run kernel-side pre-scheduler (deterministic, like the cap tests) and
+// store their verdict here; (a) the live EL0 CALL/RECV/REPLY rendezvous runs under the
+// scheduler and is verified post-run (like [P12c]). ---
+#[cfg(not(feature = "cm5"))]
+static R1_IPC_B: AtomicBool = AtomicBool::new(false); // (b) cap-gate fail-closed
+#[cfg(not(feature = "cm5"))]
+static R1_IPC_C: AtomicBool = AtomicBool::new(false); // (c) revoke severs IPC
+#[cfg(not(feature = "cm5"))]
+static R1_SRESULT_PA: AtomicUsize = AtomicUsize::new(0); // PA of the EL0 server's received-msg word
+#[cfg(not(feature = "cm5"))]
+static R1_CRESULT_PA: AtomicUsize = AtomicUsize::new(0); // PA of the EL0 client's received-reply word
+/// The message the EL0 client SYS_CALLs with; the server must receive EXACTLY this.
+#[cfg(not(feature = "cm5"))]
+const R1_MSG: u64 = 0x0000_0000_0000_1C71;
+/// The word the EL0 server SYS_REPLYs with; the client must receive EXACTLY this.
+#[cfg(not(feature = "cm5"))]
+const R1_REPLY: u64 = 0x0000_0000_0000_2BEE;
+#[cfg(not(feature = "cm5"))]
+static mut EL0_IPC_SKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the IPC server TCB
+#[cfg(not(feature = "cm5"))]
+static mut EL0_IPC_CKSTACK: KStack = KStack([0; 0x4000]); // kernel stack for the IPC client TCB
+
 /// CM5 / BCM2712 first-boot entry: prove HEQK boots and prints on real silicon
 /// via the on-SoC debug UART. MMU stays OFF (the UART is at a 40-bit PA that the
 /// QEMU identity map doesn't cover); GIC-400 / generic-timer / RP1 are the next
@@ -2067,6 +2090,16 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(not(feature = "cm5"))]
     p2_revoke_unmap_demo();
 
+    // --- R1 (M5.0) (b)+(c): cap-gated synchronous IPC — the fail-closed cap gate + the
+    // revoke-severs proof (deterministic, pre-scheduler). (a), the live EL0 CALL/RECV/
+    // REPLY rendezvous, spawns under the scheduler below and is reported post-run. ---
+    #[cfg(not(feature = "cm5"))]
+    {
+        let (b, c) = r1_ipc_cap_selftest();
+        R1_IPC_B.store(b, Ordering::Relaxed);
+        R1_IPC_C.store(c, Ordering::Relaxed);
+    }
+
     // --- P12 (a)+(b): Notification signal/poll + pub-sub AUTHORITY (topics as caps).
     // Synchronous, pre-scheduler; the blocking-WAIT proof (c) runs under the scheduler
     // and is reported post-run. ---
@@ -2330,6 +2363,7 @@ pub extern "C" fn kmain() -> ! {
     el0_preempt_spawn(); // P7c: + one uncooperative EL0 TCB that the timer must preempt
     el0_fault_spawn(); // P7c 4b: + one crashing EL0 driver TCB that must be contained + restarted
     p12_el0_spawn(); // P12 (c): + a WAIT TCB (blocks) and a SIGNAL TCB (wakes it) — the real syscall path
+    r1_ipc_el0_spawn(); // R1 (M5.0) (a): + an IPC server (RECV/REPLY) and client (CALL) — cap-gated sync IPC
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -5381,6 +5415,7 @@ fn switch_to(next_sp: usize) -> usize {
 /// disarm its restart record, then reschedule and return the next thread's SP.
 fn p12_task_exit(cur: usize, frame: *mut u64) -> usize {
     notify::detach_tcb(cur); // death path: no stale badge into a freed frame
+    ipc::detach_tcb(cur); // R1: also unpark from any sync-IPC endpoint (no stale reply)
     scheduler::exit_current();
     scheduler::clear_restart(cur); // a reused slot must not inherit scheduled-restart
     let next = scheduler::on_tick(frame as usize);
@@ -5417,6 +5452,29 @@ fn resolve_ntfn_cap(cptr: usize, need: u8, expect: caps::ObjType) -> Result<(usi
         return Err(abi::RC_DENIED); // "ungranted subscribe/signal is REFUSED"
     }
     Ok((c.base, c.watermark as u32, c.badge))
+}
+
+/// R1 (M5.0) — resolve an Endpoint CPtr in a GIVEN CSpace and check it holds all of
+/// `need` rights. Returns `(index, generation)` (base=index, watermark=generation, as
+/// `install_object` stamps them). Fails CLOSED: empty slot / insufficient rights ->
+/// `RC_DENIED`; wrong object type -> `RC_BADARG`. The cap gate for the sync-IPC path.
+fn resolve_ep_cap_in(cs: &caps::CapSpace, cptr: usize, need: u8) -> Result<(usize, u32), u64> {
+    let c = cs.get(cptr).ok_or(abi::RC_DENIED)?; // no such cap -> fail closed
+    if c.otype != caps::ObjType::Endpoint {
+        return Err(abi::RC_BADARG); // type-tag safety: only an Endpoint drives sync IPC
+    }
+    if c.rights & need != need {
+        return Err(abi::RC_DENIED); // CALL needs W, RECV/REPLY need R — else REFUSED
+    }
+    Ok((c.base, c.watermark as u32))
+}
+
+/// R1 (M5.0) — resolve an Endpoint CPtr in the CALLER's OWN per-TCB CSpace (CORE-2):
+/// an EL0 task can only ever name an endpoint it actually holds. A missing CSpace is
+/// `RC_DENIED`, never a panic (fail closed).
+fn resolve_ep_cap(cptr: usize, need: u8) -> Result<(usize, u32), u64> {
+    let cs = current_cspace().ok_or(abi::RC_DENIED)?; // no CSpace => fail closed
+    resolve_ep_cap_in(cs, cptr, need)
 }
 
 /// Timer IRQ handler (called from `irq_entry` in vectors.s). Returns the stack
@@ -5466,7 +5524,21 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                     if c { "PASS" } else { "FAIL" }, blocked, got, P12_BADGE_C);
                 kprint!(" [P12] {} — (a)signal/poll={} (b)pubsub-authority={} (c)blocking-wait={} [notification objects + capability pub-sub, badge-from-cap, MAX_THREADS=16, DSN-6 fixed]\n",
                     if a && b && c { "PASS" } else { "FAIL" }, a, b, c);
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 GREEN\n");
+                // R1 (M5.0): the cap-gated synchronous-IPC beachhead. (a) is the LIVE EL0
+                // rendezvous verified here (the server received the client's SYS_CALL msg;
+                // the client received the server's SYS_REPLY word); (b)/(c) ran pre-scheduler.
+                let sr = R1_SRESULT_PA.load(Ordering::SeqCst);
+                let cr = R1_CRESULT_PA.load(Ordering::SeqCst);
+                let got_msg = if sr != 0 { unsafe { read_volatile(sr as *const u64) } } else { 0 };
+                let got_reply = if cr != 0 { unsafe { read_volatile(cr as *const u64) } } else { 0 };
+                let ra = got_msg == R1_MSG && got_reply == R1_REPLY;
+                let rb = R1_IPC_B.load(Ordering::Relaxed);
+                let rc_ = R1_IPC_C.load(Ordering::Relaxed);
+                kprint!(" [P-r1-ipc-a] {} — EL0 client SYS_CALL delivered msg {:#x} to server (got {:#x}); server SYS_REPLY returned {:#x} to client (got {:#x})\n",
+                    if ra { "PASS" } else { "FAIL" }, R1_MSG, got_msg, R1_REPLY, got_reply);
+                kprint!(" [P-r1-ipc] {} — (a)EL0-rendezvous={} (b)cap-gate-fail-closed={} (c)revoke-severs={} [cap-gated SYS_CALL/EP_RECV/REPLY, Endpoint resolved from the caller's OWN CSpace, fail-closed RC_DENIED, mint-child/revoke-parent sever]\n",
+                    if ra && rb && rc_ { "PASS" } else { "FAIL" }, ra, rb, rc_);
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc GREEN\n");
                 arch_aarch64::semihosting::exit(0);
             }
             // On real silicon there is no semihosting exit: signal the idle
@@ -5622,6 +5694,11 @@ const SYS_PUBLISH: u64 = abi::SYS_PUBLISH;
 const SYS_RECV: u64 = abi::SYS_RECV;
 const SYS_SUBSCRIBE: u64 = abi::SYS_SUBSCRIBE;
 const SYS_TASK_EXIT: u64 = abi::SYS_TASK_EXIT;
+// R1 (M5.0): cap-gated synchronous IPC. CALL/EP_RECV block (handled in handle_lower_sync);
+// REPLY is non-blocking (handled in syscall_dispatch, like SYS_SIGNAL).
+const SYS_CALL: u64 = abi::SYS_CALL;
+const SYS_EP_RECV: u64 = abi::SYS_EP_RECV;
+const SYS_REPLY: u64 = abi::SYS_REPLY;
 
 // Value the isolated EL0 driver server reported (a NIC register it read).
 static DRIVER_REPORT: AtomicU32 = AtomicU32::new(0);
@@ -5976,6 +6053,212 @@ fn p12_el0_spawn() {
     kprint!(" [P12c] spawned EL0 WAITer(prio7,Notification{{R}}) + SIGNALler(prio6,Notification{{W}},badge={:#x})\n", P12_BADGE_C);
 }
 
+/// R1 (M5.0) (b)+(c) — the cap-gate + revoke-sever proofs of the synchronous-IPC
+/// beachhead, kernel-side and DETERMINISTIC (mirrors `cap_invariants_selftest` /
+/// `p2_revoke_unmap_demo`; needs no scheduler). (a) — the live EL0 CALL/REPLY rendezvous
+/// through the real syscall path — runs under the scheduler and is verified post-run.
+/// Returns `(b_ok, c_ok)`.
+///
+///  * (b) FAIL CLOSED — the cap gate `resolve_ep_cap_in` (the exact gate the SYS_CALL /
+///    SYS_EP_RECV / SYS_REPLY syscalls use) REFUSES: a CALL with NO endpoint cap
+///    (`RC_DENIED`), a CALL with an R-only cap (CALL needs W → `RC_DENIED`), a wrong
+///    OBJECT TYPE (`RC_BADARG`), and the mechanism itself refuses a stale object — while
+///    a RECV with the R right is allowed. No rendezvous is possible without the authority.
+///  * (c) REVOKE SEVERS — MINT a CHILD endpoint cap from a PARENT cap (same CSpace, so a
+///    real CDT parent link), park a victim TCB on the object, then revoke the PARENT.
+///    `revoke` deletes the CHILD (its subtree) and FIRES the IPC-sever hook: the victim is
+///    woken with `RC_DENIED` (observed in its saved x0) and unblocked (not hung), the
+///    object generation is bumped, and the KEPT parent cap now fails closed on a fresh
+///    CALL. This is the faithful mirror of CORE-1's revoke-parent-unmaps-child.
+#[cfg(not(feature = "cm5"))]
+fn r1_ipc_cap_selftest() -> (bool, bool) {
+    use caps::{CapSpace, ObjType, G, R, W};
+
+    // ---------- (b) FAIL CLOSED: the capability gate refuses missing/insufficient. -----
+    let eh = match ipc::ep_create() {
+        Some(h) => h,
+        None => return (false, false),
+    };
+    let mut cs = CapSpace::empty();
+    // slot 0: Endpoint{R} only — may RECV/REPLY, may NOT CALL (CALL needs the W right).
+    let r_slot = cs
+        .install_object(ObjType::Endpoint, R, eh.index, eh.generation, 0)
+        .unwrap();
+    // slot 1: a Notification (WRONG object type) to prove type-tag safety on the IPC path.
+    let wrong_slot = cs.install_object(ObjType::Notification, R | W, 0, 0, 0).unwrap();
+
+    let call_no_cap = resolve_ep_cap_in(&cs, 9, W).is_err(); // empty slot -> DENIED
+    let call_insufficient = resolve_ep_cap_in(&cs, r_slot, W).is_err(); // R-only, CALL needs W
+    let recv_ok = resolve_ep_cap_in(&cs, r_slot, R).is_ok(); // R present -> RECV allowed
+    let wrong_type = resolve_ep_cap_in(&cs, wrong_slot, R).is_err(); // Notification != Endpoint
+    // The mechanism also refuses a stale/absent object (fail closed at the ipc layer).
+    let stale_refused = matches!(
+        ipc::call(eh.index, eh.generation.wrapping_add(9), 0, 1),
+        ipc::IpcOut::Rc(_)
+    );
+    let b = call_no_cap && call_insufficient && recv_ok && wrong_type && stale_refused;
+    ipc::on_endpoint_cap_deleted(eh.index, eh.generation); // reclaim (b)'s endpoint object
+
+    // ---------- (c) REVOKE SEVERS the IPC (mint child / revoke parent). ----------------
+    let ch = match ipc::ep_create() {
+        Some(h) => h,
+        None => return (b, false),
+    };
+    // A real reserved-frame trap frame for a "parked" victim tid, so we can OBSERVE the
+    // RC_DENIED the sever delivers (deliver_wake writes frame word 0 = the victim's x0).
+    let fbase = arch_aarch64::mmu::reserve_region(4096);
+    let victim = scheduler::MAX_THREADS - 1; // a spare slot never spawned in this run
+    unsafe { write_volatile(fbase as *mut u64, 0) };
+    scheduler::set_sp(victim, fbase); // give the victim a saved frame to receive x0 into
+    scheduler::block_tid(victim); // park it (blocked) so the sever must UNBLOCK it
+    ipc::park_recv_for_test(ch.index, ch.generation, victim); // parked on the endpoint
+
+    // PARENT endpoint cap (R|W|G) + a minted CHILD (same CSpace -> a real CDT parent link).
+    let mut cs2 = CapSpace::empty();
+    let parent = cs2
+        .install_object(ObjType::Endpoint, R | W | G, ch.index, ch.generation, 0)
+        .unwrap();
+    let child = cs2.mint(parent, R | W).unwrap(); // child.parent = (parent, gen)
+
+    let setup_ok = cs2.get(child).is_some() && ipc::ep_exists(ch.index, ch.generation);
+
+    // Revoke the PARENT: deletes the CHILD subtree and FIRES the IPC-sever hook.
+    cs2.revoke(parent);
+
+    let child_deleted = cs2.get(child).is_none();
+    let parent_kept = cs2.get(parent).is_some();
+    let obj_severed = !ipc::ep_exists(ch.index, ch.generation); // generation bumped / freed
+    let victim_woken_denied =
+        unsafe { read_volatile(fbase as *const u64) } == abi::RC_DENIED;
+    let victim_unblocked = !scheduler::is_blocked(victim); // woken, NOT left hung
+    // The kept parent cap now fails closed on a fresh CALL (object generation bumped).
+    let parent_fail_closed = matches!(
+        ipc::call(ch.index, ch.generation, 0, 1),
+        ipc::IpcOut::Rc(_)
+    );
+    scheduler::set_sp(victim, 0); // undo the test frame pointer
+
+    let c = setup_ok
+        && child_deleted
+        && parent_kept
+        && obj_severed
+        && victim_woken_denied
+        && victim_unblocked
+        && parent_fail_closed;
+
+    kprint!(
+        " [P-r1-ipc-b] {} — CALL-without-cap DENIED={} CALL-with-R-only(insufficient) DENIED={} RECV-with-R OK={} wrong-type REFUSED={} stale-object REFUSED={}\n",
+        if b { "PASS" } else { "FAIL" },
+        call_no_cap, call_insufficient, recv_ok, wrong_type, stale_refused
+    );
+    kprint!(
+        " [P-r1-ipc-c] {} — mint CHILD from PARENT Endpoint cap, revoke PARENT: child-deleted={} parent-kept={} object-severed={} victim-woken-RC_DENIED={} not-hung(unblocked)={} kept-parent-now-fail-closed={}\n",
+        if c { "PASS" } else { "FAIL" },
+        child_deleted, parent_kept, obj_severed, victim_woken_denied, victim_unblocked, parent_fail_closed
+    );
+    (b, c)
+}
+
+/// R1 (M5.0) (a) — spawn TWO scheduled EL0 TCBs that exercise the REAL cap-gated
+/// synchronous-IPC syscall path end to end: a SERVER (holds `Endpoint{R}`, prio 9) that
+/// SYS_EP_RECVs then SYS_REPLYs, and a CLIENT (holds `Endpoint{W}`, prio 8) that
+/// SYS_CALLs. Highest-priority SERVER runs first and BLOCKS in RECV; the CLIENT then
+/// CALLs — the kernel delivers the message into the server's RECV return, the server
+/// REPLYs, and the kernel returns the reply into the client's CALL return. Both write
+/// what they received to a result page the kernel checks post-run (`R1_MSG`/`R1_REPLY`).
+/// This is the D4 #1 gate: one EL0 task, real syscall, ENFORCED capability, fails closed.
+#[cfg(not(feature = "cm5"))]
+fn r1_ipc_el0_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    extern "C" {
+        static ipc_server_stub: u8;
+        static ipc_server_stub_end: u8;
+        static ipc_client_stub: u8;
+        static ipc_client_stub_end: u8;
+    }
+    // One Endpoint object shared by both TCBs via distinct rights-narrowed caps.
+    let eh = match ipc::ep_create() {
+        Some(h) => h,
+        None => {
+            kprint!(" [P-r1-ipc-a] FAIL: endpoint table full\n");
+            return;
+        }
+    };
+
+    // ---- SERVER TCB (Endpoint{R}) — RECV then REPLY ----
+    let (scode, sstack, sresult) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if scode == 0 || sstack == 0 || sresult == 0 {
+        return;
+    }
+    let ssrc = core::ptr::addr_of!(ipc_server_stub) as usize;
+    let slen = core::ptr::addr_of!(ipc_server_stub_end) as usize - ssrc;
+    unsafe {
+        core::ptr::copy_nonoverlapping(ssrc as *const u8, scode as *mut u8, slen);
+        write_volatile(sresult as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(scode, slen);
+    let (sl1, sasid) = mmu.new_addr_space();
+    if sl1 == 0 {
+        return;
+    }
+    const SCODE_VA: usize = 0x8600_0000;
+    const SSTACK_VA: usize = 0x8600_1000;
+    const SRESULT_VA: usize = 0x8600_2000; // the server stub hard-codes this
+    mmu.map_user_code_in(sl1, SCODE_VA, scode);
+    mmu.map_user_data_in(sl1, SSTACK_VA, sstack);
+    mmu.map_user_data_in(sl1, SRESULT_VA, sresult);
+    R1_SRESULT_PA.store(sresult, Ordering::SeqCst);
+    let skstack = unsafe { core::ptr::addr_of!(EL0_IPC_SKSTACK) as usize + 0x4000 };
+    let ssp = arch_aarch64::thread::make_el0_thread(skstack, SCODE_VA, SSTACK_VA + 0x1000, 0);
+    let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(ssp, 9, sttbr0) {
+        // The server holds the Endpoint with the READ right only (may RECV/REPLY, not CALL).
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Endpoint, caps::R, eh.index, eh.generation, 0);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, SCODE_VA, SSTACK_VA + 0x1000, skstack); // DSN-6: never longjmp
+    }
+
+    // ---- CLIENT TCB (Endpoint{W}) — CALL ----
+    let (ccode, cstack, cresult) = (mmu.alloc_frame(), mmu.alloc_frame(), mmu.alloc_frame());
+    if ccode == 0 || cstack == 0 || cresult == 0 {
+        return;
+    }
+    let csrc = core::ptr::addr_of!(ipc_client_stub) as usize;
+    let clen = core::ptr::addr_of!(ipc_client_stub_end) as usize - csrc;
+    unsafe {
+        core::ptr::copy_nonoverlapping(csrc as *const u8, ccode as *mut u8, clen);
+        write_volatile(cresult as *mut u64, 0);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(ccode, clen);
+    let (cl1, casid) = mmu.new_addr_space();
+    if cl1 == 0 {
+        return;
+    }
+    const CCODE_VA: usize = 0x8700_0000;
+    const CSTACK_VA: usize = 0x8700_1000;
+    const CRESULT_VA: usize = 0x8700_2000; // the client stub hard-codes this
+    mmu.map_user_code_in(cl1, CCODE_VA, ccode);
+    mmu.map_user_data_in(cl1, CSTACK_VA, cstack);
+    mmu.map_user_data_in(cl1, CRESULT_VA, cresult);
+    R1_CRESULT_PA.store(cresult, Ordering::SeqCst);
+    let ckstack = unsafe { core::ptr::addr_of!(EL0_IPC_CKSTACK) as usize + 0x4000 };
+    let csp = arch_aarch64::thread::make_el0_thread(ckstack, CCODE_VA, CSTACK_VA + 0x1000, 0);
+    let cttbr0 = cl1 as u64 | ((casid as u64) << 48);
+    if let Some(tid) = scheduler::spawn_as(csp, 8, cttbr0) {
+        // The client holds the Endpoint with the WRITE right (may CALL).
+        let mut cs = caps::CapSpace::empty();
+        let _ = cs.install_object(caps::ObjType::Endpoint, caps::W, eh.index, eh.generation, 0);
+        install_cspace(tid, cs);
+        scheduler::set_restart(tid, CCODE_VA, CSTACK_VA + 0x1000, ckstack);
+    }
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase
+    kprint!(
+        " [P-r1-ipc-a] spawned EL0 server(prio9,Endpoint{{R}}) + client(prio8,Endpoint{{W}}); msg={:#x} reply={:#x}\n",
+        R1_MSG, R1_REPLY
+    );
+}
+
 fn p3_user_demo() {
     let mmu = arch_aarch64::Mmu;
     extern "C" {
@@ -6065,6 +6348,59 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
                 }
             }
         }
+        // R1 (M5.0) — cap-gated synchronous IPC. CALL and (endpoint) RECV can BLOCK the
+        // caller, so — like SYS_WAIT — they are handled HERE (they may return a DIFFERENT
+        // thread's SP via the proven switch_to path), not in `syscall_dispatch`. Both
+        // resolve the Endpoint from the caller's OWN CSpace and FAIL CLOSED (RC_DENIED)
+        // with no rendezvous when the cap is missing / wrong-type / insufficient-rights.
+        if num == SYS_CALL {
+            // Call needs the W (send) right. On a cap failure return immediately (no block).
+            match resolve_ep_cap(a0 as usize, caps::W) {
+                Err(rc) => {
+                    unsafe { *frame.add(0) = rc };
+                    return frame as usize; // FAIL CLOSED: no message, no rendezvous
+                }
+                Ok((i, g)) => match ipc::call(i, g, a1, cur) {
+                    ipc::IpcOut::Rc(rc) => {
+                        unsafe { *frame.add(0) = rc };
+                        return frame as usize;
+                    }
+                    ipc::IpcOut::Ready(w) => {
+                        unsafe { *frame.add(0) = w }; // (defensive; Call always blocks)
+                        return frame as usize;
+                    }
+                    ipc::IpcOut::Block => {
+                        scheduler::block_current(); // blocked until a REPLY wakes me
+                        let next = scheduler::on_tick(frame as usize);
+                        return switch_to(next);
+                    }
+                },
+            }
+        }
+        if num == SYS_EP_RECV {
+            // Recv needs the R (receive) right.
+            match resolve_ep_cap(a0 as usize, caps::R) {
+                Err(rc) => {
+                    unsafe { *frame.add(0) = rc };
+                    return frame as usize; // FAIL CLOSED
+                }
+                Ok((i, g)) => match ipc::recv_ep(i, g, cur) {
+                    ipc::IpcOut::Ready(w) => {
+                        unsafe { *frame.add(0) = w }; // a caller was already parked
+                        return frame as usize;
+                    }
+                    ipc::IpcOut::Rc(rc) => {
+                        unsafe { *frame.add(0) = rc };
+                        return frame as usize;
+                    }
+                    ipc::IpcOut::Block => {
+                        scheduler::block_current(); // blocked until a CALL rendezvous
+                        let next = scheduler::on_tick(frame as usize);
+                        return switch_to(next);
+                    }
+                },
+            }
+        }
         let ret = syscall_dispatch(num, a0, a1);
         unsafe { *frame.add(0) = ret };
         return frame as usize; // restore this frame in place, eret back to EL0
@@ -6090,6 +6426,7 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     // it on EVERY death path (restart AND kill below) so a later Signal can't write a
     // badge into its (about to be rebuilt / freed) trap frame.
     notify::detach_tcb(cur);
+    ipc::detach_tcb(cur); // R1: also unpark from any sync-IPC endpoint
     if EL0_SCHED_MODE.load(Ordering::Relaxed) {
         if let Some(rec) = scheduler::restart_rec(cur) {
         let n = scheduler::bump_restart(cur);
@@ -6191,6 +6528,15 @@ fn syscall_dispatch(num: u64, a0: u64, _a1: u64) -> u64 {
                     Ok(_meta) => abi::RC_OK,
                     Err(rc) => rc,
                 },
+                Err(rc) => rc,
+            }
+        }
+        SYS_REPLY => {
+            // R1 (M5.0) — Reply(EpCPtr{R}, word=x1): wake the served caller. NON-blocking
+            // (like SYS_SIGNAL), so it lives here. Needs the R right (the receive side of
+            // the endpoint); resolved from the replier's OWN CSpace, fail closed.
+            match resolve_ep_cap(a0 as usize, caps::R) {
+                Ok((i, g)) => ipc::reply(i, g, _a1),
                 Err(rc) => rc,
             }
         }

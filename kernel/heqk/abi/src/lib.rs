@@ -28,6 +28,17 @@ pub const SYS_SUBSCRIBE: u64 = 21; // Subscribe(TopicCPtr{R}): requires the R ri
 pub const SYS_TASK_EXIT: u64 = 22; // scheduler-aware clean exit of the current scheduled TCB
 pub const SYS_CAP_BADGE: u64 = 23; // reserved: read a cap's badge (kept for symmetry)
 
+// --- R1 sync-IPC ABI (M5.0): cap-gated SYNCHRONOUS rendezvous over an Endpoint ------
+// seL4-style Call/Recv/Reply. The Endpoint cap is a CPtr in x0, resolved from the
+// CALLER's OWN per-TCB CSpace (CORE-2); CALL requires the W (send) right, RECV/REPLY
+// require the R (receive) right. A missing / wrong-type / insufficient-rights cap fails
+// CLOSED with RC_DENIED before any rendezvous. `SYS_EP_RECV` is named distinctly from
+// the P12 topic `SYS_RECV = 20` (a different object) to avoid the number/name collision;
+// it is the endpoint-object receive of the synchronous IPC path.
+pub const SYS_CALL: u64 = 24; // Call(EpCPtr{W}, msg=x1): send msg + BLOCK until a REPLY; reply in x0
+pub const SYS_EP_RECV: u64 = 25; // Recv(EpCPtr{R}): block until a CALL rendezvous; returns msg in x0
+pub const SYS_REPLY: u64 = 26; // Reply(EpCPtr{R}, word=x1): wake the served caller with word; never blocks
+
 // --- P12 return codes (in x0). RC_OK = 0 so a bare `0` return stays "success". --
 pub const RC_OK: u64 = 0;
 pub const RC_DENIED: u64 = 1; // authority absent (ungranted subscribe/signal) — fail CLOSED
