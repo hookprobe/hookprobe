@@ -2021,6 +2021,24 @@ fn cm5_gem_rx_demo() {
         }
     }
     kprint!(" [P8] PASS — inline IPS: wire -> ring -> parser -> BPF verdict -> ENFORCE (forward :53 / drop :4444)\n");
+
+    // [P8-txburst] DETERMINISTIC TX measurement. Every tx_fail rate quoted from live
+    // traffic this session swung wildly (20% -> 9% -> 2% -> 9% across windows of the SAME
+    // boot) because this segment idles for 45 s at a stretch, so each window held only a
+    // few dozen frames — far too few to tell a real change from noise. A fixed-size burst
+    // removes the dependency on what happens to be on the wire, so a TX fix can be SHOWN
+    // to work instead of asserted. Frames are minimal broadcast with EtherType 0x88b5
+    // (IEEE 802.1 local experimental) — inert on the segment, nothing will answer them.
+    {
+        const N: u32 = 200;
+        let (ok, bad, tsr) = arch_aarch64::gem::tx_burst_selftest(N);
+        // Report parts-per-thousand: integer math, no float on this softfloat target.
+        let ppk = if N > 0 { (bad * 1000) / N } else { 0 };
+        kprint!(" [P8-txburst] {} — {} frames: {} sent / {} FAILED ({}.{}%), last_tsr={:#04x}\n",
+            if bad == 0 { "PASS" } else { "MEASURED" },
+            N, ok, bad, ppk / 10, ppk % 10, tsr);
+        kprint!("   [P8-txburst] tsr bits: 0x01=UBR(used-bit-read, HALTS) 0x04=RLE 0x10=TFC 0x40=UND 0x80=HRESP | 0x08 alone = timeout with a CLEAN status (ring saturation, not a latched halt)\n");
+    }
 }
 
 /// Measured-boot attestation: independently replay HBoot's event log and
