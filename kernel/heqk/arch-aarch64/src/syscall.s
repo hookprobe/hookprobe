@@ -142,9 +142,13 @@ gem_probe_stub:
 gem_probe_stub_end:
 
 // -------- P7c step 3b stage 2: EL0 GEM RX driver (poll the descriptor ring) --
+// NOTE: there are TWO EL0 RX scan stubs in this file (gem_rx_stub below, and
+// gem_ids_stub further down which the PRODUCTION sensor loop uses). BOTH hardcode the
+// ring depth and BOTH must track gem.rs `const NRX`.
+//
 // The RX hot path — the part that touches attacker-controlled packet data — runs
 // isolated at EL0, granted ONLY a Normal-NC window onto the descriptor ring
-// (0x1_4000_3000). It scans the 8 x 24-byte descriptors for a received frame
+// (0x1_4000_3000). It scans the 16 x 24-byte descriptors for a received frame
 // (word0 USED bit) and reports that descriptor's status word (word1 = EOF|SOF|
 // len), then exits. The kernel did the privileged one-time bring-up.
 .global gem_rx_stub
@@ -161,7 +165,7 @@ gem_rx_stub:
     ldr  w3, [x7]                 // desc[i].word0
     tbnz w3, #0, 2f               // USED (bit0) set -> frame received
     add  x2, x2, #1
-    cmp  x2, #8                   // NRX
+    cmp  x2, #128                  // NRX — MUST match gem.rs `const NRX` (see its doc comment)
     b.lo 1b
     add  x4, x4, #1               // no frame this pass; bounded spin + retry
     movz x9, #0x0400, lsl #16     // 0x400_0000 bound (~a second, to catch live traffic)
@@ -227,7 +231,11 @@ gem_ids_stub:
     ldr  w3, [x7]                 // desc[i].word0
     tbnz w3, #0, 2f               // USED?
     add  x2, x2, #1
-    cmp  x2, #8
+    cmp  x2, #128                  // NRX — MUST match gem.rs `const NRX`. NOTE: there are TWO
+                                  // RX scan stubs (gem_rx_stub AND gem_ids_stub, the one
+                                  // the PROD sensor loop uses). Updating only one silently
+                                  // strands the descriptors past the stale bound: the ring
+                                  // fills, they are never recycled, BNA fires and RX DIES.
     b.lo 1b
     add  x4, x4, #1
     movz x9, #0x0400, lsl #16     // ~1s spin bound
