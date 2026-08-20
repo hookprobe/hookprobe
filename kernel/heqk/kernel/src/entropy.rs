@@ -114,10 +114,24 @@ impl HwTrng {
 impl RawTrng for HwTrng {
     #[inline]
     fn next_word(&mut self) -> Option<u64> {
-        // Gate R: no hardware TRNG driver is wired yet (BCM2712 RNG200 =
-        // follow-up). Fail closed on ALL current targets. Deliberately no
-        // #[cfg(cm5)] shortcut to a timer/counter — that would be the seeded slip.
-        None
+        // On metal: the STRICT BCM2712 rng200 leaf. It shares HBoot's proven
+        // register map but NOT its policy — HBoot folds CNTPCT in and degrades to
+        // counter bytes so a wedged TRNG can never deadlock the boot chain, which
+        // is right for boot and wrong for keys. `next_word_strict` returns `None`
+        // for absent / wedged / NIST-failed / half-drained, so a device with a
+        // dead TRNG REFUSES rather than running weak (M4.2b review condition #6).
+        //
+        // Still deliberately NO shortcut to a timer/counter on any target — that
+        // would be the seeded slip. Off-cm5 there is no rng200, so this stays
+        // fail-closed by construction.
+        #[cfg(feature = "cm5")]
+        {
+            arch_aarch64::rng200::next_word_strict()
+        }
+        #[cfg(not(feature = "cm5"))]
+        {
+            None
+        }
     }
 }
 

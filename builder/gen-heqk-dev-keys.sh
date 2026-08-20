@@ -22,7 +22,11 @@ ROOT="$(cd "$HERE/.." && pwd)"
 KEYDIR="${1:-$ROOT/builder/.heqk-dev-keys}"
 SIGNER_DIR="$ROOT/builder/heqk-sign"
 SIGNER="$SIGNER_DIR/target/release/heqk-sign"
-TRUSTED_DST="$ROOT/kernel/heqk/hboot/src/trusted_keys.rs"
+# The boot trust root moved OUT of the now-deleted hboot/src/trusted_keys.rs into the SHARED
+# boot-abi verifier (one root for boot-time verify + M3.4 OTA pre-flight). Installing to the old
+# path silently orphaned the keys: hboot kept compiling the PREVIOUS pubkeys while mkimage-hboot.sh
+# signed with the NEW ones, so the board would fail signature verification and park on boot.
+TRUSTED_DST="$ROOT/kernel/heqk/boot-abi/src/verify.rs"
 REG="$ROOT/builder/heqk-dev-key-fingerprints.txt"
 
 # Build the in-tree signer if needed (host tool, stable toolchain).
@@ -38,10 +42,42 @@ echo "== generating DEV boot keys into $KEYDIR"
 [ -f "$KEYDIR/trusted_keys.rs" ] || { echo "FATAL: keygen did not emit trusted_keys.rs" >&2; exit 1; }
 
 echo "== installing matching compiled-in boot pubkeys -> $TRUSTED_DST"
-cp "$KEYDIR/trusted_keys.rs" "$TRUSTED_DST"
+# SPLICE (never `cp`): verify.rs carries the verification LOGIC as well as the two roots, and it
+# names them TRUSTED_*_PUBKEY while `heqk-sign keygen` emits *_PUBKEY. Overwriting the file would
+# delete the verifier; so rewrite ONLY the two byte arrays in place, fail-closed if either the
+# source key or the destination constant is not found.
+python3 - "$KEYDIR/trusted_keys.rs" "$TRUSTED_DST" <<'PYSPLICE'
+import re, sys, pathlib
+src, dst = (pathlib.Path(a) for a in sys.argv[1:3])
+stxt, dtxt = src.read_text(), dst.read_text()
+
+def grab(txt, name):
+    m = re.search(r'pub const %s\s*:\s*\[u8;\s*32\]\s*=\s*\[(.*?)\];' % name, txt, re.S)
+    if not m:
+        sys.exit(f"FATAL: {name} not found in {src}")
+    b = [int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', m.group(1))]
+    if len(b) != 32:
+        sys.exit(f"FATAL: {name} is {len(b)} bytes, expected 32")
+    return b
+
+def fmt(b):
+    rows = ["    " + " ".join(f"0x{x:02x}," for x in b[i:i+16]) for i in range(0, 32, 16)]
+    return "\n".join(rows)
+
+for srcname, dstname in (("ED25519_PUBKEY", "TRUSTED_ED25519_PUBKEY"),
+                         ("SLHDSA_PUBKEY", "TRUSTED_SLHDSA_PUBKEY")):
+    body = fmt(grab(stxt, srcname))
+    pat = re.compile(r'(pub const %s\s*:\s*\[u8;\s*32\]\s*=\s*\[)(.*?)(\];)' % dstname, re.S)
+    if not pat.search(dtxt):
+        sys.exit(f"FATAL: {dstname} not found in {dst} — trust-root layout changed, refusing")
+    dtxt = pat.sub(lambda m: m.group(1) + "\n" + body + "\n" + m.group(3), dtxt, count=1)
+
+dst.write_text(dtxt)
+print(f"  spliced 2 boot pubkeys into {dst}")
+PYSPLICE
 
 echo "== registering new dev-key fingerprints in $REG (so the release gate rejects them)"
-python3 - "$TRUSTED_DST" "$REG" <<'PY'
+python3 - "$KEYDIR/trusted_keys.rs" "$REG" <<'PY'
 import sys, re, hashlib, pathlib, datetime
 src, reg = sys.argv[1], sys.argv[2]
 txt = pathlib.Path(src).read_text()
