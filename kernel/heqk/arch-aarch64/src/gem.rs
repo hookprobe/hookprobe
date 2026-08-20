@@ -36,6 +36,36 @@ const NCFGR: usize = 0x004; // Network Config
 const NSR: usize = 0x008; // Network Status
 const DMACFG: usize = 0x010; // DMA Config (GEM)
 const TSR: usize = 0x014; // Transmit Status
+// TSR bits (Cadence GEM). ALL of these except TGO are write-1-to-clear, and the
+// error ones HALT the transmitter until cleared — which is why they must be handled
+// rather than defined and ignored (they were, until the 2026-08-20 metal run).
+const TSR_UBR: u32 = 1 << 0; // Used Bit Read: HW read a descriptor with USED=1 -> TX STOPS
+const TSR_COL: u32 = 1 << 1; // collision occurred
+const TSR_RLE: u32 = 1 << 2; // retry limit exceeded -> TX STOPS
+const TSR_TGO: u32 = 1 << 3; // transmit go (status, read-only — never W1C this)
+const TSR_TFC: u32 = 1 << 4; // frame corruption / buffers exhausted mid-frame -> TX STOPS
+const TSR_TXCOMP: u32 = 1 << 5; // transmit complete
+const TSR_UND: u32 = 1 << 6; // transmit underrun -> TX STOPS
+const TSR_HRESP: u32 = 1 << 7; // HRESP not OK -> TX STOPS
+/// Every W1C bit (TGO excluded: it is read-only status, not a latch).
+const TSR_W1C: u32 = TSR_UBR | TSR_COL | TSR_RLE | TSR_TFC | TSR_TXCOMP | TSR_UND | TSR_HRESP;
+/// The subset that HALTS the transmitter — seeing any of these means TX will stay
+/// dead for every subsequent frame until it is cleared AND the transmitter restarted.
+const TSR_HALTING: u32 = TSR_UBR | TSR_RLE | TSR_TFC | TSR_UND | TSR_HRESP;
+
+/// Last TX status that accompanied a failure, latched for diagnostics (0 = none since
+/// the last take). Lets the sensor report WHY a PASS frame was not forwarded instead of
+/// reporting an anonymous timeout.
+static mut LAST_TX_ERR: u32 = 0;
+
+/// Read-and-clear the last TX error status (see `LAST_TX_ERR`).
+pub fn tx_err_take() -> u32 {
+    unsafe {
+        let v = core::ptr::read_volatile(core::ptr::addr_of!(LAST_TX_ERR));
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_TX_ERR), 0);
+        v
+    }
+}
 const RBQP: usize = 0x018; // RX buffer queue base (low)
 const TBQP: usize = 0x01c; // TX buffer queue base (low)
 const RSR: usize = 0x020; // Receive Status
@@ -587,16 +617,52 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         write_volatile(d.add(1), (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
         core::arch::asm!("dsb sy"); // ensure the armed descriptor is in DRAM before TSTART
     }
+    // Clear any status latched by the PREVIOUS frame before kicking. TSR error bits are
+    // sticky and halting: leaving one set means this transmit — and every one after it —
+    // silently never completes. The 2026-08-20 CM5 run showed ~7-9% of PASS frames
+    // failing in CLUSTERS, which is the signature of a latched halt rather than a
+    // per-frame probability: TX stops, a run of frames times out, something incidentally
+    // restarts it, then a clean stretch (48 consecutive successes were observed).
+    let pre = r(GEM, TSR);
+    if pre & TSR_W1C != 0 {
+        w(GEM, TSR, pre & TSR_W1C); // W1C — never write TSR_TGO (read-only status)
+    }
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
     loop {
         let ctrl = unsafe { read_volatile(d.add(1)) };
         if ctrl & TXD_USED != 0 {
+            // Completed. Still clear TXCOMP/COL so they cannot accumulate into the next
+            // frame's `pre` read and be mistaken for a fresh error.
+            let post = r(GEM, TSR);
+            if post & TSR_W1C != 0 {
+                w(GEM, TSR, post & TSR_W1C);
+            }
             return Some(ctrl);
         }
         spins += 1;
         if spins >= 500_000 {
+            // Timed out. Record WHY, then RECOVER: clear the latched status and bounce
+            // the transmit enable so a halted TX engine does not take every subsequent
+            // frame down with it. Without this the failure is self-perpetuating.
+            let err = r(GEM, TSR);
+            unsafe {
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!(LAST_TX_ERR),
+                    if err == 0 { TSR_TGO } else { err }, // 0 => "timeout, TSR clean"
+                );
+            }
+            if err & TSR_W1C != 0 {
+                w(GEM, TSR, err & TSR_W1C);
+            }
+            if err & TSR_HALTING != 0 {
+                // TE low then high restarts the transmitter (RE is left up so RX — the
+                // detection path — is never interrupted by a TX-side recovery).
+                w(GEM, NCR, NCR_RE | NCR_MPE);
+                unsafe { core::arch::asm!("dsb sy") };
+                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
+            }
             return None;
         }
     }
