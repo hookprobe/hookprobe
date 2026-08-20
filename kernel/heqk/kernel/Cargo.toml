@@ -117,6 +117,18 @@ prod = ["hboot"]
 #
 #   cargo build -p kernel --features prod-full --release
 prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
+# rollback-test — M1 CRITERION 4 ONLY. Arms the firmware's one-shot tryboot flag and
+# resets, so the NEXT boot loads tryboot.txt (SLOT B) instead of config.txt (SLOT A).
+#
+# ⚠️ THIS IMAGE DELIBERATELY REBOOTS ITSELF. It exists to prove forced-bad-boot rollback
+# and MUST NOT ship. It also LOOPS by construction: after the rollback returns to SLOT A,
+# this same image arms tryboot again. That is intentional — each cycle is a complete
+# demonstration — but it means the operator observes a cycle or two, powers off, and
+# reflashes a normal image. There is no brick path: SLOT A is always the known-good
+# image and the tryboot flag is one-shot, so the board can only ever land back on A.
+#
+#   cargo build -p kernel --features rollback-test --release
+rollback-test = ["prod"]
 
 [[bin]]
 name = "kernel"
