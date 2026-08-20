@@ -1,6 +1,11 @@
 # HANDOFF — GEM TX failure on CM5 (open)
 
-**Status:** 🔴 OPEN. **Owner:** unassigned — pick this up with fresh eyes.
+**Status:** 🔴 OPEN — **three fix attempts spent, all verified negative on metal.**
+**Owner:** unassigned — pick this up with fresh eyes.
+
+> **Read §3 before proposing anything.** An entire class of fix (halt-recovery ordering)
+> is already excluded by measurement. The most valuable thing this note carries is what
+> has been ruled OUT.
 **Date:** 2026-08-20 · **Branch:** `worktree-heqk-premetal-gaps` · **Board:** CM5, zero-Linux boot partition.
 
 ---
@@ -54,19 +59,39 @@ claim was wrong and is corrected here.)*
 | **v1** `2c0b342` | `TSR` was DEFINED AND NEVER READ. Clear latched status before arming; recover (bounce `TE`) on timeout | live traffic **8.8% → 1.9%** | **Real fix, keep it.** The register was simply never serviced |
 | **v2** `34122ea` | Also restart on the **success** path | **100/200, `tsr=0x08`** | **Wrong — reverted.** Re-enables `TE` while the descriptor still reads `USED=1`, so the engine instantly re-latches UBR and halts again before the next frame |
 | **v3** `93dcbfd` | Revert v2 — clear only, restart solely on timeout | **100/200, `tsr=0x01`** | Correct handling but insufficient: the halt stands, the next frame's `TSTART` hits a dead engine, only its timeout recovers |
-| **v4** (this branch) | Move recovery to **after arming, before the kick** | ⬜ **UNVERIFIED** | Hypothesis: with the descriptor already armed (`USED=0`, real work present), re-enabling `TE` gives the controller something to find instead of an idle slot to re-halt on |
+| **v4** `b25b971` | Move recovery to **after arming, before the kick** | **100/200, `tsr=0x08`** | **Verified NEGATIVE.** Arming first did not help either |
 
-**Opposite policies (v2 restart-early, v3 never-restart) produced the identical 50%.**
-That is the strongest single clue: the fault is not the recovery *policy* but the
-*sequence position* at which recovery happens relative to arming.
+### ⛔ RULED OUT: halt-recovery policy, in any ordering
+
+**THREE different recovery policies produced EXACTLY 100/200 each:**
+
+| Policy | `last_tsr` |
+|---|---|
+| v2 — restart immediately after completion | `0x08` |
+| v3 — never restart on the success path | `0x01` |
+| v4 — restart after arming, before the kick | `0x08` |
+
+Restarting early, late, and not at all all give the identical alternation. **Do not spend
+another metal cycle on halt/restart ordering** — the fault is upstream of recovery. Only
+the latched *status bit* changes with policy; the 50% does not move.
 
 ---
 
 ## 4. Where to go next, in order of expected value
 
-1. **Verify or kill v4.** Flash, read `[P8-txburst]`. `200/200` = solved. Still `100/200` =
-   the ordering hypothesis is wrong too, and the halt/restart approach is a dead end —
-   go to (2).
+1. **Missed / ignored `TSTART` under back-to-back kicks — TEST THIS FIRST.** It is the
+   only hypothesis that explains alternation *independently of recovery policy*, and it is
+   cheap. In the burst loop the next `TSTART` is written microseconds after the previous
+   frame completed, while the controller may still be finishing internal work (descriptor
+   writeback, the wrap read). If that `TSTART` is dropped, the frame never starts, the poll
+   burns its full budget, and the *next* call succeeds because the engine has settled —
+   exactly the observed alternation, and exactly why no recovery ordering changes it.
+   - **Cheapest probe:** re-issue `TSTART` periodically *inside* the poll loop (say every
+     ~10k spins) instead of kicking once. If a dropped kick is the cause, failures should
+     collapse immediately. This is a handful of lines in `tx_frame` and needs one flash.
+   - **Second probe:** insert a bounded settle delay between completion and the next kick
+     and see whether the 50% moves. If a delay fixes it, it is a timing/kick problem, not
+     a descriptor problem.
 2. **Asynchronous multi-descriptor TX.** `NTX` → 8, `TXD_WRAP` on the last descriptor
    only, round-robin arming, and crucially **do not block per frame** — arm, return,
    reap completions lazily. This removes the drain-halt from the steady-state path
