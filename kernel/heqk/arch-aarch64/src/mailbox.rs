@@ -140,6 +140,103 @@ pub fn get_clock_rate(clock_id: u32) -> Option<u32> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reboot flags — the ON-DEVICE `tryboot` mechanism (M1 criterion 4 / M3 OTA).
+//
+// `reboot "0 tryboot"` on Linux is NOT a magic userspace string: it is two VideoCore
+// mailbox properties. From the reference driver, Linux
+// drivers/firmware/raspberrypi.c:204 (source in builder/kernel-build/linux-rpi-*.tar.gz):
+//
+//     // 'tryboot': Sets a one-shot flag which is cleared upon reboot and
+//     //           causes the tryboot.txt to be loaded instead of config.txt
+//     if (data && strstr(data, " tryboot"))
+//             reboot_flags |= 0x1;
+//     if (reboot_flags)
+//             rpi_firmware_property(fw, RPI_FIRMWARE_SET_REBOOT_FLAGS, ...);
+//     rpi_firmware_property(fw, RPI_FIRMWARE_NOTIFY_REBOOT, NULL, 0);
+//
+// Tag numbers from include/soc/bcm2835/raspberrypi-firmware.h:
+//     RPI_FIRMWARE_NOTIFY_REBOOT    = 0x00030048
+//     RPI_FIRMWARE_GET_REBOOT_FLAGS = 0x00030064
+//     RPI_FIRMWARE_SET_REBOOT_FLAGS = 0x00038064
+//
+// The flag is ONE-SHOT: the firmware clears it as it consumes it, so exactly one boot
+// uses tryboot.txt (SLOT B) and any subsequent boot falls back to config.txt (SLOT A).
+// That is what makes A/B rollback safe without a host PC.
+
+/// The tryboot one-shot bit in the firmware's reboot-flags word.
+pub const REBOOT_FLAG_TRYBOOT: u32 = 0x1;
+
+/// GET_REBOOT_FLAGS (0x00030064). Returns the firmware's current reboot-flags word.
+///
+/// Lets the tryboot path be verified NON-DESTRUCTIVELY (set, read back, clear) before it
+/// is ever used to actually reboot the board.
+pub fn get_reboot_flags() -> Option<u32> {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // [size, req, tag, val_size(4), code, value, end]
+        let req = [0x1Cu32, 0, 0x0003_0064, 4, 0, 0, 0];
+        for (i, &v) in req.iter().enumerate() {
+            write_volatile(buf.add(i), v);
+        }
+        if !transact(7) {
+            return None;
+        }
+        Some(read_volatile(buf.add(5)))
+    }
+}
+
+/// SET_REBOOT_FLAGS (0x00038064). Returns the flags word the firmware reports back.
+///
+/// Pass `REBOOT_FLAG_TRYBOOT` to arm the one-shot; pass 0 to disarm it again.
+pub fn set_reboot_flags(flags: u32) -> Option<u32> {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        let req = [0x1Cu32, 0, 0x0003_8064, 4, 0, flags, 0];
+        for (i, &v) in req.iter().enumerate() {
+            write_volatile(buf.add(i), v);
+        }
+        if !transact(7) {
+            return None;
+        }
+        Some(read_volatile(buf.add(5)))
+    }
+}
+
+/// NOTIFY_REBOOT (0x00030048): tell the firmware a reboot is imminent, so it can commit
+/// any pending state (including the reboot flags) before the SoC resets. Linux issues
+/// this on EVERY reboot, flags or not (raspberrypi.c:222).
+pub fn notify_reboot() -> bool {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // Zero-length value buffer.
+        let req = [0x18u32, 0, 0x0003_0048, 0, 0, 0];
+        for (i, &v) in req.iter().enumerate() {
+            write_volatile(buf.add(i), v);
+        }
+        transact(6)
+    }
+}
+
+/// NON-DESTRUCTIVE proof that the tryboot mechanism is reachable from heqk: read the
+/// current flags, arm the tryboot one-shot, read it back, then DISARM it and confirm.
+///
+/// Returns `(before, armed_readback, after_disarm)`. Nothing reboots — this deliberately
+/// verifies the mailbox path BEFORE it is used to actually trial a candidate slot, so a
+/// failure here is a console line rather than a board that boots somewhere unexpected.
+///
+/// SAFETY NOTE: the flag is left DISARMED on exit. If this function is interrupted between
+/// arm and disarm, the next reset would consume the one-shot and boot tryboot.txt (SLOT B)
+/// exactly once, then fall back to SLOT A by itself.
+pub fn tryboot_roundtrip() -> (Option<u32>, Option<u32>, Option<u32>) {
+    let before = get_reboot_flags();
+    let _ = set_reboot_flags(REBOOT_FLAG_TRYBOOT);
+    let armed = get_reboot_flags();
+    let _ = set_reboot_flags(0);
+    let after = get_reboot_flags();
+    (before, armed, after)
+}
+
 /// SET_POWER_STATE (0x00028001): power a device domain. `state` bit0=on, bit1=wait.
 /// Returns the resulting state, or None.
 pub fn set_power_state(device_id: u32, on: bool) -> Option<u32> {
