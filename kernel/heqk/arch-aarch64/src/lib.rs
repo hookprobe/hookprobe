@@ -31,6 +31,10 @@ pub mod rp1_spi;
 pub mod rp1_uartp;
 #[cfg(feature = "cm5")]
 pub mod rtl8111;
+// The STRICT (fail-closed, never counter-seeded) rng200 leaf behind the kernel's
+// production entropy source. Distinct policy from hboot::rng — see rng200.rs.
+#[cfg(feature = "cm5")]
+pub mod rng200;
 #[cfg(feature = "cm5")]
 pub mod cyw43;
 // P15 — eMMC block storage: base-parameterized SDHCI + read-only eMMC driver.
