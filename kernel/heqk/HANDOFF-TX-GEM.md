@@ -28,16 +28,23 @@ live traffic** (see §5).
 
 ---
 
-## 2. Root cause (established, high confidence)
+## 2. Root cause — PARTIALLY established. Read the caveat.
 
-`NTX = 1` — `gem.rs`, literally commented *"single-descriptor synchronous TX
-(send-one, poll-complete)"*.
+**Observed and certain:** `NTX = 1` (`gem.rs`, commented *"single-descriptor synchronous
+TX (send-one, poll-complete)"*). With one descriptor carrying `TXD_WRAP`, the controller
+finishes a frame, wraps straight back to that same descriptor, reads `USED=1`, and latches
+**`TSR.UBR`** (Used Bit Read), which halts the transmitter. `txerr=0x01` on metal confirms
+UBR really is being latched.
 
-With one descriptor carrying `TXD_WRAP`, the controller finishes a frame, wraps straight
-back to that same descriptor, reads `USED=1`, latches **`TSR.UBR`** (Used Bit Read) and
-**halts the transmitter**. This happens after *every single transmit*.
+**⚠️ CAVEAT — do not treat the rest as settled.** The natural follow-on story is "the halt
+costs one frame, hence alternation." **Three fixes built on that story all failed** (§3).
+In particular v4 recovered *after the descriptor was already armed*, which on that story
+should have avoided the per-frame cost entirely — and the number did not move at all.
 
-Recovery — whenever and however it happens — costs exactly one frame. Hence alternation.
+So either the halt is **not** what costs the frame, or something else stalls the very next
+transmit independently of the halt. **The UBR observation is solid; the causal chain from
+UBR to the 50% is NOT.** That is precisely why the missed-`TSTART` hypothesis (§4.1) is
+now ranked first: it explains the alternation *without* relying on the halt at all.
 
 ### Why depth alone does NOT fix it
 
