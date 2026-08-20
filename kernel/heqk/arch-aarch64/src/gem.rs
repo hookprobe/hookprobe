@@ -633,11 +633,30 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     loop {
         let ctrl = unsafe { read_volatile(d.add(1)) };
         if ctrl & TXD_USED != 0 {
-            // Completed. Still clear TXCOMP/COL so they cannot accumulate into the next
+            // Completed. Clear the latched status so it cannot accumulate into the next
             // frame's `pre` read and be mistaken for a fresh error.
             let post = r(GEM, TSR);
             if post & TSR_W1C != 0 {
                 w(GEM, TSR, post & TSR_W1C);
+            }
+            // UBR IS EXPECTED HERE, EVERY TIME. This ring has exactly ONE descriptor with
+            // TXD_WRAP set, so the moment the frame goes out the GEM wraps back to that
+            // same descriptor, reads it with USED=1, latches TSR.UBR and HALTS the
+            // transmitter. Metal (2026-08-20, boot 2) confirmed it: the very first
+            // heartbeat reported txerr=0x01 = TSR_UBR.
+            //
+            // Clearing the latch does NOT restart a halted engine — so before this, the
+            // next frame's TSTART landed on a dead transmitter and timed out, and only
+            // the TIMEOUT path bounced TE and recovered. That is the whole burst pattern:
+            // halt -> a run of timeouts -> incidental recovery -> clean stretch.
+            //
+            // Restore the transmitter to a RUNNING state here, on the success path, so
+            // the next frame never starts against a halted engine. RE stays up
+            // throughout: a TX-side recovery must never interrupt RX, the detection path.
+            if post & TSR_HALTING != 0 {
+                w(GEM, NCR, NCR_RE | NCR_MPE);
+                unsafe { core::arch::asm!("dsb sy") };
+                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
             }
             return Some(ctrl);
         }
@@ -666,6 +685,35 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
             return None;
         }
     }
+}
+
+/// Deterministic TX burst — send `n` minimal frames back-to-back and report
+/// `(sent_ok, failed, last_tsr)`.
+///
+/// WHY: the tx_fail rate was previously only measurable against whatever happened to be
+/// on the wire, and that link goes idle for 45 s at a stretch — every rate estimate off
+/// it was drawn from a few dozen frames and moved wildly (20% -> 9% -> 2% -> 9% across
+/// successive windows of the same boot). A fixed-size burst makes the measurement
+/// independent of traffic, so a fix can actually be shown to work.
+///
+/// The frame is a minimal broadcast Ethernet frame with an unregistered EtherType, so it
+/// is inert on the segment (no IP, no ARP semantics, nothing will answer it).
+pub fn tx_burst_selftest(n: u32) -> (u32, u32, u32) {
+    let mut frame = [0u8; 60];
+    frame[0..6].copy_from_slice(&[0xff; 6]); // broadcast dst
+    frame[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]); // locally-administered src
+    frame[12] = 0x88; // EtherType 0x88b5 = IEEE 802.1 local experimental (inert)
+    frame[13] = 0xb5;
+    let (mut ok, mut bad) = (0u32, 0u32);
+    for i in 0..n {
+        frame[14] = (i & 0xff) as u8; // vary the payload so it is not a constant frame
+        if tx_frame(&frame).is_some() {
+            ok += 1;
+        } else {
+            bad += 1;
+        }
+    }
+    (ok, bad, tx_err_take())
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
