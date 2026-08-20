@@ -3,17 +3,30 @@
 # then write a boot partition that contains ONLY heqk artifacts.
 #
 # Difference from flash-now.sh: that script only ADDS heqk files and leaves every
-# Linux file in place (kernels, initramfs, dtbs, overlays, the config.txt backup) —
-# ~102 MB of Linux boot artifacts stay resident, plus the whole Debian rootfs on
-# part2. This script removes them from the BOARD, having first copied them to the
-# host so they remain available as a working reference.
+# Linux file in place (kernels, initramfs, dtbs, overlays, the config.txt backup).
+# This script removes them from the BOARD, having first copied them to the host so
+# they remain available as a working reference.
+#
+# HOW MUCH Linux is actually resident depends on the board's history — measure, do
+# not assume. On the first real CM5 run (2026-08-20) the boot partition held only
+# 8.2 MB and NO Linux kernel or initramfs at all: it had already been heqk-flashed in
+# a prior session, and the disk had a single 512 MB partition with no Debian rootfs.
+# The "~102 MB of boot artifacts" figure quoted elsewhere describes the repo's
+# cm5-boot/linux-boot-backup/ directory, NOT necessarily what is on your device.
 #
 # ORDER IS DELIBERATE — archive, verify the archive, THEN destroy. Nothing is
 # removed from the eMMC until its copy on the host has been read back.
 #
 # ── Recovery, if heqk does not boot ──────────────────────────────────────────────
-# The CM5's boot firmware lives in SPI EEPROM, NOT on the FAT partition, so wiping
-# part1 cannot brick the board: rpiboot always re-enumerates the eMMC.
+# rpiboot always re-enumerates the eMMC (the boot ROM path does not depend on the FAT
+# contents), so a bad partition cannot permanently brick the board.
+#
+# NOTE: the BCM2712 bootloader itself lives in SPI EEPROM, but a real CM5 boot
+# partition can still carry Pi PLATFORM firmware (bootcode.bin / start4.elf /
+# fixup4.dat). The first run of this script wiped those, because the wipe is
+# indiscriminate and only heqk files were written back — they had to be restored by
+# hand before power-cycling. They are now restored unconditionally (see below);
+# do NOT reintroduce the assumption that the FAT partition holds nothing needed.
 #   1. Fit the nRPIBOOT jumper, power-cycle.
 #   2. sudo ./flash-clean.sh --restore <archive-dir>     # puts Linux back
 # The archive written by this script is exactly what --restore consumes.
@@ -31,7 +44,15 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 USBBOOT="$HERE/../tools/usbboot"
-ARCHIVE_ROOT="${HEQK_ARCHIVE_ROOT:-$HOME/heqk-linux-reference}"
+# This script runs under sudo, so $HOME is root's. Archive under the INVOKING user's
+# home so the reference is where they can actually read it (and is not root-owned in
+# /root). $SUDO_USER is set by sudo; fall back to $HOME when run as real root.
+_INVOKER_HOME="$HOME"
+if [ -n "${SUDO_USER:-}" ]; then
+  _INVOKER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  [ -n "$_INVOKER_HOME" ] || _INVOKER_HOME="$HOME"
+fi
+ARCHIVE_ROOT="${HEQK_ARCHIVE_ROOT:-$_INVOKER_HOME/heqk-linux-reference}"
 
 KEEP_DTB=1
 WITH_ROOTFS=0
@@ -128,7 +149,7 @@ else
 fi
 
 # ── 2. WIPE the boot partition, then write ONLY heqk ────────────────────────────
-echo "== wiping the boot partition (firmware lives in SPI EEPROM, not here)"
+echo "== wiping the boot partition (Pi platform firmware is restored immediately after)"
 mount "$D1" "$MNT"
 find "$MNT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
@@ -149,6 +170,18 @@ else
   echo "   TRUE zero-Linux: no .dtb, no dtparam= (RTL8111/eth1 will NOT be trained)"
 fi
 
+# Raspberry Pi PLATFORM firmware is NOT Linux and is NOT ours to remove — any OS on
+# this board may need it, and it is what the boot ROM/EEPROM chain consumes before a
+# kernel exists. The first run of this script wiped bootcode.bin/start4.elf/fixup4.dat
+# off a real CM5 because the wipe is indiscriminate and only heqk files were written
+# back; they had to be restored by hand from the archive before power-cycling. Restore
+# them unconditionally now, from the archive we just verified.
+for _fw in bootcode.bin start4.elf start.elf fixup4.dat fixup.dat; do
+  if tar -xf "$ARCH/bootpart.tar" -C "$MNT" "./$_fw" 2>/dev/null; then
+    echo "   restored platform firmware: $_fw (Pi firmware, not Linux)"
+  fi
+done
+
 cp -f "$HERE/heqk8.img" "$MNT/heqk8.img"
 [ -f "$HERE/heqk8-b.img" ] && cp -f "$HERE/heqk8-b.img" "$MNT/heqk8-b.img"
 [ -f "$HERE/tryboot.txt" ] && cp -f "$HERE/tryboot.txt" "$MNT/tryboot.txt"
@@ -158,7 +191,7 @@ echo "== boot partition now contains ONLY:"
 ls -la "$MNT" | sed 's/^/     /'
 echo "== kernel line:"; grep -E 'kernel=|pciex4|device_tree' "$MNT/config.txt" | sed 's/^/     /'
 LEFTOVER="$(find "$MNT" -maxdepth 1 -type f \( -name 'kernel*.img' -o -name 'initramfs*' -o -name 'cmdline.txt' \) | grep -v heqk8 || true)"
-[ -z "$LEFTOVER" ] && echo "     (no Linux kernel/initramfs/cmdline present)" || { echo "WARN: Linux artifacts remain:"; echo "$LEFTOVER"; }
+[ -z "$LEFTOVER" ] && echo "     (no Linux kernel/initramfs/cmdline present; Pi platform firmware is retained BY DESIGN)" || { echo "WARN: Linux artifacts remain:"; echo "$LEFTOVER"; }
 umount "$MNT"
 
 echo ""
