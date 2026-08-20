@@ -125,6 +125,37 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puthash(&hboot_self);
     puts("\n");
 
+    // ── A/B SAFETY NET — ARM BEFORE ANYTHING THAT CAN park() ─────────────────────
+    //
+    // FOUND ON METAL, 2026-08-20 (the M1 criterion-4 rollback test). The trial watchdog
+    // used to be armed only AFTER verification succeeded, but EVERY verification-failure
+    // path calls park(), which halts EL2 forever. So a candidate slot that FAILED to
+    // verify left the board HUNG rather than rolling back — observed directly: SLOT B was
+    // corrupted, hboot correctly printed
+    //     verify : ed25519  OK / verify : SLH-DSA FAIL
+    //     secure boot: FAIL — hybrid signature invalid, refusing to boot
+    // and then the console went silent. No timer was running, so nothing reset the SoC and
+    // the consumed one-shot never got the chance to boot the known-good slot.
+    //
+    // The watchdog covered "valid signature, bad kernel" but NOT "invalid signature",
+    // which is the more likely OTA failure (a corrupted or truncated download). For M3's
+    // on-device OTA that meant a bad update could STRAND the device, needing physical
+    // rpiboot recovery — defeating the entire point of A/B.
+    //
+    // Arm the safety net FIRST, so every failure below (bad magic, insane size, bad load
+    // geometry, signature failure, post-relocation re-hash mismatch) ends in a reset ->
+    // the consumed one-shot -> config.txt -> the known-good slot. The mailbox is already
+    // live above (board_serial), so the PM block is reachable at this point.
+    //
+    // It is RE-ARMED before the EL1 handoff below, so a healthy kernel still gets a full
+    // window in which to hvc#1-confirm. `arm()` is a plain register write and is safely
+    // idempotent.
+    const TRIAL_WDOG_SECS: u32 = 15;
+    let wdog_secs_early = watchdog::arm(TRIAL_WDOG_SECS);
+    puts(" a/b    : safety watchdog armed BEFORE verify ");
+    puthex(wdog_secs_early as u64);
+    puts("s — any refusal below now RESETS to the known-good slot instead of hanging\n");
+
     // Locate and validate the payload header.
     let hdr = (IMAGE_BASE + HBOOT_PAYLOAD_OFFSET) as *const PayloadHeader;
     let (magic, size, load_pa, entry_off, svn) = unsafe {
@@ -324,9 +355,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // before confirming trips the watchdog -> full SoC reset -> the firmware's
     // consumed one-shot `tryboot` flag boots the KNOWN-GOOD slot (config.txt).
     // Automatic A/B fallback with no mutable persistent store in HBoot.
-    const TRIAL_WDOG_SECS: u32 = 15;
+    // RE-ARM (it was already armed before verification, above) so the kernel gets a FULL
+    // window to bring its detection plane up and hvc#1-confirm, rather than inheriting
+    // whatever remained of the pre-verify budget.
     let wdog_secs = watchdog::arm(TRIAL_WDOG_SECS);
-    puts(" a/b    : trial watchdog armed ");
+    puts(" a/b    : trial watchdog re-armed ");
     puthex(wdog_secs as u64);
     puts("s — kernel must hvc#1-confirm or fall back to the known-good slot\n");
 
