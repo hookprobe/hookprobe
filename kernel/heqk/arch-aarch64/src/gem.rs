@@ -627,6 +627,32 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     if pre & TSR_W1C != 0 {
         w(GEM, TSR, pre & TSR_W1C); // W1C — never write TSR_TGO (read-only status)
     }
+    // RECOVER HERE — AFTER the descriptor is armed, BEFORE the kick. Ordering is the
+    // whole point, and two metal runs proved it:
+    //
+    // With NTX=1 the GEM finishes a frame, advances into the (now idle, USED=1)
+    // descriptor, latches UBR and HALTS. That happens after EVERY transmit — depth alone
+    // would not change it, because tx_frame arms exactly ONE descriptor and waits, so the
+    // controller always advances into an unarmed slot whatever the ring size.
+    //
+    // Restarting at the wrong moment does not help:
+    //   * restart AFTER COMPLETION (34122ea) re-enabled TE while the descriptor still
+    //     read USED=1, so the engine immediately re-latched UBR and halted again before
+    //     the next frame — burst measured 100/200, last_tsr=0x08;
+    //   * NO restart at all (93dcbfd) left the halt standing, so the next frame's TSTART
+    //     hit a dead engine and only its TIMEOUT recovered — burst measured 100/200,
+    //     last_tsr=0x01.
+    // Same 50% alternation from opposite policies, one root cause.
+    //
+    // Here the descriptor is ALREADY armed (USED=0, real work present), so bringing TE
+    // back up gives the controller something to find instead of an idle slot to re-halt
+    // on. RE stays up throughout: a TX-side recovery must never interrupt RX, which is
+    // the detection path.
+    if pre & TSR_HALTING != 0 {
+        w(GEM, NCR, NCR_RE | NCR_MPE);
+        unsafe { core::arch::asm!("dsb sy") };
+        w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
+    }
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
