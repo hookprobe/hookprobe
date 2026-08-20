@@ -104,6 +104,19 @@ p15-write = ["arch-aarch64/p15-write", "boot-abi/otaverify"]
 # crash, and the loop NEVER halts. Implies hboot (metal, EL2-launched, measured boot).
 #   cargo build -p kernel --features prod --release
 prod = ["hboot"]
+# prod-full — the PH1 sensor loop PLUS the M3/M4/M6 subsystems actually WIRED IN.
+#
+# WHY THIS IS A SEPARATE FEATURE, not just added to `prod`: on the cm5 profile the
+# M3/M4/M6 entry points are only reachable from the QEMU self-test sequence that
+# `prod` replaces, so building `prod,p15-write,securechannel,netsvc` moves the binary
+# by EIGHTY BYTES — everything is dead-stripped. `prodfull.rs` is the missing caller.
+# Keeping it behind its own flag means the M1 flash image (`prod`) stays BYTE-IDENTICAL
+# to the one validated in QEMU, so the first-ever on-silicon run of the cm5 W^X mapping
+# is not confounded by newly-wired storage/crypto paths. Promote to `prod` only after
+# M1 is green on metal.
+#
+#   cargo build -p kernel --features prod-full --release
+prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
 
 [[bin]]
 name = "kernel"

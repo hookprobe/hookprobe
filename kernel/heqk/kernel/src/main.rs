@@ -63,6 +63,12 @@ mod enroll;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
+// prod-full — the missing METAL caller for M3/M4/M6. On the cm5 profile those
+// subsystems are only reachable from the QEMU self-test sequence that `prod`
+// replaces, so without this module they are dead-stripped out of the image
+// entirely (measured: +80 bytes for all three). See prodfull.rs.
+#[cfg(all(feature = "cm5", feature = "prod-full"))]
+mod prodfull;
 mod edge;
 mod notify;
 mod packet;
@@ -845,6 +851,12 @@ fn cm5_prod_service() -> ! {
     let hb_interval = cntfrq * 5;
     let t0 = prod_cntpct();
     let mut last_hb = t0;
+    // prod-full: bring up M3 persistence + establish the M4/M6 posture BEFORE the
+    // loop. Infallible by construction — any storage/crypto failure degrades to
+    // "no persistence" and the sensor still runs (PH1: never halts).
+    #[cfg(feature = "prod-full")]
+    let mut pf = prodfull::ProdFull::init();
+
     kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
@@ -854,6 +866,18 @@ fn cm5_prod_service() -> ! {
             last_hb = now;
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
+            // prod-full: throttled M3 persist (interval AND dirty — the reserved
+            // window is 32 sectors and every persist rewrites the same LBAs) plus
+            // the structural M6 export gate.
+            #[cfg(feature = "prod-full")]
+            {
+                let up = now.wrapping_sub(t0) / cntfrq;
+                let c = prodfull::Counters { seen, forwarded, dropped, tx_fail, faults, empty };
+                if pf.on_heartbeat(up, c, telemetry::score()) {
+                    kprint!("   [PROD-FULL] M3 persisted: boots={} seen={} drop={} events={} (sealed, LBA {}..)\n",
+                        pf.snap.boots, seen, dropped, pf.snap.nev, arch_aarch64::emmc::RESERVED_LBA_LO);
+                }
+            }
         }
         // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
         // iteration was contained by the EL0 fault handler; this reload is the
@@ -905,6 +929,20 @@ fn cm5_prod_service() -> ! {
         } else {
             // ENFORCE: threat verdict — dropped, NOT forwarded.
             dropped += 1;
+            // prod-full: the dropped frame becomes a persisted evidence event. The
+            // 16-byte image is the SAME encoding M6 exports, so a persisted record
+            // and an exported one are byte-identical (no re-encoding drift).
+            #[cfg(feature = "prod-full")]
+            {
+                let ev = events::Event {
+                    ts: now,
+                    src: 0,          // not flow-scoped here; the rule plane owns attribution
+                    rule_id: 0,      // packet::verdict does not surface the rule id at this seam
+                    severity: 0,
+                    verdict: packet::DROP as u8,
+                };
+                pf.on_threat(&ev);
+            }
         }
         arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
         // A processed-frame beat too, so a busy link reports progress between the ~5 s ticks.
