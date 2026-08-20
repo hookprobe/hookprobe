@@ -53,6 +53,10 @@ const TSR_W1C: u32 = TSR_UBR | TSR_COL | TSR_RLE | TSR_TFC | TSR_TXCOMP | TSR_UN
 /// dead for every subsequent frame until it is cleared AND the transmitter restarted.
 const TSR_HALTING: u32 = TSR_UBR | TSR_RLE | TSR_TFC | TSR_UND | TSR_HRESP;
 
+/// Round-robin TX slot cursor. Advancing per frame keeps the controller's prefetch
+/// pointed at a descriptor OTHER than the one currently in flight.
+static mut TX_SLOT: usize = 0;
+
 /// Last TX status that accompanied a failure, latched for diagnostics (0 = none since
 /// the last take). Lets the sensor report WHY a PASS frame was not forwarded instead of
 /// reporting an anonymous timeout.
@@ -185,7 +189,25 @@ static mut RXRING: RxRing = RxRing {
     buf: [[0; RXBUF]; NRX],
 };
 
-const NTX: usize = 1; // single-descriptor synchronous TX (send-one, poll-complete)
+/// TX ring depth. MUST be >= 2 — a one-entry ring is architecturally invalid on this
+/// controller, proven by instrumentation on 2026-08-20 (`[P8-txdiag]`):
+///
+///   seq ok  w1_armed    tsr_pre tsr_post  w1_final     spins
+///     2 OK  0x4000803c  0x0021  0x0021    0xc000803c     481
+///     3 --  0x4000803c  0x0021  0x0021    0x4000803c  200000
+///
+/// The software-visible state at TSTART is BYTE-IDENTICAL on the succeeding and failing
+/// frames — same armed descriptor, same TSR, and TSTART never changes TSR on either. The
+/// differing variable is therefore INTERNAL to the GEM. With one descriptor carrying
+/// WRAP, the controller's prefetch of "the next descriptor" ALIASES the descriptor it
+/// just completed, so it holds a cached copy reading USED=1, rejects that frame, re-reads,
+/// and the FOLLOWING kick sees a valid copy — a one-deep prefetch over a self-wrapping
+/// ring gives exactly one frame of lag, i.e. the phase-locked 50% loss that was measured.
+///
+/// With NTX >= 2 the prefetch targets a DIFFERENT descriptor and cannot alias the active
+/// one. Note this is about ring GEOMETRY, not about pipelining depth: the TX path here is
+/// still fully synchronous (arm one, kick, poll to completion).
+const NTX: usize = 2;
 const TXBUF: usize = 2048;
 
 /// TX ring + buffer, page-aligned, in kernel RAM (identity-mapped: VA == PA).
@@ -575,16 +597,25 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
 pub fn tx_init() {
     let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize }; // physical ring base (for TBQP)
     dc_civac(dphys, NTX * DESC_SZ); // drop cacheable copies; access via NC alias hereafter
-    let bus = unsafe { core::ptr::addr_of!(TXRING.buf[0]) as u64 } + DMA_BUS_OFFSET;
-    let d = nc_desc(dphys);
+    // Arm EVERY descriptor as idle (USED=1 = software owns it, nothing to send), each
+    // pointing at its OWN buffer, with WRAP on the LAST one only. WRAP marks the end of
+    // the ring; putting it on any earlier descriptor truncates the ring to that length.
+    for i in 0..NTX {
+        let bus = unsafe { core::ptr::addr_of!(TXRING.buf[i]) as u64 } + DMA_BUS_OFFSET;
+        let d = nc_desc(dphys + i * DESC_SZ);
+        let wrap = if i == NTX - 1 { TXD_WRAP } else { 0 };
+        unsafe {
+            write_volatile(d.add(0), bus as u32);
+            write_volatile(d.add(1), TXD_USED | wrap); // idle; WRAP only on the last slot
+            write_volatile(d.add(2), (bus >> 32) as u32); // addr high (= 0x10)
+            write_volatile(d.add(3), 0); // resvd
+            write_volatile(d.add(4), 0); // ts_1 (PTP)
+            write_volatile(d.add(5), 0); // ts_2 (PTP)
+        }
+    }
     unsafe {
-        write_volatile(d.add(0), bus as u32);
-        write_volatile(d.add(1), TXD_USED | TXD_WRAP); // USED=1 (idle) + WRAP (only descriptor)
-        write_volatile(d.add(2), (bus >> 32) as u32); // addr high (= 0x10)
-        write_volatile(d.add(3), 0); // resvd
-        write_volatile(d.add(4), 0); // ts_1 (PTP)
-        write_volatile(d.add(5), 0); // ts_2 (PTP)
         core::arch::asm!("dsb sy");
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), 0);
     }
     let ringbus = dphys as u64 + DMA_BUS_OFFSET;
     w(GEM, TBQPH, (ringbus >> 32) as u32); // high FIRST
@@ -598,23 +629,31 @@ pub fn tx_init() {
 /// so the verdict now acts on the wire instead of only being logged.
 pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     let n = bytes.len().min(TXBUF);
+    // Advance the slot BEFORE arming so consecutive frames use different descriptors —
+    // the whole point of NTX>=2 (see the NTX doc comment).
+    let slot = unsafe {
+        let sl = core::ptr::read_volatile(core::ptr::addr_of!(TX_SLOT));
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), (sl + 1) % NTX);
+        sl
+    };
     let bufpa = unsafe {
         let tr = &mut *core::ptr::addr_of_mut!(TXRING);
         for k in 0..n {
-            tr.buf[0][k] = bytes[k];
+            tr.buf[slot][k] = bytes[k];
         }
-        tr.buf[0].as_ptr() as usize
+        tr.buf[slot].as_ptr() as usize
     };
     dc_cvac(bufpa, n); // TX buffer is cacheable — clean so the device reads the frame
-    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc[0]) as usize };
+    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize } + slot * DESC_SZ;
     let d = nc_desc(dphys); // NC alias — coherent, no descriptor cache maintenance
     let bus = bufpa as u64 + DMA_BUS_OFFSET;
+    let wrap = if slot == NTX - 1 { TXD_WRAP } else { 0 };
     unsafe {
         write_volatile(d.add(0), bus as u32); // word0 addr_lo
         write_volatile(d.add(2), (bus >> 32) as u32); // word2 addr_hi
-        // word1: length | LAST | WRAP, USED=0 — hand the descriptor to HW. The GEM
-        // auto-pads to the 60B minimum and appends the FCS (NOCRC not set).
-        write_volatile(d.add(1), (n as u32 & RXD_FRMLEN) | TXD_LAST | TXD_WRAP);
+        // word1: length | LAST | (WRAP only on the last slot), USED=0 — hand the
+        // descriptor to HW. The GEM auto-pads to the 60B minimum and appends the FCS.
+        write_volatile(d.add(1), (n as u32 & RXD_FRMLEN) | TXD_LAST | wrap);
         core::arch::asm!("dsb sy"); // ensure the armed descriptor is in DRAM before TSTART
     }
     // Clear any status latched by the PREVIOUS frame before kicking. TSR error bits are
@@ -653,6 +692,33 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         unsafe { core::arch::asm!("dsb sy") };
         w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
     }
+    // RESYNCHRONISE THE CONTROLLER'S QUEUE POINTER WITH THE DESCRIPTOR WE JUST ARMED.
+    //
+    // This is the contract violation that caused the 50% alternation, proven by the
+    // [P8-txdiag] instrumentation on 2026-08-20:
+    //
+    //   seq 1 (FAIL): w1_final = 0x0000803c   <- USED clear, we gave up polling
+    //   seq 3 (same slot): w1_entry = 0x8000803c  <- USED *SET* by hardware since
+    //
+    // The frame was NOT lost. Hardware set USED on that descriptor AFTER our poll budget
+    // expired: the completion arrived one kick LATE. tx_frame armed a slot and assumed
+    // TSTART would service THAT descriptor, but the GEM has its own internal queue
+    // pointer which advances as it consumes descriptors and is NOT reset by TSTART. The
+    // software producer index and the hardware consumer index were independent, so a kick
+    // serviced wherever the controller was parked and our descriptor was picked up on a
+    // LATER kick — we polled the wrong descriptor at the wrong time, timed out, and the
+    // frame went out anyway.
+    //
+    // A descriptor ring requires the producer to follow the consumer's order. For this
+    // synchronous one-frame-at-a-time path the cheapest way to honour that is to point
+    // the controller AT the descriptor we armed immediately before kicking, making each
+    // transmit independent of whatever pointer state the previous one left behind.
+    // (TBQPH first, then TBQP: the low write is what latches the pair.)
+    let ringbus = dphys as u64 + DMA_BUS_OFFSET;
+    w(GEM, TBQPH, (ringbus >> 32) as u32);
+    w(GEM, TBQP, ringbus as u32);
+    unsafe { core::arch::asm!("dsb sy") };
+
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
@@ -741,6 +807,129 @@ pub fn tx_burst_selftest(n: u32) -> (u32, u32, u32) {
         }
     }
     (ok, bad, tx_err_take())
+}
+
+/// Phase-5 instrumentation: one TX attempt's full hardware state, captured at the
+/// points that distinguish the competing failure hypotheses.
+///
+/// This exists because three "fixes" were applied to this path without ever observing
+/// what the hardware actually did between frames. Every field is a raw register or
+/// descriptor read — no interpretation.
+#[derive(Clone, Copy)]
+pub struct TxDiag {
+    pub seq: u32,
+    /// TSR as found on entry (i.e. whatever the PREVIOUS frame left behind).
+    pub tsr_entry: u32,
+    /// Descriptor word1 as found on entry, BEFORE we arm it. Tells us whether the
+    /// previous frame's completion writeback (USED=1) is actually visible.
+    pub w1_entry: u32,
+    /// Descriptor word1 read back immediately after arming (expect USED=0).
+    pub w1_armed: u32,
+    /// TSR immediately before the TSTART write.
+    pub tsr_prekick: u32,
+    /// TSR immediately after the TSTART write — if the controller was halted and the
+    /// kick was rejected, this is where it shows.
+    pub tsr_postkick: u32,
+    /// Descriptor word1 immediately after TSTART (before polling).
+    pub w1_postkick: u32,
+    /// Spins actually consumed (== budget on timeout).
+    pub spins: u32,
+    pub w1_final: u32,
+    pub tsr_final: u32,
+    pub ok: bool,
+}
+
+impl TxDiag {
+    const fn zero() -> Self {
+        TxDiag {
+            seq: 0, tsr_entry: 0, w1_entry: 0, w1_armed: 0, tsr_prekick: 0,
+            tsr_postkick: 0, w1_postkick: 0, spins: 0, w1_final: 0, tsr_final: 0,
+            ok: false,
+        }
+    }
+}
+
+/// Instrumented TX burst. MIRRORS `tx_frame`'s exact sequence — if `tx_frame` changes,
+/// change this with it — but snapshots hardware state at each transition instead of
+/// only reporting the outcome. Deliberately performs NO recovery of any kind, so the
+/// UNMODIFIED failure mechanism is what gets recorded.
+///
+/// `budget` is intentionally small (the production path uses 500k): a failing frame is
+/// identified by "did not complete within a generous window", and a short budget keeps
+/// the whole diagnostic bounded on a boot path.
+pub fn tx_diag_burst(out: &mut [TxDiag], budget: u32) {
+    let mut frame = [0u8; 60];
+    frame[0..6].copy_from_slice(&[0xff; 6]);
+    frame[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+    frame[12] = 0x88;
+    frame[13] = 0xb5;
+
+    let ringbase = unsafe { core::ptr::addr_of!(TXRING.desc) as usize };
+
+    for i in 0..out.len() {
+        let mut rec = TxDiag::zero();
+        rec.seq = i as u32;
+        frame[14] = (i & 0xff) as u8;
+
+        // MIRROR tx_frame's slot rotation — a diagnostic pinned to one descriptor would
+        // measure a ring geometry the production path no longer uses.
+        let slot = unsafe {
+            let sl = core::ptr::read_volatile(core::ptr::addr_of!(TX_SLOT));
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), (sl + 1) % NTX);
+            sl
+        };
+        let d = nc_desc(ringbase + slot * DESC_SZ);
+
+        // -- state as the PREVIOUS use of THIS slot left it ----------------------
+        rec.tsr_entry = r(GEM, TSR);
+        rec.w1_entry = unsafe { read_volatile(d.add(1)) };
+
+        // -- arm (identical to tx_frame) ----------------------------------------
+        let bufpa = unsafe {
+            let tr = &mut *core::ptr::addr_of_mut!(TXRING);
+            tr.buf[slot][..60].copy_from_slice(&frame);
+            tr.buf[slot].as_ptr() as usize
+        };
+        dc_cvac(bufpa, 60);
+        let bus = bufpa as u64 + DMA_BUS_OFFSET;
+        let wrap = if slot == NTX - 1 { TXD_WRAP } else { 0 };
+        unsafe {
+            write_volatile(d.add(0), bus as u32);
+            write_volatile(d.add(2), (bus >> 32) as u32);
+            write_volatile(d.add(1), (60u32 & RXD_FRMLEN) | TXD_LAST | wrap);
+            core::arch::asm!("dsb sy");
+        }
+        rec.w1_armed = unsafe { read_volatile(d.add(1)) };
+
+        // -- kick. NO TSR clear, NO restart: record the raw mechanism. ----------
+        rec.tsr_prekick = r(GEM, TSR);
+        // Mirror tx_frame: resync the controller's queue pointer to this descriptor.
+        let ringbus = (ringbase + slot * DESC_SZ) as u64 + DMA_BUS_OFFSET;
+        w(GEM, TBQPH, (ringbus >> 32) as u32);
+        w(GEM, TBQP, ringbus as u32);
+        unsafe { core::arch::asm!("dsb sy") };
+        w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
+        rec.tsr_postkick = r(GEM, TSR);
+        rec.w1_postkick = unsafe { read_volatile(d.add(1)) };
+
+        // -- poll ---------------------------------------------------------------
+        let mut spins = 0u32;
+        loop {
+            let ctrl = unsafe { read_volatile(d.add(1)) };
+            if ctrl & TXD_USED != 0 {
+                rec.ok = true;
+                break;
+            }
+            spins += 1;
+            if spins >= budget {
+                break;
+            }
+        }
+        rec.spins = spins;
+        rec.w1_final = unsafe { read_volatile(d.add(1)) };
+        rec.tsr_final = r(GEM, TSR);
+        out[i] = rec;
+    }
 }
 
 /// Current Receive Status register (for diagnostics: BNA/REC/overrun).
@@ -869,7 +1058,10 @@ pub fn tx_prep_el0(len: usize) {
     let d = nc_desc(dphys); // NC alias — coherent with the EL0 driver's NC window
     unsafe {
         write_volatile(d.add(0), bus as u32); // word0 addr_lo (USED=0)
-        write_volatile(d.add(1), TXD_USED | TXD_WRAP); // word1 IDLE (EL0 arms it)
+        // word1 IDLE (EL0 arms it). NO WRAP: with NTX>=2, desc[0] is not the last slot —
+        // WRAP belongs on desc[NTX-1] and putting it here would truncate the ring to one
+        // entry, reintroducing the prefetch-aliasing defect this ring depth exists to fix.
+        write_volatile(d.add(1), TXD_USED);
         write_volatile(d.add(2), (bus >> 32) as u32); // word2 addr_hi
         write_volatile(d.add(3), 0);
         write_volatile(d.add(4), 0);

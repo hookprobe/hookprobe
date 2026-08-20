@@ -1,172 +1,210 @@
-# HANDOFF — GEM TX failure on CM5 (open)
+# HANDOFF — GEM TX 50% alternating failure on CM5 (OPEN)
 
-**Status:** 🔴 OPEN — **three fix attempts spent, all verified negative on metal.**
-**Owner:** unassigned — pick this up with fresh eyes.
-
-> **Read §3 before proposing anything.** An entire class of fix (halt-recovery ordering)
-> is already excluded by measurement. The most valuable thing this note carries is what
-> has been ruled OUT.
+**Status:** 🔴 **OPEN.** Six metal cycles spent. Three explanations proposed and each
+later contradicted by its own follow-up measurement. **Root cause NOT established.**
 **Date:** 2026-08-20 · **Branch:** `worktree-heqk-premetal-gaps` · **Board:** CM5, zero-Linux boot partition.
 
+> **The value of this note is the EVIDENCE (§2) and the RULED-OUT list (§3), not a
+> diagnosis.** Several plausible theories are already dead by measurement, and the open
+> contradiction in §4 invalidates any explanation that does not account for BOTH datasets.
+
 ---
 
-## 1. The symptom, stated precisely
+## 1. Symptom
 
-Under **back-to-back** transmission the GEM drops **exactly half** the frames:
+Under back-to-back transmission, exactly half of all frames fail to complete:
 
 ```
-[P8-txburst] MEASURED — 200 frames: 100 sent / 100 FAILED (50.0%), last_tsr=0x..
+[P8-txburst] MEASURED — 200 frames: 100 sent / 100 FAILED (50.0%)
 ```
 
-**100 of 200 is a PATTERN, not a rate.** Probabilistic loss does not land on precisely
-half. Every *other* frame fails. Any proposed fix must explain the alternation, not just
-reduce a percentage.
+**100/200 is a PATTERN, not a rate** — probabilistic loss does not land on precisely
+half. Failures alternate, strictly. A failing frame's poll burns the full budget
+(200 000 spins in the diagnostic; 500 000 in production ≈ 50 ms).
 
-On sparse live traffic it hides: the running sensor reads ~2–4% because frames there are
-far enough apart for the engine to settle between transmits. **Do not measure this against
-live traffic** (see §5).
+Sparse live traffic reports only ~2–4%, because frames are far enough apart to hide it.
+**Never characterise this from live traffic** — see §6.
 
----
+### What is ACTUALLY broken (this was mis-stated for most of the session)
 
-## 2. Root cause — PARTIALLY established. Read the caveat.
-
-**Observed and certain:** `NTX = 1` (`gem.rs`, commented *"single-descriptor synchronous
-TX (send-one, poll-complete)"*). With one descriptor carrying `TXD_WRAP`, the controller
-finishes a frame, wraps straight back to that same descriptor, reads `USED=1`, and latches
-**`TSR.UBR`** (Used Bit Read), which halts the transmitter. `txerr=0x01` on metal confirms
-UBR really is being latched.
-
-**⚠️ CAVEAT — do not treat the rest as settled.** The natural follow-on story is "the halt
-costs one frame, hence alternation." **Three fixes built on that story all failed** (§3).
-In particular v4 recovered *after the descriptor was already armed*, which on that story
-should have avoided the per-frame cost entirely — and the number did not move at all.
-
-So either the halt is **not** what costs the frame, or something else stalls the very next
-transmit independently of the halt. **The UBR observation is solid; the causal chain from
-UBR to the 50% is NOT.** That is precisely why the missed-`TSTART` hypothesis (§4.1) is
-now ranked first: it explains the alternation *without* relying on the halt at all.
-
-### Why depth alone does NOT fix it
-
-`tx_frame` arms exactly **one** descriptor and then blocks until it completes. So the
-controller always advances into an *unarmed* slot regardless of ring size — UBR fires at
-`NTX=8` just as it does at `NTX=1`. **A deeper ring only helps together with pipelining**
-(arm several, don't block), i.e. an asynchronous TX path. Do not expect `NTX = 8` on its
-own to change the number.
-
-*(An earlier note in this repo claimed depth was the fix. It is not, on its own. That
-claim was wrong and is corrected here.)*
+1. **~50 ms stall on alternate frames.** `tx_frame` is synchronous and sits in the inline
+   forwarding path, so the sensor blocks. That caps forwarding at ~20 fps on the stalling
+   half. **This is the serious defect**, and it is real regardless of whether the frame
+   eventually reaches the wire.
+2. **`tx_fail` accounting is wrong in at least some builds** — frames counted as failed
+   had in fact transmitted. Every rate quoted this session (8.8% / 1.9% / 3.5%) measured
+   MIS-ACCOUNTING, not lost traffic.
+3. **Latent descriptor-reuse risk.** Software re-arms a descriptor without knowing the
+   controller has consumed the previous one. **Not observed**, but the ring-contract
+   violation permits wrong/duplicate bytes on the wire — unacceptable for an inline
+   forwarder. Worth a targeted check.
 
 ---
 
-## 3. What has been tried — three metal runs, all measured
+## 2. RAW EVIDENCE — the `[P8-txdiag]` tables
 
-| Rev | Change | Burst result | Reading |
-|---|---|---|---|
-| **v1** `2c0b342` | `TSR` was DEFINED AND NEVER READ. Clear latched status before arming; recover (bounce `TE`) on timeout | live traffic **8.8% → 1.9%** | **Real fix, keep it.** The register was simply never serviced |
-| **v2** `34122ea` | Also restart on the **success** path | **100/200, `tsr=0x08`** | **Wrong — reverted.** Re-enables `TE` while the descriptor still reads `USED=1`, so the engine instantly re-latches UBR and halts again before the next frame |
-| **v3** `93dcbfd` | Revert v2 — clear only, restart solely on timeout | **100/200, `tsr=0x01`** | Correct handling but insufficient: the halt stands, the next frame's `TSTART` hits a dead engine, only its timeout recovers |
-| **v4** `b25b971` | Move recovery to **after arming, before the kick** | **100/200, `tsr=0x08`** | **Verified NEGATIVE.** Arming first did not help either |
+`gem::tx_diag_burst` mirrors `tx_frame` exactly but applies **no recovery of any kind**,
+so these record the unmodified mechanism.
+`word1`: bit31 `USED`, bit30 `WRAP`, bit15 `LAST`, bits[13:0] length.
+`0x4000803c` = WRAP|LAST|60 armed · `0xc000803c` = same + USED (completed).
 
-### ⛔ RULED OUT: halt-recovery policy, in any ordering
+### 2a. `NTX=1` (single descriptor, WRAP always set) — image `ea19a6db`
 
-**THREE different recovery policies produced EXACTLY 100/200 each:**
+```
+ seq ok  tsr_entry w1_entry   w1_armed   tsr_pre tsr_post w1_postkick spins    w1_final   tsr_final
+   0 OK   0x0001   0xc000802a 0x4000803c  0x0001  0x0001  0x4000803c     493  0xc000803c 0x0021
+   1 --   0x0021   0xc000803c 0x4000803c  0x0021  0x0021  0x4000803c  200000  0x4000803c 0x0021
+   2 OK   0x0021   0x4000803c 0x4000803c  0x0021  0x0021  0x4000803c     481  0xc000803c 0x0021
+   3 --   0x0021   0xc000803c 0x4000803c  0x0021  0x0021  0x4000803c  200000  0x4000803c 0x0021
+```
 
-| Policy | `last_tsr` |
+**Every frame is armed identically (`0x4000803c`, WRAP set); TSR is identical (`0x0021`)
+on both outcomes — yet it alternates.** Software-visible state at `TSTART` is
+byte-identical for success and failure.
+
+### 2b. `NTX=2` + `TBQP` resync — image `879a929f`
+
+```
+ seq ok  w1_entry   w1_armed   tsr_pre tsr_post spins    w1_final
+   0 OK  0xc0000000 0x4000803c  0x0000  0x0000     501  0xc000803c
+   1 --  0x8000802a 0x0000803c  0x0021  0x0021  200000  0x0000803c
+   2 OK  0xc0000000 0x4000803c  0x0021  0x0021     501  0xc000803c
+   3 --  0x0000803c 0x0000803c  0x0021  0x0021  200000  0x0000803c
+```
+
+**Success correlates 100% with the WRAP bit in `w1_armed`** (10/10 rows). The controller
+transmits a descriptor carrying WRAP and refuses one without it — **even with `TBQP`
+pointed directly at that descriptor**.
+
+### 2c. Build-specific: late completion appears and disappears
+
+* `NTX=2`, **no** TBQP resync: `seq 1` ends `w1_final=0x0000803c`; by `seq 3` the same
+  descriptor reads `w1_entry=0x8000803c` — **hardware set USED after we stopped polling.**
+  The frame transmitted LATE.
+* `NTX=2`, **with** TBQP resync: `seq 3` reads `w1_entry=0x0000803c` — USED never set.
+  Those frames are genuinely never transmitted.
+
+"Frames complete late" is therefore **build-specific, not a stable property of the
+defect.** Do not build a theory on it without re-measuring on your build.
+
+---
+
+## 3. RULED OUT — by measurement, not argument
+
+| Hypothesis | How it was eliminated |
 |---|---|
-| v2 — restart immediately after completion | `0x08` |
-| v3 — never restart on the success path | `0x01` |
-| v4 — restart after arming, before the kick | `0x08` |
-
-Restarting early, late, and not at all all give the identical alternation. **Do not spend
-another metal cycle on halt/restart ordering** — the fault is upstream of recovery. Only
-the latched *status bit* changes with policy; the 50% does not move.
-
----
-
-## 4. Where to go next, in order of expected value
-
-1. **Missed / ignored `TSTART` under back-to-back kicks — TEST THIS FIRST.** It is the
-   only hypothesis that explains alternation *independently of recovery policy*, and it is
-   cheap. In the burst loop the next `TSTART` is written microseconds after the previous
-   frame completed, while the controller may still be finishing internal work (descriptor
-   writeback, the wrap read). If that `TSTART` is dropped, the frame never starts, the poll
-   burns its full budget, and the *next* call succeeds because the engine has settled —
-   exactly the observed alternation, and exactly why no recovery ordering changes it.
-   - **Cheapest probe:** re-issue `TSTART` periodically *inside* the poll loop (say every
-     ~10k spins) instead of kicking once. If a dropped kick is the cause, failures should
-     collapse immediately. This is a handful of lines in `tx_frame` and needs one flash.
-   - **Second probe:** insert a bounded settle delay between completion and the next kick
-     and see whether the 50% moves. If a delay fixes it, it is a timing/kick problem, not
-     a descriptor problem.
-2. **Asynchronous multi-descriptor TX.** `NTX` → 8, `TXD_WRAP` on the last descriptor
-   only, round-robin arming, and crucially **do not block per frame** — arm, return,
-   reap completions lazily. This removes the drain-halt from the steady-state path
-   entirely. It changes `tx_frame`'s contract (it currently returns `Some(status)` /
-   `None` and the caller counts `fwd` vs `tx_fail` synchronously), so the sensor loop's
-   accounting has to be reworked with it.
-   - **Entanglement to watch:** `tx_prep_el0` hardcodes `desc[0]` and sets
-     `TXD_USED | TXD_WRAP` (`gem.rs` ~line 846). With a multi-slot ring, `WRAP` belongs on
-     `desc[NTX-1]` only.
-   - **Note:** the EL0 stub at `syscall.s:192` writes `word1 = 0x8040` = `len|LAST` and
-     does **not** set `WRAP`, despite the comment on line 183 claiming `len|LAST|WRAP`.
-     That is a latent bug at `NTX=1` (the controller runs past the end of the ring) and
-     becomes *correct* under a multi-slot ring. Fix the comment either way.
-3. **Consider whether synchronous TX is the right contract at all.** Blocking the
-   detection datapath on TX completion couples forwarding latency to the wire. Worth an
-   ADR-level look before M2 hammers this path.
+| **DMA / cache visibility of the descriptor** | `w1_armed` reads back correctly on EVERY frame, both outcomes |
+| **MMIO ordering / posted writes** | `tsr_postkick` sampled after the kick; stable and identical on both outcomes |
+| **Completion misinterpretation by software** | `w1_final` truthfully distinguishes every OK (`0xc0…`) from every FAIL (`0x40…`/`0x00…`) |
+| **UBR halting the transmitter** | Frames succeed **with UBR latched** (`tsr=0x0021` throughout, never cleared in the diagnostic) |
+| **Recovery policy / ordering** | The diagnostic applies **NO recovery** and alternates identically. Also tested in production: restart-after-completion, never-restart, restart-after-arming — all 100/200 |
+| **Compiler / CPU reordering** | Disassembly (§5): ownership store is LAST, `dsb sy` correctly placed between publication and the MMIO kick |
+| **`TSTART` changing controller state** | `tsr_postkick == tsr_prekick` on every row, success and failure alike |
+| **Queue-pointer desync alone** | `TBQP` resync before every kick did NOT change the 50% |
 
 ---
 
-## 5. Measurement discipline — read this before quoting any number
+## 4. ⚠️ THE OPEN CONTRADICTION — any theory must explain BOTH
 
-The rate was estimated **five times** off live traffic during this session
-(20% → 8.7% → 10% → 2% → 9%) and **contradicted twice**. The segment idles for **45
-seconds at a stretch**, so each window held only a few dozen frames — far too few to
-distinguish a real change from noise.
+* In **`NTX=2`**, success ⟺ `WRAP` set on the armed descriptor (§2b, 10/10 rows).
+* In **`NTX=1`**, **every** frame had `WRAP` set (§2a) — and it **still alternated 50%**.
 
-**Use `[P8-txburst]`** (`gem::tx_burst_selftest`, wired into the P8 selftest, `b777a32`).
-200 back-to-back frames, deterministic, traffic-independent — and because back-to-back
-*is* the saturating stimulus, the same test that measures the fix also exercises the bug.
-It caught the v2 regression on its first execution.
-
-Frames are minimal broadcast, EtherType `0x88b5` (IEEE 802.1 local experimental) — inert
-on the segment.
-
-**`txerr` legend** (heartbeat + burst `last_tsr`):
-
-| Bit | Meaning |
-|---|---|
-| `0x01` | `UBR` Used Bit Read — **halts** the transmitter |
-| `0x04` | `RLE` retry limit exceeded — halts |
-| `0x10` | `TFC` frame corruption / buffers exhausted — halts |
-| `0x40` | `UND` underrun — halts |
-| `0x80` | `HRESP` not OK — halts |
-| `0x08` alone | sentinel: timeout with a **completely clean** status register |
+"WRAP present ⟹ success" is perfect in one dataset and flatly contradicted by the other.
+Both are measured, neither inferred. **Until one mechanism explains both, there is no root
+cause** — only two partial patterns. Resolving this is the highest-value next step.
 
 ---
 
-## 6. Reproduce
+## 5. Machine code — VERIFIED CORRECT (Phase 4 complete, do not redo)
+
+```asm
+1015af8:  str  w21, [x9]        ; word0 = buffer addr_lo
+1015afc:  str  w10, [x9, #0x8]  ; word2 = addr_hi
+1015b00:  str  w8,  [x9, #0x4]  ; word1 = len|LAST|wrap, USED=0  <- ownership store LAST
+1015b0c:  dsb  sy               ; <- barrier AFTER publication, BEFORE MMIO
+1015b48:  stur w10, [x8, #-0x14]; NCR = 0x21c = RE|TE|MPE|TSTART
+1015b54:  ldr  w1,  [x9, #0x4]  ; poll word1
+1015b58:  tbnz w1, #0x1f        ; test bit31 = USED
+```
+
+Ownership store is last; `dsb sy` sits between descriptor publication and the kick; NCR
+decodes correctly (bits 2,3,4,9); the poll reads the right word and bit. Slot rotation and
+WRAP selection also compile as written. **Software ordering is not the defect.**
+
+Incidental: `RXD_FRMLEN` (an RX constant) masks the TX length. Provably a no-op for
+`n <= 2048` — the compiler elides it — but it should be renamed.
+
+---
+
+## 6. Measurement discipline — READ BEFORE QUOTING ANY NUMBER
+
+The failure rate was estimated **five times** from live traffic (20% → 8.7% → 10% → 2%
+→ 9%) and contradicted twice. That segment idles **45 s at a stretch**; each window held
+only a few dozen frames.
+
+**Use `[P8-txburst]`** (`gem::tx_burst_selftest`) — 200 back-to-back frames,
+deterministic, traffic-independent. It caught a regression on its first execution.
+**Use `[P8-txdiag]`** (`gem::tx_diag_burst`) to see hardware state, not just outcomes.
+
+Both are wired into the P8 selftest. Frames are minimal broadcast, EtherType `0x88b5`
+(IEEE 802.1 local experimental) — inert on the segment.
+
+**⚠️ EXPERIMENT DESIGN FLAW TO AVOID:** the `NTX=2` runs are **confounded** — rotation
+period 2 equals the alternation period 2, so slot-effects and frame-effects are
+indistinguishable in that data. Use **`NTX=3` or `NTX=4`**.
+
+---
+
+## 7. Suggested next experiments (single-variable, designed — NOT fixes)
+
+1. **`NTX=4`.** Breaks the period-2 confound. If failures still alternate per FRAME the
+   cause is frame-sequential; if the pattern becomes period-4 it is slot-positional.
+2. **`WRAP` set on EVERY descriptor** (deliberately non-standard). Tests the §2b
+   correlation directly against the §2a contradiction. If all frames then succeed, WRAP
+   presence is causal and §2a needs re-examination.
+3. **Confirm whether "failed" frames reach the wire.** Capture on a peer host during the
+   burst. This decides whether the defect is *transmission* or *completion reporting* —
+   they demand different fixes, and §2c shows it varies by build.
+4. **Ground the GEM contract in authoritative documentation** (Cadence GEM / RP1 TRM):
+   `TSTART` semantics when the controller is parked, whether `TBQP` writes are honoured
+   while `TE=1`, descriptor prefetch behaviour, and whether a one-entry ring is legal.
+   Most wrong turns this session came from reasoning off recall rather than sources.
+
+---
+
+## 8. State of the tree — UNJUSTIFIED CHANGES PRESENT
+
+`gem.rs` currently carries **`NTX=2`** and the **`TBQP` resync**. **Neither is supported by
+evidence** — both were tested on metal and neither changed the 50%. Per the
+smallest-correct-fix rule they should probably be **reverted** before further work, so the
+baseline reflects proven state rather than accumulated attempts.
+
+Worth KEEPING: the TSR read/clear (`TSR` was previously **declared and never read at all**
+— a genuine bug), and both diagnostics.
+
+---
+
+## 9. What is NOT broken — do not chase these
+
+* **Enforcement is unaffected.** `[P8] PASS — inline IPS: forward :53 / drop :4444` on
+  every boot; `drop=0` across every real frame observed (372+ on one boot). A TX failure
+  means a PASS frame was not forwarded — **never** that a threat passed, and **never**
+  that a legitimate frame was dropped by policy.
+* **RX is fine.** `faults=0` on every run; the isolated EL0 driver never crashed.
+* **`W^X`, secure boot, attestation** PASS on all boots.
+* `[P8-irq]` 0 IRQs is **DRV-1** (RP1 `MSIX_CFG_6` not firmware-preprogrammed; RX stays
+  polled) — separate, known, unrelated.
+
+---
+
+## 10. Reproduce
 
 ```bash
 export HEQK_KEYDIR=~/heqk-sign/keys
 HOOKPROBE_DEBUG_ACCESS=1 builder/make-cm5-heqk-image.sh          # builds `prod`
 # CM5 in rpiboot (nRPIBOOT jumper + power-cycle):
 sudo kernel/heqk/cm5-boot/flash-clean.sh --no-dtb
-# jumper out, power-cycle, then read /dev/ttyUSB2 @115200 for [P8-txburst]
+# jumper out, power-cycle, read /dev/ttyUSB2 @115200 for [P8-txdiag] and [P8-txburst]
 ```
 
-Prior boot logs, each named with its image hash, are in `~/heqk-metal-logs/`.
-
----
-
-## 7. What is NOT broken (do not chase these)
-
-- **Enforcement is unaffected.** `[P8] PASS — inline IPS: forward :53 / drop :4444` on
-  every boot, and `drop=0` across every real frame seen (372+ on boot 3). A TX-completion
-  failure means a PASS frame was **not forwarded** — it never means a threat got through,
-  and never means a legitimate frame was dropped by policy.
-- **RX is fine.** `faults=0` across every run; the isolated EL0 driver never crashed.
-- **`W^X`, secure boot, attestation** all PASS on four consecutive boots.
-- `[P8-irq]` 0 IRQs is **DRV-1** (RP1 `MSIX_CFG_6` not firmware-preprogrammed, RX stays
-  polled) — a separate, known, unrelated item.
+Boot logs, each named with its image hash, are in `~/heqk-metal-logs/`.
