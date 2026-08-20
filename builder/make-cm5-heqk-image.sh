@@ -66,10 +66,28 @@ cd "$HEQK"
 
 # Pre-flight assurance gate (heqk's own always-on V&V): the verifier soundness harness must
 # pass before we sign an image (mirrors heqk BUILD_FLASH_PLAN.md §1).
+#
+# The harness binary is written next to $OUT, so $OUT's parent MUST exist first. It used to
+# be created 16 lines BELOW this gate, so on any tree where builder/generated/ did not
+# already exist (a fresh clone, CI, or a git worktree) rustc could not create the output
+# file and the gate aborted — and because stderr went to /dev/null, a MISSING DIRECTORY
+# reported itself as "verifier harness failed", i.e. as BPF verifier UNSOUNDNESS. That is
+# the most alarming false alarm this codebase can raise. Create the directory here, and keep
+# a build failure and a real soundness failure clearly distinguishable.
+mkdir -p "$(dirname "$OUT")"
 if [ -f tools/verifier-harness.rs ]; then
-  rustc --edition 2021 -O tools/verifier-harness.rs -o "$OUT.vh" 2>/dev/null && "$OUT.vh" >/dev/null \
-    && echo "== [M1] verifier soundness harness PASS" || { echo "FATAL: verifier harness failed"; exit 1; }
-  rm -f "$OUT.vh"
+  VH_LOG="$(mktemp)"
+  if ! rustc --edition 2021 -O tools/verifier-harness.rs -o "$OUT.vh" 2>"$VH_LOG"; then
+    echo "FATAL: could not BUILD the verifier harness (toolchain/path problem, NOT a soundness failure):" >&2
+    sed 's/^/    /' "$VH_LOG" >&2
+    rm -f "$VH_LOG"; exit 1
+  fi
+  if ! "$OUT.vh" >/dev/null; then
+    echo "FATAL: verifier soundness harness FAILED — the BPF verifier abstract domain is UNSOUND. Do NOT sign this image." >&2
+    rm -f "$VH_LOG" "$OUT.vh"; exit 1
+  fi
+  echo "== [M1] verifier soundness harness PASS"
+  rm -f "$VH_LOG" "$OUT.vh"
 fi
 
 cargo build -p hboot --release
