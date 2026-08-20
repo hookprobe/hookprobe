@@ -639,25 +639,26 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
             if post & TSR_W1C != 0 {
                 w(GEM, TSR, post & TSR_W1C);
             }
-            // UBR IS EXPECTED HERE, EVERY TIME. This ring has exactly ONE descriptor with
-            // TXD_WRAP set, so the moment the frame goes out the GEM wraps back to that
-            // same descriptor, reads it with USED=1, latches TSR.UBR and HALTS the
-            // transmitter. Metal (2026-08-20, boot 2) confirmed it: the very first
-            // heartbeat reported txerr=0x01 = TSR_UBR.
+            // UBR IS EXPECTED HERE, EVERY TIME, AND IS NOT AN ERROR. This ring has one
+            // descriptor with TXD_WRAP, so the moment a frame goes out the GEM wraps back
+            // to it, reads USED=1 and latches TSR.UBR. That happens on ANY ring depth the
+            // instant the TX queue drains — Linux's macb driver treats TXUBR as routine
+            // and simply clears it. Clearing the latch (above) is the whole job here.
             //
-            // Clearing the latch does NOT restart a halted engine — so before this, the
-            // next frame's TSTART landed on a dead transmitter and timed out, and only
-            // the TIMEOUT path bounced TE and recovered. That is the whole burst pattern:
-            // halt -> a run of timeouts -> incidental recovery -> clean stretch.
+            // DO NOT RESTART THE TRANSMITTER ON THIS PATH. A previous revision bounced TE
+            // here whenever a halting bit was latched, and the deterministic burst caught
+            // what sparse live traffic hid: 200 back-to-back frames gave EXACTLY
+            // 100 sent / 100 FAILED — 50.0%, an alternating pattern, not a rate. The
+            // bounce broke the very NEXT transmit: frame N completes -> UBR -> bounce TE
+            // -> frame N+1's TSTART lands on a just-toggled engine and times out (~50 ms,
+            // clean TSR because we had already cleared it) -> the TIMEOUT path bounces TE
+            // again -> frame N+2 succeeds -> repeat. Each "recovery" cost the next frame.
             //
-            // Restore the transmitter to a RUNNING state here, on the success path, so
-            // the next frame never starts against a halted engine. RE stays up
-            // throughout: a TX-side recovery must never interrupt RX, the detection path.
-            if post & TSR_HALTING != 0 {
-                w(GEM, NCR, NCR_RE | NCR_MPE);
-                unsafe { core::arch::asm!("dsb sy") };
-                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
-            }
+            // It looked harmless on live traffic (boot 3: 3.5%, no UBR reported) only
+            // because frames there are far enough apart for the engine to settle. The
+            // timeout path below still restarts, which is correct: THERE we have positive
+            // evidence of a genuine stall (no forward progress for the full poll budget),
+            // rather than a routine queue-drain latch.
             return Some(ctrl);
         }
         spins += 1;
