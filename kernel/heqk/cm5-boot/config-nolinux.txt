@@ -1,0 +1,39 @@
+# HEQK CM5 — ZERO-LINUX boot config (no devicetree at all).
+#
+# The ONLY difference from config.txt is that this drops `device_tree=` and every
+# `dtparam=` line, so the Pi firmware loads NO Linux-derived devicetree blob. heqk
+# never parses a DTB anyway — HBoot receives `dtb_pa` in x0 and only PRINTS it; all
+# peripheral addresses are hardcoded (see arch-aarch64/src/*.rs) — so from heqk's
+# side the DTB has always been dead weight.
+#
+# ⚠️ WHAT THIS COSTS (read before using):
+#   `dtparam=` is applied by the FIRMWARE to the devicetree BEFORE OS entry. With no
+#   DTB there is nothing to apply them to, so these are silently lost:
+#     dtparam=pciex1                -> external PCIe RC1 is NOT enabled/trained
+#     dtparam=pciex1_gen=1          -> no Gen1 forcing for a marginal PHY
+#     dtparam=pcie_tperst_clk_ms=100-> no extended PERST#->refclk settle
+#   Net effect: the RTL8111H second NIC (eth1, P9) will NOT have its link trained by
+#   firmware. The RP1 GEM LAN (eth0) is unaffected — `pciex4_reset=0` below is a plain
+#   config.txt parameter, NOT a dtparam, so the RP1 PCIe window survives with no DTB.
+#
+# THEREFORE: this config is correct for the M1 gate (GEM LAN + inline IPS + A/B
+# rollback), and NOT correct once the RTL8111 WAN datapath matters. Use config.txt
+# (which keeps exactly one Linux artifact — the .dtb) when you need eth1.
+#
+# Pair with: flash-clean.sh --no-dtb
+arm_64bit=1
+enable_uart=1
+disable_overscan=1
+# CRITICAL for bare metal: keep the firmware's RP1 PCIe window alive at OS entry.
+# Without this the firmware resets the PCIe x4 RC before starting the kernel and any
+# access to RP1 (0x1F_xxxx_xxxx — incl. the GPIO-header UART the FTDI is wired to)
+# hangs. This is a plain config parameter and needs NO devicetree.
+pciex4_reset=0
+# EEPROM 2024-07-30+: firmware brings up RP1 and initializes UART0 on GPIO14/15
+# @115200 before starting the ARM cores. Bare-metal earlycon on the header.
+enable_rp1_uart=1
+
+[cm5]
+kernel=heqk8.img
+kernel_address=0x80000
+os_check=0

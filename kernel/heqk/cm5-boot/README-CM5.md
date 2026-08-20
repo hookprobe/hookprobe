@@ -6,6 +6,15 @@
 - `heqk8.img` — the flat kernel binary (linked at `0x80000`, entry = boot stub). HEQK-specific name so it never clobbers an existing kernel; `config.txt` `kernel=` and `flash-cm5.sh` both use this exact name (a mismatch here silently boots the Linux image's leftover kernel instead).
 - `config.txt` — minimal Pi 5 boot config. **`pciex4_reset=0` is load-bearing**: by default the firmware resets the RP1 PCIe controller before starting the OS, which would make every RP1 access (including the header UART) hang.
 - `flash-cm5.sh` — copies both onto the eMMC's FAT boot partition (backs up the old `config.txt`).
+- `flash-now.sh` — one-shot rpiboot + copy. **ADDS** heqk files and leaves every Linux file in place, so the one-rename revert (`config.txt.heqk-backup` → `config.txt`) stays available. Use this while heqk is unproven on metal.
+- `flash-clean.sh` — **ZERO-LINUX flash.** Archives the whole boot partition to the host (`~/heqk-linux-reference/<UTC-stamp>/`, override with `HEQK_ARCHIVE_ROOT`), reads the archive back to verify it, and only THEN wipes the partition and writes heqk alone. Removes ~102 MB of resident Linux boot artifacts (`kernel8.img`, `kernel_2712.img`, both initramfs, cmdline, dtbs, overlays) from the board.
+  - `--no-dtb` → uses `config-nolinux.txt`: no devicetree at all. heqk never parses one (HBoot prints `dtb_pa` and ignores it), but the firmware applies `dtparam=` to the DTB **before** OS entry, so with no DTB the RTL8111H (eth1) PCIe RC1 is not trained. `pciex4_reset=0` is a plain config parameter and still works, so RP1/GEM (eth0) is unaffected — correct for the M1 gate, wrong once eth1 matters.
+  - default (no flag) keeps exactly ONE Linux artifact: the `.dtb` that `config.txt` names.
+  - `--with-rootfs` also images part2 (the Debian rootfs) to the archive. Without it, part2 is left INTACT on the eMMC — `flash-clean.sh` only touches part1.
+  - `--restore <archive-dir>` repopulates the boot partition and promotes the saved Linux `config.txt` back.
+- `config-nolinux.txt` — the no-devicetree boot config (see above for what it costs).
+
+> **Recovery.** The CM5's boot firmware is in SPI EEPROM, *not* on the FAT partition, so wiping part1 cannot brick the board — rpiboot always re-enumerates the eMMC. If heqk does not boot: nRPIBOOT jumper, power-cycle, `sudo ./flash-clean.sh --restore <archive-dir>`. Note this is an rpiboot cycle rather than a `config.txt` rename, which is the trade you accept for a genuinely zero-Linux first metal test.
 
 ## Console: which UART and why (ground truth, 2026-07-20)
 The CM5 has two candidate PL011s:
