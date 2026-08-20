@@ -53,6 +53,25 @@ const TSR_W1C: u32 = TSR_UBR | TSR_COL | TSR_RLE | TSR_TFC | TSR_TXCOMP | TSR_UN
 /// dead for every subsequent frame until it is cleared AND the transmitter restarted.
 const TSR_HALTING: u32 = TSR_UBR | TSR_RLE | TSR_TFC | TSR_UND | TSR_HRESP;
 
+/// TX completion poll budget, in iterations.
+///
+/// WAS 500_000 (~50 ms). That is ~500x longer than any observed success and it was
+/// throttling the whole sensor: the datapath is SYNCHRONOUS, so every frame's RX
+/// processing waits on that frame's TX completion. Metal, 2026-08-21: a 2000-frame burst
+/// gave seen=221 with tx_fail=88 — 40% of frames hit the FULL budget, i.e. ~4.4 s of a
+/// 14 s window parked in TX timeouts. The RX ring then overflows (rsr=BNA|OVR) not because
+/// it is too shallow but because the loop drains it at ~15 frames/s.
+///
+/// MEASURED completion: ~364-391 spins on a first kick, ~2460 with a 2000-spin retrigger
+/// interval (i.e. ~400 spins after the retrigger). With RETRIGGER_SPINS=512 the worst
+/// legitimate case is ~900. 8192 leaves ~9x margin over that while capping a genuinely
+/// stuck transmit at ~0.8 ms instead of 50 ms — a ~60x reduction in the worst-case stall.
+///
+/// This does NOT make TX more reliable; it stops an unrecoverable frame from starving RX.
+/// The architecturally correct fix is to stop blocking RX on TX completion at all
+/// (asynchronous completion reaping), which is a contract change and its own piece of work.
+const TX_POLL_BUDGET: u32 = 8192;
+
 /// How often (in poll iterations) to re-issue a possibly-dropped TSTART.
 ///
 /// Tuned against MEASURED latency, not guessed: boot 11 showed a first-kick success
@@ -183,7 +202,110 @@ pub fn pcie_inbound_window() -> (u32, u32) {
     (bar1_lo_before, ubus_lo_before)
 }
 
-const NRX: usize = 8;
+/// RX ring depth.
+///
+/// Was 8 — BELOW the minimum the reference driver for this controller declares. Linux
+/// drivers/net/ethernet/cadence/macb_main.c:58-59:
+///
+///     #define DEFAULT_RX_RING_SIZE 512 /* must be power of 2 */
+///     #define MIN_RX_RING_SIZE      64
+///
+/// Measured consequence of 8 (2026-08-20, isolated DUT link): a deterministic 2000-frame
+/// burst was seen as only 214 frames — ~89% lost. At 1 Gbps a 2000-frame burst arrives in
+/// about a millisecond, so a ring of 8 overflows almost immediately while software is
+/// still processing the first descriptor. This is burst ABSORPTION, distinct from
+/// steady-state processing rate: a deeper ring lets the controller keep queueing while the
+/// EL0 driver excursion + verdict + forward completes for earlier frames.
+///
+/// 64 = Linux's stated MINIMUM. Deliberately not larger yet: the EL0 RX driver is granted
+/// exactly ONE 4 KiB Normal-NC page onto the descriptor ring (map_user_nc at
+/// USER_VA_BASE+0x3000), and 64 x 24 B = 1536 B fits with room to spare, whereas 256 would
+/// need 6144 B and a second page — a mapping change that should be its own step.
+///
+/// ⚠️ The depth is ALSO hardcoded in the EL0 scan stub (`gem_rx_stub`, syscall.s:
+/// `cmp x2, #64`). Both must change together.
+/// ⚠️ REVERTED TO 8 — DO NOT RAISE THIS WITHOUT READING THIS COMMENT.
+///
+/// The reference driver for this controller declares a MINIMUM of 64
+/// (Linux drivers/net/ethernet/cadence/macb_main.c:58-59: DEFAULT_RX_RING_SIZE 512,
+/// MIN_RX_RING_SIZE 64), so 8 is objectively too small and burst absorption is poor:
+/// a deterministic 2000-frame burst on an isolated link is seen as ~214 frames.
+///
+/// BUT RAISING IT TO 64 MADE THINGS WORSE, MEASURED ON METAL (2026-08-20):
+/// the same 2000-frame burst was seen as only **16** frames, and then RX STOPPED
+/// ENTIRELY — `seen` froze at 16 while `empty` kept incrementing, i.e. the EL0 scan
+/// stub reported no further frames. That is a FUNCTIONAL REGRESSION, not a slower path.
+/// The EL0 stub's scan bound was raised in lockstep (syscall.s `cmp x2, #64`), so the
+/// cause is something else — candidates NOT yet distinguished:
+///   * descriptor recycle/index bookkeeping that only holds for a small ring;
+///   * RXRING growing 16 KiB -> 128 KiB and crossing a DMA-reachability or IOMMU-fence
+///     boundary (the P14 fence ceiling), or the buffer pool no longer being where the
+///     controller can write it;
+///   * cache maintenance over a much larger buffer pool (dc_civac over 128 KiB).
+///
+/// The next attempt MUST be instrumented first: the heartbeat now reports RSR, so
+/// `rsr` bit0 BNA (buffers not available) vs bit2 OVR (overrun) vs clean will
+/// distinguish "ring overflowed" from "controller could not write the buffers at all".
+/// Do not raise NRX again until that reading exists.
+/// RX ring depth. Currently BISECTING — see the measurement history below.
+///
+/// TARGET CONFIRMED BY HARDWARE (2026-08-20): after a deterministic 2000-frame burst on
+/// the isolated DUT link the heartbeat reported **rsr=0x07 = BNA | REC | OVR** — the
+/// controller ran out of descriptors (BNA, buffers-not-available) AND overran (OVR). Ring
+/// exhaustion is therefore the real limit, measured rather than inferred. The reference
+/// driver agrees: Linux drivers/net/ethernet/cadence/macb_main.c:58-59 declares
+/// DEFAULT_RX_RING_SIZE 512 and MIN_RX_RING_SIZE 64, so 8 was always far too small.
+///
+/// MEASUREMENT HISTORY (2000-frame burst, isolated link, `seen` counted):
+///     NRX=8   -> 214 seen, rsr=0x07 (BNA|OVR)   baseline, functional
+///     NRX=64  -> 16 seen, then RX STOPPED DEAD   REGRESSION (`seen` froze, `empty` rose)
+///     NRX=16  -> (this step)
+///
+/// The 64 regression was NOT a descriptor-handling bug: WRAP is set correctly on the last
+/// descriptor, rx_init loops over NRX cleanly, and the EL0 scan bound was raised in
+/// lockstep. Leading hypothesis is a LAYOUT collision — RXRING grows 16 KiB -> 128 KiB at
+/// 64, shifting all of .bss, and this codebase has been bitten by exactly that before (the
+/// M5.4 commit records a latent stack overflow "benign only by luck until M5.4's .bss
+/// shifted the tripwire into the blast zone"), with hardcoded physical addresses also in
+/// play (the 0x980000 cap-test base, EL0 code/stack pages).
+///
+/// 16 is the bisection step: RXRING grows only 16 KiB -> 32 KiB. If 16 works, the failure
+/// is SIZE-dependent (layout) and the ceiling can be raised carefully toward 64. If 16
+/// ALSO breaks, the failure is triggered by NRX != 8 itself and the bug is in code that
+/// assumes the small ring.
+///
+/// ⚠️ The depth is ALSO hardcoded in the EL0 scan stub (`gem_rx_stub`, syscall.s
+/// `cmp x2, #N`). Both must change together.
+/// RX ring depth = 128.
+///
+/// MEASUREMENT HISTORY (2000-frame burst on the isolated DUT link, `seen` counted):
+///     NRX=8                    -> 213, rsr=0x07 (BNA|OVR)
+///     NRX=64, one stub patched -> 16, RX DEAD   (the two-stub bug, not the depth)
+///     NRX=16, one stub patched -> 16, RX DEAD   (same bug — this is what disproved the
+///                                                ".bss layout collision" theory)
+///     NRX=16, BOTH stubs       -> 221, rsr=0x07  (+4% only)
+///     NRX=16 + TX budget 8192  -> 221            (TX stalls were NOT the throttle)
+///     NRX=128                  -> (this step)
+///
+/// WHAT THE NUMBERS ACTUALLY SAY: the generator pushes 2000 frames in ~50 ms; the sensor
+/// drained ~220 of them in that window, i.e. a drain rate around 4400 frames/s. The other
+/// ~1780 were dropped AT THE WIRE by hardware because the ring had nowhere to put them —
+/// which is why 14 further seconds of idle never raised the count. Buffering IS the limit,
+/// but 16 was never going to matter: at 4400/s drain and a 50 ms burst you need a ring of
+/// order 1800 to absorb it. Linux's DEFAULT_RX_RING_SIZE of 512
+/// (drivers/net/ethernet/cadence/macb_main.c:58) is the considered number.
+///
+/// 128 is the CEILING IMPOSED BY THE EL0 GRANT, not a tuning choice: the isolated EL0 RX
+/// driver is given exactly ONE 4 KiB Normal-NC page onto the descriptor ring
+/// (map_user_nc at USER_VA_BASE+0x3000), and 4096/24 = 170 descriptors fit. 128 is the
+/// largest power of two under that. Going beyond needs a multi-page EL0 grant, which is a
+/// mapping change and its own piece of work.
+///
+/// ⚠️ THERE ARE TWO EL0 RX SCAN STUBS (gem_rx_stub AND gem_ids_stub — the PROD sensor loop
+/// uses the latter). BOTH hardcode this depth. Updating only one silently strands every
+/// descriptor past the stale bound: the ring fills, they are never recycled, BNA fires and
+/// RX DIES. That cost two metal cycles; see syscall.s.
+const NRX: usize = 128;
 const RXBUF: usize = 2048;
 // Extended-BD descriptor = 6 u32 words / 24 bytes: {addr_lo, ctrl} + {addr_hi,
 // resvd} (DMA64) + {ts_1, ts_2} (PTP). RXEXT/TXEXT in DMACFG make the GEM use this
@@ -780,7 +902,7 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
             return Some(ctrl);
         }
         spins += 1;
-        if spins >= 500_000 {
+        if spins >= TX_POLL_BUDGET {
             // Timed out. Record WHY, then RECOVER: clear the latched status and bounce
             // the transmit enable so a halted TX engine does not take every subsequent
             // frame down with it. Without this the failure is self-perpetuating.
@@ -1046,7 +1168,25 @@ pub fn recycle_rx(i: usize) {
         nw0 |= RXD_WRAP;
     }
     unsafe {
-        write_volatile(d.add(0), nw0);
+        // ORDER IS PART OF THE CONTRACT — from the reference driver for this controller,
+        // Linux drivers/net/ethernet/cadence/macb_main.c:1451-1456:
+        //
+        //     desc->ctrl = 0;
+        //     /* Setting addr clears RX_USED and allows reception,
+        //      * make sure ctrl is cleared first to avoid a race.
+        //      */
+        //     dma_wmb();
+        //     macb_set_addr(bp, desc, paddr);
+        //
+        // Writing word0 is what CLEARS RX_USED and hands the descriptor back to the
+        // controller — i.e. it is the ownership release, and everything the controller
+        // may read must already be settled before it. This path previously wrote word0
+        // ALONE, leaving word1 holding the PREVIOUS frame's status/length while the
+        // descriptor was live again, with no barrier between the two. Clear word1 first,
+        // publish it, then release ownership.
+        write_volatile(d.add(1), 0); // ctrl/status — clear BEFORE releasing ownership
+        core::arch::asm!("dsb sy"); // == dma_wmb(): word1 visible before word0 lands
+        write_volatile(d.add(0), nw0); // clears RX_USED -> controller owns it again
         core::arch::asm!("dsb sy");
     }
 }
