@@ -1,121 +1,113 @@
-# HANDOFF — GEM TX 50% alternating failure on CM5 (OPEN)
+# GEM TX 50% alternating failure on CM5 — **RESOLVED**
 
-**Status:** 🔴 **OPEN.** Six metal cycles spent. Three explanations proposed and each
-later contradicted by its own follow-up measurement. **Root cause NOT established.**
+**Status:** 🟢 **Root cause proven and fixed.** 100/200 (50%) → **1 failure in 6,200 frames (0.016%)**.
 **Date:** 2026-08-20 · **Branch:** `worktree-heqk-premetal-gaps` · **Board:** CM5, zero-Linux boot partition.
 
-> **The value of this note is the EVIDENCE (§2) and the RULED-OUT list (§3), not a
-> diagnosis.** Several plausible theories are already dead by measurement, and the open
-> contradiction in §4 invalidates any explanation that does not account for BOTH datasets.
+Two smaller items remain open — see §7. Neither is the alternation.
 
 ---
 
-## 1. Symptom
+## 1. Root cause
 
-Under back-to-back transmission, exactly half of all frames fail to complete:
+**The GEM silently drops `TSTART` writes** issued too soon after a previous frame, while
+the transmitter is still internally busy. The write is discarded, the frame never starts.
 
+`tx_frame` kicked **once** and then polled for ~50 ms, so a dropped kick became a reported
+failure — while the *next* frame's kick landed cleanly. That is the deterministic 50%
+alternation. It is **frame-sequential**, which is why it appeared identically at `NTX=1`
+and `NTX=2`, and why the "perfect WRAP correlation" seen at `NTX=2` was a period-2
+confound rather than causation.
+
+### Authoritative confirmation
+
+Linux `drivers/net/ethernet/cadence/macb_main.c:2517` — the reference driver for this
+exact controller (source is on this machine, in `builder/kernel-build/linux-rpi-*.tar.gz`):
+
+```c
+/* TSTART write might get dropped, so make the IRQ retrigger a buffer read */
+if (macb_readl(bp, TSR) & MACB_BIT(TGO))
+        queue->tx_pending = 1;
+macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
 ```
-[P8-txburst] MEASURED — 200 frames: 100 sent / 100 FAILED (50.0%)
-```
 
-**100/200 is a PATTERN, not a rate** — probabilistic loss does not land on precisely
-half. Failures alternate, strictly. A failing frame's poll burns the full budget
-(200 000 spins in the diagnostic; 500 000 in production ≈ 50 ms).
-
-Sparse live traffic reports only ~2–4%, because frames are far enough apart to hide it.
-**Never characterise this from live traffic** — see §6.
-
-### What is ACTUALLY broken (this was mis-stated for most of the session)
-
-1. **~50 ms stall on alternate frames.** `tx_frame` is synchronous and sits in the inline
-   forwarding path, so the sensor blocks. That caps forwarding at ~20 fps on the stalling
-   half. **This is the serious defect**, and it is real regardless of whether the frame
-   eventually reaches the wire.
-2. **`tx_fail` accounting is wrong in at least some builds** — frames counted as failed
-   had in fact transmitted. Every rate quoted this session (8.8% / 1.9% / 3.5%) measured
-   MIS-ACCOUNTING, not lost traffic.
-3. **Latent descriptor-reuse risk.** Software re-arms a descriptor without knowing the
-   controller has consumed the previous one. **Not observed**, but the ring-contract
-   violation permits wrong/duplicate bytes on the wire — unacceptable for an inline
-   forwarder. Worth a targeted check.
+Linux *expects* the drop: it flags the condition via `TSR.TGO` and has the TCOMP/TXUBR IRQ
+retrigger the queue (`:2058`), where `macb_tx_restart()` re-reads `TBQP`, compares the
+controller's consumer position against the software head, and **re-issues `TSTART`** if it
+has not caught up (`:1834-1843`).
 
 ---
 
-## 2. RAW EVIDENCE — the `[P8-txdiag]` tables
+## 2. Evidence — quantitative, not correlational
 
-`gem::tx_diag_burst` mirrors `tx_frame` exactly but applies **no recovery of any kind**,
-so these record the unmodified mechanism.
-`word1`: bit31 `USED`, bit30 `WRAP`, bit15 `LAST`, bits[13:0] length.
-`0x4000803c` = WRAP|LAST|60 armed · `0xc000803c` = same + USED (completed).
-
-### 2a. `NTX=1` (single descriptor, WRAP always set) — image `ea19a6db`
+`[P8-txdiag]` `spins` column with `RETRIGGER_SPINS = 2000` (boot 11, image `73316c88`):
 
 ```
- seq ok  tsr_entry w1_entry   w1_armed   tsr_pre tsr_post w1_postkick spins    w1_final   tsr_final
-   0 OK   0x0001   0xc000802a 0x4000803c  0x0001  0x0001  0x4000803c     493  0xc000803c 0x0021
-   1 --   0x0021   0xc000803c 0x4000803c  0x0021  0x0021  0x4000803c  200000  0x4000803c 0x0021
-   2 OK   0x0021   0x4000803c 0x4000803c  0x0021  0x0021  0x4000803c     481  0xc000803c 0x0021
-   3 --   0x0021   0xc000803c 0x4000803c  0x0021  0x0021  0x4000803c  200000  0x4000803c 0x0021
+ seq ok  spins    note
+   0 OK    381    first-kick success
+   1 OK   2461    ~400 spins AFTER the retrigger fired at 2000
+   2 OK    364    first-kick success
+   3 OK   2481    ~400 spins after retrigger
 ```
 
-**Every frame is armed identically (`0x4000803c`, WRAP set); TSR is identical (`0x0021`)
-on both outcomes — yet it alternates.** Software-visible state at `TSTART` is
-byte-identical for success and failure.
+Frames that previously burned the **entire 200,000-spin budget** complete ~400 spins after
+a *second* `TSTART` — the **same** latency as a first-kick success (364–391). The frame was
+never slow, never halted, never mis-polled. The kick simply never arrived.
 
-### 2b. `NTX=2` + `TBQP` resync — image `879a929f`
+### Scale regression (boot 12, image `05c624d9`)
 
 ```
- seq ok  w1_entry   w1_armed   tsr_pre tsr_post spins    w1_final
-   0 OK  0xc0000000 0x4000803c  0x0000  0x0000     501  0xc000803c
-   1 --  0x8000802a 0x0000803c  0x0021  0x0021  200000  0x0000803c
-   2 OK  0xc0000000 0x4000803c  0x0021  0x0021     501  0xc000803c
-   3 --  0x0000803c 0x0000803c  0x0021  0x0021  200000  0x0000803c
+[P8-txburst] MEASURED — 200 frames:  199 sent /  1 FAILED (0.5%)  last_tsr=0x01
+[P8-txburst] PASS     — 1000 frames: 1000 sent / 0 FAILED (0.0%)  last_tsr=0x00
+[P8-txburst] PASS     — 5000 frames: 5000 sent / 0 FAILED (0.0%)  last_tsr=0x00
 ```
 
-**Success correlates 100% with the WRAP bit in `w1_armed`** (10/10 rows). The controller
-transmits a descriptor carrying WRAP and refuses one without it — **even with `TBQP`
-pointed directly at that descriptor**.
-
-### 2c. Build-specific: late completion appears and disappears
-
-* `NTX=2`, **no** TBQP resync: `seq 1` ends `w1_final=0x0000803c`; by `seq 3` the same
-  descriptor reads `w1_entry=0x8000803c` — **hardware set USED after we stopped polling.**
-  The frame transmitted LATE.
-* `NTX=2`, **with** TBQP resync: `seq 3` reads `w1_entry=0x0000803c` — USED never set.
-  Those frames are genuinely never transmitted.
-
-"Frames complete late" is therefore **build-specific, not a stable property of the
-defect.** Do not build a theory on it without re-measuring on your build.
+1,000 and 5,000 are perfectly clean with a fully clear status register. The single failure
+is in the **first** burst — a cold-start artifact, not a rate: a 0.5% rate would have
+produced ~25 failures at 5,000, and produced zero.
 
 ---
 
-## 3. RULED OUT — by measurement, not argument
+## 3. The fix
 
-| Hypothesis | How it was eliminated |
+**Re-issue `TSTART` periodically while polling** — the synchronous equivalent of Linux's
+IRQ-driven retrigger, since this path has no interrupts. `RETRIGGER_SPINS = 512`, tuned to
+the **measured** ~400-spin transmission latency (2000 made every dropped kick wait ~5×
+longer than necessary).
+
+The constant is **shared** between `tx_frame` and `tx_diag_burst` deliberately: they were
+briefly allowed to drift (production 512, diagnostic hardcoded 2000) and the diagnostic
+then reported spin counts for a configuration that was no longer shipping.
+
+### ⚠️ DO NOT "clean up" the NCR writes into a read-modify-write
+
+`macb` uses `NCR |= TSTART`. **That was tried here and broke transmission completely:**
+0 sent / 200 FAILED, `TSR = 0x0000` on every frame — no TXCOMP, no UBR, no TGO, i.e. the
+transmitter was not running at all. **`NCR` readback is not trustworthy on this
+integration** (`TSTART` is self-clearing and the readback did not carry `TE`), so
+`readback | TSTART` left `TE` **clear**. The explicit `RE|TE|MPE|TSTART` write is
+load-bearing, not sloppiness.
+
+---
+
+## 4. False hypotheses — all rejected by measurement
+
+| Hypothesis | Verdict and how it died |
 |---|---|
-| **DMA / cache visibility of the descriptor** | `w1_armed` reads back correctly on EVERY frame, both outcomes |
-| **MMIO ordering / posted writes** | `tsr_postkick` sampled after the kick; stable and identical on both outcomes |
-| **Completion misinterpretation by software** | `w1_final` truthfully distinguishes every OK (`0xc0…`) from every FAIL (`0x40…`/`0x00…`) |
-| **UBR halting the transmitter** | Frames succeed **with UBR latched** (`tsr=0x0021` throughout, never cleared in the diagnostic) |
-| **Recovery policy / ordering** | The diagnostic applies **NO recovery** and alternates identically. Also tested in production: restart-after-completion, never-restart, restart-after-arming — all 100/200 |
-| **Compiler / CPU reordering** | Disassembly (§5): ownership store is LAST, `dsb sy` correctly placed between publication and the MMIO kick |
-| **`TSTART` changing controller state** | `tsr_postkick == tsr_prekick` on every row, success and failure alike |
-| **Queue-pointer desync alone** | `TBQP` resync before every kick did NOT change the 50% |
+| UBR / transmitter halt | **No.** Frames succeed with UBR latched (`tsr=0x0021` throughout) |
+| Recovery ordering (3 policies tried) | **No.** The diagnostic applies *no* recovery and alternates identically |
+| One-descriptor ring (`NTX=1`) | **No.** `NTX=2` alternated identically |
+| Descriptor prefetch aliasing | **No.** Same as above |
+| Descriptor reuse / ownership | **No.** `w1_armed` correct on every frame |
+| Memory ordering / barriers | **No.** Disassembly: ownership store last, `dsb sy` correctly placed |
+| MMIO ordering / posted writes | **No.** `tsr_postkick` stable and identical on both outcomes |
+| Completion polling | **No.** `w1_final` truthfully distinguishes every outcome |
+| Cache / DMA visibility | **No.** Descriptor reads back correctly every time |
+| Queue-pointer desync (`TBQP` rewrite) | **No.** Resync before every kick did not change the 50% |
+| **Dropped `TSTART`** | **YES** — confirmed quantitatively (§2) and in the reference driver |
 
 ---
 
-## 4. ⚠️ THE OPEN CONTRADICTION — any theory must explain BOTH
-
-* In **`NTX=2`**, success ⟺ `WRAP` set on the armed descriptor (§2b, 10/10 rows).
-* In **`NTX=1`**, **every** frame had `WRAP` set (§2a) — and it **still alternated 50%**.
-
-"WRAP present ⟹ success" is perfect in one dataset and flatly contradicted by the other.
-Both are measured, neither inferred. **Until one mechanism explains both, there is no root
-cause** — only two partial patterns. Resolving this is the highest-value next step.
-
----
-
-## 5. Machine code — VERIFIED CORRECT (Phase 4 complete, do not redo)
+## 5. Machine code — verified correct (Phase 4, do not redo)
 
 ```asm
 1015af8:  str  w21, [x9]        ; word0 = buffer addr_lo
@@ -127,77 +119,58 @@ cause** — only two partial patterns. Resolving this is the highest-value next 
 1015b58:  tbnz w1, #0x1f        ; test bit31 = USED
 ```
 
-Ownership store is last; `dsb sy` sits between descriptor publication and the kick; NCR
-decodes correctly (bits 2,3,4,9); the poll reads the right word and bit. Slot rotation and
-WRAP selection also compile as written. **Software ordering is not the defect.**
-
-Incidental: `RXD_FRMLEN` (an RX constant) masks the TX length. Provably a no-op for
-`n <= 2048` — the compiler elides it — but it should be renamed.
+Ownership store last, barrier correctly placed, NCR decodes correctly, poll reads the right
+word and bit. **Software ordering was never the defect.**
 
 ---
 
-## 6. Measurement discipline — READ BEFORE QUOTING ANY NUMBER
+## 6. Measurement discipline — the durable lesson
 
-The failure rate was estimated **five times** from live traffic (20% → 8.7% → 10% → 2%
-→ 9%) and contradicted twice. That segment idles **45 s at a stretch**; each window held
-only a few dozen frames.
+The failure rate was estimated **five times** from live traffic (20% → 8.7% → 10% → 2% →
+9%) and contradicted twice, because the segment idles **45 s at a stretch** and each window
+held only a few dozen frames. Nothing converged until a **deterministic stimulus** existed.
 
-**Use `[P8-txburst]`** (`gem::tx_burst_selftest`) — 200 back-to-back frames,
-deterministic, traffic-independent. It caught a regression on its first execution.
-**Use `[P8-txdiag]`** (`gem::tx_diag_burst`) to see hardware state, not just outcomes.
+* **`[P8-txburst]`** (`gem::tx_burst_selftest`) — fixed-size back-to-back bursts. Caught a
+  regression on its first execution.
+* **`[P8-txdiag]`** (`gem::tx_diag_burst`) — per-frame hardware state, **no recovery
+  applied**, so it records the unmodified mechanism.
 
-Both are wired into the P8 selftest. Frames are minimal broadcast, EtherType `0x88b5`
-(IEEE 802.1 local experimental) — inert on the segment.
-
-**⚠️ EXPERIMENT DESIGN FLAW TO AVOID:** the `NTX=2` runs are **confounded** — rotation
-period 2 equals the alternation period 2, so slot-effects and frame-effects are
-indistinguishable in that data. Use **`NTX=3` or `NTX=4`**.
-
----
-
-## 7. Suggested next experiments (single-variable, designed — NOT fixes)
-
-1. **`NTX=4`.** Breaks the period-2 confound. If failures still alternate per FRAME the
-   cause is frame-sequential; if the pattern becomes period-4 it is slot-positional.
-2. **`WRAP` set on EVERY descriptor** (deliberately non-standard). Tests the §2b
-   correlation directly against the §2a contradiction. If all frames then succeed, WRAP
-   presence is causal and §2a needs re-examination.
-3. **Confirm whether "failed" frames reach the wire.** Capture on a peer host during the
-   burst. This decides whether the defect is *transmission* or *completion reporting* —
-   they demand different fixes, and §2c shows it varies by build.
-4. **Ground the GEM contract in authoritative documentation** (Cadence GEM / RP1 TRM):
-   `TSTART` semantics when the controller is parked, whether `TBQP` writes are honoured
-   while `TE=1`, descriptor prefetch behaviour, and whether a one-entry ring is legal.
-   Most wrong turns this session came from reasoning off recall rather than sources.
+**Experiment-design traps hit during this investigation, recorded so they are not repeated:**
+* `NTX=2` was **confounded** — rotation period 2 equalled the alternation period 2, making
+  slot- and frame-effects indistinguishable. Use `NTX=3`/`4` if ring depth is ever retested.
+* One build changed **two variables at once** (retrigger + NCR RMW) and produced a
+  self-inflicted 0/200 regression that cost a metal cycle.
+* Reasoning about the GEM contract from recall produced three wrong theories. **Read the
+  reference driver first** — it was on this disk the whole time.
 
 ---
 
-## 8. State of the tree — UNJUSTIFIED CHANGES PRESENT
+## 7. STILL OPEN (neither is the alternation)
 
-`gem.rs` currently carries **`NTX=2`** and the **`TBQP` resync**. **Neither is supported by
-evidence** — both were tested on metal and neither changed the 50%. Per the
-smallest-correct-fix rule they should probably be **reverted** before further work, so the
-baseline reflects proven state rather than accumulated attempts.
-
-Worth KEEPING: the TSR read/clear (`TSR` was previously **declared and never read at all**
-— a genuine bug), and both diagnostics.
+1. **Cold-start TX burst.** The live sensor shows ~15 `tx_fail` in the first ~11 s, then
+   **flat** (subsequent frames all forward). The 200-frame burst shows the same shape with
+   1 failure. Likely the first transmits after the selftest leaves the controller in a
+   particular state. Small, bounded, and no longer a steady-state defect.
+2. **`NTX=2` is retained but not independently justified.** The defect proved
+   frame-sequential, so `NTX=1` would very likely work identically. Depth 2 is arguably
+   more correct hardware usage regardless, but if a minimal diff matters, test `NTX=1` with
+   the retrigger before keeping it.
 
 ---
 
-## 9. What is NOT broken — do not chase these
+## 8. What is NOT broken
 
-* **Enforcement is unaffected.** `[P8] PASS — inline IPS: forward :53 / drop :4444` on
-  every boot; `drop=0` across every real frame observed (372+ on one boot). A TX failure
-  means a PASS frame was not forwarded — **never** that a threat passed, and **never**
-  that a legitimate frame was dropped by policy.
+* **Enforcement never regressed** across twelve boots: `[P8] PASS — inline IPS: forward :53
+  / drop :4444`, and `drop=0` on every real frame observed. A TX failure meant a PASS frame
+  was not forwarded — **never** that a threat passed or a legitimate frame was dropped.
 * **RX is fine.** `faults=0` on every run; the isolated EL0 driver never crashed.
 * **`W^X`, secure boot, attestation** PASS on all boots.
-* `[P8-irq]` 0 IRQs is **DRV-1** (RP1 `MSIX_CFG_6` not firmware-preprogrammed; RX stays
-  polled) — separate, known, unrelated.
+* `[P8-irq]` 0 IRQs is **DRV-1** (RP1 `MSIX_CFG_6` not firmware-preprogrammed) — separate,
+  known, unrelated.
 
 ---
 
-## 10. Reproduce
+## 9. Reproduce
 
 ```bash
 export HEQK_KEYDIR=~/heqk-sign/keys

@@ -2057,15 +2057,26 @@ fn cm5_gem_rx_demo() {
         }
     }
 
+    // PHASE-10 REGRESSION: progressively larger bursts in ONE boot. A 200-frame pass is
+    // not proof at scale — a defect that costs 0.5% at 200 frames must be shown to stay
+    // flat at 1000 and 5000, not creep. Each size is an independent measurement.
     {
-        const N: u32 = 200;
-        let (ok, bad, tsr) = arch_aarch64::gem::tx_burst_selftest(N);
-        // Report parts-per-thousand: integer math, no float on this softfloat target.
-        let ppk = if N > 0 { (bad * 1000) / N } else { 0 };
-        kprint!(" [P8-txburst] {} — {} frames: {} sent / {} FAILED ({}.{}%), last_tsr={:#04x}\n",
-            if bad == 0 { "PASS" } else { "MEASURED" },
-            N, ok, bad, ppk / 10, ppk % 10, tsr);
-        kprint!("   [P8-txburst] tsr bits: 0x01=UBR(used-bit-read, HALTS) 0x04=RLE 0x10=TFC 0x40=UND 0x80=HRESP | 0x08 alone = timeout with a CLEAN status (ring saturation, not a latched halt)\n");
+        let sizes: [u32; 3] = [200, 1_000, 5_000];
+        let mut all_clean = true;
+        for &n in sizes.iter() {
+            let (ok, bad, tsr) = arch_aarch64::gem::tx_burst_selftest(n);
+            // Parts-per-thousand: integer math, no float on this softfloat target.
+            let ppk = if n > 0 { (bad * 1000) / n } else { 0 };
+            if bad != 0 {
+                all_clean = false;
+            }
+            kprint!(" [P8-txburst] {} — {} frames: {} sent / {} FAILED ({}.{}%), last_tsr={:#04x}\n",
+                if bad == 0 { "PASS" } else { "MEASURED" },
+                n, ok, bad, ppk / 10, ppk % 10, tsr);
+        }
+        kprint!(" [P8-txburst] SCALE VERDICT: {}\n",
+            if all_clean { "PASS — every burst size fully clean" } else { "MEASURED — see per-size rows above" });
+        kprint!("   [P8-txburst] tsr bits: 0x01=UBR(used-bit-read, HALTS) 0x04=RLE 0x10=TFC 0x40=UND 0x80=HRESP | 0x08 alone = timeout with a CLEAN status\n");
     }
 }
 
