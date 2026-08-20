@@ -864,8 +864,14 @@ fn cm5_prod_service() -> ! {
         let now = prod_cntpct();
         if now.wrapping_sub(last_hb) >= hb_interval {
             last_hb = now;
-            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={}\n",
-                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
+            // AUDIT (2026-08-20 metal): tx_fail was an ANONYMOUS timeout — a PASS frame
+            // silently not forwarded with no cause. gem::tx_err_take() reports the GEM
+            // TSR that accompanied the most recent failure (bit0 UBR / bit2 RLE /
+            // bit4 TFC / bit6 UND / bit7 HRESP are the halting ones; bit3 alone = the
+            // timeout happened with a CLEAN status, which means something else stalled).
+            let txerr = arch_aarch64::gem::tx_err_take();
+            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} faults={} empty={} qsecbit={}\n",
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, faults, empty, telemetry::score());
             // prod-full: throttled M3 persist (interval AND dirty — the reserved
             // window is 32 sectors and every persist rewrites the same LBAs) plus
             // the structural M6 export gate.
@@ -1953,8 +1959,23 @@ fn cm5_gem_rx_demo() {
         }
     }
     if got == 0 {
-        kprint!(" [P8] no frames (RSR={:#x}) — suspects: PHY reset/link, or RC inbound ATU (BNA)\n",
-            arch_aarch64::gem::rsr());
+        // AUDIT (2026-08-20 metal): this asserted "suspects: PHY reset/link, or RC inbound
+        // ATU (BNA)" UNCONDITIONALLY, which misdirected diagnosis — on that run the link
+        // was fine (PHY speed_code=7 = 1G/full) and the prod sensor went on to receive
+        // hundreds of frames; the probe window had simply landed in a quiet stretch (45 s
+        // gaps with zero frames were later observed on the same link). Distinguish the
+        // cases instead of guessing.
+        let rsr_now = arch_aarch64::gem::rsr();
+        if rsr_now & 0x1 != 0 {
+            kprint!(" [P8] no frames, RSR.BNA SET (RSR={:#x}) — REAL fault: buffers-not-available / RC inbound ATU\n",
+                rsr_now);
+        } else if rsr_now == 0 {
+            kprint!(" [P8] no frames, RSR clean (={:#x}) — link IDLE during the probe window, NOT a fault (the prod sensor drains this same ring)\n",
+                rsr_now);
+        } else {
+            kprint!(" [P8] no frames (RSR={:#x}) — suspects: PHY reset/link, or RC inbound ATU (BNA)\n",
+                rsr_now);
+        }
     } else {
         kprint!(" [P8] {} real frame(s) received + IDS verdict on the microkernel\n", got);
     }
