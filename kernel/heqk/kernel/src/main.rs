@@ -2029,6 +2029,34 @@ fn cm5_gem_rx_demo() {
     // removes the dependency on what happens to be on the wire, so a TX fix can be SHOWN
     // to work instead of asserted. Frames are minimal broadcast with EtherType 0x88b5
     // (IEEE 802.1 local experimental) — inert on the segment, nothing will answer them.
+    // [P8-txdiag] PHASE-5 INSTRUMENTATION. Before any further fix, OBSERVE the hardware
+    // state across the success/failure alternation instead of inferring it. This path
+    // performs NO recovery, so what it records is the unmodified mechanism.
+    //
+    // Read the table like this:
+    //   w1_entry  USED set?   -> did the PREVIOUS frame's completion writeback land?
+    //   w1_armed  USED clear? -> did our arming store actually reach the descriptor?
+    //   tsr_postkick vs prekick -> did TSTART change controller state at all?
+    //   w1_postkick USED set?  -> did the controller consume the descriptor immediately?
+    //   spins / w1_final / tsr_final -> how the attempt ended
+    {
+        use arch_aarch64::gem::TxDiag;
+        const D: usize = 10;
+        let mut recs = [TxDiag {
+            seq: 0, tsr_entry: 0, w1_entry: 0, w1_armed: 0, tsr_prekick: 0,
+            tsr_postkick: 0, w1_postkick: 0, spins: 0, w1_final: 0, tsr_final: 0, ok: false,
+        }; D];
+        arch_aarch64::gem::tx_diag_burst(&mut recs, 200_000);
+        kprint!(" [P8-txdiag] per-frame hardware state (NO recovery applied):\n");
+        kprint!("   seq ok  tsr_entry w1_entry  w1_armed  tsr_pre tsr_post w1_postkick spins    w1_final  tsr_final\n");
+        for r in recs.iter() {
+            kprint!("   {:>3} {}   {:#06x}    {:#010x} {:#010x} {:#06x}  {:#06x}   {:#010x}  {:>7} {:#010x} {:#06x}\n",
+                r.seq, if r.ok { "OK" } else { "--" },
+                r.tsr_entry, r.w1_entry, r.w1_armed, r.tsr_prekick,
+                r.tsr_postkick, r.w1_postkick, r.spins, r.w1_final, r.tsr_final);
+        }
+    }
+
     {
         const N: u32 = 200;
         let (ok, bad, tsr) = arch_aarch64::gem::tx_burst_selftest(N);
