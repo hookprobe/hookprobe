@@ -483,6 +483,45 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P8 (RX-IRQ): enable interrupt-driven RX (LAST — bounded, self-contained) ---
     cm5_gem_rx_irq_probe();
 
+    // [P7-rollback] M1 CRITERION 4 — forced-bad-boot rollback. TEST BUILD ONLY.
+    //
+    // Arms the firmware's one-shot tryboot flag (proven reachable by [P7-tryboot]) and
+    // resets via the EL2 gate. The next boot therefore loads tryboot.txt -> SLOT B. With
+    // SLOT B deliberately corrupted, hboot's hybrid Ed25519+SLH-DSA verify REFUSES it and
+    // parks; the EL2 trial watchdog then resets the SoC; the one-shot has already been
+    // consumed, so that reset boots config.txt -> SLOT A. Verification AND watchdog
+    // fallback are exercised together, which is the whole point of the criterion.
+    //
+    // NO BRICK PATH: SLOT A is always the known-good image and the flag is one-shot, so
+    // the board can only ever land back on A. This build LOOPS (A arms again after the
+    // rollback) — observe a cycle, power off, reflash a normal image.
+    #[cfg(feature = "rollback-test")]
+    {
+        kprint!("\n [P7-rollback] M1 CRITERION 4 — arming the firmware one-shot tryboot flag\n");
+        let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
+        let readback = arch_aarch64::mailbox::get_reboot_flags();
+        let notified = arch_aarch64::mailbox::notify_reboot();
+        kprint!("   [P7-rollback] set={:?} readback={:?} notify_reboot={}\n", set, readback, notified);
+        match readback {
+            Some(f) if f & arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT != 0 => {
+                kprint!("   [P7-rollback] tryboot ARMED — resetting via the EL2 gate (hvc #0).\n");
+                kprint!("   [P7-rollback] EXPECT NEXT: firmware loads tryboot.txt -> SLOT B (corrupt)\n");
+                kprint!("   [P7-rollback]              -> hboot signature verify REFUSES -> park\n");
+                kprint!("   [P7-rollback]              -> EL2 trial watchdog resets the SoC\n");
+                kprint!("   [P7-rollback]              -> one-shot consumed -> config.txt -> SLOT A boots\n");
+                // Let the UART drain before the reset takes the console with it.
+                for _ in 0..40_000_000u64 {
+                    core::hint::spin_loop();
+                }
+                unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+            }
+            other => {
+                kprint!("   [P7-rollback] FAIL — tryboot did not arm (readback={:?}); NOT resetting.\n", other);
+                kprint!("   [P7-rollback] Refusing to reset without the one-shot: a reset here would just reboot SLOT A and prove nothing.\n");
+            }
+        }
+    }
+
     // PH1 — GO LIVE (a `prod` build). Every bring-up phase above has run (MMU/W^X,
     // scheduler, verified rule plane, GEM Ethernet, the P14 IOMMU DMA fence, and the
     // isolated EL0 driver just proven on stages 1-4a), so enter the persistent
