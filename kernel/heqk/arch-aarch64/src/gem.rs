@@ -53,6 +53,20 @@ const TSR_W1C: u32 = TSR_UBR | TSR_COL | TSR_RLE | TSR_TFC | TSR_TXCOMP | TSR_UN
 /// dead for every subsequent frame until it is cleared AND the transmitter restarted.
 const TSR_HALTING: u32 = TSR_UBR | TSR_RLE | TSR_TFC | TSR_UND | TSR_HRESP;
 
+/// How often (in poll iterations) to re-issue a possibly-dropped TSTART.
+///
+/// Tuned against MEASURED latency, not guessed: boot 11 showed a first-kick success
+/// completing in 364-391 spins and a dropped-kick frame completing at ~2460 — i.e. ~400
+/// spins after the retrigger fired at 2000. So ~400 spins is the real transmission time,
+/// and a 2000 interval made every dropped kick wait ~5x longer than necessary. 512 catches
+/// a dropped TSTART almost immediately with comfortable margin over the observed ~400.
+///
+/// SHARED between tx_frame and tx_diag_burst ON PURPOSE: they were briefly allowed to
+/// drift (production 512, diagnostic hardcoded 2000), which made the diagnostic report
+/// spin counts for a configuration that was no longer shipping. A diagnostic that does
+/// not mirror the code it measures produces wrong conclusions.
+pub const RETRIGGER_SPINS: u32 = 512;
+
 /// Round-robin TX slot cursor. Advancing per frame keeps the controller's prefetch
 /// pointed at a descriptor OTHER than the one currently in flight.
 static mut TX_SLOT: usize = 0;
@@ -724,8 +738,7 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     // is not trustworthy on this integration (TSTART is self-clearing, and the readback
     // did not carry TE), so `readback | TSTART` left TE CLEAR and disabled the
     // transmitter. The explicit write below guarantees RE|TE|MPE are set every time.
-    /// How often (in poll iterations) to re-issue a possibly-dropped TSTART.
-    const RETRIGGER_SPINS: u32 = 2_000;
+
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
@@ -926,7 +939,7 @@ pub fn tx_diag_burst(out: &mut [TxDiag], budget: u32) {
         let mut spins = 0u32;
         loop {
             // Mirror tx_frame: retrigger a possibly-dropped TSTART while polling.
-            if spins != 0 && spins % 2_000 == 0 {
+            if spins != 0 && spins % RETRIGGER_SPINS == 0 {
                 w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
             }
             let ctrl = unsafe { read_volatile(d.add(1)) };
