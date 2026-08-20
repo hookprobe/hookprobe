@@ -229,3 +229,43 @@ Two parallel auditors swept the PH1-PH7 code (prod service, netsvc/smoltcp, PH2a
 | R5 | Info | main.rs | CM5 cap-test base hardcoded 0x980000 | ACCEPTED — verified in the free RAM window (above HBoot stack, below kernel image); documented |
 
 **Confirmed SOUND (no defect):** packet::verdict fail-closed + enforce correctness; no crafted-frame panic in the datapath or netsvc; cntfrq div-by-zero guarded (max(1)); rx_desc_status uses HW writeback length (M-7); netsvc dual-gate has no bypass + split-borrow sound; SRK domain-sep / flush-range / write-before-stage2 / repr(C) layout / hw_bound=false fallback / srk-derived-before-wipe all correct; self-heal survival real (kernel never halts). QEMU [PHprod]/[PH7-caps]/[PH6-net] PASS + [ALL] GREEN, 0 failing.
+
+## METAL RUN 2026-08-20 — first ZERO-LINUX CM5 boot (3 boots, M1 3/4)
+
+The board was flashed with a boot partition holding **no Linux at all** (no kernel, no
+initramfs, no cmdline, no devicetree) — only heqk A/B slots, `config.txt`, and the Pi
+platform firmware. Three consecutive boots; `[P7b] W^X PASS` every time, which is the
+FIRST-EVER execution of the `cm5` W^X mapping on silicon (it had not even LINKED until
+AUD-BLD-1 was fixed, so this was the single largest unknown in the flash).
+
+### Closed this run
+
+| ID | Sev | Loc | Defect | Status |
+|----|-----|-----|--------|--------|
+| MET-TX-1 | **High** | `gem.rs` TSR | `TSR` (Transmit Status) was DECLARED at line 38 and never read or written ANYWHERE. On a Cadence GEM, `UBR`/`RLE`/`TFC`/`UND`/`HRESP` HALT the transmitter and are write-1-to-clear — so one latched error stopped TX dead and every subsequent frame timed out until something incidentally restarted it. Measured cost: **8.8%** of PASS frames not forwarded (11/125 post-startup, boot 1) | CLOSED (2c0b342 + 34122ea) — clear before arming, clear on completion, recover by bouncing TE (RE left UP so RX/detection is never interrupted). **Boot 2 measured 1.9% (9/467)** — a ~4x reduction on 3.7x the sample |
+| MET-TX-2 | Med | `gem.rs` / `main.rs` hb | `tx_fail` was an ANONYMOUS timeout — a PASS frame silently not forwarded, no cause recorded. Every rate estimate off live traffic swung wildly (20% → 9% → 2% → 9% across windows of the SAME boot) because the link idles 45 s at a stretch and each window held only a few dozen frames | CLOSED — `gem::tx_err_take()` + `txerr=0x..` in the heartbeat. Boot 2's FIRST heartbeat reported `txerr=0x01` = `TSR_UBR`, identifying the exact bit. Also added `gem::tx_burst_selftest(n)` for a traffic-independent measurement (NOT yet wired into the selftest sequence) |
+| MET-RX-1 | Low-Med | `main.rs` P8 probe | The "no frames" message asserted *"suspects: PHY reset/link, or RC inbound ATU (BNA)"* UNCONDITIONALLY and MISDIRECTED diagnosis: the link was fine (PHY `speed_code=7` = 1G/full) and the prod sensor went on to receive hundreds of frames — the 5 s probe had simply landed in a quiet stretch | CLOSED (2c0b342) — now distinguishes `RSR.BNA` set (a REAL buffers/ATU fault) from `RSR` clean (an IDLE link, not a fault). Confirmed on boot 3 |
+| MET-BLD-1 | Med(build) | `builder/make-cm5-heqk-image.sh` | `mkdir -p "$OUT"` sat 16 lines BELOW the P16 verifier gate that writes `$OUT.vh`, so on a fresh clone/CI/worktree rustc could not create the file — and with stderr sent to `/dev/null` a MISSING DIRECTORY reported itself as **"verifier harness failed"**, i.e. as BPF verifier UNSOUNDNESS. The most alarming false alarm this repo can raise | CLOSED (d200e72) — dir created first; build-failure and soundness-failure now read completely differently |
+| MET-FW-1 | **High** | `cm5-boot/flash-clean.sh` | The wipe was indiscriminate and only heqk files were written back, so it DESTROYED `bootcode.bin` / `start4.elf` / `fixup4.dat` — Raspberry Pi PLATFORM firmware, not Linux. Self-inflicted; recovered by hand from the archive before power-cycling | CLOSED (c5dd1a1) — platform firmware restored unconditionally after the wipe; validated on the next two flashes |
+| MET-FW-2 | Low | `cm5-boot/flash-clean.sh` | Runs under sudo, so `$HOME` was root's and the "reference to learn from" was written root-owned to `/root/heqk-linux-reference/` | CLOSED (c5dd1a1) — resolves `$SUDO_USER`'s home |
+
+### STILL OPEN after this run
+
+- **MET-TX-3 (Med, throughput).** 2 of boot 2's 9 failures reported `txerr=0x08` — the sentinel for *timeout with a COMPLETELY CLEAN TSR*, no latched error at all. Both landed inside heavy bursts (81 and 94 frames in one window): the **single-descriptor TX ring saturating under load**. This is NOT the UBR halt and must not be conflated with it. Fix = a deeper TX ring (multi-descriptor), a separate and larger change.
+- **DRV-1 confirmed on metal.** `[P8-irq]` armed clean but saw 0 INTID-166 IRQs — RP1 `MSIX_CFG_6` is not firmware-preprogrammed, so RX stays polled.
+- **V3/SEC-2 confirmed OPEN on metal.** `[P15-SRK]` prints that the SRK is REAL and per-device (OTP-derived, `device_id=0x010256173c495a31`) but that EL1 can still read OTP via the VC mailbox, so on-device binding is not yet tamper-proof (PH2b).
+- **M1 criterion 4 (forced-bad-boot rollback) NOT tested.** `[HBoot-AB] PASS` is the trial-CONFIRM path. The designed trigger is `reboot "0 tryboot"` issued ON-DEVICE, and heqk has no such path — closing this needs an hboot-side tryboot hook or a deliberately-corrupted slot staged via rpiboot.
+
+### Doc claims this run proved STALE (all in the project's favour)
+
+- **AK is hardware-bound**, not software-constant: `ak: customer OTP already provisioned -> deriving per-device AK`. `buildPlan.md:185` / the Track-C ledger still say "AK still software-constant = demo-grade".
+- **Anti-rollback is live**, not inert: `svn: image=1 floor=1 (BCM2712 OTP block3 (hardware monotonic thermometer))`. SEC-6 above is recorded as "FLOOR=0, never advanced".
+- **heqk needs no devicetree**: booted with `dtb 0x0`. `hboot` takes `dtb_pa` in x0 and only PRINTS it.
+- **The RTL8111 does NOT need firmware `dtparam=`**: with no DTB at all, `[P9] RC1 LINK UP — HEQK trained the external PCIe!` and `RTL8111H found @01:00.0`. heqk owns RC1 training itself (Path B).
+
+### Method note (worth keeping)
+
+Four separate rate estimates were quoted off small windows before the sample was adequate,
+and two of them were later contradicted. Rates measured against opportunistic link traffic
+on an idle segment are not trustworthy below a few hundred frames — which is exactly why
+`tx_burst_selftest` exists. Prefer a deterministic stimulus over a bigger guess.
