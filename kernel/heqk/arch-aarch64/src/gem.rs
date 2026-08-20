@@ -692,37 +692,50 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         unsafe { core::arch::asm!("dsb sy") };
         w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
     }
-    // RESYNCHRONISE THE CONTROLLER'S QUEUE POINTER WITH THE DESCRIPTOR WE JUST ARMED.
+    // KICK, THEN RETRIGGER WHILE POLLING.
     //
-    // This is the contract violation that caused the 50% alternation, proven by the
-    // [P8-txdiag] instrumentation on 2026-08-20:
+    // Grounded in the reference driver for this exact controller — Linux
+    // drivers/net/ethernet/cadence/macb_main.c:2517:
     //
-    //   seq 1 (FAIL): w1_final = 0x0000803c   <- USED clear, we gave up polling
-    //   seq 3 (same slot): w1_entry = 0x8000803c  <- USED *SET* by hardware since
+    //     /* TSTART write might get dropped, so make the IRQ retrigger a buffer read */
+    //     if (macb_readl(bp, TSR) & MACB_BIT(TGO))
+    //             queue->tx_pending = 1;
+    //     macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
     //
-    // The frame was NOT lost. Hardware set USED on that descriptor AFTER our poll budget
-    // expired: the completion arrived one kick LATE. tx_frame armed a slot and assumed
-    // TSTART would service THAT descriptor, but the GEM has its own internal queue
-    // pointer which advances as it consumes descriptors and is NOT reset by TSTART. The
-    // software producer index and the hardware consumer index were independent, so a kick
-    // serviced wherever the controller was parked and our descriptor was picked up on a
-    // LATER kick — we polled the wrong descriptor at the wrong time, timed out, and the
-    // frame went out anyway.
+    // A TSTART write CAN BE SILENTLY DROPPED by the hardware. Linux expects this: it
+    // notes the condition via TSR.TGO (transmitter still going) and has the TCOMP/TXUBR
+    // IRQ retrigger the queue (macb_main.c:2058), where macb_tx_restart() re-reads TBQP,
+    // compares the controller's consumer position against the software head, and
+    // RE-ISSUES TSTART if the controller has not caught up (macb_main.c:1834-1843).
     //
-    // A descriptor ring requires the producer to follow the consumer's order. For this
-    // synchronous one-frame-at-a-time path the cheapest way to honour that is to point
-    // the controller AT the descriptor we armed immediately before kicking, making each
-    // transmit independent of whatever pointer state the previous one left behind.
-    // (TBQPH first, then TBQP: the low write is what latches the pair.)
-    let ringbus = dphys as u64 + DMA_BUS_OFFSET;
-    w(GEM, TBQPH, (ringbus >> 32) as u32);
-    w(GEM, TBQP, ringbus as u32);
-    unsafe { core::arch::asm!("dsb sy") };
-
+    // heqk kicked exactly once and then polled for ~50 ms. A dropped kick therefore
+    // produced a frame that never started, a full-budget timeout, and a reported failure
+    // — while the NEXT frame's kick (by then the engine has settled) succeeded. That is
+    // the deterministic 50% alternation, and it is frame-sequential, which is why it
+    // appeared identically at NTX=1 and NTX=2.
+    //
+    // This path has no interrupts, so the synchronous equivalent of Linux's IRQ
+    // retrigger is to re-issue TSTART periodically while waiting.
+    //
+    // ⚠️ DO NOT convert these NCR writes to a read-modify-write (NCR |= TSTART) even
+    // though that is what macb does. It was tried and it BROKE TRANSMISSION COMPLETELY:
+    // the burst went 0 sent / 200 FAILED with TSR reading 0x0000 on every frame — no
+    // TXCOMP, no UBR, no TGO, i.e. the transmitter was not running AT ALL. NCR readback
+    // is not trustworthy on this integration (TSTART is self-clearing, and the readback
+    // did not carry TE), so `readback | TSTART` left TE CLEAR and disabled the
+    // transmitter. The explicit write below guarantees RE|TE|MPE are set every time.
+    /// How often (in poll iterations) to re-issue a possibly-dropped TSTART.
+    const RETRIGGER_SPINS: u32 = 2_000;
     w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART); // kick the TX DMA
     // Poll for completion: HW sets USED (bit31) in word1 when the frame is out.
     let mut spins = 0u32;
     loop {
+        if spins != 0 && spins % RETRIGGER_SPINS == 0 {
+            // The kick may have been dropped (see above). Re-issue it; this is a no-op
+            // for the controller if the frame is already in flight. Explicit write, not
+            // a read-modify-write — see the NCR readback warning above.
+            w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
+        }
         let ctrl = unsafe { read_volatile(d.add(1)) };
         if ctrl & TXD_USED != 0 {
             // Completed. Clear the latched status so it cannot accumulate into the next
@@ -903,11 +916,8 @@ pub fn tx_diag_burst(out: &mut [TxDiag], budget: u32) {
 
         // -- kick. NO TSR clear, NO restart: record the raw mechanism. ----------
         rec.tsr_prekick = r(GEM, TSR);
-        // Mirror tx_frame: resync the controller's queue pointer to this descriptor.
-        let ringbus = (ringbase + slot * DESC_SZ) as u64 + DMA_BUS_OFFSET;
-        w(GEM, TBQPH, (ringbus >> 32) as u32);
-        w(GEM, TBQP, ringbus as u32);
-        unsafe { core::arch::asm!("dsb sy") };
+        // Mirror tx_frame: EXPLICIT kick (NOT read-modify-write — NCR readback is not
+        // trustworthy here; see the warning in tx_frame).
         w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
         rec.tsr_postkick = r(GEM, TSR);
         rec.w1_postkick = unsafe { read_volatile(d.add(1)) };
@@ -915,6 +925,10 @@ pub fn tx_diag_burst(out: &mut [TxDiag], budget: u32) {
         // -- poll ---------------------------------------------------------------
         let mut spins = 0u32;
         loop {
+            // Mirror tx_frame: retrigger a possibly-dropped TSTART while polling.
+            if spins != 0 && spins % 2_000 == 0 {
+                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
+            }
             let ctrl = unsafe { read_volatile(d.add(1)) };
             if ctrl & TXD_USED != 0 {
                 rec.ok = true;
