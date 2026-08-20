@@ -909,8 +909,15 @@ fn cm5_prod_service() -> ! {
             // bit4 TFC / bit6 UND / bit7 HRESP are the halting ones; bit3 alone = the
             // timeout happened with a CLEAN status, which means something else stalled).
             let txerr = arch_aarch64::gem::tx_err_take();
-            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} faults={} empty={} qsecbit={}\n",
-                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, faults, empty, telemetry::score());
+            // RSR is the RX-side counterpart to txerr and the diagnostic that was MISSING
+            // when the NRX 8->64 attempt regressed RX to 16 frames: bit0 BNA (buffers not
+            // available => the ring was exhausted / the controller could not write) vs
+            // bit2 OVR (overrun) vs clean distinguishes "ring overflowed under burst" from
+            // "the controller could not reach the buffers at all". Read-only; the sticky
+            // bits are cleared by the RX path itself.
+            let rsr = arch_aarch64::gem::rsr();
+            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
             // prod-full: throttled M3 persist (interval AND dirty — the reserved
             // window is 32 sectors and every persist rewrites the same LBAs) plus
             // the structural M6 export gate.
