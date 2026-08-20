@@ -2047,7 +2047,32 @@ fn cm5_gem_rx_demo() {
             tsr_postkick: 0, w1_postkick: 0, spins: 0, w1_final: 0, tsr_final: 0, ok: false,
         }; D];
         arch_aarch64::gem::tx_diag_burst(&mut recs, 200_000);
-        kprint!(" [P8-txdiag] per-frame hardware state (NO recovery applied):\n");
+        // [P7-tryboot] M1 CRITERION 4 PREREQUISITE — prove the ON-DEVICE tryboot path.
+    //
+    // A/B rollback needs heqk to arm the firmware's one-shot tryboot flag itself; there is
+    // no on-device `reboot "0 tryboot"` today, which is what has kept M1 at 3/4. Linux
+    // does it through two VideoCore mailbox properties (drivers/firmware/raspberrypi.c:204,
+    // tags from include/soc/bcm2835/raspberrypi-firmware.h), and heqk already has a
+    // metal-proven mailbox — so this is reachable without new transport.
+    //
+    // NON-DESTRUCTIVE ON PURPOSE: arm the flag, read it back, then DISARM it. Nothing
+    // reboots. Verifying the mechanism BEFORE using it destructively means a wrong tag
+    // number costs a console line, not a board that boots somewhere unexpected.
+    {
+        let (before, armed, after) = arch_aarch64::mailbox::tryboot_roundtrip();
+        let ok = matches!(armed, Some(a) if a & arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT != 0)
+            && matches!(after, Some(a) if a & arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT == 0);
+        kprint!(" [P7-tryboot] {} — firmware reboot-flags round-trip: before={:?} armed={:?} after_disarm={:?} (one-shot tryboot bit = {:#x})\n",
+            if ok { "PASS" } else { "FAIL" }, before, armed, after,
+            arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
+        if ok {
+            kprint!("   [P7-tryboot] the on-device A/B trial path is REACHABLE — heqk can arm tryboot itself (M1 criterion 4 unblocked; also the M3 OTA slot-trial prerequisite)\n");
+        } else {
+            kprint!("   [P7-tryboot] mailbox reboot-flags NOT working — do NOT attempt an on-device slot trial; investigate the tag/transport first\n");
+        }
+    }
+
+    kprint!(" [P8-txdiag] per-frame hardware state (NO recovery applied):\n");
         kprint!("   seq ok  tsr_entry w1_entry  w1_armed  tsr_pre tsr_post w1_postkick spins    w1_final  tsr_final\n");
         for r in recs.iter() {
             kprint!("   {:>3} {}   {:#06x}    {:#010x} {:#010x} {:#06x}  {:#06x}   {:#010x}  {:>7} {:#010x} {:#06x}\n",
