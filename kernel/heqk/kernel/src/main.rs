@@ -852,6 +852,37 @@ fn prod_cntpct() -> u64 {
     c
 }
 
+/// rxprof — per-phase accumulators for the RX->verdict->forward loop. Every field is a
+/// SUM of cntpct ticks across `frames` iterations; the heartbeat divides to an average
+/// and converts to microseconds. Reading cntpct is a couple of cycles, so the probe does
+/// not meaningfully perturb what it measures.
+#[cfg(feature = "rxprof")]
+#[derive(Default, Clone, Copy)]
+struct RxProf {
+    reload: u64,  // stub copy + i-cache sync + map_user_code (every iteration)
+    el0: u64,     // enter_user round-trip (the EL0 stub scans the ring + syscalls back)
+    rxstat: u64,  // rx_desc_status
+    copy: u64,    // peek_rx_frame (up to 2 KiB out of the ring)
+    verdict: u64, // packet::verdict (the whole detection chain)
+    tx: u64,      // tx_frame forward (PASS frames only)
+    recycle: u64, // recycle_rx
+    frames: u64,  // processed frames (seen), the divisor
+}
+
+#[cfg(feature = "rxprof")]
+impl RxProf {
+    #[inline(always)]
+    fn report(&self, cntfrq: u64) {
+        let f = self.frames.max(1);
+        let us = |sum: u64| -> u64 { sum.wrapping_mul(1_000_000) / cntfrq / f };
+        kprint!("   [rxprof] n={} avg-us: reload={} el0={} rxstat={} copy={} verdict={} tx={} recycle={} | total={}
+",
+            self.frames, us(self.reload), us(self.el0), us(self.rxstat), us(self.copy),
+            us(self.verdict), us(self.tx), us(self.recycle),
+            us(self.reload + self.el0 + self.rxstat + self.copy + self.verdict + self.tx + self.recycle));
+    }
+}
+
 #[cfg(feature = "cm5")]
 fn cm5_prod_service() -> ! {
     use arch_aarch64::mmu_cm5;
@@ -895,6 +926,8 @@ fn cm5_prod_service() -> ! {
     // "no persistence" and the sensor still runs (PH1: never halts).
     #[cfg(feature = "prod-full")]
     let mut pf = prodfull::ProdFull::init();
+    #[cfg(feature = "rxprof")]
+    let mut prof = RxProf::default();
 
     kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
     loop {
@@ -918,6 +951,11 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            #[cfg(feature = "rxprof")]
+            {
+                prof.report(cntfrq);
+                prof = RxProf::default(); // per-window: each line = traffic since the last
+            }
             // prod-full: throttled M3 persist (interval AND dirty — the reserved
             // window is 32 sectors and every persist rewrites the same LBAs) plus
             // the structural M6 export gate.
@@ -931,6 +969,9 @@ fn cm5_prod_service() -> ! {
                 }
             }
         }
+        // rxprof: mark the start of the per-frame work (after the heartbeat book-keeping).
+        #[cfg(feature = "rxprof")]
+        let mut mark = prod_cntpct();
         // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
         // iteration was contained by the EL0 fault handler; this reload is the
         // structural self-heal ([P7c] proves the contain+restart survives).
@@ -938,10 +979,14 @@ fn cm5_prod_service() -> ! {
         unsafe { core::ptr::copy_nonoverlapping(ids.0 as *const u8, code_pa as *mut u8, len) };
         arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
         mmu_cm5::map_user_code(ucode, code_pa);
+        #[cfg(feature = "rxprof")]
+        { let t = prod_cntpct(); prof.reload += t.wrapping_sub(mark); mark = t; }
 
         DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
         // Drop to EL0; returns here on the driver's report syscall OR on a contained fault.
         unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
+        #[cfg(feature = "rxprof")]
+        { let t = prod_cntpct(); prof.el0 += t.wrapping_sub(mark); mark = t; }
 
         let report = DRIVER_REPORT.load(Ordering::Relaxed);
         if report == RPT_SENTINEL {
@@ -961,14 +1006,20 @@ fn cm5_prod_service() -> ! {
                 continue;
             }
         };
+        #[cfg(feature = "rxprof")]
+        { let t = prod_cntpct(); prof.rxstat += t.wrapping_sub(mark); mark = t; }
         // AUDIT D5: size the buffer to the HW RX buffer (RXBUF up to 2048), NOT 1600 —
         // a 1601..2048 B frame must not be truncated before verdict (deep-L7 evasion).
         let mut buf = [0u8; packet::FRAME_SZ];
         let n = flen.min(buf.len());
         arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
+        #[cfg(feature = "rxprof")]
+        { let t = prod_cntpct(); prof.copy += t.wrapping_sub(mark); mark = t; }
         seen += 1;
         // The verified rule plane's verdict on the real frame.
         let (_port, v) = packet::verdict(&buf[..n]);
+        #[cfg(feature = "rxprof")]
+        { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
         if v == packet::PASS {
             // ENFORCE: forward on the wire; a TX-completion timeout is counted (AUDIT D2)
             // so `seen == forwarded + dropped + tx_fail` holds and a lost PASS frame is
@@ -978,6 +1029,8 @@ fn cm5_prod_service() -> ! {
             } else {
                 tx_fail += 1;
             }
+            #[cfg(feature = "rxprof")]
+            { let t = prod_cntpct(); prof.tx += t.wrapping_sub(mark); mark = t; }
         } else {
             // ENFORCE: threat verdict — dropped, NOT forwarded.
             dropped += 1;
@@ -996,7 +1049,14 @@ fn cm5_prod_service() -> ! {
                 pf.on_threat(&ev);
             }
         }
+        // rxprof: on the DROP branch `mark` still points at the end of `verdict`, so reset it
+        // here to avoid charging drop-branch bookkeeping to `recycle`. On PASS it points at
+        // end-of-tx. Either way, time recycle_rx alone.
+        #[cfg(feature = "rxprof")]
+        let mark = prod_cntpct();
         arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
+        #[cfg(feature = "rxprof")]
+        { prof.recycle += prod_cntpct().wrapping_sub(mark); prof.frames += 1; }
         // A processed-frame beat too, so a busy link reports progress between the ~5 s ticks.
         if (seen & 0xff) == 0 && seen != 0 {
             kprint!("   [PROD hb] seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={} (frame-beat)\n",
