@@ -2116,6 +2116,20 @@ fn cm5_gem_rx_irq_probe() {
         arch_aarch64::gem::rx_msix_test_clear();
         kprint!(" [P8-emit] RP1 MSIX_CFG(6).TEST force-emit: INTID-166 fired={} GIC-pending={} (fired => RP1 emit works, gap is the level-source trigger)\n",
             tf_fired, pend_tf);
+        // EDGE test: the source has been continuously high since boot (INTSTATL=0x40), so the
+        // one MSI it emitted went to the stale table and it never re-triggered. Clear the GEM
+        // interrupt to DEASSERT source 6, IACK to re-arm, then let a fresh frame re-assert
+        // (rising edge) — which should finally emit an MSI to the now-correct table.
+        let (il0, _) = arch_aarch64::gem::rp1_intstat();
+        let _ = arch_aarch64::gem::rx_irq_ack(); // read GEM ISR (clears) + W1C RSR -> deassert
+        arch_aarch64::gem::rx_msix_iack();
+        let (il1, _) = arch_aarch64::gem::rp1_intstat();
+        let ed_before = GEM_RX_IRQS.load(Ordering::Relaxed);
+        let mut s4 = 0u64;
+        while GEM_RX_IRQS.load(Ordering::Relaxed) == ed_before && s4 < 300_000_000 { s4 += 1; core::hint::spin_loop(); }
+        let ed_fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(ed_before);
+        kprint!(" [P8-edge] deassert->reassert: INTSTATL bit6 {:#x}->{:#x} (want 0x40->0x00 then re-arm); INTID-166 fired={} (fired => level-edge was the gap; DRV-1 CLOSED)\n",
+            il0 & 0x40, il1 & 0x40, ed_fired);
     }
     // Re-mask IRQs so the trailing reboot path stays deterministic.
     unsafe { core::arch::asm!("msr daifset, #2", options(nomem, nostack)) };
