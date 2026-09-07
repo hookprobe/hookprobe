@@ -1425,6 +1425,18 @@ pub fn msi_sink_unmask() {
     }
 }
 
+/// DRV-1 (mipdump): is a GIC SPI pending? Reads the GICD ISPENDR bit for `intid` (CM5
+/// GIC-400 distributor @ 0x10_7FFF_9000, ISPENDR base 0x200). Ground truth for "did anything
+/// raise this interrupt" independent of whether it was taken. Used to tell a working mip0->
+/// GIC raise (pending set) from a dead one.
+#[cfg(feature = "mipdump")]
+pub fn gic_spi_pending(intid: u32) -> bool {
+    const GICD: usize = 0x10_7FFF_9000;
+    let reg = GICD + 0x200 + ((intid / 32) as usize) * 4;
+    let v = unsafe { read_volatile(reg as *const u32) };
+    (v >> (intid % 32)) & 1 == 1
+}
+
 /// DRV-1 ISOLATION self-test (mipdump): inject the mip0 doorbell write from the CPU side
 /// (write the vector to MIP_INT_RAISE at CPU 0x10_0013_0000+0x00) and read STATUSL_HOST
 /// (0x80) back. This exercises mip0 INDEPENDENT of the RP1's MSI generation: if the
