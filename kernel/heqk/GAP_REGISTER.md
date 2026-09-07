@@ -189,6 +189,50 @@ Every remaining gap is NOT a surgical fix — categorized honestly:
 P13 PASS on metal (deny-list enforced, i2c1 EL0-driver works, eMMC block device up 59640MiB, MBR+guard OK; SPI SRL loopback WARN non-fatal). P15 metal run FOUND a security-critical HMAC bug (commit ff80854): the incremental Hasher dropped a message tail <=32 bytes, so seal tamper detection LEAKED for short ciphertexts — QEMU missed it (36-byte test secret took the good path). Fixed + QEMU gate now uses a 28-byte secret to guard the path. Confirms XC-15 (dual-backend coverage gap).
 
 
+## DRV-1 (RP1 GEM RX-IRQ) — FULL CHARACTERIZATION 2026-09-07
+
+Taken as far as it can go responsibly WITHOUT the RP1 peripherals datasheet. Not closed;
+precisely located and reprioritized.
+
+**DONE + VERIFIED READY (the entire BCM2712 side):**
+- GIC SPI 134 -> INTID 166 routing (`Gic::enable_spi(166)`), idempotent.
+- GEM `IER.RCOMP` (`gem::rx_irq_enable`).
+- `handle_irq` INTID-166 branch: record `GEM_RX_IRQS`, `gem::rx_irq_ack`, `gic.eoi`. Correct.
+- `[P8-irq]` bounded probe wires+tests it end-to-end; masks the timer PPI first.
+- => the instant the RP1 MIP delivers, RX-IRQ works with NO further BCM2712-side change.
+
+**THE ONE MISSING PIECE:** program the RP1 MIP (MSI-X) entry for internal source 6
+(RP1_INT_ETH) so RCOMP emits the MSI write the BCM2712 mip0 converts to SPI 134.
+
+**WHY IT IS NOT SAFE TO DO BLIND (do not "just try" the recipe below on metal):**
+1. The prior recipe (BUILD_FLASH_PLAN.md 5.2: `MSIX_CFG_6` at RP1 `0x108000 + 0x08 + 6*4`,
+   MSI addr `0xFF_FFFF_F000`, data 6, + maybe an RC2 inbound window
+   `0xFF_FFFF_F000 -> 0x10_0013_0000`) was NEVER made to fire — it is an untested hypothesis.
+2. Its description is internally inconsistent — "ENABLE + addr + data" cannot fit the single
+   u32 register it names, so the true MIP register LAYOUT is unconfirmed.
+3. There is NO RP1 irqchip driver in the RPi Linux source (checked): the RP1-internal ->
+   GIC-SPI path is RP1 silicon + `pcie-brcmstb` MSI + firmware, so the register map is not
+   derivable from the kernel source we have — it needs the RP1 peripherals datasheet.
+4. Programming it writes an MSI DMA TARGET ADDRESS into RP1 HW; a wrong value makes RP1
+   post a write to that address on every RX frame, and DRV-2 (IOMMU containment) is
+   UNRESOLVED — a stray MSI write is exactly the scribble DRV-2 would catch and cannot yet.
+
+**THE SAFE, REFERENCE-DRIVEN UNBLOCK (the "use Linux as reference" method):** boot Linux on
+the board (`cm5-boot/linux-observe/`) and DUMP the RP1 MIP registers Linux programs for the
+ethernet interrupt (a READ, not a write) — capturing the real base / offset / addr / data /
+enable layout from a working system. Then mirror it in `gem::rx_msix_program()` (cm5),
+read-back-verified, tested via `[P8-irq]`. This is non-speculative and cannot scribble.
+
+**REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
+frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
+(PSI / conntrack-saturation / self-revert TTL) with paced traffic. DRV-1's payoff is
+retiring the poll-spin (CPU efficiency) + instantaneous line-rate BURST absorption
+(currently ~500/2000) — a PRODUCTION-HARDENING / burst-resilience property, not enforcement
+correctness. It belongs with the PH-tier metal items, gated behind DRV-2 (IOMMU) for the
+MSI-write safety net, and behind the RP1 register dump for the layout.
+
+---
+
 ## DEEP-INVESTIGATION AUDIT ROUND 2026-07-25 (post-P17, new P11-P17 + CORE code)
 A fresh multi-agent audit of the newly-added code (caps/notify/netq/devq/seal/store/rp1/packet) surfaced these. Closed one per commit with a regression gate:
 
