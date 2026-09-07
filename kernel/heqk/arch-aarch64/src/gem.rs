@@ -1179,6 +1179,60 @@ pub fn pcie_bridge_enumerate() -> u32 {
     }
 }
 
+/// DRV-1 (metal 2026-09-08): the RP1 MSI-X table lives in BAR0 (PCIe 0x80410000, a 32-bit
+/// non-prefetchable region), but reads of CPU 0x1f_80410000 returned 0xffffffff — there is
+/// no RC OUTBOUND window mapping that CPU range to PCIe (firmware only set up the
+/// prefetchable window for the BAR1 peripherals at CPU 0x1C). Program a FREE brcmstb RC
+/// outbound window (pcie-brcmstb.c brcm_pcie_set_outbound_win) so BAR0 becomes MMIO-
+/// reachable and the MSI-X table can be written. SAFE: scans all 4 windows and only uses
+/// one whose BASE_LIMIT reads 0 (unused) — never clobbers firmware's live peripheral
+/// window (which carries the GEM MMIO the whole sensor depends on). Registers (RC base):
+///   WIN_LO(w)=0x400c+8w  WIN_HI(w)=0x4010+8w  BASE_LIMIT(w)=0x4070+4w  (base[15:4]MB,
+///   limit[31:20]MB)  BASE_HI(w)=0x4080+8w[7:0]  LIMIT_HI(w)=0x4084+8w[7:0] (MB>>12).
+/// Returns the window index used, or 0xff if none free.
+#[cfg(feature = "mipdump")]
+pub fn pcie_map_bar0_window() -> u8 {
+    const IDX: usize = PCIE_RC + 0x9000;
+    const DATA: usize = PCIE_RC + 0x8000;
+    unsafe {
+        // Read BAR0 (bus1 dev0 config 0x10) via the now-working EXT_CFG path.
+        write_volatile(IDX as *mut u32, 1 << 20);
+        core::arch::asm!("dsb sy");
+        let bar0 = read_volatile((DATA + 0x10) as *const u32) & !0xf;
+        let pcie_base = (bar0 & !0xf_ffff) as u64; // MB-align down
+        let cpu_base = 0x1f_0000_0000u64 + pcie_base; // 32-bit outbound window
+        let size = 0x10_0000u64; // 1 MB covers the table
+        crate::_print(format_args!(" [DRV1] outbound map: BAR0={:#010x} -> PCIe base {:#x} CPU base {:#x}\n", bar0, pcie_base, cpu_base));
+        // Dump the 4 windows; pick the first free (BASE_LIMIT==0).
+        let mut win = 0xffu8;
+        for w in 0..4u8 {
+            let bl = read_volatile((PCIE_RC + 0x4070 + (w as usize) * 4) as *const u32);
+            let lo = read_volatile((PCIE_RC + 0x400c + (w as usize) * 8) as *const u32);
+            crate::_print(format_args!("   win{}: BASE_LIMIT={:#010x} WIN_LO={:#010x}\n", w, bl, lo));
+            if bl == 0 && win == 0xff { win = w; }
+        }
+        if win == 0xff {
+            crate::_print(format_args!(" [DRV1] no free outbound window — cannot map BAR0\n"));
+            return 0xff;
+        }
+        let cpu_mb = cpu_base / 0x10_0000;
+        let lim_mb = (cpu_base + size - 1) / 0x10_0000;
+        // WIN_LO/HI = pcie base.
+        write_volatile((PCIE_RC + 0x400c + (win as usize) * 8) as *mut u32, pcie_base as u32);
+        write_volatile((PCIE_RC + 0x4010 + (win as usize) * 8) as *mut u32, (pcie_base >> 32) as u32);
+        // BASE_LIMIT: base in [15:4], limit in [31:20] (MB units, low 12 bits).
+        let bl = (((cpu_mb as u32) << 4) & 0xfff0) | (((lim_mb as u32) << 20) & 0xfff0_0000);
+        write_volatile((PCIE_RC + 0x4070 + (win as usize) * 4) as *mut u32, bl);
+        // BASE_HI / LIMIT_HI: MB >> 12, low 8 bits.
+        write_volatile((PCIE_RC + 0x4080 + (win as usize) * 8) as *mut u32, (cpu_mb >> 12) as u32 & 0xff);
+        write_volatile((PCIE_RC + 0x4084 + (win as usize) * 8) as *mut u32, (lim_mb >> 12) as u32 & 0xff);
+        core::arch::asm!("dsb sy");
+        crate::_print(format_args!(" [DRV1] outbound win{} programmed: BASE_LIMIT={:#010x} BASE_HI={:#x} LIMIT_HI={:#x} (CPU {:#x}->PCIe {:#x}, 1MB)\n",
+            win, bl, (cpu_mb >> 12) & 0xff, (lim_mb >> 12) & 0xff, cpu_base, pcie_base));
+        win
+    }
+}
+
 /// DRV-1 (the last piece): walk the RP1 endpoint's PCIe config space and PROGRAM its
 /// standard PCI MSI-X TABLE entry for the ETH source so an RX-complete raises a real
 /// interrupt. Devicetree ground truth (bcm2712.dtsi): `pcie2 msi-parent = <&mip0>`,

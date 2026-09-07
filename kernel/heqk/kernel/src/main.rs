@@ -954,6 +954,7 @@ fn cm5_prod_service() -> ! {
         // MSI-X table entry (mip0 doorbell) + BME, then unmask mip0. This is the full
         // chain that should make the RP1 ETH source emit MSIs the mip0 sink latches.
         let _ = arch_aarch64::gem::pcie_bridge_enumerate();
+        let _ = arch_aarch64::gem::pcie_map_bar0_window();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
     }
@@ -2064,6 +2065,7 @@ fn cm5_gem_rx_irq_probe() {
     #[cfg(feature = "mipdump")]
     {
         let _ = arch_aarch64::gem::pcie_bridge_enumerate();
+        let _ = arch_aarch64::gem::pcie_map_bar0_window();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
     }
