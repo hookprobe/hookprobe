@@ -955,6 +955,7 @@ fn cm5_prod_service() -> ! {
         // chain that should make the RP1 ETH source emit MSIs the mip0 sink latches.
         let _ = arch_aarch64::gem::pcie_bridge_enumerate();
         let _ = arch_aarch64::gem::pcie_map_bar0_window();
+        let _ = arch_aarch64::gem::pcie_inbound_mip_doorbell();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
         arch_aarch64::gem::rx_msix_iack();
@@ -2070,6 +2071,7 @@ fn cm5_gem_rx_irq_probe() {
     {
         let _ = arch_aarch64::gem::pcie_bridge_enumerate();
         let _ = arch_aarch64::gem::pcie_map_bar0_window();
+        let _ = arch_aarch64::gem::pcie_inbound_mip_doorbell();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
         // Re-arm source 6 (clear the auto-mask from the early stray assertion) so a fresh
