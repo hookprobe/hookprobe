@@ -988,6 +988,9 @@ fn cm5_prod_service() -> ! {
                 let (ml, mh, rc) = arch_aarch64::gem::msi_sink_status();
                 let (il, ih) = arch_aarch64::gem::rp1_intstat();
                 kprint!("   [DRV1-hb] rp1_INTSTATL={:#010x} (bit6=ETH asserts?) INTSTATH={:#010x} | mip_sL={:#010x} mip_sH={:#010x} rc_s={:#010x}\n", il, ih, ml, mh, rc);
+                // ISOLATION: inject the doorbell from the CPU side to test mip0 alone.
+                let (sb, sv, sx) = arch_aarch64::gem::mip_selftest();
+                kprint!("   [DRV1-st] mip_selftest STATUSL: before={:#010x} after_raise6={:#010x} after_raise(1<<6)={:#010x} (nonzero => mip0 latches; RP1-emit is the gap)\n", sb, sv, sx);
                 // Re-arm source 6 each beat so a fresh MSI is generated while frames flow —
                 // proves the full RP1->mip0 path independent of one-shot auto-mask timing.
                 arch_aarch64::gem::rx_msix_iack();
