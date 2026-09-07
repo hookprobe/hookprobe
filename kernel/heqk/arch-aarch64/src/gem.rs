@@ -1425,6 +1425,28 @@ pub fn msi_sink_unmask() {
     }
 }
 
+/// DRV-1 ISOLATION self-test (mipdump): inject the mip0 doorbell write from the CPU side
+/// (write the vector to MIP_INT_RAISE at CPU 0x10_0013_0000+0x00) and read STATUSL_HOST
+/// (0x80) back. This exercises mip0 INDEPENDENT of the RP1's MSI generation: if the
+/// injected raise latches in STATUSL_HOST, the mip0 sink (and, with the GIC routed, SPI
+/// 134) works and the remaining gap is purely the RP1 emitting/routing the MSI; if it does
+/// NOT latch, mip0 itself needs more setup. Tries data=6 (the vector) then data=1<<6 (in
+/// case RAISE is a bitmask). Returns (statusL before, after data=6, after data=1<<6).
+#[cfg(feature = "mipdump")]
+pub fn mip_selftest() -> (u32, u32, u32) {
+    const MIP: usize = 0x10_0013_0000;
+    unsafe {
+        let before = read_volatile((MIP + 0x80) as *const u32);
+        write_volatile((MIP + 0x00) as *mut u32, 6); // MIP_INT_RAISE = vector 6
+        core::arch::asm!("dsb sy");
+        let after_val = read_volatile((MIP + 0x80) as *const u32);
+        write_volatile((MIP + 0x00) as *mut u32, 1 << 6); // try bitmask form
+        core::arch::asm!("dsb sy");
+        let after_bit = read_volatile((MIP + 0x80) as *const u32);
+        (before, after_val, after_bit)
+    }
+}
+
 /// DRV-1 re-arm (mipdump): write MSIX_CFG(6).IACK (bit2) to clear the auto-mask the RP1
 /// sets "when the interrupt was generated" (RP1 datasheet Table 89). A level source that
 /// asserted early — before the MSI-X table was correctly programmed — fired one MSI to the
