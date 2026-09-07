@@ -318,6 +318,62 @@ The dual-sink experiment code (gem::msi_sink_unmask/msi_sink_status + the [DRV1-
 stays in-tree behind `mipdump` for whichever option runs next. Evidence:
 ~/heqk-metal-logs/20260908-drv1-dualsink-both-zero-table-unprogrammed.log
 
+**SESSION 2026-09-08 — DRV-1 driven from "blocked mystery" to a fully-built MSI chain with
+the sink PROVEN and one narrow gap left (RP1 EP emit).** Went to the RPi Linux drivers AND the
+official RP1 peripherals datasheet (not guessing). Every layer below is now metal-verified;
+the code is all `mipdump`-gated (prod byte-identical). ~13 flash cycles, evidence in
+~/heqk-metal-logs/2026090[78]-drv1-*.log.
+
+WHAT WAS BUILT + PROVEN ON METAL (all in gem.rs, mipdump):
+1. pcie_bridge_enumerate() — ROOT CAUSE of the 0xffffffff config reads: the RC PCIe bridge
+   was never bus-enumerated (secondary/subordinate=0/0), so bus-1 config = UR = 0xffffffff
+   (firmware's AXI_READ_ERROR_DATA). Writing RC bridge class=0x060400 + primary/secondary/
+   subordinate=0/1/1 (RC+0x18=0x00010100) + MSE|BME (RC+0x04|=0x06) FIXED it:
+   **RP1 bus1 VID/DID=0x00011de4** now reads. (RC status 0x4068=0x0003e0b0 => DL_ACTIVE|
+   PHYLINKUP set.)
+2. pcie_map_bar0_window() — the MSI-X table lives in RP1 BAR0 (PCIe 0x80410000, 32-bit),
+   which had no RC outbound window. Program a FREE brcmstb outbound window (scan 4; free =
+   limit<base i.e. BASE_LIMIT=0x10) mapping a linear alias CPU=PCIe+0x40_0000_0000 =>
+   CPU 0x40_80400000 -> PCIe 0x80400000. **Table now readable + writable.**
+3. pcie_inbound_mip_doorbell() — RC_BAR2 inbound window PCIe 0xff_fffff000 (4KB) -> CPU
+   0x10_0013_0000 (mip0 INT_RAISE), since heqk only had the RAM DMA inbound (RC_BAR1).
+4. rx_msix_program() — walks the MSI-X cap (cap@0xb0, BIR=0 off=0), sets BME on the EP, and
+   programs table entry 6: **addr=0xff_fffff000 data=6 vctrl=0 (read-back CONFIRMED)**, then
+   enables MSI-X in msgctrl (0x803c0011).
+5. msi_sink_unmask() — mip0 HOST unmask (MASKL/H_HOST=0, CFGL/H_HOST=~0, MASKL/H_VPU=~0).
+6. rx_msix_iack() — clears the MSIX_CFG(6) auto-mask.
+7. **mip0 -> GIC -> handler PROVEN:** [P8-inj] a CPU write to MIP_INT_RAISE=6 -> **INTID-166
+   fired=1**. GIC SPI 134 routing, mip0 CFG, vector->SPI mapping ALL correct. (STATUSL reads
+   0 because an unmasked raise forwards immediately — use gic_spi_pending()/fired, not STATUS.)
+8. GEM asserts into RP1: INTSTATL bit6 = 0x40 (raw source 6 active) during prod.
+
+THE ONE REMAINING GAP — the RP1 EP does not EMIT the MSI:
+- [P8-emit] MSIX_CFG(6).TEST force-emit -> INTID-166 fired=0 (nothing reaches the GIC).
+- LEADING HYPOTHESIS (untested cleanly yet): the source is stuck LEVEL-HIGH — prod enables
+  GEM IER.RCOMP but NEVER clears the GEM ISR (the EL0/DMA ring path doesn't read ISR), so
+  RCOMP stays set => INTSTATL bit6 permanently 0x40. MSIX_CFG likely emitted ONE MSI when the
+  level first rose (to the then-unprogrammed table => lost) + auto-masked; a continuously-high
+  level makes NO new rising edge, and TEST OR'd onto an already-high source is no edge either,
+  so it never re-emits. IACK clears the mask but without an edge nothing re-generates.
+- [P8-edge] tried deassert(clear GEM ISR)->reassert, but ran in the PROBE where INTSTATL bit6
+  was already 0 (no RX pending pre-prod) — inconclusive, wrong timing.
+
+NEXT STEPS TO CLOSE (pick up here):
+  a) Do the deassert/reassert edge test DURING PROD (source high, 0x40): each heartbeat, clear
+     the GEM ISR (rx_irq_ack) to drop RCOMP, IACK, then a fresh frame re-asserts (rising edge)
+     -> should emit to the correct table -> mip_sL/INTID-166. If it fires, the fix is simply
+     "clear the GEM ISR periodically so RCOMP edges" (or wire the GEM RCOMP ack into the drain).
+  b) If still nothing, read the MSI-X PBA (cap+8 BIR/offset) bit6 to split generated-but-blocked
+     (PBA set => inbound/BME/mask issue) vs not-generated (PBA clear => MSIX_CFG trigger).
+  c) Consider the RC-MSI sink alternative (firmware armed it: BAR_CFG=0xfffffffd doorbell
+     0xf_ffff_fffc data 0x6540) — point the table there + unmask INTR2 + route GIC SPI 234.
+Still NOT an M2 gate — polled RX is fully functional (drop=0). Value = retire the poll-spin.
+
+Reference pulled this session: RP1 peripherals datasheet (MSIX_CFG_x=0x008+4x bit0 ENABLE/
+bit1 TEST/bit2 IACK/bit3 IACK_EN; INTSTATL 0x108; eth=source 6; BARs 32-bit; peripherals via
+BAR1); irq-bcm2712-mip.c (mip regs, msg.data=vector, GIC SPI 128+v); pcie-brcmstb.c (EXT_CFG,
+inbound/outbound win regs, bus-enum). Extracted under /home/andrei/.claude/jobs/*/tmp/.
+
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
 (PSI / conntrack-saturation / self-revert TTL) with paced traffic. DRV-1's payoff is
