@@ -129,6 +129,13 @@ prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
 #
 #   cargo build -p kernel --features rollback-test --release
 rollback-test = ["prod"]
+# rxprof — per-phase cntpct instrumentation of the prod RX->verdict->forward loop.
+# PURE MEASUREMENT, zero behaviour change: times stub-reload / EL0-excursion / rx-status /
+# frame-copy / verdict / tx / recycle and reports per-phase averages in the heartbeat.
+# Exists because RX throughput was guessed wrong THREE times; measure the path before
+# restructuring it. Additive to prod; not shipped.
+#   FEATURES=prod,rxprof builder/make-cm5-heqk-image.sh
+rxprof = ["prod"]
 
 [[bin]]
 name = "kernel"
