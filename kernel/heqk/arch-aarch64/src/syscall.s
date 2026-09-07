@@ -168,7 +168,13 @@ gem_rx_stub:
     cmp  x2, #128                  // NRX — MUST match gem.rs `const NRX` (see its doc comment)
     b.lo 1b
     add  x4, x4, #1               // no frame this pass; bounded spin + retry
-    movz x9, #0x0400, lsl #16     // 0x400_0000 bound (~a second, to catch live traffic)
+    movz x9, #0x8000, lsl #0      // 0x8000 bound (~tens of us). METAL 2026-09-07: the old
+                                  // 0x0400_0000 (~seconds) bound was CATASTROPHIC under load —
+                                  // rxprof measured el0=15.6 s/frame during a burst. One frame
+                                  // per excursion + a multi-second empty-scan wait means when the
+                                  // ring overflows (BNA) the stub finds nothing and burns the full
+                                  // bound, so the ring never drains. A short bound returns fast, the
+                                  // kernel recycles + re-arms, BNA clears, the ring drains.
     cmp  x4, x9
     b.lo 0b
     mov  x0, xzr                  // timeout -> report 0
@@ -238,7 +244,8 @@ gem_ids_stub:
                                   // fills, they are never recycled, BNA fires and RX DIES.
     b.lo 1b
     add  x4, x4, #1
-    movz x9, #0x0400, lsl #16     // ~1s spin bound
+    movz x9, #0x8000, lsl #0      // ~tens of us (was ~1s) — see gem_rx_stub note above.
+                                  // MUST match: both stubs share this idle-wait discipline.
     cmp  x4, x9
     b.lo 0b
     mov  x0, xzr                  // timeout -> 0
