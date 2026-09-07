@@ -233,7 +233,34 @@ ON METAL, grounded exactly in Linux `drivers/mfd/rp1.c` (not guessed):
 - Still `0 INTID-166 IRQs`, `INTSTATL=0` => the PCIe MSI-X TABLE (doorbell addr/data) is NOT
   firmware-programmed. DRV-1 is now isolated to EXACTLY that one remaining piece.
 
-**REMAINING (precise) + DE-RISKED:** program the RP1's PCIe MSI-X CAPABILITY TABLE entry for
+**DELIVERY MODEL RESOLVED ON METAL 2026-09-07 (RC MSI register read) — corrects a wrong
+heqk assumption.** The brcmstb RC MSI registers read:
+  BAR_CFG_LO(0x4044)=0xfffffffd  HI(0x4048)=0x0000000f  -> doorbell 0xf_ffff_fffc + MSI-enable
+  DATA_CFG(0x404c)=0xffe06540 (32-vector mode)  INTR2_STAT(0x4500)=0  MASK(0x450c)=0xffffffff
+=> The RP1 uses the brcmstb RC's CONSOLIDATED MSI DEMUX (model a), and FIRMWARE ALREADY
+PROGRAMMED the doorbell. Path: RP1 MSI-X write -> RC doorbell 0xf_ffff_fffc -> RC sets a bit
+in INTR2_STAT(0x4500) -> RC's SINGLE MSI SPI -> software reads 0x4500 and demuxes.
+heqk's "RP1 src 6 -> dedicated SPI 134 / INTID 166" (model b) is WRONG — GEM_RX_INTID=166 and
+the per-source handler branch must be REWORKED to the RC-MSI-demux shape. All 32 vectors are
+currently MASKED (0x450c=0xffffffff).
+
+SAFETY FULLY RELIEVED: the doorbell 0xf_ffff_fffc is a top-of-PCIe-space MMIO capture in the
+RC, NOT system RAM, so programming the RP1 MSI-X table to target it cannot scribble memory —
+the DRV-2 dependency is moot for DRV-1.
+
+**REMAINING (now a bounded IMPLEMENTATION session, no unknowns):**
+1. Rework handle_irq: the RC MSI is ONE consolidated SPI (not per-source INTID 166) — on it,
+   read INTR2_STAT(0x4500), demux the set vector, ack via INTR2_CLR, eoi. Discover the RC2
+   MSI SPI number (BCM2712 RC2) — the one place still needing a datasheet/dt value.
+2. Unmask the chosen vector: write INTR2_MASK_CLR (MSI_INTR2 base 0x4500 + the CLR offset).
+3. Program the RP1 endpoint MSI-X TABLE entry: addr=0xf_ffff_fffc, data=0xffe06540|vector
+   (both now KNOWN from the RC read). Needs the RP1 MSI-X table BAR+offset (a small ECAM read
+   of the RP1 endpoint's MSI-X capability, or the RP1 datasheet).
+4. RP1 MSIX_CFG(6) enable — ALREADY DONE + metal-verified (pre=0->post=9).
+
+The OLD "remaining" text below is superseded by the model resolution above.
+
+**(superseded) program the RP1's PCIe MSI-X CAPABILITY TABLE entry for
 vector 6 with `addr = brcmstb MSI doorbell` and `data = 0x6540 | 6`
 (pcie-brcmstb.c: `msg->data = (0xffff & PCIE_MISC_MSI_DATA_CONFIG_VAL_32) | hwirq`,
 `msi_target_addr = BRCM_MSI_TARGET_ADDR_* ~0xff_ffff_fffc`). CRUCIAL: that target is the
