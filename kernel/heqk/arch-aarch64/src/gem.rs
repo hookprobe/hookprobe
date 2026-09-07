@@ -1122,6 +1122,16 @@ pub fn rx_msix_setup() -> u32 {
         let post = read_volatile((MIP + REG_RW + CFG6) as *const u32);
         crate::_print(format_args!(" [DRV1] MSIX_CFG(6) enable: pre={:#010x} -> post={:#010x} (want ENABLE|IACK_EN=0x9); INTSTATL pre={:#010x}\n",
             pre, post, stat_pre));
+        // READ-ONLY: dump the brcmstb RC MSI controller (pcie-brcmstb.c) to disambiguate
+        // the delivery model. If BAR_CONFIG_LO/HI + DATA_CONFIG are programmed, the RP1
+        // uses the RC's CONSOLIDATED MSI demux (model a: one SoC IRQ + INTR2 status 0x4500),
+        // NOT a dedicated per-source SPI 134 (model b, which heqk's handler assumes). All
+        // reads of the RC block heqk already writes (PCIE_RC = 0x10_0012_0000). No writes.
+        let rc = |off: usize| -> u32 { read_volatile((PCIE_RC + off) as *const u32) };
+        crate::_print(format_args!(" [DRV1] RC MSI: BAR_CFG_LO(0x4044)={:#010x} HI(0x4048)={:#010x} DATA_CFG(0x404c)={:#010x} INTR2_STAT(0x4500)={:#010x}\n",
+            rc(0x4044), rc(0x4048), rc(0x404c), rc(0x4500)));
+        crate::_print(format_args!(" [DRV1] RC MSI: INTR2_MASK_STAT(0x450c)={:#010x} (model: nonzero BAR_CFG => RC-demux (a); zero => dedicated mip SPI (b))\n",
+            rc(0x450c)));
         post
     }
 }
