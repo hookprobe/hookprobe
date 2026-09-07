@@ -1200,16 +1200,27 @@ pub fn pcie_map_bar0_window() -> u8 {
         core::arch::asm!("dsb sy");
         let bar0 = read_volatile((DATA + 0x10) as *const u32) & !0xf;
         let pcie_base = (bar0 & !0xf_ffff) as u64; // MB-align down
-        let cpu_base = 0x1f_0000_0000u64 + pcie_base; // 32-bit outbound window
+        // Map to a CPU alias disjoint from firmware's low windows: CPU = PCIe + 0x40_0000_0000
+        // (256 GB, inside the mmu_cm5 GB4..511 identity map). Linear alias -> reader uses the
+        // same offset. cpu_base MB-aligned to match pcie_base.
+        const ALIAS: u64 = 0x40_0000_0000;
+        let cpu_base = ALIAS + pcie_base;
         let size = 0x10_0000u64; // 1 MB covers the table
         crate::_print(format_args!(" [DRV1] outbound map: BAR0={:#010x} -> PCIe base {:#x} CPU base {:#x}\n", bar0, pcie_base, cpu_base));
-        // Dump the 4 windows; pick the first free (BASE_LIMIT==0).
+        // Dump the 4 windows; a window is FREE when its limit < base (empty range — firmware
+        // leaves unused windows as BASE_LIMIT=0x10 = base 1MB / limit 0), or all-zero.
         let mut win = 0xffu8;
         for w in 0..4u8 {
             let bl = read_volatile((PCIE_RC + 0x4070 + (w as usize) * 4) as *const u32);
             let lo = read_volatile((PCIE_RC + 0x400c + (w as usize) * 8) as *const u32);
-            crate::_print(format_args!("   win{}: BASE_LIMIT={:#010x} WIN_LO={:#010x}\n", w, bl, lo));
-            if bl == 0 && win == 0xff { win = w; }
+            let bh = read_volatile((PCIE_RC + 0x4080 + (w as usize) * 8) as *const u32);
+            let lh = read_volatile((PCIE_RC + 0x4084 + (w as usize) * 8) as *const u32);
+            let base_f = (bl >> 4) & 0xfff;
+            let lim_f = (bl >> 20) & 0xfff;
+            let free = bl == 0 || lim_f < base_f;
+            crate::_print(format_args!("   win{}: BASE_LIMIT={:#010x} WIN_LO={:#010x} BASE_HI={:#x} LIMIT_HI={:#x} {}\n",
+                w, bl, lo, bh, lh, if free { "FREE" } else { "used" }));
+            if free && win == 0xff { win = w; }
         }
         if win == 0xff {
             crate::_print(format_args!(" [DRV1] no free outbound window — cannot map BAR0\n"));
@@ -1312,13 +1323,10 @@ pub fn rx_msix_program() -> u32 {
         };
         crate::_print(format_args!(" [DRV1] BAR{}={:#010x} (is64={}) BAR{}_hi={:#010x} → PCIe {:#x}\n",
             bir, bar_lo, is64, bir + 1, bar_hi, bar_full));
-        // dt ranges: 64-bit prefetch PCIe 0x4_0000_0000 → CPU 0x1c_0000_0000;
-        //            32-bit          PCIe 0x0         → CPU 0x1f_0000_0000.
-        let cpu_bar = if bar_full >= 0x4_0000_0000 {
-            bar_full - 0x4_0000_0000 + 0x1c_0000_0000
-        } else {
-            bar_full + 0x1f_0000_0000
-        };
+        // The table is reached through the outbound window pcie_map_bar0_window() programmed:
+        // a linear alias CPU = PCIe + 0x40_0000_0000 (256 GB, identity-mapped device space).
+        // Must match the ALIAS in pcie_map_bar0_window exactly.
+        let cpu_bar = bar_full + 0x40_0000_0000;
         let table_cpu = cpu_bar + toff;
         let ent = table_cpu + ETH_VEC * 16;
         crate::_print(format_args!(" [DRV1] table CPU={:#x} (bar→cpu {:#x} + off {:#x}); entry[{}] @ {:#x}\n",
