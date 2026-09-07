@@ -136,6 +136,10 @@ rollback-test = ["prod"]
 # restructuring it. Additive to prod; not shipped.
 #   FEATURES=prod,rxprof builder/make-cm5-heqk-image.sh
 rxprof = ["prod"]
+# mipdump — READ-ONLY dump of the RP1 MIP (MSI-X) register region, to discover the DRV-1
+# interrupt-config layout on metal WITHOUT any write (no scribble risk). Additive to prod;
+# never shipped. See gem::mip_dump + the [DRV1-mipdump] probe.
+mipdump = ["prod", "arch-aarch64/mipdump"]
 
 [[bin]]
 name = "kernel"
