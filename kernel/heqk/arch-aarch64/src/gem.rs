@@ -1398,6 +1398,24 @@ pub fn msi_sink_unmask() {
     }
 }
 
+/// DRV-1 re-arm (mipdump): write MSIX_CFG(6).IACK (bit2) to clear the auto-mask the RP1
+/// sets "when the interrupt was generated" (RP1 datasheet Table 89). A level source that
+/// asserted early — before the MSI-X table was correctly programmed — fired one MSI to the
+/// stale address and masked itself; nothing re-arms it because heqk takes no IRQ (poll
+/// drain). This clears that mask so the still-asserted source (INTSTATL bit6) generates a
+/// FRESH MSI to the now-correct table. Self-clearing bit; safe to call repeatedly.
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_iack() {
+    const MIP: usize = 0x1C_0010_8000; // RP1 PCIE_CFG (APBS 0x108000)
+    const REG_SET: usize = 0x800;
+    const CFG6: usize = 0x8 + 4 * 6; // MSIX_CFG_6 = 0x20
+    const IACK: u32 = 1 << 2;
+    unsafe {
+        write_volatile((MIP + REG_SET + CFG6) as *mut u32, IACK);
+        core::arch::asm!("dsb sy");
+    }
+}
+
 /// DRV-1 experiment readout (mipdump): the two candidate sinks' pending-status
 /// registers. Returns (mip_statusL, mip_statusH, rc_status). A nonzero value while
 /// RX frames flow reveals which doorbell the RP1 ETH source actually targets and the

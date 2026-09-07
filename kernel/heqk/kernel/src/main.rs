@@ -957,6 +957,7 @@ fn cm5_prod_service() -> ! {
         let _ = arch_aarch64::gem::pcie_map_bar0_window();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
+        arch_aarch64::gem::rx_msix_iack();
     }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
@@ -986,6 +987,9 @@ fn cm5_prod_service() -> ! {
                 let (ml, mh, rc) = arch_aarch64::gem::msi_sink_status();
                 let (il, ih) = arch_aarch64::gem::rp1_intstat();
                 kprint!("   [DRV1-hb] rp1_INTSTATL={:#010x} (bit6=ETH asserts?) INTSTATH={:#010x} | mip_sL={:#010x} mip_sH={:#010x} rc_s={:#010x}\n", il, ih, ml, mh, rc);
+                // Re-arm source 6 each beat so a fresh MSI is generated while frames flow —
+                // proves the full RP1->mip0 path independent of one-shot auto-mask timing.
+                arch_aarch64::gem::rx_msix_iack();
             }
             #[cfg(feature = "rxprof")]
             {
@@ -2068,6 +2072,9 @@ fn cm5_gem_rx_irq_probe() {
         let _ = arch_aarch64::gem::pcie_map_bar0_window();
         let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
+        // Re-arm source 6 (clear the auto-mask from the early stray assertion) so a fresh
+        // MSI fires to the now-correct table during the wait below.
+        arch_aarch64::gem::rx_msix_iack();
     }
     let before = GEM_RX_IRQS.load(Ordering::Relaxed);
     // Unmask IRQs (DAIF.I=0); only SPI 166 can fire now. Bounded wait for a frame.
