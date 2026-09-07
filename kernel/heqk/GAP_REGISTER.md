@@ -46,7 +46,7 @@ Verified-closed: D1/D2/D5, M-3/L-15 (in read_sdpcm_frame), M-4/M-5/M-6, H-1, L-1
 
 | ID | Sev | File:line | Gap | Fix |
 |---|---|---|---|---|
-| DRV-1 | High | main.rs:1081; gem.rs:610 | NO real IRQ-driven RX: RP1 MSI-X (MSIX_CFG_6→SPI134) never programmed, RCOMP never reaches GIC → polling-only despite "PASS" | program RP1 MSI-X entry in rx_init + read back; stop reporting IRQ path as enabled |
+| DRV-1 | High | main.rs:1081; gem.rs:610 | NO real IRQ-driven RX. Model RESOLVED 2026-09-07 (dt ground truth): RP1 msi-parent=mip0, vec6→GIC SPI134(edge)→INTID166 — heqk's INTID-166 branch was RIGHT; only the RP1 std PCI MSI-X TABLE entry (addr=0xf_ffff_fffc,data=6) is unprogrammed. NOT an M2 gate | ECAM-walk RP1 MSI-X cap for table BAR/offset; program entry; set GIC 134 edge |
 | DRV-2 | High | main.rs:1054; iommu.rs:96; gem.rs:119 | P14 protects nothing live: iommu2(RTL) fenced but link DOWN; iommu5(GEM, the live master) unfenced; ceiling 1GiB sits ABOVE all kernel/DMA memory | fence iommu5 above live ring PAs; relocate kernel above ceiling or invert window (C1/X5) |
 | DRV-3 | Med | iommu.rs:102,45,74 | fence ceiling math unverified: wrapping_sub(1) underflow→0xFFFFFFFF no-op; ADDR_CAP_SHIFT guessed; weak present-check | read back ADDR_CAP + assert; saturating sub; confirm shift on metal (C3/C4) |
 | DRV-4 | Med latent | cyw43.rs:2370,2388 | bcdc_dcmd remainder read did NOT get the M-3 fix → control reply >576B assembles STALE bytes of prior frame | same clamp+zero as read_sdpcm_frame; loop transfer in ≤512B chunks |
@@ -233,44 +233,54 @@ ON METAL, grounded exactly in Linux `drivers/mfd/rp1.c` (not guessed):
 - Still `0 INTID-166 IRQs`, `INTSTATL=0` => the PCIe MSI-X TABLE (doorbell addr/data) is NOT
   firmware-programmed. DRV-1 is now isolated to EXACTLY that one remaining piece.
 
-**DELIVERY MODEL RESOLVED ON METAL 2026-09-07 (RC MSI register read) — corrects a wrong
-heqk assumption.** The brcmstb RC MSI registers read:
-  BAR_CFG_LO(0x4044)=0xfffffffd  HI(0x4048)=0x0000000f  -> doorbell 0xf_ffff_fffc + MSI-enable
-  DATA_CFG(0x404c)=0xffe06540 (32-vector mode)  INTR2_STAT(0x4500)=0  MASK(0x450c)=0xffffffff
-=> The RP1 uses the brcmstb RC's CONSOLIDATED MSI DEMUX (model a), and FIRMWARE ALREADY
-PROGRAMMED the doorbell. Path: RP1 MSI-X write -> RC doorbell 0xf_ffff_fffc -> RC sets a bit
-in INTR2_STAT(0x4500) -> RC's SINGLE MSI SPI -> software reads 0x4500 and demuxes.
-heqk's "RP1 src 6 -> dedicated SPI 134 / INTID 166" (model b) is WRONG — GEM_RX_INTID=166 and
-the per-source handler branch must be REWORKED to the RC-MSI-demux shape. All 32 vectors are
-currently MASKED (0x450c=0xffffffff).
+**DELIVERY MODEL RESOLVED — DEVICETREE GROUND TRUTH 2026-09-07 (supersedes the RC-demux
+read below; corrects TWO earlier wrong assumptions).** The authoritative BCM2712 devicetree
+(`arch/arm64/boot/dts/broadcom/bcm2712.dtsi`, pcie2 + mip0 nodes) is definitive:
 
-SAFETY FULLY RELIEVED: the doorbell 0xf_ffff_fffc is a top-of-PCIe-space MMIO capture in the
-RC, NOT system RAM, so programming the RP1 MSI-X table to target it cannot scribble memory —
-the DRV-2 dependency is moot for DRV-1.
+  pcie2: pcie@1000120000 { ... msi-parent = <&mip0>; };       // RP1 root complex (RC2)
+  mip0: msi-controller@1000130000 {
+      compatible = "brcm,bcm2712-mip";
+      reg = <0x10 0x00130000 0x00 0xc0>,      // MIP config regs (CPU side)
+            <0xff 0xfffff000 0x00 0x1000>;     // doorbell page (PCIe-visible)
+      msi-ranges = <&gicv2 GIC_SPI 128 IRQ_TYPE_EDGE_RISING 64>;  // vec v -> SPI (128+v)
+      brcm,msi-offset = <0>;
+  };
 
-**REMAINING (now a bounded IMPLEMENTATION session, no unknowns):**
-1. Rework handle_irq: the RC MSI is ONE consolidated SPI (not per-source INTID 166) — on it,
-   read INTR2_STAT(0x4500), demux the set vector, ack via INTR2_CLR, eoi. Discover the RC2
-   MSI SPI number (BCM2712 RC2) — the one place still needing a datasheet/dt value.
-2. Unmask the chosen vector: write INTR2_MASK_CLR (MSI_INTR2 base 0x4500 + the CLR offset).
-3. Program the RP1 endpoint MSI-X TABLE entry: addr=0xf_ffff_fffc, data=0xffe06540|vector
-   (both now KNOWN from the RC read). Needs the RP1 MSI-X table BAR+offset (a small ECAM read
-   of the RP1 endpoint's MSI-X capability, or the RP1 datasheet).
-4. RP1 MSIX_CFG(6) enable — ALREADY DONE + metal-verified (pre=0->post=9).
+THE TRUE MODEL (neither of the two I guessed):
+- The RP1's MSI parent is a DISTINCT **MIP** block (`mip0` @ CPU 0x10_0013_0000), NOT the
+  brcmstb RC's internal MSI demux. The RC INTR2 regs I read (0x4500=0, mask=0xffffffff) were
+  a RED HERRING — that legacy RC MSI path is unused; the RP1 routes to mip0.
+- mip0 maps **one dedicated GIC SPI per vector**, SPI 128..191, **edge-rising**. So this is
+  the per-vector-SPI shape (my "model a / consolidated RC demux, single SPI + software
+  0x4500 demux" was WRONG — there is NO software demux; the GIC gets a distinct SPI).
+- Vector 6 -> SPI (128+6)=134 -> INTID 166. => **heqk's ORIGINAL `GEM_RX_INTID=166` +
+  per-source handler branch were correct in SHAPE all along** — it just was never wired
+  end-to-end. NO handler rework to a demux is needed; the existing INTID-166 branch is right.
+  (One correction: the SPI is EDGE-rising, so the GIC ICFGR for 134 must be edge, and EOI is
+  sufficient re-arm at the GIC — plus the RP1 MSIX_CFG IACK per rp1.c to re-arm source 6.)
+- The doorbell 0xf_ffff_fffc IS mip0's PCIe-visible page (dma-ranges maps PCIe ff_fffff000
+  -> CPU 0x10_0013_0000). Firmware DID program the RP1 endpoint's MSI-X message address to
+  it — that part of the earlier read stands.
+- RP1 MSI-X mechanism (rp1.c): MSIX_CFG(x) is ONLY enable/IACK bits (ENABLE b0, IACK b2,
+  IACK_EN b3) — it does NOT hold addr/data. RP1 is a normal PCIe endpoint with a STANDARD
+  PCI MSI-X TABLE (addr_lo/addr_hi/data/vector_ctrl per entry) in one of its BARs; the RP1
+  irqchip is a 2nd-level chained domain on top of those 64 PCI MSI-X vectors.
 
-The OLD "remaining" text below is superseded by the model resolution above.
+SAFETY FULLY RELIEVED (unchanged): 0xf_ffff_fffc is the MIP doorbell MMIO page, NOT system
+RAM — programming the RP1 MSI-X table to target it cannot scribble memory; DRV-2 moot here.
 
-**(superseded) program the RP1's PCIe MSI-X CAPABILITY TABLE entry for
-vector 6 with `addr = brcmstb MSI doorbell` and `data = 0x6540 | 6`
-(pcie-brcmstb.c: `msg->data = (0xffff & PCIE_MISC_MSI_DATA_CONFIG_VAL_32) | hwirq`,
-`msi_target_addr = BRCM_MSI_TARGET_ADDR_* ~0xff_ffff_fffc`). CRUCIAL: that target is the
-PCIe RC's OWN MMIO doorbell register, NOT system RAM — so this write is contained by the
-PCIe controller and is NOT the RAM-scribble hazard first feared; the hard DRV-2 dependency
-is largely relieved for this specific write. What it needs that heqk lacks TODAY: a minimal
-PCIe CONFIG-SPACE (ECAM) accessor to find the RP1 endpoint's MSI-X capability -> its table
-BAR+offset, plus confirming the brcmstb RC MSI controller (`PCIE_MISC_MSI_BAR_CONFIG_LO/HI`
-+ `PCIE_MISC_MSI_DATA_CONFIG`) is set to raise SPI 134. That is a small NEW subsystem (PCIe
-MSI-X capability programmer), its own focused session — no longer a mystery, a scoped build.
+**REMAINING — bounded IMPLEMENTATION, all values now KNOWN except the RP1 MSI-X table BAR/offset:**
+1. GICv2 for SPI 134: set ICFGR to EDGE, ISENABLER bit, priority, target CPU. (Keep the
+   existing INTID-166 handler branch — it was right; no demux rework.)
+2. Program the RP1 endpoint's STANDARD PCI MSI-X TABLE entry for internal source 6:
+   addr_lo=0xfffffffc, addr_hi=0x0000000f (doorbell 0xf_ffff_fffc), data=6 (MIP vector 6 ->
+   SPI 134), vector_ctrl=0 (unmask). Needs the RP1 MSI-X table BAR+offset = a small READ-ONLY
+   ECAM walk of the RP1 endpoint (bus 1 dev 0 behind RC2) to its MSI-X capability. This is the
+   ONE remaining unknown and it is a read, not a guess.
+3. RP1 MSIX_CFG(6) enable + IACK_EN — ALREADY DONE + metal-verified (pre=0 -> post=9).
+
+The RC2 "pcie"/"msi" SPIs from the dt (233/234) and the legacy-INTx map (229..232) are NOT
+needed for this path — the MSI goes mip0 -> SPI 134 directly.
 
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
