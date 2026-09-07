@@ -125,7 +125,20 @@ pub const TCP_SYNFIN: [u64; 6] = [
 ];
 
 /// SYN-flood rate-limit threshold (lone SYNs per ~1 s window). Tunable per policy.
-pub const SYN_LIMIT: i32 = 32;
+/// Per-source lone-SYN cap per ~1 s window — RECONCILED to the ADR-0023 blanket
+/// new-connection cap (`ratelimit::DEFAULT_NEW_CONN_PPS` = 400/s), single source of
+/// truth so the two tiers that meter the same signal can never drift apart again.
+///
+/// WAS 32 — and that mis-tuning was a MEASURED LEGIT-DROP on metal (2026-09-07, M2
+/// separation matrix, isolated DUT link): matrix rows L7 (CDN fan-out, 100 conns all
+/// to :443) and L10 (legit ~100 new-conns/s burst) each lost exactly 16 frames to this
+/// limiter — the precise failure docs/design/heqk-detection-parity.md predicted:
+/// "a mis-tuned TCP_SYN_FLOOD_SRC limit would false-drop a legit burst. Cap value ...
+/// must be reconciled to DEFAULT_NEW_CONN_PPS=400". The verdict SEMANTICS were already
+/// correct post-M2.0 (FloodRate -> bounded self-reverting RateLimit, mgmt floor
+/// honored); only the cap was never reconciled. A legit 100/s burst sits far under
+/// 400; a real flood still crosses it in the first window.
+pub const SYN_LIMIT: i32 = crate::ratelimit::DEFAULT_NEW_CONN_PPS as i32;
 
 /// SYN-flood — the first STATEFUL rule (uses the `CALL` helper + the kernel rate
 /// limiter). A lone SYN (`flags==0x02`) bumps a windowed counter; once the rate
