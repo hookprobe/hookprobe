@@ -1244,6 +1244,54 @@ pub fn rx_msix_program() -> u32 {
     }
 }
 
+/// DRV-1 DECISIVE EXPERIMENT (mipdump): the RP1 endpoint's MSI-X table is unreadable
+/// (config-space access via EXT_CFG returns 0xffffffff on metal), so we cannot see
+/// which doorbell the ETH source targets. Both candidate MSI sinks are fully known
+/// from the RPi Linux source, so unmask BOTH and let the hardware tell us which one
+/// latches when RX frames flow — no guessing:
+///   * mip0 (dt-canonical, irq-bcm2712-mip.c): base 0x10_0013_0000, doorbell PCIe
+///     0xff_fffff000, data=vector, GIC SPI (v+128) edge. Unmask HOST = write 0 to
+///     MASKL/H_HOST (0x40/0x50), ~0 to CFGL/H_HOST (0x20/0x30 = route to HOST).
+///   * RC MSI (firmware-programmed, pcie-brcmstb.c): base 0x10_0012_0000+0x4500,
+///     doorbell 0xf_ffff_fffc, data=0x6540|v, GIC SPI 234 level. Unmask = MASK_CLR
+///     (0x4514); clear stale = CLR (0x4508).
+/// Both register windows are inside the mmu_cm5 GB4..511 identity map (mapped, safe).
+/// Read-mostly: no GIC routing here — this only reveals the sink+vector so the real
+/// wiring afterwards is correct, not guessed.
+#[cfg(feature = "mipdump")]
+pub fn msi_sink_unmask() {
+    const MIP: usize = 0x10_0013_0000; // mip0 reg[0] (CPU)
+    const RC: usize = PCIE_RC + 0x4500; // brcmstb RC MSI INTR2 base
+    unsafe {
+        // mip0: route to HOST + unmask all 64 HOST vectors.
+        write_volatile((MIP + 0x20) as *mut u32, 0xffff_ffff); // CFGL_HOST
+        write_volatile((MIP + 0x30) as *mut u32, 0xffff_ffff); // CFGH_HOST
+        write_volatile((MIP + 0x40) as *mut u32, 0x0000_0000); // MASKL_HOST (0=unmasked)
+        write_volatile((MIP + 0x50) as *mut u32, 0x0000_0000); // MASKH_HOST
+        // RC MSI: clear stale, then unmask all 32.
+        write_volatile((RC + 0x8) as *mut u32, 0xffff_ffff); // MSI_INT_CLR
+        write_volatile((RC + 0x14) as *mut u32, 0xffff_ffff); // MSI_INT_MASK_CLR
+        core::arch::asm!("dsb sy");
+    }
+}
+
+/// DRV-1 experiment readout (mipdump): the two candidate sinks' pending-status
+/// registers. Returns (mip_statusL, mip_statusH, rc_status). A nonzero value while
+/// RX frames flow reveals which doorbell the RP1 ETH source actually targets and the
+/// vector bit — the fact the metal MSI-X-table read could not give us.
+#[cfg(feature = "mipdump")]
+pub fn msi_sink_status() -> (u32, u32, u32) {
+    const MIP: usize = 0x10_0013_0000;
+    const RC: usize = PCIE_RC + 0x4500;
+    unsafe {
+        (
+            read_volatile((MIP + 0x80) as *const u32), // STATUSL_HOST
+            read_volatile((MIP + 0x90) as *const u32), // STATUSH_HOST
+            read_volatile((RC + 0x0) as *const u32),   // MSI_INT_STATUS
+        )
+    }
+}
+
 /// P8 (RP1 RX-IRQ) — unmask the GEM **receive-complete** interrupt so an RX frame
 /// raises RP1 internal source 6 → MSI-X → mip0 → GIC SPI 134 / INTID 166 (instead
 /// of pure polling). Pairs with `Gic::enable_spi(166)` + a `handle_irq` branch.

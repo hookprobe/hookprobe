@@ -940,6 +940,18 @@ fn cm5_prod_service() -> ! {
     let mut prof = RxProf::default();
 
     kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
+    // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
+    // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
+    // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs
+    // stay masked — the poll drain is unchanged — but the sink STATUS registers latch
+    // pending bits regardless of GIC routing, so reading them each heartbeat reveals
+    // which doorbell the RP1 ETH source targets and the vector, on real flowing frames.
+    #[cfg(feature = "mipdump")]
+    {
+        arch_aarch64::gem::rx_irq_enable();
+        let _ = arch_aarch64::gem::rx_msix_setup();
+        arch_aarch64::gem::msi_sink_unmask();
+    }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -961,6 +973,13 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            // DRV-1 sink experiment readout — a nonzero value identifies the RP1 ETH MSI
+            // sink + vector (the fact the unreadable MSI-X table could not give us).
+            #[cfg(feature = "mipdump")]
+            {
+                let (ml, mh, rc) = arch_aarch64::gem::msi_sink_status();
+                kprint!("   [DRV1-hb] mip_statusL={:#010x} mip_statusH={:#010x} rc_status={:#010x} (nonzero => that sink is the RP1 ETH target)\n", ml, mh, rc);
+            }
             #[cfg(feature = "rxprof")]
             {
                 prof.report(cntfrq);
