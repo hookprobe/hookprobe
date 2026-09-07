@@ -2032,6 +2032,11 @@ fn cm5_gem_rx_irq_probe() {
     // programmed the PCIe MSI-X table: if so, the IRQ now fires below; if not, silent.
     #[cfg(feature = "mipdump")]
     let _ = arch_aarch64::gem::rx_msix_setup();
+    // DRV-1 last piece: program the RP1 PCI MSI-X table entry for the ETH source
+    // (doorbell 0xf_ffff_fffc, data=6 → mip0 → SPI 134). If firmware left the table
+    // blank this is what makes the IRQ actually fire; read-back is dumped above.
+    #[cfg(feature = "mipdump")]
+    let _ = arch_aarch64::gem::rx_msix_program();
     let before = GEM_RX_IRQS.load(Ordering::Relaxed);
     // Unmask IRQs (DAIF.I=0); only SPI 166 can fire now. Bounded wait for a frame.
     unsafe { core::arch::asm!("msr daifclr, #2", options(nomem, nostack)) };

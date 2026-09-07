@@ -1136,6 +1136,114 @@ pub fn rx_msix_setup() -> u32 {
     }
 }
 
+/// DRV-1 (the last piece): walk the RP1 endpoint's PCIe config space and PROGRAM its
+/// standard PCI MSI-X TABLE entry for the ETH source so an RX-complete raises a real
+/// interrupt. Devicetree ground truth (bcm2712.dtsi): `pcie2 msi-parent = <&mip0>`,
+/// and `mip0 msi-ranges = <&gicv2 GIC_SPI 128 EDGE_RISING 64>` — so MIP vector v maps
+/// to GIC SPI (128+v); vector 6 → SPI 134 → INTID 166 (heqk's existing constant). The
+/// doorbell 0xf_ffff_fffc is mip0's PCIe-visible page. rp1.c shows MSIX_CFG is enable-
+/// only; the addr/data live in a real PCI MSI-X table in an RP1 BAR.
+///
+/// Config access (pcie-brcmstb.c, bcm7712 offsets): write PCIE_ECAM_OFFSET(bus,devfn,0)
+/// = (bus<<20)|(devfn<<12) to EXT_CFG_INDEX (RC+0x9000); the device's 4 KiB config
+/// space is then a window at EXT_CFG_DATA (RC+0x8000)+(reg&0xfff). RP1 = bus 1, dev 0.
+///
+/// SAFETY: the whole RP1 BAR window (GB 112) and the RC config window (GB 64) are
+/// inside the mmu_cm5 identity map (GB 4..511 Device-nGnRnE), so every access here is
+/// mapped — no fault risk from any BAR offset. The programmed target 0xf_ffff_fffc is
+/// MIP doorbell MMIO, not system RAM, so it cannot scribble memory (DRV-2 moot). Every
+/// value is dumped and the table write is read-back-verified. Returns the read-back of
+/// the programmed `data` dword (want 6), or 0 if no MSI-X capability was found.
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_program() -> u32 {
+    const IDX: usize = PCIE_RC + 0x9000; // EXT_CFG_INDEX (bcm7712)
+    const DATA: usize = PCIE_RC + 0x8000; // EXT_CFG_DATA window base
+    const RP1_ECAM: u32 = (1 << 20) | (0 << 12); // bus 1, devfn 0
+    const ETH_VEC: usize = 6; // RP1_INT_ETH → MIP vector 6 → SPI 134 / INTID 166
+    unsafe {
+        write_volatile(IDX as *mut u32, RP1_ECAM);
+        core::arch::asm!("dsb sy");
+        let cr = |reg: usize| -> u32 { read_volatile((DATA + (reg & 0xfff)) as *const u32) };
+        let cw = |reg: usize, v: u32| { write_volatile((DATA + (reg & 0xfff)) as *mut u32, v) };
+
+        let id = cr(0x00);
+        let statuscmd = cr(0x04);
+        crate::_print(format_args!(" [DRV1] RP1 cfg: VID/DID={:#010x} STATUS/CMD={:#010x} (cap-list={})\n",
+            id, statuscmd, (statuscmd >> 20) & 1));
+
+        // Walk the capability list: byte 0x34 → first cap ptr; each cap dword is
+        // [id | next<<8 | cap-specific<<16]. MSI-X cap id = 0x11.
+        let mut cap = (cr(0x34) & 0xfc) as usize;
+        let mut msix = 0usize;
+        let mut guard = 0;
+        while cap != 0 && cap != 0xfc && guard < 48 {
+            let w0 = cr(cap);
+            let this_id = w0 & 0xff;
+            let next = ((w0 >> 8) & 0xfc) as usize;
+            crate::_print(format_args!("   cap@{:#04x} id={:#04x} next={:#04x}\n", cap, this_id, next));
+            if this_id == 0x11 { msix = cap; break; }
+            cap = next;
+            guard += 1;
+        }
+        if msix == 0 {
+            crate::_print(format_args!(" [DRV1] no MSI-X capability on RP1 — cannot program table\n"));
+            return 0;
+        }
+        // MSI-X cap: +0 [id|next|msgctrl<<16], +4 table off/BIR, +8 pba off/BIR.
+        let msgctrl = cr(msix) >> 16;
+        let toffbir = cr(msix + 4);
+        let bir = (toffbir & 0x7) as usize;
+        let toff = (toffbir & !0x7) as usize;
+        let tsize = (msgctrl & 0x7ff) + 1;
+        crate::_print(format_args!(" [DRV1] MSI-X cap@{:#04x}: msgctrl={:#06x} (size={} en={} fmask={}) tbl BIR={} off={:#x}\n",
+            msix, msgctrl & 0xffff, tsize, (msgctrl >> 15) & 1, (msgctrl >> 14) & 1, bir, toff));
+        // Read BAR[bir] (a PCIe address); RP1's BAR is 64-bit prefetchable.
+        let bar_lo = cr(0x10 + bir * 4);
+        let bar_hi = cr(0x10 + bir * 4 + 4);
+        let bar_full = (((bar_hi as u64) << 32) | ((bar_lo & !0xf) as u64)) as usize;
+        crate::_print(format_args!(" [DRV1] BAR{}={:#010x} BAR{}_hi={:#010x} → PCIe {:#x}\n",
+            bir, bar_lo, bir + 1, bar_hi, bar_full));
+        // dt ranges: 64-bit prefetch PCIe 0x4_0000_0000 → CPU 0x1c_0000_0000;
+        //            32-bit          PCIe 0x0         → CPU 0x1f_0000_0000.
+        let cpu_bar = if bar_full >= 0x4_0000_0000 {
+            bar_full - 0x4_0000_0000 + 0x1c_0000_0000
+        } else {
+            bar_full + 0x1f_0000_0000
+        };
+        let table_cpu = cpu_bar + toff;
+        let ent = table_cpu + ETH_VEC * 16;
+        crate::_print(format_args!(" [DRV1] table CPU={:#x} (bar→cpu {:#x} + off {:#x}); entry[{}] @ {:#x}\n",
+            table_cpu, cpu_bar, toff, ETH_VEC, ent));
+        // Guard: the table must land inside the identity-mapped device window (GB 4..511).
+        if !(0x1_0000_0000..0x80_0000_0000).contains(&ent) {
+            crate::_print(format_args!(" [DRV1] entry addr outside identity map — refusing to write\n"));
+            return 0;
+        }
+        let er = |o: usize| -> u32 { read_volatile((ent + o) as *const u32) };
+        crate::_print(format_args!(" [DRV1] MSI-X[{}] BEFORE: addr={:#010x}_{:08x} data={:#010x} vctrl={:#010x}\n",
+            ETH_VEC, er(0x4), er(0x0), er(0x8), er(0xc)));
+        // Program: doorbell 0xf_ffff_fffc, data = MIP vector 6, unmask (vctrl bit0=0).
+        write_volatile((ent + 0x0) as *mut u32, 0xffff_fffc);
+        write_volatile((ent + 0x4) as *mut u32, 0x0000_000f);
+        write_volatile((ent + 0x8) as *mut u32, ETH_VEC as u32);
+        write_volatile((ent + 0xc) as *mut u32, 0x0000_0000);
+        core::arch::asm!("dsb sy");
+        crate::_print(format_args!(" [DRV1] MSI-X[{}] AFTER:  addr={:#010x}_{:08x} data={:#010x} vctrl={:#010x}\n",
+            ETH_VEC, er(0x4), er(0x0), er(0x8), er(0xc)));
+        // Enable MSI-X globally + clear the function mask (msgctrl bit15=1, bit14=0).
+        write_volatile(IDX as *mut u32, RP1_ECAM);
+        core::arch::asm!("dsb sy");
+        let mc_pre = cr(msix);
+        let mc_new = (mc_pre & !(1u32 << (16 + 14))) | (1u32 << (16 + 15));
+        cw(msix, mc_new);
+        core::arch::asm!("dsb sy");
+        let mc_post = cr(msix);
+        crate::_print(format_args!(" [DRV1] MSI-X enable: msgctrl {:#010x} → {:#010x} (want b31 set, b30 clear)\n",
+            mc_pre, mc_post));
+        er(0x8)
+    }
+}
+
 /// P8 (RP1 RX-IRQ) — unmask the GEM **receive-complete** interrupt so an RX frame
 /// raises RP1 internal source 6 → MSI-X → mip0 → GIC SPI 134 / INTID 166 (instead
 /// of pure polling). Pairs with `Gic::enable_spi(166)` + a `handle_irq` branch.
