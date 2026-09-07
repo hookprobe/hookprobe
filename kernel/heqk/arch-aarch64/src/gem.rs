@@ -202,6 +202,33 @@ pub fn pcie_inbound_window() -> (u32, u32) {
     (bar1_lo_before, ubus_lo_before)
 }
 
+/// DRV-1 (mipdump): program a SECOND brcmstb inbound window (RC_BAR2) so the RP1's upstream
+/// MSI write to the mip0 doorbell reaches it. The RP1 posts its MSI to PCIe 0xff_fffff000;
+/// the dt dma-ranges map that 4 KB region to CPU 0x10_0013_0000 (mip0 MIP_INT_RAISE), but
+/// heqk's pcie_inbound_window() only set up RC_BAR1 (the 64 GB RAM DMA window) — mip0 sits
+/// just past its top, so the MSI went nowhere and mip_sL stayed 0. Registers (pcie-brcmstb.c
+/// bcm7712, BAR index 2): RC_BAR2 LO=0x4034 HI=0x4038; UBUS_BAR2 REMAP LO=0x40b4 HI=0x40b8.
+///   RC_BAR2_LO = lower32(pci_off) | size_code (4 KB => 0x1c in [4:0])
+///   UBUS_BAR2_REMAP_LO = (lower32(cpu_addr) & ~0xfff) | ACCESS_EN(bit0)
+/// Returns the pre-write RC_BAR2_LO so we can see if firmware already had it.
+#[cfg(feature = "mipdump")]
+pub fn pcie_inbound_mip_doorbell() -> u32 {
+    let rd = |off: usize| unsafe { read_volatile((PCIE_RC + off) as *const u32) };
+    let wr = |off: usize, v: u32| unsafe { write_volatile((PCIE_RC + off) as *mut u32, v) };
+    let before = rd(0x4034);
+    unsafe { core::arch::asm!("dsb sy") };
+    // RC_BAR2: PCIe 0xff_fffff000, 4 KB (size code 0x1c). LO carries size in [4:0].
+    wr(0x4034, 0xffff_f000 | 0x1c);
+    wr(0x4038, 0x0000_00ff);
+    // UBUS_BAR2 remap: CPU 0x10_0013_0000 + ACCESS_EN.
+    wr(0x40b4, 0x0013_0000 | 0x1);
+    wr(0x40b8, 0x0000_0010);
+    unsafe { core::arch::asm!("dsb sy") };
+    crate::_print(format_args!(" [DRV1] inbound mip doorbell: RC_BAR2_LO {:#010x}->{:#010x} HI={:#010x} UBUS_LO={:#010x} HI={:#010x} (PCIe 0xff_fffff000 -> CPU 0x10_0013_0000)\n",
+        before, rd(0x4034), rd(0x4038), rd(0x40b4), rd(0x40b8)));
+    before
+}
+
 /// RX ring depth.
 ///
 /// Was 8 — BELOW the minimum the reference driver for this controller declares. Linux
