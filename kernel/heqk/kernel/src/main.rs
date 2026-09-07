@@ -911,6 +911,16 @@ fn cm5_prod_service() -> ! {
     // Telemetry invariant: seen == forwarded + dropped + tx_fail.
     let (mut seen, mut forwarded, mut dropped) = (0u64, 0u64, 0u64);
     let (mut empty, mut faults, mut tx_fail) = (0u64, 0u64, 0u64);
+    // Persistent RX read cursor — the analog of Linux macb's `queue->rx_tail`. The GEM
+    // fills descriptors sequentially and wraps, so `rx_head` is the oldest unconsumed
+    // slot; the batch drainer advances it in lockstep with the hardware fill. It survives
+    // across EL0 excursions so the drain never re-scans from 0 (which would misalign with
+    // the GEM's fill position).
+    let mut rx_head: usize = 0;
+    // NAPI-style drain budget: how many frames one EL0 excursion may consume before
+    // yielding back to the loop. Bounds worst-case latency while amortizing the ~ms EL0
+    // round-trip (rxprof-measured) over a whole batch instead of paying it per frame.
+    const RX_BUDGET: usize = 64;
     // Wall-clock heartbeat so the sensor is visibly ALIVE on a quiet link (the empty-
     // window `continue` below skips any end-of-loop print). ~5 s cadence via cntpct.
     let cntfrq = {
@@ -996,71 +1006,113 @@ fn cm5_prod_service() -> ! {
             faults += 1;
             continue;
         }
-        let idx = ((report >> 16) & 0xff) as usize;
-        // Frame length from the HW status writeback (AUDIT M-7), never the untrusted
-        // EL0 report. None => the stub reported but no frame is ready -> empty window.
-        let flen = match arch_aarch64::gem::rx_desc_status(idx) {
-            Some(l) if l >= 14 => l,
-            _ => {
-                empty += 1;
-                continue;
+        // The EL0 excursion above is the "wake": it blocked (bounded) until at least one
+        // frame was ready and CONTAINED the untrusted initial scan. reload+el0 were already
+        // charged to `mark` above; the per-frame phases below charge the rest.
+        //
+        // CURSOR RESYNC (metal 2026-09-07): a persistent free-running `rx_head` DESYNCED
+        // from the GEM's fill position under burst — rxprof showed the batch draining ZERO
+        // frames (n=0) while frames were clearly arriving (rsr=OVR), because the cursor sat
+        // on a slot the GEM was not filling next. The EL0 stub, however, scans the WHOLE
+        // ring and reports a genuinely-USED descriptor. So: if our cursor is stale (its slot
+        // is not USED) but the stub found a real frame, RESYNC the cursor to the stub's
+        // index. This self-heals any drift each wake; in steady state the two already agree
+        // so it is a no-op. The stub timeout path reports 0, so only resync on a nonzero
+        // report whose slot is actually USED.
+        let stub_idx = ((report >> 16) & 0xff) as usize;
+        if !arch_aarch64::gem::rx_desc_used(rx_head)
+            && report != 0
+            && arch_aarch64::gem::rx_desc_used(stub_idx % arch_aarch64::gem::RX_NDESC)
+        {
+            rx_head = stub_idx % arch_aarch64::gem::RX_NDESC;
+        }
+
+        // ---- NAPI-STYLE BATCH DRAIN (analog of Linux macb gem_rx's `while (count <
+        // budget)` loop, drivers/net/ethernet/cadence/macb_main.c:1506) --------------------
+        //
+        // rxprof measured the EL0 excursion at ~99.9% of per-frame cost because the old
+        // design did ONE frame per excursion. macb amortizes its poll over a batch of up to
+        // `budget`; so do we now — drain every ready descriptor in this one excursion, up to
+        // RX_BUDGET, before yielding. The EL0 round-trip is paid once per batch, not per frame.
+        //
+        // TRUST BOUNDARY UNCHANGED: the kernel already read the ring (rx_desc_status) and
+        // copied+classified the packet (peek_rx_frame + verdict) for every frame; the EL0
+        // stub was never the sole toucher of untrusted ring data, only the wake/scan
+        // containment. Draining in the kernel touches exactly the same bytes it already did.
+        let mut batch = 0usize;
+        while batch < RX_BUDGET {
+            // A descriptor OWNED BY SOFTWARE (USED) must be consumed and advanced past even
+            // if its frame is malformed — exactly as macb advances rx_tail on any RX_USED
+            // descriptor — else one bad frame stalls the ring at this slot forever.
+            if !arch_aarch64::gem::rx_desc_used(rx_head) {
+                break; // ring drained: nothing more ready → re-enter EL0 to wait
             }
-        };
-        #[cfg(feature = "rxprof")]
-        { let t = prod_cntpct(); prof.rxstat += t.wrapping_sub(mark); mark = t; }
-        // AUDIT D5: size the buffer to the HW RX buffer (RXBUF up to 2048), NOT 1600 —
-        // a 1601..2048 B frame must not be truncated before verdict (deep-L7 evasion).
-        let mut buf = [0u8; packet::FRAME_SZ];
-        let n = flen.min(buf.len());
-        arch_aarch64::gem::peek_rx_frame(idx, &mut buf[..n]);
-        #[cfg(feature = "rxprof")]
-        { let t = prod_cntpct(); prof.copy += t.wrapping_sub(mark); mark = t; }
-        seen += 1;
-        // The verified rule plane's verdict on the real frame.
-        let (_port, v) = packet::verdict(&buf[..n]);
-        #[cfg(feature = "rxprof")]
-        { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
-        if v == packet::PASS {
-            // ENFORCE: forward on the wire; a TX-completion timeout is counted (AUDIT D2)
-            // so `seen == forwarded + dropped + tx_fail` holds and a lost PASS frame is
-            // never invisible.
-            if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
-                forwarded += 1;
-            } else {
-                tx_fail += 1;
+            let flen = arch_aarch64::gem::rx_desc_status(rx_head); // Some(len) valid / None bad
+            #[cfg(feature = "rxprof")]
+            { let t = prod_cntpct(); prof.rxstat += t.wrapping_sub(mark); mark = t; }
+            match flen {
+                Some(l) if l >= 14 => {
+                    // AUDIT D5: buffer sized to RXBUF (2048), not 1600 — no deep-L7 truncation.
+                    let mut buf = [0u8; packet::FRAME_SZ];
+                    let n = l.min(buf.len());
+                    arch_aarch64::gem::peek_rx_frame(rx_head, &mut buf[..n]);
+                    #[cfg(feature = "rxprof")]
+                    { let t = prod_cntpct(); prof.copy += t.wrapping_sub(mark); mark = t; }
+                    seen += 1;
+                    let (_port, v) = packet::verdict(&buf[..n]);
+                    #[cfg(feature = "rxprof")]
+                    { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
+                    if v == packet::PASS {
+                        // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
+                        // seen == forwarded + dropped + tx_fail holds and a lost PASS is visible.
+                        if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
+                            forwarded += 1;
+                        } else {
+                            tx_fail += 1;
+                        }
+                        #[cfg(feature = "rxprof")]
+                        { let t = prod_cntpct(); prof.tx += t.wrapping_sub(mark); mark = t; }
+                    } else {
+                        dropped += 1;
+                        #[cfg(feature = "prod-full")]
+                        {
+                            let ev = events::Event {
+                                ts: now,
+                                src: 0,
+                                rule_id: 0,
+                                severity: 0,
+                                verdict: packet::DROP as u8,
+                            };
+                            pf.on_threat(&ev);
+                        }
+                    }
+                }
+                _ => {
+                    // USED but bad length: count it, still consume+advance (macb parity).
+                    empty += 1;
+                }
             }
             #[cfg(feature = "rxprof")]
-            { let t = prod_cntpct(); prof.tx += t.wrapping_sub(mark); mark = t; }
-        } else {
-            // ENFORCE: threat verdict — dropped, NOT forwarded.
-            dropped += 1;
-            // prod-full: the dropped frame becomes a persisted evidence event. The
-            // 16-byte image is the SAME encoding M6 exports, so a persisted record
-            // and an exported one are byte-identical (no re-encoding drift).
-            #[cfg(feature = "prod-full")]
+            let _rmark = prod_cntpct();
+            arch_aarch64::gem::recycle_rx(rx_head); // re-arm this slot for the GEM
+            rx_head = (rx_head + 1) % arch_aarch64::gem::RX_NDESC; // advance in lockstep
+            batch += 1;
+            #[cfg(feature = "rxprof")]
             {
-                let ev = events::Event {
-                    ts: now,
-                    src: 0,          // not flow-scoped here; the rule plane owns attribution
-                    rule_id: 0,      // packet::verdict does not surface the rule id at this seam
-                    severity: 0,
-                    verdict: packet::DROP as u8,
-                };
-                pf.on_threat(&ev);
+                prof.recycle += prod_cntpct().wrapping_sub(_rmark);
+                prof.frames += 1;
+                mark = prod_cntpct();
+            }
+            // A processed-frame beat, so a busy link reports progress between ~5 s ticks.
+            if (seen & 0xff) == 0 && seen != 0 {
+                kprint!("   [PROD hb] seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={} (frame-beat)\n",
+                    seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
             }
         }
-        // rxprof: on the DROP branch `mark` still points at the end of `verdict`, so reset it
-        // here to avoid charging drop-branch bookkeeping to `recycle`. On PASS it points at
-        // end-of-tx. Either way, time recycle_rx alone.
-        #[cfg(feature = "rxprof")]
-        let mark = prod_cntpct();
-        arch_aarch64::gem::recycle_rx(idx); // re-arm the slot for the next frame
-        #[cfg(feature = "rxprof")]
-        { prof.recycle += prod_cntpct().wrapping_sub(mark); prof.frames += 1; }
-        // A processed-frame beat too, so a busy link reports progress between the ~5 s ticks.
-        if (seen & 0xff) == 0 && seen != 0 {
-            kprint!("   [PROD hb] seen={} fwd={} drop={} tx_fail={} faults={} empty={} qsecbit={} (frame-beat)\n",
-                seen, forwarded, dropped, tx_fail, faults, empty, telemetry::score());
+        if batch == 0 {
+            // The stub woke us but the cursor slot was not ready (timeout wake / already
+            // drained). Not a fault; just loop back and wait again.
+            empty += 1;
         }
     }
 }
