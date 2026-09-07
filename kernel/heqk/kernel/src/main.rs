@@ -950,6 +950,11 @@ fn cm5_prod_service() -> ! {
     {
         arch_aarch64::gem::rx_irq_enable();
         let _ = arch_aarch64::gem::rx_msix_setup();
+        // ROOT-CAUSE FIX: enumerate the RC bridge (config access), then program the RP1
+        // MSI-X table entry (mip0 doorbell) + BME, then unmask mip0. This is the full
+        // chain that should make the RP1 ETH source emit MSIs the mip0 sink latches.
+        let _ = arch_aarch64::gem::pcie_bridge_enumerate();
+        let _ = arch_aarch64::gem::rx_msix_program();
         arch_aarch64::gem::msi_sink_unmask();
     }
     loop {
@@ -978,7 +983,8 @@ fn cm5_prod_service() -> ! {
             #[cfg(feature = "mipdump")]
             {
                 let (ml, mh, rc) = arch_aarch64::gem::msi_sink_status();
-                kprint!("   [DRV1-hb] mip_statusL={:#010x} mip_statusH={:#010x} rc_status={:#010x} (nonzero => that sink is the RP1 ETH target)\n", ml, mh, rc);
+                let (il, ih) = arch_aarch64::gem::rp1_intstat();
+                kprint!("   [DRV1-hb] rp1_INTSTATL={:#010x} (bit6=ETH asserts?) INTSTATH={:#010x} | mip_sL={:#010x} mip_sH={:#010x} rc_s={:#010x}\n", il, ih, ml, mh, rc);
             }
             #[cfg(feature = "rxprof")]
             {
@@ -2051,11 +2057,16 @@ fn cm5_gem_rx_irq_probe() {
     // programmed the PCIe MSI-X table: if so, the IRQ now fires below; if not, silent.
     #[cfg(feature = "mipdump")]
     let _ = arch_aarch64::gem::rx_msix_setup();
-    // DRV-1 last piece: program the RP1 PCI MSI-X table entry for the ETH source
-    // (doorbell 0xf_ffff_fffc, data=6 → mip0 → SPI 134). If firmware left the table
-    // blank this is what makes the IRQ actually fire; read-back is dumped above.
+    // DRV-1 ROOT-CAUSE FIX: enumerate the RC bridge bus numbers so config access to the
+    // RP1 endpoint works (was 0xffffffff = un-enumerated bus), then program the RP1 PCI
+    // MSI-X table entry for the ETH source (mip0 doorbell 0xff_ffff_f000, data=6 → SPI
+    // 134). Together these are what actually make the IRQ fire; read-backs dumped.
     #[cfg(feature = "mipdump")]
-    let _ = arch_aarch64::gem::rx_msix_program();
+    {
+        let _ = arch_aarch64::gem::pcie_bridge_enumerate();
+        let _ = arch_aarch64::gem::rx_msix_program();
+        arch_aarch64::gem::msi_sink_unmask();
+    }
     let before = GEM_RX_IRQS.load(Ordering::Relaxed);
     // Unmask IRQs (DAIF.I=0); only SPI 166 can fire now. Bounded wait for a frame.
     unsafe { core::arch::asm!("msr daifclr, #2", options(nomem, nostack)) };
