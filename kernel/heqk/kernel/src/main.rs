@@ -2105,6 +2105,17 @@ fn cm5_gem_rx_irq_probe() {
         let pend_inj = arch_aarch64::gem::gic_spi_pending(166);
         kprint!(" [P8-inj] CPU-inject mip0 RAISE: INTID-166 fired={} (RP1-path GIC-pending was {}); selftest STATUSL b={:#x} r6={:#x} rbit={:#x}; post-inject GIC-pending={}\n",
             inj_fired, pend_rp1, sb, sv, sx, pend_inj);
+        // RP1-EMIT test: force the RP1 to emit an MSI via MSIX_CFG(6).TEST, independent of
+        // the GEM. If INTID-166 fires here, the RP1 emit path + table + BME are all good.
+        let tf_before = GEM_RX_IRQS.load(Ordering::Relaxed);
+        arch_aarch64::gem::rx_msix_test_fire();
+        let mut s3 = 0u64;
+        while GEM_RX_IRQS.load(Ordering::Relaxed) == tf_before && s3 < 50_000_000 { s3 += 1; core::hint::spin_loop(); }
+        let tf_fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(tf_before);
+        let pend_tf = arch_aarch64::gem::gic_spi_pending(166);
+        arch_aarch64::gem::rx_msix_test_clear();
+        kprint!(" [P8-emit] RP1 MSIX_CFG(6).TEST force-emit: INTID-166 fired={} GIC-pending={} (fired => RP1 emit works, gap is the level-source trigger)\n",
+            tf_fired, pend_tf);
     }
     // Re-mask IRQs so the trailing reboot path stays deterministic.
     unsafe { core::arch::asm!("msr daifset, #2", options(nomem, nostack)) };

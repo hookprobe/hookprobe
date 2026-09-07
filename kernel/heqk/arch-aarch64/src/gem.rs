@@ -1459,6 +1459,37 @@ pub fn mip_selftest() -> (u32, u32, u32) {
     }
 }
 
+/// DRV-1 (mipdump): pulse MSIX_CFG(6).TEST (bit1) — "ORed with interrupt source for test
+/// purposes" (RP1 datasheet Table 89) — to FORCE the RP1 to emit an MSI-X message for source
+/// 6, independent of the GEM. If this makes INTID-166 fire, the RP1 emit path + table + BME
+/// are all good and the remaining gap is only the level-source trigger/auto-mask handling; if
+/// it does NOT, the RP1 emit itself (table/cap/BME) is still wrong despite reading correct.
+/// Sets TEST|ENABLE|IACK_EN then IACKs; caller clears TEST via rx_msix_test_clear().
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_test_fire() {
+    const MIP: usize = 0x1C_0010_8000;
+    const REG_SET: usize = 0x800;
+    const CFG6: usize = 0x8 + 4 * 6;
+    unsafe {
+        write_volatile((MIP + REG_SET + CFG6) as *mut u32, (1 << 1) | (1 << 0) | (1 << 3)); // TEST|ENABLE|IACK_EN
+        core::arch::asm!("dsb sy");
+        write_volatile((MIP + REG_SET + CFG6) as *mut u32, 1 << 2); // IACK
+        core::arch::asm!("dsb sy");
+    }
+}
+
+/// Clear the MSIX_CFG(6).TEST bit (via REG_CLR 0xc00) after rx_msix_test_fire().
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_test_clear() {
+    const MIP: usize = 0x1C_0010_8000;
+    const REG_CLR: usize = 0xc00;
+    const CFG6: usize = 0x8 + 4 * 6;
+    unsafe {
+        write_volatile((MIP + REG_CLR + CFG6) as *mut u32, 1 << 1); // clear TEST
+        core::arch::asm!("dsb sy");
+    }
+}
+
 /// DRV-1 re-arm (mipdump): write MSIX_CFG(6).IACK (bit2) to clear the auto-mask the RP1
 /// sets "when the interrupt was generated" (RP1 datasheet Table 89). A level source that
 /// asserted early — before the MSI-X table was correctly programmed — fired one MSI to the
