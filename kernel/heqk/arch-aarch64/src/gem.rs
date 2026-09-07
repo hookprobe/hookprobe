@@ -1086,6 +1086,46 @@ pub fn rsr() -> u32 {
     r(GEM, RSR)
 }
 
+/// DRV-1: dump the RP1 MIP (MSI-X) config region read-only, then ENABLE the ETH
+/// RX-complete source, mirroring Linux drivers/mfd/rp1.c EXACTLY (not a guess):
+///   msix_cfg_regs = bar_start + RP1_PCIE_APBS_BASE (0x108000) -> heqk 0x1C_0010_8000
+///   MSIX_CFG(x)   = 0x8 + 4*x ;  RP1_INT_ETH = 6 -> 0x20
+///   REG_RW=0x000, REG_SET=0x800 (write-1-to-set), INTSTATL=0x108
+///   a LEVEL-HIGH source (the eth node's type) enables with ENABLE(b0) | IACK_EN(b3)
+///
+/// The enable is a pure CONFIG write — it carries NO DMA target address, so unlike a
+/// PCIe MSI-X *table* write it cannot scribble memory; worst case is that no interrupt
+/// fires (the PCIe MSI-X table was not set up by firmware) and the path stays silent.
+/// Dumps the region before + reads MSIX_CFG(6) and INTSTATL back after. Returns the
+/// read-back MSIX_CFG(6).
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_setup() -> u32 {
+    const MIP: usize = 0x1C_0010_8000; // bar(0x1C_0000_0000) + APBS 0x108000
+    const REG_RW: usize = 0x000;
+    const REG_SET: usize = 0x800;
+    const CFG6: usize = 0x8 + 4 * 6; // MSIX_CFG(RP1_INT_ETH=6) = 0x20
+    const INTSTATL: usize = 0x108;
+    const ENABLE: u32 = 1 << 0;
+    const IACK_EN: u32 = 1 << 3;
+    crate::_print(format_args!(" [DRV1] RP1 MIP MSIX_CFG region @ {:#x} (read-only first):\n", MIP));
+    for row in 0..2 {
+        let base = MIP + REG_RW + row * 0x20;
+        let r = |o: usize| -> u32 { unsafe { read_volatile((base + o) as *const u32) } };
+        crate::_print(format_args!("   {:#08x}: {:08x} {:08x} {:08x} {:08x}  {:08x} {:08x} {:08x} {:08x}\n",
+            base, r(0x00), r(0x04), r(0x08), r(0x0c), r(0x10), r(0x14), r(0x18), r(0x1c)));
+    }
+    unsafe {
+        let pre = read_volatile((MIP + REG_RW + CFG6) as *const u32);
+        let stat_pre = read_volatile((MIP + INTSTATL) as *const u32);
+        write_volatile((MIP + REG_SET + CFG6) as *mut u32, ENABLE | IACK_EN);
+        core::arch::asm!("dsb sy");
+        let post = read_volatile((MIP + REG_RW + CFG6) as *const u32);
+        crate::_print(format_args!(" [DRV1] MSIX_CFG(6) enable: pre={:#010x} -> post={:#010x} (want ENABLE|IACK_EN=0x9); INTSTATL pre={:#010x}\n",
+            pre, post, stat_pre));
+        post
+    }
+}
+
 /// P8 (RP1 RX-IRQ) — unmask the GEM **receive-complete** interrupt so an RX frame
 /// raises RP1 internal source 6 → MSI-X → mip0 → GIC SPI 134 / INTID 166 (instead
 /// of pure polling). Pairs with `Gic::enable_spi(166)` + a `handle_irq` branch.

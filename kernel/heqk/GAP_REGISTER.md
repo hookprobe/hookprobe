@@ -223,6 +223,28 @@ ethernet interrupt (a READ, not a write) — capturing the real base / offset / 
 enable layout from a working system. Then mirror it in `gem::rx_msix_program()` (cm5),
 read-back-verified, tested via `[P8-irq]`. This is non-speculative and cannot scribble.
 
+**METAL ADVANCE 2026-09-07 (mipdump probe):** the RP1-side enable is now DONE + VERIFIED
+ON METAL, grounded exactly in Linux `drivers/mfd/rp1.c` (not guessed):
+- MIP MSIX_CFG regs base = `bar_start + RP1_PCIE_APBS_BASE(0x108000)` = heqk `0x1C_0010_8000`
+  (confirmed adjacent to GEM `0x1C_0010_0000`); `MSIX_CFG(x)=0x8+4x`, `RP1_INT_ETH=6` -> `0x20`;
+  `REG_SET=0x800`; level-high enable = `ENABLE(b0)|IACK_EN(b3)=0x9`.
+- `gem::rx_msix_setup()` wrote it: **`MSIX_CFG(6) pre=0x0 -> post=0x9`** read-back — the RP1
+  source-6 enable path, register semantics, and address are all CORRECT on silicon.
+- Still `0 INTID-166 IRQs`, `INTSTATL=0` => the PCIe MSI-X TABLE (doorbell addr/data) is NOT
+  firmware-programmed. DRV-1 is now isolated to EXACTLY that one remaining piece.
+
+**REMAINING (precise) + DE-RISKED:** program the RP1's PCIe MSI-X CAPABILITY TABLE entry for
+vector 6 with `addr = brcmstb MSI doorbell` and `data = 0x6540 | 6`
+(pcie-brcmstb.c: `msg->data = (0xffff & PCIE_MISC_MSI_DATA_CONFIG_VAL_32) | hwirq`,
+`msi_target_addr = BRCM_MSI_TARGET_ADDR_* ~0xff_ffff_fffc`). CRUCIAL: that target is the
+PCIe RC's OWN MMIO doorbell register, NOT system RAM — so this write is contained by the
+PCIe controller and is NOT the RAM-scribble hazard first feared; the hard DRV-2 dependency
+is largely relieved for this specific write. What it needs that heqk lacks TODAY: a minimal
+PCIe CONFIG-SPACE (ECAM) accessor to find the RP1 endpoint's MSI-X capability -> its table
+BAR+offset, plus confirming the brcmstb RC MSI controller (`PCIE_MISC_MSI_BAR_CONFIG_LO/HI`
++ `PCIE_MISC_MSI_DATA_CONFIG`) is set to raise SPI 134. That is a small NEW subsystem (PCIe
+MSI-X capability programmer), its own focused session — no longer a mystery, a scoped build.
+
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
 (PSI / conntrack-saturation / self-revert TTL) with paced traffic. DRV-1's payoff is
