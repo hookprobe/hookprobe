@@ -1155,6 +1155,21 @@ pub fn rx_desc_status(i: usize) -> Option<usize> {
     }
 }
 
+/// Is RX descriptor `i` owned by SOFTWARE (USED set) — i.e. the GEM has delivered a
+/// frame into it? Distinct from `rx_desc_status`, which also validates the length and
+/// returns `None` for BOTH "not delivered" and "delivered but bad length". The batch
+/// drainer needs to tell those apart: a delivered-but-bad descriptor must still be
+/// CONSUMED and RECYCLED (and its cursor advanced), exactly as Linux macb advances
+/// `rx_tail` on any RX_USED descriptor regardless of the frame's validity — otherwise a
+/// single malformed frame stalls the whole ring at that slot.
+#[inline]
+pub fn rx_desc_used(i: usize) -> bool {
+    let i = i % NRX;
+    let dphys = unsafe { core::ptr::addr_of!(RXRING.desc[i]) as usize };
+    let d = nc_desc(dphys);
+    (unsafe { read_volatile(d.add(0)) } & RXD_USED) != 0
+}
+
 /// Re-arm RX descriptor `i` (clear USED, preserve WRAP) so the GEM refills it —
 /// the kernel calls this after the EL0 driver's delivered frame is consumed, so
 /// the continuous driver server sees fresh frames. P7c step 4d.
