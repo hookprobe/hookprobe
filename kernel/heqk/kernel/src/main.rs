@@ -2027,6 +2027,11 @@ fn cm5_gem_rx_irq_probe() {
     gic.init(); // idempotent: distributor + CPU interface live
     gic.enable_spi(GEM_RX_INTID); // route SPI 166 -> CPU0, edge, below PMR
     arch_aarch64::gem::rx_irq_enable(); // GEM IER RCOMP
+    // DRV-1 (mipdump feature): enable the RP1 MIP MSIX_CFG for the ETH source (Linux
+    // rp1.c-exact, a config write with no DMA address). Tests whether firmware already
+    // programmed the PCIe MSI-X table: if so, the IRQ now fires below; if not, silent.
+    #[cfg(feature = "mipdump")]
+    let _ = arch_aarch64::gem::rx_msix_setup();
     let before = GEM_RX_IRQS.load(Ordering::Relaxed);
     // Unmask IRQs (DAIF.I=0); only SPI 166 can fire now. Bounded wait for a frame.
     unsafe { core::arch::asm!("msr daifclr, #2", options(nomem, nostack)) };

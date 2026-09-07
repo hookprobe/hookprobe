@@ -12,3 +12,5 @@ hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
 # P15 eMMC WRITE path — OFF by default (read-only, no brick risk). The only
 # sectors ever writable are 2016..2047; LBA 0 + partitions are never touched.
 p15-write = []
+# DRV-1 recon: the read-only MIP dump + rp1.c-exact MSIX_CFG enable (gem::rx_msix_setup).
+mipdump = ["cm5"]
