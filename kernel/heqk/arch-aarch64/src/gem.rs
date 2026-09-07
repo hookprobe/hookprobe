@@ -1136,6 +1136,49 @@ pub fn rx_msix_setup() -> u32 {
     }
 }
 
+/// DRV-1 ROOT-CAUSE FIX (metal 2026-09-08, from the RPi brcmstb driver): heqk's config
+/// reads of the RP1 endpoint returned 0xffffffff because firmware set up the RC's OUTBOUND
+/// MMIO windows (so GEM MMIO works — it routes by address) but never ENUMERATED the bus:
+/// the RC bridge's secondary/subordinate bus-number registers are still 0/0, so a config
+/// request to bus 1 is an Unsupported Request, surfaced as all-ones by the firmware-set
+/// AXI_READ_ERROR_DATA=0xffffffff. Program the standard PCI-bridge registers in the RC's
+/// OWN config space (root-bus access = PCIE_RC + reg directly, no EXT_CFG) so bus 1 falls
+/// inside [secondary,subordinate]; then bus-1 config reads work. Idempotent. Returns the
+/// RP1 endpoint VID/DID read back after enumeration (want 0x00011de4).
+///   RC+0x04  command: |= MSE|BME (0x06)
+///   RC+0x043c class:  [23:0]=0x060400 (present as PCI bridge)
+///   RC+0x18/19/1a:    primary=0 / secondary=1 / subordinate=1  (one u32 write 0x00010100)
+///   RC+0x4068 status: verify DL_ACTIVE(0x20)|PHYLINKUP(0x10)
+#[cfg(feature = "mipdump")]
+pub fn pcie_bridge_enumerate() -> u32 {
+    const IDX: usize = PCIE_RC + 0x9000;
+    const DATA: usize = PCIE_RC + 0x8000;
+    const RP1_ECAM: u32 = 1 << 20; // bus 1, devfn 0
+    unsafe {
+        let status = read_volatile((PCIE_RC + 0x4068) as *const u32);
+        // RC own config (root bus): direct at PCIE_RC + reg.
+        let rc = |o: usize| -> u32 { read_volatile((PCIE_RC + o) as *const u32) };
+        let rcw = |o: usize, v: u32| { write_volatile((PCIE_RC + o) as *mut u32, v) };
+        // Present the RC as a PCI bridge so the class-based logic + bus regs apply.
+        let cls = rc(0x43c);
+        rcw(0x43c, (cls & 0xff00_0000) | 0x0060_0400);
+        // primary=0, secondary=1, subordinate=1, latency=0  -> 0x00_01_01_00 at +0x18.
+        rcw(0x18, 0x0001_0100);
+        // MSE|BME on the RC.
+        let cmd = rc(0x04);
+        rcw(0x04, cmd | 0x06);
+        core::arch::asm!("dsb sy");
+        // Now a bus-1 config read should return the RP1 VID/DID (0x1de4:0x0001).
+        write_volatile(IDX as *mut u32, RP1_ECAM);
+        core::arch::asm!("dsb sy");
+        let vid = read_volatile(DATA as *const u32);
+        crate::_print(format_args!(" [DRV1] PCIe enumerate: RC status(0x4068)={:#010x} (DL_ACTIVE|PHYLINKUP want 0x30 bits) class {:#010x}->{:#010x} cmd {:#06x}->{:#06x}\n",
+            status, cls, rc(0x43c), cmd, rc(0x04)));
+        crate::_print(format_args!(" [DRV1] PCIe enumerate: RP1 bus1 VID/DID now={:#010x} (want 0x00011de4; still 0xffffffff => link not up or bus regs rejected)\n", vid));
+        vid
+    }
+}
+
 /// DRV-1 (the last piece): walk the RP1 endpoint's PCIe config space and PROGRAM its
 /// standard PCI MSI-X TABLE entry for the ETH source so an RX-complete raises a real
 /// interrupt. Devicetree ground truth (bcm2712.dtsi): `pcie2 msi-parent = <&mip0>`,
@@ -1167,9 +1210,14 @@ pub fn rx_msix_program() -> u32 {
         let cw = |reg: usize, v: u32| { write_volatile((DATA + (reg & 0xfff)) as *mut u32, v) };
 
         let id = cr(0x00);
+        // Bus-Master-Enable + Memory-Space-Enable on the RP1 endpoint — without BME the
+        // RP1 physically cannot issue the upstream MSI memory write.
+        let cmd0 = cr(0x04);
+        cw(0x04, cmd0 | 0x06);
+        core::arch::asm!("dsb sy");
         let statuscmd = cr(0x04);
-        crate::_print(format_args!(" [DRV1] RP1 cfg: VID/DID={:#010x} STATUS/CMD={:#010x} (cap-list={})\n",
-            id, statuscmd, (statuscmd >> 20) & 1));
+        crate::_print(format_args!(" [DRV1] RP1 cfg: VID/DID={:#010x} CMD {:#06x}->{:#06x} (MSE|BME)\n",
+            id, cmd0 & 0xffff, statuscmd & 0xffff));
 
         // Walk the capability list: byte 0x34 → first cap ptr; each cap dword is
         // [id | next<<8 | cap-specific<<16]. MSI-X cap id = 0x11.
@@ -1222,11 +1270,14 @@ pub fn rx_msix_program() -> u32 {
         let er = |o: usize| -> u32 { read_volatile((ent + o) as *const u32) };
         crate::_print(format_args!(" [DRV1] MSI-X[{}] BEFORE: addr={:#010x}_{:08x} data={:#010x} vctrl={:#010x}\n",
             ETH_VEC, er(0x4), er(0x0), er(0x8), er(0xc)));
-        // Program: doorbell 0xf_ffff_fffc, data = MIP vector 6, unmask (vctrl bit0=0).
-        write_volatile((ent + 0x0) as *mut u32, 0xffff_fffc);
-        write_volatile((ent + 0x4) as *mut u32, 0x0000_000f);
-        write_volatile((ent + 0x8) as *mut u32, ETH_VEC as u32);
-        write_volatile((ent + 0xc) as *mut u32, 0x0000_0000);
+        // Program: mip0 doorbell 0xff_ffff_f000 (PCIe addr; dma-ranges -> CPU 0x10_0013_0000
+        // = MIP_INT_RAISE), data = MIP vector 6 (mip_compose_msi_msg: msg.data = hwirq),
+        // unmask (vctrl bit0=0). NOT the RC doorbell 0xf_ffff_fffc — that block is unused on
+        // BCM2712 (pcie2 msi-parent = mip0).
+        write_volatile((ent + 0x0) as *mut u32, 0xffff_f000); // addr_lo
+        write_volatile((ent + 0x4) as *mut u32, 0x0000_00ff); // addr_hi -> 0xff_ffff_f000
+        write_volatile((ent + 0x8) as *mut u32, ETH_VEC as u32); // data = vector 6
+        write_volatile((ent + 0xc) as *mut u32, 0x0000_0000); // unmask
         core::arch::asm!("dsb sy");
         crate::_print(format_args!(" [DRV1] MSI-X[{}] AFTER:  addr={:#010x}_{:08x} data={:#010x} vctrl={:#010x}\n",
             ETH_VEC, er(0x4), er(0x0), er(0x8), er(0xc)));
@@ -1263,11 +1314,14 @@ pub fn msi_sink_unmask() {
     const MIP: usize = 0x10_0013_0000; // mip0 reg[0] (CPU)
     const RC: usize = PCIE_RC + 0x4500; // brcmstb RC MSI INTR2 base
     unsafe {
-        // mip0: route to HOST + unmask all 64 HOST vectors.
+        // mip0: route to HOST + unmask all 64 HOST vectors, and MASK the VPU copy so the
+        // interrupt is delivered to the host GIC (irq-bcm2712-mip.c:189-194 init sequence).
         write_volatile((MIP + 0x20) as *mut u32, 0xffff_ffff); // CFGL_HOST
         write_volatile((MIP + 0x30) as *mut u32, 0xffff_ffff); // CFGH_HOST
         write_volatile((MIP + 0x40) as *mut u32, 0x0000_0000); // MASKL_HOST (0=unmasked)
         write_volatile((MIP + 0x50) as *mut u32, 0x0000_0000); // MASKH_HOST
+        write_volatile((MIP + 0x60) as *mut u32, 0xffff_ffff); // MASKL_VPU (mask VPU)
+        write_volatile((MIP + 0x70) as *mut u32, 0xffff_ffff); // MASKH_VPU
         // RC MSI: clear stale, then unmask all 32.
         write_volatile((RC + 0x8) as *mut u32, 0xffff_ffff); // MSI_INT_CLR
         write_volatile((RC + 0x14) as *mut u32, 0xffff_ffff); // MSI_INT_MASK_CLR
@@ -1288,6 +1342,28 @@ pub fn msi_sink_status() -> (u32, u32, u32) {
             read_volatile((MIP + 0x80) as *const u32), // STATUSL_HOST
             read_volatile((MIP + 0x90) as *const u32), // STATUSH_HOST
             read_volatile((RC + 0x0) as *const u32),   // MSI_INT_STATUS
+        )
+    }
+}
+
+/// DRV-1 DECISIVE SPLIT (mipdump): the RP1 PCIE_CFG block's RAW per-source interrupt
+/// status (RP1 peripherals datasheet Table 90/91: INTSTATL 0x108 = sources [31:0],
+/// INTSTATH 0x10c = [63:32]). PCIE_CFG base = RP1 0x108000 -> CPU 0x1C_0010_8000.
+/// This is BEFORE the MSIX_CFG mask/generation, so it tells us whether the GEM (source
+/// RP1_INT_ETH=6, i.e. INTSTATL bit 6) actually ASSERTS into the RP1 interrupt block at
+/// all. Read under sustained RX it splits the two remaining hypotheses cleanly:
+///   * bit6 SETS but no sink latches  => GEM->RP1 works; the ONLY gap is the unprogrammed
+///     PCI MSI-X table (addr/data) — focus there (RC downstream cfg vs RP1 DBI).
+///   * bit6 STAYS 0                    => the GEM never reaches the RP1 vector block — a
+///     GEM/RP1-internal routing/enable gap, NOT the table.
+/// Returns (INTSTATL, INTSTATH).
+#[cfg(feature = "mipdump")]
+pub fn rp1_intstat() -> (u32, u32) {
+    const PCIE_CFG: usize = 0x1C_0010_8000;
+    unsafe {
+        (
+            read_volatile((PCIE_CFG + 0x108) as *const u32),
+            read_volatile((PCIE_CFG + 0x10c) as *const u32),
         )
     }
 }
