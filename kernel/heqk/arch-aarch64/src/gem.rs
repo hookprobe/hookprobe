@@ -1248,9 +1248,16 @@ pub fn rx_msix_program() -> u32 {
         // Read BAR[bir] (a PCIe address); RP1's BAR is 64-bit prefetchable.
         let bar_lo = cr(0x10 + bir * 4);
         let bar_hi = cr(0x10 + bir * 4 + 4);
-        let bar_full = (((bar_hi as u64) << 32) | ((bar_lo & !0xf) as u64)) as usize;
-        crate::_print(format_args!(" [DRV1] BAR{}={:#010x} BAR{}_hi={:#010x} → PCIe {:#x}\n",
-            bir, bar_lo, bir + 1, bar_hi, bar_full));
+        // BAR type: bits[2:1]=10 => 64-bit (consumes the next BAR as the high dword);
+        // otherwise 32-bit (RP1's BARs are all 32-bit non-prefetchable per the datasheet).
+        let is64 = (bar_lo & 0x6) == 0x4;
+        let bar_full = if is64 {
+            (((bar_hi as u64) << 32) | ((bar_lo & !0xf) as u64)) as usize
+        } else {
+            (bar_lo & !0xf) as usize
+        };
+        crate::_print(format_args!(" [DRV1] BAR{}={:#010x} (is64={}) BAR{}_hi={:#010x} → PCIe {:#x}\n",
+            bir, bar_lo, is64, bir + 1, bar_hi, bar_full));
         // dt ranges: 64-bit prefetch PCIe 0x4_0000_0000 → CPU 0x1c_0000_0000;
         //            32-bit          PCIe 0x0         → CPU 0x1f_0000_0000.
         let cpu_bar = if bar_full >= 0x4_0000_0000 {
