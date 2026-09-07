@@ -2089,9 +2089,25 @@ fn cm5_gem_rx_irq_probe() {
         spins += 1;
         core::hint::spin_loop();
     }
+    let fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(before);
+    // ISOLATION (mipdump): with IRQs STILL unmasked + GIC 166 routed + handler live, inject
+    // the mip0 doorbell from the CPU side. If INTID-166 now fires, mip0->GIC->handler works
+    // and the ONLY gap is the RP1 emitting/routing the MSI; if it stays silent, the mip0->GIC
+    // path itself is the problem (not the RP1). Also snapshot GIC-pending for INTID 166.
+    #[cfg(feature = "mipdump")]
+    {
+        let inj_before = GEM_RX_IRQS.load(Ordering::Relaxed);
+        let pend_rp1 = arch_aarch64::gem::gic_spi_pending(166);
+        let (sb, sv, sx) = arch_aarch64::gem::mip_selftest();
+        let mut s2 = 0u64;
+        while GEM_RX_IRQS.load(Ordering::Relaxed) == inj_before && s2 < 50_000_000 { s2 += 1; core::hint::spin_loop(); }
+        let inj_fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(inj_before);
+        let pend_inj = arch_aarch64::gem::gic_spi_pending(166);
+        kprint!(" [P8-inj] CPU-inject mip0 RAISE: INTID-166 fired={} (RP1-path GIC-pending was {}); selftest STATUSL b={:#x} r6={:#x} rbit={:#x}; post-inject GIC-pending={}\n",
+            inj_fired, pend_rp1, sb, sv, sx, pend_inj);
+    }
     // Re-mask IRQs so the trailing reboot path stays deterministic.
     unsafe { core::arch::asm!("msr daifset, #2", options(nomem, nostack)) };
-    let fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(before);
     let detail = if fired > 0 {
         "fired -> spin-poll wakeup RETIRED on metal"
     } else {
