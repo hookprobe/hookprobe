@@ -46,7 +46,7 @@ Verified-closed: D1/D2/D5, M-3/L-15 (in read_sdpcm_frame), M-4/M-5/M-6, H-1, L-1
 
 | ID | Sev | File:line | Gap | Fix |
 |---|---|---|---|---|
-| DRV-1 | High | main.rs:1081; gem.rs:610 | NO real IRQ-driven RX. Model RESOLVED 2026-09-07 (dt ground truth): RP1 msi-parent=mip0, vec6→GIC SPI134(edge)→INTID166 — heqk's INTID-166 branch was RIGHT; only the RP1 std PCI MSI-X TABLE entry (addr=0xf_ffff_fffc,data=6) is unprogrammed. NOT an M2 gate | ECAM-walk RP1 MSI-X cap for table BAR/offset; program entry; set GIC 134 edge |
+| DRV-1 | High | main.rs:1081; gem.rs:610 | NO real IRQ-driven RX. BLOCKED (metal 2026-09-08): RP1 emits NO MSI (both sinks status=0 under load) because its PCI MSI-X table is unprogrammed AND unreachable — heqk EXT_CFG config access to RP1 (bus1) returns 0xffffffff. Polled RX fully works. NOT an M2 gate | needs a PCIe config-access subsystem OR RP1 datasheet OR Linux-ref boot (see DRV-1 detail) |
 | DRV-2 | High | main.rs:1054; iommu.rs:96; gem.rs:119 | P14 protects nothing live: iommu2(RTL) fenced but link DOWN; iommu5(GEM, the live master) unfenced; ceiling 1GiB sits ABOVE all kernel/DMA memory | fence iommu5 above live ring PAs; relocate kernel above ceiling or invert window (C1/X5) |
 | DRV-3 | Med | iommu.rs:102,45,74 | fence ceiling math unverified: wrapping_sub(1) underflow→0xFFFFFFFF no-op; ADDR_CAP_SHIFT guessed; weak present-check | read back ADDR_CAP + assert; saturating sub; confirm shift on metal (C3/C4) |
 | DRV-4 | Med latent | cyw43.rs:2370,2388 | bcdc_dcmd remainder read did NOT get the M-3 fix → control reply >576B assembles STALE bytes of prior frame | same clamp+zero as read_sdpcm_frame; loop transfer in ≤512B chunks |
@@ -281,6 +281,42 @@ RAM — programming the RP1 MSI-X table to target it cannot scribble memory; DRV
 
 The RC2 "pcie"/"msi" SPIs from the dt (233/234) and the legacy-INTx map (229..232) are NOT
 needed for this path — the MSI goes mip0 -> SPI 134 directly.
+
+**DECISIVE METAL RESULT 2026-09-08 (dual-sink experiment, image d8c918c2) — DRV-1 is
+BLOCKED on a real hardware gap, precisely located.** With heavy traffic flowing (seen
+256→3124, ~155 fps, drop=0, faults=0) and BOTH candidate MSI sinks unmasked + the GEM
+emitting RX-complete (IER.RCOMP on, RP1 MSIX_CFG(6)=0x9), the sink status registers read
+ZERO on every heartbeat:
+    [DRV1-hb] mip_statusL=0 mip_statusH=0 rc_status=0   (x4, over 20s of RX)
+=> NEITHER sink (mip0 STATUSL/H_HOST nor brcmstb RC MSI_INT_STATUS) ever latches. The RP1
+ETH source is NOT emitting MSIs at all, despite the source being enabled. Root cause: the
+RP1's PCI MSI-X TABLE entry (addr/data) is UNPROGRAMMED — MSIX_CFG(6) enables the SOURCE
+but without a table entry there is no message to send, so no doorbell write, so no sink
+latch. This is consistent with the earlier read: RP1 config space is UNREACHABLE from heqk
+(EXT_CFG returns 0xffffffff), so heqk can neither find nor program the table.
+
+WHAT THIS DEFINITIVELY ESTABLISHES:
+- Polled RX is fully functional on metal (the sensor/enforcer needs nothing more).
+- RX-IRQ requires programming the RP1 PCI MSI-X table, which requires PCIe CONFIG-SPACE
+  access to the RP1 endpoint — and heqk's brcmstb EXT_CFG path returns 0xffffffff (the RP1
+  MMIO outbound window works, but downstream config access does not).
+- The mip0-vs-RC-doorbell ambiguity is moot until a table entry exists to point at either.
+
+REMAINING (a bounded but SUBSTANTIAL new subsystem, its own focused effort — NOT M2):
+  Option A — teach heqk minimal PCIe config access for the RP1 bridge: diagnose why
+    EXT_CFG(bus1,dev0) is 0xffffffff (read the RC's own header at PCIE_RC+0 first as a
+    control; check the RC secondary/subordinate-bus regs firmware left; the CFG_READ_UR
+    mode at 0x4008), then program the MSI-X table entry (addr=chosen doorbell, data=vector,
+    unmask) via the DATA window. Then unmask the matching sink + route its GIC SPI.
+  Option B — RP1 datasheet: the MSI-X table's fixed BAR+offset → program it via MMIO
+    directly (no config walk), same table-entry values.
+  Option C — Linux-on-CM5 reference boot: lspci -vv the RP1 + /proc/interrupts to read the
+    live table location, target doorbell, and the actual GIC line — then hardcode. (The
+    operator's "use Linux as reference" method; definitive but needs a Linux boot.)
+
+The dual-sink experiment code (gem::msi_sink_unmask/msi_sink_status + the [DRV1-hb] readout)
+stays in-tree behind `mipdump` for whichever option runs next. Evidence:
+~/heqk-metal-logs/20260908-drv1-dualsink-both-zero-table-unprogrammed.log
 
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
