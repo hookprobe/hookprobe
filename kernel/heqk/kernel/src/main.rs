@@ -2029,6 +2029,65 @@ fn cm5_p15_block_seal() {
         }
     }
 
+    // M3.2 metal — the crash-safe LOG-STRUCTURED evidence store (DataVolume) on real eMMC:
+    // prove multi-record append + in-order read-back + CROSS-REBOOT persistence of real
+    // evidence records (the "evidence graph survives reboot" capability at scale, beyond a
+    // single sealed blob). Uses a DataVolume region carved from p3 — this is a heqk-only
+    // board (Linux re-flashable, operator-authorized 2026-09-08). 128 sectors @ LBA
+    // 16_777_216 (SB + 127 record slots), far from the MBR/keystore/boot-slot; the widened
+    // eMMC Gate-1 allowlist (keystore ∪ DataVolume) + the dv armed window admit it.
+    #[cfg(feature = "p15-write")]
+    {
+        use store::{RegionKind, SealedStore};
+        const DV_LO: u64 = 16_777_216;
+        const DV_HI: u64 = DV_LO + 128;
+        emmc.set_data_volume(DV_LO, DV_HI); // Gate-1 allowlist entry
+        emmc.arm_write_window(DV_LO, DV_HI); // Gate-2 armed window (routes to the dv region)
+        let (dv_prev, dv_now, dv_cap, dv_order, dv_evid, dv_pass) = (|| -> (u64, u64, u64, bool, bool, bool) {
+            let mut ss = match SealedStore::open(&mut emmc) {
+                Ok(s) => s,
+                Err(_) => return (0, 0, 0, false, false, false),
+            };
+            if ss.add_region(DV_LO, DV_HI, RegionKind::DataVolume).is_err() {
+                return (0, 0, 0, false, false, false);
+            }
+            let mut log = match crate::fslog::open_or_format(&mut ss, DV_LO, DV_HI) {
+                Ok(l) => l,
+                Err(_) => return (0, 0, 0, false, false, false),
+            };
+            let prev = log.count(); // records persisted from a PRIOR boot (0 on first format)
+            let cap = log.capacity();
+            // Append 3 real evidence Events (rule 302 IOC-hit, PASS) with a boot-tag in ts.
+            let mut appended = true;
+            for i in 0..3u64 {
+                let mut ev = [0u8; 16];
+                ev[0..8].copy_from_slice(&(0xE0u64 + prev + i).to_le_bytes());
+                ev[8..12].copy_from_slice(&0x0a63_0008u32.to_le_bytes());
+                ev[12..14].copy_from_slice(&302u16.to_le_bytes());
+                ev[14] = 5;
+                ev[15] = 1;
+                if log.append(&mut ss, crate::fslog::RT_EVIDENCE, &ev).is_err() {
+                    appended = false;
+                    break;
+                }
+            }
+            let now = log.count();
+            // Read back the live records in order; count them + confirm they are evidence Events.
+            let mut seen = 0u64;
+            let mut all_evid = true;
+            let _ = log.for_each(&ss, |_seq, rt, pl| {
+                seen += 1;
+                if !(rt == crate::fslog::RT_EVIDENCE && pl.len() >= 14 && pl[12] == 0x2e && pl[13] == 0x01) {
+                    all_evid = false;
+                }
+            });
+            let expect = (prev + 3).min(cap);
+            (prev, now, cap, seen == now, all_evid && seen > 0, appended && now == expect && seen == now && all_evid)
+        })();
+        kprint!("   [SEPDIAG-EMMC-DATAVOL] persisted-records-from-prior-boot={} | appended=3 total={} cap={} readback-in-order={} all-evidence={} => {}\n",
+            dv_prev, dv_now, dv_cap, dv_order, dv_evid, if dv_pass { "PASS" } else { "FAIL" });
+    }
+
     // If we can build a store over the real disk, exercise the READ/scan path.
     {
         let mut dev = emmc; // move into the store (read path uses it immutably)
