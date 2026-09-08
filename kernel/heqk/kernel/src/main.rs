@@ -1857,7 +1857,9 @@ fn cm5_p15_block_seal() {
     kprint!("   [P15] clk-emmc2={} Hz (get only; shared w/ WiFi), pre-touch: CAPS={:#010x} PRESENT={:#010x} CLKCTL={:#06x} INT_EN={:#010x}\n",
         clk, pre[0], pre[1], pre[3] as u16, pre[5]);
 
-    let emmc = match Emmc::probe() {
+    // `mut` for the p15-write metal write self-test below; read-only otherwise.
+    #[cfg_attr(not(feature = "p15-write"), allow(unused_mut))]
+    let mut emmc = match Emmc::probe() {
         Ok(e) => e,
         Err((step, err)) => {
             kprint!("   [P15] eMMC SILENT — stalled step {} ({:?}); read-only probe, no disk change\n", step, err);
@@ -1898,6 +1900,42 @@ fn cm5_p15_block_seal() {
     }
     kprint!("   [P15] reserved window LBA {} scan (read-only): {}\n",
         store::RESERVED_LBA_LO, if found { "HQKSEAL1 blob present" } else { "empty (no seal yet)" });
+
+    // M3 metal keystone (p15-write): the FIRST real CMD24 write to the CM5 eMMC. The write
+    // path (arch emmc::write_block_impl) was only ever exercised over virtio-blk/RamDisk in
+    // QEMU; this proves it on SILICON. Safe by construction: Gate-1 is a COMPILE-TIME hard
+    // clamp to the reserved window LBA 2016..2047 (32 empty sectors between the MBR and
+    // partition 1), independent of the caller — a bug cannot escape it. We target LBA 2040,
+    // clear of the seal-store blob region at 2016. TWO-BOOT PROOF: read FIRST (a cookie from
+    // a prior boot ⇒ persistence survived the power-cycle on real eMMC), then rewrite with a
+    // bumped boot counter.
+    #[cfg(feature = "p15-write")]
+    {
+        const WLBA: u64 = 2040;
+        const WMAGIC: &[u8; 8] = b"HQKEMWR1";
+        let mut rb = [0u8; 512];
+        let pre_ok = emmc.read_block(WLBA, &mut rb).is_ok();
+        let persisted = pre_ok && &rb[..8] == WMAGIC;
+        let prev_boot = if persisted {
+            u32::from_le_bytes([rb[8], rb[9], rb[10], rb[11]])
+        } else {
+            0
+        };
+        let this_boot = prev_boot.wrapping_add(1);
+        let mut wb = [0u8; 512];
+        wb[..8].copy_from_slice(WMAGIC);
+        wb[8..12].copy_from_slice(&this_boot.to_le_bytes());
+        let (wlo, whi) = emmc.arm_write_window(WLBA, WLBA + 1);
+        let armed = whi > wlo;
+        let wrote = armed && emmc.write_block(WLBA, &wb).is_ok();
+        let mut vb = [0u8; 512];
+        let readback = wrote && emmc.read_block(WLBA, &mut vb).is_ok() && vb[..12] == wb[..12];
+        // A guard-escape assertion: a write OUTSIDE the reserved window MUST be refused.
+        let escape_refused = emmc.write_block(store::RESERVED_LBA_HI, &wb).is_err();
+        let pass = wrote && readback && escape_refused;
+        kprint!("   [SEPDIAG-EMMC-WRITE] persisted-from-prior-boot={} (boot#{}) | armed=[{}..{}) wrote={} readback-match={} | out-of-window-refused={} => {}\n",
+            persisted, this_boot, wlo, whi, wrote, readback, escape_refused, if pass { "PASS" } else { "FAIL" });
+    }
 
     // If we can build a store over the real disk, exercise the READ/scan path.
     {
