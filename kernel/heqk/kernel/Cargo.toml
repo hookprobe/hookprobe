@@ -140,6 +140,11 @@ rxprof = ["prod"]
 # interrupt-config layout on metal WITHOUT any write (no scribble risk). Additive to prod;
 # never shipped. See gem::mip_dump + the [DRV1-mipdump] probe.
 mipdump = ["prod", "arch-aarch64/mipdump"]
+# sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
+# heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
+# verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also
+# attributes the truncated-frame fail-closed drop (SG-2). Additive to prod; NEVER shipped.
+sepdiag = ["prod"]
 
 [[bin]]
 name = "kernel"
