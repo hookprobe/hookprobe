@@ -926,6 +926,24 @@ fn cm5_prod_service() -> ! {
     // Telemetry invariant: seen == forwarded + dropped + tx_fail.
     let (mut seen, mut forwarded, mut dropped) = (0u64, 0u64, 0u64);
     let (mut empty, mut faults, mut tx_fail) = (0u64, 0u64, 0u64);
+    // M4 GEM↔smoltcp bridge FIRST-LIGHT (netmetal). A persistent EL1 smoltcp instance that
+    // answers ARP for heqk's own control-plane IP (10.200.0.2/28) on the REAL wire — the first
+    // proof heqk terminates a frame rather than only forward/drop it. Seed fail-closed from the
+    // rng200 TRNG: a dead TRNG ⇒ no bridge (control plane stays down; the sensor loop is
+    // unaffected). LA MAC 02:00:00:00:00:02 (device-derived MAC is the M4.2 refinement).
+    // prod stays byte-identical — this whole block compiles out without `netmetal`.
+    #[cfg(feature = "netmetal")]
+    let mut metal_bridge: Option<netsvc::MetalBridge> = match arch_aarch64::rng200::next_word_strict() {
+        Some(w) => {
+            let mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0x02];
+            kprint!(" [NETMETAL] smoltcp bridge UP on GEM: 10.200.0.2/28 mac 02:00:00:00:00:02 (TRNG-seeded)\n");
+            Some(netsvc::MetalBridge::new(mac, [10, 200, 0, 2], 28, w as u64))
+        }
+        None => {
+            kprint!(" [NETMETAL] control plane DISABLED — TRNG absent (sensor still live)\n");
+            None
+        }
+    };
     // Persistent RX read cursor — the analog of Linux macb's `queue->rx_tail`. The GEM
     // fills descriptors sequentially and wraps, so `rx_head` is the oldest unconsumed
     // slot; the batch drainer advances it in lockstep with the hardware fill. It survives
@@ -1183,6 +1201,11 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            // M4 FIRST-LIGHT heartbeat: how many ARP-for-heqk frames the bridge saw and answered.
+            #[cfg(feature = "netmetal")]
+            if let Some(b) = metal_bridge.as_ref() {
+                kprint!("   [NETMETAL hb] arp_seen={} arp_answered={}\n", b.seen, b.answered);
+            }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
             // verdict 1=PASS/2=DROP -> wire action). prod exposes only aggregate counters;
@@ -1324,12 +1347,39 @@ fn cm5_prod_service() -> ! {
                     #[cfg(feature = "rxprof")]
                     { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
                     if v == packet::PASS {
+                        // M4 FIRST-LIGHT (netmetal): AFTER the frame PASSes the verified rule
+                        // plane, demux for-heqk frames (ARP-request for the control-plane IP)
+                        // into the smoltcp bridge and TX its reply out the GEM. A for-heqk frame
+                        // TERMINATES here (not hairpin-forwarded). Everything else falls through
+                        // to the normal forward path. Compiles out without `netmetal`.
+                        #[cfg(feature = "netmetal")]
+                        let handled = if let Some(b) = metal_bridge.as_mut() {
+                            if b.wants(&buf[..n]) {
+                                let now_ms = (prod_cntpct() / (cntfrq / 1000).max(1)) as i64;
+                                if let Some((reply, rn)) = b.step(&buf[..n], now_ms) {
+                                    if arch_aarch64::gem::tx_frame(&reply[..rn]).is_some() {
+                                        forwarded += 1;
+                                    } else {
+                                        tx_fail += 1;
+                                    }
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        #[cfg(not(feature = "netmetal"))]
+                        let handled = false;
                         // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
                         // seen == forwarded + dropped + tx_fail holds and a lost PASS is visible.
-                        if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
-                            forwarded += 1;
-                        } else {
-                            tx_fail += 1;
+                        if !handled {
+                            if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
+                                forwarded += 1;
+                            } else {
+                                tx_fail += 1;
+                            }
                         }
                         #[cfg(feature = "rxprof")]
                         { let t = prod_cntpct(); prof.tx += t.wrapping_sub(mark); mark = t; }
@@ -3341,6 +3391,11 @@ pub extern "C" fn kmain() -> ! {
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
+        // M4 FIRST-LIGHT: the SAME MetalBridge the prod drain loop runs, exercised in QEMU —
+        // wants()+step() answers an ARP for heqk's IP; the metal half is a host `arping`.
+        let mbok = netsvc::metalbridge_selftest(0x4845_514b_5636_0001);
+        kprint!(" [PH6-metalbridge] {} — MetalBridge (prod GEM path) answers ARP for heqk's IP, demux rejects non-ARP (metal = host arping 10.200.0.2)\n",
+            if mbok { "PASS" } else { "FAIL" });
     }
 
     // --- M4.1 (P18-netcfg): network CONFIG clients over smoltcp — DHCP + DNS + SNTP,
