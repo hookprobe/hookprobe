@@ -367,3 +367,243 @@ pub fn metalbridge_selftest(seed: u64) -> bool {
 
     arp_ok && icmp_claimed && threat_not_wanted && br.seen == 1 && br.answered == 1
 }
+
+// ===========================================================================
+// M4 Noise-over-bridge — the metal transport (GemPhy) + a bounded enrollment BRING-UP.
+// A persistent UDP socket in MetalBridge is not expressible in no_std/no-heap (self-referential
+// SocketSet<'a> borrowing the socket buffers), so the handshake transport gets a dedicated
+// single-function-scope driver that stack-owns the SocketSet + UDP buffers for its bounded
+// lifetime — exactly `netcfg::real_slirp`'s proven arrangement. It runs ONCE before the sensor
+// loop, owns the GEM cursor for its window, and hands `rx_head` back advanced. Air-gap invariant:
+// no responder ⇒ the bounded window elapses and the sensor loop runs; a dead HW-TRNG ⇒ no wire
+// touch at all (fail-closed). Off by default; `netmetal`(+`securechannel`) only.
+// ===========================================================================
+
+#[cfg(feature = "netmetal")]
+fn now_ms() -> i64 {
+    let cnt: u64;
+    let frq: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) cnt, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) frq, options(nomem, nostack));
+    }
+    if frq == 0 {
+        return 0;
+    }
+    ((cnt as u128 * 1000) / frq as u128) as i64
+}
+#[cfg(feature = "netmetal")]
+fn now() -> Instant {
+    Instant::from_millis(now_ms())
+}
+
+/// A smoltcp `phy::Device` over the REAL RP1 GEM (mirrors `netcfg::VirtioPhy`, dual verdict gate).
+/// `pump_rx` drains ONE RX descriptor — staging it for smoltcp only if it is for-heqk AND PASSes
+/// the rule plane (ingress gate) — then always recycles + advances the shared cursor so the ring
+/// never stalls. `pump_tx` flushes one egress frame (already egress-verdict-gated in `TxTok`) via
+/// `gem::tx_frame`. Egress checksums are computed (`Checksum::Tx`) so datagrams carry valid
+/// UDP/IP checksums the host kernel accepts.
+#[cfg(feature = "netmetal")]
+pub struct GemPhy<'c> {
+    rx: Option<([u8; MTU], usize)>,
+    tx: TxSink,
+    rx_head: &'c mut usize,
+    our_mac: [u8; 6],
+    our_ip: [u8; 4],
+    csum: ChecksumCapabilities,
+    pub rx_staged: u32,
+    pub dropped_in: u32,
+}
+
+#[cfg(feature = "netmetal")]
+impl<'c> GemPhy<'c> {
+    pub fn new(mac: [u8; 6], ip: [u8; 4], rx_head: &'c mut usize) -> GemPhy<'c> {
+        let mut cs = ChecksumCapabilities::ignored();
+        cs.ipv4 = Checksum::Tx;
+        cs.icmpv4 = Checksum::Tx;
+        cs.tcp = Checksum::Tx;
+        cs.udp = Checksum::Tx;
+        GemPhy {
+            rx: None,
+            tx: TxSink { buf: [0; MTU], len: 0, ready: false, dropped_out: 0, tx_lost: 0 },
+            rx_head,
+            our_mac: mac,
+            our_ip: ip,
+            csum: cs,
+            rx_staged: 0,
+            dropped_in: 0,
+        }
+    }
+    fn pump_rx(&mut self) {
+        if self.rx.is_some() {
+            return;
+        }
+        let head = *self.rx_head;
+        if !arch_aarch64::gem::rx_desc_used(head) {
+            return;
+        }
+        if let Some(l) = arch_aarch64::gem::rx_desc_status(head) {
+            if l >= 14 {
+                let mut buf = [0u8; MTU];
+                let n = l.min(MTU);
+                arch_aarch64::gem::peek_rx_frame(head, &mut buf[..n]);
+                if is_for_heqk(&buf[..n], self.our_mac, self.our_ip)
+                    && packet::verdict(&buf[..n]).1 == packet::PASS
+                {
+                    self.rx = Some((buf, n));
+                    self.rx_staged += 1;
+                } else {
+                    self.dropped_in += 1;
+                }
+            }
+        }
+        arch_aarch64::gem::recycle_rx(head);
+        *self.rx_head = (head + 1) % arch_aarch64::gem::RX_NDESC;
+    }
+    fn pump_tx(&mut self) {
+        if self.tx.ready {
+            let _ = arch_aarch64::gem::tx_frame(&self.tx.buf[..self.tx.len]);
+            self.tx.ready = false;
+        }
+    }
+}
+
+#[cfg(feature = "netmetal")]
+impl<'c> Device for GemPhy<'c> {
+    type RxToken<'a>
+        = RxTok
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = TxTok<'a>
+    where
+        Self: 'a;
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut c = DeviceCapabilities::default();
+        c.max_transmission_unit = MTU;
+        c.medium = Medium::Ethernet;
+        c.checksum = self.csum.clone();
+        c
+    }
+    fn receive(&mut self, _t: Instant) -> Option<(RxTok, TxTok<'_>)> {
+        let (frame, len) = self.rx.take()?;
+        Some((RxTok { frame, len }, TxTok { sink: &mut self.tx }))
+    }
+    fn transmit(&mut self, _t: Instant) -> Option<TxTok<'_>> {
+        Some(TxTok { sink: &mut self.tx })
+    }
+}
+
+/// The bounded enrollment bring-up outcome.
+#[cfg(all(feature = "netmetal", feature = "securechannel"))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BringupOutcome {
+    /// Fail-closed: the HW-TRNG could not produce session entropy → NO wire touch (the control
+    /// plane never proceeds without real entropy); the sensor loop still runs.
+    NoTrng,
+    /// The bounded window elapsed with no datagram emitted (e.g. peer never ARP-resolved).
+    TimedOut { tx: u32 },
+    /// The enrollment hello was emitted on the wire (`tx` frames out, `rx` for-heqk frames in).
+    Emitted { tx: u32, rx: u32 },
+}
+
+/// Bounded enrollment bring-up over the real GEM: draw fail-closed HW-TRNG session entropy, bring
+/// up a smoltcp UDP socket on `GemPhy`, ARP-resolve the peer, and emit an enrollment HELLO
+/// datagram (a stable device-identity beacon) to `peer:port`. This is the TRANSPORT first-light —
+/// it proves GemPhy + smoltcp-UDP-over-GEM + the egress verdict gate + the fail-closed-TRNG gate
+/// on real silicon. The full Noise msg1 (to the PROVISIONED MSSP pubkey, using the drawn
+/// ephemerals) + the handshake ride the next increment (a host MSSP-sim generates the keypair).
+/// Hard-bounded by `window_ms` AND `max_attempts` (air-gap invariant); returns `rx_head` advanced.
+#[cfg(all(feature = "netmetal", feature = "securechannel"))]
+pub fn cm5_enroll_bringup(
+    mac: [u8; 6],
+    ip: [u8; 4],
+    prefix: u8,
+    peer: [u8; 4],
+    port: u16,
+    device_id: u64,
+    rx_head: &mut usize,
+    window_ms: i64,
+    max_attempts: u32,
+) -> BringupOutcome {
+    use crate::entropy::EntropySource; // brings fill_32 into scope
+    use smoltcp::socket::udp;
+    use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+
+    // (1) FAIL-CLOSED session entropy from the real HW-TRNG. A dead TRNG ⇒ no enrollment at all
+    // (never a seeded path on metal); the sensor loop is unaffected.
+    let mut e = crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new());
+    let _irand = match crate::securechannel::InitiatorRandomness::from_entropy(&mut e) {
+        Ok(r) => r, // the msg1 ephemerals — consumed by the full handshake next increment
+        Err(_) => return BringupOutcome::NoTrng,
+    };
+    let seed = e
+        .fill_32()
+        .map(|s| u64::from_le_bytes(s[..8].try_into().unwrap()))
+        .unwrap_or(0);
+
+    // (2) bring up a smoltcp iface + one UDP socket bound to `port`, over the GEM.
+    let mut phy = GemPhy::new(mac, ip, rx_head);
+    let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+    cfg.random_seed = seed;
+    let mut iface = Interface::new(cfg, &mut phy, now());
+    iface.update_ip_addrs(|a| {
+        let _ = a.push(IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix));
+    });
+    let mut store = [SocketStorage::EMPTY; 1];
+    let mut sockets = SocketSet::new(&mut store[..]);
+    let mut rxm = [udp::PacketMetadata::EMPTY; 4];
+    let mut rxb = [0u8; 2048];
+    let mut txm = [udp::PacketMetadata::EMPTY; 4];
+    let mut txb = [0u8; 2048];
+    let uh = sockets.add(udp::Socket::new(
+        udp::PacketBuffer::new(&mut rxm[..], &mut rxb[..]),
+        udp::PacketBuffer::new(&mut txm[..], &mut txb[..]),
+    ));
+    let _ = sockets.get_mut::<udp::Socket>(uh).bind(port);
+
+    // (3) the enrollment HELLO: a stable device-identity beacon (marker ‖ device_id ‖ fp).
+    let mut hello = [0u8; 48];
+    hello[..16].copy_from_slice(b"HEQK-ENROLL-HELO");
+    hello[16..24].copy_from_slice(&device_id.to_le_bytes());
+    let fp = boot_abi::sha256::digest(&device_id.to_le_bytes());
+    hello[24..48].copy_from_slice(&fp[..24]);
+    let ep = IpEndpoint::new(
+        IpAddress::Ipv4(Ipv4Address::new(peer[0], peer[1], peer[2], peer[3])),
+        port,
+    );
+
+    let deadline = now_ms() + window_ms;
+    let mut attempts = 0u32;
+    let mut tx_seen = 0u32;
+    let mut sent = false;
+    let mut last_send = 0i64;
+    while now_ms() < deadline {
+        phy.pump_rx();
+        iface.poll(now(), &mut phy, &mut sockets);
+        if phy.tx.ready {
+            tx_seen += 1;
+        }
+        phy.pump_tx();
+
+        // (re)send the hello up to `max_attempts`, ~500 ms apart. smoltcp ARP-resolves the peer,
+        // holding the datagram until the reply, then emits it.
+        let t = now_ms();
+        if attempts < max_attempts && (last_send == 0 || t - last_send >= 500) {
+            if sockets.get_mut::<udp::Socket>(uh).send_slice(&hello, ep).is_ok() {
+                attempts += 1;
+                last_send = t;
+                sent = true;
+            }
+        }
+        // drain any inbound datagram (transport-RX confirm; content used next increment).
+        let mut ib = [0u8; 256];
+        let _ = sockets.get_mut::<udp::Socket>(uh).recv_slice(&mut ib);
+    }
+
+    if sent && tx_seen > 0 {
+        BringupOutcome::Emitted { tx: tx_seen, rx: phy.rx_staged }
+    } else {
+        BringupOutcome::TimedOut { tx: tx_seen }
+    }
+}

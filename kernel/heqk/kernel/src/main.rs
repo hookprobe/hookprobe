@@ -1207,6 +1207,28 @@ fn cm5_prod_service() -> ! {
         arch_aarch64::gem::msi_sink_unmask();
         arch_aarch64::gem::rx_msix_iack();
     }
+    // M4 Noise-over-bridge TRANSPORT first-light (netmetal+securechannel): a BOUNDED enrollment
+    // bring-up over the real GEM — fail-closed HW-TRNG session entropy, then a smoltcp UDP
+    // enrollment HELLO to the control-plane peer (10.200.0.1:7654). Air-gap: no responder / no
+    // TRNG ⇒ the bounded window elapses and the sensor loop below runs unaffected. `rx_head` is
+    // handed back advanced past any frames the bring-up drained. The full Noise handshake +
+    // reconcile_reach_policy (metal segmentation arming) ride the host-MSSP-sim increment.
+    #[cfg(all(feature = "netmetal", feature = "securechannel"))]
+    {
+        let device_id = read_seal_handoff().map(|h| h.device_id).unwrap_or(0);
+        let outcome = netsvc::cm5_enroll_bringup(
+            [0x02, 0x00, 0x00, 0x00, 0x00, 0x02], // LA MAC (== MetalBridge)
+            [10, 200, 0, 2],
+            28,
+            [10, 200, 0, 1], // control-plane peer
+            7654,            // HS_PORT
+            device_id,
+            &mut rx_head,
+            3000, // ≤3 s window (never blocks the sensor forever)
+            3,    // ≤3 hello attempts
+        );
+        kprint!(" [NETENROLL] bring-up outcome: {:?}\n", outcome);
+    }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
