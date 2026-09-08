@@ -441,3 +441,61 @@ pub fn build_enroll_beacon(our_mac: [u8; 6], our_ip: [u8; 4], port: u16, device_
     out[p + 24..p + 48].copy_from_slice(&fp[..24]);
     FRAME
 }
+
+/// Build a UDP datagram carrying `framed_chunk` (one Noise-handshake chunk from `hs_chunk`):
+/// Ethernet(`dst_mac`)/IPv4(`our_ip`→`dst_ip`)/UDP(`port`→`port`) ‖ framed_chunk. Valid IPv4
+/// header checksum; UDP checksum 0 (permitted for IPv4). `dst_mac`=ff.. + `dst_ip`=255.255.255.255
+/// broadcasts (avoids ARP — the responder replies unicast to our MAC, caught by `is_for_heqk`).
+/// Returns the frame length written to `out` (needs ≥ 42 + framed_chunk.len()). The ControlPlane
+/// emits these through the sensor's SINGLE gem::tx_frame path (single-owner discipline).
+pub fn build_hs_datagram(
+    our_mac: [u8; 6],
+    our_ip: [u8; 4],
+    dst_mac: [u8; 6],
+    dst_ip: [u8; 4],
+    port: u16,
+    framed_chunk: &[u8],
+    out: &mut [u8],
+) -> usize {
+    let plen = framed_chunk.len();
+    let frame = 14 + 20 + 8 + plen;
+    for b in out[..frame].iter_mut() {
+        *b = 0;
+    }
+    out[0..6].copy_from_slice(&dst_mac);
+    out[6..12].copy_from_slice(&our_mac);
+    out[12] = 0x08;
+    out[13] = 0x00; // IPv4
+    out[14] = 0x45; // v4, IHL=5
+    out[16..18].copy_from_slice(&((20 + 8 + plen) as u16).to_be_bytes());
+    out[22] = 64; // TTL
+    out[23] = 17; // UDP
+    out[26..30].copy_from_slice(&our_ip);
+    out[30..34].copy_from_slice(&dst_ip);
+    let csum = ipv4_checksum(&out[14..34]);
+    out[24..26].copy_from_slice(&csum.to_be_bytes());
+    out[34..36].copy_from_slice(&port.to_be_bytes());
+    out[36..38].copy_from_slice(&port.to_be_bytes());
+    out[38..40].copy_from_slice(&((8 + plen) as u16).to_be_bytes());
+    out[42..42 + plen].copy_from_slice(framed_chunk);
+    frame
+}
+
+/// The L4-payload slice of a UDP frame destined to `port`, or `None` (not IPv4/UDP or wrong
+/// port). Used by the ControlPlane to extract a handshake chunk from a received frame.
+pub fn udp_payload_for_port(frame: &[u8], port: u16) -> Option<&[u8]> {
+    let m = crate::net::parse(frame)?;
+    // `net::parse` sets `payload_off` = the IP datagram END (`ip_end`); the UDP payload is the
+    // slice AFTER the 8-byte UDP header (l4_off+8) up to that end.
+    let start = m.l4_off.checked_add(8)?;
+    if m.ip_proto == crate::net::IPPROTO_UDP
+        && m.dst_port == port
+        && m.l4_off != 0
+        && start <= m.payload_off
+        && m.payload_off <= frame.len()
+    {
+        Some(&frame[start..m.payload_off])
+    } else {
+        None
+    }
+}

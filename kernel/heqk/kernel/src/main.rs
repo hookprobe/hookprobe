@@ -61,6 +61,9 @@ mod entropy;
 // M4.3 — MSSP enrollment + authenticated update fetch over the Noise channel.
 #[cfg(feature = "securechannel")]
 mod enroll;
+// M4.5 — control-plane INITIATOR: smoltcp-free hand-framed Noise handshake over the single drain.
+#[cfg(feature = "securechannel")]
+mod controlplane;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
@@ -3530,6 +3533,10 @@ pub extern "C" fn kmain() -> ! {
         // fail-closed reassembly, and the full handshake completes over it (the metal GEM
         // transport rides this framing; the smoltcp-UDP-over-GEM carriage is the metal first-light).
         enroll::noise_over_udp_selftest();
+        // M4.5: the control-plane INITIATOR state machine drives a full handshake against an
+        // in-kernel responder over the exact smoltcp-free hand-framed UDP transport it runs on
+        // metal (the metal half is the host MSSP-sim, deferred).
+        controlplane::cp_selftest();
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
