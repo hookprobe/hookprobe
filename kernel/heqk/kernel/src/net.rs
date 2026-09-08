@@ -139,6 +139,46 @@ pub fn eth_ipv6_dst(frame: &[u8]) -> Option<[u8; 16]> {
     Some(out)
 }
 
+/// ICMPv6 (IPv6 next-header 58) and the Router Advertisement message type (134),
+/// for the RA-guard tier (RFC 6105 / matrix rows L4 legit + A9 rogue).
+pub const IPPROTO_ICMPV6: u8 = 58;
+pub const ICMPV6_ROUTER_ADVERT: u8 = 134;
+
+/// RA-guard predicate (RFC 6105): is this frame an ICMPv6 **Router Advertisement**
+/// (type 134)? Walks VLAN tags → IPv6 → the bounded extension-header chain (reusing
+/// `parse_ipv6`), then reads the ICMPv6 message type. A RA is legitimate ONLY from a
+/// designated router/uplink port; on a client/access port it is a rogue gateway-hijack
+/// the RA-guard verdict drops (A9), while a legit downstream-router RA on an uplink is
+/// Observed + accepted (L4). Returns `false` (no RA verdict — fail-safe) for any
+/// non-IPv6 / non-ICMPv6 / truncated frame, so a normal packet is never mis-flagged.
+pub fn is_icmpv6_ra(frame: &[u8]) -> bool {
+    let mut et = match be16(frame, 12) {
+        Some(v) => v,
+        None => return false,
+    };
+    let mut l3 = ETH_HLEN;
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = match be16(frame, l3 + 2) {
+            Some(v) => v,
+            None => return false,
+        };
+        l3 += 4;
+        tags += 1;
+    }
+    if et != ETHERTYPE_IPV6 {
+        return false;
+    }
+    match parse_ipv6(frame, l3) {
+        // parse_ipv6 returns the ICMPv6 header offset as the "L4" offset; the message
+        // type is its first byte.
+        Some((IPPROTO_ICMPV6, icmp_off, _end)) => {
+            frame.get(icmp_off).copied() == Some(ICMPV6_ROUTER_ADVERT)
+        }
+        _ => false,
+    }
+}
+
 /// Maximum on-wire Ethernet frame size (802.1Q-tagged): 1518 + 4 = 1522. A frame
 /// past this from an unrecognized source is a structural anomaly (F7). Mirrors
 /// Linux `dpi::DEFAULT_MAX_FRAME_LEN`.
