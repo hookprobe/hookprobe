@@ -110,6 +110,16 @@ pub enum FindingClass {
     /// only emits a SOAR alert, never a wire action. Mirrors the Linux posture (beacon/
     /// lateral run in the userspace observation stream, never in the tc-bpf drop path).
     Behavioral,
+    /// RA-guard (RFC 6105 / matrix rows L4 legit + A9 rogue). An ICMPv6 Router
+    /// Advertisement is legitimate ONLY from a designated router/uplink port. This
+    /// class is PORT-ROLE-GATED like `L2Flood`, but the Access verdict is a clean
+    /// `FrameDrop` (a RA on a client-only port is a definitionally-illegitimate
+    /// gateway-hijack — a suspicion-free, port-keyed drop of THAT frame, ADR 0023),
+    /// while an Uplink RA is the legit downstream-router advertisement → `Observe`
+    /// (accepted + logged). The mgmt floor still short-circuits. FAIL-SAFE: the live
+    /// aggregate port defaults `Uplink`, so a real RA is never dropped until a manifest
+    /// marks a specific access interface.
+    RaGuard,
 }
 
 /// The role of the ingress port — the FP guard that keeps a busy AP/uplink radio's
@@ -309,6 +319,21 @@ fn decide_core(class: FindingClass, ctx: DecideCtx) -> Verdict {
             } else {
                 match ctx.port_role {
                     PortRole::Access => Verdict::RateLimit { over_limit: true },
+                    PortRole::Uplink => Verdict::Observe,
+                }
+            }
+        }
+
+        // RA-guard (RFC 6105). Port-role-gated like L2Flood, but a rogue RA is dropped
+        // as a whole illegitimate FRAME (gateway-hijack), not rate-limited: Access →
+        // FrameDrop (A9), Uplink → the legit downstream-router RA is Observed (L4). The
+        // mgmt floor still short-circuits. Live default (Uplink) never drops a real RA.
+        FindingClass::RaGuard => {
+            if ctx.allowlisted {
+                Verdict::Allowlisted
+            } else {
+                match ctx.port_role {
+                    PortRole::Access => Verdict::FrameDrop,
                     PortRole::Uplink => Verdict::Observe,
                 }
             }
