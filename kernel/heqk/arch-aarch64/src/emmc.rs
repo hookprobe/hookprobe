@@ -58,9 +58,17 @@ pub struct Emmc {
     rca: u32,
     sec_count: u64,
     sector_addr: bool,
-    /// One-shot narrowing write window (only present in the write build).
+    /// One-shot narrowing write window for the reserved KEYSTORE window (write build).
     #[cfg(feature = "p15-write")]
     win: Option<(u64, u64)>,
+    /// M3 DataVolume: a SECOND registered writable region (evidence log store), set by
+    /// `set_data_volume` from the on-disk layout. Gate-1 allows the keystore window OR
+    /// this region — NEVER LBA 0 / the boot slot. `dv_win` is its independent one-shot
+    /// narrowing window (per-region narrowing preserved).
+    #[cfg(feature = "p15-write")]
+    dv: Option<(u64, u64)>,
+    #[cfg(feature = "p15-write")]
+    dv_win: Option<(u64, u64)>,
 }
 
 impl Emmc {
@@ -178,6 +186,10 @@ impl Emmc {
             sector_addr,
             #[cfg(feature = "p15-write")]
             win: None,
+            #[cfg(feature = "p15-write")]
+            dv: None,
+            #[cfg(feature = "p15-write")]
+            dv_win: None,
         })
     }
 
@@ -212,16 +224,45 @@ impl Emmc {
         self.host.pio_in(buf, 512).map_err(|_| BlockErr::Io)
     }
 
-    /// Arm the one-shot, NARROWING-ONLY write window (SEALED_STORAGE.md: the
-    /// driver's independent second gate). It can only ever shrink, and is hard-
-    /// clamped to the reserved window regardless of the caller's request, so a
-    /// store-layer arithmetic bug cannot widen it. Returns the effective window.
+    /// M3 — REGISTER the DataVolume region (the evidence log store), the SECOND writable
+    /// region Gate-1 admits besides the reserved keystore window. The layout supplies it;
+    /// it MUST NOT include LBA 0 or the boot slot (the caller asserts that). Registering it
+    /// only ENABLES the allowlist entry — a write still needs `arm_write_window` (Gate 2).
+    #[cfg(feature = "p15-write")]
+    pub fn set_data_volume(&mut self, lo: u64, hi: u64) {
+        if lo < hi {
+            self.dv = Some((lo, hi));
+        }
+    }
+
+    /// Arm the one-shot, NARROWING-ONLY write window (the driver's independent second gate).
+    /// Routes to whichever REGION contains the request — the registered DataVolume (if set
+    /// and the request fits) else the reserved keystore window — and narrows only WITHIN
+    /// that region (each region has its own window, so a store-layer bug can never widen
+    /// past its region, and Gate-1 still hard-bounds everything to keystore ∪ DataVolume,
+    /// never LBA 0 / the boot slot). Returns the effective window.
     #[cfg(feature = "p15-write")]
     pub fn arm_write_window(&mut self, lo: u64, hi: u64) -> (u64, u64) {
-        // Clamp the request into the hard reserved window first.
+        // DataVolume region takes the request iff it is fully contained in it.
+        if let Some((dlo, dhi)) = self.dv {
+            if lo >= dlo && hi <= dhi && lo < hi {
+                let mut a = lo.max(dlo);
+                let mut b = hi.min(dhi);
+                if let Some((plo, phi)) = self.dv_win {
+                    a = a.max(plo);
+                    b = b.min(phi);
+                }
+                if a >= b {
+                    a = dlo;
+                    b = dlo; // empty: refuses everything in the DataVolume
+                }
+                self.dv_win = Some((a, b));
+                return (a, b);
+            }
+        }
+        // Otherwise the reserved keystore window (unchanged narrowing behavior).
         let mut lo = lo.max(RESERVED_LBA_LO);
         let mut hi = hi.min(RESERVED_LBA_HI);
-        // Then intersect with any previously-armed window (narrow only).
         if let Some((plo, phi)) = self.win {
             lo = lo.max(plo);
             hi = hi.min(phi);
@@ -236,13 +277,17 @@ impl Emmc {
 
     #[cfg(feature = "p15-write")]
     fn write_block_impl(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
-        // Gate 1 (independent of the store layer): the compile-time hard clamp —
-        // LBA 0 is never writable and nothing at/above the first partition is.
-        if lba < RESERVED_LBA_LO || lba >= RESERVED_LBA_HI {
+        // Gate 1 (independent of the store layer): the hard allowlist — the reserved
+        // keystore window OR the registered DataVolume region. LBA 0 (MBR) and the boot
+        // slot are NEVER in either, so they can never be written.
+        let in_reserved = lba >= RESERVED_LBA_LO && lba < RESERVED_LBA_HI;
+        let in_dv = self.dv.map_or(false, |(lo, hi)| lba >= lo && lba < hi);
+        if !(in_reserved || in_dv) {
             return Err(BlockErr::WriteRefused);
         }
-        // Gate 2: the armed one-shot window (must have been narrowed to fit).
-        match self.win {
+        // Gate 2: the armed one-shot window FOR THE MATCHING REGION.
+        let armed = if in_dv { self.dv_win } else { self.win };
+        match armed {
             Some((lo, hi)) if lba >= lo && lba < hi => {}
             _ => return Err(BlockErr::WriteRefused),
         }
