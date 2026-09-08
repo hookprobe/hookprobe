@@ -36,6 +36,7 @@ PHASES=(
   "DRV|[DRV] PASS|impl|Validation|driver isolation: EL0 driver server drives NIC MMIO via a capability"
   "P8|[P8] PASS|impl|Validation|PREVAIL verifier: statically proves rule memory-safety, rejects unsafe 3rd-party rules"
   "P8p|[P8-plane] PASS|impl|Validation|detection plane: general BPF JIT (branches) + rule registry (parity) + live QSecBit scoring"
+  "P8scan|[P8-scan] PASS|impl|Validation|TCP-flag scan tier fires SYMMETRICALLY (M2 A6 settled): a lone FIN (0x01) fires rule 202 exactly as NULL (0x00) fires 201 and Xmas (0x29) fires 203 — the three are byte-eq on the same TCP flags offset — while a legit SYN (0x02) fires none. Proves the metal 'FIN-scan doesn't fire' observation was a harness run-ordering/attribution artifact, not a code asymmetry"
   "P8diff|[P8-diff] PASS|impl|Validation|DET-6: JIT<->interpreter differential over ALL live JIT'd rules (L4 port + L2 ARP + TCP-scan), not just THREAT_RULE — native codegen proven == verified interpreter on a match-constant-stressed input set; FLOW/CALL rules interp-only, excluded"
   "P8vlan|[P8-vlan] PASS|impl|Validation|AUD-NET-1: strip_vlan reconstructs the canonical untagged frame for 1-tag and QinQ (guards the VLAN-normalization off-by-2 that re-opened the DET-4 L2/FLOW IDS bypass)"
   "P8n|[P8-napi] PASS|impl|Validation|adaptive NAPI: poll-budget grows under load, idles+re-arms when quiet (spin-poll retired)"
