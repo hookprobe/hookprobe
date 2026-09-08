@@ -176,7 +176,27 @@ fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
 /// (dst_port, verdict) where verdict is PASS or DROP. Malformed/truncated frames
 /// fail closed to DROP. Same code path as the inline datapath verdict.
 pub fn verdict(frame: &[u8]) -> (u16, u16) {
-    classify(frame)
+    let (port, v) = classify(frame);
+    // M-segmentation reach gate (C6): a POLICY drop applied AFTER the threat pipeline has
+    // PASSed the frame — the kill-switch pattern, NOT a FindingClass. Inert unless the reach
+    // plane is ARMED (C7) by an authenticated authority; fail-open (Full default / mgmt floor
+    // / infra carve-out) otherwise. A threat DROP is never second-guessed here (threats drop
+    // regardless of reach). Keyed on the frame's OWN src MAC (no victim-framing path).
+    if v == PASS && frame.len() >= 12 {
+        let mac_key = crate::ratelimit::mac_hash(&frame[6..12]);
+        let mut nbuf = [0u8; FRAME_SZ];
+        let nframe = strip_vlan(frame, &mut nbuf);
+        let src = crate::net::eth_ipv4_src(nframe);
+        let dst = crate::net::eth_ipv4_dst(nframe).unwrap_or(0);
+        let dst_internal = dst != 0 && crate::behavioral::is_internal(dst);
+        if !crate::segment::reach_allow(src, mac_key, dst, dst_internal) {
+            // Segmentation POLICY drop — a distinct INFO event (C5), NOT a threat: it must not
+            // feed QSecBit / corroboration / the threat score, so it is NOT run through the
+            // detection event ring here.
+            return (port, DROP);
+        }
+    }
+    (port, v)
 }
 
 /// AUD-NET-1 regression guard: prove strip_vlan reconstructs the CANONICAL untagged
