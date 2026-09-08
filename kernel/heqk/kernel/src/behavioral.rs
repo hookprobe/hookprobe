@@ -44,6 +44,13 @@ fn cntfrq() -> u64 {
     v
 }
 
+/// Monotonic seconds since boot — the real-clock source for the live behavioral tier
+/// (beacon needs a `now`). Same clock the internal detectors already use.
+#[inline]
+pub fn now_secs() -> u64 {
+    cntpct() / cntfrq().max(1)
+}
+
 /// RFC1918 + loopback "internal" test on a HOST-ORDER IPv4 u32 — parity with
 /// `napse_loader::lateral::is_private_ipv4` (which also treats 127/8 as private). Used by
 /// the lateral (internal→internal) and exfil (internal→external) direction guards.

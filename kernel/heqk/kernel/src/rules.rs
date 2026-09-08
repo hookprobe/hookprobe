@@ -316,7 +316,12 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     // storm). A genuine flood on an Access port → RateLimit; Uplink → Observe.
     if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6]) {
         if crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
-            let v = verdict::decide_l2(FindingClass::L2Flood, ctx);
+            // A3 FIX: a NON-EXEMPT broadcast/multicast FLOOD is resource-exhaustion, not
+            // legit many-client traffic (legit mDNS/SSDP/LLMNR are exempted above, row L1).
+            // So it is a rate wall crossed → FindingClass::FloodRate → a bounded, self-
+            // reverting RateLimit on ANY port (mgmt floor still honored), NOT L2Flood's
+            // port-role gate (which is correct only for mac-flood's legit-many-MACs case).
+            let v = verdict::decide_l2(FindingClass::FloodRate, ctx);
             fire(RULE_BCAST_STORM, SEV_MED, v, src);
             if v.is_drop() {
                 return Some(v);
@@ -444,6 +449,33 @@ pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
 pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
 pub const RULE_TRUNCATED: u16 = 120; // SG-2: net::parse None -> fail-closed drop (matrix F4)
 
+/// M2.3 L2/L3 RESOURCE-SHED (matrix A7 conntrack-saturation / A8 scheduler-pressure / L9
+/// legit-heavy-no-shed) — wired live off the connection stream. Records `src` into the
+/// top-talker census, then sheds IFF a real resource wall is crossed AND `src` is the
+/// dominant top-talker: A7 = flow-table >=80% full, A8 = CPU/scheduler pressure >= the PSI
+/// floor. Identity-BLIND + SELF-REVERTING (windowed top + re-checked every frame → the
+/// source PASSes again the moment the wall clears; L9's legit heavy source in an
+/// un-saturated table / low-PSI box never fires). mgmt `Allowlisted` floor honored in
+/// `shed_verdict`. Returns `None` (no shed) in the common case.
+pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
+    if src == 0 {
+        return None;
+    }
+    let s = src as u64;
+    crate::ratelimit::flow_record(s); // top-talker census (windowed → self-reverting)
+    let saturated = crate::ratelimit::saturation_shed(
+        s,
+        crate::ratelimit::flow_count(),
+        crate::ratelimit::flow_table_max(),
+    );
+    let pressured = crate::ratelimit::pressure_shed(s);
+    if saturated || pressured {
+        Some(shed_verdict(RULE_RESOURCE_SHED, src, true))
+    } else {
+        None
+    }
+}
+
 /// M2.4 shared verdict step: a behavioral detector FIRED → route through `decide()` as
 /// `FindingClass::Behavioral`, which is OBSERVE-ONLY by construction (always `Observe`,
 /// PASS on the wire — zero legit-drop risk). `fire()` still exports the SOAR alert so the
@@ -466,6 +498,12 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
         return None;
     }
     Some(behavioral_verdict(RULE_BEACON, src))
+}
+
+/// Live-clock wrapper for the datapath (M2.4 A10/L8 wiring): same as `beacon_verdict_at`
+/// but sources `now` from the real monotonic clock instead of an injected test value.
+pub fn beacon_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
+    beacon_verdict_at(src, dst, dst_port, crate::behavioral::now_secs())
 }
 
 /// M2.4 / LATERAL (A10 detection-half) — one internal source fanning out across many
