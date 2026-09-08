@@ -245,5 +245,3 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
   matrix as one adversarial Gate-R pass on metal, the manifest-sourced port-role for a REAL Access
   interface (A1/A9), and a product-steward ruling accepting L5/L6-off-device + A11-wire-rejected.
   U2 (Linux-dataplane unbuild) stays gated on that — **not yet unlocked.**
-</content>
-</invoke>
