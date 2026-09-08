@@ -991,7 +991,8 @@ fn cm5_prod_service() -> ! {
                 // in prod, so a real emission shows as a GIC-pending bit on INTID 166 (no CPU
                 // inject here — that would false-positive). This is the RP1's OWN emission.
                 let emitted = arch_aarch64::gem::gic_spi_pending(166);
-                kprint!("   [DRV1-hb] INTSTATL={:#010x} (bit6=ETH) INTSTATH={:#010x} | mip_sL={:#010x} rc_s={:#010x} | RP1_emitted(GIC166)={} <== the answer\n", il, ih, ml, rc, emitted);
+                let (pbir, pdw, pbit) = arch_aarch64::gem::rx_msix_pba();
+                kprint!("   [DRV1-hb] INTSTATL={:#010x} (bit6=ETH) | mip_sL={:#010x} rc_s={:#010x} | RP1_emitted(GIC166)={} | PBA[bir/off={:#x} dw={:#010x} vec6pending={}] <== \n", il, ml, rc, emitted, pbir, pdw, pbit);
                 arch_aarch64::gem::gic_spi_clear_pending(166); // fresh per-beat
                 // EDGE maneuver: the source is stuck level-HIGH (INTSTATL=0x40) because prod
                 // never clears the GEM ISR (RX is via the DMA ring). Clear it now to DEASSERT
