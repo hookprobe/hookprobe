@@ -36,22 +36,22 @@
 
 | State | Count | Rows |
 |---|---|---|
-| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` / self-test evidence, zero legit-drops) | **28** | L1, L2, L3, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A10 · F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 |
+| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` / self-test evidence, zero legit-drops) | **30** | L1, L2, L3, L4, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A9, A10 · F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 |
 | **QEMU-PROVEN / metal-pending or metal-not-drivable** | **0** | — (all pre-M4-provable rows are metal-proven) |
-| **SCOPED-ABSENT / NOT-YET-BUILT** (some off-device per ADR 0044 D3) | **5** | L4, L5, L6 · A9, A11 |
+| **SCOPED-ABSENT / NOT-YET-BUILT** (need a stateful subsystem; some off-device per ADR 0044 D3) | **3** | L5, L6 (NAC) · A11 (corroboration) |
 
 **Sacred invariant, held on metal:** across every LEGIT row driven on CM5 (`20260907-m2-matrix-*`),
 `drop+=0`. No legitimate stimulus was ever wire-dropped. Sensor stayed healthy (96/96 heartbeats,
 `faults=0`) through the A3/A10/L8/shed wiring run.
 
-> **Gate-R is NOT yet complete.** 28/33 proven-on-metal covers every pre-M4-provable row:
-> all frame-drivable classes, the three resource-shed rows, the two port-role rows, and the
-> structural/exemption rows (F4/F7/L1 via bring-up self-tests, since the host NIC cannot emit
-> a sub-14B runt or a >1522B jumbo). The release gate is the FULL 33-row matrix on metal.
-> The remaining **5 rows are scoped-absent and structurally M4-gated** (NAC/RA-guard need the
-> network stack; A11 needs the multi-signal corroboration engine — some off-device by ADR
-> 0044 D3). Therefore **U2 (the Linux-dataplane unbuild) is NOT unlocked** — it is gated on the
-> full matrix + Gate R green (BuildPlan Track C; MIGRATION-heqk §U2).
+> **Gate-R is NOT yet complete.** 30/33 proven-on-metal covers every row buildable without a
+> new stateful subsystem: all frame-drivable classes, the resource-shed rows, the port-role
+> rows, the structural/exemption rows (F4/F7/L1 via bring-up self-tests), and RA-guard (L4/A9,
+> RFC 6105). The release gate is the FULL 33-row matrix on metal. The remaining **3 rows need
+> a stateful subsystem heqk does not have yet**: L5/L6 (a NAC onboarding-grace state machine)
+> and A11 (a multi-signal corroboration engine) — some off-device by ADR 0044 D3. Therefore
+> **U2 (the Linux-dataplane unbuild) is NOT unlocked** — it is gated on the full matrix + Gate R
+> green (BuildPlan Track C; MIGRATION-heqk §U2).
 
 ---
 
@@ -124,7 +124,7 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 | L1 | mDNS/SSDP/LLMNR multicast burst | no storm alert (accept) | **M** | `rules::is_exempt_multicast` (rules.rs:543) exempts 33:33 + 01:00:5e mDNS/LLMNR/SSDP groups BEFORE the storm counter | **Metal-proven** (2026-09-08, `[SEPDIAG-STRUCT] L1 mDNS-200x-exempt(no-fire)=true`): 200 mDNS frames NEVER fire `l2_stateful_verdict` on silicon — the exemption holds, legit service discovery always passes |
 | L2 | Busy uplink, distinct MACs | Observe (never RateLimit) | **M** | `L2Flood` on an `Uplink` port → `Observe` (verdict.rs:264) | **Metal-proven** via the A1/A2 self-test's Uplink leg (`[SEPDIAG-A1A2] A2 uplink-fired=true uplink-drop=false`): 320 distinct MACs on an Uplink port fire but never wire-drop, on silicon |
 | L3 | ARP binding flip-flop | **Observe, never FrameDrop** | **M** | rule 102 arp-spoof → `IdentitySpoof` → `Observe` | `rule=102 verdict=PASS` (metal) + matrix `L3_arp_flipflop drop+=0 PASS`. The 2026-08-20 🔴 legit-drop risk is **eliminated** |
-| L4 | Unlisted downstream-router RA (ICMPv6 134) | observed + accepted | **S** | *(no RA-guard)* | Not built; RA-guard is a follow-on (off-device candidate, ADR 0044 D3). PASS-by-absence, no observe/log |
+| L4 | Downstream-router RA (ICMPv6 134) on an uplink | observed + accepted | **M** | RA-guard (RFC 6105): `net::is_icmpv6_ra` → `decide_l2(RaGuard)`; Uplink → `Observe` (rule 121) | **Metal-proven** (2026-09-08, `[SEPDIAG-RAGUARD] L4 legit-RA-uplink-Observe=true`): a legit RA on an Uplink port is Observed + accepted, never dropped. This IS the live-port behavior (port 0 defaults Uplink) |
 | L5 | Brand-new unclassified device | OnboardingGrace (full reach) | **S** | *(no NAC model)* | No NAC/segment state machine on heqk; scoped-absent |
 | L6 | Stale unclassified device past grace | revert to InternetOnly | **S** | *(no NAC / time-grace)* | Same — needs off-device or a heqk-native policy store |
 | L7 | CDN fan-out, 100 conns all to :443 | no port-scan alert | **M** | `flow_scan_verdict` keys on SYN-only-to-distinct-ports-without-establishment, not conn count | matrix `L7_cdn_443 drop+=0 PASS`; established/normal flows never trip the scan wall |
@@ -145,7 +145,7 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 | A6 | FIN/NULL/XMAS stealth scan | RateLimit (graduated) | **M** | rules 201/202/203/204 → `ScanShape`, single packet `over_limit=false` → `RateLimit{false}` → **PASS** | `rule=201/202/203 verdict=PASS`, `rule=204 verdict=PASS` (metal). **Detection is metal-proven; the graduated verdict is a non-drop RateLimit** — the harness's old "MISS" label was a wrong expectation (a stealth-scan shape with no rate context is Observe on the wire, not a drop). Corrected in `gate-r-matrix.sh` to expect "fire", not "DROP" |
 | A7 | Conntrack saturation, single flood source | shed that source | **M** | `resource_shed_verdict` → `saturation_shed` (≥80% flow-table) → `FloodRate` shed | `[SEPDIAG-SHED] A7 sat-shed=true` (metal self-test at sensor bring-up; not frame-drivable) |
 | A8 | Sustained PSI pressure + top-talker | shed top-talker | **M** | `resource_shed_verdict` → `pressure_shed` (heqk-native scheduler/mem pressure) → `FloodRate` shed | `[SEPDIAG-SHED] A8 psi-shed=true A8(legit)=false A8(revert)=false` (metal self-test) |
-| A9 | Confirmed-rogue RA source | drop (ether saddr … type 134) | **S** | *(no RA-guard)* | Not built; RA-guard follow-on (off-device candidate) |
+| A9 | Rogue RA on a client/access port | drop (type 134) | **M** | RA-guard (RFC 6105): `decide_l2(RaGuard)` on an Access port → `FrameDrop` (rule 121) — a RA on a client-only port is a definitionally-illegitimate gateway-hijack (suspicion-free, port-keyed drop, ADR 0023) | **Metal-proven** (2026-09-08, `[SEPDIAG-RAGUARD] A9 rogue-RA-access-DROP=true`). Live default is Uplink (fail-safe: a real RA is never dropped until a manifest marks a specific access interface). Verdict-policy note (FrameDrop vs Observe cf. ARP-spoof) flagged for security-auditor |
 | A10 | Lateral / C2-beacon finding | detected, **never enforced** | **M** | rule 117 lateral + rule 116 beacon → `Behavioral` → `Observe` | `rule=117 verdict=PASS` ×5 (metal — lateral detected, never wire-dropped). **Beacon detection-half** (rule 116 on a genuine non-NTP TCP beacon) is Observe-only + QEMU-proven; it needs a ~60s periodic drive → **metal-pending, low value** (it is PASS by construction either way) |
 | A11 | Corroborated active IOC threat | Quarantine (to isolation seg) | **S** | *(single-signal only → Observe; no corroboration gate, no quarantine-to-segment)* | Multi-signal corroboration + segment isolation are the M2 follow-on. Today one IOC = `Observe` (correct for L11); the corroborated-escalation half is not built |
 
@@ -231,8 +231,8 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
   frame-structural) are separate acceptance surfaces on separate substrates. CLAUDE.md's invariant
   bullet describes the **Linux** matrix; do not conflate its ✅ with heqk's Gate-R status.
 - **M2 is 🟡, not ✅.** QEMU-green (M2.0–M2.4) is the engineering milestone; Gate R is the release
-  sign-off and is **partially met** (28/33 metal-proven — every pre-M4-provable row; the final 5
-  are M4-gated). U2 (Linux-dataplane unbuild) stays gated on the FULL 33-row matrix + Gate R —
-  **not yet unlocked.**
+  sign-off and is **partially met** (30/33 metal-proven; the final 3 need a stateful subsystem —
+  NAC state machine / corroboration engine). U2 (Linux-dataplane unbuild) stays gated on the
+  FULL 33-row matrix + Gate R — **not yet unlocked.**
 </content>
 </invoke>
