@@ -1437,6 +1437,46 @@ pub fn gic_spi_pending(intid: u32) -> bool {
     (v >> (intid % 32)) & 1 == 1
 }
 
+/// DRV-1 (mipdump): read the RP1 MSI-X PBA (Pending Bit Array) bit for vector 6 — the
+/// DEFINITIVE split of "EP generated the MSI but the send is blocked" (PBA bit SET) vs "EP
+/// never generated it" (PBA CLEAR). Walks the cap (config access works post-enumerate) for
+/// the PBA offset/BIR, translates via the same 0x40_0000_0000 outbound alias, reads the PBA
+/// dword holding vector 6. Returns (pba_off/bir raw, the PBA dword, bit6 set?). If the PBA is
+/// outside the mapped 1 MB BAR0 window it returns (raw, 0xffffffff, false).
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_pba() -> (u32, u32, bool) {
+    const IDX: usize = PCIE_RC + 0x9000;
+    const DATA: usize = PCIE_RC + 0x8000;
+    unsafe {
+        write_volatile(IDX as *mut u32, 1 << 20);
+        core::arch::asm!("dsb sy");
+        let cr = |reg: usize| -> u32 { read_volatile((DATA + (reg & 0xfff)) as *const u32) };
+        // find MSI-X cap (id 0x11)
+        let mut cap = (cr(0x34) & 0xfc) as usize;
+        let mut msix = 0usize;
+        let mut g = 0;
+        while cap != 0 && cap != 0xfc && g < 48 {
+            let w0 = cr(cap);
+            if w0 & 0xff == 0x11 { msix = cap; break; }
+            cap = ((w0 >> 8) & 0xfc) as usize;
+            g += 1;
+        }
+        if msix == 0 { return (0, 0xffff_ffff, false); }
+        let pbabir = cr(msix + 8);
+        let bir = (pbabir & 0x7) as usize;
+        let poff = (pbabir & !0x7) as usize;
+        let bar_lo = cr(0x10 + bir * 4) & !0xf;
+        let pba_pcie = bar_lo as usize + poff;
+        let pba_cpu = pba_pcie + 0x40_0000_0000; // same alias as pcie_map_bar0_window
+        // vector 6 -> dword 6/32 = 0, bit 6. Guard to the mapped window.
+        if !(0x40_0000_0000..0x41_0000_0000).contains(&pba_cpu) {
+            return (pbabir, 0xffff_ffff, false);
+        }
+        let dw = read_volatile((pba_cpu) as *const u32);
+        (pbabir, dw, (dw >> 6) & 1 == 1)
+    }
+}
+
 /// DRV-1 (mipdump): clear a GIC SPI's pending bit (GICD ICPENDR, base 0x280) so the next
 /// read of gic_spi_pending() reflects only fresh activity since this clear. Used to detect
 /// PER-BEAT RP1 MSI emission rather than a latched once-ever bit.
