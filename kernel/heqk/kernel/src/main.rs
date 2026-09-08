@@ -1207,29 +1207,15 @@ fn cm5_prod_service() -> ! {
         arch_aarch64::gem::msi_sink_unmask();
         arch_aarch64::gem::rx_msix_iack();
     }
-    // M4 Noise-over-bridge TRANSPORT first-light (netmetal+securechannel): a BOUNDED enrollment
-    // bring-up over the real GEM — fail-closed HW-TRNG session entropy, then a smoltcp UDP
-    // enrollment HELLO to the control-plane peer (10.200.0.1:7654). Air-gap: no responder / no
-    // TRNG ⇒ the bounded window elapses and the sensor loop below runs unaffected. `rx_head` is
-    // handed back advanced past any frames the bring-up drained. The full Noise handshake +
-    // reconcile_reach_policy (metal segmentation arming) ride the host-MSSP-sim increment.
-    #[cfg(all(feature = "netmetal", feature = "securechannel"))]
-    {
-        let device_id = read_seal_handoff().map(|h| h.device_id).unwrap_or(0);
-        let outcome = netsvc::cm5_enroll_bringup(
-            [0x02, 0x00, 0x00, 0x00, 0x00, 0x02], // LA MAC (== MetalBridge)
-            [10, 200, 0, 2],
-            28,
-            [10, 200, 0, 1], // control-plane peer
-            7654,            // HS_PORT
-            device_id,
-            &mut rx_head,
-            5000, // wait ≤5 s for the GEM/RP1 link to come up before emitting (metal finding)
-            3000, // ≤3 s emit window (never blocks the sensor forever)
-            3,    // ≤3 hello attempts
-        );
-        kprint!(" [NETENROLL] bring-up outcome: {:?}\n", outcome);
-    }
+    // M4 Noise-over-bridge control-plane TRANSPORT first-light: a once-per-boot BROADCAST UDP
+    // presence beacon, emitted from the sensor heartbeat below through the ONE gem::tx_frame path
+    // (Linux-`macb`-aligned: single RX-ring owner, no second walker — the deleted GemPhy/bring-up
+    // corrupted the ring → BNA stall). Link-gated by a SAFE PHY BMSR read. `device_id` captured
+    // here so the closure over the heartbeat can build the beacon.
+    #[cfg(feature = "netmetal")]
+    let beacon_device_id: u64 = read_seal_handoff().map(|h| h.device_id).unwrap_or(0);
+    #[cfg(feature = "netmetal")]
+    let mut beacon_sent = false;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -1256,6 +1242,24 @@ fn cm5_prod_service() -> ! {
             #[cfg(feature = "netmetal")]
             if let Some(b) = metal_bridge.as_ref() {
                 kprint!("   [NETMETAL hb] forheqk_seen={} answered={}\n", b.seen, b.answered);
+            }
+            // M4 control-plane TRANSPORT first-light: emit the BROADCAST UDP presence beacon ONCE,
+            // when the PHY link is up (safe BMSR read — no NCR touch), through the SINGLE
+            // gem::tx_frame path (no second RX-ring walker — the Linux-macb single-owner rule).
+            #[cfg(feature = "netmetal")]
+            if !beacon_sent && arch_aarch64::gem::phy_link_up(0) {
+                let mut bf = [0u8; 96];
+                let n = netsvc::build_enroll_beacon(
+                    [0x02, 0x00, 0x00, 0x00, 0x00, 0x02],
+                    [10, 200, 0, 2],
+                    7654,
+                    beacon_device_id,
+                    &mut bf,
+                );
+                if arch_aarch64::gem::tx_frame(&bf[..n]).is_some() {
+                    beacon_sent = true;
+                    kprint!("   [NETENROLL] presence beacon emitted on wire ({} B, bcast UDP:7654) via single TX path\n", n);
+                }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
