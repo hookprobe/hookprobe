@@ -871,6 +871,143 @@ fn seg_policy_persist_gate(op: &KeyPair, enr: &Enrollment) {
     }
 }
 
+/// The M4.5 NOISE-OVER-UDP framing self-test — proves the datagram chunker + fail-closed
+/// reassembler carry a >MTU PQ-hybrid handshake, and that the FULL initiator↔responder handshake
+/// completes over that framing (matching transport keys + a record round-trips). Deterministic
+/// (StubTrng production `from_entropy` path). The real smoltcp-UDP-over-GEM carriage is the metal
+/// first-light (`cm5_enroll_bringup`); this proves the load-bearing >MTU framing off-hardware.
+#[cfg(feature = "securechannel-selftest")]
+pub fn noise_over_udp_selftest() {
+    use crate::securechannel::{hs_chunk, HsReasm, HS_CHUNK, HS_FRAME_HDR, HS_MSG_MAX};
+
+    // (1) chunk → reassemble round-trip of a >MTU buffer (2500 B → 3 datagrams).
+    let mut msg = [0u8; 2500];
+    for (i, b) in msg.iter_mut().enumerate() {
+        *b = (i as u8) ^ 0x5A;
+    }
+    let mut rr = HsReasm::new();
+    let mut count = 0u32;
+    let mut complete_len = 0usize;
+    let chunked = hs_chunk(&msg, |d| {
+        count += 1;
+        match rr.feed(d) {
+            Ok(Some(n)) => {
+                complete_len = n;
+                true
+            }
+            Ok(None) => true,
+            Err(()) => false,
+        }
+    });
+    let roundtrip = chunked && count == 3 && complete_len == msg.len() && rr.message() == &msg[..];
+
+    // (2) FAIL-CLOSED reassembly — a malicious peer cannot drive OOB / unbounded state.
+    let dgram = |total: u16, off: u16, clen: usize| -> ([u8; HS_FRAME_HDR + HS_CHUNK + 1], usize) {
+        let mut d = [0u8; HS_FRAME_HDR + HS_CHUNK + 1];
+        d[0..2].copy_from_slice(&total.to_le_bytes());
+        d[2..4].copy_from_slice(&off.to_le_bytes());
+        (d, HS_FRAME_HDR + clen)
+    };
+    let mut r = HsReasm::new();
+    let too_big = { let (d, n) = dgram(5000, 0, HS_CHUNK); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // total > MAX
+    let unaligned = { let (d, n) = dgram(2000, 100, HS_CHUNK); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // off % CHUNK != 0
+    let off_gt_total = { let (d, n) = dgram(10, 1024, 0); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // off > total
+    let chunk_too_big = { let (d, n) = dgram(2000, 0, HS_CHUNK + 1); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // chunk > CHUNK
+    let short_nonfinal = { let (d, n) = dgram(2000, 0, 500); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // non-final < CHUNK
+    let overflow = { let (d, n) = dgram(2000, 1024, HS_CHUNK); r.reset(); matches!(r.feed(&d[..n]), Err(())) }; // off+chunk > total
+    let inconsistent = {
+        r.reset();
+        let (d1, n1) = dgram(2000, 0, HS_CHUNK);
+        let first_ok = matches!(r.feed(&d1[..n1]), Ok(None));
+        let (d2, n2) = dgram(1500, 1024, 476); // different total
+        first_ok && matches!(r.feed(&d2[..n2]), Err(()))
+    };
+    let hdr_too_short = { r.reset(); matches!(r.feed(&[0u8; 3]), Err(())) };
+    let failclosed = too_big && unaligned && off_gt_total && chunk_too_big && short_nonfinal
+        && overflow && inconsistent && hdr_too_short;
+
+    // (3) FULL PQ-hybrid Noise handshake carried over the chunker (each message chunked +
+    //     reassembled), matching transport keys + a record round-trips.
+    let tv = crate::securechannel::test_vectors();
+    let device_fp = sha256::digest(&tv.dev.pk[..]);
+    let handshake = noise_handshake_over_chunker(&tv, &device_fp);
+
+    let pass = roundtrip && failclosed && handshake;
+    kprint!(" [P19-noise-over-udp] {} — >MTU handshake datagram framing: chunk/reassemble roundtrip(2500B→3 dgrams)={} fail-closed-reassembly(8 malformed rejected)={} full-Noise-handshake-over-chunker(matched keys+record-rt)={}\n",
+        yn(pass), yn(roundtrip), yn(failclosed), yn(handshake));
+}
+
+/// Drive the full M4.2b handshake with EVERY message routed through `hs_chunk` → `HsReasm`
+/// (the exact framing the metal GEM transport uses), then confirm the crossed transport keys
+/// match by a record round-trip. Returns true iff the whole exchange succeeds over the framing.
+#[cfg(feature = "securechannel-selftest")]
+fn noise_handshake_over_chunker(
+    tv: &crate::securechannel::TestVectors,
+    device_fp: &[u8; 32],
+) -> bool {
+    use crate::securechannel::{hs_chunk, HsReasm};
+
+    // Route a message through the chunker into a fresh reassembler; return the reassembled bytes
+    // length, or None if framing failed.
+    fn ferry(msg: &[u8], reasm: &mut HsReasm) -> bool {
+        reasm.reset();
+        let mut done = false;
+        let ok = hs_chunk(msg, |d| match reasm.feed(d) {
+            Ok(Some(_)) => {
+                done = true;
+                true
+            }
+            Ok(None) => true,
+            Err(()) => false,
+        });
+        ok && done
+    }
+
+    // msg1: device → responder, over the chunker.
+    let (msg1, ipend) =
+        match initiator_write_msg1(&tv.dev, &tv.resp.public(), &tv.irand, device_fp) {
+            Some(x) => x,
+            None => return false,
+        };
+    let mut reasm = HsReasm::new();
+    if !ferry(msg1.as_slice(), &mut reasm) {
+        return false;
+    }
+    let rpend = match responder_read_msg1(&tv.resp, &tv.dev.pk, reasm.message()) {
+        Ok(x) => x,
+        Err(_) => return false,
+    };
+    if rpend.payload1.as_slice() != &device_fp[..] {
+        return false;
+    }
+
+    // msg2: responder → device, over the chunker.
+    let tb = 4242u64.to_le_bytes();
+    let (msg2, mut mssp_session) = match responder_write_msg2(rpend, &tv.rrand, &tb) {
+        Some(x) => x,
+        None => return false,
+    };
+    if !ferry(msg2.as_slice(), &mut reasm) {
+        return false;
+    }
+    let (mut dev_session, _p2) = match initiator_read_msg2(ipend, reasm.message()) {
+        Ok(x) => x,
+        Err(_) => return false,
+    };
+
+    // The crossed keys match iff a device-sent record decrypts on the MSSP recv cipher.
+    let mut ct = [0u8; 64];
+    let n = match dev_session.send.encrypt_into(b"", b"seg-policy-probe", &mut ct) {
+        Some(n) => n,
+        None => return false,
+    };
+    let mut pt = [0u8; 64];
+    match mssp_session.recv.decrypt_into(b"", &ct[..n], &mut pt) {
+        Ok(m) => &pt[..m] == b"seg-policy-probe",
+        Err(_) => false,
+    }
+}
+
 // --- (a) entropy checks ---------------------------------------------------
 
 #[cfg(feature = "securechannel-selftest")]

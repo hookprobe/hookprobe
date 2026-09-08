@@ -110,6 +110,141 @@ pub type HsMsg = Buf<HS_MSG_MAX>;
 /// A handshake AEAD-record buffer (encrypt/decrypt-and-hash plaintext/ciphertext).
 pub type HsRec = Buf<HS_REC_MAX>;
 
+// ===========================================================================
+// Noise-over-UDP DATAGRAM FRAMING (M4.5). A PQ-hybrid handshake message (msg1 ≈ 2480 B — the
+// ML-KEM-768 encaps key 1184 B + ciphertext 1088 B dominate) EXCEEDS one UDP datagram at the
+// 1514 MTU, so a message is split into ≤`HS_CHUNK`-byte datagrams, each prefixed
+// [total_len:u16 LE][offset:u16 LE]. Heap-free. The reassembler is FAIL-CLOSED: every offset/len
+// is bounds-checked against HS_MSG_MAX so a malicious peer can neither drive an OOB write nor
+// grow unbounded state (a reassembly-DoS surface the os-architect flagged). This framing sits
+// BELOW Noise — Noise's AEAD still authenticates the reassembled bytes end-to-end.
+// ===========================================================================
+
+/// Max application bytes per handshake datagram (UDP payload = this + `HS_FRAME_HDR` ≤ MTU).
+pub const HS_CHUNK: usize = 1024;
+/// The per-datagram framing header: [total_len:u16 LE][offset:u16 LE].
+pub const HS_FRAME_HDR: usize = 4;
+/// Max datagrams a single handshake message occupies.
+pub const HS_MAX_CHUNKS: usize = (HS_MSG_MAX + HS_CHUNK - 1) / HS_CHUNK;
+/// Max on-wire datagram (header + one chunk).
+pub const HS_DGRAM_MAX: usize = HS_FRAME_HDR + HS_CHUNK;
+
+/// Split `msg` (≤ `HS_MSG_MAX`) into framed datagrams IN ORDER, invoking `emit(datagram)` for
+/// each. Returns false if `msg` is too large or any `emit` returns false. Heap-free (one
+/// stack datagram buffer reused). A zero-length message emits one empty (total=0) datagram so
+/// the peer still observes completion.
+pub fn hs_chunk(msg: &[u8], mut emit: impl FnMut(&[u8]) -> bool) -> bool {
+    if msg.len() > HS_MSG_MAX {
+        return false;
+    }
+    let total = msg.len() as u16;
+    let mut d = [0u8; HS_DGRAM_MAX];
+    let mut off = 0usize;
+    if msg.is_empty() {
+        d[0..4].copy_from_slice(&[0, 0, 0, 0]);
+        return emit(&d[..HS_FRAME_HDR]);
+    }
+    while off < msg.len() {
+        let n = core::cmp::min(HS_CHUNK, msg.len() - off);
+        d[0..2].copy_from_slice(&total.to_le_bytes());
+        d[2..4].copy_from_slice(&(off as u16).to_le_bytes());
+        d[HS_FRAME_HDR..HS_FRAME_HDR + n].copy_from_slice(&msg[off..off + n]);
+        if !emit(&d[..HS_FRAME_HDR + n]) {
+            return false;
+        }
+        off += n;
+    }
+    true
+}
+
+/// Fail-closed reassembler for chunked handshake datagrams. Bounded, heap-free.
+pub struct HsReasm {
+    buf: [u8; HS_MSG_MAX],
+    total: usize,
+    got: usize,
+    have: [bool; HS_MAX_CHUNKS],
+    started: bool,
+}
+
+impl Default for HsReasm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HsReasm {
+    pub fn new() -> Self {
+        HsReasm { buf: [0u8; HS_MSG_MAX], total: 0, got: 0, have: [false; HS_MAX_CHUNKS], started: false }
+    }
+
+    /// Feed one datagram. `Ok(Some(len))` = message complete (see `message()`); `Ok(None)` = more
+    /// expected; `Err(())` = MALFORMED (fail-closed — the caller aborts / drops the peer). Every
+    /// field is bounds-checked; a chunk that is not the final one MUST be exactly `HS_CHUNK` (so
+    /// offsets can never desync), and `total_len` must agree across every datagram of a message.
+    pub fn feed(&mut self, d: &[u8]) -> Result<Option<usize>, ()> {
+        if d.len() < HS_FRAME_HDR {
+            return Err(());
+        }
+        let total = u16::from_le_bytes([d[0], d[1]]) as usize;
+        let off = u16::from_le_bytes([d[2], d[3]]) as usize;
+        let chunk = &d[HS_FRAME_HDR..];
+        if total > HS_MSG_MAX
+            || off > total
+            || off % HS_CHUNK != 0
+            || chunk.len() > HS_CHUNK
+            || off + chunk.len() > total
+        {
+            return Err(());
+        }
+        let is_final = off + chunk.len() == total;
+        if !is_final && chunk.len() != HS_CHUNK {
+            return Err(()); // a non-final chunk must fill a full HS_CHUNK slot
+        }
+        if self.started {
+            if self.total != total {
+                return Err(()); // total must agree across the message's datagrams
+            }
+        } else {
+            self.total = total;
+            self.started = true;
+            self.got = 0;
+            self.have = [false; HS_MAX_CHUNKS];
+        }
+        let idx = off / HS_CHUNK;
+        if idx >= HS_MAX_CHUNKS {
+            return Err(());
+        }
+        if !self.have[idx] {
+            self.buf[off..off + chunk.len()].copy_from_slice(chunk);
+            self.have[idx] = true;
+            self.got += chunk.len();
+        }
+        if self.got >= self.total {
+            let nchunks = if self.total == 0 { 0 } else { (self.total + HS_CHUNK - 1) / HS_CHUNK };
+            for i in 0..nchunks {
+                if !self.have[i] {
+                    return Ok(None);
+                }
+            }
+            return Ok(Some(self.total));
+        }
+        Ok(None)
+    }
+
+    /// The reassembled message (valid only after `feed` returned `Ok(Some(len))`).
+    pub fn message(&self) -> &[u8] {
+        &self.buf[..self.total]
+    }
+
+    /// Reset for the next message (reuse the buffer, no realloc).
+    pub fn reset(&mut self) {
+        self.started = false;
+        self.got = 0;
+        self.total = 0;
+        self.have = [false; HS_MAX_CHUNKS];
+    }
+}
+
 /// Volatile-scrub a 32-byte secret (raw ML-KEM / X25519 shared secret) once it
 /// has been folded into the chaining key — defense-in-depth in the spirit of
 /// auditor condition #3 (full `zeroize`-crate adoption on the dalek types is the
