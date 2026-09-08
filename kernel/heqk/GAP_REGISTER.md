@@ -451,6 +451,30 @@ MSI-write safety net, and behind the RP1 register dump for the layout.
 
 ---
 
+## RX THROUGHPUT — ~20x FIX VALIDATED ON METAL 2026-09-09
+
+The Linux-on-CM5 reference PROVED heqk's GEM DMA config is already correct (post-init DMACFG
+0x70200710 ~= Linux 0x70180f10: 2048B RX buffers, 16-beat burst, max pkt-buf memory), so the
+~500/2000 burst ceiling + ~389/s sustained was NOT the GEM — it was the DRAIN path. Root cause:
+cm5_prod_service reloaded the ENTIRE EL0 driver stub (multi-KiB copy + full I-cache maintenance
++ remap) EVERY loop iteration; rxprof had measured that phase at ~99.9% of per-frame cost. The
+stub is AP_RO_EL0 (RO to EL0, cannot be corrupted), so the reload was pure overhead. FIX
+(commit 8b054d6): load the stub ONCE before the loop; re-load only in the contained-fault branch
+(self-heal preserved).
+
+METAL RESULT (image 372d0dfd, saturating RX, ~/heqk-metal-logs/20260909-rx-throughput-20x-fix.log):
+  sustained RX ~389/s -> ~8,000-9,400 frames/s (47,098 frames in one 5s window) = ~20-24x.
+  rxprof: reload=0 (was ~99.9%); per-frame el0 160,000us -> 48-125us under load. drop=0 through
+  114,227 frames; faults=0; no panic; validate.sh all GREEN. Enforcement path unchanged.
+
+FOLLOW-ONS (next tiers, not blocking):
+- tx_fail ~27% under saturation (31,056/114,227): the FORWARD/TX path cannot keep up at the new
+  RX rate — separate TX-throughput optimization (RX drop=0 is the goal and is met).
+- remaining RX bottleneck = el0 48-125us/frame (the EL0 excursion + per-frame IDS): the next
+  RX tier if line-rate (~80k/s) is ever needed. Current ~9k/s is far above M2 needs.
+
+---
+
 ## DEEP-INVESTIGATION AUDIT ROUND 2026-07-25 (post-P17, new P11-P17 + CORE code)
 A fresh multi-agent audit of the newly-added code (caps/notify/netq/devq/seal/store/rp1/packet) surfaced these. Closed one per commit with a regression gate:
 
