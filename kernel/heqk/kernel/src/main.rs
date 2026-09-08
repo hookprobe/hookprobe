@@ -17,6 +17,7 @@ mod bpf;
 mod caps;
 mod corroboration;
 mod devq;
+mod dnssink;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
@@ -3349,6 +3350,52 @@ pub extern "C" fn kmain() -> ! {
         let syn_q = rules::verdict_tcp(&hdr(0x02), s).is_none();
         kprint!(" [P8-scan] {} — NULL(201)={} FIN(202)={} XMAS(203)={} legit-SYN-quiet={}\n",
             if null_f && fin_f && xmas_f && syn_q { "PASS" } else { "FAIL" }, null_f, fin_f, xmas_f, syn_q);
+    }
+
+    // --- P20-dns-sink: DNS-sinkhole / RPZ — "refuse a NAME, never a PACKET". A query for a
+    // policy-blocked domain (+ its subdomains) gets a SINKHOLE A answer; a benign name is not
+    // blocked (packet flows untouched); a compression pointer in a query qname is fail-closed. ---
+    {
+        // Build a minimal DNS A query for the dotted labels into `out`; returns length.
+        fn mk_query(labels: &[&[u8]], out: &mut [u8]) -> usize {
+            out[0..2].copy_from_slice(&0x1234u16.to_be_bytes());
+            out[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // RD
+            out[4..6].copy_from_slice(&1u16.to_be_bytes()); // QDCOUNT=1
+            out[6..12].copy_from_slice(&[0u8; 6]);
+            let mut o = 12;
+            for l in labels {
+                out[o] = l.len() as u8;
+                o += 1;
+                out[o..o + l.len()].copy_from_slice(l);
+                o += l.len();
+            }
+            out[o] = 0;
+            o += 1; // root
+            out[o..o + 2].copy_from_slice(&1u16.to_be_bytes()); // QTYPE=A
+            out[o + 2..o + 4].copy_from_slice(&1u16.to_be_bytes()); // QCLASS=IN
+            o + 4
+        }
+        let mut q = [0u8; 128];
+        let mut nm = [0u8; 256];
+        // (1) blocked exact name → parse + rpz + sinkhole answer == SINKHOLE_IP.
+        let n = mk_query(&[b"ads", b"tracker"], &mut q);
+        let name_ok = dnssink::parse_qname(&q[..n], &mut nm).map_or(false, |l| &nm[..l] == b"ads.tracker");
+        let blocked = dnssink::rpz_blocked(b"ads.tracker");
+        let mut resp = [0u8; 160];
+        let sink_ok = dnssink::build_sinkhole_response(&q[..n], dnssink::SINKHOLE_IP, &mut resp)
+            .map_or(false, |rl| rl >= 4 && resp[rl - 4..rl] == dnssink::SINKHOLE_IP && resp[6..8] == 1u16.to_be_bytes());
+        // (2) subdomain of a blocked name → also blocked (suffix on a label boundary).
+        let sub_blocked = dnssink::rpz_blocked(b"x.ads.tracker");
+        // (3) benign name → NOT blocked (the packet flows untouched — never a drop).
+        let benign_ok = !dnssink::rpz_blocked(b"good.example") && !dnssink::rpz_blocked(b"notads.tracker.org");
+        // (4) fail-closed: a compression pointer (0xC0) in a query qname is rejected.
+        let mut bad = [0u8; 32];
+        let _ = mk_query(&[b"a"], &mut bad);
+        bad[12] = 0xC0; // corrupt the first label length into a pointer
+        let failclosed = dnssink::parse_qname(&bad[..20], &mut nm).is_none();
+        let pass = name_ok && blocked && sink_ok && sub_blocked && benign_ok && failclosed;
+        kprint!(" [P20-dns-sink] {} — RPZ refuses a NAME not a packet: qname-parse={} blocked-name={} sinkhole-answer={} subdomain-blocked={} benign-passes={} bad-qname-fail-closed={}\n",
+            if pass { "PASS" } else { "FAIL" }, name_ok, blocked, sink_ok, sub_blocked, benign_ok, failclosed);
     }
 
     // --- P5: Packet Engine (zero-copy ring + in-place verdict datapath) ---
