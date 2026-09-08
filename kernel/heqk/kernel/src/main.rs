@@ -1224,7 +1224,8 @@ fn cm5_prod_service() -> ! {
             7654,            // HS_PORT
             device_id,
             &mut rx_head,
-            3000, // ≤3 s window (never blocks the sensor forever)
+            5000, // wait ≤5 s for the GEM/RP1 link to come up before emitting (metal finding)
+            3000, // ≤3 s emit window (never blocks the sensor forever)
             3,    // ≤3 hello attempts
         );
         kprint!(" [NETENROLL] bring-up outcome: {:?}\n", outcome);
