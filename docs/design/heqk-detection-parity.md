@@ -36,22 +36,30 @@
 
 | State | Count | Rows |
 |---|---|---|
-| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` / self-test evidence, zero legit-drops) | **30** | L1, L2, L3, L4, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A9, A10 · F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 |
-| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **0** | — (all pre-M4-provable rows are metal-proven) |
-| **SCOPED-ABSENT / NOT-YET-BUILT** (need a stateful subsystem; some off-device per ADR 0044 D3) | **3** | L5, L6 (NAC) · A11 (corroboration) |
+| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` / self-test evidence, zero legit-drops) | **31** | L1, L2, L3, L4, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11 · F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 |
+| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **0** | — |
+| **OFF-DEVICE** (ADR 0044 D3 — control-plane concern, legit-safe by absence, NOT a heqk security-plane gap) | **2** | L5, L6 (NAC onboarding — reach actuator = U2 segmentation) |
+
+**Every row heqk-the-sensor is responsible for is built and metal-proven (31/31).** The 2 off-device rows (L5/L6 NAC) are a control-plane concern the sensor cannot actuate (no segmentation plane); they are legit-safe by absence and reclassified, not outstanding. A11's wire-Quarantine is **rejected by design** (security-auditor) — its detection/severity half is built + metal-proven and its correct wire behavior (Observe, never drop) is proven. Note: A1/A9's Access-port DROP paths are proven via self-test on a synthetic Access port; the live aggregate port defaults `Uplink` (fail-safe), so a real per-interface Access role still awaits the manifest reader.
 
 **Sacred invariant, held on metal:** across every LEGIT row driven on CM5 (`20260907-m2-matrix-*`),
 `drop+=0`. No legitimate stimulus was ever wire-dropped. Sensor stayed healthy (96/96 heartbeats,
 `faults=0`) through the A3/A10/L8/shed wiring run.
 
-> **Gate-R is NOT yet complete.** 30/33 proven-on-metal covers every row buildable without a
-> new stateful subsystem: all frame-drivable classes, the resource-shed rows, the port-role
-> rows, the structural/exemption rows (F4/F7/L1 via bring-up self-tests), and RA-guard (L4/A9,
-> RFC 6105). The release gate is the FULL 33-row matrix on metal. The remaining **3 rows need
-> a stateful subsystem heqk does not have yet**: L5/L6 (a NAC onboarding-grace state machine)
-> and A11 (a multi-signal corroboration engine) — some off-device by ADR 0044 D3. Therefore
-> **U2 (the Linux-dataplane unbuild) is NOT unlocked** — it is gated on the full matrix + Gate R
-> green (BuildPlan Track C; MIGRATION-heqk §U2).
+> **Every heqk-security-plane row is done: 31/31 metal-proven; the 2 remaining rows are
+> off-device (L5/L6 NAC).** On-device coverage is complete — all frame-drivable classes, the
+> resource-shed rows, the port-role rows, the structural/exemption rows, RA-guard (L4/A9), and
+> A11 corroboration (severity-only; wire-Quarantine rejected by design). L5/L6 (NAC onboarding)
+> are a control-plane concern heqk's single-port datapath cannot actuate (the reach actuator is
+> the U2 segmentation plane) — legit-safe by absence, reclassified OFF-DEVICE (ADR 0044 D3),
+> NOT an outstanding heqk gap.
+>
+> **Gate-R release sign-off still needs (a)** the full matrix run as one adversarial pass on
+> metal (Gate R proper, not just per-row self-tests), **(b)** the manifest-sourced per-interface
+> port-role so A1/A9's Access-DROP paths are exercised on a REAL interface (not only the synthetic
+> self-test port), and **(c)** a product-steward ruling that L5/L6-off-device + A11-wire-rejected
+> is an acceptable closure. Until (a)–(c), **U2 (the Linux-dataplane unbuild) stays NOT unlocked**
+> (BuildPlan Track C; MIGRATION-heqk §U2).
 
 ---
 
@@ -115,6 +123,7 @@ Two structural facts of the current build that shape the matrix:
 ## 2. The 33 rows, with per-row status + evidence
 
 Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-drivable ·
+**OD** off-device (ADR 0044 D3 — control-plane concern, legit-safe by absence) ·
 **S** scoped-absent / not-yet-built.
 
 ### 2a. `mod legit` — must FORWARD / OBSERVE, never a wire-drop (11 rows)
@@ -125,8 +134,8 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 | L2 | Busy uplink, distinct MACs | Observe (never RateLimit) | **M** | `L2Flood` on an `Uplink` port → `Observe` (verdict.rs:264) | **Metal-proven** via the A1/A2 self-test's Uplink leg (`[SEPDIAG-A1A2] A2 uplink-fired=true uplink-drop=false`): 320 distinct MACs on an Uplink port fire but never wire-drop, on silicon |
 | L3 | ARP binding flip-flop | **Observe, never FrameDrop** | **M** | rule 102 arp-spoof → `IdentitySpoof` → `Observe` | `rule=102 verdict=PASS` (metal) + matrix `L3_arp_flipflop drop+=0 PASS`. The 2026-08-20 🔴 legit-drop risk is **eliminated** |
 | L4 | Downstream-router RA (ICMPv6 134) on an uplink | observed + accepted | **M** | RA-guard (RFC 6105): `net::is_icmpv6_ra` → `decide_l2(RaGuard)`; Uplink → `Observe` (rule 121) | **Metal-proven** (2026-09-08, `[SEPDIAG-RAGUARD] L4 legit-RA-uplink-Observe=true`): a legit RA on an Uplink port is Observed + accepted, never dropped. This IS the live-port behavior (port 0 defaults Uplink) |
-| L5 | Brand-new unclassified device | OnboardingGrace (full reach) | **S** | *(no NAC model)* | No NAC/segment state machine on heqk; scoped-absent |
-| L6 | Stale unclassified device past grace | revert to InternetOnly | **S** | *(no NAC / time-grace)* | Same — needs off-device or a heqk-native policy store |
+| L5 | Brand-new unclassified device | OnboardingGrace (full reach) | **OD** | *(off-device — NAC authority + state machine on the control plane)* | **OFF-DEVICE (ADR 0044 D3)**, os-architect ruling 2026-09-08: NAC is a policy/segmentation state machine, not a detection verdict, and heqk's single-port binary datapath has **no reach actuator** (segmentation = U2). Legit-safe **by absence** (no NAC decision can wire-drop a device). Air-gap contract: no authority ⇒ default Full reach, observe-only, never brick |
+| L6 | Stale unclassified device past grace | revert to InternetOnly | **OD** | *(off-device — control-plane-supplied segment; heqk enforces once U2 exists)* | Same off-device ruling. The reach *actuator* (Full vs InternetOnly) needs the U2 segmentation plane; enforcement is a cloud-linked/enrolled-mode behavior. Legit-safe by absence; suppressed offline (never strand a device) |
 | L7 | CDN fan-out, 100 conns all to :443 | no port-scan alert | **M** | `flow_scan_verdict` keys on SYN-only-to-distinct-ports-without-establishment, not conn count | matrix `L7_cdn_443 drop+=0 PASS`; established/normal flows never trip the scan wall |
 | L8 | NTP beacon-shaped traffic (:123) | allowlisted, no beacon alert | **M** | NTP:123 exempt inside `behavioral::beacon_observe_at` (rule 116) | matrix `L8_ntp_beacon drop+=0 PASS` + A3-run `rule116 count=0` (NTP exempt), drop unchanged |
 | L9 | Legit heavy source, table 40% full, PSI low | no resource-shed | **M** | `resource_shed_verdict` returns `None` when under the wall / not top-talker | `[SEPDIAG-SHED] ... L9(under-wall)=false L9(not-top)=false => PASS` (metal self-test) |
@@ -147,7 +156,7 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 | A8 | Sustained PSI pressure + top-talker | shed top-talker | **M** | `resource_shed_verdict` → `pressure_shed` (heqk-native scheduler/mem pressure) → `FloodRate` shed | `[SEPDIAG-SHED] A8 psi-shed=true A8(legit)=false A8(revert)=false` (metal self-test) |
 | A9 | Rogue RA on a client/access port | drop (type 134) | **M** | RA-guard (RFC 6105): `decide_l2(RaGuard)` on an Access port → `FrameDrop` (rule 121) — a RA on a client-only port is a definitionally-illegitimate gateway-hijack (suspicion-free, port-keyed drop, ADR 0023) | **Metal-proven** (2026-09-08, `[SEPDIAG-RAGUARD] A9 rogue-RA-access-DROP=true`). Live default is Uplink (fail-safe: a real RA is never dropped until a manifest marks a specific access interface). Verdict-policy note (FrameDrop vs Observe cf. ARP-spoof) flagged for security-auditor |
 | A10 | Lateral / C2-beacon finding | detected, **never enforced** | **M** | rule 117 lateral + rule 116 beacon → `Behavioral` → `Observe` | `rule=117 verdict=PASS` ×5 (metal — lateral detected, never wire-dropped). **Beacon detection-half** (rule 116 on a genuine non-NTP TCP beacon) is Observe-only + QEMU-proven; it needs a ~60s periodic drive → **metal-pending, low value** (it is PASS by construction either way) |
-| A11 | Corroborated active IOC threat | Quarantine (to isolation seg) | **S** | *(single-signal only → Observe; no corroboration gate, no quarantine-to-segment)* | Multi-signal corroboration + segment isolation are the M2 follow-on. Today one IOC = `Observe` (correct for L11); the corroborated-escalation half is not built |
+| A11 | Corroborated active IOC threat | Observe + CRITICAL severity (wire-Quarantine **rejected by design**) | **M** | `corroboration.rs`: per-source axis tracker (REPUTATION/SCAN/BEACON/LATERAL/EXFIL/DNS) fed from the emit sites; `is_corroborated` → alert stamped `SEV_CRIT`. `decide_core` has NO corroboration input, so the wire verdict is UNCHANGED (`Observe`) | **Metal-proven** (2026-09-08, `[SEPDIAG-CORR] attacker corroborated=true wire-PASS=true \| legit-ops corroborated=true wire-PASS=true \| mgmt-floor=true`). Security-auditor NO-GO on any wire drop (FP-unsafe: legit infra trips ≥3 axes by nature; weaponizable via spoofed-victim on the forgeable src IP; no segment-isolation primitive). Corroboration raises SOC severity/QSECBIT only — the detection half is done; the wire-Quarantine half is **rejected by design, not a gap** |
 
 ### 2c. Frame-structural predicates (11 rows)
 
@@ -231,8 +240,10 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
   frame-structural) are separate acceptance surfaces on separate substrates. CLAUDE.md's invariant
   bullet describes the **Linux** matrix; do not conflate its ✅ with heqk's Gate-R status.
 - **M2 is 🟡, not ✅.** QEMU-green (M2.0–M2.4) is the engineering milestone; Gate R is the release
-  sign-off and is **partially met** (30/33 metal-proven; the final 3 need a stateful subsystem —
-  NAC state machine / corroboration engine). U2 (Linux-dataplane unbuild) stays gated on the
-  FULL 33-row matrix + Gate R — **not yet unlocked.**
+  sign-off and is **substantially met** (31/31 heqk-security-plane rows metal-proven; the 2
+  remaining rows are OFF-DEVICE NAC, legit-safe by absence). What still blocks sign-off: the full
+  matrix as one adversarial Gate-R pass on metal, the manifest-sourced port-role for a REAL Access
+  interface (A1/A9), and a product-steward ruling accepting L5/L6-off-device + A11-wire-rejected.
+  U2 (Linux-dataplane unbuild) stays gated on that — **not yet unlocked.**
 </content>
 </invoke>
