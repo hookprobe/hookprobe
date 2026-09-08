@@ -1024,6 +1024,46 @@ fn cm5_prod_service() -> ! {
         kprint!("   [SEPDIAG-A1A2] table Access={} Uplink={} | A1 access-macflood-DROP={} | A2 uplink-fired={} uplink-drop={} => {}\n",
             a_role, u_role, a1_drop, a2_fired, a2_drop, if pass { "PASS" } else { "FAIL" });
     }
+    // M2 F4/F7/L1 ON-METAL structural + exemption self-test (sepdiag). These three are
+    // NOT host-frame-drivable — the injecting NIC pads runts to 60B (F4 can't ride the
+    // wire sub-14B) and enforces MTU 1522 (F7 oversize can't be sent), and L1 is a
+    // never-fires exemption. So prove the DECISION on silicon through the REAL datapath
+    // entry `packet::verdict` (the same chain classify walks live), which is a strictly
+    // stronger proof than calling a detector directly.
+    #[cfg(feature = "sepdiag")]
+    {
+        use crate::packet::{verdict as pkt_verdict, DROP};
+        // F4 — a frame shorter than an Ethernet header: net::parse fail-closes → DROP (rule 120).
+        let f4 = [0xffu8, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0x00];
+        let (_p4, v4) = pkt_verdict(&f4);
+        let f4_drop = v4 == DROP;
+        // F7 — oversize (> MAX_FRAME_LEN 1522): structural_anomaly → MalformedFrame → FrameDrop.
+        // src MAC unicast (LSB 0) so F6 (mcast-source) does NOT pre-empt the oversize check.
+        let mut f7 = [0u8; 1600];
+        f7[0..6].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        f7[6..12].copy_from_slice(&[0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
+        f7[12..14].copy_from_slice(&[0x08, 0x00]);
+        let (_p7, v7) = pkt_verdict(&f7);
+        let f7_drop = v7 == DROP;
+        // L1 — a legit mDNS (01:00:5e:00:00:fb) burst is EXEMPT from the broadcast-storm
+        // counter: even 200 frames must NEVER fire the L2 tier (the exact exemption is the
+        // L1 mechanism). Asserted at l2_stateful_verdict (a well-formed-L3 mDNS frame then
+        // forwards through the rest of the chain — 5353 is no threat); this isolates the
+        // exemption without an L3-malformed confound.
+        let mut md = [0u8; 64];
+        md[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]);
+        md[6..12].copy_from_slice(&[0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
+        md[12..14].copy_from_slice(&[0x08, 0x00]);
+        let mut l1_never_fires = true;
+        for _ in 0..200 {
+            if rules::l2_stateful_verdict(&md, 0, 0, crate::verdict::port_role_for(0)).is_some() {
+                l1_never_fires = false;
+            }
+        }
+        let pass = f4_drop && f7_drop && l1_never_fires;
+        kprint!("   [SEPDIAG-STRUCT] F4 truncated-DROP={} | F7 oversize-DROP={} | L1 mDNS-200x-exempt(no-fire)={} => {}\n",
+            f4_drop, f7_drop, l1_never_fires, if pass { "PASS" } else { "FAIL" });
+    }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
     // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs
