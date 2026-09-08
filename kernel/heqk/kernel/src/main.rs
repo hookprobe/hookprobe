@@ -3498,6 +3498,10 @@ pub extern "C" fn kmain() -> ! {
         // M4.5: the segmentation AUTHORITY — an operator-signed reach policy over the enrolled
         // Noise channel ARMS segment.rs (C9 independent signature; fail-open on any failure).
         enroll::seg_policy_selftest();
+        // M4.5: Noise-over-UDP datagram framing — a >MTU PQ-hybrid handshake survives chunk +
+        // fail-closed reassembly, and the full handshake completes over it (the metal GEM
+        // transport rides this framing; the smoltcp-UDP-over-GEM carriage is the metal first-light).
+        enroll::noise_over_udp_selftest();
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
