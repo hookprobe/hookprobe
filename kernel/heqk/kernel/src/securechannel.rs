@@ -1056,6 +1056,21 @@ impl ResponderPub {
     pub fn x_pk(&self) -> [u8; 32] {
         self.x_pk
     }
+
+    /// Construct a `ResponderPub` from PROVISIONED public bytes — the metal path: a device holds
+    /// the MSSP's PUBLIC key (X25519 32 B + ML-KEM-768 encaps key 1184 B), NEVER the private
+    /// seeds (`from_seeds` is selftest-only, compiled out of cm5). Validates the ML-KEM encaps
+    /// key encoding (rejects a malformed provisioning blob) so a bad blob fails at construction,
+    /// not mid-handshake. `k_ek` must be exactly `MLKEM_EK_LEN` bytes.
+    pub fn from_provisioned(x_pk: [u8; 32], k_ek: &[u8]) -> Option<ResponderPub> {
+        if k_ek.len() != MLKEM_EK_LEN {
+            return None;
+        }
+        ek_from_bytes(k_ek)?; // validate the ML-KEM encaps-key encoding (fail fast)
+        let mut k_ek_bytes = [0u8; MLKEM_EK_LEN];
+        k_ek_bytes.copy_from_slice(k_ek);
+        Some(ResponderPub { x_pk, k_ek_bytes })
+    }
 }
 
 impl ResponderStatic {
