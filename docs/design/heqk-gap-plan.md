@@ -17,7 +17,7 @@ No U-batch is fireable yet. Nothing is deleted. The Linux M1 image keeps shippin
 | Phase | State | Remaining |
 |---|---|---|
 | **M1** substrate beachhead | ✅ metal 4/4 | production key-custody ceremony (process) |
-| **M2** detection parity | 🟢 31/31 heqk-plane metal + 2 off-device | Gate-R single adversarial pass on metal; manifest per-interface port-role reader (A1/A9 on a REAL interface); product-steward sign-off ruling |
+| **M2** detection parity | ✅ **SIGNED OFF — CONDITIONAL-GO** (Gate-R closed, 4 carve-outs; 31/31 heqk-plane metal + 2 off-device); single adversarial pass done | (carve-outs only) manifest port-role reader = C-2 M4/P9-gated; A9 verdict-posture → security-auditor; A6 FIN-scan (202) miss follow-up. Unlocks **U2a**, not U2b (segmentation plane) |
 | **M3** persistence & OTA | 🟢 write + sealed store + real-OTP-SRK + DataVolume log-store + **A/B OTA forward-flip + rollback** all metal | physical OTA candidate DELIVERY (FAT32 writer: new image→slot B + B→A promotion); V3/SEC-2 OTP hardening; production DataVolume partition (image-factory) |
 | **M4** control-plane/net | 🟡 QEMU-only, zero metal | **NIC↔smoltcp bridge over GEM (keystone)**; HW-TRNG-live Noise handshake + PCR3 seed; DNS-sinkhole/RPZ; WAN PBR/NAT/TUN-SASE; provisioning |
 | **M5** module runtime / brain | 🟡 QEMU/EL0, `!cm5`-gated | **MMU multi-block-W^X fix → un-gate + build wasmi FOR cm5**; real wasip1 host; full signed catalogue; CORE-1 caps-enforced + CORE-2 per-TCB CSpace |
@@ -33,12 +33,14 @@ No U-batch is fireable yet. Nothing is deleted. The Linux M1 image keeps shippin
 
 ## Prioritized plan
 
-### Group A — buildable-now, bounded (safe, matches this session's self-test method) → unlocks U2
-1. **Doc-hygiene** (done 2026-09-08): stripped stray tool artifacts, reconciled the 30/33→31/31 contradiction; still TODO: refresh stale "AK software-constant / anti-rollback inert" claims (metal shows OTP-derived AK + floor=1) and `LIFECYCLE.md` P7 (metal 4/4).
-2. **Manifest per-interface port-role reader** — turns A1/A9 from self-test to live-interface-real (small, bounded; the `verdict::set_port_role` seam exists).
-3. **Gate-R single adversarial pass on metal** — run `tools/gate-r-matrix.sh` as ONE pass (harness tracked) → the release-blocking artifact.
-4. **Product-steward ruling** accepting L5/L6-off-device + A11-wire-rejected.
-5. **M3 DataVolume (in progress) + OTA forward tryboot flip on metal** → advances M3 → unlocks U3.
+### Group A — buildable-now, bounded (safe, matches this session's self-test method) → unlocks **U2a**
+1. **Doc-hygiene** ✅ (2026-09-08): stripped stray tool artifacts, reconciled 30/33→31/31; still TODO: refresh stale "AK software-constant / anti-rollback inert" claims (metal shows OTP-derived AK + floor=1) and `LIFECYCLE.md` P7 (metal 4/4).
+2. **Manifest per-interface port-role reader** — ruled **carve-out C-2** (M4/P9-gated): needs a real Access interface = the physically-blocked RTL8111/eth1 datapath; live fail-safe `Uplink` default makes its absence a MISS-not-harm. Lands *with* the P9 datapath; A1/A9 re-driven with real frames then. **Not built now.**
+3. **Gate-R single adversarial pass on metal** ✅ (2026-09-08): `tools/gate-r-matrix.sh` as ONE pass → `~/heqk-metal-logs/20260908-M2-gater-single-pass-consolidated.txt` (faults=0, all drops attacker/structural-sourced, zero mgmt/legit drops; rule 113 port-scan un-masked by a harness fix). Follow-up: A6 FIN-scan (rule 202) miss — observe-class, non-blocking.
+4. **Product-steward ruling** ✅ (2026-09-08): **CONDITIONAL-GO — M2 Gate-R CLOSED with 4 carve-outs** (C-1 self-test-through-datapath OK for undrivable rows; C-2 above; C-3 A11 wire-rejected valid; C-4 L5/L6 off-device valid). Recorded in parity-doc §6 + BuildPlan.
+5. **M3 DataVolume + OTA forward tryboot flip on metal** ✅ (2026-09-08) → M3 metal-complete for the mechanism → unlocks **U3** (pending the physical DataVolume partition + FAT candidate-delivery).
+
+> **M2 Gate-R is signed off (CONDITIONAL-GO).** But it did **NOT** unlock the full U2 — see the U2a/U2b split below.
 
 ### Group B — needs a decision
 6. **Ratify ADR 0045 (dev/test creds) + 0046 (GitHub migration + heqk 316-commit history custody)** — Red blocker before any push.
@@ -60,17 +62,29 @@ No U-batch is fireable yet. Nothing is deleted. The Linux M1 image keeps shippin
 18. **XC-11/DET-1 BPF helper ABI** (close the kernel-read oracle) before any dynamic/untrusted rule loading.
 19. **Irreversible ceremonies (operator-only, never autonomous):** SEC-3 BCM2712 signed-boot fuse; SEC-6 SVN-floor advance; SEC-5 AK-PCR0 binding (re-enroll); SEC-9 EL2 W^X.
 
+## The U2 split — U2a (detect/enforce) vs U2b (segmentation)
+
+The M2 Gate-R CONDITIONAL-GO (2026-09-08, product-steward) signed off the **detect/enforce** plane but did **not** unlock the monolithic U2 (Dataplane) unbuild batch. Reason: U2's scope bundles two different things, and only one has its heqk replacement proven. So U2 is **split** (a future **Amber** proposal → ADR + operator sign-off; noted here so the plan reflects it):
+
+| Batch | Linux primitive being retired | heqk replacement | Gate | Status |
+|---|---|---|---|---|
+| **U2a** | libbpf/CO-RE loaders, XDP/TC `.bpf.c` build, `bpftool`/`clang` CI stages, `nft`/conntrack *as inline IDS/IPS* | the RFC-9669 rule plane + tri-state `decide()`/`decide_l2` (M2) | **M2 Gate-R** | ✅ **gate MET** (31/31 heqk-plane metal + carve-outs) — U2a is unlock-able |
+| **U2b** | **OVS + nftables/conntrack *as SEGMENTATION*** (inter-segment/VLAN policy, per-device reach, quarantine-to-segment) | a heqk **segmentation plane** (does not exist yet) | a future segmentation-plane milestone | ⬜ **gate NOT met** — U2b stays gated |
+
+**The segmentation plane is the newly-clarified blocker.** It is the *same* absent reach-actuator behind three carved-out rows: **L5/L6 NAC** (reach = Full vs InternetOnly), **A11** (quarantine-*to-segment*), and now **U2b**. heqk's datapath is a single aggregate port with a binary PASS/DROP verdict — no per-segment forwarding, no VLAN/routing policy. Building the segmentation plane simultaneously unlocks U2b, makes L5/L6 actuatable on-device (vs off-device), and gives A11 a safe non-drop enforcement action. It is therefore a **first-class remaining milestone**, adjacent in priority to the M4 GEM bridge and the M5 Wasm-host un-gate. (Governance: never retire the Linux segmentation primitive before its heqk replacement is proven; Track B is the sunset-on-parity fallback.)
+
 ## Critical path to zero-Linux-on-CM5
 
 ```
-M2 sign-off (port-role reader + Gate-R one-pass + steward ruling)          → U2
+M2 Gate-R sign-off (CONDITIONAL-GO) ✅                                      → U2a (unlock-able)
    → CORE-1 caps-enforced + CORE-2 per-TCB CSpace (D4 #1)
    → MMU multi-block-W^X fix → un-gate + wasmi on CM5 (D4 #2)   ← tallest pole
    → real wasip1 host + signed catalogue                                    → U5
-   → M3 DataVolume partition + OTA flip                                     → U3
+   → M3 DataVolume partition + FAT OTA candidate-delivery                    → U3
    → NIC↔smoltcp bridge over GEM + M4 metal → DNS / enroll / OTA-pull
+   → SEGMENTATION PLANE (unlocks U2b; actuates L5/L6 + A11)                  → U2b
    → P10 WiFi assoc/data (U4)  ∥  M6 UI-on-heqk + greedy-floor              → U6
    → U6 → M7 execute unbuild → delete Linux on rpi-native
 ```
 
-The enforcing **sensor** is done on metal. The remaining distance is the **brain (M5, un-gate the Wasm host)** and the **connected half (M4, the GEM bridge)** — both currently QEMU-only. Nearest-term highest-value, matching the proven self-test method: **finish M3 (DataVolume + OTA flip) + M2 sign-off** (unlocks U2, the first real Linux teardown), then open the MMU-W^X + Wasm-host-on-cm5 work (the tallest pole).
+The enforcing **sensor** and **persistence** are done on metal (M2 signed off; M3 write/seal/DataVolume/OTA-flip proven). The remaining distance is the **brain (M5, un-gate the Wasm host)**, the **connected half (M4, the GEM bridge)**, and the **segmentation plane** (the reach-actuator that unlocks U2b + L5/L6 + A11) — all QEMU-only or unbuilt. Nearest-term highest-value: the MMU-W^X + Wasm-host-on-cm5 work (the tallest pole) and the M4 GEM bridge (turns the QEMU-only connected stack real); the segmentation plane is the third pillar and the true gate to *deleting* the Linux dataplane (U2b → M7).
