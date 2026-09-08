@@ -15,6 +15,7 @@ mod behavioral;
 mod blocklist;
 mod bpf;
 mod caps;
+mod corroboration;
 mod devq;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
@@ -1093,6 +1094,41 @@ fn cm5_prod_service() -> ! {
         let pass = is_ra && a9_drop && l4_observe;
         kprint!("   [SEPDIAG-RAGUARD] is-RA={} | A9 rogue-RA-access-DROP={} | L4 legit-RA-uplink-Observe={} => {}\n",
             is_ra, a9_drop, l4_observe, if pass { "PASS" } else { "FAIL" });
+    }
+    // M2 A11 ON-METAL corroboration self-test (sepdiag). Corroboration is a SOC-SEVERITY
+    // signal, NEVER a wire action (security-auditor 2026-09-08: durable Quarantine from
+    // corroboration is FP-unsafe + weaponizable + heqk has no segment-isolation primitive).
+    // This proves the tracker accumulates axes AND — the load-bearing property — that a
+    // corroborated source's wire verdict STAYS Observe/PASS (an attacker, a legit ops host
+    // that trips 3 axes benignly, both PASS), and the mgmt floor still holds.
+    #[cfg(feature = "sepdiag")]
+    {
+        use crate::corroboration as corr;
+        use crate::verdict::{decide, DecideCtx, FindingClass, Verdict};
+        // (1) attacker: REPUTATION + BEACON + SCAN → corroborated, but the wire stays PASS.
+        let atk: u64 = 0xC612_0001; // 198.18.0.1 (TEST-NET-2, off the live datapath)
+        corr::corr_observe(atk, corr::AXIS_REPUTATION);
+        corr::corr_observe(atk, corr::AXIS_BEACON);
+        let atk_axes = corr::corr_observe(atk, corr::AXIS_SCAN);
+        let atk_corr = corr::is_corroborated(atk) && atk_axes == 3;
+        let atk_pass = decide(FindingClass::Behavioral, DecideCtx::for_src(atk as u32)) == Verdict::Observe;
+        // (2) legit ops host: LATERAL + EXFIL + BEACON (benign backup/monitoring) → also
+        //     corroborated, and MUST still PASS — the whole reason corroboration is off the wire.
+        let ops: u64 = 0xC612_0002;
+        corr::corr_observe(ops, corr::AXIS_LATERAL);
+        corr::corr_observe(ops, corr::AXIS_EXFIL);
+        corr::corr_observe(ops, corr::AXIS_BEACON);
+        let ops_corr = corr::is_corroborated(ops);
+        let ops_pass = decide(FindingClass::Behavioral, DecideCtx::for_src(ops as u32)) == Verdict::Observe;
+        // (3) mgmt floor holds even when corroborated with an enforceable (scan) finding.
+        let mgmt: u64 = 0x0AC8_0005; // 10.200.0.5
+        corr::corr_observe(mgmt, corr::AXIS_REPUTATION);
+        corr::corr_observe(mgmt, corr::AXIS_SCAN);
+        corr::corr_observe(mgmt, corr::AXIS_BEACON);
+        let mgmt_floor = decide(FindingClass::ScanShape, DecideCtx::for_src(mgmt as u32)) == Verdict::Allowlisted;
+        let pass = atk_corr && atk_pass && ops_corr && ops_pass && mgmt_floor;
+        kprint!("   [SEPDIAG-CORR] attacker corroborated={} wire-PASS={} | legit-ops corroborated={} wire-PASS={} | mgmt-floor={} => {}\n",
+            atk_corr, atk_pass, ops_corr, ops_pass, mgmt_floor, if pass { "PASS" } else { "FAIL" });
     }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
@@ -4545,7 +4581,26 @@ fn p8_flow() -> bool {
     // Sanity: the two bars are ordered so RateLimit precedes Quarantine.
     ok &= SCAN_PORTS_RATELIMIT <= SCAN_PORTS_CONFIRM;
 
-    kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines — establishment ⇒ not a scan (ADR 0018/0023, conntrack-equivalent)\n",
+    // A11 corroboration — SEVERITY signal ONLY, never the wire. A source tripping 3
+    // independent axes is corroborated (is_corroborated true), yet its wire verdict STAYS
+    // Observe/PASS — a durable Quarantine from corroboration is rejected by design
+    // (security-auditor 2026-09-08: FP-unsafe + weaponizable + no segment primitive).
+    {
+        use crate::corroboration as corr;
+        use crate::verdict::{decide, DecideCtx, FindingClass, Verdict};
+        let s: u64 = 0xC612_0009; // 198.18.0.9 (TEST-NET-2)
+        corr::corr_observe(s, corr::AXIS_REPUTATION);
+        corr::corr_observe(s, corr::AXIS_BEACON);
+        let axes = corr::corr_observe(s, corr::AXIS_LATERAL);
+        let corr_ok = corr::is_corroborated(s) && axes == 3
+            && decide(FindingClass::Behavioral, DecideCtx::for_src(s as u32)) == Verdict::Observe
+            && !decide(FindingClass::Behavioral, DecideCtx::for_src(s as u32)).is_drop();
+        ok &= corr_ok;
+        kprint!("   A11 corroboration: 3-axis corroborated={} but wire verdict Observe/PASS (never a drop) [{}]\n",
+            corr::is_corroborated(s), if corr_ok { "ok" } else { "BUG" });
+    }
+
+    kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines; A11 corroboration is SEVERITY-only, never a wire drop (ADR 0018/0023, conntrack-equivalent)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
