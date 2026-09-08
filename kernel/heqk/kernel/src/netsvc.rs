@@ -536,10 +536,11 @@ pub fn cm5_enroll_bringup(
     use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
 
     // (0) WAIT FOR LINK-UP first (metal finding 2026-09-08): the bring-up fires early in boot,
-    // and frames emitted before the GEM/RP1 autoneg completes are dropped by the not-ready MAC
-    // (never reach the wire — observed as tx>0 but zero on-wire). Gate on the PHY link bit; if the
-    // link never settles in-budget, don't emit — the sensor loop drains the ring once it does.
-    if arch_aarch64::gem::wait_link(link_wait_ms) & 1 == 0 {
+    // and frames emitted before the link is up are dropped by the not-ready MAC (observed as
+    // tx>0 but ZERO on-wire, txerr=UBR). Gate on the PHY's OWN BMSR link bit — the RP1 RGMII
+    // `link_status()` bit reads 0 on this board even at 1G, so it is the wrong gate. If the link
+    // never settles in-budget, don't emit — the sensor loop drains the ring once it does.
+    if !arch_aarch64::gem::wait_phy_link(0, link_wait_ms) {
         return BringupOutcome::LinkDown;
     }
 
