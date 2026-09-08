@@ -953,6 +953,33 @@ fn cm5_prod_service() -> ! {
     let mut prof = RxProf::default();
 
     kprint!(" [PROD] HEQK sensor UP — isolated EL0 GEM driver -> verified rule plane -> ENFORCE (forward PASS / drop threat); self-healing; never halts\n");
+    // M2 Gate-R A7/A8/L9 ON-METAL shed-logic self-test (sepdiag). A7 (conntrack-saturation)
+    // and A8 (PSI pressure) are NOT frame-drivable — reaching 80% of a 100k flow table or
+    // real scheduler pressure from a generator is impractical. So prove the LOGIC on silicon
+    // deterministically via the documented Gate-R synthetic hooks (the honest QEMU-vs-metal
+    // split): the LIVE wiring above (resource_shed_verdict in classify) still sheds under
+    // real load; this confirms the decision function itself on-metal.
+    #[cfg(feature = "sepdiag")]
+    {
+        let flood: u64 = 0x0a63_0009;
+        let legit: u64 = 0x0a63_0002;
+        // Make `flood` the dominant top-talker: > SHED_TOPTALKER_MIN_FLOWS (100) and above
+        // anything the (not-yet-started) datapath has recorded, so is_top_talker(flood) holds.
+        for _ in 0..150 { crate::ratelimit::flow_record(flood); }
+        crate::ratelimit::flow_record(legit);
+        let a7 = crate::ratelimit::saturation_shed(flood, 85_000, 100_000); // >80% + top → shed
+        let l9_under = crate::ratelimit::saturation_shed(flood, 40_000, 100_000); // <80% → no shed
+        let l9_legit = crate::ratelimit::saturation_shed(legit, 85_000, 100_000); // not top → no shed
+        crate::ratelimit::set_synthetic_pressure(60); // >= PSI_SHED_PCT (40) floor
+        let a8 = crate::ratelimit::pressure_shed(flood); // top-talker sheds
+        let a8_legit = crate::ratelimit::pressure_shed(legit); // small legit never top → no shed
+        crate::ratelimit::set_synthetic_pressure(10); // < PSI floor
+        let a8_revert = crate::ratelimit::pressure_shed(flood); // pressure cleared → revert
+        crate::ratelimit::clear_synthetic_pressure();
+        let pass = a7 && !l9_under && !l9_legit && a8 && !a8_legit && !a8_revert;
+        kprint!("   [SEPDIAG-SHED] A7 sat-shed={} L9(under-wall)={} L9(not-top)={} | A8 psi-shed={} A8(legit)={} A8(revert)={} => {}\n",
+            a7, l9_under, l9_legit, a8, a8_legit, a8_revert, if pass { "PASS" } else { "FAIL" });
+    }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
     // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs
@@ -4156,8 +4183,13 @@ fn p8_l2struct() -> bool {
         if c_role { "ok" } else { "BUG" });
 
     // --- mac-flood ACCESS: 40 distinct source MACs -> RateLimit (wire DROP) once past 20.
+    // The dst is UNICAST (00:11:22:33:44:55) on purpose: mac-flood is keyed on distinct
+    // SOURCE-MAC count, so this tests D12 in isolation. (DST above is a multicast address —
+    // reusing it here would ALSO trip the broadcast-storm counter, which post-A3 sheds a
+    // non-exempt mcast flood on ANY port — a different row. A real legit AP flood is many
+    // distinct sources with unicast/exempt-mcast dst, so the two never collide in the field.)
     let mut fr = [0u8; 64];
-    fr[0..6].copy_from_slice(&DST);
+    fr[0..6].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
     fr[12..14].copy_from_slice(&[0x08, 0x00]);
     let mut mf_access_drop = false;
     for i in 0..40u8 {
@@ -4202,6 +4234,19 @@ fn p8_l2struct() -> bool {
     ok &= bc_drop;
     kprint!("   broadcast-storm non-exempt (60 bcast frames) -> RateLimit DROP fired: {} [{}]\n",
         bc_drop, if bc_drop { "ok" } else { "BUG" });
+
+    // --- A3 FIX: a non-exempt broadcast flood on an UPLINK port must ALSO RateLimit (DROP).
+    // Unlike mac-flood (legit many-MACs on an AP → Observe), a non-exempt bcast flood is
+    // resource-exhaustion on any port (legit mcast is exempted above), so it is FloodRate.
+    let mut bc_up_drop = false;
+    for _ in 0..60 {
+        if rules::l2_stateful_verdict(&bc, 0, 9, PortRole::Uplink).map_or(false, Verdict::is_drop) {
+            bc_up_drop = true;
+        }
+    }
+    ok &= bc_up_drop;
+    kprint!("   broadcast-storm non-exempt on UPLINK -> RateLimit DROP fired: {} (A3 fix: bcast flood shed on ANY port) [{}]\n",
+        bc_up_drop, if bc_up_drop { "ok" } else { "BUG" });
 
     // --- broadcast-storm EXEMPT: an mDNS burst (01:00:5e:00:00:fb) must NEVER fire or drop.
     let mut md = [0u8; 64];

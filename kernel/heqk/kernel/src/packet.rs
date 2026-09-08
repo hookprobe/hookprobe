@@ -301,8 +301,28 @@ fn classify(frame: &[u8]) -> (u16, u16) {
             return (0, DROP);
         }
     }
+    // M2.3 L2/L3 — conntrack-saturation (A7) / scheduler-pressure (A8) top-talker shed,
+    // self-reverting + identity-blind (keyed on the resource wall + measured dominance).
+    // A legit heavy source in an un-saturated table / low-PSI box (L9) returns None here.
+    if let Some(v) = crate::rules::resource_shed_verdict(src) {
+        if v.is_drop() {
+            return (0, DROP);
+        }
+    }
     match crate::net::parse(frame) {
         Some(m) if m.has_l4_ports() => {
+            // M2.4 BEHAVIORAL tier (A10 lateral / L8 beacon / DNS) — DETECTION half, wired
+            // live off the connection-observation stream. Observe-ONLY by construction
+            // (FindingClass::Behavioral → unconditional Observe; verdict.rs), so these NEVER
+            // affect the drop decision — call-and-continue; each fires its own event when it
+            // trips (SEPDIAG-visible). NTP:123 is exempt inside beacon_observe_at (row L8).
+            let dst = crate::net::eth_ipv4_dst(nframe).unwrap_or(0);
+            if m.ip_proto == crate::net::IPPROTO_TCP {
+                let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
+                let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
+            } else if m.dst_port == 53 {
+                let _ = crate::rules::dns_verdict(frame);
+            }
             // Run the signed rule set on a normalized L4 view: R1 = L4 header, so
             // each rule reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
             let l4 = &frame[m.l4_off..];
