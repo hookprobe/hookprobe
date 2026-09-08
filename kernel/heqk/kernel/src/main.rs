@@ -3495,6 +3495,9 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "securechannel-selftest")]
     {
         enroll::enroll_selftest();
+        // M4.5: the segmentation AUTHORITY — an operator-signed reach policy over the enrolled
+        // Noise channel ARMS segment.rs (C9 independent signature; fail-open on any failure).
+        enroll::seg_policy_selftest();
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
