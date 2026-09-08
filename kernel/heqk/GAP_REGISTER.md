@@ -34,7 +34,7 @@ SVN bound into signed message; load geometry pinned; AK zeroized (moot under SEC
 | SEC-3 (V4) | High | config.txt:33 | os_check=0 + unsigned hboot8.img → whole chain TOFU | enable BCM2712 signed-boot; until then document TOFU |
 | SEC-4 (V7a) | High | main.rs:286→344 | measure→launch TOCTOU: payload hashed then copied, never re-hashed before EL1 entry | re-sha256(load_pa,size) after copy, park on mismatch |
 | SEC-5 (V5) | Med | ak_derive.rs:147 | AK = KDF(OTP) only, no PCR0 binding → tampered HBoot derives same AK | ak_seed = KDF(OTP, PCR0_after_self_measure) |
-| SEC-6 (V6) | Med | rollback.rs:39 | anti-rollback inert: FLOOR=0, never advanced, images svn=1 | real SVN counter + advance_floor release step |
+| SEC-6 (V6) | Med | rollback.rs:39 | anti-rollback is LIVE on metal (svn floor=1, BCM2712 OTP block3 hardware-monotonic — NOT inert; see line 548) — the residual is the per-release SVN-advance PROCESS, not the mechanism | real per-release SVN counter + advance_floor release step |
 | SEC-7 (V9) | Med | attest.rs:119 | ephemeral attest seed + nonce ignore TRNG liveness → predictable key | require full liveness or refuse to publish key |
 | SEC-8 (V7b) | Med | linker.ld:37 | HBoot stack grows toward image, no guard page → silent overrun corrupts measured bytes | unmapped guard region below __stack_top |
 | SEC-9 (V8) | Low-Med | hboot/mmu.rs:53 | EL2 GB0 Normal RWX — HBoot code W^X hole at highest privilege | split GB0, .text RO+X, data RW+XN |
