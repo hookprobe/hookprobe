@@ -498,6 +498,10 @@ impl<'c> Device for GemPhy<'c> {
 #[cfg(all(feature = "netmetal", feature = "securechannel"))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BringupOutcome {
+    /// The GEM/RP1 link did not come up within the wait budget — no point emitting (frames would
+    /// hit a not-ready MAC and never reach the wire, the metal-observed early-boot failure). The
+    /// sensor loop drains the ring once the link settles.
+    LinkDown,
     /// Fail-closed: the HW-TRNG could not produce session entropy → NO wire touch (the control
     /// plane never proceeds without real entropy); the sensor loop still runs.
     NoTrng,
@@ -523,12 +527,21 @@ pub fn cm5_enroll_bringup(
     port: u16,
     device_id: u64,
     rx_head: &mut usize,
+    link_wait_ms: u32,
     window_ms: i64,
     max_attempts: u32,
 ) -> BringupOutcome {
     use crate::entropy::EntropySource; // brings fill_32 into scope
     use smoltcp::socket::udp;
     use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+
+    // (0) WAIT FOR LINK-UP first (metal finding 2026-09-08): the bring-up fires early in boot,
+    // and frames emitted before the GEM/RP1 autoneg completes are dropped by the not-ready MAC
+    // (never reach the wire — observed as tx>0 but zero on-wire). Gate on the PHY link bit; if the
+    // link never settles in-budget, don't emit — the sensor loop drains the ring once it does.
+    if arch_aarch64::gem::wait_link(link_wait_ms) & 1 == 0 {
+        return BringupOutcome::LinkDown;
+    }
 
     // (1) FAIL-CLOSED session entropy from the real HW-TRNG. A dead TRNG ⇒ no enrollment at all
     // (never a seeded path on metal); the sensor loop is unaffected.
