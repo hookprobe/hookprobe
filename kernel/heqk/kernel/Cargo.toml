@@ -63,6 +63,11 @@ ed25519-compact = { version = "2", default-features = false }
 wasmhost = []
 # PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
 netsvc = ["dep:smoltcp"]
+# M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
+# prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
+# (smoltcp) into the cm5 build; prod stays byte-identical without it. os-architect design
+# 2026-09-08. Off by default; opt-in for the first-light validation image.
+netmetal = ["prod", "netsvc"]
 # M4.2a: compile the PQC secure-channel crypto primitives + the [P19-pqc-kat] gate
 # (ML-KEM-768 round-trip + KAT, X25519 RFC-7748 vector, ChaCha20-Poly1305 RFC-8439
 # vector, hybrid HKDF combiner Alice==Bob). Framing-agnostic; the handshake is M4.2b.
