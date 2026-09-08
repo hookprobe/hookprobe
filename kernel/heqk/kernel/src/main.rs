@@ -1937,6 +1937,78 @@ fn cm5_p15_block_seal() {
             persisted, this_boot, wlo, whi, wrote, readback, escape_refused, if pass { "PASS" } else { "FAIL" });
     }
 
+    // M3.3 metal — the SEALED evidence-record round-trip on real eMMC: prove a genuine
+    // encrypted evidence Event survives a power-cycle (the "evidence graph persists across
+    // reboot" capability), and that it is CIPHERTEXT at rest. Uses the full stack — seal →
+    // SealedStore::store → (reboot) → load → unseal — over the keystore reserved window (the
+    // SAME crash-safe stack QEMU proves as P15-fs/P15-sealfs over virtio-blk, now on silicon).
+    // Synthetic SRK/policy (real OTP-bound SRK sealing is audit V3); the point here is the
+    // store+persist+encryption mechanism on real eMMC, not the key provenance.
+    #[cfg(feature = "p15-write")]
+    {
+        use seal::{Policy, SealBlob};
+        use store::SealedStore;
+        // Serialize a real evidence Event (repr(C): ts u64 | src u32 | rule_id u16 | sev u8 | verdict u8).
+        fn ev16(ts: u64, src: u32, rule_id: u16, sev: u8, verdict: u8) -> [u8; 16] {
+            let mut b = [0u8; 16];
+            b[0..8].copy_from_slice(&ts.to_le_bytes());
+            b[8..12].copy_from_slice(&src.to_le_bytes());
+            b[12..14].copy_from_slice(&rule_id.to_le_bytes());
+            b[14] = sev;
+            b[15] = verdict;
+            b
+        }
+        let srk = [0x5au8; 32];
+        let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
+        pcr[0] = [0x11; 32];
+        pcr[1] = [0x22; 32];
+        pcr[2] = [0x33; 32];
+        let policy = Policy {
+            mask: boot_abi::SEAL_POLICY_STRICT,
+            device_id: 0x0BADF00D_1234_5678u64,
+            svn_floor: 7,
+            pcr,
+        };
+        if let Ok(mut ss) = SealedStore::open(&mut emmc) {
+            // READ FIRST: unseal a prior-boot Event ⇒ it survived the power-cycle, encrypted.
+            let mut rbuf = [0u8; seal::SEAL_MAX_BLOB];
+            let mut prev_boot: u64 = 0;
+            let mut persisted = false;
+            if let Some(n) = ss.load(&mut rbuf) {
+                let mut pt = [0u8; 64];
+                if let Ok(m) = seal::unseal(&srk, &policy, &rbuf[..n], &mut pt) {
+                    if m >= 16 && pt[12] == 0x2e && pt[13] == 0x01 {
+                        // rule_id 302 (0x012e) LE ⇒ our evidence Event; ts carries the boot counter.
+                        prev_boot = u64::from_le_bytes(pt[0..8].try_into().unwrap());
+                        persisted = true;
+                    }
+                }
+            }
+            let this_boot = prev_boot.wrapping_add(1);
+            let ev = ev16(this_boot, 0x0a63_0007, 302, 5, 1); // a real IOC-hit Event (rule 302, PASS)
+            let mut blob = SealBlob::new();
+            let sealed = seal::seal(&srk, &policy, &ev, &mut blob).is_ok();
+            let stored = sealed && ss.store(blob.as_slice()).is_ok();
+            // CONFIDENTIALITY: the on-disk sector is HQKSEAL1 ciphertext — the Event's 16-byte
+            // plaintext image is ABSENT on disk (encryption at rest).
+            let mut raw = [0u8; 512];
+            let ciphertext = stored
+                && ss.read_sector(store::RESERVED_LBA_LO, &mut raw).is_ok()
+                && &raw[..8] == seal::SEAL_MAGIC
+                && !raw[8..].windows(16).any(|w| w == ev);
+            // ROUND-TRIP THIS boot: read back + unseal → exact Event bytes.
+            let mut rbuf2 = [0u8; seal::SEAL_MAX_BLOB];
+            let mut pt2 = [0u8; 64];
+            let roundtrip = stored
+                && ss.load(&mut rbuf2).map_or(false, |n| {
+                    seal::unseal(&srk, &policy, &rbuf2[..n], &mut pt2).map_or(false, |m| m >= 16 && pt2[..16] == ev)
+                });
+            let pass = stored && ciphertext && roundtrip;
+            kprint!("   [SEPDIAG-EMMC-SEAL] persisted-Event-from-prior-boot={} (boot#{}) | sealed+stored={} on-disk-ciphertext={} unseal-roundtrip={} => {}\n",
+                persisted, this_boot, stored, ciphertext, roundtrip, if pass { "PASS" } else { "FAIL" });
+        }
+    }
+
     // If we can build a store over the real disk, exercise the READ/scan path.
     {
         let mut dev = emmc; // move into the store (read path uses it immutably)
