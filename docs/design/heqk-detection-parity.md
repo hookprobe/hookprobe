@@ -36,18 +36,20 @@
 
 | State | Count | Rows |
 |---|---|---|
-| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` evidence, zero legit-drops) | **24** | L3, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A10 · F1, F2, F3, F5, F6, F8, F9, F10, F11 |
-| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **4** | L1, L2 · F4, F7 |
+| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` / self-test evidence, zero legit-drops) | **28** | L1, L2, L3, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A10 · F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11 |
+| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **0** | — (all pre-M4-provable rows are metal-proven) |
 | **SCOPED-ABSENT / NOT-YET-BUILT** (some off-device per ADR 0044 D3) | **5** | L4, L5, L6 · A9, A11 |
 
 **Sacred invariant, held on metal:** across every LEGIT row driven on CM5 (`20260907-m2-matrix-*`),
 `drop+=0`. No legitimate stimulus was ever wire-dropped. Sensor stayed healthy (96/96 heartbeats,
 `faults=0`) through the A3/A10/L8/shed wiring run.
 
-> **Gate-R is NOT yet complete.** 22/33 proven-on-metal is a strong majority and covers every
-> frame-drivable class + all three resource-shed rows, but the release gate is the FULL 33-row
-> matrix on metal. **6 rows are code-present but not metal-driven** (host-NIC/topology limits) and
-> **5 rows are scoped-absent** (NAC/RA-guard/multi-signal corroboration — some off-device by ADR
+> **Gate-R is NOT yet complete.** 28/33 proven-on-metal covers every pre-M4-provable row:
+> all frame-drivable classes, the three resource-shed rows, the two port-role rows, and the
+> structural/exemption rows (F4/F7/L1 via bring-up self-tests, since the host NIC cannot emit
+> a sub-14B runt or a >1522B jumbo). The release gate is the FULL 33-row matrix on metal.
+> The remaining **5 rows are scoped-absent and structurally M4-gated** (NAC/RA-guard need the
+> network stack; A11 needs the multi-signal corroboration engine — some off-device by ADR
 > 0044 D3). Therefore **U2 (the Linux-dataplane unbuild) is NOT unlocked** — it is gated on the
 > full matrix + Gate R green (BuildPlan Track C; MIGRATION-heqk §U2).
 
@@ -119,8 +121,8 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 
 | # | Scenario | Required | State | heqk file / rule | Evidence |
 |---|---|---|---|---|---|
-| L1 | mDNS/SSDP/LLMNR multicast burst | no storm alert (accept) | **Q** | `rules::is_exempt_multicast` (rules.rs:543) exempts 33:33 + 01:00:5e mDNS/LLMNR/SSDP groups BEFORE the storm counter | Exemption is coded + QEMU-proven; not driven as its own metal row. PASS-by-exemption is structural, not merely by-absence (the old doc's downgrade is resolved) |
-| L2 | Busy uplink, 40 distinct MACs | Observe (never RateLimit) | **Q** | `L2Flood` on `DEFAULT_PORT_ROLE=Uplink` → `Observe` (verdict.rs:264) | Safe-by-design (Uplink default); QEMU-proven, not driven with 40 real distinct MACs on metal |
+| L1 | mDNS/SSDP/LLMNR multicast burst | no storm alert (accept) | **M** | `rules::is_exempt_multicast` (rules.rs:543) exempts 33:33 + 01:00:5e mDNS/LLMNR/SSDP groups BEFORE the storm counter | **Metal-proven** (2026-09-08, `[SEPDIAG-STRUCT] L1 mDNS-200x-exempt(no-fire)=true`): 200 mDNS frames NEVER fire `l2_stateful_verdict` on silicon — the exemption holds, legit service discovery always passes |
+| L2 | Busy uplink, distinct MACs | Observe (never RateLimit) | **M** | `L2Flood` on an `Uplink` port → `Observe` (verdict.rs:264) | **Metal-proven** via the A1/A2 self-test's Uplink leg (`[SEPDIAG-A1A2] A2 uplink-fired=true uplink-drop=false`): 320 distinct MACs on an Uplink port fire but never wire-drop, on silicon |
 | L3 | ARP binding flip-flop | **Observe, never FrameDrop** | **M** | rule 102 arp-spoof → `IdentitySpoof` → `Observe` | `rule=102 verdict=PASS` (metal) + matrix `L3_arp_flipflop drop+=0 PASS`. The 2026-08-20 🔴 legit-drop risk is **eliminated** |
 | L4 | Unlisted downstream-router RA (ICMPv6 134) | observed + accepted | **S** | *(no RA-guard)* | Not built; RA-guard is a follow-on (off-device candidate, ADR 0044 D3). PASS-by-absence, no observe/log |
 | L5 | Brand-new unclassified device | OnboardingGrace (full reach) | **S** | *(no NAC model)* | No NAC/segment state machine on heqk; scoped-absent |
@@ -154,10 +156,10 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 | F1 | iPhone 42-byte unpadded ARP | never anomalous | **M** | `bpf::ARP_MALFORMED` floors at the complete-ARP 42-byte check, not an 802.3 60-byte runt floor | matrix `F1_iphone_arp42 drop+=0 PASS` — the iPhone false-drop does not reproduce |
 | F2 | Bare 54B TCP ACK / 42B UDP / EAPOL | never anomalous | **M** | `net::parse` accepts valid short frames; unknown ethertype hits the PASS arm | matrix `F2_bare_ack54 drop+=0 PASS` |
 | F3 | Randomized locally-administered unicast MAC | never trips multicast check | **M** | `net::structural_anomaly` keys the multicast bit (I/G), not the locally-administered bit | driven (`F3_local_admin`); no rule-110 fire → PASS (negative result: no false-positive) |
-| F4 | Frame shorter than eth header | flagged | **Q** | `net::parse` → `None` → fail-closed DROP (packet.rs:338; sepdiag rule 120) | Code fail-closed + QEMU-proven. **Metal: not drivable** — the host NIC pads runt frames to 60B, so the sub-14B stimulus never reaches the wire (matrix showed MISS/INCONCLUSIVE). Correctness is by code + QEMU, not metal |
+| F4 | Frame shorter than eth header | flagged | **M** | `net::parse` → `None` → fail-closed DROP (packet.rs:338; sepdiag rule 120) | **Metal-proven** (2026-09-08, `[SEPDIAG-STRUCT] F4 truncated-DROP=true`): an 8-byte frame → `packet::verdict` DROP on silicon. Not host-frame-drivable (the injecting NIC pads runts to 60B), so proven via the bring-up self-test through the real datapath entry |
 | F5 | ARP claiming but truncated <42B | flagged | **M** | rule 101 `ARP_MALFORMED` (min_len 42 rejects short) | `rule=101 verdict=DROP` + matrix `F9 drop+=40` (shared arp-malformed rule) |
 | F6 | Multicast/broadcast **source** MAC | flagged | **M** | `net::structural_anomaly` → rule 110 `MalformedFrame`/FrameDrop | `rule=110 verdict=DROP` + matrix `F6_mcast_src drop+=40 PASS` |
-| F7 | Oversized frame >1522B | flagged | **Q** | `net::structural_anomaly` oversize check → rule 110 | Code present + QEMU-proven. **Metal: not drivable** — host MTU 1500 blocks the send (matrix SKIPPED); the stimulus cannot reach the wire |
+| F7 | Oversized frame >1522B | flagged | **M** | `net::structural_anomaly` oversize check → rule 110 | **Metal-proven** (2026-09-08, `[SEPDIAG-STRUCT] F7 oversize-DROP=true`): a 1600B frame → `packet::verdict` DROP on silicon. Not host-frame-drivable (host MTU blocks the send), so proven via the bring-up self-test through the real datapath entry |
 | F8 | Double-tagged VLAN | flagged | **M** | `net::structural_anomaly` flags double-tag → rule 110 | `rule=110 verdict=DROP` (the 110-DROP count covers F6 + F8; `F8_double_vlan` in the harness) |
 | F9 | Malformed ARP header | flagged malformed | **M** | rule 101 `ARP_MALFORMED` (htype/ptype/hlen/plen shape) | `rule=101 verdict=DROP` + matrix `F9_arp_malformed drop+=40 PASS` |
 | F10 | ARP sender-mac / eth-src mismatch | flagged | **M** | rule 102 `ARP_SPOOF` → `IdentitySpoof` → `Observe` (detected, PASS) | `rule=102 verdict=PASS` (metal — flagged/observed, correctly non-dropping; shares the rule with L3) |
@@ -229,7 +231,8 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
   frame-structural) are separate acceptance surfaces on separate substrates. CLAUDE.md's invariant
   bullet describes the **Linux** matrix; do not conflate its ✅ with heqk's Gate-R status.
 - **M2 is 🟡, not ✅.** QEMU-green (M2.0–M2.4) is the engineering milestone; Gate R is the release
-  sign-off and is **partially met** (22/33 metal-proven). U2 (Linux-dataplane unbuild) stays gated on
-  the FULL 33-row matrix + Gate R — **not yet unlocked.**
+  sign-off and is **partially met** (28/33 metal-proven — every pre-M4-provable row; the final 5
+  are M4-gated). U2 (Linux-dataplane unbuild) stays gated on the FULL 33-row matrix + Gate R —
+  **not yet unlocked.**
 </content>
 </invoke>
