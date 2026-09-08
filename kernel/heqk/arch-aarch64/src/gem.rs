@@ -1153,9 +1153,14 @@ pub fn rx_msix_setup() -> u32 {
         let stat_pre = read_volatile((MIP + INTSTATL) as *const u32);
         write_volatile((MIP + REG_SET + CFG6) as *mut u32, ENABLE | IACK_EN);
         core::arch::asm!("dsb sy");
+        // Match the Linux reference: the PCIE_CFG block INTE (0x1ac "Interrupt Enable") reads
+        // 0x5f on a working system; heqk never set it. Write it (REG_RW, absolute) in case it
+        // gates the APBS interrupt forwarding.
+        write_volatile((MIP + 0x1ac) as *mut u32, 0x5f);
+        core::arch::asm!("dsb sy");
         let post = read_volatile((MIP + REG_RW + CFG6) as *const u32);
-        crate::_print(format_args!(" [DRV1] MSIX_CFG(6) enable: pre={:#010x} -> post={:#010x} (want ENABLE|IACK_EN=0x9); INTSTATL pre={:#010x}\n",
-            pre, post, stat_pre));
+        crate::_print(format_args!(" [DRV1] MSIX_CFG(6) enable: pre={:#010x} -> post={:#010x} (want 0x9); INTE(0x1ac)={:#010x}; INTSTATL pre={:#010x}\n",
+            pre, post, read_volatile((MIP + 0x1ac) as *const u32), stat_pre));
         // READ-ONLY: dump the brcmstb RC MSI controller (pcie-brcmstb.c) to disambiguate
         // the delivery model. If BAR_CONFIG_LO/HI + DATA_CONFIG are programmed, the RP1
         // uses the RC's CONSOLIDATED MSI demux (model a: one SoC IRQ + INTR2 status 0x4500),
@@ -1312,10 +1317,13 @@ pub fn rx_msix_program() -> u32 {
         // Bus-Master-Enable + Memory-Space-Enable on the RP1 endpoint — without BME the
         // RP1 physically cannot issue the upstream MSI memory write.
         let cmd0 = cr(0x04);
-        cw(0x04, cmd0 | 0x06);
+        // Match the Linux reference EXACTLY: command = 0x0406 = MSE(b1)|BME(b2)|INTx-DISABLE
+        // (b10). A DWC EP with MSI-X enabled but INTx NOT disabled stays on legacy INTx and
+        // never emits MSI-X — heqk was setting only 0x06 (missing the INTx-disable bit).
+        cw(0x04, cmd0 | 0x406);
         core::arch::asm!("dsb sy");
         let statuscmd = cr(0x04);
-        crate::_print(format_args!(" [DRV1] RP1 cfg: VID/DID={:#010x} CMD {:#06x}->{:#06x} (MSE|BME)\n",
+        crate::_print(format_args!(" [DRV1] RP1 cfg: VID/DID={:#010x} CMD {:#06x}->{:#06x} (want 0x0406 MSE|BME|INTxDIS)\n",
             id, cmd0 & 0xffff, statuscmd & 0xffff));
 
         // Walk the capability list: byte 0x34 → first cap ptr; each cap dword is
