@@ -374,6 +374,42 @@ bit1 TEST/bit2 IACK/bit3 IACK_EN; INTSTATL 0x108; eth=source 6; BARs 32-bit; per
 BAR1); irq-bcm2712-mip.c (mip regs, msg.data=vector, GIC SPI 128+v); pcie-brcmstb.c (EXT_CFG,
 inbound/outbound win regs, bus-enum). Extracted under /home/andrei/.claude/jobs/*/tmp/.
 
+**SESSION 2026-09-09 — DEFINITIVE: the RP1 EP does NOT emit the MSI (generation gap, not
+routing).** Used the references hard (full Linux RP1->mip0->RC trace via subagent + RP1
+datasheet) instead of guessing, then a decisive RAM-landing test to settle the ambiguity:
+- The reference trace said the fix was the RC inbound window in RC_BAR3 (not BAR2 where I had
+  it). Applied it EXACTLY (RC_BAR3_LO=0xfffff01c HI=0xff, UBUS_BAR3_REMAP LO=0x00130001 HI=0x10;
+  metal read-back 'before=0' => firmware never set BAR3, confirming the reference). Still no MSI
+  reached mip0.
+- The subagent INFERRED "the RP1 emits fine, the write is dropped at the RC" from PBA=0. That
+  inference is WRONG. [P8-ram] retargets the MSI-X entry (gem::rx_msix_retarget) at a RAM word
+  via RC_BAR1 (bus 0x10_..+pa -> CPU pa) — the SAME inbound window the GEM RX DMA uses every
+  frame — writes 0, TEST-force-fires, reads back: **0x0**. The RP1 does NOT put the MSI write on
+  the bus at all. (PBA=0 was ambiguous: a posted write clears it either way.)
+
+So EVERYTHING the Linux rp1.c driver does is replicated (MSIX_CFG(6)=0x9 ENABLE|IACK_EN, PCI
+MSI-X cap enabled msgctrl=0x803c, table entry vctrl=0 unmasked, BME on the EP, source asserting
+INTSTATL=0x40) AND the RC in/out windows are correct AND mip0->GIC->handler is PROVEN (CPU-inject
+fires INTID-166) — yet the RP1 EP's APBS MSIX_CFG mechanism never generates the upstream MSI
+write, even TEST-forced, even aimed at a trivially-reachable RAM address. The GEM's own upstream
+DMA writes DO work (frames land in the ring), so the EP's upstream data path is fine — it is
+specifically the MSI-X GENERATION that does not fire.
+
+THE REMAINING GAP IS BELOW THE KERNEL SOURCE: the RP1 is a Synopsys DWC PCIe EP whose MSI-X
+generation / outbound path is brought up by the RP1's OWN firmware (a separate co-processor),
+not by rp1.c. Candidates not visible in the source: (i) a DWC-EP-core MSI-X enable / outbound
+iATU that the RP1 firmware must arm (dw_pcie_ep_raise_msix_irq maps an outbound iATU to msg_addr
+— if the APBS hardware path depends on an iATU window firmware didn't set for our addresses,
+nothing goes out); (ii) an APBS-block-level arm beyond the per-source MSIX_CFG; (iii) the DWC DBI
+'APP_DBI_RO_WR_DISABLE' / config-shadow gating the cap enable. None are in the RPi kernel tree.
+
+CLEAN UNBLOCK (recommended): boot Linux ON the CM5 once and OBSERVE the working state — lspci
+-vvv on the RP1 (MSI-X cap + BARs), /proc/interrupts (the eth IRQ's actual GIC line + count
+climbing), and dump the RP1 PCIE_CFG/DBI + DWC iATU registers while ethernet RX interrupts are
+firing. That reveals the exact firmware/DWC state that makes emission work — the one thing
+source-reading cannot give. Alternatively bank DRV-1 (NOT an M2 gate; polled RX drop=0) and move
+on. Evidence: ~/heqk-metal-logs/20260909-drv1-ramtest-rp1-does-not-emit.log
+
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
 (PSI / conntrack-saturation / self-revert TTL) with paced traffic. DRV-1's payoff is
