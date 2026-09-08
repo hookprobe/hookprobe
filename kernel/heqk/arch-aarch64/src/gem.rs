@@ -531,24 +531,16 @@ pub fn link_status() -> u32 {
     r(ETH_CFG, 0x04)
 }
 
-/// Poll the PHY's OWN link bit (BMSR reg1 bit2) up to `ms` ms — the RELIABLE wire-link signal.
-/// NOTE: on this CM5 the RP1 `link_status()` RGMII bit reads 0 even at a negotiated 1G, so it is
-/// the WRONG gate; the PHY BMSR is authoritative. Unlike `phy_link`, this does NOT restart
-/// auto-negotiation (safe to call in a poll loop). Reads BMSR twice each tick (the first read
-/// clears the latched-low bit). Returns true once link is up. `phy` = MDIO address (0 = GEM PHY).
-pub fn wait_phy_link(phy: u32, ms: u32) -> bool {
-    w(GEM, NCFGR, NCFGR_MDC_DIV128);
-    w(GEM, NCR, NCR_MPE);
-    for _ in 0..ms {
-        let _ = phy_read(phy, 1); // clear the latched-low link bit
-        if phy_read(phy, 1) & 0x0004 != 0 {
-            return true;
-        }
-        for _ in 0..400_000u32 {
-            core::hint::spin_loop();
-        } // ~1 ms
-    }
-    false
+/// Read the PHY's OWN link bit (BMSR reg1 bit2) — the RELIABLE wire-link signal. NOTE: on this
+/// CM5 the RP1 `link_status()` RGMII bit reads 0 even at a negotiated 1G, so it is the WRONG gate;
+/// the PHY BMSR is authoritative. This is CHEAP + SAFE to call in the running datapath: it does
+/// NOT restart auto-negotiation (unlike `phy_link`) and does NOT write NCR/NCFGR — writing
+/// `NCR=NCR_MPE` would CLEAR the RE/TE datapath enables (management-port-only), stalling RX/TX.
+/// MDC divider + MPE were set at boot (`rx_init`), so a bare MDIO read is valid here. Reads BMSR
+/// twice (the first read clears the latched-low bit). `phy` = MDIO address (0 = GEM PHY).
+pub fn phy_link_up(phy: u32) -> bool {
+    let _ = phy_read(phy, 1); // clear the latched-low link bit
+    phy_read(phy, 1) & 0x0004 != 0
 }
 
 /// Diagnostics: PHY ID at MDIO addr 0 and 1 (reg2/reg3), plus the ETH_RST_N pin
