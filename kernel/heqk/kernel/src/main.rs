@@ -902,6 +902,19 @@ fn cm5_prod_service() -> ! {
     mmu_cm5::map_user_data(ustack, mmu_cm5::el0_stack_pa());
     mmu_cm5::map_user_nc(uring, arch_aarch64::gem::rxring_pa());
     arch_aarch64::gem::tx_init(); // forwarding path for a PASS verdict
+    // RX-THROUGHPUT (2026-09-09, Linux-reference validated the GEM config is correct; the
+    // bottleneck was the DRAIN path): the EL0 stub is mapped AP_RO_EL0 (read-only to EL0 —
+    // map_user_code uses AP_RO_EL0|PXN), so EL0 CANNOT corrupt its code. Reloading it (a
+    // multi-KiB copy + full I-cache maintenance + remap) EVERY loop iteration was therefore
+    // pure overhead on the hot path — rxprof measured the EL0/reload phase at ~99.9% of
+    // per-frame cost, capping sustained RX at ~389/s. Load it ONCE here; re-load ONLY after a
+    // contained fault (the only event that could leave EL0 state needing a reset).
+    {
+        let len = ids.1 - ids.0;
+        unsafe { core::ptr::copy_nonoverlapping(ids.0 as *const u8, code_pa as *mut u8, len) };
+        arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+        mmu_cm5::map_user_code(ucode, code_pa);
+    }
 
     // Distinct sentinel (AUDIT D3/D4) so a CONTAINED EL0 driver fault — the stub crashed
     // before it ran its report syscall — is told apart from a benign empty window (where
@@ -1021,14 +1034,11 @@ fn cm5_prod_service() -> ! {
         }
         // rxprof: mark the start of the per-frame work (after the heartbeat book-keeping).
         #[cfg(feature = "rxprof")]
+        #[allow(unused_mut)]
         let mut mark = prod_cntpct();
-        // (Re)load the TRUSTED driver stub every iteration — a crash on the prior
-        // iteration was contained by the EL0 fault handler; this reload is the
-        // structural self-heal ([P7c] proves the contain+restart survives).
-        let len = ids.1 - ids.0;
-        unsafe { core::ptr::copy_nonoverlapping(ids.0 as *const u8, code_pa as *mut u8, len) };
-        arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
-        mmu_cm5::map_user_code(ucode, code_pa);
+        // Stub reload HOISTED out of the hot path (loaded once before the loop; the stub is
+        // RO to EL0 so it cannot be corrupted). The reload phase is now ~0; only re-loaded in
+        // the fault branch below.
         #[cfg(feature = "rxprof")]
         { let t = prod_cntpct(); prof.reload += t.wrapping_sub(mark); mark = t; }
 
@@ -1040,9 +1050,14 @@ fn cm5_prod_service() -> ! {
 
         let report = DRIVER_REPORT.load(Ordering::Relaxed);
         if report == RPT_SENTINEL {
-            // The driver FAULTED before reporting (contained by the EL0 fault handler; the
-            // trusted stub is re-copied above). Count it so a crash-looping driver is
-            // observable, DISTINCT from a quiet link — this is the honest self-heal signal.
+            // The driver FAULTED before reporting (contained by the EL0 fault handler). Count
+            // it so a crash-looping driver is observable, DISTINCT from a quiet link. RE-LOAD
+            // the stub here — the ONLY place a reload is needed — to structurally self-heal
+            // (re-copy code + I-cache sync + re-map), matching the [P7c] contain+restart proof.
+            let len = ids.1 - ids.0;
+            unsafe { core::ptr::copy_nonoverlapping(ids.0 as *const u8, code_pa as *mut u8, len) };
+            arch_aarch64::mmu::sync_instruction_cache(code_pa, len);
+            mmu_cm5::map_user_code(ucode, code_pa);
             faults += 1;
             continue;
         }
