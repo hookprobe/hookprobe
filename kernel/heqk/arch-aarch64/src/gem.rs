@@ -1437,6 +1437,19 @@ pub fn gic_spi_pending(intid: u32) -> bool {
     (v >> (intid % 32)) & 1 == 1
 }
 
+/// DRV-1 (mipdump): clear a GIC SPI's pending bit (GICD ICPENDR, base 0x280) so the next
+/// read of gic_spi_pending() reflects only fresh activity since this clear. Used to detect
+/// PER-BEAT RP1 MSI emission rather than a latched once-ever bit.
+#[cfg(feature = "mipdump")]
+pub fn gic_spi_clear_pending(intid: u32) {
+    const GICD: usize = 0x10_7FFF_9000;
+    let reg = GICD + 0x280 + ((intid / 32) as usize) * 4;
+    unsafe {
+        write_volatile(reg as *mut u32, 1 << (intid % 32));
+        core::arch::asm!("dsb sy");
+    }
+}
+
 /// DRV-1 ISOLATION self-test (mipdump): inject the mip0 doorbell write from the CPU side
 /// (write the vector to MIP_INT_RAISE at CPU 0x10_0013_0000+0x00) and read STATUSL_HOST
 /// (0x80) back. This exercises mip0 INDEPENDENT of the RP1's MSI generation: if the

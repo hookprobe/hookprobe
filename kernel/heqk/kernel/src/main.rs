@@ -987,12 +987,17 @@ fn cm5_prod_service() -> ! {
             {
                 let (ml, mh, rc) = arch_aarch64::gem::msi_sink_status();
                 let (il, ih) = arch_aarch64::gem::rp1_intstat();
-                kprint!("   [DRV1-hb] rp1_INTSTATL={:#010x} (bit6=ETH asserts?) INTSTATH={:#010x} | mip_sL={:#010x} mip_sH={:#010x} rc_s={:#010x}\n", il, ih, ml, mh, rc);
-                // ISOLATION: inject the doorbell from the CPU side to test mip0 alone.
-                let (sb, sv, sx) = arch_aarch64::gem::mip_selftest();
-                kprint!("   [DRV1-st] mip_selftest STATUSL: before={:#010x} after_raise6={:#010x} after_raise(1<<6)={:#010x} (nonzero => mip0 latches; RP1-emit is the gap)\n", sb, sv, sx);
-                // Re-arm source 6 each beat so a fresh MSI is generated while frames flow —
-                // proves the full RP1->mip0 path independent of one-shot auto-mask timing.
+                // EDGE-TEST readout: did the RP1 emit an MSI since last beat? IRQs are masked
+                // in prod, so a real emission shows as a GIC-pending bit on INTID 166 (no CPU
+                // inject here — that would false-positive). This is the RP1's OWN emission.
+                let emitted = arch_aarch64::gem::gic_spi_pending(166);
+                kprint!("   [DRV1-hb] INTSTATL={:#010x} (bit6=ETH) INTSTATH={:#010x} | mip_sL={:#010x} rc_s={:#010x} | RP1_emitted(GIC166)={} <== the answer\n", il, ih, ml, rc, emitted);
+                arch_aarch64::gem::gic_spi_clear_pending(166); // fresh per-beat
+                // EDGE maneuver: the source is stuck level-HIGH (INTSTATL=0x40) because prod
+                // never clears the GEM ISR (RX is via the DMA ring). Clear it now to DEASSERT
+                // source 6, IACK to re-arm; the next frame re-asserts (rising edge) so the RP1
+                // emits a FRESH MSI to the now-correct table -> shows as RP1_emitted next beat.
+                let _ = arch_aarch64::gem::rx_irq_ack();
                 arch_aarch64::gem::rx_msix_iack();
             }
             #[cfg(feature = "rxprof")]
