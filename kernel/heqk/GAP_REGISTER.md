@@ -410,6 +410,37 @@ firing. That reveals the exact firmware/DWC state that makes emission work — t
 source-reading cannot give. Alternatively bank DRV-1 (NOT an M2 gate; polled RX drop=0) and move
 on. Evidence: ~/heqk-metal-logs/20260909-drv1-ramtest-rp1-does-not-emit.log
 
+**SESSION 2026-09-09b — LINUX-ON-CM5 REFERENCE captured; RP1-side now MATCHES Linux yet the
+RP1 STILL does not emit -> gap is RC-level/RP1-internal, below the host register set.**
+Booted stock Linux (hookprobe-os-pi-debug-v8, [cm5] kernel_2712) on the CM5, SSH'd in
+(andrei@10.200.0.6, lockdown=none+iomem=relaxed) and dumped the WORKING RP1 MSI-X state via
+/dev/mem. Saved: ~/heqk-metal-logs/20260909-LINUX-REFERENCE-{rp1-msix,harvest,iomem}.txt.
+KEY REFERENCE FACTS:
+- GEM RX IRQ = 105 = rp1_irq_chip hwirq 6 LEVEL on end0, climbs with traffic -> heqk's
+  source-6/mip0 model is CORRECT.
+- Linux RP1: MSIX_CFG(6)=0x9, MSI-X table[v]=addr 0xff_fffff000/data=v/vctrl=0, cap
+  msgctrl=0x803c (enable), RC_BAR3=0xfffff01c/0xff + UBUS3=0x00130001/0x10 (mip0 doorbell),
+  mip0 MASKL/H_HOST=0 CFGL/H_HOST=0xffffffff. command=0x0406 (MSE|BME|INTx-DIS). INTE(0x1ac)=0x5f.
+- heqk MATCHES all RP1-side registers. Applied the only two diffs (INTx-disable b10 + INTE=0x5f,
+  commit 240acf4) -> STILL RP1_emitted=false, [P8-emit] fired=0, mip_sL=0, PBA=0. Not the gate.
+REMAINING DIFFS (RC-level, unconfirmed as the gate; NOT yet applied):
+- MISC_CTRL(0x4008): heqk 0xa8003000 (firmware + SCB_ACCESS_EN) vs Linux 0x00263480 (full
+  brcmstb RCB/burst/UR config). Biggest concrete diff; risky to match (heqk DMA works on its
+  current value).
+- heqk enumerate CLASS-CODE BUG: writes 0x30600400 (class 0x60, invalid) instead of Linux
+  0x30060400 (class 0x06 PCI-bridge) — mask should be 0x0006_0400 not 0x0060_0400. Cosmetic-ish.
+- heqk inbound-window LAYOUT differs: heqk RC_BAR1=RAM(64GB); Linux RC_BAR1=4MB->CPU 0x1f
+  (RP1 periph), RC_BAR2=RAM. Same MSI routing (both BAR3->mip0) but different overall map.
+CAVEAT on the tests: [P8-ram] RAM-landing has a CACHE-COHERENCY confound (LAND is a cached
+static; a device DMA write may not be seen by a cached CPU read) -> RAM=0 is not conclusive of
+non-emit. But [P8-emit]/RP1_emitted (GIC-pending) have no such confound and show no fire.
+Also confirmed for OTHER gaps (harvested this session): IOMMU@5280 = heqk iommu5 base (DRV-2
+located); full GEM regs (NCFGR=0x0156044a, NCR=0x0010001c, IER=RCOMP-only) for the RX-throughput
+gap; full RC regs for PCIe-completeness. Wi-Fi (CYW43455) NOT harvested = large separate track.
+STATUS: DRV-1 remains open (RP1 emit), now bounded to RC-level/RP1-internal. STILL NOT an M2
+gate (polled RX drop=0). Recommend banking unless the RC-match (MISC_CTRL + full window layout)
+is worth a focused, riskier attempt.
+
 **REPRIORITIZED — DRV-1 is NOT an M2 gate.** Measured 2026-09-07: heqk sustains ~389 RX
 frames/s at drop=0, faults=0, which drives the M2 sustained-load separation-matrix rows
 (PSI / conntrack-saturation / self-revert TTL) with paced traffic. DRV-1's payoff is
