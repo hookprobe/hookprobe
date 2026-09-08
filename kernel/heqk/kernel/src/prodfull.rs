@@ -27,12 +27,15 @@
 //!     the next boot. That is a real cross-reboot persistence proof on silicon, and
 //!     it is deliberately not dressed up as the full evidence graph.
 //!
-//! **There is no smoltcp↔GEM bridge in the prod datapath.** The sensor loop drives
-//! `gem::peek_rx_frame` directly; `netsvc` is not fed by it. So M4 here establishes
-//! the *posture* (air-gap-safe config resolution, enrollment status) and M6 the
-//! *structural gate* (`should_export` consulted BEFORE any channel). No handshake is
-//! attempted against a transport that does not exist — a fake one would be worse
-//! than an absent one. Wiring the real transport is PH5 + Gate R.
+//! **UPDATE (2026-09-08): the GEM control-plane transport now EXISTS.** The `netmetal` sensor
+//! loop feeds `MetalBridge` (ARP first-light + presence beacon metal-proven) off its SINGLE drain
+//! (the Linux-`macb` single-ring-owner rule), and the smoltcp-FREE `ControlPlane` (`controlplane.rs`)
+//! drives the full PQ-hybrid Noise handshake over a hand-framed UDP transport that rides that same
+//! drain + the one `gem::tx_frame` — QEMU-proven end-to-end ([P19-controlplane]), and
+//! `reconcile_reach_policy` arms segmentation off a channel-fetched signed policy ([P20-reconcile]).
+//! What remains is the METAL live handshake (a host MSSP-sim on the wire). This `prodfull` posture
+//! layer (air-gap-safe config resolution, enrollment status, the M6 `should_export` structural
+//! gate) is unchanged and correct; it no longer implies the transport is absent.
 //!
 //! # Invariants this module must not break
 //!
