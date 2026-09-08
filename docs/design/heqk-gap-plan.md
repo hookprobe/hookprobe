@@ -95,4 +95,16 @@ M2 Gate-R sign-off (CONDITIONAL-GO) ✅                                      →
    → U6 → M7 execute unbuild → delete Linux on rpi-native
 ```
 
-The enforcing **sensor**, **persistence**, and now the **connected half's first-light** are on metal (M2 signed off; M3 write/seal/DataVolume/OTA-flip proven; **M4 GEM↔smoltcp bridge first-light proven 2026-09-08** — heqk answers ARP on the real wire). The remaining distance is the **brain (M5, un-gate the Wasm host)**, the **rest of M4** (ICMP/DHCP/enroll/Noise/DNS/WAN-SASE on top of the now-live bridge), and the **segmentation plane** (the reach-actuator that unlocks U2b + L5/L6 + A11). Nearest-term highest-value: the MMU-W^X + Wasm-host-on-cm5 work (the tallest pole); the segmentation plane is the true gate to *deleting* the Linux dataplane (U2b → M7). The M4 bridge is now the substrate the segmentation authority + enrollment build on.
+The enforcing **sensor**, **persistence**, and the **connected half's first-light** are on metal (M2 signed off; M3 write/seal/DataVolume/OTA-flip proven; **M4 GEM bridge + presence beacon metal-proven 2026-09-08**).
+
+### 2026-09-08 QEMU build-out (metal validation queued for the next hardware session)
+
+The connected control plane + arming logic are now built and QEMU-green end-to-end:
+- **[P19-controlplane]** — the smoltcp-free `ControlPlane` initiator drives the FULL PQ-hybrid Noise handshake over the hand-framed UDP transport that rides the sensor's single drain (against an in-kernel responder); msg1 chunked → reassembled → `Established`, crossed keys match.
+- **[P20-reconcile]** — `reconcile_reach_policy` arms `segment.rs` off a channel-fetched operator-signed policy (read floor → TOFU op-key → fetch → apply → persist), replay refused; the **QEMU half of the U2b gate**.
+- **[P20-dns-sink]** — DNS-sinkhole/RPZ ("refuse a NAME, never a packet").
+- Plus (earlier today) [P19-seg-policy] / [P19-seg-policy-persist] / [P19-noise-over-udp].
+
+**FLAG (product-steward):** the M5 "tallest pole" is **build-plumbing, not an unsolved MMU problem** — the multi-block W^X fix already exists ([P-wx]) with a cm5 mirror (`mmu_cm5.rs`); what remains is un-gating `build.rs`/`Cargo.toml` to build the EL0 wasmi host FOR cm5 + a metal-runtime proof.
+
+**Metal-tomorrow worklist** (needs hardware; do NOT fake in QEMU): (1) the live full Noise handshake — a std host MSSP-sim (shared `heqk-noise` crate for byte-compat) replies on the wire → device `Established`; (2) **metal segmentation arming** — `reconcile_reach_policy` over the live `ControlPlane` Session serving a signed policy → a quarantined MAC dropped while mgmt/legit pass (the Gate-R sign-off for U2b); (3) M5 wasm-on-cm5 runtime; (4) M3 eMMC-scale (DataVolume partition, torn-tail, power-cycle); (5) P9 RTL8111/port-role (hardware-blocked board); (6) WAN PBR/NAT/TUN-SASE dataplane; (7) WiFi assoc/data. The **segmentation plane** stays the true gate to *deleting* the Linux dataplane (U2b → M7) — its logic is now fully QEMU-proven; only the on-the-wire arm remains.
