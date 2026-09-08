@@ -2088,6 +2088,95 @@ fn cm5_p15_block_seal() {
             dv_prev, dv_now, dv_cap, dv_order, dv_evid, if dv_pass { "PASS" } else { "FAIL" });
     }
 
+    // M3.4 metal — the ON-DEVICE forward A/B tryboot flip (opt-in `otaflip`; SELF-REBOOTS
+    // once). The ROLLBACK half is already metal-proven (M1 criterion-4: corrupt slot B →
+    // verify fail → EL2 watchdog → revert to slot A). This proves the FORWARD/healthy path:
+    // heqk-on-A arms the REAL firmware one-shot tryboot → the firmware boots the (existing,
+    // valid) slot B → heqk-on-B reads OtaState=Trying → confirm → Committed. Persisted in the
+    // keystore reserved window (LBA 2044), NOT the boot partition — slot A is never touched
+    // (zero brick risk; the watchdog reverts to A if slot B ever hangs). Loop-safe: persist +
+    // read-back BEFORE arming, generation cap, and Committed is terminal (never re-arms).
+    // The physical candidate delivery (FAT write of a NEW image to slot B + B→A promotion) is
+    // the remaining Phase-2 piece; this proves the flip MECHANISM on real firmware.
+    #[cfg(feature = "otaflip")]
+    {
+        use ota::{OtaPhase, OtaState};
+        const OTA_LBA: u64 = 2044; // reserved window, distinct from seal@2016 / cookie@2040
+        emmc.arm_write_window(store::RESERVED_LBA_LO, store::RESERVED_LBA_HI);
+        let mut sec = [0u8; 512];
+        let cur = if emmc.read_block(OTA_LBA, &mut sec).is_ok() {
+            OtaState::from_bytes(&sec[..OtaState::WIRE_LEN]).unwrap_or_else(OtaState::initial)
+        } else {
+            OtaState::initial()
+        };
+        match cur.phase {
+            OtaPhase::Committed => {
+                kprint!("   [SEPDIAG-OTA] forward-flip COMMITTED (gen={}) — tryboot trial→confirm→commit proven on real firmware => PASS\n",
+                    cur.generation);
+            }
+            OtaPhase::Trying => {
+                // We ARE the trial boot (firmware loaded tryboot.txt → slot B) and we booted
+                // healthy. Confirm → Committed, persist. No re-arm (fall through to normal boot).
+                match ota::confirm(&cur) {
+                    Ok(done) => {
+                        let mut w = [0u8; 512];
+                        w[..OtaState::WIRE_LEN].copy_from_slice(&done.to_bytes());
+                        let wrote = emmc.write_block(OTA_LBA, &w).is_ok();
+                        let mut rb = [0u8; 512];
+                        let ok = wrote && emmc.read_block(OTA_LBA, &mut rb).is_ok()
+                            && rb[..OtaState::WIRE_LEN] == w[..OtaState::WIRE_LEN];
+                        kprint!("   [SEPDIAG-OTA] TRIAL slot B booted HEALTHY → confirm → COMMITTED persist={} (gen {}→{}, active_slot→B) => {}\n",
+                            ok, cur.generation, done.generation, if ok { "PASS" } else { "FAIL" });
+                    }
+                    Err(e) => kprint!("   [SEPDIAG-OTA] confirm FAILED: {:?} => FAIL\n", e),
+                }
+            }
+            OtaPhase::Idle | OtaPhase::RolledBack | OtaPhase::Staged => {
+                // INITIATE the forward flip (Staged is folded here — a stale Staged with no
+                // pending trial re-initiates cleanly). Loop-safety: generation cap +
+                // persist-read-back BEFORE arming (never reset if the state didn't stick).
+                if cur.generation < 6 {
+                    let staged = OtaState {
+                        phase: OtaPhase::Staged,
+                        active_slot: ota::SLOT_A,
+                        try_slot: ota::SLOT_NONE,
+                        candidate_svn: 1,
+                        generation: cur.generation + 1,
+                    };
+                    match ota::flip(&staged) {
+                        Ok(trying) => {
+                            let mut w = [0u8; 512];
+                            w[..OtaState::WIRE_LEN].copy_from_slice(&trying.to_bytes());
+                            let wrote = emmc.write_block(OTA_LBA, &w).is_ok();
+                            let mut rb = [0u8; 512];
+                            let persisted = wrote && emmc.read_block(OTA_LBA, &mut rb).is_ok()
+                                && rb[..OtaState::WIRE_LEN] == w[..OtaState::WIRE_LEN];
+                            if persisted {
+                                let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
+                                let readback = arch_aarch64::mailbox::get_reboot_flags();
+                                let _ = arch_aarch64::mailbox::notify_reboot();
+                                match readback {
+                                    Some(f) if f & arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT != 0 => {
+                                        kprint!("   [SEPDIAG-OTA] initiate: OtaState=Trying persisted (gen {}), tryboot ARMED (set={:?}) — warm-reset → firmware loads tryboot.txt (slot B)\n",
+                                            trying.generation, set);
+                                        for _ in 0..40_000_000u64 { core::hint::spin_loop(); } // drain UART
+                                        unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+                                    }
+                                    other => kprint!("   [SEPDIAG-OTA] tryboot did NOT arm (readback={:?}) — NOT resetting (no loop) => FAIL\n", other),
+                                }
+                            } else {
+                                kprint!("   [SEPDIAG-OTA] OtaState persist read-back FAILED — NOT arming/resetting (no loop) => FAIL\n");
+                            }
+                        }
+                        Err(e) => kprint!("   [SEPDIAG-OTA] flip FAILED: {:?} => FAIL\n", e),
+                    }
+                } else {
+                    kprint!("   [SEPDIAG-OTA] generation cap reached (gen={}) — forward-flip disabled (loop-safety)\n", cur.generation);
+                }
+            }
+        }
+    }
+
     // If we can build a store over the real disk, exercise the READ/scan path.
     {
         let mut dev = emmc; // move into the store (read path uses it immutably)
