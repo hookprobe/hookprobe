@@ -15,6 +15,24 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub const SEV_LOW: u32 = 1;
 pub const SEV_MED: u32 = 3;
 pub const SEV_HIGH: u32 = 5;
+/// A11 corroboration: when a source has tripped >= CORR_CRITICAL_AXES independent axes,
+/// its alerts are stamped CRITICAL for the SOC/QSECBIT. This is a SEVERITY escalation
+/// ONLY — the wire verdict is unchanged (corroboration never drops; security-auditor
+/// 2026-09-08). Higher than SEV_HIGH so the SOC can rank corroborated sources first.
+pub const SEV_CRIT: u32 = 7;
+
+/// Map a fired rule's `FindingClass` to a corroboration axis (None = not a corroboration
+/// axis, e.g. a structural/signature/spoof finding). REPUTATION (blocklist/IOC) and
+/// SCAN are the axes carried by signed rules; BEACON/LATERAL/EXFIL/DNS are recorded at
+/// their behavioral wrappers.
+#[inline]
+fn axis_for_class(c: FindingClass) -> Option<u32> {
+    match c {
+        FindingClass::IdentityReputation => Some(crate::corroboration::AXIS_REPUTATION),
+        FindingClass::ScanShape => Some(crate::corroboration::AXIS_SCAN),
+        _ => None,
+    }
+}
 
 pub struct Rule {
     pub id: u16,
@@ -179,7 +197,22 @@ fn run_set_verdict(
         if v == bpf::DROP {
             // The rule MATCHED — an alert, not a wire action. decide() graduates it.
             let verdict = decide_fn(rules[i].class, ctx);
-            fire(rules[i].id, rules[i].severity, verdict, src);
+            // A11 corroboration (SEVERITY only, never the wire): record this axis for the
+            // source and, if it is now corroborated across >= K axes, stamp the alert
+            // CRITICAL. `verdict` is UNCHANGED — decide_fn already mapped a reputation/scan
+            // finding to its own (observe/graduated) verdict; corroboration does not touch it.
+            let sev = match axis_for_class(rules[i].class) {
+                Some(ax) => {
+                    crate::corroboration::corr_observe(src as u64, ax);
+                    if crate::corroboration::is_corroborated(src as u64) {
+                        SEV_CRIT
+                    } else {
+                        rules[i].severity
+                    }
+                }
+                None => rules[i].severity,
+            };
+            fire(rules[i].id, sev, verdict, src);
             if verdict.is_drop() {
                 return Some(verdict);
             }
@@ -406,7 +439,12 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     let mut ctx = DecideCtx::for_src(src);
     ctx.over_limit = true;
     let v = verdict::decide(FindingClass::ScanShape, ctx);
-    fire(RULE_PORT_SCAN, SEV_HIGH, v, src);
+    // A11 corroboration (SEVERITY only): record the SCAN axis; stamp CRITICAL if the source
+    // is now corroborated across >= K axes. `v` is UNCHANGED (the scan's own graduated
+    // verdict stands — corroboration never escalates the wire action).
+    crate::corroboration::corr_observe(src64, crate::corroboration::AXIS_SCAN);
+    let sev = if crate::corroboration::is_corroborated(src64) { SEV_CRIT } else { SEV_HIGH };
+    fire(RULE_PORT_SCAN, sev, v, src);
     Some(v)
 }
 
@@ -503,9 +541,14 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
 /// SOC SEES the behavior; the wire is never touched. This is the whole M2.4 contract:
 /// detection parity WITHOUT enforcement.
 #[inline]
-fn behavioral_verdict(rule_id: u16, src: u32) -> Verdict {
+fn behavioral_verdict(rule_id: u16, src: u32, axis: u32) -> Verdict {
     let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(src));
-    fire(rule_id, SEV_MED, v, src);
+    // A11 corroboration (SEVERITY only): record this behavioral axis; a source corroborated
+    // across >= K axes is stamped CRITICAL for the SOC. `v` stays `Observe` — behavioral is
+    // observe-only by construction, and corroboration NEVER changes the wire verdict.
+    crate::corroboration::corr_observe(src as u64, axis);
+    let sev = if crate::corroboration::is_corroborated(src as u64) { SEV_CRIT } else { SEV_MED };
+    fire(rule_id, sev, v, src);
     v
 }
 
@@ -518,7 +561,7 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
     if !crate::behavioral::beacon_observe_at(src, dst, dst_port, now) {
         return None;
     }
-    Some(behavioral_verdict(RULE_BEACON, src))
+    Some(behavioral_verdict(RULE_BEACON, src, crate::corroboration::AXIS_BEACON))
 }
 
 /// Live-clock wrapper for the datapath (M2.4 A10/L8 wiring): same as `beacon_verdict_at`
@@ -534,7 +577,7 @@ pub fn lateral_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
     if !crate::behavioral::lateral_observe(src, dst, dst_port) {
         return None;
     }
-    Some(behavioral_verdict(RULE_LATERAL, src))
+    Some(behavioral_verdict(RULE_LATERAL, src, crate::corroboration::AXIS_LATERAL))
 }
 
 /// M2.4 / EXFIL — anomalous OUTBOUND (internal→external) byte volume from one source.
@@ -543,7 +586,7 @@ pub fn exfil_verdict(src: u32, dst: u32, bytes: u64) -> Option<Verdict> {
     if !crate::behavioral::exfil_observe(src, dst, bytes) {
         return None;
     }
-    Some(behavioral_verdict(RULE_EXFIL, src))
+    Some(behavioral_verdict(RULE_EXFIL, src, crate::corroboration::AXIS_EXFIL))
 }
 
 /// M2.4 / DNS ANALYTICS — tunneling / DGA / high-entropy QNAME. Self-parses the frame
@@ -552,7 +595,7 @@ pub fn exfil_verdict(src: u32, dst: u32, bytes: u64) -> Option<Verdict> {
 pub fn dns_verdict(frame: &[u8]) -> Option<Verdict> {
     if crate::behavioral::dns_qname_anomaly(frame)? {
         let src = crate::net::eth_ipv4_src(frame);
-        Some(behavioral_verdict(RULE_DNS, src))
+        Some(behavioral_verdict(RULE_DNS, src, crate::corroboration::AXIS_DNS))
     } else {
         None // parsed as DNS but the name is normal
     }
