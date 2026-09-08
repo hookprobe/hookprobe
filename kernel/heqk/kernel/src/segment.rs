@@ -34,6 +34,16 @@
 //!   AUTHENTICATED reach channel provisions policy (mirrors the WAN-kill-switch fail-closed
 //!   posture). Until then a device set to InternetOnly/Quarantine is still passed.
 //! * C8 bounded table with collision-EVICT-toward-Full discipline.
+//! * C9 AUTHENTICATED + OPERATOR-SIGNED provisioning (security-auditor 2026-09-08). The
+//!   authority delivers policy over the enrolled Noise transport, but the transport is NOT the
+//!   trust root: the ReachPolicy carries an INDEPENDENT operator Ed25519 signature (a key
+//!   distinct from the Noise static), verified on-device before ANY mutation (`enroll.rs`
+//!   `apply_reach_policy`). This mirrors the ratified OTA doctrine — the channel authenticates
+//!   the pipe, never the payload — so a compromised always-online MSSP cannot forge a
+//!   customer-traffic-dropping policy. Bound to tenant_id + device_fp (C14), monotonic-generation
+//!   floored against replay-downgrade (C11), fail-open on any auth/parse/floor failure. `arm`
+//!   and `set_reach(non-Full)` apply ONLY on a verified signature; `set_reach` is NEVER driven by
+//!   observed traffic (C16 — preserves the A11 no-victim-framing line: `corroboration.rs:8-23`).
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
@@ -54,13 +64,38 @@ const R_FULL: u8 = 0; // the fail-safe default code
 const R_INTERNET_ONLY: u8 = 1;
 const R_QUARANTINE: u8 = 2;
 
+impl Reach {
+    /// Wire code → Reach. `None` for any unknown code (fail-closed parse — an unrecognized
+    /// reach in a policy record rejects the WHOLE record, never a partial/misapplied entry).
+    #[inline]
+    pub fn from_code(c: u8) -> Option<Reach> {
+        match c {
+            R_FULL => Some(Reach::Full),
+            R_INTERNET_ONLY => Some(Reach::InternetOnly),
+            R_QUARANTINE => Some(Reach::Quarantine),
+            _ => None,
+        }
+    }
+    /// Reach → wire code (single source of truth for the code mapping).
+    #[inline]
+    pub fn to_code(self) -> u8 {
+        match self {
+            Reach::Full => R_FULL,
+            Reach::InternetOnly => R_INTERNET_ONLY,
+            Reach::Quarantine => R_QUARANTINE,
+        }
+    }
+}
+
 /// Distinct INFO telemetry id (C5): a segmentation-POLICY drop, never a threat class. Must
 /// not feed QSecBit / corroboration / the threat score. heqk rule-ids are `u16`; `1050` is the
 /// heqk analog of the Linux ~1000050 policy band, distinct from the detection ids (1-3 / 101-121
 /// / 201-204 / 301-302).
 pub const RULE_SEG_POLICY: u16 = 1050;
 
-const DEV_SLOTS: usize = 64;
+/// Policy-entry cap = the reach-table slot count (exposed so the ReachPolicy record bounds its
+/// entry list to exactly what the table can hold).
+pub const DEV_SLOTS: usize = 64;
 /// Reach-entry lease (C1): an entry older than this expires to Full, so a stale authority
 /// state can never durably strand a legit device.
 const REACH_TTL_SECS: u64 = 3600;
@@ -132,6 +167,20 @@ pub fn set_reach(mac_key: u64, reach: Reach) {
     DEV_KEY[s].store(mac_key, Ordering::Relaxed);
     DEV_REACH[s].store(code, Ordering::Relaxed);
     DEV_SET_AT[s].store(cntpct(), Ordering::Relaxed);
+}
+
+/// AUTHORITY seam: DECLARATIVE reset — a fresh policy is the FULL desired state, so
+/// `apply_reach_policy` zeroes every slot before applying the new batch. An empty slot resolves
+/// to Full in `reach_of` (C1), so this is the fail-SAFE direction: a device dropped from the new
+/// policy reverts to Full IMMEDIATELY (not on TTL), and even the transient window before `arm`
+/// is called last cannot strand anyone (everything is Full mid-reset). Also the un-enroll path
+/// (standalone returns to pure fail-open).
+pub fn reset_all_to_full() {
+    for s in 0..DEV_SLOTS {
+        DEV_KEY[s].store(0, Ordering::Relaxed);
+        DEV_REACH[s].store(R_FULL, Ordering::Relaxed);
+        DEV_SET_AT[s].store(0, Ordering::Relaxed);
+    }
 }
 
 /// Look up a device's reach (C1 fail-open): unknown key, a collision (slot holds another

@@ -35,7 +35,7 @@ use crate::securechannel::{
     InitiatorRandomness, NoiseErr, ResponderRandomness, ResponderStatic, Session,
 };
 use boot_abi::sha256;
-use ed25519_compact::KeyPair;
+use ed25519_compact::{KeyPair, PublicKey as EdPub, Signature as EdSig};
 
 /// Local console print (same arch seam as the rest of the kernel).
 #[cfg(feature = "securechannel-selftest")]
@@ -244,6 +244,234 @@ pub fn fetch_candidate_over_channel(
 }
 
 // ===========================================================================
+// M4.5 — the SEGMENTATION AUTHORITY: an operator-signed REACH-POLICY delivered over the enrolled
+// Noise transport, which provisions `segment.rs`'s per-device reach + ARMS the plane.
+//
+// TRUST SEPARATION (security-auditor C9, 2026-09-08 — the same doctrine as the OTA fetch above):
+// the enrolled channel authenticates the PIPE, never the PAYLOAD. Because a ReachPolicy DROPS
+// customer LAN traffic, it must carry its OWN Ed25519 signature by a DEDICATED operator key —
+// distinct from the always-online Noise static — verified on-device before ANY table mutation.
+// A compromised MSSP can then only RELAY/withhold/replay operator-signed policies (bounded by the
+// TTL lease + WAN/mgmt/infra floors), never forge one. The signature covers the record body ‖ the
+// device fingerprint (C14 — a policy for another device/tenant is rejected), and a monotonic
+// generation floored against replay-downgrade (C11) stops an old policy re-stranding a device.
+// FAIL-OPEN: any transport/parse/tenant/generation/signature failure returns Err having mutated
+// NOTHING and left the plane unarmed. `set_reach` is NEVER driven by observed traffic (C16).
+// ===========================================================================
+
+/// The opcode the device sends to request its reach policy (mirrors `FETCH_REQ`).
+pub const REACH_POLICY_REQ: &[u8] = b"HEQK-SEG-GET";
+
+/// One reach-table entry as the off-device authority speaks it: the RAW 6-byte MAC (heqk applies
+/// its internal `ratelimit::mac_hash` at apply time — the authority never sees the hash) + the
+/// `segment` reach code.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ReachEntry {
+    pub mac: [u8; 6],
+    pub reach: u8,
+}
+
+/// An operator-signed, tenant-bound, generation-floored reach policy. Fixed-size / no-heap.
+#[derive(Clone, Copy)]
+pub struct ReachPolicy {
+    pub generation: u64,
+    pub tenant_id: u64,
+    pub infra_gw: u32,
+    pub infra_dns: u32,
+    pub entry_count: u16,
+    pub entries: [ReachEntry; crate::segment::DEV_SLOTS],
+    /// Ed25519 operator signature over `signed_body() ‖ device_fp` (C9/C14).
+    pub sig: [u8; 64],
+}
+
+/// A reach-policy error. Every variant leaves the reach table + `REACH_ARMED` UNCHANGED.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReachPolicyErr {
+    Transport,
+    Parse,
+    TenantMismatch,
+    StaleGeneration,
+    BadSignature,
+}
+
+impl ReachPolicy {
+    const MAGIC: u32 = 0x314C_5052; // "RPL1" LE (distinct from ENR1 / the OTA magic)
+    const VERSION: u8 = 1;
+    const HDR_LEN: usize = 32; // magic4 ver1 flags1 count2 gen8 tenant8 gw4 dns4
+    const ENTRY_LEN: usize = 8; // mac6 reach1 rsvd1
+    /// The signed body: header + the full (zero-padded) entry array.
+    pub const BODY_LEN: usize = Self::HDR_LEN + crate::segment::DEV_SLOTS * Self::ENTRY_LEN;
+    pub const SIG_LEN: usize = 64;
+    /// The full on-wire record: signed body + operator signature.
+    pub const WIRE_LEN: usize = Self::BODY_LEN + Self::SIG_LEN;
+
+    /// Serialize the SIGNED BODY (everything the operator signature covers — NOT the sig itself).
+    /// Deterministic, so both the signer and the on-device verifier reconstruct identical bytes.
+    pub fn signed_body(&self) -> [u8; Self::BODY_LEN] {
+        let mut b = [0u8; Self::BODY_LEN];
+        b[0..4].copy_from_slice(&Self::MAGIC.to_le_bytes());
+        b[4] = Self::VERSION;
+        b[5] = 0; // flags
+        b[6..8].copy_from_slice(&self.entry_count.to_le_bytes());
+        b[8..16].copy_from_slice(&self.generation.to_le_bytes());
+        b[16..24].copy_from_slice(&self.tenant_id.to_le_bytes());
+        b[24..28].copy_from_slice(&self.infra_gw.to_le_bytes());
+        b[28..32].copy_from_slice(&self.infra_dns.to_le_bytes());
+        for (i, e) in self.entries.iter().enumerate() {
+            let o = Self::HDR_LEN + i * Self::ENTRY_LEN;
+            b[o..o + 6].copy_from_slice(&e.mac);
+            b[o + 6] = e.reach;
+            b[o + 7] = 0; // rsvd
+        }
+        b
+    }
+
+    /// Full record = signed body ‖ operator signature.
+    pub fn to_bytes(&self) -> [u8; Self::WIRE_LEN] {
+        let mut b = [0u8; Self::WIRE_LEN];
+        b[..Self::BODY_LEN].copy_from_slice(&self.signed_body());
+        b[Self::BODY_LEN..].copy_from_slice(&self.sig);
+        b
+    }
+
+    /// The bytes the operator signature is computed over: the signed body ‖ the target device
+    /// fingerprint (C14 — binds the policy to THIS device; a policy signed for another device
+    /// fails verification here). Returned on the stack; no heap.
+    fn sig_msg(body: &[u8; Self::BODY_LEN], device_fp: &[u8; 32]) -> [u8; Self::BODY_LEN + 32] {
+        let mut m = [0u8; Self::BODY_LEN + 32];
+        m[..Self::BODY_LEN].copy_from_slice(body);
+        m[Self::BODY_LEN..].copy_from_slice(device_fp);
+        m
+    }
+
+    /// FAIL-CLOSED parse. `None` (⇒ caller does not arm) on: short buffer, wrong magic, wrong
+    /// version, `entry_count > DEV_SLOTS`, or ANY entry carrying an unknown reach code (the whole
+    /// record is rejected — never a partial/misapplied apply).
+    pub fn from_bytes(b: &[u8]) -> Option<ReachPolicy> {
+        if b.len() < Self::WIRE_LEN {
+            return None;
+        }
+        if u32::from_le_bytes(b[0..4].try_into().ok()?) != Self::MAGIC {
+            return None;
+        }
+        if b[4] != Self::VERSION {
+            return None;
+        }
+        let entry_count = u16::from_le_bytes(b[6..8].try_into().ok()?);
+        if entry_count as usize > crate::segment::DEV_SLOTS {
+            return None;
+        }
+        let mut entries = [ReachEntry { mac: [0u8; 6], reach: 0 }; crate::segment::DEV_SLOTS];
+        for (i, e) in entries.iter_mut().enumerate() {
+            let o = Self::HDR_LEN + i * Self::ENTRY_LEN;
+            e.mac.copy_from_slice(&b[o..o + 6]);
+            e.reach = b[o + 6];
+            // Reject the WHOLE record if any MEANINGFUL entry has an unknown reach code.
+            if (i as u16) < entry_count && crate::segment::Reach::from_code(e.reach).is_none() {
+                return None;
+            }
+        }
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(&b[Self::BODY_LEN..Self::WIRE_LEN]);
+        Some(ReachPolicy {
+            generation: u64::from_le_bytes(b[8..16].try_into().ok()?),
+            tenant_id: u64::from_le_bytes(b[16..24].try_into().ok()?),
+            infra_gw: u32::from_le_bytes(b[24..28].try_into().ok()?),
+            infra_dns: u32::from_le_bytes(b[28..32].try_into().ok()?),
+            entry_count,
+            entries,
+            sig,
+        })
+    }
+}
+
+/// TRANSPORT + PARSE only (no verification, no mutation). The device sends `REACH_POLICY_REQ` on
+/// `dev.send`; the MSSP answers with the `WIRE_LEN` blob in AEAD transport records (counter-
+/// advanced → an in-session replay/reorder is rejected); the device decrypts + fail-closed
+/// parses. Like `fetch_candidate_over_channel`, this is the pipe — the operator signature is the
+/// trust root, checked in `apply_reach_policy`.
+pub fn fetch_reach_policy(
+    dev: &mut Session,
+    mssp: &mut Session,
+    blob: &[u8],
+    out: &mut [u8; ReachPolicy::WIRE_LEN],
+) -> Result<ReachPolicy, ReachPolicyErr> {
+    // device -> MSSP: request.
+    let mut reqbuf = [0u8; REACH_POLICY_REQ.len() + 16];
+    let rn = dev
+        .send
+        .encrypt_into(b"", REACH_POLICY_REQ, &mut reqbuf)
+        .ok_or(ReachPolicyErr::Transport)?;
+    let mut reqpt = [0u8; REACH_POLICY_REQ.len()];
+    let got = mssp
+        .recv
+        .decrypt_into(b"", &reqbuf[..rn], &mut reqpt)
+        .map_err(|_| ReachPolicyErr::Transport)?;
+    if &reqpt[..got] != REACH_POLICY_REQ {
+        return Err(ReachPolicyErr::Transport);
+    }
+    // MSSP -> device: the policy blob in one AEAD record (WIRE_LEN < the 1024 chunk).
+    if blob.len() != ReachPolicy::WIRE_LEN {
+        return Err(ReachPolicyErr::Parse);
+    }
+    let mut recbuf = [0u8; ReachPolicy::WIRE_LEN + 16];
+    let rl = mssp
+        .send
+        .encrypt_into(b"", blob, &mut recbuf)
+        .ok_or(ReachPolicyErr::Transport)?;
+    let dl = dev
+        .recv
+        .decrypt_into(b"", &recbuf[..rl], &mut out[..])
+        .map_err(|_| ReachPolicyErr::Transport)?;
+    if dl != ReachPolicy::WIRE_LEN {
+        return Err(ReachPolicyErr::Transport);
+    }
+    ReachPolicy::from_bytes(&out[..]).ok_or(ReachPolicyErr::Parse)
+}
+
+/// PURE apply — validates EVERYTHING before mutating ANYTHING; on any error returns `Err` with
+/// the reach table + `REACH_ARMED` untouched (fail-open). Order (C9/C11/C14):
+///   1. operator Ed25519 signature over `signed_body ‖ device_fp` verifies against `operator_pk`;
+///   2. `pol.tenant_id == enr.tenant_id`;
+///   3. `pol.generation > floor` (monotonic anti-rollback);
+/// then, and only then: reset-to-Full, set_infra, batch set_reach, arm LAST. Returns
+/// `(applied_count, new_floor = pol.generation)`.
+pub fn apply_reach_policy(
+    enr: &Enrollment,
+    pol: &ReachPolicy,
+    floor: u64,
+    operator_pk: &[u8; 32],
+) -> Result<(usize, u64), ReachPolicyErr> {
+    // (1) INDEPENDENT operator signature — the trust root (C9), checked FIRST.
+    let pk = EdPub::from_slice(operator_pk).map_err(|_| ReachPolicyErr::BadSignature)?;
+    let sig = EdSig::from_slice(&pol.sig).map_err(|_| ReachPolicyErr::BadSignature)?;
+    let msg = ReachPolicy::sig_msg(&pol.signed_body(), &enr.device_fp);
+    if pk.verify(&msg[..], &sig).is_err() {
+        return Err(ReachPolicyErr::BadSignature);
+    }
+    // (2) tenant binding (C14).
+    if pol.tenant_id != enr.tenant_id {
+        return Err(ReachPolicyErr::TenantMismatch);
+    }
+    // (3) monotonic anti-rollback (C11) — a replayed/older policy can never re-strand a device.
+    if pol.generation <= floor {
+        return Err(ReachPolicyErr::StaleGeneration);
+    }
+    // All checks passed. Mutate; arm LAST so the gate stays inert until fully provisioned.
+    crate::segment::reset_all_to_full();
+    crate::segment::set_infra(pol.infra_gw, pol.infra_dns);
+    let n = pol.entry_count as usize;
+    for e in &pol.entries[..n] {
+        // from_bytes already validated every meaningful reach code, so from_code is Some here.
+        if let Some(r) = crate::segment::Reach::from_code(e.reach) {
+            crate::segment::set_reach(crate::ratelimit::mac_hash(&e.mac), r);
+        }
+    }
+    crate::segment::arm_reach_channel();
+    Ok((n, pol.generation))
+}
+
+// ===========================================================================
 // The [P19-enroll] gate (securechannel-selftest). Deterministic loopback + fake
 // MSSP; entropy fed through the PRODUCTION path via a simulated-HW StubTrng.
 // The persist + authenticated-fetch halves additionally need `p15-write`
@@ -309,6 +537,142 @@ pub fn enroll_selftest() {
 
     #[cfg(feature = "p15-write")]
     persist_and_fetch_gate(entropy_ok, airgap_ok, proto_ok, buffers_ok, enr_for_persist);
+}
+
+/// The M4.5 SEGMENTATION-AUTHORITY self-test — an operator-signed reach policy delivered over the
+/// enrolled Noise channel provisions `segment.rs` + ARMS the plane, and every fail-open guard
+/// holds. Deterministic loopback + in-process fake MSSP + a dedicated operator signing key
+/// (distinct from the Noise static — C9). Restores the DISARMED state at the end (C7/C13).
+#[cfg(feature = "securechannel-selftest")]
+pub fn seg_policy_selftest() {
+    use crate::segment::{self, Reach};
+    use ed25519_compact::{KeyPair, Seed};
+    const TENANT: u64 = 0x5445_4E41; // "TENA"
+
+    // A dedicated OPERATOR signing key — the independent trust root (C9), NOT the Noise static.
+    let op = KeyPair::from_seed(Seed::new(sha256::digest(b"HEQK-M4.5-operator-signing-key")));
+    let rogue = KeyPair::from_seed(Seed::new(sha256::digest(b"HEQK-M4.5-ROGUE-operator-key")));
+    let opk: [u8; 32] = *op.pk;
+    let rogue_pk: [u8; 32] = *rogue.pk;
+
+    // Enroll a device/MSSP pair so we have a real Enrollment (tenant + device_fp) + transport.
+    let tv = crate::securechannel::test_vectors();
+    let (ir, rr) = match (init_rand_from_stub(b"seg-i"), resp_rand_from_stub(b"seg-r")) {
+        (Some(a), Some(b)) => (a, b),
+        _ => {
+            kprint!(" [P19-seg-policy] FAIL — entropy stub unavailable\n");
+            return;
+        }
+    };
+    let (enr, mut dev, mut mssp) = match enroll_over_noise(&tv.dev, &tv.resp, &ir, &rr, TENANT) {
+        Ok(x) => x,
+        Err(_) => {
+            kprint!(" [P19-seg-policy] FAIL — enroll_over_noise failed\n");
+            return;
+        }
+    };
+
+    // Build + operator-sign a policy FOR THIS device (body ‖ device_fp).
+    let build_signed = |gen: u64, tenant: u64, signer: &KeyPair| -> ReachPolicy {
+        let mut p = ReachPolicy {
+            generation: gen,
+            tenant_id: tenant,
+            infra_gw: 0x0A00_0001,  // 10.0.0.1
+            infra_dns: 0x0A00_0002, // 10.0.0.2
+            entry_count: 2,
+            entries: [ReachEntry { mac: [0u8; 6], reach: 0 }; segment::DEV_SLOTS],
+            sig: [0u8; 64],
+        };
+        // Byte 0 differs (0x02 vs 0x0a) so the two devices land in DISTINCT reach-table slots —
+        // `mac_hash` puts MAC byte 0 in the low bits and the slot is key % DEV_SLOTS, so MACs
+        // sharing byte 0 would collision-evict (C8 by design), which is not what this test means.
+        p.entries[0] = ReachEntry { mac: [0x02, 0, 0, 0, 0, 0x10], reach: Reach::Quarantine.to_code() };
+        p.entries[1] = ReachEntry { mac: [0x0a, 0, 0, 0, 0, 0x11], reach: Reach::InternetOnly.to_code() };
+        let msg = ReachPolicy::sig_msg(&p.signed_body(), &enr.device_fp);
+        let s = signer.sk.sign(&msg[..], None);
+        p.sig.copy_from_slice(&s[..]);
+        p
+    };
+    let pol = build_signed(7, TENANT, &op);
+
+    // (1) serde round-trip + fail-CLOSED parse.
+    let wire = pol.to_bytes();
+    let rt_ok = ReachPolicy::from_bytes(&wire).map_or(false, |p| {
+        p.generation == 7 && p.tenant_id == TENANT && p.entry_count == 2
+            && p.entries[0].reach == Reach::Quarantine.to_code() && p.sig == pol.sig
+    });
+    let bad_magic = { let mut b = wire; b[0] ^= 0xFF; ReachPolicy::from_bytes(&b).is_none() };
+    let bad_ver = { let mut b = wire; b[4] = 2; ReachPolicy::from_bytes(&b).is_none() };
+    let short = ReachPolicy::from_bytes(&wire[..ReachPolicy::WIRE_LEN - 1]).is_none();
+    let bad_count = {
+        let mut b = wire;
+        b[6..8].copy_from_slice(&((segment::DEV_SLOTS as u16 + 1).to_le_bytes()));
+        ReachPolicy::from_bytes(&b).is_none()
+    };
+    let bad_reach = { let mut b = wire; b[38] = 0x7F; ReachPolicy::from_bytes(&b).is_none() }; // entry0 reach @ 32+6
+    let parse_ok = rt_ok && bad_magic && bad_ver && short && bad_count && bad_reach;
+
+    // (2) fetch over the enrolled Noise transport (AEAD, counter-advanced).
+    let mut out = [0u8; ReachPolicy::WIRE_LEN];
+    let fetched = fetch_reach_policy(&mut dev, &mut mssp, &wire, &mut out);
+    let fetch_ok = fetched.as_ref().map_or(false, |p| p.generation == 7 && p.tenant_id == TENANT);
+    let fpol = fetched.unwrap_or(pol);
+
+    // Clean baseline for the (dis)arm assertions.
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+
+    // (3) signed apply → armed + the reach matrix holds (provisioned, not set directly).
+    let applied = apply_reach_policy(&enr, &fpol, 0, &opk);
+    let q_key = crate::ratelimit::mac_hash(&[0x02, 0, 0, 0, 0, 0x10]);
+    let io_key = crate::ratelimit::mac_hash(&[0x0a, 0, 0, 0, 0, 0x11]);
+    let lan: u32 = 0x0A00_0005; // internal peer
+    let wan: u32 = 0x0808_0808; // external
+    let gw: u32 = 0x0A00_0001; // infra (gateway) — internal but carved out
+    let apply_ok = applied == Ok((2, 7))
+        && segment::reach_armed()
+        && segment::reach_of(q_key) == Reach::Quarantine
+        && segment::reach_of(io_key) == Reach::InternetOnly
+        && !segment::reach_allow(0, q_key, lan, true)   // Quarantine + LAN peer → DENY
+        && segment::reach_allow(0, q_key, wan, false)   // Quarantine + WAN → allow
+        && segment::reach_allow(0, io_key, gw, true)    // C2 infra gateway → allow
+        && segment::reach_allow(0x0AC8_0005, q_key, lan, true); // C3 mgmt floor → allow
+
+    // (4) BAD SIGNATURE (tampered sig) → BadSignature, NOTHING mutated/armed.
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+    let mut tampered = fpol;
+    tampered.sig[0] ^= 0xFF;
+    let badsig = apply_reach_policy(&enr, &tampered, 0, &opk) == Err(ReachPolicyErr::BadSignature)
+        && !segment::reach_armed()
+        && segment::reach_allow(0, q_key, lan, true); // fail-open: still all-allow
+
+    // (5) WRONG operator key → BadSignature.
+    let wrongkey = apply_reach_policy(&enr, &fpol, 0, &rogue_pk) == Err(ReachPolicyErr::BadSignature)
+        && !segment::reach_armed();
+
+    // (6) STALE generation (floor >= gen) → StaleGeneration, nothing re-stranded.
+    let stale = apply_reach_policy(&enr, &fpol, 7, &opk) == Err(ReachPolicyErr::StaleGeneration)
+        && !segment::reach_armed()
+        && segment::reach_allow(0, q_key, lan, true);
+
+    // (7) TENANT mismatch (validly signed for a DIFFERENT tenant) → TenantMismatch.
+    let other = build_signed(9, TENANT ^ 0xFFFF, &op);
+    let tenant_bad = apply_reach_policy(&enr, &other, 0, &opk) == Err(ReachPolicyErr::TenantMismatch)
+        && !segment::reach_armed();
+
+    // (8) monotonic advance: after floor=7, a gen=9 policy (re-signed) applies.
+    let adv = build_signed(9, TENANT, &op);
+    let advance_ok = matches!(apply_reach_policy(&enr, &adv, 7, &opk), Ok((2, 9)))
+        && segment::reach_armed();
+
+    // Restore the inert production state (C7/C13).
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+
+    let pass = parse_ok && fetch_ok && apply_ok && badsig && wrongkey && stale && tenant_bad && advance_ok;
+    kprint!(" [P19-seg-policy] {} — operator-signed reach policy over enrolled Noise ARMS segmentation (C9): parse(fail-closed)={} fetch={} apply+matrix={} bad-sig-rejected={} wrong-key-rejected={} stale-gen-rejected={} tenant-mismatch-rejected={} gen-advance={} | plane restored DISARMED={}\n",
+        yn(pass), yn(parse_ok), yn(fetch_ok), yn(apply_ok), yn(badsig), yn(wrongkey), yn(stale), yn(tenant_bad), yn(advance_ok), yn(!segment::reach_armed()));
 }
 
 // --- (a) entropy checks ---------------------------------------------------
