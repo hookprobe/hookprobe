@@ -66,8 +66,12 @@
 > stealth-scan, 117 lateral). The single-pass also FIXED a harness self-mask (post-A3 the universal
 > bcast dst tripped bcast-storm and masked the L4 scan rows → the L4 rows now use a unicast dst, and
 > rule 113 fires cleanly). The non-frame-drivable rows are covered by the 5 sepdiag self-tests through
-> the real datapath entry. **Follow-up (not a blocker):** the A6 FIN-scan variant did not fire rule
-> 202 on metal (null/xmas did) — a detection MISS, observe-class (never a false-drop). (b) The manifest-sourced per-interface port-role (A1/A9 on a REAL Access interface) is a
+> the real datapath entry. **Follow-up — RESOLVED 2026-09-08 (not a code defect):** the A6 FIN-scan
+> variant appeared not to fire rule 202 on one metal run (null/xmas did). The `[P8-scan]` gate now
+> proves the three stateless flag rules fire SYMMETRICALLY — a lone FIN (0x01) fires 202 exactly as
+> NULL (0x00) fires 201 and Xmas (0x29) fires 203 (byte-eq on the same TCP flags offset; a legit SYN
+> stays quiet). The metal observation was a harness run-ordering/attribution artifact (same class as
+> the fixed bcast-storm masking of the L4 rows), NOT an asymmetry in the code. (b) The manifest-sourced per-interface port-role (A1/A9 on a REAL Access interface) is a
 > **named M4/P9-gated carve-out** — a real Access interface requires the physically-blocked
 > RTL8111/eth1 datapath, and the live fail-safe `Uplink` default makes its absence a MISS-not-harm
 > (never a legit-drop). (c) L5/L6-off-device + A11-wire-rejected-by-design are **ruled acceptable
