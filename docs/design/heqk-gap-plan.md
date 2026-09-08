@@ -18,7 +18,7 @@ No U-batch is fireable yet. Nothing is deleted. The Linux M1 image keeps shippin
 |---|---|---|
 | **M1** substrate beachhead | ✅ metal 4/4 | production key-custody ceremony (process) |
 | **M2** detection parity | 🟢 31/31 heqk-plane metal + 2 off-device | Gate-R single adversarial pass on metal; manifest per-interface port-role reader (A1/A9 on a REAL interface); product-steward sign-off ruling |
-| **M3** persistence & OTA | 🟢 write + sealed store + real-OTP-SRK metal | **DataVolume partition (in progress)**; A/B OTA forward tryboot flip on metal (rollback half already proven); V3/SEC-2 OTP hardening |
+| **M3** persistence & OTA | 🟢 write + sealed store + real-OTP-SRK + **DataVolume log-store** metal | A/B OTA forward tryboot flip on metal (rollback half already proven) — **NEXT**; V3/SEC-2 OTP hardening; production DataVolume partition (image-factory; metal proof used a p3-overlay) |
 | **M4** control-plane/net | 🟡 QEMU-only, zero metal | **NIC↔smoltcp bridge over GEM (keystone)**; HW-TRNG-live Noise handshake + PCR3 seed; DNS-sinkhole/RPZ; WAN PBR/NAT/TUN-SASE; provisioning |
 | **M5** module runtime / brain | 🟡 QEMU/EL0, `!cm5`-gated | **MMU multi-block-W^X fix → un-gate + build wasmi FOR cm5**; real wasip1 host; full signed catalogue; CORE-1 caps-enforced + CORE-2 per-TCB CSpace |
 | **M6** app tier / UI | ⬜ vision | B1-vs-B2 decision (recommend B2 off-device); MC live vs heqk CM5; greedy-floor test |
