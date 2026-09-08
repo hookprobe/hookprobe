@@ -264,6 +264,10 @@ fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
 pub const RULE_STRUCT_ANOMALY: u16 = 110;
 pub const RULE_MAC_FLOOD: u16 = 111;
 pub const RULE_BCAST_STORM: u16 = 112;
+/// RA-guard (RFC 6105): a rogue ICMPv6 Router Advertisement on a non-router port
+/// (matrix A9); a legit RA on an uplink is Observed (L4). Kept distinct from the L2
+/// tier 110-112 and the truncated/behavioral ids.
+pub const RULE_ROGUE_RA: u16 = 121;
 
 /// Distinct-source-MAC-per-window thresholds (ADR 0023 D12). Access is tight; the
 /// uplink/AP bar is deliberately far higher (many client MACs are legitimate there).
@@ -291,6 +295,23 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     }
 
     let mut observed: Option<Verdict> = None;
+
+    // RA-guard (RFC 6105 / matrix L4 legit + A9 rogue): an ICMPv6 Router Advertisement
+    // is legitimate ONLY from a designated router/uplink port. Port-role-gated via
+    // decide_l2(RaGuard): Access → FrameDrop (a RA on a client-only port is a rogue
+    // gateway-hijack), Uplink → Observe (the legit downstream-router RA, accepted +
+    // logged). Fail-safe: the live aggregate port defaults Uplink, so a real RA is
+    // never dropped until a manifest marks a specific access interface.
+    if crate::net::is_icmpv6_ra(frame) {
+        let v = verdict::decide_l2(FindingClass::RaGuard, ctx);
+        fire(RULE_ROGUE_RA, SEV_HIGH, v, src);
+        if v.is_drop() {
+            return Some(v);
+        }
+        if observed.is_none() {
+            observed = Some(v);
+        }
+    }
 
     // mac-flood — DISTINCT source MACs per port within the window. On an Access port
     // a genuine fan-out → RateLimit (drop); on an Uplink/AP port it stays Observe

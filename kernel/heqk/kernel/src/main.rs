@@ -1064,6 +1064,36 @@ fn cm5_prod_service() -> ! {
         kprint!("   [SEPDIAG-STRUCT] F4 truncated-DROP={} | F7 oversize-DROP={} | L1 mDNS-200x-exempt(no-fire)={} => {}\n",
             f4_drop, f7_drop, l1_never_fires, if pass { "PASS" } else { "FAIL" });
     }
+    // M2 L4/A9 ON-METAL RA-guard self-test (sepdiag, RFC 6105). An ICMPv6 Router
+    // Advertisement (type 134) is legit ONLY from a router/uplink port. Port-role-gated:
+    // Access → FrameDrop (A9, rogue gateway-hijack), Uplink → Observe (L4, legit
+    // downstream-router RA accepted + logged). Proven on the synthetic port ids 6/7
+    // through the real l2_stateful_verdict → decide_l2(RaGuard) path; the live port 0
+    // defaults Uplink, so a real RA is NEVER dropped on the box (fail-safe) until a
+    // manifest marks a specific access interface.
+    #[cfg(feature = "sepdiag")]
+    {
+        use crate::verdict::{PortRole, Verdict};
+        // A minimal well-formed ICMPv6 RA: eth(IPv6) + IPv6 hdr (next-hdr 58) + type 134.
+        let mut ra = [0u8; 70];
+        ra[0..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0x01]); // IPv6 all-nodes (33:33.. exempt)
+        ra[6..12].copy_from_slice(&[0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]); // unicast src (no F6)
+        ra[12..14].copy_from_slice(&[0x86, 0xdd]); // ethertype IPv6
+        ra[14] = 0x60; // IPv6 version 6
+        ra[18] = 0x00;
+        ra[19] = 0x10; // payload length = 16 (a minimal RA body)
+        ra[20] = 58; // next-header = ICMPv6
+        ra[21] = 255; // hop limit
+        ra[54] = 134; // ICMPv6 type = Router Advertisement (IPv6 base hdr is 40B → offset 14+40)
+        let is_ra = crate::net::is_icmpv6_ra(&ra);
+        // A9 — rogue RA on an ACCESS port → FrameDrop.
+        let a9_drop = rules::l2_stateful_verdict(&ra, 0, 6, PortRole::Access).map_or(false, Verdict::is_drop);
+        // L4 — legit RA on an UPLINK port → Observe (fires but never a wire drop).
+        let l4_observe = rules::l2_stateful_verdict(&ra, 0, 7, PortRole::Uplink) == Some(Verdict::Observe);
+        let pass = is_ra && a9_drop && l4_observe;
+        kprint!("   [SEPDIAG-RAGUARD] is-RA={} | A9 rogue-RA-access-DROP={} | L4 legit-RA-uplink-Observe={} => {}\n",
+            is_ra, a9_drop, l4_observe, if pass { "PASS" } else { "FAIL" });
+    }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
     // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs
@@ -4348,7 +4378,27 @@ fn p8_l2struct() -> bool {
     kprint!("   broadcast-storm EXEMPT mDNS (200 frames) -> fired={} (must never fire; legit service-discovery passes) [{}]\n",
         mdns_fired, if c_mdns { "ok" } else { "BUG" });
 
-    kprint!(" [P8-l2struct] {} — F6/F7/F8 -> FrameDrop; mac-flood Access->RateLimit but Uplink/AP->Observe (legit AP clients NEVER dropped); broadcast-storm fires but mDNS/SSDP/LLMNR exempt (ADR 0023 D12/D13, all via decide_l2)\n",
+    // --- RA-guard (RFC 6105 / L4 legit + A9 rogue): an ICMPv6 Router Advertisement is
+    //     legit ONLY on a router/uplink port. Access -> FrameDrop (rogue gateway-hijack);
+    //     Uplink -> Observe (legit downstream-router RA). Fail-safe: live default Uplink.
+    let mut ra = [0u8; 70];
+    ra[0..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0x01]); // IPv6 all-nodes (exempt from storm)
+    ra[6..12].copy_from_slice(&[0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]); // unicast src
+    ra[12..14].copy_from_slice(&[0x86, 0xdd]);
+    ra[14] = 0x60; // IPv6 v6
+    ra[19] = 0x10; // payload length 16
+    ra[20] = 58; // ICMPv6
+    ra[21] = 255; // hop limit
+    ra[54] = 134; // Router Advertisement
+    let ra_detected = crate::net::is_icmpv6_ra(&ra);
+    let ra_access_drop = rules::l2_stateful_verdict(&ra, 0, 2, PortRole::Access).map_or(false, Verdict::is_drop);
+    let ra_uplink_obs = rules::l2_stateful_verdict(&ra, 0, 3, PortRole::Uplink) == Some(Verdict::Observe);
+    let c_ra = ra_detected && ra_access_drop && ra_uplink_obs;
+    ok &= c_ra;
+    kprint!("   RA-guard: is-RA={} Access-rogue-DROP={} Uplink-legit-Observe={} (A9 drop / L4 observe) [{}]\n",
+        ra_detected, ra_access_drop, ra_uplink_obs, if c_ra { "ok" } else { "BUG" });
+
+    kprint!(" [P8-l2struct] {} — F6/F7/F8 -> FrameDrop; mac-flood Access->RateLimit but Uplink/AP->Observe (legit AP clients NEVER dropped); broadcast-storm fires but mDNS/SSDP/LLMNR exempt; RA-guard Access->FrameDrop/Uplink->Observe (ADR 0023 D12/D13 + RFC 6105, all via decide_l2)\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
