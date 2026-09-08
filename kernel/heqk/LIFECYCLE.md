@@ -56,7 +56,9 @@ The **left arm** is the design docs already written; the **right arm** is the pe
 | **P5b** | Validation | **real wire** — virtio-net ARP round-trip → ring → verdict (real packet) → `[P5b] PASS` | ✅ |
 | **P6** | Validation | **AI Runtime** — RFC 9669 BPF VM (interpreter) runs the threat rule + bounds sandbox → `[P6] PASS` | ✅ |
 | **P6b** | Validation | BPF **verifier** + **JIT** (native codegen, W^X) + **self-heal supervisor** + telemetry/QSecBit → `[P6b] PASS` | ✅ |
-| **P7** | Validation | CM5/RP1 metal bring-up | ▶ next (needs hardware) |
+| **P7** | Validation | CM5/RP1 metal bring-up (→ M1 acceptance) | ✅ metal 4/4 (2026-08-20): boot + `:53` forward / `:4444` drop / forced-bad-boot rollback |
+
+**Beyond P7 — the migration Track C (M1–M7)** continues in `docs/BuildPlan.md` (this table stops at the microkernel's own P0–P7 bring-up). Metal status as of 2026-09-08: **M1** accepted 4/4; **M2** detection parity SIGNED OFF (CONDITIONAL-GO — 31/31 heqk-plane rows + 2 off-device, Gate-R single-pass on metal); **M3** persistence metal-proven (eMMC write + sealed store w/ real OTP SRK + DataVolume log-store + A/B OTA forward-flip + rollback); **segmentation** reach-enforcement plane built + metal-proven (disarmed, C7). Remaining pillars: M4 GEM↔smoltcp bridge, M5 Wasm-host un-gate, the segmentation authority/arming + P9. See `docs/design/heqk-gap-plan.md`.
 
 A gate is green **only** with a recorded marker from the tier it names (same honesty rule as the FreeBSD/QNX tracks). `validate.sh` enforces this every run.
 
