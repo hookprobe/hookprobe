@@ -562,12 +562,40 @@ pub fn pin_operator_pk<D: hal::BlockDev>(
     }
 }
 
-// The production metal orchestrator (read floor → TOFU-pin/read operator key → fetch over the
-// live wire → apply against the PINNED key + floor → best-effort persist) lands WITH the
-// Noise-over-GEM-bridge increment: the device-side fetch needs a transport that reads the real
-// encrypted record off the bridge, which does not exist until the handshake goes live there. The
-// primitives above (floor + operator-key persistence) are the complete, tested mechanism it will
-// compose; the [P19-seg-policy] two-boot gate below proves them end-to-end now.
+/// The segmentation-arming ORCHESTRATOR (M4.5 G2). Composes the shipped, individually-proven
+/// primitives into the one call that arms `segment.rs` off an authenticated control channel:
+///   1. `read_reach_floor` — Err ⇒ return `FloorUnavailable`, DO NOT arm (C12 no-floor⇒no-arm);
+///   2. `pin_operator_pk`(TOFU) + `read_operator_pk` — the PINNED operator key is the verify key,
+///      never one the MSSP supplied inline (C10); a key-swap is refused;
+///   3. `fetch_reach_policy` over the enrolled `Session`s (the ControlPlane's live channel on
+///      metal; the loopback pair in QEMU) — the transport, never the trust root;
+///   4. `apply_reach_policy` against the PINNED key + the persisted floor (verify sig → tenant →
+///      monotonic gen → reset + set_infra + batch set_reach + arm LAST);
+///   5. BEST-EFFORT `persist_reach_floor` — a persist failure must NOT tear down a correctly
+///      applied policy (that would strand a device); the next reconcile re-fetches `≥` it.
+/// Any error before step 4 completes leaves the reach table + `REACH_ARMED` UNTOUCHED (fail-open).
+#[cfg(feature = "p15-write")]
+pub fn reconcile_reach_policy<D: hal::BlockDev>(
+    enr: &Enrollment,
+    dev: &mut Session,
+    mssp: &mut Session,
+    blob: &[u8],
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+    provisioned_op_pk: &[u8; 32],
+) -> Result<usize, ReachPolicyErr> {
+    let floor = read_reach_floor(store, lo, hi).map_err(|_| ReachPolicyErr::FloorUnavailable)?;
+    pin_operator_pk(store, lo, hi, provisioned_op_pk)?; // TOFU; a differing key → OperatorKeyMismatch
+    let op_pk = read_operator_pk(store, lo, hi)
+        .map_err(|_| ReachPolicyErr::FloorUnavailable)?
+        .ok_or(ReachPolicyErr::FloorUnavailable)?;
+    let mut out = [0u8; ReachPolicy::WIRE_LEN];
+    let pol = fetch_reach_policy(dev, mssp, blob, &mut out)?;
+    let (count, newgen) = apply_reach_policy(enr, &pol, floor, &op_pk)?;
+    let _ = persist_reach_floor(store, lo, hi, newgen); // best-effort (C11 note)
+    Ok(count)
+}
 
 // ===========================================================================
 // The [P19-enroll] gate (securechannel-selftest). Deterministic loopback + fake
@@ -779,7 +807,92 @@ pub fn seg_policy_selftest() {
     // The persistence half (C10 operator-key TOFU-pin + C11 anti-rollback floor SURVIVING reboot)
     // rides validate.sh's two-boot over one virtio-blk backing — p15-write only.
     #[cfg(feature = "p15-write")]
-    seg_policy_persist_gate(&op, &enr);
+    {
+        seg_policy_persist_gate(&op, &enr);
+        reconcile_gate(&op, &enr);
+    }
+}
+
+/// M4.5 G2 [P20-reconcile]: the segmentation-arming ORCHESTRATOR end-to-end — a signed reach
+/// policy FETCHED over the enrolled Noise channel is applied + arms `segment.rs`, with the
+/// persisted floor gating replays. Composes `reconcile_reach_policy`. Robust across the two-boot
+/// (reads the current floor F, uses gen=F+5 to arm and gen=F+2 to prove the stale-refusal).
+#[cfg(all(feature = "securechannel-selftest", feature = "p15-write"))]
+fn reconcile_gate(op: &KeyPair, enr: &Enrollment) {
+    use crate::segment;
+    use crate::store::{RegionKind, SealedStore};
+    const TENANT: u64 = 0x5445_4E41;
+    let opk: [u8; 32] = *op.pk;
+    // Region disjoint from seg (9560-9600) + enroll (9500-9560 / 9600-9900).
+    const RC_LO: u64 = 9440;
+    const RC_HI: u64 = 9480;
+
+    let mut dev0 = match arch_aarch64::virtio_blk::VirtioBlk::open() {
+        Some(d) => d,
+        None => {
+            kprint!(" [P20-reconcile] SKIP — no virtio-blk\n");
+            return;
+        }
+    };
+    let mut store = match SealedStore::open(&mut dev0) {
+        Ok(s) => s,
+        Err(e) => {
+            kprint!(" [P20-reconcile] FAIL — MBR guard: {:?}\n", e);
+            return;
+        }
+    };
+    if store.add_region(RC_LO, RC_HI, RegionKind::DataVolume).is_err() {
+        kprint!(" [P20-reconcile] FAIL — region register\n");
+        return;
+    }
+    let floor = read_reach_floor(&mut store, RC_LO, RC_HI).unwrap_or(u64::MAX);
+    if floor == u64::MAX {
+        kprint!(" [P20-reconcile] FAIL — floor unreadable\n");
+        return;
+    }
+
+    // A fresh enrolled session pair per reconcile (loopback; metal uses the ControlPlane session).
+    let mk_sessions = || -> Option<(Session, Session)> {
+        let tv = crate::securechannel::test_vectors();
+        let ir = init_rand_from_stub(b"rc-i")?;
+        let rr = resp_rand_from_stub(b"rc-r")?;
+        enroll_over_noise(&tv.dev, &tv.resp, &ir, &rr, TENANT).ok().map(|(_e, d, m)| (d, m))
+    };
+
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+
+    // (1) reconcile a gen=F+5 policy fetched over the channel → armed + floor advances.
+    let armed = if let Some((mut d, mut m)) = mk_sessions() {
+        let pol = build_signed_policy(floor + 5, TENANT, &enr.device_fp, op);
+        let blob = pol.to_bytes();
+        let r = reconcile_reach_policy(enr, &mut d, &mut m, &blob, &mut store, RC_LO, RC_HI, &opk);
+        let q_key = crate::ratelimit::mac_hash(&[0x02, 0, 0, 0, 0, 0x10]);
+        r == Ok(2)
+            && segment::reach_armed()
+            && segment::reach_of(q_key) == segment::Reach::Quarantine
+            && !segment::reach_allow(0, q_key, 0x0A00_0005, true) // Quarantine LAN → DENY
+            && read_reach_floor(&mut store, RC_LO, RC_HI).unwrap_or(0) == floor + 5
+    } else {
+        false
+    };
+
+    // (2) a replayed OLD policy (gen=F+2 ≤ the new floor F+5) is REFUSED — no re-strand.
+    let stale_refused = if let Some((mut d, mut m)) = mk_sessions() {
+        let pol = build_signed_policy(floor + 2, TENANT, &enr.device_fp, op);
+        let blob = pol.to_bytes();
+        reconcile_reach_policy(enr, &mut d, &mut m, &blob, &mut store, RC_LO, RC_HI, &opk)
+            == Err(ReachPolicyErr::StaleGeneration)
+    } else {
+        false
+    };
+
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+
+    let pass = armed && stale_refused;
+    kprint!(" [P20-reconcile] {} — segmentation ARMED off a channel-fetched signed policy: fetch+apply+arm+floor-advance={} replayed-policy-refused={} | restored DISARMED={}\n",
+        yn(pass), yn(armed), yn(stale_refused), yn(!segment::reach_armed()));
 }
 
 /// M4.5 PERSISTENCE two-boot gate ([P19-seg-policy-persist], p15-write): proves the operator key
