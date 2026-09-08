@@ -1550,6 +1550,43 @@ pub fn rx_msix_test_clear() {
     }
 }
 
+/// DRV-1 DEFINITIVE emit test (mipdump): re-point the MSI-X table entry for vector 6 at an
+/// arbitrary (addr_hi:addr_lo, data). Used to aim the RP1's MSI at a RAM location reachable
+/// through RC_BAR1 (the inbound window the GEM RX DMA already proves works) so we can READ IT
+/// BACK and know for certain whether the RP1 EMITS — ending the ambiguous PBA inference. The
+/// table lives in BAR0 reached via the 0x40_0000_0000 outbound alias (pcie_map_bar0_window).
+#[cfg(feature = "mipdump")]
+pub fn rx_msix_retarget(addr_lo: u32, addr_hi: u32, data: u32) {
+    const IDX: usize = PCIE_RC + 0x9000;
+    const DATA: usize = PCIE_RC + 0x8000;
+    unsafe {
+        write_volatile(IDX as *mut u32, 1 << 20);
+        core::arch::asm!("dsb sy");
+        let cr = |reg: usize| -> u32 { read_volatile((DATA + (reg & 0xfff)) as *const u32) };
+        let mut cap = (cr(0x34) & 0xfc) as usize;
+        let mut msix = 0usize;
+        let mut g = 0;
+        while cap != 0 && cap != 0xfc && g < 48 {
+            let w0 = cr(cap);
+            if w0 & 0xff == 0x11 { msix = cap; break; }
+            cap = ((w0 >> 8) & 0xfc) as usize;
+            g += 1;
+        }
+        if msix == 0 { return; }
+        let toffbir = cr(msix + 4);
+        let toff = (toffbir & !0x7) as usize;
+        let bir = (toffbir & 0x7) as usize;
+        let bar = (cr(0x10 + bir * 4) & !0xf) as usize;
+        let ent = bar + 0x40_0000_0000 + toff + 6 * 16;
+        if !(0x40_0000_0000..0x41_0000_0000).contains(&ent) { return; }
+        write_volatile((ent + 0x0) as *mut u32, addr_lo);
+        write_volatile((ent + 0x4) as *mut u32, addr_hi);
+        write_volatile((ent + 0x8) as *mut u32, data);
+        write_volatile((ent + 0xc) as *mut u32, 0);
+        core::arch::asm!("dsb sy");
+    }
+}
+
 /// DRV-1 re-arm (mipdump): write MSIX_CFG(6).IACK (bit2) to clear the auto-mask the RP1
 /// sets "when the interrupt was generated" (RP1 datasheet Table 89). A level source that
 /// asserted early — before the MSI-X table was correctly programmed — fired one MSI to the

@@ -2136,6 +2136,24 @@ fn cm5_gem_rx_irq_probe() {
         let ed_fired = GEM_RX_IRQS.load(Ordering::Relaxed).wrapping_sub(ed_before);
         kprint!(" [P8-edge] deassert->reassert: INTSTATL bit6 {:#x}->{:#x} (want 0x40->0x00 then re-arm); INTID-166 fired={} (fired => level-edge was the gap; DRV-1 CLOSED)\n",
             il0 & 0x40, il1 & 0x40, ed_fired);
+        // DEFINITIVE emit test: aim the RP1 MSI at a RAM word via RC_BAR1 (the inbound window
+        // the GEM DMA already proves works), fire, read it back. Ends the PBA ambiguity.
+        {
+            static mut LAND: u32 = 0;
+            let pa = core::ptr::addr_of!(LAND) as usize;
+            let bus = 0x10_0000_0000usize + pa; // RC_BAR1: bus 0x10_.. -> CPU 0x0
+            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(LAND), 0) };
+            core::sync::atomic::fence(Ordering::SeqCst);
+            arch_aarch64::gem::rx_msix_retarget((bus & 0xffff_ffff) as u32, (bus >> 32) as u32, 0x0000_00a5);
+            arch_aarch64::gem::rx_msix_test_fire();
+            arch_aarch64::gem::rx_msix_iack();
+            let mut s5 = 0u64;
+            while unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAND)) } == 0 && s5 < 50_000_000 { s5 += 1; core::hint::spin_loop(); }
+            let landed = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAND)) };
+            arch_aarch64::gem::rx_msix_test_clear();
+            kprint!(" [P8-ram] RP1 MSI RAM-landing (bus {:#x}->CPU {:#x}): read back {:#x} (0xa5 => RP1 EMITS, gap is mip0 routing; 0 => RP1 does NOT emit)\n",
+                bus, pa, landed);
+        }
     }
     // Re-mask IRQs so the trailing reboot path stays deterministic.
     unsafe { core::arch::asm!("msr daifset, #2", options(nomem, nostack)) };
