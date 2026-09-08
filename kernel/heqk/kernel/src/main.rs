@@ -994,6 +994,23 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
+            // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
+            // verdict 1=PASS/2=DROP -> wire action). prod exposes only aggregate counters;
+            // this is the diagnostic that lets a metal run say WHICH row fired WHAT.
+            #[cfg(feature = "sepdiag")]
+            {
+                let mut evs = [crate::events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 32];
+                loop {
+                    let n = crate::events::drain(&mut evs);
+                    if n == 0 { break; }
+                    for e in &evs[..n] {
+                        kprint!("   [SEPDIAG] rule={} verdict={} src={:#010x} sev={}\n",
+                            e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity);
+                    }
+                    if n < evs.len() { break; }
+                }
+            }
             // DRV-1 sink experiment readout — a nonzero value identifies the RP1 ETH MSI
             // sink + vector (the fact the unreadable MSI-X table could not give us).
             #[cfg(feature = "mipdump")]

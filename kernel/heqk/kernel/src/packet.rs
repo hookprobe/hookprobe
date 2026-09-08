@@ -315,7 +315,14 @@ fn classify(frame: &[u8]) -> (u16, u16) {
             (m.dst_port, v)
         }
         Some(m) => (m.dst_port, PASS), // valid non-port traffic (ARP/ICMP/…)
-        None => (0, DROP),             // malformed/truncated -> fail-closed
+        None => {
+            // malformed/truncated -> fail-closed. SG-2: attribute it to the event ring so
+            // matrix row F4 is observable on metal (the wire action was always correct;
+            // only the per-event attribution was missing). sepdiag-gated => prod unchanged.
+            #[cfg(feature = "sepdiag")]
+            crate::events::push_hit(crate::rules::RULE_TRUNCATED, crate::rules::SEV_MED as u8, DROP as u8, src);
+            (0, DROP)
+        }
     }
 }
 
