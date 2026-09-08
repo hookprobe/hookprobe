@@ -103,7 +103,11 @@ SVN="$SVN" KEYDIR="$HEQK_KEYDIR" SIGNER="$HEQK_SIGNER" ./cm5-boot/mkimage-hboot.
 # Stage the CM5 boot-partition contents (what flash-now.sh copies onto the FAT boot part).
 mkdir -p "$OUT"
 cp -f cm5-boot/heqk8.img "$OUT/"
-[ -f cm5-boot/heqk8-b.img ] && cp -f cm5-boot/heqk8-b.img "$OUT/"       # A/B slot B
+# A/B slot B: seed with the CURRENT image (both slots start identical; OTA later replaces
+# B with a new candidate). Previously this copied a STALE leftover cm5-boot/heqk8-b.img,
+# so slot B could be an old image lacking the running build's logic (breaks tryboot-confirm).
+cp -f cm5-boot/heqk8.img cm5-boot/heqk8-b.img
+cp -f cm5-boot/heqk8-b.img "$OUT/"                                        # A/B slot B == slot A (current image)
 [ -f cm5-boot/config.txt ] && cp -f cm5-boot/config.txt "$OUT/"          # kernel=heqk8.img + pciex4_reset=0
 [ -f cm5-boot/tryboot.txt ] && cp -f cm5-boot/tryboot.txt "$OUT/"        # A/B tryboot
 SHA="$(sha256sum cm5-boot/heqk8.img | cut -d' ' -f1)"
