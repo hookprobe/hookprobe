@@ -442,6 +442,7 @@ pub const RULE_BEACON: u16 = 116; // parity: napse-capture beacon 1000040 (A10/L
 pub const RULE_LATERAL: u16 = 117; // parity: napse-capture lateral 1000041 (A10)
 pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
 pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
+pub const RULE_TRUNCATED: u16 = 120; // SG-2: net::parse None -> fail-closed drop (matrix F4)
 
 /// M2.4 shared verdict step: a behavioral detector FIRED → route through `decide()` as
 /// `FindingClass::Behavioral`, which is OBSERVE-ONLY by construction (always `Observe`,
