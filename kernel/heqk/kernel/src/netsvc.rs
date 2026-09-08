@@ -190,3 +190,119 @@ fn build_udp_threat(out: &mut [u8]) -> usize {
     out[39] = 8; // UDP length
     42
 }
+
+// ===========================================================================================
+// M4 GEM↔smoltcp bridge — FIRST-LIGHT (os-architect design 2026-09-08).
+// A persistent EL1 smoltcp instance fed frame-by-frame from the prod GEM drain loop. The
+// kernel already copies + `packet::verdict`-gates every frame, so handing a for-heqk PASS
+// frame to this in-kernel smoltcp adds no new access to the EL0-isolated ring; the EL0/EL1
+// boundary is untouched. This proves "smoltcp lives on the real GEM": the host ARPs heqk's
+// IP over the real wire and heqk answers — the metal analog of `netsvc_selftest`. The
+// EL0-isolated netq service (moving smoltcp out of the TCB) is the deferred end-state.
+// ===========================================================================================
+
+/// The first-light demux (§2): is `frame` an ARP REQUEST whose target-protocol-address is
+/// heqk's own IP? Bounds-safe. (ICMP echo needs no demux — smoltcp answers unicast-to-us.)
+pub fn is_arp_request_for(frame: &[u8], ip: [u8; 4]) -> bool {
+    frame.len() >= 42
+        && frame[12] == 0x08
+        && frame[13] == 0x06 // ethertype ARP
+        && frame[20] == 0
+        && frame[21] == 1 // oper = request
+        && frame[38] == ip[0]
+        && frame[39] == ip[1]
+        && frame[40] == ip[2]
+        && frame[41] == ip[3] // tpa == our IP
+}
+
+/// A persistent smoltcp bridge over the real GEM. Owns the `Interface` + the `RuleGatedDev`;
+/// `step` feeds one for-heqk frame through the dual verdict gate + smoltcp and returns any
+/// egress reply for the caller to TX out `gem::tx_frame`. ARP + ICMP-echo need no sockets, so
+/// a fresh empty `SocketSet` is built per `step` (avoids a self-referential storage borrow).
+pub struct MetalBridge {
+    iface: Interface,
+    dev: RuleGatedDev,
+    our_ip: [u8; 4],
+    /// Counters for the heartbeat (not threat metrics).
+    pub seen: u32,
+    pub answered: u32,
+}
+
+impl MetalBridge {
+    /// Bring the bridge up with heqk's LA MAC + static IP/prefix and a TRNG `seed` (the caller
+    /// draws it fail-closed from `rng200::next_word_strict`; a dead TRNG ⇒ no bridge).
+    pub fn new(mac: [u8; 6], ip: [u8; 4], prefix: u8, seed: u64) -> MetalBridge {
+        let mut dev = RuleGatedDev::new();
+        let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+        cfg.random_seed = seed;
+        let mut iface = Interface::new(cfg, &mut dev, Instant::from_millis(0));
+        iface.update_ip_addrs(|a| {
+            let _ = a.push(IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix));
+        });
+        MetalBridge { iface, dev, our_ip: ip, seen: 0, answered: 0 }
+    }
+
+    /// The first-light demux predicate (ARP-for-us).
+    pub fn wants(&self, frame: &[u8]) -> bool {
+        is_arp_request_for(frame, self.our_ip)
+    }
+
+    /// Feed one for-heqk frame → dual-gated smoltcp poll → return any egress reply (frame +
+    /// len) to TX out GEM. `now_ms` = a monotonic ms clock (cntpct-derived). Ingress is
+    /// verdict-gated by `RuleGatedDev::ingress` (belt-and-suspenders on the already-PASSed
+    /// demux path); egress is verdict-gated in `TxTok::consume`.
+    pub fn step(&mut self, frame: &[u8], now_ms: i64) -> Option<([u8; MTU], usize)> {
+        self.seen += 1;
+        self.dev.ingress(frame);
+        let mut storage: [SocketStorage; 0] = [];
+        let mut sockets = SocketSet::new(&mut storage[..]);
+        self.iface.poll(Instant::from_millis(now_ms), &mut self.dev, &mut sockets);
+        if self.dev.tx.ready {
+            let n = self.dev.tx.len.min(MTU);
+            let mut out = [0u8; MTU];
+            out[..n].copy_from_slice(&self.dev.tx.buf[..n]);
+            self.dev.tx.ready = false;
+            self.answered += 1;
+            Some((out, n))
+        } else {
+            None
+        }
+    }
+}
+
+/// QEMU gate for the FIRST-LIGHT bridge (the metal analog runs the SAME `MetalBridge` from the
+/// prod drain loop). Constructs the bridge at 192.0.2.1/24 so it can reuse `build_arp_request`
+/// (tpa == 192.0.2.1), feeds one ARP request through `wants` + `step`, and asserts a well-formed
+/// ARP REPLY with our IP as sender. Also asserts a threat frame is NOT `wants`-matched (the demux
+/// only ever hands ARP-for-us to the stack). Deterministic; proves the exact code path metal runs.
+pub fn metalbridge_selftest(seed: u64) -> bool {
+    let mac = [0x02, 0, 0, 0, 0, 0x01];
+    let mut br = MetalBridge::new(mac, [192, 0, 2, 1], 24, seed);
+
+    let mut req = [0u8; MTU];
+    let rlen = build_arp_request(&mut req);
+    if !br.wants(&req[..rlen]) {
+        return false;
+    }
+    let reply = match br.step(&req[..rlen], 1) {
+        Some((r, n)) => {
+            if n < 42 {
+                return false;
+            }
+            (r, n)
+        }
+        None => return false,
+    };
+    let (r, _n) = reply;
+    let reply_ok = r[12] == 0x08
+        && r[13] == 0x06 // ethertype ARP
+        && r[21] == 2 // oper = reply
+        && r[28..32] == [192, 0, 2, 1]; // spa = our IP
+
+    // The demux must NOT hand a non-ARP threat frame to the stack.
+    let mut threat = [0u8; MTU];
+    let tlen = build_udp_threat(&mut threat);
+    let threat_not_wanted = !br.wants(&threat[..tlen]);
+
+    reply_ok && threat_not_wanted && br.seen == 1 && br.answered == 1
+}
