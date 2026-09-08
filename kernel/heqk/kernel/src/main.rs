@@ -1160,6 +1160,33 @@ fn cm5_prod_service() -> ! {
         kprint!("   [SEPDIAG-SEG] reach-matrix(Full/InternetOnly/Quarantine x LAN/WAN/infra + mgmt-floor + fail-open)={} | armed-after={} (must be false) => {}\n",
             seg, armed, if seg && !armed { "PASS" } else { "FAIL" });
     }
+    // M2 A6 scan-tier self-test (sepdiag) — settles the M2 follow-up "FIN-scan (202) doesn't
+    // fire while NULL/XMAS do". The three stateless flag rules are byte-eq on the SAME TCP
+    // offset 13, so a lone FIN (0x01) MUST fire rule 202 exactly as NULL (0x00) fires 201 and
+    // Xmas (0x29) fires 203. This drives each single crafted header through the REAL
+    // verdict_tcp path and asserts each returns Some (a rule matched → an event fired) — proving
+    // the metal "miss" was a harness/masking artifact, not a code asymmetry. A single crafted
+    // packet with no rate context graduates to observe (RateLimit{over_limit:false}); the
+    // event still fires (fire() pushes it regardless of the wire verdict).
+    #[cfg(feature = "sepdiag")]
+    {
+        // Minimal 20-byte TCP header; byte 12 = data-offset (5<<4), byte 13 = flags.
+        let hdr = |flags: u8| -> [u8; 20] {
+            let mut t = [0u8; 20];
+            t[12] = 0x50;
+            t[13] = flags;
+            t
+        };
+        let src = 0xC612_0006u32; // 198.18.0.6 (TEST-NET-2, off the live datapath)
+        let null_fires = rules::verdict_tcp(&hdr(0x00), src).is_some();
+        let fin_fires = rules::verdict_tcp(&hdr(0x01), src).is_some();
+        let xmas_fires = rules::verdict_tcp(&hdr(0x29), src).is_some();
+        // A normal SYN(0x02) must NOT fire any scan rule (no false positive on legit setup).
+        let syn_quiet = rules::verdict_tcp(&hdr(0x02), src).is_none();
+        let pass = null_fires && fin_fires && xmas_fires && syn_quiet;
+        kprint!("   [SEPDIAG-SCAN] NULL(201)-fires={} FIN(202)-fires={} XMAS(203)-fires={} | legit-SYN-quiet={} => {}\n",
+            null_fires, fin_fires, xmas_fires, syn_quiet, if pass { "PASS" } else { "FAIL" });
+    }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
     // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs
@@ -3275,6 +3302,23 @@ pub extern "C" fn kmain() -> ! {
     // datapath will run (rule parity + native codegen). ---
     let (rv, rj) = rules::init();
     kprint!(" [P8] rule plane: {} rules verified, {} JIT-compiled (interp fallback) — parity corpus armed\n", rv, rj);
+
+    // --- P8-scan: the stateless TCP-flag scan tier fires symmetrically. Settles the M2 A6
+    // follow-up ("FIN-scan 202 doesn't fire while NULL/XMAS do") deterministically: the three
+    // rules are byte-eq on the SAME TCP offset 13, so a lone FIN (0x01) MUST fire 202 exactly
+    // as NULL (0x00) fires 201 and Xmas (0x29) fires 203; a legit SYN (0x02) fires none. Each
+    // returns Some when a rule matched (fire() pushed the event); a single crafted packet
+    // graduates to observe, but the alert still fires. ---
+    {
+        let hdr = |flags: u8| -> [u8; 20] { let mut t = [0u8; 20]; t[12] = 0x50; t[13] = flags; t };
+        let s = 0xC612_0006u32;
+        let null_f = rules::verdict_tcp(&hdr(0x00), s).is_some();
+        let fin_f = rules::verdict_tcp(&hdr(0x01), s).is_some();
+        let xmas_f = rules::verdict_tcp(&hdr(0x29), s).is_some();
+        let syn_q = rules::verdict_tcp(&hdr(0x02), s).is_none();
+        kprint!(" [P8-scan] {} — NULL(201)={} FIN(202)={} XMAS(203)={} legit-SYN-quiet={}\n",
+            if null_f && fin_f && xmas_f && syn_q { "PASS" } else { "FAIL" }, null_f, fin_f, xmas_f, syn_q);
+    }
 
     // --- P5: Packet Engine (zero-copy ring + in-place verdict datapath) ---
     if !p5_packet_engine() {
