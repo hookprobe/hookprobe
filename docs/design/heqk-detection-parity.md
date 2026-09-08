@@ -54,12 +54,27 @@
 > the U2 segmentation plane) — legit-safe by absence, reclassified OFF-DEVICE (ADR 0044 D3),
 > NOT an outstanding heqk gap.
 >
-> **Gate-R release sign-off still needs (a)** the full matrix run as one adversarial pass on
-> metal (Gate R proper, not just per-row self-tests), **(b)** the manifest-sourced per-interface
-> port-role so A1/A9's Access-DROP paths are exercised on a REAL interface (not only the synthetic
-> self-test port), and **(c)** a product-steward ruling that L5/L6-off-device + A11-wire-rejected
-> is an acceptable closure. Until (a)–(c), **U2 (the Linux-dataplane unbuild) stays NOT unlocked**
-> (BuildPlan Track C; MIGRATION-heqk §U2).
+> **Gate-R release sign-off (product-steward ruling 2026-09-08, §6 below): CONDITIONAL-GO —
+> Gate R is CLOSED with 4 named carve-outs.** (a) The full matrix as one adversarial pass on metal
+> is met — TWICE: the 2026-09-09 `prod` adversarial pass (`20260909-m2-gater-metal-matrix.log`)
+> AND a **2026-09-08 consolidated single-pass** (`20260908-M2-gater-single-pass-consolidated.txt`)
+> via the tracked `gate-r-matrix.sh`. Both ran the frame-drivable corpus with `faults=0` throughout
+> and **every DROP attributed to the single attacker source (`0x0a630001`, 299×) or to non-IPv4
+> structural frames (`0x0`, 40×) — ZERO mgmt/legit-source drops** (a `0x0ac8…` mgmt-source DROP grep
+> returns nothing). Attacks caught (rule 1 signature / 101 arp-malformed / 110 struct / 112
+> bcast-storm / **113 port-scan**), legit + observe-class rows PASS (102 arp-spoof, 302 IOC, 201/203
+> stealth-scan, 117 lateral). The single-pass also FIXED a harness self-mask (post-A3 the universal
+> bcast dst tripped bcast-storm and masked the L4 scan rows → the L4 rows now use a unicast dst, and
+> rule 113 fires cleanly). The non-frame-drivable rows are covered by the 5 sepdiag self-tests through
+> the real datapath entry. **Follow-up (not a blocker):** the A6 FIN-scan variant did not fire rule
+> 202 on metal (null/xmas did) — a detection MISS, observe-class (never a false-drop). (b) The manifest-sourced per-interface port-role (A1/A9 on a REAL Access interface) is a
+> **named M4/P9-gated carve-out** — a real Access interface requires the physically-blocked
+> RTL8111/eth1 datapath, and the live fail-safe `Uplink` default makes its absence a MISS-not-harm
+> (never a legit-drop). (c) L5/L6-off-device + A11-wire-rejected-by-design are **ruled acceptable
+> closures** (§6). **U2 (the Linux-dataplane unbuild) stays NOT unlocked** — no longer for the
+> detection/enforcement rows (done) but because U2's scope also includes OVS/nftables-as-segmentation,
+> and the absent heqk **segmentation plane** (the same reach-actuator L5/L6 + A11 need) must exist
+> before that Linux primitive can be retired (BuildPlan Track C; MIGRATION-heqk §U2).
 
 ---
 
@@ -239,9 +254,96 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
   on Pi4/CM5, M1) and the **heqk** matrix in THIS document (11 legit + 11 attacker + 11
   frame-structural) are separate acceptance surfaces on separate substrates. CLAUDE.md's invariant
   bullet describes the **Linux** matrix; do not conflate its ✅ with heqk's Gate-R status.
-- **M2 is 🟡, not ✅.** QEMU-green (M2.0–M2.4) is the engineering milestone; Gate R is the release
-  sign-off and is **substantially met** (31/31 heqk-security-plane rows metal-proven; the 2
-  remaining rows are OFF-DEVICE NAC, legit-safe by absence). What still blocks sign-off: the full
-  matrix as one adversarial Gate-R pass on metal, the manifest-sourced port-role for a REAL Access
-  interface (A1/A9), and a product-steward ruling accepting L5/L6-off-device + A11-wire-rejected.
-  U2 (Linux-dataplane unbuild) stays gated on that — **not yet unlocked.**
+- **M2 is 🟡 CONDITIONAL-GO, not clean ✅.** QEMU-green (M2.0–M2.4) is the engineering milestone;
+  Gate R is the release sign-off and is **CLOSED with 4 named carve-outs** (product-steward ruling,
+  §6): the 31/31 heqk-security-plane rows are metal-proven with zero legit-drops and the consolidated
+  adversarial pass is met. A clean ✅ is withheld because the full 33-on-device-with-real-frames
+  standard is neither met nor physically achievable on this board — see §6 for the exact carve-outs
+  and why each is legit-safe. U2 (Linux-dataplane unbuild) stays **NOT unlocked** (the segmentation
+  sub-scope; §6).
+
+---
+
+## 6. Product-steward ruling — M2 Gate-R closure (2026-09-08)
+
+**RULING: CONDITIONAL-GO.** heqk M2 Gate-R is signed off as **CLOSED for the on-device
+detection/enforcement plane** (the plane M2 is responsible for), subject to the 4 named carve-outs
+below. This is a release-gate ruling grounded in the code (`verdict.rs`/`rules.rs`/`packet.rs`) and
+the CM5 metal logs (`~/heqk-metal-logs/20260908-*` self-tests + `20260907-m2-matrix-run3-final.txt`
+frame-driven runs + `20260909-m2-gater-metal-matrix.log` consolidated adversarial pass). It is a GO
+for what the row must prove — *legit always passes; attacks reach the correct tri-state verdict on
+real silicon* — and CONDITIONAL only on recording the carve-outs honestly.
+
+**Why GO, not still-open.** The sacred invariant holds on metal under adversarial drive:
+`faults=0` across the run, and in the consolidated pass **every DROP is attributed to the single
+attacker source (`0x0a630001`) or to a non-IPv4 structural frame (`src=0x0`) — zero mgmt/legit-source
+drops** (188 attacker DROPs, 41 structural, 0 mgmt). Attack rules (110 malformed, 113 scan, 1
+signature, 101 arp-malformed) DROP; observe-by-design rules (102 arp-spoof, 302 ip-blocklist,
+201-203 stealth-scan shapes, non-storm 112) PASS. The frame-driven harness independently shows every
+LEGIT row `drop+=0`. That is the whole of ADR 0023's operator rule, proven on the wire.
+
+### The 4 named carve-outs (each legit-safe; none is a masked gap)
+
+**C-1 — Self-test-through-the-datapath-entry is ACCEPTED for the non-frame-drivable rows**
+(F4, F7, L1, A7, A8, L9, A1, A2, A9, L4, A11). Ground: these rows are *physically undrivable with
+real frames from the DUT host NIC* — the injecting NIC pads runts to 60B (F4), enforces MTU 1500
+(F7), a resource-state (A7 conntrack-saturation / A8 PSI-pressure / L9 under-wall) is not a frame at
+all, L1 is a never-fires exemption, and A1/A9 require a real Access-port topology a single-port board
+cannot originate. The meaningful thing to prove on metal for these is that the **decision** is
+correct when the input reaches the datapath; the sepdiag self-tests inject through the *real* entry
+points `classify()` walks (`packet::verdict` for F4/F7, `l2_stateful_verdict` for L1/A3-family,
+`decide_l2` for A1/A2/A9/L4) on real silicon. This is the standard verification distinction between
+*drivable-on-the-wire* and *provable-through-the-entry*, and it is a bounded carve-out — **every row
+that CAN be frame-driven WAS** (F5/F6/F8/F9, A4/A5/A6, L3/L7/L8/L10/L11, threat_4444, A3 in its
+dedicated storm-window run). Demanding real frames for C-1's rows would require a raw-injection rig /
+a non-padding NIC / a real 2nd interface the board does not have.
+
+**C-2 — A1/A9 real-Access-interface enforcement is DEFERRED to M4/P9 (named follow-on, not a
+blocker).** The decision logic + the per-port role table + the manifest seam
+(`verdict::set_port_role`/`port_role_for`) all exist and are metal-proven through the datapath. What
+is absent is (i) a manifest *reader* feeding a real per-interface role and (ii) a real 2nd Access
+interface — the RTL8111/eth1 P9 datapath, physically blocked on this board. Because the live
+aggregate port defaults to the fail-safe `Uplink`, the absence can only ever cause a **MISS** (an
+Access-port attack not enforced on a board that has no Access port), **never a legit-drop or a false
+enforcement**. A MISS on a code path no live interface can reach is not a release blocker. When a
+real Access interface lands (P9, M4), the reader must land with it and A1/A9 must be re-driven with
+real frames on that interface — tracked as an M4/P9 gate, not an M2 gate.
+
+**C-3 — A11 wire-Quarantine REJECTED-BY-DESIGN is a VALID closure.** The row's correct enforcement
+behavior *is* "never wire-drop": a durable wire-Quarantine on multi-signal corroboration is FP-unsafe
+(legit infra trips ≥3 axes by nature), weaponizable (the axes share one forgeable trust root = the
+src IP, so a spoofed-victim DoS-via-IPS is trivial), and there is no segment-isolation primitive to
+actuate it safely (security-auditor NO-GO). The detection/severity half is built and metal-proven
+(`SEV_CRIT` stamping; corroborated attacker AND corroborated legit-ops BOTH stay wire-PASS). The
+matrix does not require a wire action for A11 — it requires the *correct* action, which is Observe.
+Closed as a scope decision anchored in the security-auditor NO-GO + ADR 0023's observe-by-default.
+
+**C-4 — L5/L6 OFF-DEVICE (NAC) is a VALID closure for M2, relocated not proven-on-device.** NAC
+onboarding/grace is a control-plane state machine whose reach-actuator is the segmentation plane
+heqk does not yet have; its single-port binary datapath cannot actuate a reach change. Ruled
+OFF-DEVICE per ADR 0044 D3 (os-architect, 2026-09-08); legit-safe by absence (no NAC decision can
+wire-drop a device; air-gap contract = default Full reach). Accepted as a closure of M2's
+*heqk-security-plane* responsibility (31 on-device + 2 off-device), with the explicit honesty that
+the matrix is **not** 33-on-device — L5/L6 are relocated to the enrolled-mode / U2-segmentation
+roadmap, not proven on the device.
+
+### One honesty note on the evidence shape (not a carve-out, a disclosure)
+The 33-row evidence is **assembled from three builds/runs**, not one unified per-row artifact: (a)
+the `prod` adversarial pass (`20260909-…`, frame-drivable rows + a healthy sensor under drive), (b)
+the 5 `sepdiag`-feature self-test runs (`20260908-…`, the non-drivable rows through the real entry),
+and (c) the frame-driven matrix harness (`20260907-run3`, the LEGIT `drop+=0` invariant). The
+`sepdiag` and `prod` builds are the same code with the `[SEPDIAG]` diagnostic emitters
+feature-gated on vs off. This is acceptable for sign-off, but a future consolidation into a single
+run that emits a per-row PASS/FAIL table would strengthen the ledger; recorded so the evidence
+provenance is not overstated as "one artifact."
+
+### Consequence for U2 (the Linux-dataplane unbuild)
+**U2 stays NOT unlocked.** The reason is now sharpened: U2 is no longer blocked by the heqk
+detection/enforcement rows (those are done and metal-proven). It is blocked because U2's scope also
+includes **OVS + nftables/conntrack-as-segmentation**, and heqk has **no segmentation plane** — the
+same absent reach-actuator that puts L5/L6 off-device (C-4) and forbids A11 a wire-Quarantine (C-3).
+Unbuild governance (retirement-agent proposes; nothing deleted before its heqk replacement is proven;
+Track B-Linux on rpi-native is the *sunset-on-parity* fallback) forbids retiring OVS/nft-segmentation
+while heqk cannot replace it. A future Amber proposal *may* split U2 into **U2a** (bpf loaders /
+XDP-TC build / detect-enforce path — gate MET) and **U2b** (segmentation apply logic — gate NOT met),
+but that re-sequencing needs an ADR + operator sign-off and is out of scope for this ruling.
