@@ -1201,10 +1201,11 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
-            // M4 FIRST-LIGHT heartbeat: how many ARP-for-heqk frames the bridge saw and answered.
+            // M4 FIRST-LIGHT heartbeat: how many for-heqk frames (ARP-for-us + unicast-to-our-MAC,
+            // i.e. ICMP echo) the bridge saw and answered.
             #[cfg(feature = "netmetal")]
             if let Some(b) = metal_bridge.as_ref() {
-                kprint!("   [NETMETAL hb] arp_seen={} arp_answered={}\n", b.seen, b.answered);
+                kprint!("   [NETMETAL hb] forheqk_seen={} answered={}\n", b.seen, b.answered);
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
@@ -1348,8 +1349,8 @@ fn cm5_prod_service() -> ! {
                     { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
                     if v == packet::PASS {
                         // M4 FIRST-LIGHT (netmetal): AFTER the frame PASSes the verified rule
-                        // plane, demux for-heqk frames (ARP-request for the control-plane IP)
-                        // into the smoltcp bridge and TX its reply out the GEM. A for-heqk frame
+                        // plane, demux for-heqk frames (ARP-for-us + unicast-to-our-MAC, i.e.
+                        // ICMP echo) into the smoltcp bridge and TX its reply out the GEM. A for-heqk frame
                         // TERMINATES here (not hairpin-forwarded). Everything else falls through
                         // to the normal forward path. Compiles out without `netmetal`.
                         #[cfg(feature = "netmetal")]
@@ -3394,7 +3395,7 @@ pub extern "C" fn kmain() -> ! {
         // M4 FIRST-LIGHT: the SAME MetalBridge the prod drain loop runs, exercised in QEMU —
         // wants()+step() answers an ARP for heqk's IP; the metal half is a host `arping`.
         let mbok = netsvc::metalbridge_selftest(0x4845_514b_5636_0001);
-        kprint!(" [PH6-metalbridge] {} — MetalBridge (prod GEM path) answers ARP for heqk's IP, demux rejects non-ARP (metal = host arping 10.200.0.2)\n",
+        kprint!(" [PH6-metalbridge] {} — MetalBridge (prod GEM path) answers ARP for heqk's IP; is_for_heqk demux claims+admits a unicast ICMP-for-us (echo reply needs an ICMP socket, deferred); rejects a broadcast threat (metal = host arping 10.200.0.2)\n",
             if mbok { "PASS" } else { "FAIL" });
     }
 

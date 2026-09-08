@@ -12,7 +12,7 @@
 
 use crate::packet;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
-use smoltcp::phy::{self, ChecksumCapabilities, Device, DeviceCapabilities, Medium};
+use smoltcp::phy::{self, Checksum, ChecksumCapabilities, Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
 
@@ -30,6 +30,11 @@ struct TxSink {
 pub struct RuleGatedDev {
     rx: Option<([u8; MTU], usize)>,
     tx: TxSink,
+    /// Per-device checksum policy. Default `ignored()` (the ARP-only / hand-built-frame
+    /// selftests need no valid checksums); the MetalBridge sets tx-compute so ICMP/IP replies
+    /// carry VALID checksums the real host kernel will accept (an ARP reply has none, which is
+    /// why ARP first-light worked with `ignored()`, but ICMP echo does).
+    csum: ChecksumCapabilities,
 }
 
 impl RuleGatedDev {
@@ -37,6 +42,7 @@ impl RuleGatedDev {
         RuleGatedDev {
             rx: None,
             tx: TxSink { buf: [0; MTU], len: 0, ready: false, dropped_out: 0, tx_lost: 0 },
+            csum: ChecksumCapabilities::ignored(),
         }
     }
     /// INGRESS gate — admit a frame to smoltcp only if the verified rule plane PASSes it.
@@ -95,7 +101,7 @@ impl Device for RuleGatedDev {
         let mut c = DeviceCapabilities::default();
         c.max_transmission_unit = MTU;
         c.medium = Medium::Ethernet;
-        c.checksum = ChecksumCapabilities::ignored();
+        c.checksum = self.csum.clone();
         c
     }
     fn receive(&mut self, _t: Instant) -> Option<(RxTok, TxTok<'_>)> {
@@ -215,6 +221,17 @@ pub fn is_arp_request_for(frame: &[u8], ip: [u8; 4]) -> bool {
         && frame[41] == ip[3] // tpa == our IP
 }
 
+/// The full first-light demux: is this frame FOR heqk? True iff its destination MAC is heqk's
+/// own unicast MAC (covers unicast ICMP echo requests AND the ARP replies smoltcp needs to fill
+/// its neighbour cache before it can answer an echo), OR it is a broadcast ARP request for
+/// heqk's IP. A for-heqk frame TERMINATES at heqk (never hairpin-forwarded). Bounds-safe.
+pub fn is_for_heqk(frame: &[u8], mac: [u8; 6], ip: [u8; 4]) -> bool {
+    if frame.len() < 14 {
+        return false;
+    }
+    frame[0..6] == mac || is_arp_request_for(frame, ip)
+}
+
 /// A persistent smoltcp bridge over the real GEM. Owns the `Interface` + the `RuleGatedDev`;
 /// `step` feeds one for-heqk frame through the dual verdict gate + smoltcp and returns any
 /// egress reply for the caller to TX out `gem::tx_frame`. ARP + ICMP-echo need no sockets, so
@@ -223,6 +240,7 @@ pub struct MetalBridge {
     iface: Interface,
     dev: RuleGatedDev,
     our_ip: [u8; 4],
+    our_mac: [u8; 6],
     /// Counters for the heartbeat (not threat metrics).
     pub seen: u32,
     pub answered: u32,
@@ -233,18 +251,29 @@ impl MetalBridge {
     /// draws it fail-closed from `rng200::next_word_strict`; a dead TRNG ⇒ no bridge).
     pub fn new(mac: [u8; 6], ip: [u8; 4], prefix: u8, seed: u64) -> MetalBridge {
         let mut dev = RuleGatedDev::new();
+        // Egress checksums COMPUTED (rx not verified) so ICMP/IP replies carry valid checksums
+        // the real host kernel accepts — ARP first-light worked with `ignored()` (ARP has none),
+        // ICMP echo does not. `Checksum::Tx` = compute on transmit, skip verify on receive (real
+        // host frames are valid anyway; a hand-built selftest frame needn't be).
+        let mut cs = ChecksumCapabilities::ignored();
+        cs.ipv4 = Checksum::Tx;
+        cs.icmpv4 = Checksum::Tx;
+        cs.tcp = Checksum::Tx;
+        cs.udp = Checksum::Tx;
+        dev.csum = cs;
         let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
         cfg.random_seed = seed;
         let mut iface = Interface::new(cfg, &mut dev, Instant::from_millis(0));
         iface.update_ip_addrs(|a| {
             let _ = a.push(IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix));
         });
-        MetalBridge { iface, dev, our_ip: ip, seen: 0, answered: 0 }
+        MetalBridge { iface, dev, our_ip: ip, our_mac: mac, seen: 0, answered: 0 }
     }
 
-    /// The first-light demux predicate (ARP-for-us).
+    /// The first-light demux predicate: any frame addressed to heqk (ARP-for-us or unicast-to-
+    /// our-MAC, so ICMP echo + smoltcp's neighbour-cache ARP replies are included).
     pub fn wants(&self, frame: &[u8]) -> bool {
-        is_arp_request_for(frame, self.our_ip)
+        is_for_heqk(frame, self.our_mac, self.our_ip)
     }
 
     /// Feed one for-heqk frame → dual-gated smoltcp poll → return any egress reply (frame +
@@ -270,39 +299,71 @@ impl MetalBridge {
     }
 }
 
+/// A minimal Ethernet/IPv4/ICMP echo REQUEST from 192.0.2.2 (mac 02:..:02) to heqk (192.0.2.1,
+/// mac 02:..:01). Checksums left zero — the bridge device skips rx verification (`Checksum::Tx`);
+/// the REPLY smoltcp emits DOES get valid checksums, which is the property the metal `ping` needs.
+fn build_icmp_echo_request(out: &mut [u8]) -> usize {
+    out[0..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x01]); // dst = heqk's MAC (unicast to us)
+    out[6..12].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x02]); // src
+    out[12] = 0x08;
+    out[13] = 0x00; // ethertype IPv4
+    out[14] = 0x45; // IPv4, IHL=5
+    let total: u16 = 20 + 8;
+    out[16] = (total >> 8) as u8;
+    out[17] = (total & 0xff) as u8;
+    out[22] = 64; // TTL
+    out[23] = 1; // proto ICMP
+    out[26..30].copy_from_slice(&[192, 0, 2, 2]); // src
+    out[30..34].copy_from_slice(&[192, 0, 2, 1]); // dst = our IP
+    out[34] = 8; // ICMP type 8 = echo request
+    out[35] = 0; // code
+    out[38] = 0x00;
+    out[39] = 0x01; // identifier
+    out[40] = 0x00;
+    out[41] = 0x2a; // sequence
+    42
+}
+
 /// QEMU gate for the FIRST-LIGHT bridge (the metal analog runs the SAME `MetalBridge` from the
 /// prod drain loop). Constructs the bridge at 192.0.2.1/24 so it can reuse `build_arp_request`
-/// (tpa == 192.0.2.1), feeds one ARP request through `wants` + `step`, and asserts a well-formed
-/// ARP REPLY with our IP as sender. Also asserts a threat frame is NOT `wants`-matched (the demux
-/// only ever hands ARP-for-us to the stack). Deterministic; proves the exact code path metal runs.
+/// (tpa == 192.0.2.1): (1) feeds an ARP request through `wants` + `step` and asserts a well-formed
+/// ARP REPLY with our IP as sender (the metal-PROVEN capability — heqk answers ARP on the wire);
+/// (2) asserts the broadened `is_for_heqk` demux CLAIMS a unicast ICMP-echo-for-us AND that frame
+/// PASSes the rule plane (so it is admitted and TERMINATES at heqk, never hairpin-forwarded) — the
+/// L2/L3 first-light property; the actual echo *reply* needs an ICMP/raw socket (smoltcp 0.13 does
+/// NOT auto-answer echo) and is DEFERRED, not faked here; (3) asserts a broadcast threat frame is
+/// NOT `wants`-matched. Deterministic; proves the exact demux + admission path metal runs.
 pub fn metalbridge_selftest(seed: u64) -> bool {
     let mac = [0x02, 0, 0, 0, 0, 0x01];
     let mut br = MetalBridge::new(mac, [192, 0, 2, 1], 24, seed);
 
+    // (1) ARP-for-us -> ARP reply (the metal-proven capability).
     let mut req = [0u8; MTU];
     let rlen = build_arp_request(&mut req);
     if !br.wants(&req[..rlen]) {
         return false;
     }
-    let reply = match br.step(&req[..rlen], 1) {
-        Some((r, n)) => {
-            if n < 42 {
-                return false;
-            }
-            (r, n)
-        }
+    let (r, n) = match br.step(&req[..rlen], 1) {
+        Some(x) => x,
         None => return false,
     };
-    let (r, _n) = reply;
-    let reply_ok = r[12] == 0x08
+    let arp_ok = n >= 42
+        && r[12] == 0x08
         && r[13] == 0x06 // ethertype ARP
         && r[21] == 2 // oper = reply
         && r[28..32] == [192, 0, 2, 1]; // spa = our IP
 
-    // The demux must NOT hand a non-ARP threat frame to the stack.
+    // (2) a unicast ICMP-echo-for-us is demux-CLAIMED (dst MAC is ours) AND PASSes the rule plane,
+    //     so it is admitted to the stack and terminates at heqk. The echo REPLY itself is deferred
+    //     (needs an ICMP/raw socket; smoltcp does not auto-answer echo) — we do NOT assert a reply.
+    let mut echo = [0u8; MTU];
+    let elen = build_icmp_echo_request(&mut echo);
+    let icmp_claimed = br.wants(&echo[..elen]) && packet::verdict(&echo[..elen]).1 == packet::PASS;
+
+    // (3) the demux must NOT hand a broadcast threat frame to the stack.
     let mut threat = [0u8; MTU];
     let tlen = build_udp_threat(&mut threat);
     let threat_not_wanted = !br.wants(&threat[..tlen]);
 
-    reply_ok && threat_not_wanted && br.seen == 1 && br.answered == 1
+    arp_ok && icmp_claimed && threat_not_wanted && br.seen == 1 && br.answered == 1
 }
