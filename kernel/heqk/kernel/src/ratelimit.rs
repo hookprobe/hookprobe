@@ -330,6 +330,13 @@ pub fn flow_saturation_pct() -> u64 {
     saturation_pct(FLOW_COUNT.load(Ordering::Relaxed), flow_table_max())
 }
 
+/// Live flow-table occupancy count — the A7 saturation numerator, for the datapath's
+/// per-frame `resource_shed_verdict`.
+#[inline]
+pub fn flow_count() -> u64 {
+    FLOW_COUNT.load(Ordering::Relaxed)
+}
+
 /// The logical flow-table capacity used for the live saturation percentage. Sourced from
 /// the manifest per-platform in production (M2 follow-on); a conservative default here.
 #[inline]
