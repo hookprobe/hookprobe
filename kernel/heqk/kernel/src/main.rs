@@ -1942,11 +1942,10 @@ fn cm5_p15_block_seal() {
 
     // M3.3 metal — the SEALED evidence-record round-trip on real eMMC: prove a genuine
     // encrypted evidence Event survives a power-cycle (the "evidence graph persists across
-    // reboot" capability), and that it is CIPHERTEXT at rest. Uses the full stack — seal →
-    // SealedStore::store → (reboot) → load → unseal — over the keystore reserved window (the
-    // SAME crash-safe stack QEMU proves as P15-fs/P15-sealfs over virtio-blk, now on silicon).
-    // Synthetic SRK/policy (real OTP-bound SRK sealing is audit V3); the point here is the
-    // store+persist+encryption mechanism on real eMMC, not the key provenance.
+    // reboot" capability), and that it is CIPHERTEXT at rest, bound to the REAL per-device
+    // OTP-derived SRK when HBoot supplies one (device-binding — a blob is unsealable on
+    // another device). Full stack — seal → SealedStore::store → (reboot) → load → unseal —
+    // over the keystore reserved window (the P15-fs/P15-sealfs QEMU stack, now on silicon).
     #[cfg(feature = "p15-write")]
     {
         use seal::{Policy, SealBlob};
@@ -1961,15 +1960,32 @@ fn cm5_p15_block_seal() {
             b[15] = verdict;
             b
         }
-        let srk = [0x5au8; 32];
-        let mut pcr = [[0u8; 32]; boot_abi::NUM_PCR];
-        pcr[0] = [0x11; 32];
-        pcr[1] = [0x22; 32];
-        pcr[2] = [0x33; 32];
+        // The REAL per-device OTP SRK + measured policy from the HBoot handoff when present
+        // (mirrors p15_seal_ram_demo); synthetic fallback on a device with no SealHandoff.
+        // A per-device key means this sealed blob is bound to THIS device's hardware root.
+        #[cfg(feature = "hboot")]
+        let (srk, device_id, svn_floor, pcr, real_srk) = match read_seal_handoff() {
+            Some(h) => (seal_srk().unwrap_or([0x5au8; 32]), h.device_id, h.svn_floor, h.pcr, true),
+            None => {
+                let mut p = [[0u8; 32]; boot_abi::NUM_PCR];
+                p[0] = [0x11; 32];
+                p[1] = [0x22; 32];
+                p[2] = [0x33; 32];
+                ([0x5au8; 32], 0x0BADF00D_1234_5678u64, 7, p, false)
+            }
+        };
+        #[cfg(not(feature = "hboot"))]
+        let (srk, device_id, svn_floor, pcr, real_srk) = {
+            let mut p = [[0u8; 32]; boot_abi::NUM_PCR];
+            p[0] = [0x11; 32];
+            p[1] = [0x22; 32];
+            p[2] = [0x33; 32];
+            ([0x5au8; 32], 0x0BADF00D_1234_5678u64, 7, p, false)
+        };
         let policy = Policy {
             mask: boot_abi::SEAL_POLICY_STRICT,
-            device_id: 0x0BADF00D_1234_5678u64,
-            svn_floor: 7,
+            device_id,
+            svn_floor,
             pcr,
         };
         if let Ok(mut ss) = SealedStore::open(&mut emmc) {
@@ -2007,7 +2023,8 @@ fn cm5_p15_block_seal() {
                     seal::unseal(&srk, &policy, &rbuf2[..n], &mut pt2).map_or(false, |m| m >= 16 && pt2[..16] == ev)
                 });
             let pass = stored && ciphertext && roundtrip;
-            kprint!("   [SEPDIAG-EMMC-SEAL] persisted-Event-from-prior-boot={} (boot#{}) | sealed+stored={} on-disk-ciphertext={} unseal-roundtrip={} => {}\n",
+            kprint!("   [SEPDIAG-EMMC-SEAL] key={} | persisted-Event-from-prior-boot={} (boot#{}) | sealed+stored={} on-disk-ciphertext={} unseal-roundtrip={} => {}\n",
+                if real_srk { "REAL-OTP-per-device" } else { "synthetic" },
                 persisted, this_boot, stored, ciphertext, roundtrip, if pass { "PASS" } else { "FAIL" });
         }
     }
