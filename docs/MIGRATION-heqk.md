@@ -133,7 +133,7 @@ Legend: ✅ works on heqk metal · 🟡 partial · ⬜ absent (build) · N/A tie
 | **DNS sinkhole / RPZ** | dnsmasq/systemd-resolved + RPZ | ⬜ no resolver/net stack | resolver over M4 net stack | M4: "refuse a NAME, never a PACKET" holds |
 | **WiFi AP + WIDS** | brcmfmac + hostapd + nl80211 monitor | 🟡 scan only; no assoc/data/monitor | heqk P10 D/E + AP-control + monitor surface | Parallel: AP serves clients; ADR 0042 detectors fire |
 | **WAN uplink** | RTL/cellular + PBR/NAT/TUN kill-switch | 🟡 RTL8111 link trained, datapath pending | RTL datapath + ADR 0004 envelope on native stack | M4: WAN up, kill-switch fails closed |
-| **OTA update** | registry pull → bootc/image-sync | 🟡 A/B proven but needs host PC | M4 net stack + M3 storage | M3: registry OTA + rollback, no host PC |
+| **OTA update** | registry pull → bootc/image-sync | 🟢 **on-device A/B flip proven on CM5** (2026-09-08): forward tryboot flip → boot candidate slot → confirm→commit (`[SEPDIAG-OTA]`) + rollback (M1 crit-4), no host PC | physical candidate DELIVERY (FAT-write new image to slot B + B→A promotion) needs a FAT32 writer; registry PULL needs M4 net stack | M3: A/B flip + rollback ✓; pull = M4 |
 | **Provisioning / zero-touch** | captive portal → reconciler → nft/hostapd | ⬜ needs net + FS + apply backend | re-target `reconcile_network` to heqk dataplane | M4/M5: intent→staged-diff→apply on heqk |
 | **MSSP / control-plane link** | tokio/axum/rustls hybrid-PQC TLS | ⬜ no TCP/TLS | M4 net stack + TLS | M4: enroll over PQC-TLS; standalone still works |
 | **SOC UI (Mission Control)** | Astro/Solid + Axum/SSE | ⬜ on heqk; runs in guest/host | Zone-4 guest or hosted control node | M6: live workspaces, swap invisible |
