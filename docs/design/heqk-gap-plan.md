@@ -69,9 +69,17 @@ The M2 Gate-R CONDITIONAL-GO (2026-09-08, product-steward) signed off the **dete
 | Batch | Linux primitive being retired | heqk replacement | Gate | Status |
 |---|---|---|---|---|
 | **U2a** | libbpf/CO-RE loaders, XDP/TC `.bpf.c` build, `bpftool`/`clang` CI stages, `nft`/conntrack *as inline IDS/IPS* | the RFC-9669 rule plane + tri-state `decide()`/`decide_l2` (M2) | **M2 Gate-R** | ✅ **gate MET** (31/31 heqk-plane metal + carve-outs) — U2a is unlock-able |
-| **U2b** | **OVS + nftables/conntrack *as SEGMENTATION*** (inter-segment/VLAN policy, per-device reach, quarantine-to-segment) | a heqk **segmentation plane** (does not exist yet) | a future segmentation-plane milestone | ⬜ **gate NOT met** — U2b stays gated |
+| **U2b** | **OVS + nftables/conntrack *as SEGMENTATION*** (inter-segment/VLAN policy, per-device reach, quarantine-to-segment) | a heqk **segmentation plane** — the on-device REACH-ENFORCEMENT primitive (`segment.rs`) is now BUILT + QEMU/metal-proven, but DISARMED (C7) pending an authenticated authority + P9 ingress-port binding | a future segmentation-plane milestone | 🟡 **enforcement built (disarmed); gate NOT met** — needs the authenticated reach channel + off-device authority + P9 port-binding |
 
-**The segmentation plane is the newly-clarified blocker.** It is the *same* absent reach-actuator behind three carved-out rows: **L5/L6 NAC** (reach = Full vs InternetOnly), **A11** (quarantine-*to-segment*), and now **U2b**. heqk's datapath is a single aggregate port with a binary PASS/DROP verdict — no per-segment forwarding, no VLAN/routing policy. Building the segmentation plane simultaneously unlocks U2b, makes L5/L6 actuatable on-device (vs off-device), and gives A11 a safe non-drop enforcement action. It is therefore a **first-class remaining milestone**, adjacent in priority to the M4 GEM bridge and the M5 Wasm-host un-gate. (Governance: never retire the Linux segmentation primitive before its heqk replacement is proven; Track B is the sunset-on-parity fallback.)
+**The segmentation plane** is the *same* reach-actuator behind three carved-out rows: **L5/L6 NAC** (reach = Full vs InternetOnly), **A11** (quarantine-*to-segment*), and **U2b**. heqk's datapath is a single aggregate port with a binary PASS/DROP verdict — no per-segment forwarding.
+
+**Progress (2026-09-08):** the on-device **reach-ENFORCEMENT primitive is BUILT** (`segment.rs`, security-auditor CONDITIONAL-GO C1–C8): a per-device MAC-keyed reach policy (`Full`/`InternetOnly`/`Quarantine`) enforced as a separate policy gate after the threat pipeline PASSes (kill-switch pattern), fail-open (Full default, mgmt-floor + infra carve-out), authority-set (never inferred — the key distinction from A11, so no victim-framing path). QEMU-proven (P8-flow) + metal self-test (`[SEPDIAG-SEG]`). **DISARMED by default (C7)** — inert in production (no reach-drop on the wire) until armed. **Remaining to make it live (and unlock U2b):**
+> 1. an **authenticated reach channel** (signed manifest / attested control link) to arm it (C7) — an attacker who forges it owns the reach table;
+> 2. the **off-device authority** (reconciler/NAC, ADR 0044 D3) that actually SETS per-device reach;
+> 3. **P9 ingress-port binding** (multi-port RX) for spoof-resistant containment (aggregate port 0 can't port-bind today; a MAC-spoofing on-segment attacker escapes containment — a documented residual);
+> 4. the InternetOnly/Quarantine **infra allow-set** completed with the authority-supplied gateway/DNS (`set_infra`).
+
+It stays a **first-class remaining milestone** (the enforcement half done; the authority + arming + P9 remain), adjacent to the M4 GEM bridge and the M5 Wasm-host un-gate. (Governance: never retire the Linux segmentation primitive before its heqk replacement is proven + armed; Track B is the sunset-on-parity fallback.)
 
 ## Critical path to zero-Linux-on-CM5
 
