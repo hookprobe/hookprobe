@@ -74,10 +74,10 @@ retirement-eligible once gated** (this is a confidence in the *mapping*, not a g
 | **What** | dm-crypt/LUKS, initramfs unlock, journald, sysctl/kargs/KSPP hardening knobs, systemd sandboxing boilerplate |
 | **heqk replacement** | M3 — Persistence & OTA: eMMC/SDHCI block driver → minimal FS → sealed/encrypted data volume (re-homes ADR 0007 off dm-crypt); on-device A/B OTA |
 | **Metal gate required** | OTA installs to inactive slot from a registry + forced-bad boot rolls back; **the evidence graph persists across reboot on real hardware** |
-| **Status (2026-07-30)** | 🟡 QEMU-green (M3.1–M3.4, 2026-07-29): file-backed virtio-blk behind `hal::BlockDev`, crash-safe log-structured store, sealed data volume (HQKSEAL1), A/B OTA state machine — **~70–75% QEMU-green over the block trait**. **Gate-R METAL ⬜: real eMMC write driver on `brcm,bcm2712-sdhci`, firmware tryboot flip, PM-watchdog + power-cycle persistence, OTP-bound SRK not yet run** |
-| **Evidence** | `docs/BuildPlan.md` M3 row; `docs/design/heqk-persistence.md`; note the doc's own caveat that the eMMC write driver is `cfg(cm5)`-gated and *not* exercised by the QEMU harness |
+| **Status (2026-09-08)** | 🟡 QEMU-green (M3.1–M3.4) over the block trait. **🟢 eMMC WRITE keystone PROVEN on CM5 metal (2026-09-08):** real CMD24 single-block write + read-back + **cross-power-cycle persistence** to the reserved window (`[SEPDIAG-EMMC-WRITE]` two-boot), Gate-1 clamp refuses out-of-window on metal — the load-bearing SDHCI write risk is retired. **Gate-R METAL ⬜ (remaining):** widen to the full DataVolume evidence store on eMMC, sealed-VEK on eMMC, firmware tryboot flip, PM-watchdog + OTA power-cycle persistence, OTP-bound SRK (audit V3) |
+| **Evidence** | `docs/BuildPlan.md` M3 row + 2026-09-08 Change Log; `docs/design/heqk-persistence.md`; `~/heqk-metal-logs/20260908-M3-emmc-write-persist-evidence.txt` (two-boot metal capture) |
 | **Blast radius** | Medium — loses the evidence graph / QSecBit history durability if regressed, but does not break boot or detect/enforce |
-| **Confidence (mapping)** | Medium — the write path is proven only against a file-backed block device today; the real eMMC driver is the load-bearing unproven piece |
+| **Confidence (mapping)** | Medium-High — the write PRIMITIVE is now proven on real eMMC (write+persist+clamp); the remaining risk is scale (full DataVolume region + sealed store), not the basic SDHCI write path |
 | **Fires after** | M3 green **on metal** (unchanged) |
 
 ### U4 — Wi-Fi dongles
