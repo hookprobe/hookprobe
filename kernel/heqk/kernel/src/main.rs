@@ -1925,8 +1925,11 @@ fn cm5_p15_block_seal() {
         let mut wb = [0u8; 512];
         wb[..8].copy_from_slice(WMAGIC);
         wb[8..12].copy_from_slice(&this_boot.to_le_bytes());
-        let (wlo, whi) = emmc.arm_write_window(WLBA, WLBA + 1);
-        let armed = whi > wlo;
+        // Arm the FULL reserved window (still Gate-1-clamped to [2016,2048)) so BOTH this
+        // cookie (LBA 2040) and the sealed-store blob (LBA 2016, below) are writable this
+        // session — the window is narrowing-only, so a per-LBA arm would lock the other out.
+        let (wlo, whi) = emmc.arm_write_window(store::RESERVED_LBA_LO, store::RESERVED_LBA_HI);
+        let armed = wlo <= WLBA && WLBA < whi;
         let wrote = armed && emmc.write_block(WLBA, &wb).is_ok();
         let mut vb = [0u8; 512];
         let readback = wrote && emmc.read_block(WLBA, &mut vb).is_ok() && vb[..12] == wb[..12];
