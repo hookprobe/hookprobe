@@ -36,8 +36,8 @@
 
 | State | Count | Rows |
 |---|---|---|
-| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` evidence, zero legit-drops) | **22** | L3, L7, L8, L9, L10, L11 · A3, A4, A5, A6, A7, A8, A10 · F1, F2, F3, F5, F6, F8, F9, F10, F11 |
-| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **6** | L1, L2 · A1, A2 · F4, F7 |
+| **PROVEN-ON-METAL** (rule-id + verdict / `drop+=` evidence, zero legit-drops) | **24** | L3, L7, L8, L9, L10, L11 · A1, A2, A3, A4, A5, A6, A7, A8, A10 · F1, F2, F3, F5, F6, F8, F9, F10, F11 |
+| **QEMU-PROVEN / metal-pending or metal-not-drivable** | **4** | L1, L2 · F4, F7 |
 | **SCOPED-ABSENT / NOT-YET-BUILT** (some off-device per ADR 0044 D3) | **5** | L4, L5, L6 · A9, A11 |
 
 **Sacred invariant, held on metal:** across every LEGIT row driven on CM5 (`20260907-m2-matrix-*`),
@@ -135,8 +135,8 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 
 | # | Scenario | Required | State | heqk file / rule | Evidence |
 |---|---|---|---|---|---|
-| A1 | Access-port mac-flood (≥20 MACs) | RateLimit | **Q** | mac-flood detector built (rule 111, `MAC_FLOOD_ACCESS=20`); Access→`RateLimit` | Verdict logic QEMU-proven, but **not reachable on-device**: the aggregate port is `Uplink` (no manifest port-role). Metal-pending on a manifest port-role source |
-| A2 | Multi-hundred-MAC flood on uplink | Observe (detected, logged) | **Q** | rule 111 on `Uplink` → `Observe` (`MAC_FLOOD_UPLINK=300`) | The live default; QEMU-proven. Not driven with 300+ real MACs on metal |
+| A1 | Access-port mac-flood (≥20 MACs) | RateLimit | **M** | mac-flood detector (rule 111, `MAC_FLOOD_ACCESS=20`); Access→`RateLimit` via the per-port role TABLE (`verdict::port_role_for`, the manifest seam) that `classify()` now consults | **Metal-proven** (2026-09-08, `[SEPDIAG-A1A2] A1 access-macflood-DROP=true`): a table-marked Access port drops a 40-distinct-MAC flood through the same `l2_stateful_verdict`→`decide_l2` path classify walks. Caveat: a REAL Access *interface* on live traffic still awaits the manifest reader (live port 0 stays fail-safe `Uplink`); the DECISION + SOURCE are proven, like A7/A8/L9 via bring-up self-test |
+| A2 | Multi-hundred-MAC flood on uplink | Observe (detected, logged) | **M** | rule 111 on `Uplink` → `Observe` (`MAC_FLOOD_UPLINK=300`) | **Metal-proven** (`[SEPDIAG-A1A2] A2 uplink-fired=true uplink-drop=false`): 320 distinct MACs on a table-marked Uplink port FIRE but never wire-drop (D12), on silicon |
 | A3 | Non-exempt broadcast flood | RateLimit | **M** | **FIXED this session:** bcast-storm now → `FloodRate` (not `L2Flood`), so it sheds on ANY port role (rules.rs:317-333) | `rule=112 verdict=DROP` ×64 on the Uplink NIC (was PASS/under-enforced pre-fix) |
 | A4 | Unconfirmed SYN scan ≥50 ports | **RateLimit, never Quarantine** | **M** | rule 113 `flow_scan_verdict`; over-wall + zero establishment → `RateLimit{over_limit:true}` (DROP) | `rule=113 verdict=DROP` + matrix `A4_synscan drop+=71 PASS` |
 | A5 | Confirmed SYN scan ≥50 ports | Quarantine (durable) | **M** | rule 113 + `ratelimit::scan_confirmed` → `ctx.confirmed` → `Quarantine` | rule 113 DROP fired on the confirmed drive (sent≥CONFIRM). **Note:** wire = DROP is metal-proven; the durable-vs-self-reverting distinction (`Quarantine` persistence) is internal to the enum and QEMU-proven, not separately observable on the wire |
