@@ -1215,7 +1215,7 @@ fn cm5_prod_service() -> ! {
     #[cfg(feature = "netmetal")]
     let beacon_device_id: u64 = read_seal_handoff().map(|h| h.device_id).unwrap_or(0);
     #[cfg(feature = "netmetal")]
-    let mut beacon_sent = false;
+    let mut beacon_count: u32 = 0;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -1243,11 +1243,12 @@ fn cm5_prod_service() -> ! {
             if let Some(b) = metal_bridge.as_ref() {
                 kprint!("   [NETMETAL hb] forheqk_seen={} answered={}\n", b.seen, b.answered);
             }
-            // M4 control-plane TRANSPORT first-light: emit the BROADCAST UDP presence beacon ONCE,
-            // when the PHY link is up (safe BMSR read — no NCR touch), through the SINGLE
-            // gem::tx_frame path (no second RX-ring walker — the Linux-macb single-owner rule).
+            // M4 control-plane TRANSPORT first-light: emit a PERIODIC (every heartbeat) BROADCAST
+            // UDP presence beacon when the PHY link is up (safe BMSR read — no NCR touch), through
+            // the SINGLE gem::tx_frame path (no second RX-ring walker — the Linux-macb single-owner
+            // rule). Periodic = a real presence announcement + live-capturable.
             #[cfg(feature = "netmetal")]
-            if !beacon_sent && arch_aarch64::gem::phy_link_up(0) {
+            if arch_aarch64::gem::phy_link_up(0) {
                 let mut bf = [0u8; 96];
                 let n = netsvc::build_enroll_beacon(
                     [0x02, 0x00, 0x00, 0x00, 0x00, 0x02],
@@ -1257,8 +1258,8 @@ fn cm5_prod_service() -> ! {
                     &mut bf,
                 );
                 if arch_aarch64::gem::tx_frame(&bf[..n]).is_some() {
-                    beacon_sent = true;
-                    kprint!("   [NETENROLL] presence beacon emitted on wire ({} B, bcast UDP:7654) via single TX path\n", n);
+                    beacon_count += 1;
+                    kprint!("   [NETENROLL] presence beacon #{} on wire ({} B, bcast UDP:7654) via single TX path\n", beacon_count, n);
                 }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
