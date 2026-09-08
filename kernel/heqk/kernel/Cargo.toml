@@ -97,6 +97,11 @@ p10bt = []
 # root). The default (non-p15-write) kernel links neither ed25519 nor SLH-DSA
 # beyond its existing ephemeral-attest use, keeping the base TCB untouched.
 p15-write = ["arch-aarch64/p15-write", "boot-abi/otaverify"]
+# otaflip — M3.4 ON-DEVICE forward tryboot-flip metal proof (opt-in; SELF-REBOOTS once).
+# Drives the OtaState state machine through a REAL firmware one-shot tryboot into the
+# existing valid slot B, confirm+commit, keystore-persisted + loop-guarded. Distinct from
+# p15-write so a normal sepdiag image never self-reboots. See cm5_p15_block_seal.
+otaflip = ["p15-write"]
 # PH1 — PRODUCTION service profile. Instead of the P0-P17 self-test sequence that
 # reboots at the end, boot into the persistent RX->classify->verdict->ENFORCE sensor
 # datapath: an isolated EL0 GEM driver feeds real frames to the verified rule plane,
