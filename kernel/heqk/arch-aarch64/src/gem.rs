@@ -215,17 +215,24 @@ pub fn pcie_inbound_window() -> (u32, u32) {
 pub fn pcie_inbound_mip_doorbell() -> u32 {
     let rd = |off: usize| unsafe { read_volatile((PCIE_RC + off) as *const u32) };
     let wr = |off: usize, v: u32| unsafe { write_volatile((PCIE_RC + off) as *mut u32, v) };
-    let before = rd(0x4034);
+    // Use RC_BAR3 (inbound window index 3), NOT BAR2: the RP1 MSI is a POSTED write to bus
+    // 0xff_fffff000 that the RC DROPS if this window isn't armed (that is why PBA reads 0 —
+    // the EP posts + clears regardless). Per pcie2 dma-ranges (bcm2712.dtsi) the mip0 doorbell
+    // is the 3rd entry, which the BCM7712 driver assigns to inbound window index 3 -> BAR3.
+    // (BAR2 is firmware's RAM window — must not be clobbered.) Offsets: RC_BAR3 LO=0x403c
+    // HI=0x4040; UBUS_BAR3 REMAP LO=0x40bc HI=0x40c0 (pcie-brcmstb.c set_inbound_win_registers;
+    // ACCESS_EN=BIT0 in the UBUS remap is the actual forwarding gate).
+    let before = rd(0x403c);
     unsafe { core::arch::asm!("dsb sy") };
-    // RC_BAR2: PCIe 0xff_fffff000, 4 KB (size code 0x1c). LO carries size in [4:0].
-    wr(0x4034, 0xffff_f000 | 0x1c);
-    wr(0x4038, 0x0000_00ff);
-    // UBUS_BAR2 remap: CPU 0x10_0013_0000 + ACCESS_EN.
-    wr(0x40b4, 0x0013_0000 | 0x1);
-    wr(0x40b8, 0x0000_0010);
+    // RC_BAR3: PCIe 0xff_fffff000, 4 KB (size code 0x1c in LO[4:0]).
+    wr(0x403c, 0xffff_f000 | 0x1c);
+    wr(0x4040, 0x0000_00ff);
+    // UBUS_BAR3 remap: CPU 0x10_0013_0000 + ACCESS_EN (BIT0).
+    wr(0x40bc, 0x0013_0000 | 0x1);
+    wr(0x40c0, 0x0000_0010);
     unsafe { core::arch::asm!("dsb sy") };
-    crate::_print(format_args!(" [DRV1] inbound mip doorbell: RC_BAR2_LO {:#010x}->{:#010x} HI={:#010x} UBUS_LO={:#010x} HI={:#010x} (PCIe 0xff_fffff000 -> CPU 0x10_0013_0000)\n",
-        before, rd(0x4034), rd(0x4038), rd(0x40b4), rd(0x40b8)));
+    crate::_print(format_args!(" [DRV1] inbound mip doorbell (BAR3): RC_BAR3_LO {:#010x}->{:#010x} HI={:#010x} UBUS_LO={:#010x} HI={:#010x} (PCIe 0xff_fffff000 -> CPU 0x10_0013_0000)\n",
+        before, rd(0x403c), rd(0x4040), rd(0x40bc), rd(0x40c0)));
     before
 }
 
