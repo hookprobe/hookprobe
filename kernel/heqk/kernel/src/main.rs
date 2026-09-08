@@ -74,6 +74,7 @@ mod edge;
 mod notify;
 mod packet;
 mod ratelimit;
+mod segment;
 mod rules;
 mod scheduler;
 mod seal;
@@ -1129,6 +1130,17 @@ fn cm5_prod_service() -> ! {
         let pass = atk_corr && atk_pass && ops_corr && ops_pass && mgmt_floor;
         kprint!("   [SEPDIAG-CORR] attacker corroborated={} wire-PASS={} | legit-ops corroborated={} wire-PASS={} | mgmt-floor={} => {}\n",
             atk_corr, atk_pass, ops_corr, ops_pass, mgmt_floor, if pass { "PASS" } else { "FAIL" });
+    }
+    // M-segmentation reach plane on metal — the per-device reach ACTUATOR (U2b + L5/L6 NAC +
+    // A11 quarantine-to-segment). Proves the reach matrix + fail-open invariants through the
+    // real `segment::reach_allow` decision, then leaves the plane DISARMED (C7 — inert in
+    // production until an authenticated authority arms it, so no reach-drop hits the wire).
+    #[cfg(feature = "sepdiag")]
+    {
+        let seg = crate::segment::reach_selftest();
+        let armed = crate::segment::reach_armed(); // must be false after the self-test (C7)
+        kprint!("   [SEPDIAG-SEG] reach-matrix(Full/InternetOnly/Quarantine x LAN/WAN/infra + mgmt-floor + fail-open)={} | armed-after={} (must be false) => {}\n",
+            seg, armed, if seg && !armed { "PASS" } else { "FAIL" });
     }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
@@ -4876,6 +4888,17 @@ fn p8_flow() -> bool {
         ok &= corr_ok;
         kprint!("   A11 corroboration: 3-axis corroborated={} but wire verdict Observe/PASS (never a drop) [{}]\n",
             corr::is_corroborated(s), if corr_ok { "ok" } else { "BUG" });
+    }
+
+    // Segmentation reach plane — the per-device reach ACTUATOR (U2b + L5/L6 + A11-to-segment).
+    // DISARMED → nothing segmented (C7); ARMED → Full allows, InternetOnly/Quarantine DROP a
+    // LAN-internal peer but allow WAN + infra (gateway), mgmt floor + unknown device always
+    // allowed (fail-open). Authority-set, never inferred (security-auditor CONDITIONAL-GO).
+    {
+        let seg_ok = crate::segment::reach_selftest();
+        ok &= seg_ok;
+        kprint!("   segmentation reach: disarmed-noop + Full/InternetOnly/Quarantine x LAN/WAN/infra + mgmt-floor + fail-open-default [{}]\n",
+            if seg_ok { "ok" } else { "BUG" });
     }
 
     kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines; A11 corroboration is SEVERITY-only, never a wire drop (ADR 0018/0023, conntrack-equivalent)\n",
