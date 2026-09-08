@@ -980,6 +980,50 @@ fn cm5_prod_service() -> ! {
         kprint!("   [SEPDIAG-SHED] A7 sat-shed={} L9(under-wall)={} L9(not-top)={} | A8 psi-shed={} A8(legit)={} A8(revert)={} => {}\n",
             a7, l9_under, l9_legit, a8, a8_legit, a8_revert, if pass { "PASS" } else { "FAIL" });
     }
+    // M2 A1/A2 ON-METAL port-role-SOURCE self-test (sepdiag). The gap: classify() used a
+    // hardcoded DEFAULT_PORT_ROLE stub, so Access→RateLimit (row A1) could never fire on the
+    // live device. classify() now consults the per-port role TABLE (verdict::port_role_for);
+    // this proves that table → l2_stateful_verdict → decide_l2 yields DROP on a table-marked
+    // Access port and Observe on an Uplink port, on silicon, through the SAME path classify
+    // walks. Synthetic port ids 6/7 (live port 0 stays fail-safe Uplink; a real Access
+    // interface awaits the manifest reader). Restored to Uplink after, so no live effect.
+    #[cfg(feature = "sepdiag")]
+    {
+        use crate::verdict::{port_role_for, set_port_role, PortRole, Verdict};
+        set_port_role(6, PortRole::Access);
+        set_port_role(7, PortRole::Uplink);
+        let a_role = port_role_for(6) == PortRole::Access; // table returns what we wrote
+        let u_role = port_role_for(7) == PortRole::Uplink;
+        let mut fr = [0u8; 64];
+        fr[0..6].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // unicast dst (mac-flood only)
+        fr[12..14].copy_from_slice(&[0x08, 0x00]);
+        // A1: 40 distinct src MACs on the ACCESS port (> MAC_FLOOD_ACCESS 20) → RateLimit DROP.
+        let mut a1_drop = false;
+        for i in 0..40u8 {
+            fr[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, i]);
+            if rules::l2_stateful_verdict(&fr, 0, 6, port_role_for(6)).map_or(false, Verdict::is_drop) {
+                a1_drop = true;
+            }
+        }
+        // A2: the SAME fan-out scaled past the Uplink bar (320 > MAC_FLOOD_UPLINK 300) MUST
+        // fire but stay Observe — a busy AP's client MACs are NEVER wire-dropped (D12).
+        let mut a2_fired = false;
+        let mut a2_drop = false;
+        for i in 0..320u16 {
+            fr[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, (i >> 8) as u8, (i & 0xff) as u8]);
+            if let Some(v) = rules::l2_stateful_verdict(&fr, 0, 7, port_role_for(7)) {
+                a2_fired = true;
+                if v.is_drop() || v != Verdict::Observe {
+                    a2_drop = true;
+                }
+            }
+        }
+        set_port_role(6, PortRole::Uplink); // restore fail-safe on the synthetic ports
+        set_port_role(7, PortRole::Uplink);
+        let pass = a_role && u_role && a1_drop && a2_fired && !a2_drop;
+        kprint!("   [SEPDIAG-A1A2] table Access={} Uplink={} | A1 access-macflood-DROP={} | A2 uplink-fired={} uplink-drop={} => {}\n",
+            a_role, u_role, a1_drop, a2_fired, a2_drop, if pass { "PASS" } else { "FAIL" });
+    }
     // DRV-1 sink experiment (mipdump): the RP1 MSI-X table is unreadable (config-space
     // access returns 0xffffffff), so make the GEM actually EMIT RX-complete MSIs (IER
     // RCOMP + RP1 MSIX_CFG(6)) and unmask BOTH candidate sinks (mip0 + brcmstb RC). IRQs

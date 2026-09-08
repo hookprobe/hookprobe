@@ -19,6 +19,7 @@
 //! from the verdict via `Verdict::to_wire()` instead of being the rule's raw result.
 
 use crate::packet;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 /// The tri-state verdict, isomorphic to Linux `scan_responder::ReflexVerdict` /
 /// `l2_responder::L2Verdict` (ADR 0023 D1). Graduated by confidence, with a
@@ -140,6 +141,47 @@ pub enum PortRole {
 /// specific wired-access interface may narrow it back to `Access`. Fail-safe toward
 /// never dropping legit traffic — honestly a stub, NOT faked as manifest-driven.
 pub const DEFAULT_PORT_ROLE: PortRole = PortRole::Uplink;
+
+// ---- M2 A1/A2 — the per-ingress-port ROLE SOURCE (the manifest seam) ----
+//
+// The gap this closes: `classify()` used to pass the hardcoded `DEFAULT_PORT_ROLE`
+// stub, so the Access→`RateLimit` mac-flood path (matrix row A1) could NEVER fire on
+// the live device — there was no per-interface role source at all. This table is that
+// source. On a real deployment the SIGNED PLATFORM MANIFEST populates it once at boot
+// (CLAUDE.md "detect once, query forever": `wlan0`=AP=Uplink, a wired single-endpoint
+// access port=Access); heqk's manifest reader is an M-follow-on, so today every port
+// starts at the fail-safe default (`Uplink` — a port that legitimately carries many
+// client MACs is NEVER wire-capped, ADR 0023 D12) and `set_port_role` is the seam that
+// manifest reader (or the Gate-R self-test) writes through. This is honestly a seam
+// with a safe default, NOT faked as manifest-driven.
+const MAX_PORTS: usize = 8;
+const ROLE_UPLINK_U8: u8 = 0; // the fail-safe default (never wire-drop legit many-MAC churn)
+const ROLE_ACCESS_U8: u8 = 1;
+static PORT_ROLE: [AtomicU8; MAX_PORTS] = [const { AtomicU8::new(ROLE_UPLINK_U8) }; MAX_PORTS];
+
+/// The manifest/Gate-R seam: set the role of ingress `port`. Out-of-range is ignored
+/// (fail-safe — an unknown port keeps the `Uplink` default via `port_role_for`).
+pub fn set_port_role(port: usize, role: PortRole) {
+    if port < MAX_PORTS {
+        let code = match role {
+            PortRole::Uplink => ROLE_UPLINK_U8,
+            PortRole::Access => ROLE_ACCESS_U8,
+        };
+        PORT_ROLE[port].store(code, Ordering::Relaxed);
+    }
+}
+
+/// The role `classify()` consults per ingress port. Any port not explicitly set to
+/// `Access` (including out-of-range) resolves to `Uplink` — the fail-safe that keeps a
+/// busy AP/uplink's many legit client MACs from ever being wire-dropped (ADR 0023 D12).
+pub fn port_role_for(port: u64) -> PortRole {
+    let p = port as usize;
+    if p < MAX_PORTS && PORT_ROLE[p].load(Ordering::Relaxed) == ROLE_ACCESS_U8 {
+        PortRole::Access
+    } else {
+        PortRole::Uplink
+    }
+}
 
 /// The context `decide()` reads. `allowlisted` = the source is on the management
 /// path (the floor). `confirmed` = an ADR-0018 confirmation signal is present

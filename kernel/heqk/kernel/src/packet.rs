@@ -261,11 +261,14 @@ fn classify(frame: &[u8]) -> (u16, u16) {
     let src = crate::net::eth_ipv4_src(nframe);
     // M2.1 — structural + stateful L2 tier (F6/F7/F8 structural anomalies + mac-flood
     // + broadcast-storm), on the ORIGINAL frame (MAC offsets, length, and VLAN-tag
-    // depth are pre-normalization facts). Port 0 = the single datapath ingress; the
-    // role is the manifest stub default (verdict::DEFAULT_PORT_ROLE). Routes through
-    // decide_l2 — a structural anomaly or a genuine Access-port flood DROPs; an
-    // Uplink flood / observed finding PASSes (a later tier may still drop).
-    if let Some(v) = crate::rules::l2_stateful_verdict(frame, src, 0, crate::verdict::DEFAULT_PORT_ROLE) {
+    // depth are pre-normalization facts). Port 0 = the single datapath ingress today
+    // (RTL8111/eth1 RX is the P9 follow-on). M2 A1/A2: the role is now SOURCED from the
+    // per-port role table (`port_role_for`, manifest seam) instead of a hardcoded stub —
+    // an Access port's genuine mac-flood DROPs (A1), an Uplink's stays Observe (A2/D12).
+    // Port 0 defaults to the fail-safe `Uplink` until a manifest narrows it.
+    let port: u64 = 0;
+    let port_role = crate::verdict::port_role_for(port);
+    if let Some(v) = crate::rules::l2_stateful_verdict(frame, src, port, port_role) {
         if v.is_drop() {
             return (0, DROP);
         }
