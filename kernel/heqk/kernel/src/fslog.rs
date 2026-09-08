@@ -86,6 +86,13 @@ pub struct SealCtx<'a> {
 // Record-type tags (evidence graph + QSecBit history + a test record).
 pub const RT_EVIDENCE: u16 = 1;
 pub const RT_QSECBIT: u16 = 2;
+/// M4.5 segmentation-authority anti-rollback floor (a bare monotonic `u64` generation). The
+/// reach plane refuses any policy whose generation is `<=` the max floor seen — so a replayed
+/// old policy can never re-strand a legit device across reboot (security-auditor C11).
+pub const RT_REACHGEN: u16 = 3;
+/// M4.5 TOFU-pinned operator public key (32-byte Ed25519). The independent policy trust root
+/// (C10) — pinned once, distinct from the online Noise static; a later differing key is refused.
+pub const RT_OPKEY: u16 = 4;
 pub const RT_TEST: u16 = 0x00FF;
 
 // Record header field offsets.

@@ -292,6 +292,13 @@ pub enum ReachPolicyErr {
     TenantMismatch,
     StaleGeneration,
     BadSignature,
+    /// The anti-rollback floor could not be read from the sealed store (C12). The plane MUST
+    /// NOT arm without an establishable freshness floor — refusing to arm IS the fail-open
+    /// choice (disarmed = all-Full) and is simultaneously the anti-replay-safe choice.
+    FloorUnavailable,
+    /// The operator key pinned on this device (C10 TOFU) differs from the one presented — a
+    /// silent operator-key swap by the online MSSP is refused.
+    OperatorKeyMismatch,
 }
 
 impl ReachPolicy {
@@ -471,6 +478,97 @@ pub fn apply_reach_policy(
     Ok((n, pol.generation))
 }
 
+// --- M4.5 PERSISTENCE (p15-write): the anti-rollback floor (C11/C12) + the TOFU-pinned
+// operator key (C10) in the M3 sealed-store fslog. Only these DURABLE bits persist — the reach
+// TABLE and REACH_ARMED are RAM-only and cold-start disarmed (C13), so a reboot never
+// auto-restores a dropping state; the device re-fetches + re-arms with generation > floor. ---
+
+/// Read the highest persisted reach generation (the anti-rollback floor). `Ok(0)` = none yet
+/// (fresh device — the first authenticated+signed policy may arm). `Err` = the floor is
+/// UNREADABLE (disk/mount failure) — the caller MUST NOT arm (C12).
+#[cfg(feature = "p15-write")]
+pub fn read_reach_floor<D: hal::BlockDev>(
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+) -> Result<u64, crate::fslog::FsErr> {
+    let log = crate::fslog::open_or_format(store, lo, hi)?;
+    let mut floor = 0u64;
+    log.for_each(store, |_seq, rt, pl| {
+        if rt == crate::fslog::RT_REACHGEN && pl.len() >= 8 {
+            let g = u64::from_le_bytes(pl[..8].try_into().unwrap());
+            if g > floor {
+                floor = g;
+            }
+        }
+    })?;
+    Ok(floor)
+}
+
+/// Persist a new reach generation as the floor (append-only ring; `read_reach_floor` takes the
+/// max, so ring wrap never lowers it while a `> floor` gate stands in front of every apply).
+#[cfg(feature = "p15-write")]
+pub fn persist_reach_floor<D: hal::BlockDev>(
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+    gen: u64,
+) -> Result<(), crate::fslog::FsErr> {
+    let mut log = crate::fslog::open_or_format(store, lo, hi)?;
+    log.append(store, crate::fslog::RT_REACHGEN, &gen.to_le_bytes())?;
+    Ok(())
+}
+
+/// Read the TOFU-pinned operator key (C10). `Ok(None)` = not pinned yet. Returns the FIRST
+/// pinned key (TOFU — first-write-wins; a later differing key is refused by `reconcile`).
+#[cfg(feature = "p15-write")]
+pub fn read_operator_pk<D: hal::BlockDev>(
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+) -> Result<Option<[u8; 32]>, crate::fslog::FsErr> {
+    let log = crate::fslog::open_or_format(store, lo, hi)?;
+    let mut pinned: Option<[u8; 32]> = None;
+    log.for_each(store, |_seq, rt, pl| {
+        if rt == crate::fslog::RT_OPKEY && pl.len() >= 32 && pinned.is_none() {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&pl[..32]);
+            pinned = Some(k);
+        }
+    })?;
+    Ok(pinned)
+}
+
+/// Pin the operator key (TOFU). Appends `pk` as the operator key ONLY if none is pinned yet;
+/// idempotent if the same key is re-pinned. A DIFFERENT key when one is already pinned is refused
+/// (C10 — no silent operator-key swap; signed rotation is a further follow-up).
+#[cfg(feature = "p15-write")]
+pub fn pin_operator_pk<D: hal::BlockDev>(
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+    pk: &[u8; 32],
+) -> Result<(), ReachPolicyErr> {
+    match read_operator_pk(store, lo, hi).map_err(|_| ReachPolicyErr::FloorUnavailable)? {
+        Some(existing) if &existing == pk => Ok(()),
+        Some(_) => Err(ReachPolicyErr::OperatorKeyMismatch),
+        None => {
+            let mut log = crate::fslog::open_or_format(store, lo, hi)
+                .map_err(|_| ReachPolicyErr::FloorUnavailable)?;
+            log.append(store, crate::fslog::RT_OPKEY, &pk[..])
+                .map_err(|_| ReachPolicyErr::FloorUnavailable)?;
+            Ok(())
+        }
+    }
+}
+
+// The production metal orchestrator (read floor → TOFU-pin/read operator key → fetch over the
+// live wire → apply against the PINNED key + floor → best-effort persist) lands WITH the
+// Noise-over-GEM-bridge increment: the device-side fetch needs a transport that reads the real
+// encrypted record off the bridge, which does not exist until the handshake goes live there. The
+// primitives above (floor + operator-key persistence) are the complete, tested mechanism it will
+// compose; the [P19-seg-policy] two-boot gate below proves them end-to-end now.
+
 // ===========================================================================
 // The [P19-enroll] gate (securechannel-selftest). Deterministic loopback + fake
 // MSSP; entropy fed through the PRODUCTION path via a simulated-HW StubTrng.
@@ -539,6 +637,30 @@ pub fn enroll_selftest() {
     persist_and_fetch_gate(entropy_ok, airgap_ok, proto_ok, buffers_ok, enr_for_persist);
 }
 
+/// Build + operator-sign a 2-entry reach policy FOR the device `device_fp` (the signature covers
+/// `signed_body ‖ device_fp` — C14). Byte 0 of the two MACs differs (0x02 vs 0x0a) so they land
+/// in DISTINCT reach-table slots (`mac_hash` puts MAC byte 0 in the low bits and the slot is
+/// key % DEV_SLOTS — MACs sharing byte 0 would collision-evict, C8 by design).
+#[cfg(feature = "securechannel-selftest")]
+fn build_signed_policy(gen: u64, tenant: u64, device_fp: &[u8; 32], signer: &KeyPair) -> ReachPolicy {
+    use crate::segment::Reach;
+    let mut p = ReachPolicy {
+        generation: gen,
+        tenant_id: tenant,
+        infra_gw: 0x0A00_0001,  // 10.0.0.1
+        infra_dns: 0x0A00_0002, // 10.0.0.2
+        entry_count: 2,
+        entries: [ReachEntry { mac: [0u8; 6], reach: 0 }; crate::segment::DEV_SLOTS],
+        sig: [0u8; 64],
+    };
+    p.entries[0] = ReachEntry { mac: [0x02, 0, 0, 0, 0, 0x10], reach: Reach::Quarantine.to_code() };
+    p.entries[1] = ReachEntry { mac: [0x0a, 0, 0, 0, 0, 0x11], reach: Reach::InternetOnly.to_code() };
+    let msg = ReachPolicy::sig_msg(&p.signed_body(), device_fp);
+    let s = signer.sk.sign(&msg[..], None);
+    p.sig.copy_from_slice(&s[..]);
+    p
+}
+
 /// The M4.5 SEGMENTATION-AUTHORITY self-test — an operator-signed reach policy delivered over the
 /// enrolled Noise channel provisions `segment.rs` + ARMS the plane, and every fail-open guard
 /// holds. Deterministic loopback + in-process fake MSSP + a dedicated operator signing key
@@ -573,27 +695,7 @@ pub fn seg_policy_selftest() {
     };
 
     // Build + operator-sign a policy FOR THIS device (body ‖ device_fp).
-    let build_signed = |gen: u64, tenant: u64, signer: &KeyPair| -> ReachPolicy {
-        let mut p = ReachPolicy {
-            generation: gen,
-            tenant_id: tenant,
-            infra_gw: 0x0A00_0001,  // 10.0.0.1
-            infra_dns: 0x0A00_0002, // 10.0.0.2
-            entry_count: 2,
-            entries: [ReachEntry { mac: [0u8; 6], reach: 0 }; segment::DEV_SLOTS],
-            sig: [0u8; 64],
-        };
-        // Byte 0 differs (0x02 vs 0x0a) so the two devices land in DISTINCT reach-table slots —
-        // `mac_hash` puts MAC byte 0 in the low bits and the slot is key % DEV_SLOTS, so MACs
-        // sharing byte 0 would collision-evict (C8 by design), which is not what this test means.
-        p.entries[0] = ReachEntry { mac: [0x02, 0, 0, 0, 0, 0x10], reach: Reach::Quarantine.to_code() };
-        p.entries[1] = ReachEntry { mac: [0x0a, 0, 0, 0, 0, 0x11], reach: Reach::InternetOnly.to_code() };
-        let msg = ReachPolicy::sig_msg(&p.signed_body(), &enr.device_fp);
-        let s = signer.sk.sign(&msg[..], None);
-        p.sig.copy_from_slice(&s[..]);
-        p
-    };
-    let pol = build_signed(7, TENANT, &op);
+    let pol = build_signed_policy(7, TENANT, &enr.device_fp, &op);
 
     // (1) serde round-trip + fail-CLOSED parse.
     let wire = pol.to_bytes();
@@ -657,12 +759,12 @@ pub fn seg_policy_selftest() {
         && segment::reach_allow(0, q_key, lan, true);
 
     // (7) TENANT mismatch (validly signed for a DIFFERENT tenant) → TenantMismatch.
-    let other = build_signed(9, TENANT ^ 0xFFFF, &op);
+    let other = build_signed_policy(9, TENANT ^ 0xFFFF, &enr.device_fp, &op);
     let tenant_bad = apply_reach_policy(&enr, &other, 0, &opk) == Err(ReachPolicyErr::TenantMismatch)
         && !segment::reach_armed();
 
     // (8) monotonic advance: after floor=7, a gen=9 policy (re-signed) applies.
-    let adv = build_signed(9, TENANT, &op);
+    let adv = build_signed_policy(9, TENANT, &enr.device_fp, &op);
     let advance_ok = matches!(apply_reach_policy(&enr, &adv, 7, &opk), Ok((2, 9)))
         && segment::reach_armed();
 
@@ -673,6 +775,100 @@ pub fn seg_policy_selftest() {
     let pass = parse_ok && fetch_ok && apply_ok && badsig && wrongkey && stale && tenant_bad && advance_ok;
     kprint!(" [P19-seg-policy] {} — operator-signed reach policy over enrolled Noise ARMS segmentation (C9): parse(fail-closed)={} fetch={} apply+matrix={} bad-sig-rejected={} wrong-key-rejected={} stale-gen-rejected={} tenant-mismatch-rejected={} gen-advance={} | plane restored DISARMED={}\n",
         yn(pass), yn(parse_ok), yn(fetch_ok), yn(apply_ok), yn(badsig), yn(wrongkey), yn(stale), yn(tenant_bad), yn(advance_ok), yn(!segment::reach_armed()));
+
+    // The persistence half (C10 operator-key TOFU-pin + C11 anti-rollback floor SURVIVING reboot)
+    // rides validate.sh's two-boot over one virtio-blk backing — p15-write only.
+    #[cfg(feature = "p15-write")]
+    seg_policy_persist_gate(&op, &enr);
+}
+
+/// M4.5 PERSISTENCE two-boot gate ([P19-seg-policy-persist], p15-write): proves the operator key
+/// TOFU-pins (C10) and the anti-rollback generation floor SURVIVES reboot (C11) over one
+/// virtio-blk backing (validate.sh's two boots). BOOT1 pins the key + applies gen=5 + persists
+/// floor=5; BOOT2 reads floor=5 back, refuses a replayed gen=3 (no re-strand across reboot),
+/// applies gen=7, and refuses a DIFFERENT operator key (no silent swap). Restores DISARMED.
+#[cfg(all(feature = "securechannel-selftest", feature = "p15-write"))]
+fn seg_policy_persist_gate(op: &KeyPair, enr: &Enrollment) {
+    use crate::segment;
+    use crate::store::{RegionKind, SealedStore};
+    const TENANT: u64 = 0x5445_4E41;
+    let opk: [u8; 32] = *op.pk;
+    // A DIFFERENT operator key (must be refused once one is pinned — C10).
+    let other_op = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(sha256::digest(
+        b"HEQK-M4.5-OTHER-operator-key",
+    )));
+    let other_opk: [u8; 32] = *other_op.pk;
+
+    // Region disjoint from the enroll gate's (9500-9560 / 9600-9900) and the P15 footprints.
+    const SEG_LO: u64 = 9560;
+    const SEG_HI: u64 = 9600;
+
+    let mut dev = match arch_aarch64::virtio_blk::VirtioBlk::open() {
+        Some(d) => d,
+        None => {
+            kprint!(" [P19-seg-policy-persist] SKIP — no virtio-blk (diskless); signed-apply proven inline above\n");
+            return;
+        }
+    };
+    let mut store = match SealedStore::open(&mut dev) {
+        Ok(s) => s,
+        Err(e) => {
+            kprint!(" [P19-seg-policy-persist] FAIL — guard refused MBR: {:?}\n", e);
+            return;
+        }
+    };
+    if store.add_region(SEG_LO, SEG_HI, RegionKind::DataVolume).is_err() {
+        kprint!(" [P19-seg-policy-persist] FAIL — could not register seg region\n");
+        return;
+    }
+
+    let log = match crate::fslog::open_or_format(&mut store, SEG_LO, SEG_HI) {
+        Ok(l) => l,
+        Err(e) => {
+            kprint!(" [P19-seg-policy-persist] FAIL — log open: {:?}\n", e);
+            return;
+        }
+    };
+    let first_boot = log.count() == 0;
+    segment::disarm_reach_channel();
+    segment::reset_all_to_full();
+
+    if first_boot {
+        // BOOT1: floor empty → pin the operator key + apply gen=5 + persist floor=5.
+        let floor0 = read_reach_floor(&mut store, SEG_LO, SEG_HI).unwrap_or(u64::MAX);
+        let pinned = pin_operator_pk(&mut store, SEG_LO, SEG_HI, &opk).is_ok();
+        let pol5 = build_signed_policy(5, TENANT, &enr.device_fp, op);
+        let applied = matches!(apply_reach_policy(enr, &pol5, floor0, &opk), Ok((2, 5)));
+        let persisted = persist_reach_floor(&mut store, SEG_LO, SEG_HI, 5).is_ok();
+        segment::disarm_reach_channel();
+        segment::reset_all_to_full();
+        kprint!(" [P19-seg-policy-persist] BOOT1 — floor-was-empty={} op-key-pinned={} gen=5-applied={} floor=5-persisted={} — reboot to verify it SURVIVES\n",
+            yn(floor0 == 0), yn(pinned), yn(applied), yn(persisted));
+    } else {
+        // BOOT2: the floor + operator key must have SURVIVED the reboot.
+        let floor = read_reach_floor(&mut store, SEG_LO, SEG_HI).unwrap_or(u64::MAX);
+        let floor_survived = floor == 5; // C11
+        let key_survived =
+            read_operator_pk(&mut store, SEG_LO, SEG_HI).ok().flatten() == Some(opk); // C10
+        // A replayed OLD policy (gen=3 <= floor 5) is refused — no re-strand across reboot.
+        let pol3 = build_signed_policy(3, TENANT, &enr.device_fp, op);
+        let replay_refused =
+            apply_reach_policy(enr, &pol3, floor, &opk) == Err(ReachPolicyErr::StaleGeneration)
+                && !segment::reach_armed();
+        // A monotonic advance (gen=7 > floor 5) applies + arms.
+        let pol7 = build_signed_policy(7, TENANT, &enr.device_fp, op);
+        let advance_ok = matches!(apply_reach_policy(enr, &pol7, floor, &opk), Ok((2, 7)))
+            && segment::reach_armed();
+        // A DIFFERENT operator key is refused once one is pinned (C10 — no silent swap).
+        let swap_refused =
+            pin_operator_pk(&mut store, SEG_LO, SEG_HI, &other_opk) == Err(ReachPolicyErr::OperatorKeyMismatch);
+        let _ = other_opk;
+        segment::disarm_reach_channel();
+        segment::reset_all_to_full();
+        let pass = floor_survived && key_survived && replay_refused && advance_ok && swap_refused;
+        kprint!(" [P19-seg-policy-persist] {} — floor SURVIVED reboot (=5)={} op-key SURVIVED={} replayed-gen3-refused={} gen7-advance={} op-key-swap-refused(C10)={} | restored DISARMED={}\n",
+            yn(pass), yn(floor_survived), yn(key_survived), yn(replay_refused), yn(advance_ok), yn(swap_refused), yn(!segment::reach_armed()));
+    }
 }
 
 // --- (a) entropy checks ---------------------------------------------------
