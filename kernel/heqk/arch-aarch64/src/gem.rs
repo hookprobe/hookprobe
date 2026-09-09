@@ -440,6 +440,7 @@ pub fn read_ncfgr() -> u32 {
 /// descriptor, no error) — the exact symptom the size sweep isolates. RE/TE live in NCR, not
 /// NCFGR, so this read-modify-write does not disturb RX/TX enable.
 #[cfg(feature = "txsweep")]
+#[allow(dead_code)] // RUN-2 proved jumbo was NOT the cause (retrigger race was); kept as a valid capability.
 pub fn enable_jumbo() {
     const JML: usize = 0x048;
     const JFRAME: u32 = 1 << 3;
@@ -1017,10 +1018,23 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     let mut spins = 0u32;
     loop {
         if spins != 0 && spins % RETRIGGER_SPINS == 0 {
-            // The kick may have been dropped (see above). Re-issue it; this is a no-op
-            // for the controller if the frame is already in flight. Explicit write, not
-            // a read-modify-write — see the NCR readback warning above.
-            w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
+            // The kick may have been dropped (see above). Re-issue it — BUT ONLY IF THE
+            // TRANSMITTER IS IDLE (TSR.TGO clear). Linux macb (macb_main.c:2517) does the
+            // same: it notes `if (TSR & TGO) tx_pending = 1;` and does NOT blindly re-issue
+            // TSTART while the transmit-go bit is set, because re-kicking mid-transmit
+            // disturbs an in-flight DMA.
+            //
+            // METAL 2026-09-09 (the txsweep run): full-size frames (>~1512 B) take LONGER
+            // than RETRIGGER_SPINS=512 spins to complete, so the unconditional re-kick fired
+            // DURING a legitimate transmit and produced a PERFECT pass/fail POSITIONAL
+            // alternation at the boundary — 1512✓ 1514✗ 1515✓ 1516✗ … while 1520 and even
+            // 1600 transmitted whenever the alternation landed on a "pass" slot. It was never
+            // a length gate or a PCIe/alignment fault: it was this re-kick racing the tail of
+            // a large frame. Gate the re-kick on TGO clear and a genuinely dropped TSTART
+            // (TGO idle) still gets re-issued while an in-progress large frame is left alone.
+            if r(GEM, TSR) & TSR_TGO == 0 {
+                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
+            }
         }
         let ctrl = unsafe { read_volatile(d.add(1)) };
         if ctrl & TXD_USED != 0 {
@@ -1211,8 +1225,10 @@ pub fn tx_diag_burst(out: &mut [TxDiag], budget: u32) {
         // -- poll ---------------------------------------------------------------
         let mut spins = 0u32;
         loop {
-            // Mirror tx_frame: retrigger a possibly-dropped TSTART while polling.
-            if spins != 0 && spins % RETRIGGER_SPINS == 0 {
+            // Mirror tx_frame: retrigger a possibly-dropped TSTART while polling, but ONLY
+            // when the transmitter is idle (TSR.TGO clear) — re-kicking mid-transmit of a
+            // large frame is what caused the boundary alternation (see tx_frame).
+            if spins != 0 && spins % RETRIGGER_SPINS == 0 && r(GEM, TSR) & TSR_TGO == 0 {
                 w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE | NCR_TSTART);
             }
             let ctrl = unsafe { read_volatile(d.add(1)) };
