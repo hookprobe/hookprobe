@@ -231,10 +231,15 @@ fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
         }
 
         // POLICY phase — Established: decrypt the REQ over the Session, serve the signed policy.
-        if let Some((session, device_fp)) = established.as_mut() {
+        if established.is_some() {
             let mut reqpt = [0u8; 64];
-            match session.recv.decrypt_into(b"", &buf[..n], &mut reqpt) {
-                Ok(got) if &reqpt[..got] == REACH_POLICY_REQ => {
+            let decoded = established
+                .as_mut()
+                .and_then(|(s, _)| s.recv.decrypt_into(b"", &buf[..n], &mut reqpt).ok())
+                .map(|got| &reqpt[..got] == REACH_POLICY_REQ);
+            match decoded {
+                Some(true) => {
+                    let (session, device_fp) = established.as_mut().unwrap();
                     let pol = build_signed_policy(gen, SEG_TENANT, device_fp);
                     let mut rec = [0u8; RP_WIRE_LEN + 16];
                     match session.send.encrypt_into(b"", &pol, &mut rec) {
@@ -246,11 +251,21 @@ fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
                     }
                     established = None; // one policy per session; a device reboot re-handshakes
                     reasm = HsReasm::new();
+                    continue;
                 }
-                Ok(_) => { /* decrypted but not the REQ opcode — ignore */ }
-                Err(_) => { /* not decryptable on this Session (stray/handshake) — ignore */ }
+                Some(false) => {
+                    // Decrypted on this Session but not the REQ opcode — ignore, stay Established.
+                    continue;
+                }
+                None => {
+                    // NOT decryptable on this Session → a NEW handshake attempt (e.g. the prior
+                    // session half-completed: we Established but the device did not). RECOVER:
+                    // drop the stale session + fall through to handshake processing of THIS frame.
+                    println!(" [sim] stale session — new handshake attempt detected, resetting");
+                    established = None;
+                    reasm = HsReasm::new();
+                }
             }
-            continue;
         }
 
         // HANDSHAKE phase.
