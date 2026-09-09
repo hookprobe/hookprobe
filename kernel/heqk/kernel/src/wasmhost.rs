@@ -379,6 +379,22 @@ pub fn fixture_detect() -> (&'static [u8], &'static [u8], &'static [u8]) {
     (FIXTURE_DETECT_WASM, FIXTURE_DETECT_PK, FIXTURE_DETECT_SIG)
 }
 
+/// M5.5 — the signed REAL `wasm32-wasip1` fixture triple (a std stdin/stdout command binary,
+/// the production module shape): built by build.rs (nested cargo, wasm32-wasip1 target) and
+/// Ed25519-signed. Run through the EL0 wasip1 host to prove the real WASI preview1 ABI.
+#[cfg(feature = "wasmhost")]
+const FIXTURE_WASIP1_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_wasip1.wasm"));
+#[cfg(feature = "wasmhost")]
+const FIXTURE_WASIP1_PK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_wasip1.pk"));
+#[cfg(feature = "wasmhost")]
+const FIXTURE_WASIP1_SIG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_wasip1.sig"));
+
+/// M5.5 — the signed wasip1 fixture triple, for the [P-wasip1] EL0 host.
+#[cfg(feature = "wasmhost")]
+pub fn fixture_wasip1() -> (&'static [u8], &'static [u8], &'static [u8]) {
+    (FIXTURE_WASIP1_WASM, FIXTURE_WASIP1_PK, FIXTURE_WASIP1_SIG)
+}
+
 /// M5.3 — VERIFY a module's Ed25519 signature (kernel = trust root); on success return the
 /// EXACT module bytes to hand to the EL0 wasmi host, else `None` (fail-closed: a
 /// tampered/unsigned module is refused BEFORE it can cross into EL0). Unlike

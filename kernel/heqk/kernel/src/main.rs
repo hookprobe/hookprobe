@@ -308,6 +308,34 @@ static mut WASMI_C_HKS: KStack = KStack([0; KSTACK_SIZE]);
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 static mut WASMI_C_SKS: KStack = KStack([0; KSTACK_SIZE]);
 
+// --- M5.5 (Track C) — the REAL wasip1 host (QEMU): run a signed `wasm32-wasip1` std module
+// (stdin/stdout, the production module shape) through wasmi in an isolated EL0 task, over the
+// enforced Endpoint-cap IPC. It needs bigger windows than the classify/detect hosts: the
+// ~37 KiB module lives in its OWN RO window (WASMI_MODULE_VA, too big for the work page) and
+// its ~1.1 MiB linear memory needs a MiB-scale heap (the kernel maps only what it touches).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_MODULE_VA: usize = 0x9500_0000; // == el0-wasmhost WASIP1_MODULE_BASE
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASMI_MODULE_PAGES: usize = 16; // 64 KiB — a std wasip1 module is ~37 KiB
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASIP1_HEAP_PAGES: usize = 1024; // 4 MiB — fits the module's ~1.1 MiB memory + wasmi
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASIP1_MAGIC: u64 = 0x4851_5741_5349_5031; // "HQWASIP1" (== el0-wasmhost WASIP1_MAGIC)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASIP1_RES_A: AtomicUsize = AtomicUsize::new(0); // host-A result word (port 4444 -> DROP)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASIP1_RES_B: AtomicUsize = AtomicUsize::new(0); // host-B result word (port 443 -> PASS)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASIP1_TAMPER_NOSPAWN: AtomicBool = AtomicBool::new(false); // (b) tampered -> no host
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_A_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_A_SKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_B_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_B_SKS: KStack = KStack([0; KSTACK_SIZE]);
+
 // --- M5.4 (Track C) — DETECTION-at-PARITY host (ADR 0044 D4 #4, small scale). The SAME
 // el0-wasmhost binary runs a signed DETECTION module (linear memory + hp_input/hp_emit
 // imports) over a VECTOR of L4 headers through wasmi; its per-input verdicts must EQUAL
@@ -4274,6 +4302,8 @@ pub extern "C" fn kmain() -> ! {
     m5_wasmi_el0_spawn(); // M5.3 (Track C) (a): + a REAL wasmi runtime in an EL0 SERVER running one signed module, verdict over enforced IPC
     #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
     m5_detect_el0_spawn(); // M5.4 (Track C): a DETECTION module (memory+imports) run via wasmi in EL0 at PARITY with rules::run_l4
+    #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+    m5_wasip1_el0_spawn(); // M5.5 (Track C): a REAL wasm32-wasip1 std module (stdin/stdout) run via wasmi in EL0 over the WASI preview1 ABI
 
     // Bring up the interrupt controller + periodic timer, then let go.
     let gic = arch_aarch64::Gic;
@@ -7725,9 +7755,24 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                         if dp_a { "PASS" } else { "FAIL" }, d_n, d_packed, d_exp);
                     kprint!(" [P-wasm-parity] {} — (a)EL0-wasmi DETECTION module == in-kernel rules::run_l4 case-for-case over the vector (PARITY, reproduces the L4 dst-port SIGNATURE corpus 4444/23/31337)={} (b)TAMPERED detection module refused BEFORE EL0 hand-off={} (c)malformed-input wasm TRAP contained at EL0 (iso packed {:#010x}, parity host intact, kernel alive)={} [ADR 0044 D4 #4 @ min scale: ONE detection module at parity via a BESPOKE 2-import shim (hp_input/hp_emit) — NOT the full signed catalogue (napse-dpi/aegis-guard/qsecbit/dnsxai), NOT WASI 0.2/wasm32-wasip1 (the real modules' stdin/stdout+wasi imports are a SUPERSET, unreachable here), NOT metal — ADR 0044 D5]\n",
                         if dp_a && dp_b && dp_c { "PASS" } else { "FAIL" }, dp_a, dp_b, d_iso, dp_c);
+
+                    // M5.5 — the REAL wasip1 host: two std wasm32-wasip1 modules ran through
+                    // wasmi in EL0, each reading an L4 header from STDIN (fd_read) + writing
+                    // its verdict to STDOUT (fd_write) over the WASI preview1 ABI. host A
+                    // (dst-port 4444) -> DROP(2), host B (dst-port 443) -> PASS(1): a SINGLE
+                    // pair proves the predicate genuinely COMPUTES over real WASI stdin, not a
+                    // constant. (b) a bad-signature module is refused BEFORE any EL0 hand-off.
+                    let ra = WASIP1_RES_A.load(Ordering::SeqCst);
+                    let rb = WASIP1_RES_B.load(Ordering::SeqCst);
+                    let wa = if ra != 0 { (unsafe { read_volatile(ra as *const u64) }) as u32 } else { 0 };
+                    let wb = if rb != 0 { (unsafe { read_volatile(rb as *const u64) }) as u32 } else { 0 };
+                    let wp_a = wa == 2 && wb == 1;
+                    let wp_b = WASIP1_TAMPER_NOSPAWN.load(Ordering::SeqCst);
+                    kprint!(" [P-wasip1] {} — REAL wasm32-wasip1 STD module (stdin/stdout, the PRODUCTION module shape) via wasmi in an ISOLATED EL0 host over the WASI preview1 ABI (fd_read/fd_write/environ_*/proc_exit): dst-port 4444 -> {} (want DROP=2), dst-port 443 -> {} (want PASS=1) — read from STDIN, verdict to STDOUT, returned over the enforced Endpoint-cap IPC; (b) a BAD-SIGNATURE module REFUSED before EL0 hand-off={} [ADR 0044 D4 #4: the real WASI 0.2/wasm32-wasip1 ABI (napse-dpi/dnsxai/qsecbit are wasip1 stdin/stdout binaries), NOT the bespoke hp_input/hp_emit shim; QEMU-proven, wasmi OUT of the kernel TCB; metal = a future cm5 concern (a MiB-scale heap needs a bigger window than the GB5 2 MiB)]\n",
+                        if wp_a && wp_b { "PASS" } else { "FAIL" }, wa, wb, wp_b);
                 }
                 #[cfg(feature = "wasmhost")]
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity GREEN\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity P-wasip1 GREEN\n");
                 #[cfg(not(feature = "wasmhost"))]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf GREEN\n");
                 arch_aarch64::semihosting::exit(0);
@@ -9131,6 +9176,137 @@ fn bringup_detect_el0(
     install_cspace(tid, cs);
     scheduler::set_restart(tid, loaded.entry, sp_top, kstack);
     Some(tid)
+}
+
+/// M5.5 — bring up ONE EL0 wasip1-host TCB running a REAL std `wasm32-wasip1` module. Like
+/// bringup_wasmi_el0 but with the bigger windows a std module needs: a MiB-scale HEAP (its
+/// ~1.1 MiB linear memory), and the module bytes in their OWN RW+NX window (too big for the
+/// work page). The work page carries only [WASIP1_MAGIC, wasm_len, stdin_len, stdin bytes].
+/// The kernel has ALREADY Ed25519-verified `module` (trust root) before this call.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn bringup_wasip1_el0(
+    mmu: &arch_aarch64::Mmu,
+    parsed: &elf::ParsedElf,
+    module: &[u8],
+    stdin: &[u8],
+    ep: ipc::EpHandle,
+    prio: u8,
+    kstack: usize,
+) -> Option<usize> {
+    let (l1, asid) = mmu.new_addr_space();
+    if l1 == 0 {
+        return None;
+    }
+    let loaded = elf::load_into(parsed, WASMI_ELF, l1).ok()?;
+    for p in 0..WASMI_STACK_PAGES {
+        let f = mmu.alloc_frame();
+        if f == 0 {
+            return None;
+        }
+        mmu.map_user_data_in(l1, WASMI_STACK_VA + p * 0x1000, f);
+    }
+    let sp_top = WASMI_STACK_VA + WASMI_STACK_PAGES * 0x1000;
+    // MiB-scale heap for the std module's ~1.1 MiB linear memory + wasmi overhead.
+    for p in 0..WASIP1_HEAP_PAGES {
+        let f = mmu.alloc_frame();
+        if f == 0 {
+            return None;
+        }
+        mmu.map_user_data_in(l1, WASMI_HEAP_VA + p * 0x1000, f);
+    }
+    // Module window (RW+NX): copy the kernel-verified module bytes across its pages.
+    let mpages = (module.len() + 0xFFF) >> 12;
+    if mpages > WASMI_MODULE_PAGES {
+        return None;
+    }
+    for p in 0..mpages {
+        let f = mmu.alloc_frame();
+        if f == 0 {
+            return None;
+        }
+        let off = p * 0x1000;
+        let n = (module.len() - off).min(0x1000);
+        unsafe {
+            core::ptr::copy_nonoverlapping(module.as_ptr().add(off), f as *mut u8, n);
+        }
+        mmu.map_user_data_in(l1, WASMI_MODULE_VA + off, f);
+    }
+    // Work page: [+0]=WASIP1_MAGIC [+8]=wasm_len [+16]=stdin_len [+24..]=stdin bytes.
+    let work = mmu.alloc_frame();
+    if work == 0 {
+        return None;
+    }
+    let sn = stdin.len().min(64);
+    unsafe {
+        write_volatile(work as *mut u64, WASIP1_MAGIC);
+        write_volatile((work + 8) as *mut u64, module.len() as u64);
+        write_volatile((work + 16) as *mut u64, sn as u64);
+        core::ptr::copy_nonoverlapping(stdin.as_ptr(), (work + 24) as *mut u8, sn);
+    }
+    mmu.map_user_data_in(l1, WASMI_WORK_VA, work);
+
+    let sp = arch_aarch64::thread::make_el0_thread(kstack, loaded.entry, sp_top, 0);
+    let ttbr0 = l1 as u64 | ((asid as u64) << 48);
+    let tid = scheduler::spawn_as(sp, prio, ttbr0)?;
+    let mut cs = caps::CapSpace::empty();
+    let _ = cs.install_object(caps::ObjType::Endpoint, caps::W, ep.index, ep.generation, 0);
+    install_cspace(tid, cs);
+    scheduler::set_restart(tid, loaded.entry, sp_top, kstack);
+    Some(tid)
+}
+
+/// M5.5 — run TWO REAL signed `wasm32-wasip1` std modules through wasmi in isolated EL0
+/// hosts, each reading an L4 header from STDIN and writing its verdict to STDOUT over the
+/// WASI preview1 ABI, returned over the enforced Endpoint-cap IPC. host A (dst-port 4444) ->
+/// DROP(2); host B (dst-port 443) -> PASS(1) — the pair proves the predicate COMPUTES over
+/// real WASI stdin, not a constant. (b) a bad-signature module is refused before EL0 spawn.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn m5_wasip1_el0_spawn() {
+    let mmu = arch_aarch64::Mmu;
+    let parsed = match elf::parse(WASMI_ELF) {
+        Ok(p) => p,
+        Err(e) => {
+            kprint!(" [P-wasip1] FAIL: EL0 host ELF rejected by loader: {:?}\n", e);
+            return;
+        }
+    };
+    let (wasm, pk, sig) = wasmhost::fixture_wasip1();
+    // (b) FAIL-CLOSED before any EL0 hand-off: a corrupted signature is refused. (Flip a byte
+    // of the 64-B sig rather than copy the ~37 KiB module onto the kernel stack.)
+    let mut badsig = [0u8; 64];
+    badsig.copy_from_slice(&sig[..64]);
+    badsig[0] ^= 0x01;
+    WASIP1_TAMPER_NOSPAWN.store(wasmhost::verified_module(wasm, pk, &badsig).is_none(), Ordering::SeqCst);
+
+    let module = match wasmhost::verified_module(wasm, pk, sig) {
+        Some(m) => m,
+        None => {
+            kprint!(" [P-wasip1] FAIL: signed wasip1 module failed Ed25519 verify\n");
+            return;
+        }
+    };
+    // An L4 header with a big-endian dst-port at [2..4] (== the module's classify offset).
+    fn l4_hdr(port: u16) -> [u8; 16] {
+        let mut h = [0u8; 16];
+        h[2] = (port >> 8) as u8;
+        h[3] = (port & 0xff) as u8;
+        h
+    }
+    let hdr_a = l4_hdr(4444); // -> DROP (signature port)
+    let hdr_b = l4_hdr(443); //  -> PASS
+    if let Some(eh) = ipc::ep_create() {
+        let sks = unsafe { core::ptr::addr_of!(WASIP1_A_SKS) as usize + KSTACK_SIZE };
+        WASIP1_RES_A.store(spawn_ipc_result_server(&mmu, eh, 9, sks), Ordering::SeqCst);
+        let hks = unsafe { core::ptr::addr_of!(WASIP1_A_HKS) as usize + KSTACK_SIZE };
+        let _ = bringup_wasip1_el0(&mmu, &parsed, module, &hdr_a, eh, 8, hks);
+    }
+    if let Some(eh) = ipc::ep_create() {
+        let sks = unsafe { core::ptr::addr_of!(WASIP1_B_SKS) as usize + KSTACK_SIZE };
+        WASIP1_RES_B.store(spawn_ipc_result_server(&mmu, eh, 9, sks), Ordering::SeqCst);
+        let hks = unsafe { core::ptr::addr_of!(WASIP1_B_HKS) as usize + KSTACK_SIZE };
+        let _ = bringup_wasip1_el0(&mmu, &parsed, module, &hdr_b, eh, 8, hks);
+    }
+    EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase: faults restart
 }
 
 /// M5.4 DETECT-mode work-page magic (== el0-wasmhost `DETECT_MAGIC`). Both tiers.
