@@ -1338,6 +1338,33 @@ fn cm5_prod_service() -> ! {
         arch_aarch64::gem::set_tx_override(None);
         kprint!(" [TXSWEEP] done. Capture: tcpdump -ni FTS -e -v udp portrange 60000-62999\n");
     }
+    // ── M4.5 SEGMENTATION ARMING (feature `segmetal`) ────────────────────────────────────
+    // Once the ControlPlane is Established, request + apply an operator-signed ReachPolicy over
+    // the live Session and ARM segment.rs. State lives as locals here (the eMMC store BORROWS the
+    // Emmc device, so it is opened transiently at reconcile time; the Emmc + Enrollment outlive
+    // the loop). OPERATOR_PK is the PINNED operator verify key (C10) — baked bytes, not derived,
+    // so the device never holds the operator private key. The signing key lives only with the
+    // host operator (responder-sim). Reach floor persists in the eMMC guard window (2032..2048).
+    #[cfg(feature = "segmetal")]
+    let mut seg_emmc = arch_aarch64::emmc::Emmc::probe();
+    #[cfg(feature = "segmetal")]
+    let seg_enr = enroll::Enrollment {
+        tenant_id: 0x5445_4E41, // "TENA" — MUST equal the policy tenant the operator signs
+        responder_x_pk: [0u8; 32], // not consulted by apply_reach_policy
+        device_fp: cp.as_ref().map(|c| c.device_fp()).unwrap_or([0u8; 32]),
+        generation: 0,
+    };
+    #[cfg(feature = "segmetal")]
+    let mut seg_phase: u8 = 0; // 0=idle, 1=REQ sent, 2=armed
+    #[cfg(feature = "segmetal")]
+    const OPERATOR_PK: [u8; 32] = [
+        0xe8, 0xd8, 0x79, 0x93, 0xba, 0xe8, 0x16, 0xad, 0x3b, 0xea, 0x1b, 0x7a, 0xc7, 0x27, 0x26, 0x86, 0x18, 0xf0,
+        0xf2, 0xf7, 0x63, 0x03, 0x90, 0x42, 0xe4, 0xd9, 0xa0, 0x9a, 0xcf, 0x1e, 0xaf, 0x8d,
+    ];
+    #[cfg(feature = "segmetal")]
+    const SEG_LO: u64 = 2032;
+    #[cfg(feature = "segmetal")]
+    const SEG_HI: u64 = 2048;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -1409,6 +1436,26 @@ fn cm5_prod_service() -> ! {
                 kprint!("   [NETCP hb] state={:?} msg1_dgrams_out={} last_len={} last_ctrl={:#010x} tx_err={} rx_seen={}\n",
                     c.state(), dgrams, last_len, last_ctrl,
                     (last_ctrl & 0x3800_0000) != 0, c.seen);
+                // M4.5: once Established, send ONE encrypted reach-policy REQ over the Session.
+                // The host responder-sim answers with the operator-signed policy (captured in the
+                // drain below). One-shot so the AEAD counters stay aligned.
+                #[cfg(feature = "segmetal")]
+                if c.established() && seg_phase == 0 {
+                    if let Some(sess) = c.session_mut() {
+                        let mut req = [0u8; 64];
+                        if let Some(rn) = enroll::encrypt_reach_req(sess, &mut req) {
+                            let mut dg = [0u8; 128];
+                            let dn = netsvc::build_hs_datagram(
+                                [0x02, 0, 0, 0, 0, 0x02], [10, 200, 0, 2], [0xff; 6], [255, 255, 255, 255], 7654,
+                                &req[..rn], &mut dg,
+                            );
+                            if arch_aarch64::gem::tx_frame(&dg[..dn]).is_some() {
+                                seg_phase = 1;
+                                kprint!("   [SEGMETAL] reach-policy REQ sent ({} B record) over the live Session\n", rn);
+                            }
+                        }
+                    }
+                }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
@@ -1562,6 +1609,34 @@ fn cm5_prod_service() -> ! {
                         let cp_took = if let Some(c) = cp.as_mut() {
                             if c.wants(&buf[..n]) {
                                 let now_ms = (prod_cntpct() / (cntfrq / 1000).max(1)) as i64;
+                                // M4.5: post-Established, a :7654 for-heqk frame is the encrypted
+                                // ReachPolicy record → verify + arm segment.rs (never cp.ingress).
+                                #[cfg(feature = "segmetal")]
+                                {
+                                    if c.established() && seg_phase == 1 {
+                                        if let Some(payload) = netsvc::udp_payload_for_port(&buf[..n], 7654) {
+                                            match (seg_emmc.as_mut().ok(), c.session_mut()) {
+                                                (Some(emmc), Some(sess)) => match store::SealedStore::open(emmc) {
+                                                    Ok(mut st) => match enroll::reconcile_reach_policy_record(
+                                                        &seg_enr, sess, payload, &mut st, SEG_LO, SEG_HI, &OPERATOR_PK,
+                                                    ) {
+                                                        Ok(nn) => {
+                                                            seg_phase = 2;
+                                                            kprint!("   [SEGMETAL] ✅ ARMED — reconcile applied {} reach entries; reach_armed={}\n",
+                                                                nn, crate::segment::reach_armed());
+                                                        }
+                                                        Err(e) => kprint!("   [SEGMETAL] reconcile refused: {:?} (fail-open, unarmed)\n", e),
+                                                    },
+                                                    Err(e) => kprint!("   [SEGMETAL] eMMC store open failed: {:?}\n", e),
+                                                },
+                                                _ => {}
+                                            }
+                                        }
+                                    } else {
+                                        c.ingress(&buf[..n], now_ms);
+                                    }
+                                }
+                                #[cfg(not(feature = "segmetal"))]
                                 c.ingress(&buf[..n], now_ms);
                                 true
                             } else {

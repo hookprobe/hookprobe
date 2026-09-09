@@ -597,6 +597,53 @@ pub fn reconcile_reach_policy<D: hal::BlockDev>(
     Ok(count)
 }
 
+/// M4.5 METAL — encrypt the reach-policy REQUEST for transmission over the LIVE Session. The
+/// device tx's the returned ciphertext to the MSSP (`dev.send` == `mssp.recv`), which replies
+/// with the operator-signed policy as one AEAD record. Split-transport counterpart to
+/// `fetch_reach_policy` (which models BOTH endpoints in-process for QEMU). Returns the ciphertext
+/// length written to `out` (needs ≥ REACH_POLICY_REQ.len() + 16 for the Poly1305 tag).
+#[cfg(feature = "p15-write")]
+pub fn encrypt_reach_req(session: &mut Session, out: &mut [u8]) -> Option<usize> {
+    session.send.encrypt_into(b"", REACH_POLICY_REQ, out)
+}
+
+/// M4.5 METAL — the on-the-wire reconcile: apply an operator-signed reach policy that arrived as
+/// ONE AEAD record over the device's live Session (`dev.recv` == `mssp.send`). The metal analog of
+/// `reconcile_reach_policy`, but the device holds only ITS Session and the policy comes off the
+/// wire (not a local `mssp` Session + plaintext blob). Same trust order: read anti-rollback floor
+/// (Err ⇒ FloorUnavailable, DO NOT arm — C12) → TOFU-pin the PROVISIONED operator key (C10) →
+/// decrypt the record → parse (fail-closed) → `apply_reach_policy` (verify sig → tenant → gen >
+/// floor → reset + set_infra + batch set_reach + arm LAST) → best-effort persist the new floor.
+/// Fail-open: any error before `apply` completes leaves the reach table + `REACH_ARMED` untouched.
+#[cfg(feature = "p15-write")]
+pub fn reconcile_reach_policy_record<D: hal::BlockDev>(
+    enr: &Enrollment,
+    session: &mut Session,
+    record: &[u8],
+    store: &mut crate::store::SealedStore<D>,
+    lo: u64,
+    hi: u64,
+    provisioned_op_pk: &[u8; 32],
+) -> Result<usize, ReachPolicyErr> {
+    let floor = read_reach_floor(store, lo, hi).map_err(|_| ReachPolicyErr::FloorUnavailable)?;
+    pin_operator_pk(store, lo, hi, provisioned_op_pk)?; // TOFU; a differing key → OperatorKeyMismatch
+    let op_pk = read_operator_pk(store, lo, hi)
+        .map_err(|_| ReachPolicyErr::FloorUnavailable)?
+        .ok_or(ReachPolicyErr::FloorUnavailable)?;
+    let mut out = [0u8; ReachPolicy::WIRE_LEN];
+    let dl = session
+        .recv
+        .decrypt_into(b"", record, &mut out)
+        .map_err(|_| ReachPolicyErr::Transport)?;
+    if dl != ReachPolicy::WIRE_LEN {
+        return Err(ReachPolicyErr::Transport);
+    }
+    let pol = ReachPolicy::from_bytes(&out).ok_or(ReachPolicyErr::Parse)?;
+    let (n, newgen) = apply_reach_policy(enr, &pol, floor, &op_pk)?;
+    let _ = persist_reach_floor(store, lo, hi, newgen); // best-effort (C11)
+    Ok(n)
+}
+
 // ===========================================================================
 // The [P19-enroll] gate (securechannel-selftest). Deterministic loopback + fake
 // MSSP; entropy fed through the PRODUCTION path via a simulated-HW StubTrng.
