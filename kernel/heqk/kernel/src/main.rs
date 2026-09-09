@@ -2190,7 +2190,7 @@ fn cm5_spawn_el0_loop_asid() -> bool {
 /// frames) and confirm adversarial third-party rules are rejected.
 #[cfg(feature = "cm5")]
 fn cm5_p8_verify() {
-    use bpf::{verify_prevail, EVIL_LOOP, EVIL_NO_VERDICT, EVIL_WILD_LOAD, THREAT_RULE};
+    use bpf::{verify_prevail, EVIL_HELPER_ORACLE, EVIL_LOOP, EVIL_NO_VERDICT, EVIL_WILD_LOAD, THREAT_RULE};
     kprint!(" [P8] verifier (metal): ");
     let safe = match verify_prevail(&THREAT_RULE) {
         Ok(min) => {
@@ -2204,7 +2204,8 @@ fn cm5_p8_verify() {
     };
     let rejected = verify_prevail(&EVIL_WILD_LOAD).is_err()
         && verify_prevail(&EVIL_LOOP).is_err()
-        && verify_prevail(&EVIL_NO_VERDICT).is_err();
+        && verify_prevail(&EVIL_NO_VERDICT).is_err()
+        && verify_prevail(&EVIL_HELPER_ORACLE).is_err(); // XC-11: scalar-ptr payload_match refused
     kprint!("; adversarial rules {}\n", if rejected { "all REJECTED" } else { "ACCEPTED <- BUG" });
     kprint!(" [P8] {} — rule statically verified before the live datapath runs it\n",
         if safe && rejected { "PASS" } else { "FAIL" });
@@ -4073,6 +4074,9 @@ pub extern "C" fn kmain() -> ! {
 
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
+    // --- P8/L7 oracle close (XC-11/DET-1): verifier refuses a scalar payload_match ptr;
+    // the interpreter bounds the helper's read to the packet (no kernel-read oracle)
+    p8_l7oracle();
 
     // --- M2.4: L7 / behavioral OBSERVE-ONLY detectors — beacon/lateral/exfil/DNS all
     // detect (SOC sees them) but route decide()->Observe->PASS; NTP beacon exempt.
@@ -5851,6 +5855,40 @@ fn p8_l7() -> bool {
         if vm == bpf::DROP { "DROP" } else { "PASS" },
         if vo == bpf::PASS { "PASS" } else { "DROP" });
     kprint!(" [P8-l7] {} — L7 MQTT signature caught in-kernel before EL0 automation services\n",
+        if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// [P8-l7oracle] XC-11/DET-1 — the helper-arg KERNEL-READ ORACLE is CLOSED, two legs:
+///  (a) STATIC: a rule passing a SCALAR (attacker-chosen address) to payload_match
+///      (EVIL_HELPER_ORACLE) is REJECTED by the verifier — arg1 must be a packet pointer,
+///      so a ~4-insn program can never turn helper #3 into an arbitrary-kernel-read.
+///  (b) RUNTIME BACKSTOP: L7_NOTOUCH_ORACLE is verifier-ADMISSIBLE (payload_match(pkt+0)
+///      with NO touch-load, min_len folds to 4) yet on a packet SHORTER than the pattern
+///      the interpreter now BOUNDS R1 at the CALL and returns INVALID (no OOB read),
+///      while a full "MQTT" packet still matches (DROP). This makes the verifier-folded
+///      min_len a per-call runtime reality, independent of a rule's touch-load structure —
+///      exactly what a dynamically-loaded untrusted rule could otherwise have exploited.
+#[cfg(not(feature = "cm5"))]
+fn p8_l7oracle() -> bool {
+    kprint!("\n [P8] L7 helper-arg oracle — payload_match pointer bounded to the packet (XC-11/DET-1)\n");
+    let scalar_refused = bpf::verify_prevail(&bpf::EVIL_HELPER_ORACLE).is_err();
+    let admissible = bpf::verify_prevail(&bpf::L7_NOTOUCH_ORACLE).is_ok();
+    // A 2-byte "packet" is shorter than the 4-byte "MQTT" pattern: without the interpreter
+    // backstop the no-touch rule's payload_match would read 2 bytes OOB. It must now be
+    // bounded -> INVALID (fail-closed), NOT run.
+    let short = [0u8; 2];
+    let vs = bpf::run(&bpf::L7_NOTOUCH_ORACLE, short.as_ptr(), short.len());
+    // A full "MQTT" payload (4 bytes) is in-bounds and still matches -> DROP.
+    let full = [b'M', b'Q', b'T', b'T'];
+    let vf = bpf::run(&bpf::L7_NOTOUCH_ORACLE, full.as_ptr(), full.len());
+    let ok = scalar_refused && admissible && vs == bpf::INVALID && vf == bpf::DROP;
+    kprint!("   scalar-ptr rule refused by verifier: {}; no-touch rule admissible: {}; short pkt -> {}; full MQTT -> {}\n",
+        if scalar_refused { "yes" } else { "NO <- BUG" },
+        if admissible { "yes" } else { "NO" },
+        if vs == bpf::INVALID { "INVALID (bounded, no OOB)" } else { "RAN <- ORACLE BUG" },
+        if vf == bpf::DROP { "DROP" } else { "PASS <- BUG" });
+    kprint!(" [P8-l7oracle] {} — helper-arg kernel-read oracle CLOSED: verifier refuses a scalar ptr; interpreter bounds payload_match's read to the packet\n",
         if ok { "PASS" } else { "FAIL" });
     ok
 }
