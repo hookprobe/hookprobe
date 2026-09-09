@@ -1306,12 +1306,21 @@ fn cm5_prod_service() -> ! {
                 let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
                 c.tick(now_ms, link, ir);
                 let mut dgrams = 0u32;
+                let mut last_ctrl = 0u32;
+                let mut last_len = 0usize;
                 while let Some((dg, dn)) = c.poll_egress() {
-                    if arch_aarch64::gem::tx_frame(&dg[..dn]).is_some() {
+                    if let Some(ctrl) = arch_aarch64::gem::tx_frame(&dg[..dn]) {
                         dgrams += 1;
+                        last_ctrl = ctrl;
+                        last_len = dn;
                     }
                 }
-                kprint!("   [NETCP hb] state={:?} msg1_dgrams_out={} rx_seen={}\n", c.state(), dgrams, c.seen);
+                // Descriptor word1: USED(31); TX-error bits 27=buf-exhausted 28=underrun 29=error.
+                // A large frame that completes with USED set AND an error bit was ABORTED (never
+                // reached the wire) — this readout tells the metal run WHY (2026-09-09 diagnosis).
+                kprint!("   [NETCP hb] state={:?} msg1_dgrams_out={} last_len={} last_ctrl={:#010x} tx_err={} rx_seen={}\n",
+                    c.state(), dgrams, last_len, last_ctrl,
+                    (last_ctrl & 0x3800_0000) != 0, c.seen);
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
