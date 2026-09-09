@@ -20,6 +20,14 @@ edition = "2021"
 name = "el0-wasmhost"
 path = "src/main.rs"
 
+# M5.5 (Track C, U5) — the CM5 SYNCHRONOUS-EXCURSION ABI. Default (no feature) keeps the
+# QEMU-proven IPC-server ABI (SYS_CALL on an Endpoint cap, run under the scheduler). Under
+# `syncabi` the host instead runs classify ONCE and reports the verdict via a single
+# SYS_DRIVER_REPORT svc — matching CM5 prod's IRQs-off, no-scheduler `enter_user` excursion
+# (the same primitive the isolated EL0 GEM driver uses). Selects link-cm5.ld (GB5 window).
+[features]
+syncabi = []
+
 [dependencies]
 # The REAL runtime. no_std, alloc-only (default-features=false drops std + getrandom); the
 # M4.2a feasibility proof + M5.3's own measurement show it builds for
