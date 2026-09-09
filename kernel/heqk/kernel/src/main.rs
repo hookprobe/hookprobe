@@ -1465,8 +1465,9 @@ fn cm5_prod_service() -> ! {
                 // DIAG re-print (garbling-proof): repeats the reconcile outcome every hb.
                 #[cfg(feature = "segmetal")]
                 if seg_phase >= 1 {
-                    kprint!("   [SEGDIAG] phase={} fslog_err={:?} recon={:?} armed={}\n",
-                        seg_phase, seg_fslog_err, seg_recon, crate::segment::reach_armed());
+                    kprint!("   [SEGDIAG] phase={} fslog_err={:?} recon={:?} armed={} reach_drops={}\n",
+                        seg_phase, seg_fslog_err, seg_recon, crate::segment::reach_armed(),
+                        packet::seg_reach_drops());
                 }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
