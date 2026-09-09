@@ -1273,58 +1273,69 @@ fn cm5_prod_service() -> ! {
             bus_base,
             arch_aarch64::gem::read_dmacfg()
         );
-        let mut sbuf = [0u8; 1600];
-        let mut idx: u16 = 0;
+        // RUN 1 (2026-09-09) settled the coarse picture: frames 64..1024 B egress at EVERY
+        // alignment; only the 1518 B frame (→ 1522 on wire once the GEM appends FCS) failed, at
+        // all alignments, with a CLEAN descriptor (used=1, w1=0xc00085ee, tsr=0). The "~90 B
+        // cliff" and the 256 B PCIe-boundary hypotheses are both refuted; the signature is a
+        // pure LENGTH gate = a silent oversize-drop on TX. heqk sets neither NCFGR.JFRAME nor
+        // NCFGR.BIG, so the MAC caps at the standard 1518-on-wire. This run (a) finds the EXACT
+        // boundary in 1024..1522 incl. 1070 (the msg1 datagram size), then (b) enables JFRAME +
+        // JML=10240 exactly as Linux macb does for the RP1 GEM and RE-runs — proving whether
+        // jumbo-enable lifts the gate. Alignment is settled, so off=0 throughout.
+        let mut sbuf = [0u8; 2100];
         macro_rules! emit {
-            ($len:expr, $off:expr) => {{
+            ($len:expr, $dport:expr) => {{
                 let len: usize = $len;
-                let off: usize = $off;
-                let dport = 60000u16.wrapping_add(idx);
+                let dport: u16 = $dport;
                 let n = netsvc::build_sweep_frame(our_mac, our_ip, dport, len, &mut sbuf);
-                let bus = bus_base + off as u64;
-                arch_aarch64::gem::set_tx_override(Some((nc_base + off, bus)));
+                let bus = bus_base;
+                arch_aarch64::gem::set_tx_override(Some((nc_base, bus)));
                 let res = arch_aarch64::gem::tx_frame(&sbuf[..n]);
                 let tsr = arch_aarch64::gem::read_tsr();
                 kprint!(
-                    "   [TXSWEEP] idx={} len={} off={} dma={:#x} m64={} m128={} m256={} m4k={} used={} w1={:#010x} tsr={:#06x}\n",
-                    idx, n, off, bus,
-                    (bus & 63) as u32, (bus & 127) as u32, (bus & 255) as u32, (bus & 4095) as u32,
-                    res.is_some() as u32, res.unwrap_or(0), tsr
+                    "   [TXSWEEP] dport={} len={} dma={:#x} used={} w1={:#010x} tsr={:#06x}\n",
+                    dport, n, bus, res.is_some() as u32, res.unwrap_or(0), tsr
                 );
-                idx = idx.wrapping_add(1);
-                // ~few ms spacing so the host capture is not overrun
                 for _ in 0..5_000_000u32 {
                     core::hint::spin_loop();
                 }
             }};
         }
-        // Phase A — length sweep at a fixed (0-offset, 4 KiB-aligned) buffer. Dense around the
-        // observed ~90 B cliff and at the 256 B AXI/PCIe boundary.
-        kprint!(" [TXSWEEP] phase A: length sweep @ off=0\n");
-        for &l in &[
-            64usize, 72, 80, 88, 89, 90, 91, 92, 96, 100, 112, 120, 128, 144, 160, 192, 224, 240, 256, 272, 384, 512,
-            768, 1024, 1518,
-        ] {
-            emit!(l, 0usize);
+        const BND: [usize; 18] = [
+            1024, 1040, 1056, 1070, 1088, 1200, 1400, 1480, 1500, 1510, 1512, 1514, 1515, 1516, 1517, 1518, 1520, 1522,
+        ];
+        // Phase 1 — boundary sweep, jumbo OFF. dport = 60000 + i (i = index into BND).
+        kprint!(
+            " [TXSWEEP] phase 1: boundary sweep, jumbo OFF (ncfgr={:#010x})\n",
+            arch_aarch64::gem::read_ncfgr()
+        );
+        {
+            let mut i: u16 = 0;
+            for &l in &BND {
+                emit!(l, 60000 + i);
+                i += 1;
+            }
         }
-        // Phase B — THE fastest discriminator (expert): fixed 256 B frame, move ONLY the buffer
-        // across 64/128/256-byte boundaries (incl. straddles 224/240/252/255).
-        kprint!(" [TXSWEEP] phase B: 256B frame, move buffer across boundaries\n");
-        for &o in &[0usize, 4, 8, 16, 32, 48, 60, 64, 120, 124, 128, 192, 224, 240, 252, 255, 256] {
-            emit!(256usize, o);
-        }
-        // Phase C — coarse length × coarse alignment grid (fills in the 2-D map).
-        kprint!(" [TXSWEEP] phase C: length x coarse alignment\n");
-        for &l in &[128usize, 256, 512, 1024, 1518] {
-            for &o in &[0usize, 64, 128, 192, 256] {
-                emit!(l, o);
+        // Enable jumbo (NCFGR.JFRAME + JML=10240), exactly as Linux macb does for RP1.
+        arch_aarch64::gem::enable_jumbo();
+        // Phase 2 — SAME boundary sweep + a few jumbo sizes, jumbo ON. dport = 61000 + j.
+        kprint!(
+            " [TXSWEEP] phase 2: same sweep + jumbo, jumbo ON (ncfgr={:#010x})\n",
+            arch_aarch64::gem::read_ncfgr()
+        );
+        {
+            let mut j: u16 = 0;
+            for &l in &BND {
+                emit!(l, 61000 + j);
+                j += 1;
+            }
+            for &l in &[1600usize, 1800, 2000] {
+                emit!(l, 61000 + j);
+                j += 1;
             }
         }
         arch_aarch64::gem::set_tx_override(None);
-        kprint!(
-            " [TXSWEEP] done — {} frames emitted. Capture: tcpdump -ni FTS -e -v udp portrange 60000-60999\n",
-            idx
-        );
+        kprint!(" [TXSWEEP] done. Capture: tcpdump -ni FTS -e -v udp portrange 60000-61999\n");
     }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the

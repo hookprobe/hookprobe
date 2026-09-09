@@ -428,6 +428,25 @@ pub fn read_tsr() -> u32 {
 pub fn read_dmacfg() -> u32 {
     r(GEM, DMACFG)
 }
+/// Live NCFGR (to confirm the JFRAME bit before/after enable_jumbo).
+#[cfg(feature = "txsweep")]
+pub fn read_ncfgr() -> u32 {
+    r(GEM, NCFGR)
+}
+/// Enable jumbo frames exactly as Linux macb does for the RP1 GEM
+/// (raspberrypi_rp1_config: MACB_CAPS_JUMBO): set NCFGR.JFRAME (bit 3) and program the
+/// Jumbo Max Length register (GEM_JML = 0x048) = 10240. Without JFRAME the MAC's max-frame
+/// gate sits at the standard 1518-on-wire and silently drops a longer TX post-DMA (clean
+/// descriptor, no error) — the exact symptom the size sweep isolates. RE/TE live in NCR, not
+/// NCFGR, so this read-modify-write does not disturb RX/TX enable.
+#[cfg(feature = "txsweep")]
+pub fn enable_jumbo() {
+    const JML: usize = 0x048;
+    const JFRAME: u32 = 1 << 3;
+    w(GEM, NCFGR, r(GEM, NCFGR) | JFRAME);
+    w(GEM, JML, 10240);
+    unsafe { core::arch::asm!("dsb sy") };
+}
 
 #[inline]
 fn r(base: usize, off: usize) -> u32 {
