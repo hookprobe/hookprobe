@@ -1372,9 +1372,9 @@ fn cm5_prod_service() -> ! {
     // now that fslog::format accepts the Keystore region (the #1b fix). Sub-allocated clear of the
     // seal blob at 2016. (Proper home is a dedicated DataVolume partition — M3 gap #7.)
     #[cfg(feature = "segmetal")]
-    const SEG_LO: u64 = 2033;
+    const SEG_LO: u64 = 2034;
     #[cfg(feature = "segmetal")]
-    const SEG_HI: u64 = 2047;
+    const SEG_HI: u64 = 2046;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.

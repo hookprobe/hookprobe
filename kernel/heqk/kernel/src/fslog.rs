@@ -507,10 +507,12 @@ impl LogStore {
         sec[REC_HDR..REC_HDR + payload.len()].copy_from_slice(payload);
         let dg = record_digest(&sec, payload.len());
         sec[R_DIGEST..R_DIGEST_END].copy_from_slice(&dg);
-        // The guard authorizes only the DataVolume region; anything else escapes.
+        // The guard authorizes a DataVolume OR the always-registered Keystore window (the small
+        // M4.5 reach-floor log home until a DataVolume partition exists — see format()). An
+        // InactiveSlot / non-registered LBA still escapes.
         match store.store_sector(lba, &sec)? {
-            RegionKind::DataVolume => {}
-            _ => return Err(FsErr::OutsideRegion),
+            RegionKind::DataVolume | RegionKind::Keystore => {}
+            RegionKind::InactiveSlot => return Err(FsErr::OutsideRegion),
         }
         self.next_seq += 1;
         if self.count < self.nslots {
