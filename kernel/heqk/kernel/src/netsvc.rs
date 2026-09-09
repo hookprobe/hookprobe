@@ -518,6 +518,76 @@ pub fn build_sweep_frame(our_mac: [u8; 6], our_ip: [u8; 4], dport: u16, total: u
     total
 }
 
+/// DNS-SINKHOLE (feature `dnssink`): if `qframe` is a standard untagged Ethernet/IPv4/UDP DNS
+/// QUERY (dst port 53) for an RPZ-blocked name, build the spoofed SINKHOLE reply into `out`
+/// (eth/IP/UDP addresses swapped so it appears to come from the queried resolver; UDP sport=53;
+/// the crafted A-record answer points at `dnssink::SINKHOLE_IP`) and return its length. `None`
+/// for anything else (not a blocked DNS query) — the caller then forwards the query untouched, so
+/// a legit name always flows (ADR 0023 "refuse a NAME, never a PACKET"). Only the NO-VLAN /
+/// IHL=5 common case is handled; anything unusual falls through to normal forwarding (fail-open).
+#[cfg(feature = "dnssink")]
+pub fn build_dns_sinkhole_frame(qframe: &[u8], out: &mut [u8]) -> Option<usize> {
+    // eth(14) + IPv4(20) + UDP(8) + at least a DNS header(12).
+    if qframe.len() < 42 + 12 {
+        return None;
+    }
+    if qframe[12] != 0x08 || qframe[13] != 0x00 {
+        return None; // not IPv4
+    }
+    if qframe[14] != 0x45 {
+        return None; // IHL != 5 (options) — fall through
+    }
+    if qframe[23] != 17 {
+        return None; // not UDP
+    }
+    if u16::from_be_bytes([qframe[36], qframe[37]]) != 53 {
+        return None; // not a DNS query (dst port 53)
+    }
+    let ip_total = u16::from_be_bytes([qframe[16], qframe[17]]) as usize;
+    let dns_end = 14 + ip_total; // IP total length measured from the eth start
+    let dns_off = 42usize;
+    if dns_end > qframe.len() || dns_end <= dns_off {
+        return None;
+    }
+    let dns_query = &qframe[dns_off..dns_end];
+    // RPZ decision (fail-closed parse). Not blocked ⇒ None ⇒ the query is forwarded normally.
+    let mut nm = [0u8; 256];
+    let nlen = crate::dnssink::parse_qname(dns_query, &mut nm)?;
+    if !crate::dnssink::rpz_blocked(&nm[..nlen]) {
+        return None;
+    }
+    // Craft the sinkhole DNS answer.
+    let mut dresp = [0u8; 512];
+    let rlen = crate::dnssink::build_sinkhole_response(dns_query, crate::dnssink::SINKHOLE_IP, &mut dresp)?;
+    let frame = 42 + rlen;
+    if frame > out.len() {
+        return None;
+    }
+    for b in out[..42].iter_mut() {
+        *b = 0;
+    }
+    // eth: dst = query's src MAC, src = query's dst MAC (heqk answers AS the resolver).
+    out[0..6].copy_from_slice(&qframe[6..12]);
+    out[6..12].copy_from_slice(&qframe[0..6]);
+    out[12] = 0x08;
+    out[13] = 0x00;
+    // IPv4: src = query's dst IP (the resolver), dst = query's src IP (the client).
+    out[14] = 0x45;
+    out[16..18].copy_from_slice(&((20 + 8 + rlen) as u16).to_be_bytes());
+    out[22] = 64; // TTL
+    out[23] = 17; // UDP
+    out[26..30].copy_from_slice(&qframe[30..34]);
+    out[30..34].copy_from_slice(&qframe[26..30]);
+    let csum = ipv4_checksum(&out[14..34]);
+    out[24..26].copy_from_slice(&csum.to_be_bytes());
+    // UDP: sport = 53, dport = query's src port; checksum 0 (permitted for IPv4).
+    out[34..36].copy_from_slice(&53u16.to_be_bytes());
+    out[36..38].copy_from_slice(&qframe[34..36]);
+    out[38..40].copy_from_slice(&((8 + rlen) as u16).to_be_bytes());
+    out[42..42 + rlen].copy_from_slice(&dresp[..rlen]);
+    Some(frame)
+}
+
 /// The L4-payload slice of a UDP frame destined to `port`, or `None` (not IPv4/UDP or wrong
 /// port). Used by the ControlPlane to extract a handshake chunk from a received frame.
 pub fn udp_payload_for_port(frame: &[u8], port: u16) -> Option<&[u8]> {
