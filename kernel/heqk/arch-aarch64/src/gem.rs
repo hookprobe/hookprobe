@@ -392,6 +392,43 @@ static mut TXRING: TxRing = TxRing {
     buf: [[0; TXBUF]; NTX],
 };
 
+// ── TX size/alignment sweep (feature `txsweep`, host-RAM DMA discriminator) ──────────
+// A dedicated 8 KiB TX buffer, 4 KiB-aligned so `bus & 0xfff == off` for any offset ≤ 0xfff:
+// the on-wire correlation of a failure to a DMA-address boundary (esp. the 256-byte
+// RP1-AXI/PCIe-MPS boundary) is exact. tx_frame reads the override per frame instead of its
+// own TXRING.buf, so the sweep rides the PROVEN arm/kick/poll path — only the buffer moves.
+#[cfg(feature = "txsweep")]
+#[repr(C, align(4096))]
+struct SweepBuf {
+    b: [u8; 8192],
+}
+#[cfg(feature = "txsweep")]
+static mut SWEEPBUF: SweepBuf = SweepBuf { b: [0; 8192] };
+#[cfg(feature = "txsweep")]
+static mut TX_BUF_OVERRIDE: Option<(usize, u64)> = None;
+
+/// (NC-alias write VA base, GEM-DMA bus base) of the 4 KiB-aligned sweep buffer.
+#[cfg(feature = "txsweep")]
+pub fn sweep_base() -> (usize, u64) {
+    let pa = unsafe { core::ptr::addr_of!(SWEEPBUF) as usize };
+    (pa + NC_VA, pa as u64 + DMA_BUS_OFFSET)
+}
+/// Point the NEXT tx_frame at `(write_va, bus)` instead of its own TXRING buffer; `None` restores.
+#[cfg(feature = "txsweep")]
+pub fn set_tx_override(o: Option<(usize, u64)>) {
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_BUF_OVERRIDE), o) };
+}
+/// Live TX status register (for per-frame sweep logging).
+#[cfg(feature = "txsweep")]
+pub fn read_tsr() -> u32 {
+    r(GEM, TSR)
+}
+/// Live DMA-config register (for the sweep header line).
+#[cfg(feature = "txsweep")]
+pub fn read_dmacfg() -> u32 {
+    r(GEM, DMACFG)
+}
+
 #[inline]
 fn r(base: usize, off: usize) -> u32 {
     unsafe { read_volatile((base + off) as *const u32) }
@@ -864,6 +901,11 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
         (bufpa + NC_VA, bufpa as u64 + DMA_BUS_OFFSET)
     };
+    // Sweep override (feature `txsweep`): if the caller has staged a (write_va, bus) via
+    // set_tx_override, transmit from THAT buffer instead — the size/alignment discriminator.
+    #[cfg(feature = "txsweep")]
+    let (write_va, bus) =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TX_BUF_OVERRIDE)) }.unwrap_or((write_va, bus));
     unsafe {
         let dst = write_va as *mut u8;
         for k in 0..n {

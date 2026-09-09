@@ -481,6 +481,43 @@ pub fn build_hs_datagram(
     frame
 }
 
+/// DISCRIMINATOR (feature `txsweep`): build a BROADCAST UDP frame of EXACTLY `total` bytes
+/// (Ethernet(bcast)/IPv4(src=`our_ip`,dst=255.255.255.255)/UDP(sport=total,dport=`dport`) ‖
+/// 0xA5 padding). `sport` carries the frame length and `dport` the sweep index so a host
+/// `tcpdump -e` capture maps every frame that reaches the wire back to its (length, index)
+/// without the kernel log. Valid IPv4 checksum; UDP checksum 0. `total` is clamped to
+/// [42, out.len()]. Returns the frame length written.
+#[cfg(feature = "txsweep")]
+pub fn build_sweep_frame(our_mac: [u8; 6], our_ip: [u8; 4], dport: u16, total: usize, out: &mut [u8]) -> usize {
+    let total = total.max(42).min(out.len());
+    for b in out[..42].iter_mut() {
+        *b = 0;
+    }
+    for b in out[42..total].iter_mut() {
+        *b = 0xA5;
+    }
+    // Ethernet: bcast dst, our src, IPv4
+    out[0..6].copy_from_slice(&[0xff; 6]);
+    out[6..12].copy_from_slice(&our_mac);
+    out[12] = 0x08;
+    out[13] = 0x00;
+    // IPv4 header
+    out[14] = 0x45; // v4, IHL=5
+    out[16..18].copy_from_slice(&((total - 14) as u16).to_be_bytes());
+    out[22] = 64; // TTL
+    out[23] = 17; // UDP
+    out[26..30].copy_from_slice(&our_ip);
+    out[30..34].copy_from_slice(&[255, 255, 255, 255]);
+    let csum = ipv4_checksum(&out[14..34]);
+    out[24..26].copy_from_slice(&csum.to_be_bytes());
+    // UDP header — sport = length marker, dport = sweep index code
+    out[34..36].copy_from_slice(&(total as u16).to_be_bytes());
+    out[36..38].copy_from_slice(&dport.to_be_bytes());
+    out[38..40].copy_from_slice(&((total - 34) as u16).to_be_bytes());
+    // UDP checksum 0 (already zeroed), payload already 0xA5
+    total
+}
+
 /// The L4-payload slice of a UDP frame destined to `port`, or `None` (not IPv4/UDP or wrong
 /// port). Used by the ControlPlane to extract a handshake chunk from a received frame.
 pub fn udp_payload_for_port(frame: &[u8], port: u16) -> Option<&[u8]> {
