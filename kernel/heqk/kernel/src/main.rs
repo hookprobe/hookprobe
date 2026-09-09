@@ -1389,6 +1389,20 @@ fn cm5_prod_service() -> ! {
     // metal observability (the on-wire sinkhole reply is the definitive proof).
     #[cfg(feature = "dnssink")]
     let mut dns_sinks: u64 = 0;
+    // M5 WASM-HOST ON CM5 (feature `wasmhost`): run the bespoke in-kernel beachhead ONCE at
+    // boot — Ed25519-verify a signed .wasm module then EXECUTE it with the dependency-free
+    // no_std interpreter, ON SILICON. classify(4444)=1 / classify(443)=0; a tampered module or
+    // bad signature is refused before interpretation (fail-closed). This is the first Wasm
+    // module executed on heqk CM5 metal. (The full wasmi EL0 host is the deferred end-state —
+    // it needs the build.rs un-gate + an EL0 excursion on cm5; see docs/design gap #6.)
+    #[cfg(feature = "wasmhost")]
+    {
+        let w = wasmhost::wasmhost_selftest();
+        kprint!(" [WASMMETAL] signed .wasm verify+run ON CM5 SILICON: verify_run={} classify(4444)={}(exp1) classify(443)={}(exp0) tamper_refused={} badsig_refused={}\n",
+            w.a_verify_run, w.bad_result, w.ok_result, w.b_fail_closed, w.b_unsigned);
+        kprint!(" [WASMMETAL] {} — bespoke no_std interpreter verified + executed a signed module on metal (M5 beachhead on CM5)\n",
+            if w.a_verify_run && w.bad_result == 1 && w.ok_result == 0 && w.b_fail_closed && w.b_unsigned { "PASS" } else { "FAIL" });
+    }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
