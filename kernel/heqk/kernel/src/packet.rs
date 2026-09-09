@@ -170,6 +170,15 @@ fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
     &buf[..14 + l3_len]
 }
 
+/// segmetal metal observability: total segmentation reach-DROPs since boot (the armed-DROP
+/// proof reads this — a reach-drop is otherwise event-less by design). segmetal-only, never shipped.
+#[cfg(feature = "segmetal")]
+static SEG_REACH_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "segmetal")]
+pub fn seg_reach_drops() -> u64 {
+    SEG_REACH_DROPS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// P17 — the public verdict entry point. Both IPS gates (netq::rx_publish on
 /// ingress, netq::tx_drain on egress) call THIS so the userspace IP service is a
 /// *client* of the signed rule plane, never a bypass of it. Returns
@@ -193,6 +202,10 @@ pub fn verdict(frame: &[u8]) -> (u16, u16) {
             // Segmentation POLICY drop — a distinct INFO event (C5), NOT a threat: it must not
             // feed QSecBit / corroboration / the threat score, so it is NOT run through the
             // detection event ring here.
+            // segmetal metal observability ONLY: count reach-drops so the armed-DROP proof has a
+            // signal distinct from threat drops (a reach-drop emits no event by design). Additive.
+            #[cfg(feature = "segmetal")]
+            SEG_REACH_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             return (port, DROP);
         }
     }
