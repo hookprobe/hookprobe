@@ -94,6 +94,12 @@ impl ControlPlane {
         self.session.as_mut()
     }
 
+    /// This device's fingerprint (`sha256(dev.pk)`) — the C14 binding the reach policy is signed
+    /// for. The segmentation-arming path builds an `Enrollment` around it.
+    pub fn device_fp(&self) -> [u8; 32] {
+        self.device_fp
+    }
+
     /// Is this frame for the control plane (for-heqk AND UDP:7654)?
     pub fn wants(&self, frame: &[u8]) -> bool {
         is_for_heqk(frame, self.our_mac, self.our_ip) && udp_payload_for_port(frame, HS_PORT).is_some()

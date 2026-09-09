@@ -36,6 +36,64 @@ use std::net::UdpSocket;
 const HS_PORT: u16 = 7654;
 const TENANT: &[u8] = b"TENANT42";
 
+// --- M4.5 segmentation authority (the reach policy the sim serves post-Established) ----------
+// The device requests its policy with this opcode (enroll.rs REACH_POLICY_REQ).
+const REACH_POLICY_REQ: &[u8] = b"HEQK-SEG-GET";
+// The reach tenant the device is enrolled under (must equal the device-baked Enrollment.tenant_id).
+const SEG_TENANT: u64 = 0x5445_4E41; // "TENA"
+// ReachPolicy wire layout — mirrors kernel enroll.rs::ReachPolicy EXACTLY (fail-closed parsed
+// on-device, so any drift is rejected, never mis-applied).
+const RP_MAGIC: u32 = 0x314C_5052; // "RPL1" LE
+const RP_DEV_SLOTS: usize = 64; // segment::DEV_SLOTS
+const RP_HDR_LEN: usize = 32;
+const RP_ENTRY_LEN: usize = 8;
+const RP_BODY_LEN: usize = RP_HDR_LEN + RP_DEV_SLOTS * RP_ENTRY_LEN; // 544
+const RP_WIRE_LEN: usize = RP_BODY_LEN + 64; // + Ed25519 sig = 608
+// Reach codes (segment::Reach::to_code): Full=0, InternetOnly=1, Quarantine=2.
+const REACH_QUARANTINE: u8 = 2;
+const REACH_INTERNET_ONLY: u8 = 1;
+
+/// The operator Ed25519 signing keypair — the INDEPENDENT trust root (C9), from the same public
+/// dev seed the device pins (enroll.rs seg_policy_selftest). In production this private key lives
+/// only with the operator; here it is a shared dev key so the metal bring-up is reproducible.
+fn operator_keypair() -> ed25519_compact::KeyPair {
+    ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(sha256::digest(
+        b"HEQK-M4.5-operator-signing-key",
+    )))
+}
+
+/// Build + operator-sign a 2-entry reach policy FOR `device_fp` (sig covers body ‖ device_fp, C14).
+/// Byte-identical layout to kernel enroll.rs::build_signed_policy: MAC byte0 differs (0x02 vs 0x0a)
+/// so the two entries land in distinct reach-table slots. Returns the WIRE_LEN record.
+fn build_signed_policy(gen: u64, tenant: u64, device_fp: &[u8; 32]) -> [u8; RP_WIRE_LEN] {
+    let mut b = [0u8; RP_WIRE_LEN];
+    // header
+    b[0..4].copy_from_slice(&RP_MAGIC.to_le_bytes());
+    b[4] = 1; // VERSION
+    b[5] = 0; // flags
+    b[6..8].copy_from_slice(&2u16.to_le_bytes()); // entry_count
+    b[8..16].copy_from_slice(&gen.to_le_bytes());
+    b[16..24].copy_from_slice(&tenant.to_le_bytes());
+    b[24..28].copy_from_slice(&0x0A00_0001u32.to_le_bytes()); // infra_gw 10.0.0.1
+    b[28..32].copy_from_slice(&0x0A00_0002u32.to_le_bytes()); // infra_dns 10.0.0.2
+    // entry 0: MAC 02:..:10 -> Quarantine
+    let e0 = RP_HDR_LEN;
+    b[e0..e0 + 6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x10]);
+    b[e0 + 6] = REACH_QUARANTINE;
+    // entry 1: MAC 0a:..:11 -> InternetOnly
+    let e1 = RP_HDR_LEN + RP_ENTRY_LEN;
+    b[e1..e1 + 6].copy_from_slice(&[0x0a, 0, 0, 0, 0, 0x11]);
+    b[e1 + 6] = REACH_INTERNET_ONLY;
+    // sign body ‖ device_fp
+    let mut sig_msg = [0u8; RP_BODY_LEN + 32];
+    sig_msg[..RP_BODY_LEN].copy_from_slice(&b[..RP_BODY_LEN]);
+    sig_msg[RP_BODY_LEN..].copy_from_slice(device_fp);
+    let kp = operator_keypair();
+    let sig = kp.sk.sign(&sig_msg[..], None);
+    b[RP_BODY_LEN..].copy_from_slice(&sig[..]);
+    b
+}
+
 /// The MSSP responder static keypair — from the SAME seeds as
 /// controlplane::dump_provisioned_blob, so `.public()` == the device's baked MSSP pubkey.
 fn responder_static() -> ResponderStatic {
@@ -150,21 +208,52 @@ fn run_live(dev_ip: &str, dev_id: u64) -> std::io::Result<()> {
     println!(" [sim] device_id={dev_id} → authenticating device ed25519 pk (first 8 bytes) {:02x?}",
         &dpk_bytes[..8]);
 
+    let op_kp = operator_keypair();
+    let op_pk: &[u8] = op_kp.pk.as_ref();
+    println!(" [sim] operator signing pubkey (bake into device as OPERATOR_PK): {}",
+        op_pk.iter().map(|b| format!("{b:02x}")).collect::<String>());
+
     let sock = UdpSocket::bind(("0.0.0.0", HS_PORT))?;
     sock.set_broadcast(true)?;
-    println!(" [sim] listening on 0.0.0.0:{HS_PORT} (broadcast); will answer msg2 to {dev_ip}:{HS_PORT}");
+    println!(" [sim] listening on 0.0.0.0:{HS_PORT} (broadcast); will answer msg2 + serve ReachPolicy to {dev_ip}:{HS_PORT}");
 
     let mut reasm = HsReasm::new();
     let mut buf = [0u8; 2048];
+    // Some(session, device_fp) once Established: the next non-beacon datagram is the encrypted
+    // REACH_POLICY_REQ, which we answer with the operator-signed policy over the same Session.
+    let mut established: Option<(securechannel::Session, [u8; 32])> = None;
     let mut handshakes = 0u32;
     loop {
         let (n, from) = sock.recv_from(&mut buf)?;
-        // The device also broadcasts a 90 B presence BEACON on :7654 whose UDP payload starts
-        // with "HEQK-ENROLL-HELO". It is NOT a handshake chunk — feeding it to HsReasm corrupts
-        // an in-progress msg1 reassembly. Skip it.
+        // Skip the 90 B presence beacon (UDP payload starts "HEQK-ENROLL-HELO").
         if buf[..n].starts_with(b"HEQK-ENROLL") {
             continue;
         }
+
+        // POLICY phase — Established: decrypt the REQ over the Session, serve the signed policy.
+        if let Some((session, device_fp)) = established.as_mut() {
+            let mut reqpt = [0u8; 64];
+            match session.recv.decrypt_into(b"", &buf[..n], &mut reqpt) {
+                Ok(got) if &reqpt[..got] == REACH_POLICY_REQ => {
+                    let pol = build_signed_policy(1, SEG_TENANT, device_fp);
+                    let mut rec = [0u8; RP_WIRE_LEN + 16];
+                    match session.send.encrypt_into(b"", &pol, &mut rec) {
+                        Some(rl) => {
+                            let ok = sock.send_to(&rec[..rl], (dev_ip, HS_PORT)).is_ok();
+                            println!(" [sim] ✅ REQ received; operator-signed ReachPolicy sent (gen=1 tenant=TENA, MAC 02..10=Quarantine, 0a..11=InternetOnly; {RP_WIRE_LEN} B plaintext → {rl} B record, sent_ok={ok}) — device should verify+ARM");
+                        }
+                        None => eprintln!(" [sim] policy encrypt failed"),
+                    }
+                    established = None; // one policy per session; a device reboot re-handshakes
+                    reasm = HsReasm::new();
+                }
+                Ok(_) => { /* decrypted but not the REQ opcode — ignore */ }
+                Err(_) => { /* not decryptable on this Session (stray/handshake) — ignore */ }
+            }
+            continue;
+        }
+
+        // HANDSHAKE phase.
         match reasm.feed(&buf[..n]) {
             Ok(Some(total)) => {
                 println!(" [sim] msg1 reassembled ({total} B) from {from}");
@@ -178,20 +267,31 @@ fn run_live(dev_ip: &str, dev_id: u64) -> std::io::Result<()> {
                     }
                 };
                 match responder_read_msg1(&resp, &dev_pk, reasm.message()) {
-                    Ok(rpend) => match responder_write_msg2(rpend, &rrand, TENANT) {
-                        Some((msg2, rsession)) => {
-                            let sent = hs_chunk(msg2.as_slice(), |framed| {
-                                sock.send_to(framed, (dev_ip, HS_PORT)).is_ok()
-                            });
-                            handshakes += 1;
-                            println!(
-                                " [sim] ✅ msg2 sent (chunks_ok={sent}); ESTABLISHED #{handshakes}; \
-                                 responder send-key[0..8]={:02x?}",
-                                &rsession.send.key_for_test()[..8]
-                            );
+                    Ok(rpend) => {
+                        // The device sends device_fp (= sha256(dev.pk)) as msg1 payload1 — capture
+                        // it BEFORE responder_write_msg2 consumes rpend, to sign the policy for it.
+                        let mut device_fp = [0u8; 32];
+                        let pl = rpend.payload1.as_slice();
+                        if pl.len() == 32 {
+                            device_fp.copy_from_slice(pl);
                         }
-                        None => eprintln!(" [sim] responder_write_msg2 failed"),
-                    },
+                        match responder_write_msg2(rpend, &rrand, TENANT) {
+                            Some((msg2, rsession)) => {
+                                let sent = hs_chunk(msg2.as_slice(), |framed| {
+                                    sock.send_to(framed, (dev_ip, HS_PORT)).is_ok()
+                                });
+                                handshakes += 1;
+                                println!(
+                                    " [sim] ✅ msg2 sent (chunks_ok={sent}); ESTABLISHED #{handshakes}; \
+                                     device_fp[0..8]={:02x?}; send-key[0..8]={:02x?}",
+                                    &device_fp[..8],
+                                    &rsession.send.key_for_test()[..8]
+                                );
+                                established = Some((rsession, device_fp));
+                            }
+                            None => eprintln!(" [sim] responder_write_msg2 failed"),
+                        }
+                    }
                     Err(e) => eprintln!(" [sim] responder_read_msg1 rejected the device: {e:?} \
                         (dev-id/pubkey mismatch? try --dev-id from the device's serial log)"),
                 }
