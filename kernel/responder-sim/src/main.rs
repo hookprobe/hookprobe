@@ -159,6 +159,12 @@ fn run_live(dev_ip: &str, dev_id: u64) -> std::io::Result<()> {
     let mut handshakes = 0u32;
     loop {
         let (n, from) = sock.recv_from(&mut buf)?;
+        // The device also broadcasts a 90 B presence BEACON on :7654 whose UDP payload starts
+        // with "HEQK-ENROLL-HELO". It is NOT a handshake chunk — feeding it to HsReasm corrupts
+        // an in-progress msg1 reassembly. Skip it.
+        if buf[..n].starts_with(b"HEQK-ENROLL") {
+            continue;
+        }
         match reasm.feed(&buf[..n]) {
             Ok(Some(total)) => {
                 println!(" [sim] msg1 reassembled ({total} B) from {from}");
@@ -212,7 +218,16 @@ fn main() {
         }
         "--live" => {
             let dev_ip = arg_val("--dev-ip").unwrap_or_else(|| "10.200.0.2".to_string());
-            let dev_id = arg_val("--dev-id").and_then(|s| s.parse().ok()).unwrap_or(0u64);
+            // --dev-id accepts decimal or 0x-hex (the device prints its OTP id as 0x… on serial).
+            let dev_id = arg_val("--dev-id")
+                .and_then(|s| {
+                    let s = s.trim();
+                    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                        Some(h) => u64::from_str_radix(h, 16).ok(),
+                        None => s.parse().ok(),
+                    }
+                })
+                .unwrap_or(0u64);
             if let Err(e) = run_live(&dev_ip, dev_id) {
                 eprintln!(" [sim] fatal: {e}");
                 std::process::exit(1);
