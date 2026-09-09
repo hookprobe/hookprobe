@@ -1301,12 +1301,21 @@ fn cm5_prod_service() -> ! {
                 }
             }};
         }
+        // RUN 2 (2026-09-09) was decisive: the ">1024 B TX blocker" is NOT a length gate, a
+        // PCIe-boundary fault, or a MAC max-frame limit — it is the tx_frame RETRIGGER racing
+        // the tail of a large frame. RUN 2 showed a PERFECT pass/fail POSITIONAL alternation
+        // at the boundary (1512✓ 1514✗ 1515✓ 1516✗ …) while 1520 and even 1600 transmitted on
+        // the "pass" slots, and every passing large frame read TSR.TGO=1 (transmitter still
+        // going). 1070 B (the msg1 datagram size) passes cleanly — the Noise handshake was
+        // never blocked. FIX (gem.rs): gate the retrigger re-kick on TSR.TGO clear, exactly as
+        // Linux macb does. RUN 3 VALIDATES it: (1) the boundary sweep should now pass at EVERY
+        // length, and (2) a sustained back-to-back full-size (1514 B) burst should show NO
+        // alternation. off=0 throughout.
         const BND: [usize; 18] = [
             1024, 1040, 1056, 1070, 1088, 1200, 1400, 1480, 1500, 1510, 1512, 1514, 1515, 1516, 1517, 1518, 1520, 1522,
         ];
-        // Phase 1 — boundary sweep, jumbo OFF. dport = 60000 + i (i = index into BND).
         kprint!(
-            " [TXSWEEP] phase 1: boundary sweep, jumbo OFF (ncfgr={:#010x})\n",
+            " [TXSWEEP] phase 1: boundary sweep 1024..1522 (TGO-gated retrigger; ncfgr={:#010x})\n",
             arch_aarch64::gem::read_ncfgr()
         );
         {
@@ -1316,26 +1325,18 @@ fn cm5_prod_service() -> ! {
                 i += 1;
             }
         }
-        // Enable jumbo (NCFGR.JFRAME + JML=10240), exactly as Linux macb does for RP1.
-        arch_aarch64::gem::enable_jumbo();
-        // Phase 2 — SAME boundary sweep + a few jumbo sizes, jumbo ON. dport = 61000 + j.
-        kprint!(
-            " [TXSWEEP] phase 2: same sweep + jumbo, jumbo ON (ncfgr={:#010x})\n",
-            arch_aarch64::gem::read_ncfgr()
-        );
+        // Phase 2 — sustained full-size (1514 B = the max standard payload → 1518 on wire)
+        // back-to-back burst. Pre-fix this alternated 1/0/1/0; post-fix every one must land.
+        kprint!(" [TXSWEEP] phase 2: 32x back-to-back 1514B (alternation check)\n");
         {
-            let mut j: u16 = 0;
-            for &l in &BND {
-                emit!(l, 61000 + j);
-                j += 1;
-            }
-            for &l in &[1600usize, 1800, 2000] {
-                emit!(l, 61000 + j);
-                j += 1;
+            let mut k: u16 = 0;
+            while k < 32 {
+                emit!(1514usize, 62000 + k);
+                k += 1;
             }
         }
         arch_aarch64::gem::set_tx_override(None);
-        kprint!(" [TXSWEEP] done. Capture: tcpdump -ni FTS -e -v udp portrange 60000-61999\n");
+        kprint!(" [TXSWEEP] done. Capture: tcpdump -ni FTS -e -v udp portrange 60000-62999\n");
     }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
