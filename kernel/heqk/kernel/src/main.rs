@@ -1616,7 +1616,14 @@ fn cm5_prod_service() -> ! {
                                     if c.established() && seg_phase == 1 {
                                         if let Some(payload) = netsvc::udp_payload_for_port(&buf[..n], 7654) {
                                             match (seg_emmc.as_mut().ok(), c.session_mut()) {
-                                                (Some(emmc), Some(sess)) => match store::SealedStore::open(emmc) {
+                                                (Some(emmc), Some(sess)) => {
+                                                // Arm the eMMC one-shot write window for the reach-
+                                                // floor fslog region (Gate 2). It is narrowing-only
+                                                // but survives multiple writes, so one arm covers the
+                                                // fslog format + op-key-pin + floor-persist writes
+                                                // (all within [SEG_LO,SEG_HI) ⊂ the keystore window).
+                                                let _ = emmc.arm_write_window(SEG_LO, SEG_HI);
+                                                match store::SealedStore::open(emmc) {
                                                     Ok(mut st) => match enroll::reconcile_reach_policy_record(
                                                         &seg_enr, sess, payload, &mut st, SEG_LO, SEG_HI, &OPERATOR_PK,
                                                     ) {
@@ -1628,7 +1635,8 @@ fn cm5_prod_service() -> ! {
                                                         Err(e) => kprint!("   [SEGMETAL] reconcile refused: {:?} (fail-open, unarmed)\n", e),
                                                     },
                                                     Err(e) => kprint!("   [SEGMETAL] eMMC store open failed: {:?}\n", e),
-                                                },
+                                                }
+                                                }
                                                 _ => {}
                                             }
                                         }
