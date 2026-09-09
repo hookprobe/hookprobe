@@ -1057,6 +1057,13 @@ impl ResponderPub {
         self.x_pk
     }
 
+    /// The responder's ML-KEM-768 encapsulation key bytes (public material — 1184 B). Used to
+    /// serialize/inspect the provisioning blob.
+    #[inline]
+    pub fn k_ek_bytes(&self) -> &[u8] {
+        &self.k_ek_bytes
+    }
+
     /// Construct a `ResponderPub` from PROVISIONED public bytes — the metal path: a device holds
     /// the MSSP's PUBLIC key (X25519 32 B + ML-KEM-768 encaps key 1184 B), NEVER the private
     /// seeds (`from_seeds` is selftest-only, compiled out of cm5). Validates the ML-KEM encaps
