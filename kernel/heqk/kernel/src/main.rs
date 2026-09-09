@@ -1367,10 +1367,14 @@ fn cm5_prod_service() -> ! {
         0xe8, 0xd8, 0x79, 0x93, 0xba, 0xe8, 0x16, 0xad, 0x3b, 0xea, 0x1b, 0x7a, 0xc7, 0x27, 0x26, 0x86, 0x18, 0xf0,
         0xf2, 0xf7, 0x63, 0x03, 0x90, 0x42, 0xe4, 0xd9, 0xa0, 0x9a, 0xcf, 0x1e, 0xaf, 0x8d,
     ];
+    // Reach-floor fslog in the eMMC keystore guard window. [2033,2047) is a FRESH sub-range
+    // (a former slot area, never a superblock) so a fresh-device format→arm happens in ONE boot
+    // now that fslog::format accepts the Keystore region (the #1b fix). Sub-allocated clear of the
+    // seal blob at 2016. (Proper home is a dedicated DataVolume partition — M3 gap #7.)
     #[cfg(feature = "segmetal")]
-    const SEG_LO: u64 = 2032;
+    const SEG_LO: u64 = 2033;
     #[cfg(feature = "segmetal")]
-    const SEG_HI: u64 = 2048;
+    const SEG_HI: u64 = 2047;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.

@@ -439,9 +439,17 @@ pub fn format<D: BlockDev>(
     h.update(&sb[0..24]);
     let d = h.finish();
     sb[24..32].copy_from_slice(&d[..8]);
+    // The superblock must land in a WRITABLE, registered, non-boot region — either a DataVolume
+    // (the normal evidence/OTA log home) or the always-registered Keystore window (where the small
+    // M4.5 reach-floor log lives until a dedicated DataVolume partition exists — the caller
+    // sub-allocates so it never overlaps the seal blob). `store_sector` has already guaranteed the
+    // LBA is in a registered region and passed the device write clamp; LBA 0 / boot slots are
+    // never in either region, so both kinds are safe here. A non-registered LBA already errored
+    // via `?` above.
     match store.store_sector(lo, &sb)? {
-        RegionKind::DataVolume => {}
-        _ => return Err(FsErr::OutsideRegion), // superblock must land in the data volume
+        RegionKind::DataVolume | RegionKind::Keystore => {}
+        // InactiveSlot (an A/B boot slot) must NEVER hold an fslog superblock — reject.
+        RegionKind::InactiveSlot => return Err(FsErr::OutsideRegion),
     }
     // Zero the slot area so a re-format over stale records leaves no valid ghosts.
     let zero = [0u8; SEC];
