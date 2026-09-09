@@ -20,6 +20,23 @@ pub const RESERVED_LBA_HI: u64 = 2048;
 pub const MIN_PART_LBA: u64 = 2048;
 /// MBR partition type marking a GPT protective entry — refuse (we don't parse GPT).
 pub const PTYPE_GPT_PROTECTIVE: u8 = 0xEE;
+/// MBR partition type marking the heqk DataVolume (raw log store: evidence graph, QSecBit
+/// history, reach-floor). 0xDA = "Non-FS data" — a raw, filesystem-less partition, exactly
+/// what the log-structured DataVolume store wants. The image factory / provisioning sets it.
+pub const PTYPE_DATAVOLUME: u8 = 0xDA;
+
+/// Find the heqk DataVolume partition (MBR type 0xDA) and return its `[start, start+count)` LBA
+/// range, or `None` if there is no such partition. The kernel registers this as the writable
+/// DataVolume region (`SealedStore::add_region` + `emmc::set_data_volume`) instead of a
+/// hardcoded LBA — the partition table is now the single source of truth for the layout.
+pub fn datavolume_from_mbr(sector: &[u8; 512]) -> Option<(u64, u64)> {
+    for p in parse_mbr(sector).iter() {
+        if p.ptype == PTYPE_DATAVOLUME && p.count != 0 && p.start >= MIN_PART_LBA {
+            return Some((p.start, p.start.saturating_add(p.count)));
+        }
+    }
+    None
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardErr {

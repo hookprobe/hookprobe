@@ -1377,14 +1377,33 @@ fn cm5_prod_service() -> ! {
         0xe8, 0xd8, 0x79, 0x93, 0xba, 0xe8, 0x16, 0xad, 0x3b, 0xea, 0x1b, 0x7a, 0xc7, 0x27, 0x26, 0x86, 0x18, 0xf0,
         0xf2, 0xf7, 0x63, 0x03, 0x90, 0x42, 0xe4, 0xd9, 0xa0, 0x9a, 0xcf, 0x1e, 0xaf, 0x8d,
     ];
-    // Reach-floor fslog in the eMMC keystore guard window. [2033,2047) is a FRESH sub-range
-    // (a former slot area, never a superblock) so a fresh-device format→arm happens in ONE boot
-    // now that fslog::format accepts the Keystore region (the #1b fix). Sub-allocated clear of the
-    // seal blob at 2016. (Proper home is a dedicated DataVolume partition — M3 gap #7.)
+    // #7: reach-floor fslog HOME. Preferred = the dedicated DataVolume PARTITION (MBR type 0xDA),
+    // derived from the partition table — the durable, capacious home. Fallback = the keystore
+    // guard window [2034,2046) if there is no DataVolume partition (older layout). `seg_dv` carries
+    // the full partition range so the eMMC Gate-1 allowlist (set_data_volume) admits writes there.
     #[cfg(feature = "segmetal")]
-    const SEG_LO: u64 = 2034;
+    let (seg_dv, seg_lo, seg_hi): (Option<(u64, u64)>, u64, u64) = {
+        let mut mbr = [0u8; 512];
+        let dv = match seg_emmc.as_mut() {
+            Ok(e) => {
+                use hal::BlockDev;
+                if e.read_block(0, &mut mbr).is_ok() {
+                    store::datavolume_from_mbr(&mbr)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+        match dv {
+            // reach-floor ring = the FIRST 16 sectors of the DataVolume partition.
+            Some((lo, hi)) => (Some((lo, hi)), lo, (lo + 16).min(hi)),
+            None => (None, 2034, 2046), // keystore-window fallback (#1b bring-up)
+        }
+    };
     #[cfg(feature = "segmetal")]
-    const SEG_HI: u64 = 2046;
+    kprint!(" [SEGMETAL] reach-floor home: {} lo={} hi={}\n",
+        if seg_dv.is_some() { "DataVolume partition (0xDA)" } else { "keystore-window fallback" }, seg_lo, seg_hi);
     // DNS-sinkhole counter (feature `dnssink`) — reprinted every heartbeat for garbling-proof
     // metal observability (the on-wire sinkhole reply is the definitive proof).
     #[cfg(feature = "dnssink")]
@@ -1681,19 +1700,28 @@ fn cm5_prod_service() -> ! {
                                         if let Some(payload) = netsvc::udp_payload_for_port(&buf[..n], 7654) {
                                             match (seg_emmc.as_mut().ok(), c.session_mut()) {
                                                 (Some(emmc), Some(sess)) => {
-                                                // Arm the eMMC one-shot write window for the reach-
-                                                // floor fslog region (Gate 2). It is narrowing-only
-                                                // but survives multiple writes, so one arm covers the
-                                                // fslog format + op-key-pin + floor-persist writes
-                                                // (all within [SEG_LO,SEG_HI) ⊂ the keystore window).
-                                                let _ = emmc.arm_write_window(SEG_LO, SEG_HI);
+                                                // #7: if the reach-floor lives in the DataVolume PARTITION,
+                                                // register it in the eMMC Gate-1 allowlist (set_data_volume)
+                                                // so writes there are admitted. Then arm the one-shot Gate-2
+                                                // window — narrowing-only but survives multiple writes, so one
+                                                // arm covers the fslog format + op-key-pin + floor-persist.
+                                                if let Some((dvlo, dvhi)) = seg_dv {
+                                                    emmc.set_data_volume(dvlo, dvhi);
+                                                }
+                                                let _ = emmc.arm_write_window(seg_lo, seg_hi);
                                                 match store::SealedStore::open(emmc) {
                                                     Ok(mut st) => {
+                                                    // Register the reach-floor region as DataVolume (partition
+                                                    // home) so store_sector admits it; keystore fallback is
+                                                    // always-registered so add_region is skipped there.
+                                                    if let Some((dvlo, dvhi)) = seg_dv {
+                                                        let _ = st.add_region(dvlo, dvhi, store::RegionKind::DataVolume);
+                                                    }
                                                     // DIAG: capture the fslog outcome (read_reach_floor collapses
                                                     // every FsErr to FloorUnavailable). Stored + re-printed each hb.
-                                                    seg_fslog_err = crate::fslog::open_or_format(&mut st, SEG_LO, SEG_HI).err();
+                                                    seg_fslog_err = crate::fslog::open_or_format(&mut st, seg_lo, seg_hi).err();
                                                     let r = enroll::reconcile_reach_policy_record(
-                                                        &seg_enr, sess, payload, &mut st, SEG_LO, SEG_HI, &OPERATOR_PK,
+                                                        &seg_enr, sess, payload, &mut st, seg_lo, seg_hi, &OPERATOR_PK,
                                                     );
                                                     seg_recon = Some(r);
                                                     if let Ok(nn) = r {
