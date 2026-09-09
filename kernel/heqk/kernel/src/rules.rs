@@ -187,7 +187,21 @@ fn run_set_verdict(
         if !st.verified {
             continue;
         }
-        let v = if st.jit != 0 && pkt.len() as u64 >= st.min_len {
+        // XC-11/DET-1 — CLOSE THE KERNEL-READ ORACLE on the interpreter path. `min_len` is
+        // the verifier-proven lower bound for EVERY in-bounds access this rule makes —
+        // including helper POINTER args (payload_match derefs R1 for pattern_len bytes with
+        // no internal bounds check; the verifier folds that length into min_len). The JIT
+        // path was already gated on `pkt.len() >= min_len`, but the interpreter FALLBACK ran
+        // UNCONDITIONALLY — so a rule that omits a touch-load could drive payload_match's read
+        // OOB on a short packet (an arbitrary-kernel-read oracle, CVE-2021-4204 class). Latent
+        // while the rule corpus is static+trusted; live the moment untrusted/dynamic rules
+        // load. Enforce min_len on BOTH backends: a packet shorter than the rule's proven
+        // minimum cannot satisfy it, so SKIP it — fail-closed, never a spurious match, and it
+        // makes the verifier's `min_len` a runtime reality independent of a rule's structure.
+        if (pkt.len() as u64) < st.min_len {
+            continue;
+        }
+        let v = if st.jit != 0 {
             let f: extern "C" fn(*const u8) -> u64 =
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(st.jit) };
             f(pkt.as_ptr())
