@@ -833,11 +833,15 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     };
     // Physical address of this slot's TX buffer (VA==PA identity for TXRING).
     let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
-    // Write the frame through the NON-CACHEABLE alias (bufpa + NC_VA), NOT the cacheable
-    // struct field. The old cacheable-write + dc_cvac(clean-to-PoC) path delivered ≤90B frames
-    // but LOST large ones on metal (the GEM read a not-fully-coherent buffer → corrupt/undelivered
-    // frame, clean descriptor). Writing via the same NC window the descriptors use guarantees the
-    // GEM DMA-reads exactly these bytes — dma_alloc_coherent semantics. No cache maintenance.
+    // Write the frame through the NON-CACHEABLE alias (bufpa + NC_VA), NOT the cacheable struct
+    // field — dma_alloc_coherent semantics, the SAME NC window the descriptor ring uses, so the
+    // GEM DMA-reads exactly these bytes with no cache in the path (correct coherency model; small
+    // frames verified still TX). ⚠️ NOTE (metal 2026-09-09): this did NOT fix the >90B large-frame
+    // TX blocker — large frames still complete with a CLEAN descriptor yet never reach the wire,
+    // and the host sees NO CRC error (so they are claimed-sent-but-not-delivered, not bad-FCS).
+    // Cause still unknown after ruling out burst/error-bits/length/TXPBMS/cache-coherency/re-kick;
+    // the next lead is a Linux-macb-on-RP1 DMA+register comparison. Kept because it is the correct
+    // coherency model regardless.
     unsafe {
         let nc = (bufpa + NC_VA) as *mut u8;
         for k in 0..n {
