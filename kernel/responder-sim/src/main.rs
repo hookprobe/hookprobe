@@ -200,7 +200,7 @@ fn fail(what: &str) -> bool {
 
 /// Live responder: bind UDP :7654, reassemble the device's broadcast msg1, answer msg2
 /// unicast to `dev_ip`, print Established. Loops so repeated device attempts are all served.
-fn run_live(dev_ip: &str, dev_id: u64) -> std::io::Result<()> {
+fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
     let resp = responder_static();
     print_pub_hex(" [sim] responder MSSP pub:", &resp.public());
     let dev_pk = device_pk(dev_id);
@@ -235,12 +235,12 @@ fn run_live(dev_ip: &str, dev_id: u64) -> std::io::Result<()> {
             let mut reqpt = [0u8; 64];
             match session.recv.decrypt_into(b"", &buf[..n], &mut reqpt) {
                 Ok(got) if &reqpt[..got] == REACH_POLICY_REQ => {
-                    let pol = build_signed_policy(1, SEG_TENANT, device_fp);
+                    let pol = build_signed_policy(gen, SEG_TENANT, device_fp);
                     let mut rec = [0u8; RP_WIRE_LEN + 16];
                     match session.send.encrypt_into(b"", &pol, &mut rec) {
                         Some(rl) => {
                             let ok = sock.send_to(&rec[..rl], (dev_ip, HS_PORT)).is_ok();
-                            println!(" [sim] ✅ REQ received; operator-signed ReachPolicy sent (gen=1 tenant=TENA, MAC 02..10=Quarantine, 0a..11=InternetOnly; {RP_WIRE_LEN} B plaintext → {rl} B record, sent_ok={ok}) — device should verify+ARM");
+                            println!(" [sim] ✅ REQ received; operator-signed ReachPolicy sent (gen={gen} tenant=TENA, MAC 02..10=Quarantine, 0a..11=InternetOnly; {RP_WIRE_LEN} B plaintext → {rl} B record, sent_ok={ok}) — device should verify+ARM");
                         }
                         None => eprintln!(" [sim] policy encrypt failed"),
                     }
@@ -328,7 +328,8 @@ fn main() {
                     }
                 })
                 .unwrap_or(0u64);
-            if let Err(e) = run_live(&dev_ip, dev_id) {
+            let gen = arg_val("--gen").and_then(|s| s.parse().ok()).unwrap_or(1u64);
+            if let Err(e) = run_live(&dev_ip, dev_id, gen) {
                 eprintln!(" [sim] fatal: {e}");
                 std::process::exit(1);
             }
