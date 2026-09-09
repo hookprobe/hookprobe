@@ -14,3 +14,7 @@ hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
 p15-write = []
 # DRV-1 recon: the read-only MIP dump + rp1.c-exact MSIX_CFG enable (gem::rx_msix_setup).
 mipdump = ["cm5"]
+# DISCRIMINATOR EXPERIMENT: route the GEM TX frame through RP1 internal SRAM (0xC0_4040_0000)
+# instead of host RAM, so the DMA read never crosses PCIe — isolates the large-frame TX bug to
+# the PCIe read path vs the GEM. Additive; never shipped.
+txsram = ["cm5"]
