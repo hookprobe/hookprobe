@@ -349,7 +349,8 @@ pub fn verified_classify_expr<'a>(wasm: &'a [u8], pk: &[u8], sig: &[u8]) -> Opti
 // the KERNEL: verification happens HERE (EL1) before any byte crosses into EL0.
 
 /// M5.3 — the good fixture triple (full module bytes + key + sig), for the wasmi EL0 host.
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+/// Available on BOTH tiers: QEMU (IPC host) and CM5 (M5.5 sync-excursion host).
+#[cfg(feature = "wasmhost")]
 pub fn fixture_full() -> (&'static [u8], &'static [u8], &'static [u8]) {
     (FIXTURE_WASM, FIXTURE_PK, FIXTURE_SIG)
 }
@@ -382,7 +383,7 @@ pub fn fixture_detect() -> (&'static [u8], &'static [u8], &'static [u8]) {
 /// tampered/unsigned module is refused BEFORE it can cross into EL0). Unlike
 /// `verified_classify_expr` (which also decodes classify() for the bespoke stub), wasmi
 /// consumes the whole module, so this returns the whole verified image.
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+#[cfg(feature = "wasmhost")]
 pub fn verified_module<'a>(wasm: &'a [u8], pk: &[u8], sig: &[u8]) -> Option<&'a [u8]> {
     if verify_module(wasm, pk, sig) {
         Some(wasm)

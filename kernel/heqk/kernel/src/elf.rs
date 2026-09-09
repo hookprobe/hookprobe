@@ -71,8 +71,21 @@ pub const MAX_SEGMENTS: usize = 8; // (was 4 — M5.3: real images carry text/ro
 /// window is L1 slot 2 [0x8000_0000, 0xC000_0000): it holds every real EL0 image the
 /// beachhead loads (the asm fixtures at 0x8A00_0000.., the wasmi host at 0x9000_0000..)
 /// and excludes the kernel RAM/text region and the low device/identity region.
+// QEMU/self-test tier: L1 slot 2 [0x8000_0000, 0xC000_0000) holds the asm fixtures
+// (0x8A00_0000..) and the wasmi host (0x9000_0000..).
+#[cfg(not(feature = "cm5"))]
 pub const USER_VA_LO: usize = 0x8000_0000;
+#[cfg(not(feature = "cm5"))]
 pub const USER_VA_HI: usize = 0xC000_0000;
+// M5.5 (CM5 tier): the single 2 MiB GB5 EL0 window mmu_cm5 actually maps — USER_VA_BASE
+// (0x1_4000_0000) .. +2 MiB. The `syncabi` el0-wasmhost image + its kernel-mapped
+// stack/heap/work all live here; nothing else does. Pinning the window in the pure
+// parse() still refuses any image naming a VA outside it (defense-in-depth alongside
+// mmu_cm5's own user_va_ok fail-closed at map time).
+#[cfg(feature = "cm5")]
+pub const USER_VA_LO: usize = 0x1_4000_0000;
+#[cfg(feature = "cm5")]
+pub const USER_VA_HI: usize = 0x1_4020_0000;
 
 /// Is `[va, va+len)` wholly inside the EL0 user VA window (and non-wrapping)?
 #[inline]
