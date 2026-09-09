@@ -1,0 +1,39 @@
+# heqk MSSP responder-sim — a HOST (std) simulator of the enrollment responder, used to
+# metal-prove the PQ-hybrid Noise handshake against a real CM5 heqk device over the wire.
+#
+# It links the EXACT kernel `securechannel.rs` via `#[path]` (byte-for-byte wire compat by
+# construction — no reimplementation drift) plus a tiny std `entropy` shim. It is NOT part of
+# the aarch64-none heqk workspace: the empty [workspace] table below makes it its own
+# workspace root so it builds for the host target with std. Never shipped on-device.
+[package]
+name = "responder-sim"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone workspace — do NOT get absorbed by the parent aarch64-none heqk workspace.
+[workspace]
+
+[features]
+# securechannel.rs is wholly gated on `securechannel` (its module-level #![cfg]) and gates its
+# test-only key accessor (key_for_test) + deterministic constructors on `securechannel-selftest`;
+# the in-process --selftest cross-check needs both. Enabled by default (this crate exists to run it).
+default = ["securechannel", "securechannel-selftest"]
+securechannel = []
+securechannel-selftest = []
+
+[dependencies]
+# The SAME crates + versions/features the kernel's `securechannel` feature pins, so the
+# handshake bytes are identical. boot-abi (no_std) supplies the shared HKDF + SHA-256.
+boot-abi         = { path = "../heqk/boot-abi" }
+ml-kem           = { version = "0.2", default-features = false, features = ["deterministic"] }
+kem              = { version = "=0.3.0-pre.0", default-features = false }
+x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"] }
+chacha20poly1305 = { version = "0.10", default-features = false }
+ed25519-compact  = { version = "2", default-features = false }
+getrandom        = "0.2"
+# Host stub so securechannel.rs's `arch_aarch64::_print` (its KAT printer) resolves on the host.
+arch_aarch64     = { path = "arch-stub", package = "arch-stub" }
+
+[[bin]]
+name = "responder-sim"
+path = "src/main.rs"
