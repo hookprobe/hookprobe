@@ -102,7 +102,7 @@ The enforcing **sensor**, **persistence**, and the **connected half's first-ligh
 The connected control plane + arming logic are now built and QEMU-green end-to-end:
 - **[P19-controlplane]** — the smoltcp-free `ControlPlane` initiator drives the FULL PQ-hybrid Noise handshake over the hand-framed UDP transport that rides the sensor's single drain (against an in-kernel responder); msg1 chunked → reassembled → `Established`, crossed keys match.
 - **[P20-reconcile]** — `reconcile_reach_policy` arms `segment.rs` off a channel-fetched operator-signed policy (read floor → TOFU op-key → fetch → apply → persist), replay refused; the **QEMU half of the U2b gate**.
-- **[P20-dns-sink]** — DNS-sinkhole/RPZ ("refuse a NAME, never a packet").
+- **[P20-dns-sink]** — DNS-sinkhole/RPZ ("refuse a NAME, never a packet"). ✅ **NOW METAL-PROVEN (2026-09-09, #4)**: wired to the prod drain via `netsvc::build_dns_sinkhole_frame` (feature `dnssink`). On CM5, injected `ads.tracker`/`x.ads.tracker` (blocked) each got a spoofed resolver reply `A 10.200.0.254`; `good.example` (legit) was forwarded untouched; serial `[DNSSINK hb] sinkholed=8`. Evidence: `~/heqk-metal-logs/20260909-DNS-sinkhole-metal-proven.txt`.
 - Plus (earlier today) [P19-seg-policy] / [P19-seg-policy-persist] / [P19-noise-over-udp].
 
 **FLAG (product-steward):** the M5 "tallest pole" is **build-plumbing, not an unsolved MMU problem** — the multi-block W^X fix already exists ([P-wx]) with a cm5 mirror (`mmu_cm5.rs`); what remains is un-gating `build.rs`/`Cargo.toml` to build the EL0 wasmi host FOR cm5 + a metal-runtime proof.
