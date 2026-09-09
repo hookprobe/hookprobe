@@ -151,7 +151,14 @@ rxprof = ["prod"]
 # never shipped. See gem::mip_dump + the [DRV1-mipdump] probe.
 mipdump = ["prod", "arch-aarch64/mipdump"]
 # txsram — route GEM TX through RP1 internal SRAM (PCIe-read-path discriminator). Additive.
+# ⚠️ SUPERSEDED by txsweep (2026-09-09): the SRAM address used was the AXI-peripheral region,
+# not the shared SRAM. Do not flash a txsram image.
 txsram = ["arch-aarch64/txsram"]
+# txsweep — the host-RAM GEM-TX size/alignment sweep (main.rs, pre-sensor-loop). Emits stepped-
+# length / stepped-alignment UDP broadcasts through the proven tx_frame path (buffer overridden)
+# to determine whether the >90 B TX cliff tracks frame LENGTH (GEM FIFO/fetch) or DMA ADDRESS
+# (RP1 AXI/PCIe 256-byte-boundary read path). Needs the metal net stack; additive; never shipped.
+txsweep = ["netmetal", "arch-aarch64/txsweep"]
 # sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
 # heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
 # verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also

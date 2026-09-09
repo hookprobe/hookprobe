@@ -1250,6 +1250,82 @@ fn cm5_prod_service() -> ! {
         &mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new()),
     )
     .ok();
+    // ── RP1 GEM large-frame TX size/alignment sweep (feature `txsweep`) ──────────────────
+    // The host-RAM discriminator for the >90 B TX blocker (os-architect + external SoC expert,
+    // 2026-09-09). Emits UDP broadcasts of stepped LENGTH and stepped DMA-buffer ALIGNMENT
+    // through the ONE proven gem::tx_frame path (buffer overridden per frame). Correlate on the
+    // host:  `tcpdump -ni FTS -e -v udp portrange 60000-60999`.
+    //   dport = 60000+idx (sweep index) · UDP sport = frame length · IP.len encodes length too.
+    // Signatures:  A) a length threshold that is IDENTICAL at every alignment  ⇒ GEM TX FIFO /
+    // DMA-fetch depth (fault inside GEM);  B) the threshold MOVES with the DMA address — esp.
+    // frames that fail only when the buffer crosses a 256-byte boundary (RP1's 128-bit×16-beat
+    // AXI burst == PCIe EP 256-byte MPS)  ⇒ RP1 AXI/PCIe read-completion/iATU path. The kernel
+    // line logs dma & {64,128,256,4096} so the boundary is unambiguous. Runs ONCE, then the
+    // sensor loop proceeds normally.
+    #[cfg(feature = "txsweep")]
+    {
+        let our_mac = [0x02u8, 0, 0, 0, 0, 0x02];
+        let our_ip = [10u8, 200, 0, 2];
+        let (nc_base, bus_base) = arch_aarch64::gem::sweep_base();
+        kprint!(
+            " [TXSWEEP] begin  nc_base={:#x} bus_base={:#x} dmacfg={:#010x}\n",
+            nc_base,
+            bus_base,
+            arch_aarch64::gem::read_dmacfg()
+        );
+        let mut sbuf = [0u8; 1600];
+        let mut idx: u16 = 0;
+        macro_rules! emit {
+            ($len:expr, $off:expr) => {{
+                let len: usize = $len;
+                let off: usize = $off;
+                let dport = 60000u16.wrapping_add(idx);
+                let n = netsvc::build_sweep_frame(our_mac, our_ip, dport, len, &mut sbuf);
+                let bus = bus_base + off as u64;
+                arch_aarch64::gem::set_tx_override(Some((nc_base + off, bus)));
+                let res = arch_aarch64::gem::tx_frame(&sbuf[..n]);
+                let tsr = arch_aarch64::gem::read_tsr();
+                kprint!(
+                    "   [TXSWEEP] idx={} len={} off={} dma={:#x} m64={} m128={} m256={} m4k={} used={} w1={:#010x} tsr={:#06x}\n",
+                    idx, n, off, bus,
+                    (bus & 63) as u32, (bus & 127) as u32, (bus & 255) as u32, (bus & 4095) as u32,
+                    res.is_some() as u32, res.unwrap_or(0), tsr
+                );
+                idx = idx.wrapping_add(1);
+                // ~few ms spacing so the host capture is not overrun
+                for _ in 0..5_000_000u32 {
+                    core::hint::spin_loop();
+                }
+            }};
+        }
+        // Phase A — length sweep at a fixed (0-offset, 4 KiB-aligned) buffer. Dense around the
+        // observed ~90 B cliff and at the 256 B AXI/PCIe boundary.
+        kprint!(" [TXSWEEP] phase A: length sweep @ off=0\n");
+        for &l in &[
+            64usize, 72, 80, 88, 89, 90, 91, 92, 96, 100, 112, 120, 128, 144, 160, 192, 224, 240, 256, 272, 384, 512,
+            768, 1024, 1518,
+        ] {
+            emit!(l, 0usize);
+        }
+        // Phase B — THE fastest discriminator (expert): fixed 256 B frame, move ONLY the buffer
+        // across 64/128/256-byte boundaries (incl. straddles 224/240/252/255).
+        kprint!(" [TXSWEEP] phase B: 256B frame, move buffer across boundaries\n");
+        for &o in &[0usize, 4, 8, 16, 32, 48, 60, 64, 120, 124, 128, 192, 224, 240, 252, 255, 256] {
+            emit!(256usize, o);
+        }
+        // Phase C — coarse length × coarse alignment grid (fills in the 2-D map).
+        kprint!(" [TXSWEEP] phase C: length x coarse alignment\n");
+        for &l in &[128usize, 256, 512, 1024, 1518] {
+            for &o in &[0usize, 64, 128, 192, 256] {
+                emit!(l, o);
+            }
+        }
+        arch_aarch64::gem::set_tx_override(None);
+        kprint!(
+            " [TXSWEEP] done — {} frames emitted. Capture: tcpdump -ni FTS -e -v udp portrange 60000-60999\n",
+            idx
+        );
+    }
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
