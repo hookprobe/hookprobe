@@ -84,7 +84,14 @@ const TX_POLL_BUDGET: u32 = 8192;
 /// drift (production 512, diagnostic hardcoded 2000), which made the diagnostic report
 /// spin counts for a configuration that was no longer shipping. A diagnostic that does
 /// not mirror the code it measures produces wrong conclusions.
-pub const RETRIGGER_SPINS: u32 = 512;
+///
+/// RAISED 512 -> 4096 (2026-09-09): 512 was tuned to the ~400-spin completion of a ≤90B
+/// frame, but a ~1070B frame's several DMA read bursts take longer, so a blind re-kick
+/// could land MID-TRANSMISSION of a large frame (macb only re-kicks after a TBQP consumer
+/// check; we have no IRQ so we re-issue on a timer). 4096 stays well under TX_POLL_BUDGET
+/// (8192) so a genuinely dropped kick is still caught, but never fires mid large-frame TX.
+/// Small frames complete at ~400 spins — far under either value — so they are unaffected.
+pub const RETRIGGER_SPINS: u32 = 4096;
 
 /// Round-robin TX slot cursor. Advancing per frame keeps the controller's prefetch
 /// pointed at a descriptor OTHER than the one currently in flight.
@@ -707,11 +714,16 @@ pub fn rx_init() -> (usize, u16, u32) {
     w(GEM, RSR, RSR_BNA | RSR_REC); // clear sticky status
     let rxbs = (RXBUF / 64) as u32; // RX buffer size in 64-byte units
     // ADDR64 + RX/TX extended-BD mode (6-word descriptors, required for the word1
-    // status writeback on this PTP-capable GEM) + full-SF buffer sizing + INCR16
-    // burst => 0x70200710. Matches the mainline macb config that works on metal.
+    // status writeback on this PTP-capable GEM) + full-SF buffer sizing + AMBA burst.
+    // FBLDO (bits[4:0]) LOWERED INCR16(0x10) -> INCR8(0x08): a large TX frame requires
+    // several back-to-back DMA READ bursts over the brcmstb PCIe inbound (non-posted)
+    // window, and INCR16 reads did not sustain — small frames (≤~90B, one sub-burst)
+    // TX'd fine while ~1070B frames completed with a descriptor TX-error and never hit
+    // the wire (2026-09-09 metal). INCR8 halves the per-burst read pressure. RX (writes)
+    // is unaffected in correctness.
     w(GEM, DMACFG,
         DMACFG_ADDR64 | DMACFG_RXEXT | DMACFG_TXEXT
-            | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
+            | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x08);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
