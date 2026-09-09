@@ -723,9 +723,11 @@ pub fn rx_init() -> (usize, u16, u32) {
     // RP1 macb DT (`rp1.dtsi` rp1_eth) programs ar2r-max-pipe=8 / aw2w-max-pipe=8 / use-aw2b-fill,
     // via gem_init_axi()'s read-modify-write. AR2R_MAX_PIPE[7:0] is the AXI READ-to-read pipeline
     // depth — literally the TX read path (GEM reads the frame from host RAM over the RP1 PCIe EP).
-    // Leaving it at reset is the leading suspect for "TX reads of >90B frames never complete on
-    // the wire while RX writes are fine" (2026-09-09 metal + macb study). RMW like Linux: preserve
-    // other bits, set the three RP1 fields.
+    // RMW like Linux: preserve other bits, set the three RP1 fields. ⚠️ NOTE (metal 2026-09-09):
+    // adding this did NOT fix the >90B TX blocker (large frames still don't reach the wire, clean
+    // descriptor) — so the AXI read-pipeline depth is NOT the cause. Kept because it is the correct
+    // RP1 config regardless; the remaining suspect is the RP1 PCIe-EP outbound read/completion path
+    // (below the GEM registers, likely firmware-provisioned). Next: relocate TX buffer to RP1 SRAM.
     let amp = (r(GEM, AMP) & !0x0001_FFFF) | (0x08) | (0x08 << 8) | (1 << 16);
     w(GEM, AMP, amp);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
