@@ -18,17 +18,36 @@ extern crate alloc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-// ---- VAs the kernel maps for us (MUST match main.rs EL0_WHOST2_* constants) ----
-// Code base is set by link.ld (0x9000_0000). The kernel maps a stack, a heap window and a
-// work page at these fixed VAs (none are in our ELF — like the M5.1 fixture's stack).
+// ---- VAs the kernel maps for us (MUST match main.rs WASMI_* / WASMI_CM5_* constants) ----
+// Code base is set by the link script. The kernel maps a stack, a heap window and a work
+// page at these fixed VAs (none are in our ELF — like the M5.1 fixture's stack).
+//
+// Two ABIs / two VA maps:
+//   * default (QEMU IPC server): 0x9000_0000 image, heap 0x9300_0000, work 0x9400_0000.
+//   * `syncabi` (CM5 sync excursion): the whole image + heap + work live inside the single
+//     2 MiB GB5 EL0 window (0x1_4000_0000..0x1_4020_0000) the CM5 mapper can reach.
+#[cfg(not(feature = "syncabi"))]
 const HEAP_BASE: usize = 0x9300_0000;
+#[cfg(feature = "syncabi")]
+const HEAP_BASE: usize = 0x1_4009_0000; // GB5 window, above the ~393 KiB code image + stack
 const HEAP_SIZE: usize = 256 * 1024; // 256 KiB — ~26x the measured ~9.5 KiB wasmi high-water
+#[cfg(not(feature = "syncabi"))]
 const WORK_BASE: usize = 0x9400_0000;
+#[cfg(feature = "syncabi")]
+const WORK_BASE: usize = 0x1_400D_0000; // GB5 window, above the heap
 
-// ---- syscall numbers (== the kernel's SYS_CALL / SYS_TASK_EXIT; see syscall.s) ----
+// ---- syscall numbers (== the kernel's SYS_CALL / SYS_TASK_EXIT / SYS_DRIVER_REPORT) ----
+#[cfg(not(feature = "syncabi"))]
 const SYS_CALL: u64 = 24; // send msg + block for reply on an Endpoint{W} cap
+#[cfg(not(feature = "syncabi"))]
 const SYS_TASK_EXIT: u64 = 22;
+#[cfg(not(feature = "syncabi"))]
 const EP_CPTR: u64 = 0; // CPtr 0 = our Endpoint{W}
+// M5.5 — the CM5 excursion's return path: report the verdict in x0 via a single svc; in
+// cooperative (IRQs-off, no-scheduler) mode the kernel's SVC handler stores it into
+// DRIVER_REPORT and longjmps back to the enter_user caller (never returns to EL0).
+#[cfg(feature = "syncabi")]
+const SYS_DRIVER_REPORT: u64 = 7;
 const FAIL: u32 = 0xFFFF_FFFF; // fail-closed sentinel verdict (kernel treats != {0,1} as error)
 
 // ---- M5.4 (Track C) DETECT-mode work-page ABI (distinct from the M5.3 classify ABI) ----
@@ -79,6 +98,7 @@ unsafe impl GlobalAlloc for Bump {
 }
 
 // ============================ EL0 syscall shims ==============================
+#[cfg(not(feature = "syncabi"))]
 #[inline(always)]
 fn sys_call(cptr: u64, msg: u64) -> u64 {
     let reply: u64;
@@ -96,6 +116,7 @@ fn sys_call(cptr: u64, msg: u64) -> u64 {
     reply
 }
 
+#[cfg(not(feature = "syncabi"))]
 #[inline(always)]
 fn sys_task_exit() -> ! {
     unsafe {
@@ -104,9 +125,26 @@ fn sys_task_exit() -> ! {
 }
 
 /// Return the verdict to the kernel over the enforced Endpoint{W} IPC, then exit cleanly.
+#[cfg(not(feature = "syncabi"))]
 fn send_verdict_and_exit(verdict: u32) -> ! {
     let _ = sys_call(EP_CPTR, verdict as u64);
     sys_task_exit();
+}
+
+/// M5.5 (CM5 sync excursion) — report the verdict in x0 via ONE SYS_DRIVER_REPORT svc.
+/// The kernel handles it in cooperative mode: store x0 into DRIVER_REPORT, then
+/// resume_kernel() back into the enter_user caller. Control never returns to EL0, so this
+/// is `-> !` (noreturn) — the mirror of the isolated EL0 GEM driver's report path.
+#[cfg(feature = "syncabi")]
+fn send_verdict_and_exit(verdict: u32) -> ! {
+    unsafe {
+        core::arch::asm!(
+            "svc #0",
+            in("x0") verdict as u64,
+            in("x8") SYS_DRIVER_REPORT,
+            options(noreturn),
+        );
+    }
 }
 
 // ============================ panic / alloc error ============================

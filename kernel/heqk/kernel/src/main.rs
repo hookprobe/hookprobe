@@ -284,8 +284,9 @@ const WASMI_STACK_PAGES: usize = 16; // 64 KiB
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 const WASMI_WORK_VA: usize = 0x9400_0000; // 1 page RW (== el0-wasmhost WORK_BASE)
 /// The EL0 wasmi-host ELF, compiled by build.rs (nested cargo) and embedded — wasmi's
-/// ~326 KiB .text lives HERE, NOT in the kernel TCB.
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+/// ~355 KiB .text lives HERE, NOT in the kernel TCB. Both tiers embed it: the QEMU tier
+/// uses the IPC-server ABI (0x9000_0000 map), the CM5 tier the `syncabi` build (GB5 map).
+#[cfg(feature = "wasmhost")]
 const WASMI_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/el0_wasmhost.elf"));
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 static WASMI_RES_A: AtomicUsize = AtomicUsize::new(0); // PA of host-A's server result word (packed)
@@ -889,10 +890,173 @@ impl RxProf {
     }
 }
 
+/// M5.5 (Track C, U5) — the REAL wasmi 0.32 EL0 Wasm-host running on CM5 silicon via a
+/// SYNCHRONOUS EL0 EXCURSION (Option B), mirroring the isolated-EL0-GEM-driver model that
+/// CM5 prod already proves on metal ([P7c]): IRQs off, NO scheduler, NO IPC endpoint — one
+/// `enter_user` drop to EL0 that runs the module and reports back via SYS_DRIVER_REPORT.
+///
+/// The kernel is the TRUST ROOT: it Ed25519-verifies the signed `classify` module BEFORE a
+/// single byte crosses into EL0. The `syncabi` el0-wasmhost image is linked into the single
+/// 2 MiB GB5 EL0 window (0x1_4000_0000) that `mmu_cm5` can map; wasmi's ~355 KiB `.text`
+/// lives in THAT EL0 image, entirely OUT of the kernel TCB (ADR 0044 D4 #2). The host runs
+/// classify(4444) AND classify(443) and packs the two verdicts into `(v_a<<16)|v_b`, so a
+/// SINGLE reported word proves the predicate genuinely COMPUTES (0x0001_0000 == block-4444 +
+/// pass-443), not a constant. A trapping/faulting module is CONTAINED at EL0 (fail sentinel).
+///
+/// Runs ONCE at the top of `cm5_prod_service`, before the GEM driver claims the low GB5
+/// pages; it unmaps its whole footprint on the way out so the GEM setup maps cleanly.
+#[cfg(all(feature = "cm5", feature = "wasmhost"))]
+fn wasmi_el0_cm5_metal() {
+    use arch_aarch64::mmu_cm5;
+    use core::ptr::write_volatile;
+    const RPT_SENTINEL: u32 = 0xFFFF_FFFF; // DRIVER_REPORT pre-load; also the both-FAIL packing
+    let base = mmu_cm5::USER_VA_BASE;
+    let stack_va = base + 0x8_0000; // above the ~393 KiB (0x61000) image, page-aligned
+    let stack_pages = 16usize; // 64 KiB
+    let heap_va = base + 0x9_0000; // == el0-wasmhost HEAP_BASE (syncabi)
+    let heap_pages = 64usize; // 256 KiB == el0-wasmhost HEAP_SIZE
+    let work_va = base + 0xD_0000; // == el0-wasmhost WORK_BASE (syncabi)
+
+    // 1. Parse + VALIDATE the embedded EL0 host ELF (pure, fail-closed; W^X + GB5-window
+    //    checked). The `syncabi` build is ET_EXEC based at 0x1_4000_0000.
+    let parsed = match elf::parse(WASMI_ELF) {
+        Ok(p) => p,
+        Err(e) => {
+            kprint!(" [P-wasmi-el0-metal] FAIL: EL0 host ELF rejected by loader: {:?}\n", e);
+            return;
+        }
+    };
+    // 2. Load each PT_LOAD into freshly-allocated (zeroed) GB5 frames via the CM5 single-AS
+    //    mapper. Code/rodata → RO(+X for text); data/bss → RW+NX. The loader already refused
+    //    any W&X segment, so W^X holds. `alloc_frame` zeroes each frame (bss tail = 0).
+    let mut si = 0usize;
+    while si < parsed.nsegs {
+        let s = parsed.segs[si];
+        let exec = s.executable();
+        let write = s.writable();
+        let npages = (s.memsz + 0xFFF) >> 12;
+        let mut p = 0usize;
+        while p < npages {
+            let f = mmu_cm5::alloc_frame();
+            if f == 0 {
+                kprint!(" [P-wasmi-el0-metal] FAIL: CM5 frame pool exhausted (seg {})\n", si);
+                return;
+            }
+            let voff = p * 0x1000;
+            let fileleft = s.filesz.saturating_sub(voff);
+            let n = fileleft.min(0x1000);
+            if n > 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        WASMI_ELF.as_ptr().add(s.offset + voff),
+                        f as *mut u8,
+                        n,
+                    );
+                }
+            }
+            let va = s.vaddr + voff;
+            let ok = if exec {
+                mmu_cm5::map_user_code(va, f); // AP_RO_EL0 | PXN — EL0 exec, kernel non-exec
+                arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+                true
+            } else if write {
+                mmu_cm5::map_user_data(va, f) // RW + NX
+            } else {
+                mmu_cm5::map_user_data_ro(va, f) // RO + NX
+            };
+            if !ok {
+                kprint!(" [P-wasmi-el0-metal] FAIL: seg VA {:#x} outside GB5 window\n", va);
+                return;
+            }
+            p += 1;
+        }
+        si += 1;
+    }
+    // 3. Stack (RW+NX) — kernel-provided, grows down from the top. Not in the ELF.
+    let mut p = 0usize;
+    while p < stack_pages {
+        let f = mmu_cm5::alloc_frame();
+        if f == 0 {
+            return;
+        }
+        mmu_cm5::map_user_data(stack_va + p * 0x1000, f);
+        p += 1;
+    }
+    let sp_top = stack_va + stack_pages * 0x1000;
+    // 4. Heap window (RW+NX) — the EL0 bump allocator hands this to wasmi.
+    let mut p = 0usize;
+    while p < heap_pages {
+        let f = mmu_cm5::alloc_frame();
+        if f == 0 {
+            return;
+        }
+        mmu_cm5::map_user_data(heap_va + p * 0x1000, f);
+        p += 1;
+    }
+    // 5. VERIFY the signed classify module (kernel = trust root) and stage it into the work
+    //    page: [+0]=port_a [+8]=port_b [+16]=wasm_len [+24..]=module bytes.
+    let (gwasm, gpk, gsig) = wasmhost::fixture_full();
+    let module = match wasmhost::verified_module(gwasm, gpk, gsig) {
+        Some(m) => m,
+        None => {
+            kprint!(" [P-wasmi-el0-metal] FAIL: signed classify module failed Ed25519 verify\n");
+            return;
+        }
+    };
+    let work = mmu_cm5::alloc_frame();
+    if work == 0 {
+        return;
+    }
+    let n = module.len().min(0xF00);
+    unsafe {
+        write_volatile(work as *mut u64, 4444u64); // port_a — the block-4444 backdoor port
+        write_volatile((work + 8) as *mut u64, 443u64); // port_b — a benign pass port
+        write_volatile((work + 16) as *mut u64, n as u64);
+        core::ptr::copy_nonoverlapping(module.as_ptr(), (work + 24) as *mut u8, n);
+    }
+    mmu_cm5::map_user_data(work_va, work);
+
+    // 6. THE EXCURSION — drop to EL0 at the host's entry with our stack. The host runs both
+    //    classifies through REAL wasmi and reports the packed verdict via SYS_DRIVER_REPORT,
+    //    which (cooperative mode) longjmps back here. A fault/trap is contained: the report
+    //    never lands and DRIVER_REPORT stays at the sentinel.
+    DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
+    unsafe { arch_aarch64::syscall::enter_user(parsed.entry, sp_top) };
+    let packed = DRIVER_REPORT.load(Ordering::Relaxed);
+
+    // 7. PROVE it: classify(4444)=1 (block) AND classify(443)=0 (pass) → 0x0001_0000.
+    let va = (packed >> 16) & 0xffff;
+    let vb = packed & 0xffff;
+    let pass = packed != RPT_SENTINEL && va == 1 && vb == 0;
+    kprint!(
+        " [P-wasmi-el0-metal] {} — REAL wasmi 0.32 in an ISOLATED EL0 excursion on CM5 silicon: classify(4444)={} classify(443)={} packed={:#010x} (want 0x00010000); wasmi .text is in the {}-byte EL0 image, NOT the kernel TCB\n",
+        if pass { "PASS" } else { "FAIL" },
+        va as i32,
+        vb as i32,
+        packed,
+        WASMI_ELF.len()
+    );
+
+    // 8. Unmap the whole wasmi footprint [base, work_va+0x1000) so the GEM driver setup that
+    //    follows maps the shared low GB5 pages onto a clean L3 table (no stale EL0 exec).
+    let mut va = base;
+    while va < work_va + 0x1000 {
+        mmu_cm5::unmap_user(va);
+        va += 0x1000;
+    }
+}
+
 #[cfg(feature = "cm5")]
 fn cm5_prod_service() -> ! {
     use arch_aarch64::mmu_cm5;
     arch_aarch64::disable_irqs();
+    // M5.5 (Track C, U5) — ONE-SHOT: run a REAL signed `.wasm` module through wasmi 0.32 in an
+    // ISOLATED EL0 excursion on CM5 silicon, BEFORE the GEM driver claims the low GB5 pages.
+    // Mirrors the isolated-EL0-GEM-driver model (enter_user, IRQs-off, no scheduler/no IPC);
+    // proves the on-device Wasm host (ADR 0044 Track C M5). It unmaps its own footprint so the
+    // GEM setup below maps the shared low VAs cleanly.
+    #[cfg(feature = "wasmhost")]
+    wasmi_el0_cm5_metal();
     extern "C" {
         static gem_ids_stub: u8;
         static gem_ids_stub_end: u8;

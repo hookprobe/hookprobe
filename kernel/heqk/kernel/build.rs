@@ -35,7 +35,9 @@ fn main() {
     // that links wasmi 0.32, compiled to an aarch64 ELF by a NESTED `cargo build` in a
     // clean env and embedded via include_bytes!. wasmi's ~326 KiB .text lives in THAT EL0
     // image, NOT the kernel TCB (ADR 0044 D4 #2). See build_el0_wasmhost.
-    if std::env::var("CARGO_FEATURE_WASMHOST").is_ok() && std::env::var("CARGO_FEATURE_CM5").is_err()
+    // M5.5 (Track C, U5): the EL0 wasmi host now builds for CM5 too — the on-device Wasm
+    // host is a real CM5 target (ADR 0044 Track C M5). Previously !cm5-only.
+    if std::env::var("CARGO_FEATURE_WASMHOST").is_ok()
     {
         gen_fixture_trap_wasm(&std::env::var("OUT_DIR").unwrap());
         gen_fixture_detect_wasm(&std::env::var("OUT_DIR").unwrap());
@@ -229,6 +231,12 @@ fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
         .arg("--target-dir")
         .arg(&nested_target)
         .current_dir(&crate_dir);
+    // M5.5 — a CM5 kernel gets the SYNCHRONOUS-EXCURSION host (syncabi: link-cm5.ld GB5
+    // window + SYS_DRIVER_REPORT return), matching CM5 prod's IRQs-off enter_user model.
+    // Read the parent feature BEFORE the clean-env scrub below strips CARGO_FEATURE_*.
+    if std::env::var("CARGO_FEATURE_CM5").is_ok() {
+        cmd.arg("--features").arg("syncabi");
+    }
 
     // CLEAN env: drop every parent-build-script var that would confuse the child cargo/rustc,
     // keeping PATH/HOME/rustup so the nightly toolchain + registry resolve normally.
