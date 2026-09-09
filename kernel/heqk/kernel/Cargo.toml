@@ -176,6 +176,10 @@ segmetal = ["netmetal", "securechannel", "p15-write"]
 # and not forwarded; legit names flow untouched (ADR 0023). Never shipped; metal opt-in.
 #   FEATURES=dnssink builder/make-cm5-heqk-image.sh
 dnssink = ["netmetal"]
+# dhcp — M4 DHCPv4 CLIENT on the bridge. heqk obtains its IPv4 lease (DORA) via smoltcp's dhcpv4
+# socket over the real GEM, rule-gated both ways. Additive to netmetal; never shipped; metal opt-in.
+#   FEATURES=dhcp builder/make-cm5-heqk-image.sh
+dhcp = ["netmetal"]
 
 [[bin]]
 name = "kernel"
