@@ -948,6 +948,16 @@ fn cm5_prod_service() -> ! {
             None
         }
     };
+    // M4 DHCPv4 client (feature `dhcp`): heqk obtains its lease over the GEM. Own MAC/seed;
+    // TRNG-seeded fail-closed (no client without entropy).
+    #[cfg(feature = "dhcp")]
+    let mut dhcp_client: Option<netsvc::DhcpClient> = match arch_aarch64::rng200::next_word_strict() {
+        Some(w) => {
+            kprint!(" [DHCP] client UP on GEM (mac 02:00:00:00:00:02) — soliciting a lease\n");
+            Some(netsvc::DhcpClient::new([0x02, 0, 0, 0, 0, 0x02], w as u64))
+        }
+        None => None,
+    };
     // Persistent RX read cursor — the analog of Linux macb's `queue->rx_tail`. The GEM
     // fills descriptors sequentially and wraps, so `rx_head` is the oldest unconsumed
     // slot; the batch drainer advances it in lockstep with the hardware fill. It survives
@@ -1402,6 +1412,23 @@ fn cm5_prod_service() -> ! {
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
             #[cfg(feature = "dnssink")]
             kprint!("   [DNSSINK hb] sinkholed={} (RPZ-blocked DNS queries answered with SINKHOLE_IP + not forwarded)\n", dns_sinks);
+            // M4 DHCP: drive the client (DISCOVER/REQUEST/retransmit) + report the lease.
+            #[cfg(feature = "dhcp")]
+            if let Some(dc) = dhcp_client.as_mut() {
+                let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
+                if let Some((f, fl)) = dc.service(now_ms) {
+                    if arch_aarch64::gem::tx_frame(&f[..fl]).is_some() {
+                        forwarded += 1;
+                    } else {
+                        tx_fail += 1;
+                    }
+                }
+                match dc.assigned {
+                    Some(ip) => kprint!("   [DHCP hb] ✅ LEASED ip={}.{}.{}.{} gw={:?} dns={:?} (rx={})\n",
+                        ip[0], ip[1], ip[2], ip[3], dc.router, dc.dns, dc.seen),
+                    None => kprint!("   [DHCP hb] soliciting a lease... (rx={})\n", dc.seen),
+                }
+            }
             // M4 FIRST-LIGHT heartbeat: how many for-heqk frames (ARP-for-us + unicast-to-our-MAC,
             // i.e. ICMP echo) the bridge saw and answered.
             #[cfg(feature = "netmetal")]
@@ -1682,6 +1709,29 @@ fn cm5_prod_service() -> ! {
                         };
                         #[cfg(not(all(feature = "netmetal", feature = "securechannel")))]
                         let cp_took = false;
+                        // M4 DHCP: a DORA reply (UDP dst:68) is fed to the client (→ REQUEST/settle),
+                        // TX'd, and TERMINATES here (not forwarded). Checked before the bridge so a
+                        // unicast-to-our-MAC reply is not mis-handled as ARP/ICMP. Reply TX counts as
+                        // forwarded (telemetry invariant).
+                        #[cfg(feature = "dhcp")]
+                        let cp_took = cp_took
+                            || if let Some(dc) = dhcp_client.as_mut() {
+                                if dc.wants(&buf[..n]) {
+                                    let now_ms = (prod_cntpct() / (cntfrq / 1000).max(1)) as i64;
+                                    if let Some((f, fl)) = dc.ingress(&buf[..n], now_ms) {
+                                        if arch_aarch64::gem::tx_frame(&f[..fl]).is_some() {
+                                            forwarded += 1;
+                                        } else {
+                                            tx_fail += 1;
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
                         #[cfg(feature = "netmetal")]
                         let handled = cp_took
                             || if let Some(b) = metal_bridge.as_mut() {

@@ -299,6 +299,117 @@ impl MetalBridge {
     }
 }
 
+// ── M4 DHCPv4 CLIENT (feature `dhcp`) ───────────────────────────────────────────────────────
+// heqk obtains its IPv4 lease over the real GEM via smoltcp's dhcpv4 socket, rule-gated both
+// directions like the bridge. The socket is PERSISTENT (DORA state spans polls), so its
+// SocketSet is backed by a `static` storage array — the no_std-lifetime approach the gap-plan
+// flagged (avoids a self-referential SocketSet-borrows-own-storage struct).
+#[cfg(feature = "dhcp")]
+use smoltcp::iface::SocketHandle;
+#[cfg(feature = "dhcp")]
+use smoltcp::socket::dhcpv4;
+
+#[cfg(feature = "dhcp")]
+static mut DHCP_STORAGE: [SocketStorage<'static>; 1] = [SocketStorage::EMPTY];
+
+/// A DHCPv4 client over the real GEM. Starts with NO IP; drives DISCOVER→OFFER→REQUEST→ACK via
+/// `service` (periodic, no-RX poll → emits the next DHCP msg) + `ingress` (a DORA reply → poll →
+/// next msg). On `Configured` it records + installs the leased address. Both directions pass the
+/// P17 rule plane (RuleGatedDev).
+#[cfg(feature = "dhcp")]
+pub struct DhcpClient {
+    iface: Interface,
+    dev: RuleGatedDev,
+    sockets: SocketSet<'static>,
+    dhcp: SocketHandle,
+    pub assigned: Option<[u8; 4]>,
+    pub router: Option<[u8; 4]>,
+    pub dns: Option<[u8; 4]>,
+    pub seen: u32,
+}
+
+#[cfg(feature = "dhcp")]
+impl DhcpClient {
+    pub fn new(mac: [u8; 6], seed: u64) -> DhcpClient {
+        let mut dev = RuleGatedDev::new();
+        let mut cs = ChecksumCapabilities::ignored();
+        cs.ipv4 = Checksum::Tx;
+        cs.udp = Checksum::Tx;
+        dev.csum = cs;
+        let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+        cfg.random_seed = seed;
+        let iface = Interface::new(cfg, &mut dev, Instant::from_millis(0)); // no static IP — DHCP assigns
+        #[allow(static_mut_refs)]
+        let mut sockets = SocketSet::new(unsafe { &mut DHCP_STORAGE[..] });
+        let dhcp = sockets.add(dhcpv4::Socket::new());
+        DhcpClient { iface, dev, sockets, dhcp, assigned: None, router: None, dns: None, seen: 0 }
+    }
+
+    /// A DHCP reply bound for the client (IPv4/UDP dst port 68) — route these to `ingress`.
+    pub fn wants(&self, frame: &[u8]) -> bool {
+        frame.len() >= 42
+            && frame[12] == 0x08
+            && frame[13] == 0x00
+            && (frame[14] & 0xf0) == 0x40
+            && frame[23] == 17
+            && u16::from_be_bytes([frame[36], frame[37]]) == 68
+    }
+
+    /// Periodic tick (no RX): drive DHCP TX (DISCOVER / REQUEST / retransmit). Returns any egress.
+    pub fn service(&mut self, now_ms: i64) -> Option<([u8; MTU], usize)> {
+        self.iface.poll(Instant::from_millis(now_ms), &mut self.dev, &mut self.sockets);
+        self.check_event();
+        self.take_tx()
+    }
+
+    /// Feed one DHCP reply; poll; return any egress (e.g. the REQUEST after an OFFER).
+    pub fn ingress(&mut self, frame: &[u8], now_ms: i64) -> Option<([u8; MTU], usize)> {
+        self.seen += 1;
+        self.dev.ingress(frame);
+        self.iface.poll(Instant::from_millis(now_ms), &mut self.dev, &mut self.sockets);
+        self.check_event();
+        self.take_tx()
+    }
+
+    fn check_event(&mut self) {
+        let cfg = {
+            let sock = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp);
+            match sock.poll() {
+                Some(dhcpv4::Event::Configured(c)) => Some((c.address, c.router, c.dns_servers.first().copied())),
+                Some(dhcpv4::Event::Deconfigured) => None,
+                None => return,
+            }
+        };
+        match cfg {
+            Some((addr, router, dns)) => {
+                self.assigned = Some(addr.address().octets());
+                self.router = router.map(|r| r.octets());
+                self.dns = dns.map(|d| d.octets());
+                self.iface.update_ip_addrs(|a| {
+                    a.clear();
+                    let _ = a.push(IpCidr::Ipv4(addr));
+                });
+            }
+            None => {
+                self.assigned = None;
+                self.iface.update_ip_addrs(|a| a.clear());
+            }
+        }
+    }
+
+    fn take_tx(&mut self) -> Option<([u8; MTU], usize)> {
+        if self.dev.tx.ready {
+            let n = self.dev.tx.len.min(MTU);
+            let mut out = [0u8; MTU];
+            out[..n].copy_from_slice(&self.dev.tx.buf[..n]);
+            self.dev.tx.ready = false;
+            Some((out, n))
+        } else {
+            None
+        }
+    }
+}
+
 /// A minimal Ethernet/IPv4/ICMP echo REQUEST from 192.0.2.2 (mac 02:..:02) to heqk (192.0.2.1,
 /// mac 02:..:01). Checksums left zero — the bridge device skips rx verification (`Checksum::Tx`);
 /// the REPLY smoltcp emits DOES get valid checksums, which is the property the metal `ping` needs.
