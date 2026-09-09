@@ -84,6 +84,7 @@ PHASES=(
   "P15fs|[P15-fs] PASS|impl|Validation|M3.2 crash-safe log-structured record store on the DataVolume region: (a) N records survive reboot IN ORDER, (b) an injected torn-tail record is DROPPED on recovery while every intact record survives + the store stays writable, (c) a bounded ring evicts oldest-first at capacity and never writes outside the guard, (d) a real evidence Event + QSecBit history record round-trip across reboot; keyless digest integrity (per-record seal.rs encryption is M3.3); QEMU/virtio-blk-proven, real eMMC = metal (Gate R)"
   "P15sf|[P15-sealfs] PASS|impl|Validation|M3.3 sealed data-volume (encryption at rest): record payloads are sealed with HQKSEAL1 (Encrypt-then-MAC) under a Volume Encryption Key that is itself SEALED in the keystore — (b) CONFIDENTIALITY: a raw block read of a slot holding a known Event is ciphertext (ts 0xDEADBEEF / src IP / the 16-B Event image ABSENT on disk, HQKSEAL1 magic present), (c) INTEGRITY: a ciphertext byte flipped on disk WITH the forgeable keyless framing digest recomputed is still MAC-REJECTED at mount_sealed (the seal MAC, not the digest, is the guard) while intact records survive fail-closed, (a)+(d) CROSS-RESTART: the sealed VEK survives reboot (boot-2 loads it) and decrypts the evidence Event + QSecBit history field-for-field; QEMU/virtio-blk-proven, real eMMC write + OTP-bound SRK = metal (Gate R)"
   "P15ota|[P15-ota] PASS|impl|Validation|M3.4 on-device A/B OTA orchestrator + state machine over file-backed virtio-blk: (a) a VALID hybrid-signed candidate is verified by the SHARED boot_abi::verify (HBoot's EXACT verifier + trust root — no 2nd trust root) → staged to the INACTIVE slot only → state=Staged, persisted; (b) an INVALID candidate (bad ed25519 sig) is REJECTED verify-before-flip — NO inactive-slot write, active slot + tryboot flag untouched; (c) flip→Trying→simulated healthy trial→Committed (new slot active); (d) simulated failed trial→RolledBack (old slot stays active) + a below-floor (svn<floor) DOWNGRADE is refused (SVN floor); (e) OTA state + staged candidate SURVIVE reboot (persisted, driven by the two boots); (f) brick-safety — the candidate write only ever lands in RegionKind::InactiveSlot, LBA 0/MBR + the active slot are guard-REFUSED. QEMU-proven; the REAL firmware one-shot flip + PM-watchdog trial reset + power cycle are hboot/metal (Gate R)"
+  "P15otafat|[P15-otafat] PASS|impl|Validation|B2 OTA DELIVERY — locate the inactive A/B slot inside the SHARED FAT32 boot partition + stage a candidate into its REAL sectors (genuine mkfs.vfat image over virtio-blk): the read-only fat.rs locator parses the MBR → the FAT32 BPB → walks the root directory to HEQK8-B.IMG → follows its cluster chain to a CONTIGUOUS LBA run (fail-closed if fragmented/absent), registers that run as RegionKind::InactiveSlot, and writes a candidate marker through the brick-safety LBA guard (LBA 0 + the active slot + FAT/dir metadata all WriteRefused), read back byte-identical — FAT metadata never mutated (same-size in-place overwrite). QEMU-proven on a real FAT32 fs; the metal eMMC InactiveSlot write arming (emmc.rs clamp) is a separate Gate-R item"
   "AB|[HBoot-AB] PASS|impl|Validation|A/B trial boot: kernel confirms health (hvc #1 disarms HBoot's EL2 watchdog) or firmware falls back to the known-good slot"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
@@ -158,6 +159,47 @@ if command -v dd >/dev/null 2>&1 && cargo build --features netsvc,securechannel,
   rm -f "$DISK" "$B1" "$B2"
 else
   echo "skip (no dd, or p15-write build failed — see /tmp/hp_build_p15w.log)"
+fi
+
+# --- Stage 2c: B2 (M3.4) OTA DELIVERY — locate the inactive A/B slot inside the
+# SHARED FAT32 boot partition and stage a candidate into its REAL sectors. Builds a
+# genuine mkfs.vfat FAT32 image (heqk8.img + heqk8-b.img copied in), boots heqk against
+# it as virtio-blk, and the kernel parses the BPB + walks the root dir + follows the
+# cluster chain to HEQK8-B.IMG, registers that run as InactiveSlot, and writes a
+# candidate through the brick-safety guard. Needs the p15-write kernel from Stage 2b.
+echo -n "[P15-otafat] FAT32 locate + guarded slot-B candidate write ... "
+if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1 \
+   && command -v dd >/dev/null 2>&1 && [ -f "$KERNEL" ]; then
+  FATDISK="$(mktemp)"; PART="$(mktemp)"; CAND="$(mktemp)"; BO="$(mktemp)"
+  # A 63 MiB FAT32 partition image (>= FAT32 min clusters), 512-B clusters.
+  dd if=/dev/zero of="$PART" bs=512 count=129024 status=none
+  mkfs.vfat -F 32 -s 1 "$PART" >/dev/null 2>&1
+  # A 256 KiB candidate; copy it as BOTH slots (fresh FS => each contiguous). HEQK8-B.IMG
+  # is the INACTIVE target the kernel must locate; HEQK8.IMG is the active slot (never written).
+  dd if=/dev/urandom of="$CAND" bs=1K count=256 status=none
+  mcopy -i "$PART" "$CAND" ::HEQK8.IMG   >/dev/null 2>&1
+  mcopy -i "$PART" "$CAND" ::HEQK8-B.IMG >/dev/null 2>&1
+  # A 64 MiB disk with an MBR: FAT partition @ LBA 2048 (129024 sectors); the running
+  # kernel is FORBIDDEN LBA 0, so the tool lays the table + copies the FS in (as on metal).
+  dd if=/dev/zero of="$FATDISK" bs=1M count=64 status=none
+  printf '\x0c'             | dd of="$FATDISK" bs=1 seek=450 conv=notrunc status=none  # type 0x0c (FAT)
+  printf '\x00\x08\x00\x00' | dd of="$FATDISK" bs=1 seek=454 conv=notrunc status=none  # LBA start 2048
+  printf '\x00\xf8\x01\x00' | dd of="$FATDISK" bs=1 seek=458 conv=notrunc status=none  # count 129024
+  printf '\x55\xaa'         | dd of="$FATDISK" bs=1 seek=510 conv=notrunc status=none  # 0x55AA sig
+  dd if="$PART" of="$FATDISK" bs=512 seek=2048 conv=notrunc status=none
+  QEMU_FAT="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+    -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+    -drive file=$FATDISK,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
+  timeout 75 $QEMU_FAT "$KERNEL" >"$BO" 2>&1
+  cat "$BO" >> "$LOG"
+  if grep -qF "[P15-otafat] PASS" "$BO"; then
+    echo "PASS (located HEQK8-B.IMG in FAT32 + staged candidate through the guard)"
+  else
+    echo "FAIL/see report"; grep -F "[P15-otafat]" "$BO" | sed 's/^/    /'
+  fi
+  rm -f "$FATDISK" "$PART" "$CAND" "$BO"
+else
+  echo "skip (no mkfs.vfat/mcopy/dd, or no p15-write kernel)"
 fi
 
 # --- Stage 3: phase gate report ------------------------------------------
