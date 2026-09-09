@@ -42,6 +42,7 @@ fn main() {
         gen_fixture_trap_wasm(&std::env::var("OUT_DIR").unwrap());
         gen_fixture_detect_wasm(&std::env::var("OUT_DIR").unwrap());
         build_el0_wasmhost(&dir, &std::env::var("OUT_DIR").unwrap());
+        build_wasip1_fixture(&dir, &std::env::var("OUT_DIR").unwrap());
     }
     println!("cargo:rerun-if-changed=build.rs");
 }
@@ -276,6 +277,78 @@ fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
         panic!("el0-wasmhost ELF not found at {}: {e}", produced.display())
     });
+}
+
+// A2 (M5.5) — build the REAL wasm32-wasip1 detection module (wasip1-fixture) via a NESTED
+// cargo build in a CLEAN env, Ed25519-SIGN its bytes (kernel = trust root, same as the
+// M5.2/M5.3 fixtures) and emit fixture_wasip1.{wasm,pk,sig} for the EL0 wasip1 host to run.
+// A genuine wasip1 command binary (stdin/stdout, imports fd_read/fd_write/environ_*/proc_exit)
+// — the production module shape, run THROUGH wasmi in an isolated EL0 task.
+fn build_wasip1_fixture(kernel_manifest_dir: &str, out_dir: &str) {
+    use std::path::Path;
+    use std::process::Command;
+
+    let crate_dir = Path::new(kernel_manifest_dir).join("../wasip1-fixture");
+    let crate_dir = crate_dir.canonicalize().expect("wasip1-fixture dir missing");
+    let manifest = crate_dir.join("Cargo.toml");
+    let nested_target = Path::new(out_dir).join("wasip1-target");
+
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("src/main.rs").display());
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
+        .arg("--release")
+        .arg("--target")
+        .arg("wasm32-wasip1")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&nested_target)
+        .current_dir(&crate_dir);
+    // CLEAN env: drop parent build-script vars that would confuse the child cargo/rustc.
+    for (k, _) in std::env::vars() {
+        let leak = k == "RUSTFLAGS"
+            || k == "CARGO_ENCODED_RUSTFLAGS"
+            || k == "RUSTC"
+            || k == "RUSTC_WRAPPER"
+            || k == "RUSTC_WORKSPACE_WRAPPER"
+            || k == "RUSTDOC"
+            || k == "CARGO"
+            || k == "CARGO_TARGET_DIR"
+            || k == "CARGO_BUILD_TARGET"
+            || k == "OUT_DIR"
+            || k == "TARGET"
+            || k == "HOST"
+            || k == "NUM_JOBS"
+            || k == "CARGO_MANIFEST_DIR"
+            || k == "CARGO_MANIFEST_LINKS"
+            || k == "CARGO_PRIMARY_PACKAGE"
+            || k.starts_with("CARGO_FEATURE_")
+            || k.starts_with("CARGO_CFG_")
+            || k.starts_with("CARGO_PKG_");
+        if leak {
+            cmd.env_remove(k);
+        }
+    }
+    let status = cmd.status().expect("failed to invoke nested cargo for wasip1-fixture");
+    if !status.success() {
+        panic!("wasip1-fixture nested build FAILED (status {status}) — wasmhost kernel cannot ship without its signed wasip1 fixture");
+    }
+    let produced = nested_target.join("wasm32-wasip1/release/wasip1-fixture.wasm");
+    let wasm = std::fs::read(&produced)
+        .unwrap_or_else(|e| panic!("wasip1-fixture wasm not found at {}: {e}", produced.display()));
+
+    // Sign the module bytes with the PINNED module-signing root seed (the SAME [0x5a;32] the
+    // classify/detect fixtures use) — verify_module pins the presented key to TRUSTED_MODULE_PK
+    // (== FIXTURE_PK), so a per-fixture key would be rejected as a confused-deputy.
+    use ed25519_compact::{KeyPair, Seed};
+    let kp = KeyPair::from_seed(Seed::new([0x5au8; 32]));
+    let sig = kp.sk.sign(&wasm, None);
+    let dir = Path::new(out_dir);
+    std::fs::write(dir.join("fixture_wasip1.wasm"), &wasm).expect("write wasip1 wasm");
+    std::fs::write(dir.join("fixture_wasip1.pk"), kp.pk.as_ref()).expect("write wasip1 pk");
+    std::fs::write(dir.join("fixture_wasip1.sig"), sig.as_ref()).expect("write wasip1 sig");
 }
 
 // M5.4 (Track C) — the DETECTION-shaped `.wasm` fixture the [P-wasm-parity] gate runs at
