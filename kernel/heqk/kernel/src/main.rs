@@ -45,6 +45,8 @@ mod napi;
 #[cfg(feature = "p15-write")]
 #[cfg_attr(feature = "cm5", allow(dead_code))]
 mod ota;
+#[allow(dead_code)] // B2 read-only FAT32 locator: used by the OTA/p15 delivery path only
+mod fat;
 mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
@@ -4224,6 +4226,11 @@ pub extern "C" fn kmain() -> ! {
     //     (skips diskless; the two-boot proof is driven by validate.sh) ---
     p15_persist_selftest();
 
+    // --- P15-otafat: B2 OTA delivery — locate the inactive A/B slot inside the shared
+    //     FAT32 boot partition and stage a candidate into its real sectors (driven by
+    //     validate.sh with a mkfs.vfat'd disk; skips diskless / non-FAT) ---
+    p15_otafat_selftest();
+
     // --- P15-fs: M3.2 crash-safe log-structured record store (torn-tail recovery
     //     + bounded retention + evidence/QSecBit records survive reboot) ---
     p15_fs_selftest();
@@ -6325,6 +6332,89 @@ fn p15_guard_selftest() {
 /// eMMC write on brcm,bcm2712-sdhci is metal (Gate R); this proves the write-path
 /// LOGIC + persistence in QEMU only.
 #[cfg(not(feature = "cm5"))]
+/// [P15-otafat] B2 (M3.4 OTA delivery) — LOCATE the inactive A/B kernel slot inside the
+/// SHARED FAT32 boot partition and stage an OTA candidate into its REAL sectors, over a
+/// file-backed virtio-blk device (the same hal::BlockDev the metal eMMC slots into). Proves
+/// the delivery path end-to-end off-CM5: parse the MBR -> parse the FAT32 BPB -> walk the
+/// root directory to HEQK8-B.IMG -> follow its cluster chain to a contiguous LBA run ->
+/// register that run as RegionKind::InactiveSlot -> write a candidate marker through the
+/// brick-safety guard -> read it back. FAT metadata (table + directory) is never mutated —
+/// only the file's existing data clusters are overwritten (same-size candidate).
+///
+/// METAL CAVEAT (honest): the metal eMMC write_block still clamps InactiveSlot writes to
+/// WriteRefused (emmc.rs) — that multi-region eMMC arming is a separate Gate-R item. This
+/// phase proves the LOCATE + guarded-delivery LOGIC on a genuine FAT32 image; the metal
+/// write landing is tomorrow's eMMC work.
+#[cfg(not(feature = "cm5"))]
+fn p15_otafat_selftest() {
+    use hal::BlockDev;
+    let mut dev = match arch_aarch64::virtio_blk::VirtioBlk::open() {
+        Some(d) => d,
+        None => {
+            kprint!(" [P15-otafat] SKIP — no virtio-blk device (attach -drive with a FAT32 partition)\n");
+            return;
+        }
+    };
+    // 1. Find the FAT boot partition start from the MBR (partition 1, as on a real device).
+    let mut mbr = [0u8; 512];
+    if dev.read_block(0, &mut mbr).is_err() {
+        kprint!(" [P15-otafat] SKIP — MBR read failed\n");
+        return;
+    }
+    let parts = store::parse_mbr(&mbr);
+    let part_start = parts[0].start;
+    if part_start == 0 {
+        kprint!(" [P15-otafat] SKIP — no first partition in the MBR\n");
+        return;
+    }
+    // 2. Locate heqk8-b.img (8.3 short name "HEQK8-B IMG") as a contiguous LBA run.
+    let (slot_lba, slot_sectors) = match fat::locate_contiguous(&dev, part_start, b"HEQK8-B IMG") {
+        Some(r) => r,
+        None => {
+            kprint!(" [P15-otafat] FAIL — could not locate a contiguous HEQK8-B.IMG in the FAT32 partition @LBA {}\n", part_start);
+            return;
+        }
+    };
+    kprint!(" [P15-otafat] located HEQK8-B.IMG @ LBA {} ({} sectors) via FAT32 BPB + root-dir + cluster-chain\n",
+        slot_lba, slot_sectors);
+    #[cfg(feature = "p15-write")]
+    {
+        use store::{RegionKind, SealedStore};
+        let marker = b"HEQK-OTA-CANDIDATE-SLOT-B-v1";
+        let (mbr_refused, pre_refused, wrote) = {
+            let mut store = match SealedStore::open(&mut dev) {
+                Ok(s) => s,
+                Err(e) => {
+                    kprint!(" [P15-otafat] FAIL — guard refused to open the device MBR: {:?}\n", e);
+                    return;
+                }
+            };
+            // Register ONLY the located inactive-slot run — the ACTIVE slot, the FAT table,
+            // the directory and LBA 0 all stay unregistered => WriteRefused (brick-safety).
+            if store.add_region(slot_lba, slot_lba + slot_sectors, RegionKind::InactiveSlot).is_err() {
+                kprint!(" [P15-otafat] FAIL — could not register the InactiveSlot region\n");
+                return;
+            }
+            let poison = [0xEEu8; 512];
+            let mbr_refused = store.store_sector(0, &poison).is_err();
+            // A sector just BEFORE the slot (FAT/dir metadata or the active slot) is refused.
+            let pre_refused = slot_lba == 0 || store.store_sector(slot_lba - 1, &poison).is_err();
+            let mut sec = [0u8; 512];
+            sec[..marker.len()].copy_from_slice(marker);
+            let wrote = matches!(store.store_sector(slot_lba, &sec), Ok(RegionKind::InactiveSlot));
+            (mbr_refused, pre_refused, wrote)
+        };
+        // store dropped -> dev free again -> read the candidate's first sector back.
+        let mut rb = [0u8; 512];
+        let read_ok = dev.read_block(slot_lba, &mut rb).is_ok() && &rb[..marker.len()] == &marker[..];
+        let ok = mbr_refused && pre_refused && wrote && read_ok;
+        kprint!(" [P15-otafat] {} — FAT locate -> InactiveSlot register -> guarded candidate write -> read-back (MBR-refused {}, pre-slot-refused {}, wrote {}, readback {})\n",
+            if ok { "PASS" } else { "FAIL" }, yn(mbr_refused), yn(pre_refused), yn(wrote), yn(read_ok));
+    }
+    #[cfg(not(feature = "p15-write"))]
+    kprint!(" [P15-otafat] located OK (read-only build; rebuild --features p15-write for the guarded write + read-back proof)\n");
+}
+
 fn p15_persist_selftest() {
     use hal::BlockDev;
     use seal::Policy;
