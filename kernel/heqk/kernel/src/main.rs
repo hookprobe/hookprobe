@@ -1356,6 +1356,12 @@ fn cm5_prod_service() -> ! {
     };
     #[cfg(feature = "segmetal")]
     let mut seg_phase: u8 = 0; // 0=idle, 1=REQ sent, 2=armed
+    // DIAG (garbling-proof): captured once in the drain, RE-PRINTED every heartbeat so the
+    // serial loss at 115200 cannot eat the one-shot result.
+    #[cfg(feature = "segmetal")]
+    let mut seg_fslog_err: Option<crate::fslog::FsErr> = None;
+    #[cfg(feature = "segmetal")]
+    let mut seg_recon: Option<Result<usize, enroll::ReachPolicyErr>> = None;
     #[cfg(feature = "segmetal")]
     const OPERATOR_PK: [u8; 32] = [
         0xe8, 0xd8, 0x79, 0x93, 0xba, 0xe8, 0x16, 0xad, 0x3b, 0xea, 0x1b, 0x7a, 0xc7, 0x27, 0x26, 0x86, 0x18, 0xf0,
@@ -1455,6 +1461,12 @@ fn cm5_prod_service() -> ! {
                             }
                         }
                     }
+                }
+                // DIAG re-print (garbling-proof): repeats the reconcile outcome every hb.
+                #[cfg(feature = "segmetal")]
+                if seg_phase >= 1 {
+                    kprint!("   [SEGDIAG] phase={} fslog_err={:?} recon={:?} armed={}\n",
+                        seg_phase, seg_fslog_err, seg_recon, crate::segment::reach_armed());
                 }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
@@ -1624,16 +1636,20 @@ fn cm5_prod_service() -> ! {
                                                 // (all within [SEG_LO,SEG_HI) ⊂ the keystore window).
                                                 let _ = emmc.arm_write_window(SEG_LO, SEG_HI);
                                                 match store::SealedStore::open(emmc) {
-                                                    Ok(mut st) => match enroll::reconcile_reach_policy_record(
+                                                    Ok(mut st) => {
+                                                    // DIAG: capture the fslog outcome (read_reach_floor collapses
+                                                    // every FsErr to FloorUnavailable). Stored + re-printed each hb.
+                                                    seg_fslog_err = crate::fslog::open_or_format(&mut st, SEG_LO, SEG_HI).err();
+                                                    let r = enroll::reconcile_reach_policy_record(
                                                         &seg_enr, sess, payload, &mut st, SEG_LO, SEG_HI, &OPERATOR_PK,
-                                                    ) {
-                                                        Ok(nn) => {
-                                                            seg_phase = 2;
-                                                            kprint!("   [SEGMETAL] ✅ ARMED — reconcile applied {} reach entries; reach_armed={}\n",
-                                                                nn, crate::segment::reach_armed());
-                                                        }
-                                                        Err(e) => kprint!("   [SEGMETAL] reconcile refused: {:?} (fail-open, unarmed)\n", e),
-                                                    },
+                                                    );
+                                                    seg_recon = Some(r);
+                                                    if let Ok(nn) = r {
+                                                        seg_phase = 2;
+                                                        kprint!("   [SEGMETAL] ✅ ARMED — reconcile applied {} reach entries; reach_armed={}\n",
+                                                            nn, crate::segment::reach_armed());
+                                                    }
+                                                    }
                                                     Err(e) => kprint!("   [SEGMETAL] eMMC store open failed: {:?}\n", e),
                                                 }
                                                 }
