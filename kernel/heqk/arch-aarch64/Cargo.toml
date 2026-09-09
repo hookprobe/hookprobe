@@ -17,4 +17,10 @@ mipdump = ["cm5"]
 # DISCRIMINATOR EXPERIMENT: route the GEM TX frame through RP1 internal SRAM (0xC0_4040_0000)
 # instead of host RAM, so the DMA read never crosses PCIe — isolates the large-frame TX bug to
 # the PCIe read path vs the GEM. Additive; never shipped.
+# ⚠️ SUPERSEDED (2026-09-09): the SRAM address was wrong (that base is the RP1 AXI-peripheral
+# region, not the shared SRAM at proc 0x2000_0000 / system 0xC0_2000_0000). Use `txsweep`.
 txsram = ["cm5"]
+# DISCRIMINATOR (host-RAM): tx_frame reads a per-frame buffer OVERRIDE (set_tx_override) instead
+# of its own ring buffer, so a size/alignment sweep can move the DMA source across 64/128/256-byte
+# boundaries while staying on the exact failing GEM→RP1-AXI→PCIe→host-RAM read path. Additive; never shipped.
+txsweep = ["cm5"]
