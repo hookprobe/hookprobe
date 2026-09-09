@@ -196,6 +196,29 @@ impl ControlPlane {
     }
 }
 
+/// ONE-SHOT: dump the DEV-provisioning MSSP public blob (x_pk ‖ k_ek = 1216 B) as hex, so it can
+/// be baked into the device image (`include_bytes!`) byte-identically to what the kernel's ml-kem
+/// emits. The host MSSP-sim regenerates the private half from the SAME seeds. Dev/test only.
+#[cfg(feature = "securechannel-selftest")]
+#[allow(dead_code)]
+pub fn dump_provisioned_blob() {
+    use boot_abi::sha256;
+    let resp = crate::securechannel::ResponderStatic::from_seeds(
+        &sha256::digest(b"HEQK-DEV-PROV-mssp-x25519"),
+        &sha256::digest(b"HEQK-DEV-PROV-mssp-mlkem-d"),
+        &sha256::digest(b"HEQK-DEV-PROV-mssp-mlkem-z"),
+    );
+    let p = resp.public();
+    arch_aarch64::_print(format_args!("[PROVBLOB-BEGIN]"));
+    for b in p.x_pk().iter() {
+        arch_aarch64::_print(format_args!("{:02x}", b));
+    }
+    for b in p.k_ek_bytes().iter() {
+        arch_aarch64::_print(format_args!("{:02x}", b));
+    }
+    arch_aarch64::_print(format_args!("[PROVBLOB-END]\n"));
+}
+
 /// The [P19-controlplane] QEMU gate: drive the `ControlPlane` INITIATOR through a FULL PQ-hybrid
 /// handshake against an IN-KERNEL responder over the exact hand-framed UDP + chunk transport it
 /// runs on metal (msg1 chunked into datagrams → responder reassembles + answers msg2 → datagrams

@@ -1220,6 +1220,36 @@ fn cm5_prod_service() -> ! {
     let beacon_device_id: u64 = read_seal_handoff().map(|h| h.device_id).unwrap_or(0);
     #[cfg(feature = "netmetal")]
     let mut beacon_count: u32 = 0;
+
+    // M4.5 control-plane INITIATOR on metal: the ControlPlane drives the full PQ-hybrid Noise
+    // handshake toward the provisioned MSSP over the smoltcp-free hand-framed UDP transport,
+    // riding this SINGLE drain (RX tee) + the one gem::tx_frame (poll_egress). Session ephemerals
+    // are drawn fail-closed from the real HW-TRNG once; a dead TRNG ⇒ no handshake (sensor runs).
+    // The full handshake completes only against a live host MSSP-sim; msg1-on-the-wire (this
+    // increment) proves the initiator + chunked transport on silicon.
+    #[cfg(all(feature = "netmetal", feature = "securechannel"))]
+    let mut cp: Option<controlplane::ControlPlane> = {
+        let blob: &[u8; 1216] = include_bytes!("testdata/provisioned_mssp_pub.bin");
+        let mut xpk = [0u8; 32];
+        xpk.copy_from_slice(&blob[..32]);
+        match securechannel::ResponderPub::from_provisioned(xpk, &blob[32..]) {
+            Some(rp) => {
+                let seed = boot_abi::sha256::digest(&beacon_device_id.to_le_bytes());
+                let dev_kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
+                kprint!(" [NETCP] control-plane initiator UP — provisioned MSSP key loaded; handshake will start at link-up\n");
+                Some(controlplane::ControlPlane::new(rp, dev_kp, [0x02, 0, 0, 0, 0, 0x02], [10, 200, 0, 2]))
+            }
+            None => {
+                kprint!(" [NETCP] DISABLED — provisioned MSSP blob invalid\n");
+                None
+            }
+        }
+    };
+    #[cfg(all(feature = "netmetal", feature = "securechannel"))]
+    let cp_irand = crate::securechannel::InitiatorRandomness::from_entropy(
+        &mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new()),
+    )
+    .ok();
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -1265,6 +1295,23 @@ fn cm5_prod_service() -> ! {
                     beacon_count += 1;
                     kprint!("   [NETENROLL] presence beacon #{} on wire ({} B, bcast UDP:7654) via single TX path\n", beacon_count, n);
                 }
+            }
+            // M4.5 control-plane handshake: drive the ControlPlane once the link is up — tick()
+            // starts / bounded-retransmits msg1, and its egress datagrams go out the SINGLE
+            // gem::tx_frame path (the Linux-macb single-owner rule; NOT a 2nd ring walker). The
+            // full handshake completes against a live host MSSP-sim; here msg1 hits the wire.
+            #[cfg(all(feature = "netmetal", feature = "securechannel"))]
+            if let (Some(c), Some(ir)) = (cp.as_mut(), cp_irand.as_ref()) {
+                let link = arch_aarch64::gem::phy_link_up(0);
+                let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
+                c.tick(now_ms, link, ir);
+                let mut dgrams = 0u32;
+                while let Some((dg, dn)) = c.poll_egress() {
+                    if arch_aarch64::gem::tx_frame(&dg[..dn]).is_some() {
+                        dgrams += 1;
+                    }
+                }
+                kprint!("   [NETCP hb] state={:?} msg1_dgrams_out={} rx_seen={}\n", c.state(), dgrams, c.seen);
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
@@ -1412,17 +1459,13 @@ fn cm5_prod_service() -> ! {
                         // ICMP echo) into the smoltcp bridge and TX its reply out the GEM. A for-heqk frame
                         // TERMINATES here (not hairpin-forwarded). Everything else falls through
                         // to the normal forward path. Compiles out without `netmetal`.
-                        #[cfg(feature = "netmetal")]
-                        let handled = if let Some(b) = metal_bridge.as_mut() {
-                            if b.wants(&buf[..n]) {
+                        // Control-plane frames (UDP:7654 for-heqk, e.g. a responder's msg2) are
+                        // TEED to the ControlPlane off this SINGLE drain and terminate here.
+                        #[cfg(all(feature = "netmetal", feature = "securechannel"))]
+                        let cp_took = if let Some(c) = cp.as_mut() {
+                            if c.wants(&buf[..n]) {
                                 let now_ms = (prod_cntpct() / (cntfrq / 1000).max(1)) as i64;
-                                if let Some((reply, rn)) = b.step(&buf[..n], now_ms) {
-                                    if arch_aarch64::gem::tx_frame(&reply[..rn]).is_some() {
-                                        forwarded += 1;
-                                    } else {
-                                        tx_fail += 1;
-                                    }
-                                }
+                                c.ingress(&buf[..n], now_ms);
                                 true
                             } else {
                                 false
@@ -1430,6 +1473,27 @@ fn cm5_prod_service() -> ! {
                         } else {
                             false
                         };
+                        #[cfg(not(all(feature = "netmetal", feature = "securechannel")))]
+                        let cp_took = false;
+                        #[cfg(feature = "netmetal")]
+                        let handled = cp_took
+                            || if let Some(b) = metal_bridge.as_mut() {
+                                if b.wants(&buf[..n]) {
+                                    let now_ms = (prod_cntpct() / (cntfrq / 1000).max(1)) as i64;
+                                    if let Some((reply, rn)) = b.step(&buf[..n], now_ms) {
+                                        if arch_aarch64::gem::tx_frame(&reply[..rn]).is_some() {
+                                            forwarded += 1;
+                                        } else {
+                                            tx_fail += 1;
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
                         #[cfg(not(feature = "netmetal"))]
                         let handled = false;
                         // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
