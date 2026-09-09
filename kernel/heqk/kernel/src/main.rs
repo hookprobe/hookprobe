@@ -911,14 +911,11 @@ fn wasmi_el0_cm5_metal() {
     use core::ptr::write_volatile;
     const RPT_SENTINEL: u32 = 0xFFFF_FFFF; // DRIVER_REPORT pre-load; also the both-FAIL packing
     let base = mmu_cm5::USER_VA_BASE;
-    let stack_va = base + 0x8_0000; // above the ~393 KiB (0x61000) image, page-aligned
-    let stack_pages = 16usize; // 64 KiB
-    let heap_va = base + 0x9_0000; // == el0-wasmhost HEAP_BASE (syncabi)
-    let heap_pages = 64usize; // 256 KiB == el0-wasmhost HEAP_SIZE
     let work_va = base + 0xD_0000; // == el0-wasmhost WORK_BASE (syncabi)
+    let foot_top = work_va + 0x1000; // whole GB5 footprint [base, foot_top)
 
-    // 1. Parse + VALIDATE the embedded EL0 host ELF (pure, fail-closed; W^X + GB5-window
-    //    checked). The `syncabi` build is ET_EXEC based at 0x1_4000_0000.
+    // Parse + VALIDATE the embedded EL0 host ELF once (pure, fail-closed; W^X + GB5-window
+    // checked). The `syncabi` build is ET_EXEC based at 0x1_4000_0000. Reused by both excursions.
     let parsed = match elf::parse(WASMI_ELF) {
         Ok(p) => p,
         Err(e) => {
@@ -926,9 +923,123 @@ fn wasmi_el0_cm5_metal() {
             return;
         }
     };
-    // 2. Load each PT_LOAD into freshly-allocated (zeroed) GB5 frames via the CM5 single-AS
-    //    mapper. Code/rodata → RO(+X for text); data/bss → RW+NX. The loader already refused
-    //    any W&X segment, so W^X holds. `alloc_frame` zeroes each frame (bss tail = 0).
+
+    // ========================= M5.5 — CLASSIFY excursion =========================
+    // A signed memoryless classify(port) module: prove REAL wasmi computes correctly in an
+    // isolated EL0 excursion. classify(4444)=1 (block) AND classify(443)=0 (pass) → 0x0001_0000.
+    if let Some(sp_top) = load_el0_wasmhost_cm5(&parsed) {
+        let (gwasm, gpk, gsig) = wasmhost::fixture_full();
+        match wasmhost::verified_module(gwasm, gpk, gsig) {
+            Some(module) => {
+                let work = mmu_cm5::alloc_frame();
+                if work != 0 {
+                    let n = module.len().min(0xF00);
+                    unsafe {
+                        write_volatile(work as *mut u64, 4444u64); // port_a — block-4444 backdoor
+                        write_volatile((work + 8) as *mut u64, 443u64); // port_b — benign pass
+                        write_volatile((work + 16) as *mut u64, n as u64);
+                        core::ptr::copy_nonoverlapping(module.as_ptr(), (work + 24) as *mut u8, n);
+                    }
+                    mmu_cm5::map_user_data(work_va, work);
+                    DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
+                    unsafe { arch_aarch64::syscall::enter_user(parsed.entry, sp_top) };
+                    let packed = DRIVER_REPORT.load(Ordering::Relaxed);
+                    let va = (packed >> 16) & 0xffff;
+                    let vb = packed & 0xffff;
+                    let pass = packed != RPT_SENTINEL && va == 1 && vb == 0;
+                    kprint!(
+                        " [P-wasmi-el0-metal] {} — REAL wasmi 0.32 in an ISOLATED EL0 excursion on CM5 silicon: classify(4444)={} classify(443)={} packed={:#010x} (want 0x00010000); wasmi .text is in the {}-byte EL0 image, NOT the kernel TCB\n",
+                        if pass { "PASS" } else { "FAIL" },
+                        va as i32, vb as i32, packed, WASMI_ELF.len()
+                    );
+                }
+            }
+            None => kprint!(" [P-wasmi-el0-metal] FAIL: signed classify module failed Ed25519 verify\n"),
+        }
+        // Unmap so the next excursion (and later the GEM driver) maps a clean L3 table.
+        let mut va = base;
+        while va < foot_top { mmu_cm5::unmap_user(va); va += 0x1000; }
+    } else {
+        kprint!(" [P-wasmi-el0-metal] FAIL: EL0 host load failed (frame pool / GB5 window)\n");
+    }
+
+    // ==================== M5.6 — DETECTION-at-PARITY excursion ====================
+    // A signed DETECTION module (linear memory + hp_input/hp_emit imports) run THROUGH wasmi
+    // over a VECTOR of 8 L4 headers; its per-input verdicts must EQUAL the in-kernel
+    // rules::run_l4 reference case-for-case (PARITY, ADR 0044 D4 #4) — the REAL IDS/IPS use
+    // of the Wasm host, now on silicon (the QEMU [P-wasm-parity] proof was explicitly NOT metal).
+    if let Some(sp_top) = load_el0_wasmhost_cm5(&parsed) {
+        let (dwasm, dpk, dsig) = wasmhost::fixture_detect();
+        // (b) fail-closed BEFORE hand-off: a tampered module (last byte flipped) fails verify.
+        let mut tampered = [0u8; 256];
+        let tn = dwasm.len().min(256);
+        tampered[..tn].copy_from_slice(&dwasm[..tn]);
+        tampered[tn - 1] ^= 0x01;
+        let tamper_refused = wasmhost::verified_module(&tampered[..tn], dpk, dsig).is_none();
+        match wasmhost::verified_module(dwasm, dpk, dsig) {
+            Some(module) => {
+                // The PARITY corpus: 8 L4 headers (src port 0, dst port big-endian). Three
+                // blocked ports mirror rules.rs RULES (4444/23/31337 = Signature). The kernel
+                // computes the reference with the SAME rules::run_l4 the module must reproduce.
+                const STRIDE: usize = 8;
+                const NP: usize = 8;
+                let ports: [u16; NP] = [4444, 23, 31337, 80, 443, 22, 0, 65535];
+                let mut inputs = [0u8; NP * STRIDE];
+                let mut expected: u32 = 0;
+                let mut i = 0usize;
+                while i < NP {
+                    let b = i * STRIDE;
+                    inputs[b + 2] = (ports[i] >> 8) as u8; // dst-port high
+                    inputs[b + 3] = (ports[i] & 0xff) as u8; // dst-port low
+                    let wire = rules::run_l4(&inputs[b..b + STRIDE], 0) as u32; // 1=PASS 2=DROP
+                    expected |= (wire & 0xF) << (4 * i);
+                    i += 1;
+                }
+                let work = mmu_cm5::alloc_frame();
+                if work != 0 {
+                    // DETECT ABI: [+0]=MAGIC [+8]=n [+16]=stride [+24]=mod_len, inputs@+32, module@+512.
+                    let mod_len = module.len().min(0x1000 - 512);
+                    let in_len = inputs.len().min(512 - 32);
+                    unsafe {
+                        write_volatile(work as *mut u64, DETECT_MAGIC);
+                        write_volatile((work + 8) as *mut u64, NP as u64);
+                        write_volatile((work + 16) as *mut u64, STRIDE as u64);
+                        write_volatile((work + 24) as *mut u64, mod_len as u64);
+                        core::ptr::copy_nonoverlapping(inputs.as_ptr(), (work + 32) as *mut u8, in_len);
+                        core::ptr::copy_nonoverlapping(module.as_ptr(), (work + 512) as *mut u8, mod_len);
+                    }
+                    mmu_cm5::map_user_data(work_va, work);
+                    DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
+                    unsafe { arch_aarch64::syscall::enter_user(parsed.entry, sp_top) };
+                    let packed = DRIVER_REPORT.load(Ordering::Relaxed);
+                    let parity = packed != RPT_SENTINEL && packed == expected;
+                    kprint!(
+                        " [P-wasm-parity-metal] {} — SIGNED DETECTION module (linear memory + hp_input/hp_emit) via REAL wasmi in an ISOLATED EL0 excursion on CM5 silicon over {} L4 headers: wasm-packed={:#010x} vs in-kernel rules::run_l4={:#010x} (nibble/input, 1=PASS 2=DROP); tamper_refused_before_EL0={}\n",
+                        if parity { "PASS" } else { "FAIL" },
+                        NP, packed, expected, tamper_refused
+                    );
+                }
+            }
+            None => kprint!(" [P-wasm-parity-metal] FAIL: signed detection module failed Ed25519 verify\n"),
+        }
+        let mut va = base;
+        while va < foot_top { mmu_cm5::unmap_user(va); va += 0x1000; }
+    }
+}
+
+/// M5.5/M5.6 helper — map the `syncabi` el0-wasmhost image (code RO+X, rodata RO, data RW+NX)
+/// into fresh zeroed GB5 frames via the CM5 single-AS mapper, plus a 64 KiB stack and 256 KiB
+/// heap at the fixed VAs (matching el0-wasmhost). Returns sp_top, or None on frame-pool/window
+/// failure. The caller stages the work page + drives the excursion.
+#[cfg(all(feature = "cm5", feature = "wasmhost"))]
+fn load_el0_wasmhost_cm5(parsed: &elf::ParsedElf) -> Option<usize> {
+    use arch_aarch64::mmu_cm5;
+    let base = mmu_cm5::USER_VA_BASE;
+    let stack_va = base + 0x8_0000; // above the ~393 KiB (0x61000) image, page-aligned
+    let stack_pages = 16usize; // 64 KiB
+    let heap_va = base + 0x9_0000; // == el0-wasmhost HEAP_BASE (syncabi)
+    let heap_pages = 64usize; // 256 KiB == el0-wasmhost HEAP_SIZE
+    // PT_LOAD segments — W^X: RO+X text / RO rodata / RW+NX data; alloc_frame zeroes (bss tail=0).
     let mut si = 0usize;
     while si < parsed.nsegs {
         let s = parsed.segs[si];
@@ -939,111 +1050,53 @@ fn wasmi_el0_cm5_metal() {
         while p < npages {
             let f = mmu_cm5::alloc_frame();
             if f == 0 {
-                kprint!(" [P-wasmi-el0-metal] FAIL: CM5 frame pool exhausted (seg {})\n", si);
-                return;
+                return None;
             }
             let voff = p * 0x1000;
             let fileleft = s.filesz.saturating_sub(voff);
             let n = fileleft.min(0x1000);
             if n > 0 {
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        WASMI_ELF.as_ptr().add(s.offset + voff),
-                        f as *mut u8,
-                        n,
-                    );
+                    core::ptr::copy_nonoverlapping(WASMI_ELF.as_ptr().add(s.offset + voff), f as *mut u8, n);
                 }
             }
             let va = s.vaddr + voff;
             let ok = if exec {
-                mmu_cm5::map_user_code(va, f); // AP_RO_EL0 | PXN — EL0 exec, kernel non-exec
+                mmu_cm5::map_user_code(va, f);
                 arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
                 true
             } else if write {
-                mmu_cm5::map_user_data(va, f) // RW + NX
+                mmu_cm5::map_user_data(va, f)
             } else {
-                mmu_cm5::map_user_data_ro(va, f) // RO + NX
+                mmu_cm5::map_user_data_ro(va, f)
             };
             if !ok {
-                kprint!(" [P-wasmi-el0-metal] FAIL: seg VA {:#x} outside GB5 window\n", va);
-                return;
+                return None;
             }
             p += 1;
         }
         si += 1;
     }
-    // 3. Stack (RW+NX) — kernel-provided, grows down from the top. Not in the ELF.
     let mut p = 0usize;
     while p < stack_pages {
         let f = mmu_cm5::alloc_frame();
         if f == 0 {
-            return;
+            return None;
         }
         mmu_cm5::map_user_data(stack_va + p * 0x1000, f);
         p += 1;
     }
     let sp_top = stack_va + stack_pages * 0x1000;
-    // 4. Heap window (RW+NX) — the EL0 bump allocator hands this to wasmi.
     let mut p = 0usize;
     while p < heap_pages {
         let f = mmu_cm5::alloc_frame();
         if f == 0 {
-            return;
+            return None;
         }
         mmu_cm5::map_user_data(heap_va + p * 0x1000, f);
         p += 1;
     }
-    // 5. VERIFY the signed classify module (kernel = trust root) and stage it into the work
-    //    page: [+0]=port_a [+8]=port_b [+16]=wasm_len [+24..]=module bytes.
-    let (gwasm, gpk, gsig) = wasmhost::fixture_full();
-    let module = match wasmhost::verified_module(gwasm, gpk, gsig) {
-        Some(m) => m,
-        None => {
-            kprint!(" [P-wasmi-el0-metal] FAIL: signed classify module failed Ed25519 verify\n");
-            return;
-        }
-    };
-    let work = mmu_cm5::alloc_frame();
-    if work == 0 {
-        return;
-    }
-    let n = module.len().min(0xF00);
-    unsafe {
-        write_volatile(work as *mut u64, 4444u64); // port_a — the block-4444 backdoor port
-        write_volatile((work + 8) as *mut u64, 443u64); // port_b — a benign pass port
-        write_volatile((work + 16) as *mut u64, n as u64);
-        core::ptr::copy_nonoverlapping(module.as_ptr(), (work + 24) as *mut u8, n);
-    }
-    mmu_cm5::map_user_data(work_va, work);
-
-    // 6. THE EXCURSION — drop to EL0 at the host's entry with our stack. The host runs both
-    //    classifies through REAL wasmi and reports the packed verdict via SYS_DRIVER_REPORT,
-    //    which (cooperative mode) longjmps back here. A fault/trap is contained: the report
-    //    never lands and DRIVER_REPORT stays at the sentinel.
-    DRIVER_REPORT.store(RPT_SENTINEL, Ordering::Relaxed);
-    unsafe { arch_aarch64::syscall::enter_user(parsed.entry, sp_top) };
-    let packed = DRIVER_REPORT.load(Ordering::Relaxed);
-
-    // 7. PROVE it: classify(4444)=1 (block) AND classify(443)=0 (pass) → 0x0001_0000.
-    let va = (packed >> 16) & 0xffff;
-    let vb = packed & 0xffff;
-    let pass = packed != RPT_SENTINEL && va == 1 && vb == 0;
-    kprint!(
-        " [P-wasmi-el0-metal] {} — REAL wasmi 0.32 in an ISOLATED EL0 excursion on CM5 silicon: classify(4444)={} classify(443)={} packed={:#010x} (want 0x00010000); wasmi .text is in the {}-byte EL0 image, NOT the kernel TCB\n",
-        if pass { "PASS" } else { "FAIL" },
-        va as i32,
-        vb as i32,
-        packed,
-        WASMI_ELF.len()
-    );
-
-    // 8. Unmap the whole wasmi footprint [base, work_va+0x1000) so the GEM driver setup that
-    //    follows maps the shared low GB5 pages onto a clean L3 table (no stale EL0 exec).
-    let mut va = base;
-    while va < work_va + 0x1000 {
-        mmu_cm5::unmap_user(va);
-        va += 0x1000;
-    }
+    Some(sp_top)
 }
 
 #[cfg(feature = "cm5")]
@@ -8952,8 +9005,8 @@ fn bringup_detect_el0(
     Some(tid)
 }
 
-/// M5.4 DETECT-mode work-page magic (== el0-wasmhost `DETECT_MAGIC`).
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+/// M5.4 DETECT-mode work-page magic (== el0-wasmhost `DETECT_MAGIC`). Both tiers.
+#[cfg(feature = "wasmhost")]
 const DETECT_MAGIC: u64 = 0x4851_4445_5445_4354;
 
 /// M5.4 (a)+(b)+(c) — run ONE signed DETECTION `.wasm` module (linear memory + the
