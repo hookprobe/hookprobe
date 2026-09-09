@@ -30,11 +30,24 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 const HEAP_BASE: usize = 0x9300_0000;
 #[cfg(feature = "syncabi")]
 const HEAP_BASE: usize = 0x1_4009_0000; // GB5 window, above the ~393 KiB code image + stack
-const HEAP_SIZE: usize = 256 * 1024; // 256 KiB — ~26x the measured ~9.5 KiB wasmi high-water
+// Heap: the classify/detect modules use ~9.5 KiB, but a REAL std wasm32-wasip1 module (M5.5)
+// declares ~1.1 MiB of linear memory + wasmi overhead — so the QEMU host gets a 4 MiB heap
+// window (the kernel maps only as many pages as a given host actually touches). The cm5
+// `syncabi` host stays at 256 KiB (its whole GB5 window is only 2 MiB; it runs the small
+// classify/detect modules, not the big std wasip1 module).
+#[cfg(not(feature = "syncabi"))]
+const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4 MiB (QEMU): fits a std wasip1 module's ~1.1 MiB memory
+#[cfg(feature = "syncabi")]
+const HEAP_SIZE: usize = 256 * 1024; // 256 KiB (cm5 GB5 window)
 #[cfg(not(feature = "syncabi"))]
 const WORK_BASE: usize = 0x9400_0000;
 #[cfg(feature = "syncabi")]
 const WORK_BASE: usize = 0x1_400D_0000; // GB5 window, above the heap
+// M5.5 — the wasip1 module window (QEMU path only): a std wasm32-wasip1 module is ~37 KiB,
+// far bigger than the 4 KiB work page, so the kernel maps its bytes in this OWN RO window and
+// the work page carries only the WASIP1 header + the stdin bytes.
+#[cfg(not(feature = "syncabi"))]
+const WASIP1_MODULE_BASE: usize = 0x9500_0000;
 
 // ---- syscall numbers (== the kernel's SYS_CALL / SYS_TASK_EXIT / SYS_DRIVER_REPORT) ----
 #[cfg(not(feature = "syncabi"))]
@@ -60,6 +73,14 @@ const DETECT_MAGIC: u64 = 0x4851_4445_5445_4354; // sentinel ("HQDETECT"), never
 const DETECT_INPUTS_OFF: usize = 32;
 const DETECT_MODULE_OFF: usize = 512;
 const DETECT_FAIL_NIBBLE: u32 = 0xF; // per-input fail-closed marker (trap / bad verdict)
+
+// ---- M5.5 (Track C) wasip1-mode work-page ABI (QEMU path). The module is too big for the
+// work page, so it lives in WASIP1_MODULE_BASE; the work page carries only:
+//   [+0]=WASIP1_MAGIC(u64) [+8]=wasm_len(u64) [+16]=stdin_len(u64) [+24..]=stdin bytes
+#[cfg(not(feature = "syncabi"))]
+const WASIP1_MAGIC: u64 = 0x4851_5741_5349_5031; // sentinel ("HQWASIP1")
+#[cfg(not(feature = "syncabi"))]
+const WASIP1_STDIN_OFF: usize = 24;
 
 // ============================ bump allocator ================================
 // A monotonic bump over the kernel-mapped [HEAP_BASE, HEAP_BASE+HEAP_SIZE) window. wasmi's
@@ -294,6 +315,200 @@ fn run_detect(module: &[u8], inputs_base: usize, n: usize, stride: usize) -> u32
     packed
 }
 
+// ===================== M5.5 — the REAL wasip1 host (QEMU path) ================
+/// Per-Store state for the WASI preview1 host functions: a stdin cursor (the L4 header the
+/// kernel staged) and a stdout sink (the module's verdict byte).
+#[cfg(not(feature = "syncabi"))]
+struct WasiState {
+    stdin: [u8; 64],
+    stdin_len: usize,
+    stdin_pos: usize,
+    stdout: [u8; 64],
+    stdout_len: usize,
+    #[allow(dead_code)]
+    exit_code: i32,
+}
+
+/// Run a REAL, kernel-verified `wasm32-wasip1` module through wasmi with a minimal WASI
+/// preview1 host: it reads the staged L4 header from STDIN (fd_read) and writes its verdict
+/// byte to STDOUT (fd_write); environ_* are empty; proc_exit records the code. Returns the
+/// first stdout byte (1=PASS, 2=DROP) or FAIL on any wasmi/decoding/OOM error — the module
+/// can only ever yield a verdict or the fail-closed sentinel, never escape EL0.
+#[cfg(not(feature = "syncabi"))]
+fn run_wasip1(module: &[u8], stdin_bytes: &[u8]) -> u32 {
+    use wasmi::{Caller, Engine, Extern, Linker, Module, Store};
+    let engine = Engine::default();
+    let m = match Module::new(&engine, module) {
+        Ok(m) => m,
+        Err(_) => return FAIL,
+    };
+    let mut init = WasiState {
+        stdin: [0u8; 64],
+        stdin_len: 0,
+        stdin_pos: 0,
+        stdout: [0u8; 64],
+        stdout_len: 0,
+        exit_code: 0,
+    };
+    let n = stdin_bytes.len().min(64);
+    init.stdin[..n].copy_from_slice(&stdin_bytes[..n]);
+    init.stdin_len = n;
+    let mut store = Store::new(&engine, init);
+    let mut linker = Linker::<WasiState>::new(&engine);
+    const WASI: &str = "wasi_snapshot_preview1";
+
+    // fd_read(fd, iovs, iovs_len, nread) -> errno. Copies the stdin cursor into the module's
+    // linear memory at each iovec (bounds-checked by wasmi's mem.write). fd 0 only.
+    if linker
+        .func_wrap(WASI, "fd_read", |mut caller: Caller<'_, WasiState>, fd: i32, iovs: i32, iovs_len: i32, nread: i32| -> i32 {
+            if fd != 0 {
+                return 8; // EBADF
+            }
+            let mem = match caller.get_export("memory") {
+                Some(Extern::Memory(mm)) => mm,
+                _ => return 8,
+            };
+            let mut total: u32 = 0;
+            let mut i = 0i32;
+            while i < iovs_len {
+                let mut ent = [0u8; 8];
+                if mem.read(&caller, (iovs as usize) + (i as usize) * 8, &mut ent).is_err() {
+                    return 21; // EFAULT
+                }
+                let buf = u32::from_le_bytes([ent[0], ent[1], ent[2], ent[3]]) as usize;
+                let len = u32::from_le_bytes([ent[4], ent[5], ent[6], ent[7]]) as usize;
+                let (pos, slen) = {
+                    let d = caller.data();
+                    (d.stdin_pos, d.stdin_len)
+                };
+                let avail = slen - pos;
+                let take = len.min(avail);
+                if take > 0 {
+                    let mut tmp = [0u8; 64];
+                    {
+                        let d = caller.data();
+                        tmp[..take].copy_from_slice(&d.stdin[pos..pos + take]);
+                    }
+                    if mem.write(&mut caller, buf, &tmp[..take]).is_err() {
+                        return 21;
+                    }
+                    caller.data_mut().stdin_pos += take;
+                    total += take as u32;
+                }
+                if avail == 0 {
+                    break; // EOF — stop after the first short/empty iovec
+                }
+                i += 1;
+            }
+            let _ = mem.write(&mut caller, nread as usize, &total.to_le_bytes());
+            0
+        })
+        .is_err()
+    {
+        return FAIL;
+    }
+
+    // fd_write(fd, iovs, iovs_len, nwritten) -> errno. fd 1 (stdout) bytes are captured into
+    // the state's stdout sink; fd 2 (stderr) is accepted+discarded; all requested bytes are
+    // reported written so the module's write loop terminates.
+    if linker
+        .func_wrap(WASI, "fd_write", |mut caller: Caller<'_, WasiState>, fd: i32, iovs: i32, iovs_len: i32, nwritten: i32| -> i32 {
+            if fd != 1 && fd != 2 {
+                return 8;
+            }
+            let mem = match caller.get_export("memory") {
+                Some(Extern::Memory(mm)) => mm,
+                _ => return 8,
+            };
+            let mut total: u32 = 0;
+            let mut i = 0i32;
+            while i < iovs_len {
+                let mut ent = [0u8; 8];
+                if mem.read(&caller, (iovs as usize) + (i as usize) * 8, &mut ent).is_err() {
+                    return 21;
+                }
+                let buf = u32::from_le_bytes([ent[0], ent[1], ent[2], ent[3]]) as usize;
+                let len = u32::from_le_bytes([ent[4], ent[5], ent[6], ent[7]]) as usize;
+                if fd == 1 {
+                    let sl = caller.data().stdout_len;
+                    let cap = 64usize.saturating_sub(sl);
+                    let take = len.min(cap);
+                    if take > 0 {
+                        let mut tmp = [0u8; 64];
+                        if mem.read(&caller, buf, &mut tmp[..take]).is_err() {
+                            return 21;
+                        }
+                        caller.data_mut().stdout[sl..sl + take].copy_from_slice(&tmp[..take]);
+                        caller.data_mut().stdout_len += take;
+                    }
+                }
+                total += len as u32;
+                i += 1;
+            }
+            let _ = mem.write(&mut caller, nwritten as usize, &total.to_le_bytes());
+            0
+        })
+        .is_err()
+    {
+        return FAIL;
+    }
+
+    // environ_sizes_get(count, buf_size) -> errno: zero environment.
+    if linker
+        .func_wrap(WASI, "environ_sizes_get", |mut caller: Caller<'_, WasiState>, count: i32, size: i32| -> i32 {
+            let mem = match caller.get_export("memory") {
+                Some(Extern::Memory(mm)) => mm,
+                _ => return 8,
+            };
+            let _ = mem.write(&mut caller, count as usize, &0u32.to_le_bytes());
+            let _ = mem.write(&mut caller, size as usize, &0u32.to_le_bytes());
+            0
+        })
+        .is_err()
+    {
+        return FAIL;
+    }
+    // environ_get(environ, buf) -> errno: nothing to write (zero environment).
+    if linker
+        .func_wrap(WASI, "environ_get", |_caller: Caller<'_, WasiState>, _environ: i32, _buf: i32| -> i32 { 0 })
+        .is_err()
+    {
+        return FAIL;
+    }
+    // proc_exit(code): record the code; the module halts (the crt's trailing unreachable
+    // traps, which we treat as the normal exit — the verdict is already in stdout).
+    if linker
+        .func_wrap(WASI, "proc_exit", |mut caller: Caller<'_, WasiState>, code: i32| {
+            caller.data_mut().exit_code = code;
+        })
+        .is_err()
+    {
+        return FAIL;
+    }
+
+    let pre = match linker.instantiate(&mut store, &m) {
+        Ok(p) => p,
+        Err(_) => return FAIL,
+    };
+    let inst = match pre.ensure_no_start(&mut store) {
+        Ok(i) => i,
+        Err(_) => return FAIL,
+    };
+    let start = match inst.get_typed_func::<(), ()>(&store, "_start") {
+        Ok(f) => f,
+        Err(_) => return FAIL,
+    };
+    // A trailing trap after proc_exit is EXPECTED (the crt's post-exit unreachable); the
+    // verdict was written to stdout before that, so read it back regardless of the result.
+    let _ = start.call(&mut store, ());
+    let d = store.data();
+    if d.stdout_len >= 1 {
+        d.stdout[0] as u32
+    } else {
+        FAIL
+    }
+}
+
 /// EL0 entry. The kernel set our SP (via make_el0_thread) and mapped the work page + heap.
 /// Work page ABI (== main.rs writes):
 ///   [+0]=port_a(u64) [+8]=port_b(u64) [+16]=wasm_len(u64) [+24..]=wasm module bytes
@@ -308,6 +523,22 @@ pub extern "C" fn _start() -> ! {
     // M5.4 — dispatch on the work-page mode word at [+0]. The classify path writes a small
     // port int there; the detect path writes DETECT_MAGIC. Zero-touch to the M5.3 layout.
     let mode = unsafe { core::ptr::read_volatile(work as *const u64) };
+    // M5.5 (QEMU) — wasip1 mode: the module is in WASIP1_MODULE_BASE (too big for the work
+    // page); the work page carries [MAGIC, wasm_len, stdin_len, stdin bytes].
+    #[cfg(not(feature = "syncabi"))]
+    if mode == WASIP1_MAGIC {
+        let (wasm_len, stdin_len) = unsafe {
+            let w = core::ptr::read_volatile((work + 8) as *const u64) as usize;
+            let s = core::ptr::read_volatile((work + 16) as *const u64) as usize;
+            (w.min(4 * 1024 * 1024), s.min(64))
+        };
+        let module: &[u8] =
+            unsafe { core::slice::from_raw_parts(WASIP1_MODULE_BASE as *const u8, wasm_len) };
+        let stdin: &[u8] =
+            unsafe { core::slice::from_raw_parts((work + WASIP1_STDIN_OFF) as *const u8, stdin_len) };
+        let v = run_wasip1(module, stdin);
+        send_verdict_and_exit(v);
+    }
     if mode == DETECT_MAGIC {
         let (n, stride, wasm_len) = unsafe {
             let n = core::ptr::read_volatile((work + 8) as *const u64) as usize;
