@@ -365,15 +365,16 @@ pub fn fixture_trap() -> (&'static [u8], &'static [u8], &'static [u8]) {
 /// module with LINEAR MEMORY + the `hp_input`/`hp_emit` host imports that reproduces the
 /// L4 dst-port SIGNATURE corpus (rules.rs RULES: 4444/23/31337) for the [P-wasm-parity]
 /// gate. Verified by the kernel (Ed25519 leg) before hand-off to the EL0 wasmi host.
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+// Available on BOTH tiers: QEMU parity host and CM5 (M5.6 detection-at-parity on metal).
+#[cfg(feature = "wasmhost")]
 const FIXTURE_DETECT_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_detect.wasm"));
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+#[cfg(feature = "wasmhost")]
 const FIXTURE_DETECT_PK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_detect.pk"));
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+#[cfg(feature = "wasmhost")]
 const FIXTURE_DETECT_SIG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_detect.sig"));
 
 /// M5.4 — the signed DETECTION fixture triple, for the [P-wasm-parity] EL0 host.
-#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+#[cfg(feature = "wasmhost")]
 pub fn fixture_detect() -> (&'static [u8], &'static [u8], &'static [u8]) {
     (FIXTURE_DETECT_WASM, FIXTURE_DETECT_PK, FIXTURE_DETECT_SIG)
 }
