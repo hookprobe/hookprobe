@@ -171,6 +171,11 @@ sepdiag = ["prod"]
 # Pulls p15-write for the anti-rollback floor (C11/C12) in the eMMC sealed store. Never shipped.
 #   FEATURES=segmetal builder/make-cm5-heqk-image.sh
 segmetal = ["netmetal", "securechannel", "p15-write"]
+# dnssink — M4 DNS-sinkhole/RPZ ON THE WIRE. Additive to netmetal: a transiting DNS query for an
+# RPZ-blocked name (dnssink::RPZ_LIST) is answered with a spoofed sinkhole reply (A -> SINKHOLE_IP)
+# and not forwarded; legit names flow untouched (ADR 0023). Never shipped; metal opt-in.
+#   FEATURES=dnssink builder/make-cm5-heqk-image.sh
+dnssink = ["netmetal"]
 
 [[bin]]
 name = "kernel"

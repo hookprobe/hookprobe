@@ -1375,6 +1375,10 @@ fn cm5_prod_service() -> ! {
     const SEG_LO: u64 = 2034;
     #[cfg(feature = "segmetal")]
     const SEG_HI: u64 = 2046;
+    // DNS-sinkhole counter (feature `dnssink`) — reprinted every heartbeat for garbling-proof
+    // metal observability (the on-wire sinkhole reply is the definitive proof).
+    #[cfg(feature = "dnssink")]
+    let mut dns_sinks: u64 = 0;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
@@ -1396,6 +1400,8 @@ fn cm5_prod_service() -> ! {
             let rsr = arch_aarch64::gem::rsr();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            #[cfg(feature = "dnssink")]
+            kprint!("   [DNSSINK hb] sinkholed={} (RPZ-blocked DNS queries answered with SINKHOLE_IP + not forwarded)\n", dns_sinks);
             // M4 FIRST-LIGHT heartbeat: how many for-heqk frames (ARP-for-us + unicast-to-our-MAC,
             // i.e. ICMP echo) the bridge saw and answered.
             #[cfg(feature = "netmetal")]
@@ -1697,6 +1703,26 @@ fn cm5_prod_service() -> ! {
                             };
                         #[cfg(not(feature = "netmetal"))]
                         let handled = false;
+                        // DNS-SINKHOLE (feature `dnssink`): a transiting DNS query for an RPZ-blocked
+                        // name is ANSWERED with a spoofed sinkhole reply and NOT forwarded (the name
+                        // is refused, the packet path is not silently dropped — ADR 0023). A legit
+                        // name returns None here and flows normally below. The reply TX counts as
+                        // `forwarded` so seen == forwarded + dropped + tx_fail still holds.
+                        #[cfg(feature = "dnssink")]
+                        let handled = handled || {
+                            let mut reply = [0u8; 600];
+                            if let Some(rl) = netsvc::build_dns_sinkhole_frame(&buf[..n], &mut reply) {
+                                if arch_aarch64::gem::tx_frame(&reply[..rl]).is_some() {
+                                    forwarded += 1;
+                                } else {
+                                    tx_fail += 1;
+                                }
+                                dns_sinks += 1;
+                                true
+                            } else {
+                                false
+                            }
+                        };
                         // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
                         // seen == forwarded + dropped + tx_fail holds and a lost PASS is visible.
                         if !handled {
