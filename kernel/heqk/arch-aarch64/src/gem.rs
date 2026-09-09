@@ -106,6 +106,7 @@ pub fn tx_err_take() -> u32 {
 const RBQP: usize = 0x018; // RX buffer queue base (low)
 const TBQP: usize = 0x01c; // TX buffer queue base (low)
 const RSR: usize = 0x020; // Receive Status
+const AMP: usize = 0x054; // GEM AXI Max Pipeline: AR2R_MAX_PIPE[7:0], AW2W_MAX_PIPE[15:8], AW2B_FILL[16]
 const ISR: usize = 0x024; // Interrupt Status (read-to-clear on macb)
 const IER: usize = 0x028; // Interrupt Enable
 const IDR: usize = 0x02c; // Interrupt Disable (mask all)
@@ -718,6 +719,15 @@ pub fn rx_init() -> (usize, u16, u32) {
     w(GEM, DMACFG,
         DMACFG_ADDR64 | DMACFG_RXEXT | DMACFG_TXEXT
             | DMACFG_RXBMS | DMACFG_TXPBMS | (rxbs << 16) | 0x10);
+    // GEM AXI Max Pipeline (AMP, 0x054) — RP1-SPECIFIC, and my driver NEVER set it before. The
+    // RP1 macb DT (`rp1.dtsi` rp1_eth) programs ar2r-max-pipe=8 / aw2w-max-pipe=8 / use-aw2b-fill,
+    // via gem_init_axi()'s read-modify-write. AR2R_MAX_PIPE[7:0] is the AXI READ-to-read pipeline
+    // depth — literally the TX read path (GEM reads the frame from host RAM over the RP1 PCIe EP).
+    // Leaving it at reset is the leading suspect for "TX reads of >90B frames never complete on
+    // the wire while RX writes are fine" (2026-09-09 metal + macb study). RMW like Linux: preserve
+    // other bits, set the three RP1 fields.
+    let amp = (r(GEM, AMP) & !0x0001_FFFF) | (0x08) | (0x08 << 8) | (1 << 16);
+    w(GEM, AMP, amp);
     let ringbus = ring as u64 + DMA_BUS_OFFSET;
     w(GEM, RBQPH, (ringbus >> 32) as u32); // high FIRST
     w(GEM, RBQP, ringbus as u32);
