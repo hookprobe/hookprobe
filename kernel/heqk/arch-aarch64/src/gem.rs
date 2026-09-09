@@ -843,27 +843,36 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), (sl + 1) % NTX);
         sl
     };
-    // Physical address of this slot's TX buffer (VA==PA identity for TXRING).
-    let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
-    // Write the frame through the NON-CACHEABLE alias (bufpa + NC_VA), NOT the cacheable struct
-    // field — dma_alloc_coherent semantics, the SAME NC window the descriptor ring uses, so the
-    // GEM DMA-reads exactly these bytes with no cache in the path (correct coherency model; small
-    // frames verified still TX). ⚠️ NOTE (metal 2026-09-09): this did NOT fix the >90B large-frame
-    // TX blocker — large frames still complete with a CLEAN descriptor yet never reach the wire,
-    // and the host sees NO CRC error (so they are claimed-sent-but-not-delivered, not bad-FCS).
-    // Cause still unknown after ruling out burst/error-bits/length/TXPBMS/cache-coherency/re-kick;
-    // the next lead is a Linux-macb-on-RP1 DMA+register comparison. Kept because it is the correct
-    // coherency model regardless.
+    // Determine (a) the CPU virtual address to WRITE the frame bytes into and (b) the `bus`
+    // address the GEM DMA READS from (descriptor word0/word2).
+    //
+    // ⚠️ DISCRIMINATOR EXPERIMENT (feature `txsram`, 2026-09-09): route the TX frame through RP1's
+    // INTERNAL 64 KB shared SRAM instead of BCM2712 host RAM. The GEM (an RP1-internal AXI4 master)
+    // reads the SRAM at its RP1-SYSTEM address 0xC0_4040_0000 (per rp1.dtsi `sram@...` + datasheet
+    // §2.3.1 "40-bit internal masters use the System Addr Bases"), which decodes INSIDE the RP1
+    // fabric and NEVER crosses the PCIe endpoint. The CPU fills it through the RP1 window at
+    // 0x1C_0040_0000. Slot k at offset k*TXBUF (both < the 0xFF00 firmware-mailbox reservation).
+    // If large frames egress under this ⇒ the GEM/MAC/PHY are fine and the fault is the
+    // BCM2712↔RP1 PCIe read-completion path. If they still fail ⇒ the fault is inside GEM/RP1.
+    //
+    // Normal path: host RAM via the NC alias (bufpa + NC_VA) for the write, `bufpa + DMA_BUS_OFFSET`
+    // (the PCIe bus base 0x10_00000000) for the GEM read.
+    #[cfg(feature = "txsram")]
+    let (write_va, bus) = (0x1C_0040_0000usize + slot * TXBUF, 0xC0_4040_0000u64 + (slot * TXBUF) as u64);
+    #[cfg(not(feature = "txsram"))]
+    let (write_va, bus) = {
+        let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
+        (bufpa + NC_VA, bufpa as u64 + DMA_BUS_OFFSET)
+    };
     unsafe {
-        let nc = (bufpa + NC_VA) as *mut u8;
+        let dst = write_va as *mut u8;
         for k in 0..n {
-            core::ptr::write_volatile(nc.add(k), bytes[k]);
+            core::ptr::write_volatile(dst.add(k), bytes[k]);
         }
-        core::arch::asm!("dsb sy"); // ensure the NC frame bytes are in DRAM before the descriptor is armed
+        core::arch::asm!("dsb sy"); // frame bytes visible to the GEM before the descriptor is armed
     }
     let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize } + slot * DESC_SZ;
     let d = nc_desc(dphys); // NC alias — coherent, no descriptor cache maintenance
-    let bus = bufpa as u64 + DMA_BUS_OFFSET;
     let wrap = if slot == NTX - 1 { TXD_WRAP } else { 0 };
     unsafe {
         write_volatile(d.add(0), bus as u32); // word0 addr_lo
