@@ -34,8 +34,20 @@ pub fn max_pattern_len() -> usize {
     m
 }
 
+/// XC-11/DET-1 — the EXACT byte count `payload_match` will dereference for a given id
+/// (0 for an unknown id, which reads nothing). The interpreter uses this to bound the
+/// helper's pointer against the packet at the CALL site (a runtime backstop that makes the
+/// verifier-folded min_len enforced per-call, independent of a rule's touch-load structure).
+pub fn pattern_len(pattern_id: u64) -> usize {
+    match PATTERNS.get(pattern_id as usize) {
+        Some(p) => p.bytes.len(),
+        None => 0,
+    }
+}
+
 /// Helper #3: `R0 = payload_match(R1 = ptr, R2 = pattern_id)` — 1 on match, else 0.
-/// Bounds are the caller's responsibility (touch-LDX before the call).
+/// Bounds are the caller's responsibility (touch-LDX before the call) AND, as a backstop,
+/// the interpreter bounds R1 against the packet using `pattern_len` before this runs.
 pub fn payload_match(ptr: u64, pattern_id: u64) -> u64 {
     let p = match PATTERNS.get(pattern_id as usize) {
         Some(p) => p,

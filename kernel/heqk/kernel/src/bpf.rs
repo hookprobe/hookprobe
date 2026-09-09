@@ -241,6 +241,32 @@ pub const EVIL_NO_VERDICT: [u64; 2] = [
     insn(0x71, 2, 1, 0, 0), // R2 = *(u8*)(R1+0)
     insn(0x95, 0, 0, 0, 0), // EXIT — R0 never written
 ];
+/// UNSAFE (XC-11/DET-1 — the helper-arg kernel-read oracle): pass a SCALAR (an
+/// attacker-chosen address) as payload_match's pointer arg. The STATIC verifier must
+/// REJECT it — helper #3's arg1 must be a PACKET pointer (Abs::Pkt), never a scalar —
+/// so a ~4-insn program can never turn payload_match into an arbitrary-kernel-read.
+pub const EVIL_HELPER_ORACLE: [u64; 4] = [
+    insn(0xb7, 1, 0, 0, 0x4141_4141), // R1 = 0x41414141 (a SCALAR — not the packet)
+    insn(0xb7, 2, 0, 0, 0),           // R2 = 0          (pattern id)
+    insn(0x85, 0, 0, 0, 3),           // R0 = payload_match(R1, R2)  — arg1 is a scalar!
+    insn(0x95, 0, 0, 0, 0),           // EXIT
+];
+/// VERIFIER-ADMISSIBLE but RUNTIME-UNSAFE-without-the-interpreter-backstop: calls
+/// payload_match(R1 = packet+0, id) with NO touch-load. It PASSES verification (R1 is a
+/// packet pointer, min_len folds to max_pattern_len), but on a packet SHORTER than the
+/// pattern the helper's raw read would run OOB — UNLESS the interpreter bounds R1 at the
+/// CALL (the XC-11 backstop). Proof vector: short packet ⇒ INVALID (no oracle read),
+/// full "MQTT" packet ⇒ DROP (the match still works).
+pub const L7_NOTOUCH_ORACLE: [u64; 8] = [
+    insn(0xbf, 1, 1, 0, 0),      // 0 R1 = R1   (arg1 = packet start, NO touch-load)
+    insn(0xb7, 2, 0, 0, 0),      // 1 R2 = 0    (pattern id = MQTT)
+    insn(0x85, 0, 0, 0, 3),      // 2 R0 = payload_match(R1, R2)  helper #3 (1=match/0=no)
+    insn(0x15, 0, 0, 2, 0),      // 3 if R0 == 0 goto +2 (-> 6, PASS)
+    insn(0xb7, 0, 0, 0, 2),      // 4 R0 = DROP (match)
+    insn(0x95, 0, 0, 0, 0),      // 5 EXIT (DROP)
+    insn(0xb7, 0, 0, 0, 1),      // 6 R0 = PASS (no match)
+    insn(0x95, 0, 0, 0, 0),      // 7 EXIT (PASS)
+];
 
 /// A realistic rule exercising the EXPANDED ISA: walk to the Ethernet EtherType
 /// via pointer arithmetic (MOV_X + ADD_K), read it with a 16-bit load (LDX_H),
@@ -625,6 +651,24 @@ pub fn run(prog: &[u64], pkt: *const u8, len: usize) -> u64 {
             0x85 => {
                 // CALL helper: R0 = helper(imm)(R1, R2). (Args clobbered per ABI;
                 // the verifier forbids reading them after, so we needn't scrub.)
+                //
+                // XC-11/DET-1 — CLOSE THE KERNEL-READ ORACLE at the interpreter. Helper #3
+                // `payload_match` does a RAW read of `pattern_len` bytes at R1 with no
+                // internal bounds check. The verifier folds that length into the rule's
+                // min_len, but a rule that OMITS the touch-load still passes verification and,
+                // on a packet shorter than min_len via the interpreter fallback, would drive
+                // that read OUT OF BOUNDS — an arbitrary-kernel-read oracle (CVE-2021-4204
+                // class). Bound R1 against the packet HERE, exactly like the LDX path (line
+                // 594), so the helper's read is proven in-bounds per-call regardless of rule
+                // structure. Helpers #1/#2 take SCALAR args (no pointer) — nothing to bound.
+                if imm as u32 == crate::ratelimit::HELPER_PAYLOAD_MATCH {
+                    let plen = crate::l7::pattern_len(r[2]) as u64;
+                    let addr = r[1];
+                    let end = addr.wrapping_add(plen);
+                    if plen != 0 && (addr < pbase || end > pend || end < addr) {
+                        return INVALID; // OOB helper pointer — fail closed, no oracle read
+                    }
+                }
                 r[0] = crate::ratelimit::call_helper(imm as u32, r[1], r[2]);
             }
             0x95 => return r[0], // EXIT
