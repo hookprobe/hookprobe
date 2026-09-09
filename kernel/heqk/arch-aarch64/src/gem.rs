@@ -785,6 +785,13 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
 pub fn tx_init() {
     let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize }; // physical ring base (for TBQP)
     dc_civac(dphys, NTX * DESC_SZ); // drop cacheable copies; access via NC alias hereafter
+    // Same for the TX BUFFERS: tx_frame writes each outgoing frame through the NON-CACHEABLE
+    // alias (like the descriptors), so the GEM DMA-reads EXACTLY the bytes the CPU wrote — no
+    // clean-to-PoC gap. Drop any cacheable copies ONCE here to avoid a mismatched-attributes
+    // hazard (metal 2026-09-09: large-frame TX egressed corrupt/undelivered with the old
+    // cacheable-write + dc_cvac path while ≤90B frames survived).
+    let bphys = unsafe { core::ptr::addr_of!(TXRING.buf) as usize };
+    dc_civac(bphys, NTX * TXBUF);
     // Arm EVERY descriptor as idle (USED=1 = software owns it, nothing to send), each
     // pointing at its OWN buffer, with WRAP on the LAST one only. WRAP marks the end of
     // the ring; putting it on any earlier descriptor truncates the ring to that length.
@@ -824,14 +831,20 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), (sl + 1) % NTX);
         sl
     };
-    let bufpa = unsafe {
-        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
+    // Physical address of this slot's TX buffer (VA==PA identity for TXRING).
+    let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
+    // Write the frame through the NON-CACHEABLE alias (bufpa + NC_VA), NOT the cacheable
+    // struct field. The old cacheable-write + dc_cvac(clean-to-PoC) path delivered ≤90B frames
+    // but LOST large ones on metal (the GEM read a not-fully-coherent buffer → corrupt/undelivered
+    // frame, clean descriptor). Writing via the same NC window the descriptors use guarantees the
+    // GEM DMA-reads exactly these bytes — dma_alloc_coherent semantics. No cache maintenance.
+    unsafe {
+        let nc = (bufpa + NC_VA) as *mut u8;
         for k in 0..n {
-            tr.buf[slot][k] = bytes[k];
+            core::ptr::write_volatile(nc.add(k), bytes[k]);
         }
-        tr.buf[slot].as_ptr() as usize
-    };
-    dc_cvac(bufpa, n); // TX buffer is cacheable — clean so the device reads the frame
+        core::arch::asm!("dsb sy"); // ensure the NC frame bytes are in DRAM before the descriptor is armed
+    }
     let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize } + slot * DESC_SZ;
     let d = nc_desc(dphys); // NC alias — coherent, no descriptor cache maintenance
     let bus = bufpa as u64 + DMA_BUS_OFFSET;
