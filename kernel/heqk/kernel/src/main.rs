@@ -481,6 +481,11 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     let caps_ok = caps::cap_invariants_selftest(0x0098_0000);
     kprint!(" [PH7-caps] {} — mint narrows+never-amplifies (all 8 rights), type-tag safety, revoke severs+bumps-gen (CM5 backend)\n",
         if caps_ok { "PASS" } else { "FAIL" });
+    // A1b (CORE-1 on CM5 silicon): the [PH7-caps] sweep above proves the cap ALGEBRA on the
+    // CM5 backend, but not that a mapping is cap-GATED + revoke-SEVERS a real page table on
+    // the mmu_cm5 backend (the QEMU [P2-unmap] proof is not(cm5)). Prove it here on metal,
+    // BEFORE the GEM drivers claim the GB5 window.
+    p_cm5_cap();
 
     // --- P8: load the signed HookProbe rule plane (verify every rule; JIT is
     // QEMU-only, so CM5 runs the bounds-checked interpreter — same verdict). ---
@@ -8086,6 +8091,69 @@ fn cspace_isolation_demo() {
 ///      INVALID. Authority was severed BY revoke, through the cap, not by clearing a slot.
 /// Uses a local CSpace + real reserved frames; arch-neutral read-back so it validates
 /// under QEMU. #[cfg(not(cm5))] so the metal build is untouched (P10-BT lesson).
+/// A1b [P-cm5-cap] (CORE-1 capability enforcement on CM5 SILICON) — the `mmu_cm5`-backend
+/// sibling of the QEMU [P2-unmap] proof. [PH7-caps] already proves the cap ALGEBRA on the
+/// CM5 backend, but NOT that a page mapping is cap-GATED + that revoke SEVERS a real page
+/// table on the CM5 MMU. This closes that: on metal, prove (1) a RW Frame cap -> an EL0 AP
+/// read-write mapping, (2) a RO cap -> AP read-only, (3) a W-on-a-RO-cap is DENIED (the
+/// has_rights gate, before any PTE write), and (4) revoke SEVERS both mappings (the GB5 L3
+/// descriptors go invalid) AND deletes the caps. Reuses the already-cm5-wired
+/// map_frame_cap / revoke / user_frame_desc (which dispatch to mmu_cm5). Purely ADDITIVE:
+/// runs once before the GEM drivers claim the GB5 window; uses two spare high VAs in the
+/// 2 MiB user window + one runtime-pool frame; no EL0 execution (descriptors only).
+#[cfg(feature = "cm5")]
+fn p_cm5_cap() {
+    use caps::{CapSpace, ObjType, R, W};
+    const AP_RW_EL0: u64 = 0b01; // AP[7:6] EL0 read-write
+    const AP_RO_EL0: u64 = 0b11; // AP[7:6] EL0 read-only
+    let ap = |d: u64| (d >> 6) & 0b11;
+    let present = |d: u64| d & 1 != 0;
+    // Two spare EL0 VAs high in the GB5 2 MiB window — clear of the GEM driver pages
+    // (USER_VA_BASE + 0..0x4000). Both pass user_va_ok (in-window, page-aligned).
+    let va_rw = arch_aarch64::mmu_cm5::USER_VA_BASE + 0x10_0000;
+    let va_ro = arch_aarch64::mmu_cm5::USER_VA_BASE + 0x10_1000;
+    // A real, zeroed 4 KiB frame from the CM5 runtime pool backs the root Untyped.
+    let base = arch_aarch64::mmu_cm5::alloc_frame();
+    if base == 0 {
+        kprint!(" [P-cm5-cap] FAIL — CM5 frame pool exhausted\n");
+        return;
+    }
+    let mut cs = CapSpace::with_root_untyped(base, 4096);
+    let frame = match cs.retype(0, ObjType::Frame, 4096) {
+        Ok(f) => f,
+        Err(_) => {
+            kprint!(" [P-cm5-cap] FAIL — retype(Frame)\n");
+            return;
+        }
+    };
+    // An R-only cap over the SAME object (mint narrows: R & (R|W|G) = R).
+    let ro = match cs.mint(frame, R) {
+        Ok(r) => r,
+        Err(_) => {
+            kprint!(" [P-cm5-cap] FAIL — mint(R)\n");
+            return;
+        }
+    };
+    let map_rw_ok = cs.map_frame_cap(frame, va_rw, R | W).is_ok();
+    let map_ro_ok = cs.map_frame_cap(ro, va_ro, R).is_ok();
+    let w_denied = cs.map_frame_cap(ro, va_ro, R | W).is_err(); // RO cap cannot obtain W
+    let d_rw = arch_aarch64::user_frame_desc(va_rw);
+    let d_ro = arch_aarch64::user_frame_desc(va_ro);
+    let live_rw = present(d_rw) && ap(d_rw) == AP_RW_EL0;
+    let live_ro = present(d_ro) && ap(d_ro) == AP_RO_EL0;
+    // Revoke the PARENT Untyped: deletes both derived Frame caps AND unmaps them (mmu_cm5).
+    cs.revoke(0);
+    let sev_rw = !present(arch_aarch64::user_frame_desc(va_rw));
+    let sev_ro = !present(arch_aarch64::user_frame_desc(va_ro));
+    let caps_gone = cs.get(frame).is_none() && cs.get(ro).is_none();
+    let ok = map_rw_ok && map_ro_ok && w_denied && live_rw && live_ro && sev_rw && sev_ro && caps_gone;
+    kprint!(
+        " [P-cm5-cap] {} — CORE-1 cap-gated map ENFORCED on CM5 silicon (mmu_cm5 backend): RW-cap->AP=RW={} RO-cap->AP=RO={} W-on-RO-cap-DENIED={}; revoke SEVERED: RW-unmapped={} RO-unmapped={} caps-deleted={}\n",
+        if ok { "PASS" } else { "FAIL" },
+        live_rw, live_ro, w_denied, sev_rw, sev_ro, caps_gone
+    );
+}
+
 #[cfg(not(feature = "cm5"))]
 fn p2_revoke_unmap_demo() {
     use caps::{CapSpace, ObjType, R, W};
