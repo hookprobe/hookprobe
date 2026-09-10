@@ -257,7 +257,11 @@ el1_fault_reset:
 hvc_dispatch:
     and     x12, x10, #0xffff       // ISS = hvc immediate
     cmp     x12, #1
-    b.ne    reset_platform          // hvc #0 (or other) -> reboot
+    b.eq    hvc_confirm             // hvc #1 -> A/B boot confirm (below)
+    cmp     x12, #2
+    b.eq    hvc_mbox                // hvc #2 -> SEC-2 mailbox proxy (below)
+    b       reset_platform          // hvc #0 (or other) -> reboot
+hvc_confirm:
     // hvc #1 — disarm the PM watchdog: RSTC &= ~WRCFG, keep password.
     movz    x9, #0x0000
     movk    x9, #0x7d20, lsl #16
@@ -276,6 +280,18 @@ hvc_dispatch:
     tbnz    w12, #5, 94b
     strb    w11, [x9]
     // Restore EL1's x9-x13 (saved at gate entry) and return past the hvc.
+    ldr     x13,      [sp, #32]
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
+    eret
+
+// SEC-2 — hvc #2: the mailbox PROXY. EL1 passes its property-buffer PA in x0 and the word
+// count in x1 (x0-x8 are untouched by the gate, which saved only x9-x13). Call the Rust
+// whitelist+transact helper (returns the result in x0), then restore x9-x13 and return to
+// EL1. `bl` clobbers x30 and x0-x18 per AAPCS — the EL1 caller's `hvc #2` asm declares those
+// clobbered, so nothing EL1 relies on is lost. The EL2 stack (gate pushed 48 B) backs the call.
+hvc_mbox:
+    bl      hboot_hvc_mbox          // x0 = pa, x1 = nwords  ->  x0 = result (0 = ok)
     ldr     x13,      [sp, #32]
     ldp     x11, x12, [sp, #16]
     ldp     x9,  x10, [sp], #48

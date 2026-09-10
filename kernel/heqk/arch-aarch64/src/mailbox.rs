@@ -8,16 +8,50 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-const MBOX: usize = 0x10_7C01_3880;
-const RD: usize = 0x00; // MAIL0 read  (VC -> ARM)
-const STA0: usize = 0x18; // MAIL0 status; EMPTY = bit30
-const WRT: usize = 0x20; // MAIL1 write (ARM -> VC)
-const STA1: usize = 0x38; // MAIL1 status; FULL = bit31
-const EMPTY: u32 = 0x4000_0000;
-const FULL: u32 = 0x8000_0000;
-const CHAN: u32 = 8; // property channel
-const RESP_OK: u32 = 0x8000_0000;
-const POLL_MAX: u32 = 4_000_000;
+// SEC-2: the raw MMIO transaction machinery below is now dead on the kernel side — EL1
+// reaches the mailbox only through the `hvc #2` proxy (see `transact`). Retained for
+// reference; Increment 2 (the stage-2 mailbox-page carve) deletes it outright.
+#[allow(dead_code)]
+mod mmio_legacy {
+    use core::ptr::{read_volatile, write_volatile};
+    pub const MBOX: usize = 0x10_7C01_3880;
+    pub const RD: usize = 0x00; // MAIL0 read  (VC -> ARM)
+    pub const STA0: usize = 0x18; // MAIL0 status; EMPTY = bit30
+    pub const WRT: usize = 0x20; // MAIL1 write (ARM -> VC)
+    pub const STA1: usize = 0x38; // MAIL1 status; FULL = bit31
+    pub const EMPTY: u32 = 0x4000_0000;
+    pub const FULL: u32 = 0x8000_0000;
+    pub const CHAN: u32 = 8; // property channel
+    pub const RESP_OK: u32 = 0x8000_0000;
+    pub const POLL_MAX: u32 = 4_000_000;
+
+    #[inline(always)]
+    pub unsafe fn r(off: usize) -> u32 {
+        read_volatile((MBOX + off) as *const u32)
+    }
+    #[inline(always)]
+    pub unsafe fn w(off: usize, v: u32) {
+        write_volatile((MBOX + off) as *mut u32, v);
+    }
+    pub unsafe fn cvac(base: usize, len: usize) {
+        const LINE: usize = 64;
+        let mut a = base & !(LINE - 1);
+        while a < base + len {
+            core::arch::asm!("dc cvac, {}", in(reg) a);
+            a += LINE;
+        }
+        core::arch::asm!("dsb sy");
+    }
+    pub unsafe fn ivac(base: usize, len: usize) {
+        const LINE: usize = 64;
+        let mut a = base & !(LINE - 1);
+        while a < base + len {
+            core::arch::asm!("dc ivac, {}", in(reg) a);
+            a += LINE;
+        }
+        core::arch::asm!("dsb sy");
+    }
+}
 
 /// VideoCore clock IDs (RPi firmware property interface).
 pub const CLK_EMMC: u32 = 1;
@@ -29,83 +63,33 @@ pub const PWR_SDCARD: u32 = 0;
 struct MboxBuf([u32; 48]); // 3 cache lines, owns them outright
 static mut MBOX_BUF: MboxBuf = MboxBuf([0; 48]);
 
-#[inline(always)]
-unsafe fn r(off: usize) -> u32 {
-    read_volatile((MBOX + off) as *const u32)
-}
-#[inline(always)]
-unsafe fn w(off: usize, v: u32) {
-    write_volatile((MBOX + off) as *mut u32, v);
-}
-unsafe fn cvac(base: usize, len: usize) {
-    const LINE: usize = 64;
-    let mut a = base & !(LINE - 1);
-    while a < base + len {
-        core::arch::asm!("dc cvac, {}", in(reg) a);
-        a += LINE;
-    }
-    core::arch::asm!("dsb sy");
-}
-unsafe fn ivac(base: usize, len: usize) {
-    const LINE: usize = 64;
-    let mut a = base & !(LINE - 1);
-    while a < base + len {
-        core::arch::asm!("dc ivac, {}", in(reg) a);
-        a += LINE;
-    }
-    core::arch::asm!("dsb sy");
-}
-
 /// Run one property transaction (buffer already holds the request; `nwords` = its
-/// length). Returns true on a RESP_OK reply. Tries the VC-alias pointer then identity.
+/// length). Returns true on a RESP_OK reply.
+///
+/// SEC-2 / V3 — EL1 no longer drives the VideoCore mailbox MMIO directly. It hands the
+/// request buffer's PHYS address + word count to the EL2 proxy (`hboot_hvc_mbox`) via
+/// `hvc #2`; HBoot runs the transaction against the mailbox registers — but only for a
+/// WHITELIST of tags (clock/power/reboot), so a compromised EL1 kernel can never re-read
+/// the OTP secret to reconstruct the deterministic SRK/AK. HBoot's proxy owns all cache
+/// maintenance (it does the same cvac/ivac around the buffer on the same PE, so the request
+/// the kernel wrote is cleaned to DRAM before the VC reads and the response is invalidated
+/// before the kernel reads it back). The proxy returns 0 on RESP_OK; nonzero on
+/// bad-PA / refused-tag / txn-failure — all map to `false` here. The buffer is in the
+/// kernel's .bss, which (prod links at KERNEL_LOAD_PA = 16 MiB) always satisfies the
+/// proxy's `[8 MiB, 1 GiB)` window; the range check below fails closed if that ever changes.
 unsafe fn transact(nwords: usize) -> bool {
-    let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
-    let phys = buf as usize;
-    if phys >= 0x4000_0000 {
-        return false; // VC pointer is 32-bit; buffer must be in the low 1 GB
+    let phys = core::ptr::addr_of_mut!(MBOX_BUF) as usize;
+    if phys < 0x0080_0000 || phys >= 0x4000_0000 {
+        return false; // outside the EL2 proxy's accepted EL1-RAM window
     }
-    let candidates = [0xC000_0000u32 | (phys as u32 & 0x3FFF_FFFF), phys as u32];
-    for &vcaddr in &candidates {
-        cvac(phys, nwords * 4);
-        let mut drain = 0;
-        while r(STA0) & EMPTY == 0 && drain < 16 {
-            let _ = r(RD);
-            drain += 1;
-        }
-        let mut spin = 0;
-        while r(STA1) & FULL != 0 {
-            spin += 1;
-            if spin >= POLL_MAX {
-                break;
-            }
-        }
-        w(WRT, (vcaddr & !0xF) | CHAN);
-        let mut got = false;
-        let mut outer = 0u32;
-        'recv: while outer < POLL_MAX {
-            let mut s = 0;
-            while r(STA0) & EMPTY != 0 {
-                s += 1;
-                if s >= POLL_MAX {
-                    break 'recv;
-                }
-            }
-            let msg = r(RD);
-            if msg & 0xF == CHAN {
-                got = true;
-                break 'recv;
-            }
-            outer += 1;
-        }
-        if !got {
-            continue;
-        }
-        ivac(phys, nwords * 4);
-        if read_volatile(buf.add(1)) == RESP_OK {
-            return true;
-        }
-    }
-    false
+    let ret: u64;
+    core::arch::asm!(
+        "hvc #2",
+        inout("x0") phys as u64 => ret,
+        in("x1") nwords as u64,
+        clobber_abi("C"),
+    );
+    ret == 0
 }
 
 /// SET_CLOCK_RATE (0x00038002): set `clock_id` to `rate` Hz (skip_turbo=0).
