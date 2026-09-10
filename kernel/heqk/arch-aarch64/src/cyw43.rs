@@ -2304,35 +2304,6 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     // (out.bssid was captured up front — this firmware's post-up GET returns 0.)
 }
 
-/// M-AP1 helper: hold the beacon up and report client-indication events (a station's
-/// AUTH_IND/ASSOC_IND) for a bounded window. Returns the number of ASSOC_IND seen and the
-/// MAC of the last associating station (into `last_sta`). Keeps HT/backplane up.
-pub fn ap_watch_events(budget: u32, last_sta: &mut [u8; 6]) -> u32 {
-    let mut rx = [0u8; 2048];
-    let mut assoc = 0u32;
-    let mut i = 0u32;
-    while i < budget {
-        i += 1;
-        if i % 16 == 0 { let _ = ensure_ht_avail(); }
-        let (channel, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
-        if channel != 1 { continue; }
-        let bdc_doff = rx[doff + 3] as usize;
-        let ev = doff + 4 + bdc_doff * 4;
-        if ev + 40 > rx.len() { continue; }
-        let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
-        // brcmf_event_msg_be starts at ev+24 (event_type@+4=ev+28); its addr[6] (the peer
-        // station MAC) is at struct offset +24, i.e. ev+48. (ev+24 was version/flags = 00:02..)
-        if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
-            if ev + 54 <= rx.len() { last_sta.copy_from_slice(&rx[ev + 48..ev + 54]); }
-            assoc += 1;
-            dbg_putc(b'C'); // client associated
-        } else if et == WLC_E_AUTH_IND {
-            dbg_putc(b'H'); // client authenticating
-        }
-    }
-    assoc
-}
-
 // --- AP-side DHCP server + ARP responder (M-AP-DHCP): give an associated client a real
 // lease so it leaves 169.254 and shows "connected". Inverts the STA DHCP client; same
 // channel-2 encrypted data path (fw does CCMP once WPA2 keys are set; open for now).
