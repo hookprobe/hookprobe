@@ -2439,6 +2439,223 @@ pub fn wifi_data_probe(out: &mut DataProbe) {
 }
 
 // ===========================================================================
+// P10-E DHCP-over-WiFi — the last step to a usable STA link. Once PTK+GTK are
+// installed the firmware encrypts/decrypts CCMP transparently, so DHCP is just
+// plaintext ethernet/IPv4/UDP frames handed to sdpcm_data_tx (fw encrypts with
+// the PTK) and read back off channel 2 (fw decrypts). We run a minimal DORA:
+// DISCOVER -> OFFER -> REQUEST -> ACK, then heqk has an IP lease.
+// ===========================================================================
+
+/// Result of the DHCP DORA exchange over WiFi.
+pub struct DhcpResult {
+    pub mac: [u8; 6],
+    pub discover_tx: bool,
+    pub offer_rx: bool,
+    pub request_tx: bool,
+    pub ack_rx: bool,
+    pub yiaddr: [u8; 4], // offered/assigned IP (option: BOOTP yiaddr)
+    pub server: [u8; 4], // DHCP server id (option 54)
+    pub router: [u8; 4], // option 3 (default gateway)
+    pub mask: [u8; 4],   // option 1 (subnet mask)
+    pub lease: u32,      // option 51 (lease time, seconds)
+    pub frames_seen: u32,
+    pub udp68_seen: u32, // UDP frames arriving on client port 68 (OFFER/ACK candidates)
+}
+
+impl DhcpResult {
+    pub fn new() -> Self {
+        DhcpResult {
+            mac: [0; 6], discover_tx: false, offer_rx: false, request_tx: false, ack_rx: false,
+            yiaddr: [0; 4], server: [0; 4], router: [0; 4], mask: [0; 4], lease: 0,
+            frames_seen: 0, udp68_seen: 0,
+        }
+    }
+}
+
+/// One's-complement internet checksum over `data`, folded, with a running `init` (used to
+/// seed the UDP pseudo-header sum). Returns the value to store in the checksum field.
+fn inet_csum(data: &[u8], init: u32) -> u16 {
+    let mut sum = init;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < data.len() {
+        sum += (data[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// Build a DHCP DISCOVER (mt=1) or REQUEST (mt=3) as a complete ethernet/IPv4/UDP/BOOTP frame
+/// into `buf`; returns the frame length. `req_ip`/`server` are the option-50/54 values used
+/// only for the REQUEST. Broadcast (bcast flag) so the reply reaches us before we have an IP.
+fn build_dhcp(buf: &mut [u8], mac: &[u8; 6], xid: &[u8; 4], mt: u8, req_ip: &[u8; 4], server: &[u8; 4]) -> usize {
+    for b in buf.iter_mut() { *b = 0; }
+    // Ethernet
+    buf[0..6].copy_from_slice(&[0xff; 6]); // dst broadcast
+    buf[6..12].copy_from_slice(mac);       // src STA
+    buf[12] = 0x08; buf[13] = 0x00;        // IPv4
+    // BOOTP/DHCP starts at 42 (14 eth + 20 ip + 8 udp)
+    let d = 42;
+    buf[d] = 1; buf[d + 1] = 1; buf[d + 2] = 6; buf[d + 3] = 0; // op=BOOTREQUEST htype=eth hlen=6 hops=0
+    buf[d + 4..d + 8].copy_from_slice(xid);
+    buf[d + 10] = 0x80; // flags: broadcast (0x8000)
+    buf[d + 28..d + 34].copy_from_slice(mac); // chaddr
+    buf[d + 236..d + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]); // magic cookie
+    let mut o = d + 240;
+    buf[o] = 53; buf[o + 1] = 1; buf[o + 2] = mt; o += 3;                       // msg type
+    buf[o] = 55; buf[o + 1] = 4; buf[o + 2] = 1; buf[o + 3] = 3;                // param req list:
+    buf[o + 4] = 6; buf[o + 5] = 51; o += 6;                                    //  mask,router,dns,lease
+    buf[o] = 61; buf[o + 1] = 7; buf[o + 2] = 1; buf[o + 3..o + 9].copy_from_slice(mac); o += 9; // client id
+    if mt == 3 {
+        buf[o] = 50; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(req_ip); o += 6;   // requested IP
+        buf[o] = 54; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(server); o += 6;   // server id
+    }
+    buf[o] = 255; o += 1; // end
+    // Pad the BOOTP message to the 300-byte minimum some servers enforce.
+    let mut total = o;
+    if total < 42 + 300 { total = 42 + 300; }
+    let dhcp_len = total - 42;
+    // IPv4 header
+    buf[14] = 0x45; buf[15] = 0x00;
+    let iplen = (20 + 8 + dhcp_len) as u16;
+    buf[16..18].copy_from_slice(&iplen.to_be_bytes());
+    buf[22] = 64; buf[23] = 17; // TTL, proto=UDP
+    // src 0.0.0.0 (already 0), dst 255.255.255.255
+    buf[30..34].copy_from_slice(&[0xff; 4]);
+    let ipc = inet_csum(&buf[14..34], 0);
+    buf[24..26].copy_from_slice(&ipc.to_be_bytes());
+    // UDP header
+    buf[34..36].copy_from_slice(&68u16.to_be_bytes());
+    buf[36..38].copy_from_slice(&67u16.to_be_bytes());
+    let udplen = (8 + dhcp_len) as u16;
+    buf[38..40].copy_from_slice(&udplen.to_be_bytes());
+    // UDP checksum with IPv4 pseudo-header (src+dst+zero+proto+udplen).
+    let mut pseudo = 0u32;
+    pseudo += u16::from_be_bytes([buf[26], buf[27]]) as u32; // src hi/lo
+    pseudo += u16::from_be_bytes([buf[28], buf[29]]) as u32;
+    pseudo += u16::from_be_bytes([buf[30], buf[31]]) as u32; // dst
+    pseudo += u16::from_be_bytes([buf[32], buf[33]]) as u32;
+    pseudo += 17u32; // proto
+    pseudo += udplen as u32;
+    let mut udpc = inet_csum(&buf[34..total], pseudo);
+    if udpc == 0 { udpc = 0xffff; }
+    buf[40..42].copy_from_slice(&udpc.to_be_bytes());
+    total
+}
+
+/// Parse a received ethernet frame for a DHCP reply to us (UDP 67->68, BOOTREPLY). On a match
+/// fills `out` yiaddr + options and returns the DHCP message type (2=OFFER, 5=ACK), else 0.
+fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
+    if eth.len() < 42 + 240 { return 0; }
+    if eth[12] != 0x08 || eth[13] != 0x00 { return 0; }        // IPv4
+    let ihl = ((eth[14] & 0x0f) as usize) * 4;
+    let l4 = 14 + ihl;
+    if eth[23] != 17 { return 0; }                              // UDP
+    if l4 + 8 > eth.len() { return 0; }
+    let sport = u16::from_be_bytes([eth[l4], eth[l4 + 1]]);
+    let dport = u16::from_be_bytes([eth[l4 + 2], eth[l4 + 3]]);
+    if sport != 67 || dport != 68 { return 0; }
+    out.udp68_seen += 1;
+    let b = l4 + 8; // BOOTP start
+    if b + 240 > eth.len() || eth[b] != 2 { return 0; }         // BOOTREPLY
+    if eth[b + 236] != 0x63 || eth[b + 237] != 0x82 || eth[b + 238] != 0x53 || eth[b + 239] != 0x63 { return 0; }
+    let yi = b + 16;
+    let mut yiaddr = [0u8; 4];
+    yiaddr.copy_from_slice(&eth[yi..yi + 4]);
+    // Walk options (b+240..): [code][len][data], 0xff=end, 0x00=pad.
+    let mut p = b + 240;
+    let mut mt = 0u8;
+    let mut server = [0u8; 4];
+    let mut router = [0u8; 4];
+    let mut mask = [0u8; 4];
+    let mut lease = 0u32;
+    while p + 2 <= eth.len() {
+        let code = eth[p];
+        if code == 0xff { break; }
+        if code == 0x00 { p += 1; continue; }
+        let len = eth[p + 1] as usize;
+        if p + 2 + len > eth.len() { break; }
+        let v = &eth[p + 2..p + 2 + len];
+        match code {
+            53 if len >= 1 => mt = v[0],
+            54 if len >= 4 => server.copy_from_slice(&v[..4]),
+            3 if len >= 4 => router.copy_from_slice(&v[..4]),
+            1 if len >= 4 => mask.copy_from_slice(&v[..4]),
+            51 if len >= 4 => lease = u32::from_be_bytes([v[0], v[1], v[2], v[3]]),
+            _ => {}
+        }
+        p += 2 + len;
+    }
+    if mt == 2 || mt == 5 {
+        out.yiaddr = yiaddr;
+        if server != [0; 4] { out.server = server; }
+        if router != [0; 4] { out.router = router; }
+        if mask != [0; 4] { out.mask = mask; }
+        if lease != 0 { out.lease = lease; }
+    }
+    mt
+}
+
+/// Run DHCP DORA over the WiFi data path. Requires PTK/GTK already installed (fw does CCMP).
+pub fn wifi_dhcp(out: &mut DhcpResult) {
+    // The STA MAC actually in use (OTP or the LAA fallback) — src of every DHCP frame.
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.mac);
+    // A per-boot xid from the cycle counter so retries/reboots don't collide.
+    let ctr: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ctr, options(nomem, nostack)) };
+    let xid = (ctr as u32).to_be_bytes();
+    let mut pkt = [0u8; 400];
+    let none = [0u8; 4];
+
+    // --- DISCOVER, then watch channel 2 for the OFFER.
+    let n = build_dhcp(&mut pkt, &out.mac, &xid, 1, &none, &none);
+    out.discover_tx = sdpcm_data_tx(&pkt[..n]);
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < 900 {
+        i += 1;
+        if i % 256 == 0 { let _ = ensure_ht_avail(); }
+        let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 2 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let eth = doff + 4 + bdc_doff * 4;
+        if eth + 14 > rx.len() { continue; }
+        out.frames_seen += 1;
+        if parse_dhcp_reply(&rx[eth..], out) == 2 {
+            out.offer_rx = true;
+            break;
+        }
+    }
+    if !out.offer_rx { return; }
+
+    // --- REQUEST the offered IP from the offering server, watch for the ACK.
+    let yi = out.yiaddr;
+    let sv = out.server;
+    let n = build_dhcp(&mut pkt, &out.mac, &xid, 3, &yi, &sv);
+    out.request_tx = sdpcm_data_tx(&pkt[..n]);
+    let mut i = 0u32;
+    while i < 900 {
+        i += 1;
+        if i % 256 == 0 { let _ = ensure_ht_avail(); }
+        let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 2 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let eth = doff + 4 + bdc_doff * 4;
+        if eth + 14 > rx.len() { continue; }
+        out.frames_seen += 1;
+        if parse_dhcp_reply(&rx[eth..], out) == 5 {
+            out.ack_rx = true;
+            break;
+        }
+    }
+}
+
+// ===========================================================================
 // P10-E WPA2 HOST SUPPLICANT (the firmware has no idsup — we run the 4-way HS).
 // Increment S1: derive the PTK from the captured M1, build + send M2, watch for M3.
 // ===========================================================================
