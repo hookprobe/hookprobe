@@ -576,14 +576,16 @@ pub fn phy0_led_config(phy: u32) -> (u16, u16, u16) {
     // read current LED Selector 1 (shadow 0x0D).
     phy_write(phy, 0x1c, 0x0d << 10);
     let before = phy_read(phy, 0x1c) & 0x3ff;
-    // green(LED1)=FDXLED(0x4), amber(LED3)=ACTIVITYLED(0x3) -> 0x034. LINKSPD1(0x0) is DARK at
-    // a gigabit link on this PHY (metal: [P8] speed_code=7 = 1000/full, green off), and
-    // LINKSPD2(0x1) only flickered — neither is a speed-independent SOLID source. FDXLED is on
-    // whenever the link is full-duplex (every 10/100/1000 link here), giving a solid green
-    // link indicator regardless of speed. (Sources per Linux bcm-phy-lib.h: LINKSPD1=0x0,
-    // LINKSPD2=0x1, XMIT=0x2, ACTIVITY=0x3, FDX=0x4.)
-    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x034);
-    // read back.
+    // The green pin turned out NOT to be LED1: configuring only LED Selector 1 (shadow 0x0D =
+    // LED1[3:0]+LED3[7:4]) never made green solid (LINKSPD1 dark at 1G, LINKSPD2 flicker, FDX
+    // flicker) while eth1 (solid green) is fixed — so end0's green is LED0 or LED2, which live
+    // in LED Selector 2 (shadow 0x0E = LED0[3:0]+LED2[7:4]) that we never touched (they sat at
+    // their POR "xmas-tree" default). Drive ALL FOUR LED sources = FDXLED(0x4) across BOTH
+    // selectors: solid on for any full-duplex link, so whichever output is the green pin lights
+    // SOLID. (Sources per Linux bcm-phy-lib.h: LINKSPD1=0x0,LINKSPD2=0x1,XMIT=0x2,ACT=0x3,FDX=0x4.)
+    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x044); // LED1=FDX, LED3=FDX
+    phy_write(phy, 0x1c, 0x8000 | (0x0e << 10) | 0x044); // LED0=FDX, LED2=FDX (Selector 2)
+    // read back Selector 1.
     phy_write(phy, 0x1c, 0x0d << 10);
     let after = phy_read(phy, 0x1c) & 0x3ff;
     (before, after, phy_read(phy, 1))
