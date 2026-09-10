@@ -2613,6 +2613,9 @@ fn cm5_p10_probe() {
                     kprint!("\n");
                     kprint!("   [P10-E data] channel-2 frames seen={} | EAPOL(0x888E) M1 seen={} len={}\n",
                         jr.data_frames, jr.eapol_seen, jr.eapol_len);
+                    kprint!("   [P10-E wpaie] set_ok={} readback({} B):", jr.wpaie_set_ok, jr.wpaie_get_len);
+                    for k in 0..jr.wpaie_get_len { kprint!(" {:02x}", jr.wpaie_get[k]); }
+                    kprint!("\n");
                     kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} deauth_after={} other_eapol={}\n",
                         hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.deauth_after, hs.other_eapol);
                     if hs.m3_seen {

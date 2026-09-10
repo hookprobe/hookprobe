@@ -2126,6 +2126,9 @@ pub struct JoinResult {
     pub eapol_seen: bool, // an EAPOL (0x888E) frame arrived
     pub eapol_len: usize, // bytes captured of the first EAPOL frame
     pub eapol: [u8; 128], // first EAPOL frame head (EAPOL hdr + key descriptor + ANonce…)
+    pub wpaie_set_ok: bool, // the RSN IE was pinned via the "wpaie" iovar
+    pub wpaie_get: [u8; 40], // the RSN IE read back from the firmware (for match diagnosis)
+    pub wpaie_get_len: usize,
 }
 
 impl JoinResult {
@@ -2148,6 +2151,9 @@ impl JoinResult {
             eapol_seen: false,
             eapol_len: 0,
             eapol: [0; 128],
+            wpaie_set_ok: false,
+            wpaie_get: [0; 40],
+            wpaie_get_len: 0,
         }
     }
 }
@@ -2223,6 +2229,19 @@ pub fn wifi_join(
     //
     // WPA2 only: install the PMK. (Open networks skip all keying.)
     if !open {
+    // Pin the RSN IE used in the (re)assoc request via the brcmf "wpaie" iovar, so M2's
+    // key-data RSN IE provably byte-matches it (else the AP rejects M2 as an RSN mismatch).
+    // Read it back for diagnosis. This is what brcmfmac's host-supplicant path does.
+    {
+        let mut ib = [0u8; 48];
+        let n = iovar_buf(b"wpaie", &RSN_IE_PSK_CCMP, &mut ib);
+        out.wpaie_set_ok = bcdc_iovar_set(&ib[..n]);
+        let mut rb = [0u8; 40];
+        if bcdc_iovar_get(b"wpaie", &mut rb) {
+            out.wpaie_get = rb;
+            out.wpaie_get_len = rb.iter().rposition(|&b| b != 0).map(|p| p + 1).unwrap_or(0);
+        }
+    }
     // Set the RAW 32-byte PMK (flags=0) in brcmfmac's EXACT wire format:
     // struct brcmf_wsec_pmk_le { u16 key_len; u16 flags; u8 key[BRCMF_WSEC_MAX_PSK_LEN=32] }
     // = 36 B. This firmware rejects a passphrase (WSEC_PASSPHRASE → BADARG) AND a 68-B
