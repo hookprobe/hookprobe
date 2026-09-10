@@ -2625,8 +2625,8 @@ fn cm5_p10_probe() {
                                 sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                             let mut auth = cyw43::ApAuth::new();
                             cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
-                            kprint!("   [P11-AP2 auth] m1_tx={} m2_rx={} m2_mic={} m3_tx={} m4_rx={} m4_mic={} ptk_set={} gtk_set={}\n",
-                                auth.m1_tx, auth.m2_rx, auth.m2_mic_ok, auth.m3_tx, auth.m4_rx, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set);
+                            kprint!("   [P11-AP2 auth] m1_tx={} m2_rx={} m2_mic={} m3_tx={} m4_rx={} m4_mic={} ptk_set={} gtk_set={} authorized={}\n",
+                                auth.m1_tx, auth.m2_rx, auth.m2_mic_ok, auth.m3_tx, auth.m4_rx, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set, auth.authorized);
                             if auth.ptk_set && auth.gtk_set {
                                 kprint!(" [P11-AP2] PASS(ap-wpa2) — heqk-as-AP completed the WPA2 4-way + installed per-station PTK + GTK. Serving DHCP...\n");
                                 let our_ip = [10u8, 99, 0, 1];
