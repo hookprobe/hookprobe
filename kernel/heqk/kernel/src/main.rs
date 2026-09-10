@@ -2586,6 +2586,30 @@ fn cm5_p10_probe() {
                     } else {
                         kprint!(" [P10-D] scan armed (up={} escan={}); no AP frames parsed — see scan diag\n", sd[2], sd[3]);
                     }
+                    // P10-E: STA-mode WPA2-PSK association (firmware-offloaded supplicant).
+                    // Dev target constants — this box is single-operator; the PSK stays local.
+                    const JOIN_SSID: &[u8] = b"hookprobe";
+                    const JOIN_PSK: &[u8] = b"113527oeM+-!";
+                    kprint!(" [P10-E] WiFi STA join \"");
+                    for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
+                    kprint!("\" (WPA2-PSK, firmware supplicant)...\n");
+                    let mut jr = cyw43::JoinResult::new();
+                    cyw43::wifi_join(JOIN_SSID, JOIN_PSK, &mut jr);
+                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} sup_wpa={} pmk={} up={} | set_ssid ok={} status={:#x}\n",
+                        jr.steps_ok & 1, (jr.steps_ok >> 1) & 1, (jr.steps_ok >> 2) & 1, (jr.steps_ok >> 3) & 1,
+                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 5) & 1, (jr.steps_ok >> 6) & 1, (jr.steps_ok >> 7) & 1,
+                        jr.set_ssid_ok, jr.set_ssid_status);
+                    kprint!("   [P10-E events] seen={} (type,status,flags):", jr.events_seen);
+                    for k in 0..jr.trail_len {
+                        let (t, s, f) = jr.trail[k];
+                        kprint!(" ({},{:#x},{:#x})", t, s, f);
+                    }
+                    kprint!("\n");
+                    if jr.link_up {
+                        kprint!(" [P10-E] PASS — ASSOCIATED: WLC_E_LINK up (psk_keyed={}) — heqk STA joined the AP, firmware installed the keys\n", jr.psk_keyed);
+                    } else {
+                        kprint!(" [P10-E] not linked yet — last event={} status={:#x}; event trail above shows the stage reached\n", jr.last_event, jr.last_status);
+                    }
                 } else {
                     kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
                 }
