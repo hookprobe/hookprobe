@@ -2444,6 +2444,24 @@ pub fn wifi_data_probe(out: &mut DataProbe) {
 // ===========================================================================
 
 const SDPCM_DATA_CHANNEL: u8 = 2;
+
+/// Emit one debug char to the RP1 console UART (0x1C_0003_0000) — same UART kprint uses on
+/// cm5 — so the supplicant's stage is visible inline even if wifi_join never returns. Bounded.
+#[inline]
+fn dbg_putc(b: u8) {
+    const U: usize = 0x1C_0003_0000;
+    unsafe {
+        let mut spin = 0u32;
+        while core::ptr::read_volatile((U + 0x18) as *const u32) & (1 << 5) != 0 {
+            spin += 1;
+            if spin > 200_000 {
+                return;
+            }
+        }
+        core::ptr::write_volatile(U as *mut u8, b);
+    }
+}
+
 const WLC_SET_KEY: u32 = 45;
 const CRYPTO_ALGO_AES_CCM: u32 = 4; // CCMP
 const WSEC_PRIMARY_KEY: u32 = 0x0002;
@@ -2622,6 +2640,7 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
     let mut rx = [0u8; 2048];
     let mut i = 0u32;
     let mut m4_deadline: u32 = 0; // 0 = unset; once M4 is sent, break at this iteration
+    dbg_putc(b'<'); // entering the M3 watch loop
     while i < 2500 {
         i += 1;
         if m4_deadline != 0 && i >= m4_deadline {
@@ -2665,13 +2684,17 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                         m4[body + 5..body + 13].copy_from_slice(&m3_replay);
                         let mic4 = crate::wpa::wpa_mic_sha1(&kck, &m4[14..]);
                         m4[body + 77..body + 93].copy_from_slice(&mic4);
+                        dbg_putc(b'3'); // M3 seen, M4 built
                         out.m4_tx_ok = sdpcm_data_tx(&m4);
+                        dbg_putc(b'4'); // M4 sent
 
                         // --- S2b: install the keys so the firmware can encrypt/decrypt data.
                         // PTK's TK (ptk[32..48]) = pairwise; GTK from M3's encrypted key data.
                         let mut tk = [0u8; 16];
                         tk.copy_from_slice(&ptk[32..48]);
+                        dbg_putc(b'P'); // about to install PTK
                         out.ptk_set_ok = wlc_set_key(0, &tk, &aa, true);
+                        dbg_putc(b'p'); // PTK install returned
                         // M3 key data: len @ body+93 (BE16), encrypted blob @ body+95, AES-key-
                         // wrapped under the KEK (ptk[16..32]). Unwrap → KDEs; find the GTK KDE
                         // (OUI 00-0f-ac, data type 01) → keyid + GTK, then install as group key.
@@ -2681,7 +2704,10 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                             let mut kek = [0u8; 16];
                             kek.copy_from_slice(&ptk[16..32]);
                             let mut plain = [0u8; 128];
-                            if let Some(pl) = crate::aes::aes_unwrap(&kek, &rx[kd_start..kd_start + kd_len], &mut plain) {
+                            dbg_putc(b'u'); // about to AES-unwrap the GTK
+                            let unw = crate::aes::aes_unwrap(&kek, &rx[kd_start..kd_start + kd_len], &mut plain);
+                            dbg_putc(b'U'); // unwrap returned
+                            if let Some(pl) = unw {
                                 // Walk KDEs: [0xdd][len][OUI 3][type 1][data len-4].
                                 let mut p = 0usize;
                                 while p + 2 <= pl {
@@ -2701,7 +2727,9 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                                         out.gtk_keyid = plain[p + 6] & 0x03;
                                         let gtk = &plain[p + 8..p + 2 + klen];
                                         out.gtk_unwrapped = true;
+                                        dbg_putc(b'G'); // about to install GTK
                                         out.gtk_set_ok = wlc_set_key(out.gtk_keyid as u32, gtk, &[0u8; 6], false);
+                                        dbg_putc(b'g'); // GTK install returned
                                         break;
                                     }
                                     p += 2 + klen;
@@ -2729,6 +2757,7 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
             _ => {}
         }
     }
+    dbg_putc(b'>'); // watch loop exited — wifi_join returning
 }
 
 // --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
