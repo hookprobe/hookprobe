@@ -527,6 +527,25 @@ pub fn map_user_code_in(l1_root: usize, va: usize, pa: usize) -> bool {
 pub fn map_user_data_in(l1_root: usize, va: usize, pa: usize) -> bool {
     map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_NORMAL, PXN | UXN))
 }
+/// Map an EL0 READ-ONLY data page into a specific address space (AP read-only + NX) — the
+/// per-ASID counterpart of `map_user_data_ro`, the attribute a Frame cap lacking the `W`
+/// right maps to in a per-TCB VSpace (CORE-2). Fail-closed on an out-of-window `va`.
+pub fn map_user_data_ro_in(l1_root: usize, va: usize, pa: usize) -> bool {
+    map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN | UXN))
+}
+/// Read back the raw L3 leaf descriptor for `va` in a SPECIFIC address space's private user
+/// table (the per-ASID counterpart of `page_desc`). Returns 0 for an out-of-window `va` or a
+/// missing table. Lets a proof VERIFY the effective AP bits + present-bit of a per-AS grant.
+pub fn page_desc_in(l1_root: usize, va: usize) -> u64 {
+    if l1_root == 0 || !user_va_ok(va) {
+        return 0;
+    }
+    let l3 = user_l3_of(l1_root);
+    if l3.is_null() {
+        return 0;
+    }
+    unsafe { core::ptr::read_volatile(l3.add(user_l3_idx(va))) }
+}
 /// Map an EL0 device-MMIO window into a specific address space (a driver's cap).
 pub fn map_user_device_in(l1_root: usize, va: usize, pa: usize) -> bool {
     map_user_in(l1_root, va, user_page_ng(pa as u64, AP_RW_EL0, ATTR_DEVICE, PXN | UXN))
