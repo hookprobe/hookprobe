@@ -2493,6 +2493,8 @@ pub struct Wpa4Way {
     pub m2_dump: [u8; 140], // the exact M2 ethernet frame we built (for offline verification)
     pub m2_len: usize,
     pub snonce: [u8; 32], // the SNonce we used (to recompute the MIC offline)
+    pub m4_tx_ok: bool, // M4 (final handshake msg) was built + sent
+    pub deauth_after_m4: bool, // a deauth arrived AFTER M4 (handshake rejected / port not held)
 }
 
 impl Wpa4Way {
@@ -2502,6 +2504,7 @@ impl Wpa4Way {
             m3_key_info: 0, m3_len: 0, deauth_after: false, deauth_reason: 0,
             post_m2_eapol: 0, last_eapol_ki: 0,
             m2_dump: [0; 140], m2_len: 0, snonce: [0; 32],
+            m4_tx_ok: false, deauth_after_m4: false,
         }
     }
 }
@@ -2605,11 +2608,30 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                     out.last_eapol_ki = ki;
                     // M3 = Key-ACK (0x80) AND Key-MIC (0x100) set. An M1 RETRY has ACK but
                     // NOT MIC — don't mistake it for M3 (that was the earlier bug).
-                    if ki & 0x0080 != 0 && ki & 0x0100 != 0 {
+                    if ki & 0x0080 != 0 && ki & 0x0100 != 0 && !out.m3_seen {
                         out.m3_seen = true;
                         out.m3_key_info = ki;
                         out.m3_len = (rx.len() - eth).min(0xffff);
-                        break;
+                        // --- S2: send M4 to complete the handshake. Echo M3's replay counter;
+                        // M4 = pairwise|MIC|secure, zero nonce, empty key data, MIC over KCK.
+                        let mut m3_replay = [0u8; 8];
+                        m3_replay.copy_from_slice(&rx[eth + body + 5..eth + body + 13]);
+                        let mut m4 = [0u8; 14 + 4 + 95];
+                        m4[0..6].copy_from_slice(&aa);
+                        m4[6..12].copy_from_slice(&spa);
+                        m4[12] = 0x88;
+                        m4[13] = 0x8E;
+                        m4[14] = x1ver;
+                        m4[15] = 0x03;
+                        m4[16..18].copy_from_slice(&95u16.to_be_bytes());
+                        m4[body] = 0x02;
+                        let m4_ki = (m1_ki & 0x0007) | 0x0008 | 0x0100 | 0x0200; // ver|pairwise|MIC|secure
+                        m4[body + 1..body + 3].copy_from_slice(&m4_ki.to_be_bytes());
+                        m4[body + 5..body + 13].copy_from_slice(&m3_replay);
+                        let mic4 = crate::wpa::wpa_mic_sha1(&kck, &m4[14..]);
+                        m4[body + 77..body + 93].copy_from_slice(&mic4);
+                        out.m4_tx_ok = sdpcm_data_tx(&m4);
+                        // Keep watching: a deauth now ⇒ handshake not accepted / no key held.
                     }
                 }
             }
@@ -2620,6 +2642,7 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                     let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
                     if et == WLC_E_DEAUTH || et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC || et == WLC_E_DISASSOC_IND {
                         out.deauth_after = true;
+                        if out.m4_tx_ok { out.deauth_after_m4 = true; }
                         out.deauth_reason = u32::from_be_bytes([rx[ev + 36], rx[ev + 37], rx[ev + 38], rx[ev + 39]]);
                         break;
                     }
