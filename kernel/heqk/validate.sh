@@ -123,6 +123,25 @@ else
   echo "skip (rustc host build unavailable)"
 fi
 
+# --- Stage 1c: WiFi/WPA crypto KAT harness (P-wifi-crypto, host-side) ------
+# aes.rs + wpa.rs are #[cfg(feature="cm5")] so they are ABSENT from the qemu-virt
+# kernel — their KATs (aes_selftest/wpa_pmk_selftest) would otherwise never run.
+# Compile the REAL source (#[path], no drift) and run FIPS-197 + RFC-3394 wrap/
+# unwrap/tamper + PBKDF2 PMK + PTK/MIC self-consistency vectors on the host.
+echo -n "[P-wifi-crypto] WiFi/WPA crypto KAT ... "
+WCK="$(mktemp)"
+if rustc --edition 2021 -O tools/wifi-crypto-kat.rs -o "$WCK" >/tmp/hp_wck_build.log 2>&1; then
+  if "$WCK" >/tmp/hp_wck.log 2>&1; then
+    echo "PASS (AES-128/RFC3394 wrap+tamper, PBKDF2 PMK, PRF PTK, HMAC-SHA1 MIC)"
+  else
+    echo "FAIL — WiFi crypto KAT:"; sed 's/^/    /' /tmp/hp_wck.log
+    rm -f "$WCK"; exit 2
+  fi
+  rm -f "$WCK"
+else
+  echo "skip (rustc host build unavailable)"
+fi
+
 # --- Stage 2: boot + capture ---------------------------------------------
 echo -n "[boot]  qemu virt ... "
 timeout 45 $QEMU "$KERNEL" >"$LOG" 2>&1
