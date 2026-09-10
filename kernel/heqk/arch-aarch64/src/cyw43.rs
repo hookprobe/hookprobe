@@ -2085,6 +2085,7 @@ const WLC_SET_WSEC_PMK: u32 = 268; // payload = wsec_pmk_t
 const WLC_SET_PM_: u32 = 86; // power-mgmt (0 = CAM/awake through the handshake)
 const WLC_SET_CHANNEL: u32 = 30; // legacy channel set (u32 channel number) — for AP mode
 const WLC_SET_AP: u32 = 118; // 1 = this bsscfg is an AP
+const WLC_SCB_AUTHORIZE: u32 = 121; // open a station's 802.1X port after the host 4-way (payload=ea)
 const WLC_GET_AP: u32 = 117;
 
 // AP-mode client-indication events (host = the WPA2 authenticator).
@@ -2467,13 +2468,14 @@ pub struct ApAuth {
     pub m4_mic_ok: bool,
     pub ptk_set: bool,
     pub gtk_set: bool,
+    pub authorized: bool,
 }
 
 impl ApAuth {
     pub fn new() -> Self {
         ApAuth {
             sta: [0; 6], m1_tx: false, m2_rx: false, m2_mic_ok: false, m3_tx: false,
-            m4_rx: false, m4_mic_ok: false, ptk_set: false, gtk_set: false,
+            m4_rx: false, m4_mic_ok: false, ptk_set: false, gtk_set: false, authorized: false,
         }
     }
 }
@@ -2697,6 +2699,17 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
     dbg_putc(b'P');
     out.gtk_set = wlc_set_key(gtk_keyid as u32, gtk, &[0u8; 6], false);
     dbg_putc(b'G');
+    // --- AUTHORIZE the station: on a FullMAC AP with a HOST authenticator, the firmware
+    // did NOT run the 4-way, so it keeps the station's 802.1X controlled port BLOCKED until
+    // told the station is authorized. Without this the keys install but the station's data
+    // (DHCP etc.) is dropped by the fw and the client reports a generic auth failure. Payload
+    // = the station ether_addr. Try both the ioctl and the "authorize" iovar (fw-variant safe).
+    out.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, sta, &mut []).0;
+    let mut ab = [0u8; 32];
+    let na = iovar_buf(b"authorize", sta, &mut ab);
+    let iv = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
+    out.authorized = out.authorized || iv;
+    dbg_putc(b'A');
 }
 
 /// True if the space-separated token list `hay` contains exactly `tok`.
