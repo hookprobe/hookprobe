@@ -84,6 +84,50 @@ fn main() {
         check("wpa_mic_sha1 avalanche (frame-sensitive)", mic1 != mic_t, &mut ok);
     }
 
+    // 4. AP-authenticator M3 GTK path (M-AP2): the AP builds a GTK-KDE, AES-key-wraps it under
+    //    the KEK, and the STA unwraps + parses it back — the two halves of one on-wire contract.
+    {
+        let kek = [
+            0xa0u8, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad,
+            0xae, 0xaf,
+        ];
+        let gtk = [
+            0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff, 0x00,
+        ];
+        // AP side: build the GTK-KDE, then AES-key-wrap it (24-B KDE -> 32-B wrapped).
+        let mut kde = [0u8; 64];
+        let kde_len = wpa::wpa_gtk_kde(1, &gtk, &mut kde);
+        let mut wrapped = [0u8; 64];
+        let w = aes::aes_wrap(&kek, &kde[..kde_len], &mut wrapped);
+        check("wpa_gtk_kde is 24 B + wraps to 32 B", kde_len == 24 && w == Some(32), &mut ok);
+        // Encrypted at rest: the wrapped blob must not contain the plaintext GTK.
+        let leaked = wrapped[..w.unwrap_or(0)].windows(16).any(|win| win == gtk);
+        check("wrapped GTK-KDE is ciphertext (no plaintext GTK)", !leaked, &mut ok);
+        // STA side: unwrap, then parse the KDE exactly as cyw43's M3 handler does.
+        let mut plain = [0u8; 64];
+        let u = aes::aes_unwrap(&kek, &wrapped[..w.unwrap_or(0)], &mut plain);
+        let mut recovered = false;
+        if let Some(pl) = u {
+            // walk: [0xdd][len][00-0f-ac][01][keyid][rsvd][GTK...]
+            if pl >= 24
+                && plain[0] == 0xdd
+                && plain[2] == 0x00 && plain[3] == 0x0f && plain[4] == 0xac && plain[5] == 0x01
+            {
+                recovered = &plain[8..24] == &gtk[..];
+            }
+        }
+        check("STA unwrap+parse recovers the exact GTK", recovered, &mut ok);
+        // Tamper: a flipped wrapped byte must fail the unwrap integrity check.
+        let mut w2 = wrapped;
+        w2[12] ^= 0x01;
+        check(
+            "tampered wrapped GTK-KDE rejected",
+            aes::aes_unwrap(&kek, &w2[..w.unwrap_or(0)], &mut plain).is_none(),
+            &mut ok,
+        );
+    }
+
     if ok {
         println!("[P-wifi-crypto] PASS");
     } else {
