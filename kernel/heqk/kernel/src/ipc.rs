@@ -124,7 +124,7 @@ pub fn send(msg: u64) -> bool {
 
 /// How many synchronous-IPC endpoint OBJECTS the kernel can hold. Kept tiny — the R1
 /// beachhead needs a handful; the full seL4 waiter-queue endpoint is a later step.
-pub const MAX_ENDPOINTS: usize = 12; // M5.5: +2 for the wasip1 host pair (was 8; r1/wasm-el0/wasmi-A+C/detect-D+I already use ~7)
+pub const MAX_ENDPOINTS: usize = 16; // M5.5:+2 wasip1; A2+:+2 wasip1-dnsrpz catalogue hosts (was 8/12)
 
 /// The outcome of a `call`/`recv_ep` the syscall layer turns into block / return / error.
 pub enum IpcOut {

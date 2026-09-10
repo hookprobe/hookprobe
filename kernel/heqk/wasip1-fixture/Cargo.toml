@@ -16,6 +16,11 @@ edition = "2021"
 name = "wasip1-fixture"
 path = "src/main.rs"
 
+# A2+ — the SECOND catalogue module (DNS-RPZ sinkhole detector), same wasip1 stdin/stdout ABI.
+[[bin]]
+name = "wasip1-dnsrpz"
+path = "src/dnsrpz.rs"
+
 [profile.release]
 panic = "abort"
 opt-level = "z"
