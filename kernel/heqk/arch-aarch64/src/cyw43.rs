@@ -2063,6 +2063,183 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     naps
 }
 
+// ===========================================================================
+// P10-E — STA-mode WPA2-PSK ASSOCIATION (firmware-offloaded supplicant).
+//
+// CYW43455 is a FullMAC part: the firmware runs PBKDF2 + the 802.11 association
+// + the WPA2 4-way handshake + CCMP in-chip, so heqk needs NO WPA crypto. We
+// only drive the standard wl-tool SET sequence through the proven `bcdc_dcmd`
+// control path, then collect the async WLC_E_* events off SDPCM channel 1 with
+// the same `read_sdpcm_frame` + brcmf_event parse the scan uses. Success = a
+// WLC_E_LINK event with the LINK flag set (link up ⇒ keys installed).
+// ===========================================================================
+
+// WLC ioctl ids used by association (WLC_UP/WLC_SET_INFRA already defined above).
+const WLC_DOWN: u32 = 3;
+const WLC_SET_AUTH: u32 = 22; // 0 = Open System (WPA2-PSK does the security in the 4-way HS)
+const WLC_SET_SSID: u32 = 26; // join: payload = wlc_ssid_t
+const WLC_DISASSOC: u32 = 52;
+const WLC_SET_WSEC: u32 = 134; // wsec bitmask
+const WLC_SET_WPA_AUTH: u32 = 165;
+const WLC_SET_WSEC_PMK: u32 = 268; // payload = wsec_pmk_t
+const WLC_SET_PM_: u32 = 86; // power-mgmt (0 = CAM/awake through the handshake)
+
+const AES_ENABLED: u32 = 0x0004; // wsec bit: CCMP/AES
+const WPA2_AUTH_PSK: u32 = 0x0080; // wpa_auth: WPA2-PSK
+const WSEC_PASSPHRASE: u16 = 0x0001; // wsec_pmk flag: `key` holds an ASCII passphrase (fw PBKDF2s)
+
+// Association event ids (BE32 event_type in the brcmf_event header, ev+28).
+const WLC_E_SET_SSID: u32 = 0;
+const WLC_E_AUTH: u32 = 3;
+const WLC_E_DEAUTH: u32 = 5;
+const WLC_E_DEAUTH_IND: u32 = 6;
+const WLC_E_ASSOC: u32 = 7;
+const WLC_E_DISASSOC: u32 = 11;
+const WLC_E_DISASSOC_IND: u32 = 12;
+const WLC_E_LINK: u32 = 16;
+const WLC_E_PSK_SUP: u32 = 46;
+const WLC_EVENT_MSG_LINK: u16 = 0x01; // brcmf_event_msg.flags: link is UP
+const WLC_SUP_KEYED: u32 = 6; // WLC_E_PSK_SUP status: 4-way handshake complete
+
+/// The outcome + diagnostic trail of one association attempt. The trail is the
+/// heart of the "validate + fix on metal" loop: every WLC_E_* the firmware emits
+/// during the join is recorded (type, status, flags) so a failing handshake shows
+/// exactly which stage it reached.
+pub struct JoinResult {
+    pub steps_ok: u16, // bit0 event_msgs,1 infra,2 auth,3 wsec,4 wpa_auth,5 sup_wpa,6 pmk,7 up
+    pub set_ssid_ok: bool,
+    pub set_ssid_status: u32,
+    pub link_up: bool,
+    pub psk_keyed: bool,
+    pub events_seen: u32,
+    pub last_event: u32,
+    pub last_status: u32,
+    pub trail: [(u32, u32, u16); 24],
+    pub trail_len: usize,
+}
+
+impl JoinResult {
+    pub fn new() -> Self {
+        JoinResult {
+            steps_ok: 0,
+            set_ssid_ok: false,
+            set_ssid_status: 0,
+            link_up: false,
+            psk_keyed: false,
+            events_seen: 0,
+            last_event: 0xffff_ffff,
+            last_status: 0,
+            trail: [(0, 0, 0); 24],
+            trail_len: 0,
+        }
+    }
+}
+
+/// Associate to a WPA2-PSK AP. `ssid` (<=32 B) + `passphrase` (8..63 B). Fills
+/// `out` with the step-acks + the full event trail. Reuses the scan's wake/HT
+/// preamble and the NOTUP-retry idiom (the STA finishes coming up asynchronously).
+pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
+    // Wake + backplane clock (the 43455 SR-sleeps on a quiet bus; the multi-second
+    // handshake needs HT held up — we also re-ensure it inside the event loop).
+    let _ = wake_chip();
+    drain_firmware_mailbox();
+    let _ = ensure_ht_avail();
+
+    // Down to (re)configure the security suite cleanly.
+    let _ = wlc_set_int(WLC_DOWN, 0);
+
+    // Enable the association events on top of whatever the firmware already has.
+    let mut mask = [0u8; 16];
+    let _ = bcdc_iovar_get(b"event_msgs", &mut mask);
+    for e in [
+        WLC_E_SET_SSID, WLC_E_AUTH, WLC_E_DEAUTH, WLC_E_DEAUTH_IND, WLC_E_ASSOC,
+        WLC_E_DISASSOC, WLC_E_DISASSOC_IND, WLC_E_LINK, WLC_E_PSK_SUP,
+    ] {
+        mask[(e / 8) as usize] |= 1 << (e % 8);
+    }
+    let mut iob = [0u8; 64];
+    let nm = iovar_buf(b"event_msgs", &mask, &mut iob);
+    if bcdc_iovar_set(&iob[..nm]) { out.steps_ok |= 1 << 0; }
+
+    // Infrastructure (managed) mode + Open 802.11 auth (WPA2-PSK secures via the HS).
+    if wlc_set_int(WLC_SET_INFRA, 1) { out.steps_ok |= 1 << 1; }
+    if wlc_set_int(WLC_SET_AUTH, 0) { out.steps_ok |= 1 << 2; }
+    // wsec = CCMP/AES, wpa_auth = WPA2-PSK.
+    if wlc_set_int(WLC_SET_WSEC, AES_ENABLED) { out.steps_ok |= 1 << 3; }
+    if wlc_set_int(WLC_SET_WPA_AUTH, WPA2_AUTH_PSK) { out.steps_ok |= 1 << 4; }
+    // Enable the in-firmware WPA supplicant so the chip runs the 4-way handshake.
+    {
+        let mut ib = [0u8; 48];
+        let n = iovar_buf(b"sup_wpa", &1u32.to_le_bytes(), &mut ib);
+        if bcdc_iovar_set(&ib[..n]) { out.steps_ok |= 1 << 5; }
+    }
+    // Set the PMK as a passphrase (firmware runs PBKDF2 over passphrase+SSID).
+    // wsec_pmk_t { u16 key_len; u16 flags; u8 key[64] } — total 68 B.
+    {
+        let plen = passphrase.len().min(64);
+        let mut pmk = [0u8; 4 + 64];
+        pmk[0..2].copy_from_slice(&(plen as u16).to_le_bytes());
+        pmk[2..4].copy_from_slice(&WSEC_PASSPHRASE.to_le_bytes());
+        pmk[4..4 + plen].copy_from_slice(&passphrase[..plen]);
+        if bcdc_dcmd(WLC_SET_WSEC_PMK, BCDC_SET, &pmk, &mut []).0 { out.steps_ok |= 1 << 6; }
+    }
+    // Power-save OFF (stay awake through the handshake), then bring the STA up.
+    let _ = wlc_set_int(WLC_SET_PM_, 0);
+    if wlc_set_int(WLC_UP, 1) { out.steps_ok |= 1 << 7; }
+    delay(80_000);
+    let _ = ensure_ht_avail();
+
+    // Join: WLC_SET_SSID with wlc_ssid_t { u32 SSID_len; u8 SSID[32] }. The STA
+    // comes up asynchronously after WLC_UP, so retry while the firmware says NOTUP(-4).
+    let slen = ssid.len().min(32);
+    let mut sb = [0u8; 4 + 32];
+    sb[0..4].copy_from_slice(&(slen as u32).to_le_bytes());
+    sb[4..4 + slen].copy_from_slice(&ssid[..slen]);
+    for _ in 0..20 {
+        let (ok, st) = bcdc_dcmd(WLC_SET_SSID, BCDC_SET, &sb[..4 + slen], &mut []);
+        out.set_ssid_ok = ok;
+        out.set_ssid_status = st;
+        if ok || st != 0xffff_fffc { break; }
+        delay(60_000);
+    }
+
+    // Collect events until link-up (or the budget runs out). read_sdpcm_frame is
+    // the same primitive the scan uses; channel 1 = event. Keep HT alive across it.
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < 6000 {
+        i += 1;
+        if i % 256 == 0 { let _ = ensure_ht_avail(); }
+        let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) {
+            Some(t) => t,
+            None => continue,
+        };
+        if channel != 1 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let ev = doff + 4 + bdc_doff * 4;
+        if ev + 36 > rx.len() { continue; }
+        let flags = u16::from_be_bytes([rx[ev + 26], rx[ev + 27]]);
+        let etype = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+        let status = u32::from_be_bytes([rx[ev + 32], rx[ev + 33], rx[ev + 34], rx[ev + 35]]);
+        out.events_seen += 1;
+        out.last_event = etype;
+        out.last_status = status;
+        if out.trail_len < out.trail.len() {
+            out.trail[out.trail_len] = (etype, status, flags);
+            out.trail_len += 1;
+        }
+        if etype == WLC_E_PSK_SUP && status == WLC_SUP_KEYED {
+            out.psk_keyed = true;
+        }
+        if etype == WLC_E_LINK {
+            out.link_up = (flags & WLC_EVENT_MSG_LINK) != 0;
+            if out.link_up {
+                break; // link up ⇒ associated + keyed; done
+            }
+        }
+    }
+}
+
 // --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
 // dcmd header: struct brcmf_proto_bcdc_dcmd { u32 cmd; u32 len; u32 flags; u32 status; }
 const WLC_GET_VERSION: u32 = 1;
