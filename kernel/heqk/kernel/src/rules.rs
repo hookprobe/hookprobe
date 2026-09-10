@@ -125,6 +125,30 @@ fn rstate(state: *mut RState, i: usize) -> RState {
 /// (reuse `attest_svc`) and refuse any rule whose signature does not verify — BEFORE
 /// `verify_prevail`. Until that gate exists, there must be no code path that feeds a
 /// non-static rule into `compile_set`.
+/// DET-2 — the PINNED dynamic-rule signing ROOT (the fixture's pubkey today; a real
+/// deployment bakes the HYDRA/operator rule-root here). A presented key is NEVER trusted —
+/// the gate verifies against THIS pinned key, the confused-deputy a trust root avoids.
+const RULE_ROOT_PK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_rule.pk"));
+/// DET-2 — the signed dynamic-rule fixture (valid BPF bytecode + its signature), for the
+/// [P8-det2] gate proof (a real dynamic source would supply these from storage/HYDRA).
+pub const DYN_RULE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_rule.bin"));
+pub const DYN_RULE_SIG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fixture_rule.sig"));
+
+/// DET-2 — the per-rule AUTHENTICITY GATE (the HARD PREREQUISITE for any dynamic rule
+/// source named in compile_set's integrity note). Verify an Ed25519 signature over the rule
+/// BYTECODE against the PINNED rule-signing root. Returns `true` iff authentic; a tampered or
+/// unsigned rule is refused fail-closed and must NEVER reach verify_prevail or the datapath.
+/// This is authenticity (provenance); `verify_prevail` remains the separate memory-safety leg.
+pub fn rule_sig_ok(prog: &[u8], sig: &[u8]) -> bool {
+    use ed25519_compact::{PublicKey, Signature};
+    (|| {
+        let pk = PublicKey::from_slice(RULE_ROOT_PK).ok()?;
+        let s = Signature::from_slice(sig).ok()?;
+        pk.verify(prog, &s).ok()
+    })()
+    .is_some()
+}
+
 fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
     let mut verified = 0usize;
     let mut jitted = 0usize;
