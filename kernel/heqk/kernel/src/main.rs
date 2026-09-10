@@ -2626,8 +2626,13 @@ fn cm5_p10_probe() {
                     kprint!("\n   [P10-E M2raw]");
                     for k in 0..hs.m2_len { kprint!("{:02x}", hs.m2_dump[k]); }
                     kprint!("\n");
-                    if hs.m3_seen {
-                        kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED inline — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
+                    kprint!("   [P10-E s2] m4_tx={} deauth_after_m4={}\n", hs.m4_tx_ok, hs.deauth_after_m4);
+                    if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 {
+                        kprint!(" [P10-E] PASS(4way) — M1..M4 complete, no deauth after M4! Host WPA2 supplicant handshake DONE. Remaining: install PTK/GTK (WLC_SET_KEY) for data.\n");
+                    } else if hs.m3_seen && hs.m4_tx_ok {
+                        kprint!(" [P10-E] M1..M4 sent but deauth after M4 (reason={}) — likely heqk fw needs the PTK installed (WLC_SET_KEY) to hold the port\n", hs.deauth_reason);
+                    } else if hs.m3_seen {
+                        kprint!(" [P10-E] PASS(4way-S1) — AP sent M3 (M2 accepted) but M4 tx={} — see s2 diag\n", hs.m4_tx_ok);
                     } else if hs.m2_tx_ok && hs.deauth_after {
                         kprint!(" [P10-E] M2 sent inline but AP DEAUTHed (no M3) — likely MIC/PTK or RSN-IE mismatch; kdv={}\n", hs.kdv);
                     } else if hs.m2_tx_ok {
