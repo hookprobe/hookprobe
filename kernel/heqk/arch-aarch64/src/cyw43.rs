@@ -2404,7 +2404,10 @@ impl DataProbe {
 pub fn wifi_data_probe(out: &mut DataProbe) {
     let mut rx = [0u8; 2048];
     let mut i = 0u32;
-    while i < 5000 {
+    // Short passive glance only: on a quiet subnet every read_sdpcm_frame is DRY (~1.5s each),
+    // so a big window here would grind for ~hours BEFORE DHCP runs. DHCP's OFFER RX is the real
+    // decrypted-data proof; this is just an opportunistic pre-DHCP peek at any background bcast.
+    while i < 30 {
         i += 1;
         if i % 256 == 0 {
             let _ = ensure_ht_avail();
@@ -2612,14 +2615,16 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
     let mut pkt = [0u8; 400];
     let none = [0u8; 4];
 
-    // --- DISCOVER, then watch channel 2 for the OFFER.
+    let mut rx = [0u8; 2048];
+    // --- DISCOVER, then watch channel 2 for the OFFER. Each read_sdpcm_frame is ~1.5s when
+    // dry, so the window is small; DHCP is lossy (UDP) so retransmit the DISCOVER periodically.
     let n = build_dhcp(&mut pkt, &out.mac, &xid, 1, &none, &none);
     out.discover_tx = sdpcm_data_tx(&pkt[..n]);
-    let mut rx = [0u8; 2048];
+    dbg_putc(b'D'); // DISCOVER sent
     let mut i = 0u32;
-    while i < 900 {
+    while i < 120 {
         i += 1;
-        if i % 256 == 0 { let _ = ensure_ht_avail(); }
+        if i % 40 == 0 { let _ = sdpcm_data_tx(&pkt[..n]); dbg_putc(b'd'); } // retransmit
         let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
         if channel != 2 { continue; }
         let bdc_doff = rx[doff + 3] as usize;
@@ -2628,6 +2633,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         out.frames_seen += 1;
         if parse_dhcp_reply(&rx[eth..], out) == 2 {
             out.offer_rx = true;
+            dbg_putc(b'o'); // OFFER received
             break;
         }
     }
@@ -2638,10 +2644,11 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
     let sv = out.server;
     let n = build_dhcp(&mut pkt, &out.mac, &xid, 3, &yi, &sv);
     out.request_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'R'); // REQUEST sent
     let mut i = 0u32;
-    while i < 900 {
+    while i < 120 {
         i += 1;
-        if i % 256 == 0 { let _ = ensure_ht_avail(); }
+        if i % 40 == 0 { let _ = sdpcm_data_tx(&pkt[..n]); dbg_putc(b'r'); } // retransmit
         let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
         if channel != 2 { continue; }
         let bdc_doff = rx[doff + 3] as usize;
@@ -2650,6 +2657,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         out.frames_seen += 1;
         if parse_dhcp_reply(&rx[eth..], out) == 5 {
             out.ack_rx = true;
+            dbg_putc(b'a'); // ACK received
             break;
         }
     }
