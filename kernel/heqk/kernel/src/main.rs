@@ -2663,6 +2663,27 @@ fn cm5_p10_probe() {
                         if dh.ack_rx {
                             kprint!(" [P10-E] PASS(wifi-dhcp) — heqk HAS A DHCP LEASE over WPA2 WiFi ({}.{}.{}.{}) — STA link is LIVE end-to-end\n",
                                 dh.yiaddr[0], dh.yiaddr[1], dh.yiaddr[2], dh.yiaddr[3]);
+                            // --- Traffic validation: ARP gw -> ICMP gw (on-link) -> ICMP 8.8.8.8 (NAT + internet).
+                            let inet = [8u8, 8, 8, 8];
+                            kprint!(" [P10-E] traffic: ARP gw, ping gw, ping {}.{}.{}.{} through NAT...\n",
+                                inet[0], inet[1], inet[2], inet[3]);
+                            let mut pg = cyw43::PingResult::new();
+                            cyw43::wifi_ping(&dh.yiaddr, &dh.router, &inet, &mut pg);
+                            kprint!("   [P10-E ping] arp_tx={} arp_reply={} gw_mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                                pg.arp_tx, pg.arp_reply, pg.gw_mac[0], pg.gw_mac[1], pg.gw_mac[2], pg.gw_mac[3], pg.gw_mac[4], pg.gw_mac[5]);
+                            kprint!("   [P10-E ping] gw {}.{}.{}.{} reply={} ttl={} | inet {}.{}.{}.{} reply={} ttl={} | icmp_replies={}\n",
+                                pg.gw_ip[0], pg.gw_ip[1], pg.gw_ip[2], pg.gw_ip[3], pg.gw_ping_reply, pg.gw_ttl,
+                                pg.inet_ip[0], pg.inet_ip[1], pg.inet_ip[2], pg.inet_ip[3], pg.inet_ping_reply, pg.inet_ttl, pg.icmp_replies);
+                            if pg.inet_ping_reply {
+                                kprint!(" [P10-E] PASS(wifi-internet) — heqk ICMP round-trip to {}.{}.{}.{} through the AP's NAT (ttl={}) — real internet data over WPA2 WiFi\n",
+                                    inet[0], inet[1], inet[2], inet[3], pg.inet_ttl);
+                            } else if pg.gw_ping_reply {
+                                kprint!(" [P10-E] gw ping OK (L3 on-link) but no internet reply — NAT/upstream to diagnose\n");
+                            } else if pg.arp_reply {
+                                kprint!(" [P10-E] ARP resolved gw but no ICMP reply — forward/ICMP path to diagnose\n");
+                            } else {
+                                kprint!(" [P10-E] ARP got no reply — L2 TX-to-gw path to diagnose\n");
+                            }
                         } else if dh.offer_rx {
                             kprint!(" [P10-E] DHCP OFFER received (decrypted DHCP RX PROVEN) but no ACK — REQUEST/lease incomplete\n");
                         } else {
