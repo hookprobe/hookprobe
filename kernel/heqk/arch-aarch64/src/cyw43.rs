@@ -2119,6 +2119,13 @@ pub struct JoinResult {
     pub last_status: u32,
     pub trail: [(u32, u32, u16); 24],
     pub trail_len: usize,
+    // WiFi DATA-path proof captured DURING association: the AP starts the WPA2 4-way
+    // handshake by sending EAPOL-Key M1 (ethertype 0x888E) over SDPCM channel 2. Catching
+    // it proves the data path AND gives the supplicant its first input (ANonce).
+    pub data_frames: u32, // any channel-2 (data) frame seen during the join
+    pub eapol_seen: bool, // an EAPOL (0x888E) frame arrived
+    pub eapol_len: usize, // bytes captured of the first EAPOL frame
+    pub eapol: [u8; 128], // first EAPOL frame head (EAPOL hdr + key descriptor + ANonce…)
 }
 
 impl JoinResult {
@@ -2137,6 +2144,10 @@ impl JoinResult {
             last_status: 0,
             trail: [(0, 0, 0); 24],
             trail_len: 0,
+            data_frames: 0,
+            eapol_seen: false,
+            eapol_len: 0,
+            eapol: [0; 128],
         }
     }
 }
@@ -2271,6 +2282,23 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], open: bool, out: &mut JoinResul
                 continue;
             }
         };
+        // Channel 2 = DATA. During a WPA2 join the AP's EAPOL-Key M1 arrives here — capture
+        // it (proves the data path + is the supplicant's first input). BDC hdr then ethernet.
+        if channel == 2 {
+            let bdc_doff = rx[doff + 3] as usize;
+            let eth = doff + 4 + bdc_doff * 4;
+            if eth + 14 <= rx.len() {
+                out.data_frames += 1;
+                let etype = u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]);
+                if etype == 0x888E && !out.eapol_seen {
+                    out.eapol_seen = true;
+                    let n = (rx.len() - eth).min(out.eapol.len());
+                    out.eapol[..n].copy_from_slice(&rx[eth..eth + n]);
+                    out.eapol_len = n;
+                }
+            }
+            continue;
+        }
         if channel != 1 { continue; }
         let bdc_doff = rx[doff + 3] as usize;
         let ev = doff + 4 + bdc_doff * 4;
