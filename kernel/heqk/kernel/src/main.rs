@@ -2595,46 +2595,36 @@ fn cm5_p10_probe() {
                     kprint!(" [P10-E] WiFi STA join \"");
                     for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
                     kprint!("\" (WPA2) — capturing the EAPOL M1 (data-path proof)...\n");
+                    // Compute the PMK up front and pass it in: wifi_join now runs the 4-way
+                    // handshake INLINE — the instant M1 arrives it sends M2 in the live session
+                    // (the AP deauths within ~1-2 s otherwise), then reads on for M3.
+                    let pmk = arch_aarch64::wpa::wpa_pmk(JOIN_PSK, JOIN_SSID);
                     let mut jr = cyw43::JoinResult::new();
-                    cyw43::wifi_join(JOIN_SSID, JOIN_PSK, false, &mut jr);
-                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} up={} | pmk ok={} | set_ssid ok={} status={:#x}\n",
+                    let mut hs = cyw43::Wpa4Way::new();
+                    cyw43::wifi_join(JOIN_SSID, JOIN_PSK, false, Some(&pmk), &mut jr, &mut hs);
+                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} up={} | set_ssid ok={} status={:#x}\n",
                         jr.steps_ok & 1, (jr.steps_ok >> 1) & 1, (jr.steps_ok >> 2) & 1, (jr.steps_ok >> 3) & 1,
-                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 7) & 1, (jr.steps_ok >> 6) & 1, jr.set_ssid_ok, jr.set_ssid_status);
+                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 7) & 1, jr.set_ssid_ok, jr.set_ssid_status);
                     kprint!("   [P10-E events] seen={} deauth={} link={} (type,status,flags):", jr.events_seen, jr.deauth_seen, jr.link_up);
                     for k in 0..jr.trail_len {
                         let (t, s, f) = jr.trail[k];
                         kprint!(" ({},{:#x},{:#x})", t, s, f);
                     }
                     kprint!("\n");
-                    kprint!("   [P10-E data] channel-2 frames seen={} | EAPOL(0x888E) seen={} len={}\n",
+                    kprint!("   [P10-E data] channel-2 frames seen={} | EAPOL(0x888E) M1 seen={} len={}\n",
                         jr.data_frames, jr.eapol_seen, jr.eapol_len);
-                    if jr.eapol_seen && jr.eapol_len >= 18 {
-                        // EAPOL: eth(14) | ver(1) type(1) len(2) | 802.1X-Key descriptor...
-                        kprint!("   [P10-E eapol] eth.etype={:#06x} 8021x.ver={:#04x} type={:#04x} body_len={} keydesc={:#04x}\n",
-                            ((jr.eapol[12] as u16) << 8) | jr.eapol[13] as u16,
-                            jr.eapol[14], jr.eapol[15],
-                            ((jr.eapol[16] as u16) << 8) | jr.eapol[17] as u16,
-                            if jr.eapol_len > 18 { jr.eapol[18] } else { 0 });
-                    }
-                    if jr.eapol_seen {
-                        kprint!(" [P10-E] data-path LIVE — EAPOL M1 captured. Running the WPA2 host supplicant (S1: PTK -> M2 -> M3)...\n");
-                        // S1: derive PTK from the captured M1 + our PMK, send M2, watch for M3.
-                        let pmk = arch_aarch64::wpa::wpa_pmk(JOIN_PSK, JOIN_SSID);
-                        let mut hs = cyw43::Wpa4Way::new();
-                        cyw43::wpa_handshake(&jr.eapol, jr.eapol_len, &pmk, &mut hs);
-                        kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} deauth_after={} other_eapol={}\n",
-                            hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.deauth_after, hs.other_eapol);
-                        if hs.m3_seen {
-                            kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
-                        } else if hs.deauth_after {
-                            kprint!(" [P10-E] M2 sent but AP DEAUTHed (no M3) — MIC/PTK or RSN-IE mismatch; kdv={} m2_tx={}\n", hs.kdv, hs.m2_tx_ok);
-                        } else {
-                            kprint!(" [P10-E] M2 sent (tx={}) but no M3/deauth seen in window — see s1 diag\n", hs.m2_tx_ok);
-                        }
-                    } else if jr.data_frames > 0 {
-                        kprint!(" [P10-E] data path LIVE ({} ch2 frames) but no EAPOL captured (deauth={} link={}); assoc window may be too short\n", jr.data_frames, jr.deauth_seen, jr.link_up);
+                    kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} deauth_after={} other_eapol={}\n",
+                        hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.deauth_after, hs.other_eapol);
+                    if hs.m3_seen {
+                        kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED inline — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
+                    } else if hs.m2_tx_ok && hs.deauth_after {
+                        kprint!(" [P10-E] M2 sent inline but AP DEAUTHed (no M3) — likely MIC/PTK or RSN-IE mismatch; kdv={}\n", hs.kdv);
+                    } else if hs.m2_tx_ok {
+                        kprint!(" [P10-E] M2 sent inline (tx ok) but no M3/deauth in window — see s1 diag\n");
+                    } else if jr.eapol_seen {
+                        kprint!(" [P10-E] M1 captured but M2 NOT sent (snonce={} — TRNG?) — data path proven, handshake blocked\n", hs.snonce_ok);
                     } else if jr.link_up {
-                        kprint!(" [P10-E] linked but 0 ch2 data frames captured — the AP's EAPOL M1 may have raced the loop; last event={} status={:#x}\n", jr.last_event, jr.last_status);
+                        kprint!(" [P10-E] linked but no EAPOL M1 captured (raced the loop?); last event={} status={:#x}\n", jr.last_event, jr.last_status);
                     } else {
                         kprint!(" [P10-E] NOT LINKED — last event={} status={:#x}; trail shows the stage reached\n", jr.last_event, jr.last_status);
                     }
