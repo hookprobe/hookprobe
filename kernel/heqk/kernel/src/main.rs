@@ -1133,6 +1133,24 @@ fn load_el0_wasmhost_cm5(parsed: &elf::ParsedElf) -> Option<usize> {
 fn cm5_prod_service() -> ! {
     use arch_aarch64::mmu_cm5;
     arch_aarch64::disable_irqs();
+    // THERMAL (2026-09-10) — prod busy-polls the GEM RX ring with IRQs OFF (no GEM IRQ to
+    // wake a plain WFI), so between frames the A76 spun at 100% and cooked the CM5. Enable the
+    // ARM generic-timer EVENT STREAM: it posts a periodic WFE wake-event WITHOUT any interrupt,
+    // so the idle branch of the drain loop can WFE (clock-gate the core) and wake periodically
+    // to re-scan. EVNTI=10 -> a wake on CNTVCT[10] (every 1024 ticks; ~19 µs at the CM5's
+    // ~54 MHz cntfrq): a large idle duty-cycle/heat cut for a negligible (~20 µs) RX-latency
+    // add. Under load (batch>0) the loop never WFEs, so RX throughput is unchanged (a frame
+    // arriving during a WFE is caught on the very next poll). CNTKCTL_EL1: EVNTEN(bit2)=1,
+    // EVNTI(7:4)=10, EVNTDIR(bit3)=0; EL0 timer-access bits (1:0) preserved. The event stream
+    // wakes WFE at EL0 too, so the isolated GEM stub's shortened empty-wait costs nothing hot.
+    unsafe {
+        let mut cntkctl: u64;
+        core::arch::asm!("mrs {}, cntkctl_el1", out(reg) cntkctl, options(nomem, nostack));
+        cntkctl &= !0b1111_1000; // clear EVNTI(7:4) + EVNTDIR(3) + EVNTEN(2)
+        cntkctl |= (10u64 << 4) | (1u64 << 2); // EVNTI=10 (~19 µs), EVNTEN=1 (EVNTDIR stays 0)
+        core::arch::asm!("msr cntkctl_el1, {}", in(reg) cntkctl, options(nomem, nostack));
+        core::arch::asm!("isb", options(nomem, nostack));
+    }
     // M5.5 (Track C, U5) — ONE-SHOT: run a REAL signed `.wasm` module through wasmi 0.32 in an
     // ISOLATED EL0 excursion on CM5 silicon, BEFORE the GEM driver claims the low GB5 pages.
     // Mirrors the isolated-EL0-GEM-driver model (enter_user, IRQs-off, no scheduler/no IPC);
@@ -2100,6 +2118,11 @@ fn cm5_prod_service() -> ! {
             // The stub woke us but the cursor slot was not ready (timeout wake / already
             // drained). Not a fault; just loop back and wait again.
             empty += 1;
+            // THERMAL: idle — WFE-sleep (clock-gate the core) until the next event-stream
+            // wake (~few µs, armed above) instead of spinning hot. A frame that arrives during
+            // the sleep is caught on the very next EL0 poll excursion; under load this branch
+            // is never taken (batch>0), so throughput is unaffected.
+            unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
         }
     }
 }
@@ -6445,6 +6468,7 @@ fn p15_otafat_selftest() {
     kprint!(" [P15-otafat] located OK (read-only build; rebuild --features p15-write for the guarded write + read-back proof)\n");
 }
 
+#[cfg(not(feature = "cm5"))]
 fn p15_persist_selftest() {
     use hal::BlockDev;
     use seal::Policy;
