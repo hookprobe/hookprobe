@@ -212,6 +212,21 @@ lower64_sync_gate:
 // EL1). ANY other EL1 data abort is a real kernel fault -> reset, as before P7e.
 el1_blocked:
     mrs     x10, far_el2            // (x9-x13 already saved by lower64_sync_gate)
+    // SEC-2: a stray EL1 access to the CARVED VC-mailbox page
+    // [0x10_7C01_3000, 0x10_7C01_4000) -> contain it (mark 'V', skip the faulting
+    // instruction, return). EL1 must use `hvc #2`; a compromised kernel probing the
+    // OTP mailbox directly gets its load SKIPPED (no secret, no DoS-by-reset).
+    movz    x13, #0x3000
+    movk    x13, #0x7c01, lsl #16
+    movk    x13, #0x0010, lsl #32   // 0x10_7C01_3000 = mailbox page base
+    cmp     x10, x13
+    b.lo    el1_hole_check          // FAR < page base -> not the mailbox page
+    movz    x13, #0x4000
+    movk    x13, #0x7c01, lsl #16
+    movk    x13, #0x0010, lsl #32   // 0x10_7C01_4000 = mailbox page end
+    cmp     x10, x13
+    b.lo    el1_mbox_contain        // base <= FAR < end -> contain
+el1_hole_check:
     movz    x13, #0x0020, lsl #16   // 0x00200000 = HOLE_LO
     cmp     x10, x13
     b.lo    el1_blk_reset           // FAR < 0x200000 -> not the EL2 region
@@ -229,6 +244,25 @@ el1_blocked:
     add     x10, x10, #4            // skip the faulting load
     msr     elr_el2, x10
     ldr     x13,      [sp, #32]     // restore EL1's registers + return
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
+    eret
+
+// SEC-2: EL1 touched the carved VC-mailbox page. Same containment as the HBoot hole,
+// with a distinct 'V' marker: emit 'V', skip the faulting instruction (ELR+=4 — the
+// load never completes, so the destination register keeps its prior value), return.
+el1_mbox_contain:
+    movz    x9, #0x0000
+    movk    x9, #0x0003, lsl #16
+    movk    x9, #0x001c, lsl #32
+    mov     w11, #0x56              // 'V' = EL1 blocked from the carved VC-mailbox page
+96: ldr     w12, [x9, #0x18]
+    tbnz    w12, #5, 96b
+    strb    w11, [x9]
+    mrs     x10, elr_el2
+    add     x10, x10, #4            // skip the faulting mailbox access
+    msr     elr_el2, x10
+    ldr     x13,      [sp, #32]
     ldp     x11, x12, [sp, #16]
     ldp     x9,  x10, [sp], #48
     eret
