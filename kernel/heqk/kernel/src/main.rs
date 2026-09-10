@@ -2644,7 +2644,29 @@ fn cm5_p10_probe() {
                         if dp.l2_known > 0 {
                             kprint!(" [P10-E] PASS(wifi-data) — heqk DECRYPTED {} real WiFi data frame(s) (arp/ip) — WPA2 STA link is LIVE end-to-end\n", dp.l2_known);
                         } else {
-                            kprint!(" [P10-E] keyed OK; {} ch2 frames but no decrypted L2 yet (gtk_set={}) — may need GTK RSC / DHCP TX\n", dp.frames, hs.gtk_set_ok);
+                            kprint!(" [P10-E] keyed OK; {} ch2 frames but no decrypted L2 yet (gtk_set={}) — running DHCP\n", dp.frames, hs.gtk_set_ok);
+                        }
+                        // --- DHCP-over-WiFi: DISCOVER -> OFFER -> REQUEST -> ACK = a real lease.
+                        kprint!(" [P10-E] DHCP-over-WiFi: sending DISCOVER...\n");
+                        let mut dh = cyw43::DhcpResult::new();
+                        cyw43::wifi_dhcp(&mut dh);
+                        kprint!("   [P10-E dhcp] mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} | discover_tx={} offer_rx={} request_tx={} ack_rx={} | frames={} udp68={}\n",
+                            dh.mac[0], dh.mac[1], dh.mac[2], dh.mac[3], dh.mac[4], dh.mac[5],
+                            dh.discover_tx, dh.offer_rx, dh.request_tx, dh.ack_rx, dh.frames_seen, dh.udp68_seen);
+                        if dh.offer_rx || dh.ack_rx {
+                            kprint!("   [P10-E dhcp] ip {}.{}.{}.{} mask {}.{}.{}.{} gw {}.{}.{}.{} server {}.{}.{}.{} lease={}s\n",
+                                dh.yiaddr[0], dh.yiaddr[1], dh.yiaddr[2], dh.yiaddr[3],
+                                dh.mask[0], dh.mask[1], dh.mask[2], dh.mask[3],
+                                dh.router[0], dh.router[1], dh.router[2], dh.router[3],
+                                dh.server[0], dh.server[1], dh.server[2], dh.server[3], dh.lease);
+                        }
+                        if dh.ack_rx {
+                            kprint!(" [P10-E] PASS(wifi-dhcp) — heqk HAS A DHCP LEASE over WPA2 WiFi ({}.{}.{}.{}) — STA link is LIVE end-to-end\n",
+                                dh.yiaddr[0], dh.yiaddr[1], dh.yiaddr[2], dh.yiaddr[3]);
+                        } else if dh.offer_rx {
+                            kprint!(" [P10-E] DHCP OFFER received (decrypted DHCP RX PROVEN) but no ACK — REQUEST/lease incomplete\n");
+                        } else {
+                            kprint!(" [P10-E] DHCP no OFFER (discover_tx={}) — TX path or server-reachability to diagnose\n", dh.discover_tx);
                         }
                     } else if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 {
                         kprint!(" [P10-E] PASS(4way) — M1..M4 complete, no deauth, but PTK install failed (ptk_set={}) — see s2 diag\n", hs.ptk_set_ok);
