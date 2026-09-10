@@ -2216,6 +2216,21 @@ pub fn wifi_join(
     let (wsec_val, wpa_auth_val) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
     if wlc_set_int(WLC_SET_WSEC, wsec_val) { out.steps_ok |= 1 << 3; }
     if wlc_set_int(WLC_SET_WPA_AUTH, wpa_auth_val) { out.steps_ok |= 1 << 4; }
+    // Pin the assoc-request RSN IE via "wpaie" BEFORE WLC_UP/join (brcmf sets it during the
+    // down-config), so the firmware puts EXACTLY RSN_IE_PSK_CCMP in the (re)assoc request and
+    // M2's key-data IE byte-matches it. hostapd's "WPA IE from (Re)AssocReq did not match with
+    // msg 2/4" deauth proved the firmware's own generated IE differs from M2's — pinning both
+    // to the same bytes removes the mismatch. Read it back for diagnosis.
+    if !open {
+        let mut ib = [0u8; 48];
+        let n = iovar_buf(b"wpaie", &RSN_IE_PSK_CCMP, &mut ib);
+        out.wpaie_set_ok = bcdc_iovar_set(&ib[..n]);
+        let mut rb = [0u8; 40];
+        if bcdc_iovar_get(b"wpaie", &mut rb) {
+            out.wpaie_get = rb;
+            out.wpaie_get_len = rb.iter().rposition(|&b| b != 0).map(|p| p + 1).unwrap_or(0);
+        }
+    }
     // Power-save OFF (stay awake through the handshake), then bring the STA up.
     let _ = wlc_set_int(WLC_SET_PM_, 0);
     if wlc_set_int(WLC_UP, 1) { out.steps_ok |= 1 << 7; }
@@ -2229,19 +2244,6 @@ pub fn wifi_join(
     //
     // WPA2 only: install the PMK. (Open networks skip all keying.)
     if !open {
-    // Pin the RSN IE used in the (re)assoc request via the brcmf "wpaie" iovar, so M2's
-    // key-data RSN IE provably byte-matches it (else the AP rejects M2 as an RSN mismatch).
-    // Read it back for diagnosis. This is what brcmfmac's host-supplicant path does.
-    {
-        let mut ib = [0u8; 48];
-        let n = iovar_buf(b"wpaie", &RSN_IE_PSK_CCMP, &mut ib);
-        out.wpaie_set_ok = bcdc_iovar_set(&ib[..n]);
-        let mut rb = [0u8; 40];
-        if bcdc_iovar_get(b"wpaie", &mut rb) {
-            out.wpaie_get = rb;
-            out.wpaie_get_len = rb.iter().rposition(|&b| b != 0).map(|p| p + 1).unwrap_or(0);
-        }
-    }
     // Set the RAW 32-byte PMK (flags=0) in brcmfmac's EXACT wire format:
     // struct brcmf_wsec_pmk_le { u16 key_len; u16 flags; u8 key[BRCMF_WSEC_MAX_PSK_LEN=32] }
     // = 36 B. This firmware rejects a passphrase (WSEC_PASSPHRASE → BADARG) AND a 68-B
