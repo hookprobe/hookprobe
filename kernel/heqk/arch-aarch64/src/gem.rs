@@ -576,8 +576,11 @@ pub fn phy0_led_config(phy: u32) -> (u16, u16, u16) {
     // read current LED Selector 1 (shadow 0x0D).
     phy_write(phy, 0x1c, 0x0d << 10);
     let before = phy_read(phy, 0x1c) & 0x3ff;
-    // green(LED1)=LINKSPD1(0x0), amber(LED3)=ACTIVITYLED(0x3) -> 0x030.
-    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x030);
+    // green(LED1)=LINKSPD2(0x1), amber(LED3)=ACTIVITYLED(0x3) -> 0x031. Was LINKSPD1(0x0),
+    // which is empirically DARK at a settled 1000 Mbps link (operator: LED lights on plug
+    // then disappears). LINKSPD2 is the source lit by the PHY POR default (before=0x010 had
+    // LED3=LINKSPD2) so it stays on at gigabit; keep amber(LED3)=Activity.
+    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x031);
     // read back.
     phy_write(phy, 0x1c, 0x0d << 10);
     let after = phy_read(phy, 0x1c) & 0x3ff;
