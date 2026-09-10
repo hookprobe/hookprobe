@@ -486,6 +486,10 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // the mmu_cm5 backend (the QEMU [P2-unmap] proof is not(cm5)). Prove it here on metal,
     // BEFORE the GEM drivers claim the GB5 window.
     p_cm5_cap();
+    // A1b cont'd (CORE-2 on CM5 silicon): per-TCB CSpace isolation (cap-algebra delegation)
+    // AND distinct per-AS user page tables (RO/RW attribute mapping + cross-AS isolation +
+    // unmap-severs) on the mmu_cm5 per-ASID backend.
+    p_cm5_cspace_iso();
 
     // --- P8: load the signed HookProbe rule plane (verify every rule; JIT is
     // QEMU-only, so CM5 runs the bounds-checked interpreter — same verdict). ---
@@ -8151,6 +8155,86 @@ fn p_cm5_cap() {
         " [P-cm5-cap] {} — CORE-1 cap-gated map ENFORCED on CM5 silicon (mmu_cm5 backend): RW-cap->AP=RW={} RO-cap->AP=RO={} W-on-RO-cap-DENIED={}; revoke SEVERED: RW-unmapped={} RO-unmapped={} caps-deleted={}\n",
         if ok { "PASS" } else { "FAIL" },
         live_rw, live_ro, w_denied, sev_rw, sev_ro, caps_gone
+    );
+}
+
+/// A1b cont'd [P-cm5-cspace-iso] (CORE-2 on CM5 SILICON) — two legs on real hardware:
+///  (1) CAP-ALGEBRA isolation (the [P2-iso] property on the CM5 backend): a parent CSpace
+///      owning Frame(R|W|G) + Endpoint(R|W|G) delegates ONLY the Frame, R-only, to a child;
+///      the child then holds the Frame with R but NOT W/G and does NOT hold the Endpoint,
+///      while the parent keeps its Endpoint (rights narrow, un-delegated authority absent).
+///  (2) PER-AS PAGE TABLES on the mmu_cm5 per-ASID backend: two DISTINCT address spaces
+///      (each `new_addr_space` builds its OWN private L2->L3 for the GB5 window); a RO cap
+///      attribute maps to AP=read-only and a RW to AP=read-write; the SECOND address space
+///      sees NEITHER mapping (private tables = isolation); and unmap SEVERS both (invalid).
+/// Additive; runs once after [P-cm5-cap], before the GEM drivers. Reuses the PH7 scratch
+/// window for the Untyped (proven-free) + runtime-pool frames for the address spaces.
+#[cfg(feature = "cm5")]
+fn p_cm5_cspace_iso() {
+    use arch_aarch64::mmu_cm5;
+    use caps::{CapSpace, ObjType, G, R, W};
+    const AP_RW_EL0: u64 = 0b01;
+    const AP_RO_EL0: u64 = 0b11;
+    let ap = |d: u64| (d >> 6) & 0b11;
+    let present = |d: u64| d & 1 != 0;
+
+    // --- (1) cap-algebra delegation isolation (reuses the PH7 proven-free scratch window,
+    //     which cap_invariants_selftest already finished using this boot). ---
+    let mut parent = CapSpace::with_root_untyped(0x0098_0000, 16 * 1024);
+    let ep = parent.retype(0, ObjType::Endpoint, 16);
+    let frame = parent.retype(0, ObjType::Frame, 4096);
+    let (algebra_ok, c_r, c_nw, c_ng, c_noep, p_ep) = match (ep, frame) {
+        (Ok(ep), Ok(frame)) => {
+            let mut child = CapSpace::empty(); // a fresh TCB starts with NO authority
+            let cframe = parent.mint_into(frame, R, &mut child); // delegate Frame, R only
+            let cr = cframe.map(|c| child.has_rights(c, R)).unwrap_or(false);
+            let cnw = cframe.map(|c| !child.has_rights(c, W)).unwrap_or(false);
+            let cng = cframe.map(|c| !child.has_rights(c, G)).unwrap_or(false);
+            let mut cep = false;
+            for s in 0..caps::SLOTS_PER_CSPACE {
+                if let Some(c) = child.get(s) {
+                    if c.otype == ObjType::Endpoint {
+                        cep = true;
+                    }
+                }
+            }
+            let pep = parent.get(ep).map(|c| c.otype == ObjType::Endpoint).unwrap_or(false);
+            (cr && cnw && cng && !cep && pep, cr, cnw, cng, !cep, pep)
+        }
+        _ => (false, false, false, false, false, false),
+    };
+
+    // --- (2) distinct per-AS page tables + RO/RW attribute + isolation + unmap-severs. ---
+    let (l1a, _aa) = mmu_cm5::new_addr_space();
+    let (l1b, _ab) = mmu_cm5::new_addr_space();
+    let pa = mmu_cm5::alloc_frame();
+    let va_ro = mmu_cm5::USER_VA_BASE + 0x12_0000;
+    let va_rw = mmu_cm5::USER_VA_BASE + 0x13_0000;
+    let (ro_ok, rw_ok, iso_ok, sev_ok) = if l1a != 0 && l1b != 0 && pa != 0 {
+        mmu_cm5::map_user_data_ro_in(l1a, va_ro, pa);
+        mmu_cm5::map_user_data_in(l1a, va_rw, pa);
+        let d_ro = mmu_cm5::page_desc_in(l1a, va_ro);
+        let d_rw = mmu_cm5::page_desc_in(l1a, va_rw);
+        let ro = present(d_ro) && ap(d_ro) == AP_RO_EL0;
+        let rw = present(d_rw) && ap(d_rw) == AP_RW_EL0;
+        // Isolation: the SECOND address space's private L3 sees neither mapping.
+        let iso = !present(mmu_cm5::page_desc_in(l1b, va_ro))
+            && !present(mmu_cm5::page_desc_in(l1b, va_rw));
+        // Sever: unmap in l1a -> both descriptors invalid.
+        mmu_cm5::unmap_user_in(l1a, va_ro);
+        mmu_cm5::unmap_user_in(l1a, va_rw);
+        let sev = !present(mmu_cm5::page_desc_in(l1a, va_ro))
+            && !present(mmu_cm5::page_desc_in(l1a, va_rw));
+        (ro, rw, iso, sev)
+    } else {
+        (false, false, false, false)
+    };
+
+    let ok = algebra_ok && ro_ok && rw_ok && iso_ok && sev_ok;
+    kprint!(
+        " [P-cm5-cspace-iso] {} — CORE-2 on CM5 silicon: cap-algebra iso (child Frame R={} W-denied={} G-denied={} Endpoint-absent={} parent-keeps-ep={}); per-AS tables (RO->AP=RO={} RW->AP=RW={} 2nd-AS-sees-neither={} unmap-severs={})\n",
+        if ok { "PASS" } else { "FAIL" },
+        c_r, c_nw, c_ng, c_noep, p_ep, ro_ok, rw_ok, iso_ok, sev_ok
     );
 }
 
