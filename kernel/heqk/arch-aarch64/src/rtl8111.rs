@@ -580,20 +580,19 @@ pub fn mac_start() {
         wm32(RXCFG, (read_volatile((RTL_MMIO + RXCFG) as *const u32) & !0xF) | 0x0E); // B|MyPhys|Mcast
         wm16(IMR as usize, 0); // polled
 
-        // LED config (RTL8168H/8111H LED_CTRL @ 0x18). Empirically (operator, 2026-09-10)
-        // the green link LED lights on cable-plug then GOES DARK once heqk runs — because the
-        // old value 0x0480 set LED0's nibble to 0 (off), and the green pin is LED0 (the ONLY
-        // LED dark at a settled 1000 Mbps link under both POR 0x0ca9 and 0x0480). Drive LED0
-        // AND LED2 = any-link (Link10|100|1000 = 0x7) so the green stays SOLID at any speed,
-        // whichever pin it is; LED1 = Activity. Unlock CFG9346 first — this chip gates the
-        // 0x18 write behind it (the earlier "no CFG9346 gate" note was wrong, so the write
-        // was landing but with LED0=0). Nibbles: LED2=0x7, LED1=0x8(Act), LED0=0x7.
+        // LED config (RTL8168H/8111H LED_CTRL @ 0x18). Empirically narrowed (operator,
+        // 2026-09-10): with 0x0787 (LED0/LED2=any-link, LED1=Act) the board showed SOLID AMBER
+        // and NO green — so the amber pin is LED0/LED2 and the GREEN pin is LED1 (which was
+        // Activity-only => dark at idle, matching "green dark" under both 0x0480 and 0x0787).
+        // Fix: LED1 = any-link (SOLID GREEN on link at any speed), LED0/LED2 = Activity (amber
+        // blink on traffic). Nibbles: LED2=0x8, LED1=0x7, LED0=0x8 -> 0x0878. Unlock CFG9346
+        // around the 0x18 write. LED_DIAG.1 now holds the register READ-BACK to confirm it stuck.
         let led_por = m16(LED_CTRL);
         wm8(CFG9346, 0xC0); // unlock config/LED registers
-        let led_new = (led_por & 0xF000) | 0x0787; // LED0=any-link, LED1=Act, LED2=any-link
-        wm16(LED_CTRL, led_new);
+        let led_want = (led_por & 0xF000) | 0x0878; // LED1=any-link(green), LED0/LED2=Act(amber)
+        wm16(LED_CTRL, led_want);
         wm8(CFG9346, 0x00); // re-lock
-        LED_DIAG = (led_por, led_new, m8(PHYSTATUS) as u16);
+        LED_DIAG = (led_por, m16(LED_CTRL), m8(PHYSTATUS) as u16); // read back the actual value
     }
 }
 
