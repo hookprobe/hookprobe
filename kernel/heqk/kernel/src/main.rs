@@ -4154,6 +4154,9 @@ pub extern "C" fn kmain() -> ! {
     // --- P8/L7 oracle close (XC-11/DET-1): verifier refuses a scalar payload_match ptr;
     // the interpreter bounds the helper's read to the packet (no kernel-read oracle)
     p8_l7oracle();
+    // --- DET-2: the per-rule authenticity GATE (the second dynamic-rule-load prereq) —
+    // a signed rule is admitted + verify_prevail'd; a tampered/wrong-sig rule is refused
+    p8_det2();
 
     // --- M2.4: L7 / behavioral OBSERVE-ONLY detectors — beacon/lateral/exfil/DNS all
     // detect (SOC sees them) but route decide()->Observe->PASS; NTP beacon exempt.
@@ -5974,6 +5977,44 @@ fn p8_l7oracle() -> bool {
         if vf == bpf::DROP { "DROP" } else { "PASS <- BUG" });
     kprint!(" [P8-l7oracle] {} — helper-arg kernel-read oracle CLOSED: verifier refuses a scalar ptr; interpreter bounds payload_match's read to the packet\n",
         if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// [P8-det2] DET-2 — the per-rule AUTHENTICITY GATE, the second prerequisite (with A4's
+/// oracle close) for any DYNAMIC/untrusted rule source (HYDRA-synced field updates from
+/// storage/network, not the image-signed static corpus). Proves: (a) an AUTHENTIC signed
+/// rule passes the gate AND then verify_prevail (memory-safe); (b) FAIL-CLOSED — a rule with
+/// one bytecode byte flipped is REFUSED at the gate BEFORE verify_prevail (broken provenance,
+/// even if the bytes are still valid BPF); (c) a WRONG signature is refused likewise. So an
+/// unsigned/tampered dynamic rule can never reach the verifier or the live datapath.
+#[cfg(not(feature = "cm5"))]
+fn p8_det2() -> bool {
+    let authentic = rules::rule_sig_ok(rules::DYN_RULE_BIN, rules::DYN_RULE_SIG);
+    // The gate ran first; now the admitted rule's bytecode (16 LE bytes) as [u64;2] for the
+    // memory-safety verifier — proving a gate-admitted rule is also verify_prevail-clean.
+    let mut b0 = [0u8; 8];
+    let mut b1 = [0u8; 8];
+    let safe = if rules::DYN_RULE_BIN.len() >= 16 {
+        b0.copy_from_slice(&rules::DYN_RULE_BIN[0..8]);
+        b1.copy_from_slice(&rules::DYN_RULE_BIN[8..16]);
+        let prog = [u64::from_le_bytes(b0), u64::from_le_bytes(b1)];
+        bpf::verify_prevail(&prog).is_ok()
+    } else {
+        false
+    };
+    // (b) tampered bytecode -> gate refuses (provenance broken), BEFORE verify_prevail.
+    let mut tampered = [0u8; 16];
+    tampered.copy_from_slice(&rules::DYN_RULE_BIN[..16]);
+    tampered[0] ^= 0x08;
+    let tamper_refused = !rules::rule_sig_ok(&tampered, rules::DYN_RULE_SIG);
+    // (c) authentic bytecode but a corrupted signature -> refused.
+    let mut badsig = [0u8; 64];
+    badsig.copy_from_slice(&rules::DYN_RULE_SIG[..64]);
+    badsig[0] ^= 0x01;
+    let badsig_refused = !rules::rule_sig_ok(rules::DYN_RULE_BIN, &badsig);
+    let ok = authentic && safe && tamper_refused && badsig_refused;
+    kprint!(" [P8-det2] {} — per-rule authenticity GATE (DET-2, the dynamic-rule-load prereq): signed rule AUTHENTIC={} + verify_prevail-safe={}; TAMPERED rule REFUSED before verify={}; WRONG-signature REFUSED={} — an unsigned/tampered dynamic rule never reaches the verifier or the datapath\n",
+        if ok { "PASS" } else { "FAIL" }, authentic, safe, tamper_refused, badsig_refused);
     ok
 }
 

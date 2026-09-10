@@ -29,6 +29,12 @@ fn main() {
     // no wat2wasm/external toolchain). See gen_fixture_wasm.
     gen_fixture_wasm(&std::env::var("OUT_DIR").unwrap());
 
+    // DET-2 (Track C) — the SIGNED dynamic-rule fixture the per-rule authenticity gate
+    // verifies ([P8-det2]). A minimal VALID BPF rule (R0=PASS; EXIT) + an Ed25519 signature
+    // over its bytecode under the pinned rule-signing root — the gate a future dynamic rule
+    // source (HYDRA-synced field updates) MUST pass BEFORE verify_prevail. See gen_fixture_rule.
+    gen_fixture_rule(&std::env::var("OUT_DIR").unwrap());
+
     // M5.3 (Track C) — the REAL wasmi runtime in an EL0 SERVER. Two build outputs, ONLY
     // under `wasmhost` (and not cm5): (1) a SIGNED trapping module fixture for the (c)
     // wasmi-trap-isolation proof; (2) the EL0 Wasm-host BINARY — a separate no_std crate
@@ -94,6 +100,28 @@ fn gen_fixture_wasm(out_dir: &str) {
     std::fs::write(dir.join("fixture_classify.wasm"), wasm).expect("write fixture wasm");
     std::fs::write(dir.join("fixture_classify.pk"), kp.pk.as_ref()).expect("write fixture pk");
     std::fs::write(dir.join("fixture_classify.sig"), sig.as_ref()).expect("write fixture sig");
+}
+
+// DET-2 — emit a minimal VALID BPF rule (R0=PASS; EXIT, 2 insns = 16 LE bytes) + an Ed25519
+// signature over its bytecode under the PINNED rule-signing root (dev seed [0xd2;32], distinct
+// from the wasm module root). The kernel's per-rule authenticity gate (rules::rule_sig_ok)
+// verifies this signature BEFORE verify_prevail — the gate a future DYNAMIC rule source
+// (HYDRA-synced field updates from storage/network) must pass; tampered/unsigned => refused.
+fn gen_fixture_rule(out_dir: &str) {
+    // insn(op,dst,src,off,imm) = op | dst<<8 | src<<12 | (off as u16 as u64)<<16 | (imm as u32 as u64)<<32
+    let mov: u64 = 0xb7 | (1u64 << 32); // MOV64_K R0, 1  (R0 = PASS)
+    let exit: u64 = 0x95; //               EXIT
+    let mut prog = Vec::with_capacity(16);
+    prog.extend_from_slice(&mov.to_le_bytes());
+    prog.extend_from_slice(&exit.to_le_bytes());
+
+    use ed25519_compact::{KeyPair, Seed};
+    let kp = KeyPair::from_seed(Seed::new([0xd2u8; 32]));
+    let sig = kp.sk.sign(&prog, None);
+    let dir = std::path::Path::new(out_dir);
+    std::fs::write(dir.join("fixture_rule.bin"), &prog).expect("write rule fixture");
+    std::fs::write(dir.join("fixture_rule.pk"), kp.pk.as_ref()).expect("write rule pk");
+    std::fs::write(dir.join("fixture_rule.sig"), sig.as_ref()).expect("write rule sig");
 }
 
 // A minimal, real ELF64/aarch64 ET_EXEC image with TWO PT_LOAD segments — the M5.1
