@@ -2593,34 +2593,60 @@ fn cm5_p10_probe() {
                     const AP_MODE: bool = true;
                     if AP_MODE {
                         const AP_SSID: &[u8] = b"heqk-ap";
-                        kprint!(" [P11-AP0] AP-mode bring-up: SSID \"heqk-ap\" ch6 (open)...\n");
+                        const AP_PSK: &[u8] = b"heqkwifi2026"; // WPA2 passphrase for heqk-ap
+                        kprint!(" [P11-AP2] WPA2-secured AP: SSID \"heqk-ap\" ch6 (PSK) — heqk is the authenticator...\n");
                         let mut ap = cyw43::ApResult::new();
-                        cyw43::ap_start(AP_SSID, 6, true, &mut ap);
-                        kprint!("   [P11-AP0] cap_has_ap={} down={} apsta={} set_ap={} infra={} chan={} wsec={} up={} ssid={} | get_ap_ok={} get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                            ap.cap_has_ap, ap.down_ok, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok,
-                            ap.wsec_ok, ap.up_ok, ap.ssid_ok, ap.get_ap_ok, ap.get_ap,
+                        cyw43::ap_start(AP_SSID, 6, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                        kprint!("   [P11-AP2] cap_has_ap={} apsta={} set_ap={} infra={} chan={} wsec={} wpa_auth={} up={} ssid={} | get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                            ap.cap_has_ap, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok, ap.wsec_ok,
+                            ap.wpa_auth_ok, ap.up_ok, ap.ssid_ok, ap.get_ap,
                             ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
                         if ap.get_ap == 1 && ap.ssid_ok {
-                            kprint!(" [P11-AP0] PASS(ap-config) — firmware in AP mode + BSS started; \"heqk-ap\" visible on a phone. Serving DHCP (10.99.0.1, offer .10) — join the phone; watch for O/K + 'connected'...\n");
+                            kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up; join \"heqk-ap\" with PSK \"heqkwifi2026\". Awaiting client + running the 4-way authenticator...\n");
                         } else {
-                            kprint!(" [P11-AP0] AP config INCOMPLETE (cap_has_ap={} get_ap={} ssid_ok={}) — see step acks above\n", ap.cap_has_ap, ap.get_ap, ap.ssid_ok);
+                            kprint!(" [P11-AP2] AP config INCOMPLETE (cap_has_ap={} get_ap={} ssid_ok={} wpa_auth={})\n", ap.cap_has_ap, ap.get_ap, ap.ssid_ok, ap.wpa_auth_ok);
                         }
-                        // M-AP-DHCP: serve the associated client a real lease so it leaves 169.254.
-                        let our_ip = [10u8, 99, 0, 1];
-                        let offer_ip = [10u8, 99, 0, 10];
-                        let mut dh = cyw43::ApDhcp::new();
-                        cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 220, &mut dh);
-                        kprint!(" [P11-AP-DHCP] arp_replies={} discovers={} offers_tx={} requests={} acks_tx={} | client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{}\n",
-                            dh.arp_replies, dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx,
-                            dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
-                            dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
-                        if dh.acks_tx > 0 {
-                            kprint!(" [P11-AP-DHCP] PASS(ap-dhcp) — heqk (as AP) LEASED {}.{}.{}.{} to a client over its own WiFi — AP data path is LIVE bidirectionally\n",
-                                dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
-                        } else if dh.discovers > 0 {
-                            kprint!(" [P11-AP-DHCP] saw DISCOVER (RX ok) but no ACK — OFFER TX or REQUEST path to diagnose\n");
+                        // PMK for our SSID+PSK; GTK from the HW TRNG (fail-closed).
+                        let pmk = arch_aarch64::wpa::wpa_pmk(AP_PSK, AP_SSID);
+                        let mut gtk = [0u8; 16];
+                        let mut gtk_ok = true;
+                        for k in 0..2 {
+                            match arch_aarch64::rng200::next_word_strict() {
+                                Some(w) => gtk[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+                                None => gtk_ok = false,
+                            }
+                        }
+                        if !gtk_ok {
+                            kprint!(" [P11-AP2] GTK TRNG failed — abort\n");
+                            return;
+                        }
+                        if let Some(sta) = cyw43::ap_wait_assoc(400) {
+                            kprint!("   [P11-AP2] client associated {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — running WPA2 4-way authenticator\n",
+                                sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                            let mut auth = cyw43::ApAuth::new();
+                            cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
+                            kprint!("   [P11-AP2 auth] m1_tx={} m2_rx={} m2_mic={} m3_tx={} m4_rx={} m4_mic={} ptk_set={} gtk_set={}\n",
+                                auth.m1_tx, auth.m2_rx, auth.m2_mic_ok, auth.m3_tx, auth.m4_rx, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set);
+                            if auth.ptk_set && auth.gtk_set {
+                                kprint!(" [P11-AP2] PASS(ap-wpa2) — heqk-as-AP completed the WPA2 4-way + installed per-station PTK + GTK. Serving DHCP...\n");
+                                let our_ip = [10u8, 99, 0, 1];
+                                let offer_ip = [10u8, 99, 0, 10];
+                                let mut dh = cyw43::ApDhcp::new();
+                                cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 220, &mut dh);
+                                kprint!(" [P11-AP-DHCP] discovers={} offers_tx={} requests={} acks_tx={} leased {}.{}.{}.{}\n",
+                                    dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx,
+                                    dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                                if dh.acks_tx > 0 {
+                                    kprint!(" [P11-AP2] PASS(wpa2-e2e) — a WPA2-SECURED client leased {}.{}.{}.{} over heqk's own AP — heqk is a full authenticator+AP end-to-end\n",
+                                        dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                                }
+                            } else if auth.m2_rx && !auth.m2_mic_ok {
+                                kprint!(" [P11-AP2] M2 MIC FAILED — client PSK mismatch OR PTK aa/spa/nonce order bug\n");
+                            } else {
+                                kprint!(" [P11-AP2] 4-way incomplete (see auth diag) — likely M2/M4 not received in window\n");
+                            }
                         } else {
-                            kprint!(" [P11-AP-DHCP] no client DHCP seen (arp={}) — client may not have (re)associated in the window\n", dh.arp_replies);
+                            kprint!(" [P11-AP2] no client associated in the window — join heqk-ap with PSK heqkwifi2026\n");
                         }
                         return;
                     }
