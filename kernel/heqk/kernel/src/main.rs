@@ -335,6 +335,19 @@ static mut WASIP1_A_SKS: KStack = KStack([0; KSTACK_SIZE]);
 static mut WASIP1_B_HKS: KStack = KStack([0; KSTACK_SIZE]);
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 static mut WASIP1_B_SKS: KStack = KStack([0; KSTACK_SIZE]);
+// A2+ — the DNS-RPZ catalogue module's two hosts (C: blocklisted qname -> DROP; D: benign -> PASS).
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASIP1_RES_C: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASIP1_RES_D: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_C_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_C_SKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_D_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASIP1_D_SKS: KStack = KStack([0; KSTACK_SIZE]);
 
 // --- M5.4 (Track C) — DETECTION-at-PARITY host (ADR 0044 D4 #4, small scale). The SAME
 // el0-wasmhost binary runs a signed DETECTION module (linear memory + hp_input/hp_emit
@@ -7803,9 +7816,40 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                     let wp_b = WASIP1_TAMPER_NOSPAWN.load(Ordering::SeqCst);
                     kprint!(" [P-wasip1] {} — REAL wasm32-wasip1 STD module (stdin/stdout, the PRODUCTION module shape) via wasmi in an ISOLATED EL0 host over the WASI preview1 ABI (fd_read/fd_write/environ_*/proc_exit): dst-port 4444 -> {} (want DROP=2), dst-port 443 -> {} (want PASS=1) — read from STDIN, verdict to STDOUT, returned over the enforced Endpoint-cap IPC; (b) a BAD-SIGNATURE module REFUSED before EL0 hand-off={} [ADR 0044 D4 #4: the real WASI 0.2/wasm32-wasip1 ABI (napse-dpi/dnsxai/qsecbit are wasip1 stdin/stdout binaries), NOT the bespoke hp_input/hp_emit shim; QEMU-proven, wasmi OUT of the kernel TCB; metal = a future cm5 concern (a MiB-scale heap needs a bigger window than the GB5 2 MiB)]\n",
                         if wp_a && wp_b { "PASS" } else { "FAIL" }, wa, wb, wp_b);
+
+                    // A2+ — the 2-module signed CATALOGUE: a SECOND, DISTINCT detection module
+                    // (DNS-RPZ) run through the SAME wasip1 host. host C on a blocklisted
+                    // SUBDOMAIN -> DROP(2), host D on a benign name -> PASS(1), each verified
+                    // against the in-kernel dnssink::rpz_blocked reference (computed inline —
+                    // the dnssink feature isn't in this build). Proves the host runs a
+                    // CATALOGUE of distinct signed rules, not one hardwired predicate.
+                    fn rpz_ref(name: &[u8]) -> bool {
+                        const RPZ: &[&[u8]] = &[b"malware.example", b"ads.tracker", b"c2.evil.test"];
+                        for &b in RPZ {
+                            if name == b {
+                                return true;
+                            }
+                            if name.len() > b.len() + 1 {
+                                let s = name.len() - b.len();
+                                if &name[s..] == b && name[s - 1] == b'.' {
+                                    return true;
+                                }
+                            }
+                        }
+                        false
+                    }
+                    let rc = WASIP1_RES_C.load(Ordering::SeqCst);
+                    let rd = WASIP1_RES_D.load(Ordering::SeqCst);
+                    let vc = if rc != 0 { (unsafe { read_volatile(rc as *const u64) }) as u32 } else { 0 };
+                    let vd = if rd != 0 { (unsafe { read_volatile(rd as *const u64) }) as u32 } else { 0 };
+                    let ref_c = if rpz_ref(b"host.malware.example") { 2u32 } else { 1 };
+                    let ref_d = if rpz_ref(b"good.example.com") { 2u32 } else { 1 };
+                    let cat_ok = vc == ref_c && vd == ref_d && vc == 2 && vd == 1;
+                    kprint!(" [P-wasip1-cat] {} — 2-module signed CATALOGUE via the ONE wasip1 host: a DISTINCT DNS-RPZ module (not the port-signature one, same WASI ABI) 'host.malware.example' -> {} (kernel rpz_blocked ref={} => DROP=2), 'good.example.com' -> {} (ref={} => PASS=1) — verdicts == in-kernel dnssink::rpz_blocked case-for-case; the portable-signed-rule catalogue on heqk\n",
+                        if cat_ok { "PASS" } else { "FAIL" }, vc, ref_c, vd, ref_d);
                 }
                 #[cfg(feature = "wasmhost")]
-                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity P-wasip1 GREEN\n");
+                kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity P-wasip1 P-wasip1-cat GREEN\n");
                 #[cfg(not(feature = "wasmhost"))]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf GREEN\n");
                 arch_aarch64::semihosting::exit(0);
@@ -9481,6 +9525,28 @@ fn m5_wasip1_el0_spawn() {
         WASIP1_RES_B.store(spawn_ipc_result_server(&mmu, eh, 9, sks), Ordering::SeqCst);
         let hks = unsafe { core::ptr::addr_of!(WASIP1_B_HKS) as usize + KSTACK_SIZE };
         let _ = bringup_wasip1_el0(&mmu, &parsed, module, &hdr_b, eh, 8, hks);
+    }
+
+    // A2+ — the SECOND catalogue module: DNS-RPZ (distinct detection, same wasip1 ABI + same
+    // signed-verify-before-EL0 trust root). Two hosts prove it COMPUTES + matches the in-kernel
+    // dnssink::rpz_blocked: host C on a blocklisted SUBDOMAIN -> DROP(2), host D on a benign
+    // name -> PASS(1). Same host ELF, different (verified) module bytes + stdin.
+    let (dwasm, dpk, dsig) = wasmhost::fixture_wasip1_dnsrpz();
+    if let Some(dmod) = wasmhost::verified_module(dwasm, dpk, dsig) {
+        let blk = b"host.malware.example"; // subdomain of a blocked domain -> DROP
+        let ben = b"good.example.com"; //     not blocked -> PASS
+        if let Some(eh) = ipc::ep_create() {
+            let sks = unsafe { core::ptr::addr_of!(WASIP1_C_SKS) as usize + KSTACK_SIZE };
+            WASIP1_RES_C.store(spawn_ipc_result_server(&mmu, eh, 9, sks), Ordering::SeqCst);
+            let hks = unsafe { core::ptr::addr_of!(WASIP1_C_HKS) as usize + KSTACK_SIZE };
+            let _ = bringup_wasip1_el0(&mmu, &parsed, dmod, blk, eh, 8, hks);
+        }
+        if let Some(eh) = ipc::ep_create() {
+            let sks = unsafe { core::ptr::addr_of!(WASIP1_D_SKS) as usize + KSTACK_SIZE };
+            WASIP1_RES_D.store(spawn_ipc_result_server(&mmu, eh, 9, sks), Ordering::SeqCst);
+            let hks = unsafe { core::ptr::addr_of!(WASIP1_D_HKS) as usize + KSTACK_SIZE };
+            let _ = bringup_wasip1_el0(&mmu, &parsed, dmod, ben, eh, 8, hks);
+        }
     }
     EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase: faults restart
 }
