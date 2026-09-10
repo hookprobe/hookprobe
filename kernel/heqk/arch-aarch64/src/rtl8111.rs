@@ -580,14 +580,19 @@ pub fn mac_start() {
         wm32(RXCFG, (read_volatile((RTL_MMIO + RXCFG) as *const u32) & !0xF) | 0x0E); // B|MyPhys|Mcast
         wm16(IMR as usize, 0); // polled
 
-        // LED config (RTL8168H/8111H LED_CTRL @ 0x18, r8169-verified — no CFG9346 gate).
-        // Schematic-verified wiring on the Waveshare CM5-DUAL-ETH-MINI (RJ1A / IC1):
-        // GREEN = LED2 (pin25), AMBER = LED1 (pin26), LED0 (pin27) = unused/floating.
-        // So drive LED2 = Link1000 (solid green on a gigabit link) and LED1 = Activity
-        // (amber blink on traffic). Nibbles: LED2[11:8]=0x4, LED1[7:4]=0x8, LED0[3:0]=0.
+        // LED config (RTL8168H/8111H LED_CTRL @ 0x18). Empirically (operator, 2026-09-10)
+        // the green link LED lights on cable-plug then GOES DARK once heqk runs — because the
+        // old value 0x0480 set LED0's nibble to 0 (off), and the green pin is LED0 (the ONLY
+        // LED dark at a settled 1000 Mbps link under both POR 0x0ca9 and 0x0480). Drive LED0
+        // AND LED2 = any-link (Link10|100|1000 = 0x7) so the green stays SOLID at any speed,
+        // whichever pin it is; LED1 = Activity. Unlock CFG9346 first — this chip gates the
+        // 0x18 write behind it (the earlier "no CFG9346 gate" note was wrong, so the write
+        // was landing but with LED0=0). Nibbles: LED2=0x7, LED1=0x8(Act), LED0=0x7.
         let led_por = m16(LED_CTRL);
-        let led_new = (led_por & 0xF000) | 0x0480; // LED2=Link1000(green), LED1=Act(amber)
+        wm8(CFG9346, 0xC0); // unlock config/LED registers
+        let led_new = (led_por & 0xF000) | 0x0787; // LED0=any-link, LED1=Act, LED2=any-link
         wm16(LED_CTRL, led_new);
+        wm8(CFG9346, 0x00); // re-lock
         LED_DIAG = (led_por, led_new, m8(PHYSTATUS) as u16);
     }
 }
