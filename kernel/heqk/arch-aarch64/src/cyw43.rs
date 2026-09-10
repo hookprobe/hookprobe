@@ -2269,8 +2269,18 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     let nmb = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut mb);
     let _ = bcdc_iovar_set(&mb[..nmb]);
 
-    // Channel (legacy ioctl — avoids the fiddly chanspec encoding for bring-up).
-    out.chan_ok = wlc_set_int(WLC_SET_CHANNEL, channel);
+    // Channel + WIDTH via the "chanspec" iovar — the mechanism brcmfmac AP mode uses (a bare
+    // WLC_SET_CHANNEL leaves the width/ctl-sideband unset). d11ac chanspec = chan | BW_20 |
+    // CTL_SB_NONE | band; 2.4 GHz (ch<=14) band=0x0000, 5 GHz band=0xc000; BW_20=0x1000.
+    let band: u16 = if channel <= 14 { 0x0000 } else { 0xc000 };
+    let chanspec: u16 = (channel as u16 & 0x00ff) | 0x1000 | band; // BW_20, CTL_SB_NONE
+    let mut csb = [0u8; 32];
+    let ncs = iovar_buf(b"chanspec", &chanspec.to_le_bytes(), &mut csb);
+    out.chan_ok = bcdc_iovar_set(&csb[..ncs]);
+    if !out.chan_ok {
+        // Fallback to the legacy channel ioctl if the fw rejects the chanspec encoding.
+        out.chan_ok = wlc_set_int(WLC_SET_CHANNEL, channel);
+    }
 
     // Security suite for the BSS.
     let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
