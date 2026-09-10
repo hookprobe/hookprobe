@@ -2737,7 +2737,11 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                             }
                         }
                         // Linger a short window to catch a deauth (rejected handshake/keys).
-                        m4_deadline = i + 400;
+                        // Each post-M4 read is DRY (handshake done, no EAPOL) and burns the
+                        // full read_sdpcm_frame dry-timeout (~1.5s), so keep the window small:
+                        // 20 reads ≈ 30s worst-case, and a real deauth returns fast. (400 here
+                        // made the loop take ~10 min — slow, not hung: the earlier false alarm.)
+                        m4_deadline = i + 20;
                     }
                 }
             }
