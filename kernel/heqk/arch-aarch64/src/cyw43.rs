@@ -2851,6 +2851,216 @@ pub fn wifi_ping(sta_ip: &[u8; 4], gw_ip: &[u8; 4], inet_ip: &[u8; 4], out: &mut
 }
 
 // ===========================================================================
+// P10-E L4 VALIDATION — routed UDP (DNS) and stateful TCP (SYN->SYN/ACK) through
+// the AP's NAT conntrack. ICMP already proved L3+NAT; this proves the transport
+// layer: a real DNS A-record resolve and a TCP 3-way-handshake half-open.
+// ===========================================================================
+
+pub struct L4Result {
+    pub gw_mac: [u8; 6],
+    pub dns_server: [u8; 4],
+    pub dns_tx: bool,
+    pub dns_reply: bool,
+    pub dns_answer_ip: [u8; 4], // first A record in the response
+    pub tcp_target: [u8; 4],
+    pub tcp_port: u16,
+    pub tcp_syn_tx: bool,
+    pub tcp_synack: bool,
+}
+
+impl L4Result {
+    pub fn new() -> Self {
+        L4Result {
+            gw_mac: [0; 6], dns_server: [0; 4], dns_tx: false, dns_reply: false, dns_answer_ip: [0; 4],
+            tcp_target: [0; 4], tcp_port: 0, tcp_syn_tx: false, tcp_synack: false,
+        }
+    }
+}
+
+/// Fill the ethernet + IPv4 header for an L4 datagram of proto `proto` with `l4len` bytes of L4
+/// payload; returns the offset where the L4 header begins (34). Computes the IPv4 checksum.
+fn fill_eth_ip(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: usize) -> usize {
+    buf[0..6].copy_from_slice(dst_mac);
+    buf[6..12].copy_from_slice(mac);
+    buf[12] = 0x08; buf[13] = 0x00;
+    buf[14] = 0x45; buf[15] = 0x00;
+    let iplen = (20 + l4len) as u16;
+    buf[16..18].copy_from_slice(&iplen.to_be_bytes());
+    buf[22] = 64; buf[23] = proto;
+    buf[24] = 0; buf[25] = 0;
+    buf[26..30].copy_from_slice(sip);
+    buf[30..34].copy_from_slice(dip);
+    let ipc = inet_csum(&buf[14..34], 0);
+    buf[24..26].copy_from_slice(&ipc.to_be_bytes());
+    34
+}
+
+/// Ones-complement sum of the IPv4 pseudo-header (src+dst+zero+proto+l4len) for TCP/UDP csum.
+fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
+    let mut s = 0u32;
+    s += u16::from_be_bytes([sip[0], sip[1]]) as u32;
+    s += u16::from_be_bytes([sip[2], sip[3]]) as u32;
+    s += u16::from_be_bytes([dip[0], dip[1]]) as u32;
+    s += u16::from_be_bytes([dip[2], dip[3]]) as u32;
+    s += proto as u32;
+    s += l4len as u32;
+    s
+}
+
+/// Build a DNS A-query for `dns.google` to `dns_ip`:53 over UDP. Returns the frame length.
+fn build_dns_query(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dns_ip: &[u8; 4], sport: u16, id: u16) -> usize {
+    for b in buf[..80].iter_mut() { *b = 0; }
+    // DNS payload at 42 (14 eth + 20 ip + 8 udp)
+    let d = 42;
+    buf[d..d + 2].copy_from_slice(&id.to_be_bytes());
+    buf[d + 2] = 0x01; buf[d + 3] = 0x00; // flags: RD
+    buf[d + 5] = 1;                        // qdcount = 1
+    // qname: 3"dns" 6"google" 0
+    let q = d + 12;
+    buf[q] = 3; buf[q + 1..q + 4].copy_from_slice(b"dns");
+    buf[q + 4] = 6; buf[q + 5..q + 11].copy_from_slice(b"google");
+    buf[q + 11] = 0;
+    let mut o = q + 12;
+    buf[o] = 0x00; buf[o + 1] = 0x01; // qtype A
+    buf[o + 2] = 0x00; buf[o + 3] = 0x01; // qclass IN
+    o += 4;
+    let dns_len = o - d;
+    let udp = 34;
+    buf[udp..udp + 2].copy_from_slice(&sport.to_be_bytes());
+    buf[udp + 2..udp + 4].copy_from_slice(&53u16.to_be_bytes());
+    let udplen = (8 + dns_len) as u16;
+    buf[udp + 4..udp + 6].copy_from_slice(&udplen.to_be_bytes());
+    fill_eth_ip(buf, mac, dst_mac, sip, dns_ip, 17, udplen as usize);
+    let mut c = inet_csum(&buf[34..34 + udplen as usize], pseudo_sum(sip, dns_ip, 17, udplen));
+    if c == 0 { c = 0xffff; }
+    buf[udp + 6..udp + 8].copy_from_slice(&c.to_be_bytes());
+    o
+}
+
+/// Parse a DNS response from :53 to `sport` matching `id`; extract the first A record into `ip`.
+fn parse_dns_response(eth: &[u8], sport: u16, id: u16, ip: &mut [u8; 4]) -> bool {
+    if eth.len() < 42 + 12 { return false; }
+    if eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 17 { return false; }
+    let ihl = ((eth[14] & 0x0f) as usize) * 4;
+    let l4 = 14 + ihl;
+    if l4 + 8 > eth.len() { return false; }
+    if u16::from_be_bytes([eth[l4], eth[l4 + 1]]) != 53 { return false; }
+    if u16::from_be_bytes([eth[l4 + 2], eth[l4 + 3]]) != sport { return false; }
+    let d = l4 + 8;
+    if d + 12 > eth.len() { return false; }
+    if u16::from_be_bytes([eth[d], eth[d + 1]]) != id { return false; }
+    let ancount = u16::from_be_bytes([eth[d + 6], eth[d + 7]]);
+    if ancount == 0 { return false; }
+    // Skip the question: qname labels until 0, then qtype(2)+qclass(2).
+    let mut p = d + 12;
+    while p < eth.len() && eth[p] != 0 { p += 1 + eth[p] as usize; }
+    p += 1 + 4;
+    // Walk answers.
+    let mut a = 0;
+    while a < ancount && p + 12 <= eth.len() {
+        // name: compression pointer (0xc0) => 2 bytes, else labels until 0.
+        if eth[p] & 0xc0 == 0xc0 { p += 2; } else { while p < eth.len() && eth[p] != 0 { p += 1 + eth[p] as usize; } p += 1; }
+        if p + 10 > eth.len() { return false; }
+        let atype = u16::from_be_bytes([eth[p], eth[p + 1]]);
+        let rdlen = u16::from_be_bytes([eth[p + 8], eth[p + 9]]) as usize;
+        p += 10;
+        if p + rdlen > eth.len() { return false; }
+        if atype == 1 && rdlen == 4 {
+            ip.copy_from_slice(&eth[p..p + 4]);
+            return true;
+        }
+        p += rdlen;
+        a += 1;
+    }
+    false
+}
+
+/// Build a TCP SYN to `dip`:`dport`. Returns the frame length (14+20+20=54).
+fn build_tcp_syn(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], sport: u16, dport: u16, seq: u32) -> usize {
+    for b in buf[..54].iter_mut() { *b = 0; }
+    let t = 34;
+    buf[t..t + 2].copy_from_slice(&sport.to_be_bytes());
+    buf[t + 2..t + 4].copy_from_slice(&dport.to_be_bytes());
+    buf[t + 4..t + 8].copy_from_slice(&seq.to_be_bytes());
+    buf[t + 12] = 0x50; // data offset = 5 (20B), no options
+    buf[t + 13] = 0x02; // flags = SYN
+    buf[t + 14..t + 16].copy_from_slice(&0xffffu16.to_be_bytes()); // window
+    fill_eth_ip(buf, mac, dst_mac, sip, dip, 6, 20);
+    let c = inet_csum(&buf[34..54], pseudo_sum(sip, dip, 6, 20));
+    buf[t + 16..t + 18].copy_from_slice(&c.to_be_bytes());
+    54
+}
+
+/// True if `eth` is a TCP SYN/ACK from `peer`:`peer_port` to our `sport`.
+fn parse_tcp_synack(eth: &[u8], peer: &[u8; 4], peer_port: u16, sport: u16) -> bool {
+    if eth.len() < 54 || eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 6 { return false; }
+    if &eth[26..30] != &peer[..] { return false; }
+    let ihl = ((eth[14] & 0x0f) as usize) * 4;
+    let l4 = 14 + ihl;
+    if l4 + 14 > eth.len() { return false; }
+    if u16::from_be_bytes([eth[l4], eth[l4 + 1]]) != peer_port { return false; }
+    if u16::from_be_bytes([eth[l4 + 2], eth[l4 + 3]]) != sport { return false; }
+    eth[l4 + 13] & 0x12 == 0x12 // SYN+ACK
+}
+
+/// L4 validation: a DNS A-resolve of dns.google and a TCP SYN half-open, both to 8.8.8.8
+/// through the AP NAT. Requires an active lease + the gateway MAC (from wifi_ping).
+pub fn wifi_l4probe(sta_ip: &[u8; 4], gw_mac: &[u8; 6], out: &mut L4Result) {
+    out.gw_mac = *gw_mac;
+    out.dns_server = [8, 8, 8, 8];
+    out.tcp_target = [8, 8, 8, 8];
+    out.tcp_port = 53;
+    let mut mac = [0u8; 6];
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut mac);
+    let ctr: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ctr, options(nomem, nostack)) };
+    let sport = 0xC000 | (ctr as u16 & 0x0fff); // ephemeral port
+    let mut pkt = [0u8; 128];
+    let mut rx = [0u8; 2048];
+
+    // 1. DNS A-query for dns.google.
+    let id = 0x4845u16;
+    let n = build_dns_query(&mut pkt, &mac, gw_mac, sta_ip, &out.dns_server, sport, id);
+    out.dns_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'N');
+    let mut i = 0u32;
+    while i < 160 {
+        i += 1;
+        if i % 40 == 0 { let _ = sdpcm_data_tx(&pkt[..n]); }
+        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if ch != 2 { continue; }
+        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if eth + 14 > rx.len() { continue; }
+        if parse_dns_response(&rx[eth..], sport, id, &mut out.dns_answer_ip) {
+            out.dns_reply = true;
+            dbg_putc(b'n');
+            break;
+        }
+    }
+
+    // 2. TCP SYN to 8.8.8.8:53, expect SYN/ACK.
+    let sport2 = sport ^ 0x0111;
+    let seq = ctr as u32;
+    let n = build_tcp_syn(&mut pkt, &mac, gw_mac, sta_ip, &out.tcp_target, sport2, out.tcp_port, seq);
+    out.tcp_syn_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'T');
+    let mut i = 0u32;
+    while i < 160 {
+        i += 1;
+        if i % 40 == 0 { let _ = sdpcm_data_tx(&pkt[..n]); }
+        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if ch != 2 { continue; }
+        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if eth + 14 > rx.len() { continue; }
+        if parse_tcp_synack(&rx[eth..], &out.tcp_target, out.tcp_port, sport2) {
+            out.tcp_synack = true;
+            dbg_putc(b't');
+            break;
+        }
+    }
+}
+
+// ===========================================================================
 // P10-E WPA2 HOST SUPPLICANT (the firmware has no idsup — we run the 4-way HS).
 // Increment S1: derive the PTK from the captured M1, build + send M2, watch for M3.
 // ===========================================================================

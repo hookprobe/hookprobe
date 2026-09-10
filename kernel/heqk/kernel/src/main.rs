@@ -2680,6 +2680,24 @@ fn cm5_p10_probe() {
                             if pg.inet_ping_reply {
                                 kprint!(" [P10-E] PASS(wifi-internet) — heqk ICMP round-trip to {}.{}.{}.{} through the AP's NAT (ttl={}) — real internet data over WPA2 WiFi\n",
                                     inet[0], inet[1], inet[2], inet[3], pg.inet_ttl);
+                                // --- L4: routed UDP (DNS) + stateful TCP (SYN->SYN/ACK) through NAT.
+                                if pg.arp_reply {
+                                    kprint!(" [P10-E] L4: DNS A dns.google @8.8.8.8, TCP SYN 8.8.8.8:53...\n");
+                                    let mut l4 = cyw43::L4Result::new();
+                                    cyw43::wifi_l4probe(&dh.yiaddr, &pg.gw_mac, &mut l4);
+                                    kprint!("   [P10-E l4] dns_tx={} dns_reply={} answer {}.{}.{}.{} | tcp_syn_tx={} tcp_synack={} ({}.{}.{}.{}:{})\n",
+                                        l4.dns_tx, l4.dns_reply, l4.dns_answer_ip[0], l4.dns_answer_ip[1], l4.dns_answer_ip[2], l4.dns_answer_ip[3],
+                                        l4.tcp_syn_tx, l4.tcp_synack, l4.tcp_target[0], l4.tcp_target[1], l4.tcp_target[2], l4.tcp_target[3], l4.tcp_port);
+                                    if l4.dns_reply && l4.tcp_synack {
+                                        kprint!(" [P10-E] PASS(wifi-l4) — routed DNS resolve + TCP 3-way through NAT: heqk speaks UDP+TCP to the internet over WPA2 WiFi\n");
+                                    } else if l4.dns_reply {
+                                        kprint!(" [P10-E] DNS resolve OK (routed UDP), TCP SYN/ACK not seen — conntrack/TCP to diagnose\n");
+                                    } else if l4.tcp_synack {
+                                        kprint!(" [P10-E] TCP 3-way OK, DNS reply not seen — UDP/53 path to diagnose\n");
+                                    } else {
+                                        kprint!(" [P10-E] L4 no replies (dns_tx={} tcp_syn_tx={}) — to diagnose\n", l4.dns_tx, l4.tcp_syn_tx);
+                                    }
+                                }
                             } else if pg.gw_ping_reply {
                                 kprint!(" [P10-E] gw ping OK (L3 on-link) but no internet reply — NAT/upstream to diagnose\n");
                             } else if pg.arp_reply {
