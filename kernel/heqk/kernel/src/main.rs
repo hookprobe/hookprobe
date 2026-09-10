@@ -2586,6 +2586,35 @@ fn cm5_p10_probe() {
                     } else {
                         kprint!(" [P10-D] scan armed (up={} escan={}); no AP frames parsed — see scan diag\n", sd[2], sd[3]);
                     }
+                    // P11 M-AP0: AP-mode bring-up (compile-time switch — runs INSTEAD of the STA
+                    // join). heqk becomes the WiFi authenticator (gap #4). The FullMAC firmware
+                    // makes beacons/auth/assoc itself; M-AP0 just proves it enters AP mode + the
+                    // BSS beacons (validated by an attending operator seeing the SSID on a phone).
+                    const AP_MODE: bool = true;
+                    if AP_MODE {
+                        const AP_SSID: &[u8] = b"heqk-ap";
+                        kprint!(" [P11-AP0] AP-mode bring-up: SSID \"heqk-ap\" ch6 (open)...\n");
+                        let mut ap = cyw43::ApResult::new();
+                        cyw43::ap_start(AP_SSID, 6, true, &mut ap);
+                        kprint!("   [P11-AP0] cap_has_ap={} down={} apsta={} set_ap={} infra={} chan={} wsec={} up={} ssid={} | get_ap_ok={} get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                            ap.cap_has_ap, ap.down_ok, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok,
+                            ap.wsec_ok, ap.up_ok, ap.ssid_ok, ap.get_ap_ok, ap.get_ap,
+                            ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+                        if ap.get_ap == 1 && ap.ssid_ok {
+                            kprint!(" [P11-AP0] PASS(ap-config) — firmware in AP mode + BSS started; the \"heqk-ap\" SSID should now be visible on a phone WiFi scan. Watching ~90s for client events (open-join a phone to see 'C')...\n");
+                        } else {
+                            kprint!(" [P11-AP0] AP config INCOMPLETE (cap_has_ap={} get_ap={} ssid_ok={}) — see step acks above\n", ap.cap_has_ap, ap.get_ap, ap.ssid_ok);
+                        }
+                        let mut sta = [0u8; 6];
+                        let assoc = cyw43::ap_watch_events(60, &mut sta);
+                        kprint!(" [P11-AP0] watch done: assoc_ind={} last_sta {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                            assoc, sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                        if assoc > 0 {
+                            kprint!(" [P11-AP1] PASS(ap-assoc) — a client 802.11-associated to heqk's AP (station MAC above)\n");
+                        }
+                        return;
+                    }
+
                     // P10-E: WPA2 join to the existing hookprobe AP + DATA-PATH proof. This
                     // firmware has no in-fw supplicant (cap string, iters 1-5): after 802.11
                     // assoc the AP sends EAPOL-Key M1 over SDPCM channel 2. Capturing it proves
