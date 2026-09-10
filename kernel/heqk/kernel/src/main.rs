@@ -2618,6 +2618,12 @@ fn cm5_p10_probe() {
                     kprint!("\n");
                     kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} | post_m2_eapol={} last_ki={:#06x} | deauth={} reason={}\n",
                         hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.post_m2_eapol, hs.last_eapol_ki, hs.deauth_after, hs.deauth_reason);
+                    // Raw frames for offline verification (parse offsets + recompute the MIC).
+                    kprint!("   [P10-E M1raw]");
+                    for k in 0..jr.eapol_len.min(72) { kprint!("{:02x}", jr.eapol[k]); }
+                    kprint!("\n   [P10-E M2raw]");
+                    for k in 0..hs.m2_len { kprint!("{:02x}", hs.m2_dump[k]); }
+                    kprint!("\n");
                     if hs.m3_seen {
                         kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED inline — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
                     } else if hs.m2_tx_ok && hs.deauth_after {
