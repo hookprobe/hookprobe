@@ -2620,35 +2620,41 @@ fn cm5_p10_probe() {
                             kprint!(" [P11-AP2] GTK TRNG failed — abort\n");
                             return;
                         }
-                        if let Some(sta) = cyw43::ap_wait_assoc(400) {
-                            kprint!("   [P11-AP2] client associated {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — running WPA2 4-way authenticator\n",
+                        // M-AP3: PERSISTENT AP serve loop — heqk IS the AP now. Every (re)association
+                        // (WLC_E_ASSOC_IND) drives a fresh 4-way + a DHCP lease, forever. Fixes the
+                        // one-shot bring-up where a disconnect/rejoin was unhandled (looked like a
+                        // wrong password). Single-client pool (10.99.0.10) — the reconnecting phone
+                        // re-keys + re-leases; a multi-client pool is a follow-up.
+                        kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — handling (re)joins continuously\n");
+                        let our_ip = [10u8, 99, 0, 1];
+                        let offer_ip = [10u8, 99, 0, 10];
+                        loop {
+                            let sta = match cyw43::ap_wait_assoc(20000) {
+                                Some(s) => s,
+                                None => continue, // no join this window; keep beaconing + waiting
+                            };
+                            kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
                                 sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                             let mut auth = cyw43::ApAuth::new();
                             cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
-                            kprint!("   [P11-AP2 auth] m1_tx={} m2_rx={} m2_mic={} m3_tx={} m4_rx={} m4_mic={} ptk_set={} gtk_set={} authorized={}\n",
-                                auth.m1_tx, auth.m2_rx, auth.m2_mic_ok, auth.m3_tx, auth.m4_rx, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set, auth.authorized);
+                            kprint!("   [P11-AP3 auth] m2_mic={} m4_mic={} ptk_set={} gtk_set={} authorized={}\n",
+                                auth.m2_mic_ok, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set, auth.authorized);
                             if auth.ptk_set && auth.gtk_set {
-                                kprint!(" [P11-AP2] PASS(ap-wpa2) — heqk-as-AP completed the WPA2 4-way + installed per-station PTK + GTK. Serving DHCP...\n");
-                                let our_ip = [10u8, 99, 0, 1];
-                                let offer_ip = [10u8, 99, 0, 10];
                                 let mut dh = cyw43::ApDhcp::new();
-                                cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 220, &mut dh);
-                                kprint!(" [P11-AP-DHCP] discovers={} offers_tx={} requests={} acks_tx={} leased {}.{}.{}.{}\n",
-                                    dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx,
-                                    dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                                cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 160, &mut dh);
                                 if dh.acks_tx > 0 {
-                                    kprint!(" [P11-AP2] PASS(wpa2-e2e) — a WPA2-SECURED client leased {}.{}.{}.{} over heqk's own AP — heqk is a full authenticator+AP end-to-end\n",
-                                        dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                                    kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}) — WPA2 AP live, reconnect-capable\n",
+                                        dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
+                                        dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx);
+                                } else {
+                                    kprint!(" [P11-AP3] keyed but no lease this round (discovers={} offers={}) — will re-wait\n", dh.discovers, dh.offers_tx);
                                 }
                             } else if auth.m2_rx && !auth.m2_mic_ok {
-                                kprint!(" [P11-AP2] M2 MIC FAILED — client PSK mismatch OR PTK aa/spa/nonce order bug\n");
+                                kprint!(" [P11-AP3] M2 MIC failed (unexpected — PSK proven) — re-wait\n");
                             } else {
-                                kprint!(" [P11-AP2] 4-way incomplete (see auth diag) — likely M2/M4 not received in window\n");
+                                kprint!(" [P11-AP3] 4-way incomplete — re-wait for the next (re)assoc\n");
                             }
-                        } else {
-                            kprint!(" [P11-AP2] no client associated in the window — join heqk-ap with PSK heqkwifi2026\n");
                         }
-                        return;
                     }
 
                     // P10-E: WPA2 join to the existing hookprobe AP + DATA-PATH proof. This
