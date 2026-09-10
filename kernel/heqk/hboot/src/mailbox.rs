@@ -76,8 +76,13 @@ unsafe fn ivac(base: usize, len: usize) {
 /// its length). Returns true on a success response. Tries the VC-alias pointer
 /// then identity.
 unsafe fn transact(nwords: usize) -> bool {
-    let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
-    let phys = buf as usize;
+    transact_at(core::ptr::addr_of_mut!(MBOX_BUF) as usize, nwords)
+}
+
+/// Run one property transaction on the buffer at PHYS `phys` (already holds the request).
+/// Generalizes `transact` so the SEC-2 hvc proxy can run a transaction on EL1's OWN buffer.
+unsafe fn transact_at(phys: usize, nwords: usize) -> bool {
+    let buf = phys as *mut u32;
     // The VC pointer is 32-bit; both candidates require the buffer in the low
     // 1 GB. If HBoot were ever linked ≥1 GB the mask would silently truncate to
     // a DIFFERENT physical page — on a SET that means a garbage/irreversible
@@ -130,6 +135,55 @@ unsafe fn transact(nwords: usize) -> bool {
         }
     }
     false
+}
+
+/// SEC-2 / V3 — the EL2 mailbox PROXY, called from the `hvc #2` handler in boot.s. After
+/// the stage-2 carve, EL1 can no longer touch the VC mailbox MMIO directly; it hands us its
+/// property buffer's PHYS address (`pa`) + word count (`nwords`) and we run the transaction
+/// on its behalf — but ONLY for a WHITELIST of tags (the clock/power/reboot ops the kernel
+/// legitimately needs for WiFi + A/B tryboot). Any other tag — crucially GET_CUSTOMER_OTP
+/// / GET_BOARD_SERIAL — is REFUSED, so a compromised EL1 kernel cannot re-read the OTP secret
+/// to reconstruct the deterministic SRK/AK. A whitelist (not a blacklist) fails closed on any
+/// unknown/future tag. Returns 0 on RESP_OK; nonzero on bad-PA / refused-tag / txn-failure
+/// (the kernel maps nonzero -> None/false). `pa` must be EL1 RAM (above the EL2 hole, below
+/// the VC 1 GB limit) — never MMIO or the HBoot region.
+#[no_mangle]
+pub extern "C" fn hboot_hvc_mbox(pa: u64, nwords: u64) -> u64 {
+    let pa = pa as usize;
+    let n = nwords as usize;
+    // PA sanity: EL1 RAM only — above the EL2 hole (0x800000), below the VC 1 GB pointer
+    // limit, word-aligned, sane length (<= our 48-word buffer convention). Fail closed.
+    if pa < 0x0080_0000 || pa >= 0x4000_0000 || (pa & 0x3) != 0 || n == 0 || n > 48 {
+        return 1;
+    }
+    // The property TAG is word 2 of the buffer ([size, req/resp, TAG, ...]). EL2's read here
+    // is coherent with EL1's cached write (same core, PIPT normal memory).
+    let tag = unsafe { core::ptr::read_volatile((pa + 8) as *const u32) };
+    // WHITELIST — exactly the kernel's arch mailbox ops. Anything else (OTP/serial/…) refused.
+    const ALLOWED: [u32; 6] = [
+        0x0003_0002, // GET_CLOCK_RATE
+        0x0003_8002, // SET_CLOCK_RATE
+        0x0002_8001, // SET_POWER_STATE (WiFi/SDIO)
+        0x0003_0064, // GET_REBOOT_FLAGS (tryboot)
+        0x0003_8064, // SET_REBOOT_FLAGS (tryboot)
+        0x0003_0048, // NOTIFY_REBOOT
+    ];
+    let mut ok_tag = false;
+    let mut i = 0;
+    while i < ALLOWED.len() {
+        if ALLOWED[i] == tag {
+            ok_tag = true;
+        }
+        i += 1;
+    }
+    if !ok_tag {
+        return 2; // refused: not a whitelisted op (OTP read attempt, or anything unexpected)
+    }
+    if unsafe { transact_at(pa, n) } {
+        0
+    } else {
+        3
+    }
 }
 
 /// GET_BOARD_SERIAL (0x00010004) — the 64-bit device-unique serial (OTP row 31).
