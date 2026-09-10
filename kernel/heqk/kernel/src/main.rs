@@ -2616,8 +2616,8 @@ fn cm5_p10_probe() {
                     kprint!("   [P10-E wpaie] set_ok={} readback({} B):", jr.wpaie_set_ok, jr.wpaie_get_len);
                     for k in 0..jr.wpaie_get_len { kprint!(" {:02x}", jr.wpaie_get[k]); }
                     kprint!("\n");
-                    kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} deauth_after={} other_eapol={}\n",
-                        hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.deauth_after, hs.other_eapol);
+                    kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} | post_m2_eapol={} last_ki={:#06x} | deauth={} reason={}\n",
+                        hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.post_m2_eapol, hs.last_eapol_ki, hs.deauth_after, hs.deauth_reason);
                     if hs.m3_seen {
                         kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED inline — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
                     } else if hs.m2_tx_ok && hs.deauth_after {

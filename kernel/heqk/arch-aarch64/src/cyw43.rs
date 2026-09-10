@@ -2485,14 +2485,17 @@ pub struct Wpa4Way {
     pub m3_key_info: u16,
     pub m3_len: usize,
     pub deauth_after: bool,
-    pub other_eapol: u32,
+    pub deauth_reason: u32, // 802.11 reason code (15 = 4-way HS timeout/MIC failure)
+    pub post_m2_eapol: u32, // EAPOL frames seen after M2 (M1 retries or M3)
+    pub last_eapol_ki: u16, // key info of the last post-M2 EAPOL (retry vs M3 discriminator)
 }
 
 impl Wpa4Way {
     pub fn new() -> Self {
         Wpa4Way {
             have_m1: false, kdv: 0, snonce_ok: false, m2_tx_ok: false, m3_seen: false,
-            m3_key_info: 0, m3_len: 0, deauth_after: false, other_eapol: 0,
+            m3_key_info: 0, m3_len: 0, deauth_after: false, deauth_reason: 0,
+            post_m2_eapol: 0, last_eapol_ki: 0,
         }
     }
 }
@@ -2584,23 +2587,26 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                 }
                 if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) == 0x888E {
                     let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
-                    // M3 has the ACK bit (0x80) set (AP->STA); M2's echo wouldn't.
-                    if ki & 0x0080 != 0 {
+                    out.post_m2_eapol += 1;
+                    out.last_eapol_ki = ki;
+                    // M3 = Key-ACK (0x80) AND Key-MIC (0x100) set. An M1 RETRY has ACK but
+                    // NOT MIC — don't mistake it for M3 (that was the earlier bug).
+                    if ki & 0x0080 != 0 && ki & 0x0100 != 0 {
                         out.m3_seen = true;
                         out.m3_key_info = ki;
                         out.m3_len = (rx.len() - eth).min(0xffff);
                         break;
                     }
-                    out.other_eapol += 1;
                 }
             }
             Some((1, _h, doff)) => {
                 let bdc_doff = rx[doff + 3] as usize;
                 let ev = doff + 4 + bdc_doff * 4;
-                if ev + 32 <= rx.len() {
+                if ev + 40 <= rx.len() {
                     let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
                     if et == WLC_E_DEAUTH || et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC || et == WLC_E_DISASSOC_IND {
                         out.deauth_after = true;
+                        out.deauth_reason = u32::from_be_bytes([rx[ev + 36], rx[ev + 37], rx[ev + 38], rx[ev + 39]]);
                         break;
                     }
                 }
