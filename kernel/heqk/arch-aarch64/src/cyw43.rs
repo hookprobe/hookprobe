@@ -2450,6 +2450,255 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
     }
 }
 
+// ===========================================================================
+// P11 M-AP2 — heqk as the WPA2 AUTHENTICATOR. The mirror of the STA supplicant
+// (wpa_handshake): the AP sends M1(ANonce)/M3(GTK) and receives M2/M4. The FullMAC
+// firmware makes beacons/auth/assoc; heqk runs the 4-way + installs per-station keys.
+// Crypto proven host-side (P-wifi-crypto): wpa_ptk/wpa_mic_sha1/aes_wrap/wpa_gtk_kde.
+// ===========================================================================
+
+pub struct ApAuth {
+    pub sta: [u8; 6],
+    pub m1_tx: bool,
+    pub m2_rx: bool,
+    pub m2_mic_ok: bool,
+    pub m3_tx: bool,
+    pub m4_rx: bool,
+    pub m4_mic_ok: bool,
+    pub ptk_set: bool,
+    pub gtk_set: bool,
+}
+
+impl ApAuth {
+    pub fn new() -> Self {
+        ApAuth {
+            sta: [0; 6], m1_tx: false, m2_rx: false, m2_mic_ok: false, m3_tx: false,
+            m4_rx: false, m4_mic_ok: false, ptk_set: false, gtk_set: false,
+        }
+    }
+}
+
+/// Watch SDPCM channel-1 events for a client 802.11 association (`WLC_E_ASSOC_IND`) and return
+/// the station MAC (brcmf_event_msg_be.addr @ ev+48). Bounded; None if none in the window.
+pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < budget {
+        i += 1;
+        if i % 16 == 0 {
+            let _ = ensure_ht_avail();
+        }
+        let (channel, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 1 {
+            continue;
+        }
+        let ev = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if ev + 54 > rx.len() {
+            continue;
+        }
+        let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+        if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
+            let mut sta = [0u8; 6];
+            sta.copy_from_slice(&rx[ev + 48..ev + 54]);
+            dbg_putc(b'C');
+            return Some(sta);
+        } else if et == WLC_E_AUTH_IND {
+            dbg_putc(b'H');
+        }
+    }
+    None
+}
+
+/// Verify an EAPOL-Key MIC (KDV2 HMAC-SHA1-128): recompute over the 802.1X frame `eapol`
+/// (= from the version byte to the end) with the 16-B MIC field at `mic_off` zeroed, and
+/// compare to the received MIC. `eapol` is a private copy so zeroing is safe.
+fn eapol_mic_ok(kck: &[u8; 16], eapol: &mut [u8], mic_off: usize) -> bool {
+    let mut recv = [0u8; 16];
+    recv.copy_from_slice(&eapol[mic_off..mic_off + 16]);
+    for b in &mut eapol[mic_off..mic_off + 16] {
+        *b = 0;
+    }
+    crate::wpa::wpa_mic_sha1(kck, eapol) == recv
+}
+
+/// M-AP2: run the WPA2 4-way handshake as the AUTHENTICATOR for one associated `sta`.
+/// `ap_mac` = our BSSID; `pmk` = PBKDF2(passphrase, ssid); `gtk`/`gtk_keyid` = the group key.
+/// On success installs the per-station PTK (ea=sta) + the GTK (broadcast) via WLC_SET_KEY.
+pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
+    out.sta = *sta;
+    let body = 18usize;
+    let x1ver = 2u8;
+    // ANonce from the HW TRNG (fail-closed).
+    let mut anonce = [0u8; 32];
+    for k in 0..4 {
+        match crate::rng200::next_word_strict() {
+            Some(w) => anonce[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+            None => return,
+        }
+    }
+
+    // --- M1 (AP->STA): ver2 | pairwise | ACK = 0x008a; ANonce; replay=1; no MIC/key-data.
+    let mut m1 = [0u8; 14 + 4 + 95];
+    m1[0..6].copy_from_slice(sta);
+    m1[6..12].copy_from_slice(ap_mac);
+    m1[12] = 0x88;
+    m1[13] = 0x8E;
+    m1[14] = x1ver;
+    m1[15] = 0x03;
+    m1[16..18].copy_from_slice(&95u16.to_be_bytes());
+    m1[body] = 0x02;
+    m1[body + 1..body + 3].copy_from_slice(&0x008au16.to_be_bytes());
+    m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
+    m1[body + 5..body + 13].copy_from_slice(&1u64.to_be_bytes()); // replay = 1
+    m1[body + 13..body + 45].copy_from_slice(&anonce);
+    out.m1_tx = sdpcm_data_tx(&m1);
+    dbg_putc(b'1');
+
+    // --- await M2 (STA->AP): ch2 EAPOL from `sta`, pairwise|MIC, ACK clear.
+    let mut rx = [0u8; 2048];
+    let mut snonce = [0u8; 32];
+    let mut m2buf = [0u8; 256];
+    let mut m2len = 0usize;
+    let mut i = 0u32;
+    while i < 200 {
+        i += 1;
+        if i % 40 == 0 {
+            let _ = sdpcm_data_tx(&m1);
+        }
+        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if ch != 2 {
+            continue;
+        }
+        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if eth + body + 95 > rx.len() {
+            continue;
+        }
+        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E {
+            continue;
+        }
+        if &rx[eth + 6..eth + 12] != &sta[..] {
+            continue;
+        }
+        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
+        if ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0 {
+            out.m2_rx = true;
+            dbg_putc(b'2');
+            snonce.copy_from_slice(&rx[eth + body + 13..eth + body + 45]);
+            // copy the whole 802.1X frame (from ver@eth+14) for the MIC check.
+            let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
+            m2len = (4 + x1).min(m2buf.len());
+            m2buf[..m2len].copy_from_slice(&rx[eth + 14..eth + 14 + m2len]);
+            break;
+        }
+    }
+    if !out.m2_rx {
+        return;
+    }
+
+    // derive PTK, verify M2 MIC (MIC field is at body-14+77 within the 802.1X copy).
+    let ptk = crate::wpa::wpa_ptk(pmk, ap_mac, sta, &anonce, &snonce);
+    let mut kck = [0u8; 16];
+    kck.copy_from_slice(&ptk[0..16]);
+    let mut kek = [0u8; 16];
+    kek.copy_from_slice(&ptk[16..32]);
+    let mic_off = (body - 14) + 77; // MIC offset inside the ver-based 802.1X copy
+    if mic_off + 16 <= m2len {
+        out.m2_mic_ok = eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off);
+    }
+    if !out.m2_mic_ok {
+        return; // wrong PSK / forged M2
+    }
+
+    // --- M3 (AP->STA): key-data = RSNE ++ GTK-KDE, padded to /8, AES-key-wrapped under KEK.
+    let mut kd = [0u8; 72];
+    kd[..RSN_IE_PSK_CCMP.len()].copy_from_slice(&RSN_IE_PSK_CCMP);
+    let kln = crate::wpa::wpa_gtk_kde(gtk_keyid, gtk, &mut kd[RSN_IE_PSK_CCMP.len()..]);
+    let mut plen = RSN_IE_PSK_CCMP.len() + kln; // 22 + 24 = 46
+    let unpadded = plen;
+    while plen % 8 != 0 {
+        kd[plen] = if plen == unpadded { 0xdd } else { 0x00 }; // 0xdd + 0x00 pad KDE
+        plen += 1;
+    }
+    let mut wrapped = [0u8; 88];
+    let kdw = match crate::aes::aes_wrap(&kek, &kd[..plen], &mut wrapped) {
+        Some(n) => n,
+        None => return,
+    };
+    let mut m3 = [0u8; 14 + 4 + 95 + 88];
+    m3[0..6].copy_from_slice(sta);
+    m3[6..12].copy_from_slice(ap_mac);
+    m3[12] = 0x88;
+    m3[13] = 0x8E;
+    m3[14] = x1ver;
+    m3[15] = 0x03;
+    let x1len3 = (95 + kdw) as u16;
+    m3[16..18].copy_from_slice(&x1len3.to_be_bytes());
+    m3[body] = 0x02;
+    // ver2|pairwise|install|ack|mic|secure|encrypted = 0x13ca.
+    m3[body + 1..body + 3].copy_from_slice(&0x13cau16.to_be_bytes());
+    m3[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes());
+    m3[body + 5..body + 13].copy_from_slice(&2u64.to_be_bytes()); // replay = 2
+    m3[body + 13..body + 45].copy_from_slice(&anonce);
+    m3[body + 93..body + 95].copy_from_slice(&(kdw as u16).to_be_bytes());
+    m3[body + 95..body + 95 + kdw].copy_from_slice(&wrapped[..kdw]);
+    let m3end = body + 95 + kdw;
+    let mic3 = crate::wpa::wpa_mic_sha1(&kck, &m3[14..m3end]); // MIC field still zero
+    m3[body + 77..body + 93].copy_from_slice(&mic3);
+    out.m3_tx = sdpcm_data_tx(&m3[..m3end]);
+    dbg_putc(b'3');
+
+    // --- await M4 (STA->AP): pairwise|MIC|secure, ACK clear; verify MIC.
+    let mut m4buf = [0u8; 256];
+    let mut m4len = 0usize;
+    let mut j = 0u32;
+    while j < 120 {
+        j += 1;
+        if j % 40 == 0 {
+            let _ = sdpcm_data_tx(&m3[..m3end]);
+        }
+        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if ch != 2 {
+            continue;
+        }
+        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if eth + body + 95 > rx.len() {
+            continue;
+        }
+        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E {
+            continue;
+        }
+        if &rx[eth + 6..eth + 12] != &sta[..] {
+            continue;
+        }
+        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
+        if ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0200 != 0 && ki & 0x0080 == 0 {
+            out.m4_rx = true;
+            dbg_putc(b'4');
+            let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
+            m4len = (4 + x1).min(m4buf.len());
+            m4buf[..m4len].copy_from_slice(&rx[eth + 14..eth + 14 + m4len]);
+            break;
+        }
+    }
+    if !out.m4_rx {
+        return;
+    }
+    if mic_off + 16 <= m4len {
+        out.m4_mic_ok = eapol_mic_ok(&kck, &mut m4buf[..m4len], mic_off);
+    }
+    if !out.m4_mic_ok {
+        return;
+    }
+
+    // --- install the keys: per-station PTK (TK = ptk[32..48]) + the shared GTK.
+    let mut tk = [0u8; 16];
+    tk.copy_from_slice(&ptk[32..48]);
+    out.ptk_set = wlc_set_key(0, &tk, sta, true);
+    dbg_putc(b'P');
+    out.gtk_set = wlc_set_key(gtk_keyid as u32, gtk, &[0u8; 6], false);
+    dbg_putc(b'G');
+}
+
 /// True if the space-separated token list `hay` contains exactly `tok`.
 fn has_token(hay: &[u8], tok: &[u8]) -> bool {
     let mut i = 0;
