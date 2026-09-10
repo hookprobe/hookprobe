@@ -2593,14 +2593,22 @@ fn cm5_p10_probe() {
                     // On-device KAT for the WPA PMK KDF (PBKDF2-HMAC-SHA1) before we trust it.
                     kprint!("   [P10-E kdf] PBKDF2-HMAC-SHA1 KAT (IEEE 802.11i password/IEEE) = {}\n",
                         if arch_aarch64::wpa::wpa_pmk_selftest() { "PASS" } else { "FAIL" });
+                    // Firmware capability string — does it advertise an in-firmware supplicant
+                    // (sup/fwsup/idsup)? Decides host-supplicant vs firmware-supplicant path.
+                    let mut cap = [0u8; 512];
+                    let cl = cyw43::fw_cap(&mut cap);
+                    kprint!("   [P10-E cap] ({} B): ", cl);
+                    for &c in &cap[..cl] { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
+                    kprint!("\n");
                     kprint!(" [P10-E] WiFi STA join \"");
                     for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
                     kprint!("\" (WPA2-PSK, host-computed PMK -> firmware idsup)...\n");
                     let mut jr = cyw43::JoinResult::new();
                     cyw43::wifi_join(JOIN_SSID, JOIN_PSK, &mut jr);
-                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} sup_wpa={}(st={:#x}) pmk={}(st={:#x}) up={} | set_ssid ok={} status={:#x}\n",
+                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} up={} | pmk(ioctl st={:#x} / iovar st={:#x}) ok={} | set_ssid ok={} status={:#x}\n",
                         jr.steps_ok & 1, (jr.steps_ok >> 1) & 1, (jr.steps_ok >> 2) & 1, (jr.steps_ok >> 3) & 1,
-                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 5) & 1, jr.sup_wpa_status, (jr.steps_ok >> 6) & 1, jr.pmk_status, (jr.steps_ok >> 7) & 1,
+                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 7) & 1,
+                        jr.pmk_status, jr.sup_wpa_status, (jr.steps_ok >> 6) & 1,
                         jr.set_ssid_ok, jr.set_ssid_status);
                     kprint!("   [P10-E events] seen={} deauth={} (type,status,flags):", jr.events_seen, jr.deauth_seen);
                     for k in 0..jr.trail_len {
