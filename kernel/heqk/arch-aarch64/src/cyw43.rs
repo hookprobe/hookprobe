@@ -2587,11 +2587,19 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
 
     out.m2_tx_ok = sdpcm_data_tx(&m2);
 
-    // Watch for M3 (another EAPOL from the AP) or a deauth.
+    // Watch for M3 (another EAPOL from the AP) or a deauth. BOUNDED so wifi_join always
+    // returns promptly: M3 arrives within ~1 s of M2 (a few hundred reads); a hard cap of
+    // 2500 dry reads bounds the no-M3 failure case, and after M4 we linger only a short
+    // window (m4_deadline) to catch an immediate deauth. (Earlier the post-M3 loop ran to
+    // 5000 with no break — up to ~1 min of dry polling that looked like a freeze.)
     let mut rx = [0u8; 2048];
     let mut i = 0u32;
-    while i < 5000 {
+    let mut m4_deadline: u32 = 0; // 0 = unset; once M4 is sent, break at this iteration
+    while i < 2500 {
         i += 1;
+        if m4_deadline != 0 && i >= m4_deadline {
+            break; // short post-M4 window elapsed with no deauth ⇒ handshake held
+        }
         if i % 256 == 0 {
             let _ = ensure_ht_avail();
         }
@@ -2631,7 +2639,9 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                         let mic4 = crate::wpa::wpa_mic_sha1(&kck, &m4[14..]);
                         m4[body + 77..body + 93].copy_from_slice(&mic4);
                         out.m4_tx_ok = sdpcm_data_tx(&m4);
-                        // Keep watching: a deauth now ⇒ handshake not accepted / no key held.
+                        // Linger only ~400 more reads to catch an immediate deauth, then return
+                        // (no key is installed yet, so nothing more happens in this window).
+                        m4_deadline = i + 400;
                     }
                 }
             }
