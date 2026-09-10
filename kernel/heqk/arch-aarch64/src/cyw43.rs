@@ -2173,7 +2173,14 @@ pub fn fw_cap(out: &mut [u8]) -> usize {
 /// Associate to a WPA2-PSK AP. `ssid` (<=32 B) + `passphrase` (8..63 B). Fills
 /// `out` with the step-acks + the full event trail. Reuses the scan's wake/HT
 /// preamble and the NOTUP-retry idiom (the STA finishes coming up asynchronously).
-pub fn wifi_join(ssid: &[u8], passphrase: &[u8], open: bool, out: &mut JoinResult) {
+pub fn wifi_join(
+    ssid: &[u8],
+    passphrase: &[u8],
+    open: bool,
+    pmk: Option<&[u8; 32]>,
+    out: &mut JoinResult,
+    hs: &mut Wpa4Way,
+) {
     // Wake + backplane clock (the 43455 SR-sleeps on a quiet bus; the multi-second
     // handshake needs HT held up — we also re-ensure it inside the event loop).
     let _ = wake_chip();
@@ -2287,14 +2294,30 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], open: bool, out: &mut JoinResul
         if channel == 2 {
             let bdc_doff = rx[doff + 3] as usize;
             let eth = doff + 4 + bdc_doff * 4;
-            if eth + 14 <= rx.len() {
+            if eth + 21 <= rx.len() {
                 out.data_frames += 1;
                 let etype = u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]);
-                if etype == 0x888E && !out.eapol_seen {
-                    out.eapol_seen = true;
-                    let n = (rx.len() - eth).min(out.eapol.len());
-                    out.eapol[..n].copy_from_slice(&rx[eth..eth + n]);
-                    out.eapol_len = n;
+                if etype == 0x888E {
+                    // EAPOL-Key: key info is body+1 = eth+18+1.
+                    let ki = u16::from_be_bytes([rx[eth + 19], rx[eth + 20]]);
+                    if !out.eapol_seen {
+                        out.eapol_seen = true;
+                        let n = (rx.len() - eth).min(out.eapol.len());
+                        out.eapol[..n].copy_from_slice(&rx[eth..eth + n]);
+                        out.eapol_len = n;
+                    }
+                    // M1 = Key-ACK set, MIC clear. Respond with M2 IMMEDIATELY — the AP
+                    // deauths within ~1-2 s if it gets no M2, so the handshake must run
+                    // inline in the live session, not after wifi_join returns.
+                    if ki & 0x0080 != 0 && ki & 0x0100 == 0 && !hs.m2_tx_ok {
+                        if let Some(p) = pmk {
+                            let flen = (rx.len() - eth).min(256);
+                            let mut m1 = [0u8; 256];
+                            m1[..flen].copy_from_slice(&rx[eth..eth + flen]);
+                            wpa_handshake(&m1, flen, p, hs);
+                            break; // wpa_handshake sent M2 and read on for M3
+                        }
+                    }
                 }
             }
             continue;
