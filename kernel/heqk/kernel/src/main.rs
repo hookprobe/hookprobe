@@ -2625,9 +2625,11 @@ fn cm5_p10_probe() {
                     for k in 0..jr.eapol_len.min(72) { kprint!("{:02x}", jr.eapol[k]); }
                     kprint!("\n   [P10-E M2raw]");
                     for k in 0..hs.m2_len { kprint!("{:02x}", hs.m2_dump[k]); }
+                    kprint!("\n   [P10-E M3raw]");
+                    for k in 0..hs.m3_dump_len { kprint!("{:02x}", hs.m3_dump[k]); }
                     kprint!("\n");
-                    kprint!("   [P10-E s2] m4_tx={} deauth_after_m4={} | ptk_set={} gtk_unwrapped={} gtk_keyid={} gtk_set={}\n",
-                        hs.m4_tx_ok, hs.deauth_after_m4, hs.ptk_set_ok, hs.gtk_unwrapped, hs.gtk_keyid, hs.gtk_set_ok);
+                    kprint!("   [P10-E s2] m4_tx={} deauth_after_m4={} | ptk_set={} unwrap_some={} gtk_unwrapped={} gtk_keyid={} gtk_set={}\n",
+                        hs.m4_tx_ok, hs.deauth_after_m4, hs.ptk_set_ok, hs.gtk_unwrap_some, hs.gtk_unwrapped, hs.gtk_keyid, hs.gtk_set_ok);
                     if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 && hs.ptk_set_ok {
                         kprint!(" [P10-E] PASS(4way+keys) — handshake DONE + PTK{}{}installed. Probing encrypted DATA RX...\n",
                             if hs.gtk_set_ok { "+GTK " } else { " (PTK only) " }, "");

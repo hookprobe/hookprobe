@@ -2539,6 +2539,9 @@ pub struct Wpa4Way {
     pub gtk_unwrapped: bool, // the GTK KDE was found + AES-unwrapped from M3
     pub gtk_keyid: u8,
     pub gtk_set_ok: bool, // the group key was installed (WLC_SET_KEY)
+    pub gtk_unwrap_some: bool, // aes_unwrap returned Some (integrity passed) — vs None (KEK/blob wrong)
+    pub m3_dump: [u8; 160], // the raw M3 ethernet EAPOL frame (for offline GTK-KDE analysis)
+    pub m3_dump_len: usize,
 }
 
 impl Wpa4Way {
@@ -2550,6 +2553,7 @@ impl Wpa4Way {
             m2_dump: [0; 140], m2_len: 0, snonce: [0; 32],
             m4_tx_ok: false, deauth_after_m4: false,
             ptk_set_ok: false, gtk_unwrapped: false, gtk_keyid: 0, gtk_set_ok: false,
+            gtk_unwrap_some: false, m3_dump: [0; 160], m3_dump_len: 0,
         }
     }
 }
@@ -2666,6 +2670,10 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                         out.m3_seen = true;
                         out.m3_key_info = ki;
                         out.m3_len = (rx.len() - eth).min(0xffff);
+                        // Capture the raw M3 ethernet EAPOL frame for offline GTK-KDE analysis.
+                        let m3n = (rx.len() - eth).min(160);
+                        out.m3_dump[..m3n].copy_from_slice(&rx[eth..eth + m3n]);
+                        out.m3_dump_len = m3n;
                         // --- S2: send M4 to complete the handshake. Echo M3's replay counter;
                         // M4 = pairwise|MIC|secure, zero nonce, empty key data, MIC over KCK.
                         let mut m3_replay = [0u8; 8];
@@ -2708,17 +2716,22 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                             let unw = crate::aes::aes_unwrap(&kek, &rx[kd_start..kd_start + kd_len], &mut plain);
                             dbg_putc(b'U'); // unwrap returned
                             if let Some(pl) = unw {
-                                // Walk KDEs: [0xdd][len][OUI 3][type 1][data len-4].
+                                out.gtk_unwrap_some = true;
+                                dbg_putc(b'S'); // unwrap integrity OK (Some)
+                                // Walk 802.11 information elements generically: each is
+                                // [id][len][data]. hostapd's M3 key data is RSNE(id 0x30) THEN
+                                // the GTK KDE (id 0xdd, OUI 00-0f-ac, type 01) — so we must SKIP
+                                // non-matching elements, not break on the first non-0xdd (the
+                                // leading RSNE). Only the GTK KDE is acted on. 0-len ⇒ padding end.
                                 let mut p = 0usize;
                                 while p + 2 <= pl {
-                                    if plain[p] != 0xdd {
-                                        break;
-                                    }
                                     let klen = plain[p + 1] as usize;
-                                    if p + 2 + klen > pl || klen < 6 {
+                                    if klen == 0 || p + 2 + klen > pl {
                                         break;
                                     }
-                                    let is_gtk = plain[p + 2] == 0x00
+                                    let is_gtk = plain[p] == 0xdd
+                                        && klen >= 6
+                                        && plain[p + 2] == 0x00
                                         && plain[p + 3] == 0x0f
                                         && plain[p + 4] == 0xac
                                         && plain[p + 5] == 0x01;
@@ -2734,6 +2747,8 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                                     }
                                     p += 2 + klen;
                                 }
+                            } else {
+                                dbg_putc(b'N'); // unwrap None — KEK or blob offset/len wrong
                             }
                         }
                         // Linger a short window to catch a deauth (rejected handshake/keys).
