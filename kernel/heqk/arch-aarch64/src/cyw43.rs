@@ -2162,7 +2162,7 @@ pub fn fw_cap(out: &mut [u8]) -> usize {
 /// Associate to a WPA2-PSK AP. `ssid` (<=32 B) + `passphrase` (8..63 B). Fills
 /// `out` with the step-acks + the full event trail. Reuses the scan's wake/HT
 /// preamble and the NOTUP-retry idiom (the STA finishes coming up asynchronously).
-pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
+pub fn wifi_join(ssid: &[u8], passphrase: &[u8], open: bool, out: &mut JoinResult) {
     // Wake + backplane clock (the 43455 SR-sleeps on a quiet bus; the multi-second
     // handshake needs HT held up — we also re-ensure it inside the event loop).
     let _ = wake_chip();
@@ -2188,9 +2188,10 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
     // Infrastructure (managed) mode + Open 802.11 auth (WPA2-PSK secures via the HS).
     if wlc_set_int(WLC_SET_INFRA, 1) { out.steps_ok |= 1 << 1; }
     if wlc_set_int(WLC_SET_AUTH, 0) { out.steps_ok |= 1 << 2; }
-    // wsec = CCMP/AES, wpa_auth = WPA2-PSK (set while down — the classic wl order).
-    if wlc_set_int(WLC_SET_WSEC, AES_ENABLED) { out.steps_ok |= 1 << 3; }
-    if wlc_set_int(WLC_SET_WPA_AUTH, WPA2_AUTH_PSK) { out.steps_ok |= 1 << 4; }
+    // OPEN: wsec=0 + wpa_auth=0 (no encryption, no handshake). WPA2: CCMP + WPA2-PSK.
+    let (wsec_val, wpa_auth_val) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
+    if wlc_set_int(WLC_SET_WSEC, wsec_val) { out.steps_ok |= 1 << 3; }
+    if wlc_set_int(WLC_SET_WPA_AUTH, wpa_auth_val) { out.steps_ok |= 1 << 4; }
     // Power-save OFF (stay awake through the handshake), then bring the STA up.
     let _ = wlc_set_int(WLC_SET_PM_, 0);
     if wlc_set_int(WLC_UP, 1) { out.steps_ok |= 1 << 7; }
@@ -2202,6 +2203,8 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
     // WHD bare-metal driver for this exact chip doesn't use it — the fw supplicant is
     // implicit once wsec/wpa_auth/pmk are set.)
     //
+    // WPA2 only: install the PMK. (Open networks skip all keying.)
+    if !open {
     // Set the RAW 32-byte PMK (flags=0) in brcmfmac's EXACT wire format:
     // struct brcmf_wsec_pmk_le { u16 key_len; u16 flags; u8 key[BRCMF_WSEC_MAX_PSK_LEN=32] }
     // = 36 B. This firmware rejects a passphrase (WSEC_PASSPHRASE → BADARG) AND a 68-B
@@ -2229,6 +2232,7 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
             }
         }
     }
+    } // end if !open
     // Give the firmware a moment to absorb the passphrase (WHD delays here before join).
     delay(20_000);
 
@@ -2300,6 +2304,64 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
                 break; // AP kicked us — keying failed or credentials rejected
             }
             _ => {}
+        }
+    }
+}
+
+/// What the WiFi data-path RX probe observed on SDPCM channel 2 after association.
+pub struct DataProbe {
+    pub frames: u32,     // channel-2 (data) frames seen
+    pub l2_known: u32,   // frames with a recognizable ethertype (ARP/IPv4/IPv6)
+    pub last_etype: u16, // ethertype of the last data frame
+    pub sample: [u8; 32], // first data frame: eth dst[6] src[6] etype[2] + payload head
+    pub sample_len: usize,
+}
+
+impl DataProbe {
+    pub fn new() -> Self {
+        DataProbe { frames: 0, l2_known: 0, last_etype: 0, sample: [0; 32], sample_len: 0 }
+    }
+}
+
+/// After association, prove the WiFi DATA path: read SDPCM channel-2 (data) frames off F2
+/// for a bounded window and parse their ethernet headers. Any network has background
+/// broadcast/multicast (ARP, DHCP, mDNS, IPv6 RA), so on a live AP this should see frames —
+/// proving heqk RECEIVES real 802.11 data through the firmware over SDIO. Channel-2 payload
+/// layout mirrors events: a 4-B BDC header (data_offset in byte 3, in 4-B units) then the
+/// ethernet frame.
+pub fn wifi_data_probe(out: &mut DataProbe) {
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < 5000 {
+        i += 1;
+        if i % 256 == 0 {
+            let _ = ensure_ht_avail();
+        }
+        let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) {
+            Some(t) => t,
+            None => continue,
+        };
+        if channel != 2 {
+            continue;
+        }
+        let bdc_doff = rx[doff + 3] as usize;
+        let eth = doff + 4 + bdc_doff * 4;
+        if eth + 14 > rx.len() {
+            continue;
+        }
+        out.frames += 1;
+        let etype = u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]);
+        out.last_etype = etype;
+        if etype == 0x0806 || etype == 0x0800 || etype == 0x86dd {
+            out.l2_known += 1;
+        }
+        if out.sample_len == 0 {
+            let n = (rx.len() - eth).min(32);
+            out.sample[..n].copy_from_slice(&rx[eth..eth + n]);
+            out.sample_len = n;
+        }
+        if out.frames >= 64 {
+            break; // enough evidence the RX data path is live
         }
     }
 }
