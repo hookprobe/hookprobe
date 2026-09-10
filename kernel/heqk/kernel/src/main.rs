@@ -2586,46 +2586,44 @@ fn cm5_p10_probe() {
                     } else {
                         kprint!(" [P10-D] scan armed (up={} escan={}); no AP frames parsed — see scan diag\n", sd[2], sd[3]);
                     }
-                    // P10-E: STA-mode OPEN association + WiFi DATA-PATH proof. This firmware
-                    // has no in-fw WPA supplicant (cap string, iters 1-5), so we prove the
-                    // associate -> SDIO channel-2 data path FIRST on an OPEN AP, before the
-                    // host WPA2 supplicant is built. Dev target — single-operator box.
-                    const OPEN_SSID: &[u8] = b"hookprobe-open";
+                    // P10-E: WPA2 join to the existing hookprobe AP + DATA-PATH proof. This
+                    // firmware has no in-fw supplicant (cap string, iters 1-5): after 802.11
+                    // assoc the AP sends EAPOL-Key M1 over SDPCM channel 2. Capturing it proves
+                    // the data path on the real AP AND is the host supplicant's first input.
+                    const JOIN_SSID: &[u8] = b"hookprobe";
+                    const JOIN_PSK: &[u8] = b"113527oeM+-!";
                     kprint!(" [P10-E] WiFi STA join \"");
-                    for &c in OPEN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
-                    kprint!("\" (OPEN — no encryption; proving the data path)...\n");
+                    for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
+                    kprint!("\" (WPA2) — capturing the EAPOL M1 (data-path proof)...\n");
                     let mut jr = cyw43::JoinResult::new();
-                    cyw43::wifi_join(OPEN_SSID, b"", true, &mut jr);
-                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} up={} | set_ssid ok={} status={:#x}\n",
+                    cyw43::wifi_join(JOIN_SSID, JOIN_PSK, false, &mut jr);
+                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} up={} | pmk ok={} | set_ssid ok={} status={:#x}\n",
                         jr.steps_ok & 1, (jr.steps_ok >> 1) & 1, (jr.steps_ok >> 2) & 1, (jr.steps_ok >> 3) & 1,
-                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 7) & 1, jr.set_ssid_ok, jr.set_ssid_status);
-                    kprint!("   [P10-E events] seen={} deauth={} (type,status,flags):", jr.events_seen, jr.deauth_seen);
+                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 7) & 1, (jr.steps_ok >> 6) & 1, jr.set_ssid_ok, jr.set_ssid_status);
+                    kprint!("   [P10-E events] seen={} deauth={} link={} (type,status,flags):", jr.events_seen, jr.deauth_seen, jr.link_up);
                     for k in 0..jr.trail_len {
                         let (t, s, f) = jr.trail[k];
                         kprint!(" ({},{:#x},{:#x})", t, s, f);
                     }
                     kprint!("\n");
-                    if jr.link_up && !jr.deauth_seen {
-                        kprint!(" [P10-E] ASSOCIATED (open) — WLC_E_LINK up, no deauth. Probing the RX data path (SDPCM ch2)...\n");
-                        let mut dp = cyw43::DataProbe::new();
-                        cyw43::wifi_data_probe(&mut dp);
-                        kprint!("   [P10-E data] channel-2 frames={} known-l2(arp/ip)={} last_etype={:#06x}\n",
-                            dp.frames, dp.l2_known, dp.last_etype);
-                        if dp.sample_len >= 14 {
-                            kprint!("   [P10-E data] first eth: dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} etype {:#06x}\n",
-                                dp.sample[0], dp.sample[1], dp.sample[2], dp.sample[3], dp.sample[4], dp.sample[5],
-                                dp.sample[6], dp.sample[7], dp.sample[8], dp.sample[9], dp.sample[10], dp.sample[11],
-                                ((dp.sample[12] as u16) << 8) | dp.sample[13] as u16);
-                        }
-                        if dp.frames > 0 {
-                            kprint!(" [P10-E] PASS — WiFi DATA path LIVE: heqk received {} real 802.11 data frame(s) over SDIO after open assoc\n", dp.frames);
-                        } else {
-                            kprint!(" [P10-E] assoc OK but 0 data frames — AP may have no background traffic; next step = active TX (DHCP DISCOVER)\n");
-                        }
-                    } else if jr.deauth_seen {
-                        kprint!(" [P10-E] DEAUTH — kicked after assoc; last event={} status={:#x} (open AP up + in range?)\n", jr.last_event, jr.last_status);
+                    kprint!("   [P10-E data] channel-2 frames seen={} | EAPOL(0x888E) seen={} len={}\n",
+                        jr.data_frames, jr.eapol_seen, jr.eapol_len);
+                    if jr.eapol_seen && jr.eapol_len >= 18 {
+                        // EAPOL: eth(14) | ver(1) type(1) len(2) | 802.1X-Key descriptor...
+                        kprint!("   [P10-E eapol] eth.etype={:#06x} 8021x.ver={:#04x} type={:#04x} body_len={} keydesc={:#04x}\n",
+                            ((jr.eapol[12] as u16) << 8) | jr.eapol[13] as u16,
+                            jr.eapol[14], jr.eapol[15],
+                            ((jr.eapol[16] as u16) << 8) | jr.eapol[17] as u16,
+                            if jr.eapol_len > 18 { jr.eapol[18] } else { 0 });
+                    }
+                    if jr.eapol_seen {
+                        kprint!(" [P10-E] PASS(data-path) — WiFi DATA path LIVE: heqk received the EAPOL-Key M1 over SDIO after assoc. Supplicant (PTK/M2/M3/M4) is the next build.\n");
+                    } else if jr.data_frames > 0 {
+                        kprint!(" [P10-E] data path LIVE ({} ch2 frames) but no EAPOL captured (deauth={} link={}); assoc window may be too short\n", jr.data_frames, jr.deauth_seen, jr.link_up);
+                    } else if jr.link_up {
+                        kprint!(" [P10-E] linked but 0 ch2 data frames captured — the AP's EAPOL M1 may have raced the loop; last event={} status={:#x}\n", jr.last_event, jr.last_status);
                     } else {
-                        kprint!(" [P10-E] NOT LINKED — last event={} status={:#x}; is \"hookprobe-open\" up + in range? trail shows the stage\n", jr.last_event, jr.last_status);
+                        kprint!(" [P10-E] NOT LINKED — last event={} status={:#x}; trail shows the stage reached\n", jr.last_event, jr.last_status);
                     }
                 } else {
                     kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
