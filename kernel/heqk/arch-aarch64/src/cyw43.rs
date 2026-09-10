@@ -2107,10 +2107,13 @@ const WLC_SUP_KEYED: u32 = 6; // WLC_E_PSK_SUP status: 4-way handshake complete
 /// exactly which stage it reached.
 pub struct JoinResult {
     pub steps_ok: u16, // bit0 event_msgs,1 infra,2 auth,3 wsec,4 wpa_auth,5 sup_wpa,6 pmk,7 up
+    pub pmk_status: u32, // bcdc status of WLC_SET_WSEC_PMK (0xfffffffc = NOTUP)
+    pub sup_wpa_status: u32, // bcdc status of the bsscfg:sup_wpa SET
     pub set_ssid_ok: bool,
     pub set_ssid_status: u32,
     pub link_up: bool,
     pub psk_keyed: bool,
+    pub deauth_seen: bool, // a WLC_E_DEAUTH/DISASSOC after link — keying failed / kicked
     pub events_seen: u32,
     pub last_event: u32,
     pub last_status: u32,
@@ -2122,10 +2125,13 @@ impl JoinResult {
     pub fn new() -> Self {
         JoinResult {
             steps_ok: 0,
+            pmk_status: 0,
+            sup_wpa_status: 0,
             set_ssid_ok: false,
             set_ssid_status: 0,
             link_up: false,
             psk_keyed: false,
+            deauth_seen: false,
             events_seen: 0,
             last_event: 0xffff_ffff,
             last_status: 0,
@@ -2164,30 +2170,37 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
     // Infrastructure (managed) mode + Open 802.11 auth (WPA2-PSK secures via the HS).
     if wlc_set_int(WLC_SET_INFRA, 1) { out.steps_ok |= 1 << 1; }
     if wlc_set_int(WLC_SET_AUTH, 0) { out.steps_ok |= 1 << 2; }
-    // wsec = CCMP/AES, wpa_auth = WPA2-PSK.
+    // wsec = CCMP/AES, wpa_auth = WPA2-PSK (set while down — the classic wl order).
     if wlc_set_int(WLC_SET_WSEC, AES_ENABLED) { out.steps_ok |= 1 << 3; }
     if wlc_set_int(WLC_SET_WPA_AUTH, WPA2_AUTH_PSK) { out.steps_ok |= 1 << 4; }
-    // Enable the in-firmware WPA supplicant so the chip runs the 4-way handshake.
-    {
-        let mut ib = [0u8; 48];
-        let n = iovar_buf(b"sup_wpa", &1u32.to_le_bytes(), &mut ib);
-        if bcdc_iovar_set(&ib[..n]) { out.steps_ok |= 1 << 5; }
-    }
-    // Set the PMK as a passphrase (firmware runs PBKDF2 over passphrase+SSID).
-    // wsec_pmk_t { u16 key_len; u16 flags; u8 key[64] } — total 68 B.
-    {
-        let plen = passphrase.len().min(64);
-        let mut pmk = [0u8; 4 + 64];
-        pmk[0..2].copy_from_slice(&(plen as u16).to_le_bytes());
-        pmk[2..4].copy_from_slice(&WSEC_PASSPHRASE.to_le_bytes());
-        pmk[4..4 + plen].copy_from_slice(&passphrase[..plen]);
-        if bcdc_dcmd(WLC_SET_WSEC_PMK, BCDC_SET, &pmk, &mut []).0 { out.steps_ok |= 1 << 6; }
-    }
     // Power-save OFF (stay awake through the handshake), then bring the STA up.
     let _ = wlc_set_int(WLC_SET_PM_, 0);
     if wlc_set_int(WLC_UP, 1) { out.steps_ok |= 1 << 7; }
     delay(80_000);
     let _ = ensure_ht_avail();
+
+    // --- credentials, set AFTER WLC_UP (they NOTUP'd on the down interface) ---
+    // (No sup_wpa: this firmware reports that iovar UNSUPPORTED(-23), and the Infineon
+    // WHD bare-metal driver for this exact chip doesn't use it — the fw supplicant is
+    // implicit once wsec/wpa_auth/pmk are set.)
+    //
+    // Set the RAW 32-byte PMK (flags=0). This RPi brcmfmac firmware rejects the
+    // passphrase path (WSEC_PASSPHRASE → BADARG-2, both 36- and 68-B structs), so we
+    // compute the PMK on-device — PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32),
+    // KAT-verified (wpa::wpa_pmk_selftest) — and hand the firmware idsup the raw key.
+    // wsec_pmk_t here = { u16 key_len=32; u16 flags=0; u8 key[64] } = 68 B.
+    {
+        let pmk_key = crate::wpa::wpa_pmk(passphrase, ssid);
+        let mut pmk = [0u8; 4 + 64];
+        pmk[0..2].copy_from_slice(&32u16.to_le_bytes()); // key_len = 32 (raw PMK)
+        pmk[2..4].copy_from_slice(&0u16.to_le_bytes()); // flags = 0 (not a passphrase)
+        pmk[4..4 + 32].copy_from_slice(&pmk_key);
+        let (ok, st) = bcdc_dcmd(WLC_SET_WSEC_PMK, BCDC_SET, &pmk, &mut []);
+        out.pmk_status = st;
+        if ok { out.steps_ok |= 1 << 6; }
+    }
+    // Give the firmware a moment to absorb the passphrase (WHD delays here before join).
+    delay(20_000);
 
     // Join: WLC_SET_SSID with wlc_ssid_t { u32 SSID_len; u8 SSID[32] }. The STA
     // comes up asynchronously after WLC_UP, so retry while the firmware says NOTUP(-4).
@@ -2203,16 +2216,26 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
         delay(60_000);
     }
 
-    // Collect events until link-up (or the budget runs out). read_sdpcm_frame is
-    // the same primitive the scan uses; channel 1 = event. Keep HT alive across it.
+    // Collect events. read_sdpcm_frame is the same primitive the scan uses; channel 1 =
+    // event. We do NOT stop on link-up — for WPA2 the 4-way handshake (WLC_E_PSK_SUP
+    // keyed) and any post-assoc deauth (keying failure / kick) can follow it — so once
+    // link comes up we keep reading a grace window to see the TRUE outcome. Success =
+    // PSK_SUP keyed with link up and no deauth. Keep HT alive across the handshake.
     let mut rx = [0u8; 2048];
     let mut i = 0u32;
-    while i < 6000 {
+    let mut grace = 0u32; // reads remaining after link-up before we call it
+    while i < 8000 {
         i += 1;
         if i % 256 == 0 { let _ = ensure_ht_avail(); }
         let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) {
             Some(t) => t,
-            None => continue,
+            None => {
+                if out.link_up {
+                    grace += 1;
+                    if grace > 1200 { break; } // ~link is up and quiet ⇒ stable
+                }
+                continue;
+            }
         };
         if channel != 1 { continue; }
         let bdc_doff = rx[doff + 3] as usize;
@@ -2228,14 +2251,25 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
             out.trail[out.trail_len] = (etype, status, flags);
             out.trail_len += 1;
         }
-        if etype == WLC_E_PSK_SUP && status == WLC_SUP_KEYED {
-            out.psk_keyed = true;
-        }
-        if etype == WLC_E_LINK {
-            out.link_up = (flags & WLC_EVENT_MSG_LINK) != 0;
-            if out.link_up {
-                break; // link up ⇒ associated + keyed; done
+        match etype {
+            WLC_E_PSK_SUP if status == WLC_SUP_KEYED => {
+                out.psk_keyed = true;
+                if out.link_up { break; } // keyed + linked ⇒ fully associated, done
             }
+            WLC_E_LINK => {
+                out.link_up = (flags & WLC_EVENT_MSG_LINK) != 0;
+                if !out.link_up {
+                    // link went DOWN after being up ⇒ kicked
+                    if i > 100 { out.deauth_seen = true; break; }
+                } else if out.psk_keyed {
+                    break; // keyed already + link up ⇒ done
+                }
+            }
+            WLC_E_DEAUTH | WLC_E_DEAUTH_IND | WLC_E_DISASSOC | WLC_E_DISASSOC_IND => {
+                out.deauth_seen = true;
+                break; // AP kicked us — keying failed or credentials rejected
+            }
+            _ => {}
         }
     }
 }

@@ -2590,25 +2590,33 @@ fn cm5_p10_probe() {
                     // Dev target constants — this box is single-operator; the PSK stays local.
                     const JOIN_SSID: &[u8] = b"hookprobe";
                     const JOIN_PSK: &[u8] = b"113527oeM+-!";
+                    // On-device KAT for the WPA PMK KDF (PBKDF2-HMAC-SHA1) before we trust it.
+                    kprint!("   [P10-E kdf] PBKDF2-HMAC-SHA1 KAT (IEEE 802.11i password/IEEE) = {}\n",
+                        if arch_aarch64::wpa::wpa_pmk_selftest() { "PASS" } else { "FAIL" });
                     kprint!(" [P10-E] WiFi STA join \"");
                     for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
-                    kprint!("\" (WPA2-PSK, firmware supplicant)...\n");
+                    kprint!("\" (WPA2-PSK, host-computed PMK -> firmware idsup)...\n");
                     let mut jr = cyw43::JoinResult::new();
                     cyw43::wifi_join(JOIN_SSID, JOIN_PSK, &mut jr);
-                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} sup_wpa={} pmk={} up={} | set_ssid ok={} status={:#x}\n",
+                    kprint!("   [P10-E setup] event_msgs={} infra={} auth={} wsec={} wpa_auth={} sup_wpa={}(st={:#x}) pmk={}(st={:#x}) up={} | set_ssid ok={} status={:#x}\n",
                         jr.steps_ok & 1, (jr.steps_ok >> 1) & 1, (jr.steps_ok >> 2) & 1, (jr.steps_ok >> 3) & 1,
-                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 5) & 1, (jr.steps_ok >> 6) & 1, (jr.steps_ok >> 7) & 1,
+                        (jr.steps_ok >> 4) & 1, (jr.steps_ok >> 5) & 1, jr.sup_wpa_status, (jr.steps_ok >> 6) & 1, jr.pmk_status, (jr.steps_ok >> 7) & 1,
                         jr.set_ssid_ok, jr.set_ssid_status);
-                    kprint!("   [P10-E events] seen={} (type,status,flags):", jr.events_seen);
+                    kprint!("   [P10-E events] seen={} deauth={} (type,status,flags):", jr.events_seen, jr.deauth_seen);
                     for k in 0..jr.trail_len {
                         let (t, s, f) = jr.trail[k];
                         kprint!(" ({},{:#x},{:#x})", t, s, f);
                     }
                     kprint!("\n");
-                    if jr.link_up {
-                        kprint!(" [P10-E] PASS — ASSOCIATED: WLC_E_LINK up (psk_keyed={}) — heqk STA joined the AP, firmware installed the keys\n", jr.psk_keyed);
+                    if jr.link_up && jr.psk_keyed && !jr.deauth_seen {
+                        kprint!(" [P10-E] PASS — ASSOCIATED + KEYED: WLC_E_PSK_SUP keyed + WLC_E_LINK up, no deauth — heqk STA fully joined the WPA2 AP (firmware installed CCMP keys)\n");
+                    } else if jr.link_up && !jr.deauth_seen {
+                        kprint!(" [P10-E] PARTIAL — 802.11 link up but WPA2 keying UNCONFIRMED (psk_keyed={} pmk_ok={} sup_wpa_ok={}); handshake not proven — see trail\n",
+                            jr.psk_keyed, (jr.steps_ok >> 6) & 1, (jr.steps_ok >> 5) & 1);
+                    } else if jr.deauth_seen {
+                        kprint!(" [P10-E] DEAUTH — AP kicked us after assoc (keying failed / wrong PSK); last event={} status={:#x}\n", jr.last_event, jr.last_status);
                     } else {
-                        kprint!(" [P10-E] not linked yet — last event={} status={:#x}; event trail above shows the stage reached\n", jr.last_event, jr.last_status);
+                        kprint!(" [P10-E] NOT LINKED — last event={} status={:#x}; trail shows the stage reached\n", jr.last_event, jr.last_status);
                     }
                 } else {
                     kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
