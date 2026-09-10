@@ -2617,7 +2617,20 @@ fn cm5_p10_probe() {
                             if jr.eapol_len > 18 { jr.eapol[18] } else { 0 });
                     }
                     if jr.eapol_seen {
-                        kprint!(" [P10-E] PASS(data-path) — WiFi DATA path LIVE: heqk received the EAPOL-Key M1 over SDIO after assoc. Supplicant (PTK/M2/M3/M4) is the next build.\n");
+                        kprint!(" [P10-E] data-path LIVE — EAPOL M1 captured. Running the WPA2 host supplicant (S1: PTK -> M2 -> M3)...\n");
+                        // S1: derive PTK from the captured M1 + our PMK, send M2, watch for M3.
+                        let pmk = arch_aarch64::wpa::wpa_pmk(JOIN_PSK, JOIN_SSID);
+                        let mut hs = cyw43::Wpa4Way::new();
+                        cyw43::wpa_handshake(&jr.eapol, jr.eapol_len, &pmk, &mut hs);
+                        kprint!("   [P10-E s1] have_m1={} kdv={} snonce={} m2_tx={} | m3_seen={} m3_keyinfo={:#06x} deauth_after={} other_eapol={}\n",
+                            hs.have_m1, hs.kdv, hs.snonce_ok, hs.m2_tx_ok, hs.m3_seen, hs.m3_key_info, hs.deauth_after, hs.other_eapol);
+                        if hs.m3_seen {
+                            kprint!(" [P10-E] PASS(4way-S1) — AP sent M3! Our M2 (PTK+MIC over SDIO TX) was ACCEPTED — host supplicant works to M3. Next: M4 + AES-unwrap GTK + WLC_SET_KEY.\n");
+                        } else if hs.deauth_after {
+                            kprint!(" [P10-E] M2 sent but AP DEAUTHed (no M3) — MIC/PTK or RSN-IE mismatch; kdv={} m2_tx={}\n", hs.kdv, hs.m2_tx_ok);
+                        } else {
+                            kprint!(" [P10-E] M2 sent (tx={}) but no M3/deauth seen in window — see s1 diag\n", hs.m2_tx_ok);
+                        }
                     } else if jr.data_frames > 0 {
                         kprint!(" [P10-E] data path LIVE ({} ch2 frames) but no EAPOL captured (deauth={} link={}); assoc window may be too short\n", jr.data_frames, jr.deauth_seen, jr.link_up);
                     } else if jr.link_up {

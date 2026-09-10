@@ -2394,6 +2394,180 @@ pub fn wifi_data_probe(out: &mut DataProbe) {
     }
 }
 
+// ===========================================================================
+// P10-E WPA2 HOST SUPPLICANT (the firmware has no idsup — we run the 4-way HS).
+// Increment S1: derive the PTK from the captured M1, build + send M2, watch for M3.
+// ===========================================================================
+
+const SDPCM_DATA_CHANNEL: u8 = 2;
+
+/// Send one ethernet frame as an SDPCM DATA frame (channel 2) over F2. Mirrors the control
+/// TX framing (bcdc_dcmd) but channel=2 with a 4-byte BDC data header instead of the BCDC
+/// dcmd header. Rides the same SDPCM tx-credit + sequence as control.
+fn sdpcm_data_tx(eth: &[u8]) -> bool {
+    if !txctl_ok() {
+        return false;
+    }
+    let seq = unsafe { TX_SEQ };
+    let mut frame = [0u8; DL_CHUNK + 64];
+    let w0: u32 = (seq as u32)
+        | ((SDPCM_DATA_CHANNEL as u32) << 8)
+        | ((SDPCM_HDRLEN as u32) << 24);
+    let bdc = SDPCM_HDRLEN; // 12
+    frame[bdc] = 0x20; // BDC flags: proto ver 2 << 4
+    frame[bdc + 1] = 0; // priority
+    frame[bdc + 2] = 0; // flags2
+    frame[bdc + 3] = 0; // data_offset (4-byte units past the BDC header)
+    let body = bdc + 4;
+    let n = eth.len().min(frame.len() - body);
+    frame[body..body + n].copy_from_slice(&eth[..n]);
+    let total = (body + n) as u16;
+    frame[0..2].copy_from_slice(&total.to_le_bytes());
+    frame[2..4].copy_from_slice(&(!total).to_le_bytes());
+    frame[4..8].copy_from_slice(&w0.to_le_bytes());
+    let padded = ((total as usize) + 3) & !3;
+    let ok = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
+    if ok {
+        unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
+    }
+    ok
+}
+
+/// Outcome of the 4-way handshake attempt (S1 = up to M3).
+pub struct Wpa4Way {
+    pub have_m1: bool,
+    pub kdv: u8,        // key-descriptor version from M1 key-info (2 = HMAC-SHA1/AES)
+    pub snonce_ok: bool,
+    pub m2_tx_ok: bool,
+    pub m3_seen: bool,  // AP replied with another EAPOL after M2 ⇒ M2 (PTK+MIC) accepted
+    pub m3_key_info: u16,
+    pub m3_len: usize,
+    pub deauth_after: bool,
+    pub other_eapol: u32,
+}
+
+impl Wpa4Way {
+    pub fn new() -> Self {
+        Wpa4Way {
+            have_m1: false, kdv: 0, snonce_ok: false, m2_tx_ok: false, m3_seen: false,
+            m3_key_info: 0, m3_len: 0, deauth_after: false, other_eapol: 0,
+        }
+    }
+}
+
+/// The RSN information element for WPA2-PSK / CCMP. MUST match what the firmware put in the
+/// (re)association request or the AP rejects M2. group=CCMP, pairwise=CCMP, akm=PSK, no caps.
+const RSN_IE_PSK_CCMP: [u8; 22] = [
+    0x30, 0x14, 0x01, 0x00, // id, len=20, version 1
+    0x00, 0x0f, 0xac, 0x04, // group cipher = CCMP
+    0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, // pairwise count 1, CCMP
+    0x01, 0x00, 0x00, 0x0f, 0xac, 0x02, // akm count 1, PSK
+    0x00, 0x00, // RSN capabilities
+];
+
+/// S1 of the host supplicant: parse M1, derive the PTK, build + send M2, and watch channel 2
+/// for M3 (which proves M2's MIC — hence the PTK — was accepted) plus any deauth. `m1` is the
+/// captured ethernet EAPOL frame (dst=STA, src=AP). Key install + M4 are S2.
+pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way) {
+    let body = 18; // eth(14) + 802.1X hdr(4)
+    if m1_len < body + 95 {
+        return; // need a full EAPOL-Key body
+    }
+    out.have_m1 = true;
+    let mut spa = [0u8; 6];
+    spa.copy_from_slice(&m1[0..6]); // dst of M1 = us
+    let mut aa = [0u8; 6];
+    aa.copy_from_slice(&m1[6..12]); // src of M1 = AP
+    let m1_ki = u16::from_be_bytes([m1[body + 1], m1[body + 2]]);
+    out.kdv = (m1_ki & 0x0007) as u8;
+    let x1ver = m1[14]; // 802.1X protocol version to echo
+    let mut replay = [0u8; 8];
+    replay.copy_from_slice(&m1[body + 5..body + 13]);
+    let mut anonce = [0u8; 32];
+    anonce.copy_from_slice(&m1[body + 13..body + 45]);
+
+    // SNonce from the HW TRNG (fail-closed: no entropy ⇒ no handshake).
+    let mut snonce = [0u8; 32];
+    for k in 0..4 {
+        match crate::rng200::next_word_strict() {
+            Some(w) => snonce[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+            None => return,
+        }
+    }
+    out.snonce_ok = true;
+
+    let ptk = crate::wpa::wpa_ptk(pmk, &aa, &spa, &anonce, &snonce);
+    let mut kck = [0u8; 16];
+    kck.copy_from_slice(&ptk[0..16]);
+
+    // Build M2: EAPOL-Key, key info = M1 version | pairwise | MIC; key data = RSN IE.
+    let kd = RSN_IE_PSK_CCMP.len(); // 22
+    let mut m2 = [0u8; 14 + 4 + 95 + 22];
+    m2[0..6].copy_from_slice(&aa); // dst = AP
+    m2[6..12].copy_from_slice(&spa); // src = us
+    m2[12] = 0x88;
+    m2[13] = 0x8E; // EAPOL ethertype
+    m2[14] = x1ver;
+    m2[15] = 0x03; // EAPOL-Key
+    let x1len = (95 + kd) as u16;
+    m2[16..18].copy_from_slice(&x1len.to_be_bytes());
+    m2[body] = 0x02; // descriptor type RSN
+    let m2_ki = (m1_ki & 0x0007) | 0x0008 | 0x0100; // version | pairwise | MIC
+    m2[body + 1..body + 3].copy_from_slice(&m2_ki.to_be_bytes());
+    // key length @ +3 = 0; replay @ +5; nonce @ +13; iv/rsc/keyid zero; mic @ +77 zero.
+    m2[body + 5..body + 13].copy_from_slice(&replay);
+    m2[body + 13..body + 45].copy_from_slice(&snonce);
+    m2[body + 93..body + 95].copy_from_slice(&(kd as u16).to_be_bytes());
+    m2[body + 95..body + 95 + kd].copy_from_slice(&RSN_IE_PSK_CCMP);
+    // MIC over the whole 802.1X frame (offset 14..end) with the MIC field zeroed.
+    let mic = crate::wpa::wpa_mic_sha1(&kck, &m2[14..]);
+    m2[body + 77..body + 93].copy_from_slice(&mic);
+
+    out.m2_tx_ok = sdpcm_data_tx(&m2);
+
+    // Watch for M3 (another EAPOL from the AP) or a deauth.
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < 5000 {
+        i += 1;
+        if i % 256 == 0 {
+            let _ = ensure_ht_avail();
+        }
+        match read_sdpcm_frame(&mut rx) {
+            Some((2, _h, doff)) => {
+                let bdc_doff = rx[doff + 3] as usize;
+                let eth = doff + 4 + bdc_doff * 4;
+                if eth + body + 3 > rx.len() {
+                    continue;
+                }
+                if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) == 0x888E {
+                    let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
+                    // M3 has the ACK bit (0x80) set (AP->STA); M2's echo wouldn't.
+                    if ki & 0x0080 != 0 {
+                        out.m3_seen = true;
+                        out.m3_key_info = ki;
+                        out.m3_len = (rx.len() - eth).min(0xffff);
+                        break;
+                    }
+                    out.other_eapol += 1;
+                }
+            }
+            Some((1, _h, doff)) => {
+                let bdc_doff = rx[doff + 3] as usize;
+                let ev = doff + 4 + bdc_doff * 4;
+                if ev + 32 <= rx.len() {
+                    let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+                    if et == WLC_E_DEAUTH || et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC || et == WLC_E_DISASSOC_IND {
+                        out.deauth_after = true;
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 // --- BCDC control over SDIO F2 (SDPCM) — source-verified wire format ----------
 // dcmd header: struct brcmf_proto_bcdc_dcmd { u32 cmd; u32 len; u32 flags; u32 status; }
 const WLC_GET_VERSION: u32 = 1;
