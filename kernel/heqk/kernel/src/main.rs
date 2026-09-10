@@ -2590,10 +2590,13 @@ fn cm5_p10_probe() {
                     // firmware has no in-fw supplicant (cap string, iters 1-5): after 802.11
                     // assoc the AP sends EAPOL-Key M1 over SDPCM channel 2. Capturing it proves
                     // the data path on the real AP AND is the host supplicant's first input.
-                    // Debug target = the Pi4 AP (fully controllable, hostapd -dd for full
-                    // handshake visibility). SSID case is EXACT — it's the PBKDF2 salt.
-                    const JOIN_SSID: &[u8] = b"HookProbe-4785C8";
-                    const JOIN_PSK: &[u8] = b"change-me-1234567";
+                    // Production target = the fortress `hookprobe` AP (WPA2-PSK-CCMP). The whole
+                    // STA chain (assoc→4-way→PTK+GTK→DHCP→NAT→internet) was first proven against
+                    // the controllable Pi4 debug AP (HookProbe-4785C8/change-me-1234567, hostapd
+                    // -dd visibility); now re-prove on the real network. SSID case is EXACT — it
+                    // is the PBKDF2 salt.
+                    const JOIN_SSID: &[u8] = b"hookprobe";
+                    const JOIN_PSK: &[u8] = b"113527oeM+-!";
                     kprint!(" [P10-E] WiFi STA join \"");
                     for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
                     kprint!("\" (WPA2) — capturing the EAPOL M1 (data-path proof)...\n");
