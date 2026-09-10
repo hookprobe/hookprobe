@@ -2664,6 +2664,193 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
 }
 
 // ===========================================================================
+// P10-E TRAFFIC VALIDATION — prove heqk can actually USE the link: resolve the
+// gateway (ARP), ICMP-echo the gateway (L3 on-link), then ICMP-echo an internet
+// host through the AP's NAT (data from the internet round-trips back). Same
+// encrypted WiFi data path (sdpcm_data_tx / ch2 RX); fw does CCMP transparently.
+// ===========================================================================
+
+pub struct PingResult {
+    pub sta_ip: [u8; 4],
+    pub gw_ip: [u8; 4],
+    pub gw_mac: [u8; 6],
+    pub arp_tx: bool,
+    pub arp_reply: bool,
+    pub gw_ping_tx: bool,
+    pub gw_ping_reply: bool,
+    pub gw_ttl: u8,
+    pub inet_ip: [u8; 4], // the internet target (e.g. 8.8.8.8)
+    pub inet_ping_tx: bool,
+    pub inet_ping_reply: bool,
+    pub inet_ttl: u8, // TTL of the internet reply (proves it traversed routers/NAT)
+    pub icmp_replies: u32,
+}
+
+impl PingResult {
+    pub fn new() -> Self {
+        PingResult {
+            sta_ip: [0; 4], gw_ip: [0; 4], gw_mac: [0; 6],
+            arp_tx: false, arp_reply: false, gw_ping_tx: false, gw_ping_reply: false, gw_ttl: 0,
+            inet_ip: [0; 4], inet_ping_tx: false, inet_ping_reply: false, inet_ttl: 0, icmp_replies: 0,
+        }
+    }
+}
+
+/// Build an ARP request ("who has `tpa`, tell `spa`/`mac`") into `buf`; returns the length
+/// (42, padded to the 60-byte ethernet minimum).
+fn build_arp(buf: &mut [u8], mac: &[u8; 6], spa: &[u8; 4], tpa: &[u8; 4]) -> usize {
+    for b in buf[..60].iter_mut() { *b = 0; }
+    buf[0..6].copy_from_slice(&[0xff; 6]);
+    buf[6..12].copy_from_slice(mac);
+    buf[12] = 0x08; buf[13] = 0x06;                 // ARP
+    buf[14] = 0x00; buf[15] = 0x01;                 // htype ethernet
+    buf[16] = 0x08; buf[17] = 0x00;                 // ptype IPv4
+    buf[18] = 6; buf[19] = 4;                       // hlen, plen
+    buf[20] = 0x00; buf[21] = 0x01;                 // op = request
+    buf[22..28].copy_from_slice(mac);               // sender HW
+    buf[28..32].copy_from_slice(spa);               // sender IP
+    // target HW = 0 (unknown)
+    buf[38..42].copy_from_slice(tpa);               // target IP
+    60
+}
+
+/// Build an ICMP echo request to `dip` (routed via `dst_mac`) into `buf`; returns the length.
+fn build_icmp_echo(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], id: u16, seq: u16) -> usize {
+    for b in buf[..74].iter_mut() { *b = 0; }
+    // Ethernet
+    buf[0..6].copy_from_slice(dst_mac);
+    buf[6..12].copy_from_slice(mac);
+    buf[12] = 0x08; buf[13] = 0x00;
+    // IPv4 (20B): 20 + 8 ICMP hdr + 32 payload = 60 total
+    let payload = 32usize;
+    buf[14] = 0x45; buf[15] = 0x00;
+    let iplen = (20 + 8 + payload) as u16;
+    buf[16..18].copy_from_slice(&iplen.to_be_bytes());
+    buf[22] = 64; buf[23] = 1; // TTL, proto=ICMP
+    buf[26..30].copy_from_slice(sip);
+    buf[30..34].copy_from_slice(dip);
+    let ipc = inet_csum(&buf[14..34], 0);
+    buf[24..26].copy_from_slice(&ipc.to_be_bytes());
+    // ICMP (8B hdr + 32 payload)
+    buf[34] = 8; buf[35] = 0; // echo request
+    buf[38..40].copy_from_slice(&id.to_be_bytes());
+    buf[40..42].copy_from_slice(&seq.to_be_bytes());
+    for k in 0..payload { buf[42 + k] = b"heqk-icmp-payload-0123456789ABCD"[k]; }
+    let icc = inet_csum(&buf[34..34 + 8 + payload], 0);
+    buf[36..38].copy_from_slice(&icc.to_be_bytes());
+    14 + 20 + 8 + payload
+}
+
+/// Parse a received ethernet frame; if it's an ARP reply from `want_ip`, copy the sender MAC
+/// into `mac_out` and return 1; if it's an ICMP echo reply (type 0) with our `id`, fill `ttl`
+/// + `src` and return 2; else 0.
+fn parse_ping_reply(eth: &[u8], want_arp_ip: &[u8; 4], id: u16, mac_out: &mut [u8; 6], ttl: &mut u8, src: &mut [u8; 4]) -> u8 {
+    if eth.len() < 42 { return 0; }
+    let et = u16::from_be_bytes([eth[12], eth[13]]);
+    if et == 0x0806 {
+        // ARP reply, sender IP == the gateway we asked about
+        if eth[20] == 0x00 && eth[21] == 0x02 && &eth[28..32] == &want_arp_ip[..] {
+            mac_out.copy_from_slice(&eth[22..28]);
+            return 1;
+        }
+        return 0;
+    }
+    if et == 0x0800 {
+        let ihl = ((eth[14] & 0x0f) as usize) * 4;
+        if eth[23] != 1 { return 0; } // ICMP
+        let l4 = 14 + ihl;
+        if l4 + 8 > eth.len() { return 0; }
+        if eth[l4] != 0 { return 0; } // echo reply
+        let rid = u16::from_be_bytes([eth[l4 + 4], eth[l4 + 5]]);
+        if rid != id { return 0; }
+        *ttl = eth[22];
+        src.copy_from_slice(&eth[26..30]);
+        return 2;
+    }
+    0
+}
+
+/// Poll channel 2 for up to `budget` reads looking for an ARP reply (mode 1) or an ICMP echo
+/// reply (mode 2). Returns true on the first match. `retx` (frame,len) is retransmitted every
+/// 40 reads (ARP/ICMP are lossy).
+fn ping_wait(mode: u8, want_ip: &[u8; 4], id: u16, out: &mut PingResult, retx: &[u8], budget: u32) -> bool {
+    let mut rx = [0u8; 2048];
+    let mut i = 0u32;
+    while i < budget {
+        i += 1;
+        if i % 40 == 0 { let _ = sdpcm_data_tx(retx); }
+        let (channel, _hw, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 2 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let eth = doff + 4 + bdc_doff * 4;
+        if eth + 14 > rx.len() { continue; }
+        let mut mac = [0u8; 6];
+        let mut ttl = 0u8;
+        let mut src = [0u8; 4];
+        let r = parse_ping_reply(&rx[eth..], want_ip, id, &mut mac, &mut ttl, &mut src);
+        if mode == 1 && r == 1 {
+            out.gw_mac = mac;
+            return true;
+        }
+        if mode == 2 && r == 2 && &src[..] == &want_ip[..] {
+            out.icmp_replies += 1;
+            out.inet_ttl = ttl; // caller distinguishes gw vs inet by which call
+            return true;
+        }
+    }
+    false
+}
+
+/// Traffic validation: ARP the gateway, ICMP-echo the gateway, then ICMP-echo `inet_ip`
+/// through the AP's NAT. Requires an active lease (PTK/GTK installed, fw does CCMP).
+pub fn wifi_ping(sta_ip: &[u8; 4], gw_ip: &[u8; 4], inet_ip: &[u8; 4], out: &mut PingResult) {
+    out.sta_ip = *sta_ip;
+    out.gw_ip = *gw_ip;
+    out.inet_ip = *inet_ip;
+    let mut mac = [0u8; 6];
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut mac);
+    let mut pkt = [0u8; 128];
+
+    // 1. ARP the gateway.
+    let n = build_arp(&mut pkt, &mac, sta_ip, gw_ip);
+    out.arp_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'A');
+    let arp_frame = { let mut f = [0u8; 60]; f.copy_from_slice(&pkt[..60]); f };
+    if ping_wait(1, gw_ip, 0, out, &arp_frame, 120) {
+        out.arp_reply = true;
+        dbg_putc(b'm');
+    } else {
+        return; // no gateway MAC ⇒ can't route
+    }
+    let gw_mac = out.gw_mac;
+    let id: u16 = 0x4845; // "HE"
+
+    // 2. ICMP echo the gateway (on-link L3).
+    let n = build_icmp_echo(&mut pkt, &mac, &gw_mac, sta_ip, gw_ip, id, 1);
+    out.gw_ping_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'w');
+    let mut echo = [0u8; 74];
+    echo.copy_from_slice(&pkt[..74]);
+    if ping_wait(2, gw_ip, id, out, &echo, 120) {
+        out.gw_ping_reply = true;
+        out.gw_ttl = out.inet_ttl; // ping_wait stored the reply TTL here
+        out.inet_ttl = 0;
+        dbg_putc(b'W');
+    }
+
+    // 3. ICMP echo an internet host THROUGH NAT — proves data from the internet.
+    let n = build_icmp_echo(&mut pkt, &mac, &gw_mac, sta_ip, inet_ip, id, 2);
+    out.inet_ping_tx = sdpcm_data_tx(&pkt[..n]);
+    dbg_putc(b'i');
+    let mut echo2 = [0u8; 74];
+    echo2.copy_from_slice(&pkt[..74]);
+    if ping_wait(2, inet_ip, id, out, &echo2, 160) {
+        out.inet_ping_reply = true;
+        dbg_putc(b'I');
+    }
+}
+
+// ===========================================================================
 // P10-E WPA2 HOST SUPPLICANT (the firmware has no idsup — we run the 4-way HS).
 // Increment S1: derive the PTK from the captured M1, build + send M2, watch for M3.
 // ===========================================================================
