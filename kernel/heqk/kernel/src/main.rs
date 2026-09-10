@@ -414,6 +414,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
             attest_replay(bi);
             cm5_attest_challenge(bi);
             cm5_el2_isolation_test();
+            cm5_sec2_mailbox_carve_test();
         } else {
             kprint!(" hboot: BAD BootInfo magic {:#x} @ {:#x}\n", bi.magic, bootinfo_pa);
         }
@@ -3842,6 +3843,35 @@ fn cm5_el2_isolation_test() {
         kprint!("\n [P7e] PASS — EL1 blocked from HBoot EL2 region (stage-2 isolation, B-3)\n");
     } else {
         kprint!("\n [P7e] FAIL — EL1 read HBoot memory: {:#018x}\n", val);
+    }
+}
+
+/// SEC-2 (V3, PH2b): prove the VC-mailbox 4 KiB page is CARVED out of EL1's stage-2 map.
+/// EL1 reads the mailbox MMIO directly; under the carve the access takes a stage-2 fault to
+/// EL2, which marks it ('V') and skips the load — so our sentinel survives (the read
+/// returned nothing). If the carve were absent, `val` would hold the mailbox register value.
+/// The kernel's LEGITIMATE mailbox ops go through the `hvc #2` proxy and are unaffected; only
+/// this DIRECT MMIO read faults — which is exactly the OTP-re-read path a compromised EL1
+/// kernel would take, now denied. Same sentinel technique as `cm5_el2_isolation_test`.
+#[cfg(feature = "hboot")]
+fn cm5_sec2_mailbox_carve_test() {
+    let sentinel: u64 = 0x5EC2_CA47_0DEF_ACE0;
+    let val: u64;
+    kprint!(" [P-sec2-carve] EL1 probing VC-mailbox @0x10_7C01_3880 (expect EL2 trap 'V'): ");
+    unsafe {
+        core::arch::asm!(
+            "mov {v}, {sent}",
+            "ldr {v}, [{a}]",
+            v = out(reg) val,
+            sent = in(reg) sentinel,
+            a = in(reg) 0x10_7C01_3880usize,
+            options(nostack),
+        );
+    }
+    if val == sentinel {
+        kprint!("\n [P-sec2-carve] PASS — EL1 blocked from the VC-mailbox page (V3/SEC-2 CLOSED; OTP unreadable from EL1, only hvc #2 remains)\n");
+    } else {
+        kprint!("\n [P-sec2-carve] FAIL — EL1 read the mailbox directly: {:#018x}\n", val);
     }
 }
 

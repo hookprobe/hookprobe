@@ -393,8 +393,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // PH2a: hand the sealing root key to the kernel via the SealHandoff page. HBoot
     // derived the SRK from the OTP secret (SRK = SHA256("HEQK-SEAL-SRK-v1" || OTP)); the
     // kernel derives every per-policy key from it and NEVER sees the OTP secret. bit1
-    // (FROM_OTP) marks the SRK real + per-device; bit0 (HW_DERIVED = tamper-proof) is set
-    // only once V3/SEC-2 closes (EL1 can no longer read OTP) — PH2b.
+    // (FROM_OTP) marks the SRK real + per-device; bit0 (HW_DERIVED = tamper-proof) is now
+    // ALSO set because SEC-2/V3 is CLOSED — `stage2::enable` carves the VC-mailbox page out
+    // of the EL1 stage-2 map, so a compromised EL1 kernel can no longer read the OTP secret
+    // (its only mailbox path is the whitelisted `hvc #2` proxy, which refuses OTP tags). The
+    // on-device sealing binding is therefore tamper-proof, not just per-device (PH2b done).
     unsafe {
         write_volatile(
             SEAL_HANDOFF_ADDR as *mut SealHandoff,
@@ -404,7 +407,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 device_id,
                 svn_floor: floor,
                 pcr: pcrs,
-                flags: if ak.hw_bound { SEAL_FLAG_SRK_FROM_OTP } else { 0 },
+                flags: if ak.hw_bound {
+                    SEAL_FLAG_SRK_FROM_OTP | SEAL_FLAG_SRK_HW_DERIVED
+                } else {
+                    0
+                },
             },
         );
     }
@@ -413,7 +420,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         unsafe { core::ptr::write_volatile(b, 0) };
     }
     puts(if ak.hw_bound {
-        " seal   : SRK handed to kernel (per-device, OTP-derived); V3/SEC-2 open -> not yet tamper-proof\n"
+        " seal   : SRK handed to kernel (per-device, OTP-derived); V3/SEC-2 CLOSED (mailbox carved) -> tamper-proof\n"
     } else {
         " seal   : no OTP secret -> no SRK handoff (kernel keeps its synthetic seal key)\n"
     });
