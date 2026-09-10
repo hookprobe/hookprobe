@@ -3950,6 +3950,8 @@ pub extern "C" fn kmain() -> ! {
 
     // CORE-2: prove per-TCB CSpace isolation + rights-narrowing delegation.
     cspace_isolation_demo();
+    // CORE-2 teardown (A1a): a freed scheduler slot must not inherit the dead task's caps.
+    p2_teardown_demo();
 
     // CORE-1: prove mapping flows through a capability invocation AND that revoke
     // SEVERS the mapping (invalidates the L3 entry), not just clears the CSpace slot.
@@ -7589,6 +7591,7 @@ fn p12_task_exit(cur: usize, frame: *mut u64) -> usize {
     ipc::detach_tcb(cur); // R1: also unpark from any sync-IPC endpoint (no stale reply)
     scheduler::exit_current();
     scheduler::clear_restart(cur); // a reused slot must not inherit scheduled-restart
+    clear_cspace(cur); // CORE-2 teardown (A1a): a reused slot must not inherit stale caps
     let next = scheduler::on_tick(frame as usize);
     switch_to(next)
 }
@@ -8054,6 +8057,21 @@ fn install_cspace(tid: usize, cs: caps::CapSpace) {
     unsafe { (*core::ptr::addr_of_mut!(CSPACE))[tid] = Some(cs) };
 }
 
+/// CORE-2 teardown (A1a) — DROP a thread's CSpace on its FINAL exit. Without this a reused
+/// scheduler slot (tid) would inherit the dead task's caps: `current_cspace()` would resolve
+/// the previous occupant's authority for the new occupant — a confused-deputy. Called from
+/// `p12_task_exit` (clean exit + scheduled-TCB SYS_EXIT_USER) and the fault-kill path, so a
+/// freed tid resolves NO caps until the next spawn installs its OWN CSpace. Cheap + fail-safe
+/// (out-of-range tid is a no-op); the drop releases the CapSpace slot array. NOTE: frames the
+/// task mapped through its caps are torn down with its address space, not here — CSpace
+/// inheritance is the confused-deputy this closes.
+fn clear_cspace(tid: usize) {
+    if tid >= scheduler::MAX_THREADS {
+        return;
+    }
+    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[tid] = None };
+}
+
 /// Build the root task's CSpace: retype real-frame-backed caps from an Untyped
 /// over reserved physical memory, and prove a Frame cap backs real RAM.
 fn build_root_cspace() {
@@ -8139,6 +8157,36 @@ fn cspace_isolation_demo() {
 ///      INVALID. Authority was severed BY revoke, through the cap, not by clearing a slot.
 /// Uses a local CSpace + real reserved frames; arch-neutral read-back so it validates
 /// under QEMU. #[cfg(not(cm5))] so the metal build is untouched (P10-BT lesson).
+/// A1a [P2-teardown] (CORE-2 CSpace kill-clear) — prove that a thread's CSpace is DROPPED on
+/// its final exit so a REUSED scheduler slot cannot inherit the dead task's caps (the
+/// confused-deputy `clear_cspace` closes, now wired into p12_task_exit + the fault-kill path).
+/// Table-level (uses a never-spawned spare slot, perturbs nothing live): install a CSpace
+/// holding a Frame cap -> it resolves; clear_cspace (what exit calls) -> the slot resolves
+/// NOTHING; a new occupant's OWN (empty) CSpace does NOT see the old cap.
+#[cfg(not(feature = "cm5"))]
+fn p2_teardown_demo() {
+    use caps::{CapSpace, ObjType};
+    let tid = scheduler::MAX_THREADS - 2; // a slot never spawned this run (spare is MAX-1)
+    let base = arch_aarch64::mmu::reserve_region(8192);
+    let mut cs = CapSpace::with_root_untyped(base, 8192);
+    let frame = cs.retype(0, ObjType::Frame, 4096).unwrap();
+    install_cspace(tid, cs);
+    let installed = cspace_of(tid).map(|c| c.get(frame).is_some()).unwrap_or(false);
+    // CORE-2 teardown: what the exit paths now call. The slot then resolves NO caps.
+    clear_cspace(tid);
+    let cleared = cspace_of(tid).is_none();
+    // Reuse: a NEW occupant installs its OWN (empty) CSpace -> the old cap is NOT inherited.
+    install_cspace(tid, CapSpace::empty());
+    let no_inherit = cspace_of(tid).map(|c| c.get(frame).is_none()).unwrap_or(false);
+    clear_cspace(tid); // leave the spare slot as we found it
+    let ok = installed && cleared && no_inherit;
+    kprint!(
+        " [P2-teardown] {} — CORE-2 CSpace kill-clear (wired into p12_task_exit + fault-kill): cap-installed-resolves={} cleared-on-exit={} reused-slot-no-inherit={}\n",
+        if ok { "PASS" } else { "FAIL" },
+        installed, cleared, no_inherit
+    );
+}
+
 /// A1b [P-cm5-cap] (CORE-1 capability enforcement on CM5 SILICON) — the `mmu_cm5`-backend
 /// sibling of the QEMU [P2-unmap] proof. [PH7-caps] already proves the cap ALGEBRA on the
 /// CM5 backend, but NOT that a page mapping is cap-GATED + that revoke SEVERS a real page
@@ -9815,6 +9863,7 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
             kprint!("   [EL0 fault] restart budget exhausted -> killing driver TCB {}\n", cur);
             scheduler::exit_current();
             scheduler::clear_restart(cur); // a reused slot must not inherit this record
+            clear_cspace(cur); // CORE-2 teardown (A1a): nor inherit the dead TCB's caps
             // AUDIT M-9: pass the KERNEL trap frame, never the attacker-controlled
             // SP_EL0 (frame slot 33) — on_tick stores its arg into the kernel SP table.
             scheduler::on_tick(frame as usize)
