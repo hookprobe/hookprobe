@@ -2083,6 +2083,14 @@ const WLC_SET_WSEC: u32 = 134; // wsec bitmask
 const WLC_SET_WPA_AUTH: u32 = 165;
 const WLC_SET_WSEC_PMK: u32 = 268; // payload = wsec_pmk_t
 const WLC_SET_PM_: u32 = 86; // power-mgmt (0 = CAM/awake through the handshake)
+const WLC_SET_CHANNEL: u32 = 30; // legacy channel set (u32 channel number) — for AP mode
+const WLC_SET_AP: u32 = 118; // 1 = this bsscfg is an AP
+const WLC_GET_AP: u32 = 117;
+
+// AP-mode client-indication events (host = the WPA2 authenticator).
+const WLC_E_AUTH_IND: u32 = 4;
+const WLC_E_ASSOC_IND: u32 = 8;
+const WLC_E_REASSOC_IND: u32 = 10;
 
 const AES_ENABLED: u32 = 0x0004; // wsec bit: CCMP/AES
 const WPA2_AUTH_PSK: u32 = 0x0080; // wpa_auth: WPA2-PSK
@@ -2174,6 +2182,155 @@ pub fn fw_cap(out: &mut [u8]) -> usize {
     } else {
         0
     }
+}
+
+// ===========================================================================
+// P11 — AP MODE (heqk as the WiFi authenticator). Increment M-AP0: drive the
+// FullMAC firmware into AP mode and start beaconing. The firmware makes beacons,
+// probe-responses, and 802.11 auth/assoc-responses itself; the host only sets
+// AP config here (and later runs the WPA2 authenticator + per-station keys).
+// cap string starts "ap sta ..." so the blob supports AP.
+// ===========================================================================
+
+pub struct ApResult {
+    pub cap_has_ap: bool,   // "ap" token present in the firmware cap string
+    pub down_ok: bool,
+    pub apsta_ok: bool,     // "apsta"=0 (pure AP) accepted
+    pub set_ap_ok: bool,    // WLC_SET_AP=1 accepted
+    pub infra_ok: bool,
+    pub chan_ok: bool,      // WLC_SET_CHANNEL accepted
+    pub wsec_ok: bool,
+    pub wpa_auth_ok: bool,
+    pub up_ok: bool,
+    pub ssid_ok: bool,      // WLC_SET_SSID (starts the BSS beaconing)
+    pub get_ap: u32,        // WLC_GET_AP readback (1 = AP mode active)
+    pub get_ap_ok: bool,
+    pub bssid: [u8; 6],     // our AP BSSID (= heqk MAC) read back
+}
+
+impl ApResult {
+    pub fn new() -> Self {
+        ApResult {
+            cap_has_ap: false, down_ok: false, apsta_ok: false, set_ap_ok: false, infra_ok: false,
+            chan_ok: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
+            get_ap: 0, get_ap_ok: false, bssid: [0; 6],
+        }
+    }
+}
+
+/// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
+/// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
+/// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
+pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
+    let _ = wake_chip();
+    drain_firmware_mailbox();
+    let _ = ensure_ht_avail();
+
+    // Does the blob advertise AP at all?
+    let mut cap = [0u8; 512];
+    let cl = fw_cap(&mut cap);
+    out.cap_has_ap = has_token(&cap[..cl], b"ap");
+
+    // Configure while DOWN.
+    out.down_ok = wlc_set_int(WLC_DOWN, 0);
+
+    // Enable the AP client-indication events so the authenticator (M-AP2) sees joins.
+    let mut mask = [0u8; 16];
+    let _ = bcdc_iovar_get(b"event_msgs", &mut mask);
+    for e in [WLC_E_AUTH_IND, WLC_E_ASSOC_IND, WLC_E_REASSOC_IND, WLC_E_DISASSOC_IND, WLC_E_DEAUTH_IND] {
+        mask[(e / 8) as usize] |= 1 << (e % 8);
+    }
+    let mut iob = [0u8; 64];
+    let nm = iovar_buf(b"event_msgs", &mask, &mut iob);
+    let _ = bcdc_iovar_set(&iob[..nm]);
+
+    // Pure AP: "apsta"=0 then WLC_SET_AP=1.
+    let mut ab = [0u8; 32];
+    let na = iovar_buf(b"apsta", &0u32.to_le_bytes(), &mut ab);
+    out.apsta_ok = bcdc_iovar_set(&ab[..na]);
+    out.set_ap_ok = wlc_set_int(WLC_SET_AP, 1);
+    out.infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
+
+    // Keep the radio on (no minimum-power-consumption sleep that would drop beacons).
+    let mut mb = [0u8; 32];
+    let nmb = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut mb);
+    let _ = bcdc_iovar_set(&mb[..nmb]);
+
+    // Channel (legacy ioctl — avoids the fiddly chanspec encoding for bring-up).
+    out.chan_ok = wlc_set_int(WLC_SET_CHANNEL, channel);
+
+    // Security suite for the BSS.
+    let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
+    out.wsec_ok = wlc_set_int(WLC_SET_WSEC, wsec);
+    out.wpa_auth_ok = wlc_set_int(WLC_SET_WPA_AUTH, wpa_auth);
+    if !open {
+        // Advertise EXACTLY our RSN IE in beacons/probe-responses.
+        let mut wb = [0u8; 48];
+        let n = iovar_buf(b"wpaie", &RSN_IE_PSK_CCMP, &mut wb);
+        let _ = bcdc_iovar_set(&wb[..n]);
+    }
+    let _ = wlc_set_int(WLC_SET_PM_, 0);
+
+    // Bring the radio up, then start the BSS by writing the SSID (this begins beaconing).
+    out.up_ok = wlc_set_int(WLC_UP, 1);
+    delay(80_000);
+    let _ = ensure_ht_avail();
+
+    let mut sb = [0u8; 36];
+    let slen = ssid.len().min(32);
+    sb[0..4].copy_from_slice(&(slen as u32).to_le_bytes());
+    sb[4..4 + slen].copy_from_slice(&ssid[..slen]);
+    let (sok, _st) = bcdc_dcmd(WLC_SET_SSID, BCDC_SET, &sb[..4 + slen], &mut []);
+    out.ssid_ok = sok;
+    delay(50_000);
+
+    // Read back AP state + our BSSID for the verdict.
+    let mut apb = [0u8; 4];
+    let (gok, _gs) = bcdc_dcmd(WLC_GET_AP, 0, &[], &mut apb);
+    out.get_ap_ok = gok;
+    out.get_ap = u32::from_le_bytes(apb);
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
+}
+
+/// M-AP1 helper: hold the beacon up and report client-indication events (a station's
+/// AUTH_IND/ASSOC_IND) for a bounded window. Returns the number of ASSOC_IND seen and the
+/// MAC of the last associating station (into `last_sta`). Keeps HT/backplane up.
+pub fn ap_watch_events(budget: u32, last_sta: &mut [u8; 6]) -> u32 {
+    let mut rx = [0u8; 2048];
+    let mut assoc = 0u32;
+    let mut i = 0u32;
+    while i < budget {
+        i += 1;
+        if i % 16 == 0 { let _ = ensure_ht_avail(); }
+        let (channel, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 1 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let ev = doff + 4 + bdc_doff * 4;
+        if ev + 40 > rx.len() { continue; }
+        let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+        // The brcmf_event carries the peer MAC in its addr field (ev+24..30).
+        if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
+            last_sta.copy_from_slice(&rx[ev + 24..ev + 30]);
+            assoc += 1;
+            dbg_putc(b'C'); // client associated
+        } else if et == WLC_E_AUTH_IND {
+            dbg_putc(b'H'); // client authenticating
+        }
+    }
+    assoc
+}
+
+/// True if the space-separated token list `hay` contains exactly `tok`.
+fn has_token(hay: &[u8], tok: &[u8]) -> bool {
+    let mut i = 0;
+    while i < hay.len() {
+        while i < hay.len() && hay[i] == b' ' { i += 1; }
+        let start = i;
+        while i < hay.len() && hay[i] != b' ' && hay[i] != 0 { i += 1; }
+        if &hay[start..i] == tok { return true; }
+        if i < hay.len() && hay[i] == 0 { break; }
+    }
+    false
 }
 
 /// Associate to a WPA2-PSK AP. `ssid` (<=32 B) + `passphrase` (8..63 B). Fills
