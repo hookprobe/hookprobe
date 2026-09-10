@@ -576,10 +576,13 @@ pub fn phy0_led_config(phy: u32) -> (u16, u16, u16) {
     // read current LED Selector 1 (shadow 0x0D).
     phy_write(phy, 0x1c, 0x0d << 10);
     let before = phy_read(phy, 0x1c) & 0x3ff;
-    // green(LED1)=LINKSPD1(0x0), amber(LED3)=ACTIVITYLED(0x3) -> 0x030. This is the WORKING
-    // value (operator confirmed end0 green was solid at 0x030); LINKSPD2(0x1) regressed it to
-    // an occasional flash, so keep LINKSPD1.
-    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x030);
+    // green(LED1)=FDXLED(0x4), amber(LED3)=ACTIVITYLED(0x3) -> 0x034. LINKSPD1(0x0) is DARK at
+    // a gigabit link on this PHY (metal: [P8] speed_code=7 = 1000/full, green off), and
+    // LINKSPD2(0x1) only flickered — neither is a speed-independent SOLID source. FDXLED is on
+    // whenever the link is full-duplex (every 10/100/1000 link here), giving a solid green
+    // link indicator regardless of speed. (Sources per Linux bcm-phy-lib.h: LINKSPD1=0x0,
+    // LINKSPD2=0x1, XMIT=0x2, ACTIVITY=0x3, FDX=0x4.)
+    phy_write(phy, 0x1c, 0x8000 | (0x0d << 10) | 0x034);
     // read back.
     phy_write(phy, 0x1c, 0x0d << 10);
     let after = phy_read(phy, 0x1c) & 0x3ff;
