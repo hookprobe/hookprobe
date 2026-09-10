@@ -2423,8 +2423,15 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
     let mut rx = [0u8; 2048];
     let mut pkt = [0u8; 400];
     let mut i = 0u32;
+    let mut ack_deadline = 0u32; // once the lease ACK is sent, linger only briefly then return
     while i < budget {
         i += 1;
+        // After leasing, return promptly: the persistent AP loop must get back to
+        // ap_wait_assoc so a client's DISCONNECT+RECONNECT (a fresh WLC_E_ASSOC_IND on
+        // channel 1) is caught — lingering here reads+discards that ch1 event and the
+        // reconnect's 4-way is then never run (looks like a wrong password). ~15 reads
+        // after the ACK still answer the client's gateway ARP.
+        if ack_deadline != 0 && i >= ack_deadline { break; }
         if i % 16 == 0 { let _ = ensure_ht_avail(); }
         let (channel, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
         if channel != 2 { continue; }
@@ -2457,7 +2464,12 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
                 out.requests += 1;
                 out.client_mac = cmac;
                 let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 5); // ACK
-                if sdpcm_data_tx(&pkt[..n]) { out.acks_tx += 1; out.leased_ip = *offer_ip; dbg_putc(b'K'); }
+                if sdpcm_data_tx(&pkt[..n]) {
+                    out.acks_tx += 1;
+                    out.leased_ip = *offer_ip;
+                    dbg_putc(b'K');
+                    if ack_deadline == 0 { ack_deadline = i + 15; } // linger briefly, then return to the assoc-wait
+                }
             }
             _ => {}
         }
