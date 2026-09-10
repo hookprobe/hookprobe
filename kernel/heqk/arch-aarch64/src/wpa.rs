@@ -167,6 +167,63 @@ pub fn wpa_pmk(passphrase: &[u8], ssid: &[u8]) -> [u8; 32] {
     out
 }
 
+/// WPA2 PRF (IEEE 802.11i §8.5.1.1) built on HMAC-SHA1: `out` = the first out.len()
+/// bytes of HMAC-SHA1(key, label || 0x00 || data || i) for i = 0,1,2,…
+fn prf(key: &[u8], label: &[u8], data: &[u8], out: &mut [u8]) {
+    let mut msg = [0u8; 160]; // label(<=32) + 1 + data(<=76) + 1
+    let base = label.len() + 1 + data.len();
+    msg[..label.len()].copy_from_slice(label);
+    msg[label.len()] = 0x00;
+    msg[label.len() + 1..base].copy_from_slice(data);
+    let mut i = 0u8;
+    let mut pos = 0;
+    while pos < out.len() {
+        msg[base] = i;
+        let d = hmac_sha1(key, &msg[..base + 1]);
+        let take = (out.len() - pos).min(20);
+        out[pos..pos + take].copy_from_slice(&d[..take]);
+        pos += take;
+        i += 1;
+    }
+}
+
+/// Derive the WPA2 PTK for CCMP (384 bits = KCK[16] ‖ KEK[16] ‖ TK[16]).
+/// PTK = PRF-384(PMK, "Pairwise key expansion",
+///   min(AA,SPA) ‖ max(AA,SPA) ‖ min(ANonce,SNonce) ‖ max(ANonce,SNonce)).
+pub fn wpa_ptk(
+    pmk: &[u8; 32],
+    aa: &[u8; 6],
+    spa: &[u8; 6],
+    anonce: &[u8; 32],
+    snonce: &[u8; 32],
+) -> [u8; 48] {
+    let mut data = [0u8; 76];
+    // min/max of the two MACs (lexicographic).
+    let (lo_m, hi_m) = if aa <= spa { (aa, spa) } else { (spa, aa) };
+    data[0..6].copy_from_slice(lo_m);
+    data[6..12].copy_from_slice(hi_m);
+    // min/max of the two nonces.
+    let (lo_n, hi_n): (&[u8; 32], &[u8; 32]) = if anonce <= snonce {
+        (anonce, snonce)
+    } else {
+        (snonce, anonce)
+    };
+    data[12..44].copy_from_slice(lo_n);
+    data[44..76].copy_from_slice(hi_n);
+    let mut ptk = [0u8; 48];
+    prf(pmk, b"Pairwise key expansion", &data, &mut ptk);
+    ptk
+}
+
+/// EAPOL-Key MIC for Key Descriptor Version 2 (HMAC-SHA1-128): the first 16 bytes of
+/// HMAC-SHA1(KCK, eapol_frame) where the frame's MIC field is zeroed before hashing.
+pub fn wpa_mic_sha1(kck: &[u8; 16], eapol: &[u8]) -> [u8; 16] {
+    let full = hmac_sha1(kck, eapol);
+    let mut mic = [0u8; 16];
+    mic.copy_from_slice(&full[..16]);
+    mic
+}
+
 /// Known-answer test (IEEE 802.11i): PBKDF2-HMAC-SHA1("password","IEEE",4096,32)
 /// = f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e. Proves the
 /// SHA-1/HMAC/PBKDF2 chain on-device before a real PMK is ever trusted.
