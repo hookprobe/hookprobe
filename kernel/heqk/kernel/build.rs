@@ -349,6 +349,15 @@ fn build_wasip1_fixture(kernel_manifest_dir: &str, out_dir: &str) {
     std::fs::write(dir.join("fixture_wasip1.wasm"), &wasm).expect("write wasip1 wasm");
     std::fs::write(dir.join("fixture_wasip1.pk"), kp.pk.as_ref()).expect("write wasip1 pk");
     std::fs::write(dir.join("fixture_wasip1.sig"), sig.as_ref()).expect("write wasip1 sig");
+
+    // A2+ — the SECOND catalogue module (DNS-RPZ), signed with the SAME pinned root key.
+    let produced2 = nested_target.join("wasm32-wasip1/release/wasip1-dnsrpz.wasm");
+    let wasm2 = std::fs::read(&produced2)
+        .unwrap_or_else(|e| panic!("wasip1-dnsrpz wasm not found at {}: {e}", produced2.display()));
+    let sig2 = kp.sk.sign(&wasm2, None);
+    std::fs::write(dir.join("fixture_wasip1_dnsrpz.wasm"), &wasm2).expect("write dnsrpz wasm");
+    std::fs::write(dir.join("fixture_wasip1_dnsrpz.pk"), kp.pk.as_ref()).expect("write dnsrpz pk");
+    std::fs::write(dir.join("fixture_wasip1_dnsrpz.sig"), sig2.as_ref()).expect("write dnsrpz sig");
 }
 
 // M5.4 (Track C) — the DETECTION-shaped `.wasm` fixture the [P-wasm-parity] gate runs at
