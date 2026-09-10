@@ -2601,16 +2601,26 @@ fn cm5_p10_probe() {
                             ap.wsec_ok, ap.up_ok, ap.ssid_ok, ap.get_ap_ok, ap.get_ap,
                             ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
                         if ap.get_ap == 1 && ap.ssid_ok {
-                            kprint!(" [P11-AP0] PASS(ap-config) — firmware in AP mode + BSS started; the \"heqk-ap\" SSID should now be visible on a phone WiFi scan. Watching ~90s for client events (open-join a phone to see 'C')...\n");
+                            kprint!(" [P11-AP0] PASS(ap-config) — firmware in AP mode + BSS started; \"heqk-ap\" visible on a phone. Serving DHCP (10.99.0.1, offer .10) — join the phone; watch for O/K + 'connected'...\n");
                         } else {
                             kprint!(" [P11-AP0] AP config INCOMPLETE (cap_has_ap={} get_ap={} ssid_ok={}) — see step acks above\n", ap.cap_has_ap, ap.get_ap, ap.ssid_ok);
                         }
-                        let mut sta = [0u8; 6];
-                        let assoc = cyw43::ap_watch_events(60, &mut sta);
-                        kprint!(" [P11-AP0] watch done: assoc_ind={} last_sta {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                            assoc, sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
-                        if assoc > 0 {
-                            kprint!(" [P11-AP1] PASS(ap-assoc) — a client 802.11-associated to heqk's AP (station MAC above)\n");
+                        // M-AP-DHCP: serve the associated client a real lease so it leaves 169.254.
+                        let our_ip = [10u8, 99, 0, 1];
+                        let offer_ip = [10u8, 99, 0, 10];
+                        let mut dh = cyw43::ApDhcp::new();
+                        cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 220, &mut dh);
+                        kprint!(" [P11-AP-DHCP] arp_replies={} discovers={} offers_tx={} requests={} acks_tx={} | client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{}\n",
+                            dh.arp_replies, dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx,
+                            dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
+                            dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                        if dh.acks_tx > 0 {
+                            kprint!(" [P11-AP-DHCP] PASS(ap-dhcp) — heqk (as AP) LEASED {}.{}.{}.{} to a client over its own WiFi — AP data path is LIVE bidirectionally\n",
+                                dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                        } else if dh.discovers > 0 {
+                            kprint!(" [P11-AP-DHCP] saw DISCOVER (RX ok) but no ACK — OFFER TX or REQUEST path to diagnose\n");
+                        } else {
+                            kprint!(" [P11-AP-DHCP] no client DHCP seen (arp={}) — client may not have (re)associated in the window\n", dh.arp_replies);
                         }
                         return;
                     }

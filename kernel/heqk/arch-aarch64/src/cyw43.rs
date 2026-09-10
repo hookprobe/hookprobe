@@ -2231,8 +2231,20 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     let cl = fw_cap(&mut cap);
     out.cap_has_ap = has_token(&cap[..cl], b"ap");
 
+    // Capture the AP MAC NOW (valid OTP MAC from the prior scan). The post-AP-up
+    // cur_etheraddr GET returns 0 on this firmware, so read it up front — this is the
+    // src MAC every AP-served frame (ARP reply, DHCP OFFER/ACK) must carry.
+    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
+
     // Configure while DOWN.
     out.down_ok = wlc_set_int(WLC_DOWN, 0);
+
+    // Re-assert the MAC while down (defensive — keep the AP BSSID = the captured MAC).
+    if out.bssid != [0u8; 6] {
+        let mut mb = [0u8; 32];
+        let nmb = iovar_buf(b"cur_etheraddr", &out.bssid, &mut mb);
+        let _ = bcdc_iovar_set(&mb[..nmb]);
+    }
 
     // Enable the AP client-indication events so the authenticator (M-AP2) sees joins.
     let mut mask = [0u8; 16];
@@ -2289,7 +2301,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     let (gok, _gs) = bcdc_dcmd(WLC_GET_AP, 0, &[], &mut apb);
     out.get_ap_ok = gok;
     out.get_ap = u32::from_le_bytes(apb);
-    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
+    // (out.bssid was captured up front — this firmware's post-up GET returns 0.)
 }
 
 /// M-AP1 helper: hold the beacon up and report client-indication events (a station's
@@ -2308,9 +2320,10 @@ pub fn ap_watch_events(budget: u32, last_sta: &mut [u8; 6]) -> u32 {
         let ev = doff + 4 + bdc_doff * 4;
         if ev + 40 > rx.len() { continue; }
         let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
-        // The brcmf_event carries the peer MAC in its addr field (ev+24..30).
+        // brcmf_event_msg_be starts at ev+24 (event_type@+4=ev+28); its addr[6] (the peer
+        // station MAC) is at struct offset +24, i.e. ev+48. (ev+24 was version/flags = 00:02..)
         if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
-            last_sta.copy_from_slice(&rx[ev + 24..ev + 30]);
+            if ev + 54 <= rx.len() { last_sta.copy_from_slice(&rx[ev + 48..ev + 54]); }
             assoc += 1;
             dbg_putc(b'C'); // client associated
         } else if et == WLC_E_AUTH_IND {
@@ -2318,6 +2331,152 @@ pub fn ap_watch_events(budget: u32, last_sta: &mut [u8; 6]) -> u32 {
         }
     }
     assoc
+}
+
+// --- AP-side DHCP server + ARP responder (M-AP-DHCP): give an associated client a real
+// lease so it leaves 169.254 and shows "connected". Inverts the STA DHCP client; same
+// channel-2 encrypted data path (fw does CCMP once WPA2 keys are set; open for now).
+
+pub struct ApDhcp {
+    pub arp_replies: u32,
+    pub discovers: u32,
+    pub offers_tx: u32,
+    pub requests: u32,
+    pub acks_tx: u32,
+    pub client_mac: [u8; 6],
+    pub leased_ip: [u8; 4],
+}
+
+impl ApDhcp {
+    pub fn new() -> Self {
+        ApDhcp { arp_replies: 0, discovers: 0, offers_tx: 0, requests: 0, acks_tx: 0, client_mac: [0; 6], leased_ip: [0; 4] }
+    }
+}
+
+/// Build an ARP reply: "`our_ip` is at `our_mac`", unicast to the requester.
+fn build_arp_reply(buf: &mut [u8], our_mac: &[u8; 6], our_ip: &[u8; 4], req_mac: &[u8; 6], req_ip: &[u8; 4]) -> usize {
+    for b in buf[..60].iter_mut() { *b = 0; }
+    buf[0..6].copy_from_slice(req_mac);
+    buf[6..12].copy_from_slice(our_mac);
+    buf[12] = 0x08; buf[13] = 0x06;
+    buf[14] = 0x00; buf[15] = 0x01; buf[16] = 0x08; buf[17] = 0x00;
+    buf[18] = 6; buf[19] = 4; buf[20] = 0x00; buf[21] = 0x02; // op = reply
+    buf[22..28].copy_from_slice(our_mac);
+    buf[28..32].copy_from_slice(our_ip);
+    buf[32..38].copy_from_slice(req_mac);
+    buf[38..42].copy_from_slice(req_ip);
+    60
+}
+
+/// Build a DHCP OFFER (mt=2) or ACK (mt=5) from server `our_ip` offering `offer_ip` to
+/// `client_mac`. Broadcast at L2/L3 (the client has no IP yet). Returns the frame length.
+fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], xid: &[u8; 4], mt: u8) -> usize {
+    for b in buf[..360].iter_mut() { *b = 0; }
+    let d = 42;
+    buf[d] = 2; buf[d + 1] = 1; buf[d + 2] = 6; buf[d + 3] = 0; // op=BOOTREPLY
+    buf[d + 4..d + 8].copy_from_slice(xid);
+    buf[d + 10] = 0x80; // broadcast flag (reply goes to L2/L3 broadcast)
+    buf[d + 16..d + 20].copy_from_slice(offer_ip); // yiaddr
+    buf[d + 20..d + 24].copy_from_slice(our_ip);   // siaddr
+    buf[d + 28..d + 34].copy_from_slice(client_mac); // chaddr
+    buf[d + 236..d + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]); // magic
+    let mut o = d + 240;
+    buf[o] = 53; buf[o + 1] = 1; buf[o + 2] = mt; o += 3;
+    buf[o] = 1; buf[o + 1] = 4; buf[o + 2] = 255; buf[o + 3] = 255; buf[o + 4] = 255; buf[o + 5] = 0; o += 6; // mask /24
+    buf[o] = 3; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // router = us
+    buf[o] = 6; buf[o + 1] = 4; buf[o + 2] = 8; buf[o + 3] = 8; buf[o + 4] = 8; buf[o + 5] = 8; o += 6; // DNS 8.8.8.8
+    buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&3600u32.to_be_bytes()); o += 6; // lease 1h
+    buf[o] = 54; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // server id
+    buf[o] = 255; o += 1;
+    let mut total = o;
+    if total < 42 + 300 { total = 42 + 300; }
+    let udplen = (8 + (total - 42)) as u16;
+    buf[34..36].copy_from_slice(&67u16.to_be_bytes());
+    buf[36..38].copy_from_slice(&68u16.to_be_bytes());
+    buf[38..40].copy_from_slice(&udplen.to_be_bytes());
+    let bcast = [255u8, 255, 255, 255];
+    let bmac = [0xffu8; 6];
+    fill_eth_ip(buf, our_mac, &bmac, our_ip, &bcast, 17, udplen as usize);
+    let mut c = inet_csum(&buf[34..total], pseudo_sum(our_ip, &bcast, 17, udplen));
+    if c == 0 { c = 0xffff; }
+    buf[40..42].copy_from_slice(&c.to_be_bytes());
+    total
+}
+
+/// Parse a client DHCP (DISCOVER=1 / REQUEST=3). Fills `cmac` (chaddr) + `xid`; returns the
+/// DHCP message type, or 0 if not a client DHCP to us.
+fn parse_client_dhcp(eth: &[u8], cmac: &mut [u8; 6], xid: &mut [u8; 4]) -> u8 {
+    if eth.len() < 42 + 240 { return 0; }
+    if eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 17 { return 0; }
+    let ihl = ((eth[14] & 0x0f) as usize) * 4;
+    let l4 = 14 + ihl;
+    if l4 + 8 > eth.len() { return 0; }
+    if u16::from_be_bytes([eth[l4], eth[l4 + 1]]) != 68 { return 0; }
+    if u16::from_be_bytes([eth[l4 + 2], eth[l4 + 3]]) != 67 { return 0; }
+    let b = l4 + 8;
+    if b + 240 > eth.len() || eth[b] != 1 { return 0; } // BOOTREQUEST
+    if eth[b + 236] != 0x63 || eth[b + 237] != 0x82 || eth[b + 238] != 0x53 || eth[b + 239] != 0x63 { return 0; }
+    cmac.copy_from_slice(&eth[b + 28..b + 34]);
+    xid.copy_from_slice(&eth[b + 4..b + 8]);
+    let mut p = b + 240;
+    let mut mt = 0u8;
+    while p + 2 <= eth.len() {
+        let code = eth[p];
+        if code == 0xff { break; }
+        if code == 0x00 { p += 1; continue; }
+        let len = eth[p + 1] as usize;
+        if p + 2 + len > eth.len() { break; }
+        if code == 53 && len >= 1 { mt = eth[p + 2]; }
+        p += 2 + len;
+    }
+    mt
+}
+
+/// M-AP-DHCP: serve one client's DORA + answer its ARP for the gateway, over the AP data path.
+/// `our_mac` = the AP MAC (captured in `ap_start`); `our_ip`/`offer_ip` on a /24. Bounded.
+pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], budget: u32, out: &mut ApDhcp) {
+    let mut rx = [0u8; 2048];
+    let mut pkt = [0u8; 400];
+    let mut i = 0u32;
+    while i < budget {
+        i += 1;
+        if i % 16 == 0 { let _ = ensure_ht_avail(); }
+        let (channel, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
+        if channel != 2 { continue; }
+        let bdc_doff = rx[doff + 3] as usize;
+        let eth = doff + 4 + bdc_doff * 4;
+        if eth + 14 > rx.len() { continue; }
+        let et = u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]);
+        if et == 0x0806 {
+            // ARP request for our gateway IP? (op=1, target-IP == our_ip)
+            if eth + 42 <= rx.len() && rx[eth + 20] == 0x00 && rx[eth + 21] == 0x01 && &rx[eth + 38..eth + 42] == &our_ip[..] {
+                let mut rmac = [0u8; 6];
+                rmac.copy_from_slice(&rx[eth + 22..eth + 28]);
+                let mut rip = [0u8; 4];
+                rip.copy_from_slice(&rx[eth + 28..eth + 32]);
+                let n = build_arp_reply(&mut pkt, our_mac, our_ip, &rmac, &rip);
+                if sdpcm_data_tx(&pkt[..n]) { out.arp_replies += 1; dbg_putc(b'r'); }
+            }
+            continue;
+        }
+        if et != 0x0800 { continue; }
+        let mut cmac = [0u8; 6];
+        let mut xid = [0u8; 4];
+        match parse_client_dhcp(&rx[eth..], &mut cmac, &mut xid) {
+            1 => {
+                out.discovers += 1;
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 2); // OFFER
+                if sdpcm_data_tx(&pkt[..n]) { out.offers_tx += 1; dbg_putc(b'O'); }
+            }
+            3 => {
+                out.requests += 1;
+                out.client_mac = cmac;
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 5); // ACK
+                if sdpcm_data_tx(&pkt[..n]) { out.acks_tx += 1; out.leased_ip = *offer_ip; dbg_putc(b'K'); }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// True if the space-separated token list `hay` contains exactly `tok`.
