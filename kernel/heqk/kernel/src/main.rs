@@ -2626,9 +2626,26 @@ fn cm5_p10_probe() {
                     kprint!("\n   [P10-E M2raw]");
                     for k in 0..hs.m2_len { kprint!("{:02x}", hs.m2_dump[k]); }
                     kprint!("\n");
-                    kprint!("   [P10-E s2] m4_tx={} deauth_after_m4={}\n", hs.m4_tx_ok, hs.deauth_after_m4);
-                    if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 {
-                        kprint!(" [P10-E] PASS(4way) — M1..M4 complete, no deauth after M4! Host WPA2 supplicant handshake DONE. Remaining: install PTK/GTK (WLC_SET_KEY) for data.\n");
+                    kprint!("   [P10-E s2] m4_tx={} deauth_after_m4={} | ptk_set={} gtk_unwrapped={} gtk_keyid={} gtk_set={}\n",
+                        hs.m4_tx_ok, hs.deauth_after_m4, hs.ptk_set_ok, hs.gtk_unwrapped, hs.gtk_keyid, hs.gtk_set_ok);
+                    if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 && hs.ptk_set_ok {
+                        kprint!(" [P10-E] PASS(4way+keys) — handshake DONE + PTK{}{}installed. Probing encrypted DATA RX...\n",
+                            if hs.gtk_set_ok { "+GTK " } else { " (PTK only) " }, "");
+                        let mut dp = cyw43::DataProbe::new();
+                        cyw43::wifi_data_probe(&mut dp);
+                        kprint!("   [P10-E data] decrypted ch2 frames={} known-l2(arp/ip)={} last_etype={:#06x}\n", dp.frames, dp.l2_known, dp.last_etype);
+                        if dp.sample_len >= 14 {
+                            kprint!("   [P10-E data] first eth: dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} etype {:#06x}\n",
+                                dp.sample[0], dp.sample[1], dp.sample[2], dp.sample[3], dp.sample[4], dp.sample[5],
+                                ((dp.sample[12] as u16) << 8) | dp.sample[13] as u16);
+                        }
+                        if dp.l2_known > 0 {
+                            kprint!(" [P10-E] PASS(wifi-data) — heqk DECRYPTED {} real WiFi data frame(s) (arp/ip) — WPA2 STA link is LIVE end-to-end\n", dp.l2_known);
+                        } else {
+                            kprint!(" [P10-E] keyed OK; {} ch2 frames but no decrypted L2 yet (gtk_set={}) — may need GTK RSC / DHCP TX\n", dp.frames, hs.gtk_set_ok);
+                        }
+                    } else if hs.m3_seen && hs.m4_tx_ok && !hs.deauth_after_m4 {
+                        kprint!(" [P10-E] PASS(4way) — M1..M4 complete, no deauth, but PTK install failed (ptk_set={}) — see s2 diag\n", hs.ptk_set_ok);
                     } else if hs.m3_seen && hs.m4_tx_ok {
                         kprint!(" [P10-E] M1..M4 sent but deauth after M4 (reason={}) — likely heqk fw needs the PTK installed (WLC_SET_KEY) to hold the port\n", hs.deauth_reason);
                     } else if hs.m3_seen {

@@ -2444,6 +2444,28 @@ pub fn wifi_data_probe(out: &mut DataProbe) {
 // ===========================================================================
 
 const SDPCM_DATA_CHANNEL: u8 = 2;
+const WLC_SET_KEY: u32 = 45;
+const CRYPTO_ALGO_AES_CCM: u32 = 4; // CCMP
+const WSEC_PRIMARY_KEY: u32 = 0x0002;
+
+/// Install a key in the firmware via WLC_SET_KEY (brcmf_wsec_key_le, 164 B). `index` = key
+/// index (0 for the pairwise PTK, the GTK's key-id for the group key); `key` = the raw key
+/// bytes (TK[16] or GTK[16]); `ea` = the peer MAC (the AP's BSSID for the pairwise key,
+/// all-zero for the group key); `primary` sets WSEC_PRIMARY_KEY (pairwise). algo = CCMP.
+/// Field offsets are the brcmf_wsec_key_le layout (index@0 len@4 data@8 algo@112 flags@116
+/// ea@156). Returns true on a RESP_OK.
+fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
+    let mut k = [0u8; 164];
+    k[0..4].copy_from_slice(&index.to_le_bytes());
+    let klen = key.len().min(32);
+    k[4..8].copy_from_slice(&(klen as u32).to_le_bytes());
+    k[8..8 + klen].copy_from_slice(&key[..klen]);
+    k[112..116].copy_from_slice(&CRYPTO_ALGO_AES_CCM.to_le_bytes());
+    let flags: u32 = if primary { WSEC_PRIMARY_KEY } else { 0 };
+    k[116..120].copy_from_slice(&flags.to_le_bytes());
+    k[156..162].copy_from_slice(ea);
+    bcdc_dcmd(WLC_SET_KEY, BCDC_SET, &k, &mut []).0
+}
 
 /// Send one ethernet frame as an SDPCM DATA frame (channel 2) over F2. Mirrors the control
 /// TX framing (bcdc_dcmd) but channel=2 with a 4-byte BDC data header instead of the BCDC
@@ -2495,6 +2517,10 @@ pub struct Wpa4Way {
     pub snonce: [u8; 32], // the SNonce we used (to recompute the MIC offline)
     pub m4_tx_ok: bool, // M4 (final handshake msg) was built + sent
     pub deauth_after_m4: bool, // a deauth arrived AFTER M4 (handshake rejected / port not held)
+    pub ptk_set_ok: bool, // the pairwise TK was installed (WLC_SET_KEY)
+    pub gtk_unwrapped: bool, // the GTK KDE was found + AES-unwrapped from M3
+    pub gtk_keyid: u8,
+    pub gtk_set_ok: bool, // the group key was installed (WLC_SET_KEY)
 }
 
 impl Wpa4Way {
@@ -2505,6 +2531,7 @@ impl Wpa4Way {
             post_m2_eapol: 0, last_eapol_ki: 0,
             m2_dump: [0; 140], m2_len: 0, snonce: [0; 32],
             m4_tx_ok: false, deauth_after_m4: false,
+            ptk_set_ok: false, gtk_unwrapped: false, gtk_keyid: 0, gtk_set_ok: false,
         }
     }
 }
@@ -2639,8 +2666,49 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                         let mic4 = crate::wpa::wpa_mic_sha1(&kck, &m4[14..]);
                         m4[body + 77..body + 93].copy_from_slice(&mic4);
                         out.m4_tx_ok = sdpcm_data_tx(&m4);
-                        // Linger only ~400 more reads to catch an immediate deauth, then return
-                        // (no key is installed yet, so nothing more happens in this window).
+
+                        // --- S2b: install the keys so the firmware can encrypt/decrypt data.
+                        // PTK's TK (ptk[32..48]) = pairwise; GTK from M3's encrypted key data.
+                        let mut tk = [0u8; 16];
+                        tk.copy_from_slice(&ptk[32..48]);
+                        out.ptk_set_ok = wlc_set_key(0, &tk, &aa, true);
+                        // M3 key data: len @ body+93 (BE16), encrypted blob @ body+95, AES-key-
+                        // wrapped under the KEK (ptk[16..32]). Unwrap → KDEs; find the GTK KDE
+                        // (OUI 00-0f-ac, data type 01) → keyid + GTK, then install as group key.
+                        let kd_len = u16::from_be_bytes([rx[eth + body + 93], rx[eth + body + 94]]) as usize;
+                        let kd_start = eth + body + 95;
+                        if kd_len >= 16 && kd_len % 8 == 0 && kd_start + kd_len <= rx.len() {
+                            let mut kek = [0u8; 16];
+                            kek.copy_from_slice(&ptk[16..32]);
+                            let mut plain = [0u8; 128];
+                            if let Some(pl) = crate::aes::aes_unwrap(&kek, &rx[kd_start..kd_start + kd_len], &mut plain) {
+                                // Walk KDEs: [0xdd][len][OUI 3][type 1][data len-4].
+                                let mut p = 0usize;
+                                while p + 2 <= pl {
+                                    if plain[p] != 0xdd {
+                                        break;
+                                    }
+                                    let klen = plain[p + 1] as usize;
+                                    if p + 2 + klen > pl || klen < 6 {
+                                        break;
+                                    }
+                                    let is_gtk = plain[p + 2] == 0x00
+                                        && plain[p + 3] == 0x0f
+                                        && plain[p + 4] == 0xac
+                                        && plain[p + 5] == 0x01;
+                                    if is_gtk {
+                                        // GTK KDE body: [keyid(bits0-1)+tx][rsvd][GTK...]
+                                        out.gtk_keyid = plain[p + 6] & 0x03;
+                                        let gtk = &plain[p + 8..p + 2 + klen];
+                                        out.gtk_unwrapped = true;
+                                        out.gtk_set_ok = wlc_set_key(out.gtk_keyid as u32, gtk, &[0u8; 6], false);
+                                        break;
+                                    }
+                                    p += 2 + klen;
+                                }
+                            }
+                        }
+                        // Linger a short window to catch a deauth (rejected handshake/keys).
                         m4_deadline = i + 400;
                     }
                 }
