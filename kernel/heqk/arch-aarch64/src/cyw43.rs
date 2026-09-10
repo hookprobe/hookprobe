@@ -2376,9 +2376,12 @@ fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], ou
     buf[34..36].copy_from_slice(&67u16.to_be_bytes());
     buf[36..38].copy_from_slice(&68u16.to_be_bytes());
     buf[38..40].copy_from_slice(&udplen.to_be_bytes());
+    // L2-UNICAST to the client MAC (NOT ff:ff:..) so the fw encrypts the reply with the
+    // per-station PTK — the proven path. A broadcast-dst reply would be GTK-encrypted, and
+    // the metal evidence (OFFERs sent 'O' but no REQUEST 'K') shows the client can't decrypt
+    // the AP's GTK-broadcast. L3 stays 255.255.255.255 so the pre-IP DHCP client accepts it.
     let bcast = [255u8, 255, 255, 255];
-    let bmac = [0xffu8; 6];
-    fill_eth_ip(buf, our_mac, &bmac, our_ip, &bcast, 17, udplen as usize);
+    fill_eth_ip(buf, our_mac, client_mac, our_ip, &bcast, 17, udplen as usize);
     let mut c = inet_csum(&buf[34..total], pseudo_sum(our_ip, &bcast, 17, udplen));
     if c == 0 { c = 0xffff; }
     buf[40..42].copy_from_slice(&c.to_be_bytes());
