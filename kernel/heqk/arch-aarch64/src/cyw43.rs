@@ -2488,6 +2488,9 @@ pub struct Wpa4Way {
     pub deauth_reason: u32, // 802.11 reason code (15 = 4-way HS timeout/MIC failure)
     pub post_m2_eapol: u32, // EAPOL frames seen after M2 (M1 retries or M3)
     pub last_eapol_ki: u16, // key info of the last post-M2 EAPOL (retry vs M3 discriminator)
+    pub m2_dump: [u8; 140], // the exact M2 ethernet frame we built (for offline verification)
+    pub m2_len: usize,
+    pub snonce: [u8; 32], // the SNonce we used (to recompute the MIC offline)
 }
 
 impl Wpa4Way {
@@ -2496,6 +2499,7 @@ impl Wpa4Way {
             have_m1: false, kdv: 0, snonce_ok: false, m2_tx_ok: false, m3_seen: false,
             m3_key_info: 0, m3_len: 0, deauth_after: false, deauth_reason: 0,
             post_m2_eapol: 0, last_eapol_ki: 0,
+            m2_dump: [0; 140], m2_len: 0, snonce: [0; 32],
         }
     }
 }
@@ -2567,6 +2571,12 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
     // MIC over the whole 802.1X frame (offset 14..end) with the MIC field zeroed.
     let mic = crate::wpa::wpa_mic_sha1(&kck, &m2[14..]);
     m2[body + 77..body + 93].copy_from_slice(&mic);
+
+    // Snapshot the exact M2 + SNonce for offline verification on the console.
+    let dl = m2.len().min(out.m2_dump.len());
+    out.m2_dump[..dl].copy_from_slice(&m2[..dl]);
+    out.m2_len = dl;
+    out.snonce = snonce;
 
     out.m2_tx_ok = sdpcm_data_tx(&m2);
 
