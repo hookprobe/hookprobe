@@ -244,8 +244,12 @@ gem_ids_stub:
                                   // fills, they are never recycled, BNA fires and RX DIES.
     b.lo 1b
     add  x4, x4, #1
-    movz x9, #0x8000, lsl #0      // ~tens of us (was ~1s) — see gem_rx_stub note above.
-                                  // MUST match: both stubs share this idle-wait discipline.
+    movz x9, #0x20, lsl #0        // THERMAL (2026-09-10): short empty-wait (~a few us of ring
+                                  // scan) then RETURN 0 so the kernel WFE-idles (event-stream
+                                  // paced, ~19us) instead of the A76 spinning hot here. Only
+                                  // the EMPTY path is bounded by this; a USED descriptor still
+                                  // returns IMMEDIATELY (tbnz above), so throughput is
+                                  // unchanged. gem_rx_stub keeps its own (probe-only) bound.
     cmp  x4, x9
     b.lo 0b
     mov  x0, xzr                  // timeout -> 0
