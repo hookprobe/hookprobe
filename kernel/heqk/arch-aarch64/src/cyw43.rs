@@ -2513,7 +2513,9 @@ const RSN_IE_PSK_CCMP: [u8; 22] = [
     0x00, 0x0f, 0xac, 0x04, // group cipher = CCMP
     0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, // pairwise count 1, CCMP
     0x01, 0x00, 0x00, 0x0f, 0xac, 0x02, // akm count 1, PSK
-    0x00, 0x00, // RSN capabilities
+    0x0c, 0x00, // RSN capabilities = 0x000c — MUST match the firmware's assoc-req IE
+                // (16 PTKSA replay counters); 0x0000 -> AP rejects M2 as "WPA IE ... did
+                // not match with msg 2/4". Confirmed via hostapd -dd of the STA's Assoc Req.
 ];
 
 /// S1 of the host supplicant: parse M1, derive the PTK, build + send M2, and watch channel 2
