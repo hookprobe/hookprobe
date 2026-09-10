@@ -217,7 +217,44 @@ pub fn aes_unwrap(kek: &[u8; 16], wrapped: &[u8], out: &mut [u8]) -> Option<usiz
     Some(n * 8)
 }
 
-/// KAT: FIPS-197 AES-128 encrypt/decrypt + RFC 3394 AES-128 key-unwrap.
+/// NIST AES Key Wrap WRAP (RFC 3394) with a 128-bit KEK — the exact inverse of `aes_unwrap`.
+/// `plain` is n 64-bit blocks (n >= 1); output is (n+1) 64-bit blocks written to `out`. Returns
+/// Some(len) with the wrapped blob in `out`, or None on a bad length / too-small `out`. Used by
+/// the WPA2 AUTHENTICATOR (AP mode) to wrap the GTK KDE into EAPOL M3 (KEK = PTK[16..32]).
+pub fn aes_wrap(kek: &[u8; 16], plain: &[u8], out: &mut [u8]) -> Option<usize> {
+    if plain.is_empty() || plain.len() % 8 != 0 {
+        return None;
+    }
+    let n = plain.len() / 8;
+    if out.len() < (n + 1) * 8 {
+        return None;
+    }
+    let rk = expand(kek);
+    // A = default IV; R[1..=n] = plain
+    let mut a = [0xA6u8; 8];
+    for i in 0..n {
+        out[(i + 1) * 8..(i + 2) * 8].copy_from_slice(&plain[i * 8..i * 8 + 8]);
+    }
+    // 6 rounds, j = 0..6, i = 1..=n
+    for j in 0..6i32 {
+        for i in 1..=n {
+            let mut blk = [0u8; 16];
+            blk[0..8].copy_from_slice(&a);
+            blk[8..16].copy_from_slice(&out[i * 8..(i + 1) * 8]);
+            encrypt_block(&rk, &mut blk);
+            // A = MSB64(B) ^ (n*j + i); R[i] = LSB64(B)
+            let t = (n as u64) * (j as u64) + (i as u64);
+            let mut av = u64::from_be_bytes([blk[0], blk[1], blk[2], blk[3], blk[4], blk[5], blk[6], blk[7]]);
+            av ^= t;
+            a.copy_from_slice(&av.to_be_bytes());
+            out[i * 8..(i + 1) * 8].copy_from_slice(&blk[8..16]);
+        }
+    }
+    out[0..8].copy_from_slice(&a);
+    Some((n + 1) * 8)
+}
+
+/// KAT: FIPS-197 AES-128 encrypt/decrypt + RFC 3394 AES-128 key wrap AND unwrap (round-trip).
 pub fn aes_selftest() -> bool {
     // FIPS-197 C.1
     let key = [
@@ -249,7 +286,27 @@ pub fn aes_selftest() -> bool {
     ];
     let mut out = [0u8; 16];
     match aes_unwrap(&key, &wrapped, &mut out) {
-        Some(16) => out == pt,
+        Some(16) => {
+            if out != pt {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    // RFC 3394 §4.1 forward: wrap(pt) must equal the known wrapped vector, and a
+    // wrap->unwrap round-trip must return the original (the AP-mode authenticator path).
+    let mut wrapped_out = [0u8; 24];
+    match aes_wrap(&key, &pt, &mut wrapped_out) {
+        Some(24) => {
+            if wrapped_out != wrapped {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+    let mut rt = [0u8; 16];
+    match aes_unwrap(&key, &wrapped_out, &mut rt) {
+        Some(16) => rt == pt,
         _ => false,
     }
 }
