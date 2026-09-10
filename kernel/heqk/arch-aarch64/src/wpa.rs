@@ -235,3 +235,29 @@ pub fn wpa_pmk_selftest() -> bool {
     ];
     wpa_pmk(b"password", b"IEEE") == KAT
 }
+
+/// Build a GTK Key-Data Element (KDE) for EAPOL-Key M3 — the AUTHENTICATOR (AP) side of the
+/// WPA2 4-way handshake (heqk-as-AP, M-AP2). Layout: [0xdd][len][00-0f-ac][01][keyid&0x03]
+/// [rsvd=0][GTK…], where len = OUI(3)+type(1)+keyid(1)+rsvd(1)+GTK. Returns bytes written (0
+/// if `out` is too small). The AP then AES-key-WRAPS the key-data (this KDE, optionally after
+/// the RSNE) under KEK=PTK[16..32] via `crate::aes::aes_wrap` and places it in M3's encrypted
+/// key-data field. The STA side (`cyw43` M3 handler) `aes_unwrap`s and parses THIS exact byte
+/// layout (OUI 00-0f-ac, data type 01, GTK at KDE+8) to recover the group key — so this
+/// builder and that parser are the two halves of one on-wire contract (KAT'd host-side).
+pub fn wpa_gtk_kde(keyid: u8, gtk: &[u8], out: &mut [u8]) -> usize {
+    let n = gtk.len();
+    let total = 2 + 6 + n;
+    if out.len() < total {
+        return 0;
+    }
+    out[0] = 0xdd;
+    out[1] = (6 + n) as u8; // KDE length: OUI + type + keyid + rsvd + GTK
+    out[2] = 0x00;
+    out[3] = 0x0f;
+    out[4] = 0xac;
+    out[5] = 0x01; // 00-0f-ac + GTK-KDE data type 01
+    out[6] = keyid & 0x03;
+    out[7] = 0x00; // reserved (tx bit unused here)
+    out[8..8 + n].copy_from_slice(gtk);
+    total
+}
