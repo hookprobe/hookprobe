@@ -2141,6 +2141,24 @@ impl JoinResult {
     }
 }
 
+/// Dump the firmware's "cap" capability string (space-separated tokens). brcmfmac reads
+/// this to detect features — crucially "sup"/"fwsup"/"idsup" (in-firmware WPA supplicant)
+/// and "sae". Its presence tells us whether the CHIP runs the 4-way handshake (set the PMK)
+/// or the HOST must (drive EAPOL). Returns the byte length written to `out`.
+pub fn fw_cap(out: &mut [u8]) -> usize {
+    let _ = wake_chip();
+    let _ = ensure_ht_avail();
+    for b in out.iter_mut() {
+        *b = 0;
+    }
+    if bcdc_iovar_get(b"cap", out) {
+        // length = up to the first NUL
+        out.iter().position(|&c| c == 0).unwrap_or(out.len())
+    } else {
+        0
+    }
+}
+
 /// Associate to a WPA2-PSK AP. `ssid` (<=32 B) + `passphrase` (8..63 B). Fills
 /// `out` with the step-acks + the full event trail. Reuses the scan's wake/HT
 /// preamble and the NOTUP-retry idiom (the STA finishes coming up asynchronously).
@@ -2184,20 +2202,32 @@ pub fn wifi_join(ssid: &[u8], passphrase: &[u8], out: &mut JoinResult) {
     // WHD bare-metal driver for this exact chip doesn't use it — the fw supplicant is
     // implicit once wsec/wpa_auth/pmk are set.)
     //
-    // Set the RAW 32-byte PMK (flags=0). This RPi brcmfmac firmware rejects the
-    // passphrase path (WSEC_PASSPHRASE → BADARG-2, both 36- and 68-B structs), so we
-    // compute the PMK on-device — PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32),
-    // KAT-verified (wpa::wpa_pmk_selftest) — and hand the firmware idsup the raw key.
-    // wsec_pmk_t here = { u16 key_len=32; u16 flags=0; u8 key[64] } = 68 B.
+    // Set the RAW 32-byte PMK (flags=0) in brcmfmac's EXACT wire format:
+    // struct brcmf_wsec_pmk_le { u16 key_len; u16 flags; u8 key[BRCMF_WSEC_MAX_PSK_LEN=32] }
+    // = 36 B. This firmware rejects a passphrase (WSEC_PASSPHRASE → BADARG) AND a 68-B
+    // struct (BADARG — length ≠ sizeof), so we send the 36-B struct with the on-device
+    // PBKDF2-HMAC-SHA1 PMK (KAT-verified) and let the firmware idsup run the 4-way HS.
     {
         let pmk_key = crate::wpa::wpa_pmk(passphrase, ssid);
-        let mut pmk = [0u8; 4 + 64];
+        let mut pmk = [0u8; 4 + 32]; // 36 B — brcmf_wsec_pmk_le
         pmk[0..2].copy_from_slice(&32u16.to_le_bytes()); // key_len = 32 (raw PMK)
         pmk[2..4].copy_from_slice(&0u16.to_le_bytes()); // flags = 0 (not a passphrase)
         pmk[4..4 + 32].copy_from_slice(&pmk_key);
         let (ok, st) = bcdc_dcmd(WLC_SET_WSEC_PMK, BCDC_SET, &pmk, &mut []);
         out.pmk_status = st;
-        if ok { out.steps_ok |= 1 << 6; }
+        if ok {
+            out.steps_ok |= 1 << 6;
+        } else {
+            // Fallback: some firmwares moved the PMK to the "wsec_pmk" IOVAR (WLC_SET_VAR).
+            // sup_wpa_status is repurposed to carry this attempt's status.
+            let mut ib = [0u8; 64];
+            let n = iovar_buf(b"wsec_pmk", &pmk, &mut ib);
+            let (iok, ist) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
+            out.sup_wpa_status = ist;
+            if iok {
+                out.steps_ok |= 1 << 6;
+            }
+        }
     }
     // Give the firmware a moment to absorb the passphrase (WHD delays here before join).
     delay(20_000);
