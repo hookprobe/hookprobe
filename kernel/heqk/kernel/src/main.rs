@@ -4431,6 +4431,10 @@ pub extern "C" fn kmain() -> ! {
     // meters keyed on RATE / saturation / scheduler-pressure REALITY, mgmt floor spared
     p8_shed();
 
+    // --- A9-3/5/7: the RA-guard arms the security-auditor ruling approved to arm now —
+    // RA-flood -> self-reverting RateLimit (any port), src-MAC attribution, evasion visible
+    p8_raflood();
+
     // --- P8/L7: deep-packet signature match in the verified fast-path (helper #3)
     p8_l7();
     // --- P8/L7 oracle close (XC-11/DET-1): verifier refuses a scalar payload_match ptr;
@@ -6193,6 +6197,145 @@ fn p8_shed() -> bool {
 
     kprint!(" [P8-shed] {} — L1 blanket cap self-reverts (over->DROP, next window->PASS); L2 saturation + L3 PSI shed the top-talker only (legit-not-saturated NEVER shed); mgmt Allowlisted floor NEVER shed (ADR 0023 4th inline drop, all identity-blind + self-reverting)\n",
         if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// [P8-raflood] A9-3 / A9-5 / A9-7 — the RA-guard arms the security-auditor A9 ruling
+/// (heqk-detection-parity.md §5) approved to build NOW, port-role independent:
+///   A9-3 an RA FLOOD from one source MAC on one port (> RA_FLOOD_THRESH per window) is a
+///        rate wall crossed → FloodRate → self-reverting RateLimit (wire DROP) on ANY port;
+///        a legit router beside the flooder keeps its own (port, MAC) budget;
+///   A9-5 rule 121/122 events carry the source-MAC hash (an IPv6 frame has no IPv4 src);
+///   A9-7 an IPv6 frame with an extension chain `parse_ipv6` refuses is surfaced as an
+///        observe-only finding (rule 123) instead of silently bypassing the guard.
+/// The first-sight Access-port FrameDrop arm is NOT exercised here — it stays embargoed
+/// (unreachable live) pending A9-1/2/4/6. Isolated port ids 5 (flood) / 4 (evasion).
+#[cfg(not(feature = "cm5"))]
+fn p8_raflood() -> bool {
+    use ratelimit::{ra_key, ra_rate_over_at, RA_FLOOD_THRESH};
+    use verdict::{PortRole, Verdict};
+    kprint!("\n [P8] RA-guard flood arm (A9-3) + attribution (A9-5) + evasion visibility (A9-7)\n");
+    let mut ok = true;
+    // The earlier P8 phases leave the 64-slot SOAR ring FULL (push_hit then overruns
+    // silently, and the attribution assertions below would read a stale event). Drain
+    // the stale backlog first — the same precedent p8_soar sets — so every push here
+    // is real; report the overrun delta so a hidden overrun can't fake a pass.
+    {
+        let mut junk = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        while events::drain(&mut junk) > 0 {}
+    }
+    let overruns_before = events::overruns();
+
+    // A minimal well-formed ICMPv6 RA from `src`: eth(IPv6) + IPv6 base (next-hdr 58) + type 134.
+    fn ra_frame(src: &[u8; 6]) -> [u8; 70] {
+        let mut ra = [0u8; 70];
+        ra[0..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0x01]); // all-nodes (exempt mcast)
+        ra[6..12].copy_from_slice(src);
+        ra[12..14].copy_from_slice(&[0x86, 0xdd]);
+        ra[14] = 0x60;
+        ra[19] = 0x10; // payload length 16
+        ra[20] = 58; // ICMPv6
+        ra[21] = 255;
+        ra[54] = 134; // Router Advertisement
+        ra
+    }
+    let router = [0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0x01]; // the legit downstream router
+    let flooder = [0x00, 0xde, 0xad, 0xbe, 0xef, 0x02]; // fake_router6
+    let port = 5u64; // isolated from the live port 0 + sepdiag 6/7
+
+    // (a) L4 continuity — one RA from the router on an Uplink port: Observe, never a drop.
+    let v_one = rules::l2_stateful_verdict(&ra_frame(&router), 0, port, PortRole::Uplink);
+    let c_a = v_one == Some(Verdict::Observe);
+    ok &= c_a;
+    // (e) A9-5 — that event is rule 121 attributed by the source-MAC hash (non-zero, != IPv4 0).
+    let ev = events::peek_last();
+    let want_src = ratelimit::mac_hash(&router) as u32;
+    let c_e = ev.map_or(false, |e| e.rule_id == rules::RULE_ROGUE_RA && e.src == want_src && e.src != 0);
+    ok &= c_e;
+    kprint!("   L4 single legit RA (Uplink) -> {:?} [{}]; rule-121 event src={:#010x} (mac-hash, want {:#010x}) [{}]\n",
+        v_one, if c_a { "ok" } else { "BUG" }, ev.map_or(0, |e| e.src), want_src, if c_e { "ok" } else { "BUG" });
+
+    // (b) the flood: 2x threshold RAs from ONE MAC on the port. The first THRESH must PASS
+    //     (no premature drop), every one past the wall must DROP (RateLimit{over_limit}).
+    let n = (RA_FLOOD_THRESH * 2) as usize;
+    let mut early_drops = 0u32;
+    let mut late_drops = 0u32;
+    let mut late_shape = true;
+    for k in 0..n {
+        let v = rules::l2_stateful_verdict(&ra_frame(&flooder), 0, port, PortRole::Uplink);
+        let drop = v.map_or(false, Verdict::is_drop);
+        if (k as u64) < RA_FLOOD_THRESH {
+            if drop { early_drops += 1; }
+        } else {
+            if drop { late_drops += 1; }
+            late_shape &= matches!(v, Some(Verdict::RateLimit { over_limit: true }));
+        }
+    }
+    let c_b = early_drops == 0 && late_drops as u64 == RA_FLOOD_THRESH && late_shape;
+    ok &= c_b;
+    kprint!("   flood {} RAs from one MAC: drops before wall={} (want 0), after wall={} (want {}), shape=RateLimit{{over_limit}}={} [{}]\n",
+        n, early_drops, late_drops, RA_FLOOD_THRESH, late_shape, if c_b { "ok" } else { "BUG" });
+    let ev = events::peek_last();
+    let c_e2 = ev.map_or(false, |e| e.rule_id == rules::RULE_RA_FLOOD && e.verdict == 2 && e.src == ratelimit::mac_hash(&flooder) as u32);
+    ok &= c_e2;
+
+    // (c) isolation — mid-flood, the legit router on the SAME port still PASSes (its own budget).
+    let v_router = rules::l2_stateful_verdict(&ra_frame(&router), 0, port, PortRole::Uplink);
+    let c_c = v_router == Some(Verdict::Observe);
+    ok &= c_c;
+    kprint!("   legit router beside the flooder (same port) mid-flood -> {:?} [{}]; rule-122 DROP event attributed to flooder [{}]\n",
+        v_router, if c_c { "ok" } else { "BUG" }, if c_e2 { "ok" } else { "BUG" });
+
+    // (d) SELF-REVERT with the injected clock (win = 1000 ticks): over the wall in window 1,
+    //     the very next window's RA is under the wall again (PASS) — never a durable block.
+    let key = ra_key(9, ratelimit::mac_hash(&flooder));
+    let win = 1000u64;
+    let mut w1_over = false;
+    for _ in 0..(RA_FLOOD_THRESH + 2) {
+        if ra_rate_over_at(key, RA_FLOOD_THRESH, 0, win) { w1_over = true; }
+    }
+    let w2_reverted = !ra_rate_over_at(key, RA_FLOOD_THRESH, win, win);
+    let c_d = w1_over && w2_reverted;
+    ok &= c_d;
+    kprint!("   self-revert (synthetic clock): window1 over-wall={}, window2 first RA PASS={} [{}]\n",
+        w1_over, w2_reverted, if c_d { "ok" } else { "BUG" });
+
+    // (f) A9-7 evasion visibility — an RA hidden behind a 9-deep Hop-by-Hop chain (past
+    //     MAX_V6_EXT=8): NOT recognised as an RA (the guard can't see it) and NOT dropped, but
+    //     SURFACED as rule 123 Observe so the evasion attempt is visible to the SOC.
+    let mut ev6 = [0u8; 200];
+    ev6[0..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0x01]);
+    ev6[6..12].copy_from_slice(&flooder);
+    ev6[12..14].copy_from_slice(&[0x86, 0xdd]);
+    ev6[14] = 0x60;
+    let chain = 9usize; // 9 x 8-byte HBH headers, then ICMPv6 RA
+    let payload = chain * 8 + 16;
+    ev6[18..20].copy_from_slice(&(payload as u16).to_be_bytes());
+    ev6[20] = 0; // first next-header = Hop-by-Hop
+    ev6[21] = 255;
+    let mut off = 54;
+    for i in 0..chain {
+        ev6[off] = if i + 1 == chain { 58 } else { 0 }; // next: HBH ... then ICMPv6
+        ev6[off + 1] = 0; // hdr_ext_len 0 -> 8 bytes
+        off += 8;
+    }
+    ev6[off] = 134;
+    let hidden_ra = &ev6[..off + 16];
+    let seen_as_ra = net::is_icmpv6_ra(hidden_ra);
+    let unparseable = net::ipv6_unparseable(hidden_ra);
+    let v_ev = rules::l2_stateful_verdict(hidden_ra, 0, 4, PortRole::Uplink);
+    let ev = events::peek_last();
+    let surfaced = ev.map_or(false, |e| e.rule_id == rules::RULE_IPV6_UNPARSEABLE && e.verdict != 2);
+    let clean_ok = !net::ipv6_unparseable(&ra_frame(&router)); // a well-formed RA is NOT flagged
+    let c_f = !seen_as_ra && unparseable && v_ev == Some(Verdict::Observe) && surfaced && clean_ok;
+    ok &= c_f;
+    kprint!("   evasion (RA behind 9 HBH hdrs): seen-as-RA={} (want false) unparseable={} verdict={:?} surfaced-rule-123={} well-formed-not-flagged={} [{}]\n",
+        seen_as_ra, unparseable, v_ev, surfaced, clean_ok, if c_f { "ok" } else { "BUG" });
+
+    let no_overrun = events::overruns() == overruns_before;
+    ok &= no_overrun;
+    kprint!(" [P8-raflood] {} — A9-3 RA-flood -> self-reverting RateLimit on any port (first {} PASS, flooder DROPs, neighbour router PASSes, next window reverts); A9-5 rule 121/122 attributed by src-MAC hash; A9-7 unparseable-IPv6 evasion surfaced as rule 123 Observe (never a drop); ring overrun during phase={}; Access first-sight FrameDrop stays EMBARGOED\n",
+        if ok { "PASS" } else { "FAIL" }, RA_FLOOD_THRESH, !no_overrun);
     ok
 }
 

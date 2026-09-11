@@ -339,6 +339,13 @@ pub const RULE_BCAST_STORM: u16 = 112;
 /// (matrix A9); a legit RA on an uplink is Observed (L4). Kept distinct from the L2
 /// tier 110-112 and the truncated/behavioral ids.
 pub const RULE_ROGUE_RA: u16 = 121;
+/// A9-3: an RA FLOOD from one source MAC on one port (> `ratelimit::RA_FLOOD_THRESH`
+/// per window) → `FloodRate` → self-reverting `RateLimit` on ANY port — rate reality,
+/// identity-blind, the one RA arm the security-auditor ruling approved to arm now.
+pub const RULE_RA_FLOOD: u16 = 122;
+/// A9-7: an IPv6 frame whose extension chain `parse_ipv6` refuses (evasion made
+/// VISIBLE, observe-only — never a drop).
+pub const RULE_IPV6_UNPARSEABLE: u16 = 123;
 
 /// Distinct-source-MAC-per-window thresholds (ADR 0023 D12). Access is tight; the
 /// uplink/AP bar is deliberately far higher (many client MACs are legitimate there).
@@ -376,12 +383,40 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     // floor does NOT cover this path (`src` is 0 for IPv6 frames) and the Access
     // FrameDrop arm is embargoed from arming — see heqk-detection-parity.md §5 (A9).
     // Guards ICMPv6 type 134 only (Redirect 137 / NA-Override 136 / DHCPv6 scoped-absent).
+    //
+    // A9-5 attribution: an IPv6 frame has no IPv4 `src`, so rules 121-123 carry the
+    // low 32 bits of `ratelimit::mac_hash(src MAC)` in `Event.src` instead (documented
+    // rule-keyed interpretation in events.rs) — without it the D16 promote/confirm loop
+    // is impossible and a guard-caused outage undiagnosable.
+    let mac_attr = if frame.len() >= 12 { crate::ratelimit::mac_hash(&frame[6..12]) } else { 0 };
     if crate::net::is_icmpv6_ra(frame) {
         let v = verdict::decide_l2(FindingClass::RaGuard, ctx);
-        fire(RULE_ROGUE_RA, SEV_HIGH, v, src);
+        fire(RULE_ROGUE_RA, SEV_HIGH, v, mac_attr as u32);
         if v.is_drop() {
             return Some(v);
         }
+        if observed.is_none() {
+            observed = Some(v);
+        }
+        // A9-3: the RA FLOOD arm — approved to arm NOW on any port. A legit router paces
+        // to ~4 RAs / 10 s (RFC 4861); exceeding RA_FLOOD_THRESH from ONE source MAC on
+        // this port is a rate wall crossed → FloodRate → bounded, self-reverting
+        // RateLimit (the same shape as the A3 broadcast-storm shed). Keyed per
+        // (port, src MAC): a legit router beside the flooder keeps its own budget.
+        if crate::ratelimit::ra_rate_over(port, mac_attr, crate::ratelimit::RA_FLOOD_THRESH) {
+            let v = verdict::decide_l2(FindingClass::FloodRate, ctx);
+            fire(RULE_RA_FLOOD, SEV_HIGH, v, mac_attr as u32);
+            if v.is_drop() {
+                return Some(v);
+            }
+        }
+    } else if crate::net::ipv6_unparseable(frame) {
+        // A9-7: an IPv6 extension chain parse_ipv6 refuses is INVISIBLE to the RA-guard
+        // (an RA behind a padded Hop-by-Hop chain bypasses it silently). Surface it as
+        // an observe-level finding so evasion is SEEN — never a drop (legit ext-header
+        // users exist; Behavioral is Observe by construction).
+        let v = verdict::decide_l2(FindingClass::Behavioral, ctx);
+        fire(RULE_IPV6_UNPARSEABLE, SEV_LOW, v, mac_attr as u32);
         if observed.is_none() {
             observed = Some(v);
         }

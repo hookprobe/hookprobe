@@ -152,23 +152,10 @@ pub const ICMPV6_ROUTER_ADVERT: u8 = 134;
 /// Observed + accepted (L4). Returns `false` (no RA verdict — fail-safe) for any
 /// non-IPv6 / non-ICMPv6 / truncated frame, so a normal packet is never mis-flagged.
 pub fn is_icmpv6_ra(frame: &[u8]) -> bool {
-    let mut et = match be16(frame, 12) {
-        Some(v) => v,
+    let l3 = match ipv6_l3_offset(frame) {
+        Some(o) => o,
         None => return false,
     };
-    let mut l3 = ETH_HLEN;
-    let mut tags = 0;
-    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
-        et = match be16(frame, l3 + 2) {
-            Some(v) => v,
-            None => return false,
-        };
-        l3 += 4;
-        tags += 1;
-    }
-    if et != ETHERTYPE_IPV6 {
-        return false;
-    }
     match parse_ipv6(frame, l3) {
         // parse_ipv6 returns the ICMPv6 header offset as the "L4" offset; the message
         // type is its first byte.
@@ -176,6 +163,38 @@ pub fn is_icmpv6_ra(frame: &[u8]) -> bool {
             frame.get(icmp_off).copied() == Some(ICMPV6_ROUTER_ADVERT)
         }
         _ => false,
+    }
+}
+
+/// The IPv6 base-header offset of `frame` after unwrapping up to `MAX_VLAN_TAGS`
+/// tags, or `None` if the frame is not IPv6 (or is truncated in the tag stack).
+fn ipv6_l3_offset(frame: &[u8]) -> Option<usize> {
+    let mut et = be16(frame, 12)?;
+    let mut l3 = ETH_HLEN;
+    let mut tags = 0;
+    while (et == ETHERTYPE_VLAN || et == ETHERTYPE_QINQ) && tags < MAX_VLAN_TAGS {
+        et = be16(frame, l3 + 2)?;
+        l3 += 4;
+        tags += 1;
+    }
+    if et == ETHERTYPE_IPV6 {
+        Some(l3)
+    } else {
+        None
+    }
+}
+
+/// A9-7 (security-auditor ruling, heqk-detection-parity.md §5): an IPv6 frame whose
+/// extension-header chain `parse_ipv6` REFUSES (over `MAX_V6_EXT` headers, a chain
+/// running past the datagram, an inconsistent payload length). Such a frame is
+/// invisible to every L4 predicate — an RA behind a padded Hop-by-Hop chain would
+/// silently bypass the RA-guard — so the caller makes it VISIBLE as an observe-level
+/// finding. Never a drop: legitimate extension-header users exist, and turning
+/// unparseable into FrameDrop would be a new legit-drop cannon.
+pub fn ipv6_unparseable(frame: &[u8]) -> bool {
+    match ipv6_l3_offset(frame) {
+        Some(l3) => parse_ipv6(frame, l3).is_none(),
+        None => false,
     }
 }
 
