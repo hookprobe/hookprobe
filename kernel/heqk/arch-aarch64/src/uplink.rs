@@ -8,7 +8,15 @@
 //!
 //! Every builder/parser is the WiFi STA's (`cyw43.rs`, metal-proven twice) — only
 //! the link layer differs: both NICs are polled DMA rings with no dry-read cost, so
-//! waits are spin-budgeted, not read-budgeted.
+//! waits are wall-clock (cntpct) deadlines.
+//!
+//! Review-driven hardening (2026-09-11, uplink/NAT deep review): the GEM is
+//! PROMISCUOUS, so `parse_dhcp_reply` matches xid + chaddr + L2 dst (a stale or
+//! foreign OFFER/ACK must never be adopted — that would squat a customer's IP on
+//! the fortress LAN); the ring is drained and RSR.BNA recovered before the DISCOVER
+//! (nobody polled it since P8); a gratuitous ARP announces the lease and
+//! `wan_poll` answers the gateway's ARP probes so the neighbour entry never goes
+//! FAILED and blackholes the return traffic.
 
 use crate::cyw43::{build_arp, build_dhcp, build_icmp_echo, parse_dhcp_reply, parse_ping_reply, DhcpResult};
 use crate::{gem, rtl8111};
@@ -29,10 +37,23 @@ pub const END0_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x02];
 /// eth1's identity (the 8111H eFuse MAC reads all-zero on this carrier).
 pub const ETH1_MAC: [u8; 6] = [0x02, 0x43, 0x45, 0x48, 0x51, 0x4c];
 
-/// ~5 s of polling at the P9 spin rate (60M spins ≈ 5 s on the A76 busy-poll).
-const WAIT_BUDGET: u64 = 60_000_000;
-/// Retransmit the lossy request every ~1 s of dry polling.
-const RETX_EVERY: u64 = 12_000_000;
+/// Per-stage wait (dnsmasq / ARP / 8.8.8.8 answer in ms; this bounds the failure case).
+const WAIT_MS: u64 = 5_000;
+/// Retransmit the lossy request every second of dry polling.
+const RETX_MS: u64 = 1_000;
+
+#[inline]
+fn cntpct() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
+    v
+}
+#[inline]
+fn ticks_ms(ms: u64) -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    f.max(1).saturating_mul(ms) / 1000
+}
 
 fn nic_ready(nic: Nic) -> bool {
     match nic {
@@ -66,8 +87,12 @@ pub struct UplinkResult {
     pub link: bool,
     pub mac: [u8; 6], // the station address in use (IDR read-back on eth1)
     pub mac_ok: bool,
+    pub stale_drained: u32, // frames drained off the ring before the DISCOVER
+    pub bna_recovered: bool, // RSR.BNA was latched (ring full) and RE was bounced
+    pub rsr_before: u32,
     pub dhcp: DhcpResult,
     pub rx_frames: u32, // every frame drained off the ring during the waits
+    pub garp_tx: bool,  // gratuitous ARP announcing the lease
     pub gw_mac: [u8; 6],
     pub arp_tx: bool,
     pub arp_reply: bool,
@@ -83,8 +108,9 @@ pub struct UplinkResult {
 impl UplinkResult {
     pub fn new(nic: Nic) -> Self {
         UplinkResult {
-            nic, started: false, link: false, mac: [0; 6], mac_ok: false, dhcp: DhcpResult::new(),
-            rx_frames: 0, gw_mac: [0; 6], arp_tx: false, arp_reply: false,
+            nic, started: false, link: false, mac: [0; 6], mac_ok: false,
+            stale_drained: 0, bna_recovered: false, rsr_before: 0, dhcp: DhcpResult::new(),
+            rx_frames: 0, garp_tx: false, gw_mac: [0; 6], arp_tx: false, arp_reply: false,
             gw_ping_tx: false, gw_ping_reply: false, gw_ttl: 0,
             inet_ip: [0; 4], inet_ping_tx: false, inet_ping_reply: false, inet_ttl: 0,
         }
@@ -95,16 +121,22 @@ impl UplinkResult {
     }
 }
 
-/// Drain the NIC's RX ring for up to `budget` spins, handing every frame to `f`
-/// until it returns true. `retx` is re-sent every `RETX_EVERY` spins.
-fn rx_wait(out: &mut UplinkResult, retx: &[u8], budget: u64, mut f: impl FnMut(&[u8], &mut UplinkResult) -> bool) -> bool {
+/// Drain the NIC's RX ring for up to `wait_ms`, handing every frame to `f` until it
+/// returns true. `retx` is re-sent every `RETX_MS` of waiting.
+fn rx_wait(out: &mut UplinkResult, retx: &[u8], wait_ms: u64, mut f: impl FnMut(&[u8], &mut UplinkResult) -> bool) -> bool {
     let nic = out.nic;
     let mut buf = [0u8; 2048];
-    let mut spins = 0u64;
-    while spins < budget {
-        spins += 1;
-        if spins % RETX_EVERY == 0 {
+    let start = cntpct();
+    let deadline = start + ticks_ms(wait_ms);
+    let mut next_retx = start + ticks_ms(RETX_MS);
+    loop {
+        let now = cntpct();
+        if now >= deadline {
+            return false;
+        }
+        if now >= next_retx {
             let _ = nic_tx(nic, retx);
+            next_retx = now + ticks_ms(RETX_MS);
         }
         match nic_rx(nic, &mut buf) {
             Some(len) => {
@@ -120,7 +152,6 @@ fn rx_wait(out: &mut UplinkResult, retx: &[u8], budget: u64, mut f: impl FnMut(&
             None => core::hint::spin_loop(),
         }
     }
-    false
 }
 
 /// Establish the NIC's station address. eth1 programs IDR; end0 is promiscuous so
@@ -138,9 +169,25 @@ fn establish_mac(nic: Nic, out: &mut UplinkResult) {
     }
 }
 
+/// Drain everything sitting in the RX ring (stale broadcast noise since the ring was
+/// armed) and, on the GEM, recover a latched buffer-not-available condition.
+fn drain_ring(nic: Nic, out: &mut UplinkResult) {
+    let mut buf = [0u8; 2048];
+    let mut n = 0u32;
+    while n < 512 && nic_rx(nic, &mut buf).is_some() {
+        n += 1;
+    }
+    out.stale_drained = n;
+    if nic == Nic::End0 {
+        let (bna, rsr) = gem::rx_bna_recover();
+        out.bna_recovered = bna;
+        out.rsr_before = rsr;
+    }
+}
+
 /// M-NAT0: bring `nic` to a leased, gateway-resolved state and prove internet
-/// reach with an ICMP echo to `inet_ip`. Never blocks past the fixed spin
-/// budgets; every stage's outcome is in `out`.
+/// reach with an ICMP echo to `inet_ip`. Never blocks past the fixed deadlines;
+/// every stage's outcome is in `out`.
 pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     out.nic = nic;
     out.inet_ip = *inet_ip;
@@ -155,48 +202,55 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     if !out.link || !out.mac_ok {
         return;
     }
+    drain_ring(nic, out);
 
     // Per-boot xid from the cycle counter (as wifi_dhcp).
-    let ctr: u64;
-    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ctr, options(nomem, nostack)) };
-    let xid = (ctr as u32).to_be_bytes();
+    let xid = (cntpct() as u32).to_be_bytes();
     let none = [0u8; 4];
     let mut pkt = [0u8; 400];
 
-    // --- DISCOVER → OFFER
+    // --- DISCOVER → OFFER (ours: xid + chaddr + L2 dst matched inside parse_dhcp_reply)
     let n = build_dhcp(&mut pkt, &mac, &xid, 1, &none, &none);
     out.dhcp.discover_tx = nic_tx(nic, &pkt[..n]);
     if !out.dhcp.discover_tx {
         return; // the TX primitive never completed
     }
     let disc = pkt;
-    out.dhcp.offer_rx = rx_wait(out, &disc[..n], WAIT_BUDGET, |eth, o| parse_dhcp_reply(eth, &mut o.dhcp) == 2);
+    out.dhcp.offer_rx = rx_wait(out, &disc[..n], WAIT_MS, |eth, o| parse_dhcp_reply(eth, &xid, &mac, &mut o.dhcp) == 2);
     if !out.dhcp.offer_rx {
         return;
     }
 
-    // --- REQUEST → ACK
+    // --- REQUEST → ACK (a NAK ends this round; the caller may retry the whole DORA)
     let yi = out.dhcp.yiaddr;
     let sv = out.dhcp.server;
     let n = build_dhcp(&mut pkt, &mac, &xid, 3, &yi, &sv);
     out.dhcp.request_tx = nic_tx(nic, &pkt[..n]);
     let req = pkt;
-    out.dhcp.ack_rx = rx_wait(out, &req[..n], WAIT_BUDGET, |eth, o| parse_dhcp_reply(eth, &mut o.dhcp) == 5);
+    out.dhcp.ack_rx = rx_wait(out, &req[..n], WAIT_MS, |eth, o| {
+        let mt = parse_dhcp_reply(eth, &xid, &mac, &mut o.dhcp);
+        mt == 5 || mt == 6
+    }) && !out.dhcp.nak_rx;
     if !out.dhcp.ack_rx {
         return;
     }
 
-    // --- ARP the gateway
+    // Announce the lease (gratuitous ARP request: sender IP == target IP == ours) so the
+    // segment's neighbour caches learn END0_MAC before any return traffic.
     let ip = out.dhcp.yiaddr;
+    let mut small = [0u8; 128];
+    let n = build_arp(&mut small, &mac, &ip, &ip);
+    out.garp_tx = nic_tx(nic, &small[..n]);
+
+    // --- ARP the gateway
     let gw = out.dhcp.router;
     if gw == [0; 4] {
         return; // no router option — nothing to route through
     }
-    let mut small = [0u8; 128];
     let n = build_arp(&mut small, &mac, &ip, &gw);
     out.arp_tx = nic_tx(nic, &small[..n]);
     let arp = small;
-    out.arp_reply = rx_wait(out, &arp[..n], WAIT_BUDGET, |eth, o| {
+    out.arp_reply = rx_wait(out, &arp[..n], WAIT_MS, |eth, o| {
         let mut m = [0u8; 6];
         let (mut ttl, mut src) = (0u8, [0u8; 4]);
         if parse_ping_reply(eth, &gw, 0, &mut m, &mut ttl, &mut src) == 1 {
@@ -216,7 +270,7 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     let n = build_icmp_echo(&mut small, &mac, &gw_mac, &ip, &gw, id, 1);
     out.gw_ping_tx = nic_tx(nic, &small[..n]);
     let echo = small;
-    out.gw_ping_reply = rx_wait(out, &echo[..n], WAIT_BUDGET, |eth, o| {
+    out.gw_ping_reply = rx_wait(out, &echo[..n], WAIT_MS, |eth, o| {
         let mut m = [0u8; 6];
         let (mut ttl, mut src) = (0u8, [0u8; 4]);
         if parse_ping_reply(eth, &none, id, &mut m, &mut ttl, &mut src) == 2 && src == gw {
@@ -231,7 +285,7 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     out.inet_ping_tx = nic_tx(nic, &small[..n]);
     let echo = small;
     let want = *inet_ip;
-    out.inet_ping_reply = rx_wait(out, &echo[..n], WAIT_BUDGET * 2, |eth, o| {
+    out.inet_ping_reply = rx_wait(out, &echo[..n], WAIT_MS * 2, |eth, o| {
         let mut m = [0u8; 6];
         let (mut ttl, mut src) = (0u8, [0u8; 4]);
         if parse_ping_reply(eth, &none, id, &mut m, &mut ttl, &mut src) == 2 && src == want {
@@ -241,6 +295,54 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
             false
         }
     });
+}
+
+/// WAN keep-alive for a leased uplink: read at most one frame off the NIC and answer an
+/// ARP request for our leased IP (the gateway's neighbour-cache probe — unanswered, the
+/// fortress marks us FAILED within a minute or two and blackholes the return traffic).
+/// Also refreshes `gw_mac` from any ARP the gateway sends. Returns the action byte
+/// ('r' ARP reply sent, 'g' gateway MAC refreshed) or 0.
+pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> u8 {
+    if !up.dhcp.ack_rx {
+        return 0;
+    }
+    let nic = up.nic;
+    let n = match nic_rx(nic, buf) {
+        Some(n) => n.min(buf.len()),
+        None => return 0,
+    };
+    if n < 42 || buf[12] != 0x08 || buf[13] != 0x06 {
+        return 0;
+    }
+    let mac = up.mac;
+    let ip = up.dhcp.yiaddr;
+    let op = u16::from_be_bytes([buf[20], buf[21]]);
+    let mut spa = [0u8; 4];
+    spa.copy_from_slice(&buf[28..32]);
+    if op == 1 && &buf[38..42] == &ip[..] {
+        let mut rmac = [0u8; 6];
+        rmac.copy_from_slice(&buf[22..28]);
+        let mut reply = [0u8; 64];
+        reply[0..6].copy_from_slice(&rmac);
+        reply[6..12].copy_from_slice(&mac);
+        reply[12] = 0x08;
+        reply[13] = 0x06;
+        reply[14] = 0x00; reply[15] = 0x01; reply[16] = 0x08; reply[17] = 0x00;
+        reply[18] = 6; reply[19] = 4; reply[20] = 0x00; reply[21] = 0x02;
+        reply[22..28].copy_from_slice(&mac);
+        reply[28..32].copy_from_slice(&ip);
+        reply[32..38].copy_from_slice(&rmac);
+        reply[38..42].copy_from_slice(&spa);
+        if nic_tx(nic, &reply[..60]) {
+            return b'r';
+        }
+        return 0;
+    }
+    if spa == up.dhcp.router && buf[22..28] != up.gw_mac {
+        up.gw_mac.copy_from_slice(&buf[22..28]); // gateway moved (VRRP/failover)
+        return b'g';
+    }
+    0
 }
 
 /// LAN-port status for eth1: program its station address and report the link.
