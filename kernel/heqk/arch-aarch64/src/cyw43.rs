@@ -3051,7 +3051,7 @@ impl DhcpResult {
 
 /// One's-complement internet checksum over `data`, folded, with a running `init` (used to
 /// seed the UDP pseudo-header sum). Returns the value to store in the checksum field.
-fn inet_csum(data: &[u8], init: u32) -> u16 {
+pub(crate) fn inet_csum(data: &[u8], init: u32) -> u16 {
     let mut sum = init;
     let mut i = 0;
     while i + 1 < data.len() {
@@ -3070,7 +3070,7 @@ fn inet_csum(data: &[u8], init: u32) -> u16 {
 /// Build a DHCP DISCOVER (mt=1) or REQUEST (mt=3) as a complete ethernet/IPv4/UDP/BOOTP frame
 /// into `buf`; returns the frame length. `req_ip`/`server` are the option-50/54 values used
 /// only for the REQUEST. Broadcast (bcast flag) so the reply reaches us before we have an IP.
-fn build_dhcp(buf: &mut [u8], mac: &[u8; 6], xid: &[u8; 4], mt: u8, req_ip: &[u8; 4], server: &[u8; 4]) -> usize {
+pub(crate) fn build_dhcp(buf: &mut [u8], mac: &[u8; 6], xid: &[u8; 4], mt: u8, req_ip: &[u8; 4], server: &[u8; 4]) -> usize {
     for b in buf.iter_mut() { *b = 0; }
     // Ethernet
     buf[0..6].copy_from_slice(&[0xff; 6]); // dst broadcast
@@ -3127,7 +3127,7 @@ fn build_dhcp(buf: &mut [u8], mac: &[u8; 6], xid: &[u8; 4], mt: u8, req_ip: &[u8
 
 /// Parse a received ethernet frame for a DHCP reply to us (UDP 67->68, BOOTREPLY). On a match
 /// fills `out` yiaddr + options and returns the DHCP message type (2=OFFER, 5=ACK), else 0.
-fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
+pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
     if eth.len() < 42 + 240 { return 0; }
     if eth[12] != 0x08 || eth[13] != 0x00 { return 0; }        // IPv4
     let ihl = ((eth[14] & 0x0f) as usize) * 4;
@@ -3272,7 +3272,7 @@ impl PingResult {
 
 /// Build an ARP request ("who has `tpa`, tell `spa`/`mac`") into `buf`; returns the length
 /// (42, padded to the 60-byte ethernet minimum).
-fn build_arp(buf: &mut [u8], mac: &[u8; 6], spa: &[u8; 4], tpa: &[u8; 4]) -> usize {
+pub(crate) fn build_arp(buf: &mut [u8], mac: &[u8; 6], spa: &[u8; 4], tpa: &[u8; 4]) -> usize {
     for b in buf[..60].iter_mut() { *b = 0; }
     buf[0..6].copy_from_slice(&[0xff; 6]);
     buf[6..12].copy_from_slice(mac);
@@ -3289,7 +3289,7 @@ fn build_arp(buf: &mut [u8], mac: &[u8; 6], spa: &[u8; 4], tpa: &[u8; 4]) -> usi
 }
 
 /// Build an ICMP echo request to `dip` (routed via `dst_mac`) into `buf`; returns the length.
-fn build_icmp_echo(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], id: u16, seq: u16) -> usize {
+pub(crate) fn build_icmp_echo(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], id: u16, seq: u16) -> usize {
     for b in buf[..74].iter_mut() { *b = 0; }
     // Ethernet
     buf[0..6].copy_from_slice(dst_mac);
@@ -3318,7 +3318,7 @@ fn build_icmp_echo(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 
 /// Parse a received ethernet frame; if it's an ARP reply from `want_ip`, copy the sender MAC
 /// into `mac_out` and return 1; if it's an ICMP echo reply (type 0) with our `id`, fill `ttl`
 /// + `src` and return 2; else 0.
-fn parse_ping_reply(eth: &[u8], want_arp_ip: &[u8; 4], id: u16, mac_out: &mut [u8; 6], ttl: &mut u8, src: &mut [u8; 4]) -> u8 {
+pub(crate) fn parse_ping_reply(eth: &[u8], want_arp_ip: &[u8; 4], id: u16, mac_out: &mut [u8; 6], ttl: &mut u8, src: &mut [u8; 4]) -> u8 {
     if eth.len() < 42 { return 0; }
     let et = u16::from_be_bytes([eth[12], eth[13]]);
     if et == 0x0806 {
