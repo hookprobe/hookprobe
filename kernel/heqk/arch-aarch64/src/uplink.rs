@@ -90,6 +90,8 @@ pub struct UplinkResult {
     pub stale_drained: u32, // frames drained off the ring before the DISCOVER
     pub bna_recovered: bool, // RSR.BNA was latched (ring full) and RE was bounced
     pub rsr_before: u32,
+    pub tx_err: u32,        // GEM LAST_TX_ERR (TSR at timeout; TGO alone = "timeout, TSR clean")
+    pub tx_retried: bool,   // the first DISCOVER timed out and a second tx_frame was attempted
     pub dhcp: DhcpResult,
     pub rx_frames: u32, // every frame drained off the ring during the waits
     pub garp_tx: bool,  // gratuitous ARP announcing the lease
@@ -109,7 +111,8 @@ impl UplinkResult {
     pub fn new(nic: Nic) -> Self {
         UplinkResult {
             nic, started: false, link: false, mac: [0; 6], mac_ok: false,
-            stale_drained: 0, bna_recovered: false, rsr_before: 0, dhcp: DhcpResult::new(),
+            stale_drained: 0, bna_recovered: false, rsr_before: 0, tx_err: 0, tx_retried: false,
+            dhcp: DhcpResult::new(),
             rx_frames: 0, garp_tx: false, gw_mac: [0; 6], arp_tx: false, arp_reply: false,
             gw_ping_tx: false, gw_ping_reply: false, gw_ttl: 0,
             inet_ip: [0; 4], inet_ping_tx: false, inet_ping_reply: false, inet_ttl: 0,
@@ -203,6 +206,14 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
         return;
     }
     drain_ring(nic, out);
+    if nic == Nic::End0 {
+        // Re-arm the TX ring right before our first frame — exactly what cm5_prod_service
+        // does before ITS first transmit (the metal-proven M4 bridge path). Metal 2026-09-11:
+        // the P8 diag frames went out fine straight after P8's tx_init, but the first frame
+        // sent ~40 s later (after P9/P10) timed out; prod never hit that because it re-inits.
+        gem::tx_init();
+        let _ = gem::tx_err_take(); // clear any stale latched error
+    }
 
     // Per-boot xid from the cycle counter (as wifi_dhcp).
     let xid = (cntpct() as u32).to_be_bytes();
@@ -212,7 +223,16 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     // --- DISCOVER → OFFER (ours: xid + chaddr + L2 dst matched inside parse_dhcp_reply)
     let n = build_dhcp(&mut pkt, &mac, &xid, 1, &none, &none);
     out.dhcp.discover_tx = nic_tx(nic, &pkt[..n]);
+    if !out.dhcp.discover_tx && nic == Nic::End0 {
+        // One more try after the timeout path's own TE recovery, with the TSR captured.
+        out.tx_err = gem::tx_err_take();
+        out.dhcp.discover_tx = nic_tx(nic, &pkt[..n]);
+        out.tx_retried = true;
+    }
     if !out.dhcp.discover_tx {
+        if nic == Nic::End0 && out.tx_err == 0 {
+            out.tx_err = gem::tx_err_take();
+        }
         return; // the TX primitive never completed
     }
     let disc = pkt;

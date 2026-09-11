@@ -2412,7 +2412,15 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
 /// group PN on every join, and flagging the PTK primary instead left the fw without a
 /// default group TX key — the likely reason AP-originated broadcast never decrypted.
 pub fn ap_install_gtk(gtk: &[u8; 16], keyid: u8) -> bool {
-    wlc_set_key(keyid as u32, gtk, &[0u8; 6], true)
+    // Metal 2026-09-11: the first SET right after WLC_UP+SET_SSID missed its reply (the
+    // dcmd reply hunt through the post-UP event burst), the second succeeded — retry.
+    for _ in 0..3 {
+        if wlc_set_key(keyid as u32, gtk, &[0u8; 6], true) {
+            return true;
+        }
+        delay(20_000);
+    }
+    false
 }
 
 /// Take the BSS down (stop beaconing). Used when the AP cannot become serve-ready: a

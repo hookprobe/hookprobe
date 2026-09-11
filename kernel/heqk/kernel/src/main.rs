@@ -2653,7 +2653,8 @@ fn cm5_p10_probe() {
                                 } else if up.dhcp.discover_tx && up.rx_frames > 0 && !up.dhcp.offer_rx {
                                     kprint!(" [M-NAT0] NO OFFER — DISCOVER transmitted but no DHCP server answered on end0's segment\n");
                                 } else if !up.dhcp.discover_tx {
-                                    kprint!(" [M-NAT0] FAIL — GEM tx_frame did not complete\n");
+                                    kprint!(" [M-NAT0] FAIL — GEM tx_frame did not complete (TSR at timeout={:#06x}: 0x01=UBR 0x04=RLE 0x08=TGO-only=clean-timeout 0x10=BEX 0x20=TXCOMP; retried={})\n",
+                                        up.tx_err, up.tx_retried);
                                 } else {
                                     kprint!(" [M-NAT0] INCOMPLETE — see stage flags above\n");
                                 }
