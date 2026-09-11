@@ -142,6 +142,21 @@ else
   echo "skip (rustc host build unavailable)"
 fi
 
+# --- Stage 1d: design-doc canon references must resolve --------------------
+# Source files, tools and readiness docs cite docs/design/<name>.md as canon. A
+# dangling reference (three were found missing on 2026-09-10/11 and reconstructed)
+# silently breaks traceability, so fail if any cited design doc is absent.
+echo -n "[docs]  design-doc canon refs ... "
+DOC_MISSING=0
+for d in $(grep -rhoE 'docs/design/heqk-[a-z0-9-]+\.md' --include='*.rs' --include='*.md' --include='*.py' --include='*.sh' . 2>/dev/null | sort -u); do
+  if [ ! -f "$d" ]; then echo; echo "  MISSING: $d"; DOC_MISSING=1; fi
+done
+if [ "$DOC_MISSING" -eq 0 ]; then
+  echo "PASS (every cited docs/design/*.md exists)"
+else
+  echo "FAIL — a cited design doc is missing (dangling canon reference)"; exit 2
+fi
+
 # --- Stage 2: boot + capture ---------------------------------------------
 echo -n "[boot]  qemu virt ... "
 timeout 45 $QEMU "$KERNEL" >"$LOG" 2>&1

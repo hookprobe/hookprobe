@@ -116,9 +116,15 @@ pub enum FindingClass {
     /// `FrameDrop` (a RA on a client-only port is a definitionally-illegitimate
     /// gateway-hijack — a suspicion-free, port-keyed drop of THAT frame, ADR 0023),
     /// while an Uplink RA is the legit downstream-router advertisement → `Observe`
-    /// (accepted + logged). The mgmt floor still short-circuits. FAIL-SAFE: the live
-    /// aggregate port defaults `Uplink`, so a real RA is never dropped until a manifest
-    /// marks a specific access interface.
+    /// (accepted + logged). NOTE: the IPv4 mgmt floor does NOT reach this class — an
+    /// IPv6 frame carries `src == 0` and a `0` source is never allowlisted, so an IPv6
+    /// management floor is a precondition of ever arming the Access drop (A9-6).
+    /// FAIL-SAFE: the live aggregate port defaults `Uplink`, so a real RA is never
+    /// dropped until a manifest marks a specific access interface. The Access
+    /// `FrameDrop` arm is EMBARGOED from arming until the ADR 0023 D16-parity
+    /// conditions in `docs/design/heqk-detection-parity.md` §5 are met (security-
+    /// auditor ruling 2026-09-11): first-sight source-blind RA drop is the
+    /// default-deny posture D16 removed on the Linux tier.
     RaGuard,
 }
 
