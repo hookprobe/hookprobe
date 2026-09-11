@@ -196,6 +196,18 @@ P9/M4) may arm any Access-port RA drop, ALL of the following are required:**
   router on that port keeps its address and default route — a frame-verdict
   assertion cannot detect the delayed prefix-expiry failure mode.
 
+**Status of the conditions (2026-09-11, QEMU gate `[P8-raflood]`):**
+
+| Cond | State | Where |
+|------|-------|-------|
+| A9-3 flood arm | **BUILT + QEMU-proven** — RA flood from one (port, src MAC) > 10/10 s → `FloodRate` → self-reverting `RateLimit` on any port; first 10 PASS, flooder DROPs, a legit router beside it PASSes, next window reverts | `ratelimit::ra_rate_over`, `rules.rs` RULE_RA_FLOOD=122 |
+| A9-3 tri-state remap (Observe / allowlist / confirmed-rogue FrameDrop) | open — needs A9-1/2/4 infrastructure | — |
+| A9-5 attribution | **BUILT** — rules 121/122/123 carry the src-MAC hash; rule-keyed interpretation documented on `Event.src` (`events.rs`), exporter serializes raw u32; per-port distinct-source counter still open | `rules.rs`, `events.rs` |
+| A9-6 comment correction | **DONE**; the IPv6 mgmt floor itself open | `verdict.rs`, `rules.rs` |
+| A9-7 evasion visibility | **BUILT + QEMU-proven** — an RA behind a 9-deep HBH chain is surfaced as RULE_IPV6_UNPARSEABLE=123 Observe, never a drop | `net::ipv6_unparseable` |
+| A9-8 scope honesty | **DONE** (row text + comments say type-134 guard) | this doc, `rules.rs` |
+| A9-1 / A9-2 / A9-4 / A9-9 | open — with C-2 (manifest port-role reader on the second datapath) | — |
+
 **Residual risk, stated plainly:** A9 provides zero live *prevention* on shipping CM5
 today (rogue RA is Observed + alerted, never dropped — a MISS correctly preferred over
 a legit-drop, recorded as C-2). After the conditions, the D16 posture still lets a

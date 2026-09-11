@@ -35,7 +35,7 @@ can't prove is marked *metal-deferred*, not closed.
 | # | Gap | Track | Type | Status / next action |
 |---|-----|-------|------|----------------------|
 | 1 | **M-AP-NAT** — route/NAT WiFi-AP clients (10.99.0.0/24) → internet via the `eth1` uplink (the SASE payoff) | WiFi AP | metal | M-NAT0 BUILT (`b300522`, `arch-aarch64/src/uplink.rs`, img 2a26013a) — metal-pending: the first-ever RTL8111 `tx_frame`; then M-NAT1..3 |
-| 4b | **A9 arming conditions** A9-1..A9-9 (`heqk-detection-parity.md` §5) — must land before C-2 arms any Access-port RA drop; the RA-flood `RateLimit` arm (A9-3) is approved to build now | Security | no-metal (QEMU) | ruling recorded 2026-09-11; comments corrected; nothing armed |
+| 4b | **A9 arming conditions** A9-1..A9-9 (`heqk-detection-parity.md` §5) — must land before C-2 arms any Access-port RA drop | Security | no-metal (QEMU) | A9-3 flood arm + A9-5 attribution + A9-7 evasion visibility BUILT, `[P8-raflood]` GREEN (2026-09-11); open: tri-state remap, IPv6 mgmt floor, A9-1/2/4/9 (with C-2) |
 | 2 | AP **bring-up intermittent** — `heqk-ap` sometimes doesn't beacon on a boot (retry works) | WiFi AP | metal | harden `ap_start` settle/sequence |
 | 3 | AP: concurrent multi-station event loop; GTK-broadcast TX path; multi-client DHCP pool | WiFi AP | metal | follow-ups (unicast sidesteps GTK for now) |
 | 4 | **Gate-R sign-off leftovers** — A9 posture ruling RECORDED (§5 CONDITIONAL-GO, 2026-09-11); one unified adversarial metal pass emitting a single `GATE-R: PASS` (`tools/gate-r-run.py` is the parser); a REAL Access-port manifest role (C-2, needs the second datapath) | Security | governance + metal | → unlocks **U2** (retire the Linux dataplane) via a U2a/U2b split-ADR |

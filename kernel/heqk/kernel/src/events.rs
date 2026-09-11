@@ -19,7 +19,15 @@ use core::sync::atomic::{AtomicU32, Ordering};
 #[repr(C)]
 pub struct Event {
     pub ts: u64,      // cntpct at detection
-    pub src: u32,     // source hash / rate key (0 if not flow-scoped)
+    /// Source attribution. For the IPv4-scoped rules this is the host-order IPv4
+    /// source (0 if not flow-scoped). RULE-KEYED EXCEPTION (A9-5, security-auditor
+    /// ruling 2026-09-11): for the IPv6 RA rules 121/122/123 (`RULE_ROGUE_RA`,
+    /// `RULE_RA_FLOOD`, `RULE_IPV6_UNPARSEABLE`) an IPv6 frame has no IPv4 source, so
+    /// this carries the low 32 bits of `ratelimit::mac_hash(src MAC)` — the source
+    /// MAC's first four octets, LE. The exporter serializes it as a raw LE u32
+    /// (`export.rs`), never renders it as an address; consumers MUST key the
+    /// interpretation on `rule_id`.
+    pub src: u32,
     pub rule_id: u16, // which signed rule fired
     pub severity: u8, // QSecBit severity points
     pub verdict: u8,  // 1 = PASS, 2 = DROP
@@ -68,6 +76,18 @@ pub fn drain(out: &mut [Event]) -> usize {
         n += 1;
     }
     n
+}
+
+/// Non-consuming peek at the most recently PUSHED event (None if nothing was ever
+/// pushed). For self-tests that need to assert what a detector just recorded
+/// without stealing the event from the EL0 exporter's drain.
+pub fn peek_last() -> Option<Event> {
+    let h = HEAD.load(Ordering::Acquire);
+    if h == 0 {
+        return None;
+    }
+    let i = (h.wrapping_sub(1) as usize) % RING;
+    Some(unsafe { core::ptr::read_volatile(addr_of!(BUF).cast::<Event>().add(i)) })
 }
 
 /// Count of events dropped because the ring was full (a SIEM-visible signal).
