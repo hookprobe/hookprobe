@@ -372,7 +372,10 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     // decide_l2(RaGuard): Access → FrameDrop (a RA on a client-only port is a rogue
     // gateway-hijack), Uplink → Observe (the legit downstream-router RA, accepted +
     // logged). Fail-safe: the live aggregate port defaults Uplink, so a real RA is
-    // never dropped until a manifest marks a specific access interface.
+    // never dropped until a manifest marks a specific access interface. The IPv4 mgmt
+    // floor does NOT cover this path (`src` is 0 for IPv6 frames) and the Access
+    // FrameDrop arm is embargoed from arming — see heqk-detection-parity.md §5 (A9).
+    // Guards ICMPv6 type 134 only (Redirect 137 / NA-Override 136 / DHCPv6 scoped-absent).
     if crate::net::is_icmpv6_ra(frame) {
         let v = verdict::decide_l2(FindingClass::RaGuard, ctx);
         fire(RULE_ROGUE_RA, SEV_HIGH, v, src);
