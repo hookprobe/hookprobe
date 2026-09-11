@@ -593,7 +593,46 @@ pub fn mac_start() {
         wm16(LED_CTRL, led_want);
         wm8(CFG9346, 0x00); // re-lock
         LED_DIAG = (led_por, m16(LED_CTRL), m8(PHYSTATUS) as u16); // read back the actual value
+        STARTED = true;
+        RX_HEAD = 0;
     }
+}
+
+static mut STARTED: bool = false;
+/// True once `mac_start` has built the rings and enabled RX/TX (the uplink code
+/// must not touch the NIC before the P9 bring-up has run + the link was up).
+pub fn started() -> bool {
+    unsafe { STARTED }
+}
+
+// --- station address (IDR0..5 @ 0x00) -----------------------------------------
+// On this carrier the 8111H's eFuse MAC reads back all-zero, so the kernel assigns
+// a locally-administered address. r8169's rtl_rar_set: unlock CFG9346, write MAC4
+// (bytes 4..5) then MAC0 (bytes 0..3) as 32-bit LE words, re-lock. RXCFG's MyPhys
+// filter keys on IDR, so unicast replies (DHCP OFFER/ACK, ARP, ICMP) land only
+// after this is set.
+const IDR0: usize = 0x00;
+const IDR4: usize = 0x04;
+
+/// Program the station address into IDR0..5 and return the read-back value.
+pub fn set_mac(mac: &[u8; 6]) -> [u8; 6] {
+    unsafe {
+        wm8(CFG9346, 0xC0);
+        wm32(IDR4, u32::from_le_bytes([mac[4], mac[5], 0, 0]));
+        wm32(IDR0, u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]));
+        wm8(CFG9346, 0x00);
+        let _ = m8(CR); // commit posted writes
+    }
+    mac_addr()
+}
+
+/// The station address currently in IDR0..5.
+pub fn mac_addr() -> [u8; 6] {
+    let mut m = [0u8; 6];
+    for (i, b) in m.iter_mut().enumerate() {
+        *b = unsafe { m8(IDR0 + i) };
+    }
+    m
 }
 
 static mut LED_DIAG: (u16, u16, u16) = (0, 0, 0);
@@ -655,6 +694,28 @@ pub fn poll_rx(i: usize, out: &mut [u8]) -> Option<usize> {
         core::arch::asm!("dsb sy");
     }
     result
+}
+
+// The NIC fills descriptors strictly in ring order, so a consumer that walks the
+// ring with its own index must advance past EVERY slot it finds SW-owned — a slot
+// that errored (RX_RES) is re-armed by `poll_rx` but returns None, and a caller that
+// only advances on Some parks on it until the ring wraps. `rx_next` keeps a single
+// shared head and advances on any SW-owned slot.
+static mut RX_HEAD: usize = 0;
+
+/// Poll the next RX slot in ring order. Returns Some(len) with the frame copied
+/// into `out`; None if the NIC still owns the head slot (or the slot errored — the
+/// head still advances so the consumer never stalls on it).
+pub fn rx_next(out: &mut [u8]) -> Option<usize> {
+    let i = unsafe { RX_HEAD } % NRX;
+    let rx_desc_pa = unsafe { core::ptr::addr_of!(RX.desc) } as usize;
+    let d = nc_desc(rx_desc_pa + i * 16);
+    if unsafe { read_volatile(d.add(0)) } & OWN != 0 {
+        return None;
+    }
+    let r = poll_rx(i, out);
+    unsafe { RX_HEAD = (i + 1) % NRX };
+    r
 }
 
 /// Stage 5: transmit one frame via TX descriptor 0 + the NPQ doorbell; polls
