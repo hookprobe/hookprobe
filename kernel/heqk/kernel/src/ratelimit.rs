@@ -413,6 +413,60 @@ pub fn conn_rate_over(src: u64, cap: u64) -> bool {
     conn_rate_over_at(src, cap, cntpct(), cntfrq().max(1))
 }
 
+// ---- A9-3: per-(port, source-MAC) Router-Advertisement rate meter (RFC 4861 pacing) ----
+//
+// The security-auditor A9 ruling (heqk-detection-parity.md §5, 2026-09-11) embargoes the
+// first-sight Access-port RA FrameDrop but APPROVES this arm now, on any port: a legit
+// router paces its RAs (MinRtrAdvInterval >= 3 s, MIN_DELAY_BETWEEN_RAS 3 s, 3 initial
+// RAs <= 16 s apart per RFC 4861 §6.2.4/§6.2.6) so it emits at most ~4 per 10 s even
+// while answering solicitations; `fake_router6`/`mitm6` flood hundreds per second. So
+// the count EXCEEDING `RA_FLOOD_THRESH` in a `RA_FLOOD_WINDOW_SECS` window is RATE
+// REALITY (ADR 0023 D3), identity-blind, self-reverting at the window boundary, and it
+// isolates the flooder: the meter is keyed on (port, src MAC), so a legit router beside
+// a flooder on the same port keeps its own under-threshold budget.
+
+const RA_SLOTS: usize = 64;
+static RA_WIN: [AtomicU64; RA_SLOTS] = [const { AtomicU64::new(0) }; RA_SLOTS];
+static RA_KEY: [AtomicU64; RA_SLOTS] = [const { AtomicU64::new(0) }; RA_SLOTS];
+static RA_COUNT: [AtomicU64; RA_SLOTS] = [const { AtomicU64::new(0) }; RA_SLOTS];
+/// RAs per window per (port, src MAC) before it is a flood — 2.5x the RFC 4861 maximum
+/// legit pacing (~4 per 10 s), 1-2 orders below any flooding tool.
+pub const RA_FLOOD_THRESH: u64 = 10;
+pub const RA_FLOOD_WINDOW_SECS: u64 = 10;
+
+/// RA meter core with an INJECTED clock (deterministic self-revert proof in QEMU, as
+/// `conn_rate_over_at`). Bumps `key`'s counter; true iff it now EXCEEDS `limit` within
+/// `[start, start+win)`. A new window or a slot re-keyed by an aliasing key resets to
+/// 1 (never counts one key's RAs against another's). `key == 0` never trips.
+pub fn ra_rate_over_at(key: u64, limit: u64, now: u64, win: u64) -> bool {
+    if key == 0 {
+        return false;
+    }
+    let i = (key as usize) % RA_SLOTS;
+    let start = RA_WIN[i].load(Ordering::Relaxed);
+    if RA_KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(start) >= win {
+        RA_KEY[i].store(key, Ordering::Relaxed);
+        RA_WIN[i].store(now, Ordering::Relaxed);
+        RA_COUNT[i].store(1, Ordering::Relaxed);
+        return false;
+    }
+    let c = RA_COUNT[i].fetch_add(1, Ordering::Relaxed) + 1;
+    c > limit
+}
+
+/// The (port, src-MAC) RA-meter key: `mac_hash` occupies bits 0..48, the port id sits
+/// above it, so the same MAC on two ports meters independently.
+#[inline]
+pub fn ra_key(port: u64, mac_key: u64) -> u64 {
+    mac_key ^ ((port & 0xff) << 56)
+}
+
+/// Live RA meter on the real generic-counter clock (`RA_FLOOD_WINDOW_SECS` window).
+pub fn ra_rate_over(port: u64, mac_key: u64, limit: u64) -> bool {
+    let win = cntfrq().max(1).saturating_mul(RA_FLOOD_WINDOW_SECS);
+    ra_rate_over_at(ra_key(port, mac_key), limit, cntpct(), win)
+}
+
 // ---- L2/L3 shared: the top-talker (highest new-conn/flow-rate source) tracker ----
 
 /// A source below this measured flow/conn count is NEVER treated as a shed-worthy
