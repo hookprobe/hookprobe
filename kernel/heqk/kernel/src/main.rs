@@ -2594,6 +2594,46 @@ fn cm5_p10_probe() {
                     if AP_MODE {
                         const AP_SSID: &[u8] = b"heqk-ap";
                         const AP_PSK: &[u8] = b"heqkwifi2026"; // WPA2 passphrase for heqk-ap
+                        // M-NAT0: the wired UPLINK (eth1/RTL8111H) — lease an IP, resolve the
+                        // gateway, ping the internet. The first-ever rtl8111::tx_frame on metal
+                        // (P9 proved RX only). Runs BEFORE the WiFi AP so the two polled rings
+                        // don't interleave in the log; its lease+gw MAC are what M-NAT1+ NATs
+                        // the AP clients through.
+                        {
+                            use arch_aarch64::uplink;
+                            kprint!(" [M-NAT0] eth1 uplink — set MAC, DHCP, ARP gw, ping gw + 8.8.8.8 over the RTL8111H TX ring\n");
+                            let mut up = uplink::UplinkResult::new();
+                            uplink::eth1_bringup(&[8, 8, 8, 8], &mut up);
+                            if !up.started {
+                                kprint!(" [M-NAT0] SKIP — RTL8111 not started (P9 link down / not enumerated)\n");
+                            } else {
+                                kprint!("   [M-NAT0] link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_ok={} | DORA tx/rx D={} O={} R={} A={} rx_frames={} udp68={}\n",
+                                    up.link, up.mac[0], up.mac[1], up.mac[2], up.mac[3], up.mac[4], up.mac[5], up.mac_ok,
+                                    up.dhcp.discover_tx, up.dhcp.offer_rx, up.dhcp.request_tx, up.dhcp.ack_rx,
+                                    up.rx_frames, up.dhcp.udp68_seen);
+                                if up.dhcp.ack_rx {
+                                    kprint!("   [M-NAT0] leased {}.{}.{}.{}/{}.{}.{}.{} gw {}.{}.{}.{} server {}.{}.{}.{} lease={}s\n",
+                                        up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
+                                        up.dhcp.mask[0], up.dhcp.mask[1], up.dhcp.mask[2], up.dhcp.mask[3],
+                                        up.dhcp.router[0], up.dhcp.router[1], up.dhcp.router[2], up.dhcp.router[3],
+                                        up.dhcp.server[0], up.dhcp.server[1], up.dhcp.server[2], up.dhcp.server[3], up.dhcp.lease);
+                                }
+                                kprint!("   [M-NAT0] arp tx={} reply={} gw_mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} | ping gw tx={} reply={} ttl={} | ping 8.8.8.8 tx={} reply={} ttl={}\n",
+                                    up.arp_tx, up.arp_reply, up.gw_mac[0], up.gw_mac[1], up.gw_mac[2], up.gw_mac[3], up.gw_mac[4], up.gw_mac[5],
+                                    up.gw_ping_tx, up.gw_ping_reply, up.gw_ttl, up.inet_ping_tx, up.inet_ping_reply, up.inet_ttl);
+                                if up.inet_ping_reply {
+                                    kprint!(" [M-NAT0] PASS — eth1 uplink leased + gateway resolved + INTERNET reachable (8.8.8.8 ttl={}) — rtl8111 tx_frame PROVEN\n", up.inet_ttl);
+                                } else if up.usable() {
+                                    kprint!(" [M-NAT0] PASS(uplink) — leased + gateway resolved; no internet echo (upstream NAT/ICMP policy?) — tx_frame PROVEN\n");
+                                } else if up.dhcp.discover_tx && up.rx_frames > 0 && !up.dhcp.offer_rx {
+                                    kprint!(" [M-NAT0] NO OFFER — DISCOVER transmitted (tx_frame completed) but no DHCP server answered on eth1's segment\n");
+                                } else if !up.dhcp.discover_tx {
+                                    kprint!(" [M-NAT0] FAIL — tx_frame did not complete (TX descriptor OWN never cleared) — the RTL TX path is the gap\n");
+                                } else {
+                                    kprint!(" [M-NAT0] INCOMPLETE — see stage flags above\n");
+                                }
+                            }
+                        }
                         kprint!(" [P11-AP2] WPA2-secured AP: SSID \"heqk-ap\" ch6 (PSK) — heqk is the authenticator...\n");
                         let mut ap = cyw43::ApResult::new();
                         cyw43::ap_start(AP_SSID, 6, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
