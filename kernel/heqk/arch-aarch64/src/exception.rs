@@ -23,14 +23,20 @@ pub extern "C" fn rust_exception(idx: u64, esr: u64, elr: u64, far: u64) -> ! {
     // QEMU: exit with FAILURE so a crash never masquerades as a clean run.
     #[cfg(not(feature = "cm5"))]
     semihosting::exit(1);
-    // Real silicon: semihosting is an undefined instruction with no debugger, so
-    // halt safely (mask IRQs, WFE-park) rather than execute into the weeds. A
-    // kernel fault stops the board; it never continues in a corrupt state.
+    // Real silicon: semihosting is an undefined instruction with no debugger. Never
+    // continue in a corrupt state — and never sit silently either: by this point
+    // hboot's trial watchdog is already disarmed (the boot was committed), so a
+    // WFE-park would hang the box until someone power-cycles it. Fail CLOSED
+    // instead: give the UART time to drain the diagnostic, then reset through the
+    // EL2 gate (`hvc #0` → reset_platform, the proven path — EL1 PM writes are
+    // ignored). A persistent fault becomes a visible reboot loop on the console.
     #[cfg(feature = "cm5")]
     {
         let _ = &semihosting::exit; // keep the import referenced
-        loop {
-            unsafe { core::arch::asm!("msr daifset, #0xf", "wfe") };
+        unsafe { core::arch::asm!("msr daifset, #0xf", options(nomem, nostack)) };
+        for _ in 0..50_000_000u64 {
+            core::hint::spin_loop();
         }
+        unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
     }
 }

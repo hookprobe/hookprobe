@@ -61,6 +61,11 @@ ed25519-compact = { version = "2", default-features = false }
 # executed by the bespoke minimal no_std interpreter in-kernel and the result checked
 # against a known vector. Dependency-free; OFF by default (base kernel untouched).
 wasmhost = []
+# P8 GEM TX burst diagnostics (tx_diag_burst + 200/1000/5000-frame bursts = ~6,200 broadcast
+# frames out end0 every boot). end0 is the WAN uplink: on a fortress with l2guard/mac-flood/
+# resource-shed that burst can get end0's MAC rate-limited seconds before the DHCP lease.
+# Off by default; opt-in for GEM TX bench work only.
+txdiag = []
 # PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
 netsvc = ["dep:smoltcp"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the

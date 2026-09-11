@@ -855,6 +855,26 @@ pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
     Some((len, w0, ctrl, w2, w3))
 }
 
+/// RX "buffer not available" recovery. The 128-slot ring is armed in P8 and nobody drains
+/// it through P9 + the whole WiFi bring-up, so on a live LAN it is full (RSR.BNA latched)
+/// by the time the uplink polls it. Linux macb recovers RXUBR/BNA by bouncing NCR.RE; this
+/// GEM revision's behaviour after a bare drain is unproven, so do the same: W1C the status
+/// and bounce RE. Returns (bna_was_set, rsr_before). Call after draining the ring.
+pub fn rx_bna_recover() -> (bool, u32) {
+    let rsr = r(GEM, RSR);
+    let bna = rsr & RSR_BNA != 0;
+    if rsr & (RSR_BNA | RSR_REC) != 0 {
+        w(GEM, RSR, rsr & (RSR_BNA | RSR_REC)); // W1C
+    }
+    if bna {
+        let ncr = r(GEM, NCR);
+        w(GEM, NCR, ncr & !NCR_RE);
+        unsafe { core::arch::asm!("dsb sy") };
+        w(GEM, NCR, ncr | NCR_RE);
+    }
+    (bna, rsr)
+}
+
 /// Arm the TX ring. NCR.TE is already enabled by rx_init; here we point the GEM
 /// at our single-descriptor TX ring and mark it USED (idle, nothing to send) so
 /// a stray TSTART can't transmit garbage. Call once after rx_init.

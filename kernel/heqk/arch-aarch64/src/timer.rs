@@ -45,6 +45,21 @@ pub fn enable_el0_counter() {
     }
 }
 
+/// Arm the generic-timer EVENT STREAM: CNTKCTL_EL1.EVNTEN=1 with EVNTI=10 (counter bit 10
+/// → a `wfe` wakes every ~19 µs at 54 MHz), EVNTDIR=0. Lets IRQs-off polled loops park in
+/// `wfe` instead of spinning the A76 at 100 % (the thermal fix that previously reached
+/// only the prod drain loop). Idempotent; leaves EL0PCTEN and the compare bits untouched.
+pub fn enable_event_stream() {
+    unsafe {
+        let mut v: u64;
+        core::arch::asm!("mrs {}, cntkctl_el1", out(reg) v, options(nomem, nostack));
+        v &= !0b1111_1000; // clear EVNTI(7:4) + EVNTDIR(3) + EVNTEN(2)
+        v |= (10u64 << 4) | (1u64 << 2);
+        core::arch::asm!("msr cntkctl_el1, {}", in(reg) v, options(nomem, nostack));
+        core::arch::asm!("isb");
+    }
+}
+
 /// The generic timer as a HAL `Timer`.
 pub struct GenericTimer;
 

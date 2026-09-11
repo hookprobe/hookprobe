@@ -519,11 +519,20 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
     cm5_gem_rx_demo();
 
+    // --- P14 seed: BCM2712 IOMMU probe + the iommu2 (external PCIe) DMA fence. Armed
+    // BEFORE the RTL8111 rings exist so P9's RX proves the datapath UNDER the fence
+    // (it used to be armed after P9 with a stale "link is down" comment, so nothing ever
+    // exercised RTL DMA behind it — eth1-as-LAN would have been the first to find out).
+    cm5_iommu_probe();
+
     // --- P9: external PCIe RC1 link + RTL8111H vendor-ID (2nd-interface bring-up) --
     cm5_p9_probe();
 
-    // --- P14 seed: BCM2712 IOMMU probe (PCIe DMA-containment recon) --
-    cm5_iommu_probe();
+    // Thermal: arm the generic-timer EVENT STREAM now so every polled `delay()` in the
+    // WiFi bring-up + the AP serve loop parks in `wfe` (the 23164ad fix reached only the
+    // prod drain loop; in AP mode the box never gets there and ran at 100 % again).
+    arch_aarch64::timer::enable_event_stream();
+    arch_aarch64::cyw43::set_event_stream_armed();
 
     // --- P10 Stage A: CYW43455 WiFi SDIO bring-up + chip-ID (0x4345) --
     cm5_p10_probe();
@@ -2196,6 +2205,11 @@ fn cm5_scheduler_demo() {
         }
     }
     arch_aarch64::disable_irqs();
+    // The demo's physical timer stays ENABLED otherwise (only the unreachable RX-IRQ probe
+    // stopped it): a level-asserted PPI parked at the GIC for the whole session, and a
+    // straight fire into `scheduler::on_tick` on a torn-down scheduler the moment anything
+    // re-enables IRQs. Stop it here.
+    unsafe { core::arch::asm!("msr cntp_ctl_el0, xzr", options(nomem, nostack)) };
 
     // P7c-4c result: the EL0 TCB ran at EL0 (counter > 0) AND the box reached the
     // scheduler's normal exit (kernel workers kept running, timer kept firing) —
@@ -2400,10 +2414,12 @@ fn cm5_p9_rx() {
     let pool = core::ptr::addr_of_mut!(RXPOOL) as usize;
     let mut buf = [0u8; 1600];
     let mut frames = 0u32;
-    let mut i = 0usize;
     let mut spins = 0u64;
+    // One shared ring cursor (`rx_next`): a local index that advances only on Some parks
+    // on an errored slot, and leaves the driver's head behind the NIC's fill point for
+    // every later consumer (the eth1 LAN role).
     while frames < 4 && spins < 60_000_000 {
-        if let Some(len) = rtl8111::poll_rx(i, &mut buf) {
+        if let Some(len) = rtl8111::rx_next(&mut buf) {
             let n = len.min(buf.len());
             if n >= 14 {
                 let verdict = if packet::produce_raw(pool, &buf[..n]) {
@@ -2418,7 +2434,6 @@ fn cm5_p9_rx() {
                 }
                 frames += 1;
             }
-            i = (i + 1) % 256; // NRX — advance to the next descriptor
         }
         spins += 1;
         core::hint::spin_loop();
@@ -2601,13 +2616,13 @@ fn cm5_p10_probe() {
                         // interleave in the log; its lease + gw MAC are what M-NAT1+ NATs the
                         // WiFi-AP and eth1-LAN clients through. eth1 is reported as the LAN port
                         // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
+                        use arch_aarch64::uplink::{self, Nic};
+                        let mut up = uplink::UplinkResult::new(Nic::End0);
                         {
-                            use arch_aarch64::uplink::{self, Nic};
                             let (lan_started, lan_link, lan_mac) = uplink::eth1_lan_status();
                             kprint!(" [M-NAT0 lan] eth1 (RTL8111H) LAN port: started={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                                 lan_started, lan_link, lan_mac[0], lan_mac[1], lan_mac[2], lan_mac[3], lan_mac[4], lan_mac[5]);
                             kprint!(" [M-NAT0] end0 (RP1 GEM) WAN uplink — DHCP, ARP gw, ping gw + 8.8.8.8 over the GEM TX ring\n");
-                            let mut up = uplink::UplinkResult::new(Nic::End0);
                             uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut up);
                             if !up.started {
                                 kprint!(" [M-NAT0] SKIP — GEM rings not armed\n");
@@ -2616,6 +2631,9 @@ fn cm5_p10_probe() {
                                     up.link, up.mac[0], up.mac[1], up.mac[2], up.mac[3], up.mac[4], up.mac[5], up.mac_ok,
                                     up.dhcp.discover_tx, up.dhcp.offer_rx, up.dhcp.request_tx, up.dhcp.ack_rx,
                                     up.rx_frames, up.dhcp.udp68_seen);
+                                kprint!("   [M-NAT0] ring: stale_drained={} rsr_before={:#x} bna_recovered={} | nak={} garp_tx={} dns={}.{}.{}.{}\n",
+                                    up.stale_drained, up.rsr_before, up.bna_recovered, up.dhcp.nak_rx, up.garp_tx,
+                                    up.dhcp.dns[0], up.dhcp.dns[1], up.dhcp.dns[2], up.dhcp.dns[3]);
                                 if up.dhcp.ack_rx {
                                     kprint!("   [M-NAT0] leased {}.{}.{}.{}/{}.{}.{}.{} gw {}.{}.{}.{} server {}.{}.{}.{} lease={}s\n",
                                         up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
@@ -2642,18 +2660,8 @@ fn cm5_p10_probe() {
                             }
                         }
                         kprint!(" [P11-AP2] WPA2-secured AP: SSID \"heqk-ap\" ch6 (PSK) — heqk is the authenticator...\n");
-                        let mut ap = cyw43::ApResult::new();
-                        cyw43::ap_start(AP_SSID, 6, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
-                        kprint!("   [P11-AP2] cap_has_ap={} apsta={} set_ap={} infra={} chan={} wsec={} wpa_auth={} up={} ssid={} | get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                            ap.cap_has_ap, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok, ap.wsec_ok,
-                            ap.wpa_auth_ok, ap.up_ok, ap.ssid_ok, ap.get_ap,
-                            ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
-                        if ap.get_ap == 1 && ap.ssid_ok {
-                            kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up; join \"heqk-ap\" with PSK \"heqkwifi2026\". Awaiting client + running the 4-way authenticator...\n");
-                        } else {
-                            kprint!(" [P11-AP2] AP config INCOMPLETE (cap_has_ap={} get_ap={} ssid_ok={} wpa_auth={})\n", ap.cap_has_ap, ap.get_ap, ap.ssid_ok, ap.wpa_auth_ok);
-                        }
-                        // PMK for our SSID+PSK; GTK from the HW TRNG (fail-closed).
+                        // PMK + GTK FIRST (fail-closed): never leave a WPA2 BSS beaconing with no
+                        // authenticator behind it because the TRNG refused after the BSS was up.
                         let pmk = arch_aarch64::wpa::wpa_pmk(AP_PSK, AP_SSID);
                         let mut gtk = [0u8; 16];
                         let mut gtk_ok = true;
@@ -2664,42 +2672,126 @@ fn cm5_p10_probe() {
                             }
                         }
                         if !gtk_ok {
-                            kprint!(" [P11-AP2] GTK TRNG failed — abort\n");
+                            kprint!(" [P11-AP2] GTK TRNG failed — AP NOT started (fail-closed)\n");
                             return;
                         }
-                        // M-AP3: PERSISTENT AP serve loop — heqk IS the AP now. Every (re)association
-                        // (WLC_E_ASSOC_IND) drives a fresh 4-way + a DHCP lease, forever. Fixes the
-                        // one-shot bring-up where a disconnect/rejoin was unhandled (looked like a
-                        // wrong password). Single-client pool (10.99.0.10) — the reconnecting phone
-                        // re-keys + re-leases; a multi-client pool is a follow-up.
-                        kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — handling (re)joins continuously\n");
+                        let mut ap = cyw43::ApResult::new();
+                        let mut ap_tries = 0u32;
+                        loop {
+                            ap_tries += 1;
+                            ap = cyw43::ApResult::new();
+                            cyw43::ap_start(AP_SSID, 6, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
+                            // group TX key, as brcmfmac's add_key) — not per station, which reset the
+                            // group PN on every join.
+                            ap.gtk_set = cyw43::ap_install_gtk(&gtk, 1);
+                            kprint!("   [P11-AP2] cap_has_ap={} apsta={} set_ap={} infra={} chan={} wsec={} wpa_auth={} up={} ssid={} | get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_set={} ev={} gtk={} bssid_rb={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} verified={}\n",
+                                ap.cap_has_ap, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok, ap.wsec_ok,
+                                ap.wpa_auth_ok, ap.up_ok, ap.ssid_ok, ap.get_ap,
+                                ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5],
+                                ap.mac_set_ok, ap.ev_ok, ap.gtk_set,
+                                ap.bssid_readback[0], ap.bssid_readback[1], ap.bssid_readback[2], ap.bssid_readback[3], ap.bssid_readback[4], ap.bssid_readback[5],
+                                ap.bssid_verified);
+                            if ap.serve_ready() && ap.gtk_set {
+                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"heqk-ap\" with PSK \"heqkwifi2026\"\n", ap_tries);
+                                break;
+                            }
+                            kprint!(" [P11-AP2] AP config INCOMPLETE (try {}: get_ap={} ssid_ok={} bssid_nonzero={} ev_ok={} gtk_set={})\n",
+                                ap_tries, ap.get_ap, ap.ssid_ok, ap.bssid != [0u8; 6], ap.ev_ok, ap.gtk_set);
+                            if ap_tries >= 2 {
+                                kprint!(" [P11-AP2] FAIL — AP not serve-ready after 2 attempts; not entering the serve loop (a BSS that can't key clients must not beacon as if it could)\n");
+                                let _ = cyw43::ap_stop();
+                                return;
+                            }
+                        }
+                        // M-AP3/M-AP4: the PERSISTENT AP serve loop is now ONE event-driven frame
+                        // pump (deep review 2026-09-11, G1/B2): every WiFi frame is demuxed per
+                        // frame — ch1 (RE)ASSOC_IND → the bounded authenticator; DEAUTH/DISASSOC
+                        // noted; ch2 ARP/DHCP → served (gateway ARP and DHCP renewals are answered
+                        // FOREVER, not only for ~15 reads after the first lease — the old shape lost
+                        // the phone's gateway within seconds and its lease every hour); other ch2 →
+                        // (M-NAT1) forwarding. Between frames the WAN keep-alive answers the
+                        // fortress's ARP probes for our lease, HT is kept alive, a 5 s heartbeat
+                        // proves liveness, and the core parks in `wfe`. The WiFi poll costs ~100 µs
+                        // when idle (I_HMB_FRAME_IND peek), so the loop is responsive without the
+                        // 1.5 s dry-read tax. Single-client pool (10.99.0.10) — a pool is M-NAT1.
+                        kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — event-driven pump (assoc/deauth/ARP/DHCP), WAN keep-alive, 5s heartbeat\n");
                         let our_ip = [10u8, 99, 0, 1];
                         let offer_ip = [10u8, 99, 0, 10];
+                        let mut rx = [0u8; 2048];
+                        let mut wbuf = [0u8; 2048];
+                        let mut dh = cyw43::ApDhcp::new();
+                        let (mut assocs, mut keyed, mut leaves, mut wifi_frames, mut wan_arp, mut wan_gw_refresh) = (0u32, 0u32, 0u32, 0u64, 0u32, 0u32);
+                        let freq: u64;
+                        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
+                        let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
+                        let (mut last_beat, mut last_ht) = (now(), now());
                         loop {
-                            let sta = match cyw43::ap_wait_assoc(20000) {
-                                Some(s) => s,
-                                None => continue, // no join this window; keep beaconing + waiting
-                            };
-                            kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
-                                sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
-                            let mut auth = cyw43::ApAuth::new();
-                            cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
-                            kprint!("   [P11-AP3 auth] m2_mic={} m4_mic={} ptk_set={} gtk_set={} authorized={}\n",
-                                auth.m2_mic_ok, auth.m4_mic_ok, auth.ptk_set, auth.gtk_set, auth.authorized);
-                            if auth.ptk_set && auth.gtk_set {
-                                let mut dh = cyw43::ApDhcp::new();
-                                cyw43::ap_dhcp_serve(&ap.bssid, &our_ip, &offer_ip, 160, &mut dh);
-                                if dh.acks_tx > 0 {
-                                    kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}) — WPA2 AP live, reconnect-capable\n",
-                                        dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
-                                        dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx);
-                                } else {
-                                    kprint!(" [P11-AP3] keyed but no lease this round (discovers={} offers={}) — will re-wait\n", dh.discovers, dh.offers_tx);
+                            match cyw43::ap_poll(&mut rx) {
+                                cyw43::ApEvent::Assoc(sta) => {
+                                    assocs += 1;
+                                    kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
+                                        sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                                    // A station that re-associates MID-handshake gets a fresh ANonce
+                                    // immediately (its previous ASSOC_IND used to be dropped by the
+                                    // old read loops — the "sometimes takes forever" texture).
+                                    let mut tries = 0u32;
+                                    loop {
+                                        tries += 1;
+                                        let mut auth = cyw43::ApAuth::new();
+                                        cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
+                                        kprint!("   [P11-AP3 auth] m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
+                                            auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
+                                            auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
+                                        if auth.ptk_set && auth.authorized {
+                                            keyed += 1;
+                                            kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
+                                            break;
+                                        }
+                                        if auth.reassoc && tries < 3 {
+                                            continue;
+                                        }
+                                        kprint!(" [P11-AP3] 4-way incomplete ({}) — back to the pump\n",
+                                            if auth.deauth { "station left" } else if auth.m2_rx && !auth.m2_mic_ok { "M2 MIC never verified: wrong PSK?" } else if !auth.m2_rx { "no M2" } else { "no M4" });
+                                        break;
+                                    }
                                 }
-                            } else if auth.m2_rx && !auth.m2_mic_ok {
-                                kprint!(" [P11-AP3] M2 MIC failed (unexpected — PSK proven) — re-wait\n");
-                            } else {
-                                kprint!(" [P11-AP3] 4-way incomplete — re-wait for the next (re)assoc\n");
+                                cyw43::ApEvent::Leave(sta) => {
+                                    leaves += 1;
+                                    kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
+                                        sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                                }
+                                cyw43::ApEvent::Data(off, len) => {
+                                    wifi_frames += 1;
+                                    let act = cyw43::ap_handle_data(&rx[off..off + len], &ap.bssid, &our_ip, &offer_ip, &mut dh);
+                                    if act == b'K' {
+                                        kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}, arp_replies={}) — WPA2 AP live\n",
+                                            dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
+                                            dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.arp_replies);
+                                    }
+                                }
+                                cyw43::ApEvent::Other => {
+                                    wifi_frames += 1;
+                                }
+                                cyw43::ApEvent::Idle => {
+                                    match uplink::wan_poll(&mut up, &mut wbuf) {
+                                        b'r' => wan_arp += 1,
+                                        b'g' => wan_gw_refresh += 1,
+                                        _ => {}
+                                    }
+                                    let t = now();
+                                    if t.wrapping_sub(last_ht) > freq / 10 {
+                                        cyw43::ap_keepalive();
+                                        last_ht = t;
+                                    }
+                                    if t.wrapping_sub(last_beat) > 5 * freq {
+                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={}\n",
+                                            assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
+                                            up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh);
+                                        last_beat = t;
+                                    }
+                                    unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+                                }
                             }
                         }
                     }
@@ -3893,6 +3985,9 @@ fn cm5_gem_rx_demo() {
     // PHASE-10 REGRESSION: progressively larger bursts in ONE boot. A 200-frame pass is
     // not proof at scale — a defect that costs 0.5% at 200 frames must be shown to stay
     // flat at 1000 and 5000, not creep. Each size is an independent measurement.
+    #[cfg(not(feature = "txdiag"))]
+    kprint!(" [P8-txburst] SKIPPED — the 200/1000/5000-frame broadcast bursts are gated behind the `txdiag` feature (end0 is the WAN; a 6,200-frame burst can get it rate-limited by the upstream sensor before the DHCP lease)\n");
+    #[cfg(feature = "txdiag")]
     {
         let sizes: [u32; 3] = [200, 1_000, 5_000];
         let mut all_clean = true;

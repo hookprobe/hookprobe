@@ -92,6 +92,17 @@ fn w32(o: usize, v: u32) {
     unsafe { write_volatile((SDHCI + o) as *mut u32, v) };
 }
 
+/// Set once the kernel has armed the generic-timer EVENT STREAM (CNTKCTL_EL1.EVNTEN):
+/// from then on every `delay()` spin parks the core in `wfe` between ~19 µs event-stream
+/// wakeups instead of burning the A76 at 100 % (the thermal fix 23164ad gave the prod
+/// loop; the WiFi bring-up + AP loops spend most of their life in `delay(1_000)`).
+/// A bare `wfe` with IRQs masked and NO event stream could sleep until an external SEV,
+/// so the flag gates it.
+static mut EVENT_STREAM_ON: bool = false;
+pub fn set_event_stream_armed() {
+    unsafe { EVENT_STREAM_ON = true };
+}
+
 fn delay(us: u64) {
     let (freq, start): (u64, u64);
     unsafe {
@@ -99,11 +110,15 @@ fn delay(us: u64) {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) start, options(nomem, nostack));
     }
     let ticks = freq.saturating_mul(us) / 1_000_000;
+    let park = unsafe { EVENT_STREAM_ON };
     loop {
         let now: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) now, options(nomem, nostack)) };
         if now.wrapping_sub(start) >= ticks {
             break;
+        }
+        if park {
+            unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
         }
     }
 }
@@ -1801,9 +1816,29 @@ fn wlc_set_int(cmd: u32, val: u32) -> bool {
     bcdc_dcmd(cmd, BCDC_SET, &val.to_le_bytes(), &mut []).0
 }
 
+/// Is a frame waiting on F2? The firmware raises `I_HMB_FRAME_IND` (I_HMB_SW2) in the SDIO
+/// core's host-mailbox INTSTATUS when it has queued a frame for the host (brcmfmac gates
+/// `readframes` on exactly this bit; the metal P10-C diag shows `intstat=0x00800040` with a
+/// frame ready). A handful of CMD52s (~100 µs) — the cheap "data available" check that lets
+/// a serve loop poll WiFi without paying `read_sdpcm_frame`'s ~1.5 s dry cost. Read-only:
+/// the bit is W1C'd by the read that follows.
+pub fn sdpcm_frame_pending() -> bool {
+    let sdb = sdio_core_base();
+    bp_r32(sdb + SD_REG_INTSTATUS) & I_HMB_FRAME_IND != 0
+}
+
 /// Read ONE SDPCM frame off F2 (poll intstatus, 64-B first read + remainder), advancing
-/// tx_max from the SW window byte. Returns (channel, hw_len, doffset), or None if dry.
+/// tx_max from the SW window byte. Returns (channel, hw_len, doffset), or None if dry
+/// after ~1.5 s (1500 × 1 ms polls) — the bring-up default where a reply is expected.
 fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
+    read_sdpcm_frame_dry(rx, 1500)
+}
+
+/// `read_sdpcm_frame` with a caller-chosen dry budget (`max_dry` × ~1 ms). After a
+/// `sdpcm_frame_pending()` hit, or to drain the frames the firmware queued behind one
+/// indication (brcmf `readframes` reads until an all-zero tag), a budget of a few ms is
+/// enough and a dry pass costs milliseconds, not seconds.
+fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     let sdb = sdio_core_base();
     let mut hw_len;
     let mut hw_ck;
@@ -1820,7 +1855,7 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
             break;
         }
         waited += 1;
-        if waited > 1500 {
+        if waited > max_dry {
             return None; // dry — no more frames in the window
         }
         delay(1_000);
@@ -2206,7 +2241,12 @@ pub struct ApResult {
     pub ssid_ok: bool,      // WLC_SET_SSID (starts the BSS beaconing)
     pub get_ap: u32,        // WLC_GET_AP readback (1 = AP mode active)
     pub get_ap_ok: bool,
-    pub bssid: [u8; 6],     // our AP BSSID (= heqk MAC) read back
+    pub bssid: [u8; 6],     // our AP BSSID (= heqk MAC): the scan's established MAC, never zero
+    pub mac_set_ok: bool,   // the cur_etheraddr re-assert while DOWN was accepted
+    pub ev_ok: bool,        // the event_msgs SET (ASSOC/DEAUTH indications) was accepted
+    pub bssid_verified: bool, // WLC_GET_BSSID after UP+SSID == bssid (fw may read 0: informative)
+    pub bssid_readback: [u8; 6],
+    pub gtk_set: bool,      // the group key was installed once at AP start (ap_install_gtk)
 }
 
 impl ApResult {
@@ -2214,10 +2254,20 @@ impl ApResult {
         ApResult {
             cap_has_ap: false, down_ok: false, apsta_ok: false, set_ap_ok: false, infra_ok: false,
             chan_ok: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
-            get_ap: 0, get_ap_ok: false, bssid: [0; 6],
+            get_ap: 0, get_ap_ok: false, bssid: [0; 6], mac_set_ok: false, ev_ok: false,
+            bssid_verified: false, bssid_readback: [0; 6], gtk_set: false,
         }
     }
+    /// The BSS is up AND the two things a client join silently depends on are in place:
+    /// a non-zero BSSID we source frames from, and the assoc/deauth event indications.
+    pub fn serve_ready(&self) -> bool {
+        self.get_ap == 1 && self.ssid_ok && self.bssid != [0u8; 6] && self.ev_ok
+    }
 }
+
+/// The fail-closed AP identity when neither the scan's established MAC nor the live GET
+/// yields one (the same LAA the STA path sets when the OTP MAC is unprogrammed).
+const AP_FALLBACK_LAA: [u8; 6] = [0x02, 0x43, 0x45, 0x48, 0x51, 0x4b];
 
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
@@ -2239,24 +2289,46 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     // → bssid 00:00:00:00:00:00 → the AP served zero-sourced frames and the phone
     // could never key/lease. That intermittent GET is the "AP sometimes doesn't
     // work on a boot" flake (gap #2). The live GET is only a fallback.
+    // Drain any ch1/ch2 backlog the chip queued while the host was busy elsewhere (the
+    // multi-second wired-uplink phase runs between the scan and this): bcdc_dcmd hunts its
+    // control reply through at most 40 frames / 0.8 s and otherwise returns (false, untouched
+    // reply) — which is how the MAC GET came back zero. One dry read costs ~1.5 s, so stop
+    // at the first dry read.
+    {
+        let mut rx = [0u8; 2048];
+        for _ in 0..16 {
+            if read_sdpcm_frame(&mut rx).is_none() {
+                break;
+            }
+        }
+    }
     let (_otp, established, _valid) = unsafe { MAC_DIAG };
     if established != [0u8; 6] {
         out.bssid = established;
     } else {
         let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
     }
+    if out.bssid == [0u8; 6] || out.bssid[0] & 1 != 0 {
+        out.bssid = AP_FALLBACK_LAA; // fail-closed: never serve zero/multicast-sourced frames
+    }
 
     // Configure while DOWN.
     out.down_ok = wlc_set_int(WLC_DOWN, 0);
 
-    // Re-assert the MAC while down (defensive — keep the AP BSSID = the captured MAC).
-    if out.bssid != [0u8; 6] {
+    // Assert the MAC while down so the fw's BSSID == the MAC we source every AP frame from
+    // (the PTK is derived over the AA; a mismatch makes every M2 MIC fail). Recorded.
+    {
         let mut mb = [0u8; 32];
         let nmb = iovar_buf(b"cur_etheraddr", &out.bssid, &mut mb);
-        let _ = bcdc_iovar_set(&mb[..nmb]);
+        out.mac_set_ok = bcdc_iovar_set(&mb[..nmb]);
+        if !out.mac_set_ok {
+            out.mac_set_ok = bcdc_iovar_set(&mb[..nmb]); // one retry (a discarded reply, not a refusal)
+        }
     }
 
-    // Enable the AP client-indication events so the authenticator (M-AP2) sees joins.
+    // Enable the AP client-indication events so the authenticator (M-AP2) sees joins. A
+    // failed GET would leave the mask zero and a failed SET leaves ASSOC_IND unarmed
+    // (silent "no joins") — so the SET result is recorded and gates serve_ready().
     let mut mask = [0u8; 16];
     let _ = bcdc_iovar_get(b"event_msgs", &mut mask);
     for e in [WLC_E_AUTH_IND, WLC_E_ASSOC_IND, WLC_E_REASSOC_IND, WLC_E_DISASSOC_IND, WLC_E_DEAUTH_IND] {
@@ -2264,7 +2336,10 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     }
     let mut iob = [0u8; 64];
     let nm = iovar_buf(b"event_msgs", &mask, &mut iob);
-    let _ = bcdc_iovar_set(&iob[..nm]);
+    out.ev_ok = bcdc_iovar_set(&iob[..nm]);
+    if !out.ev_ok {
+        out.ev_ok = bcdc_iovar_set(&iob[..nm]);
+    }
 
     // Pure AP: "apsta"=0 then WLC_SET_AP=1.
     let mut ab = [0u8; 32];
@@ -2293,6 +2368,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
 
     // Security suite for the BSS.
     let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
+    let _ = wlc_set_int(WLC_SET_AUTH, 0); // Open System 802.11 auth (brcmf_configure_wpaie); PSK is the 4-way
     out.wsec_ok = wlc_set_int(WLC_SET_WSEC, wsec);
     out.wpa_auth_ok = wlc_set_int(WLC_SET_WPA_AUTH, wpa_auth);
     if !open {
@@ -2321,7 +2397,28 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     let (gok, _gs) = bcdc_dcmd(WLC_GET_AP, 0, &[], &mut apb);
     out.get_ap_ok = gok;
     out.get_ap = u32::from_le_bytes(apb);
-    // (out.bssid was captured up front — this firmware's post-up GET returns 0.)
+    // Verify the fw's BSSID against the MAC we source from (informative: this firmware's
+    // post-up address GETs have returned 0; a MISMATCH is the actionable signal).
+    let mut bb = [0u8; 6];
+    let (bok, _bs) = bcdc_dcmd(WLC_GET_BSSID, 0, &[], &mut bb);
+    out.bssid_readback = bb;
+    out.bssid_verified = bok && bb == out.bssid;
+}
+
+/// Install the GROUP key ONCE for the BSS (after `ap_start`): index `keyid`, ea = zero,
+/// flagged PRIMARY = the fw's default TX key for index-selected (group) traffic —
+/// brcmfmac `brcmf_cfg80211_add_key` sets BRCMF_PRIMARY_KEY on the group key and leaves
+/// the per-ea pairwise key's flags 0. Installing it per station (the old shape) reset the
+/// group PN on every join, and flagging the PTK primary instead left the fw without a
+/// default group TX key — the likely reason AP-originated broadcast never decrypted.
+pub fn ap_install_gtk(gtk: &[u8; 16], keyid: u8) -> bool {
+    wlc_set_key(keyid as u32, gtk, &[0u8; 6], true)
+}
+
+/// Take the BSS down (stop beaconing). Used when the AP cannot become serve-ready: a
+/// BSS that advertises WPA2 but can never key a client must not keep beaconing.
+pub fn ap_stop() -> bool {
+    wlc_set_int(WLC_DOWN, 0)
 }
 
 // --- AP-side DHCP server + ARP responder (M-AP-DHCP): give an associated client a real
@@ -2367,16 +2464,22 @@ fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], ou
     buf[d] = 2; buf[d + 1] = 1; buf[d + 2] = 6; buf[d + 3] = 0; // op=BOOTREPLY
     buf[d + 4..d + 8].copy_from_slice(xid);
     buf[d + 10] = 0x80; // broadcast flag (reply goes to L2/L3 broadcast)
-    buf[d + 16..d + 20].copy_from_slice(offer_ip); // yiaddr
-    buf[d + 20..d + 24].copy_from_slice(our_ip);   // siaddr
+    let nak = mt == 6;
+    if !nak {
+        buf[d + 16..d + 20].copy_from_slice(offer_ip); // yiaddr
+        buf[d + 20..d + 24].copy_from_slice(our_ip);   // siaddr
+    }
     buf[d + 28..d + 34].copy_from_slice(client_mac); // chaddr
     buf[d + 236..d + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]); // magic
     let mut o = d + 240;
     buf[o] = 53; buf[o + 1] = 1; buf[o + 2] = mt; o += 3;
-    buf[o] = 1; buf[o + 1] = 4; buf[o + 2] = 255; buf[o + 3] = 255; buf[o + 4] = 255; buf[o + 5] = 0; o += 6; // mask /24
-    buf[o] = 3; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // router = us
-    buf[o] = 6; buf[o + 1] = 4; buf[o + 2] = 8; buf[o + 3] = 8; buf[o + 4] = 8; buf[o + 5] = 8; o += 6; // DNS 8.8.8.8
-    buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&3600u32.to_be_bytes()); o += 6; // lease 1h
+    if !nak {
+        // (a NAK carries only the message type + server id, RFC 2131 §4.3.2)
+        buf[o] = 1; buf[o + 1] = 4; buf[o + 2] = 255; buf[o + 3] = 255; buf[o + 4] = 255; buf[o + 5] = 0; o += 6; // mask /24
+        buf[o] = 3; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // router = us
+        buf[o] = 6; buf[o + 1] = 4; buf[o + 2] = 8; buf[o + 3] = 8; buf[o + 4] = 8; buf[o + 5] = 8; o += 6; // DNS 8.8.8.8
+        buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&3600u32.to_be_bytes()); o += 6; // lease 1h
+    }
     buf[o] = 54; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // server id
     buf[o] = 255; o += 1;
     let mut total = o;
@@ -2397,9 +2500,10 @@ fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], ou
     total
 }
 
-/// Parse a client DHCP (DISCOVER=1 / REQUEST=3). Fills `cmac` (chaddr) + `xid`; returns the
-/// DHCP message type, or 0 if not a client DHCP to us.
-fn parse_client_dhcp(eth: &[u8], cmac: &mut [u8; 6], xid: &mut [u8; 4]) -> u8 {
+/// Parse a client DHCP (DISCOVER=1 / REQUEST=3). Fills `cmac` (chaddr) + `xid` + `req_ip`
+/// (option 50, else ciaddr for a RENEW; zero if neither); returns the DHCP message type,
+/// or 0 if not a client DHCP to us.
+fn parse_client_dhcp(eth: &[u8], cmac: &mut [u8; 6], xid: &mut [u8; 4], req_ip: &mut [u8; 4]) -> u8 {
     if eth.len() < 42 + 240 { return 0; }
     if eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 17 { return 0; }
     let ihl = ((eth[14] & 0x0f) as usize) * 4;
@@ -2412,6 +2516,7 @@ fn parse_client_dhcp(eth: &[u8], cmac: &mut [u8; 6], xid: &mut [u8; 4]) -> u8 {
     if eth[b + 236] != 0x63 || eth[b + 237] != 0x82 || eth[b + 238] != 0x53 || eth[b + 239] != 0x63 { return 0; }
     cmac.copy_from_slice(&eth[b + 28..b + 34]);
     xid.copy_from_slice(&eth[b + 4..b + 8]);
+    req_ip.copy_from_slice(&eth[b + 12..b + 16]); // ciaddr (set by a RENEW/REBIND client)
     let mut p = b + 240;
     let mut mt = 0u8;
     while p + 2 <= eth.len() {
@@ -2421,6 +2526,7 @@ fn parse_client_dhcp(eth: &[u8], cmac: &mut [u8; 6], xid: &mut [u8; 4]) -> u8 {
         let len = eth[p + 1] as usize;
         if p + 2 + len > eth.len() { break; }
         if code == 53 && len >= 1 { mt = eth[p + 2]; }
+        if code == 50 && len >= 4 { req_ip.copy_from_slice(&eth[p + 2..p + 6]); } // requested IP
         p += 2 + len;
     }
     mt
@@ -2463,7 +2569,8 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
         if et != 0x0800 { continue; }
         let mut cmac = [0u8; 6];
         let mut xid = [0u8; 4];
-        match parse_client_dhcp(&rx[eth..], &mut cmac, &mut xid) {
+        let mut req_ip = [0u8; 4];
+        match parse_client_dhcp(&rx[eth..], &mut cmac, &mut xid, &mut req_ip) {
             1 => {
                 out.discovers += 1;
                 let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 2); // OFFER
@@ -2501,8 +2608,14 @@ pub struct ApAuth {
     pub m4_rx: bool,
     pub m4_mic_ok: bool,
     pub ptk_set: bool,
-    pub gtk_set: bool,
+    pub gtk_set: bool, // (installed once at AP start — mirrored here for the verdict line)
     pub authorized: bool,
+    pub reassoc: bool,  // the station (re)associated mid-handshake: restart with a fresh ANonce
+    pub deauth: bool,   // the station left mid-handshake: abandon
+    pub m1_sends: u32,
+    pub m3_sends: u32,
+    pub m2_mic_fail: u32, // MIC-failed pairwise frames ignored while waiting (hostapd keeps waiting)
+    pub replay: u64,      // the last replay counter sent
 }
 
 impl ApAuth {
@@ -2510,8 +2623,127 @@ impl ApAuth {
         ApAuth {
             sta: [0; 6], m1_tx: false, m2_rx: false, m2_mic_ok: false, m3_tx: false,
             m4_rx: false, m4_mic_ok: false, ptk_set: false, gtk_set: false, authorized: false,
+            reassoc: false, deauth: false, m1_sends: 0, m3_sends: 0, m2_mic_fail: 0, replay: 0,
         }
     }
+}
+
+/// Outcome of one bounded wait for an EAPOL-Key reply from the station.
+enum KeyWait {
+    Got(usize), // an EAPOL-Key frame matching the filter + replay is in the buffer (802.1X len)
+    Dry,        // `dry_limit` consecutive dry reads (~1.5 s each): the caller retransmits
+    Reassoc,    // the station (re)associated: the caller restarts the handshake
+    Deauth,     // the station left
+}
+
+/// Wait for a pairwise EAPOL-Key from `sta` with the Secure bit == `secure`, ACK clear,
+/// MIC set, and replay counter == `replay` (the one we last sent — hostapd/wpa_supplicant
+/// semantics: a reply must echo the current counter; anything else is stale). Channel-1
+/// events for `sta` are honoured instead of dropped (a DEAUTH or a fresh ASSOC while we
+/// wait was the "sometimes takes forever" texture). Copies the 802.1X frame (from the
+/// version byte) into `buf`; a frame longer than `buf` is skipped, never truncated (a
+/// truncated MIC span reads as "wrong PSK").
+fn wait_eapol(sta: &[u8; 6], secure: bool, replay: u64, dry_limit: u32, buf: &mut [u8]) -> KeyWait {
+    let body = 18usize;
+    let mut rx = [0u8; 2048];
+    let mut dry = 0u32;
+    let mut frames = 0u32;
+    while dry < dry_limit && frames < 64 {
+        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) {
+            Some(t) => t,
+            None => {
+                dry += 1;
+                continue;
+            }
+        };
+        frames += 1;
+        if ch == 1 {
+            if let Some((et, _st, who)) = parse_ap_event(&rx, doff) {
+                if who == *sta {
+                    if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
+                        return KeyWait::Deauth;
+                    }
+                    if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
+                        return KeyWait::Reassoc;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch != 2 {
+            continue;
+        }
+        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+        if eth + body + 95 > rx.len() {
+            continue;
+        }
+        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E || &rx[eth + 6..eth + 12] != &sta[..] {
+            continue;
+        }
+        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
+        let pairwise_mic_noack = ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0;
+        if !pairwise_mic_noack || (ki & 0x0200 != 0) != secure {
+            continue;
+        }
+        let mut rc = [0u8; 8];
+        rc.copy_from_slice(&rx[eth + body + 5..eth + body + 13]);
+        if u64::from_be_bytes(rc) != replay {
+            continue; // stale (previous session / previous retransmit)
+        }
+        let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
+        let n = 4 + x1;
+        if n > buf.len() || eth + 14 + n > rx.len() {
+            continue;
+        }
+        buf[..n].copy_from_slice(&rx[eth + 14..eth + 14 + n]);
+        return KeyWait::Got(n);
+    }
+    KeyWait::Dry
+}
+
+/// Build M1 (AP->STA): ver2 | pairwise | ACK = 0x008a; ANonce; the given replay; no MIC/key-data.
+fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64) {
+    let body = 18usize;
+    for b in m1.iter_mut() { *b = 0; }
+    m1[0..6].copy_from_slice(sta);
+    m1[6..12].copy_from_slice(ap_mac);
+    m1[12] = 0x88;
+    m1[13] = 0x8E;
+    m1[14] = 2; // 802.1X version 2
+    m1[15] = 0x03; // EAPOL-Key
+    m1[16..18].copy_from_slice(&95u16.to_be_bytes());
+    m1[body] = 0x02; // RSN key descriptor
+    m1[body + 1..body + 3].copy_from_slice(&0x008au16.to_be_bytes());
+    m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
+    m1[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
+    m1[body + 13..body + 45].copy_from_slice(anonce);
+}
+
+/// Build M3 (AP->STA) with the given replay and re-MIC it (the MIC covers the counter, so a
+/// retransmit with a bumped counter must be re-signed). `wrapped` = the AES-wrapped key data.
+fn build_m3(m3: &mut [u8; 14 + 4 + 95 + 88], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, kck: &[u8; 16], wrapped: &[u8]) -> usize {
+    let body = 18usize;
+    let kdw = wrapped.len().min(88);
+    for b in m3.iter_mut() { *b = 0; }
+    m3[0..6].copy_from_slice(sta);
+    m3[6..12].copy_from_slice(ap_mac);
+    m3[12] = 0x88;
+    m3[13] = 0x8E;
+    m3[14] = 2;
+    m3[15] = 0x03;
+    m3[16..18].copy_from_slice(&((95 + kdw) as u16).to_be_bytes());
+    m3[body] = 0x02;
+    // ver2|pairwise|install|ack|mic|secure|encrypted = 0x13ca.
+    m3[body + 1..body + 3].copy_from_slice(&0x13cau16.to_be_bytes());
+    m3[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes());
+    m3[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
+    m3[body + 13..body + 45].copy_from_slice(anonce);
+    m3[body + 93..body + 95].copy_from_slice(&(kdw as u16).to_be_bytes());
+    m3[body + 95..body + 95 + kdw].copy_from_slice(&wrapped[..kdw]);
+    let end = body + 95 + kdw;
+    let mic = crate::wpa::wpa_mic_sha1(kck, &m3[14..end]); // MIC field still zero
+    m3[body + 77..body + 93].copy_from_slice(&mic);
+    end
 }
 
 /// Watch SDPCM channel-1 events for a client 802.11 association (`WLC_E_ASSOC_IND`) and return
@@ -2528,14 +2760,11 @@ pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
         if channel != 1 {
             continue;
         }
-        let ev = doff + 4 + (rx[doff + 3] as usize) * 4;
-        if ev + 54 > rx.len() {
-            continue;
-        }
-        let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
-        if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
-            let mut sta = [0u8; 6];
-            sta.copy_from_slice(&rx[ev + 48..ev + 54]);
+        let (et, status, sta) = match parse_ap_event(&rx, doff) { Some(t) => t, None => continue };
+        // brcmfmac reports a new station only for a SUCCESS status (brcmf_notify_connect_
+        // status_ap): a failed association also raises ASSOC_IND, and keying a station
+        // that isn't there is a wasted handshake window.
+        if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && status == 0 {
             dbg_putc(b'C');
             return Some(sta);
         } else if et == WLC_E_AUTH_IND {
@@ -2543,6 +2772,20 @@ pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
         }
     }
     None
+}
+
+/// Decode a channel-1 event at `doff`: (event type @ev+28, status @ev+32, station addr
+/// @ev+48). None if the frame is too short to hold a brcmf_event_msg_be.
+fn parse_ap_event(rx: &[u8], doff: usize) -> Option<(u32, u32, [u8; 6])> {
+    let ev = doff + 4 + (*rx.get(doff + 3)? as usize) * 4;
+    if ev + 54 > rx.len() {
+        return None;
+    }
+    let et = u32::from_be_bytes([rx[ev + 28], rx[ev + 29], rx[ev + 30], rx[ev + 31]]);
+    let st = u32::from_be_bytes([rx[ev + 32], rx[ev + 33], rx[ev + 34], rx[ev + 35]]);
+    let mut sta = [0u8; 6];
+    sta.copy_from_slice(&rx[ev + 48..ev + 54]);
+    Some((et, st, sta))
 }
 
 /// Verify an EAPOL-Key MIC (KDV2 HMAC-SHA1-128): recompute over the 802.1X frame `eapol`
@@ -2563,7 +2806,6 @@ fn eapol_mic_ok(kck: &[u8; 16], eapol: &mut [u8], mic_off: usize) -> bool {
 pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
     out.sta = *sta;
     let body = 18usize;
-    let x1ver = 2u8;
     // ANonce from the HW TRNG (fail-closed).
     let mut anonce = [0u8; 32];
     for k in 0..4 {
@@ -2573,77 +2815,77 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
         }
     }
 
-    // --- M1 (AP->STA): ver2 | pairwise | ACK = 0x008a; ANonce; replay=1; no MIC/key-data.
+    // A station that re-associates while the fw still holds its PREVIOUS pairwise key
+    // (range drop, sleep — no clean DEAUTH seen) would get our unicast M1 encrypted under
+    // the old PTK and drop it ("incorrect password"). hostapd removes the STA key on
+    // (re)assoc; brcmfmac's del_key is WLC_SET_KEY with len 0 for that ea. NEEDS METAL for
+    // the no-deauth path (clean reconnects were proven without it).
+    let _ = wlc_set_key(0, &[], sta, false);
+
+    // --- M1 (AP->STA). Replay counters: hostapd bumps the counter on EVERY send incl.
+    // retransmits and wpa_supplicant rejects a non-increasing one — so each retransmit
+    // carries replay+1 and the reply must echo the LAST counter sent. Retransmit after 2
+    // dry reads (~3 s), 3 sends max: a lost M1/M2 costs seconds, not the old 60 s cadence
+    // that the supplicant rejected as a replay anyway.
     let mut m1 = [0u8; 14 + 4 + 95];
-    m1[0..6].copy_from_slice(sta);
-    m1[6..12].copy_from_slice(ap_mac);
-    m1[12] = 0x88;
-    m1[13] = 0x8E;
-    m1[14] = x1ver;
-    m1[15] = 0x03;
-    m1[16..18].copy_from_slice(&95u16.to_be_bytes());
-    m1[body] = 0x02;
-    m1[body + 1..body + 3].copy_from_slice(&0x008au16.to_be_bytes());
-    m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
-    m1[body + 5..body + 13].copy_from_slice(&1u64.to_be_bytes()); // replay = 1
-    m1[body + 13..body + 45].copy_from_slice(&anonce);
+    let mut replay: u64 = 1;
+    build_m1(&mut m1, sta, ap_mac, &anonce, replay);
     out.m1_tx = sdpcm_data_tx(&m1);
+    out.m1_sends = 1;
     dbg_putc(b'1');
 
-    // --- await M2 (STA->AP): ch2 EAPOL from `sta`, pairwise|MIC, ACK clear.
-    let mut rx = [0u8; 2048];
+    // --- await M2 (STA->AP): pairwise|MIC, ACK clear, Secure CLEAR (a stale M4 from the
+    // previous session also carries pairwise|MIC — the Secure bit tells them apart), replay
+    // == ours. A MIC-failed candidate is ignored and the wait continues (hostapd keeps
+    // waiting; the real M2 is often 10 ms behind a stale frame).
     let mut snonce = [0u8; 32];
-    let mut m2buf = [0u8; 256];
+    let mut m2buf = [0u8; 512];
     let mut m2len = 0usize;
-    let mut i = 0u32;
-    while i < 200 {
-        i += 1;
-        if i % 40 == 0 {
-            let _ = sdpcm_data_tx(&m1);
-        }
-        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
-        if ch != 2 {
-            continue;
-        }
-        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
-        if eth + body + 95 > rx.len() {
-            continue;
-        }
-        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E {
-            continue;
-        }
-        if &rx[eth + 6..eth + 12] != &sta[..] {
-            continue;
-        }
-        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
-        if ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0 {
-            out.m2_rx = true;
-            dbg_putc(b'2');
-            snonce.copy_from_slice(&rx[eth + body + 13..eth + body + 45]);
-            // copy the whole 802.1X frame (from ver@eth+14) for the MIC check.
-            let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
-            m2len = (4 + x1).min(m2buf.len());
-            m2buf[..m2len].copy_from_slice(&rx[eth + 14..eth + 14 + m2len]);
-            break;
-        }
-    }
-    if !out.m2_rx {
-        return;
-    }
-
-    // derive PTK, verify M2 MIC (MIC field is at body-14+77 within the 802.1X copy).
-    let ptk = crate::wpa::wpa_ptk(pmk, ap_mac, sta, &anonce, &snonce);
-    let mut kck = [0u8; 16];
-    kck.copy_from_slice(&ptk[0..16]);
-    let mut kek = [0u8; 16];
-    kek.copy_from_slice(&ptk[16..32]);
     let mic_off = (body - 14) + 77; // MIC offset inside the ver-based 802.1X copy
-    if mic_off + 16 <= m2len {
-        out.m2_mic_ok = eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off);
+    let mut kck = [0u8; 16];
+    let mut kek = [0u8; 16];
+    let mut ptk = [0u8; 48];
+    let mut rounds = 0u32;
+    loop {
+        rounds += 1;
+        if rounds > 12 {
+            return;
+        }
+        match wait_eapol(sta, false, replay, 2, &mut m2buf) {
+            KeyWait::Got(n) => {
+                m2len = n;
+                out.m2_rx = true;
+                dbg_putc(b'2');
+                snonce.copy_from_slice(&m2buf[(body - 14) + 13..(body - 14) + 45]);
+                ptk = crate::wpa::wpa_ptk(pmk, ap_mac, sta, &anonce, &snonce);
+                kck.copy_from_slice(&ptk[0..16]);
+                kek.copy_from_slice(&ptk[16..32]);
+                if mic_off + 16 <= m2len && eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off) {
+                    out.m2_mic_ok = true;
+                    break;
+                }
+                out.m2_mic_fail += 1; // wrong PSK, forged, or stale — keep waiting
+            }
+            KeyWait::Dry => {
+                if out.m1_sends >= 3 {
+                    return; // the station never answered: let the outer loop re-wait
+                }
+                replay += 1;
+                build_m1(&mut m1, sta, ap_mac, &anonce, replay);
+                let _ = sdpcm_data_tx(&m1);
+                out.m1_sends += 1;
+            }
+            KeyWait::Reassoc => {
+                out.reassoc = true;
+                return;
+            }
+            KeyWait::Deauth => {
+                out.deauth = true;
+                return;
+            }
+        }
     }
-    if !out.m2_mic_ok {
-        return; // wrong PSK / forged M2
-    }
+    let _ = m2len;
 
     // --- M3 (AP->STA): key-data = RSNE ++ GTK-KDE, padded to /8, AES-key-wrapped under KEK.
     let mut kd = [0u8; 72];
@@ -2660,90 +2902,194 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
         Some(n) => n,
         None => return,
     };
+    // --- M3 (AP->STA), replay+1, re-MIC'd per send (the MIC covers the counter).
     let mut m3 = [0u8; 14 + 4 + 95 + 88];
-    m3[0..6].copy_from_slice(sta);
-    m3[6..12].copy_from_slice(ap_mac);
-    m3[12] = 0x88;
-    m3[13] = 0x8E;
-    m3[14] = x1ver;
-    m3[15] = 0x03;
-    let x1len3 = (95 + kdw) as u16;
-    m3[16..18].copy_from_slice(&x1len3.to_be_bytes());
-    m3[body] = 0x02;
-    // ver2|pairwise|install|ack|mic|secure|encrypted = 0x13ca.
-    m3[body + 1..body + 3].copy_from_slice(&0x13cau16.to_be_bytes());
-    m3[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes());
-    m3[body + 5..body + 13].copy_from_slice(&2u64.to_be_bytes()); // replay = 2
-    m3[body + 13..body + 45].copy_from_slice(&anonce);
-    m3[body + 93..body + 95].copy_from_slice(&(kdw as u16).to_be_bytes());
-    m3[body + 95..body + 95 + kdw].copy_from_slice(&wrapped[..kdw]);
-    let m3end = body + 95 + kdw;
-    let mic3 = crate::wpa::wpa_mic_sha1(&kck, &m3[14..m3end]); // MIC field still zero
-    m3[body + 77..body + 93].copy_from_slice(&mic3);
+    replay += 1;
+    let m3end = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw]);
     out.m3_tx = sdpcm_data_tx(&m3[..m3end]);
+    out.m3_sends = 1;
+    out.replay = replay;
     dbg_putc(b'3');
 
-    // --- await M4 (STA->AP): pairwise|MIC|secure, ACK clear; verify MIC.
-    let mut m4buf = [0u8; 256];
-    let mut m4len = 0usize;
-    let mut j = 0u32;
-    while j < 120 {
-        j += 1;
-        if j % 40 == 0 {
-            let _ = sdpcm_data_tx(&m3[..m3end]);
+    // --- await M4 (STA->AP): pairwise|MIC|Secure, ACK clear, replay == ours; verify MIC.
+    let mut m4buf = [0u8; 512];
+    let mut rounds = 0u32;
+    loop {
+        rounds += 1;
+        if rounds > 12 {
+            return;
         }
-        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) { Some(t) => t, None => continue };
-        if ch != 2 {
-            continue;
+        match wait_eapol(sta, true, replay, 2, &mut m4buf) {
+            KeyWait::Got(n) => {
+                out.m4_rx = true;
+                dbg_putc(b'4');
+                if mic_off + 16 <= n && eapol_mic_ok(&kck, &mut m4buf[..n], mic_off) {
+                    out.m4_mic_ok = true;
+                    break;
+                }
+                out.m2_mic_fail += 1;
+            }
+            KeyWait::Dry => {
+                if out.m3_sends >= 3 {
+                    return;
+                }
+                replay += 1;
+                let _ = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw]);
+                let _ = sdpcm_data_tx(&m3[..m3end]);
+                out.m3_sends += 1;
+                out.replay = replay;
+            }
+            KeyWait::Reassoc => {
+                out.reassoc = true;
+                return;
+            }
+            KeyWait::Deauth => {
+                out.deauth = true;
+                return;
+            }
         }
-        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
-        if eth + body + 95 > rx.len() {
-            continue;
-        }
-        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E {
-            continue;
-        }
-        if &rx[eth + 6..eth + 12] != &sta[..] {
-            continue;
-        }
-        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
-        if ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0200 != 0 && ki & 0x0080 == 0 {
-            out.m4_rx = true;
-            dbg_putc(b'4');
-            let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
-            m4len = (4 + x1).min(m4buf.len());
-            m4buf[..m4len].copy_from_slice(&rx[eth + 14..eth + 14 + m4len]);
-            break;
-        }
-    }
-    if !out.m4_rx {
-        return;
-    }
-    if mic_off + 16 <= m4len {
-        out.m4_mic_ok = eapol_mic_ok(&kck, &mut m4buf[..m4len], mic_off);
-    }
-    if !out.m4_mic_ok {
-        return;
     }
 
-    // --- install the keys: per-station PTK (TK = ptk[32..48]) + the shared GTK.
+    // --- install the per-station PTK (TK = ptk[32..48]), flags 0 as brcmfmac's pairwise
+    // add_key (the PRIMARY flag belongs to the group key, installed once at AP start).
     let mut tk = [0u8; 16];
     tk.copy_from_slice(&ptk[32..48]);
-    out.ptk_set = wlc_set_key(0, &tk, sta, true);
+    out.ptk_set = wlc_set_key(0, &tk, sta, false);
     dbg_putc(b'P');
-    out.gtk_set = wlc_set_key(gtk_keyid as u32, gtk, &[0u8; 6], false);
-    dbg_putc(b'G');
+    let _ = gtk;
+    let _ = gtk_keyid;
     // --- AUTHORIZE the station: on a FullMAC AP with a HOST authenticator, the firmware
     // did NOT run the 4-way, so it keeps the station's 802.1X controlled port BLOCKED until
     // told the station is authorized. Without this the keys install but the station's data
     // (DHCP etc.) is dropped by the fw and the client reports a generic auth failure. Payload
-    // = the station ether_addr. Try both the ioctl and the "authorize" iovar (fw-variant safe).
+    // = the station ether_addr. The "authorize" iovar is only tried if the ioctl is refused
+    // (each dcmd can discard up to 40 queued data frames — the client's first DISCOVER).
     out.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, sta, &mut []).0;
-    let mut ab = [0u8; 32];
-    let na = iovar_buf(b"authorize", sta, &mut ab);
-    let iv = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
-    out.authorized = out.authorized || iv;
+    if !out.authorized {
+        let mut ab = [0u8; 32];
+        let na = iovar_buf(b"authorize", sta, &mut ab);
+        out.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
+    }
     dbg_putc(b'A');
+}
+
+/// One WiFi poll for the AP serve loop: what arrived, if anything. Costs ~100 µs when
+/// nothing is pending (the `I_HMB_FRAME_IND` peek) instead of a 1.5 s dry read.
+pub enum ApEvent {
+    Idle,
+    /// A station (re)associated successfully — run the authenticator for it.
+    Assoc([u8; 6]),
+    /// A station left (DEAUTH/DISASSOC indication).
+    Leave([u8; 6]),
+    /// A channel-2 data frame from a station: (ethernet offset, length) inside `rx`.
+    Data(usize, usize),
+    /// Some other frame (an event we don't act on) — counted, ignored.
+    Other,
+}
+
+/// Keep the 43455's backplane HT clock alive while the serve loop idles (the chip drops HT
+/// after ~150 ms of a silent bus; the old read loops did this every 16 reads).
+pub fn ap_keepalive() {
+    let _ = ensure_ht_avail();
+}
+
+pub fn ap_poll(rx: &mut [u8]) -> ApEvent {
+    if !sdpcm_frame_pending() {
+        return ApEvent::Idle;
+    }
+    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 8) {
+        Some(t) => t,
+        None => return ApEvent::Idle,
+    };
+    if ch == 1 {
+        if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
+            if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
+                dbg_putc(b'C');
+                return ApEvent::Assoc(sta);
+            }
+            if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
+                return ApEvent::Leave(sta);
+            }
+        }
+        return ApEvent::Other;
+    }
+    if ch != 2 {
+        return ApEvent::Other;
+    }
+    let eth = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+    let total = (hw_len as usize).min(rx.len());
+    if eth + 14 > total {
+        return ApEvent::Other;
+    }
+    ApEvent::Data(eth, total - eth)
+}
+
+/// Serve ONE client data frame: answer an ARP for our gateway IP; serve DHCP DISCOVER →
+/// OFFER / REQUEST → ACK (or NAK when the client asks for another address). Returns the
+/// action byte ('r' ARP reply, 'O' OFFER, 'K' ACK, 'N' NAK) or 0 when the frame is not ours
+/// to answer (M-NAT1 forwards those).
+pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], out: &mut ApDhcp) -> u8 {
+    let mut pkt = [0u8; 400];
+    if eth.len() < 14 {
+        return 0;
+    }
+    let et = u16::from_be_bytes([eth[12], eth[13]]);
+    if et == 0x0806 {
+        // ARP request for our gateway IP? (op=1, target-IP == our_ip)
+        if eth.len() >= 42 && eth[20] == 0x00 && eth[21] == 0x01 && &eth[38..42] == &our_ip[..] {
+            let mut rmac = [0u8; 6];
+            rmac.copy_from_slice(&eth[22..28]);
+            let mut rip = [0u8; 4];
+            rip.copy_from_slice(&eth[28..32]);
+            let n = build_arp_reply(&mut pkt, our_mac, our_ip, &rmac, &rip);
+            if sdpcm_data_tx(&pkt[..n]) {
+                out.arp_replies += 1;
+                dbg_putc(b'r');
+                return b'r';
+            }
+        }
+        return 0;
+    }
+    if et != 0x0800 {
+        return 0;
+    }
+    let mut cmac = [0u8; 6];
+    let mut xid = [0u8; 4];
+    let mut req_ip = [0u8; 4];
+    match parse_client_dhcp(eth, &mut cmac, &mut xid, &mut req_ip) {
+        1 => {
+            out.discovers += 1;
+            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 2); // OFFER
+            if sdpcm_data_tx(&pkt[..n]) {
+                out.offers_tx += 1;
+                dbg_putc(b'O');
+                return b'O';
+            }
+        }
+        3 => {
+            out.requests += 1;
+            // INIT-REBOOT / RENEW for an address we did not offer → NAK (RFC 2131 §4.3.2), so
+            // the client DISCOVERs at once instead of sitting on a foreign lease for its timeout.
+            if req_ip != [0; 4] && req_ip != *offer_ip {
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 6); // NAK
+                if sdpcm_data_tx(&pkt[..n]) {
+                    dbg_putc(b'N');
+                    return b'N';
+                }
+                return 0;
+            }
+            out.client_mac = cmac;
+            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 5); // ACK
+            if sdpcm_data_tx(&pkt[..n]) {
+                out.acks_tx += 1;
+                out.leased_ip = *offer_ip;
+                dbg_putc(b'K');
+                return b'K';
+            }
+        }
+        _ => {}
+    }
+    0
 }
 
 /// True if the space-separated token list `hay` contains exactly `tok`.
@@ -3043,7 +3389,9 @@ pub struct DhcpResult {
     pub server: [u8; 4], // DHCP server id (option 54)
     pub router: [u8; 4], // option 3 (default gateway)
     pub mask: [u8; 4],   // option 1 (subnet mask)
+    pub dns: [u8; 4],    // option 6 (first DNS server)
     pub lease: u32,      // option 51 (lease time, seconds)
+    pub nak_rx: bool,    // the server NAKed our REQUEST (restart DORA)
     pub frames_seen: u32,
     pub udp68_seen: u32, // UDP frames arriving on client port 68 (OFFER/ACK candidates)
 }
@@ -3052,8 +3400,8 @@ impl DhcpResult {
     pub fn new() -> Self {
         DhcpResult {
             mac: [0; 6], discover_tx: false, offer_rx: false, request_tx: false, ack_rx: false,
-            yiaddr: [0; 4], server: [0; 4], router: [0; 4], mask: [0; 4], lease: 0,
-            frames_seen: 0, udp68_seen: 0,
+            yiaddr: [0; 4], server: [0; 4], router: [0; 4], mask: [0; 4], dns: [0; 4], lease: 0,
+            nak_rx: false, frames_seen: 0, udp68_seen: 0,
         }
     }
 }
@@ -3134,10 +3482,13 @@ pub(crate) fn build_dhcp(buf: &mut [u8], mac: &[u8; 6], xid: &[u8; 4], mt: u8, r
     total
 }
 
-/// Parse a received ethernet frame for a DHCP reply to us (UDP 67->68, BOOTREPLY). On a match
-/// fills `out` yiaddr + options and returns the DHCP message type (2=OFFER, 5=ACK), else 0.
-pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
+/// Parse a received ethernet frame for a DHCP reply TO US: UDP 67->68, BOOTREPLY, and —
+/// load-bearing on a promiscuous wired NIC where every other host's OFFER/ACK is also seen —
+/// `xid` == ours AND chaddr == `mac` AND the L2 dst is us or broadcast. On a match fills `out`
+/// yiaddr + options and returns the DHCP message type (2=OFFER, 5=ACK, 6=NAK), else 0.
+pub(crate) fn parse_dhcp_reply(eth: &[u8], xid: &[u8; 4], mac: &[u8; 6], out: &mut DhcpResult) -> u8 {
     if eth.len() < 42 + 240 { return 0; }
+    if &eth[0..6] != &mac[..] && eth[0..6] != [0xff; 6] { return 0; } // to us or broadcast
     if eth[12] != 0x08 || eth[13] != 0x00 { return 0; }        // IPv4
     let ihl = ((eth[14] & 0x0f) as usize) * 4;
     let l4 = 14 + ihl;
@@ -3150,6 +3501,8 @@ pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
     let b = l4 + 8; // BOOTP start
     if b + 240 > eth.len() || eth[b] != 2 { return 0; }         // BOOTREPLY
     if eth[b + 236] != 0x63 || eth[b + 237] != 0x82 || eth[b + 238] != 0x53 || eth[b + 239] != 0x63 { return 0; }
+    if &eth[b + 4..b + 8] != &xid[..] { return 0; }             // our transaction
+    if &eth[b + 28..b + 34] != &mac[..] { return 0; }           // our chaddr
     let yi = b + 16;
     let mut yiaddr = [0u8; 4];
     yiaddr.copy_from_slice(&eth[yi..yi + 4]);
@@ -3159,6 +3512,7 @@ pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
     let mut server = [0u8; 4];
     let mut router = [0u8; 4];
     let mut mask = [0u8; 4];
+    let mut dns = [0u8; 4];
     let mut lease = 0u32;
     while p + 2 <= eth.len() {
         let code = eth[p];
@@ -3172,16 +3526,25 @@ pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
             54 if len >= 4 => server.copy_from_slice(&v[..4]),
             3 if len >= 4 => router.copy_from_slice(&v[..4]),
             1 if len >= 4 => mask.copy_from_slice(&v[..4]),
+            6 if len >= 4 => dns.copy_from_slice(&v[..4]), // first DNS server
             51 if len >= 4 => lease = u32::from_be_bytes([v[0], v[1], v[2], v[3]]),
             _ => {}
         }
         p += 2 + len;
     }
+    if mt == 6 {
+        out.nak_rx = true;
+        return mt;
+    }
     if mt == 2 || mt == 5 {
+        // An ACK must come from the server we REQUESTed from (a second server's stray ACK
+        // for our xid is ignored, RFC 2131 §4.4.1).
+        if mt == 5 && out.server != [0; 4] && server != [0; 4] && server != out.server { return 0; }
         out.yiaddr = yiaddr;
         if server != [0; 4] { out.server = server; }
         if router != [0; 4] { out.router = router; }
         if mask != [0; 4] { out.mask = mask; }
+        if dns != [0; 4] { out.dns = dns; }
         if lease != 0 { out.lease = lease; }
     }
     mt
@@ -3191,6 +3554,7 @@ pub(crate) fn parse_dhcp_reply(eth: &[u8], out: &mut DhcpResult) -> u8 {
 pub fn wifi_dhcp(out: &mut DhcpResult) {
     // The STA MAC actually in use (OTP or the LAA fallback) — src of every DHCP frame.
     let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.mac);
+    let mac = out.mac;
     // A per-boot xid from the cycle counter so retries/reboots don't collide.
     let ctr: u64;
     unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) ctr, options(nomem, nostack)) };
@@ -3214,7 +3578,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         let eth = doff + 4 + bdc_doff * 4;
         if eth + 14 > rx.len() { continue; }
         out.frames_seen += 1;
-        if parse_dhcp_reply(&rx[eth..], out) == 2 {
+        if parse_dhcp_reply(&rx[eth..], &xid, &mac, out) == 2 {
             out.offer_rx = true;
             dbg_putc(b'o'); // OFFER received
             break;
@@ -3238,7 +3602,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         let eth = doff + 4 + bdc_doff * 4;
         if eth + 14 > rx.len() { continue; }
         out.frames_seen += 1;
-        if parse_dhcp_reply(&rx[eth..], out) == 5 {
+        if parse_dhcp_reply(&rx[eth..], &xid, &mac, out) == 5 {
             out.ack_rx = true;
             dbg_putc(b'a'); // ACK received
             break;
