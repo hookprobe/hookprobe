@@ -2232,10 +2232,19 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     let cl = fw_cap(&mut cap);
     out.cap_has_ap = has_token(&cap[..cl], b"ap");
 
-    // Capture the AP MAC NOW (valid OTP MAC from the prior scan). The post-AP-up
-    // cur_etheraddr GET returns 0 on this firmware, so read it up front — this is the
-    // src MAC every AP-served frame (ARP reply, DHCP OFFER/ACK) must carry.
-    let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
+    // The AP MAC = the src of every AP-served frame (M1, ARP reply, DHCP OFFER/ACK).
+    // Take it from the scan phase's ESTABLISHED MAC (`MAC_DIAG.1`: the OTP MAC, or the
+    // LAA fallback it SET) — NOT a fresh cur_etheraddr GET. Metal 2026-09-11: the scan
+    // read OTP=b8:27:eb:74:f2:6c fine, yet this GET a few seconds later returned ZERO
+    // → bssid 00:00:00:00:00:00 → the AP served zero-sourced frames and the phone
+    // could never key/lease. That intermittent GET is the "AP sometimes doesn't
+    // work on a boot" flake (gap #2). The live GET is only a fallback.
+    let (_otp, established, _valid) = unsafe { MAC_DIAG };
+    if established != [0u8; 6] {
+        out.bssid = established;
+    } else {
+        let _ = bcdc_iovar_get(b"cur_etheraddr", &mut out.bssid);
+    }
 
     // Configure while DOWN.
     out.down_ok = wlc_set_int(WLC_DOWN, 0);

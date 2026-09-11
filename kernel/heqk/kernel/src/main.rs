@@ -2594,18 +2594,23 @@ fn cm5_p10_probe() {
                     if AP_MODE {
                         const AP_SSID: &[u8] = b"heqk-ap";
                         const AP_PSK: &[u8] = b"heqkwifi2026"; // WPA2 passphrase for heqk-ap
-                        // M-NAT0: the wired UPLINK (eth1/RTL8111H) — lease an IP, resolve the
-                        // gateway, ping the internet. The first-ever rtl8111::tx_frame on metal
-                        // (P9 proved RX only). Runs BEFORE the WiFi AP so the two polled rings
-                        // don't interleave in the log; its lease+gw MAC are what M-NAT1+ NATs
-                        // the AP clients through.
+                        // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
+                        // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
+                        // gateway, ping the internet — over the metal-proven GEM rings (armed by
+                        // the P8 GEM phase). Runs BEFORE the WiFi AP so the polled rings don't
+                        // interleave in the log; its lease + gw MAC are what M-NAT1+ NATs the
+                        // WiFi-AP and eth1-LAN clients through. eth1 is reported as the LAN port
+                        // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
                         {
-                            use arch_aarch64::uplink;
-                            kprint!(" [M-NAT0] eth1 uplink — set MAC, DHCP, ARP gw, ping gw + 8.8.8.8 over the RTL8111H TX ring\n");
-                            let mut up = uplink::UplinkResult::new();
-                            uplink::eth1_bringup(&[8, 8, 8, 8], &mut up);
+                            use arch_aarch64::uplink::{self, Nic};
+                            let (lan_started, lan_link, lan_mac) = uplink::eth1_lan_status();
+                            kprint!(" [M-NAT0 lan] eth1 (RTL8111H) LAN port: started={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                                lan_started, lan_link, lan_mac[0], lan_mac[1], lan_mac[2], lan_mac[3], lan_mac[4], lan_mac[5]);
+                            kprint!(" [M-NAT0] end0 (RP1 GEM) WAN uplink — DHCP, ARP gw, ping gw + 8.8.8.8 over the GEM TX ring\n");
+                            let mut up = uplink::UplinkResult::new(Nic::End0);
+                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut up);
                             if !up.started {
-                                kprint!(" [M-NAT0] SKIP — RTL8111 not started (P9 link down / not enumerated)\n");
+                                kprint!(" [M-NAT0] SKIP — GEM rings not armed\n");
                             } else {
                                 kprint!("   [M-NAT0] link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_ok={} | DORA tx/rx D={} O={} R={} A={} rx_frames={} udp68={}\n",
                                     up.link, up.mac[0], up.mac[1], up.mac[2], up.mac[3], up.mac[4], up.mac[5], up.mac_ok,
@@ -2622,13 +2627,15 @@ fn cm5_p10_probe() {
                                     up.arp_tx, up.arp_reply, up.gw_mac[0], up.gw_mac[1], up.gw_mac[2], up.gw_mac[3], up.gw_mac[4], up.gw_mac[5],
                                     up.gw_ping_tx, up.gw_ping_reply, up.gw_ttl, up.inet_ping_tx, up.inet_ping_reply, up.inet_ttl);
                                 if up.inet_ping_reply {
-                                    kprint!(" [M-NAT0] PASS — eth1 uplink leased + gateway resolved + INTERNET reachable (8.8.8.8 ttl={}) — rtl8111 tx_frame PROVEN\n", up.inet_ttl);
+                                    kprint!(" [M-NAT0] PASS — end0 WAN uplink leased + gateway resolved + INTERNET reachable (8.8.8.8 ttl={})\n", up.inet_ttl);
                                 } else if up.usable() {
-                                    kprint!(" [M-NAT0] PASS(uplink) — leased + gateway resolved; no internet echo (upstream NAT/ICMP policy?) — tx_frame PROVEN\n");
+                                    kprint!(" [M-NAT0] PASS(uplink) — leased + gateway resolved; no internet echo (upstream NAT/ICMP policy?)\n");
+                                } else if !up.link {
+                                    kprint!(" [M-NAT0] LINK DOWN — end0 PHY reports no link at bring-up (cable / link-partner / autoneg); nothing transmitted\n");
                                 } else if up.dhcp.discover_tx && up.rx_frames > 0 && !up.dhcp.offer_rx {
-                                    kprint!(" [M-NAT0] NO OFFER — DISCOVER transmitted (tx_frame completed) but no DHCP server answered on eth1's segment\n");
+                                    kprint!(" [M-NAT0] NO OFFER — DISCOVER transmitted but no DHCP server answered on end0's segment\n");
                                 } else if !up.dhcp.discover_tx {
-                                    kprint!(" [M-NAT0] FAIL — tx_frame did not complete (TX descriptor OWN never cleared) — the RTL TX path is the gap\n");
+                                    kprint!(" [M-NAT0] FAIL — GEM tx_frame did not complete\n");
                                 } else {
                                     kprint!(" [M-NAT0] INCOMPLETE — see stage flags above\n");
                                 }
