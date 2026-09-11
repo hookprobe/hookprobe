@@ -317,22 +317,37 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     });
 }
 
-/// WAN keep-alive for a leased uplink: read at most one frame off the NIC and answer an
-/// ARP request for our leased IP (the gateway's neighbour-cache probe — unanswered, the
-/// fortress marks us FAILED within a minute or two and blackholes the return traffic).
-/// Also refreshes `gw_mac` from any ARP the gateway sends. Returns the action byte
-/// ('r' ARP reply sent, 'g' gateway MAC refreshed) or 0.
-pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> u8 {
+/// What one WAN poll produced.
+pub enum WanEvent {
+    Idle,
+    ArpReplied,
+    GwRefreshed,
+    /// A non-ARP frame of `len` bytes is in the buffer (the NAT inbound path decides).
+    Frame(usize),
+}
+
+/// WAN service for a leased uplink: read at most one frame off the NIC. Answers an ARP
+/// request for our leased IP (the gateway's neighbour-cache probe — unanswered, the
+/// fortress marks us FAILED within a minute or two and blackholes the return traffic),
+/// refreshes `gw_mac` from any ARP the gateway sends, and hands every other frame back
+/// for the NAT inbound path.
+pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     if !up.dhcp.ack_rx {
-        return 0;
+        return WanEvent::Idle;
     }
     let nic = up.nic;
     let n = match nic_rx(nic, buf) {
         Some(n) => n.min(buf.len()),
-        None => return 0,
+        None => return WanEvent::Idle,
     };
-    if n < 42 || buf[12] != 0x08 || buf[13] != 0x06 {
-        return 0;
+    if n < 14 {
+        return WanEvent::Idle;
+    }
+    if buf[12] != 0x08 || buf[13] != 0x06 {
+        return WanEvent::Frame(n);
+    }
+    if n < 42 {
+        return WanEvent::Idle;
     }
     let mac = up.mac;
     let ip = up.dhcp.yiaddr;
@@ -354,15 +369,15 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> u8 {
         reply[32..38].copy_from_slice(&rmac);
         reply[38..42].copy_from_slice(&spa);
         if nic_tx(nic, &reply[..60]) {
-            return b'r';
+            return WanEvent::ArpReplied;
         }
-        return 0;
+        return WanEvent::Idle;
     }
     if spa == up.dhcp.router && buf[22..28] != up.gw_mac {
         up.gw_mac.copy_from_slice(&buf[22..28]); // gateway moved (VRRP/failover)
-        return b'g';
+        return WanEvent::GwRefreshed;
     }
-    0
+    WanEvent::Idle
 }
 
 /// LAN-port status for eth1: program its station address and report the link.

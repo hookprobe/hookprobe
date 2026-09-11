@@ -2721,14 +2721,26 @@ fn cm5_p10_probe() {
                         let offer_ip = [10u8, 99, 0, 10];
                         let mut rx = [0u8; 2048];
                         let mut wbuf = [0u8; 2048];
+                        let mut nbuf = [0u8; 2048];
                         let mut dh = cyw43::ApDhcp::new();
+                        // M-NAT1: masquerade the AP subnet out the end0 lease.
+                        use arch_aarch64::nat;
+                        let mut nst = nat::NatStats::default();
+                        let inside_net = [10u8, 99, 0];
+                        let (mut nat_tx_fail, mut nat_wifi_tx_fail) = (0u32, 0u32);
                         let (mut assocs, mut keyed, mut leaves, mut wifi_frames, mut wan_arp, mut wan_gw_refresh) = (0u32, 0u32, 0u32, 0u64, 0u32, 0u32);
                         let freq: u64;
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
                         let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
-                        let (mut last_beat, mut last_ht) = (now(), now());
+                        let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         loop {
-                            match cyw43::ap_poll(&mut rx) {
+                            // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
+                            // indication was lost — the peek alone stalled the pump after the first lease.
+                            let force = now().wrapping_sub(last_force) > freq / 4;
+                            if force {
+                                last_force = now();
+                            }
+                            match cyw43::ap_poll(&mut rx, force) {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
@@ -2769,6 +2781,16 @@ fn cm5_p10_probe() {
                                         kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}, arp_replies={}) — WPA2 AP live\n",
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.arp_replies);
+                                    } else if act == 0 && up.usable() {
+                                        // Not ours to answer → M-NAT1 outbound: SNAT to the lease, out end0.
+                                        let gw_mac = up.gw_mac;
+                                        if let Some(n) = nat::outbound(&rx[off..off + len], &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
+                                            if arch_aarch64::gem::tx_frame(&nbuf[..n]).is_none() {
+                                                nat_tx_fail += 1;
+                                            } else if nst.out_fwd == 1 {
+                                                kprint!(" [M-NAT1] first client frame forwarded out end0 ({} B, proto {})\n", n, nbuf[23]);
+                                            }
+                                        }
                                     }
                                 }
                                 cyw43::ApEvent::Other => {
@@ -2776,9 +2798,20 @@ fn cm5_p10_probe() {
                                 }
                                 cyw43::ApEvent::Idle => {
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
-                                        b'r' => wan_arp += 1,
-                                        b'g' => wan_gw_refresh += 1,
-                                        _ => {}
+                                        uplink::WanEvent::ArpReplied => wan_arp += 1,
+                                        uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
+                                        uplink::WanEvent::Frame(n) => {
+                                            // M-NAT1 inbound: a WAN frame for the lease → un-NAT → unicast to the
+                                            // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
+                                            if let Some(m) = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, &ap.bssid, nat::WIFI_MAX_FRAME, &mut nbuf, now(), &mut nst) {
+                                                if !cyw43::ap_tx(&nbuf[..m]) {
+                                                    nat_wifi_tx_fail += 1;
+                                                } else if nst.in_fwd == 1 {
+                                                    kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
+                                                }
+                                            }
+                                        }
+                                        uplink::WanEvent::Idle => {}
                                     }
                                     let t = now();
                                     if t.wrapping_sub(last_ht) > freq / 10 {
@@ -2786,9 +2819,11 @@ fn cm5_p10_probe() {
                                         last_ht = t;
                                     }
                                     if t.wrapping_sub(last_beat) > 5 * freq {
-                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={}\n",
+                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
-                                            up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh);
+                                            up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
+                                            nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict,
+                                            nat_tx_fail, nat_wifi_tx_fail);
                                         last_beat = t;
                                     }
                                     unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };

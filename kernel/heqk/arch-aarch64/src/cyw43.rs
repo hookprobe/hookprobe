@@ -3001,13 +3001,37 @@ pub fn ap_keepalive() {
     let _ = ensure_ht_avail();
 }
 
-pub fn ap_poll(rx: &mut [u8]) -> ApEvent {
-    if !sdpcm_frame_pending() {
+/// Transmit one ethernet frame to a station over the AP data path (fw encrypts with the
+/// per-station PTK when the L2 dst is that station's MAC — the proven path).
+pub fn ap_tx(eth: &[u8]) -> bool {
+    sdpcm_data_tx(eth)
+}
+
+/// Set after a successful read: the firmware raises I_HMB_FRAME_IND for the FIRST queued
+/// frame and the read W1Cs it — the rest of the queue does NOT re-raise it (brcmfmac's
+/// `readframes` drains until an empty tag for this reason). Metal 2026-09-11: a
+/// peek-gated one-frame-per-poll pump froze after the first lease (wifi_frames stuck at
+/// 36, no DEAUTH/ASSOC ever seen again) — the reconnect regression. So once a frame is
+/// read, keep reading unconditionally until a dry pass.
+static mut AP_DRAIN: bool = false;
+
+/// `force` = read unconditionally (a cheap ~2 ms dry pass) — the liveness net the caller
+/// applies every ~250 ms so a lost or never-raised indication can stall the pump for at
+/// most that long.
+pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
+    let draining = unsafe { AP_DRAIN };
+    if !(force || draining || sdpcm_frame_pending()) {
         return ApEvent::Idle;
     }
-    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 8) {
-        Some(t) => t,
-        None => return ApEvent::Idle,
+    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 2) {
+        Some(t) => {
+            unsafe { AP_DRAIN = true };
+            t
+        }
+        None => {
+            unsafe { AP_DRAIN = false };
+            return ApEvent::Idle;
+        }
     };
     if ch == 1 {
         if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
@@ -3851,7 +3875,7 @@ fn fill_eth_ip(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], 
 }
 
 /// Ones-complement sum of the IPv4 pseudo-header (src+dst+zero+proto+l4len) for TCP/UDP csum.
-fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
+pub(crate) fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
     let mut s = 0u32;
     s += u16::from_be_bytes([sip[0], sip[1]]) as u32;
     s += u16::from_be_bytes([sip[2], sip[3]]) as u32;

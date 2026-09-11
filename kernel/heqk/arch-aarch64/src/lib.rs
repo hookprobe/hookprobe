@@ -33,6 +33,8 @@ pub mod rp1_uartp;
 pub mod rtl8111;
 #[cfg(feature = "cm5")]
 pub mod uplink;
+#[cfg(feature = "cm5")]
+pub mod nat;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
 #[cfg(feature = "cm5")]
 pub mod wpa;
