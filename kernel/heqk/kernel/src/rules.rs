@@ -322,7 +322,7 @@ pub fn run_flow(frame: &[u8], src: u32) -> u16 {
 /// (wire-DROP) verdict. Shared by the bytecode tiers and the M2.1 stateful L2 tier.
 fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
     let wire = v.to_wire();
-    crate::events::push_hit(rule_id, severity as u8, wire as u8, src);
+    crate::events::push_hit(rule_id, severity as u8, wire as u8, v.class_code(), src);
     if wire == crate::packet::DROP {
         telemetry::emit_rule_hit(severity);
     }

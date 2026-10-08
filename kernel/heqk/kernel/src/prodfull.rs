@@ -60,177 +60,12 @@ use crate::seal::{self, Policy, SealBlob};
 use crate::store::SealedStore;
 use arch_aarch64::emmc::Emmc;
 
-/// Snapshot wire version — bump on any layout change (an older/newer blob is
-/// refused rather than misparsed).
-const SNAP_VERSION: u16 = 1;
-
-/// How many recent event images ride in a snapshot. 16 B each (the M6 `EV_IMAGE_LEN`
-/// image, so the persisted bytes are IDENTICAL to what M6 exports — no re-encoding
-/// drift, the same load-bearing property `export.rs` establishes).
-pub const SNAP_EVENTS: usize = 64;
-
-/// Fixed snapshot size: header + events. Must stay under `seal::SEAL_MAX_PT` (3968).
-const SNAP_HDR: usize = 64;
-const SNAP_LEN: usize = SNAP_HDR + SNAP_EVENTS * export::EV_IMAGE_LEN; // 64 + 1024 = 1088
+pub use crate::snapshot::{Counters, Snapshot, SNAP_LEN};
 
 /// Persist at most this often. The reserved window is 32 sectors and every persist
 /// rewrites the same LBAs, so a per-heartbeat write would hammer one eMMC erase
 /// block. 300 s + a dirty flag keeps steady-state writes near zero on a quiet link.
 const PERSIST_INTERVAL_S: u64 = 300;
-
-/// The running counters the sensor loop owns; snapshotted verbatim.
-#[derive(Clone, Copy, Default)]
-pub struct Counters {
-    pub seen: u64,
-    pub forwarded: u64,
-    pub dropped: u64,
-    pub tx_fail: u64,
-    pub faults: u64,
-    pub empty: u64,
-}
-
-#[inline]
-fn put_u64(b: &mut [u8], o: usize, v: u64) {
-    b[o..o + 8].copy_from_slice(&v.to_le_bytes());
-}
-#[inline]
-fn put_u32(b: &mut [u8], o: usize, v: u32) {
-    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
-}
-#[inline]
-fn get_u64(b: &[u8], o: usize) -> u64 {
-    let mut a = [0u8; 8];
-    a.copy_from_slice(&b[o..o + 8]);
-    u64::from_le_bytes(a)
-}
-#[inline]
-fn get_u32(b: &[u8], o: usize) -> u32 {
-    let mut a = [0u8; 4];
-    a.copy_from_slice(&b[o..o + 4]);
-    u32::from_le_bytes(a)
-}
-
-// Header layout (little-endian, offsets stable across versions):
-const O_MAGIC: usize = 0; // u32
-const O_VER: usize = 4; // u16
-const O_NEV: usize = 6; // u16  (events actually present, <= SNAP_EVENTS)
-const O_BOOTS: usize = 8; // u64
-const O_UPTIME: usize = 16; // u64 (seconds THIS boot at persist time)
-const O_SEEN: usize = 24;
-const O_FWD: usize = 32;
-const O_DROP: usize = 40;
-const O_TXF: usize = 48;
-const O_QSEC: usize = 56; // u32
-const O_FAULTS: usize = 60; // u32 (truncated — diagnostics, not accounting)
-
-/// The bounded, sealed persistence record.
-pub struct Snapshot {
-    pub boots: u64,
-    pub uptime_s: u64,
-    pub counters: Counters,
-    pub qsecbit: u32,
-    /// Ring of the most recent event images (16 B each, M6-identical encoding).
-    pub events: [[u8; export::EV_IMAGE_LEN]; SNAP_EVENTS],
-    pub nev: usize,
-    /// Write cursor into `events` (ring; wraps).
-    head: usize,
-}
-
-impl Default for Snapshot {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Snapshot {
-    pub const fn new() -> Self {
-        Snapshot {
-            boots: 0,
-            uptime_s: 0,
-            counters: Counters {
-                seen: 0,
-                forwarded: 0,
-                dropped: 0,
-                tx_fail: 0,
-                faults: 0,
-                empty: 0,
-            },
-            qsecbit: 0,
-            events: [[0u8; export::EV_IMAGE_LEN]; SNAP_EVENTS],
-            nev: 0,
-            head: 0,
-        }
-    }
-
-    /// Record one event image into the ring (oldest overwritten at capacity).
-    pub fn push_event(&mut self, ev: &events::Event) {
-        self.events[self.head] = export::ev_to_image(ev);
-        self.head = (self.head + 1) % SNAP_EVENTS;
-        if self.nev < SNAP_EVENTS {
-            self.nev += 1;
-        }
-    }
-
-    fn serialize(&self, out: &mut [u8; SNAP_LEN]) {
-        for x in out[..SNAP_HDR].iter_mut() {
-            *x = 0;
-        }
-        put_u32(out, O_MAGIC, snap_magic());
-        out[O_VER..O_VER + 2].copy_from_slice(&SNAP_VERSION.to_le_bytes());
-        out[O_NEV..O_NEV + 2].copy_from_slice(&(self.nev as u16).to_le_bytes());
-        put_u64(out, O_BOOTS, self.boots);
-        put_u64(out, O_UPTIME, self.uptime_s);
-        put_u64(out, O_SEEN, self.counters.seen);
-        put_u64(out, O_FWD, self.counters.forwarded);
-        put_u64(out, O_DROP, self.counters.dropped);
-        put_u64(out, O_TXF, self.counters.tx_fail);
-        put_u32(out, O_QSEC, self.qsecbit);
-        put_u32(out, O_FAULTS, self.counters.faults as u32);
-        for i in 0..SNAP_EVENTS {
-            let o = SNAP_HDR + i * export::EV_IMAGE_LEN;
-            out[o..o + export::EV_IMAGE_LEN].copy_from_slice(&self.events[i]);
-        }
-    }
-
-    /// Parse a snapshot. Fail-closed: a wrong magic/version/count yields `None`
-    /// rather than a misparsed record (a stale-layout blob must not resurrect as
-    /// plausible-looking counters).
-    fn parse(b: &[u8]) -> Option<Snapshot> {
-        if b.len() < SNAP_LEN || get_u32(b, O_MAGIC) != snap_magic() {
-            return None;
-        }
-        let ver = u16::from_le_bytes([b[O_VER], b[O_VER + 1]]);
-        if ver != SNAP_VERSION {
-            return None;
-        }
-        let nev = u16::from_le_bytes([b[O_NEV], b[O_NEV + 1]]) as usize;
-        if nev > SNAP_EVENTS {
-            return None;
-        }
-        let mut s = Snapshot::new();
-        s.boots = get_u64(b, O_BOOTS);
-        s.uptime_s = get_u64(b, O_UPTIME);
-        s.counters.seen = get_u64(b, O_SEEN);
-        s.counters.forwarded = get_u64(b, O_FWD);
-        s.counters.dropped = get_u64(b, O_DROP);
-        s.counters.tx_fail = get_u64(b, O_TXF);
-        s.qsecbit = get_u32(b, O_QSEC);
-        s.counters.faults = get_u32(b, O_FAULTS) as u64;
-        s.nev = nev;
-        s.head = nev % SNAP_EVENTS;
-        for i in 0..SNAP_EVENTS {
-            let o = SNAP_HDR + i * export::EV_IMAGE_LEN;
-            s.events[i].copy_from_slice(&b[o..o + export::EV_IMAGE_LEN]);
-        }
-        Some(s)
-    }
-}
-
-/// `HQKS` little-endian.
-#[inline]
-fn snap_magic() -> u32 {
-    u32::from_le_bytes(*b"HQKS")
-}
 
 /// The `prod-full` runtime state, owned by the sensor loop.
 pub struct ProdFull {
@@ -306,8 +141,7 @@ impl ProdFull {
                                         pf.snap = prev;
                                     }
                                     None => kprint!(
-                                        "   [PROD-FULL] M3: sealed blob unsealed but is not a v{} snapshot — starting fresh (fail-closed)\n",
-                                        SNAP_VERSION
+                                        "   [PROD-FULL] M3: sealed blob unsealed but is not a v1/v2 snapshot — starting fresh (fail-closed)\n"
                                     ),
                                 },
                                 Err(e) => kprint!(
@@ -358,7 +192,7 @@ impl ProdFull {
             pf.enroll.local_soc_available()
         );
         kprint!(
-            "   [PROD-FULL] M6 export gate: should_export={} (no on-device transport yet — smoltcp<->GEM bridge is PH5/Gate R)\n",
+            "   [PROD-FULL] M6 export gate: should_export={} (enrolls on the control-plane handshake when the image carries netmetal; air-gap otherwise)\n",
             export::should_export(&pf.enroll)
         );
         pf
@@ -370,8 +204,10 @@ impl ProdFull {
         self.dirty = true;
     }
 
-    /// Heartbeat hook: throttled persist + the structural export gate. Returns true
-    /// if a persist actually happened (so the caller can report it).
+    /// Heartbeat hook: throttled persist. Returns true if a persist actually happened (so the
+    /// caller can report it). Export is driven by the sensor loop (it owns the control-plane
+    /// transport) and consults `should_export(&pf.enroll)` before touching the channel —
+    /// unenrolled ⇒ nothing is attempted; evidence persists locally either way.
     pub fn on_heartbeat(&mut self, uptime_s: u64, counters: Counters, qsecbit: u32) -> bool {
         if counters.seen != self.snap.counters.seen || counters.dropped != self.snap.counters.dropped {
             self.dirty = true;
@@ -379,16 +215,7 @@ impl ProdFull {
         self.snap.counters = counters;
         self.snap.qsecbit = qsecbit;
         self.snap.uptime_s = uptime_s;
-
-        // M6: consult the gate BEFORE any channel work — unenrolled ⇒ no export is
-        // attempted at all (structural air-gap, not a runtime check that could be
-        // reordered). Evidence still persists locally below either way.
-        if export::should_export(&self.enroll) {
-            // Reaching here needs an enrolled device AND a live transport; the
-            // transport does not exist in the prod datapath yet (PH5/Gate R), so
-            // this is intentionally the only statement in the branch.
-            kprint!("   [PROD-FULL] M6: enrolled, but no on-device transport — export skipped (Gate R)\n");
-        }
+        self.snap.overruns = events::overruns();
 
         if !self.persist_ready || !self.dirty {
             return false;

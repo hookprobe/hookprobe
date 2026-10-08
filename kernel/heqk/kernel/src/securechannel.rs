@@ -744,7 +744,27 @@ impl CipherState {
             win: ReplayWindow::new(),
         }
     }
+
+    /// Seal one self-describing DATAGRAM record: `LE64(seq) ‖ ciphertext ‖ tag`, where `seq`
+    /// is this cipher's counter (the AEAD nonce, so a tampered seq fails the tag). The
+    /// receiver opens it with `AntiReplayRx::open_record`, so a lost/reordered datagram never
+    /// desyncs later ones — unlike the implicit-counter `encrypt_into`/`decrypt_into` pair,
+    /// where one dropped UDP record breaks every record after it. Same counter space as
+    /// `encrypt_into` (never a nonce reuse); callers MUST domain-separate with `ad`.
+    pub fn seal_record(&mut self, ad: &[u8], pt: &[u8], out: &mut [u8]) -> Option<usize> {
+        if out.len() < RECORD_SEQ_LEN || self.n == u64::MAX {
+            return None; // no room, or counter exhausted (rekey) — never wrap a nonce
+        }
+        let seq = self.n;
+        let (hdr, body) = out.split_at_mut(RECORD_SEQ_LEN);
+        let n = self.encrypt_into(ad, pt, body)?;
+        hdr.copy_from_slice(&seq.to_le_bytes());
+        Some(RECORD_SEQ_LEN + n)
+    }
 }
+
+/// Length of the explicit sequence prefix on a datagram record (`seal_record`).
+pub const RECORD_SEQ_LEN: usize = 8;
 
 // ---------------------------------------------------------------------------
 // M4.4 #9 — anti-replay sliding window (RFC 6479 + RFC 4303 §3.4.3).
@@ -877,6 +897,16 @@ impl AntiReplayRx {
             return Err(NoiseErr::Replay);
         }
         Ok(ct.len())
+    }
+
+    /// Open a `CipherState::seal_record` datagram (`LE64(seq) ‖ ct ‖ tag`) through the window.
+    pub fn open_record(&mut self, ad: &[u8], rec: &[u8], out: &mut [u8]) -> Result<usize, NoiseErr> {
+        if rec.len() < RECORD_SEQ_LEN + AEAD_TAG_LEN {
+            return Err(NoiseErr::Truncated);
+        }
+        let mut sb = [0u8; RECORD_SEQ_LEN];
+        sb.copy_from_slice(&rec[..RECORD_SEQ_LEN]);
+        self.open(u64::from_le_bytes(sb), ad, &rec[RECORD_SEQ_LEN..], out)
     }
 }
 

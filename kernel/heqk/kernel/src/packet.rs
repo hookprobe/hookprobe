@@ -376,7 +376,7 @@ fn classify(frame: &[u8]) -> (u16, u16) {
             // matrix row F4 is observable on metal (the wire action was always correct;
             // only the per-event attribution was missing). sepdiag-gated => prod unchanged.
             #[cfg(feature = "sepdiag")]
-            crate::events::push_hit(crate::rules::RULE_TRUNCATED, crate::rules::SEV_MED as u8, DROP as u8, src);
+            crate::events::push_hit(crate::rules::RULE_TRUNCATED, crate::rules::SEV_MED as u8, DROP as u8, crate::verdict::CLASS_FRAMEDROP, src);
             (0, DROP)
         }
     }

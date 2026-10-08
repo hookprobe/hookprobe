@@ -58,6 +58,13 @@ pub struct ControlPlane {
     last_tx_ms: i64,
     /// for-heqk UDP:7654 frames ingested (heartbeat diagnostic).
     pub seen: u32,
+    /// The tenant the MSSP assigned in msg2's payload (LE u64) — authenticated by the handshake,
+    /// so the device never hard-codes it. `None` until Established (or if msg2 carried none).
+    tenant: Option<u64>,
+    /// The responder's L2/L3 address, learned from the msg2 datagrams — exports go UNICAST to
+    /// it rather than broadcast across the LAN.
+    peer_mac: [u8; 6],
+    peer_ip: [u8; 4],
 }
 
 impl ControlPlane {
@@ -80,7 +87,30 @@ impl ControlPlane {
             attempts: 0,
             last_tx_ms: 0,
             seen: 0,
+            tenant: None,
+            peer_mac: [0xff; 6],
+            peer_ip: [255, 255, 255, 255],
         }
+    }
+
+    /// The MSSP-assigned tenant (from the authenticated msg2 payload), once Established.
+    pub fn tenant(&self) -> Option<u64> {
+        self.tenant
+    }
+
+    /// The responder's (MAC, IPv4), learned from msg2 — the unicast export destination.
+    pub fn peer(&self) -> ([u8; 6], [u8; 4]) {
+        (self.peer_mac, self.peer_ip)
+    }
+
+    /// The provisioned MSSP's X25519 static public key (recorded in the device's `Enrollment`).
+    pub fn resp_x_pk(&self) -> [u8; 32] {
+        self.resp_pub.x_pk()
+    }
+
+    /// Our own (MAC, IPv4) on the control-plane link.
+    pub fn local(&self) -> ([u8; 6], [u8; 4]) {
+        (self.our_mac, self.our_ip)
     }
 
     pub fn state(&self) -> CpState {
@@ -189,7 +219,17 @@ impl ControlPlane {
                     }
                 };
                 match initiator_read_msg2(ipend, self.reasm.message()) {
-                    Ok((session, _p2)) => {
+                    Ok((session, p2)) => {
+                        let p2 = p2.as_slice();
+                        if p2.len() == 8 {
+                            let mut t = [0u8; 8];
+                            t.copy_from_slice(p2);
+                            self.tenant = Some(u64::from_le_bytes(t));
+                        }
+                        if frame.len() >= 30 {
+                            self.peer_mac.copy_from_slice(&frame[6..12]);
+                            self.peer_ip.copy_from_slice(&frame[26..30]);
+                        }
                         self.session = Some(session);
                         self.state = CpState::Established;
                     }
@@ -263,7 +303,7 @@ pub fn cp_selftest() {
     // (3) responder authenticates the device + writes msg2.
     let msg2_ok = if msg1_complete {
         match responder_read_msg1(&tv.resp, &dev_pk, r_reasm.message()) {
-            Ok(rpend) => match responder_write_msg2(rpend, &tv.rrand, b"TENANT42") {
+            Ok(rpend) => match responder_write_msg2(rpend, &tv.rrand, &0x5445_4E41u64.to_le_bytes()) {
                 Some((msg2, rsession)) => {
                     // (4) chunk msg2 into UNICAST-to-cp datagrams → cp.ingress reassembles.
                     hs_chunk(msg2.as_slice(), |framed| {
@@ -281,7 +321,10 @@ pub fn cp_selftest() {
                         }
                         None => false,
                     };
-                    (established, keys)
+                    // (6) the MSSP-assigned tenant (msg2 payload) + the responder's address were
+                    //     learned from the authenticated handshake (unicast export destination).
+                    let learned = cp.tenant() == Some(0x5445_4E41) && cp.peer() == (resp_mac, [10, 200, 0, 1]);
+                    (established, keys && learned)
                 }
                 None => (false, false),
             },
@@ -292,6 +335,6 @@ pub fn cp_selftest() {
     };
 
     let pass = started && msg1_complete && msg2_ok.0 && msg2_ok.1;
-    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match={}\n",
+    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match+tenant/peer-learned={}\n",
         yn(pass), msg1_dgrams, yn(started), yn(msg1_complete), yn(msg2_ok.0), yn(msg2_ok.1));
 }

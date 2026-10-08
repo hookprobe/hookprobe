@@ -67,7 +67,31 @@ impl Verdict {
     pub fn is_drop(self) -> bool {
         self.to_wire() == packet::DROP
     }
+
+    /// Stable wire code for the tri-state class, carried on every SOAR event + export record so
+    /// the operator sees WHY a frame passed/dropped (Observe vs a self-reverting RateLimit vs a
+    /// confirmed Quarantine) — `to_wire()` alone collapses that to PASS/DROP. 0 = unknown.
+    /// Codes are append-only (the off-device receiver keys on them).
+    #[inline]
+    pub fn class_code(self) -> u8 {
+        match self {
+            Verdict::Allowlisted => CLASS_ALLOWLISTED,
+            Verdict::Observe => CLASS_OBSERVE,
+            Verdict::RateLimit { over_limit: false } => CLASS_RATELIMIT_UNDER,
+            Verdict::RateLimit { over_limit: true } => CLASS_RATELIMIT_OVER,
+            Verdict::FrameDrop => CLASS_FRAMEDROP,
+            Verdict::Quarantine => CLASS_QUARANTINE,
+        }
+    }
 }
+
+pub const CLASS_UNKNOWN: u8 = 0;
+pub const CLASS_ALLOWLISTED: u8 = 1;
+pub const CLASS_OBSERVE: u8 = 2;
+pub const CLASS_RATELIMIT_UNDER: u8 = 3;
+pub const CLASS_RATELIMIT_OVER: u8 = 4;
+pub const CLASS_FRAMEDROP: u8 = 5;
+pub const CLASS_QUARANTINE: u8 = 6;
 
 /// What a fired signed rule MEANS — the input to `decide()`. Each rule in the
 /// corpus (`rules.rs`) carries one; firing the rule proposes this class, and
