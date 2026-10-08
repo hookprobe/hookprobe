@@ -407,6 +407,36 @@ fn migrate_additive_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Canonical detection severity — 1=CRITICAL … 5=INFO (Suricata), the scale napse, host-EDR and
+/// the UI's `severityLabel` already use. Every producer writing `detections.severity` must use it.
+const SEV_HIGH: i64 = 2;
+const SEV_MEDIUM: i64 = 3;
+const SEV_LOW: i64 = 4;
+
+/// One-shot VALUE migration (gated on `PRAGMA user_version`). v1: the dns_dga / aegis_reflex /
+/// aegis_guard producers used to write a HIGHER-is-worse scale (dns suspicious=1, malicious=2;
+/// reflex JITTER=1, SHADOW=2, DISCONNECT=3; guard RequireApproval=1, Deny=2) into the same column
+/// as the canonical 1=CRITICAL scale — so the UI labelled a merely *suspicious* lookup CRITICAL
+/// and incident priority mixed both. Remap those rows once to the canonical scale.
+fn migrate_values(conn: &Connection) -> Result<()> {
+    let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if v < 1 {
+        conn.execute_batch(
+            "BEGIN;
+             UPDATE detections SET severity = CASE severity WHEN 2 THEN 2 WHEN 1 THEN 3 ELSE severity END
+               WHERE category = 'dns_dga';
+             UPDATE detections SET severity = CASE severity WHEN 3 THEN 2 WHEN 2 THEN 3 WHEN 1 THEN 4 ELSE severity END
+               WHERE category = 'aegis_reflex';
+             UPDATE detections SET severity = CASE severity WHEN 2 THEN 3 WHEN 1 THEN 4 ELSE severity END
+               WHERE category = 'aegis_guard';
+             PRAGMA user_version = 1;
+             COMMIT;",
+        )
+        .context("severity-scale value migration v1")?;
+    }
+    Ok(())
+}
+
 impl EvidenceGraph {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("open sqlite")?;
@@ -432,6 +462,7 @@ impl EvidenceGraph {
             .context("set pragmas")?;
         conn.execute_batch(SCHEMA).context("init schema")?;
         migrate_additive_columns(&conn).context("additive schema migration")?;
+        migrate_values(&conn)?;
         Ok(Self { conn })
     }
     pub fn open_memory() -> Result<Self> {
@@ -844,7 +875,8 @@ impl EvidenceGraph {
         let reasons: String = v["reasons"].as_array()
             .map(|a| a.iter().filter_map(|r| r.as_str()).collect::<Vec<_>>().join("; "))
             .unwrap_or_default();
-        let severity: i64 = if verdict == "malicious" { 2 } else { 1 };
+        // Canonical scale, 1=CRITICAL … 5=INFO (Suricata; napse/host-EDR/UI agree).
+        let severity: i64 = if verdict == "malicious" { SEV_HIGH } else { SEV_MEDIUM };
         let rule_msg = if reasons.is_empty() {
             format!("dnsXai DNS anomaly: {domain} ({verdict})")
         } else {
@@ -893,7 +925,7 @@ impl EvidenceGraph {
                 if ip.is_empty() || level.is_empty() || level == "OBSERVE" { return Ok(None); }
                 let score = v["score"].as_f64().unwrap_or(0.0);
                 let response = v["response"].as_str().unwrap_or("");
-                let severity: i64 = match level { "DISCONNECT" => 3, "SHADOW" => 2, _ => 1 }; // JITTER=1
+                let severity: i64 = match level { "DISCONNECT" => SEV_HIGH, "SHADOW" => SEV_MEDIUM, _ => SEV_LOW }; // JITTER=LOW
                 let det_id = sid("aegis", &format!("reflex:{ip}:{level}:{score:.4}"));
                 let rule_msg = format!("AEGIS reflex {level}: {ip} -> {response}");
                 self.conn.execute(
@@ -912,7 +944,7 @@ impl EvidenceGraph {
                 let verdict = v["verdict"].as_str().unwrap_or("");
                 if action.is_empty() || verdict.is_empty() || verdict == "AutoApply" { return Ok(None); }
                 let reason = v["reason"].as_str().unwrap_or("");
-                let severity: i64 = if verdict == "Deny" { 2 } else { 1 }; // RequireApproval=1
+                let severity: i64 = if verdict == "Deny" { SEV_MEDIUM } else { SEV_LOW }; // RequireApproval=LOW
                 let det_id = sid("aegis", &format!("guard:{action}:{verdict}"));
                 let rule_msg = format!("AEGIS guard {verdict}: {action} — {reason}");
                 self.conn.execute(
@@ -2200,8 +2232,9 @@ impl EvidenceGraph {
     /// nodes+edges, the attack path) — no query logic is duplicated, only JSON composition:
     /// - `why`: the incident's own title (deterministic correlation's plain-English summary today;
     ///   an AI-generated narrative is future work, not invented here).
-    /// - `confidence`: the incident's `threat_score` (already `max(severity)/3` from
-    ///   `correlate_incident`) re-expressed as a 0-100 percentage — the same number, not a new model.
+    /// - `confidence`: the incident's `threat_score` (already computed by
+    ///   `correlate_incident`, `(6 - worst severity) / 5`) re-expressed as a 0-100 percentage — the same
+///   number, not a new model.
     /// - `evidence`: the subgraph's `edge_count` (every linked flow/detection/response/host artifact).
     /// - `model`: `null` until the ADR 0025 BYO-LLM planner (`crates/hookprobe-planner`) has run an
     ///   explanation over THIS incident at least once (see [`Self::record_ai_explanation`]) — the
@@ -2927,16 +2960,20 @@ impl EvidenceGraph {
     /// Correlate all detections on a device into one Incident node (the "one traceable story"), linked
     /// to the device + every detection. Returns the incident id.
     pub fn correlate_incident(&self, device_ip: &str, title: &str) -> Result<String> {
-        let (cnt, maxsev, ts): (i64, i64, f64) = self.conn.query_row(
-            "SELECT count(*), coalesce(max(severity),0), coalesce(max(ts),0) FROM detections WHERE src_ip=?",
+        // Severity is 1=CRITICAL … 5=INFO, so the incident takes its WORST (lowest non-zero)
+        // detection. (Was max(severity)/3 + "High if >=2": priority came from the LEAST severe
+        // detection and the score could exceed 1.0.) 0 = unknown, ignored.
+        let (cnt, worst, ts): (i64, i64, f64) = self.conn.query_row(
+            "SELECT count(*), coalesce(min(CASE WHEN severity > 0 THEN severity END),5), coalesce(max(ts),0) FROM detections WHERE src_ip=?",
             params![device_ip], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         if cnt == 0 { anyhow::bail!("no detections for {device_ip}"); }
         let inc_id = sid("inc", &format!("{device_ip}@{}", ts as i64));
         let dev_id = sid("dev", device_ip);
-        let score = (maxsev as f64) / 3.0;
+        let worst = worst.clamp(1, 5);
+        let score = (6 - worst) as f64 / 5.0;
         self.conn.execute(
             "INSERT INTO incidents VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET threat_score=excluded.threat_score",
-            params![inc_id, ts, title, device_ip, if maxsev >= 2 { "High" } else { "Medium" }, "new", score])?;
+            params![inc_id, ts, title, device_ip, if worst <= SEV_HIGH { "High" } else { "Medium" }, "new", score])?;
         self.add_edge(&inc_id, "incident_on_device", &dev_id, ts)?;
         // cap fan-out: a spoofed src_ip with a flood of detections would otherwise create a huge hub
         // node → the attack_path traversal blows up. 10k linked detections is far beyond any real incident.
@@ -5010,7 +5047,7 @@ garbage-not-json-should-be-skipped
             "SELECT category, severity, confidence, rule_msg FROM detections WHERE id=?", params![det_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
         assert_eq!(category, "dns_dga");
-        assert_eq!(severity, 1);
+        assert_eq!(severity, SEV_MEDIUM, "suspicious = MEDIUM on the canonical 1=CRITICAL scale");
         assert!((confidence - 0.55).abs() < 1e-9);
         assert!(rule_msg.contains("kq3v9z7x1p2w.com") && rule_msg.contains("high_digit_ratio"));
 
@@ -5082,7 +5119,7 @@ garbage-not-json-should-be-skipped
         let det_id2 = g.ingest_aegis_verdict(disconnect).unwrap().expect("DISCONNECT must ingest");
         let severity: i64 = g.conn.query_row(
             "SELECT severity FROM detections WHERE id=?", params![det_id2], |r| r.get(0)).unwrap();
-        assert_eq!(severity, 3, "DISCONNECT must be the highest reflex severity");
+        assert_eq!(severity, SEV_HIGH, "DISCONNECT must be the most severe reflex level (lowest number)");
 
         // idempotent re-ingest.
         g.ingest_aegis_verdict(jitter).unwrap();
@@ -5100,7 +5137,7 @@ garbage-not-json-should-be-skipped
         let det_id = g.ingest_aegis_verdict(approval).unwrap().expect("RequireApproval must ingest");
         let severity: i64 = g.conn.query_row(
             "SELECT severity FROM detections WHERE id=?", params![det_id], |r| r.get(0)).unwrap();
-        assert_eq!(severity, 1);
+        assert_eq!(severity, SEV_LOW, "RequireApproval = LOW on the canonical scale");
 
         let deny = r#"{"mode":"guard","action":"disable_firewall","verdict":"Deny","reason":"Never disable firewall, IDS, DNS protection, or any security service","principle":"never_disable_protection"}"#;
         let det_id2 = g.ingest_aegis_verdict(deny).unwrap().expect("Deny must ingest");
@@ -5108,7 +5145,7 @@ garbage-not-json-should-be-skipped
             "SELECT category, severity, rule_msg FROM detections WHERE id=?", params![det_id2],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
         assert_eq!(category, "aegis_guard");
-        assert_eq!(severity2, 2, "Deny must outrank RequireApproval");
+        assert_eq!(severity2, SEV_MEDIUM, "Deny must outrank RequireApproval (lower = more severe)");
         assert!(rule_msg.contains("disable_firewall"));
 
         // no device edges at all for guard-mode lines (no ip in this shape).
@@ -5395,8 +5432,8 @@ garbage-not-json-should-be-skipped
         let v: serde_json::Value = serde_json::from_str(&detail).unwrap();
         assert_eq!(v["id"], inc_id);
         assert_eq!(v["title"], "Lateral movement");
-        // threat_score = max(severity)/3 = 3/3 = 1.0 -> confidence 100
-        assert_eq!(v["explanation"]["confidence"], 100.0);
+        // threat_score = (6 - worst severity)/5 = (6-3)/5 = 0.6 -> confidence 60 (severity 3 = MEDIUM)
+        assert_eq!(v["explanation"]["confidence"], 60.0);
         assert!(v["explanation"]["model"].is_null(), "no AI planner has run — model must be null, never fabricated");
         assert!(v["explanation"]["evidence"].as_i64().unwrap() > 0);
         assert!(!v["attack_path"]["nodes"].as_array().unwrap().is_empty());
@@ -5644,5 +5681,76 @@ garbage-not-json-should-be-skipped
         assert_eq!(v["iocs"].as_array().unwrap().len(), 2);
         assert_eq!(v["recent_matches"].as_array().unwrap().len(), 2);
         assert_eq!(v["cve_lens"], "/api/exploitability");
+    }
+
+    #[test]
+    fn incident_priority_comes_from_worst_detection_on_canonical_scale() {
+        let g = EvidenceGraph::open_memory().unwrap();
+        let det = |sev: i64, rule: i64, ip: &str| format!(
+            r#"{{"ts":10.0,"rule_id":{rule},"rule_msg":"t","category":"c","severity":{sev},"mitre":"","src_ip":"{ip}","dst_ip":"10.0.0.1","dst_port":22,"confidence":0.8}}"#);
+        // one CRITICAL + one INFO on the same device -> the incident is High, score 1.0
+        g.ingest_detection(&det(1, 1, "198.51.100.1")).unwrap();
+        g.ingest_detection(&det(5, 2, "198.51.100.1")).unwrap();
+        // only LOW detections -> Medium, score 0.4 (never > 1.0)
+        g.ingest_detection(&det(4, 3, "198.51.100.2")).unwrap();
+        let a = g.correlate_incident("198.51.100.1", "a").unwrap();
+        let b = g.correlate_incident("198.51.100.2", "b").unwrap();
+        let row = |id: &str| -> (String, f64) {
+            g.conn.query_row("SELECT priority, threat_score FROM incidents WHERE id=?", params![id],
+                |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+        };
+        assert_eq!(row(&a), ("High".to_string(), 1.0));
+        let (pb, sb) = row(&b);
+        assert_eq!(pb, "Medium");
+        assert!((sb - 0.4).abs() < 1e-9, "score {sb}");
+    }
+
+    #[test]
+    fn dns_verdict_writes_canonical_severity() {
+        let g = EvidenceGraph::open_memory().unwrap();
+        let sev = |verdict: &str, domain: &str| -> i64 {
+            let id = g.ingest_dns_verdict(&format!(
+                r#"{{"domain":"{domain}","verdict":"{verdict}","score":0.9,"src_ip":"198.51.100.3"}}"#))
+                .unwrap().expect("ingested");
+            g.conn.query_row("SELECT severity FROM detections WHERE id=?", params![id], |r| r.get(0)).unwrap()
+        };
+        // suspicious must NOT render CRITICAL (it used to be stored as 1 = CRITICAL)
+        assert_eq!(sev("suspicious", "a.example"), SEV_MEDIUM);
+        assert_eq!(sev("malicious", "b.example"), SEV_HIGH);
+    }
+
+    #[test]
+    fn severity_value_migration_remaps_old_scale_rows_once() {
+        let path = std::env::temp_dir().join(format!("hp-sevmig-{}.db", std::process::id()));
+        std::fs::remove_file(&path).ok();
+        {
+            let g = EvidenceGraph::open(&path).unwrap();
+            // rows as the OLD producers wrote them (higher = worse), DB marked pre-migration
+            g.conn.execute_batch(
+                "INSERT INTO detections VALUES ('d1',1.0,0,'m','dns_dga',1,'','10.0.0.9','',53,0.5);
+                 INSERT INTO detections VALUES ('d2',1.0,0,'m','dns_dga',2,'','10.0.0.9','',53,0.5);
+                 INSERT INTO detections VALUES ('r1',1.0,0,'m','aegis_reflex',3,'','10.0.0.9','',0,0.5);
+                 INSERT INTO detections VALUES ('r2',1.0,0,'m','aegis_reflex',1,'','10.0.0.9','',0,0.5);
+                 INSERT INTO detections VALUES ('g1',1.0,0,'m','aegis_guard',2,'','','',0,1.0);
+                 INSERT INTO detections VALUES ('n1',1.0,1,'m','port_scan',1,'','10.0.0.9','',22,0.5);
+                 PRAGMA user_version = 0;").unwrap();
+        }
+        let sev = |g: &EvidenceGraph, id: &str| -> i64 {
+            g.conn.query_row("SELECT severity FROM detections WHERE id=?", params![id], |r| r.get(0)).unwrap()
+        };
+        let g = EvidenceGraph::open(&path).unwrap();
+        assert_eq!(sev(&g, "d1"), SEV_MEDIUM); // dns suspicious
+        assert_eq!(sev(&g, "d2"), SEV_HIGH); // dns malicious
+        assert_eq!(sev(&g, "r1"), SEV_HIGH); // reflex DISCONNECT
+        assert_eq!(sev(&g, "r2"), SEV_LOW); // reflex JITTER
+        assert_eq!(sev(&g, "g1"), SEV_MEDIUM); // guard Deny
+        assert_eq!(sev(&g, "n1"), 1); // napse CRITICAL untouched
+        drop(g);
+        // second open is a no-op (version-gated): values must not be remapped twice
+        let g = EvidenceGraph::open(&path).unwrap();
+        assert_eq!(sev(&g, "d1"), SEV_MEDIUM);
+        assert_eq!(sev(&g, "r2"), SEV_LOW);
+        drop(g);
+        std::fs::remove_file(&path).ok();
     }
 }
