@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS detections (
   id TEXT PRIMARY KEY, ts DOUBLE, rule_id BIGINT, rule_msg TEXT, category TEXT, severity INTEGER,
   mitre TEXT, src_ip TEXT, dst_ip TEXT, dst_port INTEGER, confidence DOUBLE
 );
+-- heqk (CM5 microkernel sensor) export provenance, keyed by detection id (a side table so the
+-- positional 11-column `detections` inserts every producer uses are untouched): which sensor +
+-- tenant reported it, its per-boot sequence, and the tri-state verdict class behind PASS/DROP.
+CREATE TABLE IF NOT EXISTS heqk_detection_meta (
+  det_id TEXT PRIMARY KEY, sensor_fp TEXT, tenant TEXT, boots INTEGER, ev_seq INTEGER,
+  verdict TEXT, class TEXT, sev_points INTEGER, src_mac_hash TEXT
+);
+-- Per-sensor-boot LOSS accounting from the export stream (bounded & honest retention: what did
+-- NOT arrive is evidence too): receiver-detected gaps/late frames + the sensor's own drops.
+CREATE TABLE IF NOT EXISTS heqk_sensor_loss (
+  sensor_fp TEXT, boots INTEGER, tenant TEXT, last_ts DOUBLE, frames INTEGER,
+  gap_events INTEGER, late_events INTEGER, device_lost INTEGER, device_overruns INTEGER,
+  qsecbit INTEGER, PRIMARY KEY (sensor_fp, boots)
+);
 -- Trigger-to-evidence pcap capture (roadmap D): the bounded packet-capture artifact
 -- `napse-dpi`'s `capture` module wrote for a detection (pre-trigger ring + bounded post-trigger
 -- tail — see that module's doc). `id` = `sid("pcap", path)` (the SAME `prefix:hash` convention
@@ -405,6 +419,44 @@ fn migrate_additive_columns(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// heqk (CM5 microkernel sensor) rule-id band: `HEQK_RULE_BAND + kernel rule id`. Fresh range —
+/// napse 1_000_0xx, l2guard 1_000_03x, host-EDR 1_000_1xx, HYDRA 4_000_000_001, supply-chain 9_xxx.
+pub const HEQK_RULE_BAND: i64 = 1_200_000;
+
+/// The heqk kernel rule catalogue (`kernel/heqk/kernel/src/rules.rs`) → (message, category,
+/// MITRE, canonical severity). Unknown ids still ingest (never dropped), as a generic MEDIUM.
+fn heqk_rule(id: i64) -> (String, &'static str, &'static str, i64) {
+    let (m, c, t, s): (&str, &str, &str, i64) = match id {
+        1 => ("Known C2 port 4444", "signature", "T1571", SEV_HIGH),
+        2 => ("Telnet (23) access", "signature", "T1021", SEV_MEDIUM),
+        3 => ("Backdoor port 31337", "signature", "T1571", SEV_HIGH),
+        101 => ("Malformed ARP", "malformed_frame", "", SEV_LOW),
+        102 => ("ARP spoofing", "arp_spoof", "T1557.002", SEV_HIGH),
+        110 => ("L2 structural anomaly", "malformed_frame", "", SEV_LOW),
+        111 => ("MAC flood", "mac_flood", "T1498", SEV_MEDIUM),
+        112 => ("Broadcast storm", "bcast_storm", "T1498", SEV_MEDIUM),
+        113 => ("Port scan", "port_scan", "T1046", SEV_MEDIUM),
+        114 => ("New-connection rate shed", "resource_shed", "T1499", SEV_MEDIUM),
+        115 => ("Resource-exhaustion shed", "resource_shed", "T1499", SEV_MEDIUM),
+        116 => ("Beaconing", "beaconing", "T1071", SEV_MEDIUM),
+        117 => ("Lateral movement", "lateral_movement", "T1021", SEV_HIGH),
+        118 => ("Bulk exfiltration", "exfiltration", "T1048", SEV_HIGH),
+        119 => ("DNS tunneling / DGA", "dns_dga", "T1071.004", SEV_MEDIUM),
+        120 => ("Truncated / unparseable frame", "malformed_frame", "", SEV_LOW),
+        121 => ("Rogue IPv6 router advertisement", "rogue_ra", "T1557", SEV_HIGH),
+        122 => ("IPv6 RA flood", "ra_flood", "T1498", SEV_MEDIUM),
+        123 => ("Unparseable IPv6 (evasion attempt)", "evasion", "", SEV_LOW),
+        201 => ("TCP NULL scan", "port_scan", "T1046", SEV_MEDIUM),
+        202 => ("TCP FIN scan", "port_scan", "T1046", SEV_MEDIUM),
+        203 => ("TCP Xmas scan", "port_scan", "T1046", SEV_MEDIUM),
+        204 => ("TCP SYN-FIN scan", "port_scan", "T1046", SEV_MEDIUM),
+        301 => ("SYN flood", "syn_flood", "T1498.001", SEV_HIGH),
+        302 => ("Blocklisted IP", "ioc_match", "", SEV_HIGH),
+        _ => return (format!("heqk rule {id}"), "heqk", "", SEV_MEDIUM),
+    };
+    (m.to_string(), c, t, s)
 }
 
 /// Canonical detection severity — 1=CRITICAL … 5=INFO (Suricata), the scale napse, host-EDR and
@@ -839,6 +891,72 @@ impl EvidenceGraph {
             }
         }
         Ok(Some(resp_id))
+    }
+
+    /// Ingest one line of the heqk M6 export stream — the JSON Lines `kernel/responder-sim`
+    /// (the MSSP receiver) writes from authenticated, loss-accounted export frames:
+    ///   * `heqk_detection` → a Detection node (rule id in `HEQK_RULE_BAND`, canonical severity
+    ///     from the heqk catalogue, linked to the subject device by `src_ip`) + its provenance
+    ///     row (sensor fingerprint, tenant, boot/sequence, tri-state class);
+    ///   * `heqk_frame` → the sensor's per-boot loss accounting (upserted).
+    /// The detection id is `(sensor_fp, boots, ev_seq)`, so re-ingesting a file is idempotent.
+    pub fn ingest_heqk_export(&self, line: &str) -> Result<Option<String>> {
+        let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => return Ok(None) };
+        let fp = v["device_fp"].as_str().unwrap_or("");
+        if fp.len() != 64 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(None); // not a heqk export line (or a forged/garbled sensor id)
+        }
+        let tenant = v["tenant"].as_u64().map(|t| format!("{t:#x}")).unwrap_or_default();
+        let boots = v["boots"].as_i64().unwrap_or(0);
+        let ts = v["ts"].as_f64().unwrap_or_else(now_ts);
+        match v["type"].as_str() {
+            Some("heqk_detection") => {
+                let Some(rule) = v["rule_id"].as_i64() else { return Ok(None) };
+                let ev_seq = v["ev_seq"].as_i64().unwrap_or(0);
+                let src_ip = v["src_ip"].as_str().unwrap_or("");
+                let class = v["class"].as_str().unwrap_or("unknown");
+                let verdict = v["verdict"].as_str().unwrap_or("");
+                let (msg, category, mitre, severity) = heqk_rule(rule);
+                let confidence = match class {
+                    "quarantine" | "framedrop" | "ratelimit_enforced" => 0.9,
+                    "ratelimit" => 0.7,
+                    "observe" => 0.6,
+                    "allowlisted" => 0.3,
+                    _ => 0.5,
+                };
+                let det_id = sid("heqk", &format!("{fp}:{boots}:{ev_seq}"));
+                let rule_msg = format!("heqk: {msg} ({verdict}, {class})");
+                self.conn.execute(
+                    "INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
+                    params![det_id, ts, HEQK_RULE_BAND + rule, rule_msg, category, severity, mitre, src_ip, "", 0i64, confidence])?;
+                self.conn.execute(
+                    "INSERT INTO heqk_detection_meta VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (det_id) DO NOTHING",
+                    params![det_id, fp, tenant, boots, ev_seq, verdict, class,
+                        v["sev_points"].as_i64().unwrap_or(0), v["src_mac_hash"].as_str().unwrap_or("")])?;
+                if !src_ip.is_empty() {
+                    let dev_id = sid("dev", src_ip);
+                    self.conn.execute(
+                        "INSERT INTO devices (id,ip,first_seen,last_seen) VALUES (?,?,?,?) \
+                         ON CONFLICT (id) DO UPDATE SET last_seen=max(devices.last_seen, excluded.last_seen), first_seen=min(devices.first_seen, excluded.first_seen)",
+                        params![dev_id, src_ip, ts, ts])?;
+                    self.add_edge(&det_id, "detects_on_device", &dev_id, ts)?;
+                }
+                Ok(Some(det_id))
+            }
+            Some("heqk_frame") => {
+                self.conn.execute(
+                    "INSERT INTO heqk_sensor_loss VALUES (?,?,?,?,1,?,?,?,?,?) \
+                     ON CONFLICT (sensor_fp, boots) DO UPDATE SET last_ts=max(last_ts, excluded.last_ts), \
+                     frames=frames+1, gap_events=max(gap_events, excluded.gap_events), \
+                     late_events=max(late_events, excluded.late_events), device_lost=max(device_lost, excluded.device_lost), \
+                     device_overruns=max(device_overruns, excluded.device_overruns), qsecbit=excluded.qsecbit",
+                    params![fp, boots, tenant, ts, v["gap_events"].as_i64().unwrap_or(0), v["late_events"].as_i64().unwrap_or(0),
+                        v["device_lost"].as_i64().unwrap_or(0), v["device_overruns"].as_i64().unwrap_or(0),
+                        v["qsecbit"].as_i64().unwrap_or(0)])?;
+                Ok(Some(format!("heqk-frame:{fp}:{boots}")))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Ingest one dnsxai verdict line (`/var/lib/hookprobe/dns-verdicts`, JSON — see
@@ -1642,6 +1760,9 @@ impl EvidenceGraph {
             [],
         )? as i64;
         let (deleted_incidents, deleted_reports) = self.sweep_stale_incidents(cutoff)?;
+        // heqk side tables follow their detections (no orphaned provenance past retention).
+        self.conn.execute("DELETE FROM heqk_detection_meta WHERE det_id NOT IN (SELECT id FROM detections)", [])?;
+        self.conn.execute("DELETE FROM heqk_sensor_loss WHERE last_ts < ?", params![cutoff])?;
         self.conn.execute("DELETE FROM prune_ids", [])?; // don't leak state into the next call
         self.commit()?;
 
@@ -5752,5 +5873,69 @@ garbage-not-json-should-be-skipped
         assert_eq!(sev(&g, "r2"), SEV_LOW);
         drop(g);
         std::fs::remove_file(&path).ok();
+    }
+
+    /// The exact line shapes `kernel/responder-sim` (export_rx::frame_to_jsonl) writes.
+    fn heqk_det_line(ev_seq: u64, rule: u16, class: &str, verdict: &str, src_ip: &str) -> String {
+        serde_json::json!({
+            "type": "heqk_detection", "ts": 1_700_000_000.5, "device_fp": "ab".repeat(32),
+            "tenant": 0x5445_4E41u64, "boots": 4, "ev_seq": ev_seq, "rule_id": rule, "sev_points": 5,
+            "verdict": verdict, "class": class, "src_ip": src_ip, "src_mac_hash": "",
+        }).to_string()
+    }
+
+    #[test]
+    fn heqk_export_detection_lands_with_provenance_and_canonical_severity() {
+        let g = EvidenceGraph::open_memory().unwrap();
+        let id = g.ingest_heqk_export(&heqk_det_line(7, 1, "framedrop", "DROP", "192.168.1.50")).unwrap().unwrap();
+        let (rule_id, sev, cat, mitre, src): (i64, i64, String, String, String) = g.conn.query_row(
+            "SELECT rule_id, severity, category, mitre, src_ip FROM detections WHERE id=?", params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
+        assert_eq!(rule_id, HEQK_RULE_BAND + 1);
+        assert_eq!(sev, SEV_HIGH, "C2-port signature = HIGH on the canonical 1=CRITICAL scale");
+        assert_eq!((cat.as_str(), mitre.as_str(), src.as_str()), ("signature", "T1571", "192.168.1.50"));
+        let (fp, tenant, boots, seq, class): (String, String, i64, i64, String) = g.conn.query_row(
+            "SELECT sensor_fp, tenant, boots, ev_seq, class FROM heqk_detection_meta WHERE det_id=?", params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
+        assert_eq!((fp, tenant.as_str(), boots, seq, class.as_str()), ("ab".repeat(32), "0x54454e41", 4, 7, "framedrop"));
+        let edges: i64 = g.conn.query_row(
+            "SELECT count(*) FROM edges WHERE src_id=? AND edge_type='detects_on_device' AND dst_id=?",
+            params![id, sid("dev", "192.168.1.50")], |r| r.get(0)).unwrap();
+        assert_eq!(edges, 1, "the detection links to its subject device in the evidence graph");
+        // Re-ingesting the same (sensor, boot, seq) is idempotent.
+        g.ingest_heqk_export(&heqk_det_line(7, 1, "framedrop", "DROP", "192.168.1.50")).unwrap();
+        let n: i64 = g.conn.query_row("SELECT count(*) FROM detections", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn heqk_export_loss_accounting_upserts_per_sensor_boot() {
+        let g = EvidenceGraph::open_memory().unwrap();
+        let frame = |gap: u64, lost: u64| serde_json::json!({
+            "type": "heqk_frame", "ts": 1_700_000_001.0, "device_fp": "cd".repeat(32), "tenant": 7u64,
+            "boots": 2, "frame_seq": 0, "events": 0, "qsecbit": 812, "device_overruns": 3,
+            "device_lost": lost, "gap_events": gap, "late_events": 0,
+        }).to_string();
+        g.ingest_heqk_export(&frame(0, 0)).unwrap().unwrap();
+        g.ingest_heqk_export(&frame(5, 2)).unwrap().unwrap();
+        let (frames, gap, lost, overruns): (i64, i64, i64, i64) = g.conn.query_row(
+            "SELECT frames, gap_events, device_lost, device_overruns FROM heqk_sensor_loss WHERE boots=2", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+        assert_eq!((frames, gap, lost, overruns), (2, 5, 2, 3));
+    }
+
+    #[test]
+    fn heqk_export_rejects_lines_without_a_valid_sensor_id_and_prunes_orphans() {
+        let g = EvidenceGraph::open_memory().unwrap();
+        assert!(g.ingest_heqk_export(r#"{"type":"heqk_detection","device_fp":"nothex","rule_id":1}"#).unwrap().is_none());
+        assert!(g.ingest_heqk_export("garbage").unwrap().is_none());
+        // An unknown rule id still ingests (never silently dropped).
+        let id = g.ingest_heqk_export(&heqk_det_line(1, 999, "observe", "PASS", "")).unwrap().unwrap();
+        let msg: String = g.conn.query_row("SELECT rule_msg FROM detections WHERE id=?", params![id], |r| r.get(0)).unwrap();
+        assert!(msg.contains("heqk rule 999"));
+        // Retention: the detection (old ts) is pruned and its provenance row follows it.
+        g.prune(1.0, None).unwrap();
+        let meta: i64 = g.conn.query_row("SELECT count(*) FROM heqk_detection_meta", [], |r| r.get(0)).unwrap();
+        assert_eq!(meta, 0);
     }
 }

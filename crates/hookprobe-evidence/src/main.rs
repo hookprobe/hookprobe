@@ -14,6 +14,7 @@ enum Kind {
     Response,
     DnsVerdict,
     AegisVerdict,
+    HeqkExport,
     QsecbitScore,
     Finding,
 }
@@ -48,6 +49,11 @@ struct Cli {
     /// verdicts (RequireApproval/Deny) become Detection-class nodes.
     #[arg(long)]
     aegis_verdicts: Option<PathBuf>,
+    /// heqk (CM5 microkernel sensor) M6 evidence export stream to ingest (JSON lines written by
+    /// the MSSP receiver, `kernel/responder-sim --live --evidence-out`): detections with sensor
+    /// provenance + verdict class, and per-boot loss accounting.
+    #[arg(long)]
+    heqk_export: Option<PathBuf>,
     /// QSECBIT composite-resilience readings to ingest (JSON lines,
     /// `/var/lib/hookprobe/qsecbit-scores` — F-B6): the Mission Control "Organism Status" orb's
     /// backing node, attached to the synthetic `dev:self` device via a `qsecbit_score_of` edge.
@@ -188,6 +194,7 @@ fn ingest_file(g: &EvidenceGraph, path: &PathBuf, kind: Kind) -> Result<usize> {
             Kind::Response => g.ingest_response(line)?,
             Kind::DnsVerdict => g.ingest_dns_verdict(line)?,
             Kind::AegisVerdict => g.ingest_aegis_verdict(line)?,
+            Kind::HeqkExport => g.ingest_heqk_export(line)?,
             Kind::QsecbitScore => g.ingest_qsecbit_score(line)?,
             Kind::Finding => g.ingest_finding(line)?,
         };
@@ -282,7 +289,7 @@ fn main() -> Result<()> {
     };
     // batch the whole ingest into one transaction — one fsync instead of thousands (SD-card critical)
     let ingesting = cli.flows.is_some() || cli.events.is_some() || cli.host.is_some() || cli.responses.is_some()
-        || cli.dns_verdicts.is_some() || cli.aegis_verdicts.is_some() || cli.qsecbit_scores.is_some()
+        || cli.dns_verdicts.is_some() || cli.aegis_verdicts.is_some() || cli.heqk_export.is_some() || cli.qsecbit_scores.is_some()
         || cli.ingest_adrs.is_some() || cli.ingest_release.is_some() || cli.ingest_beacon.is_some()
         || cli.link_feedback.is_some() || cli.ingest_attack_run.is_some() || cli.ingest_findings.is_some();
     if ingesting {
@@ -305,6 +312,9 @@ fn main() -> Result<()> {
     }
     if let Some(p) = &cli.aegis_verdicts {
         eprintln!("ingested {} aegis verdict(s)", ingest_file(&g, p, Kind::AegisVerdict)?);
+    }
+    if let Some(p) = &cli.heqk_export {
+        eprintln!("ingested {} heqk export line(s)", ingest_file(&g, p, Kind::HeqkExport)?);
     }
     if let Some(p) = &cli.qsecbit_scores {
         eprintln!("ingested {} qsecbit score(s)", ingest_file(&g, p, Kind::QsecbitScore)?);

@@ -29,18 +29,24 @@ fast-forwarding `master` is an operator (Red) decision.
 | S1-7 | **Incident severity mixed two scales.** A *suspicious* DNS lookup rendered CRITICAL, incident priority came from the least-severe detection, and confidence could show 167%. | dns_dga, aegis_reflex and aegis_guard wrote higher-is-worse values into a column whose canonical scale (napse, host-EDR, UI `severityLabel`) is 1=CRITICAL. | Producers normalized; one-shot `PRAGMA user_version` value migration for deployed DBs; `correlate_incident` uses the worst (min) severity, with score `(6-min)/5`. Tests updated and added. |
 | S0-2 | **False-red QEMU gate under load.** | Fixed 45 s budget. The heal report blamed P1 when the real cause was a timeout. | `HEQK_QEMU_TIMEOUT` (default 150 s; passes exit early). The timeout is now named as a timeout, with the host load. |
 
-## Stage 2: evidence plane (device → operator). Next; QEMU/host-testable
+## Stage 2: evidence plane (device → operator). DONE (QEMU/host-proven; live run = metal day)
 
-The chain breaks at its first hop on CM5: a heqk detection never leaves the device.
+| # | Item | Root cause | Fix + proof |
+|---|---|---|---|
+| S2-1 | Verdict class lost | `rules::fire` pushed only `to_wire()` (PASS/DROP) | `Event.class` (`verdict::CLASS_*`); `verdict` keeps its 1/2 meaning. `[P8-soar]` asserts that the class agrees with the wire action |
+| S2-2 | One lost UDP datagram desynced every later frame | Implicit Noise counter (`decrypt_into`) over UDP | `CipherState::seal_record` / `AntiReplayRx::open_record` (explicit seq + the existing RFC 6479 window); domain-separated AD `HQX2-export` |
+| S2-3 | Exports uninterpretable off-device | v1 frame: raw `cntpct`, no sequence, no class, no loss counters | `exportwire.rs` v2 (pure codec, linked verbatim by the receiver): boots/cntfrq/now_ticks anchor, contiguous per-boot event seq, overruns/lost, class |
+| S2-4 | Export never called in prod | Self-test-only API; enrollment never set; no profile had both halves | `Exporter` (bounded queue, seq at push, honest `lost`) + `prod-export` profile: enrolls on Established, sends unicast to the responder learned from msg2. `[P-m6-export]` proves loss/reorder/replay/tamper/overflow/rogue/identity |
+| S2-5 | Real detections never persisted in prod-full | The SOAR ring was never drained; `on_threat` recorded zero-filled events; snapshot cursor wrong after a wrap | Single ring drain feeds sepdiag + snapshot + exporter. `snapshot.rs` v2 persists head/evicted/overruns (v1 still parses). New `[P-snapshot]` gate |
+| S2-6 | Device identity forgeable | Ed25519 key = `sha256(board serial)` (the serial is printed on the console; `sha256(0)` with no handoff) | `HKDF(SRK, "HEQK-DEVICE-IDENTITY-ed25519-v1")` (device-bound, survives OTA); no SRK ⇒ control plane refused. The device prints its pk; the sim takes `--dev-pk` |
+| S2-7 | No off-device consumer | — | `responder-sim --live` demuxes `HQXR` datagrams → `export_rx` (shared `Tracker`) → JSONL. 3 tests over a real PQ handshake |
+| S2-8 | Tenant in three disagreeing places | msg2 payload discarded | msg2 payload = tenant (LE u64), MSSP-authenticated; used for both the reach policy and the export. `[P19-controlplane]` asserts it |
+| S2-9 | Exports invisible in the evidence graph | No ingest | `hookprobe-evidence --heqk-export`: rule band 1_200_000, canonical severity, `heqk_detection_meta` provenance, `heqk_sensor_loss`, pruning. Cross-crate e2e: sim JSONL → CLI → graph |
+| S2-10 | `build_hs_datagram` could panic the kernel | Unchecked slice | Returns 0 (TX failure) instead of panicking |
 
-1. Drain the SOAR ring in the prod heartbeat. The ring is never drained in `prod`/`prod-full`, overruns climb, and `on_threat` persists zero-filled `rule_id/src/severity`.
-2. Export v2 frame: `boots`, `cntfrq`, per-boot seq, verdict class (tri-state lost today), `overruns`. `ts` is raw `cntpct` today.
-3. Transport: explicit per-record nonce counter + replay window (one lost UDP datagram currently breaks every later frame); re-handshake on decrypt failure.
-4. One combined profile carrying both ControlPlane and ProdFull. No image has both today, and `pf.enroll` is never set.
-5. An off-device receiver (std binary linking `securechannel.rs`/`export.rs` like `responder-sim`) → JSONL with `device_fp`/`tenant` → evidence ingest (+ columns). Nothing consumes HQX1 today.
-6. Tenant from msg2, kept in one place (three disagreeing tenant constants today).
-7. **Security:** the device identity key is seeded from `sha256(board serial)`, and the serial is printed on the console. Derive it from the OTP/SRK path (SEC-2), and pin the public key at enrollment.
-8. Snapshot ring honesty: persist an `evicted` count, the true head, and an export cursor (replay after reconnect).
+**Metal day (peer session):** flash `--features prod-export[,segmetal]`, run `responder-sim --live --dev-pk <pk from serial> --evidence-out f.jsonl`, then `hookprobe-evidence --db … --heqk-export f.jsonl`. Expected console output: `[M6-EXPORT] ENROLLED`, `[M6-EXPORT hb]`, and on the sim, `M6 export frame #…`.
+
+**Residual (not done):** export is broadcast-free but not yet rekeyed (the counter-exhaustion refusal is in place); the 64-slot SOAR ring is drained once per heartbeat, so a burst between heartbeats counts as `overruns` (honest, but lossy); OTA pull over the channel is still a loopback self-test; in air-gap mode the CM5 has no local operator view (only the sealed snapshot).
 
 ## Stage 3: Linux tier wiring. Host-testable; unblocks the UX
 
