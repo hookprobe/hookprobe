@@ -90,6 +90,10 @@ mod controlplane;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
+#[cfg(feature = "securechannel")]
+mod exportwire;
+#[cfg(feature = "securechannel")]
+mod snapshot;
 // prod-full — the missing METAL caller for M3/M4/M6. On the cm5 profile those
 // subsystems are only reachable from the QEMU self-test sequence that `prod`
 // replaces, so without this module they are dead-stripped out of the image
@@ -1560,12 +1564,23 @@ fn cm5_prod_service() -> ! {
         let mut xpk = [0u8; 32];
         xpk.copy_from_slice(&blob[..32]);
         match securechannel::ResponderPub::from_provisioned(xpk, &blob[32..]) {
-            Some(rp) => {
-                let seed = boot_abi::sha256::digest(&beacon_device_id.to_le_bytes());
-                let dev_kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
-                kprint!(" [NETCP] control-plane initiator UP — provisioned MSSP key loaded; handshake will start at link-up\n");
-                Some(controlplane::ControlPlane::new(rp, dev_kp, [0x02, 0, 0, 0, 0, 0x02], [10, 200, 0, 2]))
-            }
+            Some(rp) => match device_identity_keypair() {
+                Some(dev_kp) => {
+                    let fp = boot_abi::sha256::digest(&dev_kp.pk[..]);
+                    kprint!(" [NETCP] control-plane initiator UP — provisioned MSSP key loaded; handshake will start at link-up\n");
+                    kprint!(" [NETCP] device identity (SRK-derived) pk=");
+                    for b in dev_kp.pk.iter() {
+                        kprint!("{:02x}", b);
+                    }
+                    kprint!(" fp[0..8]={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} — register this pk with the MSSP to enroll\n",
+                        fp[0], fp[1], fp[2], fp[3], fp[4], fp[5], fp[6], fp[7]);
+                    Some(controlplane::ControlPlane::new(rp, dev_kp, [0x02, 0, 0, 0, 0, 0x02], [10, 200, 0, 2]))
+                }
+                None => {
+                    kprint!(" [NETCP] DISABLED — no hboot SRK (no device secret): refusing a guessable device identity; sensor unaffected\n");
+                    None
+                }
+            },
             None => {
                 kprint!(" [NETCP] DISABLED — provisioned MSSP blob invalid\n");
                 None
@@ -1577,6 +1592,13 @@ fn cm5_prod_service() -> ! {
         &mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new()),
     )
     .ok();
+    // M6 B2 evidence export (`prod-export` = prod-full + netmetal): created when the control
+    // plane is Established with an MSSP-assigned tenant; until then the device is air-gapped
+    // (should_export=false) and evidence only persists locally.
+    #[cfg(all(feature = "prod-full", feature = "netmetal"))]
+    let mut exporter: Option<export::Exporter> = None;
+    #[cfg(all(feature = "prod-full", feature = "netmetal"))]
+    let mut export_idle_hb: u32 = 0;
     // ── RP1 GEM large-frame TX size/alignment sweep (feature `txsweep`) ──────────────────
     // The host-RAM discriminator for the >90 B TX blocker (os-architect + external SoC expert,
     // 2026-09-09). Emits UDP broadcasts of stepped LENGTH and stepped DMA-buffer ALIGNMENT
@@ -1675,8 +1697,8 @@ fn cm5_prod_service() -> ! {
     #[cfg(feature = "segmetal")]
     let mut seg_emmc = arch_aarch64::emmc::Emmc::probe();
     #[cfg(feature = "segmetal")]
-    let seg_enr = enroll::Enrollment {
-        tenant_id: 0x5445_4E41, // "TENA" — MUST equal the policy tenant the operator signs
+    let mut seg_enr = enroll::Enrollment {
+        tenant_id: 0, // set from the MSSP-authenticated msg2 payload before the REQ (ControlPlane::tenant)
         responder_x_pk: [0u8; 32], // not consulted by apply_reach_policy
         device_fp: cp.as_ref().map(|c| c.device_fp()).unwrap_or([0u8; 32]),
         generation: 0,
@@ -1809,7 +1831,10 @@ fn cm5_prod_service() -> ! {
                 // The host responder-sim answers with the operator-signed policy (captured in the
                 // drain below). One-shot so the AEAD counters stay aligned.
                 #[cfg(feature = "segmetal")]
-                if c.established() && seg_phase == 0 {
+                if c.established() && seg_phase == 0 && c.tenant().is_some() {
+                    // The policy's tenant binding (C14) is the one the MSSP assigned in msg2 —
+                    // never a device-side constant. No tenant ⇒ no REQ ⇒ stays disarmed.
+                    seg_enr.tenant_id = c.tenant().unwrap_or(0);
                     if let Some(sess) = c.session_mut() {
                         let mut req = [0u8; 64];
                         if let Some(rn) = enroll::encrypt_reach_req(sess, &mut req) {
@@ -1832,20 +1857,90 @@ fn cm5_prod_service() -> ! {
                         seg_phase, seg_fslog_err, seg_recon, crate::segment::reach_armed(),
                         packet::seg_reach_drops());
                 }
+                // M6 B2 EXPORT. Enroll on the first Established heartbeat with an MSSP tenant;
+                // then seal queued evidence as HQXR datagram records (explicit seq + receiver
+                // RFC 6479 window, so a lost datagram never desyncs) and send them UNICAST to the
+                // responder learned from msg2. On segmetal images the implicit-counter reach REQ
+                // must go first (it shares the send counter), so export waits for seg_phase >= 1.
+                #[cfg(all(feature = "prod-full", feature = "netmetal"))]
+                {
+                    #[cfg(feature = "segmetal")]
+                    let req_done = seg_phase >= 1;
+                    #[cfg(not(feature = "segmetal"))]
+                    let req_done = true;
+                    if exporter.is_none() && c.established() && req_done {
+                        if let Some(t) = c.tenant() {
+                            pf.enroll = enroll::EnrollStatus::Enrolled(enroll::Enrollment {
+                                tenant_id: t,
+                                responder_x_pk: c.resp_x_pk(),
+                                device_fp: c.device_fp(),
+                                generation: 1,
+                            });
+                            exporter = Some(export::Exporter::new(t, c.device_fp(), pf.snap.boots as u32, cntfrq as u32));
+                            kprint!("   [M6-EXPORT] ENROLLED tenant={:#x} — evidence export ON (unicast to the MSSP)\n", t);
+                        }
+                    }
+                    if export::should_export(&pf.enroll) {
+                        let ((smac, sip), (dmac, dip)) = (c.local(), c.peer());
+                        if let (Some(x), Some(sess)) = (exporter.as_mut(), c.session_mut()) {
+                            export_idle_hb += 1;
+                            // Bounded per heartbeat; an idle link still sends a liveness frame
+                            // (counters + QSecBit) every 10 heartbeats.
+                            let mut budget = if x.pending() > 0 || export_idle_hb >= 10 { 4 } else { 0 };
+                            let mut sent = (0u32, 0usize);
+                            while budget > 0 {
+                                budget -= 1;
+                                let mut payload = [0u8; 4 + export::MAX_RECORD];
+                                payload[..4].copy_from_slice(&exportwire::DGRAM_TAG[..]);
+                                match x.seal_next(&mut sess.send, now, (telemetry::score(), now), events::overruns(), &mut payload[4..]) {
+                                    Ok((rl, nev)) => {
+                                        let mut dg = [0u8; 64 + 4 + export::MAX_RECORD];
+                                        let dn = netsvc::build_hs_datagram(smac, sip, dmac, dip, controlplane::HS_PORT, &payload[..4 + rl], &mut dg);
+                                        if dn > 0 && arch_aarch64::gem::tx_frame(&dg[..dn]).is_some() {
+                                            sent = (sent.0 + 1, sent.1 + nev);
+                                        } else {
+                                            x.tx_failed(nev);
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                                if x.pending() == 0 {
+                                    break;
+                                }
+                            }
+                            if sent.0 > 0 {
+                                export_idle_hb = 0;
+                                kprint!("   [M6-EXPORT hb] frames_out={} events_out={} pending={} lost={} total_frames={}\n",
+                                    sent.0, sent.1, x.pending(), x.lost, x.frames);
+                            }
+                        }
+                    }
+                }
             }
             // SG-1 (M2 Gate-R metal observability): drain the per-rule event ring so each
             // separation-matrix row's verdict is ATTRIBUTABLE on metal (rule_id -> row,
             // verdict 1=PASS/2=DROP -> wire action). prod exposes only aggregate counters;
             // this is the diagnostic that lets a metal run say WHICH row fired WHAT.
-            #[cfg(feature = "sepdiag")]
+            //
+            // ONE drain point for the SOAR ring: each real detection (true rule_id / src /
+            // severity / class) feeds the sepdiag console, the M3 snapshot (prod-full) and the
+            // M6 exporter (prod-export). A second drainer would silently steal events.
+            #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
             {
-                let mut evs = [crate::events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 32];
+                let mut evs = [crate::events::Event::EMPTY; 32];
                 loop {
                     let n = crate::events::drain(&mut evs);
                     if n == 0 { break; }
                     for e in &evs[..n] {
-                        kprint!("   [SEPDIAG] rule={} verdict={} src={:#010x} sev={}\n",
-                            e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity);
+                        #[cfg(feature = "sepdiag")]
+                        kprint!("   [SEPDIAG] rule={} verdict={} src={:#010x} sev={} class={}\n",
+                            e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity, e.class);
+                        #[cfg(feature = "prod-full")]
+                        pf.on_threat(e);
+                        #[cfg(all(feature = "prod-full", feature = "netmetal"))]
+                        if let Some(x) = exporter.as_mut() {
+                            x.push(e);
+                        }
                     }
                     if n < evs.len() { break; }
                 }
@@ -2141,17 +2236,9 @@ fn cm5_prod_service() -> ! {
                         { let t = prod_cntpct(); prof.tx += t.wrapping_sub(mark); mark = t; }
                     } else {
                         dropped += 1;
-                        #[cfg(feature = "prod-full")]
-                        {
-                            let ev = events::Event {
-                                ts: now,
-                                src: 0,
-                                rule_id: 0,
-                                severity: 0,
-                                verdict: packet::DROP as u8,
-                            };
-                            pf.on_threat(&ev);
-                        }
+                        // (prod-full records the REAL event — rule/src/severity/class — from the
+                        // SOAR ring drain in the heartbeat; a zero-filled per-drop record here
+                        // used to erase all attribution.)
                     }
                 }
                 _ => {
@@ -3427,6 +3514,22 @@ fn cm5_p15_block_seal() {
 fn read_seal_handoff() -> Option<&'static boot_abi::SealHandoff> {
     let sh = unsafe { &*(boot_abi::SEAL_HANDOFF_ADDR as *const boot_abi::SealHandoff) };
     (sh.magic == boot_abi::SEAL_HANDOFF_MAGIC).then_some(sh)
+}
+
+/// The device's Ed25519 IDENTITY (the Noise static that authenticates it to the MSSP and binds
+/// every export frame's `device_fp`), derived from the OTP-rooted SRK under its own HKDF label.
+/// The SRK is device-bound but NOT measurement-bound (hboot: `derive32("HEQK-SEAL-SRK-v1",
+/// OTP secret)`), so the identity survives OTA updates. `None` without an SRK — the caller must
+/// then refuse to run the control plane.
+///
+/// (Was `KeyPair::from_seed(sha256(device_id))`: `device_id` is the board serial hboot prints on
+/// the console, so anyone could re-derive the private key, impersonate the device and forge its
+/// evidence. With no handoff it was `sha256(0)` — one shared key for every device.)
+#[cfg(all(feature = "hboot", feature = "securechannel"))]
+fn device_identity_keypair() -> Option<ed25519_compact::KeyPair> {
+    let srk = seal_srk()?;
+    let seed = boot_abi::kdf::hkdf_expand32(&srk, b"HEQK-DEVICE-IDENTITY-ed25519-v1");
+    Some(ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed)))
 }
 
 /// PH2a (AUDIT R1): consume the SRK from the fixed handoff page EXACTLY ONCE — copy it into
@@ -4736,6 +4839,8 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "securechannel-selftest")]
     {
         export::m6_export_selftest();
+        // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
+        let _ = snapshot::snapshot_selftest();
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
@@ -5730,7 +5835,7 @@ fn p8_soar() -> bool {
     // otherwise the "all exported events are DROP" check would see leftover PASS
     // events. (Order-independent test hygiene; the metal exporter drains continuously.)
     {
-        let mut junk = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        let mut junk = [events::Event::EMPTY; 16];
         while events::drain(&mut junk) > 0 {}
     }
     // Trigger two fresh threat drops (each pushes an event header in the TCB).
@@ -5739,14 +5844,17 @@ fn p8_soar() -> bool {
         let _ = rules::run_l4(&l4, 0);
     }
     // The exporter drains the ring (zero-copy read of the headers, never payload).
-    let mut batch = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+    let mut batch = [events::Event::EMPTY; 16];
     let n = events::drain(&mut batch);
     for ev in &batch[..n] {
-        kprint!("   event: rule {} sev {} verdict {} @ts {}\n",
-            ev.rule_id, ev.severity, if ev.verdict == packet::DROP as u8 { "DROP" } else { "PASS" }, ev.ts);
+        kprint!("   event: rule {} sev {} verdict {} class {} @ts {}\n",
+            ev.rule_id, ev.severity, if ev.verdict == packet::DROP as u8 { "DROP" } else { "PASS" }, ev.class, ev.ts);
     }
-    // At least the two fresh drops must have been exported; ring never blocked.
-    let ok = n >= 2 && batch[..n].iter().all(|e| e.verdict == packet::DROP as u8);
+    // At least the two fresh drops must have been exported; ring never blocked. Each carries
+    // its tri-state class, and the class must AGREE with the wire action (a DROP is FrameDrop /
+    // over-limit RateLimit / Quarantine — never Observe/Allowlisted/unknown).
+    let drop_class = |c: u8| matches!(c, verdict::CLASS_FRAMEDROP | verdict::CLASS_RATELIMIT_OVER | verdict::CLASS_QUARANTINE);
+    let ok = n >= 2 && batch[..n].iter().all(|e| e.verdict == packet::DROP as u8 && drop_class(e.class));
     kprint!(" [P8-soar] {} — {} threat events exported async ({} overruns, wire never stalled)\n",
         if ok { "PASS" } else { "FAIL" }, n, events::overruns());
     ok
@@ -6452,7 +6560,7 @@ fn p8_raflood() -> bool {
     // the stale backlog first — the same precedent p8_soar sets — so every push here
     // is real; report the overrun delta so a hidden overrun can't fake a pass.
     {
-        let mut junk = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        let mut junk = [events::Event::EMPTY; 16];
         while events::drain(&mut junk) > 0 {}
     }
     let overruns_before = events::overruns();
@@ -7470,6 +7578,7 @@ fn p15_fs_selftest() {
                     rule_id: EV_RULE,
                     severity: EV_SEV,
                     verdict: EV_VERDICT,
+                    class: verdict::CLASS_UNKNOWN,
                 };
                 let mut evb = [0u8; 16];
                 evb[0..8].copy_from_slice(&ev.ts.to_le_bytes());

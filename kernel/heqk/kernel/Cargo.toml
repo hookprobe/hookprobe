@@ -140,6 +140,10 @@ prod = ["hboot"]
 #
 #   cargo build -p kernel --features prod-full --release
 prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
+# M6 B2 evidence export on metal: prod-full (sealed snapshot + real SOAR events) + netmetal (GEM
+# bridge + the Noise control plane). Enrolls on the handshake (tenant from msg2), then streams
+# HQXR datagram records unicast to the MSSP (kernel/responder-sim --live receives them).
+prod-export = ["prod-full", "netmetal"]
 # rollback-test — M1 CRITERION 4 ONLY. Arms the firmware's one-shot tryboot flag and
 # resets, so the NEXT boot loads tryboot.txt (SLOT B) instead of config.txt (SLOT A).
 #

@@ -39,45 +39,27 @@
 
 use crate::enroll::EnrollStatus;
 use crate::events;
-use crate::securechannel::{NoiseErr, Session};
+use crate::exportwire;
+use crate::securechannel::{AntiReplayRx, CipherState, NoiseErr};
 
-/// Frame magic b"HQX1" (LE) — an evidence-export frame. A foreign/garbage record
-/// is never misread as an export.
-pub const EXPORT_MAGIC: u32 = 0x3158_5148;
-/// Export wire-format version.
-pub const EXPORT_VERSION: u16 = 1;
-
-/// Serialized image of one evidence record — identical to the M3 `RT_EVIDENCE`
-/// on-disk image (`fslog`/`p15_fs_selftest`): ts(8) src(4) rule_id(2) sev(1)
-/// verdict(1). Keeping the export image == the persisted image means an exported
-/// record is byte-for-byte the persisted evidence node (no re-encoding drift).
+/// Serialized image of one PERSISTED evidence record — identical to the M3 `RT_EVIDENCE`
+/// on-disk image (`fslog`/`prodfull` snapshot): ts(8) src(4) rule_id(2) sev(1) verdict(1).
+/// The export WIRE record is `exportwire::Rec` (20 B, adds the tri-state class); this 16-byte
+/// image stays the on-disk format so persisted evidence needs no migration.
 pub const EV_IMAGE_LEN: usize = 16;
 
-/// Largest evidence batch one frame carries. Bounded (no heap) — the exporter
-/// drains the ring in fixed-size batches; more records ⇒ more frames.
-pub const MAX_EVENTS: usize = 16;
-
-/// Frame header length (bytes before the events array).
-///   0  magic u32 · 4 version u16 · 6 reserved u16 · 8 tenant_id u64
-///   16 device_fp[32] · 48 qsecbit_score u32 · 52 qsecbit_ts u64 · 60 n_events u16
-pub const FRAME_HDR: usize = 62;
-/// Largest serialized frame (header + full batch).
-pub const MAX_FRAME: usize = FRAME_HDR + MAX_EVENTS * EV_IMAGE_LEN; // 318
+pub use crate::exportwire::{MAX_EVENTS, MAX_FRAME};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportErr {
-    /// The batch is larger than one frame can hold.
-    TooManyEvents,
-    /// The output buffer is too small for the (cipher)text.
+    /// The output buffer is too small for the sealed record.
     ShortBuffer,
-    /// The M4 channel refused the record (AEAD auth / truncation) — a rogue or
+    /// The channel refused the record (AEAD auth / truncation / replay window) — a rogue or
     /// unenrolled consumer that lacks the enrolled transport key lands here.
     ChannelReject,
     /// The decrypted bytes are not a valid export frame (magic/version/length).
     Malformed,
-    /// The frame's device fingerprint or tenant id did not match what the MC
-    /// enrolled — the export is authenticated to the device identity, so a
-    /// mismatched-origin frame is rejected fail-closed.
+    /// The frame's device fingerprint or tenant id did not match what the MC enrolled.
     IdentityMismatch,
 }
 
@@ -97,7 +79,7 @@ pub fn should_export(status: &EnrollStatus) -> bool {
     matches!(status, EnrollStatus::Enrolled(_))
 }
 
-/// Serialize one evidence `Event` into its 16-byte export/persist image.
+/// Serialize one evidence `Event` into its 16-byte persist image.
 #[inline]
 pub fn ev_to_image(ev: &events::Event) -> [u8; EV_IMAGE_LEN] {
     let mut b = [0u8; EV_IMAGE_LEN];
@@ -109,7 +91,7 @@ pub fn ev_to_image(ev: &events::Event) -> [u8; EV_IMAGE_LEN] {
     b
 }
 
-/// Parse a 16-byte evidence image back into an `Event` (used by the MC consumer).
+/// Parse a 16-byte persist image back into an `Event` (the image carries no class).
 #[inline]
 pub fn image_to_ev(b: &[u8]) -> Option<events::Event> {
     if b.len() < EV_IMAGE_LEN {
@@ -121,139 +103,136 @@ pub fn image_to_ev(b: &[u8]) -> Option<events::Event> {
         rule_id: u16::from_le_bytes(b[12..14].try_into().ok()?),
         severity: b[14],
         verdict: b[15],
+        class: crate::verdict::CLASS_UNKNOWN, // the 16-byte persisted image carries no class
     })
 }
 
-/// A batch the device exports: the enrolled tenant/device identity, the current
-/// QSecBit score + its timestamp, and up to `MAX_EVENTS` evidence records. All
-/// borrowed / `Copy` — no heap.
-pub struct ExportBatch<'a> {
-    pub tenant_id: u64,
-    pub device_fp: &'a [u8; 32],
-    pub qsecbit_score: u32,
-    pub qsecbit_ts: u64,
-    pub events: &'a [events::Event],
+/// Bounded export queue depth (events drained from the SOAR ring, awaiting a frame).
+pub const EXPORT_QUEUE: usize = 64;
+
+/// The DEVICE-side exporter (M6 B2). The prod loop drains the SOAR ring ONCE per heartbeat and
+/// `push`es each event here (and into the M3 snapshot); `seal_next` then emits sealed
+/// datagram records, one frame (≤ `MAX_EVENTS`) each, over the enrolled session.
+///
+/// Every pushed event gets a contiguous per-boot sequence number at push time, so loss is
+/// never silent: a full queue drops the event but its sequence number is still consumed (the
+/// receiver's `Tracker` sees the gap) and `lost` counts it in the next frame header. Frames
+/// are sealed with `seal_record` (explicit seq + the RFC 6479 window on the receiver), so a
+/// lost or reordered datagram never desyncs the frames after it. Fixed buffers, no heap.
+pub struct Exporter {
+    hdr: exportwire::Header,
+    q: [(u64, exportwire::Rec); EXPORT_QUEUE],
+    qhead: usize,
+    qlen: usize,
+    next_ev_seq: u64,
+    /// Events this exporter dropped (queue full, or a frame that could not be sealed/sent).
+    pub lost: u32,
+    /// Frames sealed so far this boot.
+    pub frames: u64,
 }
 
-/// Serialize `batch` into `out`, returning the frame length. Fails closed if the
-/// batch overflows a frame or `out` is too small.
-pub fn serialize_frame(batch: &ExportBatch, out: &mut [u8]) -> Result<usize, ExportErr> {
-    if batch.events.len() > MAX_EVENTS {
-        return Err(ExportErr::TooManyEvents);
+impl Exporter {
+    pub fn new(tenant_id: u64, device_fp: [u8; 32], boots: u32, cntfrq: u32) -> Self {
+        Exporter {
+            hdr: exportwire::Header { tenant_id, device_fp, boots, cntfrq, ..Default::default() },
+            q: [(0, exportwire::Rec::default()); EXPORT_QUEUE],
+            qhead: 0,
+            qlen: 0,
+            next_ev_seq: 0,
+            lost: 0,
+            frames: 0,
+        }
     }
-    let n = batch.events.len();
-    let total = FRAME_HDR + n * EV_IMAGE_LEN;
-    if out.len() < total {
-        return Err(ExportErr::ShortBuffer);
+
+    /// Events queued for export.
+    pub fn pending(&self) -> usize {
+        self.qlen
     }
-    out[0..4].copy_from_slice(&EXPORT_MAGIC.to_le_bytes());
-    out[4..6].copy_from_slice(&EXPORT_VERSION.to_le_bytes());
-    out[6..8].copy_from_slice(&0u16.to_le_bytes()); // reserved
-    out[8..16].copy_from_slice(&batch.tenant_id.to_le_bytes());
-    out[16..48].copy_from_slice(batch.device_fp);
-    out[48..52].copy_from_slice(&batch.qsecbit_score.to_le_bytes());
-    out[52..60].copy_from_slice(&batch.qsecbit_ts.to_le_bytes());
-    out[60..62].copy_from_slice(&(n as u16).to_le_bytes());
-    for (i, ev) in batch.events.iter().enumerate() {
-        let off = FRAME_HDR + i * EV_IMAGE_LEN;
-        out[off..off + EV_IMAGE_LEN].copy_from_slice(&ev_to_image(ev));
+
+    /// Queue one drained SOAR event. Non-blocking: a full queue drops the event (counted;
+    /// its sequence number is still consumed so the receiver sees the gap).
+    pub fn push(&mut self, ev: &events::Event) {
+        let seq = self.next_ev_seq;
+        self.next_ev_seq = self.next_ev_seq.wrapping_add(1);
+        if self.qlen == EXPORT_QUEUE {
+            self.lost = self.lost.saturating_add(1);
+            return;
+        }
+        let rec = exportwire::Rec {
+            ts: ev.ts,
+            src: ev.src,
+            rule_id: ev.rule_id,
+            severity: ev.severity,
+            verdict: ev.verdict,
+            class: ev.class,
+        };
+        self.q[(self.qhead + self.qlen) % EXPORT_QUEUE] = (seq, rec);
+        self.qlen += 1;
     }
-    Ok(total)
+
+    /// Seal the next frame into `out` (a datagram record: `LE64(seq) ‖ frame ‖ tag`). Takes up
+    /// to `MAX_EVENTS` queued events with CONTIGUOUS sequence numbers (a frame never spans a
+    /// gap, so `first_ev_seq + i` is exact). A heartbeat frame with zero events still carries
+    /// the counters/QSecBit. Returns `(record_len, events_in_frame)`.
+    pub fn seal_next(
+        &mut self,
+        send: &mut CipherState,
+        now_ticks: u64,
+        qsecbit: (u32, u64),
+        overruns: u32,
+        out: &mut [u8],
+    ) -> Result<(usize, usize), ExportErr> {
+        let mut recs = [exportwire::Rec::default(); MAX_EVENTS];
+        let mut n = 0usize;
+        let first_seq = if self.qlen > 0 { self.q[self.qhead].0 } else { self.next_ev_seq };
+        while n < MAX_EVENTS && n < self.qlen {
+            let (seq, r) = self.q[(self.qhead + n) % EXPORT_QUEUE];
+            if seq != first_seq.wrapping_add(n as u64) {
+                break; // a dropped event sits here — end the frame at the gap
+            }
+            recs[n] = r;
+            n += 1;
+        }
+        let mut h = self.hdr;
+        h.frame_seq = self.frames;
+        h.first_ev_seq = first_seq;
+        h.now_ticks = now_ticks;
+        h.qsecbit_score = qsecbit.0;
+        h.qsecbit_ts = qsecbit.1;
+        h.overruns = overruns;
+        h.lost = self.lost;
+        let mut frame = [0u8; MAX_FRAME];
+        let flen = exportwire::serialize(&h, &recs[..n], &mut frame).map_err(|_| ExportErr::ShortBuffer)?;
+        let rlen = send.seal_record(exportwire::AD, &frame[..flen], out).ok_or(ExportErr::ShortBuffer)?;
+        self.qhead = (self.qhead + n) % EXPORT_QUEUE;
+        self.qlen -= n;
+        self.frames += 1;
+        Ok((rlen, n))
+    }
+
+    /// The caller could not put a sealed record on the wire: its events are gone. Count them.
+    pub fn tx_failed(&mut self, events_in_frame: usize) {
+        self.lost = self.lost.saturating_add(events_in_frame as u32);
+    }
 }
 
-/// The MC-side parsed view of an export frame (fixed buffers, no heap).
-#[derive(Clone, Copy)]
-pub struct ReceivedExport {
-    pub tenant_id: u64,
-    pub device_fp: [u8; 32],
-    pub qsecbit_score: u32,
-    pub qsecbit_ts: u64,
-    pub n_events: usize,
-    pub events: [events::Event; MAX_EVENTS],
-}
+/// Largest sealed export record (seq prefix + frame + AEAD tag).
+pub const MAX_RECORD: usize = crate::securechannel::RECORD_SEQ_LEN + MAX_FRAME + 16;
 
-/// Parse a decrypted export frame. Validates magic/version/declared-count/length
-/// fail-closed. Does NOT check identity (that is the caller's policy, see
-/// `mc_receive_export`).
-pub fn parse_frame(buf: &[u8]) -> Result<ReceivedExport, ExportErr> {
-    if buf.len() < FRAME_HDR {
-        return Err(ExportErr::Malformed);
-    }
-    let magic = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-    let version = u16::from_le_bytes(buf[4..6].try_into().unwrap());
-    if magic != EXPORT_MAGIC || version != EXPORT_VERSION {
-        return Err(ExportErr::Malformed);
-    }
-    let n = u16::from_le_bytes(buf[60..62].try_into().unwrap()) as usize;
-    if n > MAX_EVENTS {
-        return Err(ExportErr::Malformed);
-    }
-    let total = FRAME_HDR + n * EV_IMAGE_LEN;
-    if buf.len() < total {
-        return Err(ExportErr::Malformed); // truncated / lied-about count
-    }
-    let mut device_fp = [0u8; 32];
-    device_fp.copy_from_slice(&buf[16..48]);
-    let empty = events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 };
-    let mut ev = [empty; MAX_EVENTS];
-    for (i, slot) in ev.iter_mut().enumerate().take(n) {
-        let off = FRAME_HDR + i * EV_IMAGE_LEN;
-        *slot = image_to_ev(&buf[off..off + EV_IMAGE_LEN]).ok_or(ExportErr::Malformed)?;
-    }
-    Ok(ReceivedExport {
-        tenant_id: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
-        device_fp,
-        qsecbit_score: u32::from_le_bytes(buf[48..52].try_into().unwrap()),
-        qsecbit_ts: u64::from_le_bytes(buf[52..60].try_into().unwrap()),
-        n_events: n,
-        events: ev,
-    })
-}
-
-/// DEVICE side: serialize `batch` and SEAL it into `ct_out` with the enrolled
-/// session's `send` AEAD cipher. Returns the ciphertext length. This is what
-/// rides the M4 channel — the exact `encrypt_into` discipline `enroll.rs` uses
-/// for its fetch request (counter-advanced, tamper/replay-detecting AEAD).
-pub fn device_encrypt_export(
-    dev: &mut Session,
-    batch: &ExportBatch,
-    ct_out: &mut [u8],
-) -> Result<usize, ExportErr> {
-    let mut frame = [0u8; MAX_FRAME];
-    let flen = serialize_frame(batch, &mut frame)?;
-    // AEAD ciphertext = plaintext + 16-byte tag.
-    if ct_out.len() < flen + 16 {
-        return Err(ExportErr::ShortBuffer);
-    }
-    let n = dev
-        .send
-        .encrypt_into(b"", &frame[..flen], ct_out)
-        .ok_or(ExportErr::ShortBuffer)?;
-    Ok(n)
-}
-
-/// OFF-DEVICE MC (fake) consumer: DECRYPT `ct` with the enrolled session's `recv`
-/// cipher, parse the frame, and AUTHENTICATE its origin against the enrolled
-/// `(tenant, device_fp)`. Fail-closed at every step:
-///   * a party without the enrolled transport key (rogue/unenrolled) fails the
-///     AEAD ⇒ `ChannelReject` (never sees plaintext);
-///   * a frame whose device fingerprint / tenant does not match what the MC
-///     enrolled ⇒ `IdentityMismatch`.
-/// On success returns the received evidence — the MC is a CONSUMER only; it does
-/// not (and cannot) originate evidence, the device is the source of truth.
-pub fn mc_receive_export(
-    mc: &mut Session,
-    ct: &[u8],
-    expect_tenant: u64,
-    expect_fp: &[u8; 32],
-) -> Result<ReceivedExport, ExportErr> {
+/// OFF-DEVICE consumer step (the in-QEMU fake MC; the host receiver does the same with the same
+/// two shared files): open one record through the anti-replay window, then authenticate +
+/// account it with the shared `Tracker`.
+pub fn mc_open(
+    rx: &mut AntiReplayRx,
+    tracker: &mut exportwire::Tracker,
+    rec: &[u8],
+) -> Result<exportwire::Frame, ExportErr> {
     let mut pt = [0u8; MAX_FRAME];
-    let n = mc.recv.decrypt_into(b"", ct, &mut pt)?; // ChannelReject on AEAD failure
-    let rx = parse_frame(&pt[..n])?;
-    if rx.tenant_id != expect_tenant || &rx.device_fp != expect_fp {
-        return Err(ExportErr::IdentityMismatch);
-    }
-    Ok(rx)
+    let n = rx.open_record(exportwire::AD, rec, &mut pt)?;
+    tracker.accept(&pt[..n]).map_err(|e| match e {
+        exportwire::TrackErr::Malformed => ExportErr::Malformed,
+        exportwire::TrackErr::IdentityMismatch => ExportErr::IdentityMismatch,
+    })
 }
 
 // ===========================================================================
@@ -298,7 +277,7 @@ mod selftest {
     /// Drain and return the fresh events (the detection verdicts to export).
     fn produce_m2_verdicts(out: &mut [events::Event]) -> usize {
         // Drain-and-discard so we assert only on our OWN fresh verdicts.
-        let mut junk = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        let mut junk = [events::Event::EMPTY; 16];
         while events::drain(&mut junk) > 0 {}
         // Two fresh threat drops (block-port-4444 + block-port-23), each a real
         // signed-rule verdict that emits a SOAR event.
@@ -309,93 +288,139 @@ mod selftest {
         events::drain(out)
     }
 
-    /// (c) enrolled-only + (a-lite in-RAM) export round-trip. Runs in EVERY
-    /// securechannel-selftest build (no disk needed). Returns (a_ram, c).
+    /// (c) enrolled-only + (a-lite in-RAM) export round-trip + the v2 transport properties.
+    /// Runs in EVERY securechannel-selftest build (no disk needed). Returns (a_ram, c).
     fn channel_and_rogue_checks() -> (bool, bool) {
+        use crate::exportwire::Tracker;
         let tv = test_vectors();
         let device_fp = sha256::digest(&tv.dev.pk[..]);
         const TEN: u64 = 0x00C0_FFEE_0000_0006; // the enrolled tenant id
+        const FRQ: u32 = 62_500_000;
 
         // --- M2: real verdicts from the SOAR ring ---
-        let mut evbuf = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+        let mut evbuf = [events::Event::EMPTY; 16];
         let nev = produce_m2_verdicts(&mut evbuf);
         let qs = crate::telemetry::score();
 
         // --- M4: the ENROLLED channel (device <-> fake MC) ---
         let irand = init_rand(b"HEQK-M6-export-init");
         let rrand = resp_rand(b"HEQK-M6-export-resp");
-        let (enr, mut dev, mut mc) = match enroll_over_noise(&tv.dev, &tv.resp, &irand, &rrand, TEN) {
+        let (enr, mut dev, mc) = match enroll_over_noise(&tv.dev, &tv.resp, &irand, &rrand, TEN) {
             Ok(x) => x,
             Err(_) => return (false, false),
         };
-
-        let batch = ExportBatch {
-            tenant_id: enr.tenant_id,
-            device_fp: &device_fp,
-            qsecbit_score: qs,
-            qsecbit_ts: 0x0000_0000_00A6_0006,
-            events: &evbuf[..nev],
+        let mut ex = Exporter::new(enr.tenant_id, device_fp, 3, FRQ);
+        let mut rx = mc.recv.into_anti_replay();
+        let mut tr = Tracker::new(enr.tenant_id, device_fp);
+        let mut seal = |ex: &mut Exporter, now: u64| -> Option<([u8; MAX_RECORD], usize, usize)> {
+            let mut r = [0u8; MAX_RECORD];
+            ex.seal_next(&mut dev.send, now, (qs, 0xA6), events::overruns(), &mut r).ok().map(|(l, n)| (r, l, n))
         };
 
-        // Device seals + exports over dev.send; the LEGIT MC (mssp.recv) receives.
-        let mut ct = [0u8; MAX_FRAME + 16];
-        let ctlen = match device_encrypt_export(&mut dev, &batch, &mut ct) {
-            Ok(n) => n,
-            Err(_) => return (false, false),
+        // (a) real verdicts round-trip field-for-field, INCLUDING the tri-state class.
+        for e in &evbuf[..nev] {
+            ex.push(e);
+        }
+        let a_ram = match seal(&mut ex, 1_000) {
+            Some((r, l, n)) => match mc_open(&mut rx, &mut tr, &r[..l]) {
+                Ok(f) => {
+                    n == nev && f.n == nev && f.hdr.boots == 3 && f.hdr.cntfrq == FRQ
+                        && f.hdr.qsecbit_score == qs && f.hdr.first_ev_seq == 0
+                        && (0..nev).all(|i| {
+                            let (w, e) = (f.recs[i], evbuf[i]);
+                            w.rule_id == e.rule_id && w.verdict == e.verdict && w.src == e.src
+                                && w.ts == e.ts && w.class == e.class
+                        })
+                        && nev >= 1
+                        && f.records().iter().any(|w| w.verdict == crate::packet::DROP as u8 && w.class != 0)
+                }
+                Err(_) => false,
+            },
+            None => false,
         };
-        let a_ram = match mc_receive_export(&mut mc, &ct[..ctlen], enr.tenant_id, &device_fp) {
-            Ok(rx) => {
-                rx.n_events == nev
-                    && rx.qsecbit_score == qs
-                    && rx.device_fp == device_fp
-                    && rx.tenant_id == enr.tenant_id
-                    // the exported verdicts survived the channel field-for-field
-                    && (0..nev).all(|i| {
-                        rx.events[i].rule_id == evbuf[i].rule_id
-                            && rx.events[i].verdict == evbuf[i].verdict
-                            && rx.events[i].src == evbuf[i].src
-                    })
-                    // at least one real DROP verdict was exported
-                    && nev >= 1
-                    && rx.events[..nev].iter().any(|e| e.verdict == crate::packet::DROP as u8)
+
+        // (t) TRANSPORT: frame B is lost in transit, C still opens (no desync) and the gap is
+        // counted; B then arrives late and is accepted as late; an exact replay and a tampered
+        // record are refused.
+        let synth = |rule: u16| events::Event { ts: 2_000, src: 0xC612_0001, rule_id: rule, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE };
+        for r in 0..3u16 {
+            ex.push(&synth(200 + r));
+        }
+        let b = seal(&mut ex, 2_100);
+        ex.push(&synth(210));
+        ex.push(&synth(211));
+        let c = seal(&mut ex, 2_200);
+        let t_ok = match (b, c) {
+            (Some((br, bl, 3)), Some((cr, cl, 2))) => {
+                let c_ok = mc_open(&mut rx, &mut tr, &cr[..cl]).map_or(false, |f| f.recs[0].rule_id == 210);
+                let gap = tr.gap_events == 3;
+                let b_late = mc_open(&mut rx, &mut tr, &br[..bl]).is_ok() && tr.late_events == 3;
+                let replay = matches!(mc_open(&mut rx, &mut tr, &cr[..cl]), Err(ExportErr::ChannelReject));
+                let mut bad = cr;
+                bad[cl / 2] ^= 0x40;
+                let tamper = mc_open(&mut rx, &mut tr, &bad[..cl]).is_err();
+                c_ok && gap && b_late && replay && tamper
             }
-            Err(_) => false,
+            _ => false,
         };
 
-        // --- (c) enrolled-only: a ROGUE consumer cannot receive ---
-        // The rogue ran a DIFFERENT handshake (independent ephemerals) so it holds
-        // a transport key unrelated to dev.send. Re-export a fresh frame (dev's
-        // counter advanced) and feed it to the rogue's recv -> AEAD fails.
+        // (o) OVERFLOW honesty: a full queue drops events, counts them in `lost`, and the
+        // receiver sees the same number as a sequence gap.
+        let mut ex2 = Exporter::new(enr.tenant_id, device_fp, 3, FRQ);
+        for i in 0..(EXPORT_QUEUE + 5) {
+            ex2.push(&synth(300 + i as u16));
+        }
+        let lost5 = ex2.lost == 5;
+        let mut gap_before = 0;
+        let mut o_ok = lost5;
+        let mut rx2_tr = Tracker::new(enr.tenant_id, device_fp);
+        let mut drained = true;
+        while ex2.pending() > 0 {
+            match seal(&mut ex2, 3_000) {
+                Some((r, l, _)) => {
+                    if mc_open(&mut rx, &mut rx2_tr, &r[..l]).is_err() {
+                        drained = false;
+                    }
+                }
+                None => drained = false,
+            }
+            gap_before = rx2_tr.gap_events;
+        }
+        ex2.push(&synth(400));
+        if let Some((r, l, _)) = seal(&mut ex2, 3_100) {
+            match mc_open(&mut rx, &mut rx2_tr, &r[..l]) {
+                Ok(f) => o_ok &= f.hdr.lost == 5 && rx2_tr.gap_events == gap_before + 5,
+                Err(_) => o_ok = false,
+            }
+        } else {
+            o_ok = false;
+        }
+        o_ok &= drained && gap_before == 0;
+
+        // (c) enrolled-only: a ROGUE consumer (an independent handshake → unrelated key) cannot
+        // open the record; a frame claiming another device is refused even on the right key.
         let irand2 = init_rand(b"HEQK-M6-rogue-init");
         let rrand2 = resp_rand(b"HEQK-M6-rogue-resp");
-        let rogue = enroll_over_noise(&tv.dev, &tv.resp, &irand2, &rrand2, TEN);
-        let c = match rogue {
-            Ok((_e2, _dev2, mut rogue_mc)) => {
-                // Fresh legit export (dev.send counter advances each record).
-                let mut ct2 = [0u8; MAX_FRAME + 16];
-                match device_encrypt_export(&mut dev, &batch, &mut ct2) {
-                    Ok(n2) => {
-                        // The rogue MC (wrong transport key) must FAIL to decrypt.
-                        let rogue_rejected = matches!(
-                            mc_receive_export(&mut rogue_mc, &ct2[..n2], enr.tenant_id, &device_fp),
-                            Err(ExportErr::ChannelReject)
-                        );
-                        // ...and the LEGIT MC still accepts the same fresh frame.
-                        let legit_ok =
-                            mc_receive_export(&mut mc, &ct2[..n2], enr.tenant_id, &device_fp).is_ok();
-                        rogue_rejected && legit_ok
-                    }
-                    Err(_) => false,
+        let c_ok = match enroll_over_noise(&tv.dev, &tv.resp, &irand2, &rrand2, TEN) {
+            Ok((_e2, _dev2, rogue_mc)) => match seal(&mut ex, 4_000) {
+                Some((r, l, _)) => {
+                    let mut rogue_rx = rogue_mc.recv.into_anti_replay();
+                    let mut rogue_tr = Tracker::new(enr.tenant_id, device_fp);
+                    let rogue_rejected = matches!(mc_open(&mut rogue_rx, &mut rogue_tr, &r[..l]), Err(ExportErr::ChannelReject));
+                    let mut wrong = Tracker::new(enr.tenant_id, [0xEE; 32]);
+                    let id_refused = matches!(mc_open(&mut rx, &mut wrong, &r[..l]), Err(ExportErr::IdentityMismatch));
+                    rogue_rejected && id_refused
                 }
-            }
+                None => false,
+            },
             Err(_) => false,
         };
 
         kprint!(
-            "   channel: M2-verdicts-exported={} (n={}, qsecbit={}) enrolled-only(rogue-rejected+legit-ok)={}\n",
-            yn(a_ram), nev, qs, yn(c)
+            "   channel: M2-verdicts+class-exported={} (n={}, qsecbit={}) loss/reorder/replay/tamper={} (gap={} late={}) overflow-honest(lost=gap)={} enrolled-only+identity={}\n",
+            yn(a_ram), nev, qs, yn(t_ok), tr.gap_events, tr.late_events, yn(o_ok), yn(c_ok)
         );
-        (a_ram, c)
+        (a_ram && t_ok && o_ok, c_ok)
     }
 
     /// (b) AIR-GAP: UNENROLLED is a valid steady state — no export attempted, no
@@ -460,33 +485,28 @@ mod selftest {
         let device_fp = sha256::digest(&tv.dev.pk[..]);
         let irand = init_rand(b"HEQK-M6-heap-init");
         let rrand = resp_rand(b"HEQK-M6-heap-resp");
-        let (enr, mut dev, mut mc) =
+        let (enr, mut dev, mc) =
             match enroll_over_noise(&tv.dev, &tv.resp, &irand, &rrand, 9) {
                 Ok(x) => x,
                 Err(_) => return false,
             };
-        let evs = [events::Event { ts: 1, src: 2, rule_id: 3, severity: 5, verdict: 2 }];
-        let batch = ExportBatch {
-            tenant_id: enr.tenant_id,
-            device_fp: &device_fp,
-            qsecbit_score: 42,
-            qsecbit_ts: 0,
-            events: &evs,
-        };
-        // Warm-up absorbs any first-touch allocation.
-        let mut ct = [0u8; MAX_FRAME + 16];
-        if let Ok(n) = device_encrypt_export(&mut dev, &batch, &mut ct) {
-            let _ = mc_receive_export(&mut mc, &ct[..n], enr.tenant_id, &device_fp);
-        }
-        const N: u64 = 4;
-        let before = crate::heap::used();
-        for _ in 0..N {
-            if let Ok(n) = device_encrypt_export(&mut dev, &batch, &mut ct) {
-                let _ = mc_receive_export(&mut mc, &ct[..n], enr.tenant_id, &device_fp);
+        let ev = events::Event { ts: 1, src: 2, rule_id: 3, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP };
+        let mut ex = Exporter::new(enr.tenant_id, device_fp, 1, 1);
+        let mut rx = mc.recv.into_anti_replay();
+        let mut tr = crate::exportwire::Tracker::new(enr.tenant_id, device_fp);
+        let mut one = |ex: &mut Exporter| {
+            ex.push(&ev);
+            let mut r = [0u8; MAX_RECORD];
+            if let Ok((l, _)) = ex.seal_next(&mut dev.send, 1, (42, 0), 0, &mut r) {
+                let _ = mc_open(&mut rx, &mut tr, &r[..l]);
             }
+        };
+        one(&mut ex); // warm-up absorbs any first-touch allocation
+        let before = crate::heap::used();
+        for _ in 0..4 {
+            one(&mut ex);
         }
-        let growth = crate::heap::used() - before;
-        growth == 0
+        crate::heap::used() - before == 0
     }
 
     // --- (a) FULL: M2 verdict -> M3 DISK persist -> M4 export -> MC verify -----
@@ -526,7 +546,7 @@ mod selftest {
         let full_a = (|| -> bool {
             // M2: real verdicts from the SOAR ring.
             let mut evbuf =
-                [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+                [events::Event::EMPTY; 16];
             let nev = produce_m2_verdicts(&mut evbuf);
             if nev == 0 {
                 return false;
@@ -557,7 +577,7 @@ mod selftest {
                 Ok(l) => l,
                 Err(_) => return false,
             };
-            let mut persisted = [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+            let mut persisted = [events::Event::EMPTY; 16];
             let mut np = 0usize;
             let mut qs_persisted = 0u32;
             mounted
@@ -585,35 +605,34 @@ mod selftest {
             const TEN: u64 = 0x00C0_FFEE_0000_0006;
             let irand = init_rand(b"HEQK-M6-full-init");
             let rrand = resp_rand(b"HEQK-M6-full-resp");
-            let (enr, mut dsess, mut msess) =
+            let (enr, mut dsess, msess) =
                 match enroll_over_noise(&tv.dev, &tv.resp, &irand, &rrand, TEN) {
                     Ok(x) => x,
                     Err(_) => return false,
                 };
-            let batch = ExportBatch {
-                tenant_id: enr.tenant_id,
-                device_fp: &device_fp,
-                qsecbit_score: qs_persisted,
-                qsecbit_ts: 0xA6,
-                events: &persisted[..np],
-            };
-            let mut ct = [0u8; MAX_FRAME + 16];
-            let ctlen = match device_encrypt_export(&mut dsess, &batch, &mut ct) {
-                Ok(n) => n,
+            let mut ex = Exporter::new(enr.tenant_id, device_fp, 1, 1);
+            for e in &persisted[..np] {
+                ex.push(e);
+            }
+            let mut r = [0u8; MAX_RECORD];
+            let rl = match ex.seal_next(&mut dsess.send, 1, (qs_persisted, 0xA6), 0, &mut r) {
+                Ok((l, _)) => l,
                 Err(_) => return false,
             };
-            match mc_receive_export(&mut msess, &ct[..ctlen], enr.tenant_id, &device_fp) {
-                Ok(rx) => {
-                    rx.n_events == np
-                        && rx.qsecbit_score == qs_persisted
-                        && rx.device_fp == device_fp
+            let mut rx = msess.recv.into_anti_replay();
+            let mut tr = crate::exportwire::Tracker::new(enr.tenant_id, device_fp);
+            match mc_open(&mut rx, &mut tr, &r[..rl]) {
+                Ok(f) => {
+                    f.n == np
+                        && f.hdr.qsecbit_score == qs_persisted
+                        && f.hdr.device_fp == device_fp
                         && (0..np).all(|i| {
-                            rx.events[i].rule_id == persisted[i].rule_id
-                                && rx.events[i].verdict == persisted[i].verdict
-                                && rx.events[i].src == persisted[i].src
-                                && rx.events[i].ts == persisted[i].ts
+                            f.recs[i].rule_id == persisted[i].rule_id
+                                && f.recs[i].verdict == persisted[i].verdict
+                                && f.recs[i].src == persisted[i].src
+                                && f.recs[i].ts == persisted[i].ts
                         })
-                        && rx.events[..np].iter().any(|e| e.verdict == crate::packet::DROP as u8)
+                        && f.records().iter().any(|w| w.verdict == crate::packet::DROP as u8)
                 }
                 Err(_) => false,
             }
@@ -630,7 +649,7 @@ mod selftest {
             }
             // Meanwhile the local SOC keeps persisting evidence (M3) with no channel.
             let mut evbuf =
-                [events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 }; 16];
+                [events::Event::EMPTY; 16];
             let nev = produce_m2_verdicts(&mut evbuf);
             let mut log = match fslog::format(&mut store, AG_LO, AG_HI) {
                 Ok(l) => l,

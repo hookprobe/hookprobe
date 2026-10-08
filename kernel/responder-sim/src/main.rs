@@ -8,14 +8,17 @@
 //! Two modes:
 //!   responder-sim --selftest            in-process initiator<->responder cross-check (no HW):
 //!                                        proves the linked crypto + chunk transport agree.
-//!   responder-sim --live [--dev-ip IP] [--dev-id N]
+//!   responder-sim --live --dev-pk HEX [--dev-ip IP] [--evidence-out PATH]
 //!                                        bind UDP :7654, reassemble the device's broadcast
-//!                                        msg1, answer msg2 unicast; print Established + keys.
+//!                                        msg1, answer msg2 unicast; print Established + keys;
+//!                                        serve the reach policy; receive M6 evidence exports
+//!                                        (HQXR-tagged datagram records) → evidence JSONL.
 //!
 //! The responder STATIC keypair is derived from the SAME provisioning seeds whose PUBLIC half
 //! is baked into the device image (kernel testdata/provisioned_mssp_pub.bin), so the device
-//! authenticates this responder. The device's ed25519 identity is derived from `device_id`
-//! (0 when there is no seal-handoff, i.e. the netmetal image) — override with --dev-id.
+//! authenticates this responder. The device's ed25519 identity is SRK-derived on-device and
+//! never re-derivable here: pass the public key the device prints at boot
+//! (`[NETCP] device identity (SRK-derived) pk=…`) as --dev-pk — that IS the enrollment step.
 
 mod entropy;
 
@@ -23,6 +26,11 @@ mod entropy;
 // shim above; `boot_abi` + the RustCrypto crates resolve to this crate's deps.
 #[path = "../../heqk/kernel/src/securechannel.rs"]
 mod securechannel;
+// The kernel M6 export wire codec, verbatim (pure, no crate deps).
+#[path = "../../heqk/kernel/src/exportwire.rs"]
+#[allow(dead_code)]
+mod exportwire;
+mod export_rx;
 
 use boot_abi::sha256;
 use ed25519_compact::{KeyPair, PublicKey as EdPub, Seed};
@@ -34,7 +42,6 @@ use securechannel::{
 use std::net::UdpSocket;
 
 const HS_PORT: u16 = 7654;
-const TENANT: &[u8] = b"TENANT42";
 
 // --- M4.5 segmentation authority (the reach policy the sim serves post-Established) ----------
 // The device requests its policy with this opcode (enroll.rs REACH_POLICY_REQ).
@@ -104,9 +111,17 @@ fn responder_static() -> ResponderStatic {
     )
 }
 
-/// The device's ed25519 identity public key = KeyPair::from_seed(sha256(device_id_le)).
-fn device_pk(device_id: u64) -> EdPub {
-    KeyPair::from_seed(Seed::new(sha256::digest(&device_id.to_le_bytes()))).pk
+/// Parse the device's published Ed25519 identity public key (64 hex chars).
+fn parse_dev_pk(hexs: &str) -> Option<EdPub> {
+    let h = hexs.trim();
+    if h.len() != 64 {
+        return None;
+    }
+    let mut b = [0u8; 32];
+    for (i, out) in b.iter_mut().enumerate() {
+        *out = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()?;
+    }
+    EdPub::from_slice(&b).ok()
 }
 
 fn print_pub_hex(label: &str, resp_pub: &ResponderPub) {
@@ -127,8 +142,8 @@ fn print_pub_hex(label: &str, resp_pub: &ResponderPub) {
 fn selftest() -> bool {
     let resp = responder_static();
     let resp_pub = resp.public();
-    let dev_id = 0u64;
-    let dev_kp = KeyPair::from_seed(Seed::new(sha256::digest(&dev_id.to_le_bytes())));
+    // A throwaway device identity for the in-process check (the real one is SRK-derived on-device).
+    let dev_kp = KeyPair::from_seed(Seed::new(sha256::digest(b"responder-sim-selftest-device")));
     let dev_pk = dev_kp.pk;
     print_pub_hex(" [sim] responder MSSP pub:", &resp_pub);
 
@@ -171,7 +186,7 @@ fn selftest() -> bool {
         Ok(p) => p,
         Err(e) => return fail(&format!("responder_read_msg1: {e:?}")),
     };
-    let (msg2, rsession) = match responder_write_msg2(rpend, &rrand, TENANT) {
+    let (msg2, rsession) = match responder_write_msg2(rpend, &rrand, &SEG_TENANT.to_le_bytes()) {
         Some(x) => x,
         None => return fail("responder_write_msg2"),
     };
@@ -198,30 +213,43 @@ fn fail(what: &str) -> bool {
     false
 }
 
+/// One Established device session: the Noise session (reach policy, stream records) plus the
+/// M6 export receiver over the SAME session's recv key (datagram records, own AD + window).
+struct Live {
+    session: securechannel::Session,
+    device_fp: [u8; 32],
+    exports: export_rx::ExportRx,
+    policy_served: bool,
+}
+
+fn epoch_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
 /// Live responder: bind UDP :7654, reassemble the device's broadcast msg1, answer msg2
-/// unicast to `dev_ip`, print Established. Loops so repeated device attempts are all served.
-fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
+/// unicast to `dev_ip`, serve the reach policy, and receive M6 evidence exports into
+/// `evidence_out` (JSON Lines for hookprobe-evidence). Loops so repeated device attempts are
+/// all served.
+fn run_live(dev_ip: &str, dev_pk: EdPub, gen: u64, evidence_out: &str) -> std::io::Result<()> {
+    use std::io::Write;
     let resp = responder_static();
     print_pub_hex(" [sim] responder MSSP pub:", &resp.public());
-    let dev_pk = device_pk(dev_id);
     let dpk_bytes: &[u8] = dev_pk.as_ref();
-    println!(" [sim] device_id={dev_id} → authenticating device ed25519 pk (first 8 bytes) {:02x?}",
-        &dpk_bytes[..8]);
+    println!(" [sim] enrolled device pk (first 8 bytes) {:02x?}; tenant={SEG_TENANT:#x} (sent in msg2)", &dpk_bytes[..8]);
 
     let op_kp = operator_keypair();
     let op_pk: &[u8] = op_kp.pk.as_ref();
     println!(" [sim] operator signing pubkey (bake into device as OPERATOR_PK): {}",
         op_pk.iter().map(|b| format!("{b:02x}")).collect::<String>());
 
+    let mut evidence = std::fs::OpenOptions::new().create(true).append(true).open(evidence_out)?;
     let sock = UdpSocket::bind(("0.0.0.0", HS_PORT))?;
     sock.set_broadcast(true)?;
-    println!(" [sim] listening on 0.0.0.0:{HS_PORT} (broadcast); will answer msg2 + serve ReachPolicy to {dev_ip}:{HS_PORT}");
+    println!(" [sim] listening on 0.0.0.0:{HS_PORT} (broadcast); policy → {dev_ip}:{HS_PORT}; evidence → {evidence_out}");
 
     let mut reasm = HsReasm::new();
     let mut buf = [0u8; 2048];
-    // Some(session, device_fp) once Established: the next non-beacon datagram is the encrypted
-    // REACH_POLICY_REQ, which we answer with the operator-signed policy over the same Session.
-    let mut established: Option<(securechannel::Session, [u8; 32])> = None;
+    let mut live: Option<Live> = None;
     let mut handshakes = 0u32;
     loop {
         let (n, from) = sock.recv_from(&mut buf)?;
@@ -230,39 +258,56 @@ fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
             continue;
         }
 
+        // M6 EXPORT — tagged datagram records (demuxed on the tag, never trial-decrypted).
+        if buf[..n].starts_with(&exportwire::DGRAM_TAG[..]) {
+            match live.as_mut() {
+                Some(l) => match l.exports.accept(&buf[..n]) {
+                    Ok(f) => {
+                        let lines = export_rx::frame_to_jsonl(&f, &l.exports.tracker, epoch_now());
+                        for line in &lines {
+                            writeln!(evidence, "{line}")?;
+                        }
+                        evidence.flush()?;
+                        println!(" [sim] M6 export frame #{} boots={} events={} qsecbit={} | gap={} late={} device_lost={} overruns={}",
+                            f.hdr.frame_seq, f.hdr.boots, f.n, f.hdr.qsecbit_score, l.exports.tracker.gap_events,
+                            l.exports.tracker.late_events, f.hdr.lost, f.hdr.overruns);
+                    }
+                    Err(e) => eprintln!(" [sim] M6 export refused: {e:?}"),
+                },
+                None => eprintln!(" [sim] M6 export before any session — dropped"),
+            }
+            continue;
+        }
+
         // POLICY phase — Established: decrypt the REQ over the Session, serve the signed policy.
-        if established.is_some() {
+        if let Some(l) = live.as_mut() {
             let mut reqpt = [0u8; 64];
-            let decoded = established
-                .as_mut()
-                .and_then(|(s, _)| s.recv.decrypt_into(b"", &buf[..n], &mut reqpt).ok())
-                .map(|got| &reqpt[..got] == REACH_POLICY_REQ);
+            let decoded = if l.policy_served {
+                None
+            } else {
+                l.session.recv.decrypt_into(b"", &buf[..n], &mut reqpt).ok().map(|got| &reqpt[..got] == REACH_POLICY_REQ)
+            };
             match decoded {
                 Some(true) => {
-                    let (session, device_fp) = established.as_mut().unwrap();
-                    let pol = build_signed_policy(gen, SEG_TENANT, device_fp);
+                    let pol = build_signed_policy(gen, SEG_TENANT, &l.device_fp);
                     let mut rec = [0u8; RP_WIRE_LEN + 16];
-                    match session.send.encrypt_into(b"", &pol, &mut rec) {
+                    match l.session.send.encrypt_into(b"", &pol, &mut rec) {
                         Some(rl) => {
                             let ok = sock.send_to(&rec[..rl], (dev_ip, HS_PORT)).is_ok();
                             println!(" [sim] ✅ REQ received; operator-signed ReachPolicy sent (gen={gen} tenant=TENA, MAC 02..10=Quarantine, 0a..11=InternetOnly; {RP_WIRE_LEN} B plaintext → {rl} B record, sent_ok={ok}) — device should verify+ARM");
                         }
                         None => eprintln!(" [sim] policy encrypt failed"),
                     }
-                    established = None; // one policy per session; a device reboot re-handshakes
-                    reasm = HsReasm::new();
+                    // One policy per session; the session STAYS up for M6 exports.
+                    l.policy_served = true;
                     continue;
                 }
-                Some(false) => {
-                    // Decrypted on this Session but not the REQ opcode — ignore, stay Established.
-                    continue;
-                }
+                Some(false) => continue, // decrypted on this Session but not the REQ opcode
                 None => {
-                    // NOT decryptable on this Session → a NEW handshake attempt (e.g. the prior
-                    // session half-completed: we Established but the device did not). RECOVER:
-                    // drop the stale session + fall through to handshake processing of THIS frame.
-                    println!(" [sim] stale session — new handshake attempt detected, resetting");
-                    established = None;
+                    // Not a tagged export and not decryptable as the REQ → a NEW handshake
+                    // attempt (e.g. the device rebooted). Drop the stale session + fall through.
+                    println!(" [sim] new handshake attempt detected — resetting the session");
+                    live = None;
                     reasm = HsReasm::new();
                 }
             }
@@ -283,14 +328,14 @@ fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
                 };
                 match responder_read_msg1(&resp, &dev_pk, reasm.message()) {
                     Ok(rpend) => {
-                        // The device sends device_fp (= sha256(dev.pk)) as msg1 payload1 — capture
-                        // it BEFORE responder_write_msg2 consumes rpend, to sign the policy for it.
+                        // msg1 payload1 = device_fp (= sha256(dev.pk)) — capture it BEFORE
+                        // responder_write_msg2 consumes rpend; it binds the policy + the exports.
                         let mut device_fp = [0u8; 32];
                         let pl = rpend.payload1.as_slice();
                         if pl.len() == 32 {
                             device_fp.copy_from_slice(pl);
                         }
-                        match responder_write_msg2(rpend, &rrand, TENANT) {
+                        match responder_write_msg2(rpend, &rrand, &SEG_TENANT.to_le_bytes()) {
                             Some((msg2, rsession)) => {
                                 let sent = hs_chunk(msg2.as_slice(), |framed| {
                                     sock.send_to(framed, (dev_ip, HS_PORT)).is_ok()
@@ -302,13 +347,14 @@ fn run_live(dev_ip: &str, dev_id: u64, gen: u64) -> std::io::Result<()> {
                                     &device_fp[..8],
                                     &rsession.send.key_for_test()[..8]
                                 );
-                                established = Some((rsession, device_fp));
+                                let exports = export_rx::ExportRx::new(rsession.recv.into_anti_replay(), SEG_TENANT, device_fp);
+                                live = Some(Live { session: rsession, device_fp, exports, policy_served: false });
                             }
                             None => eprintln!(" [sim] responder_write_msg2 failed"),
                         }
                     }
                     Err(e) => eprintln!(" [sim] responder_read_msg1 rejected the device: {e:?} \
-                        (dev-id/pubkey mismatch? try --dev-id from the device's serial log)"),
+                        (pk mismatch? pass the pk the device prints at boot as --dev-pk)"),
                 }
                 reasm = HsReasm::new();
             }
@@ -327,30 +373,30 @@ fn main() {
     let arg_val = |flag: &str| -> Option<String> {
         args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
     };
+    let usage = "usage: responder-sim [--selftest | --live --dev-pk HEX [--dev-ip IP] [--gen N] [--evidence-out PATH]]";
     match mode {
         "--selftest" => {
             std::process::exit(if selftest() { 0 } else { 1 });
         }
         "--live" => {
             let dev_ip = arg_val("--dev-ip").unwrap_or_else(|| "10.200.0.2".to_string());
-            // --dev-id accepts decimal or 0x-hex (the device prints its OTP id as 0x… on serial).
-            let dev_id = arg_val("--dev-id")
-                .and_then(|s| {
-                    let s = s.trim();
-                    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-                        Some(h) => u64::from_str_radix(h, 16).ok(),
-                        None => s.parse().ok(),
-                    }
-                })
-                .unwrap_or(0u64);
+            let dev_pk = match arg_val("--dev-pk").as_deref().and_then(parse_dev_pk) {
+                Some(pk) => pk,
+                None => {
+                    eprintln!("{usage}\n  --dev-pk is required: the 64-hex public key the device prints at boot");
+                    eprintln!("  ([NETCP] device identity (SRK-derived) pk=…). It is no longer derivable from the serial.");
+                    std::process::exit(2);
+                }
+            };
             let gen = arg_val("--gen").and_then(|s| s.parse().ok()).unwrap_or(1u64);
-            if let Err(e) = run_live(&dev_ip, dev_id, gen) {
+            let out = arg_val("--evidence-out").unwrap_or_else(|| "heqk-evidence.jsonl".to_string());
+            if let Err(e) = run_live(&dev_ip, dev_pk, gen, &out) {
                 eprintln!(" [sim] fatal: {e}");
                 std::process::exit(1);
             }
         }
         other => {
-            eprintln!("usage: responder-sim [--selftest | --live [--dev-ip IP] [--dev-id N]]");
+            eprintln!("{usage}");
             eprintln!("  unknown mode: {other}");
             std::process::exit(2);
         }

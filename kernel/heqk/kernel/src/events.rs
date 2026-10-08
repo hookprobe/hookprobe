@@ -13,7 +13,7 @@
 use core::ptr::{addr_of, addr_of_mut};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// One telemetry event — a compact header, 24 bytes. No payload bytes ever leave
+/// One telemetry event — a compact header (24 bytes in RAM). No payload bytes ever leave
 /// the TCB through here (privacy + bounded size).
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -30,9 +30,16 @@ pub struct Event {
     pub src: u32,
     pub rule_id: u16, // which signed rule fired
     pub severity: u8, // QSecBit severity points
-    pub verdict: u8,  // 1 = PASS, 2 = DROP
+    pub verdict: u8,  // 1 = PASS, 2 = DROP (the wire action — unchanged meaning)
+    /// Tri-state class behind `verdict` (`verdict::CLASS_*`, 0 = unknown): Observe vs an
+    /// under/over-limit RateLimit vs FrameDrop vs Quarantine vs the Allowlisted floor.
+    pub class: u8,
 }
-const EMPTY: Event = Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0 };
+
+impl Event {
+    pub const EMPTY: Event = Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0 };
+}
+const EMPTY: Event = Event::EMPTY;
 
 const RING: usize = 64; // power of two
 static mut BUF: [Event; RING] = [EMPTY; RING];
@@ -49,14 +56,14 @@ fn cntpct() -> u64 {
 
 /// Producer (in the TCB): record a rule hit. Non-blocking — full ring ⇒ count an
 /// overrun and drop the export. Stamps the timestamp internally.
-pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, src: u32) {
+pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, class: u8, src: u32) {
     let h = HEAD.load(Ordering::Relaxed);
     let t = TAIL.load(Ordering::Acquire);
     if h.wrapping_sub(t) >= RING as u32 {
         OVERRUN.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let ev = Event { ts: cntpct(), src, rule_id, severity, verdict };
+    let ev = Event { ts: cntpct(), src, rule_id, severity, verdict, class };
     unsafe { core::ptr::write_volatile(addr_of_mut!(BUF).cast::<Event>().add((h as usize) % RING), ev) };
     HEAD.store(h.wrapping_add(1), Ordering::Release); // publish (release)
 }

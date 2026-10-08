@@ -570,6 +570,11 @@ pub fn build_hs_datagram(
 ) -> usize {
     let plen = framed_chunk.len();
     let frame = 14 + 20 + 8 + plen;
+    // Fail SAFE (0 = nothing built) rather than panic: an index panic here aborts the kernel and
+    // halts the sensor. Callers treat 0 as a TX failure.
+    if frame > out.len() || 8 + plen > u16::MAX as usize - 20 {
+        return 0;
+    }
     for b in out[..frame].iter_mut() {
         *b = 0;
     }
