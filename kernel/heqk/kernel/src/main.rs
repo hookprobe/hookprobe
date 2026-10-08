@@ -7,6 +7,26 @@
 //! switches contexts; each thread's local counter surviving across switches is
 //! the proof that context save/restore works.
 
+// Bench Wi-Fi modes never ship (ADR 0023 / ADR 0045). `apmode`'s serve loop never returns
+// and NATs client traffic without packet::verdict, so a prod image would boot into an
+// uninspected AP instead of the IPS service; `stajoin` bakes network credentials in.
+#[cfg(all(feature = "prod", any(feature = "apmode", feature = "stajoin")))]
+compile_error!("`apmode`/`stajoin` are CM5 bench modes and cannot be combined with `prod`");
+#[allow(dead_code)]
+const fn wpa_psk_ok(p: Option<&str>) -> bool {
+    match p {
+        Some(s) => s.len() >= 8 && s.len() <= 63,
+        None => false,
+    }
+}
+#[cfg(feature = "apmode")]
+const _: () = assert!(wpa_psk_ok(option_env!("HEQK_AP_PSK")), "apmode needs HEQK_AP_PSK (8..63 chars) set at build time");
+#[cfg(feature = "stajoin")]
+const _: () = assert!(
+    option_env!("HEQK_JOIN_SSID").is_some() && wpa_psk_ok(option_env!("HEQK_JOIN_PSK")),
+    "stajoin needs HEQK_JOIN_SSID + HEQK_JOIN_PSK (8..63 chars) set at build time"
+);
+
 extern crate alloc;
 
 mod absdom;
@@ -1975,9 +1995,14 @@ fn cm5_prod_service() -> ! {
                                                 (Some(emmc), Some(sess)) => {
                                                 // #7: derive the reach-floor HOME here, POST-handshake (no eMMC
                                                 // access before the handshake — see the boot comment). Preferred
-                                                // = the DataVolume PARTITION (MBR 0xDA) first 16 sectors; fallback
-                                                // = the keystore window [2034,2046). set_data_volume adds the
-                                                // Gate-1 allowlist entry; arm_write_window is the Gate-2 window.
+                                                // = the DataVolume PARTITION (MBR 0xDA) first 16 sectors. NO fallback:
+                                                // the old keystore-window fallback [2034,2046) overlapped the p15-write
+                                                // boot cookie (2040, rewritten every boot) + OTA state (2044), so the
+                                                // newest RT_REACHGEN record could be destroyed and the floor drop a
+                                                // generation (replay of the previous signed policy, breaks C11). No
+                                                // DataVolume ⇒ floor unavailable ⇒ the plane stays DISARMED (C12,
+                                                // fail-open). set_data_volume adds the Gate-1 allowlist entry;
+                                                // arm_write_window is the Gate-2 window.
                                                 let mut mbr = [0u8; 512];
                                                 let dvpart = {
                                                     use hal::BlockDev;
@@ -1989,8 +2014,12 @@ fn cm5_prod_service() -> ! {
                                                 };
                                                 let (seg_dv, seg_lo, seg_hi): (Option<(u64, u64)>, u64, u64) = match dvpart {
                                                     Some((lo, hi)) => (Some((lo, hi)), lo, (lo + 16).min(hi)),
-                                                    None => (None, 2034, 2046),
+                                                    None => (None, 0, 0),
                                                 };
+                                                if seg_dv.is_none() {
+                                                    kprint!("   [SEGMETAL] no DataVolume partition (MBR 0xDA) — reach floor unavailable, plane stays DISARMED (C12)\n");
+                                                    seg_recon = Some(Err(enroll::ReachPolicyErr::FloorUnavailable));
+                                                } else {
                                                 if let Some((dvlo, dvhi)) = seg_dv {
                                                     emmc.set_data_volume(dvlo, dvhi);
                                                 }
@@ -2010,10 +2039,11 @@ fn cm5_prod_service() -> ! {
                                                     if let Ok(nn) = r {
                                                         seg_phase = 2;
                                                         kprint!("   [SEGMETAL] ✅ ARMED — reach-floor home={} lo={}; applied {} entries; reach_armed={}\n",
-                                                            if seg_dv.is_some() { "DataVolume-partition(0xDA)" } else { "keystore" }, seg_lo, nn, crate::segment::reach_armed());
+                                                            "DataVolume-partition(0xDA)", seg_lo, nn, crate::segment::reach_armed());
                                                     }
                                                     }
                                                     Err(e) => kprint!("   [SEGMETAL] eMMC store open failed: {:?}\n", e),
+                                                }
                                                 }
                                                 }
                                                 _ => {}
@@ -2605,10 +2635,10 @@ fn cm5_p10_probe() {
                     // join). heqk becomes the WiFi authenticator (gap #4). The FullMAC firmware
                     // makes beacons/auth/assoc itself; M-AP0 just proves it enters AP mode + the
                     // BSS beacons (validated by an attending operator seeing the SSID on a phone).
-                    const AP_MODE: bool = true;
+                    const AP_MODE: bool = cfg!(feature = "apmode");
                     if AP_MODE {
                         const AP_SSID: &[u8] = b"heqk-ap";
-                        const AP_PSK: &[u8] = b"heqkwifi2026"; // WPA2 passphrase for heqk-ap
+                        const AP_PSK: &[u8] = match option_env!("HEQK_AP_PSK") { Some(s) => s.as_bytes(), None => b"" }; // WPA2 passphrase for heqk-ap (build-time env, never in source)
                         // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
                         // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
                         // gateway, ping the internet — over the metal-proven GEM rings (armed by
@@ -2694,7 +2724,7 @@ fn cm5_p10_probe() {
                                 ap.bssid_readback[0], ap.bssid_readback[1], ap.bssid_readback[2], ap.bssid_readback[3], ap.bssid_readback[4], ap.bssid_readback[5],
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
-                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"heqk-ap\" with PSK \"heqkwifi2026\"\n", ap_tries);
+                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"heqk-ap\" (PSK = build-time HEQK_AP_PSK)\n", ap_tries);
                                 break;
                             }
                             kprint!(" [P11-AP2] AP config INCOMPLETE (try {}: get_ap={} ssid_ok={} bssid_nonzero={} ev_ok={} gtk_set={})\n",
@@ -2832,6 +2862,7 @@ fn cm5_p10_probe() {
                         }
                     }
 
+                    if cfg!(feature = "stajoin") {
                     // P10-E: WPA2 join to the existing hookprobe AP + DATA-PATH proof. This
                     // firmware has no in-fw supplicant (cap string, iters 1-5): after 802.11
                     // assoc the AP sends EAPOL-Key M1 over SDPCM channel 2. Capturing it proves
@@ -2841,8 +2872,8 @@ fn cm5_p10_probe() {
                     // the controllable Pi4 debug AP (HookProbe-4785C8/change-me-1234567, hostapd
                     // -dd visibility); now re-prove on the real network. SSID case is EXACT — it
                     // is the PBKDF2 salt.
-                    const JOIN_SSID: &[u8] = b"hookprobe";
-                    const JOIN_PSK: &[u8] = b"113527oeM+-!";
+                    const JOIN_SSID: &[u8] = match option_env!("HEQK_JOIN_SSID") { Some(s) => s.as_bytes(), None => b"" };
+                    const JOIN_PSK: &[u8] = match option_env!("HEQK_JOIN_PSK") { Some(s) => s.as_bytes(), None => b"" };
                     kprint!(" [P10-E] WiFi STA join \"");
                     for &c in JOIN_SSID { if c >= 0x20 && c < 0x7f { kprint!("{}", c as char); } }
                     kprint!("\" (WPA2) — capturing the EAPOL M1 (data-path proof)...\n");
@@ -2972,6 +3003,9 @@ fn cm5_p10_probe() {
                         kprint!(" [P10-E] linked but no EAPOL M1 captured (raced the loop?); last event={} status={:#x}\n", jr.last_event, jr.last_status);
                     } else {
                         kprint!(" [P10-E] NOT LINKED — last event={} status={:#x}; trail shows the stage reached\n", jr.last_event, jr.last_status);
+                    }
+                    } else {
+                        kprint!(" [P10-E] SKIPPED — STA join is a bench mode: opt-in via --features stajoin + HEQK_JOIN_SSID/HEQK_JOIN_PSK at build time\n");
                     }
                 } else {
                     kprint!(" [P10-C] SILENT — BCDC ver round-trip failed; see [P10-C bcdc] diag for the failing stage\n");
@@ -6157,6 +6191,65 @@ fn p8_flow() -> bool {
     ok &= c_sat;
     kprint!("   A7/L9 saturation (wall {}%): 40%-full sheds={} (must be false), 85%-full sheds={} (must be true) [{}]\n",
         SATURATION_SHED_PCT, !l9, a7, if c_sat { "ok" } else { "BUG" });
+
+    // === LEGIT FRAGMENT: a NON-FIRST IPv4 fragment's payload is not an L4 header. The
+    //     same 54 bytes with offset 0 hit the :4444 signature (DROP); as a mid-datagram
+    //     fragment they must PASS through the live verdict (was a legit-drop: payload bytes
+    //     2-3 were read as the dst port). Also IPv6: a non-first Fragment(44) header. ===
+    {
+        let src = [198, 18, 0, 72];
+        let first = tcp_frame(src, 4444, ACK);
+        let mut tail = first;
+        tail[20] = 0x00;
+        tail[21] = 0xb9; // fragment offset 185 (x8 B), MF=0: the datagram's last fragment
+        let v_first = crate::packet::verdict(&first).1;
+        let v_tail = crate::packet::verdict(&tail).1;
+        // IPv6: eth | v6 hdr (next=44) | frag hdr (next=TCP, offset!=0) | 4444 at +2
+        let mut v6 = [0u8; 14 + 40 + 8 + 20];
+        v6[12] = 0x86;
+        v6[13] = 0xdd;
+        v6[14] = 0x60;
+        v6[19] = 28; // payload length = 8 (frag) + 20
+        v6[20] = 44; // next header: Fragment
+        v6[21] = 64;
+        v6[54] = 6; // frag next header: TCP
+        v6[56] = 0x05;
+        v6[57] = 0xc8; // fragment offset 185 (x8 B)
+        v6[64] = (4444u16 >> 8) as u8;
+        v6[65] = (4444u16 & 0xff) as u8;
+        let v_v6tail = crate::packet::verdict(&v6).1;
+        let c_frag = v_first == crate::packet::DROP && v_tail != crate::packet::DROP
+            && v_v6tail != crate::packet::DROP;
+        ok &= c_frag;
+        kprint!("   LEGIT fragment: first-frag :4444 -> {} (signature DROP), non-first v4 frag (same bytes) -> {}, non-first v6 frag -> {} (payload never read as ports) [{}]\n",
+            v_first, v_tail, v_v6tail, if c_frag { "ok" } else { "BUG" });
+    }
+
+    // === A7 LIVE GAUGE: the occupancy that FEEDS the wall must decay (self-revert) and
+    //     must not count ACK segments. Regression for the lifetime counter that latched
+    //     `saturated` after ~80k ACKs (one download) → a durable legit shed. Injected
+    //     clock far in the future so the live gauge resets on its next real read. ===
+    {
+        use ratelimit::{flow_count_at, flow_new_at};
+        let (t0, w, max) = (1u64 << 62, 1_000u64, 100u64);
+        let g0 = flow_count_at(t0, w);
+        for _ in 0..85 {
+            flow_new_at(t0 + 1, w);
+        }
+        let g_full = flow_count_at(t0 + 2, w);
+        for _ in 0..100_000 {
+            ratelimit::flow_established(ip([198, 18, 0, 71]) as u64);
+        }
+        let g_acks = flow_count_at(t0 + 3, w);
+        let g_half = flow_count_at(t0 + w + w / 2, w); // prev bucket half-overlapping
+        let g_gone = flow_count_at(t0 + 3 * w, w);
+        let c_gauge = g0 == 0 && table_saturated(g_full, max) && g_acks == g_full
+            && !table_saturated(g_half, max) && g_half > 0 && g_gone == 0;
+        let _ = ratelimit::flow_count(); // re-anchor the live gauge on the real clock
+        ok &= c_gauge;
+        kprint!("   A7 live gauge: 85 new flows -> {} (sheds), +100k ACKs -> {} (unchanged), 1.5 horizons -> {} (decaying, no shed), 3 horizons -> {} (self-reverted) [{}]\n",
+            g_full, g_acks, g_half, g_gone, if c_gauge { "ok" } else { "BUG" });
+    }
 
     // Sanity: the two bars are ordered so RateLimit precedes Quarantine.
     ok &= SCAN_PORTS_RATELIMIT <= SCAN_PORTS_CONFIRM;

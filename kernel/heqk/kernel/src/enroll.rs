@@ -299,6 +299,10 @@ pub enum ReachPolicyErr {
     /// The operator key pinned on this device (C10 TOFU) differs from the one presented — a
     /// silent operator-key swap by the online MSSP is refused.
     OperatorKeyMismatch,
+    /// A verified policy entry could not be placed in the reach table. The whole policy is
+    /// refused and the table reset (fail-open, disarmed) — never a partial apply that
+    /// reports full success.
+    TableFull,
 }
 
 impl ReachPolicy {
@@ -471,7 +475,11 @@ pub fn apply_reach_policy(
     for e in &pol.entries[..n] {
         // from_bytes already validated every meaningful reach code, so from_code is Some here.
         if let Some(r) = crate::segment::Reach::from_code(e.reach) {
-            crate::segment::set_reach(crate::ratelimit::mac_hash(&e.mac), r);
+            if !crate::segment::set_reach(crate::ratelimit::mac_hash(&e.mac), r) {
+                crate::segment::reset_all_to_full();
+                crate::segment::disarm_reach_channel();
+                return Err(ReachPolicyErr::TableFull);
+            }
         }
     }
     crate::segment::arm_reach_channel();

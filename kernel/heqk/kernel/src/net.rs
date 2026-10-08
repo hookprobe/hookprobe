@@ -341,6 +341,13 @@ fn parse_ipv4(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
         return None;
     }
     let ip_proto = *frame.get(l3_off + 9)?;
+    // A NON-FIRST fragment (offset != 0) carries mid-datagram payload, not an L4 header:
+    // report no L4 (proto 0) so payload bytes are never read as ports/flags. (Read as a
+    // header, a legit fragment whose payload held e.g. 4444 at bytes 2-3 was FrameDropped
+    // as a signature hit — an ADR 0023 legit-drop.) The FIRST fragment keeps its ports.
+    if be16(frame, l3_off + 6)? & 0x1fff != 0 {
+        return Some((0, l3_off + ihl, l3_off + total_len));
+    }
     Some((ip_proto, l3_off + ihl, l3_off + total_len))
 }
 
@@ -374,6 +381,10 @@ fn parse_ipv6(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
             // Fragment(44): fixed 8 bytes; next-header at +0.
             44 => {
                 next = *frame.get(off)?;
+                // Non-first fragment (offset field != 0): payload, not an L4 header.
+                if be16(frame, off + 2)? & 0xfff8 != 0 {
+                    return Some((0, off + 8, ip_end));
+                }
                 off += 8;
             }
             // ESP(50)/AH(51)/ICMPv6(58)/unknown: opaque to us, no L4 ports here.

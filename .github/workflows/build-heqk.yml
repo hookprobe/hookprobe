@@ -81,6 +81,23 @@ jobs:
         run: ./validate.sh
         working-directory: kernel/heqk
 
+      # validate.sh boots the QEMU flavor only; the SHIPPED image is `--features prod`
+      # (builder/make-cm5-heqk-image.sh). This gate keeps the shipped flavor building and
+      # proves a bench Wi-Fi mode can never ride into it: `apmode`'s serve loop replaced
+      # cm5_prod_service (the IPS never started) and baked a PSK into source (2026-10-08).
+      - name: heqk shipped-flavor gate (prod builds; bench modes refused; no Wi-Fi creds in source)
+        working-directory: kernel/heqk
+        run: |
+          set -euo pipefail
+          cargo build -p kernel --features prod --release
+          if cargo build -p kernel --features prod,apmode --release 2>/tmp/apmode.log; then
+            echo "FATAL: prod+apmode built — the AP bench loop would replace the IPS service"; exit 1
+          fi
+          grep -q "cannot be combined with \`prod\`" /tmp/apmode.log
+          if grep -rnE 'const [A-Z_]*(PSK|PASS)[A-Z_]*: &\[u8\] = b"' kernel/src arch-aarch64/src; then
+            echo "FATAL: Wi-Fi credential literal in kernel source — use build-time env (ADR 0045)"; exit 1
+          fi
+
 # -----------------------------------------------------------------------------
 # NOT wired here, deliberately (M1 scope discipline — don't over-scope the
 # beachhead):

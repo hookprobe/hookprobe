@@ -501,7 +501,9 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
         // which holds the scan escalation off for this source (legit-safety).
         crate::ratelimit::flow_established(src64);
     } else if flags & TCP_SYN != 0 {
-        // A SYN-only connection attempt ⇒ a scan-shape probe. Counts the distinct dst port.
+        // A SYN-only connection attempt ⇒ a NEW flow (occupancy gauge) and a scan-shape
+        // probe (counts the distinct dst port).
+        crate::ratelimit::flow_new();
         crate::ratelimit::syn_scan_observe(src64, meta.dst_port);
     }
 

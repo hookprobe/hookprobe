@@ -159,10 +159,17 @@ else
 fi
 
 # --- Stage 2: boot + capture ---------------------------------------------
+# TCG emulation of the PQC self-tests is CPU-bound: the old fixed 45 s budget expired
+# mid-boot on a loaded host (load 9 on 4 cores, 2026-10-08) and reported 29 phantom
+# phase FAILs. QEMU exits via semihosting as soon as the boot completes, so a larger
+# budget costs nothing on a pass — only a genuine hang waits it out.
+QEMU_TIMEOUT="${HEQK_QEMU_TIMEOUT:-150}"
 echo -n "[boot]  qemu virt ... "
-timeout 45 $QEMU "$KERNEL" >"$LOG" 2>&1
+timeout "$QEMU_TIMEOUT" $QEMU "$KERNEL" >"$LOG" 2>&1
 RC=$?
-if grep -q "\[ALL\]" "$LOG"; then echo "clean exit"; else echo "rc=$RC (no ALL marker; possible hang/regression)"; fi
+if grep -q "\[ALL\]" "$LOG"; then echo "clean exit"
+elif [ "$RC" = 124 ]; then echo "TIMEOUT after ${QEMU_TIMEOUT}s (load: $(cut -d' ' -f1 /proc/loadavg 2>/dev/null)) — missing markers below may be phantom; rerun on an idle host or raise HEQK_QEMU_TIMEOUT"
+else echo "rc=$RC (no ALL marker; possible hang/regression)"; fi
 
 # --- Stage 2b: M3.1 cross-restart persistence (file-backed virtio-blk) -----
 # The volatile RamDisk (P15 above) proves the write-window LOGIC but cannot prove
@@ -186,8 +193,8 @@ if command -v dd >/dev/null 2>&1 && cargo build --features netsvc,securechannel,
     -drive file=$DISK,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
   # 75s cap (was 45s): the p15-write two-boot now also runs the M4.3 securechannel
   # + enrollment gates, whose debug-mode ML-KEM-768 handshakes add real wall time.
-  timeout 75 $QEMU_BLK "$KERNEL" >"$B1" 2>&1   # boot 1: write cookie+marker through the guard
-  timeout 75 $QEMU_BLK "$KERNEL" >"$B2" 2>&1   # boot 2: SAME disk -> read back + unseal
+  timeout "$QEMU_TIMEOUT" $QEMU_BLK "$KERNEL" >"$B1" 2>&1   # boot 1: write cookie+marker through the guard
+  timeout "$QEMU_TIMEOUT" $QEMU_BLK "$KERNEL" >"$B2" 2>&1   # boot 2: SAME disk -> read back + unseal
   cat "$B1" "$B2" >> "$LOG"                     # feed both boots' markers into the report
   if grep -qF "[P15-persist] PASS" "$B2"; then
     echo "PASS (cookie+marker survived restart)"
@@ -229,7 +236,7 @@ if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1 \
   QEMU_FAT="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
     -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
     -drive file=$FATDISK,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
-  timeout 75 $QEMU_FAT "$KERNEL" >"$BO" 2>&1
+  timeout "$QEMU_TIMEOUT" $QEMU_FAT "$KERNEL" >"$BO" 2>&1
   cat "$BO" >> "$LOG"
   if grep -qF "[P15-otafat] PASS" "$BO"; then
     echo "PASS (located HEQK8-B.IMG in FAT32 + staged candidate through the guard)"

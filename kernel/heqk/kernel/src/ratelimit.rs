@@ -226,10 +226,63 @@ static SCAN_PORT_GEN: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
 static SCAN_PORT_KEY: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
     [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
 
-/// A GLOBAL flow-table fill counter (the conntrack-equivalent occupancy). Bumped on each
-/// established flow; a real gauge would also decrement on teardown (M2.3). Exposed for
-/// the live saturation SIGNAL; the deterministic verdict map takes count/max as params.
-static FLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+/// The GLOBAL flow-table occupancy GAUGE (the conntrack-equivalent fill) behind the A7
+/// saturation signal. heqk tracks no teardown, so occupancy is measured as NEW flows
+/// (SYN-only segments) inside a sliding `FLOW_IDLE_SECS` horizon — two buckets, the
+/// previous one weighted by its remaining overlap. It DECAYS on its own: once new-flow
+/// arrivals stop, the gauge reaches 0 within 2×horizon, so the shed self-reverts.
+///
+/// (Was a lifetime counter bumped on every ACK-bearing segment and never decremented:
+/// ~80k ACKs — one large download — latched `saturated` true until reboot and turned the
+/// shed into a durable legit-drop, violating ADR 0023.)
+pub const FLOW_IDLE_SECS: u64 = 60;
+static FLOW_BUCKET_START: AtomicU64 = AtomicU64::new(0);
+static FLOW_CUR: AtomicU64 = AtomicU64::new(0);
+static FLOW_PREV: AtomicU64 = AtomicU64::new(0);
+
+/// Advance the two-bucket window to `now`; returns ticks elapsed in the current bucket.
+#[inline]
+fn flow_roll(now: u64, win: u64) -> u64 {
+    let start = FLOW_BUCKET_START.load(Ordering::Relaxed);
+    let el = now.wrapping_sub(start);
+    if el >= win.saturating_mul(2) {
+        FLOW_PREV.store(0, Ordering::Relaxed);
+        FLOW_CUR.store(0, Ordering::Relaxed);
+        FLOW_BUCKET_START.store(now, Ordering::Relaxed);
+        0
+    } else if el >= win {
+        FLOW_PREV.store(FLOW_CUR.load(Ordering::Relaxed), Ordering::Relaxed);
+        FLOW_CUR.store(0, Ordering::Relaxed);
+        FLOW_BUCKET_START.store(start.wrapping_add(win), Ordering::Relaxed);
+        el - win
+    } else {
+        el
+    }
+}
+
+/// Record a NEW flow (a SYN-only connection attempt) at an INJECTED clock.
+pub fn flow_new_at(now: u64, win: u64) {
+    flow_roll(now, win);
+    FLOW_CUR.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Occupancy gauge at an INJECTED clock (so the decay is QEMU-provable without sleeping).
+pub fn flow_count_at(now: u64, win: u64) -> u64 {
+    let win = win.max(1);
+    let el = flow_roll(now, win);
+    let prev = FLOW_PREV.load(Ordering::Relaxed);
+    FLOW_CUR.load(Ordering::Relaxed) + prev.saturating_mul(win - el.min(win)) / win
+}
+
+#[inline]
+fn flow_win() -> u64 {
+    cntfrq().max(1).saturating_mul(FLOW_IDLE_SECS)
+}
+
+/// Record a new flow on the live ARM generic-counter clock.
+pub fn flow_new() {
+    flow_new_at(cntpct(), flow_win());
+}
 
 /// Locate + refresh source `src`'s slot for the CURRENT window. A new source aliasing
 /// the slot, or an expired window, resets the slot (generation bump invalidates the
@@ -275,10 +328,10 @@ pub fn syn_scan_observe(src: u64, dst_port: u16) -> u64 {
 
 /// Record that a flow from `src` reached ESTABLISHED (handshake completed — heqk's
 /// cheapest proxy is an ACK-bearing segment on an existing flow). Bumps the source's
-/// established count AND the global flow-table fill. An established source is
-/// definitionally NOT a scanner: `est > 0` holds every scan escalation OFF (below).
+/// established count (NOT the global occupancy gauge — that counts new flows, see
+/// `flow_new`). An established source is definitionally NOT a scanner: `est > 0` holds
+/// every scan escalation OFF (below).
 pub fn flow_established(src: u64) {
-    FLOW_COUNT.fetch_add(1, Ordering::Relaxed);
     if src == 0 {
         return;
     }
@@ -327,14 +380,14 @@ pub fn scan_confirmed(src: u64) -> bool {
 
 /// Live flow-table fill as a percentage (0..=100) — the A7 conntrack-saturation SIGNAL.
 pub fn flow_saturation_pct() -> u64 {
-    saturation_pct(FLOW_COUNT.load(Ordering::Relaxed), flow_table_max())
+    saturation_pct(flow_count(), flow_table_max())
 }
 
 /// Live flow-table occupancy count — the A7 saturation numerator, for the datapath's
 /// per-frame `resource_shed_verdict`.
 #[inline]
 pub fn flow_count() -> u64 {
-    FLOW_COUNT.load(Ordering::Relaxed)
+    flow_count_at(cntpct(), flow_win())
 }
 
 /// The logical flow-table capacity used for the live saturation percentage. Sourced from
