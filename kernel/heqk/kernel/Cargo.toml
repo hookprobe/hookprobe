@@ -84,6 +84,14 @@ securechannel = ["dep:ml-kem", "dep:kem", "dep:x25519-dalek", "dep:chacha20poly1
 # refuses to build if this is enabled together with the `cm5` (metal) profile.
 # validate.sh's QEMU builds enable it; the prod/cm5 image MUST NOT.
 securechannel-selftest = ["securechannel"]
+# Bench Wi-Fi modes (CM5 metal bench only — refused together with `prod`, see main.rs):
+#   apmode  — heqk as WPA2 AP + SNAT to the end0 uplink. Its serve loop never returns and
+#             NATs client traffic WITHOUT packet::verdict, so it REPLACES the IPS service;
+#             needs HEQK_AP_PSK (8..63 chars) in the build environment.
+#   stajoin — P10-E WPA2 STA join proof; needs HEQK_JOIN_SSID + HEQK_JOIN_PSK at build time.
+# Credentials are build-time env only — never source literals (ADR 0045).
+apmode = ["cm5"]
+stajoin = ["cm5"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]

@@ -151,14 +151,33 @@ pub fn set_infra(gateway: u32, dns: u32) {
     INFRA_DNS.store(dns as u64, Ordering::Relaxed);
 }
 
-/// AUTHORITY seam (C4): set a device's reach, keyed by `mac_hash(eth_src)`. Direct-mapped,
-/// collision-EVICT (C8) — a colliding device overwrites the slot (never counts against
-/// another's policy). Stamps the set time for the TTL lease (C1).
-pub fn set_reach(mac_key: u64, reach: Reach) {
-    if mac_key == 0 {
-        return;
+/// Probe for `mac_key`: the slot holding it, else the first empty slot on its probe path,
+/// else `None` (table full). Open addressing with a FULL-key compare — two devices whose
+/// hashes share a home slot both keep their entries. No deletes happen between
+/// `reset_all_to_full` calls, so a linear probe never needs tombstones.
+fn probe(mac_key: u64) -> Option<usize> {
+    let home = (mac_key as usize) % DEV_SLOTS;
+    for i in 0..DEV_SLOTS {
+        let s = (home + i) % DEV_SLOTS;
+        let k = DEV_KEY[s].load(Ordering::Relaxed);
+        if k == mac_key || k == 0 {
+            return Some(s);
+        }
     }
-    let s = (mac_key as usize) % DEV_SLOTS;
+    None
+}
+
+/// AUTHORITY seam (C4): set a device's reach, keyed by `mac_hash(eth_src)`. Returns whether
+/// the entry was placed. (Was direct-mapped collision-EVICT: two MACs of one signed policy
+/// sharing a slot silently dropped the first device's containment back to Full while the
+/// policy still reported every entry applied.) Stamps the set time for the TTL lease (C1).
+pub fn set_reach(mac_key: u64, reach: Reach) -> bool {
+    if mac_key == 0 {
+        return false;
+    }
+    let Some(s) = probe(mac_key) else {
+        return false;
+    };
     let code = match reach {
         Reach::Full => R_FULL,
         Reach::InternetOnly => R_INTERNET_ONLY,
@@ -167,6 +186,7 @@ pub fn set_reach(mac_key: u64, reach: Reach) {
     DEV_KEY[s].store(mac_key, Ordering::Relaxed);
     DEV_REACH[s].store(code, Ordering::Relaxed);
     DEV_SET_AT[s].store(cntpct(), Ordering::Relaxed);
+    true
 }
 
 /// AUTHORITY seam: DECLARATIVE reset — a fresh policy is the FULL desired state, so
@@ -189,9 +209,11 @@ pub fn reach_of(mac_key: u64) -> Reach {
     if mac_key == 0 {
         return Reach::Full;
     }
-    let s = (mac_key as usize) % DEV_SLOTS;
+    let Some(s) = probe(mac_key) else {
+        return Reach::Full;
+    };
     if DEV_KEY[s].load(Ordering::Relaxed) != mac_key {
-        return Reach::Full; // empty or a colliding (evicted) device
+        return Reach::Full; // not in the table (probe stopped at an empty slot)
     }
     // TTL lease: an entry older than REACH_TTL_SECS expires to Full (C1).
     let now = cntpct();
@@ -277,7 +299,16 @@ pub fn reach_selftest() -> bool {
     let mgmt_ok = reach_allow(mgmt, quar, lan, true); // C3 mgmt floor → allow even if Quarantine
     let unknown = reach_allow(0, 0x9999, lan, true); // C1 unknown device → Full → allow
 
-    disarm_reach_channel(); // restore the inert production state (C7)
+    // Home-slot COLLISION: two quarantined devices whose keys share a slot must BOTH stay
+    // contained (was collision-evict: the first silently reverted to Full), and a third
+    // key on the same probe path that was never set stays Full (fail-open).
+    let (ca, cb, cc) = (DEV_SLOTS as u64 * 7, DEV_SLOTS as u64 * 9, DEV_SLOTS as u64 * 11);
+    let placed = set_reach(ca, Reach::Quarantine) && set_reach(cb, Reach::Quarantine);
+    let collide = placed && !reach_allow(0, ca, lan, true) && !reach_allow(0, cb, lan, true)
+        && reach_allow(0, cc, lan, true);
 
-    disarmed && full_lan && io_lan && io_wan && io_gw && q_lan && q_wan && mgmt_ok && unknown
+    disarm_reach_channel(); // restore the inert production state (C7)
+    reset_all_to_full();
+
+    disarmed && full_lan && io_lan && io_wan && io_gw && q_lan && q_wan && mgmt_ok && unknown && collide
 }
