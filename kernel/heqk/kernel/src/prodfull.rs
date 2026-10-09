@@ -198,6 +198,13 @@ impl ProdFull {
         pf
     }
 
+    /// The owner verifier from the eMMC boot partition's OWNER.TXT (ADR 0037 D3), for the
+    /// on-device Mission Control. `None` = unclaimed (or eMMC silent): every protected route refuses.
+    #[cfg(feature = "mcserve")]
+    pub fn read_owner(&self) -> Option<crate::mcauth::Owner> {
+        self.emmc.as_ref().and_then(|d| crate::mcauth::load_owner(d))
+    }
+
     /// Record a threat verdict as a persisted event. Cheap: RAM only, marks dirty.
     pub fn on_threat(&mut self, ev: &events::Event) {
         self.snap.push_event(ev);

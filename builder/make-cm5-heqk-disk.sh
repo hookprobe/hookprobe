@@ -2,7 +2,7 @@
 # make-cm5-heqk-disk.sh — the CM5 IMAGE FACTORY (BuildPlan Track C, ADR 0047): one command from a
 # clean checkout to ONE signed, partitioned, flashable heqk disk image. No Linux in the image.
 #
-#   HEQK_KEYDIR=<keydir> builder/make-cm5-heqk-disk.sh [--zero-linux] [--size-mib N]
+#   HEQK_KEYDIR=<keydir> builder/make-cm5-heqk-disk.sh [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN]
 #
 # Layout (MBR):
 #   LBA 0            MBR (0x55AA)
@@ -19,6 +19,12 @@
 #               trained — fine for the passive-first GEM profile (ADR 0037 D4). METAL-UNPROVEN:
 #               proving it on the bench is the U1 gate. Default keeps the one proven .dtb.
 #
+# OWNER.TXT (ADR 0037 D3 — physical possession is the only credential, no default password): a
+# FIXED 128-byte file on p1 holding only a salted verifier. Default = the "HQOWN0 unclaimed"
+# placeholder (the device refuses access until claimed); the browser flasher patches the verifier
+# in place at the byte offset recorded in the manifest. --owner-token auto mints a token for a
+# bench image (printed ONCE; the image stores only sha256(salt||token)).
+#
 # Self-check: boots the heqk QEMU p15-write kernel against a COPY of the produced image — the
 # device's OWN fat.rs/store code must locate slot B in the real layout ([P15-otafat] PASS).
 set -euo pipefail
@@ -30,11 +36,13 @@ FEATURES="${FEATURES:-prod}"
 SVN="${SVN:-1}"
 SIZE_MIB=512
 ZERO_LINUX=0
+OWNER_TOKEN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --zero-linux) ZERO_LINUX=1 ;;
+    --owner-token) OWNER_TOKEN="$2"; shift ;;
     --size-mib) SIZE_MIB="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -95,6 +103,26 @@ def emit(path, slot, note):
 emit(f"{stage}/config.txt", "a", "cold boot = slot A")
 emit(f"{stage}/tryboot.txt", "b", "one-shot trial = slot B")
 PY
+# OWNER.TXT — fixed 128 bytes (the flasher overwrites it in place; the length never changes).
+python3 -I - "$STAGE/OWNER.TXT" "$OWNER_TOKEN" >"$STAGE/owner.token" <<'PY'
+import sys, os, hashlib, secrets
+path, tok = sys.argv[1], sys.argv[2]
+if tok == "auto":
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"            # no URL-encoding needed, no 0/O/1/I
+    raw = "".join(secrets.choice(alphabet) for _ in range(24))  # 24*5 = 120 bits
+    tok = "-".join(raw[i:i+4] for i in range(0, 24, 4))
+if tok:
+    if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for c in tok) or len(tok) < 16:
+        sys.exit("owner token must be >= 16 chars of [A-Za-z0-9-_]")
+    salt = os.urandom(16)
+    line = f"HQOWN1 {salt.hex()} {hashlib.sha256(salt + tok.encode()).hexdigest()}"
+    print(tok)
+else:
+    line = "HQOWN0 unclaimed"
+open(path, "w").write(line.ljust(127) + "\n")
+PY
+[ "$(stat -c %s "$STAGE/OWNER.TXT")" = 128 ] || { echo "FATAL: OWNER.TXT must be exactly 128 bytes"; exit 1; }
+
 diff <(grep -v '^kernel=\|^# heqk A/B' "$STAGE/config.txt") <(grep -v '^kernel=\|^# heqk A/B' "$STAGE/tryboot.txt") >/dev/null \
   || echo "   note: config.txt and tryboot.txt differ beyond the kernel= line (templates kept as-is)"
 
@@ -112,7 +140,7 @@ EOF
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
@@ -150,6 +178,24 @@ else
   echo "   FAIL  could not build the QEMU check kernel"; FAILS=$((FAILS+1))
 fi
 
+# Byte offset of OWNER.TXT's data inside the image (the flasher's patch target).
+OWNER_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
+import struct, sys
+f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
+def sec(l): f.seek(l * 512); return f.read(512)
+b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
+spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
+d = sec(data + (root - 2) * spc)
+for i in range(0, 512, 32):
+    e = d[i:i+32]
+    if e[:11] == b"OWNER   TXT":
+        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
+        print((data + (c - 2) * spc) * 512); break
+PY
+)"
+check "OWNER.TXT located at byte $OWNER_OFF (128 B, the flasher's in-place patch target)" \
+  "[ -n '$OWNER_OFF' ] && dd if='$IMG' bs=1 skip=$OWNER_OFF count=6 status=none | grep -q '^HQOWN'"
+
 SHA="$(sha256sum "$IMG" | cut -d' ' -f1)"
 echo "$SHA  $(basename "$IMG")" >"$IMG.sha256"
 python3 -I - "$IMG.json" <<PY
@@ -160,9 +206,16 @@ json.dump({
   "layout": {"p1_fat32": [$P1_START, $P1_SECT], "p2_datavolume_0xda": [$P2_START, $P2_SECT],
              "reserved_zero": [2016, 2048]},
   "slot_sha256": "$(sha256sum "$STAGE/heqk8-a.img" | cut -d' ' -f1)",
+  "owner_file": {"offset": int("${OWNER_OFF:-0}"), "length": 128,
+                 "claimed": bool(open("$STAGE/OWNER.TXT").read().startswith("HQOWN1"))},
   "metal_unproven": ["zero-linux boot (no devicetree)"] if $ZERO_LINUX else [],
 }, open(sys.argv[1], "w"), indent=2)
 PY
 echo
 [ "$FAILS" = 0 ] && echo "FACTORY: PASS — $IMG (sha256 $SHA)" || { echo "FACTORY: FAIL ($FAILS)"; exit 1; }
+if [ -s "$STAGE/owner.token" ]; then
+  echo
+  echo "OWNER KEY (shown ONCE, not stored anywhere; the image holds only its salted hash):"
+  echo "    $(cat "$STAGE/owner.token")"
+fi
 echo "Flash (Red/operator): the browser flasher, or today: rpiboot + dd of the whole image to the eMMC."

@@ -78,6 +78,8 @@ mod rulecat;
 #[cfg(feature = "netsvc")]
 mod mcstate;
 #[cfg(feature = "netsvc")]
+mod mcauth;
+#[cfg(feature = "netsvc")]
 mod http;
 #[cfg(feature = "mcserve")]
 mod mcserve;
@@ -1756,6 +1758,11 @@ fn cm5_prod_service() -> ! {
         Some(seed) => {
             let mac = device_mac();
             mcserve::state().set_clock(0, t0, cntfrq); // SNTP sets the epoch once the network is up
+            // Owner verifier from the eMMC boot partition (ADR 0037 D3): no file = UNCLAIMED, and
+            // every protected route refuses — never an open claim window.
+            let owner = pf.read_owner();
+            mcserve::set_owner(owner);
+            kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — access refused until flashed with an owner key" });
             let n = mcserve::McNode::new(mac, mcserve::NetMode::Dhcp, seed);
             if let Some(ref node) = n {
                 kprint!(" [MC] Mission Control node UP on GEM: mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (SRK-derived), passive-first, DHCP in progress (fallback {}.{}.{}.{}); {} UI assets embedded\n",
@@ -5017,6 +5024,7 @@ pub extern "C" fn kmain() -> ! {
     {
         // ADR 0047 D2: the on-device Mission Control server logic (parse/route/JSON/SSE).
         let _ = http::mc_selftest();
+        let _ = mcauth::mcauth_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });

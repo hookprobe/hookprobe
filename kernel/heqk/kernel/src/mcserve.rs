@@ -12,6 +12,7 @@
 //! frees). `CONNS` connection slots on :80; SSE clients hold one each.
 
 use crate::http::{self, Body};
+use crate::mcauth::{Auth, Owner};
 use crate::mcstate::McState;
 use crate::{events, packet};
 #[cfg(not(feature = "cm5"))]
@@ -153,6 +154,8 @@ static mut HEAD: [[u8; 512]; CONNS] = [[0; 512]; CONNS];
 static mut SCRATCH_BUF: [[u8; SCRATCH]; CONNS] = [[0; SCRATCH]; CONNS];
 static mut DEV: McDev = McDev::new();
 static mut STATE: McState = McState::new();
+static mut AUTH: Auth = Auth::new(None);
+static RAND_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 fn is_for_us(frame: &[u8], mac: [u8; 6]) -> bool {
     frame.len() >= 14 && (frame[..6] == mac || frame[..6] == [0xff; 6])
@@ -162,6 +165,50 @@ fn is_for_us(frame: &[u8], mac: [u8; 6]) -> bool {
 #[allow(static_mut_refs)]
 pub fn state() -> &'static mut McState {
     unsafe { &mut STATE }
+}
+
+/// Install the owner verifier read from the boot partition (`None` = unclaimed: every protected
+/// route refuses — no open claim window).
+#[allow(static_mut_refs)]
+pub fn set_owner(owner: Option<Owner>) {
+    unsafe { AUTH = Auth::new(owner) };
+}
+
+#[allow(static_mut_refs)]
+fn auth() -> &'static mut Auth {
+    unsafe { &mut AUTH }
+}
+
+/// 16 bytes for a session id: the hardware TRNG on the CM5 (fail-closed: no TRNG => `None`, the
+/// login is refused, the sensor keeps running); QEMU has no TRNG, so a hash of the cycle counter + a counter stands in
+/// (QEMU-ONLY — never shipped: the CM5 build takes the TRNG branch).
+fn rand16() -> Option<[u8; 16]> {
+    #[cfg(feature = "cm5")]
+    {
+        let a = arch_aarch64::rng200::next_word_strict();
+        let b = arch_aarch64::rng200::next_word_strict();
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                let mut o = [0u8; 16];
+                o[..8].copy_from_slice(&a.to_le_bytes());
+                o[8..].copy_from_slice(&b.to_le_bytes());
+                Some(o)
+            }
+            _ => None, // fail-closed: this login fails, the sensor keeps running
+        }
+    }
+    #[cfg(not(feature = "cm5"))]
+    {
+        let n = RAND_CTR.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let mut h = boot_abi::sha256::Hasher::new();
+        h.update(&cntpct().to_le_bytes());
+        h.update(&n.to_le_bytes());
+        h.update(b"heqk-qemu-session");
+        let d = h.finish();
+        let mut o = [0u8; 16];
+        o.copy_from_slice(&d[..16]);
+        Some(o)
+    }
 }
 
 /// How the node gets its IPv4 address.
@@ -362,6 +409,10 @@ pub fn run() -> ! {
     let t0 = cntpct();
     let st = state();
     st.set_clock(rtc_epoch_secs() * 1000, t0, frq);
+    // Owner verifier from the attached boot disk's OWNER.TXT (ADR 0037 D3); none = unclaimed.
+    let owner = arch_aarch64::virtio_blk::VirtioBlk::open().and_then(|d| crate::mcauth::load_owner(&d));
+    set_owner(owner);
+    kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED (OWNER.TXT verifier loaded) — sign-in required" } else { "UNCLAIMED — every protected route refuses (flash with the owner key)" });
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
     // DHCP (QEMU's user-mode network serves 10.0.2.15), the production address path.
     let mut node = McNode::new(mac, NetMode::Dhcp, t0 ^ 0x4D43_5345_5256_4500).expect("one node per boot");
@@ -426,7 +477,7 @@ fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms:
                     s.close();
                 }
                 Ok(r) => {
-                    let resp = http::handle(&r, st, &mut scratch[..]);
+                    let resp = http::handle(&r, st, auth(), now_ms, rand16, &mut scratch[..]);
                     let hlen = http::write_head(&resp, &mut head[..]);
                     *c = match resp.body {
                         Body::Static(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0 },
