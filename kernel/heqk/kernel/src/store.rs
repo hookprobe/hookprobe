@@ -88,6 +88,9 @@ pub enum RegionKind {
     /// The INACTIVE A/B boot slot — OTA stages a candidate here; the ACTIVE slot
     /// is never registered, so it is refused by default (brick-safety).
     InactiveSlot,
+    /// ONE sector of `config.txt` / `tryboot.txt` holding the `kernel=` slot line — the A/B
+    /// commit's same-size in-place rewrite (abboot.rs). Registered per-LBA, never a range.
+    BootConfig,
 }
 
 /// A half-open writable region [lo, hi).

@@ -67,6 +67,8 @@ mod napi;
 mod ota;
 #[allow(dead_code)] // B2 read-only FAT32 locator: used by the OTA/p15 delivery path only
 mod fat;
+#[allow(dead_code)] // A/B commit (B2): the on-device OTA commit + its QEMU two-boot proof
+mod abboot;
 mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
@@ -550,7 +552,15 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_p8_verify();
 
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
+    // `late-confirm` (OFF by default) defers this to the HEALTHY prod loop instead (audit B1: a
+    // trial image that boots but never serves should not commit). It stays off until the bench
+    // measures the [BOOT-TIMING] budget: hboot's watchdog is armed on EVERY boot (15 s, ~16 s HW
+    // max), so a late confirm that misses it reset-loops the device. Never under `apmode` (the AP
+    // pump never reaches the prod loop).
+    #[cfg(not(all(feature = "late-confirm", not(feature = "apmode"))))]
     boot_confirm();
+    #[cfg(all(feature = "late-confirm", not(feature = "apmode")))]
+    kprint!(" [HBoot-AB] confirm DEFERRED to the healthy prod loop (late-confirm) — t=+{} ms\n", boot_ms());
 
     // --- P8: RP1 GEM Ethernet — polled RX first light ----------------------
     cm5_gem_rx_demo();
@@ -666,10 +676,24 @@ fn boot_confirm() {
     if armed {
         // hvc #1 -> the EL2 gate disarms the PM watchdog and erets back to EL1.
         unsafe { core::arch::asm!("hvc #1") };
-        kprint!(" [HBoot-AB] PASS — trial boot confirmed; EL2 watchdog disarmed, slot committed\n");
+        kprint!(" [HBoot-AB] PASS — trial boot confirmed; EL2 watchdog disarmed, slot committed [BOOT-TIMING] t=+{} ms (watchdog budget {} s)\n",
+            boot_ms(), bi.watchdog_secs);
     } else {
         kprint!(" [HBoot-AB] PASS — no trial watchdog in handoff; nothing to confirm\n");
     }
+}
+
+/// Milliseconds since the ARM generic counter started (SoC power-on on the CM5) — the clock the
+/// hboot trial watchdog budget is measured against. [BOOT-TIMING] markers use it so the bench can
+/// size the late-confirm window from real metal numbers.
+#[cfg(feature = "cm5")]
+fn boot_ms() -> u64 {
+    let (c, f): (u64, u64);
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
+    }
+    c / (f / 1000).max(1)
 }
 
 /// A/B boot confirm on a build with no EL2 trial gate (QEMU / firmware-direct):
@@ -1775,10 +1799,27 @@ fn cm5_prod_service() -> ! {
             None
         }
     };
+    kprint!(" [BOOT-TIMING] prod loop entered at t=+{} ms\n", boot_ms());
+    #[cfg(all(feature = "late-confirm", not(feature = "apmode")))]
+    let mut confirmed = false;
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
         let now = prod_cntpct();
+        // late-confirm: commit this boot only once the sensor is demonstrably HEALTHY — rule plane
+        // armed, the GEM loop running >= 2 s with zero contained faults, and (prod-mc) the
+        // Mission Control node up. Otherwise hboot's watchdog fires and the trial rolls back.
+        #[cfg(all(feature = "late-confirm", not(feature = "apmode")))]
+        if !confirmed && rules::active_rules() > 0 && faults == 0 && now.wrapping_sub(t0) >= 2 * cntfrq {
+            #[cfg(feature = "prod-mc")]
+            let mc_ok = mc.is_some();
+            #[cfg(not(feature = "prod-mc"))]
+            let mc_ok = true;
+            if mc_ok {
+                boot_confirm();
+                confirmed = true;
+            }
+        }
         // Mission Control: DHCP progress, every HTTP connection, egress — EVERY iteration, so the
         // operator's UI is responsive (not paced by the heartbeat).
         #[cfg(feature = "prod-mc")]
@@ -5168,6 +5209,9 @@ pub extern "C" fn kmain() -> ! {
     //     FAT32 boot partition and stage a candidate into its real sectors (driven by
     //     validate.sh with a mkfs.vfat'd disk; skips diskless / non-FAT) ---
     p15_otafat_selftest();
+    // B2: the A/B commit survives a cold boot (two-boot, factory-layout disk; SKIPs otherwise).
+    #[cfg(feature = "p15-write")]
+    abboot::abcommit_selftest();
 
     // --- P15-fs: M3.2 crash-safe log-structured record store (torn-tail recovery
     //     + bounded retention + evidence/QSecBit records survive reboot) ---

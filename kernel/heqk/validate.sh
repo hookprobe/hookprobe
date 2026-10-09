@@ -14,6 +14,11 @@ cd "$(dirname "$0")"
 # one; through the shared target/ a concurrent builder (another session) once swapped in a
 # non-p15-write kernel between the two and produced a phantom [P15-otafat] FAIL.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/validate}"
+# ...and SERIALIZE concurrent validate runs (two sessions share this worktree): two runs in the
+# same target dir swap each other's kernels between build and boot stages (phantom FAILs).
+mkdir -p "$CARGO_TARGET_DIR"
+exec 9>"$CARGO_TARGET_DIR/.validate.lock"
+if ! flock -n 9; then echo "[lock] another validate.sh run holds $CARGO_TARGET_DIR — waiting for it..."; flock 9; fi
 KERNEL=$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/debug/kernel
 LOG="$(mktemp)"
 # virtio-net (v2) attached for P5b: the kernel ARPs the gateway and RXes the reply.
@@ -97,6 +102,7 @@ PHASES=(
   "P15sf|[P15-sealfs] PASS|impl|Validation|M3.3 sealed data-volume (encryption at rest): record payloads are sealed with HQKSEAL1 (Encrypt-then-MAC) under a Volume Encryption Key that is itself SEALED in the keystore — (b) CONFIDENTIALITY: a raw block read of a slot holding a known Event is ciphertext (ts 0xDEADBEEF / src IP / the 16-B Event image ABSENT on disk, HQKSEAL1 magic present), (c) INTEGRITY: a ciphertext byte flipped on disk WITH the forgeable keyless framing digest recomputed is still MAC-REJECTED at mount_sealed (the seal MAC, not the digest, is the guard) while intact records survive fail-closed, (a)+(d) CROSS-RESTART: the sealed VEK survives reboot (boot-2 loads it) and decrypts the evidence Event + QSecBit history field-for-field; QEMU/virtio-blk-proven, real eMMC write + OTP-bound SRK = metal (Gate R)"
   "P15ota|[P15-ota] PASS|impl|Validation|M3.4 on-device A/B OTA orchestrator + state machine over file-backed virtio-blk: (a) a VALID hybrid-signed candidate is verified by the SHARED boot_abi::verify (HBoot's EXACT verifier + trust root — no 2nd trust root) → staged to the INACTIVE slot only → state=Staged, persisted; (b) an INVALID candidate (bad ed25519 sig) is REJECTED verify-before-flip — NO inactive-slot write, active slot + tryboot flag untouched; (c) flip→Trying→simulated healthy trial→Committed (new slot active); (d) simulated failed trial→RolledBack (old slot stays active) + a below-floor (svn<floor) DOWNGRADE is refused (SVN floor); (e) OTA state + staged candidate SURVIVE reboot (persisted, driven by the two boots); (f) brick-safety — the candidate write only ever lands in RegionKind::InactiveSlot, LBA 0/MBR + the active slot are guard-REFUSED. QEMU-proven; the REAL firmware one-shot flip + PM-watchdog trial reset + power cycle are hboot/metal (Gate R)"
   "P15otafat|[P15-otafat] PASS|impl|Validation|B2 OTA DELIVERY — locate the inactive A/B slot inside the SHARED FAT32 boot partition + stage a candidate into its REAL sectors (genuine mkfs.vfat image over virtio-blk): the read-only fat.rs locator parses the MBR → the FAT32 BPB → walks the root directory to HEQK8-B.IMG → follows its cluster chain to a CONTIGUOUS LBA run (fail-closed if fragmented/absent), registers that run as RegionKind::InactiveSlot, and writes a candidate marker through the brick-safety LBA guard (LBA 0 + the active slot + FAT/dir metadata all WriteRefused), read back byte-identical — FAT metadata never mutated (same-size in-place overwrite). QEMU-proven on a real FAT32 fs; the metal eMMC InactiveSlot write arming (emmc.rs clamp) is a separate Gate-R item"
+  "P15abcommit|[P15-abcommit] PASS|impl|Validation|B2 A/B COMMIT SURVIVES A COLD BOOT (two boots, one factory-layout disk): the firmware cold-boots config.txt and trial-boots tryboot.txt, so the commit rewrites their kernel= lines in place (equal-length slot names, line inside one sector — no FAT writer) through the guard as BootConfig. Boot 1 commits config.txt -> B and loses power before tryboot.txt; boot 2 reads B back (the commit persisted), detects trial == active and re-points tryboot.txt at A, then a full commit back to A leaves config=A/tryboot=B, and re-committing the active slot writes nothing. Metal: the eMMC Gate-1 clamp must admit the BootConfig sector (Gate R)"
   "AB|[HBoot-AB] PASS|impl|Validation|A/B trial boot: kernel confirms health (hvc #1 disarms HBoot's EL2 watchdog) or firmware falls back to the known-good slot"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
@@ -253,6 +259,50 @@ if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1 \
   rm -f "$FATDISK" "$PART" "$CAND" "$BO"
 else
   echo "skip (no mkfs.vfat/mcopy/dd, or no p15-write kernel)"
+fi
+
+# --- Stage 2d: B2 A/B COMMIT survives a cold boot — TWO boots on ONE factory-layout disk.
+# config.txt/tryboot.txt are generated exactly like builder/make-cm5-heqk-disk.sh (slot names of
+# equal length, the kernel= line inside one sector). Boot 1 commits to B but writes only
+# config.txt (simulated power loss); boot 2 must find B persisted, repair tryboot.txt, then do a
+# full commit back to A. Needs the p15-write kernel from Stage 2b.
+echo -n "[P15-abcommit] A/B commit across a reboot + interrupted-commit repair ... "
+if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1 && [ -f "$KERNEL" ]; then
+  ABDISK="$(mktemp)"; ABPART="$(mktemp)"; ABW="$(mktemp -d)"; AB1="$(mktemp)"; AB2="$(mktemp)"
+  dd if=/dev/zero of="$ABPART" bs=512 count=129024 status=none
+  mkfs.vfat -F 32 -s 1 "$ABPART" >/dev/null 2>&1
+  python3 -I - "$ABW" cm5-boot/config-nolinux.txt <<'PY'
+import sys, re
+out, tpl = sys.argv[1], sys.argv[2]
+lines = [l for l in open(tpl).read().splitlines() if not re.match(r'\s*kernel\s*=', l)]
+for name, slot in (("config.txt", "a"), ("tryboot.txt", "b")):
+    body = ["# heqk A/B boot config (validate.sh, factory format)"] + lines
+    head = ("\n".join(body) + "\n").encode(); line = f"kernel=heqk8-{slot}.img"
+    if len(head) % 512 + len(line) > 512:
+        body.append("#" * max(512 - len(head) % 512 - 1, 1))
+    open(f"{out}/{name}", "w").write("\n".join(body + [line, ""]))
+PY
+  dd if=/dev/urandom of="$ABW/slot" bs=1K count=64 status=none
+  for f in config.txt tryboot.txt; do mcopy -i "$ABPART" "$ABW/$f" ::"$f" >/dev/null 2>&1; done
+  mcopy -i "$ABPART" "$ABW/slot" ::HEQK8-A.IMG >/dev/null 2>&1
+  mcopy -i "$ABPART" "$ABW/slot" ::HEQK8-B.IMG >/dev/null 2>&1
+  dd if=/dev/zero of="$ABDISK" bs=1M count=64 status=none
+  printf 'start=2048, size=129024, type=c\n' | sfdisk --quiet --label dos "$ABDISK" 2>/dev/null
+  dd if="$ABPART" of="$ABDISK" bs=512 seek=2048 conv=notrunc status=none
+  QEMU_AB="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+    -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+    -drive file=$ABDISK,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
+  timeout "$QEMU_TIMEOUT" $QEMU_AB "$KERNEL" >"$AB1" 2>&1   # boot 1: commit config only (crash)
+  timeout "$QEMU_TIMEOUT" $QEMU_AB "$KERNEL" >"$AB2" 2>&1   # boot 2: same disk -> repair + full commit
+  cat "$AB1" "$AB2" >> "$LOG"
+  if grep -qF "[P15-abcommit] boot 1: committed" "$AB1" && grep -qF "[P15-abcommit] PASS" "$AB2"; then
+    echo "PASS (commit persisted across the reboot; interrupted commit repaired; full commit + idempotent)"
+  else
+    echo "FAIL/see report"; grep -hF "[P15-abcommit]" "$AB1" "$AB2" | sed 's/^/    /'
+  fi
+  rm -rf "$ABDISK" "$ABPART" "$ABW" "$AB1" "$AB2"
+else
+  echo "skip (no mkfs.vfat/mcopy, or no p15-write kernel)"
 fi
 
 # --- Stage 3: phase gate report ------------------------------------------

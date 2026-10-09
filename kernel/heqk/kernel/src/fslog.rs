@@ -448,8 +448,9 @@ pub fn format<D: BlockDev>(
     // via `?` above.
     match store.store_sector(lo, &sb)? {
         RegionKind::DataVolume | RegionKind::Keystore => {}
-        // InactiveSlot (an A/B boot slot) must NEVER hold an fslog superblock — reject.
-        RegionKind::InactiveSlot => return Err(FsErr::OutsideRegion),
+        // InactiveSlot (an A/B boot slot) and BootConfig (a config.txt/tryboot.txt sector) must
+        // NEVER hold an fslog superblock — reject.
+        RegionKind::InactiveSlot | RegionKind::BootConfig => return Err(FsErr::OutsideRegion),
     }
     // Zero the slot area so a re-format over stale records leaves no valid ghosts.
     let zero = [0u8; SEC];
@@ -512,7 +513,7 @@ impl LogStore {
         // InactiveSlot / non-registered LBA still escapes.
         match store.store_sector(lba, &sec)? {
             RegionKind::DataVolume | RegionKind::Keystore => {}
-            RegionKind::InactiveSlot => return Err(FsErr::OutsideRegion),
+            RegionKind::InactiveSlot | RegionKind::BootConfig => return Err(FsErr::OutsideRegion),
         }
         self.next_seq += 1;
         if self.count < self.nslots {
