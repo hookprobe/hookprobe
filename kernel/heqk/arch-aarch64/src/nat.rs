@@ -22,16 +22,21 @@ pub const WIFI_MAX_FRAME: usize = 496;
 /// (496 − 14 eth − 20 ip − 20 tcp − 12 timestamps).
 pub const MSS_CLAMP: u16 = 430;
 
+/// Inside link ids (`Entry.in_if`): replies go back out the link the flow came in on.
+pub const IF_WIFI: u8 = 0;
+pub const IF_ETH1: u8 = 1;
+
 #[derive(Clone, Copy)]
 struct Entry {
     used: bool,
     proto: u8,
+    in_if: u8,
     in_mac: [u8; 6],
     in_ip: [u8; 4],
     in_port: u16, // TCP/UDP src port, or ICMP echo id
     last: u64,    // cntpct of the last packet either way
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0 };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0 };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 
 #[derive(Default)]
@@ -64,7 +69,7 @@ fn timeout(proto: u8) -> u64 {
 }
 
 /// Find or allocate the entry for (proto, in_ip, in_port). Returns the index.
-fn lookup_or_alloc(proto: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_port: u16, now: u64, st: &mut NatStats) -> usize {
+fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_port: u16, now: u64, st: &mut NatStats) -> usize {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
     let mut free: Option<usize> = None;
     let mut oldest = (0usize, u64::MAX);
@@ -74,6 +79,7 @@ fn lookup_or_alloc(proto: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_port: u16, n
             if e.proto == proto && e.in_ip == *in_ip && e.in_port == in_port {
                 t[i].last = now;
                 t[i].in_mac = *in_mac;
+                t[i].in_if = in_if;
                 return i;
             }
             if now.wrapping_sub(e.last) > timeout(e.proto) && free.is_none() {
@@ -93,7 +99,7 @@ fn lookup_or_alloc(proto: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_port: u16, n
             oldest.0
         }
     };
-    t[i] = Entry { used: true, proto, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now };
     st.table_alloc += 1;
     i
 }
@@ -222,7 +228,7 @@ fn parse_v4(f: &[u8]) -> Option<(usize, usize, u8)> {
 /// OUTBOUND (inside → WAN): rewrite a client frame into `out` addressed to the gateway,
 /// sourced from the lease. Returns the frame length to transmit on end0, or None (not
 /// NATable: not IPv4, TTL exhausted, unsupported proto, or destined for our own subnet).
-pub fn outbound(f: &[u8], inside_net: &[u8; 3], wan_ip: &[u8; 4], wan_mac: &[u8; 6], gw_mac: &[u8; 6], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<usize> {
+pub fn outbound(f: &[u8], in_if: u8, inside_net: &[u8; 3], wan_ip: &[u8; 4], wan_mac: &[u8; 6], gw_mac: &[u8; 6], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<usize> {
     let (ihl, ip_end, proto) = match parse_v4(f) {
         Some(t) => t,
         None => {
@@ -251,7 +257,7 @@ pub fn outbound(f: &[u8], inside_net: &[u8; 3], wan_ip: &[u8; 4], wan_mac: &[u8;
     in_mac.copy_from_slice(&f[6..12]);
     let mut in_ip = [0u8; 4];
     in_ip.copy_from_slice(&f[26..30]);
-    let idx = lookup_or_alloc(proto, &in_mac, &in_ip, in_port, now, st);
+    let idx = lookup_or_alloc(proto, in_if, &in_mac, &in_ip, in_port, now, st);
     let ext = EXT_BASE + idx as u16;
 
     out[..ip_end].copy_from_slice(&f[..ip_end]);
@@ -273,10 +279,11 @@ pub fn outbound(f: &[u8], inside_net: &[u8; 3], wan_ip: &[u8; 4], wan_mac: &[u8;
 }
 
 /// INBOUND (WAN → inside): a frame received on end0 for the lease. Rewrites it into `out`
-/// addressed to the inside client (from the table) and sourced from the AP/LAN MAC.
-/// Returns the frame length for the inside link, or None (not for us / no entry / too
-/// big for the WiFi leg).
-pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_mac: &[u8; 6], inside_max: usize, out: &mut [u8], now: u64, st: &mut NatStats) -> Option<usize> {
+/// addressed to the inside client (from the table) and sourced from that link's MAC
+/// (`inside_macs[in_if]`). Returns (frame length, inside link id), or None (not for us /
+/// no entry). The CALLER enforces the per-link size cap (the WiFi leg carries ≤
+/// `WIFI_MAX_FRAME`; eth1 a full MTU) and counts `in_too_big`.
+pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8; 6]; 2], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<(usize, u8)> {
     if f.len() < 14 || (&f[0..6] != &wan_mac[..]) {
         return None; // promiscuous GEM: not addressed to us (no stat — that's the wire's noise)
     }
@@ -307,10 +314,7 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_mac: &[u8; 
             return None;
         }
     };
-    if ip_end > inside_max {
-        st.in_too_big += 1;
-        return None; // the WiFi leg cannot carry it (MSS clamp keeps TCP under; big UDP is lost)
-    }
+    let inside_mac = inside_macs[(e.in_if as usize).min(1)];
     // Trim to the IPv4 total length: the GEM hands us the FCS too.
     out[..ip_end].copy_from_slice(&f[..ip_end]);
     out[0..6].copy_from_slice(&e.in_mac);
@@ -327,5 +331,5 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_mac: &[u8; 
     }
     fix_csums(out, ihl, ip_end);
     st.in_fwd += 1;
-    Some(ip_end)
+    Some((ip_end, e.in_if))
 }
