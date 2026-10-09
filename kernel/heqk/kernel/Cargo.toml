@@ -149,6 +149,11 @@ prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
 # bridge + the Noise control plane). Enrolls on the handshake (tenant from msg2), then streams
 # HQXR datagram records unicast to the MSSP (kernel/responder-sim --live receives them).
 prod-export = ["prod-full", "netmetal"]
+# ADR 0047 D2 + ADR 0037 D4 — THE production CM5 profile: prod-full (sealed snapshot, real SOAR
+# events) + heqk serving Mission Control itself on the GEM (DHCP, SRK-derived MAC, embedded UI,
+# the UI's API) in PASSIVE-FIRST mode (PASS frames observed, never re-transmitted). Built by the
+# image factory (FEATURES=prod-mc) and CI.
+prod-mc = ["prod-full", "mcserve"]
 # rollback-test — M1 CRITERION 4 ONLY. Arms the firmware's one-shot tryboot flag and
 # resets, so the NEXT boot loads tryboot.txt (SLOT B) instead of config.txt (SLOT A).
 #

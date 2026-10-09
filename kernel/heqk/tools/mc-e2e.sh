@@ -28,8 +28,10 @@ if [ ! -f "$UI/dist/index.html" ]; then
   command -v npm >/dev/null || { echo "  npm not found and ui/dist missing — cannot embed the UI"; exit 2; }
   (cd "$UI" && npm ci --no-audit --no-fund >/dev/null && PUBLIC_API_BASE='' npm run build >/dev/null) || { echo "  UI build failed"; exit 2; }
 fi
+# Private target dir: never overwrite the shared target/ other builders/sessions flash from.
+export CARGO_TARGET_DIR=target/mc
 cargo build -p kernel --features mcserve >/tmp/mc-e2e-build.log 2>&1 || { tail -20 /tmp/mc-e2e-build.log; exit 2; }
-KERNEL=target/aarch64-unknown-none-softfloat/debug/kernel
+KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
 echo "[2] boot heqk in QEMU (host :$HTTP→80, :$P4444→4444, :$P23→23)"
 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
@@ -39,8 +41,10 @@ qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio
 QPID=$!
 cleanup() { [ "${MC_E2E_KEEP:-0}" = 1 ] || kill "$QPID" 2>/dev/null; }
 trap cleanup EXIT
-for _ in $(seq 1 60); do grep -qa "\[MC\] heqk Mission Control serving" "$LOG" && break; sleep 1; done
+# "serving" is printed only once DHCP has leased an address (QEMU user-net serves 10.0.2.15).
+for _ in $(seq 1 90); do grep -qa "\[MC\] heqk Mission Control serving" "$LOG" && break; sleep 1; done
 grep -a "\[MC\]" "$LOG" | sed 's/^/        /'
+grep -qa "serving on http://10.0.2.15:80 (DHCP lease)" "$LOG" && ok "address obtained by DHCP (10.0.2.15)" || bad "no DHCP lease (expected 10.0.2.15)"
 
 echo "[3] device health: served by heqk, rule plane armed"
 H=$(curl -s -m 10 "$B/api/health")
