@@ -71,6 +71,16 @@ mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
 mod netsvc;
+// ADR 0047 D2 — on-device Mission Control: rule catalogue + state + HTTP (pure; QEMU-proven by
+// [P-mc]); the TCP serve loop is `mcserve.rs` (feature `mcserve`).
+#[cfg(feature = "netsvc")]
+mod rulecat;
+#[cfg(feature = "netsvc")]
+mod mcstate;
+#[cfg(feature = "netsvc")]
+mod http;
+#[cfg(all(feature = "mcserve", not(feature = "cm5")))]
+mod mcserve;
 #[cfg(feature = "netsvc")]
 mod netcfg;
 // M4.2a — PQC secure-channel crypto PRIMITIVES + KATs (framing-agnostic). Behind
@@ -4468,6 +4478,11 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" [P7b] W^X {} (kernel .text RO+X, data RW+PXN, SCTLR.WXN on)\n",
         if wx_ok { "PASS" } else { "FAIL" });
 
+    // ADR 0047 D2: a `mcserve` build boots straight into the device's Mission Control service
+    // (IPS-gated datapath + evidence + the UI/API over HTTP). Never returns.
+    #[cfg(feature = "mcserve")]
+    mcserve::run();
+
     // --- P-wx: MULTI-BLOCK W^X proof ----------------------------------------
     // P7b above reads back the REAL kernel descriptors, but today .text is ~1.2 MiB
     // = one 2 MiB block, so it only exercises the single-block path. build_wx_ram
@@ -4742,6 +4757,8 @@ pub extern "C" fn kmain() -> ! {
     // The EL0-isolated netq service + TRNG seed + PCR3 measurement is the metal half. ---
     #[cfg(feature = "netsvc")]
     {
+        // ADR 0047 D2: the on-device Mission Control server logic (parse/route/JSON/SSE).
+        let _ = http::mc_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });

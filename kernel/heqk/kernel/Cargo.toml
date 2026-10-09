@@ -17,7 +17,7 @@ ed25519-compact = { version = "2", default-features = false }
 # as an EL0-ISOLATED service over the P17 rule-plane-gated netq; the `netsvc` build gates
 # the stack integration on QEMU (smoltcp answers an ARP under packet::verdict both ways).
 smoltcp = { version = "0.13", default-features = false, features = [
-    "proto-ipv4", "medium-ethernet", "socket-udp", "socket-dhcpv4",
+    "proto-ipv4", "medium-ethernet", "socket-udp", "socket-dhcpv4", "socket-tcp",
 ], optional = true }
 # M4.2a — PQC secure-channel crypto PRIMITIVES (KEX + AEAD), FRAMING-AGNOSTIC (the
 # identical primitives feed BOTH the ADR-0002 rustls-hybrid path AND the ADR-0004
@@ -68,6 +68,11 @@ wasmhost = []
 txdiag = []
 # PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
 netsvc = ["dep:smoltcp"]
+# ADR 0047 D2 — heqk serves Mission Control itself (QEMU virt today): boots straight into the
+# IPS-gated datapath + SOAR → evidence state + an HTTP server for the embedded UI (ui/dist, built
+# with PUBLIC_API_BASE='') and the UI's API. Run: tools/mc-e2e.sh. Not a validate.sh flavour (the
+# serve loop never exits); its pure logic is the [P-mc] gate.
+mcserve = ["netsvc"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
 # (smoltcp) into the cm5 build; prod stays byte-identical without it. os-architect design
