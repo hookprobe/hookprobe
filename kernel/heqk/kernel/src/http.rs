@@ -7,6 +7,7 @@
 //! `/api/stream` (SSE `update`), plus the static UI embedded in the image at build time.
 //! Pure (no sockets): the serve loop owns TCP; this module turns request bytes into a response.
 
+use crate::mcauth::{self, Auth, LoginErr};
 use crate::mcstate::{JsonBuf, McState};
 
 /// One embedded static file.
@@ -23,9 +24,17 @@ include!(concat!(env!("OUT_DIR"), "/ui_assets.rs"));
 #[derive(Debug, PartialEq, Eq)]
 pub struct Req<'a> {
     pub get: bool,
+    pub post: bool,
     pub path: &'a str,
     pub query: &'a str,
+    /// The `hq_session` cookie value, if sent.
+    pub session: Option<&'a str>,
+    /// Request body (POST only; bounded by `MAX_BODY`).
+    pub body: &'a [u8],
 }
+
+/// Largest accepted request body (the login form; nothing else posts).
+pub const MAX_BODY: usize = 512;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseErr {
@@ -55,7 +64,32 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
         Some(i) => (&target[..i], &target[i + 1..]),
         None => (target, ""),
     };
-    Ok(Req { get: method == "GET", path, query })
+    let mut session = None;
+    let mut clen = 0usize;
+    for h in head.split("\r\n").skip(1) {
+        let Some((k, v)) = h.split_once(':') else { continue };
+        let v = v.trim();
+        if k.eq_ignore_ascii_case("cookie") {
+            for c in v.split(';') {
+                if let Some((ck, cv)) = c.trim().split_once('=') {
+                    if ck == mcauth::COOKIE {
+                        session = Some(cv);
+                    }
+                }
+            }
+        } else if k.eq_ignore_ascii_case("content-length") {
+            clen = v.parse().map_err(|_| ParseErr::Bad)?;
+        }
+    }
+    if clen > MAX_BODY {
+        return Err(ParseErr::Bad);
+    }
+    let body_start = end + 4;
+    if buf.len() < body_start + clen {
+        return Err(ParseErr::Incomplete);
+    }
+    let body = &buf[body_start..body_start + clen];
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body })
 }
 
 /// `key=<u32>` from a query string.
@@ -105,7 +139,17 @@ pub struct Response {
     pub status: u16,
     pub ctype: &'static str,
     pub body: Body,
+    /// Redirect target (302/303).
+    pub location: Option<&'static str>,
+    /// A freshly minted session id (hex) to set as the `hq_session` cookie.
+    pub set_cookie: Option<[u8; 32]>,
 }
+
+/// The owner login page — self-contained (no JS, no external assets), served by heqk itself.
+pub const LOGIN_HTML: &[u8] = br#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HookProbe - sign in</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0f14;color:#e6edf3;font:15px system-ui,sans-serif}form{width:min(92vw,380px);padding:28px;border:1px solid #233;border-radius:12px;background:#10161d}h1{font-size:18px;margin:0 0 6px}p{color:#9aa7b4;margin:0 0 18px;line-height:1.4}input{box-sizing:border-box;width:100%;padding:11px;border-radius:8px;border:1px solid #2b3a48;background:#0b0f14;color:#e6edf3;font:14px ui-monospace,monospace}button{margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:#22d3ee;color:#04232a;font-weight:600;cursor:pointer}</style></head><body><form method="post" action="/api/login"><h1>HookProbe</h1><p>Enter the owner key you were given when this device was flashed.</p><input name="token" autocomplete="current-password" autofocus required aria-label="Owner key"><button type="submit">Sign in</button></form></body></html>"#;
+
+/// Shown instead of the UI on a device that was never claimed.
+pub const UNCLAIMED_HTML: &[u8] = br#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>HookProbe - not claimed</title></head><body style="font:15px system-ui;background:#0b0f14;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0"><p style="max-width:420px;line-height:1.5">This device has no owner key, so it refuses access. Flash it with the HookProbe flasher to set one. There is no default password.</p></body></html>"#;
 
 fn json(scratch: &mut [u8], f: impl FnOnce(&mut JsonBuf)) -> Response {
     let mut w = JsonBuf::new(scratch);
@@ -113,16 +157,46 @@ fn json(scratch: &mut [u8], f: impl FnOnce(&mut JsonBuf)) -> Response {
     let ok = !w.overflow;
     let len = w.len;
     if ok {
-        Response { status: 200, ctype: "application/json", body: Body::Scratch(len) }
+        Response { status: 200, ctype: "application/json", body: Body::Scratch(len), location: None, set_cookie: None }
     } else {
         let mut w = JsonBuf::new(scratch);
         w.raw("{\"error\":\"response too large\"}");
-        Response { status: 500, ctype: "application/json", body: Body::Scratch(w.len) }
+        Response { status: 500, ctype: "application/json", body: Body::Scratch(w.len), location: None, set_cookie: None }
     }
 }
 
-/// Route one request against the device state. `scratch` receives rendered JSON.
-pub fn handle(req: &Req, st: &McState, scratch: &mut [u8]) -> Response {
+/// Route one request against the device state, enforcing owner authentication (ADR 0037 D3).
+/// `scratch` receives rendered JSON; `rand16` mints a session id on a successful login.
+pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
+    // Public: the login page, the login action, and a minimal health probe.
+    match (req.path, req.get, req.post) {
+        ("/login", true, _) => return Response::page(200, LOGIN_HTML),
+        ("/api/login", _, true) => return login(req, auth, now_ms, rand16, scratch),
+        ("/api/health", true, _) if !auth.check(req.session, now_ms) => {
+            let claimed = auth.claimed();
+            return json(scratch, |w| {
+                w.raw("{\"status\":\"ok\",\"substrate\":\"heqk\",\"claimed\":");
+                w.raw(if claimed { "true" } else { "false" });
+                w.raw("}");
+            });
+        }
+        _ => {}
+    }
+    let api = req.path.starts_with("/api/");
+    if !auth.claimed() {
+        return if api {
+            json(scratch, |w| w.raw("{\"error\":\"device not claimed: flash it with the HookProbe flasher to set the owner key\"}")).with_status(403)
+        } else {
+            Response::page(403, UNCLAIMED_HTML)
+        };
+    }
+    if !auth.check(req.session, now_ms) {
+        return if api {
+            json(scratch, |w| w.raw("{\"error\":\"sign in required\"}")).with_status(401)
+        } else {
+            Response { status: 302, ctype: "text/plain", body: Body::Scratch(0), location: Some("/login"), set_cookie: None }
+        };
+    }
     if !req.get {
         return json(scratch, |w| w.raw("{\"error\":\"method not allowed\"}")).with_status(405);
     }
@@ -141,16 +215,37 @@ pub fn handle(req: &Req, st: &McState, scratch: &mut [u8]) -> Response {
             let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
                 if rules == 0 { "degraded: rule plane not armed" } else { "ok" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
         }),
-        "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse },
+        "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
         p => match asset_for(p) {
-            Some(a) => Response { status: 200, ctype: a.ctype, body: Body::Static(a.body) },
+            Some(a) => Response { status: 200, ctype: a.ctype, body: Body::Static(a.body), location: None, set_cookie: None },
             None => json(scratch, |w| w.raw("{\"error\":\"not found\"}")).with_status(404),
         },
     }
 }
 
+/// `POST /api/login` with a form body `token=<owner key>` (the key alphabet needs no URL decoding).
+fn login(req: &Req, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
+    let body = core::str::from_utf8(req.body).unwrap_or("");
+    let token = body.split('&').find_map(|kv| kv.strip_prefix("token=")).unwrap_or("").trim();
+    match auth.login(token.as_bytes(), now_ms, rand16) {
+        Ok(id) => {
+            let mut hex = [0u8; 32];
+            mcauth::session_hex(&id, &mut hex);
+            Response { status: 303, ctype: "text/plain", body: Body::Scratch(0), location: Some("/"), set_cookie: Some(hex) }
+        }
+        Err(LoginErr::Unclaimed) => Response::page(403, UNCLAIMED_HTML),
+        Err(LoginErr::NoEntropy) => json(scratch, |w| w.raw("{\"error\":\"entropy source unavailable, try again\"}")).with_status(503),
+        Err(LoginErr::Throttled) => json(scratch, |w| w.raw("{\"error\":\"too many attempts, wait a minute\"}")).with_status(429),
+        Err(LoginErr::BadToken) => Response { status: 303, ctype: "text/plain", body: Body::Scratch(0), location: Some("/login"), set_cookie: None },
+    }
+}
+
 impl Response {
+    fn page(status: u16, html: &'static [u8]) -> Self {
+        Response { status, ctype: "text/html; charset=utf-8", body: Body::Static(html), location: None, set_cookie: None }
+    }
+
     fn with_status(mut self, s: u16) -> Self {
         self.status = s;
         self
@@ -168,6 +263,12 @@ impl Response {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        302 => "Found",
+        303 => "See Other",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        429 => "Too Many Requests",
+        503 => "Service Unavailable",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -179,8 +280,17 @@ fn reason(status: u16) -> &'static str {
 pub fn write_head(resp: &Response, out: &mut [u8]) -> usize {
     use core::fmt::Write;
     let mut w = JsonBuf::new(out);
-    let _ = write!(w, "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nServer: heqk\r\nAccess-Control-Allow-Origin: *\r\n",
+    // No CORS header: the UI is same-origin (served by this device), and the session cookie must
+    // never be usable cross-origin.
+    let _ = write!(w, "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nServer: heqk\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n",
         resp.status, reason(resp.status), resp.ctype);
+    if let Some(l) = resp.location {
+        let _ = write!(w, "Location: {}\r\n", l);
+    }
+    if let Some(c) = resp.set_cookie {
+        let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200\r\n",
+            mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""));
+    }
     match resp.body_len() {
         Some(n) => {
             let _ = write!(w, "Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", n);
@@ -220,34 +330,70 @@ pub fn mc_selftest() -> bool {
     st.sample_qsecbit(8_000, 40); // 40 points inside the window → risk 40/60
     let mut scratch = [0u8; 8192];
 
+    // Owner auth: a claimed device with a known owner token.
+    let salt = [9u8; 16];
+    let token: &[u8] = b"hq-owner-selftest-token";
+    let mut auth = Auth::new(Some(mcauth::Owner { salt, verifier: mcauth::verifier_for(&salt, token) }));
     let req = |raw: &'static [u8]| parse(raw);
-    let get = |p: &'static [u8], st: &McState, sc: &mut [u8]| -> (u16, usize) {
-        let r = parse(p).unwrap();
-        let resp = handle(&r, st, sc);
+    // Unauthenticated: API 401, page → 302 /login, health stays public but minimal.
+    let unauth_api = handle(&parse(b"GET /api/detections HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch).status == 401;
+    let unauth_page = {
+        let r = handle(&parse(b"GET /detect/feed HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch);
+        r.status == 302 && r.location == Some("/login")
+    };
+    let public_health = {
+        let r = handle(&parse(b"GET /api/health HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch);
+        matches!(r.body, Body::Scratch(n) if &scratch[..n] == b"{\"status\":\"ok\",\"substrate\":\"heqk\",\"claimed\":true}")
+    };
+    let bad_login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 11\r\n\r\ntoken=wrong").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch).set_cookie.is_none();
+    let login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 29\r\n\r\ntoken=hq-owner-selftest-token").unwrap(), &st, &mut auth, 0, || Some([0x5A; 16]), &mut scratch);
+    let cookie = login.set_cookie;
+    let login_ok = login.status == 303 && login.location == Some("/") && cookie.is_some();
+    let mut head = [0u8; 512];
+    let hl = write_head(&login, &mut head);
+    let cookie_hdr_ok = has(&head[..hl], "Set-Cookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a; HttpOnly; SameSite=Strict") && !has(&head[..hl], "Access-Control-Allow-Origin");
+    // Unclaimed device: everything protected refuses, login refuses.
+    let mut unclaimed = Auth::new(None);
+    let unclaimed_ok = handle(&parse(b"GET /api/detections HTTP/1.1\r\n\r\n").unwrap(), &st, &mut unclaimed, 0, || Some([0; 16]), &mut scratch).status == 403
+        && handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 11\r\n\r\ntoken=guess").unwrap(), &st, &mut unclaimed, 0, || Some([0; 16]), &mut scratch).status == 403;
+    let auth_ok = unauth_api && unauth_page && public_health && bad_login && login_ok && cookie_hdr_ok && unclaimed_ok;
+
+    // Authenticated requests from here on (the browser's cookie).
+    let mut authed: [u8; 512] = [0; 512];
+    let get = |p: &'static [u8], st: &McState, auth: &mut Auth, sc: &mut [u8], buf: &mut [u8; 512]| -> (u16, usize) {
+        // splice "Cookie: hq_session=<id>" into the request before the blank line
+        let end = p.len() - 4;
+        let ck = b"\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+        buf[..end].copy_from_slice(&p[..end]);
+        buf[end..end + ck.len()].copy_from_slice(ck);
+        buf[end + ck.len()..end + ck.len() + 4].copy_from_slice(b"\r\n\r\n");
+        let len = end + ck.len() + 4;
+        let r = parse(&buf[..len]).unwrap();
+        let resp = handle(&r, st, auth, 1, || Some([0; 16]), sc);
         (resp.status, match resp.body { Body::Scratch(n) => n, _ => 0 })
     };
-
-    let (s1, n1) = get(b"GET /api/detections?limit=50 HTTP/1.1\r\nHost: d\r\n\r\n", &st, &mut scratch);
+    let (s1, n1) = get(b"GET /api/detections?limit=50 HTTP/1.1\r\nHost: d\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let d = &scratch[..n1];
     let det_ok = s1 == 200 && has(d, "\"count\":3") && has(d, "\"rule_id\":1200001") && has(d, "Known C2 port 4444 (DROP, framedrop)")
         && has(d, "\"src_ip\":\"10.0.2.2\"") && has(d, "\"severity\":2") && has(d, "\"mitre\":\"T1571\"")
         && has(d, "\"ts\":1700000005.000") && !has(d, "17.34.51.68") /* MAC-hash src never rendered as an IP */;
-    let (s2, n2) = get(b"GET /api/incidents HTTP/1.1\r\n\r\n", &st, &mut scratch);
+    let (s2, n2) = get(b"GET /api/incidents HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let i = &scratch[..n2];
     let inc_ok = s2 == 200 && has(i, "\"count\":1") && has(i, "\"device_ip\":\"10.0.2.2\"") && has(i, "\"priority\":\"High\"")
         && has(i, "\"threat_score\":0.8") && has(i, "(2 detections)");
-    let (s3, n3) = get(b"GET /api/qsecbit?limit=5 HTTP/1.1\r\n\r\n", &st, &mut scratch);
+    let (s3, n3) = get(b"GET /api/qsecbit?limit=5 HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let q = &scratch[..n3];
     let qs_ok = s3 == 200 && has(q, "\"latest\":{\"ts\":1700000008.000,\"score\":0.666,\"band\":\"AMBER\"}") && has(q, "\"count\":2");
-    let (s4, n4) = get(b"GET /api/engines HTTP/1.1\r\n\r\n", &st, &mut scratch);
+    let (s4, n4) = get(b"GET /api/engines HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let eng_ok = s4 == 200 && &scratch[..n4] == b"{\"engines\":[]}";
-    let (s5, _) = get(b"GET /api/nope HTTP/1.1\r\n\r\n", &st, &mut scratch);
-    let (s6, _) = get(b"POST /api/detections HTTP/1.1\r\n\r\n", &st, &mut scratch);
+    let (s5, _) = get(b"GET /api/nope HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
+    let (s6, _) = get(b"POST /api/detections HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let errs_ok = s5 == 404 && s6 == 405
         && req(b"GET /api/x HTTP/1.1\r\n") == Err(ParseErr::Incomplete)
         && req(b"garbage\r\n\r\n") == Err(ParseErr::Bad)
         && asset_for("/../../etc/passwd").is_none();
-    let sse_ok = matches!(handle(&parse(b"GET /api/stream HTTP/1.1\r\n\r\n").unwrap(), &st, &mut scratch).body, Body::Sse) && {
+    let sse_ok = matches!(handle(&parse(b"GET /api/stream HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut scratch).body, Body::Sse)
+        && !matches!(handle(&parse(b"GET /api/stream HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut scratch).body, Body::Sse) && {
         let n = sse_update(&st, &mut scratch);
         n > 0 && scratch[..n].starts_with(b"event: update\ndata: {\"detections\":[") && scratch[..n].ends_with(b"]}\n\n")
     };
@@ -255,13 +401,13 @@ pub fn mc_selftest() -> bool {
     // fewer rows, an honest count); a buffer too small for even the empty document is a valid
     // 500 JSON error — never a truncated document.
     let mut small = [0u8; 400];
-    let shed = handle(&parse(b"GET /api/detections HTTP/1.1\r\n\r\n").unwrap(), &st, &mut small);
+    let shed = handle(&parse(b"GET /api/detections HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut small);
     let shed_ok = shed.status == 200 && matches!(shed.body, Body::Scratch(n) if small[..n].ends_with(b"}") && !has(&small[..n], "\"count\":3"));
     let mut tiny = [0u8; 8];
-    let big = handle(&parse(b"GET /api/detections HTTP/1.1\r\n\r\n").unwrap(), &st, &mut tiny);
+    let big = handle(&parse(b"GET /api/detections HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut tiny);
     let ovf_ok = shed_ok && big.status == 500;
-    let pass = det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} (ui assets embedded: {})\n",
-        if pass { "PASS" } else { "FAIL" }, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, UI_ASSETS.len());
+    let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok;
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} (ui assets embedded: {})\n",
+        if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, UI_ASSETS.len());
     pass
 }

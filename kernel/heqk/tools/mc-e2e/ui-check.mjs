@@ -11,6 +11,14 @@ page.on('response', (r) => { if (r.url().includes('/api/')) apiCalls.push(`${r.s
 let fails = 0;
 const check = (ok, what) => { console.log(`    ${ok ? 'ok ' : 'BAD'} ${what}`); if (!ok) fails++; };
 
+// Sign in through the device's own login page with the owner key (ADR 0037 D3).
+const token = process.argv[3] ?? '';
+await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
+check(new URL(page.url()).pathname === '/login', 'an unauthenticated browser is sent to the login page');
+await page.fill('input[name=token]', token);
+await Promise.all([page.waitForURL(`${base}/`), page.click('button[type=submit]')]);
+check(new URL(page.url()).pathname === '/', 'signing in with the owner key lands on Mission Control');
+
 // Detect workspace: the live detection feed from the device.
 // 'load', not 'networkidle': the UI holds an SSE stream open by design, so the network never idles.
 await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
