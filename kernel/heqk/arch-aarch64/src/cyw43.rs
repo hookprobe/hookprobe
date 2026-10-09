@@ -1889,23 +1889,45 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     if (hw_len as usize) > BRCMF_FIRSTREAD {
         let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
         let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-        // The remainder in byte-mode CMD53 chunks of <= 512 B, back to back. The F2 data
-        // path is a stream the firmware already continues across the 64-B header read and
-        // the remainder read, so a 1514-B frame is simply 64 + 512 + 512 + 426 (M-NAT4,
-        // metal 2026-10-09: the single capped read truncated every frame > ~560 B — the
-        // phone's QUIC/Private-Relay packets — which then failed `parse` and were counted
-        // as IDS drops). Byte-mode chunks sidestep this controller's multi-block PIO flow
-        // problem (see backplane_write). Stop at the first failed chunk: the tail stays
-        // zeroed and hw_len is clamped to what was actually moved (fail-closed, as before).
-        let mut got = 0usize;
-        while BRCMF_FIRSTREAD + got < end {
-            let chunk = (end - BRCMF_FIRSTREAD - got).min(512);
-            let s = BRCMF_FIRSTREAD + got;
-            if !cmd53_read(2, F2_SDPCM_ADDR, &mut rx[s..s + chunk]) {
-                break;
+        // The remainder is ONE transfer. Metal 2026-10-09 (imgs fd5b6ccb/6e2f0190): reading
+        // it as consecutive <=512-B byte-mode CMD53s let the first big frame through intact,
+        // then STALLED the SDPCM stream for the rest of the boot (no further frames read,
+        // TX credit never returned, 29 deliveries stuck) — the firmware expects the remainder
+        // in a single read, exactly as brcmfmac does it (block mode when > the block size).
+        // Default build: a single byte-mode read capped at 512 B — a frame > ~560 B is
+        // truncated, fails `parse` and is counted `trunc_drop` (fail-closed, stream intact).
+        // `wifi-bigtx` bench build: one BLOCK-mode read of N x 512-B blocks for a remainder
+        // > 512 B (the fw pads the tail to the block size).
+        let want = end - BRCMF_FIRSTREAD;
+        let got = {
+            #[cfg(feature = "wifi-bigtx")]
+            {
+                if want > 512 {
+                    let nblk = (want + 511) / 512;
+                    let need = nblk * 512;
+                    if BRCMF_FIRSTREAD + need <= rx.len()
+                        && cmd53_read_blocks512(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + need], nblk as u32)
+                    {
+                        want
+                    } else {
+                        0
+                    }
+                } else if cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]) {
+                    want
+                } else {
+                    0
+                }
             }
-            got += chunk;
-        }
+            #[cfg(not(feature = "wifi-bigtx"))]
+            {
+                let n = want.min(512);
+                if cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + n]) {
+                    n
+                } else {
+                    0
+                }
+            }
+        };
         for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
             *b = 0;
         }
@@ -4211,14 +4233,140 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
     // dropped by the fw although the host saw TX success. Refuse instead (the caller counts
     // it as too-big); the RX side's chunked remainder read IS valid (a 1350-B client frame
     // crossed intact). A real >512-B TX needs block-mode CMD53 proven on metal first.
-    if padded > 512 {
-        return false;
-    }
-    let ok = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
+    let ok = if padded > 512 {
+        #[cfg(feature = "wifi-bigtx")]
+        {
+            // ONE block-mode CMD53: N x 512-B blocks (the card's F2 block size), zero-padded
+            // tail. The SDPCM length word frames the real payload; the fw ignores the pad.
+            let nblk = (padded + 511) / 512;
+            let need = nblk * 512;
+            if need > frame.len() {
+                false
+            } else {
+                for b in frame[padded..need].iter_mut() {
+                    *b = 0;
+                }
+                cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..need], nblk as u32)
+            }
+        }
+        #[cfg(not(feature = "wifi-bigtx"))]
+        {
+            false // refused (counted too_big by the caller) — see the feature note in Cargo.toml
+        }
+    } else {
+        cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded])
+    };
     if ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
     }
     ok
+}
+
+/// BLOCK-mode CMD53 read of `nblocks` x 512-B blocks into `out` (out.len() >= nblocks*512):
+/// wait BUF_RD_RDY before EACH block, W1C it, pull 128 words, then wait Transfer Complete.
+#[cfg(feature = "wifi-bigtx")]
+fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> bool {
+    const BS: usize = 512;
+    let need = (nblocks as usize) * BS;
+    if out.len() < need || nblocks == 0 || nblocks > 0x1ff {
+        return false;
+    }
+    w16(BLK_SIZE_CNT, BS as u16);
+    w16(BLK_SIZE_CNT + 2, nblocks as u16);
+    w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
+    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
+        return false;
+    }
+    let mut i = 0usize;
+    for _ in 0..nblocks {
+        let mut spin = 0u32;
+        while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
+            if r32(INT_STATUS) & INT_ERR != 0 {
+                return false;
+            }
+            spin += 1;
+            if spin > 1_000_000 {
+                return false;
+            }
+        }
+        w32(INT_STATUS, INT_BUF_RD_RDY); // W1C so the next block waits fresh
+        for _ in 0..(BS / 4) {
+            let word = r32(BUF_DATA);
+            out[i] = (word & 0xff) as u8;
+            out[i + 1] = ((word >> 8) & 0xff) as u8;
+            out[i + 2] = ((word >> 16) & 0xff) as u8;
+            out[i + 3] = ((word >> 24) & 0xff) as u8;
+            i += 4;
+        }
+    }
+    let mut spin = 0u32;
+    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            return false;
+        }
+        spin += 1;
+        if spin > 4_000_000 {
+            return false;
+        }
+    }
+    true
+}
+
+/// BLOCK-mode CMD53 write of `nblocks` x 512-B blocks (data.len() >= nblocks*512) — the F2
+/// (WLAN data) block size programmed at bring-up. Mirrors `cmd53_write_blocks` (F1, 64-B
+/// blocks): wait BUF_WR_RDY before EACH block, W1C it, push 128 words, then wait Transfer
+/// Complete once. Multi-block PIO flow on this SDHCI is the open question this bench
+/// feature exists to answer (the F1 path once saw BUF_WR_RDY not re-assert for block 2).
+#[cfg(feature = "wifi-bigtx")]
+fn cmd53_write_blocks512(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
+    const BS: usize = 512;
+    let need = (nblocks as usize) * BS;
+    if data.len() < need || nblocks == 0 || nblocks > 0x1ff {
+        return false;
+    }
+    w16(BLK_SIZE_CNT, BS as u16);
+    w16(BLK_SIZE_CNT + 2, nblocks as u16);
+    w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI); // block mode, multi, write
+    let arg = (1 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
+    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
+        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
+        return false;
+    }
+    let mut i = 0usize;
+    for _ in 0..nblocks {
+        let mut spin = 0u32;
+        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
+            if r32(INT_STATUS) & INT_ERR != 0 {
+                unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
+                return false;
+            }
+            spin += 1;
+            if spin > 1_000_000 {
+                unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
+                return false;
+            }
+        }
+        w32(INT_STATUS, INT_BUF_WR_RDY); // W1C so the next block waits fresh
+        for _ in 0..(BS / 4) {
+            let word = (data[i] as u32) | ((data[i + 1] as u32) << 8) | ((data[i + 2] as u32) << 16) | ((data[i + 3] as u32) << 24);
+            w32(BUF_DATA, word);
+            i += 4;
+        }
+    }
+    let mut spin = 0u32;
+    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
+        if r32(INT_STATUS) & INT_ERR != 0 {
+            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
+        spin += 1;
+        if spin > 4_000_000 {
+            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
+            return false;
+        }
+    }
+    true
 }
 
 /// Outcome of the 4-way handshake attempt (S1 = up to M3).
