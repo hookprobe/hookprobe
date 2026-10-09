@@ -2991,6 +2991,7 @@ fn cm5_p10_probe() {
                         let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
+                        let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
@@ -3217,6 +3218,19 @@ fn cm5_p10_probe() {
                                     if t.wrapping_sub(last_ht) > freq / 10 {
                                         cyw43::ap_keepalive();
                                         last_ht = t;
+                                    }
+                                    // Stall detector: deliveries waiting for credit AND no WiFi frame read in
+                                    // 10 s while a station is associated = the SDPCM stream is wedged (metal
+                                    // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
+                                    if wq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
+                                        if !stall_reported {
+                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
+                                            stall_reported = true;
+                                        }
+                                    } else if wifi_frames != stall_frames {
+                                        stall_frames = wifi_frames;
+                                        stall_since = t;
+                                        stall_reported = false;
                                     }
                                     if t.wrapping_sub(last_beat) > 5 * freq {
                                         // Which rules dropped: drain the SOAR ring (nobody else does in apmode).

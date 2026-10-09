@@ -21,7 +21,11 @@ pub const EXT_BASE: u16 = 40000;
 /// reads, proven on metal); TX beyond this must wait for a proven block-mode CMD53 —
 /// chunked writes desynchronised the firmware (metal 2026-10-09). Bigger inbound frames are
 /// dropped and counted (`in_too_big`); the MSS clamp keeps TCP under it.
+#[cfg(not(feature = "wifi-bigtx"))]
 pub const WIFI_MAX_FRAME: usize = 496;
+/// Bench build: block-mode CMD53 carries full-MTU frames to a station.
+#[cfg(feature = "wifi-bigtx")]
+pub const WIFI_MAX_FRAME: usize = 1514;
 /// MSS advertised to both ends. Kept at the pre-M-NAT4 value for this image as the hedge:
 /// TCP stays provably within one 512-B transfer either way, while big UDP (QUIC) is the
 /// first traffic to exercise the chunked path. Raise to ~1400 once metal proves chunking.

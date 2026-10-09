@@ -24,3 +24,10 @@ txsram = ["cm5"]
 # of its own ring buffer, so a size/alignment sweep can move the DMA source across 64/128/256-byte
 # boundaries while staying on the exact failing GEM→RP1-AXI→PCIe→host-RAM read path. Additive; never shipped.
 txsweep = ["cm5"]
+# M-NAT4 TX half — BENCH EXPERIMENT: send >512-B SDPCM data frames to a station with ONE
+# block-mode CMD53 (N x 512-B blocks, PIO per block). Metal 2026-10-09 showed that
+# chunking a frame into consecutive byte-mode CMD53s desyncs the 43455's SDPCM stream;
+# block mode is the correct form (brcmfmac uses it for every transfer >= the block size)
+# but this SDHCI's multi-block PIO flow is unproven on F2. Off by default: a desync kills
+# every later unicast for that boot. Dedicated flash, then fold in.
+wifi-bigtx = ["cm5"]
