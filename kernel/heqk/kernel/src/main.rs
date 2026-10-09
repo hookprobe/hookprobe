@@ -2866,6 +2866,16 @@ fn cm5_p10_probe() {
                         let mut ebuf = [0u8; 2048];
                         let mut erep = [0u8; 400];
                         let pool_base = offer_ip; // MAC-bound pool .10 .. .10+AP_LEASES
+                        // WiFi delivery queue: SDPCM TX credit is refreshed only by READING frames, so a
+                        // burst of WAN replies between two WiFi reads can't all be sent at once. Queue
+                        // them (8 × ≤600 B) and flush after every WiFi read; count only real losses.
+                        let mut wq: [[u8; 600]; 8] = [[0; 600]; 8];
+                        let mut wq_len = [0usize; 8];
+                        let (mut wq_head, mut wq_n) = (0usize, 0usize);
+                        let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
+                        // Which signed rules are DROPping forwarded frames (the beat names them).
+                        let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
+                        let mut evs = [events::Event::EMPTY; 16];
                         let (mut assocs, mut keyed, mut leaves, mut wifi_frames, mut wan_arp, mut wan_gw_refresh) = (0u32, 0u32, 0u32, 0u64, 0u32, 0u32);
                         let freq: u64;
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
@@ -2874,7 +2884,19 @@ fn cm5_p10_probe() {
                         loop {
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
-                            let force = now().wrapping_sub(last_force) > freq / 4;
+                            // Flush queued WiFi deliveries while credit lasts (a read just refreshed it).
+                            while wq_n > 0 && cyw43::tx_credit_ok() {
+                                let i = wq_head;
+                                if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
+                                    wq_head = (i + 1) % 8;
+                                    wq_n -= 1;
+                                    wq_flushed += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            // A pending queue forces a read: the credit update arrives as a frame.
+                            let force = wq_n > 0 || now().wrapping_sub(last_force) > freq / 4;
                             if force {
                                 last_force = now();
                             }
@@ -3050,8 +3072,18 @@ fn cm5_p10_probe() {
                                                         }
                                                     } else if m > nat::WIFI_MAX_FRAME {
                                                         nst.in_too_big += 1; // the WiFi leg can't carry it (TCP is MSS-clamped; big UDP is lost)
-                                                    } else if !cyw43::ap_tx(&nbuf[..m]) {
-                                                        nat_wifi_tx_fail += 1;
+                                                    } else if wq_n > 0 || !cyw43::tx_credit_ok() || !cyw43::ap_tx(&nbuf[..m]) {
+                                                        // No credit (or the queue is already waiting): keep ORDER, queue it.
+                                                        if wq_n < 8 && m <= 600 {
+                                                            let j = (wq_head + wq_n) % 8;
+                                                            wq[j][..m].copy_from_slice(&nbuf[..m]);
+                                                            wq_len[j] = m;
+                                                            wq_n += 1;
+                                                            wifi_tx_queued += 1;
+                                                        } else {
+                                                            wifi_tx_dropped += 1;
+                                                            nat_wifi_tx_fail += 1;
+                                                        }
                                                     } else if nst.in_fwd == 1 {
                                                         kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
                                                     }
@@ -3066,6 +3098,32 @@ fn cm5_p10_probe() {
                                         last_ht = t;
                                     }
                                     if t.wrapping_sub(last_beat) > 5 * freq {
+                                        // Which rules dropped: drain the SOAR ring (nobody else does in apmode).
+                                        loop {
+                                            let k = events::drain(&mut evs);
+                                            if k == 0 {
+                                                break;
+                                            }
+                                            for e in &evs[..k] {
+                                                if e.verdict != 2 {
+                                                    continue;
+                                                }
+                                                let mut placed = false;
+                                                for slot in rule_drops.iter_mut() {
+                                                    if slot.0 == e.rule_id || slot.1 == 0 {
+                                                        slot.0 = e.rule_id;
+                                                        slot.1 += 1;
+                                                        placed = true;
+                                                        break;
+                                                    }
+                                                }
+                                                let _ = placed;
+                                            }
+                                        }
+                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} pending={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
+                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_n,
+                                            rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
+                                            rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
@@ -7399,7 +7457,16 @@ fn p15_otafat_selftest() {
     let (slot_lba, slot_sectors) = match fat::locate_contiguous(&dev, part_start, b"HEQK8-B IMG") {
         Some(r) => r,
         None => {
-            kprint!(" [P15-otafat] FAIL — could not locate a contiguous HEQK8-B.IMG in the FAT32 partition @LBA {}\n", part_start);
+            // Say WHICH stage failed (an opaque FAIL hid a partition-offset bug once).
+            let stage = match fat::parse(&dev, part_start) {
+                None => "BPB parse refused",
+                Some(fs) => match fat::find_file(&dev, &fs, b"HEQK8-B IMG") {
+                    None => "file not found in the root directory",
+                    Some(f) if f.n != 1 => "file is fragmented",
+                    Some(_) => "unknown",
+                },
+            };
+            kprint!(" [P15-otafat] FAIL — could not locate a contiguous HEQK8-B.IMG in the FAT32 partition @LBA {} ({})\n", part_start, stage);
             return;
         }
     };
