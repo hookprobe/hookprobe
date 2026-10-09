@@ -2856,6 +2856,16 @@ fn cm5_p10_probe() {
                         let inside_net = [10u8, 99, 0];
                         let (mut nat_tx_fail, mut nat_wifi_tx_fail) = (0u32, 0u32);
                         let (mut wan_retries, mut last_wan_try) = (0u32, 0u64);
+                        let (mut wan_leased_at, mut wan_renewals) = (0u64, 0u32);
+                        // IDS/IPS on BOTH NAT legs (packet::verdict = the signed rule plane, same code
+                        // path as the inline datapath; rules::init ran at kmain) + the (MAC,IP) lease
+                        // binding check (no client may source traffic as another).
+                        let (mut ids_drop_out, mut ids_drop_in, mut bind_drop) = (0u32, 0u32, 0u32);
+                        // eth1 LAN port: same DHCP/ARP server + NAT over the RTL8111 rings.
+                        let (mut lan_frames, mut lan_served, mut lan_tx_fail) = (0u32, 0u32, 0u32);
+                        let mut ebuf = [0u8; 2048];
+                        let mut erep = [0u8; 400];
+                        let pool_base = offer_ip; // MAC-bound pool .10 .. .10+AP_LEASES
                         let (mut assocs, mut keyed, mut leaves, mut wifi_frames, mut wan_arp, mut wan_gw_refresh) = (0u32, 0u32, 0u32, 0u64, 0u32, 0u32);
                         let freq: u64;
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
@@ -2908,19 +2918,34 @@ fn cm5_p10_probe() {
                                     // dies at any upstream NAC/firewall that only admits DNS to its own gateway
                                     // (metal 2026-10-09: the fortress's quarantine posture does exactly that).
                                     let client_dns = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
-                                    let act = cyw43::ap_handle_data(&rx[off..off + len], &ap.bssid, &our_ip, &offer_ip, &client_dns, &mut dh);
+                                    let frame = &rx[off..off + len];
+                                    let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
                                     if act == b'K' {
-                                        kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}, arp_replies={}) — WPA2 AP live\n",
+                                        kprint!(" [P11-AP3] PASS — client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{} (DORA {}/{}/{}/{}, leases={}, arp_replies={}) — WPA2 AP live\n",
+                                            dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
-                                            dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.arp_replies);
-                                    } else if act == 0 && up.usable() {
-                                        // Not ours to answer → M-NAT1 outbound: SNAT to the lease, out end0.
-                                        let gw_mac = up.gw_mac;
-                                        if let Some(n) = nat::outbound(&rx[off..off + len], &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
-                                            if arch_aarch64::gem::tx_frame(&nbuf[..n]).is_none() {
-                                                nat_tx_fail += 1;
-                                            } else if nst.out_fwd == 1 {
-                                                kprint!(" [M-NAT1] first client frame forwarded out end0 ({} B, proto {})\n", n, nbuf[23]);
+                                            dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.nleases, dh.arp_replies);
+                                    } else if act == 0 && up.usable() && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
+                                        // Not ours to answer → the forwarding path. Three gates, in order:
+                                        // (1) (MAC,IP) must be a lease we handed out — anti-hijack;
+                                        // (2) the signed rule plane (IDS/IPS) — a threat verdict DROPs here;
+                                        // (3) M-NAT1 outbound: SNAT to the lease, out end0.
+                                        let mut smac = [0u8; 6];
+                                        smac.copy_from_slice(&frame[6..12]);
+                                        let mut sip = [0u8; 4];
+                                        sip.copy_from_slice(&frame[26..30]);
+                                        if !dh.binding_ok(&smac, &sip) {
+                                            bind_drop += 1;
+                                        } else if packet::verdict(frame).1 == packet::DROP {
+                                            ids_drop_out += 1;
+                                        } else {
+                                            let gw_mac = up.gw_mac;
+                                            if let Some(n) = nat::outbound(frame, nat::IF_WIFI, &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
+                                                if arch_aarch64::gem::tx_frame(&nbuf[..n]).is_none() {
+                                                    nat_tx_fail += 1;
+                                                } else if nst.out_fwd == 1 {
+                                                    kprint!(" [M-NAT1] first client frame forwarded out end0 ({} B, proto {})\n", n, nbuf[23]);
+                                                }
                                             }
                                         }
                                     }
@@ -2947,6 +2972,64 @@ fn cm5_p10_probe() {
                                             }
                                             up = again;
                                         }
+                                    } else {
+                                        // WAN lease lifetime: re-lease at T1 (lease/2) so the fortress never expires us.
+                                        // (A fresh DORA from the same MAC/client-id returns the same address.)
+                                        let t = now();
+                                        if wan_leased_at == 0 {
+                                            wan_leased_at = t;
+                                        } else if up.dhcp.lease > 0 && t.wrapping_sub(wan_leased_at) > (up.dhcp.lease as u64 / 2) * freq {
+                                            let mut again = uplink::UplinkResult::new(Nic::End0);
+                                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut again);
+                                            if again.usable() {
+                                                up = again;
+                                                wan_renewals += 1;
+                                            }
+                                            wan_leased_at = t; // either way, don't retry in a tight loop
+                                        }
+                                    }
+                                    // eth1 LAN port: serve DHCP/ARP from the same lease table and forward through
+                                    // the same NAT (in_if = eth1 so replies return on the RTL rings). The first
+                                    // real exercise of rtl8111::tx_frame.
+                                    if arch_aarch64::rtl8111::started() && arch_aarch64::rtl8111::link_up() {
+                                        if let Some(n) = arch_aarch64::rtl8111::rx_next(&mut ebuf) {
+                                            let n = n.min(ebuf.len());
+                                            if n >= 14 {
+                                                lan_frames += 1;
+                                                let client_dns = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                                let lan_mac = uplink::ETH1_MAC;
+                                                let (act, m) = cyw43::ap_handle_data_into(&ebuf[..n], &lan_mac, &our_ip, &pool_base, &client_dns, &mut dh, &mut erep);
+                                                if m > 0 {
+                                                    if arch_aarch64::rtl8111::tx_frame(&erep[..m]) {
+                                                        lan_served += 1;
+                                                        if act == b'K' {
+                                                            kprint!(" [M-NAT2] eth1 LAN client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{} — rtl8111 tx_frame PROVEN\n",
+                                                                dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
+                                                                dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3]);
+                                                        }
+                                                    } else {
+                                                        lan_tx_fail += 1;
+                                                    }
+                                                } else if act == 0 && up.usable() && n >= 34 && ebuf[12] == 0x08 && ebuf[13] == 0x00 {
+                                                    let mut smac = [0u8; 6];
+                                                    smac.copy_from_slice(&ebuf[6..12]);
+                                                    let mut sip = [0u8; 4];
+                                                    sip.copy_from_slice(&ebuf[26..30]);
+                                                    if !dh.binding_ok(&smac, &sip) {
+                                                        bind_drop += 1;
+                                                    } else if packet::verdict(&ebuf[..n]).1 == packet::DROP {
+                                                        ids_drop_out += 1;
+                                                    } else {
+                                                        let gw_mac = up.gw_mac;
+                                                        if let Some(k) = nat::outbound(&ebuf[..n], nat::IF_ETH1, &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
+                                                            if arch_aarch64::gem::tx_frame(&nbuf[..k]).is_none() {
+                                                                nat_tx_fail += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
@@ -2954,11 +3037,24 @@ fn cm5_p10_probe() {
                                         uplink::WanEvent::Frame(n) => {
                                             // M-NAT1 inbound: a WAN frame for the lease → un-NAT → unicast to the
                                             // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
-                                            if let Some(m) = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, &ap.bssid, nat::WIFI_MAX_FRAME, &mut nbuf, now(), &mut nst) {
-                                                if !cyw43::ap_tx(&nbuf[..m]) {
-                                                    nat_wifi_tx_fail += 1;
-                                                } else if nst.in_fwd == 1 {
-                                                    kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
+                                            // IDS/IPS on the WAN leg too (a threat from the internet toward a client
+                                            // DROPs before un-NAT), then return on the link the flow came in on.
+                                            if packet::verdict(&wbuf[..n]).1 == packet::DROP {
+                                                ids_drop_in += 1;
+                                            } else {
+                                                let lan_mac = uplink::ETH1_MAC;
+                                                if let Some((m, in_if)) = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst) {
+                                                    if in_if == nat::IF_ETH1 {
+                                                        if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
+                                                            lan_tx_fail += 1;
+                                                        }
+                                                    } else if m > nat::WIFI_MAX_FRAME {
+                                                        nst.in_too_big += 1; // the WiFi leg can't carry it (TCP is MSS-clamped; big UDP is lost)
+                                                    } else if !cyw43::ap_tx(&nbuf[..m]) {
+                                                        nat_wifi_tx_fail += 1;
+                                                    } else if nst.in_fwd == 1 {
+                                                        kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
+                                                    }
                                                 }
                                             }
                                         }
@@ -2970,11 +3066,12 @@ fn cm5_p10_probe() {
                                         last_ht = t;
                                     }
                                     if t.wrapping_sub(last_beat) > 5 * freq {
-                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={}\n",
+                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
                                             nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict,
-                                            nat_tx_fail, nat_wifi_tx_fail, wan_retries);
+                                            nat_tx_fail, nat_wifi_tx_fail, wan_retries, wan_renewals, ids_drop_out, ids_drop_in, bind_drop,
+                                            lan_frames, lan_served, lan_tx_fail, dh.nleases, cyw43::AP_LEASES);
                                         last_beat = t;
                                     }
                                     unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
