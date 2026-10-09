@@ -49,7 +49,7 @@ const S_DRIVER_OK: u32 = 4;
 const S_FEAT_OK: u32 = 8;
 
 const VIRTQ_DESC_F_WRITE: u16 = 2;
-const QSZ: usize = 8; // ring depth per queue (power of two)
+const QSZ: usize = 64; // ring depth per queue (power of two; each queue struct fits its 4 KiB page up to 256)
 const BUF_SZ: usize = 2048; // per-buffer capacity
 const NET_HDR: usize = 12; // virtio_net_hdr (VERSION_1)
 
@@ -236,12 +236,21 @@ impl VirtioNet {
         w(self.base, QUEUE_NOTIFY, 0);
     }
 
-    /// TX one Ethernet frame (a virtio_net_hdr of zeros is prepended). Fire-and-
-    /// forget round-robin over QSZ buffers — adequate for a request/response
-    /// handshake (at most a couple frames in flight). Returns false if oversize.
+    /// TX one Ethernet frame (a virtio_net_hdr of zeros is prepended), round-robin over QSZ
+    /// buffers. Returns false if oversize OR the ring is full: a slot is reused only after the
+    /// device has COMPLETED it (used.idx), so a burst can never overwrite a frame still in flight
+    /// (it used to be fire-and-forget — safe for a couple of frames, silent corruption for a
+    /// streamed HTTP response). The caller retries a refused frame on its next pass.
     pub fn tx(&mut self, frame: &[u8]) -> bool {
         if frame.len() + NET_HDR > BUF_SZ {
             return false;
+        }
+        let used_idx = unsafe {
+            barrier();
+            read_volatile((self.tx_used + 2) as *const u16)
+        };
+        if self.tx_next.wrapping_sub(used_idx) as usize >= QSZ {
+            return false; // every slot still owned by the device
         }
         let slot = (self.tx_next as usize) % QSZ;
         self.tx_next = self.tx_next.wrapping_add(1);
@@ -264,7 +273,6 @@ impl VirtioNet {
             write_volatile((self.tx_avail + 2) as *mut u16, self.tx_avail_idx);
             barrier();
             w(self.base, QUEUE_NOTIFY, 1);
-            let _ = self.tx_used; // TX completion not polled (fire-and-forget)
         }
         true
     }
