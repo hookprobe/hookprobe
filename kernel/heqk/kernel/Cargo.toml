@@ -154,6 +154,12 @@ prod-export = ["prod-full", "netmetal"]
 # the UI's API) in PASSIVE-FIRST mode (PASS frames observed, never re-transmitted). Built by the
 # image factory (FEATURES=prod-mc) and CI.
 prod-mc = ["prod-full", "mcserve"]
+# Audit B1 — confirm the A/B trial boot only from the HEALTHY prod loop (rules armed + GEM loop
+# >= 2 s faults=0 + Mission Control up) instead of right after rules::init. OFF BY DEFAULT: hboot's
+# watchdog is armed on every boot (15 s), so this ships only after the bench measures the
+# [BOOT-TIMING] markers and the healthy point lands inside the budget with margin. Ignored under
+# `apmode` (the AP pump never reaches the prod loop).
+late-confirm = []
 # rollback-test — M1 CRITERION 4 ONLY. Arms the firmware's one-shot tryboot flag and
 # resets, so the NEXT boot loads tryboot.txt (SLOT B) instead of config.txt (SLOT A).
 #
