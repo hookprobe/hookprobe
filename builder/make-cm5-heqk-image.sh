@@ -25,6 +25,11 @@ OUT="${OUT:-$ROOT/builder/generated/cm5-heqk}"
 # Feature set: hboot (attested EL2 boot) + prod (the running IDS/IPS sensor loop). Add p10bt
 # for the Bluetooth LE-scan sensor path; omit for a faster boot.
 FEATURES="${FEATURES:-prod}"
+# IMG_DIR: where the signed heqk8.img / heqk8-b.img are assembled. Default = the historical shared
+# cm5-boot/ (unchanged for existing flows); concurrent builders (the image factory, other
+# sessions) MUST pass a private dir — two builds writing cm5-boot/ race each other's flashes.
+IMG_DIR="${IMG_DIR:-$HEQK/cm5-boot}"
+# CARGO_TARGET_DIR is honoured as-is; set it per build job for the same reason.
 SVN="${SVN:-1}"
 
 # heqk is flattened into the monorepo (its history was inherited via -s ours merge,
@@ -94,23 +99,24 @@ cargo build -p hboot --release
 cargo build -p kernel --features "$FEATURES" --release
 
 KBIN="$(mktemp -d)/kernel.bin"
-llvm-objcopy -O binary target/aarch64-unknown-none-softfloat/release/kernel "$KBIN"
+TDIR="${CARGO_TARGET_DIR:-target}"
+llvm-objcopy -O binary "$TDIR/aarch64-unknown-none-softfloat/release/kernel" "$KBIN"
 
 # Hybrid-sign (ed25519 + SLH-DSA) + assemble the combined hboot image = the CM5 kernel8 drop-in.
 SVN="$SVN" KEYDIR="$HEQK_KEYDIR" SIGNER="$HEQK_SIGNER" ./cm5-boot/mkimage-hboot.sh \
-  target/aarch64-unknown-none-softfloat/release/hboot "$KBIN" cm5-boot/heqk8.img
+  "$TDIR/aarch64-unknown-none-softfloat/release/hboot" "$KBIN" "$IMG_DIR/heqk8.img"
 
 # Stage the CM5 boot-partition contents (what flash-now.sh copies onto the FAT boot part).
 mkdir -p "$OUT"
-cp -f cm5-boot/heqk8.img "$OUT/"
+cp -f "$IMG_DIR/heqk8.img" "$OUT/"
 # A/B slot B: seed with the CURRENT image (both slots start identical; OTA later replaces
 # B with a new candidate). Previously this copied a STALE leftover cm5-boot/heqk8-b.img,
 # so slot B could be an old image lacking the running build's logic (breaks tryboot-confirm).
-cp -f cm5-boot/heqk8.img cm5-boot/heqk8-b.img
-cp -f cm5-boot/heqk8-b.img "$OUT/"                                        # A/B slot B == slot A (current image)
+cp -f "$IMG_DIR/heqk8.img" "$IMG_DIR/heqk8-b.img"
+cp -f "$IMG_DIR/heqk8-b.img" "$OUT/"                                        # A/B slot B == slot A (current image)
 [ -f cm5-boot/config.txt ] && cp -f cm5-boot/config.txt "$OUT/"          # kernel=heqk8.img + pciex4_reset=0
 [ -f cm5-boot/tryboot.txt ] && cp -f cm5-boot/tryboot.txt "$OUT/"        # A/B tryboot
-SHA="$(sha256sum cm5-boot/heqk8.img | cut -d' ' -f1)"
+SHA="$(sha256sum "$IMG_DIR/heqk8.img" | cut -d' ' -f1)"
 
 echo "== [M1] staged CM5 heqk boot set -> $OUT"
 ls -la "$OUT" | sed 's/^/     /'
