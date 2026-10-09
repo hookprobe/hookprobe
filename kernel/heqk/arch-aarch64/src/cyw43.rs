@@ -2433,19 +2433,55 @@ pub fn ap_stop() -> bool {
 // lease so it leaves 169.254 and shows "connected". Inverts the STA DHCP client; same
 // channel-2 encrypted data path (fw does CCMP once WPA2 keys are set; open for now).
 
+/// Inside-side DHCP server state: a small MAC-bound lease table shared by every inside
+/// link (WiFi AP, eth1 LAN). A client always gets the SAME address back (keyed on its
+/// MAC), and the NAT leg checks the (MAC, IP) binding on every forwarded frame so one
+/// client cannot source traffic as another (flow hijack).
+pub const AP_LEASES: usize = 16;
 pub struct ApDhcp {
     pub arp_replies: u32,
     pub discovers: u32,
     pub offers_tx: u32,
     pub requests: u32,
     pub acks_tx: u32,
-    pub client_mac: [u8; 6],
-    pub leased_ip: [u8; 4],
+    pub naks_tx: u32,
+    pub client_mac: [u8; 6], // the most recent client
+    pub leased_ip: [u8; 4],  // the most recent lease
+    pub leases: [([u8; 6], [u8; 4]); AP_LEASES],
+    pub nleases: usize,
+    pub pool_full: u32,
 }
 
 impl ApDhcp {
     pub fn new() -> Self {
-        ApDhcp { arp_replies: 0, discovers: 0, offers_tx: 0, requests: 0, acks_tx: 0, client_mac: [0; 6], leased_ip: [0; 4] }
+        ApDhcp {
+            arp_replies: 0, discovers: 0, offers_tx: 0, requests: 0, acks_tx: 0, naks_tx: 0,
+            client_mac: [0; 6], leased_ip: [0; 4], leases: [([0; 6], [0; 4]); AP_LEASES], nleases: 0, pool_full: 0,
+        }
+    }
+    /// The address bound to `mac`, if it has one.
+    pub fn lease_for(&self, mac: &[u8; 6]) -> Option<[u8; 4]> {
+        self.leases[..self.nleases].iter().find(|(m, _)| m == mac).map(|(_, ip)| *ip)
+    }
+    /// The address for `mac`: its existing binding, else the next free one from
+    /// `pool_base`+1 .. (pool is `AP_LEASES` long). None when the pool is exhausted.
+    pub fn alloc_for(&mut self, mac: &[u8; 6], pool_base: &[u8; 4]) -> Option<[u8; 4]> {
+        if let Some(ip) = self.lease_for(mac) {
+            return Some(ip);
+        }
+        if self.nleases >= AP_LEASES {
+            self.pool_full += 1;
+            return None;
+        }
+        let mut ip = *pool_base;
+        ip[3] = pool_base[3].wrapping_add(self.nleases as u8);
+        self.leases[self.nleases] = (*mac, ip);
+        self.nleases += 1;
+        Some(ip)
+    }
+    /// Is (mac, ip) a lease we handed out? The NAT leg's anti-hijack check.
+    pub fn binding_ok(&self, mac: &[u8; 6], ip: &[u8; 4]) -> bool {
+        self.lease_for(mac).map_or(false, |l| l == *ip)
     }
 }
 
@@ -3060,10 +3096,35 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
 /// OFFER / REQUEST → ACK (or NAK when the client asks for another address). Returns the
 /// action byte ('r' ARP reply, 'O' OFFER, 'K' ACK, 'N' NAK) or 0 when the frame is not ours
 /// to answer (M-NAT1 forwards those).
-pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], dns: &[u8; 4], out: &mut ApDhcp) -> u8 {
+pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool_base: &[u8; 4], dns: &[u8; 4], out: &mut ApDhcp) -> u8 {
     let mut pkt = [0u8; 400];
-    if eth.len() < 14 {
-        return 0;
+    let (act, n) = ap_handle_data_into(eth, our_mac, our_ip, pool_base, dns, out, &mut pkt);
+    if n == 0 {
+        return act;
+    }
+    if sdpcm_data_tx(&pkt[..n]) {
+        match act {
+            b'r' => out.arp_replies += 1,
+            b'O' => out.offers_tx += 1,
+            b'K' => out.acks_tx += 1,
+            b'N' => out.naks_tx += 1,
+            _ => {}
+        }
+        dbg_putc(act);
+        act
+    } else {
+        0
+    }
+}
+
+/// Link-agnostic core of `ap_handle_data`: decides + BUILDS the reply into `reply` and
+/// returns (action, reply_len) without transmitting — so the eth1 LAN port serves the same
+/// DHCP/ARP from the same lease table over `rtl8111::tx_frame`. reply_len 0 = nothing to
+/// send; the caller bumps the counters on a successful TX. Addresses come from the MAC-bound
+/// pool (`pool_base`+0..AP_LEASES); a REQUEST for another address is NAKed (RFC 2131 §4.3.2).
+pub fn ap_handle_data_into(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool_base: &[u8; 4], dns: &[u8; 4], out: &mut ApDhcp, reply: &mut [u8]) -> (u8, usize) {
+    if eth.len() < 14 || reply.len() < 400 {
+        return (0, 0);
     }
     let et = u16::from_be_bytes([eth[12], eth[13]]);
     if et == 0x0806 {
@@ -3073,17 +3134,13 @@ pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip:
             rmac.copy_from_slice(&eth[22..28]);
             let mut rip = [0u8; 4];
             rip.copy_from_slice(&eth[28..32]);
-            let n = build_arp_reply(&mut pkt, our_mac, our_ip, &rmac, &rip);
-            if sdpcm_data_tx(&pkt[..n]) {
-                out.arp_replies += 1;
-                dbg_putc(b'r');
-                return b'r';
-            }
+            let n = build_arp_reply(reply, our_mac, our_ip, &rmac, &rip);
+            return (b'r', n);
         }
-        return 0;
+        return (0, 0);
     }
     if et != 0x0800 {
-        return 0;
+        return (0, 0);
     }
     let mut cmac = [0u8; 6];
     let mut xid = [0u8; 4];
@@ -3091,37 +3148,32 @@ pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip:
     match parse_client_dhcp(eth, &mut cmac, &mut xid, &mut req_ip) {
         1 => {
             out.discovers += 1;
-            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 2); // OFFER
-            if sdpcm_data_tx(&pkt[..n]) {
-                out.offers_tx += 1;
-                dbg_putc(b'O');
-                return b'O';
-            }
+            let ip = match out.alloc_for(&cmac, pool_base) {
+                Some(ip) => ip,
+                None => return (b'F', 0), // pool exhausted: stay silent (client retries)
+            };
+            let n = build_dhcp_server(reply, our_mac, &cmac, our_ip, &ip, dns, &xid, 2); // OFFER
+            (b'O', n)
         }
         3 => {
             out.requests += 1;
-            // INIT-REBOOT / RENEW for an address we did not offer → NAK (RFC 2131 §4.3.2), so
-            // the client DISCOVERs at once instead of sitting on a foreign lease for its timeout.
-            if req_ip != [0; 4] && req_ip != *offer_ip {
-                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 6); // NAK
-                if sdpcm_data_tx(&pkt[..n]) {
-                    dbg_putc(b'N');
-                    return b'N';
-                }
-                return 0;
+            let ip = match out.alloc_for(&cmac, pool_base) {
+                Some(ip) => ip,
+                None => return (b'F', 0),
+            };
+            // INIT-REBOOT / RENEW for an address that is not this client's binding → NAK, so
+            // it DISCOVERs at once instead of sitting on a foreign lease for its timeout.
+            if req_ip != [0; 4] && req_ip != ip {
+                let n = build_dhcp_server(reply, our_mac, &cmac, our_ip, &ip, dns, &xid, 6); // NAK
+                return (b'N', n);
             }
             out.client_mac = cmac;
-            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 5); // ACK
-            if sdpcm_data_tx(&pkt[..n]) {
-                out.acks_tx += 1;
-                out.leased_ip = *offer_ip;
-                dbg_putc(b'K');
-                return b'K';
-            }
+            out.leased_ip = ip;
+            let n = build_dhcp_server(reply, our_mac, &cmac, our_ip, &ip, dns, &xid, 5); // ACK
+            (b'K', n)
         }
-        _ => {}
+        _ => (0, 0),
     }
-    0
 }
 
 /// True if the space-separated token list `hay` contains exactly `tok`.
