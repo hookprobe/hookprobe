@@ -2466,7 +2466,7 @@ fn build_arp_reply(buf: &mut [u8], our_mac: &[u8; 6], our_ip: &[u8; 4], req_mac:
 
 /// Build a DHCP OFFER (mt=2) or ACK (mt=5) from server `our_ip` offering `offer_ip` to
 /// `client_mac`. Broadcast at L2/L3 (the client has no IP yet). Returns the frame length.
-fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], xid: &[u8; 4], mt: u8) -> usize {
+fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], dns: &[u8; 4], xid: &[u8; 4], mt: u8) -> usize {
     for b in buf[..360].iter_mut() { *b = 0; }
     let d = 42;
     buf[d] = 2; buf[d + 1] = 1; buf[d + 2] = 6; buf[d + 3] = 0; // op=BOOTREPLY
@@ -2485,7 +2485,7 @@ fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], ou
         // (a NAK carries only the message type + server id, RFC 2131 §4.3.2)
         buf[o] = 1; buf[o + 1] = 4; buf[o + 2] = 255; buf[o + 3] = 255; buf[o + 4] = 255; buf[o + 5] = 0; o += 6; // mask /24
         buf[o] = 3; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // router = us
-        buf[o] = 6; buf[o + 1] = 4; buf[o + 2] = 8; buf[o + 3] = 8; buf[o + 4] = 8; buf[o + 5] = 8; o += 6; // DNS 8.8.8.8
+        buf[o] = 6; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(dns); o += 6; // DNS = the upstream resolver (WAN lease option 6; 8.8.8.8 until a lease exists)
         buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&3600u32.to_be_bytes()); o += 6; // lease 1h
     }
     buf[o] = 54; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // server id
@@ -2581,13 +2581,13 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
         match parse_client_dhcp(&rx[eth..], &mut cmac, &mut xid, &mut req_ip) {
             1 => {
                 out.discovers += 1;
-                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 2); // OFFER
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &[8u8, 8, 8, 8], &xid, 2); // OFFER
                 if sdpcm_data_tx(&pkt[..n]) { out.offers_tx += 1; dbg_putc(b'O'); }
             }
             3 => {
                 out.requests += 1;
                 out.client_mac = cmac;
-                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 5); // ACK
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &[8u8, 8, 8, 8], &xid, 5); // ACK
                 if sdpcm_data_tx(&pkt[..n]) {
                     out.acks_tx += 1;
                     out.leased_ip = *offer_ip;
@@ -3060,7 +3060,7 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
 /// OFFER / REQUEST → ACK (or NAK when the client asks for another address). Returns the
 /// action byte ('r' ARP reply, 'O' OFFER, 'K' ACK, 'N' NAK) or 0 when the frame is not ours
 /// to answer (M-NAT1 forwards those).
-pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], out: &mut ApDhcp) -> u8 {
+pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], dns: &[u8; 4], out: &mut ApDhcp) -> u8 {
     let mut pkt = [0u8; 400];
     if eth.len() < 14 {
         return 0;
@@ -3091,7 +3091,7 @@ pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip:
     match parse_client_dhcp(eth, &mut cmac, &mut xid, &mut req_ip) {
         1 => {
             out.discovers += 1;
-            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 2); // OFFER
+            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 2); // OFFER
             if sdpcm_data_tx(&pkt[..n]) {
                 out.offers_tx += 1;
                 dbg_putc(b'O');
@@ -3103,7 +3103,7 @@ pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip:
             // INIT-REBOOT / RENEW for an address we did not offer → NAK (RFC 2131 §4.3.2), so
             // the client DISCOVERs at once instead of sitting on a foreign lease for its timeout.
             if req_ip != [0; 4] && req_ip != *offer_ip {
-                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 6); // NAK
+                let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 6); // NAK
                 if sdpcm_data_tx(&pkt[..n]) {
                     dbg_putc(b'N');
                     return b'N';
@@ -3111,7 +3111,7 @@ pub fn ap_handle_data(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip:
                 return 0;
             }
             out.client_mac = cmac;
-            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, &xid, 5); // ACK
+            let n = build_dhcp_server(&mut pkt, our_mac, &cmac, our_ip, offer_ip, dns, &xid, 5); // ACK
             if sdpcm_data_tx(&pkt[..n]) {
                 out.acks_tx += 1;
                 out.leased_ip = *offer_ip;
