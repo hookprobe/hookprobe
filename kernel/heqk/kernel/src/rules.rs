@@ -170,6 +170,15 @@ fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
     (verified, jitted)
 }
 
+/// Rules VERIFIED and active across all tiers (0 until `init` runs). Until `init`, every rule is
+/// `verified=false` and skipped, so `packet::verdict` PASSES EVERYTHING — an entry path that
+/// forgets `init` runs an IPS that detects nothing. Surface this count (heartbeat, `/api/health`)
+/// so an unarmed rule plane is never silent.
+pub fn active_rules() -> usize {
+    VERIFIED_TOTAL.load(Ordering::Relaxed)
+}
+static VERIFIED_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
 /// Verify + JIT-compile the L4 AND L2 corpora once, at boot. Returns the combined
 /// (verified_count, jitted_count) across both tiers.
 pub fn init() -> (usize, usize) {
@@ -181,6 +190,7 @@ pub fn init() -> (usize, usize) {
     NRULES_TCP.store(TCP_RULES.len().min(MAX_RULES), Ordering::Relaxed);
     let (vf, jf) = compile_set(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>());
     NRULES_FLOW.store(FLOW_RULES.len().min(MAX_RULES), Ordering::Relaxed);
+    VERIFIED_TOTAL.store(v4 + v2 + vt + vf, Ordering::Relaxed);
     (v4 + v2 + vt + vf, j4 + j2 + jt + jf)
 }
 

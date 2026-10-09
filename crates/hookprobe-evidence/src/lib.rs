@@ -421,42 +421,22 @@ fn migrate_additive_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// heqk (CM5 microkernel sensor) rule-id band: `HEQK_RULE_BAND + kernel rule id`. Fresh range —
-/// napse 1_000_0xx, l2guard 1_000_03x, host-EDR 1_000_1xx, HYDRA 4_000_000_001, supply-chain 9_xxx.
-pub const HEQK_RULE_BAND: i64 = 1_200_000;
+/// The heqk rule catalogue, compiled from the KERNEL's own file so the meaning of a rule can never
+/// drift between the device's Mission Control and this aggregator.
+#[path = "../../../kernel/heqk/kernel/src/rulecat.rs"]
+#[allow(dead_code)]
+mod rulecat;
 
-/// The heqk kernel rule catalogue (`kernel/heqk/kernel/src/rules.rs`) → (message, category,
-/// MITRE, canonical severity). Unknown ids still ingest (never dropped), as a generic MEDIUM.
+/// heqk rule-id band: `HEQK_RULE_BAND + kernel rule id` (see `rulecat`).
+pub const HEQK_RULE_BAND: i64 = rulecat::HEQK_RULE_BAND as i64;
+
+/// heqk rule id → (message, category, MITRE, canonical severity). Unknown ids still ingest (never
+/// dropped), as a generic MEDIUM naming the id.
 fn heqk_rule(id: i64) -> (String, &'static str, &'static str, i64) {
-    let (m, c, t, s): (&str, &str, &str, i64) = match id {
-        1 => ("Known C2 port 4444", "signature", "T1571", SEV_HIGH),
-        2 => ("Telnet (23) access", "signature", "T1021", SEV_MEDIUM),
-        3 => ("Backdoor port 31337", "signature", "T1571", SEV_HIGH),
-        101 => ("Malformed ARP", "malformed_frame", "", SEV_LOW),
-        102 => ("ARP spoofing", "arp_spoof", "T1557.002", SEV_HIGH),
-        110 => ("L2 structural anomaly", "malformed_frame", "", SEV_LOW),
-        111 => ("MAC flood", "mac_flood", "T1498", SEV_MEDIUM),
-        112 => ("Broadcast storm", "bcast_storm", "T1498", SEV_MEDIUM),
-        113 => ("Port scan", "port_scan", "T1046", SEV_MEDIUM),
-        114 => ("New-connection rate shed", "resource_shed", "T1499", SEV_MEDIUM),
-        115 => ("Resource-exhaustion shed", "resource_shed", "T1499", SEV_MEDIUM),
-        116 => ("Beaconing", "beaconing", "T1071", SEV_MEDIUM),
-        117 => ("Lateral movement", "lateral_movement", "T1021", SEV_HIGH),
-        118 => ("Bulk exfiltration", "exfiltration", "T1048", SEV_HIGH),
-        119 => ("DNS tunneling / DGA", "dns_dga", "T1071.004", SEV_MEDIUM),
-        120 => ("Truncated / unparseable frame", "malformed_frame", "", SEV_LOW),
-        121 => ("Rogue IPv6 router advertisement", "rogue_ra", "T1557", SEV_HIGH),
-        122 => ("IPv6 RA flood", "ra_flood", "T1498", SEV_MEDIUM),
-        123 => ("Unparseable IPv6 (evasion attempt)", "evasion", "", SEV_LOW),
-        201 => ("TCP NULL scan", "port_scan", "T1046", SEV_MEDIUM),
-        202 => ("TCP FIN scan", "port_scan", "T1046", SEV_MEDIUM),
-        203 => ("TCP Xmas scan", "port_scan", "T1046", SEV_MEDIUM),
-        204 => ("TCP SYN-FIN scan", "port_scan", "T1046", SEV_MEDIUM),
-        301 => ("SYN flood", "syn_flood", "T1498.001", SEV_HIGH),
-        302 => ("Blocklisted IP", "ioc_match", "", SEV_HIGH),
-        _ => return (format!("heqk rule {id}"), "heqk", "", SEV_MEDIUM),
-    };
-    (m.to_string(), c, t, s)
+    match u16::try_from(id).ok().and_then(rulecat::lookup) {
+        Some(i) => (i.msg.to_string(), i.category, i.mitre, i.severity as i64),
+        None => (format!("heqk rule {id}"), "heqk", "", SEV_MEDIUM),
+    }
 }
 
 /// Canonical detection severity — 1=CRITICAL … 5=INFO (Suricata), the scale napse, host-EDR and

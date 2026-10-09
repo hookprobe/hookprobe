@@ -23,6 +23,11 @@ fn main() {
     // no external cross-toolchain) and `include_bytes!`d by the kernel. See gen_fixture.
     gen_fixture_elf(&std::env::var("OUT_DIR").unwrap());
 
+    // ADR 0047 D2 — the on-device Mission Control UI. Under `mcserve` the static UI build
+    // (ui/dist, built with PUBLIC_API_BASE='' so it calls the device it was served from) is
+    // embedded into the image and served by http.rs. Other builds get an empty table.
+    gen_ui_assets(&dir, &std::env::var("OUT_DIR").unwrap());
+
     // M5.2 (Track C) — generate the SIGNED .wasm fixture the Wasm-host beachhead
     // verifies-then-runs (kernel/src/wasmhost.rs, [P-wasm] gate). Hand-assembled wasm
     // bytes + an Ed25519 signature over them, all EMITTED here (no committed binary,
@@ -468,4 +473,51 @@ fn put32(b: &mut [u8], off: usize, v: u32) {
 }
 fn put64(b: &mut [u8], off: usize, v: u64) {
     b[off..off + 8].copy_from_slice(&v.to_le_bytes());
+}
+
+/// Emit `$OUT_DIR/ui_assets.rs` = `pub static UI_ASSETS: &[Asset] = &[...]` (`include_bytes!` of
+/// every file under the UI dist dir). `HEQK_UI_DIST` overrides the default `<repo>/ui/dist`.
+fn gen_ui_assets(manifest_dir: &str, out_dir: &str) {
+    use std::fmt::Write as _;
+    println!("cargo:rerun-if-env-changed=HEQK_UI_DIST");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_MCSERVE");
+    let out = std::path::Path::new(out_dir).join("ui_assets.rs");
+    let mut src = String::from("pub static UI_ASSETS: &[Asset] = &[\n");
+    if std::env::var("CARGO_FEATURE_MCSERVE").is_ok() {
+        let dist = std::env::var("HEQK_UI_DIST")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(manifest_dir).join("../../../ui/dist"));
+        let dist = dist.canonicalize().unwrap_or_else(|_| {
+            panic!("mcserve embeds the Mission Control UI but {} does not exist — build it first: \
+                    (cd ui && npm ci && PUBLIC_API_BASE='' npm run build)", dist.display())
+        });
+        println!("cargo:rerun-if-changed={}", dist.display());
+        let mut files = Vec::new();
+        let mut stack = vec![dist.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() { stack.push(p) } else { files.push(p) }
+            }
+        }
+        files.sort();
+        for f in files {
+            let rel = f.strip_prefix(&dist).unwrap().to_string_lossy().replace('\\', "/");
+            let ctype = match f.extension().and_then(|e| e.to_str()).unwrap_or("") {
+                "html" => "text/html; charset=utf-8",
+                "js" | "mjs" => "text/javascript",
+                "css" => "text/css",
+                "svg" => "image/svg+xml",
+                "json" | "webmanifest" => "application/json",
+                "png" => "image/png",
+                "ico" => "image/x-icon",
+                "woff2" => "font/woff2",
+                "txt" => "text/plain; charset=utf-8",
+                _ => "application/octet-stream",
+            };
+            let _ = writeln!(src, "    Asset {{ path: {:?}, ctype: {:?}, body: include_bytes!({:?}) }},", rel, ctype, f.display().to_string());
+        }
+    }
+    src.push_str("];\n");
+    std::fs::write(out, src).unwrap();
 }
