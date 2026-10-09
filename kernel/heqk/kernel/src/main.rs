@@ -2855,6 +2855,7 @@ fn cm5_p10_probe() {
                         let mut nst = nat::NatStats::default();
                         let inside_net = [10u8, 99, 0];
                         let (mut nat_tx_fail, mut nat_wifi_tx_fail) = (0u32, 0u32);
+                        let (mut wan_retries, mut last_wan_try) = (0u32, 0u64);
                         let (mut assocs, mut keyed, mut leaves, mut wifi_frames, mut wan_arp, mut wan_gw_refresh) = (0u32, 0u32, 0u32, 0u64, 0u32, 0u32);
                         let freq: u64;
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
@@ -2903,7 +2904,11 @@ fn cm5_p10_probe() {
                                 }
                                 cyw43::ApEvent::Data(off, len) => {
                                     wifi_frames += 1;
-                                    let act = cyw43::ap_handle_data(&rx[off..off + len], &ap.bssid, &our_ip, &offer_ip, &mut dh);
+                                    // Clients get the UPSTREAM resolver (WAN lease option 6) — a hard-coded 8.8.8.8
+                                    // dies at any upstream NAC/firewall that only admits DNS to its own gateway
+                                    // (metal 2026-10-09: the fortress's quarantine posture does exactly that).
+                                    let client_dns = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                    let act = cyw43::ap_handle_data(&rx[off..off + len], &ap.bssid, &our_ip, &offer_ip, &client_dns, &mut dh);
                                     if act == b'K' {
                                         kprint!(" [P11-AP3] PASS — client leased {}.{}.{}.{} (DORA {}/{}/{}/{}, arp_replies={}) — WPA2 AP live\n",
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
@@ -2924,6 +2929,25 @@ fn cm5_p10_probe() {
                                     wifi_frames += 1;
                                 }
                                 cyw43::ApEvent::Idle => {
+                                    // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
+                                    // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
+                                    // a cable plugged after boot (metal 2026-10-09) must not need a power-cycle.
+                                    if !up.usable() {
+                                        let t = now();
+                                        if t.wrapping_sub(last_wan_try) > 10 * freq && arch_aarch64::gem::phy_link_up(0) {
+                                            last_wan_try = t;
+                                            wan_retries += 1;
+                                            let mut again = uplink::UplinkResult::new(Nic::End0);
+                                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut again);
+                                            if again.usable() {
+                                                kprint!(" [M-NAT0] WAN came up after boot (retry {}): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{} inet_echo={}\n",
+                                                    wan_retries, again.dhcp.yiaddr[0], again.dhcp.yiaddr[1], again.dhcp.yiaddr[2], again.dhcp.yiaddr[3],
+                                                    again.dhcp.router[0], again.dhcp.router[1], again.dhcp.router[2], again.dhcp.router[3],
+                                                    again.dhcp.dns[0], again.dhcp.dns[1], again.dhcp.dns[2], again.dhcp.dns[3], again.inet_ping_reply);
+                                            }
+                                            up = again;
+                                        }
+                                    }
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
@@ -2946,11 +2970,11 @@ fn cm5_p10_probe() {
                                         last_ht = t;
                                     }
                                     if t.wrapping_sub(last_beat) > 5 * freq {
-                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={}\n",
+                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
                                             nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict,
-                                            nat_tx_fail, nat_wifi_tx_fail);
+                                            nat_tx_fail, nat_wifi_tx_fail, wan_retries);
                                         last_beat = t;
                                     }
                                     unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
@@ -4129,7 +4153,15 @@ fn cm5_gem_rx_demo() {
             seq: 0, tsr_entry: 0, w1_entry: 0, w1_armed: 0, tsr_prekick: 0,
             tsr_postkick: 0, w1_postkick: 0, spins: 0, w1_final: 0, tsr_final: 0, ok: false,
         }; D];
+        // end0 is the WAN: no diagnostic broadcast frames (ethertype 0x88b5) on a customer's
+        // or an upstream sensor's segment unless the bench feature asks for them.
+        #[cfg(feature = "txdiag")]
         arch_aarch64::gem::tx_diag_burst(&mut recs, 200_000);
+        #[cfg(not(feature = "txdiag"))]
+        {
+            let _ = &mut recs;
+            kprint!(" [P8-txdiag] SKIPPED — diag frames are gated behind the `txdiag` feature (end0 is the WAN)\n");
+        }
         // [P7-tryboot] M1 CRITERION 4 PREREQUISITE — prove the ON-DEVICE tryboot path.
     //
     // A/B rollback needs heqk to arm the firmware's one-shot tryboot flag itself; there is
