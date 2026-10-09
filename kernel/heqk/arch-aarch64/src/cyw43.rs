@@ -3043,6 +3043,15 @@ pub fn ap_tx(eth: &[u8]) -> bool {
     sdpcm_data_tx(eth)
 }
 
+/// Is there SDPCM TX credit right now? Credits (the firmware's tx window) are refreshed
+/// ONLY by reading frames — metal 2026-10-09: a burst of WAN replies un-NATed between two
+/// WiFi reads exhausted the window and every `ap_tx` failed (`wifi_tx_fail` 5→20, the
+/// phone never got its SYN-ACKs). The serve loop queues deliveries while this is false and
+/// flushes after the next read (brcmfmac does the same: packets wait for a credit update).
+pub fn tx_credit_ok() -> bool {
+    txctl_ok()
+}
+
 /// Set after a successful read: the firmware raises I_HMB_FRAME_IND for the FIRST queued
 /// frame and the read W1Cs it — the rest of the queue does NOT re-raise it (brcmfmac's
 /// `readframes` drains until an empty tag for this reason). Metal 2026-09-11: a
