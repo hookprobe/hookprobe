@@ -26,7 +26,11 @@ dtparam=pciex1_gen=1
 #  - give a slow-to-present endpoint more PERST#->refclk settle time.
 dtparam=pcie_tperst_clk_ms=100
 
-[cm5]
+# UNCONDITIONAL on purpose. These lines used to sit under a `[cm5]` model filter; on some
+# cold power-cycles the firmware did not apply that section and booted the Linux kernel
+# files that share this FAT (metal 2026-10-09: console showed a Linux audit line, no hboot
+# banner, no heqk-ap). heqk is the only intended boot target on this eMMC, so no filter.
+[all]
 kernel=heqk8.img
 device_tree=bcm2712-rpi-cm5-cm5io.dtb
 kernel_address=0x80000
