@@ -2874,7 +2874,11 @@ fn cm5_p10_probe() {
                         loop {
                             ap_tries += 1;
                             ap = cyw43::ApResult::new();
-                            cyw43::ap_start(AP_SSID, 6, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            // Try 1: 5 GHz ch36 @ 80 MHz (Wi-Fi 5 — the CYW43455 is 802.11ac and holds
+                            // VHT80 on UNII-1); try 2: the proven 2.4 GHz ch6 @ 20 MHz fallback.
+                            let ap_chan: u32 = if ap_tries == 1 { 36 } else { 6 };
+                            kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, cyw43::ap_chanspec(ap_chan));
+                            cyw43::ap_start(AP_SSID, ap_chan, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
@@ -2935,9 +2939,17 @@ fn cm5_p10_probe() {
                         // WiFi delivery queue: SDPCM TX credit is refreshed only by READING frames, so a
                         // burst of WAN replies between two WiFi reads can't all be sent at once. Queue
                         // them (8 × ≤600 B) and flush after every WiFi read; count only real losses.
-                        let mut wq: [[u8; 600]; 8] = [[0; 600]; 8];
-                        let mut wq_len = [0usize; 8];
+                        // 48 × full-MTU slots, static (not stack): the 8-deep version overflowed 23×
+                        // in a minute of browsing (metal 2026-10-09) — credit returns only when the
+                        // station sends, so the queue must absorb a whole server burst.
+                        const WQ_N: usize = 48;
+                        const WQ_SZ: usize = 1536;
+                        struct WqBuf([[u8; WQ_SZ]; WQ_N]);
+                        static mut WQBUF: WqBuf = WqBuf([[0; WQ_SZ]; WQ_N]);
+                        let wq = unsafe { &mut (*core::ptr::addr_of_mut!(WQBUF)).0 };
+                        let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
+                        let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
@@ -2954,7 +2966,7 @@ fn cm5_p10_probe() {
                             while wq_n > 0 && cyw43::tx_credit_ok() {
                                 let i = wq_head;
                                 if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
-                                    wq_head = (i + 1) % 8;
+                                    wq_head = (i + 1) % WQ_N;
                                     wq_n -= 1;
                                     wq_flushed += 1;
                                 } else {
@@ -3024,6 +3036,8 @@ fn cm5_p10_probe() {
                                         sip.copy_from_slice(&frame[26..30]);
                                         if !dh.binding_ok(&smac, &sip) {
                                             bind_drop += 1;
+                                        } else if net::parse(frame).is_none() {
+                                            trunc_drop += 1; // truncated/oversize: fail-closed, but NOT a rule drop
                                         } else if packet::verdict(frame).1 == packet::DROP {
                                             ids_drop_out += 1;
                                         } else {
@@ -3140,8 +3154,8 @@ fn cm5_p10_probe() {
                                                         nst.in_too_big += 1; // the WiFi leg can't carry it (TCP is MSS-clamped; big UDP is lost)
                                                     } else if wq_n > 0 || !cyw43::tx_credit_ok() || !cyw43::ap_tx(&nbuf[..m]) {
                                                         // No credit (or the queue is already waiting): keep ORDER, queue it.
-                                                        if wq_n < 8 && m <= 600 {
-                                                            let j = (wq_head + wq_n) % 8;
+                                                        if wq_n < WQ_N && m <= WQ_SZ {
+                                                            let j = (wq_head + wq_n) % WQ_N;
                                                             wq[j][..m].copy_from_slice(&nbuf[..m]);
                                                             wq_len[j] = m;
                                                             wq_n += 1;
@@ -3186,8 +3200,8 @@ fn cm5_p10_probe() {
                                                 let _ = placed;
                                             }
                                         }
-                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} pending={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
-                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_n,
+                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
+                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_n, trunc_drop,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
