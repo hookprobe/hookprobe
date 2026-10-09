@@ -1,5 +1,7 @@
 # HookProbe OS
 
+> 🛑 **Superseded in part by [ADR 0047](adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09):** heqk replaces Linux on **every** platform and Mission Control is served by heqk on the device. Pillar 1 ('the OS is a Containerfile/bootc') describes the transitional Linux tier; the product substrate is heqk.
+
 > **One operating system. Every platform. Hardware only unlocks capabilities.**
 >
 > HookProbe OS is an AI-native security operating system delivered as a signed container image. The **OS is a Containerfile** (bootc), **detections and policy are sandboxed WebAssembly components** (WASI), and the system is **operated by intent** — you declare what you want and an agent reconciles it. The same image, the same Mission Control, and the same AI run on a Raspberry Pi, an RK3588 board, an Intel N100 appliance, a VM, the cloud, or future HookProbe hardware.

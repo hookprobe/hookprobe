@@ -1,5 +1,7 @@
 # HookProbe OS — Master Build Plan & Living Status Tracker
 
+> 🛑 **Superseded in part by [ADR 0047](adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09):** heqk replaces Linux on **every** platform and Mission Control is served by heqk on the device. Track B (Linux) is no longer 'canonical + permanent' on UEFI/amd64/N100/cloud. It is transitional everywhere. Report: docs/design/heqk-everywhere-report-2026-10-09.md.
+
 > **This is the single source of truth for "what is the plan, and what is built."**
 > It maps every piece of the two canonical specs — **`docs/MissionControl.md`** (the control plane / dashboard) and **`docs/Readme.md`** (the unified OS) — to its current build status, organises the work into phases, and is **updated every time something is built** (see the Change Log at the bottom).
 

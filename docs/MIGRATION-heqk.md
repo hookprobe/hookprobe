@@ -1,5 +1,7 @@
 # Linux → heqk Microkernel Migration Plan
 
+> 🛑 **Superseded in part by [ADR 0047](adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09):** heqk replaces Linux on **every** platform and Mission Control is served by heqk on the device. The rpi-native/CM5-only mandate below is widened to all platforms; the port order and scale are in docs/design/heqk-everywhere-report-2026-10-09.md.
+
 **Status:** 🟡 Proposed (2026-07-24) · Companion to **[ADR 0043](adr/0043-heqk-microkernel-substrate.md)** (the keystone substrate-replacement ADR) · Authored under the "full authority to the cortex SDLC" mandate. Every phase is **Amber** (operator-reviewed) or gated **Red** (flashing/release — refused without explicit operator action), per contract C9.
 
 > **Mandate:** replace Linux on the rpi-native tier with the `~/heqk` microkernel, reduce image size, and keep a *working* HookProbe OS — driven through the Product Cortex lifecycle (requirement → … → retirement), with all ADRs updated and all flows validated end-to-end.
