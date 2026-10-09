@@ -16,10 +16,15 @@ use crate::cyw43::{inet_csum, pseudo_sum};
 const N: usize = 256;
 /// First outside port / ICMP id; entry `i` owns `EXT_BASE + i`.
 pub const EXT_BASE: u16 = 40000;
-/// Largest ethernet frame the WiFi data path can carry (cmd53 512-B cap − SDPCM/BDC).
+/// Largest ethernet frame the WiFi data path can SEND to a station: one byte-mode CMD53
+/// (512 B) minus the 16-B SDPCM/BDC header. RX now takes full-MTU frames (chunked remainder
+/// reads, proven on metal); TX beyond this must wait for a proven block-mode CMD53 —
+/// chunked writes desynchronised the firmware (metal 2026-10-09). Bigger inbound frames are
+/// dropped and counted (`in_too_big`); the MSS clamp keeps TCP under it.
 pub const WIFI_MAX_FRAME: usize = 496;
-/// MSS advertised to both ends so no TCP segment exceeds the WiFi cap either way
-/// (496 − 14 eth − 20 ip − 20 tcp − 12 timestamps).
+/// MSS advertised to both ends. Kept at the pre-M-NAT4 value for this image as the hedge:
+/// TCP stays provably within one 512-B transfer either way, while big UDP (QUIC) is the
+/// first traffic to exercise the chunked path. Raise to ~1400 once metal proves chunking.
 pub const MSS_CLAMP: u16 = 430;
 
 /// Inside link ids (`Entry.in_if`): replies go back out the link the flow came in on.

@@ -1889,11 +1889,26 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     if (hw_len as usize) > BRCMF_FIRSTREAD {
         let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
         let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-        let got = (end - BRCMF_FIRSTREAD).min(512); // what cmd53_read actually moves
+        // The remainder in byte-mode CMD53 chunks of <= 512 B, back to back. The F2 data
+        // path is a stream the firmware already continues across the 64-B header read and
+        // the remainder read, so a 1514-B frame is simply 64 + 512 + 512 + 426 (M-NAT4,
+        // metal 2026-10-09: the single capped read truncated every frame > ~560 B — the
+        // phone's QUIC/Private-Relay packets — which then failed `parse` and were counted
+        // as IDS drops). Byte-mode chunks sidestep this controller's multi-block PIO flow
+        // problem (see backplane_write). Stop at the first failed chunk: the tail stays
+        // zeroed and hw_len is clamped to what was actually moved (fail-closed, as before).
+        let mut got = 0usize;
+        while BRCMF_FIRSTREAD + got < end {
+            let chunk = (end - BRCMF_FIRSTREAD - got).min(512);
+            let s = BRCMF_FIRSTREAD + got;
+            if !cmd53_read(2, F2_SDPCM_ADDR, &mut rx[s..s + chunk]) {
+                break;
+            }
+            got += chunk;
+        }
         for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
             *b = 0;
         }
-        let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
         valid = BRCMF_FIRSTREAD + got;
     }
     let hw_len = hw_len.min(valid as u16);
@@ -2269,6 +2284,24 @@ impl ApResult {
 /// yields one (the same LAA the STA path sets when the OTP MAC is unprogrammed).
 const AP_FALLBACK_LAA: [u8; 6] = [0x02, 0x43, 0x45, 0x48, 0x51, 0x4b];
 
+/// d11ac chanspec for the AP. 2.4 GHz (ch <= 14): 20 MHz. 5 GHz UNII-1 (36/40/44/48):
+/// 80 MHz around centre 42 with the control sideband encoding the primary's position
+/// (LL/LU/UL/UU = ch 36/40/44/48) — the CYW43455 is 1x1 802.11ac and holds VHT80 there
+/// (hostapd on the same silicon: ch40/[HT40-]/seg0-42). Other 5 GHz channels fall back
+/// to 20 MHz (DFS channels do not work on this firmware/CLM).
+/// Encoding: chan | BW (0x1000=20, 0x1800=40, 0x2000=80) | sideband<<8 | band
+/// (0x0000=2G, 0xc000=5G).
+pub fn ap_chanspec(channel: u32) -> u16 {
+    if channel <= 14 {
+        return (channel as u16 & 0xff) | 0x1000;
+    }
+    if (36..=48).contains(&channel) && channel % 4 == 0 {
+        let sb: u16 = ((channel - 36) / 4) as u16; // 36→0 LL, 40→1 LU, 44→2 UL, 48→3 UU
+        return 42 | 0x2000 | (sb << 8) | 0xc000;
+    }
+    (channel as u16 & 0xff) | 0x1000 | 0xc000
+}
+
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
@@ -2356,8 +2389,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     // Channel + WIDTH via the "chanspec" iovar — the mechanism brcmfmac AP mode uses (a bare
     // WLC_SET_CHANNEL leaves the width/ctl-sideband unset). d11ac chanspec = chan | BW_20 |
     // CTL_SB_NONE | band; 2.4 GHz (ch<=14) band=0x0000, 5 GHz band=0xc000; BW_20=0x1000.
-    let band: u16 = if channel <= 14 { 0x0000 } else { 0xc000 };
-    let chanspec: u16 = (channel as u16 & 0x00ff) | 0x1000 | band; // BW_20, CTL_SB_NONE
+    let chanspec = ap_chanspec(channel);
     let mut csb = [0u8; 32];
     let ncs = iovar_buf(b"chanspec", &chanspec.to_le_bytes(), &mut csb);
     out.chan_ok = bcdc_iovar_set(&csb[..ncs]);
@@ -4172,6 +4204,16 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
     frame[2..4].copy_from_slice(&(!total).to_le_bytes());
     frame[4..8].copy_from_slice(&w0.to_le_bytes());
     let padded = ((total as usize) + 3) & !3;
+    // HARD LIMIT: one byte-mode CMD53 (512 B). Metal 2026-10-09 (img fd5b6ccb): sending a
+    // larger frame as consecutive <=512-B chunks DESYNCHRONISED the firmware's SDPCM stream
+    // — it treats each CMD53 as one transfer, so a 1234-B reply became three malformed
+    // frames; from that moment every later unicast (SYN-ACKs, FIN-ACKs, DNS) was silently
+    // dropped by the fw although the host saw TX success. Refuse instead (the caller counts
+    // it as too-big); the RX side's chunked remainder read IS valid (a 1350-B client frame
+    // crossed intact). A real >512-B TX needs block-mode CMD53 proven on metal first.
+    if padded > 512 {
+        return false;
+    }
     let ok = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
     if ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
