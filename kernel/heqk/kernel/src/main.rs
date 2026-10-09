@@ -79,7 +79,7 @@ mod rulecat;
 mod mcstate;
 #[cfg(feature = "netsvc")]
 mod http;
-#[cfg(all(feature = "mcserve", not(feature = "cm5")))]
+#[cfg(feature = "mcserve")]
 mod mcserve;
 #[cfg(feature = "netsvc")]
 mod netcfg;
@@ -1747,10 +1747,42 @@ fn cm5_prod_service() -> ! {
         kprint!(" [WASMMETAL] {} — bespoke no_std interpreter verified + executed a signed module on metal (M5 beachhead on CM5)\n",
             if w.a_verify_run && w.bad_result == 1 && w.ok_result == 0 && w.b_fail_closed && w.b_unsigned { "PASS" } else { "FAIL" });
     }
+    // ADR 0047 D2 — Mission Control served by heqk on the CM5 (`prod-mc`). PASSIVE-FIRST (ADR 0037
+    // D4): PASS frames are observed, never re-transmitted, so the device cannot break the network
+    // it sits on; only the node's own replies (ARP/ICMP/DHCP/HTTP) go out the GEM. TRNG-seeded
+    // (TCP ISNs) and fail-closed: no TRNG => no node, the sensor still runs.
+    #[cfg(feature = "prod-mc")]
+    let mut mc: Option<mcserve::McNode> = match arch_aarch64::rng200::next_word_strict() {
+        Some(seed) => {
+            let mac = device_mac();
+            mcserve::state().set_clock(0, t0, cntfrq); // SNTP sets the epoch once the network is up
+            let n = mcserve::McNode::new(mac, mcserve::NetMode::Dhcp, seed);
+            if let Some(ref node) = n {
+                kprint!(" [MC] Mission Control node UP on GEM: mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (SRK-derived), passive-first, DHCP in progress (fallback {}.{}.{}.{}); {} UI assets embedded\n",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], node.ip[0], node.ip[1], node.ip[2], node.ip[3], http::UI_ASSETS.len());
+            }
+            n
+        }
+        None => {
+            kprint!(" [MC] Mission Control DISABLED — TRNG absent (sensor still live)\n");
+            None
+        }
+    };
     loop {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
         let now = prod_cntpct();
+        // Mission Control: DHCP progress, every HTTP connection, egress — EVERY iteration, so the
+        // operator's UI is responsive (not paced by the heartbeat).
+        #[cfg(feature = "prod-mc")]
+        if let Some(node) = mc.as_mut() {
+            let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
+            if node.service(mcserve::state(), now_ms) {
+                kprint!(" [MC] heqk Mission Control serving on http://{}.{}.{}.{}:80 ({})\n",
+                    node.ip[0], node.ip[1], node.ip[2], node.ip[3], if node.leased { "DHCP lease" } else { "link-local fallback" });
+            }
+            node.flush(|f| arch_aarch64::gem::tx_frame(f).is_some());
+        }
         if now.wrapping_sub(last_hb) >= hb_interval {
             last_hb = now;
             // AUDIT (2026-08-20 metal): tx_fail was an ANONYMOUS timeout — a PASS frame
@@ -1766,6 +1798,14 @@ fn cm5_prod_service() -> ! {
             // "the controller could not reach the buffers at all". Read-only; the sticky
             // bits are cleared by the RX path itself.
             let rsr = arch_aarch64::gem::rsr();
+            #[cfg(feature = "prod-mc")]
+            {
+                let st = mcserve::state();
+                st.seen = seen as u64;
+                st.forwarded = forwarded as u64;
+                st.dropped = dropped as u64;
+                st.sample_qsecbit(now, telemetry::score());
+            }
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
                 now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
             #[cfg(feature = "dnssink")]
@@ -1947,6 +1987,8 @@ fn cm5_prod_service() -> ! {
                             e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity, e.class);
                         #[cfg(feature = "prod-full")]
                         pf.on_threat(e);
+                        #[cfg(feature = "prod-mc")]
+                        mcserve::state().push_event(e);
                         #[cfg(all(feature = "prod-full", feature = "netmetal"))]
                         if let Some(x) = exporter.as_mut() {
                             x.push(e);
@@ -2233,9 +2275,26 @@ fn cm5_prod_service() -> ! {
                                 false
                             }
                         };
+                        // Mission Control node: frames addressed to the device (its MAC or broadcast)
+                        // after they PASSed the detection plane.
+                        #[cfg(feature = "prod-mc")]
+                        let handled = handled
+                            || match mc.as_mut() {
+                                Some(node) if node.wants(&buf[..n]) => {
+                                    let now_ms = (prod_cntpct().wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
+                                    node.ingress(&buf[..n], now_ms);
+                                    forwarded += 1; // accepted (terminated on-device)
+                                    true
+                                }
+                                _ => false,
+                            };
                         // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
                         // seen == forwarded + dropped + tx_fail holds and a lost PASS is visible.
-                        if !handled {
+                        // PASSIVE (prod-mc, ADR 0037 D4): a PASS frame is OBSERVED and counted, never
+                        // re-transmitted — no hairpin back out the port it arrived on.
+                        if !handled && cfg!(feature = "prod-mc") {
+                            forwarded += 1;
+                        } else if !handled {
                             if arch_aarch64::gem::tx_frame(&buf[..n]).is_some() {
                                 forwarded += 1;
                             } else {
@@ -3714,6 +3773,18 @@ fn read_seal_handoff() -> Option<&'static boot_abi::SealHandoff> {
 /// (Was `KeyPair::from_seed(sha256(device_id))`: `device_id` is the board serial hboot prints on
 /// the console, so anyone could re-derive the private key, impersonate the device and forge its
 /// evidence. With no handoff it was `sha256(0)` — one shared key for every device.)
+/// The device's Ethernet MAC for the Mission Control node: locally-administered unicast, derived
+/// from the SRK (stable across OTA, distinct per device — two heqk boxes on one LAN never collide,
+/// unlike the old hard-coded 02:00:00:00:00:02). Falls back to the (public) device id.
+#[cfg(feature = "prod-mc")]
+fn device_mac() -> [u8; 6] {
+    let k = match seal_srk() {
+        Some(srk) => boot_abi::kdf::hkdf_expand32(&srk, b"HEQK-MAC-v1"),
+        None => boot_abi::sha256::digest(&read_seal_handoff().map(|h| h.device_id).unwrap_or(0).to_le_bytes()),
+    };
+    [(k[0] & 0xFE) | 0x02, k[1], k[2], k[3], k[4], k[5]]
+}
+
 #[cfg(all(feature = "hboot", feature = "securechannel"))]
 fn device_identity_keypair() -> Option<ed25519_compact::KeyPair> {
     let srk = seal_srk()?;

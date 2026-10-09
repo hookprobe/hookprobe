@@ -141,8 +141,10 @@ if (cd "$HEQK" && CARGO_TARGET_DIR="$KDIR" cargo build -p kernel --features nets
     -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
     -drive file="$COPY",format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 \
     -kernel "$KDIR/aarch64-unknown-none-softfloat/debug/kernel" >"$STAGE/qemu.log" 2>&1 || true
-  check "heqk's own MBR + fat.rs code locates slot B as ONE contiguous run in this image (read-only)" \
-    "grep -qaE '\\[P15-otafat\\] located HEQK8-B.IMG @ LBA [0-9]+ \\(6430 sectors\\)' '$STAGE/qemu.log'"
+  # Expected run length = the staged slot's real size in 512-B sectors (1 sector/cluster FS).
+  WANT=$(( ($(stat -c %s "$STAGE/heqk8-b.img") + 511) / 512 ))
+  check "heqk's own MBR + fat.rs code locates slot B as ONE contiguous run of $WANT sectors (read-only)" \
+    "grep -qaE '\\[P15-otafat\\] located HEQK8-B.IMG @ LBA [0-9]+ \\($WANT sectors\\)' '$STAGE/qemu.log'"
   grep -aF "[P15-otafat]" "$STAGE/qemu.log" | sed 's/^/        /' | head -3
 else
   echo "   FAIL  could not build the QEMU check kernel"; FAILS=$((FAILS+1))

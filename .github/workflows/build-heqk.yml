@@ -90,6 +90,10 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p kernel --features prod --release
+          # prod-mc = THE production CM5 profile (ADR 0047: Mission Control served by heqk on the
+          # GEM, passive-first). It embeds the UI, so build ui/dist first (same-origin API).
+          (cd ../../ui && npm ci --no-audit --no-fund && PUBLIC_API_BASE='' npm run build)
+          cargo build -p kernel --features prod-mc --release
           if cargo build -p kernel --features prod,apmode --release 2>/tmp/apmode.log; then
             echo "FATAL: prod+apmode built — the AP bench loop would replace the IPS service"; exit 1
           fi
