@@ -109,3 +109,10 @@ area (driver-read MBR + BPB), content-pinned to a single a<->b slot-letter flip 
 - **Boot 2** (config=B, tryboot=B): `[P15-abcommit-metal] PASS` — interrupted commit repaired,
   full commit back to A (config=A, tryboot=B), idempotent, content rule holds.
 - Log: `~/heqk-metal-logs/20261104-abcommit-metal-PASS-c748cf0.log`.
+
+## Production image restored — 2026-11-04 20:15
+
+`hookprobe-heqk-cm5-510caf8-zerolinux.img` (sha256 `7eac5375…`; includes the P7c fix and the
+BootConfig Gate 1): firmware booted `heqk8-a.img`, all four `[P7c]` stages PASS, and
+**MC-METAL: PASS** (`~/heqk-metal-logs/20261104-201521-prod-mc-metal-acceptance.txt`). This is the
+image currently on the bench CM5.
