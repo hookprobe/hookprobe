@@ -1680,10 +1680,12 @@ pub struct ApInfo {
     pub ssid_len: u8,
     pub channel: u8,
     pub rssi: i16,
+    /// Raw d11ac chanspec (center channel + bandwidth + band) — what channel selection needs.
+    pub chanspec: u16,
 }
 impl ApInfo {
     pub const fn new() -> Self {
-        ApInfo { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, rssi: 0 }
+        ApInfo { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, rssi: 0, chanspec: 0 }
     }
 }
 
@@ -2123,6 +2125,7 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
             ap.ssid[..slen as usize].copy_from_slice(&rx[bi + 19..bi + 19 + slen as usize]);
             let chanspec = u16::from_le_bytes([rx[bi + 72], rx[bi + 73]]);
             ap.channel = (chanspec & 0xff) as u8;
+            ap.chanspec = chanspec;
             ap.rssi = i16::from_le_bytes([rx[bi + 78], rx[bi + 79]]);
             aps[naps] = ap;
             naps += 1;
@@ -2329,7 +2332,7 @@ pub fn ap_chanspec(channel: u32) -> u16 {
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
-pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
+pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
     let _ = ensure_ht_avail();
@@ -2413,7 +2416,6 @@ pub fn ap_start(ssid: &[u8], channel: u32, open: bool, out: &mut ApResult) {
     // Channel + WIDTH via the "chanspec" iovar — the mechanism brcmfmac AP mode uses (a bare
     // WLC_SET_CHANNEL leaves the width/ctl-sideband unset). d11ac chanspec = chan | BW_20 |
     // CTL_SB_NONE | band; 2.4 GHz (ch<=14) band=0x0000, 5 GHz band=0xc000; BW_20=0x1000.
-    let chanspec = ap_chanspec(channel);
     let mut csb = [0u8; 32];
     let ncs = iovar_buf(b"chanspec", &chanspec.to_le_bytes(), &mut csb);
     out.chan_ok = bcdc_iovar_set(&csb[..ncs]);
@@ -4283,7 +4285,9 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     w16(BLK_SIZE_CNT, BS as u16);
     w16(BLK_SIZE_CNT + 2, nblocks as u16);
     w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
-    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
+    // FIXED address (op-code bit 26 = 0): brcmfmac reads F2 with sdio_readsb (bcmsdh.c
+    // brcmf_sdiod_skbuff_read, func 2) — a FIFO read. Incrementing is only for F1 memory.
+    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (0 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }

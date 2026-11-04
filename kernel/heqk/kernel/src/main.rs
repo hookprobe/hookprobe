@@ -2927,11 +2927,31 @@ fn cm5_p10_probe() {
                         loop {
                             ap_tries += 1;
                             ap = cyw43::ApResult::new();
-                            // Try 1: 5 GHz ch36 @ 80 MHz (Wi-Fi 5 — the CYW43455 is 802.11ac and holds
-                            // VHT80 on UNII-1); try 2: the proven 2.4 GHz ch6 @ 20 MHz fallback.
-                            let ap_chan: u32 = if ap_tries == 1 { 36 } else { 6 };
-                            kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, cyw43::ap_chanspec(ap_chan));
-                            cyw43::ap_start(AP_SSID, ap_chan, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            // Try 1: the scan-driven channel choice (hal::acs_choose — least interference,
+                            // 5 GHz/80 preferred when its block is clear); try 2: the proven 2.4 GHz
+                            // ch6 @ 20 MHz fallback.
+                            // Bench pin: HEQK_AP_CHANNEL=<n> (build env) bypasses the scan choice — used to hold
+                            // the channel constant while isolating another variable.
+                            const AP_PIN: Option<&str> = option_env!("HEQK_AP_CHANNEL");
+                            let pin: u32 = match AP_PIN { Some(s) => s.bytes().fold(0u32, |a, b| if b.is_ascii_digit() { a * 10 + (b - b'0') as u32 } else { a }), None => 0 };
+                            let (ap_chan, ap_cs): (u32, u16) = if ap_tries == 1 && pin != 0 {
+                                kprint!("   [P11-ACS] channel PINNED by build env HEQK_AP_CHANNEL={} (scan choice bypassed)\n", pin);
+                                (pin, cyw43::ap_chanspec(pin))
+                            } else if ap_tries == 1 {
+                                let mut neigh = [(0u16, 0i16); 32];
+                                let nn = naps.min(neigh.len());
+                                for (k, a) in aps[..nn].iter().enumerate() {
+                                    neigh[k] = (a.chanspec, a.rssi);
+                                }
+                                let c = hal::acs_choose(&neigh[..nn]);
+                                kprint!("   [P11-ACS] {} neighbours scanned -> channel {} @ {} MHz (chanspec {:#06x}, interference score {})\n",
+                                    nn, c.channel, c.mhz, c.chanspec, c.score);
+                                (c.channel as u32, c.chanspec)
+                            } else {
+                                (6, cyw43::ap_chanspec(6))
+                            };
+                            kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
+                            cyw43::ap_start(AP_SSID, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
@@ -2986,6 +3006,9 @@ fn cm5_p10_probe() {
                         let (mut ids_drop_out, mut ids_drop_in, mut bind_drop) = (0u32, 0u32, 0u32);
                         // diag: large (>600 B) WAN frames seen by wan_poll / un-NATed toward a client
                         let (mut wan_big_seen, mut wan_big_unnat) = (0u32, 0u32);
+                        // diag: the first NAT_TRACE_N NAT events (dir, proto, TCP flags, size, ports, result)
+                        const NAT_TRACE_N: u32 = 60;
+                        let mut nat_trace = 0u32;
                         // eth1 LAN port: same DHCP/ARP server + NAT over the RTL8111 rings.
                         let (mut lan_frames, mut lan_served, mut lan_tx_fail) = (0u32, 0u32, 0u32);
                         let mut ebuf = [0u8; 2048];
@@ -3099,7 +3122,12 @@ fn cm5_p10_probe() {
                                         } else {
                                             let gw_mac = up.gw_mac;
                                             if let Some(n) = nat::outbound(frame, nat::IF_WIFI, &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
-                                                if arch_aarch64::gem::tx_frame(&nbuf[..n]).is_none() {
+                                                let gem_ok = arch_aarch64::gem::tx_frame(&nbuf[..n]).is_some();
+                                                if nat_trace < NAT_TRACE_N {
+                                                    nat_trace += 1;
+                                                    nat_trace_line("OUT", &nbuf[..n], if gem_ok { "gem=ok" } else { "gem=FAIL" });
+                                                }
+                                                if !gem_ok {
                                                     nat_tx_fail += 1;
                                                 } else if nst.out_fwd == 1 {
                                                     kprint!(" [M-NAT1] first client frame forwarded out end0 ({} B, proto {})\n", n, nbuf[23]);
@@ -3214,7 +3242,14 @@ fn cm5_p10_probe() {
                                                         }
                                                     } else if m > nat::WIFI_MAX_FRAME {
                                                         nst.in_too_big += 1; // the WiFi leg can't carry it (TCP is MSS-clamped; big UDP is lost)
-                                                    } else if wq_n > 0 || !cyw43::tx_credit_ok() || !cyw43::ap_tx(&nbuf[..m]) {
+                                                    } else if {
+                                                        let sent = wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
+                                                        if nat_trace < NAT_TRACE_N {
+                                                            nat_trace += 1;
+                                                            nat_trace_line("IN ", &nbuf[..m], if sent { "wifi=sent" } else if wq_n < WQ_N { "wifi=queued" } else { "wifi=DROP" });
+                                                        }
+                                                        !sent
+                                                    } {
                                                         // No credit (or the queue is already waiting): keep ORDER, queue it.
                                                         if wq_n < WQ_N && m <= WQ_SZ {
                                                             let j = (wq_head + wq_n) % WQ_N;
@@ -5123,6 +5158,7 @@ pub extern "C" fn kmain() -> ! {
         // ADR 0047 D2: the on-device Mission Control server logic (parse/route/JSON/SSE).
         let _ = http::mc_selftest();
         let _ = mcauth::mcauth_selftest();
+        acs_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -11473,4 +11509,50 @@ extern "C" fn producer() -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     arch_aarch64::on_panic(info)
+}
+
+/// AP diag: one line per NAT event — direction, proto, TCP flags, IP length, ports, result.
+#[allow(dead_code)]
+fn nat_trace_line(dir: &str, f: &[u8], res: &str) {
+    if f.len() < 34 {
+        return;
+    }
+    let ihl = ((f[14] & 0x0f) as usize) * 4;
+    let l4 = 14 + ihl;
+    let proto = f[23];
+    let iplen = u16::from_be_bytes([f[16], f[17]]);
+    let (sp, dp) = if f.len() >= l4 + 4 && (proto == 6 || proto == 17) {
+        (u16::from_be_bytes([f[l4], f[l4 + 1]]), u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]))
+    } else {
+        (0, 0)
+    };
+    let fl = if proto == 6 && f.len() > l4 + 13 { f[l4 + 13] } else { 0 };
+    kprint!("   [NAT-TRACE] {} {} {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} iplen={} tcpflags={}{}{}{}{} {}\n",
+        dir, match proto { 6 => "tcp", 17 => "udp", 1 => "icmp", _ => "ip" },
+        f[26], f[27], f[28], f[29], sp, f[30], f[31], f[32], f[33], dp, iplen,
+        if fl & 0x02 != 0 { "S" } else { "" }, if fl & 0x10 != 0 { "A" } else { "" },
+        if fl & 0x08 != 0 { "P" } else { "" }, if fl & 0x01 != 0 { "F" } else { "" },
+        if fl & 0x04 != 0 { "R" } else { "" }, res);
+}
+
+/// `[P11-acs]` — the AP channel selection (hal::acs_choose) against fixed scan vectors.
+#[allow(dead_code)]
+fn acs_selftest() {
+    let bw80_42 = 42u16 | 0x2000 | 0xc000; // a 5 GHz 80 MHz BSS on the UNII-1 block
+    // (a) a clean air: 5 GHz 80 MHz wins.
+    let a = hal::acs_choose(&[]);
+    // (b) the bench today: fortress 80 MHz @ -51 on UNII-1, 2.4 GHz neighbours on 1/6/11.
+    let bench = [(bw80_42, -51i16), (1u16 | 0x1000, -70), (1 | 0x1000, -81), (6 | 0x1000, -32),
+                 (6 | 0x1000, -83), (6 | 0x1000, -76), (11 | 0x1000, -84)];
+    let b = hal::acs_choose(&bench);
+    // (c) only a weak (-88 dBm) 5 GHz neighbour: still 5 GHz/80 (weak neighbours are a floor).
+    let c = hal::acs_choose(&[(bw80_42, -88)]);
+    // (d) a strong 20 MHz neighbour on 36 only, 2.4 GHz crowded: 5 GHz 20 MHz on a free channel.
+    let d = hal::acs_choose(&[(36 | 0x1000 | 0xc000, -40), (1 | 0x1000, -40), (6 | 0x1000, -40), (11 | 0x1000, -40)]);
+    let ok = (a.channel, a.mhz) == (36, 80) && a.chanspec == 0xe02a
+        && (b.channel, b.mhz) == (11, 20) && b.chanspec == 0x100b
+        && (c.channel, c.mhz) == (36, 80)
+        && d.mhz == 20 && d.channel != 36 && d.chanspec & 0xc000 == 0xc000;
+    kprint!(" [P11-acs] {} — AP channel selection from the scan: clean air -> ch{}/{}MHz; bench (fortress 80 MHz @ -51 on UNII-1) -> ch{}/{}MHz {:#06x}; weak 5 GHz neighbour -> ch{}/{}MHz; strong ch36-only + crowded 2.4 -> 5 GHz ch{}/{}MHz\n",
+        if ok { "PASS" } else { "FAIL" }, a.channel, a.mhz, b.channel, b.mhz, b.chanspec, c.channel, c.mhz, d.channel, d.mhz);
 }
