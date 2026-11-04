@@ -4208,13 +4208,21 @@ fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
 /// Send one ethernet frame as an SDPCM DATA frame (channel 2) over F2. Mirrors the control
 /// TX framing (bcdc_dcmd) but channel=2 with a 4-byte BDC data header instead of the BCDC
 /// dcmd header. Rides the same SDPCM tx-credit + sequence as control.
+/// SDPCM data TX build buffer: 4 x 512-B F2 blocks (the block-padded maximum frame is 3).
+const DATA_TX_BUF: usize = 4 * 512;
+
 fn sdpcm_data_tx(eth: &[u8]) -> bool {
     if !txctl_ok() {
         unsafe { AP_DIAG[5] += 1 };
         return false;
     }
     let seq = unsafe { TX_SEQ };
-    let mut frame = [0u8; DL_CHUNK + 64];
+    // Sized for the BLOCK-PADDED maximum: a 1514-B ethernet frame + the 16-B SDPCM/BDC header =
+    // 1530 B, padded to whole 512-B F2 blocks = 1536 B. (Was DL_CHUNK+64 = 1464 B: every frame
+    // padding to 3 blocks — any reply > ~1008 B, i.e. every QUIC packet — hit `need >
+    // frame.len()`, was refused uncounted, and wedged the in-order delivery queue. Metal
+    // 2026-11-04 [NAT-TRACE]: credit=40, pending=48, big_tx ok=0 fail=0.)
+    let mut frame = [0u8; DATA_TX_BUF];
     let w0: u32 = (seq as u32)
         | ((SDPCM_DATA_CHANNEL as u32) << 8)
         | ((SDPCM_HDRLEN as u32) << 24);
@@ -4246,6 +4254,7 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
             let nblk = (padded + 511) / 512;
             let need = nblk * 512;
             if need > frame.len() {
+                unsafe { AP_DIAG[1] += 1 }; // never silent
                 false
             } else {
                 for b in frame[padded..need].iter_mut() {
