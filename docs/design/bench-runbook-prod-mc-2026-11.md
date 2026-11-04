@@ -9,8 +9,8 @@ decide the late-confirm default. One flash, ~30 minutes. Operator-run (flashing 
 
 | Image (`builder/generated/cm5-heqk/`) | Purpose |
 |---|---|
-| `hookprobe-heqk-cm5-bf6bcaf-zerolinux.img` | **Primary.** No devicetree, no Linux artifact at all. Tests the U1 gate. |
-| `hookprobe-heqk-cm5-bf6bcaf.img` | **Fallback** (proven layout, keeps the one `.dtb`). Use if the primary stays silent. |
+| `hookprobe-heqk-cm5-e690e4d-zerolinux.img` (sha256 `7f5f4d32…`) | **Primary — METAL-PROVEN 2026-11-04.** No devicetree, no Linux artifact. Contains the hboot payload-bound fix 7da4f1f. |
+| ~~`hookprobe-heqk-cm5-bf6bcaf*.img`~~ | **Do not use:** hboot's stale 2 MiB cap refuses the 2.06 MB prod-mc kernel ("payload: INSANE SIZE", reset loop). |
 
 Each image has a `.sha256`, a `.json` manifest, and its own `.owner-key` (mode 600): the ONLY copy of
 that device's sign-in key. Both are `prod-mc` (Mission Control on GEM, passive-first, owner auth),
@@ -32,7 +32,7 @@ Tools: `kernel/heqk/cm5-boot/flash-image.sh` (guarded whole-eMMC write + read-ba
 
 ```bash
 cd ~/hookprobe-os/.claude/worktrees/heqk-premetal-gaps
-IMG=builder/generated/cm5-heqk/hookprobe-heqk-cm5-bf6bcaf-zerolinux.img
+IMG=builder/generated/cm5-heqk/hookprobe-heqk-cm5-e690e4d-zerolinux.img
 LOG=~/heqk-metal-logs/$(date +%Y%m%d)-prod-mc-serial.log
 
 # 1. Flash (nRPIBOOT jumper on, power-cycle when prompted). ~5 min + backup time.
@@ -77,3 +77,17 @@ decides: U1 (zero-Linux boot) → first Linux unbuild batch; the late-confirm de
 
 **Not in this session:** the on-device A/B commit on metal (the eMMC write clamp must first admit
 the BootConfig sector — Gate R), and the production signing keys (K1).
+
+## Result — 2026-11-04 (CM5 metal)
+
+**MC-METAL: PASS** (17/17) — `~/heqk-metal-logs/20261104-192412-prod-mc-metal-acceptance.txt`.
+Zero-Linux boot (U1 met at firmware level); hboot confirm +9918 ms; device 10.200.0.7, MAC
+`66:09:fd:64:63:86`; owner auth (401 / redirect / wrong-key refused / key signs in); attack on 4444/23
+dropped on the GEM (0 → 10), 10 detections attributed to the attacker, High incident, QSecBit rose,
+operator UI served throughout; the browser rendered the live detection + incident.
+
+- **Late-confirm stays opt-in:** the prod loop starts at +70236 ms, far past the 15 s watchdog.
+- **Bench lessons:** the gadget-console `reboot -f` did not take — power-cycle the board after the
+  flash. The fortress NAC quarantines the new SRK MAC after its first DHCP; the operator admits it
+  (`fortress-ctl.sh device set-policy <mac> lan_only`).
+- **Open:** `[P7c]` stage 3 (EL0 GEM TX self-test) FAIL — prod TX path unaffected; fixed separately.
