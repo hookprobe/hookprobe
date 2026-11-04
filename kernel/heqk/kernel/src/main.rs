@@ -2984,6 +2984,8 @@ fn cm5_p10_probe() {
                         // path as the inline datapath; rules::init ran at kmain) + the (MAC,IP) lease
                         // binding check (no client may source traffic as another).
                         let (mut ids_drop_out, mut ids_drop_in, mut bind_drop) = (0u32, 0u32, 0u32);
+                        // diag: large (>600 B) WAN frames seen by wan_poll / un-NATed toward a client
+                        let (mut wan_big_seen, mut wan_big_unnat) = (0u32, 0u32);
                         // eth1 LAN port: same DHCP/ARP server + NAT over the RTL8111 rings.
                         let (mut lan_frames, mut lan_served, mut lan_tx_fail) = (0u32, 0u32, 0u32);
                         let mut ebuf = [0u8; 2048];
@@ -3191,6 +3193,9 @@ fn cm5_p10_probe() {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
                                         uplink::WanEvent::Frame(n) => {
+                                            if n > 600 {
+                                                wan_big_seen += 1;
+                                            }
                                             // M-NAT1 inbound: a WAN frame for the lease → un-NAT → unicast to the
                                             // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
                                             // IDS/IPS on the WAN leg too (a threat from the internet toward a client
@@ -3200,6 +3205,9 @@ fn cm5_p10_probe() {
                                             } else {
                                                 let lan_mac = uplink::ETH1_MAC;
                                                 if let Some((m, in_if)) = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst) {
+                                                    if m > 600 {
+                                                        wan_big_unnat += 1;
+                                                    }
                                                     if in_if == nat::IF_ETH1 {
                                                         if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
                                                             lan_tx_fail += 1;
@@ -3268,6 +3276,9 @@ fn cm5_p10_probe() {
                                             }
                                         }
                                         {
+                                            let gs = arch_aarch64::gem::rx_stats();
+                                            kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
+                                                gs[0], gs[1], gs[2], gs[3], gs[4], gs[5], gs[6], gs[7], gs[8], gs[9], gs[10], wan_big_seen, wan_big_unnat);
                                             let (seq, max, dg) = cyw43::ap_diag();
                                             kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
                                                 seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[3],
