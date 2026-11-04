@@ -30,4 +30,7 @@ txsweep = ["cm5"]
 # block mode is the correct form (brcmfmac uses it for every transfer >= the block size)
 # but this SDHCI's multi-block PIO flow is unproven on F2. Off by default: a desync kills
 # every later unicast for that boot. Dedicated flash, then fold in.
-wifi-bigtx = ["cm5"]
+# Block-mode CMD53 READ of a frame remainder > 512 B (metal-proven 2026-11-04: frames read
+# whole, stream healthy). TX > 512 B stays refused unless `wifi-bigtx`.
+wifi-bigrx = ["cm5"]
+wifi-bigtx = ["cm5", "wifi-bigrx"]
