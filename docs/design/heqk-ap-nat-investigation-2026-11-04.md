@@ -129,3 +129,13 @@ on its AP (ch36/80) browsing + speed test, `mmc_request_start` filtered to CMD53
 So a large TX frame = whole blocks + a byte-mode TAIL at the ADVANCED address (no padding to an
 extra block, never restarting at 0x8000); every F2 READ is fixed-address. heqk differed in exactly
 these two places; both now mirror the trace.
+
+## Result — img 57ff6d1 (Linux-traced SDIO sequence, `wifi-bigtx`), 2026-11-04 22:45
+
+**Block-mode TX works.** iPhone through heqk AP + NAT: YouTube and Facebook play, speed test
+~11 Mbps. `big_tx ok` 1,773 / fail 0 (full-MTU frames incl. QUIC reach the phone), `too_big` 0,
+no stall, credit refreshing (14–40), NAT 62,385 in / 9,854 out (≈20x the previous image).
+Log: `~/heqk-metal-logs/20261104-AP-NAT-linuxseq-57ff6d1-youtube.log`.
+
+Open: `rx_terminated` 132 (some phone frames still not read whole — the recovery holds the link,
+each costs a retransmit); TCP MSS still clamped to 430 (now unnecessary: TX > 512 B works).
