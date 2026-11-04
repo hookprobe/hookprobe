@@ -35,7 +35,9 @@ if [ -f "$IMG.sha256" ] && ! grep -q "$SHA_IMG" "$IMG.sha256"; then
 fi
 
 USBBOOT="$HERE/../tools/usbboot"
-RPIBOOT="$(command -v rpiboot || echo "$USBBOOT/rpiboot")"
+# The VENDORED rpiboot first: distro builds can predate BCM2712 and cannot parse the gadget's
+# bootfiles.bin ("No 'bootcode' files found").
+if [ -x "$USBBOOT/rpiboot" ]; then RPIBOOT="$USBBOOT/rpiboot"; else RPIBOOT="$(command -v rpiboot)"; fi
 if lsusb -d 0a5c:2712 >/dev/null 2>&1; then
   echo "== 1/4 rpiboot: CM5 already in USB-boot mode (0a5c:2712)"
 else
