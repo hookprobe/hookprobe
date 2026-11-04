@@ -1943,37 +1943,70 @@ pub fn tx_buf_offset() -> usize {
     }
 }
 
-/// P7c step 3b stage 3 — prepare a TX for an EL0 driver to launch: fill the TX
-/// buffer with a `len`-byte broadcast marker frame (cleaned to DRAM for the GEM),
-/// and set the descriptor's address words, leaving word1 IDLE so the EL0 driver
-/// arms + kicks it. The kernel does the privileged buffer/address setup; the EL0
-/// driver does the descriptor-arm + TSTART kick + completion poll.
-pub fn tx_prep_el0(len: usize) {
+/// P7c step 3b stage 3 — the plan the kernel hands an EL0 TX driver: WHICH descriptor to
+/// arm (byte offset inside the granted TX-ring window) and the exact word1 to arm it with.
+#[derive(Clone, Copy)]
+pub struct El0TxPlan {
+    pub desc_off: u32,
+    pub word1: u32,
+}
+
+/// P7c step 3b stage 3 — prepare a TX for an EL0 driver to launch, honouring the SAME ring
+/// contract as `tx_frame` (the privileged half; the EL0 driver only arms + kicks + polls):
+///
+///  * the descriptor is the controller's NEXT slot (`TX_SLOT`), not a hard-coded desc[0].
+///    Since 7c4e4a5 removed the per-frame TBQP resync, the GEM's queue pointer follows the
+///    ring; arming desc[0] while the controller is parked on desc[1] (after an odd number of
+///    earlier GEM transmits) means the kick services an idle descriptor and the frame never
+///    goes — the P7c stage-3 FAIL on every metal boot since 2026-08-20 22:05 (word1 stuck at
+///    0x40008040).
+///  * WRAP only on the last slot (the old stub armed WRAP on desc[0], truncating the ring).
+///  * the buffer is written through the NON-CACHEABLE alias, like `tx_frame` (tx_init dropped
+///    the cacheable copies; a cacheable write here would be a mismatched-attribute hazard).
+///  * latched TSR status from earlier frames is cleared before the kick (sticky + halting).
+pub fn tx_prep_el0(len: usize) -> El0TxPlan {
     let n = len.min(TXBUF);
-    let bufpa = unsafe {
-        let tr = &mut *core::ptr::addr_of_mut!(TXRING);
-        for k in 0..n {
-            tr.buf[0][k] = 0xaa; // marker payload
-        }
-        for k in 0..6 {
-            tr.buf[0][k] = 0xff; // broadcast dst MAC (a benign, real-shaped frame)
-        }
-        tr.buf[0].as_ptr() as usize
+    let slot = unsafe {
+        let sl = core::ptr::read_volatile(core::ptr::addr_of!(TX_SLOT));
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), (sl + 1) % NTX);
+        sl
     };
-    dc_cvac(bufpa, n); // TX buffer is cacheable — publish it to DRAM for the GEM
-    let bus = bufpa as u64 + DMA_BUS_OFFSET;
-    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc[0]) as usize };
-    let d = nc_desc(dphys); // NC alias — coherent with the EL0 driver's NC window
+    let bufpa = unsafe { core::ptr::addr_of!(TXRING.buf[slot]) as usize };
     unsafe {
-        write_volatile(d.add(0), bus as u32); // word0 addr_lo (USED=0)
-        // word1 IDLE (EL0 arms it). NO WRAP: with NTX>=2, desc[0] is not the last slot —
-        // WRAP belongs on desc[NTX-1] and putting it here would truncate the ring to one
-        // entry, reintroducing the prefetch-aliasing defect this ring depth exists to fix.
-        write_volatile(d.add(1), TXD_USED);
+        let dst = (bufpa + NC_VA) as *mut u8;
+        for k in 0..n {
+            // broadcast dst MAC, then a marker payload — a benign, real-shaped frame
+            core::ptr::write_volatile(dst.add(k), if k < 6 { 0xff } else { 0xaa });
+        }
+        core::arch::asm!("dsb sy");
+    }
+    let bus = bufpa as u64 + DMA_BUS_OFFSET;
+    let dphys = unsafe { core::ptr::addr_of!(TXRING.desc) as usize } + slot * DESC_SZ;
+    let d = nc_desc(dphys); // NC alias — coherent with the EL0 driver's NC window
+    let wrap = if slot == NTX - 1 { TXD_WRAP } else { 0 };
+    unsafe {
+        write_volatile(d.add(0), bus as u32); // word0 addr_lo
+        write_volatile(d.add(1), TXD_USED | wrap); // word1 IDLE (software-owned) until EL0 arms it
         write_volatile(d.add(2), (bus >> 32) as u32); // word2 addr_hi
         write_volatile(d.add(3), 0);
         write_volatile(d.add(4), 0);
         write_volatile(d.add(5), 0);
         core::arch::asm!("dsb sy");
     }
+    let pre = r(GEM, TSR);
+    if pre & TSR_W1C != 0 {
+        w(GEM, TSR, pre & TSR_W1C); // W1C — never TGO
+    }
+    El0TxPlan { desc_off: (slot * DESC_SZ) as u32, word1: (n as u32 & RXD_FRMLEN) | TXD_LAST | wrap }
+}
+
+/// P7c stage 3 — kernel epilogue after the EL0 TX driver returns: clear the routine latched
+/// status (UBR/TXCOMP) so it cannot leak into the next `tx_frame` as a phantom error, and
+/// return the raw TSR for the self-test's report.
+pub fn tx_finish_el0() -> u32 {
+    let tsr = r(GEM, TSR);
+    if tsr & TSR_W1C != 0 {
+        w(GEM, TSR, tsr & TSR_W1C);
+    }
+    tsr
 }

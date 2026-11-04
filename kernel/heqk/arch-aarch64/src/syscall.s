@@ -188,28 +188,40 @@ gem_rx_stub:
 gem_rx_stub_end:
 
 // -------- P7c step 3b stage 3: EL0 GEM TX driver (launch a transmit) ---------
-// The kernel pre-filled the TX buffer + set the descriptor address. This EL0
-// driver, granted the TX-ring NC window (0x1_4000_4000) + the GEM register window
-// (0x1_4000_2000), ARMS the descriptor (word1 = len|LAST|WRAP), kicks TSTART
-// (NCR = RE|TE|MPE|TSTART = 0x21c), and polls word1 for USED (bit31 = transmitted).
+// The kernel did the privileged half (gem::tx_prep_el0): picked the controller's NEXT ring
+// slot, filled that slot's buffer, set its address words, cleared latched TSR — and left a
+// PLAN at the bottom of this driver's own stack page (0x1_4000_1000):
+//     [+0] u32 desc_off  (byte offset of the descriptor inside the TX-ring window)
+//     [+4] u32 word1     (len | LAST | WRAP-only-if-last-slot)
+// This EL0 driver, granted the TX-ring NC window (0x1_4000_4000) + the GEM register window
+// (0x1_4000_2000), ARMS that descriptor, kicks TSTART (NCR = RE|TE|MPE|TSTART = 0x21c), and
+// polls word1 for USED (bit31). Like gem::tx_frame it RE-KICKS every 512 spins while the
+// transmitter is idle (TSR.TGO clear) — this GEM silently drops TSTART writes (7c4e4a5).
 .global gem_tx_stub
 .global gem_tx_stub_end
 gem_tx_stub:
     movz x1, #0x4000, lsl #16     // x1 = 0x1_4000_0000 (GB5 base)
     movk x1, #0x0001, lsl #32
-    add  x2, x1, #0x4000          // x2 = UTXVA (TX ring desc, NC)
+    add  x9, x1, #0x1000          // x9 = the plan (bottom of this driver's stack page)
+    ldr  w10, [x9]                // desc_off
+    ldr  w4, [x9, #4]             // word1 to arm
+    add  x2, x1, #0x4000          // TX-ring window
+    add  x2, x2, x10              // x2 = the planned descriptor
     add  x3, x1, #0x2000          // x3 = UDEV_VA (GEM registers)
-    movz w4, #0x8040              // word1 = len(0x40) | LAST(0x8000)
-    movk w4, #0x4000, lsl #16     //       | WRAP(0x40000000) = 0x40008040
-    str  w4, [x2, #4]             // arm desc[0].word1 (USED=0 -> hand to HW)
+    str  w4, [x2, #4]             // arm word1 (USED=0 -> hand to HW)
     dsb  sy
     movz w5, #0x021c              // NCR = RE|TE|MPE|TSTART
     str  w5, [x3]                 // kick the TX DMA (GEM+0 = NCR)
     mov  x6, xzr                  // completion poll (bounded)
-1:  ldr  w0, [x2, #4]            // desc[0].word1
+1:  ldr  w0, [x2, #4]            // word1
     tbnz w0, #31, 2f             // USED (bit31) set -> transmit complete
     add  x6, x6, #1
-    movz x7, #0x0040, lsl #16     // 0x40_0000 bound
+    tst  x6, #0x1ff               // every 512 spins ...
+    b.ne 3f
+    ldr  w11, [x3, #0x14]         // ... TSR
+    tbnz w11, #3, 3f              // TGO set -> a frame is in flight, leave it alone
+    str  w5, [x3]                 // idle -> the kick was dropped: re-issue TSTART
+3:  movz x7, #0x0040, lsl #16     // 0x40_0000 bound
     cmp  x6, x7
     b.lo 1b
 2:  mov  x8, #7                   // SYS_DRIVER_REPORT (report final word1)
