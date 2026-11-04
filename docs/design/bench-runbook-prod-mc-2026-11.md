@@ -75,8 +75,7 @@ The `~/heqk-metal-logs/*-prod-mc-metal-acceptance.txt` results file and the seri
 decides: U1 (zero-Linux boot) → first Linux unbuild batch; the late-confirm default (from the
 `[BOOT-TIMING]` lines); and the browser flasher being built on an image proven to boot.
 
-**Not in this session:** the on-device A/B commit on metal (the eMMC write clamp must first admit
-the BootConfig sector — Gate R), and the production signing keys (K1).
+**Not in this session:** the production signing keys (K1).
 
 ## Result — 2026-11-04 (CM5 metal)
 
@@ -96,3 +95,17 @@ operator UI served throughout; the browser rendered the live detection + inciden
   image: **MC-METAL: PASS** (`~/heqk-metal-logs/20261104-194011-prod-mc-metal-acceptance.txt`) — no
   regression. Root cause: the EL0 stub hard-coded desc[0] while the controller (after the one P7a
   forward) was parked on desc[1] — broken since 7c4e4a5 removed the per-frame TBQP resync.
+
+## A/B commit on metal — 2026-11-04 (PASS)
+
+Bench image `hookprobe-heqk-cm5-c748cf0-zerolinux-ABBENCH.img` (feature `abcommit-metal`, never
+shipped). The eMMC driver's Gate 1 now admits a BootConfig sector one-shot, inside p1's FAT data
+area (driver-read MBR + BPB), content-pinned to a single a<->b slot-letter flip (c748cf0).
+
+- **Boot 1** (config=A, tryboot=B): config.txt committed → B, tryboot.txt left (power loss
+  simulated); the driver REFUSED LBA 0, the FAT32 boot sector, an un-admitted write and the reuse of
+  a spent admission.
+- **Real power cycle** → the firmware logged `Read heqk8-b.img`: the commit survived a cold boot.
+- **Boot 2** (config=B, tryboot=B): `[P15-abcommit-metal] PASS` — interrupted commit repaired,
+  full commit back to A (config=A, tryboot=B), idempotent, content rule holds.
+- Log: `~/heqk-metal-logs/20261104-abcommit-metal-PASS-c748cf0.log`.
