@@ -78,3 +78,27 @@ phone's QUIC intact), channel pinned 36. Outcomes are decided before flashing:
   fortress AP occupies the same 5 GHz 80 MHz block; ACS would pick 2.4 GHz ch11. Not the cause of
   the NAT failure (the operator confirmed: phone next to the board, same result).
 - Diagnostics on the AP beat: SDPCM credit, big TX/RX, GEM hardware RX stats, `[NAT-TRACE]`.
+
+## Result — img 4a57a46 (`wifi-bigrx` + brcmfmac `rxfail` port), 2026-11-04 21:50
+
+**iPhone browses through heqk's AP + NAT: pages load (slowly), speed test 7–8 Mbps in bursts.**
+The link no longer wedges: NAT out 1,403 / in 3,018, `wifi_frames` 2,074 and rising, TX credit
+recovers (40 → 11 → 20), no WIFI STALL, station stays associated. QUIC replies are refused at the
+inbound gate (`too_big` 443) and iOS falls back to TCP. `rx_terminated` 89, `never_zeroed` 0 —
+the ported termination recovers the stream every time.
+
+The real root cause of "no NAT traffic" was on the SDIO RX side: frames from the phone larger than
+one 512-B transfer were read **partially** and the remainder was left in the F2 FIFO, so the
+firmware's TX window stopped advancing and the stream wedged (credit 40 → 0). brcmfmac never does
+that (`brcmf_sdio_rxfail`). Defects D1/D2 were real but secondary.
+
+Why it is slow (each is measurable, none fixed yet):
+1. TCP MSS clamped to 430 (every segment ≤ 512 B because TX > 512 B is refused).
+2. QUIC dropped → iOS waits for its TCP fallback.
+3. 89 phone frames terminated instead of read → TCP retransmits. Why a block read fails is open.
+4. One polled loop, PIO SDIO, ~2 ms dry passes; credit dips under load.
+
+Next (in order): (a) record why block reads fail (the 89); (b) trace brcmfmac's CMD53 WRITE on the
+Linux v8 image on this board, then enable block TX → full MTU, MSS 1460, QUIC; (c) IDS/IPS test on
+the AP path; (d) DNS on the AP's own address (10.99.0.1); (e) un-pin the channel (ACS).
+Log: `~/heqk-metal-logs/20261104-AP-NAT-iphone-browsing-4a57a46.log`.
