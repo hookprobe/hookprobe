@@ -127,3 +127,87 @@ pub fn is_slot_letter_flip(cur: &[u8; 512], new: &[u8; 512]) -> bool {
     }
     diffs == 1 && matches!((cur[p], new[p]), (b'a', b'b') | (b'b', b'a'))
 }
+
+// ── Wi-Fi AP channel selection (ACS) — pure, shared by the CM5 AP bring-up and the QEMU self-test ──
+
+/// One candidate the AP can actually run on this chip: UNII-1 (DFS fails on the CYW43455 CLM) and
+/// the three non-overlapping 2.4 GHz channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcsChoice {
+    /// Primary (control) channel.
+    pub channel: u8,
+    /// d11ac chanspec to program.
+    pub chanspec: u16,
+    /// 80 / 20 MHz.
+    pub mhz: u8,
+    /// Interference score (sum of overlapping neighbours, power-weighted).
+    pub score: u64,
+}
+
+/// Power-ish weight of a neighbour: doubles every 3 dB (≈ linear mW), -100 dBm → 1.
+fn acs_weight(rssi: i16) -> u64 {
+    let x = (rssi as i32 + 100).clamp(0, 60) as u32;
+    1u64 << (x / 3)
+}
+
+/// The 20 MHz primaries a 5 GHz neighbour occupies, from its d11ac chanspec (center + bandwidth).
+fn occ5(cs: u16) -> ([u8; 4], usize) {
+    let c = (cs & 0xff) as i16;
+    let ch = |d: i16| (c + d).clamp(0, 255) as u8;
+    match cs & 0x3800 {
+        0x1000 => ([ch(0), 0, 0, 0], 1),
+        0x1800 => ([ch(-2), ch(2), 0, 0], 2),
+        _ => ([ch(-6), ch(-2), ch(2), ch(6)], 4), // 80 MHz (and wider: treat as 80 — conservative)
+    }
+}
+
+/// Choose the AP channel + width from a scan: `neigh` = (chanspec, rssi) of every BSS heard.
+/// Candidates: 5 GHz 80 MHz on the UNII-1 block (36-48), 5 GHz 20 MHz on 36/40/44/48, 2.4 GHz
+/// 20 MHz on 1/6/11. Neighbours weaker than ~-80 dBm count as a floor (ignorable); 20 MHz 5 GHz
+/// pays a x2 handicap and 2.4 GHz a x8 handicap (throughput), so 5 GHz/80 wins whenever its block
+/// is reasonably clear and a strong co-channel neighbour pushes the AP off it.
+pub fn acs_choose(neigh: &[(u16, i16)]) -> AcsChoice {
+    const FLOOR: u64 = 64; // ≈ one -82 dBm neighbour
+    let mut best = AcsChoice { channel: 0, chanspec: 0, mhz: 0, score: u64::MAX };
+    let mut best_eff = u64::MAX;
+    let mut consider = |channel: u8, chanspec: u16, mhz: u8, score: u64, handicap: u64| {
+        let eff = score.max(FLOOR).saturating_mul(handicap);
+        if eff < best_eff {
+            best_eff = eff;
+            best = AcsChoice { channel, chanspec, mhz, score };
+        }
+    };
+    let score5 = |prim: &[u8]| -> u64 {
+        let mut sc = 0u64;
+        for &(cs, rssi) in neigh {
+            if cs & 0xc000 != 0xc000 {
+                continue; // not 5 GHz
+            }
+            let (o, n) = occ5(cs);
+            if o[..n].iter().any(|c| prim.contains(c)) {
+                sc = sc.saturating_add(acs_weight(rssi));
+            }
+        }
+        sc
+    };
+    // 5 GHz 80 MHz, UNII-1 block, primary 36 (chanspec 42 | BW80 | 5G, sideband LL).
+    consider(36, 42 | 0x2000 | 0xc000, 80, score5(&[36, 40, 44, 48]), 1);
+    for ch in [36u8, 40, 44, 48] {
+        consider(ch, ch as u16 | 0x1000 | 0xc000, 20, score5(&[ch]), 2);
+    }
+    for ch in [1u8, 6, 11] {
+        let mut sc = 0u64;
+        for &(cs, rssi) in neigh {
+            if cs & 0xc000 == 0xc000 {
+                continue;
+            }
+            let c = (cs & 0xff) as i16;
+            let reach = if cs & 0x3800 == 0x1800 { 6 } else { 4 }; // 40 MHz neighbours reach further
+            if (c - ch as i16).abs() <= reach {
+                sc = sc.saturating_add(acs_weight(rssi));
+            }
+        }
+        consider(ch, ch as u16 | 0x1000, 20, sc, 8);
+    }
+    best
+}
