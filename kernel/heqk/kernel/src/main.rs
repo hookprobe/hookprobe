@@ -791,7 +791,15 @@ fn cm5_gem_el0_rx_probe() {
 fn cm5_gem_el0_tx_probe() {
     use arch_aarch64::mmu_cm5;
     arch_aarch64::disable_irqs();
-    arch_aarch64::gem::tx_prep_el0(64); // kernel: fill TX buffer + descriptor address
+    // kernel (privileged half): pick the controller's NEXT slot, fill its buffer + address
+    // words, clear latched TSR; the plan goes to the bottom of the driver's own stack page.
+    let plan = arch_aarch64::gem::tx_prep_el0(64);
+    unsafe {
+        let p = mmu_cm5::el0_stack_pa() as *mut u32;
+        core::ptr::write_volatile(p, plan.desc_off);
+        core::ptr::write_volatile(p.add(1), plan.word1);
+        core::arch::asm!("dsb sy");
+    }
     extern "C" {
         static gem_tx_stub: u8;
         static gem_tx_stub_end: u8;
@@ -815,9 +823,10 @@ fn cm5_gem_el0_tx_probe() {
     DRIVER_REPORT.store(0, Ordering::Relaxed);
     unsafe { arch_aarch64::syscall::enter_user(ucode, ustack + 0x1000) };
     let w1 = DRIVER_REPORT.load(Ordering::Relaxed);
+    let tsr = arch_aarch64::gem::tx_finish_el0();
     let used = (w1 >> 31) & 1 == 1;
-    kprint!(" [P7c] EL0 TX driver launched a transmit: final word1={:#010x} (USED/complete={})\n",
-        w1, used);
+    kprint!(" [P7c] EL0 TX driver launched a transmit: slot@{:#x} armed={:#010x} final word1={:#010x} tsr={:#06x} (USED/complete={})\n",
+        plan.desc_off, plan.word1, w1, tsr, used);
     kprint!(" [P7c] {} — GEM TX driven from an ISOLATED EL0 driver (stage 3: armed + kicked + completed)\n",
         if used { "PASS" } else { "FAIL" });
 }
