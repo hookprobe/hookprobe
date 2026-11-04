@@ -1868,6 +1868,7 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     let channel = ((w0r >> 8) & 0xf) as u8;
     let doffset = ((w0r >> 24) & 0xff) as usize;
     let mut new_max = ((w1r >> 8) & 0xff) as u8;
+    unsafe { AP_DIAG[3] = w1r };
     if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
         new_max = unsafe { TX_SEQ }.wrapping_add(2);
     }
@@ -1908,6 +1909,7 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
                     if BRCMF_FIRSTREAD + need <= rx.len()
                         && cmd53_read_blocks512(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + need], nblk as u32)
                     {
+                        unsafe { AP_DIAG[2] += 1 };
                         want
                     } else {
                         0
@@ -4206,6 +4208,7 @@ fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
 /// dcmd header. Rides the same SDPCM tx-credit + sequence as control.
 fn sdpcm_data_tx(eth: &[u8]) -> bool {
     if !txctl_ok() {
+        unsafe { AP_DIAG[5] += 1 };
         return false;
     }
     let seq = unsafe { TX_SEQ };
@@ -4246,7 +4249,9 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
                 for b in frame[padded..need].iter_mut() {
                     *b = 0;
                 }
-                cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..need], nblk as u32)
+                let r = cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..need], nblk as u32);
+                unsafe { AP_DIAG[if r { 0 } else { 1 }] += 1 };
+                r
             }
         }
         #[cfg(not(feature = "wifi-bigtx"))]
@@ -4254,7 +4259,11 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
             false // refused (counted too_big by the caller) — see the feature note in Cargo.toml
         }
     } else {
-        cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded])
+        let r = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
+        if !r {
+            unsafe { AP_DIAG[4] += 1 };
+        }
+        r
     };
     if ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
@@ -4646,6 +4655,14 @@ const BRCMF_FIRSTREAD: usize = 64;
 
 // SDPCM tx-credit + sequence state (brcmf init: tx_seq=255, tx_max=0 => 1 boot credit).
 static mut TX_SEQ: u8 = 255;
+// AP data-path diagnostics (read-only counters; no behavior depends on them):
+// [0]=big TX ok [1]=big TX fail [2]=big RX (block remainder) [3]=last RX SW-hdr w1 raw
+// [4]=small TX fail (byte-mode CMD53 error) [5]=credit-gate refusals
+pub static mut AP_DIAG: [u32; 6] = [0; 6];
+/// (tx_seq, tx_max, AP_DIAG) — for the AP beat line.
+pub fn ap_diag() -> (u8, u8, [u32; 6]) {
+    unsafe { (TX_SEQ, TX_MAX, AP_DIAG) }
+}
 static mut TX_MAX: u8 = 0;
 static mut BCDC_REQID: u32 = 0;
 // P10-C diagnostics for the first control round-trip (GET "ver").
