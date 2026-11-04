@@ -3330,8 +3330,9 @@ fn cm5_p10_probe() {
                                             kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
                                                 gs[0], gs[1], gs[2], gs[3], gs[4], gs[5], gs[6], gs[7], gs[8], gs[9], gs[10], wan_big_seen, wan_big_unnat);
                                             let (seq, max, dg) = cyw43::ap_diag();
-                                            kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} rx_terminated={} (never_zeroed={}) | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
-                                                seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[6], dg[7], dg[3],
+                                            kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} rx_terminated={} (never_zeroed={} too_long={} blk_fail={} byte_fail={} last_len={} last_chan={} last_blk_fail={:#010x}) | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
+                                                seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[6], dg[7],
+                                                dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
                                         kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",

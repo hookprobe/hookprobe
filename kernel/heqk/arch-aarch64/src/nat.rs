@@ -29,7 +29,13 @@ pub const WIFI_MAX_FRAME: usize = 1514;
 /// MSS advertised to both ends. Kept at the pre-M-NAT4 value for this image as the hedge:
 /// TCP stays provably within one 512-B transfer either way, while big UDP (QUIC) is the
 /// first traffic to exercise the chunked path. Raise to ~1400 once metal proves chunking.
+#[cfg(not(feature = "wifi-bigtx"))]
 pub const MSS_CLAMP: u16 = 430;
+/// With block-mode TX (the Linux-traced sequence, metal-proven 2026-11-04: 1,773 full-MTU frames
+/// to an iPhone, 0 failures) a station takes full 1514-B frames: the standard MSS for a 1500-B
+/// MTU. The clamp still lowers larger advertisements; it never raises one.
+#[cfg(feature = "wifi-bigtx")]
+pub const MSS_CLAMP: u16 = 1460;
 
 /// Inside link ids (`Entry.in_if`): replies go back out the link the flow came in on.
 pub const IF_WIFI: u8 = 0;
