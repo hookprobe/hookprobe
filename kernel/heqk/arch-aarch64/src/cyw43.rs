@@ -1829,6 +1829,30 @@ pub fn sdpcm_frame_pending() -> bool {
     bp_r32(sdb + SD_REG_INTSTATUS) & I_HMB_FRAME_IND != 0
 }
 
+/// Terminate the F2 frame currently being read — a port of brcmfmac `brcmf_sdio_rxfail`
+/// (sdio.c, abort=true, rtx=false): CMD52 abort of F2 through F0 (`brcmf_sdiod_abort`: CCCR
+/// ABORT 0x06 <- function number), then SBSDIO_FUNC1_FRAMECTRL (0x1000D) <- SFC_RF_TERM (bit 0),
+/// then wait until the device's remaining-frame byte count RFRAMEBCHI/LO (0x1001C/0x1001B) is
+/// zero (bounded, like brcmfmac's 0xffff retries).
+fn sdio_rxfail() {
+    const SDIO_CCCR_ABORT: u32 = 0x06;
+    const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
+    const SFC_RF_TERM: u8 = 1 << 0;
+    const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
+    const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001C;
+    unsafe { AP_DIAG[6] += 1 };
+    let _ = cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+    let _ = cmd52(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+    for _ in 0..0xffffu32 {
+        let hi = cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCHI, 0).unwrap_or(0xff);
+        let lo = cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCLO, 0).unwrap_or(0xff);
+        if hi == 0 && lo == 0 {
+            return;
+        }
+    }
+    unsafe { AP_DIAG[7] += 1 };
+}
+
 /// Read ONE SDPCM frame off F2 (poll intstatus, 64-B first read + remainder), advancing
 /// tx_max from the SW window byte. Returns (channel, hw_len, doffset), or None if dry
 /// after ~1.5 s (1500 × 1 ms polls) — the bring-up default where a reply is expected.
@@ -1903,7 +1927,7 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
         // > 512 B (the fw pads the tail to the block size).
         let want = end - BRCMF_FIRSTREAD;
         let got = {
-            #[cfg(feature = "wifi-bigtx")]
+            #[cfg(feature = "wifi-bigrx")]
             {
                 if want > 512 {
                     let nblk = (want + 511) / 512;
@@ -1922,7 +1946,7 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
                     0
                 }
             }
-            #[cfg(not(feature = "wifi-bigtx"))]
+            #[cfg(not(feature = "wifi-bigrx"))]
             {
                 let n = want.min(512);
                 if cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + n]) {
@@ -1936,6 +1960,14 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
             *b = 0;
         }
         valid = BRCMF_FIRSTREAD + got;
+        // A frame we could not read WHOLE must be TERMINATED in the device, never left
+        // half-read: the remainder stays in the F2 FIFO and the SDPCM stream degrades, then
+        // wedges (metal 2026-11-04: after the first truncated reads TX credit only fell,
+        // 40 -> 0, and RX froze). brcmfmac never truncates — brcmf_sdio_rxfail.
+        if got < want || BRCMF_FIRSTREAD + rest > rx.len() {
+            sdio_rxfail();
+            return None;
+        }
     }
     let hw_len = hw_len.min(valid as u16);
     Some((channel, hw_len, doffset))
@@ -4284,7 +4316,7 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
 
 /// BLOCK-mode CMD53 read of `nblocks` x 512-B blocks into `out` (out.len() >= nblocks*512):
 /// wait BUF_RD_RDY before EACH block, W1C it, pull 128 words, then wait Transfer Complete.
-#[cfg(feature = "wifi-bigtx")]
+#[cfg(feature = "wifi-bigrx")]
 fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> bool {
     const BS: usize = 512;
     let need = (nblocks as usize) * BS;
@@ -4673,9 +4705,10 @@ static mut TX_SEQ: u8 = 255;
 // AP data-path diagnostics (read-only counters; no behavior depends on them):
 // [0]=big TX ok [1]=big TX fail [2]=big RX (block remainder) [3]=last RX SW-hdr w1 raw
 // [4]=small TX fail (byte-mode CMD53 error) [5]=credit-gate refusals
-pub static mut AP_DIAG: [u32; 6] = [0; 6];
+// [6]=RX frames terminated (sdio_rxfail) [7]=terminations whose RFRAMEBC never reached 0
+pub static mut AP_DIAG: [u32; 8] = [0; 8];
 /// (tx_seq, tx_max, AP_DIAG) — for the AP beat line.
-pub fn ap_diag() -> (u8, u8, [u32; 6]) {
+pub fn ap_diag() -> (u8, u8, [u32; 8]) {
     unsafe { (TX_SEQ, TX_MAX, AP_DIAG) }
 }
 static mut TX_MAX: u8 = 0;
