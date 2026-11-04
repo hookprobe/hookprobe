@@ -2010,3 +2010,21 @@ pub fn tx_finish_el0() -> u32 {
     }
     tsr
 }
+
+/// GEM hardware RX statistics (clear-on-read registers, accumulated here; read-only diagnostics).
+/// [0]=frames rx [1]=256-511 [2]=512-1023 [3]=1024-1518 [4]=1519+ [5]=oversize [6]=FCS err
+/// [7]=length err [8]=resource err (no RX buffer) [9]=overrun [10]=RSR (raw, last read)
+pub fn rx_stats() -> [u32; 11] {
+    static mut ACC: [u32; 10] = [0; 10];
+    const REGS: [usize; 10] = [0x158, 0x174, 0x178, 0x17c, 0x180, 0x188, 0x190, 0x194, 0x1a0, 0x1a4];
+    unsafe {
+        let acc = &mut *core::ptr::addr_of_mut!(ACC);
+        for (k, off) in REGS.iter().enumerate() {
+            acc[k] = acc[k].wrapping_add(r(GEM, *off));
+        }
+        let mut out = [0u32; 11];
+        out[..10].copy_from_slice(acc);
+        out[10] = r(GEM, RSR);
+        out
+    }
+}
