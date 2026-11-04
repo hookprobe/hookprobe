@@ -5,7 +5,11 @@
 # heqk-flasher) exists; note the mass-storage gadget below briefly boots a Linux initramfs ON THE
 # CM5 for the duration of the flash (the browser flasher removes that).
 #
-#   sudo kernel/heqk/cm5-boot/flash-image.sh <image.img> [--backup <file>]
+#   sudo kernel/heqk/cm5-boot/flash-image.sh <image.img> [--backup <file>] [--confirm-erase]
+#
+# --confirm-erase  non-interactive: the explicit flag replaces typing FLASH (for runs where stdin
+#                  is not a terminal). If the CM5 is already in rpiboot mode (0a5c:2712 on USB) the
+#                  "fit the jumper" prompt is skipped.
 #
 # Guards: only a Raspberry Pi USB mass-storage device (by-id) is accepted — never a host disk; the
 # device + size are shown and you must type FLASH; the written image is read back and its sha256
@@ -13,8 +17,16 @@
 # after this).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-IMG="${1:-}"; BACKUP=""
-[ "${2:-}" = "--backup" ] && BACKUP="${3:-}"
+IMG="${1:-}"; BACKUP=""; CONFIRM=0
+shift || true
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --backup) BACKUP="${2:-}"; shift ;;
+    --confirm-erase) CONFIRM=1 ;;
+    *) echo "unknown option $1"; exit 2 ;;
+  esac
+  shift
+done
 [ -f "$IMG" ] || { echo "usage: sudo $0 <image.img> [--backup <file>]"; exit 2; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo (raw block-device write)"; exit 2; }
 SHA_IMG="$(sha256sum "$IMG" | cut -d' ' -f1)"
@@ -24,8 +36,12 @@ fi
 
 USBBOOT="$HERE/../tools/usbboot"
 RPIBOOT="$(command -v rpiboot || echo "$USBBOOT/rpiboot")"
-echo "== 1/4 rpiboot: fit the nRPIBOOT jumper (EMMC-DISABLE), power-cycle the CM5, then press Enter"
-read -r _
+if lsusb -d 0a5c:2712 >/dev/null 2>&1; then
+  echo "== 1/4 rpiboot: CM5 already in USB-boot mode (0a5c:2712)"
+else
+  echo "== 1/4 rpiboot: fit the nRPIBOOT jumper (EMMC-DISABLE), power-cycle the CM5, then press Enter"
+  read -r _
+fi
 "$RPIBOOT" -d "$USBBOOT/mass-storage-gadget64"
 
 echo "== 2/4 waiting for the CM5 eMMC to appear as a USB disk..."
@@ -48,9 +64,14 @@ if [ -n "$BACKUP" ]; then
   dd if="$REAL" of="$BACKUP" bs=4M status=progress conv=fsync
 fi
 
-echo "== 3/4 THIS ERASES THE WHOLE eMMC on $REAL. Type FLASH to continue:"
-read -r ans
-[ "$ans" = FLASH ] || { echo "aborted, nothing written"; exit 1; }
+echo "== 3/4 THIS ERASES THE WHOLE eMMC on $REAL."
+if [ "$CONFIRM" != 1 ]; then
+  echo "   Type FLASH to continue:"
+  read -r ans
+  [ "$ans" = FLASH ] || { echo "aborted, nothing written"; exit 1; }
+else
+  echo "   (--confirm-erase given)"
+fi
 dd if="$IMG" of="$REAL" bs=4M status=progress conv=fsync
 sync
 
