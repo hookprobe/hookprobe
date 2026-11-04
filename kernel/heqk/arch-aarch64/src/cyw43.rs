@@ -1969,6 +1969,11 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
         // wedges (metal 2026-11-04: after the first truncated reads TX credit only fell,
         // 40 -> 0, and RX froze). brcmfmac never truncates — brcmf_sdio_rxfail.
         if got < want || BRCMF_FIRSTREAD + rest > rx.len() {
+            unsafe {
+                let k = if BRCMF_FIRSTREAD + rest > rx.len() { 8 } else if want > 512 { 9 } else { 10 };
+                AP_DIAG[k] += 1;
+                AP_DIAG[11] = (hw_len as u32) | ((channel as u32) << 16);
+            }
             sdio_rxfail();
             return None;
         }
@@ -4340,6 +4345,7 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     let incr: u32 = if fnum == 2 { 0 } else { 1 };
     let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (incr << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
+        unsafe { AP_DIAG[12] = (1 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
         return false;
     }
     let mut i = 0usize;
@@ -4347,10 +4353,12 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
         let mut spin = 0u32;
         while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
             if r32(INT_STATUS) & INT_ERR != 0 {
+                unsafe { AP_DIAG[12] = (2 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
                 return false;
             }
             spin += 1;
             if spin > 1_000_000 {
+                unsafe { AP_DIAG[12] = (3 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
                 return false;
             }
         }
@@ -4367,10 +4375,12 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     let mut spin = 0u32;
     while r32(INT_STATUS) & INT_XFER_DONE == 0 {
         if r32(INT_STATUS) & INT_ERR != 0 {
+            unsafe { AP_DIAG[12] = (4 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
             return false;
         }
         spin += 1;
         if spin > 4_000_000 {
+            unsafe { AP_DIAG[12] = (5 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
             return false;
         }
     }
@@ -4714,9 +4724,12 @@ static mut TX_SEQ: u8 = 255;
 // [0]=big TX ok [1]=big TX fail [2]=big RX (block remainder) [3]=last RX SW-hdr w1 raw
 // [4]=small TX fail (byte-mode CMD53 error) [5]=credit-gate refusals
 // [6]=RX frames terminated (sdio_rxfail) [7]=terminations whose RFRAMEBC never reached 0
-pub static mut AP_DIAG: [u32; 8] = [0; 8];
+// [8]=terminated: frame longer than the RX buffer [9]=terminated: block-mode remainder read failed
+// [10]=terminated: byte-mode remainder read failed [11]=last terminated frame: hw_len | channel<<16
+// [12]=last failed block read: stage<<24 | INT_STATUS low 24 bits
+pub static mut AP_DIAG: [u32; 13] = [0; 13];
 /// (tx_seq, tx_max, AP_DIAG) — for the AP beat line.
-pub fn ap_diag() -> (u8, u8, [u32; 8]) {
+pub fn ap_diag() -> (u8, u8, [u32; 13]) {
     unsafe { (TX_SEQ, TX_MAX, AP_DIAG) }
 }
 static mut TX_MAX: u8 = 0;
