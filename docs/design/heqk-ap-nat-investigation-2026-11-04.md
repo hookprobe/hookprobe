@@ -112,3 +112,20 @@ heqk — `ids_drop out` 0 → 43, beat `drop_rules 1:44` = rule id 1 `block-port
 "Known C2 port 4444", T1571, HIGH), and tcpdump on the CM5 port saw **zero** packets to :4444.
 Other traffic kept flowing (ADR 0023). Operational note: an IPS on the path cannot inspect traffic
 the client tunnels (Private Relay / VPN / ECH); that is a property of the client, not a heqk gap.
+
+## The Linux reference trace — 2026-11-04 22:20
+
+Linux v8 (sha `ed6a151e`, brcmfmac + sdhci-brcmstb on `1001100000.mmc`) on the SAME CM5, an iPhone
+on its AP (ch36/80) browsing + speed test, `mmc_request_start` filtered to CMD53: 114,439 requests,
+80,861 on F2. Archived: `~/heqk-metal-logs/20261104-linux-v8-brcmfmac-mmc1-cmd53-trace.txt`.
+
+| F2 transfer (Linux) | count |
+|---|---|
+| W block incr 0x8000 2x512 **followed immediately by** W byte incr **0x8400** 508 (one 1532-B frame) | 12,289 pairs |
+| R byte **FIXED** 0x8000 64 (first read) | 35,175 |
+| R block **FIXED** 0x8000 1x512 / 3x512 (remainder, padded to blocks) | 2,695 |
+| W block FIXED 0x8000 4–6x512 (TX glom superframes — heqk does not glom) | 328 |
+
+So a large TX frame = whole blocks + a byte-mode TAIL at the ADVANCED address (no padding to an
+extra block, never restarting at 0x8000); every F2 READ is fixed-address. heqk differed in exactly
+these two places; both now mirror the trace.
