@@ -90,4 +90,9 @@ operator UI served throughout; the browser rendered the live detection + inciden
 - **Bench lessons:** the gadget-console `reboot -f` did not take — power-cycle the board after the
   flash. The fortress NAC quarantines the new SRK MAC after its first DHCP; the operator admits it
   (`fortress-ctl.sh device set-policy <mac> lan_only`).
-- **Open:** `[P7c]` stage 3 (EL0 GEM TX self-test) FAIL — prod TX path unaffected; fixed separately.
+- **`[P7c]` stage 3 FIXED + metal-proven (51da53b, image `hookprobe-heqk-cm5-51da53b-zerolinux.img`
+  sha256 `9889f6b2…`, same owner key):** `slot@0x18 armed=0x40008040 final word1=0xc0008040
+  tsr=0x0021 (USED/complete=true)` → PASS; all four P7c stages PASS. Re-ran the acceptance on that
+  image: **MC-METAL: PASS** (`~/heqk-metal-logs/20261104-194011-prod-mc-metal-acceptance.txt`) — no
+  regression. Root cause: the EL0 stub hard-coded desc[0] while the controller (after the one P7a
+  forward) was parked on desc[1] — broken since 7c4e4a5 removed the per-frame TBQP resync.
