@@ -4294,9 +4294,11 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     w16(BLK_SIZE_CNT, BS as u16);
     w16(BLK_SIZE_CNT + 2, nblocks as u16);
     w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
-    // FIXED address (op-code bit 26 = 0): brcmfmac reads F2 with sdio_readsb (bcmsdh.c
-    // brcmf_sdiod_skbuff_read, func 2) — a FIFO read. Incrementing is only for F1 memory.
-    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (0 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
+    // INCREMENTING address (op-code bit 26 = 1), like heqk's proven byte-mode F2 reads. Metal
+    // 2026-11-04: this carried the phone's 1378-B QUIC packets intact (img d20ea71); switching to
+    // FIXED (brcmfmac's sdio_readsb op-code, img 7e84ab0) correlated with an RX desync — heqk's F2
+    // addressing is not brcmfmac's, so the op-code bit alone is not a like-for-like change.
+    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
