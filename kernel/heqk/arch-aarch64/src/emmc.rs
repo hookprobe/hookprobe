@@ -69,6 +69,10 @@ pub struct Emmc {
     dv: Option<(u64, u64)>,
     #[cfg(feature = "p15-write")]
     dv_win: Option<(u64, u64)>,
+    /// A/B commit (BuildPlan M3 / Gate R): up to two BootConfig sectors (config.txt, tryboot.txt)
+    /// ADMITTED one-shot by `admit_boot_config` — see the Gate-1 content rule in `write_block_impl`.
+    #[cfg(feature = "p15-write")]
+    bootcfg: [Option<u64>; 2],
 }
 
 impl Emmc {
@@ -190,6 +194,8 @@ impl Emmc {
             dv: None,
             #[cfg(feature = "p15-write")]
             dv_win: None,
+            #[cfg(feature = "p15-write")]
+            bootcfg: [None, None],
         })
     }
 
@@ -235,6 +241,72 @@ impl Emmc {
         }
     }
 
+    /// A/B commit — ADMIT one BootConfig sector (config.txt / tryboot.txt) for exactly ONE write.
+    ///
+    /// The driver validates independently of the store layer (which already classified the
+    /// write as `RegionKind::BootConfig`): the sector must sit in p1's FAT32 DATA area as the
+    /// driver itself reads it from the MBR + BPB (never LBA 0, the BPB, either FAT, or the root
+    /// directory's first cluster), outside the reserved keystore window and the DataVolume, and it
+    /// must CURRENTLY hold an uncommented `kernel=heqk8-[ab].img` line. Admission alone writes
+    /// nothing; the write itself must also pass the content rule (`is_slot_letter_flip`).
+    #[cfg(feature = "p15-write")]
+    pub fn admit_boot_config(&mut self, lba: u64) -> bool {
+        let Some((dlo, dhi, rlo, rhi)) = self.p1_fat_data_area() else { return false };
+        if lba < dlo || lba >= dhi || (lba >= rlo && lba < rhi) {
+            return false;
+        }
+        if lba < RESERVED_LBA_HI || self.dv.map_or(false, |(a, b)| lba >= a && lba < b) {
+            return false;
+        }
+        let mut cur = [0u8; 512];
+        if self.read_block_impl(lba, &mut cur).is_err() || hal::slot_line_letter(&cur).is_none() {
+            return false;
+        }
+        if self.bootcfg.iter().any(|e| *e == Some(lba)) {
+            return true;
+        }
+        match self.bootcfg.iter_mut().find(|e| e.is_none()) {
+            Some(e) => {
+                *e = Some(lba);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// p1's FAT32 geometry as THIS driver reads it: (data_lo, p1_end, rootdir_lo, rootdir_hi).
+    #[cfg(feature = "p15-write")]
+    fn p1_fat_data_area(&self) -> Option<(u64, u64, u64, u64)> {
+        let mut mbr = [0u8; 512];
+        self.read_block_impl(0, &mut mbr).ok()?;
+        if mbr[510] != 0x55 || mbr[511] != 0xAA {
+            return None;
+        }
+        let e = &mbr[446..462];
+        if !matches!(e[4], 0x0b | 0x0c) {
+            return None; // p1 must be FAT32
+        }
+        let start = u32::from_le_bytes([e[8], e[9], e[10], e[11]]) as u64;
+        let size = u32::from_le_bytes([e[12], e[13], e[14], e[15]]) as u64;
+        if start == 0 || size == 0 {
+            return None;
+        }
+        let mut bpb = [0u8; 512];
+        self.read_block_impl(start, &mut bpb).ok()?;
+        let le16 = |o: usize| u16::from_le_bytes([bpb[o], bpb[o + 1]]) as u64;
+        let le32 = |o: usize| u32::from_le_bytes([bpb[o], bpb[o + 1], bpb[o + 2], bpb[o + 3]]) as u64;
+        let spc = bpb[13] as u64;
+        let (rsvd, nfats, fatsz, root) = (le16(14), bpb[16] as u64, le32(36), le32(44));
+        if bpb[510] != 0x55 || bpb[511] != 0xAA || le16(11) != 512 || spc == 0 || rsvd == 0
+            || nfats == 0 || fatsz == 0 || le16(22) != 0 || root < 2
+        {
+            return None;
+        }
+        let data = start + rsvd + nfats * fatsz;
+        let rlo = data + (root - 2) * spc;
+        Some((data, start + size, rlo, rlo + spc))
+    }
+
     /// Arm the one-shot, NARROWING-ONLY write window (the driver's independent second gate).
     /// Routes to whichever REGION contains the request — the registered DataVolume (if set
     /// and the request fits) else the reserved keystore window — and narrows only WITHIN
@@ -277,6 +349,18 @@ impl Emmc {
 
     #[cfg(feature = "p15-write")]
     fn write_block_impl(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
+        // Gate 1 (A/B commit): an ADMITTED BootConfig sector, ONE write, and only if the new
+        // sector differs from what is on the eMMC NOW in exactly the slot letter of its
+        // `kernel=heqk8-?.img` line (a<->b). Nothing else on the boot partition is ever writable.
+        if let Some(i) = self.bootcfg.iter().position(|e| *e == Some(lba)) {
+            self.bootcfg[i] = None; // one-shot: consumed whether or not the rule passes
+            let mut cur = [0u8; 512];
+            self.read_block_impl(lba, &mut cur)?;
+            if !hal::is_slot_letter_flip(&cur, buf) {
+                return Err(BlockErr::WriteRefused);
+            }
+            return self.cmd24(lba, buf);
+        }
         // Gate 1 (independent of the store layer): the hard allowlist — the reserved
         // keystore window OR the registered DataVolume region. LBA 0 (MBR) and the boot
         // slot are NEVER in either, so they can never be written.
@@ -291,6 +375,12 @@ impl Emmc {
             Some((lo, hi)) if lba >= lo && lba < hi => {}
             _ => return Err(BlockErr::WriteRefused),
         }
+        self.cmd24(lba, buf)
+    }
+
+    /// The raw CMD24 issue — reached ONLY after a Gate-1 + Gate-2 (or BootConfig rule) pass.
+    #[cfg(feature = "p15-write")]
+    fn cmd24(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
         if lba >= self.sec_count {
             return Err(BlockErr::OutOfRange);
         }
@@ -339,3 +429,4 @@ fn wait_ms(ms: u64) {
         }
     }
 }
+
