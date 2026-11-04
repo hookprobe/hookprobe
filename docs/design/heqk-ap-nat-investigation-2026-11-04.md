@@ -139,3 +139,23 @@ Log: `~/heqk-metal-logs/20261104-AP-NAT-linuxseq-57ff6d1-youtube.log`.
 
 Open: `rx_terminated` 132 (some phone frames still not read whole — the recovery holds the link,
 each costs a retransmit); TCP MSS still clamped to 430 (now unnecessary: TX > 512 B works).
+
+## Result — img 4a1a996 (RX glom = brcmf_sdio_rxglom port, MSS 1460), 2026-11-04 23:15
+
+**Steady ~22 Mbps speed test, no drop-out; browsing works afterwards.** glom superframes 9,791 →
+37,569 sub-frames delivered, 0 dropped; `rx_terminated` **0** (was 89–300 on every earlier image);
+`big_tx` 73,429 ok / 0 fail; NAT 55,118 out / 77,086 in; credit recovers; no stall.
+Remaining small item: `wifi_tx_fail` 89 (delivery-queue overflow during brief credit=0 moments).
+Log: `~/heqk-metal-logs/20261104-AP-NAT-glom-4a1a996-22mbps.log`.
+
+### The whole chain, as finally understood
+| # | Defect | How found | Fix |
+|---|---|---|---|
+| 1 | RX frames > 512 B read **partially**, remainder left in the F2 FIFO → firmware stops granting TX credit → link freezes | counters (credit 40→0 after trunc) + brcmfmac source | port `brcmf_sdio_rxfail`; read frames whole |
+| 2 | TX build buffer 1464 B < 1536 B block-padded QUIC reply; delivery queue head-of-line | `[NAT-TRACE]` + arithmetic | 4-block buffer; drop a refused head |
+| 3 | Large TX sent as one padded block transfer; F2 reads incrementing | **Linux v8 mmc trace on this CM5** | blocks + byte tail at 0x8000+N·512; F2 reads fixed |
+| 4 | Firmware superframes (channel 3) discarded whole under load | termination-reason counters (`last_chan=3`) + brcmfmac source | port `brcmf_sdio_rxglom` |
+
+Progression on the same iPhone: no traffic → 7–8 Mbps → ~11 Mbps → 22 Mbps (then collapse) →
+**22 Mbps steady**. Method lesson: measure, then copy the reference (brcmfmac source / a Linux trace
+on the same board) — the guesses (channel, block-RX) cost images; the trace and counters did not.
