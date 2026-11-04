@@ -215,10 +215,14 @@ fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
     // MULTI for >1 block), so a single-block read is BLK_CNT_EN | READ (0x12), not
     // just READ (0x10). Written before the Command reg (0x0E), which cmd() issues.
     w16(CMD_XFER, XM_READ | XM_BLKCNT_EN);
+    // F2 (WLAN data) is a FIFO: Linux brcmfmac reads it at a FIXED address, byte AND block mode
+    // (mmc trace on this CM5, 2026-11-04: 35,175 x "R F2 byte FIXED 0x8000"). F1 memory reads
+    // stay incrementing.
+    let incr: u32 = if fnum == 2 { 0 } else { 1 };
     let arg = (0 << 31)            // read
         | ((fnum & 7) << 28)
         | (0 << 27)                 // byte mode (not block)
-        | (1 << 26)                 // op-code: incrementing address
+        | (incr << 26)              // op-code: F2 fixed, F1 incrementing
         | ((addr & 0x1_FFFF) << 9)
         | (n as u32 & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
@@ -4281,18 +4285,22 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
     let ok = if padded > 512 {
         #[cfg(feature = "wifi-bigtx")]
         {
-            // ONE block-mode CMD53: N x 512-B blocks (the card's F2 block size), zero-padded
-            // tail. The SDPCM length word frames the real payload; the fw ignores the pad.
-            let nblk = (padded + 511) / 512;
-            let need = nblk * 512;
-            if need > frame.len() {
+            // EXACTLY the Linux sequence on this CM5 (mmc trace 2026-11-04, 12,289 of 12,664 block
+            // writes): whole blocks in ONE block-mode CMD53 at 0x8000 (incrementing), then the
+            // 4-byte-aligned TAIL as a byte-mode CMD53 at the ADVANCED address 0x8000 + N*512 —
+            // e.g. a 1532-B frame = "W F2 BLK incr 0x8000 2x512" + "W F2 byte incr 0x8400 508".
+            // No padding to an extra block (that wedged the firmware on metal: big_tx ok=4, then
+            // dead), and never restarting a chunk at 0x8000 (that desynced it on 2026-10-09).
+            let nblk = padded / 512;
+            let rem = padded % 512;
+            if padded > frame.len() {
                 unsafe { AP_DIAG[1] += 1 }; // never silent
                 false
             } else {
-                for b in frame[padded..need].iter_mut() {
-                    *b = 0;
+                let mut r = cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..nblk * 512], nblk as u32);
+                if r && rem > 0 {
+                    r = cmd53_write(2, F2_SDPCM_ADDR + (nblk * 512) as u32, &frame[nblk * 512..padded]);
                 }
-                let r = cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..need], nblk as u32);
                 unsafe { AP_DIAG[if r { 0 } else { 1 }] += 1 };
                 r
             }
@@ -4326,11 +4334,11 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     w16(BLK_SIZE_CNT, BS as u16);
     w16(BLK_SIZE_CNT + 2, nblocks as u16);
     w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
-    // INCREMENTING address (op-code bit 26 = 1), like heqk's proven byte-mode F2 reads. Metal
-    // 2026-11-04: this carried the phone's 1378-B QUIC packets intact (img d20ea71); switching to
-    // FIXED (brcmfmac's sdio_readsb op-code, img 7e84ab0) correlated with an RX desync — heqk's F2
-    // addressing is not brcmfmac's, so the op-code bit alone is not a like-for-like change.
-    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
+    // FIXED address — exactly the Linux sequence on this CM5 (mmc trace 2026-11-04): "R F2 byte
+    // FIXED 0x8000 64" then "R F2 BLK FIXED 0x8000 3x512". (img 7e84ab0 made ONLY the block read
+    // fixed while the byte first-read stayed incrementing — a mix Linux never issues.)
+    let incr: u32 = if fnum == 2 { 0 } else { 1 };
+    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (incr << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
     if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
         return false;
     }
