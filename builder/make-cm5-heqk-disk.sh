@@ -76,7 +76,8 @@ FEATURES="$FEATURES" SVN="$SVN" OUT="$OUT/bootset" "$HERE/make-cm5-heqk-image.sh
 BS="$OUT/bootset"
 [ -s "$BS/heqk8.img" ] || { echo "FATAL: no signed heqk8.img produced"; exit 1; }
 
-echo "== [factory] 3/5 canonical A/B boot config ($( [ $ZERO_LINUX = 1 ] && echo 'ZERO-LINUX: no devicetree' || echo 'proven: one .dtb'))"
+if [ "$ZERO_LINUX" = 1 ]; then MODE_DESC="ZERO-LINUX: no devicetree"; else MODE_DESC="proven: one .dtb"; fi
+echo "== [factory] 3/5 canonical A/B boot config ($MODE_DESC)"
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 cp "$BS/heqk8.img" "$STAGE/heqk8-a.img"
 cp "$BS/heqk8.img" "$STAGE/heqk8-b.img"           # both slots start identical; OTA replaces B
@@ -138,7 +139,9 @@ diff <(grep -v '^kernel=\|^# heqk A/B' "$STAGE/config.txt") <(grep -v '^kernel=\
 
 echo "== [factory] 4/5 assemble the partitioned disk image (${SIZE_MIB} MiB)"
 VER="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
-IMG="$OUT/hookprobe-heqk-cm5-$VER$( [ $ZERO_LINUX = 1 ] && echo -zerolinux).img"
+# (not `$( [ ... ] && echo ...)`: under set -e that substitution's false status kills the script)
+SUFFIX=""; if [ "$ZERO_LINUX" = 1 ]; then SUFFIX="-zerolinux"; fi
+IMG="$OUT/hookprobe-heqk-cm5-$VER$SUFFIX.img"
 P1_START=8192; P1_SECT=131072                      # 64 MiB FAT32 boot partition
 TOTAL=$((SIZE_MIB * 2048))
 P2_START=$((P1_START + P1_SECT)); P2_SECT=$((TOTAL - P2_START))
@@ -224,8 +227,12 @@ PY
 echo
 [ "$FAILS" = 0 ] && echo "FACTORY: PASS — $IMG (sha256 $SHA)" || { echo "FACTORY: FAIL ($FAILS)"; exit 1; }
 if [ -s "$STAGE/owner.token" ]; then
+  # The owner key goes to a PRIVATE file next to the image (mode 600), never to stdout: build logs
+  # and transcripts are not a place for device credentials. The image holds only its salted hash.
+  KEYF="$IMG.owner-key"
+  ( umask 077; cp "$STAGE/owner.token" "$KEYF" )
   echo
-  echo "OWNER KEY (shown ONCE, not stored anywhere; the image holds only its salted hash):"
-  echo "    $(cat "$STAGE/owner.token")"
+  echo "OWNER KEY written to $KEYF (mode 600). It is the ONLY copy: the image stores just its salted"
+  echo "hash. Keep it (password manager) — without it this device cannot be signed in to."
 fi
 echo "Flash (Red/operator): the browser flasher, or today: rpiboot + dd of the whole image to the eMMC."
