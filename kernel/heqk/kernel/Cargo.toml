@@ -196,7 +196,10 @@ txsram = ["arch-aarch64/txsram"]
 # (RP1 AXI/PCIe 256-byte-boundary read path). Needs the metal net stack; additive; never shipped.
 txsweep = ["netmetal", "arch-aarch64/txsweep"]
 # M-NAT4 TX bench: full-MTU frames to Wi-Fi stations via block-mode CMD53 (see arch-aarch64).
-wifi-bigtx = ["apmode", "arch-aarch64/wifi-bigtx"]
+wifi-bigtx = ["apmode", "wifi-bigrx", "arch-aarch64/wifi-bigtx"]
+# Full-MTU RX from stations (block-mode read), TX > 512 B refused + counted — the AP default
+# until block-mode WRITE is proven (it wedged the firmware on metal 2026-11-04).
+wifi-bigrx = ["apmode", "arch-aarch64/wifi-bigrx"]
 # sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
 # heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
 # verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also
