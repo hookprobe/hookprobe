@@ -211,3 +211,102 @@ pub fn acs_choose(neigh: &[(u16, i16)]) -> AcsChoice {
     }
     best
 }
+
+// ── SDPCM RX glomming (superframes) — a port of brcmfmac brcmf_sdio_rxglom's framing rules. ──
+// Pure: shared by the CM5 Wi-Fi driver and the QEMU self-test.
+
+/// SDPCM: 4-B hardware tag + 8-B software header.
+pub const SDPCM_HDRLEN: usize = 12;
+/// SDPCM channel of a glom descriptor / superframe.
+pub const SDPCM_GLOM_CHANNEL: u8 = 3;
+/// Max subframes per superframe we accept.
+pub const GLOM_MAX_SUBS: usize = 32;
+
+/// From a glom DESCRIPTOR body (the u16 LE sub-frame lengths after the 12-B header), compute the
+/// sub-frame lengths and the superframe read length. Mirrors brcmf_sdio_rxglom: dlen must be
+/// non-zero and even; every sublen >= SDPCM_HDRLEN and the first >= 2*SDPCM_HDRLEN (it also carries
+/// the superframe header); the LAST sublen is padded so the total is a whole number of `blk`-byte
+/// blocks. Returns (n, total) or None (brcmfmac then ignores the descriptor).
+pub fn glom_plan(desc: &[u8], blk: usize, out: &mut [u16; GLOM_MAX_SUBS]) -> Option<(usize, usize)> {
+    if desc.is_empty() || desc.len() % 2 != 0 || blk == 0 {
+        return None;
+    }
+    let n = desc.len() / 2;
+    if n > GLOM_MAX_SUBS {
+        return None;
+    }
+    let mut total = 0usize;
+    for k in 0..n {
+        let sl = u16::from_le_bytes([desc[2 * k], desc[2 * k + 1]]) as usize;
+        if sl < SDPCM_HDRLEN || (k == 0 && sl < 2 * SDPCM_HDRLEN) {
+            return None;
+        }
+        out[k] = sl as u16;
+        total += sl;
+    }
+    let padded = total.div_ceil(blk) * blk;
+    let last = out[n - 1] as usize + (padded - total);
+    if last > u16::MAX as usize {
+        return None;
+    }
+    out[n - 1] = last as u16;
+    Some((n, padded))
+}
+
+/// One validated sub-frame of a superframe: its bytes are `sup[start .. start + len]`, laid out as
+/// a normal SDPCM frame (its own 12-B header at `start`), payload at `start + doff`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct GlomSub {
+    pub start: u16,
+    pub len: u16,
+    pub chan: u8,
+    pub doff: u8,
+}
+
+fn sdpcm_tag_ok(b: &[u8]) -> Option<usize> {
+    if b.len() < SDPCM_HDRLEN {
+        return None;
+    }
+    let len = u16::from_le_bytes([b[0], b[1]]);
+    let ck = u16::from_le_bytes([b[2], b[3]]);
+    if len == 0 || (len ^ ck) != 0xffff {
+        return None;
+    }
+    Some(len as usize)
+}
+
+/// Validate a SUPERFRAME read against its plan and list its sub-frames (brcmf_sdio_hdparse SUPER
+/// then SUB for each). Superframe header: valid tag, channel 3, not itself a descriptor, data offset
+/// in [12, sublen0]. Sub-frame k occupies the planned region (sub-frame 0 starts after the superframe
+/// header); its header must have a valid tag, length within its region, channel 1 (event) or 2
+/// (data), data offset in [12, len]. Any violation -> None (brcmfmac terminates the whole superframe).
+pub fn glom_split(sup: &[u8], subl: &[u16], out: &mut [GlomSub; GLOM_MAX_SUBS]) -> Option<usize> {
+    let n = subl.len();
+    if n == 0 || n > GLOM_MAX_SUBS {
+        return None;
+    }
+    let total: usize = subl.iter().map(|&x| x as usize).sum();
+    if sup.len() < total || sdpcm_tag_ok(sup).is_none() {
+        return None;
+    }
+    let chan = sup[5] & 0x0f;
+    let sdoff = sup[7] as usize;
+    if chan != SDPCM_GLOM_CHANNEL || sup[5] & 0x80 != 0 || sdoff < SDPCM_HDRLEN || sdoff > subl[0] as usize {
+        return None;
+    }
+    let mut cum = 0usize;
+    for k in 0..n {
+        let region_end = cum + subl[k] as usize;
+        let start = if k == 0 { sdoff } else { cum };
+        let reg = &sup[start..region_end];
+        let len = sdpcm_tag_ok(reg)?;
+        let c = reg[5] & 0x0f;
+        let doff = reg[7] as usize;
+        if len > reg.len() || (c != 1 && c != 2) || doff < SDPCM_HDRLEN || doff > len {
+            return None;
+        }
+        out[k] = GlomSub { start: start as u16, len: len as u16, chan: c, doff: doff as u8 };
+        cum = region_end;
+    }
+    Some(n)
+}
