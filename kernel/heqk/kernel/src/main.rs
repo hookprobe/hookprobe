@@ -586,6 +586,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // --- P15: eMMC read-only block device + sealing (in-RAM, synthetic key) --
     #[cfg(feature = "hboot")]
     cm5_p15_block_seal();
+    // --- P15 (bench): the A/B commit two-boot proof on the real eMMC (opt-in, never shipped) --
+    #[cfg(feature = "abcommit-metal")]
+    abboot::abcommit_metal_selftest();
 
     // --- P13: RP1 peripheral buses (GPIO/pinmux + I2C + SPI + UART), EL0-isolated --
     cm5_p13_probe();

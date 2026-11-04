@@ -154,6 +154,9 @@ prod-export = ["prod-full", "netmetal"]
 # the UI's API) in PASSIVE-FIRST mode (PASS frames observed, never re-transmitted). Built by the
 # image factory (FEATURES=prod-mc) and CI.
 prod-mc = ["prod-full", "mcserve"]
+# BENCH-ONLY: the two-boot A/B commit proof on the CM5 eMMC ([P15-abcommit-metal]). Rewrites
+# config.txt/tryboot.txt every boot — never shipped; reflash the production image afterwards.
+abcommit-metal = ["cm5", "p15-write"]
 # Audit B1 — confirm the A/B trial boot only from the HEALTHY prod loop (rules armed + GEM loop
 # >= 2 s faults=0 + Mission Control up) instead of right after rules::init. OFF BY DEFAULT: hboot's
 # watchdog is armed on every boot (15 s), so this ships only after the bench measures the

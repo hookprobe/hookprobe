@@ -87,3 +87,43 @@ pub trait BlockDev {
 // Still to come alongside their phase (the boundary exists from commit one):
 //   P3:  syscall entry
 
+
+// ── A/B commit content rule (shared by the CM5 eMMC driver's Gate 1 and the QEMU self-test) ──
+const SLOT_KEY: &[u8; 13] = b"kernel=heqk8-";
+
+/// Offset of the slot letter of the ONE uncommented `kernel=heqk8-[ab].img` line in a sector
+/// (start of sector or right after a newline), or None if there is none or more than one.
+pub fn slot_line_letter(sec: &[u8; 512]) -> Option<usize> {
+    let mut found = None;
+    let mut o = 0usize;
+    while o + SLOT_KEY.len() + 5 <= 512 {
+        if &sec[o..o + SLOT_KEY.len()] == SLOT_KEY
+            && (o == 0 || sec[o - 1] == b'\n')
+            && matches!(sec[o + 13], b'a' | b'b')
+            && &sec[o + 14..o + 18] == b".img"
+        {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(o + 13);
+        }
+        o += 1;
+    }
+    found
+}
+
+/// The A/B-commit content rule: `new` equals `cur` except for exactly ONE byte, and that byte is
+/// the slot letter of `cur`'s single `kernel=heqk8-?.img` line, flipped a<->b.
+pub fn is_slot_letter_flip(cur: &[u8; 512], new: &[u8; 512]) -> bool {
+    let Some(p) = slot_line_letter(cur) else { return false };
+    let mut diffs = 0usize;
+    for k in 0..512 {
+        if cur[k] != new[k] {
+            diffs += 1;
+            if k != p {
+                return false;
+            }
+        }
+    }
+    diffs == 1 && matches!((cur[p], new[p]), (b'a', b'b') | (b'b', b'a'))
+}
