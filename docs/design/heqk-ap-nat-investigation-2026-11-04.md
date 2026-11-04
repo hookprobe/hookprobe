@@ -102,3 +102,13 @@ Next (in order): (a) record why block reads fail (the 89); (b) trace brcmfmac's 
 Linux v8 image on this board, then enable block TX → full MTU, MSS 1460, QUIC; (c) IDS/IPS test on
 the AP path; (d) DNS on the AP's own address (10.99.0.1); (e) un-pin the channel (ACS).
 Log: `~/heqk-metal-logs/20261104-AP-NAT-iphone-browsing-4a57a46.log`.
+
+## IDS/IPS on the AP path — 2026-11-04 22:00 (PASS)
+
+First attempt was not a test: with iCloud Private Relay on, Safari tunneled `http://1.1.1.1:4444`
+through Apple's relay (4,939 packets to 172.224.x:443, zero to 1.1.1.1) — no on-path device can see
+the real port. With Private Relay off for `heqk-ap`: the phone's SYNs to 1.1.1.1:4444 were DROPPED by
+heqk — `ids_drop out` 0 → 43, beat `drop_rules 1:44` = rule id 1 `block-port-4444` (signed BPF,
+"Known C2 port 4444", T1571, HIGH), and tcpdump on the CM5 port saw **zero** packets to :4444.
+Other traffic kept flowing (ADR 0023). Operational note: an IPS on the path cannot inspect traffic
+the client tunnels (Private Relay / VPN / ECH); that is a property of the client, not a heqk gap.
