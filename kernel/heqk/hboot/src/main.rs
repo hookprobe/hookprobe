@@ -173,9 +173,13 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
         puts(" — refusing to boot\n");
         unsafe { park() }
     }
-    // The payload lives in the combined image below IMAGE_BASE+HBOOT_PAYLOAD_OFFSET;
-    // its body must fit within the ~2 MiB region the EEPROM actually loaded.
-    if size == 0 || size > 0x20_0000 {
+    // The EEPROM loads the WHOLE combined image flat at IMAGE_BASE, so the payload body occupies
+    // [IMAGE_BASE+HBOOT_PAYLOAD_OFFSET+hdr, +size). It must end below hboot's EL2 stack reserve
+    // (boot_abi::HBOOT_IMAGE_END_MAX). (Was a fixed 2 MiB cap from the ~100 KB-kernel era; it
+    // refused the 2.06 MB prod-mc kernel on metal.) A stack that ever reached the payload anyway
+    // is caught by the post-relocation re-hash below — refuse, never run corrupted bytes.
+    let body_start = (IMAGE_BASE + HBOOT_PAYLOAD_OFFSET + core::mem::size_of::<PayloadHeader>()) as u64;
+    if size == 0 || body_start.saturating_add(size) > boot_abi::HBOOT_IMAGE_END_MAX as u64 {
         puts(" payload: INSANE SIZE — refusing to boot\n");
         unsafe { park() }
     }

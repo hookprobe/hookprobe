@@ -279,5 +279,16 @@ pub struct SealHandoff {
 /// gives room for the PQ crypto (SLH-DSA/SHA3) in a debug build.
 pub const HBOOT_PAYLOAD_OFFSET: usize = 0x200000; // 2 MiB
 
+/// Where the EEPROM loads the combined image (hboot ‖ header ‖ kernel), flat.
+pub const HBOOT_IMAGE_BASE: usize = 0x200000;
+/// hboot's EL2 stack grows DOWN from here (MMU off, no guard page).
+pub const HBOOT_STACK_TOP: usize = 0x800000;
+/// Stack kept clear of the loaded payload (ed25519 + SLH-DSA verify are stack-hungry).
+pub const HBOOT_STACK_RESERVE: usize = 0x100000; // 1 MiB
+/// The loaded image must END at or below this address, or the payload would sit under hboot's
+/// stack. Derived from the memory map — this replaced a fixed 2 MiB payload cap that dated from
+/// a ~100 KB kernel and refused the prod-mc kernel (2.06 MB, embedded UI) on metal 2026-11-04.
+pub const HBOOT_IMAGE_END_MAX: usize = HBOOT_STACK_TOP - HBOOT_STACK_RESERVE; // 0x700000
+
 /// Physical load/link address of the kernel payload.
 pub const KERNEL_LOAD_PA: usize = 0x0100_0000; // 16 MiB

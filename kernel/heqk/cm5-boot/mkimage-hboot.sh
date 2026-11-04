@@ -46,3 +46,15 @@ PY
 cat "$TMP/hdr" "$KERNEL_BIN" >> "$TMP/img"; cp "$TMP/img" "$OUT"
 echo "== $OUT: hboot ${HBOOT_SIZE}B | payload ${KSIZE}B @ $(printf 0x%x $LOAD_PA) | svn $SVN | sha $KHASH"
 echo "   header $(stat -c %s "$TMP/hdr")B (ed25519+SLH-DSA+svn) | total $(stat -c %s "$OUT")B"
+
+# BUILD-TIME guard (the same bound hboot enforces at boot, boot_abi::HBOOT_IMAGE_END_MAX): the
+# EEPROM loads this whole file flat at 0x200000 and hboot's EL2 stack (1 MiB reserved) sits below
+# 0x800000, so the file must end at or below 0x700000 → at most 5 MiB. Fail the BUILD, not the
+# boot: a 2.06 MB kernel once passed every build check and was refused on metal.
+IMG_SIZE=$(stat -c %s "$OUT")
+MAX_IMG=$(( 0x700000 - 0x200000 ))
+if [ "$IMG_SIZE" -gt "$MAX_IMG" ]; then
+  echo "FATAL: $OUT is $IMG_SIZE bytes > $MAX_IMG — hboot would refuse it (payload under its stack). Shrink the kernel." >&2
+  rm -f "$OUT"; exit 1
+fi
+echo "   image size $IMG_SIZE / $MAX_IMG bytes ($(( IMG_SIZE * 100 / MAX_IMG ))% of the hboot load window)"
