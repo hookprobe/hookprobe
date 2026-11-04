@@ -114,5 +114,8 @@ echo
 if [ "$FAILS" != 0 ]; then echo "MC-E2E: FAIL ($FAILS)"
 elif [ "$BROWSER" = ran ]; then echo "MC-E2E: PASS — attack → heqk IPS → evidence → heqk API → Mission Control UI in a real browser, no Linux in the device path"
 else echo "MC-E2E: API LEG PASS, BROWSER LEG SKIPPED — the UI rendering was NOT verified"; fi
-[ "${MC_E2E_KEEP:-0}" = 1 ] && echo "VM left running (pid $QPID): open $B"
+if [ "${MC_E2E_KEEP:-0}" = 1 ]; then
+  ( umask 077; echo "$TOKEN" > /tmp/mc-e2e-owner-key )
+  echo "VM left running (pid $QPID): open $B — owner key in /tmp/mc-e2e-owner-key (mode 600)"
+fi
 exit "$FAILS"
