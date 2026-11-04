@@ -188,6 +188,41 @@ pub fn apply<D: BlockDev>(store: &mut SealedStore<D>, writes: &[Option<Write1>])
     Ok(n)
 }
 
+/// The driver's Gate-1 content rule (`hal::is_slot_letter_flip`) against fixed vectors: only a
+/// single a<->b flip of the one uncommented `kernel=heqk8-?.img` line is ever writable.
+pub fn content_rule_vectors() -> bool {
+    fn sec(text: &[u8]) -> [u8; 512] {
+        let mut s = [0u8; 512];
+        s[..text.len()].copy_from_slice(text);
+        s
+    }
+    let cur = sec(b"# heqk\nkernel=heqk8-a.img\narm_64bit=1\n");
+    let p = 7 + 13;
+    let mut flip = cur;
+    flip[p] = b'b';
+    let mut flip_plus = flip;
+    flip_plus[40] = b'X';
+    let mut other = cur;
+    other[2] = b'X';
+    let mut to_c = cur;
+    to_c[p] = b'c';
+    let commented = sec(b"#kernel=heqk8-a.img\n");
+    let mut commented_flip = commented;
+    commented_flip[14] = b'b';
+    let two = sec(b"kernel=heqk8-a.img\nkernel=heqk8-a.img\n");
+    let mut two_flip = two;
+    two_flip[13] = b'b';
+    hal::slot_line_letter(&cur) == Some(p)
+        && hal::is_slot_letter_flip(&cur, &flip)
+        && hal::is_slot_letter_flip(&flip, &cur)
+        && !hal::is_slot_letter_flip(&cur, &cur)
+        && !hal::is_slot_letter_flip(&cur, &flip_plus)
+        && !hal::is_slot_letter_flip(&cur, &other)
+        && !hal::is_slot_letter_flip(&cur, &to_c)
+        && !hal::is_slot_letter_flip(&commented, &commented_flip)
+        && !hal::is_slot_letter_flip(&two, &two_flip)
+}
+
 /// `[P15-abcommit]` — TWO-BOOT proof over a factory-layout FAT boot partition (virtio-blk,
 /// p15-write). The disk's own state says which boot this is:
 /// - boot 1 (config=A, tryboot=B): commit to B but write ONLY config.txt — a simulated power loss
@@ -255,10 +290,92 @@ pub fn abcommit_selftest() {
             let after_full = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::A), Ok(Slot::B));
             // Idempotence: committing to the already-active slot writes nothing.
             let idem = plan_commit(&dev, p1, Slot::A).map(|p| p.iter().all(|w| w.is_none())) == Ok(true);
-            let pass = repaired && after_repair && full && after_full && idem;
-            kprint!(" [P15-abcommit] {} — A/B commit survives a cold boot: boot-2 cold-boot slot = B (the commit persisted across a real reboot), interrupted commit repaired (tryboot re-pointed)={} full commit back to A={} (config=A, tryboot=B: {}), idempotent={}; every write a single in-place sector through the guard as BootConfig\n",
-                if pass { "PASS" } else { "FAIL" }, repaired && after_repair, full, after_full, idem);
+            let rule = content_rule_vectors();
+            let pass = repaired && after_repair && full && after_full && idem && rule;
+            kprint!(" [P15-abcommit] {} — A/B commit survives a cold boot: boot-2 cold-boot slot = B (the commit persisted across a real reboot), interrupted commit repaired (tryboot re-pointed)={} full commit back to A={} (config=A, tryboot=B: {}), idempotent={}, driver content rule (only a single a<->b slot-letter flip writable)={}; every write a single in-place sector through the guard as BootConfig\n",
+                if pass { "PASS" } else { "FAIL" }, repaired && after_repair, full, after_full, idem, rule);
         }
         other => kprint!(" [P15-abcommit] FAIL — unexpected disk state (active, trial) = {:?}\n", other),
+    }
+}
+
+/// `[P15-abcommit-metal]` — the SAME two-boot proof on the CM5's real eMMC, with a real power
+/// cycle between the boots (bench feature `abcommit-metal`; it rewrites config.txt/tryboot.txt on
+/// every boot, so it is never shipped — reflash the production image afterwards). Both slots hold
+/// the same signed image, so whichever one the firmware cold-boots is a valid heqk.
+///
+/// Every write goes through BOTH guards: the store layer (`RegionKind::BootConfig`, exactly that
+/// sector) and the driver's independent Gate 1 (`admit_boot_config`: p1 FAT data area, one-shot,
+/// content-pinned to a single a<->b slot-letter flip). Boot 1 also proves the driver REFUSES:
+/// admitting LBA 0 / the FAT32 boot sector / the root directory, and a write to a config sector
+/// that was never admitted (identical content, so a wrong accept would be harmless).
+#[cfg(all(feature = "cm5", feature = "abcommit-metal"))]
+pub fn abcommit_metal_selftest() {
+    macro_rules! kprint { ($($t:tt)*) => { arch_aarch64::_print(format_args!($($t)*)) }; }
+    use arch_aarch64::emmc::Emmc;
+    let mut dev = match Emmc::probe() {
+        Ok(d) => d,
+        Err(e) => return kprint!(" [P15-abcommit-metal] SKIP — eMMC probe failed: {:?}\n", e),
+    };
+    let mut mbr = [0u8; 512];
+    if dev.read_block(0, &mut mbr).is_err() {
+        return kprint!(" [P15-abcommit-metal] FAIL — MBR read failed\n");
+    }
+    let p1 = crate::store::parse_mbr(&mbr)[0].start;
+    let (a, t) = match (active(&dev, p1), trial(&dev, p1)) {
+        (Ok(a), Ok(t)) => (a, t),
+        r => return kprint!(" [P15-abcommit-metal] FAIL — no factory A/B config on the eMMC: {:?}\n", r),
+    };
+    kprint!(" [P15-abcommit-metal] eMMC boot config: config.txt -> {:?}, tryboot.txt -> {:?}\n", a, t);
+    let rule = content_rule_vectors();
+    // Admit + apply each planned write through both guards.
+    fn admit_apply(dev: &mut Emmc, writes: &[Option<Write1>]) -> Result<usize, AbErr> {
+        for w in writes.iter().flatten() {
+            if !dev.admit_boot_config(w.lba) {
+                return Err(AbErr::Refused);
+            }
+        }
+        let mut store = SealedStore::open(dev).map_err(|_| AbErr::Refused)?;
+        apply(&mut store, writes)
+    }
+    match (a, t) {
+        (Slot::A, Slot::B) => {
+            // Negative driver checks first (no write lands if they behave; harmless if not).
+            let lba0 = !dev.admit_boot_config(0);
+            let bpb = !dev.admit_boot_config(p1);
+            let cfg = match locate_line(&dev, p1, CONFIG_8_3) {
+                Ok(l) => l,
+                Err(e) => return kprint!(" [P15-abcommit-metal] FAIL — locate config.txt: {:?}\n", e),
+            };
+            let unadmitted = dev.write_block(cfg.lba, &cfg.sector).is_err();
+            let plan = match plan_commit(&dev, p1, Slot::B) {
+                Ok(p) => p,
+                Err(e) => return kprint!(" [P15-abcommit-metal] FAIL — plan_commit: {:?}\n", e),
+            };
+            let wrote = admit_apply(&mut dev, &plan[..1]);
+            // The admission was one-shot: re-writing the ORIGINAL sector now must be refused.
+            let oneshot = dev.write_block(cfg.lba, &cfg.sector).is_err();
+            let now = active(&dev, p1);
+            let ok = lba0 && bpb && unadmitted && wrote == Ok(1) && oneshot && now == Ok(Slot::B) && rule;
+            kprint!(" [P15-abcommit-metal] boot 1: {} — committed config.txt -> B on the eMMC (power lost before tryboot.txt, simulated); driver refused LBA0={} BPB={} un-admitted write={} reuse of a spent admission={}; content rule={}. POWER-CYCLE NOW: the firmware must cold-boot slot B\n",
+                if ok { "OK" } else { "FAIL" }, lba0, bpb, unadmitted, oneshot, rule);
+        }
+        (Slot::B, Slot::B) => {
+            let repaired = match plan_repair(&dev, p1) {
+                Ok(Some(w)) => admit_apply(&mut dev, &[Some(w)]) == Ok(1),
+                r => return kprint!(" [P15-abcommit-metal] FAIL — repair plan: {:?}\n", r),
+            };
+            let after_repair = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::B), Ok(Slot::A));
+            let full = match plan_commit(&dev, p1, Slot::A) {
+                Ok(plan) => admit_apply(&mut dev, &plan) == Ok(2),
+                Err(_) => false,
+            };
+            let after_full = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::A), Ok(Slot::B));
+            let idem = plan_commit(&dev, p1, Slot::A).map(|p| p.iter().all(|w| w.is_none())) == Ok(true);
+            let pass = repaired && after_repair && full && after_full && idem && rule;
+            kprint!(" [P15-abcommit-metal] {} — A/B commit survives a REAL power cycle on CM5 eMMC: this cold boot ran slot B (config.txt committed on the previous boot), interrupted commit repaired={} full commit back to A={} (config=A, tryboot=B: {}), idempotent={}, content rule={}; every write through the store guard AND the driver's content-pinned one-shot Gate 1\n",
+                if pass { "PASS" } else { "FAIL" }, repaired && after_repair, full, after_full, idem, rule);
+        }
+        other => kprint!(" [P15-abcommit-metal] FAIL — unexpected eMMC state (active, trial) = {:?}\n", other),
     }
 }
