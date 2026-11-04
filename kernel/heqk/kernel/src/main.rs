@@ -3030,6 +3030,7 @@ fn cm5_p10_probe() {
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
+                        let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
                         let mut evs = [events::Event::EMPTY; 16];
@@ -3048,7 +3049,21 @@ fn cm5_p10_probe() {
                                     wq_head = (i + 1) % WQ_N;
                                     wq_n -= 1;
                                     wq_flushed += 1;
+                                    wq_head_fail = 0;
                                 } else {
+                                    // Credit was available, so this is not flow control: the radio
+                                    // refused THIS frame. Retry a few times (a transient CMD53 error),
+                                    // then drop it — one lost frame, never a wedged queue (metal
+                                    // 2026-11-04: an unsendable head blocked every delivery + new joins).
+                                    wq_head_fail += 1;
+                                    if wq_head_fail >= 3 {
+                                        wq_head = (i + 1) % WQ_N;
+                                        wq_n -= 1;
+                                        wifi_tx_dropped += 1;
+                                        wq_head_drop += 1;
+                                        wq_head_fail = 0;
+                                        continue;
+                                    }
                                     break;
                                 }
                             }
@@ -3319,8 +3334,8 @@ fn cm5_p10_probe() {
                                                 seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
-                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
-                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_n, trunc_drop,
+                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
+                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
