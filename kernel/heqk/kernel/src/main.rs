@@ -3330,9 +3330,9 @@ fn cm5_p10_probe() {
                                             kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
                                                 gs[0], gs[1], gs[2], gs[3], gs[4], gs[5], gs[6], gs[7], gs[8], gs[9], gs[10], wan_big_seen, wan_big_unnat);
                                             let (seq, max, dg) = cyw43::ap_diag();
-                                            kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} rx_terminated={} (never_zeroed={} too_long={} blk_fail={} byte_fail={} last_len={} last_chan={} last_blk_fail={:#010x}) | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
+                                            kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} rx_terminated={} (never_zeroed={} too_long={} blk_fail={} byte_fail={} last_len={} last_chan={} last_blk_fail={:#010x}) glom super={} subs={} drop={} | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
                                                 seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[6], dg[7],
-                                                dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[3],
+                                                dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[13], dg[14], dg[15], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
                                         kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
@@ -5175,6 +5175,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = http::mc_selftest();
         let _ = mcauth::mcauth_selftest();
         acs_selftest();
+        glom_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -11571,4 +11572,58 @@ fn acs_selftest() {
         && d.mhz == 20 && d.channel != 36 && d.chanspec & 0xc000 == 0xc000;
     kprint!(" [P11-acs] {} — AP channel selection from the scan: clean air -> ch{}/{}MHz; bench (fortress 80 MHz @ -51 on UNII-1) -> ch{}/{}MHz {:#06x}; weak 5 GHz neighbour -> ch{}/{}MHz; strong ch36-only + crowded 2.4 -> 5 GHz ch{}/{}MHz\n",
         if ok { "PASS" } else { "FAIL" }, a.channel, a.mhz, b.channel, b.mhz, b.chanspec, c.channel, c.mhz, d.channel, d.mhz);
+}
+
+/// `[P11-glom]` — SDPCM superframe framing (hal::glom_plan / glom_split, the code the CM5 Wi-Fi
+/// driver runs) against frames built to brcmfmac's layout: a descriptor listing 3 sub-frames, a
+/// superframe = superframe header + data/event/data sub-frames, last sub-frame padded to the block.
+#[allow(dead_code)]
+fn glom_selftest() {
+    fn hdr(b: &mut [u8], len: u16, chan: u8, flags: u8, doff: u8) {
+        b[0..2].copy_from_slice(&len.to_le_bytes());
+        b[2..4].copy_from_slice(&(!len).to_le_bytes());
+        b[4] = 0;
+        b[5] = (chan & 0x0f) | flags;
+        b[6] = 0;
+        b[7] = doff;
+        b[8..12].copy_from_slice(&[0, 0x40, 0, 0]);
+    }
+    // sub-frame lengths (4-aligned) — first includes the 12-B superframe header.
+    let (s0, s1, s2) = (12 + 100usize, 60usize, 300usize);
+    let mut desc = [0u8; 6];
+    desc[0..2].copy_from_slice(&(s0 as u16).to_le_bytes());
+    desc[2..4].copy_from_slice(&(s1 as u16).to_le_bytes());
+    desc[4..6].copy_from_slice(&(s2 as u16).to_le_bytes());
+    let mut subl = [0u16; hal::GLOM_MAX_SUBS];
+    let plan = hal::glom_plan(&desc, 512, &mut subl);
+    let plan_ok = plan == Some((3, 512)) && subl[0] as usize == s0 && subl[2] as usize == 512 - s0 - s1;
+    let mut sup = [0u8; 512];
+    hdr(&mut sup[0..], 512, 3, 0, 12); // superframe header
+    hdr(&mut sup[12..], 100, 2, 0, 14); // data
+    hdr(&mut sup[s0..], 60, 1, 0, 12); // event
+    hdr(&mut sup[s0 + s1..], 300, 2, 0, 14); // data
+    let mut subs = [hal::GlomSub::default(); hal::GLOM_MAX_SUBS];
+    let n = hal::glom_split(&sup, &subl[..3], &mut subs);
+    let split_ok = n == Some(3)
+        && subs[0] == hal::GlomSub { start: 12, len: 100, chan: 2, doff: 14 }
+        && subs[1] == hal::GlomSub { start: s0 as u16, len: 60, chan: 1, doff: 12 }
+        && subs[2] == hal::GlomSub { start: (s0 + s1) as u16, len: 300, chan: 2, doff: 14 };
+    // negatives (each must be refused, as brcmfmac does)
+    let odd = hal::glom_plan(&desc[..5], 512, &mut subl).is_none();
+    let mut short = desc;
+    short[0..2].copy_from_slice(&20u16.to_le_bytes()); // first < 2*HDRLEN
+    let short_ok = hal::glom_plan(&short, 512, &mut subl).is_none();
+    let _ = hal::glom_plan(&desc, 512, &mut subl);
+    let mut bad_ck = sup;
+    bad_ck[s0 + 2] ^= 1; // event sub-frame tag check broken
+    let bad_ck_ok = hal::glom_split(&bad_ck, &subl[..3], &mut subs).is_none();
+    let mut bad_ch = sup;
+    bad_ch[s0 + s1 + 5] = 0; // sub-frame on the control channel
+    let bad_ch_ok = hal::glom_split(&bad_ch, &subl[..3], &mut subs).is_none();
+    let mut not_super = sup;
+    not_super[5] = 3 | 0x80; // a descriptor where the superframe should be
+    let not_super_ok = hal::glom_split(&not_super, &subl[..3], &mut subs).is_none();
+    let ok = plan_ok && split_ok && odd && short_ok && bad_ck_ok && bad_ch_ok && not_super_ok;
+    kprint!(" [P11-glom] {} — SDPCM superframe (brcmf_sdio_rxglom framing): plan 3 subs -> one 512-B block={} split data/event/data={} | refused: odd descriptor={} short first sub={} bad tag={} control-channel sub={} descriptor-as-superframe={}\n",
+        if ok { "PASS" } else { "FAIL" }, plan_ok, split_ok, odd, short_ok, bad_ck_ok, bad_ch_ok, not_super_ok);
 }

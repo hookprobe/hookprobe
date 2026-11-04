@@ -1868,7 +1868,109 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 /// `sdpcm_frame_pending()` hit, or to drain the frames the firmware queued behind one
 /// indication (brcmf `readframes` reads until an all-zero tag), a budget of a few ms is
 /// enough and a dry pass costs milliseconds, not seconds.
+/// RX glom (superframe) state: the firmware coalesces host-bound frames under load (metal
+/// 2026-11-04: channel-3 frames of 2.4-5 KB during a 22-Mbps speed test) — brcmfmac unpacks them in
+/// brcmf_sdio_rxglom; heqk discarded them whole. Sub-frames are handed out one per call below.
+const GLOM_BUF_SZ: usize = 16 * 1024;
+struct GlomState {
+    buf: [u8; GLOM_BUF_SZ],
+    subs: [hal::GlomSub; hal::GLOM_MAX_SUBS],
+    n: usize,
+    next: usize,
+}
+static mut GLOM: GlomState = GlomState {
+    buf: [0; GLOM_BUF_SZ],
+    subs: [hal::GlomSub { start: 0, len: 0, chan: 0, doff: 0 }; hal::GLOM_MAX_SUBS],
+    n: 0,
+    next: 0,
+};
+
+/// Hand out the next queued superframe sub-frame into `rx` (normal frame layout), or None.
+fn glom_next(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
+    let g = unsafe { &mut *core::ptr::addr_of_mut!(GLOM) };
+    while g.next < g.n {
+        let sb = g.subs[g.next];
+        g.next += 1;
+        let (st, ln) = (sb.start as usize, sb.len as usize);
+        if ln > rx.len() {
+            unsafe { AP_DIAG[15] += 1 };
+            continue; // sub-frame bigger than this caller's buffer: drop that one, keep the rest
+        }
+        rx[..ln].copy_from_slice(&g.buf[st..st + ln]);
+        unsafe { AP_DIAG[14] += 1 };
+        return Some((sb.chan, sb.len, sb.doff as usize));
+    }
+    None
+}
+
+/// TX credit from an SDPCM software header word 1 (window byte), with the brcmf clamp.
+fn apply_window(w1r: u32) {
+    let mut new_max = ((w1r >> 8) & 0xff) as u8;
+    unsafe { AP_DIAG[3] = w1r };
+    if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
+        new_max = unsafe { TX_SEQ }.wrapping_add(2);
+    }
+    unsafe { TX_MAX = new_max };
+}
+
+/// One SDPCM frame for the caller: a queued superframe sub-frame if any, else the next frame off
+/// F2. A glom DESCRIPTOR triggers the superframe read (brcmf_sdio_rxglom) and returns its first
+/// sub-frame; a channel-3 frame that is not a descriptor is dropped (brcmfmac: "superframe w/o
+/// descriptor" -> rxfail).
 fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
+    if let Some(r) = glom_next(rx) {
+        return Some(r);
+    }
+    let (ch, len, doff) = read_sdpcm_frame_raw(rx, max_dry)?;
+    if ch != hal::SDPCM_GLOM_CHANNEL {
+        return Some((ch, len, doff));
+    }
+    if rx[5] & 0x80 == 0 {
+        unsafe { AP_DIAG[15] += 1 };
+        return None; // superframe without a descriptor (raw already terminated an over-long one)
+    }
+    glom_read(rx, len as usize);
+    glom_next(rx)
+}
+
+/// Descriptor in `rx[..dlen]` -> read + validate the superframe into GLOM (queue its sub-frames).
+fn glom_read(rx: &[u8], dlen: usize) {
+    #[cfg(feature = "wifi-bigrx")]
+    {
+        let mut subl = [0u16; hal::GLOM_MAX_SUBS];
+        let desc = &rx[hal::SDPCM_HDRLEN..dlen.min(rx.len())];
+        let Some((n, total)) = hal::glom_plan(desc, 512, &mut subl) else {
+            unsafe { AP_DIAG[15] += 1 };
+            return; // brcmfmac ignores a bad descriptor
+        };
+        let g = unsafe { &mut *core::ptr::addr_of_mut!(GLOM) };
+        g.n = 0;
+        g.next = 0;
+        if total > GLOM_BUF_SZ || !cmd53_read_blocks512(2, F2_SDPCM_ADDR, &mut g.buf[..total], (total / 512) as u32) {
+            unsafe { AP_DIAG[15] += 1 };
+            sdio_rxfail();
+            return;
+        }
+        apply_window(u32::from_le_bytes([g.buf[8], g.buf[9], g.buf[10], g.buf[11]]));
+        match hal::glom_split(&g.buf[..total], &subl[..n], &mut g.subs) {
+            Some(k) => {
+                g.n = k;
+                unsafe { AP_DIAG[13] += 1 };
+            }
+            None => {
+                unsafe { AP_DIAG[15] += 1 };
+                sdio_rxfail();
+            }
+        }
+    }
+    #[cfg(not(feature = "wifi-bigrx"))]
+    {
+        let _ = (rx, dlen);
+        unsafe { AP_DIAG[15] += 1 }; // no block-mode RX in this build: superframes unsupported
+    }
+}
+
+fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     let sdb = sdio_core_base();
     let mut hw_len;
     let mut hw_ck;
@@ -1897,12 +1999,7 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
     let channel = ((w0r >> 8) & 0xf) as u8;
     let doffset = ((w0r >> 24) & 0xff) as usize;
-    let mut new_max = ((w1r >> 8) & 0xff) as u8;
-    unsafe { AP_DIAG[3] = w1r };
-    if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
-        new_max = unsafe { TX_SEQ }.wrapping_add(2);
-    }
-    unsafe { TX_MAX = new_max };
+    apply_window(w1r);
     // AUDIT M-3 / L-15: cmd53_read silently caps a byte-mode transfer at 512 bytes
     // and still reports success, so for a frame claiming more than
     // BRCMF_FIRSTREAD+512 the tail of `rx` is NEVER written by this frame. `rx` is
@@ -4727,9 +4824,11 @@ static mut TX_SEQ: u8 = 255;
 // [8]=terminated: frame longer than the RX buffer [9]=terminated: block-mode remainder read failed
 // [10]=terminated: byte-mode remainder read failed [11]=last terminated frame: hw_len | channel<<16
 // [12]=last failed block read: stage<<24 | INT_STATUS low 24 bits
-pub static mut AP_DIAG: [u32; 13] = [0; 13];
+// [13]=superframes read + validated [14]=glom sub-frames delivered [15]=glom drops (bad/no
+// descriptor, read/validate failure, oversize sub-frame)
+pub static mut AP_DIAG: [u32; 16] = [0; 16];
 /// (tx_seq, tx_max, AP_DIAG) — for the AP beat line.
-pub fn ap_diag() -> (u8, u8, [u32; 13]) {
+pub fn ap_diag() -> (u8, u8, [u32; 16]) {
     unsafe { (TX_SEQ, TX_MAX, AP_DIAG) }
 }
 static mut TX_MAX: u8 = 0;
