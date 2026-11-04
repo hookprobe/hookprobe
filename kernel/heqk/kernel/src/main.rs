@@ -3267,6 +3267,12 @@ fn cm5_p10_probe() {
                                                 let _ = placed;
                                             }
                                         }
+                                        {
+                                            let (seq, max, dg) = cyw43::ap_diag();
+                                            kprint!("   [P11-AP3 sdpcm] tx_seq={} tx_max={} credit={} | big_tx ok={} fail={} big_rx={} small_tx_fail={} credit_refused={} | last_rx_w1={:#010x} (flow_ctl_mask={:#04x} window={})\n",
+                                                seq, max, max.wrapping_sub(seq), dg[0], dg[1], dg[2], dg[4], dg[5], dg[3],
+                                                dg[3] & 0xff, (dg[3] >> 8) & 0xff);
+                                        }
                                         kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
                                             wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_n, trunc_drop,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
