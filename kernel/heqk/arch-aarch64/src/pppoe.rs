@@ -16,6 +16,9 @@ const PPP_LCP: u16 = 0xc021;
 const PPP_PAP: u16 = 0xc023;
 const PPP_CHAP: u16 = 0xc223;
 const PPP_IPCP: u16 = 0x8021;
+const PPP_IPV6CP: u16 = 0x8057;
+/// IPv6 datagrams on the session (RFC 5072).
+pub const PPP_IP6: u16 = 0x0057;
 
 const CODE_PADI: u8 = 0x09;
 const CODE_PADO: u8 = 0x07;
@@ -134,9 +137,17 @@ pub struct Stats {
     pub echo_rx: u32,
     pub auth_tx: u32,
     pub ipcp_req_tx: u32,
+    /// PADTs sent for a STALE session (a session frame to us whose SID is not ours — the AC still
+    /// holding a session from before our reboot/reflash).
+    pub stale_padt: u32,
+    /// IPV6CP (RFC 5072): Conf-Requests sent, peer Conf-Requests seen.
+    pub ip6cp_req_tx: u32,
+    pub ip6cp_req_rx: u32,
 }
 
 pub struct Pppoe {
+    /// Stale-session sweep rate limit: (last stale SID answered, when in ms).
+    stale_last: (u16, u64),
     pub mac: [u8; 6],
     pub ac_mac: [u8; 6],
     pub sid: u16,
@@ -174,6 +185,19 @@ pub struct Pppoe {
     want_dns2: bool,
     ipcp_ack_rx: bool,
     ipcp_ack_tx: bool,
+    // IPV6CP (RFC 5072) — runs alongside IPCP and never gates the session opening (IPv4 first).
+    ip6cp_id: u8,
+    /// Our interface identifier (modified EUI-64 of the MAC, or the peer's Nak suggestion).
+    pub my_iid: [u8; 8],
+    pub peer_iid: [u8; 8],
+    ip6_ack_rx: bool,
+    ip6_ack_tx: bool,
+    /// IPV6CP opened: fe80::<my_iid> <-> fe80::<peer_iid>, IPv6 (0x0057) flows on the session.
+    pub ip6_up: bool,
+    /// The peer does not do IPv6 (Conf-Reject of our IID, Protocol-Reject, or no answer in 10 tries).
+    pub ip6_off: bool,
+    ip6_last_ms: u64,
+    ip6_tries: u32,
     // PAP
     pap_id: u8,
     // retransmit
@@ -197,6 +221,7 @@ impl Pppoe {
         u[..ulen].copy_from_slice(&user[..ulen]);
         p[..plen].copy_from_slice(&pass[..plen]);
         Pppoe {
+            stale_last: (0, 0),
             mac, ac_mac: [0; 6], sid: 0, phase: Phase::Idle, why: DownWhy::None, stats: Stats::default(),
             my_ip: [0; 4], peer_ip: [0; 4], dns1: [0; 4], dns2: [0; 4], auth: 0,
             ac_name: [0; 32], ac_name_len: 0,
@@ -205,6 +230,15 @@ impl Pppoe {
             lcp_id: 0, magic: if magic == 0 { 0x4845_514b } else { magic }, mru: PPPOE_MTU, send_mru: true, send_magic: true,
             lcp_ack_rx: false, lcp_ack_tx: false,
             ipcp_id: 0, want_dns1: true, want_dns2: true, ipcp_ack_rx: false, ipcp_ack_tx: false,
+            ip6cp_id: 0,
+            my_iid: crate::ip6::eui64(&mac),
+            peer_iid: [0; 8],
+            ip6_ack_rx: false,
+            ip6_ack_tx: false,
+            ip6_up: false,
+            ip6_off: false,
+            ip6_last_ms: 0,
+            ip6_tries: 0,
             pap_id: 0, last_ms: 0, tries: 0, echo_out: 0, last_echo_ms: 0,
         }
     }
@@ -391,6 +425,92 @@ impl Pppoe {
         self.last_ms = now_ms;
     }
 
+    fn send_ip6cp_req(&mut self, now_ms: u64, tx: &mut Tx) {
+        if self.ip6_off || self.ip6_up {
+            return;
+        }
+        let mut d = [0u8; 10];
+        d[0] = 1; // Interface-Identifier
+        d[1] = 10;
+        d[2..10].copy_from_slice(&self.my_iid);
+        self.ip6cp_id = self.ip6cp_id.wrapping_add(1);
+        let id = self.ip6cp_id;
+        self.send_ctl(tx, PPP_IPV6CP, CONF_REQ, id, &d);
+        self.stats.ip6cp_req_tx += 1;
+        self.ip6_tries += 1;
+        self.ip6_last_ms = now_ms;
+    }
+
+    fn ip6_maybe_open(&mut self) {
+        if self.ip6_ack_rx && self.ip6_ack_tx {
+            self.ip6_up = true;
+        }
+    }
+
+    fn on_ip6cp(&mut self, p: &[u8], now_ms: u64, tx: &mut Tx) {
+        let Some((code, id, data)) = Self::ctl(p) else { return };
+        if !matches!(self.phase, Phase::Ipcp | Phase::Open) {
+            return;
+        }
+        match code {
+            CONF_REQ => {
+                self.stats.ip6cp_req_rx += 1;
+                // Accept the peer's Interface-Identifier unless it is zero or equals ours (RFC 5072
+                // §4.1: Nak with a different one); reject every other option.
+                let mut rej = [0u8; 64];
+                let mut nrej = 0;
+                let mut peer = [0u8; 8];
+                let mut o = 0;
+                while o + 2 <= data.len() {
+                    let (t, l) = (data[o], data[o + 1] as usize);
+                    if l < 2 || o + l > data.len() {
+                        return;
+                    }
+                    if t == 1 && l == 10 {
+                        peer.copy_from_slice(&data[o + 2..o + 10]);
+                    } else if nrej + l <= rej.len() {
+                        rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
+                        nrej += l;
+                    }
+                    o += l;
+                }
+                if nrej > 0 {
+                    self.send_ctl(tx, PPP_IPV6CP, CONF_REJ, id, &rej[..nrej]);
+                } else if peer == [0; 8] || peer == self.my_iid {
+                    let mut sug = self.my_iid;
+                    sug[7] ^= 0x01;
+                    let mut d = [0u8; 10];
+                    d[0] = 1;
+                    d[1] = 10;
+                    d[2..10].copy_from_slice(&sug);
+                    self.send_ctl(tx, PPP_IPV6CP, CONF_NAK, id, &d);
+                } else {
+                    self.peer_iid = peer;
+                    self.send_ctl(tx, PPP_IPV6CP, CONF_ACK, id, data);
+                    self.ip6_ack_tx = true;
+                    self.ip6_maybe_open();
+                }
+            }
+            CONF_ACK if id == self.ip6cp_id => {
+                self.ip6_ack_rx = true;
+                self.ip6_maybe_open();
+            }
+            CONF_NAK if id == self.ip6cp_id => {
+                if data.len() >= 10 && data[0] == 1 && data[1] == 10 {
+                    self.my_iid.copy_from_slice(&data[2..10]);
+                }
+                self.send_ip6cp_req(now_ms, tx);
+            }
+            CONF_REJ if id == self.ip6cp_id => self.ip6_off = true,
+            TERM_REQ => {
+                self.send_ctl(tx, PPP_IPV6CP, TERM_ACK, id, &[]);
+                self.ip6_up = false;
+                self.ip6_off = true;
+            }
+            _ => {}
+        }
+    }
+
     fn send_pap(&mut self, now_ms: u64, tx: &mut Tx) {
         let mut d = [0u8; 2 + 64 + 64];
         d[0] = self.ulen as u8;
@@ -421,6 +541,7 @@ impl Pppoe {
                 _ => {
                     self.phase = Phase::Ipcp;
                     self.send_ipcp_req(now_ms, tx);
+                    self.send_ip6cp_req(now_ms, tx);
                 }
             }
         }
@@ -438,6 +559,15 @@ impl Pppoe {
 
     /// Retransmit / give up on timers. Call regularly with a monotonic millisecond clock.
     pub fn tick(&mut self, now_ms: u64, tx: &mut Tx) {
+        if matches!(self.phase, Phase::Ipcp | Phase::Open) && !self.ip6_up && !self.ip6_off && self.ip6_tries > 0
+            && now_ms.wrapping_sub(self.ip6_last_ms) >= 3000
+        {
+            if self.ip6_tries >= 10 {
+                self.ip6_off = true; // no IPv6 from this AC; IPv4 is unaffected
+            } else {
+                self.send_ip6cp_req(now_ms, tx);
+            }
+        }
         if self.phase == Phase::Open {
             if self.last_echo_ms == 0 {
                 self.last_echo_ms = now_ms; // the session just opened: first echo one interval later
@@ -531,6 +661,25 @@ impl Pppoe {
             }
             return;
         }
+        // STALE-SESSION SWEEP (RFC 2516 §5.5: either end may send PADT at any time). After a reboot or
+        // reflash we never sent PADT, so the AC keeps the old session and keeps sending LCP echoes to our
+        // MAC on the OLD SID — and the ISP rejects our next login as a duplicate (metal 2026-11-05: PAP
+        // rejected after a reflash, retry 8 succeeded ~80 s later). Answer such a frame with a PADT for
+        // ITS SID so the AC frees it now. Never while Requesting (a late PADS must not get its own new
+        // session torn down); unicast to us only; once per SID per second.
+        if et == ETH_SESS && f[0..6] == self.mac && self.phase != Phase::Requesting {
+            let sid_in = be16(f, 16);
+            if sid_in != 0 && sid_in != self.sid {
+                if self.stale_last.0 != sid_in || now_ms.wrapping_sub(self.stale_last.1) >= 1000 {
+                    self.stale_last = (sid_in, now_ms);
+                    let mut ac = [0u8; 6];
+                    ac.copy_from_slice(&f[6..12]);
+                    self.padt_for(&ac, sid_in, tx);
+                    self.stats.stale_padt += 1;
+                }
+                return;
+            }
+        }
         if et != ETH_SESS || self.sid == 0 || be16(f, 16) != self.sid || f[6..12] != self.ac_mac || f.len() < 22 {
             return;
         }
@@ -546,6 +695,8 @@ impl Pppoe {
             PPP_CHAP => self.on_chap(p, now_ms, tx),
             PPP_IPCP => self.on_ipcp(p, now_ms, tx),
             PPP_IP => {} // data: handled by the caller (decap_ipv4)
+            PPP_IPV6CP => self.on_ip6cp(p, now_ms, tx),
+            PPP_IP6 => {} // data: handled by the caller (decap_ipv6)
             _ => {
                 // RFC 1661 §5.7: Protocol-Reject anything we do not run (IPV6CP, CCP, IPv6 ...),
                 // only once LCP is opened.
@@ -577,6 +728,12 @@ impl Pppoe {
     fn on_lcp(&mut self, p: &[u8], now_ms: u64, tx: &mut Tx) {
         let Some((code, id, data)) = Self::ctl(p) else { return };
         match code {
+            PROTO_REJ => {
+                // The peer does not run a protocol we sent: if it is IPV6CP, IPv6 is simply off.
+                if data.len() >= 2 && be16(data, 0) == PPP_IPV6CP {
+                    self.ip6_off = true;
+                }
+            }
             CONF_REQ => {
                 self.stats.lcp_req_rx += 1;
                 // Classify every option: Reject unknown/unsupported, Nak an auth we cannot do.
@@ -694,6 +851,7 @@ impl Pppoe {
                 self.phase = Phase::Ipcp;
                 self.tries = 0;
                 self.send_ipcp_req(now_ms, tx);
+                self.send_ip6cp_req(now_ms, tx);
             }
             3 => self.down(DownWhy::AuthRejected),
             _ => {}
@@ -733,6 +891,7 @@ impl Pppoe {
                 self.phase = Phase::Ipcp;
                 self.tries = 0;
                 self.send_ipcp_req(now_ms, tx);
+                self.send_ip6cp_req(now_ms, tx);
             }
             4 => self.down(DownWhy::AuthRejected),
             _ => {}
@@ -857,12 +1016,41 @@ impl Pppoe {
         Some(14 + ip.len())
     }
 
+    /// Wrap a bare IPv6 packet into a PPPoE session frame (protocol 0x0057). Returns the length.
+    pub fn encap_ipv6(&self, ip6: &[u8], out: &mut [u8]) -> Option<usize> {
+        if !self.ip6_up || ip6.len() < 40 || ip6[0] >> 4 != 6 {
+            return None;
+        }
+        let tot = (40 + be16(ip6, 4) as usize).min(ip6.len());
+        if tot > PPPOE_MTU as usize || 22 + tot > out.len() {
+            return None;
+        }
+        let o = self.sess_hdr(out, PPP_IP6);
+        out[o..o + tot].copy_from_slice(&ip6[..tot]);
+        Some(Self::sess_finish(out, o + tot))
+    }
+
+    /// The bare IPv6 packet inside `f` if it is an IPv6 datagram of this session.
+    pub fn decap_ipv6<'a>(&self, f: &'a [u8]) -> Option<&'a [u8]> {
+        if f.len() < 22 + 40 || be16(f, 12) != ETH_SESS || f[14] != 0x11 || be16(f, 16) != self.sid
+            || self.sid == 0 || f[6..12] != self.ac_mac || be16(f, 20) != PPP_IP6
+        {
+            return None;
+        }
+        let plen = (be16(f, 18) as usize).min(f.len() - 20);
+        Some(&f[22..20 + plen])
+    }
+
     /// Send a PADT for this session (orderly shutdown).
     pub fn padt(&self, tx: &mut Tx) {
         let (ac, sid) = (self.ac_mac, self.sid);
-        let me = &*self;
+        self.padt_for(&ac, sid, tx);
+    }
+
+    /// PADT for an arbitrary (AC, SID) — this session's, or a stale one the AC still holds.
+    fn padt_for(&self, ac: &[u8; 6], sid: u16, tx: &mut Tx) {
         let Some(b) = tx.slot() else { return };
-        let o = me.disc_hdr(b, &ac, CODE_PADT, sid);
+        let o = self.disc_hdr(b, ac, CODE_PADT, sid);
         b[18..20].copy_from_slice(&0u16.to_be_bytes());
         tx.commit(o.max(60));
     }

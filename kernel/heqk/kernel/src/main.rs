@@ -2894,11 +2894,34 @@ fn cm5_p10_probe() {
                             kprint!(" [M-NAT0] end0 (RP1 GEM) WAN uplink — DHCP, ARP gw, ping gw + 8.8.8.8 over the GEM TX ring\n");
                             uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut up);
                             if let Some((ph, why, sid, ac, ip, peer, d1, d2, auth, st)) = uplink::pppoe_info() {
-                                kprint!(" [WAN] PPPoE: phase={:?} why={:?} sid={:#06x} AC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} | ip {}.{}.{}.{} peer {}.{}.{}.{} dns {}.{}.{}.{} / {}.{}.{}.{} auth={} | padi={} pado={} padr={} pads={} lcp tx/rx={}/{} nak/rej={} auth_tx={} ipcp_tx={} proto_rej={}\n",
+                                kprint!(" [WAN] PPPoE: phase={:?} why={:?} sid={:#06x} AC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} | ip {}.{}.{}.{} peer {}.{}.{}.{} dns {}.{}.{}.{} / {}.{}.{}.{} auth={} | padi={} pado={} padr={} pads={} lcp tx/rx={}/{} nak/rej={} auth_tx={} ipcp_tx={} proto_rej={} stale_padt={}\n",
                                     ph, why, sid, ac[0], ac[1], ac[2], ac[3], ac[4], ac[5], ip[0], ip[1], ip[2], ip[3], peer[0], peer[1], peer[2], peer[3],
                                     d1[0], d1[1], d1[2], d1[3], d2[0], d2[1], d2[2], d2[3],
                                     match auth { 0xc023 => "PAP", 0xc223 => "CHAP-MD5", _ => "none" },
-                                    st.padi, st.pado, st.padr, st.pads, st.lcp_req_tx, st.lcp_req_rx, st.lcp_nak_rej_tx, st.auth_tx, st.ipcp_req_tx, st.proto_rejects);
+                                    st.padi, st.pado, st.padr, st.pads, st.lcp_req_tx, st.lcp_req_rx, st.lcp_nak_rej_tx, st.auth_tx, st.ipcp_req_tx, st.proto_rejects, st.stale_padt);
+                            }
+                            {
+                                let w = unsafe { uplink::WAN6 };
+                                if w.ran {
+                                    let h = |a: &[u8; 16]| {
+                                        let g = |k: usize| u16::from_be_bytes([a[2 * k], a[2 * k + 1]]);
+                                        [g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7)]
+                                    };
+                                    kprint!(" [WAN6] IPV6CP up={} off={} iid {:02x?} peer {:02x?} | RS tx={} | DHCPv6 tx={} rx={} advertise={} reply={} status={} | v6 frames rx={}\n",
+                                        w.ip6cp_up, w.ip6cp_off, w.my_iid, w.peer_iid, w.rs_tx, w.dhcp_tx, w.dhcp_rx, w.advertise, w.reply, w.status, w.v6_frames_rx);
+                                    match w.ra {
+                                        Some(ra) => kprint!(" [WAN6] RA from {:x?} lifetime={}s M={} O={} | prefix={} {:x?}/{} A={} valid={}s pref={}s | mtu={}\n",
+                                            h(&ra.router), ra.lifetime, ra.managed, ra.other, ra.has_prefix, h(&ra.prefix), ra.plen, ra.autonomous, ra.valid, ra.preferred, ra.mtu),
+                                        None => kprint!(" [WAN6] no Router Advertisement\n"),
+                                    }
+                                    match w.pd {
+                                        Some((p, l, v)) => kprint!(" [WAN6] DELEGATED PREFIX {:x?}/{} valid={}s (the LAN would be numbered from this)\n", h(&p), l, v),
+                                        None => kprint!(" [WAN6] no delegated prefix\n"),
+                                    }
+                                    if let Some(d) = w.dns {
+                                        kprint!(" [WAN6] DNS {:x?}\n", h(&d));
+                                    }
+                                }
                             }
                             if !up.started {
                                 kprint!(" [M-NAT0] SKIP — GEM rings not armed\n");
@@ -3350,6 +3373,10 @@ fn cm5_p10_probe() {
                                             wan_retries += 1;
                                             let mut again = uplink::UplinkResult::new(Nic::End0);
                                             uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
+                                            if let Some((ph, why, ..)) = uplink::pppoe_info().filter(|_| matches!(wan_mode, hal::WanMode::Pppoe { .. })) {
+                                                let st = uplink::pppoe_info().map(|i| i.9).unwrap_or_default();
+                                                kprint!(" [WAN] PPPoE retry {}: phase={:?} why={:?} stale_padt={} (PADT sent for a session the AC still held)\n", wan_retries, ph, why, st.stale_padt);
+                                            }
                                             if again.usable() {
                                                 kprint!(" [M-NAT0] WAN came up after boot (retry {}): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{} inet_echo={}\n",
                                                     wan_retries, again.dhcp.yiaddr[0], again.dhcp.yiaddr[1], again.dhcp.yiaddr[2], again.dhcp.yiaddr[3],
@@ -5436,6 +5463,7 @@ pub extern "C" fn kmain() -> ! {
         wancfg_selftest();
         md5_selftest();
         pppoe_selftest();
+        ip6_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -12058,6 +12086,101 @@ fn md5_selftest() {
 /// must Reject, CHAP-MD5 verified cryptographically (and a PAP run), IPCP Nak-assigned address +
 /// DNS, then Echo-Reply, Protocol-Reject of IPV6CP, IPv4 encap/decap, and PADT -> down.
 #[allow(dead_code)]
+/// `[P-ip6]` — the pure IPv6 WAN builders/parsers (arch_aarch64::ip6) the PPPoE v6 probe uses:
+/// Router Solicitation (checksum), Router Advertisement (prefix/M/O/MTU; bad checksum and wrong hop
+/// limit refused), DHCPv6 Advertise with IA_PD + Server-ID + DNS (wrong xid / client->server port refused).
+#[allow(dead_code)]
+fn ip6_selftest() {
+    use arch_aarch64::ip6::*;
+    let mac = [0x02u8, 0x11, 0x22, 0x33, 0x44, 0x55];
+    let iid = eui64(&mac);
+    let me = link_local(&iid);
+    let eui_ok = iid == [0x00, 0x11, 0x22, 0xff, 0xfe, 0x33, 0x44, 0x55];
+    let mut rs = [0u8; 64];
+    let n = build_rs(&iid, &mut rs);
+    let rs_ok = n == 48 && rs[40] == 133 && rs[7] == 255 && l4_csum(&me, &ALL_ROUTERS, 58, &rs[40..48]) == 0 && parse_ra(&rs[..n]).is_none();
+    // RA from fe80::1: O=1, lifetime 1800, PIO 2001:db8:1:2::/64 (L+A) valid 86400 pref 14400, MTU 1492.
+    let rtr: [u8; 16] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let all: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let mut ra = [0u8; 40 + 16 + 32 + 8];
+    let il = 16 + 32 + 8;
+    ra[0] = 0x60;
+    ra[4..6].copy_from_slice(&(il as u16).to_be_bytes());
+    ra[6] = 58;
+    ra[7] = 255;
+    ra[8..24].copy_from_slice(&rtr);
+    ra[24..40].copy_from_slice(&all);
+    let ic = 40;
+    ra[ic] = 134;
+    ra[ic + 4] = 64;
+    ra[ic + 5] = 0x40;
+    ra[ic + 6..ic + 8].copy_from_slice(&1800u16.to_be_bytes());
+    let po = ic + 16;
+    ra[po] = 3;
+    ra[po + 1] = 4;
+    ra[po + 2] = 64;
+    ra[po + 3] = 0xc0;
+    ra[po + 4..po + 8].copy_from_slice(&86400u32.to_be_bytes());
+    ra[po + 8..po + 12].copy_from_slice(&14400u32.to_be_bytes());
+    ra[po + 16..po + 32].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mo = po + 32;
+    ra[mo] = 5;
+    ra[mo + 1] = 1;
+    ra[mo + 4..mo + 8].copy_from_slice(&1492u32.to_be_bytes());
+    let c = l4_csum(&rtr, &all, 58, &ra[ic..ic + il]);
+    ra[ic + 2..ic + 4].copy_from_slice(&c.to_be_bytes());
+    let ra_ok = match parse_ra(&ra) {
+        Some(r) => r.router == rtr && !r.managed && r.other && r.lifetime == 1800 && r.has_prefix && r.plen == 64 && r.autonomous
+            && r.valid == 86400 && r.preferred == 14400 && r.prefix[..8] == [0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2] && r.mtu == 1492,
+        None => false,
+    };
+    let mut bad = ra;
+    bad[ic + 2] ^= 1;
+    let mut hop = ra;
+    hop[7] = 64;
+    let ra_refuse = parse_ra(&bad).is_none() && parse_ra(&hop).is_none();
+    // DHCPv6: our Solicit is to port 547 (never parsed as a server reply); an Advertise for our xid is.
+    let xid = 0x00ab_cdefu32;
+    let mut sol = [0u8; 400];
+    let sn = build_dhcp6(DHCP6_SOLICIT, xid, &mac, &iid, 7, &[], None, true, &mut sol);
+    let sol_ok = sn > 48 && sol[48] == DHCP6_SOLICIT && l4_csum(&me, &ALL_DHCP, 17, &sol[40..sn]) == 0 && parse_dhcp6(&sol[..sn], xid).is_none();
+    let mut p = [0u8; 128];
+    let mut k = 0;
+    p[0] = DHCP6_ADVERTISE;
+    p[1..4].copy_from_slice(&xid.to_be_bytes()[1..4]);
+    k += 4;
+    for (code, data) in [(2u16, &[0xaa, 0xbb, 0xcc, 0xdd][..])] {
+        p[k..k + 2].copy_from_slice(&code.to_be_bytes());
+        p[k + 2..k + 4].copy_from_slice(&(data.len() as u16).to_be_bytes());
+        p[k + 4..k + 4 + data.len()].copy_from_slice(data);
+        k += 4 + data.len();
+    }
+    // IA_PD { iaid 7, T1, T2, IAPREFIX { pref 3600, valid 7200, /56, 2001:db8:aa00:: } }
+    p[k..k + 4].copy_from_slice(&[0, 25, 0, 41]);
+    p[k + 4..k + 8].copy_from_slice(&7u32.to_be_bytes());
+    let q = k + 16;
+    p[q..q + 4].copy_from_slice(&[0, 26, 0, 25]);
+    p[q + 4..q + 8].copy_from_slice(&3600u32.to_be_bytes());
+    p[q + 8..q + 12].copy_from_slice(&7200u32.to_be_bytes());
+    p[q + 12] = 56;
+    p[q + 13..q + 29].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0xaa, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    k = q + 29;
+    p[k..k + 4].copy_from_slice(&[0, 23, 0, 16]);
+    p[k + 4..k + 20].copy_from_slice(&[0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88]);
+    k += 20;
+    let mut adv = [0u8; 256];
+    let an = build_udp6(&rtr, &me, 547, 546, 64, &p[..k], &mut adv);
+    let adv_ok = match parse_dhcp6(&adv[..an], xid) {
+        Some(d) => d.msg == DHCP6_ADVERTISE && d.sid_len == 4 && d.server_id[..4] == [0xaa, 0xbb, 0xcc, 0xdd] && d.has_pd && d.plen == 56
+            && d.preferred == 3600 && d.valid == 7200 && d.prefix[..5] == [0x20, 0x01, 0x0d, 0xb8, 0xaa] && d.has_dns && d.dns[15] == 0x88 && d.status == 0,
+        None => false,
+    };
+    let xid_refuse = parse_dhcp6(&adv[..an], xid ^ 1).is_none();
+    let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse;
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={}\n",
+        if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse);
+}
+
 fn pppoe_selftest() {
     use arch_aarch64::pppoe::{DownWhy, Phase, Pppoe, Tx, ETH_DISC, ETH_SESS};
     const CLI: [u8; 6] = [2, 0, 0, 0, 0, 2];
@@ -12318,9 +12441,58 @@ fn pppoe_selftest() {
     let echo_ok = tx.n == 1 && be16(tx.frame(0), 20) == 0xc021 && tx.frame(0)[22] == 10 && tx.frame(0)[23] == 0x55
         && tx.frame(0)[26..30] == 0xa1b2_c3d4u32.to_be_bytes() && &tx.frame(0)[30..32] == b"hb";
     tx.clear();
+    // IPV6CP (RFC 5072) is now RUN, not rejected: the AC's Conf-Req (IID ::1) is Acked, the session stays up.
     let (b, l) = sess(0x8057, 1, 1, &[1, 10, 0, 0, 0, 0, 0, 0, 0, 1]);
     c.rx(&b[..l], 1001, &mut tx);
-    let prej_ok = tx.n == 1 && tx.frame(0)[22] == 8 && be16(tx.frame(0), 26) == 0x8057 && c.phase == Phase::Open;
+    let v6_acked = tx.n == 1 && be16(tx.frame(0), 20) == 0x8057 && tx.frame(0)[22] == 2 && c.phase == Phase::Open
+        && c.peer_iid == [0, 0, 0, 0, 0, 0, 0, 1];
+    tx.clear();
+    // A protocol we really do not run (CCP) is still Protocol-Rejected, session up.
+    let (b, l) = sess(0x80fd, 1, 1, &[]);
+    c.rx(&b[..l], 1002, &mut tx);
+    let prej_ok = v6_acked && tx.n == 1 && tx.frame(0)[22] == 8 && be16(tx.frame(0), 26) == 0x80fd && c.phase == Phase::Open;
+    tx.clear();
+    // Our own IPV6CP request (retransmitted on the 3-s clock) — Ack it -> IPv6 up; then an IPv6 encap/decap round trip.
+    c.tick(1_000_000, &mut tx);
+    let mut rid = None;
+    for i in 0..tx.n {
+        let f = tx.frame(i);
+        if be16(f, 20) == 0x8057 && f[22] == 1 {
+            rid = Some((f[23], [f[28], f[29], f[30], f[31], f[32], f[33], f[34], f[35]]));
+        }
+    }
+    tx.clear();
+    let v6_up = if let Some((id, iid)) = rid {
+        let mut d = [0u8; 10];
+        d[0] = 1;
+        d[1] = 10;
+        d[2..10].copy_from_slice(&iid);
+        let (b, l) = sess(0x8057, 2, id, &d);
+        c.rx(&b[..l], 1_000_001, &mut tx);
+        c.ip6_up && iid == arch_aarch64::ip6::eui64(&CLI)
+    } else {
+        false
+    };
+    tx.clear();
+    let v6_rt = v6_up && {
+        let mut pkt = [0u8; 64];
+        let n = arch_aarch64::ip6::build_rs(&c.my_iid, &mut pkt);
+        let mut enc = [0u8; 128];
+        match c.encap_ipv6(&pkt[..n], &mut enc) {
+            Some(en) => {
+                // the same bytes coming back from the AC decap to the identical IPv6 packet
+                let mut back = enc;
+                back[0..6].copy_from_slice(&CLI);
+                back[6..12].copy_from_slice(&AC);
+                be16(&enc, 20) == 0x0057 && c.decap_ipv6(&back[..en]) == Some(&pkt[..n])
+            }
+            None => false,
+        }
+    };
+    let prej_ok = prej_ok && v6_up && v6_rt;
+    if !prej_ok {
+        kprint!("   [P-pppoe v6] acked={} ccp_rej={} our_req={} up={} roundtrip={}\n", v6_acked, prej_ok, rid.is_some(), v6_up, v6_rt);
+    }
     // IPv4 encap/decap round trip
     let mut eth = [0u8; 60];
     eth[12] = 0x08;
@@ -12354,13 +12526,15 @@ fn pppoe_selftest() {
         let mut t = Tx::new();
         let base = 50_000u64;
         // An echo is due (the run's last tick armed the clock long ago): exactly one goes out ...
+        // Count LCP Echo-Requests only: tick() also retransmits IPV6CP (this scripted AC never answers it).
+        let echoes = |t: &Tx| (0..t.n).filter(|&i| be16(t.frame(i), 20) == 0xc021 && t.frame(i)[22] == 9).count();
         cp.tick(base, &mut t);
-        let req = t.n == 1 && t.frame(0)[22] == 9;
-        let rid = if req { t.frame(0)[23] } else { 0 };
+        let req = echoes(&t) == 1;
+        let rid = (0..t.n).find(|&i| be16(t.frame(i), 20) == 0xc021 && t.frame(i)[22] == 9).map(|i| t.frame(i)[23]).unwrap_or(0);
         t.clear();
         // ... and not again within the same interval.
         cp.tick(base + 1, &mut t);
-        let once = t.n == 0;
+        let once = echoes(&t) == 0;
         // An Echo-Reply resets the miss count.
         let (b, l) = sess(0xc021, 10, rid, &0x1122_3344u32.to_be_bytes());
         cp.rx(&b[..l], base + 5, &mut t);
@@ -12372,7 +12546,7 @@ fn pppoe_selftest() {
             now += ECHO_MS;
             t.clear();
             cp.tick(now, &mut t);
-            sent += t.n;
+            sent += echoes(&t);
         }
         let r = req && once && reset_ok && sent == ECHO_MISSES as usize && cp.phase == Phase::Down && cp.why == DownWhy::NoEcho;
         if !r {
@@ -12380,7 +12554,46 @@ fn pppoe_selftest() {
         }
         r
     };
-    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka;
-    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP Protocol-Rejected (session stays up)={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={}\n",
-        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka);
+    // Stale-session sweep: a fresh client (Discovery) gets an LCP Echo-Request from the AC on an OLD SID
+    // (the session it held before our reboot) -> exactly one PADT for that SID back to that AC, rate-limited,
+    // and nothing for broadcast or for frames while Requesting.
+    let stale_ok = {
+        const OLD: u16 = 0x0bad;
+        let mut sc = Pppoe::new(CLI, USER, PASS, 7, 0x5555_6666);
+        let mut t = Tx::new();
+        sc.start(0, &mut t);
+        t.clear();
+        let mut f = [0u8; 64];
+        f[0..6].copy_from_slice(&CLI);
+        f[6..12].copy_from_slice(&AC);
+        f[12..14].copy_from_slice(&ETH_SESS.to_be_bytes());
+        f[14] = 0x11;
+        f[16..18].copy_from_slice(&OLD.to_be_bytes());
+        f[18..20].copy_from_slice(&10u16.to_be_bytes());
+        f[20..22].copy_from_slice(&0xc021u16.to_be_bytes());
+        f[22] = 9; // LCP Echo-Request
+        f[23] = 1;
+        f[24..26].copy_from_slice(&8u16.to_be_bytes());
+        sc.rx(&f[..60], 100, &mut t);
+        let one = t.n == 1 && {
+            let p = t.frame(0);
+            p[0..6] == AC && u16::from_be_bytes([p[12], p[13]]) == ETH_DISC && p[15] == 0xa7 && u16::from_be_bytes([p[16], p[17]]) == OLD
+        };
+        sc.rx(&f[..60], 200, &mut t); // same SID within 1 s: rate-limited
+        let limited = t.n == 1;
+        sc.rx(&f[..60], 1300, &mut t); // after 1 s: answered again
+        let again = t.n == 2;
+        let mut bc = f;
+        bc[0..6].copy_from_slice(&[0xff; 6]);
+        sc.rx(&bc[..60], 5000, &mut t); // broadcast: never
+        let no_bcast = t.n == 2;
+        let r = one && limited && again && no_bcast && sc.stats.stale_padt == 2 && sc.phase == Phase::Discovery;
+        if !r {
+            kprint!("   [P-pppoe stale] one={} limited={} again={} no_bcast={} n={} stale_padt={} phase={:?}\n", one, limited, again, no_bcast, t.n, sc.stats.stale_padt, sc.phase);
+        }
+        r
+    };
+    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka && stale_ok;
+    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP run (AC IID acked, ours acked -> v6 up, IPv6 encap/decap) + CCP still Protocol-Rejected={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={} | stale-session sweep: PADT for an old SID, rate-limited, never broadcast={}\n",
+        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka, stale_ok);
 }
