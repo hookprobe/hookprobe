@@ -177,3 +177,29 @@ reader (now uses the fixed one). Log: `~/heqk-metal-logs/20261105-AP-vht80-hs50-
 Remaining gap to Linux (~150 Mbps): polled single loop + PIO SDIO, per-frame interrupt-status
 CMD52/CMD53 overhead, 1-ms dry-poll delays, no TX glomming; 802.11ax is impossible on the
 CYW43455 (Wi-Fi 5, 1x1) — Wi-Fi 6 needs a PCIe module + a new heqk driver (hardware tier).
+
+## 2026-11-05 evening — PPPoE stall, WAN loss and the 40→150 Mbps fix (evidence chain)
+
+All on CM5 metal, ISP PPPoE (Digi, PAP) on end0, iPhone on heqk's AP ch36/VHT80. Serial log
+`~/heqk-metal-logs/20261105-ap-serial.log`; Linux driver-load trace
+`~/heqk-metal-logs/20261105-linux-v8-brcmfmac-INIT-journal.txt` (journald, because the dmesg ring wraps).
+
+| step | img | hypothesis / change | evidence | verdict |
+|---|---|---|---|---|
+| 1 | Linux | init-time firmware config (`tlv`/proptxstatus) differs | Linux sends no `tlv` (fcmode 0); TX framing identical (4-B round, block + byte tail) | ruled out |
+| 2 | 1de38c4 | bus clock (HT/KSO) dropped | at the stall CHIPCLKCSR=0xd0 (HT), SLEEPCSR=0x03 (KSO), F2 ready; wake = no-op, no recovery | ruled out |
+| 3 | 1de38c4 | RX glom drops cause it | sessions with 15 drops did not stall, stalled ones had 0 | ruled out |
+| 4 | 1de38c4 | — | after the stall `big_rx` kept rising with tx_max == tx_seq: firmware stopped TX to an awake station, holding 40 frames | firmware-side TX freeze |
+| 5 | 825b073 | reserve 2 control credits (brcmfmac TXCTL_CREDITS) | 3/3 stalls recovered ~4.1 s, right after the snapshot's first control frame; sta_info ver=4: ASSOC+AUTHO, PS=false, AMPDU | a host->dongle event restarts it |
+| 6 | 6ed4833 | bare SMB_DEV_INT vs one control frame | DEV_INT 0/2, control frame 2/2 within ~5 ms | only an ioctl restarts it |
+| 7 | 1c1594c | kick at 100 ms; WAN ring drained only in the Wi-Fi Idle arm, 1 frame/loop | kicks 5/5 in 103-142 ms; GEM res_err 325k -> 155 | fixed (kick = mitigation) |
+| 8 | 78c42de | 16-KB glom buffer < 23-KB superframes; wq overflow | glom drops 166 -> 0, wq drops 7,158 -> 0 | fixed |
+| 9 | 31e5466 | profiler + txbf=1 (Linux preinit) | loop ~80% asleep in 1-ms dry-poll delays of the RX read; TX only 10-12% (40 us/frame) | root cause of the speed cap |
+| 10 | f9982c6 | non-blocking RX poll (max_dry 0) | **120-160 Mbps**; 61k frames/5 s; TX 49% of loop; 0 queue/glom/TX drops; 62/62 kicks | **fixed — Linux parity** |
+
+Open:
+- The firmware TX-to-station freeze is MITIGATED (control-frame kick, ~100-140 ms) not root-caused. No trap,
+  quiet console, PS=false. ~62 kicks per heavy session.
+- GEM overrun under saturation (13,944 at 150 Mbps) is the intended single loss point now that the Wi-Fi
+  queue applies backpressure (TCP paces on it); a deeper ring needs a multi-page EL0 grant.
+- PADT on shutdown (the ISP rejected the first PAP after a reflash: stale session; retry 8 succeeded).
