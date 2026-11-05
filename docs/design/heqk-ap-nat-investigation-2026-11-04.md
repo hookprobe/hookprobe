@@ -203,3 +203,13 @@ Open:
 - GEM overrun under saturation (13,944 at 150 Mbps) is the intended single loss point now that the Wi-Fi
   queue applies backpressure (TCP paces on it); a deeper ring needs a multi-page EL0 grant.
 - PADT on shutdown (the ISP rejected the first PAP after a reflash: stale session; retry 8 succeeded).
+
+## 2026-11-05 night — IPv6 over PPPoE, stages 1+2: test-ipv6.com 10/10 (img 0c685a6)
+
+Digi PPPoE: IPV6CP up; DHCPv6 IA_NA /128 (WAN) + IA_PD /56 (infinite lifetimes), DNS 2a02:2f0c:8000:3::1;
+the ISP's RA (fe80::1, lifetime 1800, M=1, no PIO) arrives periodically, not in answer to RS. LAN = first /64
+of the delegation, router prefix::1; RA (SLAAC, MTU 1492, RDNSS) on the AP; the iPhone took a stable +
+temporary address, router fe80::ba27:…. Forwarded out/in 707/2,565, 0 TX fail, 0 firewall no_flow drops,
+0 IDS drops; test-ipv6.com **10/10**. Stateful default-deny inbound is QEMU-proven ([P-ip6]); a metal proof
+needs an outside IPv6 host. Also: PPPoE stale-session PADT sweep (img fcba6d5; not exercised yet — no
+stale session in these boots).
