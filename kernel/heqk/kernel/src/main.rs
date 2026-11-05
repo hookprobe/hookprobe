@@ -5548,6 +5548,7 @@ pub extern "C" fn kmain() -> ! {
         glom_selftest();
         dnsfwd_selftest();
         wancfg_selftest();
+        policy_selftest();
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
@@ -12166,6 +12167,115 @@ fn md5_selftest() {
     let ok = v.iter().all(|(d, h)| hx(&hal::md5(d), h));
     kprint!(" [P-md5] {} — RFC 1321 A.5 vectors (6/6 incl. the 80-byte two-block case) — used only by PPP CHAP-MD5\n",
         if ok { "PASS" } else { "FAIL" });
+}
+
+/// `[P-policy]` — the WAN policy engine (hal::policy) + the WAN.TXT link keys: IPv6 text parsing,
+/// prefix-list ge/le semantics, ACL first-match by number with hit counts, longest-prefix routes, the
+/// management allow-list, whole-file rejection, VLAN/QinQ/management sub-interface config, and the
+/// tag stack + the MTU derived from the headers.
+#[allow(dead_code)]
+fn policy_selftest() {
+    use hal::policy::*;
+    let v6 = |s: &[u8]| parse_v6(s);
+    let v6_ok = v6(b"2001:db8::1") == Some([0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+        && v6(b"::") == Some([0; 16])
+        && v6(b"fe80::ba27:ebff:fe74:f26c").map(|a| a[8..10] == [0xba, 0x27] && a[15] == 0x6c) == Some(true)
+        && v6(b"1:2:3:4:5:6:7:8").is_some()
+        && v6(b"1::2::3").is_none() && v6(b"12345::").is_none() && v6(b"1:2:3:4:5:6:7:8:9").is_none() && v6(b"g::1").is_none();
+    let txt: &[u8] = b"HQPOL1
+# test policy
+prefix-list RFC1918 seq 10 permit 10.0.0.0/8 le 32
+prefix-list RFC1918 seq 20 permit 172.16.0.0/12 le 32
+prefix-list RFC1918 seq 30 permit 192.168.0.0/16 le 32
+prefix-list ADMINS seq 5 permit 192.168.200.0/24 le 32
+prefix-list DEFAULTONLY seq 10 permit 0.0.0.0/0
+prefix-list V6LAN seq 20 permit 2a02:2f05::/32 ge 48 le 64
+prefix-list V6LAN seq 10 deny 2a02:2f05:dead::/48 le 64
+prefix-list LANSRC seq 10 permit 10.99.0.0/24 le 32
+acl LAN-OUT seq 20 allow tcp any any 443
+acl LAN-OUT seq 10 drop any any pl:RFC1918
+acl LAN-OUT seq 30 block udp any any 53
+acl LAN-OUT seq 40 drop tcp any 2001:db8::/32 1-1023
+acl LAN-OUT default allow
+acl MGMT-IN seq 10 allow any pl:ADMINS any
+interface lan acl in LAN-OUT
+interface lan prefix-list in LANSRC
+interface mgmt acl in MGMT-IN
+route 0.0.0.0/0 via wan metric 10
+route 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100
+route 10.20.0.0/16 via mgmt gw 192.168.200.1
+route 10.20.5.0/24 via wan
+route 0.0.0.0/0 from 10.99.0.128/25 via mgmt gw 192.168.200.1 metric 5
+route 2001:db8:1::/48 via mgmt
+";
+    let mut p = Policy::new();
+    let parsed = parse_policy(txt, &mut p).is_ok() && p.npl == 5 && p.nacl == 2 && p.nbind == 3 && p.nroutes == 6
+        && p.acl[0].n == 4 && p.acl[0].e[0].seq == 10 && p.acl[0].e[1].seq == 20 && p.acl[0].default == Some(Act::Allow) && p.acl[1].default.is_none();
+    let a4 = |q: [u8; 4]| Addr::v4(q);
+    let v6a = |s: &[u8]| Addr::v6(parse_v6(s).unwrap());
+    let pk = |proto: u8, src: Addr, dst: Addr, dport: u16| Pkt { proto, src, dst, dport };
+    let cli = a4([10, 99, 0, 5]);
+    let acl_ok = p.check(If::Lan, Dir::In, &pk(6, cli, a4([10, 1, 2, 3]), 443)) == (Act::Drop, Decided::Acl(0, 10)) // seq 10 before 20
+        && p.check(If::Lan, Dir::In, &pk(6, cli, a4([8, 8, 8, 8]), 443)) == (Act::Allow, Decided::Acl(0, 20))
+        && p.check(If::Lan, Dir::In, &pk(17, cli, a4([8, 8, 8, 8]), 53)) == (Act::Block, Decided::Acl(0, 30))
+        && p.check(If::Lan, Dir::In, &pk(17, cli, a4([1, 1, 1, 1]), 123)) == (Act::Allow, Decided::Acl(0, u16::MAX))
+        && p.check(If::Lan, Dir::In, &pk(6, v6a(b"2a02::5"), v6a(b"2001:db8::80"), 80)) == (Act::Drop, Decided::Acl(0, 40)) // v6; the v4-only LANSRC does not apply
+        && p.check(If::Lan, Dir::In, &pk(6, v6a(b"2a02::5"), v6a(b"2001:db8::80"), 8080)).0 == Act::Allow
+        && p.check(If::Lan, Dir::In, &pk(6, a4([10, 98, 0, 5]), a4([8, 8, 8, 8]), 443)) == (Act::Drop, Decided::PrefixList(4)) // spoofed source
+        && p.check(If::Mgmt, Dir::In, &pk(6, a4([192, 168, 200, 7]), a4([192, 168, 200, 2]), 443)) == (Act::Allow, Decided::Acl(1, 10))
+        && p.check(If::Mgmt, Dir::In, &pk(6, a4([10, 0, 0, 1]), a4([192, 168, 200, 2]), 443)) == (Act::Drop, Decided::Acl(1, u16::MAX)) // implicit deny
+        && p.check(If::Wan, Dir::In, &pk(6, a4([1, 2, 3, 4]), cli, 22)) == (Act::Allow, Decided::Unbound)
+        && p.acl[0].hits[0] == 1 && p.acl[0].hits[1] == 2 && p.acl[0].hits[2] == 1 && p.acl[0].hits[3] == 1 && p.acl[0].default_hits == 2
+        && p.pl_drops[1] == 1;
+    let pfx = |s: &[u8]| parse_prefix(s).unwrap();
+    let pl_ok = p.pl[2].matches_prefix(&pfx(b"0.0.0.0/0")) && !p.pl[2].matches_prefix(&pfx(b"10.0.0.0/8"))
+        && p.pl[3].matches_prefix(&pfx(b"2a02:2f05:d101:4c00::/56")) && !p.pl[3].matches_prefix(&pfx(b"2a02:2f05::/40"))
+        && !p.pl[3].matches_prefix(&pfx(b"2a02:2f05:d101:4c00::1/128")) && !p.pl[3].matches_prefix(&pfx(b"2a02:2f05:dead::/56")) // seq 10 deny wins
+        && p.pl[0].matches_addr(&a4([172, 20, 1, 1])) && !p.pl[0].matches_addr(&a4([172, 32, 0, 1]));
+    let all_up = |_: If| true;
+    let wan_down = |i: If| i != If::Wan;
+    let r = |src: Addr, dst: Addr, up: &dyn Fn(If) -> bool| p.route(&src, &dst, up).map(|r| (r.via, r.gw, r.metric));
+    let gw = Some(a4([192, 168, 200, 1]));
+    let rt_ok = r(cli, a4([8, 8, 8, 8]), &all_up) == Some((If::Wan, None, 10))
+        && r(a4([10, 99, 0, 200]), a4([8, 8, 8, 8]), &all_up) == Some((If::Mgmt, gw, 5)) // source-based: from 10.99.0.128/25
+        && r(cli, a4([10, 20, 5, 9]), &all_up) == Some((If::Wan, None, 0)) // /24 beats /16
+        && r(cli, a4([10, 20, 9, 9]), &all_up) == Some((If::Mgmt, gw, 0))
+        && r(cli, a4([8, 8, 8, 8]), &wan_down) == Some((If::Mgmt, gw, 100)) // failover by metric
+        && r(v6a(b"2a02::5"), v6a(b"2001:db8:1:5::1"), &all_up).map(|x| x.0) == Some(If::Mgmt)
+        && r(v6a(b"2a02::5"), v6a(b"2606::1"), &all_up).is_none();
+    // whole-file rejection, with the line number
+    let mut q = Policy::new();
+    let rej_ok = parse_policy(b"HQPOL1\nacl A seq 10 drop any any any\nacl A seq 20 allow icmp any any 80\n", &mut q) == Err(PolicyErr::Line(3))
+        && parse_policy(b"HQPOL1\nroute 10.0.0.1/8 via wan\n", &mut q) == Err(PolicyErr::Line(2)) // host bits set
+        && parse_policy(b"HQPOL1\nacl A seq 1 drop any pl:NOPE any\n", &mut q) == Err(PolicyErr::Line(2)) // undefined list
+        && parse_policy(b"HQPOL1\ninterface lan acl in NOPE\n", &mut q) == Err(PolicyErr::Line(2)) // undefined ACL
+        && parse_policy(b"HQPOL1\nacl A seq 1 drop any any any\ninterface dmz acl in A\n", &mut q) == Err(PolicyErr::Line(3))
+        && parse_policy(b"HQPOL1\nroute 0.0.0.0/0 gw 1.2.3.4\n", &mut q) == Err(PolicyErr::Line(2)) // no via
+        && parse_policy(b"HQPOL1\nprefix-list X seq 1 permit 10.0.0.0/8 ge\n", &mut q) == Err(PolicyErr::Line(2))
+        && parse_policy(b"acl A seq 1 drop any any any\n", &mut q) == Err(PolicyErr::NoMagic);
+    // WAN.TXT link keys
+    let w: &[u8] = b"HQWAN1\nmode=pppoe\npppoe_user=u@isp\npppoe_pass=x\nvlan=100\nvlan_outer=10\npcp=3\nmgmt_vlan=200\nmgmt=static\nmgmt_ip=192.168.200.2/24\nmgmt_gw=192.168.200.1\n";
+    let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }) })
+        && matches!(hal::parse_wan_cfg(w), Ok(hal::WanMode::Pppoe { .. }))
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=100\nmgmt_vlan=100\n").is_err()
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan_outer=10\n").is_err()
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=4095\n").is_err()
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\n") == Ok(hal::WanLink::default());
+    // tag stack + MTU from the headers
+    let e = Encap { vlan: 100, outer: 10, pcp: 3, pppoe: true };
+    let mut f = [0u8; 32];
+    let o = e.push_tags(&mut f, 0x8864);
+    let tag_ok = o == 22 && f[12..14] == [0x88, 0xa8] && u16::from_be_bytes([f[14], f[15]]) == (3 << 13 | 10)
+        && f[16..18] == [0x81, 0x00] && u16::from_be_bytes([f[18], f[19]]) == (3 << 13 | 100) && f[20..22] == [0x88, 0x64]
+        && rx_tags(&f) == Some((10, 100, 20)) && e.ip_mtu() == 1492 && e.mss4() == 1452 && e.frame_max() == 1522;
+    let one = Encap { vlan: 35, ..Encap::default() };
+    let mut g = [0u8; 32];
+    let og = one.push_tags(&mut g, 0x0800);
+    let tag1_ok = og == 18 && rx_tags(&g) == Some((0, 35, 16)) && one.ip_mtu() == 1500 && one.frame_max() == 1518
+        && rx_tags(&[0u8; 14]) == Some((0, 0, 12));
+    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok;
+    kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={}\n",
+        if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok);
 }
 
 /// `[P-pppoe]` — the PPPoE client engine (arch_aarch64::pppoe) end to end against a scripted
