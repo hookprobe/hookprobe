@@ -344,3 +344,167 @@ pub fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
     s += l4len as u32;
     s
 }
+
+// ── WAN configuration (WAN.TXT on the boot partition) — pure parser, QEMU-tested. ──
+
+/// First line of WAN.TXT.
+pub const WAN_CFG_MAGIC: &[u8] = b"HQWAN1";
+/// WAN.TXT is exactly one 512-B sector (patched in place by the flasher / Mission Control).
+pub const WAN_CFG_LEN: usize = 512;
+/// Max PPPoE username / password length.
+pub const WAN_CRED_MAX: usize = 64;
+
+/// How the WAN port (end0) gets its address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WanMode {
+    /// DHCP client (the default).
+    Dhcp,
+    /// Static address: `ip/prefix`, default gateway, resolver.
+    Static { ip: [u8; 4], prefix: u8, gw: [u8; 4], dns: [u8; 4] },
+    /// PPPoE client (RFC 2516) with PAP/CHAP credentials.
+    Pppoe { user: [u8; WAN_CRED_MAX], user_len: u8, pass: [u8; WAN_CRED_MAX], pass_len: u8 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WanCfgErr {
+    /// First non-empty line is not `HQWAN1`.
+    NoMagic,
+    /// A line is not `key=value`, or the key is unknown.
+    BadLine,
+    /// `mode=` missing or not dhcp/static/pppoe.
+    BadMode,
+    /// A field the mode needs is missing.
+    Missing,
+    /// An address is not a dotted quad.
+    BadAddr,
+    /// Prefix outside 8..=30.
+    BadPrefix,
+    /// Address is the network or broadcast address of its subnet.
+    BadHost,
+    /// Gateway not inside the subnet, or equal to the address.
+    BadGateway,
+    /// Credential empty / too long / not printable.
+    BadCred,
+}
+
+fn parse_quad(v: &[u8]) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut k = 0usize;
+    let mut cur: u32 = 0;
+    let mut digits = 0;
+    for &c in v.iter().chain(core::iter::once(&b'.')) {
+        if c == b'.' {
+            if digits == 0 || k >= 4 || cur > 255 {
+                return None;
+            }
+            out[k] = cur as u8;
+            k += 1;
+            cur = 0;
+            digits = 0;
+        } else if c.is_ascii_digit() {
+            cur = cur * 10 + (c - b'0') as u32;
+            digits += 1;
+            if digits > 3 {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    if k == 4 { Some(out) } else { None }
+}
+
+fn trim(mut s: &[u8]) -> &[u8] {
+    while let [first, rest @ ..] = s {
+        if first.is_ascii_whitespace() { s = rest } else { break }
+    }
+    while let [rest @ .., last] = s {
+        if last.is_ascii_whitespace() { s = rest } else { break }
+    }
+    s
+}
+
+/// Parse WAN.TXT. Format (one `key=value` per line, `#` comments, blank lines and trailing
+/// padding ignored, CRLF accepted):
+/// ```text
+/// HQWAN1
+/// mode=dhcp | static | pppoe
+/// ip=192.0.2.10/24     (static)
+/// gw=192.0.2.1         (static)
+/// dns=192.0.2.1        (static, optional: defaults to the gateway)
+/// pppoe_user=...       (pppoe)
+/// pppoe_pass=...       (pppoe, may be empty)
+/// ```
+pub fn parse_wan_cfg(buf: &[u8]) -> Result<WanMode, WanCfgErr> {
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let mut magic = false;
+    let (mut mode, mut ip, mut prefix, mut gw, mut dns) = (None::<&[u8]>, None, None, None, None);
+    let (mut user, mut pass) = (None::<&[u8]>, None::<&[u8]>);
+    for raw in buf[..end].split(|&b| b == b'\n') {
+        let line = trim(raw);
+        if line.is_empty() || line[0] == b'#' {
+            continue;
+        }
+        if !magic {
+            if line != WAN_CFG_MAGIC {
+                return Err(WanCfgErr::NoMagic);
+            }
+            magic = true;
+            continue;
+        }
+        let eq = line.iter().position(|&b| b == b'=').ok_or(WanCfgErr::BadLine)?;
+        let (k, v) = (trim(&line[..eq]), trim(&line[eq + 1..]));
+        match k {
+            b"mode" => mode = Some(v),
+            b"ip" => {
+                let slash = v.iter().position(|&b| b == b'/').ok_or(WanCfgErr::BadPrefix)?;
+                ip = Some(parse_quad(&v[..slash]).ok_or(WanCfgErr::BadAddr)?);
+                let p = &v[slash + 1..];
+                if p.is_empty() || p.len() > 2 || !p.iter().all(|c| c.is_ascii_digit()) {
+                    return Err(WanCfgErr::BadPrefix);
+                }
+                prefix = Some(p.iter().fold(0u8, |a, &c| a * 10 + (c - b'0')));
+            }
+            b"gw" => gw = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
+            b"dns" => dns = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
+            b"pppoe_user" => user = Some(v),
+            b"pppoe_pass" => pass = Some(v),
+            _ => return Err(WanCfgErr::BadLine),
+        }
+    }
+    if !magic {
+        return Err(WanCfgErr::NoMagic);
+    }
+    match mode {
+        Some(b"dhcp") => Ok(WanMode::Dhcp),
+        Some(b"static") => {
+            let (ip, prefix, gw) = (ip.ok_or(WanCfgErr::Missing)?, prefix.ok_or(WanCfgErr::Missing)?, gw.ok_or(WanCfgErr::Missing)?);
+            if !(8..=30).contains(&prefix) {
+                return Err(WanCfgErr::BadPrefix);
+            }
+            let mask: u32 = u32::MAX << (32 - prefix as u32);
+            let (a, g) = (u32::from_be_bytes(ip), u32::from_be_bytes(gw));
+            if a & !mask == 0 || a & !mask == !mask {
+                return Err(WanCfgErr::BadHost);
+            }
+            if a & mask != g & mask || g == a || g & !mask == 0 || g & !mask == !mask {
+                return Err(WanCfgErr::BadGateway);
+            }
+            Ok(WanMode::Static { ip, prefix, gw, dns: dns.unwrap_or(gw) })
+        }
+        Some(b"pppoe") => {
+            let u = user.ok_or(WanCfgErr::Missing)?;
+            let p = pass.unwrap_or(b"");
+            let ok = |s: &[u8]| s.len() <= WAN_CRED_MAX && s.iter().all(|&c| (0x21..0x7f).contains(&c));
+            if u.is_empty() || !ok(u) || !ok(p) {
+                return Err(WanCfgErr::BadCred);
+            }
+            let mut ub = [0u8; WAN_CRED_MAX];
+            let mut pb = [0u8; WAN_CRED_MAX];
+            ub[..u.len()].copy_from_slice(u);
+            pb[..p.len()].copy_from_slice(p);
+            Ok(WanMode::Pppoe { user: ub, user_len: u.len() as u8, pass: pb, pass_len: p.len() as u8 })
+        }
+        _ => Err(WanCfgErr::BadMode),
+    }
+}
