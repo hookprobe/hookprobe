@@ -37,12 +37,14 @@ SVN="${SVN:-1}"
 SIZE_MIB=512
 ZERO_LINUX=0
 OWNER_TOKEN=""
+WAN_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --zero-linux) ZERO_LINUX=1 ;;
     --owner-token) OWNER_TOKEN="$2"; shift ;;
     --size-mib) SIZE_MIB="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN]" >&2; exit 2 ;;
+    --wan-file) WAN_FILE="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -150,10 +152,23 @@ sfdisk --quiet --label dos "$IMG" <<EOF
 start=$P1_START, size=$P1_SECT, type=c, bootable
 start=$P2_START, size=$P2_SECT, type=da
 EOF
+# WAN.TXT — the WAN mode (dhcp default / static / pppoe), exactly one 512-B sector so the flasher or
+# Mission Control can rewrite it in place. --wan-file supplies the operator's (bench) choice.
+python3 -I - "$STAGE/WAN.TXT" "$WAN_FILE" <<'PY'
+import sys
+dst, src = sys.argv[1], sys.argv[2]
+body = open(src, "rb").read() if src else b"HQWAN1\n# mode = dhcp | static | pppoe (see hal::parse_wan_cfg)\nmode=dhcp\n"
+if not body.lstrip().startswith(b"HQWAN1") and b"\nHQWAN1" not in body:
+    sys.exit("FATAL: WAN file must contain the HQWAN1 magic line")
+if len(body) > 512:
+    sys.exit("FATAL: WAN file larger than 512 bytes")
+open(dst, "wb").write(body + b"\n" * (512 - len(body)))
+PY
+[ "$(stat -c %s "$STAGE/WAN.TXT")" = 512 ] || { echo "FATAL: WAN.TXT must be exactly 512 bytes"; exit 1; }
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
@@ -208,6 +223,22 @@ PY
 )"
 check "OWNER.TXT located at byte $OWNER_OFF (128 B, the flasher's in-place patch target)" \
   "[ -n '$OWNER_OFF' ] && dd if='$IMG' bs=1 skip=$OWNER_OFF count=6 status=none | grep -q '^HQOWN'"
+WAN_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
+import struct, sys
+f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
+def sec(l): f.seek(l * 512); return f.read(512)
+b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
+spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
+d = sec(data + (root - 2) * spc)
+for i in range(0, 512, 32):
+    e = d[i:i+32]
+    if e[:11] == b"WAN     TXT":
+        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
+        print((data + (c - 2) * spc) * 512); break
+PY
+)"
+check "WAN.TXT located at byte $WAN_OFF (512 B, mode=$(grep -a -m1 '^mode=' "$STAGE/WAN.TXT" | cut -d= -f2))" \
+  "[ -n '$WAN_OFF' ] && dd if='$IMG' bs=1 skip=$WAN_OFF count=6 status=none | grep -q '^HQWAN1'"
 
 SHA="$(sha256sum "$IMG" | cut -d' ' -f1)"
 echo "$SHA  $(basename "$IMG")" >"$IMG.sha256"
@@ -219,6 +250,7 @@ json.dump({
   "layout": {"p1_fat32": [$P1_START, $P1_SECT], "p2_datavolume_0xda": [$P2_START, $P2_SECT],
              "reserved_zero": [2016, 2048]},
   "slot_sha256": "$(sha256sum "$STAGE/heqk8-a.img" | cut -d' ' -f1)",
+  "wan_file": {"offset": int("${WAN_OFF:-0}"), "length": 512},
   "owner_file": {"offset": int("${OWNER_OFF:-0}"), "length": 128,
                  "claimed": bool(open("$STAGE/OWNER.TXT").read().startswith("HQOWN1"))},
   "metal_unproven": ["zero-linux boot (no devicetree)"] if $ZERO_LINUX else [],
