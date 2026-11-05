@@ -2215,6 +2215,9 @@ fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
         let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
         if intstat != 0 {
             let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
+            if intstat & I_HMB_HOST_INT != 0 {
+                hostmail(sdb);
+            }
         }
         let ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
         hw_len = u16::from_le_bytes([rx[0], rx[1]]);
@@ -5210,6 +5213,37 @@ pub fn ht_ensure_diag() -> u32 {
 const F2_SDPCM_ADDR: u32 = 0x8000;
 
 static mut MAILBOX_DIAG: (u32, u32) = (0, 0); // (intstatus seen, tohostmailboxdata)
+/// I_HMB_SW3: the firmware posted a host mailbox message (brcmfmac I_HMB_HOST_INT).
+const I_HMB_HOST_INT: u32 = 1 << 7;
+const HMB_DATA_NAKHANDLED: u32 = 0x0001;
+const HMB_DATA_FC: u32 = 0x0004;
+const HMB_DATA_FWHALT: u32 = 0x0010;
+/// Data-path host mailbox: [0] messages, [1] last tohostmailboxdata, [2] FC updates via mailbox,
+/// [3] NAK-handled, [4] FW-halt.
+pub static mut HOSTMAIL_DIAG: [u32; 5] = [0; 5];
+
+/// brcmf_sdio_hostmail: read tohostmailboxdata and ACK it (SMB_INT_ACK) — every time the firmware
+/// posts one, also mid-traffic. heqk used to W1C I_HMB_HOST_INT in the frame reader without reading
+/// or acknowledging the mailbox. An out-of-band flow-control update (HMB_DATA_FC, data[31:24]) is
+/// applied like the in-band mask.
+fn hostmail(sdb: u32) {
+    let d = bp_r32(sdb + SD_REG_TOHOSTMAILBOXDATA);
+    let _ = bp_w32(sdb + SD_REG_TOSBMAILBOX, SMB_INT_ACK);
+    unsafe {
+        HOSTMAIL_DIAG[0] += 1;
+        HOSTMAIL_DIAG[1] = d;
+        if d & HMB_DATA_FC != 0 {
+            HOSTMAIL_DIAG[2] += 1;
+            FC_MASK = (d >> 24) as u8;
+        }
+        if d & HMB_DATA_NAKHANDLED != 0 {
+            HOSTMAIL_DIAG[3] += 1;
+        }
+        if d & HMB_DATA_FWHALT != 0 {
+            HOSTMAIL_DIAG[4] += 1;
+        }
+    }
+}
 /// Service the firmware's software mailbox interrupt (DEVREADY/FWREADY posted right
 /// after boot): read tohostmailboxdata, ACK via SMB_INT_ACK, then W1C the SDIO-core
 /// intstatus. This de-asserts the firmware's in-band SDIO interrupt so it stops

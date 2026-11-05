@@ -1109,8 +1109,11 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
             // queue pointer actually is, and both descriptors' status words at timeout.
             unsafe {
                 let ring = core::ptr::addr_of!(TXRING.desc) as usize;
-                let qp = r(GEM, TBQP) as usize;
-                let hw_slot = if qp >= ring + DMA_BUS_OFFSET as usize { (qp - ring - DMA_BUS_OFFSET as usize) / DESC_SZ } else { 0xff };
+                // TBQP holds only the LOW 32 bits of the descriptor bus address.
+                let qp = r(GEM, TBQP);
+                let base = (ring as u64 + DMA_BUS_OFFSET) as u32;
+                let off = qp.wrapping_sub(base) as usize;
+                let hw_slot = if off < NTX * DESC_SZ { off / DESC_SZ } else { 0xff };
                 let w1 = |k: usize| read_volatile(nc_desc(ring + k * DESC_SZ).add(1));
                 let dg = &mut *core::ptr::addr_of_mut!(TX_FAIL_DIAG);
                 dg[0] += 1;
@@ -1124,16 +1127,33 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
                     dg[7] += 1; // controller parked on a DIFFERENT slot than the one armed
                 }
             }
-            if err & TSR_W1C != 0 {
-                w(GEM, TSR, err & TSR_W1C);
+            // RECOVER = re-synchronise the ring with the hardware, as the reference does
+            // (Linux macb_tx_error_task: halt TX, mark descriptors idle, rewrite TBQP/TBQPH to the
+            // ring base, tx_head = tx_tail = 0, clear TSR, re-enable). heqk used to only bounce TE:
+            // that resets the controller's queue pointer to slot 0 while TX_SLOT kept alternating,
+            // so the next frame was armed in a slot the controller was not looking at. Metal
+            // 2026-11-05: every timeout had the armed slot USED-clear and the other slot USED-set
+            // with TSR=UBR (controller parked on the completed slot) — 1-7% of outbound frames.
+            w(GEM, NCR, NCR_RE | NCR_MPE); // TE low (RE stays up: the detection path keeps receiving)
+            unsafe {
+                core::arch::asm!("dsb sy");
+                let ring = core::ptr::addr_of!(TXRING.desc) as usize;
+                for i in 0..NTX {
+                    let d = nc_desc(ring + i * DESC_SZ);
+                    let wrap = if i == NTX - 1 { TXD_WRAP } else { 0 };
+                    write_volatile(d.add(1), TXD_USED | wrap);
+                }
+                core::arch::asm!("dsb sy");
+                let rb = ring as u64 + DMA_BUS_OFFSET;
+                w(GEM, TBQPH, (rb >> 32) as u32); // high first
+                w(GEM, TBQP, rb as u32);
+                core::ptr::write_volatile(core::ptr::addr_of_mut!(TX_SLOT), 0);
             }
-            if err & TSR_HALTING != 0 {
-                // TE low then high restarts the transmitter (RE is left up so RX — the
-                // detection path — is never interrupted by a TX-side recovery).
-                w(GEM, NCR, NCR_RE | NCR_MPE);
-                unsafe { core::arch::asm!("dsb sy") };
-                w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
+            let st = r(GEM, TSR);
+            if st & TSR_W1C != 0 {
+                w(GEM, TSR, st & TSR_W1C);
             }
+            w(GEM, NCR, NCR_RE | NCR_TE | NCR_MPE);
             return None;
         }
     }
