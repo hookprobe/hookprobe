@@ -140,15 +140,14 @@ pub struct AcsChoice {
     pub chanspec: u16,
     /// 80 / 20 MHz.
     pub mhz: u8,
-    /// Interference score (sum of overlapping neighbours, power-weighted).
+    /// Strong (>= ACS_STRONG_DBM) co-channel networks sharing this candidate's airtime.
     pub score: u64,
+    /// Estimated share of the peak 1x1 PHY rate, Mbps: peak / (1 + strong co-channel networks).
+    pub est_mbps: u32,
 }
 
-/// Power-ish weight of a neighbour: doubles every 3 dB (≈ linear mW), -100 dBm → 1.
-fn acs_weight(rssi: i16) -> u64 {
-    let x = (rssi as i32 + 100).clamp(0, 60) as u32;
-    1u64 << (x / 3)
-}
+/// A neighbour weaker than this does not meaningfully contend for airtime.
+pub const ACS_STRONG_DBM: i16 = -82;
 
 /// The 20 MHz primaries a 5 GHz neighbour occupies, from its d11ac chanspec (center + bandwidth).
 fn occ5(cs: u16) -> ([u8; 4], usize) {
@@ -162,52 +161,55 @@ fn occ5(cs: u16) -> ([u8; 4], usize) {
 }
 
 /// Choose the AP channel + width from a scan: `neigh` = (chanspec, rssi) of every BSS heard.
-/// Candidates: 5 GHz 80 MHz on the UNII-1 block (36-48), 5 GHz 20 MHz on 36/40/44/48, 2.4 GHz
-/// 20 MHz on 1/6/11. Neighbours weaker than ~-80 dBm count as a floor (ignorable); 20 MHz 5 GHz
-/// pays a x2 handicap and 2.4 GHz a x8 handicap (throughput), so 5 GHz/80 wins whenever its block
-/// is reasonably clear and a strong co-channel neighbour pushes the AP off it.
+///
+/// Policy = maximise the EXPECTED THROUGHPUT, not minimise neighbour loudness. Co-channel BSSs
+/// share airtime (CSMA), so a candidate's estimate is its peak 1x1 PHY rate divided by
+/// (1 + the strong networks overlapping it): VHT80 433, VHT20 87, HT20 72 Mbps. Measured on the
+/// bench (2026-11-04/05, iPhone): 5 GHz/80 shared with a -51 dBm 80-MHz neighbour = 22 Mbps vs a
+/// clean 2.4 GHz/20 = 15 Mbps — the previous loudness-weighted policy picked the slower one.
+/// This is a MODEL of airtime, not a measurement of channel busy time.
+/// Candidates: 5 GHz 80 MHz on the UNII-1 block, 5 GHz 20 MHz on 36/40/44/48, 2.4 GHz 1/6/11.
 pub fn acs_choose(neigh: &[(u16, i16)]) -> AcsChoice {
-    const FLOOR: u64 = 64; // ≈ one -82 dBm neighbour
-    let mut best = AcsChoice { channel: 0, chanspec: 0, mhz: 0, score: u64::MAX };
-    let mut best_eff = u64::MAX;
-    let mut consider = |channel: u8, chanspec: u16, mhz: u8, score: u64, handicap: u64| {
-        let eff = score.max(FLOOR).saturating_mul(handicap);
-        if eff < best_eff {
-            best_eff = eff;
-            best = AcsChoice { channel, chanspec, mhz, score };
+    acs_choose_allowed(neigh, &[])
+}
+
+/// `acs_choose` restricted to the regulatory domain: a candidate is considered only if its exact
+/// chanspec is in `allowed` (the firmware's `chanspecs` list for the configured country). An
+/// EMPTY `allowed` means "no list available" and applies no restriction (QEMU vectors / a
+/// firmware that does not answer); if NO candidate is allowed the result has channel 0.
+pub fn acs_choose_allowed(neigh: &[(u16, i16)], allowed: &[u16]) -> AcsChoice {
+    let mut best = AcsChoice { channel: 0, chanspec: 0, mhz: 0, score: 0, est_mbps: 0 };
+    let mut consider = |channel: u8, chanspec: u16, mhz: u8, strong: u64, peak: u32| {
+        if !allowed.is_empty() && !allowed.contains(&chanspec) {
+            return;
+        }
+        let est = peak / (1 + strong as u32);
+        if est > best.est_mbps {
+            best = AcsChoice { channel, chanspec, mhz, score: strong, est_mbps: est };
         }
     };
-    let score5 = |prim: &[u8]| -> u64 {
-        let mut sc = 0u64;
-        for &(cs, rssi) in neigh {
-            if cs & 0xc000 != 0xc000 {
-                continue; // not 5 GHz
+    let strong5 = |prim: &[u8]| -> u64 {
+        neigh.iter().filter(|&&(cs, rssi)| {
+            cs & 0xc000 == 0xc000 && rssi >= ACS_STRONG_DBM && {
+                let (o, n) = occ5(cs);
+                o[..n].iter().any(|c| prim.contains(c))
             }
-            let (o, n) = occ5(cs);
-            if o[..n].iter().any(|c| prim.contains(c)) {
-                sc = sc.saturating_add(acs_weight(rssi));
-            }
-        }
-        sc
+        }).count() as u64
     };
-    // 5 GHz 80 MHz, UNII-1 block, primary 36 (chanspec 42 | BW80 | 5G, sideband LL).
-    consider(36, 42 | 0x2000 | 0xc000, 80, score5(&[36, 40, 44, 48]), 1);
+    // Order = tie preference: 5 GHz/80 first, then 5 GHz/20, then 2.4 GHz.
+    consider(36, 42 | 0x2000 | 0xc000, 80, strong5(&[36, 40, 44, 48]), 433);
     for ch in [36u8, 40, 44, 48] {
-        consider(ch, ch as u16 | 0x1000 | 0xc000, 20, score5(&[ch]), 2);
+        consider(ch, ch as u16 | 0x1000 | 0xc000, 20, strong5(&[ch]), 87);
     }
     for ch in [1u8, 6, 11] {
-        let mut sc = 0u64;
-        for &(cs, rssi) in neigh {
-            if cs & 0xc000 == 0xc000 {
-                continue;
+        let strong = neigh.iter().filter(|&&(cs, rssi)| {
+            cs & 0xc000 != 0xc000 && rssi >= ACS_STRONG_DBM && {
+                let c = (cs & 0xff) as i16;
+                let reach = if cs & 0x3800 == 0x1800 { 6 } else { 4 }; // 40 MHz neighbours reach further
+                (c - ch as i16).abs() <= reach
             }
-            let c = (cs & 0xff) as i16;
-            let reach = if cs & 0x3800 == 0x1800 { 6 } else { 4 }; // 40 MHz neighbours reach further
-            if (c - ch as i16).abs() <= reach {
-                sc = sc.saturating_add(acs_weight(rssi));
-            }
-        }
-        consider(ch, ch as u16 | 0x1000, 20, sc, 8);
+        }).count() as u64;
+        consider(ch, ch as u16 | 0x1000, 20, strong, 72);
     }
     best
 }
