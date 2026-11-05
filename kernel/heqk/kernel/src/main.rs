@@ -3082,6 +3082,7 @@ fn cm5_p10_probe() {
                         let mut sent_ring = [(0u32, 0u16); 4];
                         let mut sent_i = 0usize;
                         let (mut credit0_since, mut stall_diag_done) = (0u64, false);
+                        let mut rx_busy = false; // the last pump read returned a frame (firmware RX pending)
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
                         let mut evs = [events::Event::EMPTY; 16];
@@ -3096,7 +3097,13 @@ fn cm5_p10_probe() {
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
                             // Flush queued WiFi deliveries while credit lasts (a read just refreshed it).
-                            while wq_n > 0 && cyw43::tx_credit_ok() {
+                            // TX budget per pump round, as brcmfmac's dpc: at most BRCMF_TXMINMAX (1) frame
+                            // while the firmware still has RX frames for us, otherwise txbound (20) — the
+                            // host always drains the firmware's RX side before pushing more TX into it.
+                            let tx_budget = if rx_busy { 1 } else { 20 };
+                            let mut tx_round = 0;
+                            while wq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
+                                tx_round += 1;
                                 let i = wq_head;
                                 if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
                                     sent_ring[sent_i % 4] = (u32::from_be_bytes([0, wq[i][3], wq[i][4], wq[i][5]]), wq_len[i] as u16);
@@ -3143,6 +3150,31 @@ fn cm5_p10_probe() {
                                             let (d, l) = sent_ring[(sent_i + k) % 4];
                                             kprint!("   [STALL-DIAG] last-sent[{}] dst ..:{:06x} len {}\n", k, d, l);
                                         }
+                                        // case 1 vs case 2: are the firmware's TX counters moving while credit is 0?
+                                        let c1 = cyw43::fw_pktcnts();
+                                        let t0 = now();
+                                        while now().wrapping_sub(t0) < freq {}
+                                        let c2 = cyw43::fw_pktcnts();
+                                        kprint!("   [STALL-DIAG] fw pktcnts (rx_good,rx_bad,tx_good,tx_bad,rx_ocast) t0={:?} t0+1s={:?}\n", c1, c2);
+                                        if let (Some(a), Some(b)) = (c1, c2) {
+                                            kprint!("   [STALL-DIAG] => over 1 s: tx_good +{} tx_bad +{} rx_good +{} ({})\n",
+                                                b[2].wrapping_sub(a[2]), b[3].wrapping_sub(a[3]), b[0].wrapping_sub(a[0]),
+                                                if b[2] != a[2] { "firmware IS transmitting (case 2: credit not returned)" } else { "firmware NOT transmitting (case 1)" });
+                                        }
+                                        {
+                                            let mut sta = [0u8; 6];
+                                            sta.copy_from_slice(&wq[wq_head % WQ_N][0..6]);
+                                            let mut si = [0u8; 128];
+                                            if cyw43::fw_sta_info_raw(&sta, &mut si) {
+                                                for row in 0..8 {
+                                                    let r = &si[row * 16..row * 16 + 16];
+                                                    kprint!("   [STALL-DIAG] sta_info+{:03}: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}\n", row * 16,
+                                                        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+                                                }
+                                            } else {
+                                                kprint!("   [STALL-DIAG] sta_info GET failed\n");
+                                            }
+                                        }
                                         match cyw43::fw_shared() {
                                             Some(sh) => {
                                                 kprint!("   [STALL-DIAG] fw sdpcm_shared @ {:#010x} flags={:#06x} (trap={} assert={}) console @ {:#010x}\n",
@@ -3169,7 +3201,9 @@ fn cm5_p10_probe() {
                             if force {
                                 last_force = now();
                             }
-                            match cyw43::ap_poll(&mut rx, force) {
+                            let ev = cyw43::ap_poll(&mut rx, force);
+                            rx_busy = !matches!(ev, cyw43::ApEvent::Idle);
+                            match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
