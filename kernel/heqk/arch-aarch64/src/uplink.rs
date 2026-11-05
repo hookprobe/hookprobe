@@ -343,9 +343,16 @@ pub struct Wan6 {
     pub status: u16,
     pub pd: Option<([u8; 16], u8, u32)>,
     pub dns: Option<[u8; 16]>,
+    pub na: Option<[u8; 16]>,
     pub v6_frames_rx: u32,
 }
-pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, v6_frames_rx: 0 };
+pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0 };
+
+/// IPv6 seen on the LIVE session (whole uptime, not just the 12-s probe): every v6 datagram and every
+/// Router Advertisement from the ISP — answers "does Digi ever send an RA?" — plus WAN v6 TX outcomes.
+/// [v6 rx, RAs rx, v6 tx ok, v6 tx fail]
+pub static mut WAN6_LIVE: [u32; 4] = [0; 4];
+pub static mut WAN6_FIRST_RA: Option<crate::ip6::Ra> = None;
 
 /// IPv6 over the open PPPoE session — PROBE ONLY (12-s cap, never fatal, IPv4 already works):
 /// wait for IPV6CP, Router Solicitation -> Router Advertisement (the WAN /64, M/O flags), then
@@ -455,8 +462,28 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
                 if d.has_pd {
                     w.pd = Some((d.prefix, d.plen, d.valid));
                 }
+                if d.has_na {
+                    w.na = Some(d.na);
+                }
             }
         }
+    }
+}
+
+/// Send a bare IPv6 packet into the PPPoE session (the LAN v6 router's forward path). PPPoE only.
+pub fn wan_tx6(up: &UplinkResult, ip6: &[u8]) -> bool {
+    if up.mode != 2 {
+        return false;
+    }
+    unsafe {
+        let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() else { return false };
+        let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
+        let ok = match e.encap_ipv6(ip6, sc) {
+            Some(n) => nic_tx(up.nic, &sc[..n]),
+            None => false,
+        };
+        WAN6_LIVE[if ok { 2 } else { 3 }] += 1;
+        ok
     }
 }
 
@@ -532,6 +559,24 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
         if let Some(dn) = e.decap_ipv4(&buf[..n], sc) {
             let k = dn.min(buf.len());
+            buf[..k].copy_from_slice(&sc[..k]);
+            return WanEvent::Frame(k);
+        }
+        // Session IPv6 -> an Ethernet/IPv6 frame (dst = us, src = the AC) for the LAN v6 router.
+        if let Some(ip6) = e.decap_ipv6(&buf[..n]) {
+            WAN6_LIVE[0] += 1;
+            if let Some(ra) = crate::ip6::parse_ra(ip6) {
+                WAN6_LIVE[1] += 1;
+                if WAN6_FIRST_RA.is_none() {
+                    WAN6_FIRST_RA = Some(ra);
+                }
+            }
+            let k = (14 + ip6.len()).min(sc.len());
+            sc[0..6].copy_from_slice(&e.mac);
+            sc[6..12].copy_from_slice(&e.ac_mac);
+            sc[12..14].copy_from_slice(&0x86ddu16.to_be_bytes());
+            sc[14..k].copy_from_slice(&ip6[..k - 14]);
+            let k = k.min(buf.len());
             buf[..k].copy_from_slice(&sc[..k]);
             return WanEvent::Frame(k);
         }
