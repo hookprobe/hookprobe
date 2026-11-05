@@ -2708,6 +2708,11 @@ fn cm5_p10_probe() {
             static mut NVSCRATCH: [u8; 4096] = [0; 4096];
             let f2 = cyw43::firmware_upload(unsafe { &mut NVSCRATCH });
             let (erom, cr4b, cr4w) = cyw43::erom_diag();
+            {
+                let (spd, hc1, mhz) = arch_aarch64::cyw43::sdio_speed_diag();
+                kprint!("   [P10-B sdio] CCCR SPEED={:#04x} (SHS={}) HOST_CTRL1={:#04x} (HISPD={}) => SDCLK {} MHz {}\n",
+                    spd, spd & 1, hc1, (hc1 >> 2) & 1, mhz, if mhz > 12 { "High-Speed, verified over 64 CMD53 reads" } else { "default speed (fallback)" });
+            }
             kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
                 if f2 { "PASS" } else { "SILENT" }, cyw43::FW_BIN.len(),
                 if f2 { "ready (firmware alive)" } else { "not ready — see step + EROM diag" },
@@ -2924,6 +2929,7 @@ fn cm5_p10_probe() {
                         }
                         let mut ap = cyw43::ApResult::new();
                         let mut ap_tries = 0u32;
+                        let mut chosen_cs: u16 = 0; // the chanspec the AP came up on (for the channel recheck)
                         loop {
                             ap_tries += 1;
                             ap = cyw43::ApResult::new();
@@ -2943,9 +2949,17 @@ fn cm5_p10_probe() {
                                 for (k, a) in aps[..nn].iter().enumerate() {
                                     neigh[k] = (a.chanspec, a.rssi);
                                 }
-                                let c = hal::acs_choose(&neigh[..nn]);
-                                kprint!("   [P11-ACS] {} neighbours scanned -> channel {} @ {} MHz (chanspec {:#06x}, interference score {})\n",
-                                    nn, c.channel, c.mhz, c.chanspec, c.score);
+                                let allowed = cyw43::allowed_chanspecs();
+                                let mut c = hal::acs_choose_allowed(&neigh[..nn], allowed);
+                                kprint!("   [P11-ACS] regdomain: {} chanspecs allowed by the firmware for this country; 36/80 {} 11/20 {}\n",
+                                    allowed.len(), if allowed.contains(&0xe02a) { "allowed" } else { "NOT allowed" },
+                                    if allowed.contains(&0x100b) { "allowed" } else { "NOT allowed" });
+                                if c.channel == 0 {
+                                    kprint!("   [P11-ACS] no candidate is in the regdomain list — falling back to 2.4 GHz ch6\n");
+                                    c = hal::AcsChoice { channel: 6, chanspec: cyw43::ap_chanspec(6), mhz: 20, score: 0, est_mbps: 0 };
+                                }
+                                kprint!("   [P11-ACS] {} neighbours scanned -> channel {} @ {} MHz (chanspec {:#06x}, {} strong co-channel network(s), est. ~{} Mbps PHY share)\n",
+                                    nn, c.channel, c.mhz, c.chanspec, c.score, c.est_mbps);
                                 (c.channel as u32, c.chanspec)
                             } else {
                                 (6, cyw43::ap_chanspec(6))
@@ -2964,6 +2978,10 @@ fn cm5_p10_probe() {
                                 ap.bssid_readback[0], ap.bssid_readback[1], ap.bssid_readback[2], ap.bssid_readback[3], ap.bssid_readback[4], ap.bssid_readback[5],
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
+                                chosen_cs = ap_cs;
+                                let rb = cyw43::current_chanspec();
+                                kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
+                                    rb.unwrap_or(0), ap_cs, if rb == Some(ap_cs) { "ON THE CHOSEN CHANNEL" } else { "MISMATCH" });
                                 kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"heqk-ap\" (PSK = build-time HEQK_AP_PSK)\n", ap_tries);
                                 break;
                             }
@@ -3041,6 +3059,8 @@ fn cm5_p10_probe() {
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
                         let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
+                        // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
+                        let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
                         loop {
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
@@ -3334,6 +3354,17 @@ fn cm5_p10_probe() {
                                             }
                                         }
                                         {
+                                            beat_n += 1;
+                                            if beat_n % 12 == 0 {
+                                                if let Some(cs) = cyw43::current_chanspec() {
+                                                    ch_checks += 1;
+                                                    ch_last = cs;
+                                                    if cs != chosen_cs {
+                                                        ch_mismatch += 1;
+                                                    }
+                                                }
+                                            }
+                                            kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
                                             let gs = arch_aarch64::gem::rx_stats();
                                             kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
                                                 gs[0], gs[1], gs[2], gs[3], gs[4], gs[5], gs[6], gs[7], gs[8], gs[9], gs[10], wan_big_seen, wan_big_unnat);
@@ -11565,22 +11596,29 @@ fn nat_trace_line(dir: &str, f: &[u8], res: &str) {
 #[allow(dead_code)]
 fn acs_selftest() {
     let bw80_42 = 42u16 | 0x2000 | 0xc000; // a 5 GHz 80 MHz BSS on the UNII-1 block
-    // (a) a clean air: 5 GHz 80 MHz wins.
+    // (a) clean air: 5 GHz/80.
     let a = hal::acs_choose(&[]);
-    // (b) the bench today: fortress 80 MHz @ -51 on UNII-1, 2.4 GHz neighbours on 1/6/11.
+    // (b) the bench: fortress 80 MHz @ -51 on UNII-1 + 2.4 GHz neighbours -> STAY on 5 GHz/80
+    //     (measured: shared 5 GHz/80 = 22 Mbps > clean 2.4 GHz/20 = 15 Mbps).
     let bench = [(bw80_42, -51i16), (1u16 | 0x1000, -70), (1 | 0x1000, -81), (6 | 0x1000, -32),
                  (6 | 0x1000, -83), (6 | 0x1000, -76), (11 | 0x1000, -84)];
     let b = hal::acs_choose(&bench);
-    // (c) only a weak (-88 dBm) 5 GHz neighbour: still 5 GHz/80 (weak neighbours are a floor).
+    // (c) a weak (-88 dBm) 5 GHz neighbour is ignored.
     let c = hal::acs_choose(&[(bw80_42, -88)]);
-    // (d) a strong 20 MHz neighbour on 36 only, 2.4 GHz crowded: 5 GHz 20 MHz on a free channel.
-    let d = hal::acs_choose(&[(36 | 0x1000 | 0xc000, -40), (1 | 0x1000, -40), (6 | 0x1000, -40), (11 | 0x1000, -40)]);
-    let ok = (a.channel, a.mhz) == (36, 80) && a.chanspec == 0xe02a
-        && (b.channel, b.mhz) == (11, 20) && b.chanspec == 0x100b
-        && (c.channel, c.mhz) == (36, 80)
-        && d.mhz == 20 && d.channel != 36 && d.chanspec & 0xc000 == 0xc000;
-    kprint!(" [P11-acs] {} — AP channel selection from the scan: clean air -> ch{}/{}MHz; bench (fortress 80 MHz @ -51 on UNII-1) -> ch{}/{}MHz {:#06x}; weak 5 GHz neighbour -> ch{}/{}MHz; strong ch36-only + crowded 2.4 -> 5 GHz ch{}/{}MHz\n",
-        if ok { "PASS" } else { "FAIL" }, a.channel, a.mhz, b.channel, b.mhz, b.chanspec, c.channel, c.mhz, d.channel, d.mhz);
+    // (d) the 80 MHz block genuinely crowded (6 strong 80-MHz BSSs), 2.4 GHz ch1 clean -> 2.4 ch1.
+    let crowded = [(bw80_42, -50i16), (bw80_42, -55), (bw80_42, -60), (bw80_42, -62), (bw80_42, -65), (bw80_42, -70),
+                   (6 | 0x1000, -50), (11 | 0x1000, -55)];
+    let d = hal::acs_choose(&crowded);
+    // (e) two strong 20-MHz neighbours on 36 and 40, 44/48 free, 2.4 crowded: 5 GHz/80 still beats
+    //     a free 5 GHz/20 (433/3 = 144 > 87).
+    let e = hal::acs_choose(&[(36 | 0x1000 | 0xc000, -40), (40 | 0x1000 | 0xc000, -45), (1 | 0x1000, -40), (6 | 0x1000, -40), (11 | 0x1000, -40)]);
+    let ok = (a.channel, a.mhz, a.chanspec) == (36, 80, 0xe02a)
+        && (b.channel, b.mhz, b.chanspec) == (36, 80, 0xe02a) && b.score == 1
+        && (c.channel, c.mhz) == (36, 80) && c.score == 0
+        && (d.channel, d.mhz, d.chanspec) == (1, 20, 0x1001)
+        && (e.channel, e.mhz) == (36, 80);
+    kprint!(" [P11-acs] {} — AP channel selection = max expected throughput (peak / (1 + strong co-channel BSSs)): clean -> ch{}/{}MHz; bench (fortress 80 MHz @ -51) -> ch{}/{}MHz ~{} Mbps (stays on 5 GHz: measured 22 > 15 Mbps); weak neighbour ignored -> ch{}/{}MHz; crowded 80-MHz block -> ch{}/{}MHz; two strong 20-MHz on 36/40 -> ch{}/{}MHz\n",
+        if ok { "PASS" } else { "FAIL" }, a.channel, a.mhz, b.channel, b.mhz, b.est_mbps, c.channel, c.mhz, d.channel, d.mhz, e.channel, e.mhz);
 }
 
 /// `[P11-glom]` — SDPCM superframe framing (hal::glom_plan / glom_split, the code the CM5 Wi-Fi
@@ -11720,4 +11758,10 @@ fn dnsfwd_selftest() {
     let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok;
     kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={}\n",
         if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok);
+}
+
+/// 4-hex-digit formatting helper for a chanspec (no alloc): returns the value for `{:#06x}` printing.
+#[allow(dead_code)]
+fn alloc_free_hex(v: u16) -> u16 {
+    v
 }

@@ -1213,6 +1213,91 @@ fn cr4_activate(cr4w: u32, rstvec: u32) {
     ai_resetcore(cr4w, ARMCR4_IOCTL_CPUHALT, 0, 0);
 }
 
+/// The regulatory-domain channel list the firmware reports (`chanspecs`, after the country is
+/// set): the ONLY chanspecs the AP may use. (list, count)
+static mut ALLOWED_CS: ([u16; 256], usize) = ([0; 256], 0);
+pub fn allowed_chanspecs() -> &'static [u16] {
+    unsafe {
+        let a = &*core::ptr::addr_of!(ALLOWED_CS);
+        &a.0[..a.1]
+    }
+}
+
+/// Read back the operating chanspec (`chanspec` iovar) — proves the AP is on the channel ACS chose.
+pub fn current_chanspec() -> Option<u16> {
+    let mut out = [0u8; 8];
+    let mut req = [0u8; 32];
+    let n = iovar_buf(b"chanspec", &[], &mut req);
+    let (ok, _) = bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], &mut out);
+    if ok { Some(u16::from_le_bytes([out[0], out[1]])) } else { None }
+}
+
+/// SDIO bus speed: (CCCR SPEED 0x13 as read, host HOST_CTRL1 after, operating SDCLK MHz).
+static mut SDIO_SPEED_DIAG: (u8, u8, u32) = (0, 0, 0);
+pub fn sdio_speed_diag() -> (u8, u8, u32) {
+    unsafe { SDIO_SPEED_DIAG }
+}
+
+/// Switch the SDIO bus to High-Speed and the fastest clock that VERIFIES — Linux
+/// `mmc_sdio_switch_hs` / `sdio_enable_hs`: read CCCR SPEED (0x13); if the card supports High
+/// Speed (SHS, bit0) set EHS (bit1, bus-speed-select bits cleared), then the host timing
+/// (SDHCI HOST_CTRL1 HISPD, bit2), then the clock. The Linux oracle on this CM5 showed
+/// HOST_CTRL2 = 0 with Wi-Fi up (3.3 V SDR, no UHS) — i.e. High-Speed SDR; heqk had stayed in
+/// default-speed timing at 12.5 MHz (25 MHz failed CRC *in default speed*, as expected above
+/// 25 MHz without HS timing): a 50 Mbit/s raw ceiling, the ~22 Mbps AP limit.
+/// Each candidate clock (50, then 25 MHz) must pass 64 F1 CMD53 reads over all 4 DAT lines
+/// matching the chip-ID word read over CMD52; otherwise fall back to today's proven 12.5 MHz
+/// default-speed setting. Returns the operating SDCLK in MHz.
+fn sdio_high_speed() -> u32 {
+    const SDIO_CCCR_SPEED: u32 = 0x13;
+    const SHS: u8 = 1 << 0;
+    const EHS: u8 = 1 << 1;
+    const BSS_MASK: u8 = 0x0e;
+    const HISPD: u8 = 1 << 2;
+    let spd = cmd52(false, 0, SDIO_CCCR_SPEED, 0).unwrap_or(0);
+    unsafe { SDIO_SPEED_DIAG.0 = spd };
+    let fallback = || {
+        let _ = cmd52(true, 0, SDIO_CCCR_SPEED, spd & !EHS);
+        w8(HOST_CTRL1, r8(HOST_CTRL1) & !HISPD);
+        set_clock(4); // 100 MHz / (2*4) = 12.5 MHz default speed — the proven setting
+        unsafe { SDIO_SPEED_DIAG.1 = r8(HOST_CTRL1) };
+        12
+    };
+    if spd & SHS == 0 {
+        return fallback();
+    }
+    let _ = cmd52(true, 0, SDIO_CCCR_SPEED, (spd & !BSS_MASK) | EHS);
+    w8(HOST_CTRL1, r8(HOST_CTRL1) | HISPD);
+    unsafe { SDIO_SPEED_DIAG.1 = r8(HOST_CTRL1) };
+    let want = bp_r32(SI_ENUM_BASE); // chip-ID word over CMD52 (command line only)
+    for (div, mhz) in [(1u16, 50u32), (2, 25)] {
+        set_clock(div); // SDCLK = 100 MHz / (2*div)
+        delay(1_000);
+        if sdio_verify_data_lines(want) {
+            return mhz;
+        }
+    }
+    fallback()
+}
+
+/// 64 x F1 CMD53 byte-mode reads of chipcommon (64 B each): every transfer must succeed (no CRC
+/// / timeout) and return the chip-ID word read over CMD52.
+fn sdio_verify_data_lines(want: u32) -> bool {
+    if !set_backplane_window(SI_ENUM_BASE) {
+        return false;
+    }
+    let mut b = [0u8; 64];
+    for _ in 0..64 {
+        if !cmd53_read(1, (SI_ENUM_BASE & 0x7FFF) | 0x8000, &mut b) {
+            return false;
+        }
+        if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != want {
+            return false;
+        }
+    }
+    true
+}
+
 /// P10 Stage B — download firmware + NVRAM, start the ARMCR4 core, enable F2.
 /// Returns true once F2 reports ready (firmware alive). Structured from brcmfmac
 /// `brcmf_sdio_download_firmware` + OpenBSD `bwfm_sdio` — timing iterates on metal.
@@ -1225,7 +1310,8 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     //    ERROR (INT err 0x0020) — marginal signal integrity in default-speed mode on
     //    the CM5 SDIO2 traces; 12.5 MHz is conservative but still ~30x the init clock
     //    (600 KB in ~0.5 s), well under the watchdog. Tune up with high-speed mode later.
-    set_clock(4);
+    let mhz = sdio_high_speed();
+    unsafe { SDIO_SPEED_DIAG.2 = mhz };
     delay(1_000);
     // 1. ALP: request + wait.
     let _ = cmd52(true, 1, CHIPCLKCSR, SBSDIO_ALP_AVAIL_REQ);
@@ -2158,11 +2244,22 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     // GET chanspecs (now, AFTER bring-up) — brcmf_chanspec_list { count le32; list[] }.
     // count > 0 proves the band is enabled (the regulatory fix worked). Big buffer so the
     // firmware can return the list; we only read the count at offset 0.
-    let mut chbuf = [0u8; 256];
+    // 1536-B reply buffer = brcmfmac BRCMF_DCMD_MEDLEN (brcmf_construct_chaninfo): with 256 B the
+    // firmware refused the full regdomain list and heqk read count 0 (metal 2026-11-05).
+    let mut chbuf = [0u8; 1536];
     let mut chreq = [0u8; 32];
     let ncr = iovar_buf(b"chanspecs", &[], &mut chreq);
     let _ = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
     let chan_count = u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]);
+    unsafe {
+        let a = &mut *core::ptr::addr_of_mut!(ALLOWED_CS);
+        let n = (chan_count as usize).min(a.0.len()).min((chbuf.len() - 4) / 4);
+        for k in 0..n {
+            let o = 4 + 4 * k;
+            a.0[k] = u16::from_le_bytes([chbuf[o], chbuf[o + 1]]);
+        }
+        a.1 = n;
+    }
     unsafe {
         UP_CHECK_DIAG = (up_ok, bssid_ok, up_status);
         PHY_NOISE_DIAG = pn_status;
@@ -5045,8 +5142,13 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     //     frames with our channel-0 CONTROL reply. Read frames one at a time, advance
     //     tx_max from EACH frame's SW window byte (credits flow from all channels), and
     //     keep going until we get the control reply with our reqid (or run dry).
-    let sdb = sdio_core_base();
-    let mut rx = [0u8; DL_CHUNK + 64];
+    // Every frame goes through read_sdpcm_frame_dry — the SAME reader the data path uses (whole-
+    // frame reads, brcmfmac rxfail termination, RX glom). This loop used to carry its own
+    // pre-2026-11-04 reader (remainder capped at 512 B, half-read frames left in the F2 FIFO, no
+    // superframes): any control request issued while traffic flowed could re-create the wedge.
+    // Data/event frames that arrive while we wait are skipped (as before). 2 KB buffer so a
+    // full-MTU data frame is read whole, not terminated.
+    let mut rx = [0u8; 2048];
     let mut status = 0u32;
     let mut got_ctrl = false;
     let mut last_chan = 0xffu8;
@@ -5055,75 +5157,21 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let mut reqid_match = false;
     let mut last_cksum_ok = false;
     let mut any_rx = false;
-    let mut intstat_seen = 0u32;
+    let intstat_seen = 0u32;
     'frames: for _frame in 0..40 {
-        // poll for a frame indication, then read the 64-byte first chunk (retry until a
-        // non-empty tag). An all-zero tag = no frame currently waiting.
-        let mut rx_ok = false;
-        let mut hw_len = 0u16;
-        let mut hw_ck = 0u16;
-        let mut waited_empty = 0u32;
-        loop {
-            let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
-            if intstat != 0 {
-                intstat_seen = intstat;
-                let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat); // W1C
-            }
-            rx_ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
-            hw_len = u16::from_le_bytes([rx[0], rx[1]]);
-            hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
-            if rx_ok && (hw_len != 0 || hw_ck != 0) {
-                break;
-            }
-            waited_empty += 1;
-            if waited_empty > 800 {
-                break 'frames; // dry — no more frames
-            }
-            delay(1_000);
-        }
-        any_rx = any_rx || rx_ok;
-        let cksum_ok = hw_len != 0 && ((!(hw_len ^ hw_ck)) & 0xffff) == 0;
-        if !cksum_ok {
-            break 'frames; // malformed tag — stop
-        }
-        let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
-        let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
-        let channel = ((w0r >> 8) & 0xf) as u8;
-        let doffset = ((w0r >> 24) & 0xff) as usize;
-        // advance tx_max from this frame's window byte (brcmf clamp).
-        let mut new_max = ((w1r >> 8) & 0xff) as u8;
-        if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
-            new_max = unsafe { TX_SEQ }.wrapping_add(2);
-        }
-        unsafe { TX_MAX = new_max };
+        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, 800) else {
+            break 'frames; // dry (or a frame that had to be terminated)
+        };
+        any_rx = true;
+        last_cksum_ok = true;
         last_chan = channel;
         last_len = hw_len;
         last_doff = doffset;
-        last_cksum_ok = cksum_ok;
-        // read the remainder if the frame is longer than the first 64 bytes.
-        // DRV-4 (mirrors the M-3 fix in read_sdpcm_frame): cmd53_read silently caps a
-        // byte-mode transfer at 512 B and still returns true, so for hw_len >
-        // FIRSTREAD+512 the tail of rx is NEVER written by this frame. rx is reused
-        // across the frame loop, so the BCDC header/reply below could otherwise be
-        // assembled from a PREVIOUS frame's bytes (stale firmware-control data crossing
-        // the trust boundary). Zero the unfillable region and clamp every downstream
-        // bound to `valid` = bytes actually transferred, not rx.len().
-        let mut valid = BRCMF_FIRSTREAD;
-        if (hw_len as usize) > BRCMF_FIRSTREAD {
-            let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
-            let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-            let got = (end - BRCMF_FIRSTREAD).min(512); // what cmd53_read actually moves
-            for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
-                *b = 0;
-            }
-            let _ = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]);
-            valid = BRCMF_FIRSTREAD + got;
-        }
+        let valid = (hw_len as usize).min(rx.len());
         // A control (channel 0) frame with a BCDC header is our reply candidate.
         if channel == SDPCM_CONTROL_CHANNEL
             && doffset >= SDPCM_HDRLEN
             && doffset + BCDC_HDRLEN <= valid
-            && (hw_len as usize) >= doffset + BCDC_HDRLEN
         {
             let bh = doffset;
             let rflags = u32::from_le_bytes([rx[bh + 8], rx[bh + 9], rx[bh + 10], rx[bh + 11]]);
