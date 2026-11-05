@@ -1,0 +1,115 @@
+<title>heqk Status 2026-11-05</title>
+<style>
+  :root { --bg:#f7f7f5; --fg:#1b1b1b; --muted:#5d5d58; --line:#d9d9d3; --card:#fff; --acc:#1f5f8b; --ok:#2b7a3d; --warn:#9a6b00; --bad:#a3322a; --chip:#ecece8; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141413; --fg:#ececea; --muted:#a6a6a0; --line:#2e2e2b; --card:#1c1c1b; --acc:#7fb3d9; --ok:#7bd38d; --warn:#e2b44c; --bad:#f08a80; --chip:#262624; } }
+  :root[data-theme="dark"] { --bg:#141413; --fg:#ececea; --muted:#a6a6a0; --line:#2e2e2b; --card:#1c1c1b; --acc:#7fb3d9; --ok:#7bd38d; --warn:#e2b44c; --bad:#f08a80; --chip:#262624; }
+  body { background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:26px; margin:0 0 4px; } h2 { font-size:19px; margin:34px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  .sub { color:var(--muted); margin-bottom:18px; }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th,td { text-align:left; vertical-align:top; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { background:var(--chip); font-weight:600; position:sticky; top:0; }
+  tr:last-child td { border-bottom:0; }
+  .ok{color:var(--ok);font-weight:600} .warn{color:var(--warn);font-weight:600} .bad{color:var(--bad);font-weight:600}
+  code { font:13px ui-monospace,SFMono-Regular,Menlo,monospace; background:var(--chip); padding:1px 4px; border-radius:4px; }
+  .kpi { display:flex; gap:12px; flex-wrap:wrap; margin:14px 0 6px; }
+  .kpi div { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--acc); border-radius:8px; padding:10px 14px; min-width:180px; }
+  .kpi b { display:block; font-size:20px; } .kpi span { color:var(--muted); font-size:13px; }
+  .box { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--acc); border-radius:8px; padding:12px 16px; }
+  ul li, ol li { margin:4px 0; }
+</style>
+<main>
+  <h1>heqk / HookProbe OS — aligned status</h1>
+  <div class="sub">2026-11-05 · reconciles the 2026-10-09 product plan with everything proven, built and decided since. Source of truth: <code>docs/design/heqk-status-2026-11-05.md</code> (every row cites a commit or metal evidence).</div>
+
+  <div class="kpi" role="list">
+    <div role="listitem"><b>Zero-Linux PASS</b><span>prod-mc factory image, full metal acceptance (11-04)</span></div>
+    <div role="listitem"><b>120–160 Mbps</b><span>iPhone → heqk AP + NAT → ISP PPPoE = Linux parity (11-05)</span></div>
+    <div role="listitem"><b>IPS on the AP path</b><span>rule 1 drops :4444 probes, zero on the wire</span></div>
+    <div role="listitem"><b>A/B commit</b><span>metal-proven across two power cycles</span></div>
+    <div role="listitem"><b>ADR 0048 next</b><span>BOI / Behavioural Genome — design reviewed, no code</span></div>
+  </div>
+
+  <h2>1. Milestones reached (metal-proven unless marked)</h2>
+  <div class="wrap"><table>
+    <thead><tr><th>Date</th><th>Milestone</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>11-04</td><td><strong>Zero-Linux factory image passes full acceptance on CM5</strong> — Mission Control served by heqk; attack → IPS drop → detection → shown in a real browser</td><td>MC-METAL: PASS, img <code>e690e4d</code></td></tr>
+      <tr><td>11-04</td><td><strong>A/B commit on metal</strong> — content-pinned a↔b flip survives two power cycles</td><td><code>c748cf0</code>, <code>[P15-abcommit]</code></td></tr>
+      <tr><td>11-04</td><td><strong>iPhone browses through heqk Wi-Fi AP + NAT</strong> — root cause: half-read SDPCM frames; brcmfmac <code>rxfail</code> ported</td><td><code>4a57a46</code>, 7–8 Mbps</td></tr>
+      <tr><td>11-04</td><td><strong>Large-frame SDIO solved from a Linux mmc trace on this CM5</strong> (blocks + byte tail; fixed-address F2 reads) — YouTube/Facebook load</td><td><code>57ff6d1</code>, ~11 Mbps</td></tr>
+      <tr><td>11-04</td><td><strong>Firmware RX superframes</strong> (port of <code>brcmf_sdio_rxglom</code>), 0 drops</td><td><code>4a1a996</code>, 22 Mbps steady</td></tr>
+      <tr><td>11-04</td><td><strong>IDS/IPS proven on the AP path</strong> — iPhone SYNs to :4444 dropped by rule 1</td><td><code>779121d</code>, 43 drops, zero on the wire</td></tr>
+      <tr><td>11-05</td><td><strong>Real VHT80 + SDIO High-Speed</strong> — chanspec as a 4-byte int (the AP had never been 80 MHz), SDCLK 50 MHz, regdomain-checked ACS preferring 5 GHz</td><td><code>eacc4cc</code>, <code>89138e5</code>, ~45 Mbps</td></tr>
+      <tr><td>11-05</td><td><strong>WAN modes via <code>WAN.TXT</code></strong> — DHCP / static / <strong>PPPoE client</strong> (RFC 2516 + LCP/PAP/CHAP/IPCP, keepalive, re-dial) on the ISP line</td><td><code>395ccd0</code>, <code>26e6ac5</code>, <code>7de8ccc</code></td></tr>
+      <tr><td>11-05</td><td>DNS on the AP address forwarded upstream; 128-deep queue; firmware flow control (XOFF) honoured; GEM TX ring re-sync after timeout</td><td><code>2146169</code>, <code>2e8bc7a</code>, <code>cdc5394</code></td></tr>
+      <tr><td>11-05</td><td><strong>Firmware TX-stall mitigation</strong> found by elimination — one control frame restarts it in ~5 ms → reserved control credits + 100 ms kick, 62/62</td><td><code>825b073</code>, <code>6ed4833</code>, <code>1c1594c</code></td></tr>
+      <tr><td>11-05</td><td><strong>120–160 Mbps = Linux parity</strong>, on ISP PPPoE — speed cap root-caused by a per-beat profiler (loop ~80 % asleep in 1-ms dry-poll sleeps)</td><td><code>31e5466</code>, <code>f9982c6</code>, <code>54ea7b5</code></td></tr>
+      <tr><td>11-05</td><td><strong>BOI / HookProbe Behavioural Genome</strong> — alignment + adversarial review (7 questions, 60+ acceptance/failure criteria, 9 corrections) + graduated-response ladder + root-cause UI contract. <em>Design only.</em></td><td><code>39c2fbf</code>, <code>0ae5ac0</code>, <code>78c42de</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>2. The 2026-10-09 gap list — where each one stands</h2>
+  <div class="wrap"><table>
+    <thead><tr><th>#</th><th>User symptom</th><th>10-09</th><th>11-05</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Connected but no internet (upstream NAC quarantine)</td><td>onboarding story</td><td class="warn">still operator-admitted (<code>fortress-ctl device set-policy</code>); status page must say "upstream blocks us"</td></tr>
+      <tr><td>2</td><td>Power-cycle after plugging the cable</td><td class="ok">DONE</td><td class="ok">DONE + PPPoE re-dial</td></tr>
+      <tr><td>3</td><td>AP rejects the password sometimes</td><td class="ok">DONE</td><td class="ok">DONE + AP brought up exactly as Linux brcmfmac (<code>9a47b83</code>)</td></tr>
+      <tr><td>4</td><td>Video/QUIC stalls (UDP &gt; ~480 B)</td><td class="bad">open</td><td class="ok">CLOSED — Linux-traced block TX, fixed-address reads, glom; MSS 1460; Linux-parity throughput</td></tr>
+      <tr><td>5</td><td>Can't see what the box is doing</td><td class="warn">QEMU only</td><td class="ok">CLOSED on metal (prod-mc MC-METAL PASS, owner auth); thermal / upstream-blocked widgets open</td></tr>
+      <tr><td>6</td><td>Is it protecting me?</td><td class="warn">built</td><td class="ok">proven on metal; Wi-Fi Access role still gated by the A9 embargo</td></tr>
+      <tr><td>7</td><td>Second phone gets the first one's address</td><td class="ok">DONE</td><td class="ok">DONE</td></tr>
+      <tr><td>8</td><td>LAN port (eth1) does nothing</td><td class="warn">built</td><td class="warn">still unproven on metal (no LAN client exercised)</td></tr>
+      <tr><td>9</td><td>It got hot</td><td class="ok">DONE</td><td class="ok">DONE; thermal readout open</td></tr>
+      <tr><td>10</td><td>It just hangs</td><td class="ok">reset on exception</td><td class="ok">+ TX-stall kick; liveness watchdog re-arm open</td></tr>
+      <tr><td>11</td><td>Did the update work? (A/B on metal)</td><td class="bad">open</td><td class="ok">CLOSED — A/B commit metal-proven; late-confirm stays opt-in (prod loop at +70 s vs 15 s watchdog)</td></tr>
+      <tr><td>12</td><td>Set it up without a laptop</td><td class="bad">open</td><td class="warn">in progress — browser flasher (WebUSB rpiboot + owner key); <code>WAN.TXT</code>/<code>OWNER.TXT</code> seams exist</td></tr>
+      <tr><td>13</td><td>IPv6 on the AP side</td><td class="bad">open</td><td class="bad">open</td></tr>
+      <tr><td>14</td><td>Evidence leaves the device (M6 live)</td><td class="warn">pending</td><td class="warn">pending; receiver must bind <code>device_fp</code> to the authenticated key first</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>3. Decided (design, no code)</h2>
+  <ul>
+    <li><strong>BOI/HBG</strong> = optional, isolated, observe-only behavioural intelligence; the genome is <strong>on-device state, never policy</strong> (θ signed logic vs S fold over the entity's own observations; empirical Bayes, adaptive thresholds and on-device calibration are training — forbidden).</li>
+    <li><strong>Remote evidence is inert</strong>: authority ≠ truth — operator-signed pattern for priors/thresholds/allowlists; node evidence has no code path into local state; three trust levels.</li>
+    <li><strong>Pattern-break ladder</strong>: see it → step-up → corroborated containment through the operator-signed reach plane → automatic drop only within ADR 0023's four classes. "Pattern break ⇒ drop" is forbidden, not deferred.</li>
+    <li><strong>Root-cause UI contract</strong>: explanation envelope + <code>pattern</code> (established neighbourhood as a small graph), <code>break</code> (the deviating edge with its history), <code>ladder_rung</code> — rendered evidence, never a narrative.</li>
+    <li><strong>Next ADR = 0048</strong>: privacy/profiling stance, licensing boundary, real entity identity.</li>
+  </ul>
+
+  <h2>4. Open defects and risks (owned)</h2>
+  <div class="wrap"><table>
+    <thead><tr><th>Item</th><th>Severity</th><th>Owner / state</th></tr></thead>
+    <tbody>
+      <tr><td>prod-mc sealed snapshot never restores across reboot (two writers at LBA 2016; <code>boots=1</code> every boot)</td><td class="bad">HIGH</td><td>prod-mc session — logged, fix after the current metal run</td></tr>
+      <tr><td>Multi-sector sealed write not crash-consistent (power loss destroys the <em>previous</em> state)</td><td class="bad">HIGH</td><td>same task; <code>[P15-abcommit]</code> pattern is the fix shape</td></tr>
+      <tr><td>sepdiag DataVolume self-test writes outside every partition on the factory layout</td><td class="warn">MED</td><td>same task</td></tr>
+      <tr><td>GEM ring overflow invisible to <code>faults=0</code> — <code>rx_overrun</code> counter needed on prod-mc</td><td class="warn">MED</td><td>same task (AP-loop drain cause fixed)</td></tr>
+      <tr><td>Firmware TX stall: trigger unknown; the 100 ms kick is a mitigation</td><td class="warn">MED</td><td>AP session</td></tr>
+      <tr><td><code>kernel/heqk/SECURITY.md</code> stale GDPR / "no behavioral profiling" claims; ADR 0007 Apache vs AGPL</td><td>docs</td><td>reconcile with ADR 0048</td></tr>
+      <tr><td>Receiver trusts self-claimed <code>device_fp</code>; <code>src_mac_hash</code> is raw MAC octets; evidence ids unkeyed over raw IP</td><td class="warn">MED</td><td>before any multi-device receiver / BOI Phase 1</td></tr>
+      <tr><td>Upstream NAC admission is a manual operator step</td><td>UX</td><td>gap 1</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>5. Method lessons banked</h2>
+  <ul>
+    <li><strong>Stop guessing on SDIO/Wi-Fi</strong> — measured facts, brcmfmac source, or a Linux trace on the same hardware; one pre-decided image per hypothesis. Every real fix this week came from a trace or a profiler.</li>
+    <li><strong>Exhaust host/QEMU proof, flash once</strong>; snapshot images to a private path (a shared build path was overwritten once).</li>
+    <li><strong>Read the serial log in order</strong>; <code>faults=0</code> is not "no loss".</li>
+    <li><strong>An attacker may influence what heqk observes, never what heqk trusts.</strong></li>
+  </ul>
+
+  <h2>6. Next</h2>
+  <div class="box"><ol>
+    <li>Fix the prod-mc persistence defects (criterion: <code>boots=N+1</code> across a real power cycle).</li>
+    <li>Browser flasher (laptop-free first boot) → gap 12.</li>
+    <li>M6 export live run with the receiver binding <code>device_fp</code> to the static key → gap 14.</li>
+    <li>eth1 LAN client on the bench → gap 8.</li>
+    <li>ADR 0048 (BOI/HBG), then Phase 1 — host/QEMU-gated only.</li>
+  </ol></div>
+</main>
