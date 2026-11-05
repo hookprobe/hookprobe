@@ -3698,19 +3698,7 @@ impl DhcpResult {
 /// One's-complement internet checksum over `data`, folded, with a running `init` (used to
 /// seed the UDP pseudo-header sum). Returns the value to store in the checksum field.
 pub(crate) fn inet_csum(data: &[u8], init: u32) -> u16 {
-    let mut sum = init;
-    let mut i = 0;
-    while i + 1 < data.len() {
-        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
-        i += 2;
-    }
-    if i < data.len() {
-        sum += (data[i] as u32) << 8;
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    !(sum as u16)
+    hal::inet_csum(data, init)
 }
 
 /// Build a DHCP DISCOVER (mt=1) or REQUEST (mt=3) as a complete ethernet/IPv4/UDP/BOOTP frame
@@ -4133,14 +4121,7 @@ fn fill_eth_ip(buf: &mut [u8], mac: &[u8; 6], dst_mac: &[u8; 6], sip: &[u8; 4], 
 
 /// Ones-complement sum of the IPv4 pseudo-header (src+dst+zero+proto+l4len) for TCP/UDP csum.
 pub(crate) fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
-    let mut s = 0u32;
-    s += u16::from_be_bytes([sip[0], sip[1]]) as u32;
-    s += u16::from_be_bytes([sip[2], sip[3]]) as u32;
-    s += u16::from_be_bytes([dip[0], dip[1]]) as u32;
-    s += u16::from_be_bytes([dip[2], dip[3]]) as u32;
-    s += proto as u32;
-    s += l4len as u32;
-    s
+    hal::pseudo_sum(sip, dip, proto, l4len)
 }
 
 /// Build a DNS A-query for `dns.google` to `dns_ip`:53 over UDP. Returns the frame length.
