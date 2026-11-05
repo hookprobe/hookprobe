@@ -3682,7 +3682,11 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
     if !(force || draining || sdpcm_frame_pending()) {
         return ApEvent::Idle;
     }
-    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 2) {
+    // NON-BLOCKING read (max_dry 0): one header read, no sleep. The profiler (metal 2026-11-05, img
+    // 31e5466) showed the AP loop ~80% asleep in this call's 1-ms dry-poll delays (rx_dry ~2 ms each,
+    // rx_frame ~0.8 ms avg) while TX took 40 us/frame with credit available — capping the AP at ~3,000
+    // frames/s (~36 Mbps). brcmfmac's dpc never sleeps in the read path; the pump loop re-polls.
+    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 0) {
         Some(t) => {
             unsafe { AP_DRAIN = true };
             t
