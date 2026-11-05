@@ -39,6 +39,8 @@ pub mod nat;
 pub mod pppoe;
 // IPv6 WAN builders/parsers (RS/RA, DHCPv6 IA_PD) — pure, built on every target so QEMU tests it.
 pub mod ip6;
+// IPv6 LAN router + stateful firewall for the AP (RA/ND, no-NAT forwarding) — pure, QEMU-tested.
+pub mod ip6lan;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
 #[cfg(feature = "cm5")]
 pub mod wpa;

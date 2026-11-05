@@ -198,6 +198,10 @@ pub fn build_dhcp6(msg: u8, xid: u32, mac: &[u8; 6], iid: &[u8; 8], iaid: u32, s
         ia[25..41].copy_from_slice(pfx);
         ian = 41;
     }
+    // IA_NA too (a WAN global address), as fortress's wide-dhcpv6 asks Digi: "send ia-na 0; send ia-pd 0".
+    let mut na = [0u8; 12];
+    na[0..4].copy_from_slice(&iaid.to_be_bytes());
+    opt(&mut p, &mut n, 3, &na);
     opt(&mut p, &mut n, 25, &ia[..ian]);
     opt(&mut p, &mut n, 6, &23u16.to_be_bytes()); // ORO: DNS servers
     if rapid {
@@ -221,6 +225,9 @@ pub struct Dhcp6 {
     pub valid: u32,
     pub has_dns: bool,
     pub dns: [u8; 16],
+    /// IA_NA / IAADDR: a WAN global address, if the server assigned one.
+    pub has_na: bool,
+    pub na: [u8; 16],
 }
 
 /// Parse a DHCPv6 server message (bare IPv6, UDP to port 546) for transaction `xid`. Verifies the
@@ -241,7 +248,7 @@ pub fn parse_dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     if p[1..4] != xid.to_be_bytes()[1..4] {
         return None;
     }
-    let mut d = Dhcp6 { msg: p[0], server_id: [0; 64], sid_len: 0, rapid: false, status: 0, has_pd: false, prefix: [0; 16], plen: 0, preferred: 0, valid: 0, has_dns: false, dns: [0; 16] };
+    let mut d = Dhcp6 { msg: p[0], server_id: [0; 64], sid_len: 0, rapid: false, status: 0, has_pd: false, prefix: [0; 16], plen: 0, preferred: 0, valid: 0, has_dns: false, dns: [0; 16], has_na: false, na: [0; 16] };
     let mut o = 4;
     while o + 4 <= p.len() {
         let (code, l) = (u16::from_be_bytes([p[o], p[o + 1]]), u16::from_be_bytes([p[o + 2], p[o + 3]]) as usize);
@@ -259,6 +266,20 @@ pub fn parse_dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
             23 if l >= 16 => {
                 d.has_dns = true;
                 d.dns.copy_from_slice(&v[..16]);
+            }
+            3 if l >= 12 => {
+                let mut q = 12;
+                while q + 4 <= l {
+                    let (c2, l2) = (u16::from_be_bytes([v[q], v[q + 1]]), u16::from_be_bytes([v[q + 2], v[q + 3]]) as usize);
+                    if q + 4 + l2 > l {
+                        break;
+                    }
+                    if c2 == 5 && l2 >= 24 && !d.has_na {
+                        d.has_na = true;
+                        d.na.copy_from_slice(&v[q + 4..q + 20]);
+                    }
+                    q += 4 + l2;
+                }
             }
             25 if l >= 12 => {
                 let mut q = 12;
