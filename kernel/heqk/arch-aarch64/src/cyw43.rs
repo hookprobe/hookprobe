@@ -1216,6 +1216,11 @@ fn cr4_activate(cr4w: u32, rstvec: u32) {
 /// The regulatory-domain channel list the firmware reports (`chanspecs`, after the country is
 /// set): the ONLY chanspecs the AP may use. (list, count)
 static mut ALLOWED_CS: ([u16; 256], usize) = ([0; 256], 0);
+static mut CHANSPECS_STATUS: (bool, u32) = (false, 0);
+/// (ok, BCDC status) of the `chanspecs` GET.
+pub fn chanspecs_status() -> (bool, u32) {
+    unsafe { CHANSPECS_STATUS }
+}
 pub fn allowed_chanspecs() -> &'static [u16] {
     unsafe {
         let a = &*core::ptr::addr_of!(ALLOWED_CS);
@@ -2248,9 +2253,12 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     // firmware refused the full regdomain list and heqk read count 0 (metal 2026-11-05).
     let mut chbuf = [0u8; 1536];
     let mut chreq = [0u8; 32];
-    let ncr = iovar_buf(b"chanspecs", &[], &mut chreq);
-    let _ = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
-    let chan_count = u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]);
+    // brcmf_fil_iovar_data_get sends the name FOLLOWED BY the (zeroed) buffer: the firmware reads
+    // an input chanspec from it (0 = all). heqk sent the bare name -> refused, count 0.
+    let ncr = iovar_buf(b"chanspecs", &[0u8; 4], &mut chreq);
+    let (cs_ok, cs_st) = bcdc_dcmd(WLC_GET_VAR, 0, &chreq[..ncr], &mut chbuf);
+    unsafe { CHANSPECS_STATUS = (cs_ok, cs_st) };
+    let chan_count = if cs_ok { u32::from_le_bytes([chbuf[0], chbuf[1], chbuf[2], chbuf[3]]) } else { 0 };
     unsafe {
         let a = &mut *core::ptr::addr_of_mut!(ALLOWED_CS);
         let n = (chan_count as usize).min(a.0.len()).min((chbuf.len() - 4) / 4);
@@ -2511,7 +2519,9 @@ pub struct ApResult {
     pub apsta_ok: bool,     // "apsta"=0 (pure AP) accepted
     pub set_ap_ok: bool,    // WLC_SET_AP=1 accepted
     pub infra_ok: bool,
-    pub chan_ok: bool,      // WLC_SET_CHANNEL accepted
+    pub chan_ok: bool,      // channel set (chanspec, or the 20-MHz fallback)
+    pub chanspec_ok: bool,  // the "chanspec" iovar (channel + WIDTH) accepted
+    pub chan_fallback20: bool, // chanspec refused -> legacy WLC_SET_CHANNEL (20 MHz) used
     pub wsec_ok: bool,
     pub wpa_auth_ok: bool,
     pub up_ok: bool,
@@ -2530,7 +2540,7 @@ impl ApResult {
     pub fn new() -> Self {
         ApResult {
             cap_has_ap: false, down_ok: false, apsta_ok: false, set_ap_ok: false, infra_ok: false,
-            chan_ok: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
+            chan_ok: false, chanspec_ok: false, chan_fallback20: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
             get_ap: 0, get_ap_ok: false, bssid: [0; 6], mac_set_ok: false, ev_ok: false,
             bssid_verified: false, bssid_readback: [0; 6], gtk_set: false,
         }
@@ -2640,8 +2650,9 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     let mut ab = [0u8; 32];
     let na = iovar_buf(b"apsta", &0u32.to_le_bytes(), &mut ab);
     out.apsta_ok = bcdc_iovar_set(&ab[..na]);
-    out.set_ap_ok = wlc_set_int(WLC_SET_AP, 1);
+    // brcmfmac brcmf_cfg80211_start_ap order: SET_INFRA 1, then SET_AP 1, then chanspec, then UP.
     out.infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
+    out.set_ap_ok = wlc_set_int(WLC_SET_AP, 1);
 
     // Keep the radio on (no minimum-power-consumption sleep that would drop beacons).
     let mut mb = [0u8; 32];
@@ -2652,11 +2663,17 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // WLC_SET_CHANNEL leaves the width/ctl-sideband unset). d11ac chanspec = chan | BW_20 |
     // CTL_SB_NONE | band; 2.4 GHz (ch<=14) band=0x0000, 5 GHz band=0xc000; BW_20=0x1000.
     let mut csb = [0u8; 32];
-    let ncs = iovar_buf(b"chanspec", &chanspec.to_le_bytes(), &mut csb);
-    out.chan_ok = bcdc_iovar_set(&csb[..ncs]);
+    // A 4-BYTE integer, as brcmfmac sets it (brcmf_fil_iovar_int_set(ifp, "chanspec", chanspec)).
+    // heqk sent the u16 (2 bytes): the firmware refused it, the WLC_SET_CHANNEL fallback ran
+    // (always 20 MHz) and still reported chan_ok — metal 2026-11-05 readback 0xd024 (ch36/20)
+    // for a requested 0xe02a (ch36/80).
+    let ncs = iovar_buf(b"chanspec", &(chanspec as u32).to_le_bytes(), &mut csb);
+    out.chanspec_ok = bcdc_iovar_set(&csb[..ncs]);
+    out.chan_ok = out.chanspec_ok;
     if !out.chan_ok {
-        // Fallback to the legacy channel ioctl if the fw rejects the chanspec encoding.
-        out.chan_ok = wlc_set_int(WLC_SET_CHANNEL, channel);
+        // Last resort: the legacy channel ioctl (20 MHz only) — flagged, never silent.
+        out.chan_fallback20 = wlc_set_int(WLC_SET_CHANNEL, channel);
+        out.chan_ok = out.chan_fallback20;
     }
 
     // Security suite for the BSS.

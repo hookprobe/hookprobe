@@ -2951,8 +2951,9 @@ fn cm5_p10_probe() {
                                 }
                                 let allowed = cyw43::allowed_chanspecs();
                                 let mut c = hal::acs_choose_allowed(&neigh[..nn], allowed);
-                                kprint!("   [P11-ACS] regdomain: {} chanspecs allowed by the firmware for this country; 36/80 {} 11/20 {}\n",
-                                    allowed.len(), if allowed.contains(&0xe02a) { "allowed" } else { "NOT allowed" },
+                                let (cok, cst) = cyw43::chanspecs_status();
+                                kprint!("   [P11-ACS] regdomain: chanspecs GET ok={} status={:#x}; {} chanspecs allowed by the firmware for this country; 36/80 {} 11/20 {}\n",
+                                    cok, cst, allowed.len(), if allowed.contains(&0xe02a) { "allowed" } else { "NOT allowed" },
                                     if allowed.contains(&0x100b) { "allowed" } else { "NOT allowed" });
                                 if c.channel == 0 {
                                     kprint!("   [P11-ACS] no candidate is in the regdomain list — falling back to 2.4 GHz ch6\n");
@@ -2979,6 +2980,7 @@ fn cm5_p10_probe() {
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
                                 chosen_cs = ap_cs;
+                                kprint!("   [P11-ACS] chanspec iovar accepted={} (20-MHz legacy fallback used={})\n", ap.chanspec_ok, ap.chan_fallback20);
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
                                     rb.unwrap_or(0), ap_cs, if rb == Some(ap_cs) { "ON THE CHOSEN CHANNEL" } else { "MISMATCH" });
