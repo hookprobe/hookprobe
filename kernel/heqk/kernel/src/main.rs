@@ -3078,6 +3078,10 @@ fn cm5_p10_probe() {
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
+                        // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
+                        let mut sent_ring = [(0u32, 0u16); 4];
+                        let mut sent_i = 0usize;
+                        let (mut credit0_since, mut stall_diag_done) = (0u64, false);
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
                         let mut evs = [events::Event::EMPTY; 16];
@@ -3095,6 +3099,8 @@ fn cm5_p10_probe() {
                             while wq_n > 0 && cyw43::tx_credit_ok() {
                                 let i = wq_head;
                                 if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
+                                    sent_ring[sent_i % 4] = (u32::from_be_bytes([0, wq[i][3], wq[i][4], wq[i][5]]), wq_len[i] as u16);
+                                    sent_i += 1;
                                     wq_head = (i + 1) % WQ_N;
                                     wq_n -= 1;
                                     wq_flushed += 1;
@@ -3114,6 +3120,46 @@ fn cm5_p10_probe() {
                                         continue;
                                     }
                                     break;
+                                }
+                            }
+                            // TX-credit stall snapshot (once per episode): credit 0 for > 2 s with deliveries queued.
+                            {
+                                let (seq, max, _) = cyw43::ap_diag();
+                                let t = now();
+                                if max.wrapping_sub(seq) == 0 && wq_n > 0 {
+                                    if credit0_since == 0 {
+                                        credit0_since = t;
+                                    } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
+                                        stall_diag_done = true;
+                                        let (rseq, gaps, maxahead) = cyw43::rx_diag();
+                                        kprint!(" [STALL-DIAG] tx credit 0 for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
+                                            seq, max, cyw43::fc_mask(), maxahead, rseq, gaps, cyw43::sdio_intstatus(), wq_n, wifi_frames);
+                                        for k in 0..wq_n.min(3) {
+                                            let j = (wq_head + k) % WQ_N;
+                                            kprint!("   [STALL-DIAG] queued[{}] dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} len {} ethertype {:#06x}\n", k,
+                                                wq[j][0], wq[j][1], wq[j][2], wq[j][3], wq[j][4], wq[j][5], wq_len[j], u16::from_be_bytes([wq[j][12], wq[j][13]]));
+                                        }
+                                        for k in 0..4 {
+                                            let (d, l) = sent_ring[(sent_i + k) % 4];
+                                            kprint!("   [STALL-DIAG] last-sent[{}] dst ..:{:06x} len {}\n", k, d, l);
+                                        }
+                                        match cyw43::fw_shared() {
+                                            Some(sh) => {
+                                                kprint!("   [STALL-DIAG] fw sdpcm_shared @ {:#010x} flags={:#06x} (trap={} assert={}) console @ {:#010x}\n",
+                                                    sh.addr, sh.flags, sh.flags & cyw43::SDPCM_SHARED_TRAP != 0, sh.flags & cyw43::SDPCM_SHARED_ASSERT != 0, sh.console_addr);
+                                                cyw43::fw_trap_dump(&sh);
+                                                let r = cyw43::fw_console_dump(&sh, 40);
+                                                kprint!("   [STALL-DIAG] fw console: {:?} (lines, buf size, idx)\n", r);
+                                            }
+                                            None => kprint!("   [STALL-DIAG] fw sdpcm_shared NOT readable\n"),
+                                        }
+                                    }
+                                } else {
+                                    if stall_diag_done && credit0_since != 0 {
+                                        kprint!(" [STALL-DIAG] credit RECOVERED after {} ms\n", t.wrapping_sub(credit0_since) * 1000 / freq);
+                                    }
+                                    credit0_since = 0;
+                                    stall_diag_done = false;
                                 }
                             }
                             // A pending queue forces a read: the credit update arrives as a frame.
@@ -3382,6 +3428,15 @@ fn cm5_p10_probe() {
                                         }
                                         {
                                             beat_n += 1;
+                                            if beat_n == 2 || beat_n % 12 == 6 {
+                                                if let Some(sh) = cyw43::fw_shared() {
+                                                    let r = cyw43::fw_console_dump(&sh, 12);
+                                                    kprint!("   [FWCON] (periodic) shared flags={:#06x} console={:?}\n", sh.flags, r);
+                                                    cyw43::fw_trap_dump(&sh);
+                                                } else {
+                                                    kprint!("   [FWCON] sdpcm_shared not readable\n");
+                                                }
+                                            }
                                             if beat_n % 12 == 0 {
                                                 if let Some(cs) = cyw43::current_chanspec() {
                                                     ch_checks += 1;
