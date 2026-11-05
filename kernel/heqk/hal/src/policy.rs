@@ -787,6 +787,43 @@ pub fn parse_policy(buf: &[u8], out: &mut Policy) -> Result<(), PolicyErr> {
     if magic { Ok(()) } else { Err(PolicyErr::NoMagic) }
 }
 
+/// The policy facts of an untagged Ethernet IPv4 / IPv6 frame: protocol, source, destination, and the
+/// TCP/UDP destination port (0 otherwise). IPv6 extension headers are not walked: the protocol is the
+/// first next-header (an ACL on tcp/udp will not match a packet hiding behind an extension header —
+/// the IPv6 router refuses to forward those outbound anyway).
+pub fn facts(f: &[u8]) -> Option<Pkt> {
+    if f.len() < 14 {
+        return None;
+    }
+    let et = u16::from_be_bytes([f[12], f[13]]);
+    let (proto, src, dst, l4) = match et {
+        0x0800 => {
+            if f.len() < 34 || f[14] >> 4 != 4 {
+                return None;
+            }
+            let ihl = ((f[14] & 0x0f) as usize) * 4;
+            let mut s4 = [0u8; 4];
+            let mut d4 = [0u8; 4];
+            s4.copy_from_slice(&f[26..30]);
+            d4.copy_from_slice(&f[30..34]);
+            (f[23], Addr::v4(s4), Addr::v4(d4), 14 + ihl)
+        }
+        0x86dd => {
+            if f.len() < 54 || f[14] >> 4 != 6 {
+                return None;
+            }
+            let mut s6 = [0u8; 16];
+            let mut d6 = [0u8; 16];
+            s6.copy_from_slice(&f[22..38]);
+            d6.copy_from_slice(&f[38..54]);
+            (f[20], Addr::v6(s6), Addr::v6(d6), 54)
+        }
+        _ => return None,
+    };
+    let dport = if (proto == 6 || proto == 17) && f.len() >= l4 + 4 { u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]) } else { 0 };
+    Some(Pkt { proto, src, dst, dport })
+}
+
 // ---------------------------------------------------------------- WAN link encapsulation
 
 /// How a WAN sub-interface is framed on the wire (WAN.TXT `vlan=` / `vlan_outer=` + the mode).

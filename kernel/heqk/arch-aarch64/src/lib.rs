@@ -41,6 +41,8 @@ pub mod pppoe;
 pub mod ip6;
 // IPv6 LAN router + stateful firewall for the AP (RA/ND, no-NAT forwarding) — pure, QEMU-tested.
 pub mod ip6lan;
+// `block` = reject: TCP RST / ICMP(v6) administratively prohibited (task #26) — pure, QEMU-tested.
+pub mod reject;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
 #[cfg(feature = "cm5")]
 pub mod wpa;
