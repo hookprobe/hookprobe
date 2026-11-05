@@ -222,7 +222,7 @@ pub const SDPCM_HDRLEN: usize = 12;
 /// SDPCM channel of a glom descriptor / superframe.
 pub const SDPCM_GLOM_CHANNEL: u8 = 3;
 /// Max subframes per superframe we accept.
-pub const GLOM_MAX_SUBS: usize = 32;
+pub const GLOM_MAX_SUBS: usize = 64; // 48-KB superframes of ~1.5-KB sub-frames need > 32
 
 /// From a glom DESCRIPTOR body (the u16 LE sub-frame lengths after the 12-B header), compute the
 /// sub-frame lengths and the superframe read length. Mirrors brcmf_sdio_rxglom: dlen must be

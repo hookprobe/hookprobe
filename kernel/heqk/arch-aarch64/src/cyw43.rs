@@ -1980,7 +1980,10 @@ fn read_sdpcm_frame(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 /// RX glom (superframe) state: the firmware coalesces host-bound frames under load (metal
 /// 2026-11-04: channel-3 frames of 2.4-5 KB during a 22-Mbps speed test) — brcmfmac unpacks them in
 /// brcmf_sdio_rxglom; heqk discarded them whole. Sub-frames are handed out one per call below.
-const GLOM_BUF_SZ: usize = 16 * 1024;
+// 48 KB: metal 2026-11-05 saw superframes of 16,896 / 19,360 / 23,040 B. At 16 KB, 166 of them were
+// terminated whole in one session (each losing dozens of the station's frames, mostly TCP ACKs).
+// brcmfmac has no such cap. 2x the largest seen; GlomSub offsets are u16, so stay well under 64 KB.
+const GLOM_BUF_SZ: usize = 48 * 1024;
 struct GlomState {
     buf: [u8; GLOM_BUF_SZ],
     subs: [hal::GlomSub; hal::GLOM_MAX_SUBS],

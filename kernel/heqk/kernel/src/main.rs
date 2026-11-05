@@ -3418,7 +3418,10 @@ fn cm5_p10_probe() {
                                     // Drain the WAN ring with a budget (Linux NAPI: up to 64/poll). It used to be ONE frame per
                                     // loop and only when Wi-Fi was idle — under a speed test Wi-Fi is never idle, so the 128-slot
                                     // GEM ring overflowed (metal 2026-11-05: res_err 325k, overrun 1450 = ISP packets dropped).
-                                    for _ in 0..WAN_BUDGET {
+                                    // Backpressure: never pull more WAN frames than the Wi-Fi queue can hold — the rest wait in
+                                    // the GEM ring (another 128 slots) instead of being head-dropped from wq (metal 2026-11-05:
+                                    // 7,158 wq drops after the drain fix).
+                                    for _ in 0..WAN_BUDGET.min(WQ_N - wq_n) {
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
