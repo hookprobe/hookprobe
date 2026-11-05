@@ -20,7 +20,11 @@
 //! - An ACL is evaluated first-match by `seq`; with no match its `default` applies — UNSET = drop (the
 //!   Cisco implicit deny). `block` REJECTS (TCP RST / ICMP administratively prohibited — the sender
 //!   learns at once); `drop` is silent.
-//! - `in` = traffic ARRIVING on the interface (forwarded or to the device); `out` = leaving it.
+//! - STATEFUL: `in` = NEW traffic arriving on the interface (forwarded or to the device); a reply to a
+//!   connection the LAN opened (a NAT session, or the IPv6 router's flow table) is admitted without
+//!   consulting `in` — as nftables `ct state established` / Cisco reflexive ACLs. `out` = EVERY packet
+//!   leaving the interface (so deliveries, replies included, can always be filtered).
+//!   (Metal 2026-11-05: a stateless `mgmt in` admin-only ACL dropped the replies of `route … via mgmt`.)
 //! - A prefix list on an interface filters addresses: `in` = the SOURCE must be permitted, `out` = the
 //!   DESTINATION must be permitted; a miss drops.
 //! - Routes: candidates whose destination prefix holds the packet's destination and whose `from` (if any)
