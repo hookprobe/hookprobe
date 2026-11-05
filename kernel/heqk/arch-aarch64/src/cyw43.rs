@@ -1995,7 +1995,13 @@ fn glom_next(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 }
 
 /// TX credit from an SDPCM software header word 1 (window byte), with the brcmf clamp.
+/// The firmware's per-precedence flow-control mask (SDPCM sw-header w1 byte 0), from the last
+/// frame read. brcmfmac never dequeues a DATA frame of a precedence whose bit is set
+/// (brcmf_sdio_sendfromq: tx_prec_map = ~bus->flowcontrol).
+static mut FC_MASK: u8 = 0;
+
 fn apply_window(w1r: u32) {
+    unsafe { FC_MASK = (w1r & 0xff) as u8 };
     let mut new_max = ((w1r >> 8) & 0xff) as u8;
     unsafe { AP_DIAG[3] = w1r };
     if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
@@ -3359,7 +3365,7 @@ pub fn ap_tx(eth: &[u8]) -> bool {
 /// phone never got its SYN-ACKs). The serve loop queues deliveries while this is false and
 /// flushes after the next read (brcmfmac does the same: packets wait for a credit update).
 pub fn tx_credit_ok() -> bool {
-    txctl_ok()
+    txctl_ok() && unsafe { FC_MASK } == 0
 }
 
 /// Set after a successful read: the firmware raises I_HMB_FRAME_IND for the FIRST queued
@@ -4449,6 +4455,14 @@ fn sdpcm_data_tx(eth: &[u8]) -> bool {
         unsafe { AP_DIAG[5] += 1 };
         return false;
     }
+    // Firmware flow control (XOFF): hold data while ANY precedence bit is set. heqk sends all data
+    // at one priority and brcmfmac's prio->prec map depends on the WMM config, so "any bit" is the
+    // safe superset. Metal 2026-11-05: the firmware raised 0xff during a speed test, heqk kept
+    // sending, and the TX window then never advanced again (credit stuck at 0, queue full).
+    if unsafe { FC_MASK } != 0 {
+        unsafe { AP_DIAG[16] += 1 };
+        return false;
+    }
     let seq = unsafe { TX_SEQ };
     // Sized for the BLOCK-PADDED maximum: a 1514-B ethernet frame + the 16-B SDPCM/BDC header =
     // 1530 B, padded to whole 512-B F2 blocks = 1536 B. (Was DL_CHUNK+64 = 1464 B: every frame
@@ -4921,9 +4935,10 @@ static mut TX_SEQ: u8 = 255;
 // [12]=last failed block read: stage<<24 | INT_STATUS low 24 bits
 // [13]=superframes read + validated [14]=glom sub-frames delivered [15]=glom drops (bad/no
 // descriptor, read/validate failure, oversize sub-frame)
-pub static mut AP_DIAG: [u32; 16] = [0; 16];
+// [16]=data frames held by firmware flow control (XOFF)
+pub static mut AP_DIAG: [u32; 17] = [0; 17];
 /// (tx_seq, tx_max, AP_DIAG) — for the AP beat line.
-pub fn ap_diag() -> (u8, u8, [u32; 16]) {
+pub fn ap_diag() -> (u8, u8, [u32; 17]) {
     unsafe { (TX_SEQ, TX_MAX, AP_DIAG) }
 }
 static mut TX_MAX: u8 = 0;

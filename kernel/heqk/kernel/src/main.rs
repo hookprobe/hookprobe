@@ -3392,6 +3392,11 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
+                                            {
+                                                let w = unsafe { uplink::WAN_TX_DIAG };
+                                                let (_, _, dg) = cyw43::ap_diag();
+                                                kprint!("   [P11-AP3 wan-tx] too_big_for_pppoe={} (last ip len {}) gem_fail={} (last TSR {:#06x}) | wifi xoff_held={}\n", w[0], w[2], w[1], w[3], dg[16]);
+                                            }
                                             let gs = arch_aarch64::gem::rx_stats();
                                             kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
                                                 gs[0], gs[1], gs[2], gs[3], gs[4], gs[5], gs[6], gs[7], gs[8], gs[9], gs[10], wan_big_seen, wan_big_unnat);
