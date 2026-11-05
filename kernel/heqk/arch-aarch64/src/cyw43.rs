@@ -2570,6 +2570,15 @@ const WLC_E_ASSOC_IND: u32 = 8;
 const WLC_E_REASSOC_IND: u32 = 10;
 
 const AES_ENABLED: u32 = 0x0004; // wsec bit: CCMP/AES
+const WLC_SET_BCNPRD: u32 = 76;
+const WLC_SET_DTIMPRD: u32 = 78;
+
+/// Set a u32 iovar (brcmf_fil_iovar_int_set).
+fn iovar_set_u32(name: &[u8], v: u32) -> bool {
+    let mut b = [0u8; 48];
+    let n = iovar_buf(name, &v.to_le_bytes(), &mut b);
+    bcdc_iovar_set(&b[..n])
+}
 const WPA2_AUTH_PSK: u32 = 0x0080; // wpa_auth: WPA2-PSK
 const WSEC_PASSPHRASE: u16 = 0x0001; // wsec_pmk flag: `key` holds an ASCII passphrase (fw PBKDF2s)
 
@@ -2802,27 +2811,25 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
         out.ev_ok = bcdc_iovar_set(&iob[..nm]);
     }
 
-    // Pure AP: "apsta"=0 then WLC_SET_AP=1.
-    let mut ab = [0u8; 32];
-    let na = iovar_buf(b"apsta", &0u32.to_le_bytes(), &mut ab);
-    out.apsta_ok = bcdc_iovar_set(&ab[..na]);
-    // brcmfmac brcmf_cfg80211_start_ap order: SET_INFRA 1, then SET_AP 1, then chanspec, then UP.
+    // ── EXACTLY the Linux brcmfmac AP bring-up for this chip + firmware (traced on this CM5,
+    //    2026-11-05, ~/heqk-metal-logs/20261105-linux-v8-brcmfmac-AP-fil-trace.txt):
+    //    mpc 0, arp_ol/arpoe/ndoe 0, BCNPRD 100, DTIMPRD 2, [DOWN], apsta 0, SET_INFRA 1, SET_AP 1,
+    //    chanspec, UP, then per-BSS wme_bss_disable 0, auth 0, wsec 0x44, mfp 0, wpa_auth 0x80,
+    //    SET_SSID, closednet 0. No wpaie (the firmware builds the RSN IE from wsec/wpa_auth; heqk's
+    //    wpaie was refused "BCME -7 Not STA"), no PM (Linux sets neither in AP mode).
+    let _ = iovar_set_u32(b"mpc", 0); // radio always on (no minimum-power-consumption sleep)
+    let _ = iovar_set_u32(b"arp_ol", 0); // ARP offload off in AP mode (brcmf_configure_arp_nd_offload)
+    let _ = iovar_set_u32(b"arpoe", 0);
+    let _ = iovar_set_u32(b"ndoe", 0); // IPv6 ND offload off
+    let _ = wlc_set_int(WLC_SET_BCNPRD, 100);
+    let _ = wlc_set_int(WLC_SET_DTIMPRD, 2);
+    out.apsta_ok = iovar_set_u32(b"apsta", 0);
     out.infra_ok = wlc_set_int(WLC_SET_INFRA, 1);
     out.set_ap_ok = wlc_set_int(WLC_SET_AP, 1);
 
-    // Keep the radio on (no minimum-power-consumption sleep that would drop beacons).
-    let mut mb = [0u8; 32];
-    let nmb = iovar_buf(b"mpc", &0u32.to_le_bytes(), &mut mb);
-    let _ = bcdc_iovar_set(&mb[..nmb]);
-
-    // Channel + WIDTH via the "chanspec" iovar — the mechanism brcmfmac AP mode uses (a bare
-    // WLC_SET_CHANNEL leaves the width/ctl-sideband unset). d11ac chanspec = chan | BW_20 |
-    // CTL_SB_NONE | band; 2.4 GHz (ch<=14) band=0x0000, 5 GHz band=0xc000; BW_20=0x1000.
+    // Channel + WIDTH via the "chanspec" iovar as a 4-BYTE integer (brcmf_fil_iovar_int_set).
+    // (heqk once sent the u16: refused -> silent 20-MHz WLC_SET_CHANNEL fallback; metal 2026-11-05.)
     let mut csb = [0u8; 32];
-    // A 4-BYTE integer, as brcmfmac sets it (brcmf_fil_iovar_int_set(ifp, "chanspec", chanspec)).
-    // heqk sent the u16 (2 bytes): the firmware refused it, the WLC_SET_CHANNEL fallback ran
-    // (always 20 MHz) and still reported chan_ok — metal 2026-11-05 readback 0xd024 (ch36/20)
-    // for a requested 0xe02a (ch36/80).
     let ncs = iovar_buf(b"chanspec", &(chanspec as u32).to_le_bytes(), &mut csb);
     out.chanspec_ok = bcdc_iovar_set(&csb[..ncs]);
     out.chan_ok = out.chanspec_ok;
@@ -2832,23 +2839,19 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
         out.chan_ok = out.chan_fallback20;
     }
 
-    // Security suite for the BSS.
-    let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED, WPA2_AUTH_PSK) };
-    let _ = wlc_set_int(WLC_SET_AUTH, 0); // Open System 802.11 auth (brcmf_configure_wpaie); PSK is the 4-way
-    out.wsec_ok = wlc_set_int(WLC_SET_WSEC, wsec);
-    out.wpa_auth_ok = wlc_set_int(WLC_SET_WPA_AUTH, wpa_auth);
-    if !open {
-        // Advertise EXACTLY our RSN IE in beacons/probe-responses.
-        let mut wb = [0u8; 48];
-        let n = iovar_buf(b"wpaie", &RSN_IE_PSK_CCMP, &mut wb);
-        let _ = bcdc_iovar_set(&wb[..n]);
-    }
-    let _ = wlc_set_int(WLC_SET_PM_, 0);
-
-    // Bring the radio up, then start the BSS by writing the SSID (this begins beaconing).
+    // Bring the radio up, THEN configure the BSS security (Linux order).
     out.up_ok = wlc_set_int(WLC_UP, 1);
     delay(80_000);
     let _ = ensure_ht_avail();
+    // Per-BSS security. For bsscfg index 0 brcmfmac's brcmf_fil_bsscfg_* issue plain iovars.
+    // wsec = AES | SES_OW_ENABLED (0x40), as brcmf_configure_wpaie sets it for an AP.
+    const SES_OW_ENABLED: u32 = 0x0040;
+    let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED | SES_OW_ENABLED, WPA2_AUTH_PSK) };
+    let _ = iovar_set_u32(b"wme_bss_disable", 0); // WMM ON (QoS — required for HT/VHT aggregation)
+    let _ = iovar_set_u32(b"auth", 0); // Open System 802.11 auth; PSK is the host 4-way
+    out.wsec_ok = iovar_set_u32(b"wsec", wsec);
+    let _ = iovar_set_u32(b"mfp", 0);
+    out.wpa_auth_ok = iovar_set_u32(b"wpa_auth", wpa_auth);
 
     let mut sb = [0u8; 36];
     let slen = ssid.len().min(32);
@@ -2856,6 +2859,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     sb[4..4 + slen].copy_from_slice(&ssid[..slen]);
     let (sok, _st) = bcdc_dcmd(WLC_SET_SSID, BCDC_SET, &sb[..4 + slen], &mut []);
     out.ssid_ok = sok;
+    let _ = iovar_set_u32(b"closednet", 0); // broadcast the SSID (Linux sets it after SET_SSID)
     delay(50_000);
 
     // Read back AP state + our BSSID for the verdict.
