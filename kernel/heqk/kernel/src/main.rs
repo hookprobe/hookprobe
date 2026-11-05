@@ -3020,7 +3020,9 @@ fn cm5_p10_probe() {
                         // 48 × full-MTU slots, static (not stack): the 8-deep version overflowed 23×
                         // in a minute of browsing (metal 2026-10-09) — credit returns only when the
                         // station sends, so the queue must absorb a whole server burst.
-                        const WQ_N: usize = 48;
+                        // 128 deep (metal 2026-11-04 @ 22 Mbps: 48 overflowed 89x during brief credit=0
+                        // moments; brcmfmac queues far deeper before flow-controlling the stack).
+                        const WQ_N: usize = 128;
                         const WQ_SZ: usize = 1536;
                         struct WqBuf([[u8; WQ_SZ]; WQ_N]);
                         static mut WQBUF: WqBuf = WqBuf([[0; WQ_SZ]; WQ_N]);
@@ -3111,7 +3113,11 @@ fn cm5_p10_probe() {
                                     // Clients get the UPSTREAM resolver (WAN lease option 6) — a hard-coded 8.8.8.8
                                     // dies at any upstream NAC/firewall that only admits DNS to its own gateway
                                     // (metal 2026-10-09: the fortress's quarantine posture does exactly that).
-                                    let client_dns = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                    // Clients get the AP itself as their resolver (10.99.0.1): heqk forwards each
+                                    // query to the upstream resolver from the WAN lease (nat::outbound_redirect),
+                                    // so DNS works at any upstream that only admits DNS to its own gateway AND
+                                    // every query crosses heqk's IDS like any other flow.
+                                    let client_dns = our_ip;
                                     let frame = &rx[off..off + len];
                                     let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
                                     if act == b'K' {
@@ -3136,7 +3142,8 @@ fn cm5_p10_probe() {
                                             ids_drop_out += 1;
                                         } else {
                                             let gw_mac = up.gw_mac;
-                                            if let Some(n) = nat::outbound(frame, nat::IF_WIFI, &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
+                                            let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                            if let Some(n) = nat::outbound_redirect(frame, nat::IF_WIFI, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
                                                 let gem_ok = arch_aarch64::gem::tx_frame(&nbuf[..n]).is_some();
                                                 if nat_trace < NAT_TRACE_N {
                                                     nat_trace += 1;
@@ -3197,7 +3204,7 @@ fn cm5_p10_probe() {
                                             let n = n.min(ebuf.len());
                                             if n >= 14 {
                                                 lan_frames += 1;
-                                                let client_dns = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                                let client_dns = our_ip; // the AP/LAN gateway resolves (forwarded upstream)
                                                 let lan_mac = uplink::ETH1_MAC;
                                                 let (act, m) = cyw43::ap_handle_data_into(&ebuf[..n], &lan_mac, &our_ip, &pool_base, &client_dns, &mut dh, &mut erep);
                                                 if m > 0 {
@@ -3222,7 +3229,8 @@ fn cm5_p10_probe() {
                                                         ids_drop_out += 1;
                                                     } else {
                                                         let gw_mac = up.gw_mac;
-                                                        if let Some(k) = nat::outbound(&ebuf[..n], nat::IF_ETH1, &inside_net, &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
+                                                        let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
+                                                        if let Some(k) = nat::outbound_redirect(&ebuf[..n], nat::IF_ETH1, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
                                                             if arch_aarch64::gem::tx_frame(&nbuf[..k]).is_none() {
                                                                 nat_tx_fail += 1;
                                                             }
@@ -3339,10 +3347,10 @@ fn cm5_p10_probe() {
                                             wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
-                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
+                                        kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} dns_redir={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
-                                            nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict,
+                                            nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict, nst.dns_redirect,
                                             nat_tx_fail, nat_wifi_tx_fail, wan_retries, wan_renewals, ids_drop_out, ids_drop_in, bind_drop,
                                             lan_frames, lan_served, lan_tx_fail, dh.nleases, cyw43::AP_LEASES);
                                         last_beat = t;
@@ -5176,6 +5184,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = mcauth::mcauth_selftest();
         acs_selftest();
         glom_selftest();
+        dnsfwd_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -11626,4 +11635,89 @@ fn glom_selftest() {
     let ok = plan_ok && split_ok && odd && short_ok && bad_ck_ok && bad_ch_ok && not_super_ok;
     kprint!(" [P11-glom] {} — SDPCM superframe (brcmf_sdio_rxglom framing): plan 3 subs -> one 512-B block={} split data/event/data={} | refused: odd descriptor={} short first sub={} bad tag={} control-channel sub={} descriptor-as-superframe={}\n",
         if ok { "PASS" } else { "FAIL" }, plan_ok, split_ok, odd, short_ok, bad_ck_ok, bad_ch_ok, not_super_ok);
+}
+
+/// `[P11-dnsfwd]` — the AP's DNS service (nat::outbound_redirect + inbound): a client query to the
+/// AP address is forwarded to the upstream resolver through SNAT, the reply comes back FROM the AP
+/// address with valid checksums; a query sent straight to another resolver is not redirected.
+#[allow(dead_code)]
+fn dnsfwd_selftest() {
+    use arch_aarch64::nat;
+    fn csum16(b: &[u8], init: u32) -> u16 {
+        let mut s = init;
+        let mut i = 0;
+        while i + 1 < b.len() {
+            s += u16::from_be_bytes([b[i], b[i + 1]]) as u32;
+            i += 2;
+        }
+        if i < b.len() {
+            s += (b[i] as u32) << 8;
+        }
+        while s >> 16 != 0 {
+            s = (s & 0xffff) + (s >> 16);
+        }
+        !(s as u16)
+    }
+    fn udp_ok(f: &[u8]) -> bool {
+        let ip_ok = csum16(&f[14..34], 0) == 0;
+        let ulen = u16::from_be_bytes([f[38], f[39]]) as u32;
+        let mut ps = 0u32;
+        for k in (26..34).step_by(2) {
+            ps += u16::from_be_bytes([f[k], f[k + 1]]) as u32;
+        }
+        ps += 17 + ulen;
+        ip_ok && csum16(&f[34..34 + ulen as usize], ps) == 0
+    }
+    fn frame(buf: &mut [u8; 80], dmac: [u8; 6], smac: [u8; 6], sip: [u8; 4], dip: [u8; 4], sp: u16, dp: u16) -> usize {
+        *buf = [0; 80];
+        buf[0..6].copy_from_slice(&dmac);
+        buf[6..12].copy_from_slice(&smac);
+        buf[12] = 0x08;
+        buf[14] = 0x45;
+        let tot: u16 = 20 + 8 + 20;
+        buf[16..18].copy_from_slice(&tot.to_be_bytes());
+        buf[22] = 64;
+        buf[23] = 17;
+        buf[26..30].copy_from_slice(&sip);
+        buf[30..34].copy_from_slice(&dip);
+        buf[34..36].copy_from_slice(&sp.to_be_bytes());
+        buf[36..38].copy_from_slice(&dp.to_be_bytes());
+        buf[38..40].copy_from_slice(&28u16.to_be_bytes());
+        buf[40] = 0x12; // non-zero UDP checksum placeholder -> recomputed by NAT
+        buf[42..62].copy_from_slice(b"dns-query-payload-01");
+        14 + tot as usize
+    }
+    let (ap_ip, resolver, wan_ip) = ([10u8, 99, 0, 1], [10u8, 200, 0, 1], [10u8, 200, 0, 14]);
+    let (cli_ip, cli_mac, ap_mac) = ([10u8, 99, 0, 10], [2u8, 0xaa, 0, 0, 0, 1], [2u8, 0xbb, 0, 0, 0, 1]);
+    let (wan_mac, gw_mac) = ([2u8, 0, 0, 0, 0, 2], [2u8, 0xcc, 0, 0, 0, 1]);
+    let inside = [10u8, 99, 0];
+    let mut st = nat::NatStats::default();
+    let now: u64 = { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
+    let mut q = [0u8; 80];
+    let mut out = [0u8; 128];
+    let n = frame(&mut q, ap_mac, cli_mac, cli_ip, ap_ip, 51000, 53);
+    let fwd = nat::outbound_redirect(&q[..n], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st);
+    let ext = u16::from_be_bytes([out[34], out[35]]);
+    let out_ok = fwd.is_some() && out[26..30] == wan_ip && out[30..34] == resolver && udp_ok(&out) && st.dns_redirect == 1;
+    // the resolver answers the SNAT'd query
+    let mut r = [0u8; 80];
+    let rn = frame(&mut r, wan_mac, gw_mac, resolver, wan_ip, 53, ext);
+    let mut back = [0u8; 128];
+    let inb = nat::inbound(&r[..rn], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st);
+    let back_ok = inb.is_some() && back[26..30] == ap_ip && back[30..34] == cli_ip
+        && u16::from_be_bytes([back[36], back[37]]) == 51000 && back[0..6] == cli_mac && udp_ok(&back);
+    // a query straight to 1.1.1.1 is NOT redirected, and its reply keeps 1.1.1.1 as the source
+    let n2 = frame(&mut q, ap_mac, cli_mac, cli_ip, [1, 1, 1, 1], 51002, 53);
+    let f2 = nat::outbound_redirect(&q[..n2], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st);
+    let ext2 = u16::from_be_bytes([out[34], out[35]]);
+    let direct_ok = f2.is_some() && out[30..34] == [1, 1, 1, 1] && st.dns_redirect == 1;
+    let rn2 = frame(&mut r, wan_mac, gw_mac, [1, 1, 1, 1], wan_ip, 53, ext2);
+    let inb2 = nat::inbound(&r[..rn2], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st);
+    let direct_back_ok = inb2.is_some() && back[26..30] == [1, 1, 1, 1] && udp_ok(&back);
+    // a non-DNS packet to the AP address stays local (never NATed)
+    let n3 = frame(&mut q, ap_mac, cli_mac, cli_ip, ap_ip, 51004, 80);
+    let local_ok = nat::outbound_redirect(&q[..n3], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st).is_none();
+    let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok;
+    kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={}\n",
+        if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok);
 }

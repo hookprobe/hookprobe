@@ -11,7 +11,7 @@
 //! total length before forwarding. Entries expire by `last` (cntpct) and are LRU-
 //! evicted when full.
 
-use crate::cyw43::{inet_csum, pseudo_sum};
+use hal::{inet_csum, pseudo_sum};
 
 const N: usize = 256;
 /// First outside port / ICMP id; entry `i` owns `EXT_BASE + i`.
@@ -50,8 +50,11 @@ struct Entry {
     in_ip: [u8; 4],
     in_port: u16, // TCP/UDP src port, or ICMP echo id
     last: u64,    // cntpct of the last packet either way
+    /// DNS redirect: the address the client actually queried (the AP's own IP) when the query
+    /// was forwarded to the upstream resolver — replies get it back as their source. 0 = none.
+    dnat_from: [u8; 4],
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0 };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4] };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 
 #[derive(Default)]
@@ -64,6 +67,8 @@ pub struct NatStats {
     pub mss_clamped: u32,
     pub table_alloc: u32,
     pub table_evict: u32,
+    /// DNS queries to the AP address forwarded to the upstream resolver.
+    pub dns_redirect: u32,
 }
 
 #[inline]
@@ -114,7 +119,7 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
             oldest.0
         }
     };
-    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4] };
     st.table_alloc += 1;
     i
 }
@@ -244,6 +249,15 @@ fn parse_v4(f: &[u8]) -> Option<(usize, usize, u8)> {
 /// sourced from the lease. Returns the frame length to transmit on end0, or None (not
 /// NATable: not IPv4, TTL exhausted, unsupported proto, or destined for our own subnet).
 pub fn outbound(f: &[u8], in_if: u8, inside_net: &[u8; 3], wan_ip: &[u8; 4], wan_mac: &[u8; 6], gw_mac: &[u8; 6], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<usize> {
+    outbound_redirect(f, in_if, inside_net, None, wan_ip, wan_mac, gw_mac, out, now, st)
+}
+
+/// `outbound` plus the AP's DNS service: a UDP query to `dns.0` (the AP's own address, which the
+/// AP's DHCP advertises as the resolver) port 53 is forwarded to `dns.1` (the upstream resolver
+/// from the WAN lease) through the same SNAT, and the entry remembers it so `inbound` restores
+/// the AP address as the reply's source. Every gate before NAT (lease binding, IDS verdict) has
+/// already run on the client's original frame.
+pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<(&[u8; 4], &[u8; 4])>, wan_ip: &[u8; 4], wan_mac: &[u8; 6], gw_mac: &[u8; 6], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<usize> {
     let (ihl, ip_end, proto) = match parse_v4(f) {
         Some(t) => t,
         None => {
@@ -251,7 +265,13 @@ pub fn outbound(f: &[u8], in_if: u8, inside_net: &[u8; 3], wan_ip: &[u8; 4], wan
             return None;
         }
     };
-    if &f[30..33] == &inside_net[..] || f[30..34] == [255; 4] || f[30] >= 224 || f[22] <= 1 {
+    let l4p = 14 + ihl;
+    let redirect = match dns {
+        Some((ap_ip, resolver)) if proto == 17 && &f[30..34] == &ap_ip[..] && l4p + 4 <= ip_end
+            && u16::from_be_bytes([f[l4p + 2], f[l4p + 3]]) == 53 => Some((*ap_ip, *resolver)),
+        _ => None,
+    };
+    if redirect.is_none() && (&f[30..33] == &inside_net[..] || f[30..34] == [255; 4] || f[30] >= 224 || f[22] <= 1) {
         st.out_drop += 1;
         return None; // local subnet / broadcast / multicast / TTL exhausted
     }
@@ -272,14 +292,26 @@ pub fn outbound(f: &[u8], in_if: u8, inside_net: &[u8; 3], wan_ip: &[u8; 4], wan
     in_mac.copy_from_slice(&f[6..12]);
     let mut in_ip = [0u8; 4];
     in_ip.copy_from_slice(&f[26..30]);
+    if f[22] <= 1 {
+        st.out_drop += 1;
+        return None;
+    }
     let idx = lookup_or_alloc(proto, in_if, &in_mac, &in_ip, in_port, now, st);
     let ext = EXT_BASE + idx as u16;
+    unsafe {
+        let t = &mut *core::ptr::addr_of_mut!(TABLE);
+        t[idx].dnat_from = match redirect { Some((ap, _)) => ap, None => [0; 4] };
+    }
 
     out[..ip_end].copy_from_slice(&f[..ip_end]);
     out[0..6].copy_from_slice(gw_mac);
     out[6..12].copy_from_slice(wan_mac);
     out[22] -= 1; // TTL
     out[26..30].copy_from_slice(wan_ip);
+    if let Some((_, resolver)) = redirect {
+        out[30..34].copy_from_slice(&resolver);
+        st.dns_redirect += 1;
+    }
     match proto {
         6 => {
             out[l4..l4 + 2].copy_from_slice(&ext.to_be_bytes());
@@ -343,6 +375,10 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         }
         17 => out[l4 + 2..l4 + 4].copy_from_slice(&e.in_port.to_be_bytes()),
         _ => out[l4 + 4..l4 + 6].copy_from_slice(&e.in_port.to_be_bytes()),
+    }
+    // DNS redirect: the client asked the AP — the answer must come FROM the AP.
+    if e.dnat_from != [0; 4] && proto == 17 && u16::from_be_bytes([f[l4], f[l4 + 1]]) == 53 {
+        out[26..30].copy_from_slice(&e.dnat_from);
     }
     fix_csums(out, ihl, ip_end);
     st.in_fwd += 1;
