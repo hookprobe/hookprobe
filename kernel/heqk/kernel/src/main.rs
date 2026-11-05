@@ -2921,6 +2921,10 @@ fn cm5_p10_probe() {
                                     if let Some(d) = w.dns {
                                         kprint!(" [WAN6] DNS {:x?}\n", h(&d));
                                     }
+                                    match w.na {
+                                        Some(a) => kprint!(" [WAN6] WAN address (IA_NA) {:x?}\n", h(&a)),
+                                        None => kprint!(" [WAN6] no IA_NA address (the LAN /64 router address is the global source)\n"),
+                                    }
                                 }
                             }
                             if !up.started {
@@ -3109,6 +3113,30 @@ fn cm5_p10_probe() {
                         // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
                         let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
                         let mut unstick = [0u32; 5];
+                        // IPv6 LAN router + stateful firewall (stage 2): numbered from the DHCPv6-delegated prefix.
+                        static mut V6: arch_aarch64::ip6lan::V6Lan = arch_aarch64::ip6lan::V6Lan::new();
+                        let mut v6buf = [0u8; 1600];
+                        let mut v6_ids_drop = [0u32; 2]; // [outbound, inbound] IDS drops on IPv6
+                        // Send one frame to the Wi-Fi clients: direct when nothing is queued and credit allows,
+                        // else queued in order; returns false only if it had to be dropped.
+                        macro_rules! wifi_send {
+                            ($f:expr) => {{
+                                let f: &[u8] = $f;
+                                if wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
+                                    true
+                                } else if wq_n < WQ_N && f.len() <= WQ_SZ {
+                                    let j = (wq_head + wq_n) % WQ_N;
+                                    wq[j][..f.len()].copy_from_slice(f);
+                                    wq_len[j] = f.len();
+                                    wq_n += 1;
+                                    wifi_tx_queued += 1;
+                                    true
+                                } else {
+                                    wifi_tx_dropped += 1;
+                                    false
+                                }
+                            }};
+                        }
                         let mut loop_t0 = 0u64; // profiler: start of the current loop iteration
                         const WAN_BUDGET: usize = 32; // WAN frames drained per loop (NAPI-style; wq is 128 deep)
                         let mut rx_busy = false;
@@ -3323,6 +3351,25 @@ fn cm5_p10_probe() {
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.nleases, dh.arp_replies);
+                                    } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
+                                        // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
+                                        // verdict and out the PPPoE session (no NAT; the module records the flow so the
+                                        // reply is admitted by the stateful firewall).
+                                        let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
+                                        let nms = now() * 1000 / freq;
+                                        match v6.on_lan(frame, nms, &mut v6buf) {
+                                            arch_aarch64::ip6lan::LanAction::Reply(k) => {
+                                                let _ = wifi_send!(&v6buf[..k]);
+                                            }
+                                            arch_aarch64::ip6lan::LanAction::Forward(k) => {
+                                                if packet::verdict(frame).1 == packet::DROP {
+                                                    v6_ids_drop[0] += 1;
+                                                } else if up.usable() {
+                                                    let _ = uplink::wan_tx6(&up, &v6buf[..k]);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
                                     } else if act == 0 && up.usable() && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
                                         // Not ours to answer → the forwarding path. Three gates, in order:
                                         // (1) (MAC,IP) must be a lease we handed out — anti-hijack;
@@ -3464,7 +3511,18 @@ fn cm5_p10_probe() {
                                             // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
                                             // IDS/IPS on the WAN leg too (a threat from the internet toward a client
                                             // DROPs before un-NAT), then return on the link the flow came in on.
-                                            if packet::verdict(&wbuf[..n]).1 == packet::DROP {
+                                            if n >= 54 && wbuf[12] == 0x86 && wbuf[13] == 0xdd {
+                                                // IPv6 from the ISP: the stateful firewall + neighbor table decide; then the IDS.
+                                                let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
+                                                let nms = now() * 1000 / freq;
+                                                if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6.on_wan(&wbuf[14..n], nms, &mut v6buf) {
+                                                    if packet::verdict(&v6buf[..k]).1 == packet::DROP {
+                                                        v6_ids_drop[1] += 1;
+                                                    } else {
+                                                        let _ = wifi_send!(&v6buf[..k]);
+                                                    }
+                                                }
+                                            } else if packet::verdict(&wbuf[..n]).1 == packet::DROP {
                                                 ids_drop_in += 1;
                                             } else {
                                                 let lan_mac = uplink::ETH1_MAC;
@@ -3511,6 +3569,25 @@ fn cm5_p10_probe() {
                                     if t.wrapping_sub(last_ht) > freq / 10 {
                                         cyw43::ap_keepalive();
                                         last_ht = t;
+                                    }
+                                    {
+                                        // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
+                                        let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
+                                        let w6 = unsafe { uplink::WAN6 };
+                                        if let Some((pd, plen, valid)) = w6.pd {
+                                            if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
+                                                v6.configure(&pd, plen, valid, &ap.bssid, w6.dns.as_ref());
+                                                let g = |k: usize| u16::from_be_bytes([v6.gua[2 * k], v6.gua[2 * k + 1]]);
+                                                kprint!(" [V6LAN] LAN numbered from {:x?}/{}: router {:x}:{:x}:{:x}:{:x}::1/64 — RA (SLAAC, MTU {}, RDNSS={}) on the AP, stateful firewall default-deny inbound\n",
+                                                    &pd[..8], plen, g(0), g(1), g(2), g(3), arch_aarch64::ip6lan::LAN_MTU, v6.has_dns);
+                                            }
+                                        } else if v6.up && !up.usable() {
+                                            v6.up = false;
+                                        }
+                                        if v6.ra_due(t * 1000 / freq) {
+                                            let k = v6.build_ra(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut v6buf);
+                                            let _ = wifi_send!(&v6buf[..k]);
+                                        }
                                     }
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
@@ -3569,6 +3646,16 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
+                                            {
+                                                let s = unsafe { V6.stats };
+                                                let l = unsafe { uplink::WAN6_LIVE };
+                                                kprint!("   [P11-AP3 v6] up={} ra_tx={} rs_rx={} na_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
+                                                    unsafe { V6.up }, s.ra_tx, s.rs_rx, s.na_tx, s.out_fwd, s.in_fwd, s.in_icmp_err, s.drop_no_flow, s.drop_no_neigh, s.drop_hop, s.drop_src, s.drop_bad,
+                                                    v6_ids_drop[0], v6_ids_drop[1], s.flow_evict, l[0], l[1], l[2], l[3]);
+                                                if let Some(ra) = unsafe { uplink::WAN6_FIRST_RA } {
+                                                    kprint!("   [P11-AP3 v6] ISP RA seen: router {:02x?} lifetime={}s M={} O={} prefix={} /{} mtu={}\n", &ra.router[..], ra.lifetime, ra.managed, ra.other, ra.has_prefix, ra.plen, ra.mtu);
+                                                }
+                                            }
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
                                                 unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
                                             {
@@ -12176,9 +12263,100 @@ fn ip6_selftest() {
         None => false,
     };
     let xid_refuse = parse_dhcp6(&adv[..an], xid ^ 1).is_none();
-    let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={}\n",
-        if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse);
+    // ---- LAN router + stateful firewall (arch_aarch64::ip6lan) ----
+    let lan_ok = {
+        use arch_aarch64::ip6lan::{LanAction, V6Lan, WanAction};
+        let mut v = V6Lan::new();
+        let apmac = [0x02u8, 0xaa, 0, 0, 0, 1];
+        let cmac = [0x02u8, 0xcc, 0, 0, 0, 7];
+        let pd: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0xaa, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let dns: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x53];
+        v.configure(&pd, 56, u32::MAX, &apmac, Some(&dns));
+        let mut cli = [0u8; 16];
+        cli[..8].copy_from_slice(&pd[..8]);
+        cli[8..16].copy_from_slice(&[0x12, 0x34, 0, 0, 0, 0, 0xab, 0xcd]);
+        let remote: [u8; 16] = [0x26, 0x06, 0x47, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x11];
+        let mut out = [0u8; 1600];
+        // Build an Ethernet/IPv6 frame (client -> ?) with an L4 payload; ICMPv6 checksum filled when nh=58.
+        let frame6 = |f: &mut [u8], smac: &[u8; 6], dmac: &[u8; 6], src: &[u8; 16], dst: &[u8; 16], nh: u8, hop: u8, l4: &[u8]| -> usize {
+            f[0..6].copy_from_slice(dmac);
+            f[6..12].copy_from_slice(smac);
+            f[12..14].copy_from_slice(&0x86ddu16.to_be_bytes());
+            f[14] = 0x60;
+            f[18..20].copy_from_slice(&(l4.len() as u16).to_be_bytes());
+            f[20] = nh;
+            f[21] = hop;
+            f[22..38].copy_from_slice(src);
+            f[38..54].copy_from_slice(dst);
+            f[54..54 + l4.len()].copy_from_slice(l4);
+            if nh == 58 {
+                f[56..58].copy_from_slice(&[0, 0]);
+                let c = l4_csum(src, dst, 58, &f[54..54 + l4.len()]);
+                f[56..58].copy_from_slice(&c.to_be_bytes());
+            }
+            54 + l4.len()
+        };
+        let mut f = [0u8; 200];
+        let cll = link_local(&eui64(&cmac));
+        // RS -> RA (parseable, our /64, MTU 1492)
+        let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0, 0, 0, 2], &cll, &ALL_ROUTERS, 58, 255, &[133, 0, 0, 0, 0, 0, 0, 0]);
+        let ra_ok = match v.on_lan(&f[..n], 10, &mut out) {
+            LanAction::Reply(k) => out[0..6] == cmac && match parse_ra(&out[14..k]) {
+                Some(r) => r.has_prefix && r.plen == 64 && r.autonomous && r.prefix[..8] == pd[..8] && r.mtu == 1492 && r.lifetime == 1800,
+                None => false,
+            },
+            _ => false,
+        };
+        // NS for the router's link-local -> NA (solicited, router)
+        let mut ns = [0u8; 24];
+        ns[0] = 135;
+        ns[8..24].copy_from_slice(&v.ll);
+        let snm: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, v.ll[13], v.ll[14], v.ll[15]];
+        let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0xff, v.ll[13], v.ll[14], v.ll[15]], &cll, &snm, 58, 255, &ns);
+        let na_ok = matches!(v.on_lan(&f[..n], 20, &mut out), LanAction::Reply(k) if out[54] == 136 && out[58] & 0x40 != 0 && out[62..78] == v.ll && k == 86);
+        // Outbound TCP SYN 443 from the client's global address -> Forward, hop 64 -> 63
+        let mut tcp = [0u8; 20];
+        tcp[0..2].copy_from_slice(&50000u16.to_be_bytes());
+        tcp[2..4].copy_from_slice(&443u16.to_be_bytes());
+        tcp[13] = 0x02;
+        let n = frame6(&mut f, &cmac, &apmac, &cli, &remote, 6, 64, &tcp);
+        let out_ok = matches!(v.on_lan(&f[..n], 30, &mut out), LanAction::Forward(k) if k == 60 && out[7] == 63 && out[24..40] == remote);
+        // The SYN-ACK back -> Deliver to the client's MAC, hop decremented
+        let mut rtcp = [0u8; 20];
+        rtcp[0..2].copy_from_slice(&443u16.to_be_bytes());
+        rtcp[2..4].copy_from_slice(&50000u16.to_be_bytes());
+        rtcp[13] = 0x12;
+        let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 6, 57, &rtcp);
+        let in_ok = matches!(v.on_wan(&f[14..n], 40, &mut out), WanAction::Deliver(k) if k == n && out[0..6] == cmac && out[6..12] == apmac && out[21] == 56);
+        // Unsolicited inbound (the internet opening port 22 on the client) -> default deny
+        let mut scan = [0u8; 20];
+        scan[0..2].copy_from_slice(&40000u16.to_be_bytes());
+        scan[2..4].copy_from_slice(&22u16.to_be_bytes());
+        scan[13] = 0x02;
+        let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 6, 57, &scan);
+        let deny_ok = matches!(v.on_wan(&f[14..n], 50, &mut out), WanAction::Drop) && v.stats.drop_no_flow == 1;
+        // ICMPv6 Packet Too Big inbound -> passes (PMTU)
+        let mut ptb = [0u8; 56];
+        ptb[0] = 2;
+        ptb[4..8].copy_from_slice(&1280u32.to_be_bytes());
+        let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 58, 57, &ptb);
+        let ptb_ok = matches!(v.on_wan(&f[14..n], 60, &mut out), WanAction::Deliver(_)) && v.stats.in_icmp_err == 1;
+        // Spoofed source (not our /64) and a link-local destination are never routed out
+        let mut spoof = cli;
+        spoof[3] ^= 0xff;
+        let n = frame6(&mut f, &cmac, &apmac, &spoof, &remote, 6, 64, &tcp);
+        let spoof_ok = matches!(v.on_lan(&f[..n], 70, &mut out), LanAction::Drop) && v.stats.drop_src == 1;
+        let n = frame6(&mut f, &cmac, &apmac, &cli, &cll, 6, 64, &tcp);
+        let ll_ok = matches!(v.on_lan(&f[..n], 80, &mut out), LanAction::Drop);
+        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok;
+        if !r {
+            kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok);
+        }
+        r
+    };
+    let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok;
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, Packet-Too-Big passes, spoofed src / link-local dst never routed={}\n",
+        if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, lan_ok);
 }
 
 fn pppoe_selftest() {
