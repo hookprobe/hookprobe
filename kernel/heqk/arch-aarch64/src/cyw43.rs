@@ -2127,6 +2127,30 @@ pub fn fw_trap_dump(sh: &FwShared) {
     }
 }
 
+/// WLC_GET_PKTCNTS (137): the firmware's own packet counters (rx_good, rx_bad, tx_good, tx_bad,
+/// rx_ocast_good) — read twice across a stall to tell "not transmitting" from "transmitting but
+/// not returning credit". Raw u32s, no layout assumptions beyond five little-endian words.
+pub fn fw_pktcnts() -> Option<[u32; 5]> {
+    const WLC_GET_PKTCNTS: u32 = 137;
+    let mut b = [0u8; 20];
+    let (ok, _) = bcdc_dcmd(WLC_GET_PKTCNTS, 0, &[], &mut b);
+    if !ok {
+        return None;
+    }
+    let mut o = [0u32; 5];
+    for k in 0..5 {
+        o[k] = u32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]]);
+    }
+    Some(o)
+}
+
+/// "sta_info" for one station, RAW (decoded later against brcmf_sta_info_le — not guessed here).
+pub fn fw_sta_info_raw(sta: &[u8; 6], out: &mut [u8; 128]) -> bool {
+    let mut req = [0u8; 48];
+    let n = iovar_buf(b"sta_info", sta, &mut req);
+    bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], out).0
+}
+
 /// SDIO core interrupt status (for the stall snapshot).
 pub fn sdio_intstatus() -> u32 {
     bp_r32(sdio_core_base() + SD_REG_INTSTATUS)
