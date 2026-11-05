@@ -3082,6 +3082,10 @@ fn cm5_p10_probe() {
                         let mut sent_ring = [(0u32, 0u16); 4];
                         let mut sent_i = 0usize;
                         let (mut credit0_since, mut stall_diag_done) = (0u64, false);
+                        // Stall experiment: stage 1 = bare dongle interrupt sent, 2 = one control frame sent.
+                        // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
+                        let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
+                        let mut unstick = [0u32; 5];
                         let mut rx_busy = false;
                         let mut last_sta = [0u8; 6]; // most recent associated station (sta_info baseline) // the last pump read returned a frame (firmware RX pending)
                         // Which signed rules are DROPping forwarded frames (the beat names them).
@@ -3137,7 +3141,18 @@ fn cm5_p10_probe() {
                                 if max.wrapping_sub(seq) <= 2 && wq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
+                                        unstick_stage = 0;
+                                    } else if unstick_stage == 0 && t.wrapping_sub(credit0_since) > freq / 4 {
+                                        unstick[0] += 1;
+                                        cyw43::poke_dev_int(); // A: bare dongle interrupt
+                                        unstick_stage = 1;
+                                        unstick_t = t;
+                                    } else if unstick_stage == 1 && t.wrapping_sub(unstick_t) > freq / 4 {
+                                        let _ = cyw43::fw_pktcnts(); // B: one control frame (uses the reserved credit)
+                                        unstick_stage = 2;
+                                        unstick_t = t;
                                     } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
+                                        unstick[4] += 1;
                                         stall_diag_done = true;
                                         let (rseq, gaps, maxahead) = cyw43::rx_diag();
                                         kprint!(" [STALL-DIAG] tx credit <=2 (data-exhausted) for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
@@ -3204,7 +3219,15 @@ fn cm5_p10_probe() {
                                         kprint!("   [STALL-DIAG] bus wake -> CHIPCLKCSR={:#04x} SLEEPCSR={:#04x} (watch for 'credit RECOVERED')\n", after, bc2[1]);
                                     }
                                 } else {
-                                    if stall_diag_done && credit0_since != 0 {
+                                    if credit0_since != 0 && !stall_diag_done && unstick_stage > 0 {
+                                        unstick[unstick_stage as usize + 1] += 1;
+                                        kprint!(" [UNSTICK] credit back {} ms after stage {} ({})\n", t.wrapping_sub(credit0_since) * 1000 / freq,
+                                            unstick_stage, if unstick_stage == 1 { "A: DEV_INT" } else { "B: control frame" });
+                                    } else if credit0_since != 0 && !stall_diag_done && t.wrapping_sub(credit0_since) > freq / 4 {
+                                        unstick[1] += 1;
+                                    }
+                                    unstick_stage = 0;
+                                                                        if stall_diag_done && credit0_since != 0 {
                                         kprint!(" [STALL-DIAG] credit RECOVERED after {} ms\n", t.wrapping_sub(credit0_since) * 1000 / freq);
                                     }
                                     credit0_since = 0;
@@ -3499,6 +3522,8 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
+                                            kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(DEV_INT)={} after_B(ctl)={} reached_2s={}\n",
+                                                unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
                                             // Healthy-state baseline of the firmware's view of the station (compare with the
                                             // stall snapshot): every 12th beat, only while associated.
                                             if beat_n % 12 == 0 && last_sta != [0u8; 6] {
